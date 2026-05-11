@@ -579,7 +579,8 @@ jobs:
           ./configure \
             --prefix="$NFFT_PREFIX" \
             --enable-shared \
-            --disable-static \
+            --enable-static \
+            --with-pic \
             --disable-examples \
             --disable-applications \
             --with-fftw3-includedir="$FFTW_PREFIX/include" \
@@ -597,6 +598,12 @@ jobs:
           for f in "$NFFT_PREFIX"/lib/libnfft3*.dylib*; do
             [ -e "$f" ] || continue
             cp -P "$f" "$DIST/lib/"
+          done
+          # Also stage the static archives (libnfft3.a, libnfft3_threads.a
+          # if present) so the -static flavor has a true static path.
+          for f in "$NFFT_PREFIX"/lib/libnfft3*.a; do
+            [ -e "$f" ] || continue
+            cp "$f" "$DIST/lib/"
           done
           # Rewrite the .pc file so it relocates with the bundle.
           if [ -f "$NFFT_PREFIX/lib/pkgconfig/nfft3.pc" ]; then
@@ -948,6 +955,10 @@ jobs:
           # FFTW3 ships in /mingw64 via the mingw-w64-x86_64-fftw
           # package. autoconf picks it up from PKG_CONFIG_PATH/-I/-L
           # automatically; we point it explicitly to be safe.
+          # MSVC consumers cannot link a mingw-built .a (object format
+          # / name-mangling mismatch), so even the -static flavor
+          # ships only the NFFT DLL + import lib on Windows. The
+          # static archive is omitted intentionally.
           ./configure \
             --prefix="$(cygpath -u "$GITHUB_WORKSPACE")/nfft-install" \
             --enable-openmp \

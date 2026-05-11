@@ -36,14 +36,56 @@ release into a CMake build.
 |-----------------------------|-----------------------------------------|
 | `libcvc` Release shared     | `release-shared`                        |
 | `libcvc` Debug shared       | `debug-shared`                          |
-| `libcvc` Release static     | `release-static`                        |
-| `libcvc` Debug static       | `debug-static`                          |
+| `libcvc` Release static     | `release-static` *(best-effort — see caveats)* |
+| `libcvc` Debug static       | `debug-static` *(best-effort — see caveats)*   |
 | `volrover3` Release         | `release-shared` (Qt does not support static linking gratis) |
 
 On Windows the build type **must** match: a Release archive uses
 the `/MD` runtime and ships release-only DLLs; a Debug archive
 uses `/MDd` and ships Debug DLLs + PDBs. Mixing them at link time
 will fail with mismatched-CRT errors.
+
+### Static-flavor caveats
+
+The `-static` flavor is **best-effort**, not strict. Not every
+dependency has a usable static distribution, so the static archives
+mix `.a`/`.lib` static archives where possible with a small set of
+shared libraries that the upstream projects do not provide statically:
+
+| Dependency        | Linux `-static` | macOS `-static`     | Windows `-static`             |
+|-------------------|-----------------|---------------------|-------------------------------|
+| Boost             | static `.a`     | static `.a`         | static `.lib` (vcpkg)         |
+| HDF5              | static `.a`     | static `.a`         | static `.lib` (vcpkg)         |
+| FFTW3             | static `.a`     | static `.a`         | static `.lib` (vcpkg)         |
+| GSL               | static `.a`     | static `.a`         | static `.lib` (vcpkg)         |
+| GMP / MPFR        | static `.a`     | static `.a`         | static `.lib` (vcpkg)         |
+| NFFT3             | static `.a`     | static `.a` + dylib | **DLL + import lib only** (mingw `.a` is incompatible with MSVC) |
+| LAPACK / BLAS     | static `.a`     | dylib only          | static `.lib` (vcpkg)         |
+| log4cplus         | static `.a`     | dylib only          | static `.lib` (vcpkg)         |
+| ImageMagick       | static + shared | dylib only          | static `.lib` (vcpkg)         |
+| CGAL              | header-only     | header-only         | header-only                   |
+| Eigen3            | header-only     | header-only         | header-only                   |
+| **Qt6**           | **shared only** | **shared only**     | **shared only**               |
+| **VTK 9.5**       | **shared only** | **shared only**     | **shared only**               |
+| GLEW              | static + shared | n/a                 | static `.lib` (vcpkg)         |
+
+**Qt6 is always shared** in every archive flavor. Upstream Qt does not
+publish a static distribution under the open-source license without a
+commercial agreement, and our pipeline uses the prebuilt Qt binaries
+from `aqtinstall` (Windows/macOS) and the distro `qt6-base-dev`
+package (Linux). A fully static Qt would require an in-pipeline
+source build with non-trivial configuration.
+
+**VTK 9.5 is always shared** because we build it from source once
+per OS with `BUILD_SHARED_LIBS=ON` to keep the build cache compact.
+VTK's static build is fragile when Qt is involved (many rendering
+modules don't support it), so we have not invested in a separate
+static cache lane.
+
+If you need true full-static linking — including Qt6 and VTK — you
+will need to build those two dependencies yourself; the `libcvc-deps`
+static flavor still saves you the build cost for Boost, HDF5, FFTW,
+NFFT3, LAPACK/BLAS, CGAL, Eigen3, and friends.
 
 ## Using from libcvc CI
 
