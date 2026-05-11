@@ -85,3 +85,37 @@ cmake -S app -B build \
 
 See [`README.md`](README.md#version-pins) for the upstream versions
 captured by a given `libcvc-deps` release.
+
+## Host requirements
+
+Each archive aims to be self-contained, but a small set of
+ABI-stable, host-supplied libraries is *not* bundled:
+
+| Platform | Host-supplied (not in archive)                                  |
+|----------|-----------------------------------------------------------------|
+| Linux    | glibc, `libstdc++.so.6`, `libgcc_s.so.1`, the dynamic loader, libpthread/libdl/librt/libm/libresolv (all part of glibc) |
+| macOS    | The system libc / libc++ shipped with the OS (everything else is rewritten via `dylibbundler` to `@loader_path/`) |
+| Windows  | The Universal C Runtime (UCRT). All other DLLs (Qt, VTK, boost, zlib, libpng, …) are in `bin/`. |
+
+### Linux: bundled transitive deps
+
+The Linux Release pipeline runs an `ldd` sweep after staging the
+allowlisted libraries and copies every transitively-NEEDED `.so`
+into `lib/` (with SONAME symlinks), then sets `RPATH=$ORIGIN` on
+every shipped `.so`. This means the bundle is portable across
+Ubuntu LTS versions (and most other glibc-based distros) regardless
+of mismatches in `libicu`, `libpng`, `libxml2`, `liblzma`, `libssl`,
+`libfreetype`, `libfontconfig`, `libharfbuzz`, etc.
+
+You should only need a recent-ish glibc on the host. Practical
+floor: glibc ≥ 2.31 (Ubuntu 20.04). The archive is built on
+`ubuntu-latest` GitHub runners (currently 22.04, glibc 2.35); any
+host with glibc ≥ that should be fully covered.
+
+### Static archives
+
+The `-static` flavors ship `.a` / `.lib` only and never invoke the
+`ldd` / `dylibbundler` step. Transitive runtime deps are not a
+concern because everything is linked into the final consumer
+binary at static-link time. You are responsible for whatever the
+static linker pulls in (e.g. system `-ldl`, `-lpthread`).

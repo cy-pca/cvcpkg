@@ -281,6 +281,81 @@ jobs:
             [ -d $HOME/vtk-qt6/bin ]   && cp -R $HOME/vtk-qt6/bin/.   "$DIST/bin/"   2>/dev/null || true
           fi
 
+      # ── Pull in transitive NEEDED libraries via ldd ──
+      #
+      # The explicit allowlist above (libboost_*, libhdf5*, libQt6*, …)
+      # covers the libraries the consumer calls directly, but their
+      # own NEEDED entries pull in a second tier (libicu*, libpng16,
+      # libxml2, liblzma, libz, libfreetype, libfontconfig, libssl,
+      # libharfbuzz, libdouble-conversion, …) that is bound to the
+      # exact SONAME shipped on the builder's Ubuntu image. Without
+      # bundling those, the archive only works on a host that happens
+      # to match the builder's distro version (ICU SONAME changes
+      # between 22.04 → libicui18n.so.70 and 24.04 → libicui18n.so.74,
+      # for example).
+      #
+      # Resolve every NEEDED edge transitively via ldd and copy each
+      # non-system .so into $DIST/lib/, leaving only the truly
+      # ABI-stable host primitives (glibc, ld-linux, libstdc++) to
+      # the loader.
+      - name: Bundle transitive NEEDED libs (ldd sweep)
+        if: matrix.link == 'shared'
+        run: |
+          set -euo pipefail
+          DIST="$PWD/${{ steps.meta.outputs.stem }}"
+
+          # SONAMEs that stay on the host. glibc + libstdc++ are
+          # forward-compatible; the rest are loader/runtime bits
+          # that must come from the host kernel/glibc ABI.
+          host_re='^(linux-vdso\.so|ld-linux-.*\.so|libc\.so|libpthread\.so|libdl\.so|librt\.so|libm\.so|libresolv\.so|libnsl\.so|libutil\.so|libstdc\+\+\.so|libgcc_s\.so|libanl\.so)'
+
+          shopt -s globstar nullglob
+          # Worklist seeded with every shipped .so. ldd's recursive
+          # output already walks the full graph per file, so a single
+          # pass is sufficient (we just need to dedup across files).
+          declare -A seen=()
+          tmp=$(mktemp)
+          for so in "$DIST"/lib/**/*.so* "$DIST"/lib/*.so* "$DIST"/plugins/**/*.so* "$DIST"/bin/*; do
+            [ -e "$so" ] || continue
+            [ -L "$so" ] && continue
+            # Probe with ldd; suppress "not a dynamic executable".
+            ldd "$so" 2>/dev/null >> "$tmp" || true
+          done
+
+          # ldd lines we care about look like:
+          #   <soname> => /usr/lib/x86_64-linux-gnu/<path> (0x...)
+          # We want the resolved path on the right of "=>".
+          awk '/ => \// { print $3 }' "$tmp" | sort -u > "${tmp}.paths"
+
+          copied=0
+          while IFS= read -r path; do
+            [ -z "$path" ] && continue
+            [ -e "$path" ] || continue
+            base=$(basename "$path")
+            # Skip host-bound SONAMEs.
+            if [[ "$base" =~ $host_re ]]; then
+              continue
+            fi
+            # Already shipped (allowlist stage may have placed it).
+            if [ -e "$DIST/lib/$base" ]; then
+              seen["$base"]=1
+              continue
+            fi
+            # Copy the real file plus any SONAME symlink chain
+            # (libfoo.so.1 -> libfoo.so.1.2.3).
+            real=$(readlink -f "$path")
+            cp -P "$real" "$DIST/lib/"
+            # Recreate the SONAME-level symlink under $DIST/lib so
+            # the dynamic loader finds it by the name in DT_NEEDED.
+            if [ "$(basename "$real")" != "$base" ]; then
+              ln -sf "$(basename "$real")" "$DIST/lib/$base"
+            fi
+            seen["$base"]=1
+            copied=$((copied + 1))
+          done < "${tmp}.paths"
+          rm -f "$tmp" "${tmp}.paths"
+          echo "Bundled $copied additional transitive libs."
+
       # ── Patch RPATH to $ORIGIN so the staged libs resolve each
       #    other regardless of where the archive is extracted ──
       - name: Patch RPATH ($ORIGIN)
