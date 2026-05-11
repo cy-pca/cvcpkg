@@ -1,0 +1,12 @@
+build/
+build-*/
+_CPack_Packages/
+*.tar.gz
+*.zip
+*.dmg
+*.deb
+*.exe
+*.AppImage
+.vscode/
+.idea/
+.DS_Store

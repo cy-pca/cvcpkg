@@ -1,0 +1,725 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+  # Allow manual one-off builds without tagging (for plumbing
+  # verification on a feature branch).
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: 'Mark the GitHub Release as a pre-release.'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+# ───────────────────────────────────────────────────────────────────
+# libcvc-deps release artifacts
+#
+# Self-contained CMAKE_PREFIX_PATH bundles holding every project-level
+# dependency needed to build libcvc + volrover3. Each archive is one
+# install prefix:
+#
+#   <root>/{bin,lib,include,share,plugins,...}
+#
+# Build flavors per platform: (Debug|Release) × (shared|static).
+#
+#   libcvc-deps-<ver>-linux-<arch>-<config>[-static].tar.gz
+#   libcvc-deps-<ver>-macos-<arch>-<config>[-static].zip
+#   libcvc-deps-<ver>-windows-<arch>-<config>[-static].zip
+#
+# Contents:
+#   - Boost, HDF5 (C+CXX), FFTW3, GSL, log4cplus, CGAL+GMP+MPFR,
+#     ImageMagick (Q16-HDRI)
+#   - Qt 6.7.x (Core, Gui, Widgets, OpenGL, OpenGLWidgets)
+#   - VTK 9.5.0 built against Qt 6 (no QtQuick modules)
+#
+# CUDA toolkit is intentionally NOT bundled — consumers install it
+# directly via Jimver/cuda-toolkit on the build host.
+# System libraries (glibc, libstdc++, Windows UCRT) are left to the
+# host.
+# ───────────────────────────────────────────────────────────────────
+
+env:
+  VTK_VERSION: '9.5.0'
+  QT_VERSION_LINUX_MACOS: '6'    # apt qt6-base-dev / brew qt@6
+  QT_VERSION_WINDOWS: '6.7.*'    # install-qt-action spec
+
+jobs:
+  # ──────────────────────────── Linux ────────────────────────────
+  linux:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - build_type: Debug
+            link: shared
+          - build_type: Release
+            link: shared
+          - build_type: Debug
+            link: static
+          - build_type: Release
+            link: static
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute artifact metadata
+        id: meta
+        run: |
+          VERSION=$(awk '/^[[:space:]]*VERSION[[:space:]]+[0-9]/{gsub(/[^0-9.]/,"",$2); print $2; exit}' CMakeLists.txt)
+          ARCH=$(uname -m)
+          BTLC=$(echo "${{ matrix.build_type }}" | tr '[:upper:]' '[:lower:]')
+          if [ "${{ matrix.link }}" = "static" ]; then
+            LINKSFX="-static"
+          else
+            LINKSFX=""
+          fi
+          STEM="libcvc-deps-${VERSION}-linux-${ARCH}-${BTLC}${LINKSFX}"
+          echo "version=$VERSION"  >> "$GITHUB_OUTPUT"
+          echo "arch=$ARCH"        >> "$GITHUB_OUTPUT"
+          echo "btlc=$BTLC"        >> "$GITHUB_OUTPUT"
+          echo "linksfx=$LINKSFX"  >> "$GITHUB_OUTPUT"
+          echo "stem=$STEM"        >> "$GITHUB_OUTPUT"
+
+      - name: Install apt dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build patchelf \
+            libboost-all-dev libhdf5-dev libfftw3-dev libgsl-dev \
+            libmagick++-dev liblog4cplus-dev \
+            libcgal-dev libgmp-dev libmpfr-dev \
+            qt6-base-dev qt6-base-dev-tools libqt6opengl6-dev \
+            libgl1-mesa-dev libxt-dev mesa-common-dev libglew-dev \
+            libxrender-dev libxcursor-dev libxinerama-dev libxi-dev
+
+      # ── VTK 9.5 built against Qt6, cached ──
+      - name: Cache VTK install tree
+        id: vtk-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/vtk-qt6
+          key: vtk-${{ env.VTK_VERSION }}-qt6-${{ runner.os }}-v2
+
+      - name: Build VTK from source (Qt6)
+        if: steps.vtk-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          curl -L -o vtk.tar.gz https://github.com/Kitware/VTK/archive/refs/tags/v${VTK_VERSION}.tar.gz
+          tar xzf vtk.tar.gz
+          cmake -S VTK-${VTK_VERSION} -B vtk-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=$HOME/vtk-qt6 \
+            -DBUILD_SHARED_LIBS=ON \
+            -DVTK_GROUP_ENABLE_Qt=YES \
+            -DVTK_QT_VERSION=6 \
+            -DVTK_MODULE_ENABLE_VTK_GUISupportQtQuick=NO \
+            -DVTK_MODULE_ENABLE_VTK_RenderingQtQuick=NO \
+            -DVTK_BUILD_TESTING=OFF \
+            -DVTK_BUILD_EXAMPLES=OFF \
+            -DVTK_BUILD_DOCUMENTATION=OFF \
+            -DVTK_LEGACY_REMOVE=ON
+          cmake --build vtk-build --parallel --target install
+          rm -rf vtk-build VTK-${VTK_VERSION} vtk.tar.gz
+
+      # ── Install the marker libcvc-depsConfig.cmake ──
+      - name: Configure + install marker config
+        run: |
+          STEM="${{ steps.meta.outputs.stem }}"
+          DIST="$PWD/$STEM"
+          rm -rf "$DIST"
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_INSTALL_PREFIX="$DIST"
+          cmake --install build
+          mkdir -p "$DIST/lib" "$DIST/include" "$DIST/bin" "$DIST/share"
+
+      # ── Stage every apt-installed dep into $DIST ──
+      - name: Stage apt deps
+        run: |
+          set -euo pipefail
+          DIST="$PWD/${{ steps.meta.outputs.stem }}"
+
+          if [ "${{ matrix.link }}" = "static" ]; then
+            patterns=( '*.a' )
+          else
+            patterns=( '*.so' '*.so.*' )
+          fi
+
+          LIBDIRS=( /usr/lib/x86_64-linux-gnu /usr/lib )
+
+          copy_libs() {
+            local prefix="$1"
+            for d in "${LIBDIRS[@]}"; do
+              for pat in "${patterns[@]}"; do
+                find "$d" -maxdepth 1 -name "${prefix}${pat}" -print0 2>/dev/null \
+                  | xargs -0 -r cp -P -t "$DIST/lib/" 2>/dev/null || true
+              done
+            done
+          }
+          # libcvc deps
+          copy_libs 'libboost_'
+          copy_libs 'libhdf5'
+          copy_libs 'libfftw3'
+          copy_libs 'libgsl'
+          copy_libs 'libgslcblas'
+          copy_libs 'liblog4cplus'
+          copy_libs 'libMagick++-'
+          copy_libs 'libMagickCore-'
+          copy_libs 'libMagickWand-'
+          copy_libs 'libCGAL'
+          copy_libs 'libgmp'
+          copy_libs 'libmpfr'
+          # volrover3 GL deps that Qt6/VTK pull at runtime
+          copy_libs 'libGLEW'
+          copy_libs 'libQt6'
+          # X11 client libs needed by Qt6 xcb platform plugin
+          for pre in libxcb libX11 libXrender libXcursor libXinerama libXi libXext libXfixes libXrandr; do
+            copy_libs "$pre"
+          done
+
+          # CMake config trees so find_package(<Pkg> CONFIG) works
+          # against the staged prefix without needing the host apt
+          # packages.
+          mkdir -p "$DIST/lib/cmake"
+          for d in /usr/lib/x86_64-linux-gnu/cmake/*; do
+            [ -d "$d" ] || continue
+            base=$(basename "$d")
+            case "$base" in
+              # Bundle CMake configs for everything we ship.
+              Boost*|hdf5|HDF5|GSL|CGAL|log4cplus|ImageMagick|Magick*|\
+              Qt6*|VTK|vtk*|GLEW)
+                cp -R "$d" "$DIST/lib/cmake/"
+                ;;
+            esac
+          done
+          # Qt6 itself drops its top-level cmake configs under
+          # /usr/lib/x86_64-linux-gnu/cmake/Qt6/ and per-module dirs
+          # alongside (Qt6Core, Qt6Gui, …). Sweep them all.
+          find /usr/lib/x86_64-linux-gnu/cmake -maxdepth 1 -type d -name 'Qt6*' \
+            -exec cp -R {} "$DIST/lib/cmake/" \;
+
+          # Boost ships pkg-config + cmake under several paths; also
+          # copy the dir at /usr/lib/x86_64-linux-gnu/cmake/Boost-*.
+          find /usr/lib/x86_64-linux-gnu/cmake -maxdepth 1 -type d \
+            \( -name 'Boost*' -o -name 'boost*' \) \
+            -exec cp -R {} "$DIST/lib/cmake/" \;
+
+          # Headers
+          for src in \
+              /usr/include/boost \
+              /usr/include/gsl \
+              /usr/include/log4cplus \
+              /usr/include/CGAL \
+              /usr/include/Magick++ \
+              /usr/include/magick \
+              /usr/include/MagickCore \
+              /usr/include/MagickWand \
+              /usr/include/GL \
+              /usr/include/x86_64-linux-gnu/qt6 ; do
+            [ -d "$src" ] && cp -R "$src" "$DIST/include/"
+          done
+          # HDF5 headers live under /usr/include/hdf5/serial on Ubuntu.
+          if [ -d /usr/include/hdf5/serial ]; then
+            mkdir -p "$DIST/include/hdf5"
+            cp -R /usr/include/hdf5/serial/. "$DIST/include/hdf5/"
+          fi
+          # Top-level header files (fftw3.h, gmp.h, mpfr.h, …)
+          for f in /usr/include/fftw3.h /usr/include/fftw3.f \
+                   /usr/include/fftw3l.h /usr/include/fftw3q.h \
+                   /usr/include/gmp.h /usr/include/mpfr.h /usr/include/mpf2mpfr.h ; do
+            [ -f "$f" ] && cp "$f" "$DIST/include/"
+          done
+
+          # Qt6 tools (qmake, moc, rcc, uic) live in /usr/lib/qt6/bin
+          # on Ubuntu; mirror so consumers don't need qt6-base-dev-tools.
+          if [ -d /usr/lib/qt6/bin ]; then
+            cp -R /usr/lib/qt6/bin/. "$DIST/bin/" 2>/dev/null || true
+          fi
+          # Qt6 platform/imageformat plugins
+          if [ -d /usr/lib/x86_64-linux-gnu/qt6/plugins ]; then
+            mkdir -p "$DIST/plugins"
+            cp -R /usr/lib/x86_64-linux-gnu/qt6/plugins/. "$DIST/plugins/"
+          fi
+
+      # ── Stage VTK from the cached install ──
+      - name: Stage VTK
+        run: |
+          set -euo pipefail
+          DIST="$PWD/${{ steps.meta.outputs.stem }}"
+          if [ -d $HOME/vtk-qt6 ]; then
+            cp -R $HOME/vtk-qt6/include/. "$DIST/include/" 2>/dev/null || true
+            cp -R $HOME/vtk-qt6/lib/.     "$DIST/lib/"     2>/dev/null || true
+            [ -d $HOME/vtk-qt6/share ] && cp -R $HOME/vtk-qt6/share/. "$DIST/share/" 2>/dev/null || true
+            [ -d $HOME/vtk-qt6/bin ]   && cp -R $HOME/vtk-qt6/bin/.   "$DIST/bin/"   2>/dev/null || true
+          fi
+
+      # ── Patch RPATH to $ORIGIN so the staged libs resolve each
+      #    other regardless of where the archive is extracted ──
+      - name: Patch RPATH ($ORIGIN)
+        if: matrix.link == 'shared'
+        run: |
+          set -euo pipefail
+          DIST="$PWD/${{ steps.meta.outputs.stem }}"
+          shopt -s globstar nullglob
+          for so in "$DIST"/lib/**/*.so* "$DIST"/lib/*.so*; do
+            [ -e "$so" ] || continue
+            [ -L "$so" ] && continue
+            patchelf --remove-rpath "$so" 2>/dev/null || true
+            patchelf --set-rpath '$ORIGIN' "$so" 2>/dev/null || true
+          done
+
+      - name: Pack tarball
+        run: |
+          STEM="${{ steps.meta.outputs.stem }}"
+          tar czf "${STEM}.tar.gz" "$STEM"
+          du -sh "$STEM" "${STEM}.tar.gz"
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.build_type }}-${{ matrix.link }}
+          path: libcvc-deps-*.tar.gz
+          if-no-files-found: error
+
+  # ──────────────────────────── macOS ────────────────────────────
+  macos:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - build_type: Debug
+            link: shared
+          - build_type: Release
+            link: shared
+          - build_type: Debug
+            link: static
+          - build_type: Release
+            link: static
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute artifact metadata
+        id: meta
+        run: |
+          VERSION=$(awk '/^[[:space:]]*VERSION[[:space:]]+[0-9]/{gsub(/[^0-9.]/,"",$2); print $2; exit}' CMakeLists.txt)
+          ARCH=$(uname -m)
+          BTLC=$(echo "${{ matrix.build_type }}" | tr '[:upper:]' '[:lower:]')
+          if [ "${{ matrix.link }}" = "static" ]; then
+            LINKSFX="-static"
+          else
+            LINKSFX=""
+          fi
+          STEM="libcvc-deps-${VERSION}-macos-${ARCH}-${BTLC}${LINKSFX}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "arch=$ARCH"       >> "$GITHUB_OUTPUT"
+          echo "btlc=$BTLC"       >> "$GITHUB_OUTPUT"
+          echo "linksfx=$LINKSFX" >> "$GITHUB_OUTPUT"
+          echo "stem=$STEM"       >> "$GITHUB_OUTPUT"
+
+      - name: Install brew dependencies
+        run: |
+          brew install cmake ninja \
+            boost hdf5 fftw gsl imagemagick log4cplus \
+            cgal gmp mpfr \
+            qt@6 vtk
+
+      - name: Configure + install marker config
+        run: |
+          STEM="${{ steps.meta.outputs.stem }}"
+          DIST="$PWD/$STEM"
+          rm -rf "$DIST"
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_INSTALL_PREFIX="$DIST"
+          cmake --install build
+          mkdir -p "$DIST/lib" "$DIST/include" "$DIST/bin" "$DIST/share/cmake"
+
+      - name: Stage brew deps
+        run: |
+          set -euo pipefail
+          DIST="$PWD/${{ steps.meta.outputs.stem }}"
+
+          # Decide which lib pattern matters for this flavor. brew
+          # bottles for boost/hdf5/fftw/gsl/log4cplus carry both .a
+          # and .dylib; CGAL is header-only-ish but ships a .dylib.
+          # Qt6 / VTK ship .dylib only (no static brew flavor).
+          if [ "${{ matrix.link }}" = "static" ]; then
+            lib_patterns=( '*.a' '*.dylib' )   # Qt/VTK have no .a; ship dylib for those
+          else
+            lib_patterns=( '*.dylib' )
+          fi
+
+          # Bulk-copy each brew prefix (include + lib + share +
+          # bin) into the staged tree.
+          for pkg in boost hdf5 fftw gsl log4cplus imagemagick \
+                     cgal gmp mpfr qt@6 vtk ; do
+            P=$(brew --prefix "$pkg" 2>/dev/null || true)
+            [ -n "$P" ] || continue
+            [ -d "$P/include" ] && cp -R "$P/include/." "$DIST/include/" 2>/dev/null || true
+            if [ -d "$P/lib" ]; then
+              for pat in "${lib_patterns[@]}"; do
+                find "$P/lib" -maxdepth 1 -name "$pat" -print0 2>/dev/null \
+                  | xargs -0 -I {} cp -RP {} "$DIST/lib/" 2>/dev/null || true
+              done
+              # CMake config dirs
+              if [ -d "$P/lib/cmake" ]; then
+                mkdir -p "$DIST/lib/cmake"
+                cp -R "$P/lib/cmake/." "$DIST/lib/cmake/" 2>/dev/null || true
+              fi
+            fi
+            [ -d "$P/share" ] && cp -R "$P/share/." "$DIST/share/" 2>/dev/null || true
+            [ -d "$P/bin" ]   && cp -R "$P/bin/."   "$DIST/bin/"   2>/dev/null || true
+          done
+
+          # Qt6 cmake configs / plugins live under qt@6/share/qt &
+          # qt@6/lib/QtCore.framework etc on macOS. brew's qt@6 bottle
+          # uses .framework bundles for the Qt libs themselves; the
+          # blanket `cp lib/*.dylib` above missed them — sweep them in
+          # explicitly.
+          QT_PREFIX=$(brew --prefix qt@6 2>/dev/null || true)
+          if [ -n "$QT_PREFIX" ] && [ -d "$QT_PREFIX/lib" ]; then
+            find "$QT_PREFIX/lib" -maxdepth 1 -name '*.framework' \
+              -exec cp -R {} "$DIST/lib/" \;
+          fi
+          # Qt6 plugins (platforms/, imageformats/, ...) live under
+          # qt@6/share/qt/plugins on brew.
+          if [ -n "$QT_PREFIX" ] && [ -d "$QT_PREFIX/share/qt/plugins" ]; then
+            mkdir -p "$DIST/plugins"
+            cp -R "$QT_PREFIX/share/qt/plugins/." "$DIST/plugins/"
+          fi
+
+      # ── Rewrite install_names to @rpath / @loader_path so the
+      #    bundle is relocatable ──
+      - name: Bundle dylib install names
+        if: matrix.link == 'shared'
+        run: |
+          set -euo pipefail
+          DIST="$PWD/${{ steps.meta.outputs.stem }}"
+          brew install dylibbundler
+          # Run dylibbundler on every top-level dylib in lib/. This is
+          # idempotent; dylibbundler will rewrite install_names to
+          # @rpath/<dylib> and add @loader_path/ rpaths.
+          for dy in "$DIST"/lib/*.dylib; do
+            [ -e "$dy" ] || continue
+            [ -L "$dy" ] && continue
+            dylibbundler -od -b -x "$dy" -d "$DIST/lib" -p '@loader_path/' -of -cd || true
+          done
+
+      - name: Pack zip
+        run: |
+          STEM="${{ steps.meta.outputs.stem }}"
+          ditto -c -k --sequesterRsrc --keepParent "$STEM" "${STEM}.zip"
+          du -sh "$STEM" "${STEM}.zip"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.build_type }}-${{ matrix.link }}
+          path: libcvc-deps-*.zip
+          if-no-files-found: error
+
+  # ──────────────────────────── Windows ────────────────────────────
+  windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - build_type: Debug
+            link: shared
+          - build_type: Release
+            link: shared
+          - build_type: Debug
+            link: static
+          - build_type: Release
+            link: static
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute artifact metadata
+        id: meta
+        shell: bash
+        run: |
+          VERSION=$(awk '/^[[:space:]]*VERSION[[:space:]]+[0-9]/{gsub(/[^0-9.]/,"",$2); print $2; exit}' CMakeLists.txt)
+          BTLC=$(echo "${{ matrix.build_type }}" | tr '[:upper:]' '[:lower:]')
+          if [ "${{ matrix.link }}" = "static" ]; then
+            LINKSFX="-static"
+            TRIPLET="x64-windows-static"
+          else
+            LINKSFX=""
+            TRIPLET="x64-windows"
+          fi
+          STEM="libcvc-deps-${VERSION}-windows-x86_64-${BTLC}${LINKSFX}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "arch=x86_64"      >> "$GITHUB_OUTPUT"
+          echo "btlc=$BTLC"       >> "$GITHUB_OUTPUT"
+          echo "linksfx=$LINKSFX" >> "$GITHUB_OUTPUT"
+          echo "triplet=$TRIPLET" >> "$GITHUB_OUTPUT"
+          echo "stem=$STEM"       >> "$GITHUB_OUTPUT"
+
+      # ── Free disk space and route vcpkg working dirs to D: ──
+      - name: 'Free disk space and route vcpkg to D: (Windows)'
+        shell: pwsh
+        run: |
+          foreach ($dir in @(
+              'C:\Android', 'C:\Program Files\dotnet',
+              'C:\hostedtoolcache\windows\Ruby',
+              'C:\hostedtoolcache\windows\PyPy',
+              'C:\hostedtoolcache\windows\go',
+              'C:\hostedtoolcache\windows\node')) {
+            if (Test-Path $dir) {
+              Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $dir
+            }
+          }
+          New-Item -ItemType Directory -Force -Path D:\vcpkg-buildtrees | Out-Null
+          New-Item -ItemType Directory -Force -Path D:\vcpkg-packages   | Out-Null
+          New-Item -ItemType Directory -Force -Path D:\vcpkg-downloads  | Out-Null
+          "VCPKG_DOWNLOADS=D:\vcpkg-downloads"   | Out-File -Append $env:GITHUB_ENV
+          "VCPKG_BUILDTREES=D:\vcpkg-buildtrees" | Out-File -Append $env:GITHUB_ENV
+          "VCPKG_PACKAGES=D:\vcpkg-packages"     | Out-File -Append $env:GITHUB_ENV
+
+      - name: Cache vcpkg installed packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.VCPKG_INSTALLATION_ROOT }}\installed
+            ${{ env.VCPKG_INSTALLATION_ROOT }}\packages
+            ~\AppData\Local\vcpkg\archives
+          key: vcpkg-deps-${{ matrix.build_type }}-${{ steps.meta.outputs.triplet }}-v1
+          restore-keys: |
+            vcpkg-deps-${{ matrix.build_type }}-${{ steps.meta.outputs.triplet }}-
+
+      - name: Restore vcpkg downloads cache
+        id: vcpkg-downloads-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: D:\vcpkg-downloads
+          key: vcpkg-downloads-${{ hashFiles('.github/workflows/release.yml') }}
+          restore-keys: |
+            vcpkg-downloads-
+
+      # Qt6 from official prebuilt binaries (faster than vcpkg's
+      # source build of qt6-base).
+      - name: Install Qt6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION_WINDOWS }}
+          host: 'windows'
+          target: 'desktop'
+          # msvc2019_64 is ABI-compatible with the MSVC 2022 toolchain
+          # on windows-latest; Qt does not publish msvc2022_64 for 6.7.x.
+          arch: 'win64_msvc2019_64'
+          modules: ''
+          cache: true
+
+      - name: Install vcpkg dependencies
+        shell: pwsh
+        env:
+          VCPKG_OVERLAY_PORTS: ${{ github.workspace }}\vcpkg-overlay\ports
+        run: |
+          $packages = @(
+            'boost-thread','boost-date-time','boost-regex','boost-filesystem',
+            'boost-system','boost-chrono','boost-program-options','boost-signals2',
+            'boost-format','boost-property-tree','boost-algorithm','boost-asio',
+            'boost-any','boost-array','boost-dynamic-bitset','boost-exception',
+            'boost-foreach','boost-function','boost-lambda','boost-lexical-cast',
+            'boost-multi-array','boost-optional','boost-smart-ptr','boost-tuple',
+            'boost-utility',
+            'hdf5[cpp]','fftw3','gsl','imagemagick','log4cplus',
+            'cgal','glew'
+          )
+          for ($i = 1; $i -le 5; $i++) {
+            Write-Host "vcpkg install attempt $i / 5"
+            vcpkg install @packages --triplet ${{ steps.meta.outputs.triplet }} `
+              --clean-after-build `
+              --x-buildtrees-root=D:\vcpkg-buildtrees `
+              --x-packages-root=D:\vcpkg-packages
+            if ($LASTEXITCODE -eq 0) { break }
+            if ($i -eq 5) { exit $LASTEXITCODE }
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue D:\vcpkg-buildtrees\*
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue D:\vcpkg-packages\*
+            $sleep = [Math]::Min(60 * $i, 180)
+            Start-Sleep -Seconds $sleep
+          }
+
+      - name: Save vcpkg downloads cache
+        if: always() && steps.vcpkg-downloads-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: D:\vcpkg-downloads
+          key: vcpkg-downloads-${{ hashFiles('.github/workflows/release.yml') }}
+
+      # ── VTK 9.5 from source against aqt Qt6 ──
+      - name: Restore VTK cache
+        id: vtk-cache-windows
+        uses: actions/cache/restore@v4
+        with:
+          path: D:\vtk-qt6
+          key: vtk-${{ env.VTK_VERSION }}-qt6-${{ runner.os }}-${{ matrix.build_type }}-v1
+
+      - name: Build VTK from source against Qt6
+        if: steps.vtk-cache-windows.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/Kitware/VTK/archive/refs/tags/v${env:VTK_VERSION}.tar.gz" -OutFile vtk.tar.gz
+          tar xzf vtk.tar.gz
+          cmake -S "VTK-${env:VTK_VERSION}" -B D:\vtk-build `
+            -DCMAKE_INSTALL_PREFIX=D:\vtk-qt6 `
+            -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR" `
+            -DBUILD_SHARED_LIBS=ON `
+            -DVTK_GROUP_ENABLE_Qt=YES `
+            -DVTK_QT_VERSION=6 `
+            -DVTK_MODULE_ENABLE_VTK_GUISupportQtQuick=NO `
+            -DVTK_MODULE_ENABLE_VTK_RenderingQtQuick=NO `
+            -DVTK_BUILD_TESTING=OFF `
+            -DVTK_BUILD_EXAMPLES=OFF `
+            -DVTK_BUILD_DOCUMENTATION=OFF `
+            -DVTK_LEGACY_REMOVE=ON
+          cmake --build D:\vtk-build --config ${{ matrix.build_type }} --parallel --target install
+          Remove-Item -Recurse -Force D:\vtk-build
+          Remove-Item -Recurse -Force "VTK-${env:VTK_VERSION}"
+          Remove-Item -Force vtk.tar.gz
+
+      - name: Save VTK cache
+        if: steps.vtk-cache-windows.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: D:\vtk-qt6
+          key: vtk-${{ env.VTK_VERSION }}-qt6-${{ runner.os }}-${{ matrix.build_type }}-v1
+
+      - name: Configure + install marker config
+        shell: pwsh
+        run: |
+          $stem = '${{ steps.meta.outputs.stem }}'
+          $dist = Join-Path $env:GITHUB_WORKSPACE $stem
+          if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
+          cmake -B build -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_INSTALL_PREFIX="$dist"
+          cmake --install build --config ${{ matrix.build_type }}
+          New-Item -ItemType Directory -Force -Path "$dist/bin","$dist/lib","$dist/include","$dist/share" | Out-Null
+
+      - name: Stage vcpkg + Qt + VTK trees
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stem    = '${{ steps.meta.outputs.stem }}'
+          $dist    = Join-Path $env:GITHUB_WORKSPACE $stem
+          $isDebug = '${{ matrix.build_type }}' -eq 'Debug'
+          $triplet = '${{ steps.meta.outputs.triplet }}'
+
+          # ── vcpkg installed tree ───────────────────────────────
+          $vcRoot = Join-Path $env:VCPKG_INSTALLATION_ROOT "installed/$triplet"
+          if (-not (Test-Path $vcRoot)) {
+            throw "vcpkg installed tree not found at $vcRoot"
+          }
+          # Layout per triplet:
+          #   <triplet>/{bin,lib,include,share}     — release
+          #   <triplet>/debug/{bin,lib}             — debug
+          # Headers + share/cmake/* are config-agnostic and live in
+          # the release subtree only.
+          $libSrc = if ($isDebug) { Join-Path $vcRoot 'debug/lib' } else { Join-Path $vcRoot 'lib' }
+          $binSrc = if ($isDebug) { Join-Path $vcRoot 'debug/bin' } else { Join-Path $vcRoot 'bin' }
+
+          if (Test-Path "$vcRoot/include") {
+            Copy-Item -Recurse -Force "$vcRoot/include/*" "$dist/include/"
+          }
+          if (Test-Path "$vcRoot/share") {
+            Copy-Item -Recurse -Force "$vcRoot/share/*" "$dist/share/"
+          }
+          if (Test-Path $libSrc) {
+            $patterns = if ($isDebug) { @('*.lib','*.pdb') } else { @('*.lib') }
+            foreach ($p in $patterns) {
+              Get-ChildItem -Path $libSrc -Filter $p -File `
+                | Copy-Item -Destination "$dist/lib/" -Force
+            }
+          }
+          if ('${{ matrix.link }}' -eq 'shared' -and (Test-Path $binSrc)) {
+            $patterns = if ($isDebug) { @('*.dll','*.pdb') } else { @('*.dll') }
+            foreach ($p in $patterns) {
+              Get-ChildItem -Path $binSrc -Filter $p -File `
+                | Copy-Item -Destination "$dist/bin/" -Force
+            }
+          }
+
+          # ── Qt6 (aqtinstall tree) ──────────────────────────────
+          if ($env:QT_ROOT_DIR -and (Test-Path $env:QT_ROOT_DIR)) {
+            foreach ($sub in 'include','lib','bin','plugins','qml','mkspecs') {
+              $src = Join-Path $env:QT_ROOT_DIR $sub
+              if (Test-Path $src) {
+                $dst = Join-Path $dist $sub
+                New-Item -ItemType Directory -Force -Path $dst | Out-Null
+                Copy-Item -Recurse -Force "$src/*" $dst
+              }
+            }
+          }
+
+          # ── VTK 9.5 install tree ───────────────────────────────
+          if (Test-Path D:\vtk-qt6) {
+            foreach ($sub in 'include','lib','bin','share') {
+              $src = "D:\vtk-qt6\$sub"
+              if (Test-Path $src) {
+                $dst = Join-Path $dist $sub
+                New-Item -ItemType Directory -Force -Path $dst | Out-Null
+                Copy-Item -Recurse -Force "$src/*" $dst
+              }
+            }
+          }
+
+      - name: Pack zip
+        shell: pwsh
+        run: |
+          $stem = '${{ steps.meta.outputs.stem }}'
+          $dist = Join-Path $env:GITHUB_WORKSPACE $stem
+          Compress-Archive -Path "$dist/*" -DestinationPath (Join-Path $env:GITHUB_WORKSPACE "$stem.zip") -Force
+          Get-ChildItem "$env:GITHUB_WORKSPACE/$stem.zip" | Format-List Name,Length
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.build_type }}-${{ matrix.link }}
+          path: libcvc-deps-*.zip
+          if-no-files-found: error
+
+  # ──────────────────────────── Release ────────────────────────────
+  release:
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-latest
+    # Skip the release step entirely for manual workflow_dispatch
+    # runs unless the workflow was triggered on a tag.
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: find artifacts -type f | sort
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          prerelease: ${{ inputs.prerelease || false }}
+          generate_release_notes: false
+          # Explicit prefix so stray files from third-party actions
+          # can never ride along.
+          files: |
+            artifacts/libcvc-deps-*.tar.gz
+            artifacts/libcvc-deps-*.zip
