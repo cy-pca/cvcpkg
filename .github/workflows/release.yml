@@ -684,12 +684,11 @@ jobs:
             'hdf5[cpp]','fftw3','gsl','imagemagick','log4cplus',
             'cgal','glew',
             # F2Dock / F3Dock science stack.
-            #   eigen3   — header-only linear algebra (always added)
+            #   eigen3   — header-only linear algebra
             #   clapack  — LAPACK API for Windows (no MKL dep)
             #   openblas — BLAS backend for clapack
-            # NFFT3 has no vcpkg port. F2Dock gates NFFT behind
-            # pkg_check_modules, which is QUIET-optional, so a Windows
-            # consumer simply builds without F2DOCK_HAVE_NFFT.
+            # NFFT3 has no vcpkg port; it is staged directly from the
+            # upstream prebuilt Windows binaries in a later step.
             'eigen3','clapack','openblas'
           )
           for ($i = 1; $i -le 5; $i++) {
@@ -828,6 +827,187 @@ jobs:
               }
             }
           }
+
+      # NFFT3 has no vcpkg port. Rather than relying on an upstream
+      # prebuilt zip (whose hosting and URLs we don't control), we
+      # build NFFT3 from source in MSYS2/mingw64 — the same toolchain
+      # upstream's `windows-build-dll.sh` uses to produce their
+      # official Windows DLL release. The resulting `.dll` plus its
+      # mingw runtime dependencies are staged alongside the rest of
+      # the bundle, and an MSVC-friendly import library is generated
+      # from the DLL via `gendef` + `lib /def:`. F2Dock's
+      # pkg_check_modules(NFFT QUIET IMPORTED_TARGET nfft3) picks the
+      # result up via the rewritten nfft3.pc, identical to Linux.
+      #
+      # Source: https://github.com/NFFT/nfft/releases/tag/3.5.3
+      # (with a TU-Chemnitz mirror as a fallback). SHA256 is pinned.
+      - name: Set up MSYS2 (mingw64) for NFFT3 build
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            autoconf automake libtool perl make tar
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-fftw
+            mingw-w64-x86_64-tools-git
+            wget
+
+      - name: Build NFFT3 from source (MSYS2 mingw64)
+        shell: 'msys2 {0}'
+        env:
+          NFFT_VERSION: '3.5.3'
+          NFFT_SHA256:  'caf1b3b3e5bf8c33a6bfd7eca811d954efce896605ecfd0144d47d0bebdf4371'
+        run: |
+          set -ex
+          cd "$GITHUB_WORKSPACE"
+
+          url_gh="https://github.com/NFFT/nfft/releases/download/${NFFT_VERSION}/nfft-${NFFT_VERSION}.tar.gz"
+          url_tuc="https://www-user.tu-chemnitz.de/~potts/nfft/download/nfft-${NFFT_VERSION}.tar.gz"
+          echo "Fetching NFFT3 ${NFFT_VERSION} source ..."
+          wget -q "$url_gh" -O nfft.tar.gz || wget -q "$url_tuc" -O nfft.tar.gz
+          echo "${NFFT_SHA256}  nfft.tar.gz" | sha256sum -c -
+
+          tar -xzf nfft.tar.gz
+          cd "nfft-${NFFT_VERSION}"
+
+          # FFTW3 ships in /mingw64 via the mingw-w64-x86_64-fftw
+          # package. autoconf picks it up from PKG_CONFIG_PATH/-I/-L
+          # automatically; we point it explicitly to be safe.
+          ./configure \
+            --prefix="$(cygpath -u "$GITHUB_WORKSPACE")/nfft-install" \
+            --enable-openmp \
+            --enable-shared \
+            --disable-static \
+            --disable-examples \
+            --disable-applications \
+            --with-fftw3-includedir=/mingw64/include \
+            --with-fftw3-libdir=/mingw64/lib \
+            --with-gcc-arch=haswell \
+            CFLAGS="-O3 -ffast-math" \
+            LDFLAGS="-static-libgcc"
+          make -j$(nproc)
+          make install
+          ls -la "$(cygpath -u "$GITHUB_WORKSPACE")/nfft-install/bin" || true
+          ls -la "$(cygpath -u "$GITHUB_WORKSPACE")/nfft-install/lib" || true
+          ls -la "$(cygpath -u "$GITHUB_WORKSPACE")/nfft-install/include" || true
+
+      - name: Set up MSVC dev environment for lib.exe
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Stage NFFT3 into bundle (DLLs + MSVC import lib)
+        shell: pwsh
+        env:
+          NFFT_VERSION: '3.5.3'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dist = Join-Path $env:GITHUB_WORKSPACE '${{ steps.meta.outputs.stem }}'
+          $src  = Join-Path $env:GITHUB_WORKSPACE 'nfft-install'
+          if (-not (Test-Path $src)) {
+            throw "NFFT3 install prefix not found at $src — did the MSYS2 build step fail?"
+          }
+
+          New-Item -ItemType Directory -Force -Path "$dist/bin","$dist/lib","$dist/include","$dist/lib/pkgconfig" | Out-Null
+
+          # Stage NFFT's own DLLs (libnfft3-4.dll and the OpenMP
+          # variant libnfft3_threads-4.dll).
+          $nfftDlls = Get-ChildItem "$src/bin" -Filter '*.dll' -ErrorAction SilentlyContinue
+          if (-not $nfftDlls) {
+            # Some libtool flavors stash the DLL under lib/ instead.
+            $nfftDlls = Get-ChildItem "$src/lib" -Filter '*.dll' -ErrorAction SilentlyContinue
+          }
+          if (-not $nfftDlls) { throw "No NFFT DLLs found under $src" }
+          foreach ($f in $nfftDlls) { Copy-Item $f.FullName "$dist/bin/" -Force }
+
+          # Stage mingw runtime DLLs that NFFT depends on. FFTW from
+          # MSYS2 is a shared library, so we have to ship it alongside
+          # — together with libgcc_s, libwinpthread, and libgomp for
+          # OpenMP. Without these, loading nfft3.dll under any non-
+          # MSYS2 process will fail at runtime.
+          $mingwBin = 'C:\msys64\mingw64\bin'
+          $runtimeDlls = @(
+            'libfftw3-3.dll',
+            'libfftw3_threads-3.dll',
+            'libgcc_s_seh-1.dll',
+            'libwinpthread-1.dll',
+            'libgomp-1.dll',
+            'libstdc++-6.dll'
+          )
+          foreach ($name in $runtimeDlls) {
+            $p = Join-Path $mingwBin $name
+            if (Test-Path $p) {
+              Copy-Item $p "$dist/bin/" -Force
+              Write-Host "Staged runtime dep: $name"
+            } else {
+              Write-Host "Skipping missing runtime: $name"
+            }
+          }
+
+          # Headers → include/.
+          if (Test-Path "$src/include") {
+            Copy-Item "$src/include/*.h" "$dist/include/" -Force -ErrorAction SilentlyContinue
+          }
+
+          # Generate an MSVC-friendly import library from the OpenMP
+          # NFFT DLL using mingw's `gendef` (extracts the export list
+          # from the DLL) followed by MSVC's `lib /def:`. We prefer
+          # the threaded/OpenMP DLL; the bundle reports it as nfft3.lib
+          # so consumers' `-lnfft3` from pkg-config resolves under
+          # MSVC's default lib search rules.
+          $threadsDll = Get-ChildItem "$dist/bin" -Filter 'libnfft3_threads-*.dll' | Select-Object -First 1
+          $plainDll   = Get-ChildItem "$dist/bin" -Filter 'libnfft3-*.dll'         | Select-Object -First 1
+          $targetDll = if ($threadsDll) { $threadsDll } else { $plainDll }
+          if (-not $targetDll) { throw "No NFFT DLL in $dist/bin after staging." }
+          Write-Host "Generating import lib from $($targetDll.Name)"
+
+          $work = Join-Path $env:GITHUB_WORKSPACE 'nfft-implib'
+          New-Item -ItemType Directory -Force -Path $work | Out-Null
+          Copy-Item $targetDll.FullName $work -Force
+          Push-Location $work
+
+          # `gendef` is shipped by mingw-w64-tools (mingw-w64-x86_64-tools-git
+          # package in MSYS2) and is on the MSYS2 PATH.
+          $env:PATH = "C:\msys64\mingw64\bin;C:\msys64\usr\bin;$env:PATH"
+          & gendef $targetDll.Name
+          if ($LASTEXITCODE -ne 0) { throw "gendef failed ($LASTEXITCODE)" }
+          $defFile = [IO.Path]::ChangeExtension($targetDll.Name, '.def')
+          if (-not (Test-Path $defFile)) {
+            $defFile = ($targetDll.BaseName + '.def')
+          }
+          if (-not (Test-Path $defFile)) { throw "gendef produced no .def file" }
+          Write-Host "gendef produced: $defFile"
+
+          & lib "/def:$defFile" "/out:nfft3.lib" /machine:x64
+          if ($LASTEXITCODE -ne 0) { throw "lib /def failed ($LASTEXITCODE)" }
+          Copy-Item nfft3.lib "$dist/lib/" -Force
+          if (Test-Path nfft3.exp) { Copy-Item nfft3.exp "$dist/lib/" -Force }
+          Pop-Location
+
+          # pkg-config file. F2Dock discovers NFFT via
+          # pkg_check_modules(NFFT QUIET IMPORTED_TARGET nfft3) and
+          # this is the same staging convention Linux uses (rewritten
+          # prefix relative to ${pcfiledir}).
+          $pcLines = @(
+            'prefix=${pcfiledir}/../..',
+            'exec_prefix=${prefix}',
+            'libdir=${prefix}/lib',
+            'includedir=${prefix}/include',
+            '',
+            'Name: nfft3',
+            'Description: Nonequispaced Fast Fourier Transform (built from source, MSYS2/mingw64)',
+            'Version: 3.5.3',
+            'Libs: -L${libdir} -lnfft3',
+            'Cflags: -I${includedir}'
+          )
+          [System.IO.File]::WriteAllText(
+            (Join-Path "$dist/lib/pkgconfig" 'nfft3.pc'),
+            ($pcLines -join "`n") + "`n")
+
+          Write-Host "NFFT3 staged:"
+          Get-ChildItem "$dist/bin/*nfft*","$dist/bin/libfftw*","$dist/lib/nfft*","$dist/include/nfft*" -ErrorAction SilentlyContinue `
+            | ForEach-Object { Write-Host "  $($_.FullName)" }
 
       - name: Pack zip
         shell: pwsh

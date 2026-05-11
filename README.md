@@ -33,8 +33,14 @@ Every archive contains, in one tree:
 
 **F2Dock / F3Dock deps**
 
-- NFFT3 (Linux apt / macOS brew; not in vcpkg, so omitted on Windows —
-  F2Dock's NFFT discovery is QUIET-optional)
+- NFFT3 (Linux: `libnfft3-dev`; macOS: brew `nfft`; Windows: built
+  from upstream source in MSYS2/mingw64 with OpenMP and AVX2 — the
+  same toolchain upstream uses for its official Windows release — and
+  staged with an MSVC-friendly import library (`gendef` + `lib /def:`)
+  alongside the mingw runtime DLLs it needs, plus a rewritten
+  `nfft3.pc` for `pkg_check_modules` consumers. Source tarball is
+  pinned by SHA256 and fetched from the GitHub release with a
+  TU-Chemnitz mirror as fallback.)
 - Eigen3 (header-only, all platforms)
 - LAPACK + BLAS (Linux apt LAPACK + reference BLAS; macOS brew
   `lapack`; Windows vcpkg `clapack` + `openblas`)
@@ -133,7 +139,9 @@ the toolkit installer's own setup.
 - **Qt: 6.7.x** (`install-qt-action` `6.7.*` on Windows; `qt@6` / `qt6-base-dev`
   on macOS / Linux)
 - **VTK: 9.5.0** built against Qt 6 (no `GUISupportQtQuick` / `RenderingQtQuick`)
-- NFFT3: 3.x distro / brew (Linux: `libnfft3-dev`; macOS: brew `nfft`)
+- NFFT3: 3.5.3 (Linux apt `libnfft3-dev` / brew `nfft` /
+  built from source in MSYS2 mingw64 on Windows,
+  SHA256 `caf1b3b3e5bf8c33a6bfd7eca811d954efce896605ecfd0144d47d0bebdf4371`)
 - Eigen3: 3.4.x distro / vcpkg / brew
 - LAPACK / BLAS: distro reference impl / brew `lapack` /
   vcpkg `clapack` + `openblas`
