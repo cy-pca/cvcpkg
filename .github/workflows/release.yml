@@ -59,6 +59,8 @@ env:
   VTK_VERSION: '9.5.0'
   QT_VERSION_LINUX_MACOS: '6'    # apt qt6-base-dev / brew qt@6
   QT_VERSION_WINDOWS: '6.7.*'    # install-qt-action spec
+  VCGLIB_VERSION: '2025.07'
+  VCGLIB_SHA256:  'e49fc9342d5476b3e39a5e1939b965b57c91d7a17b4f97b8c5eaf01228b16cf0'
 
 jobs:
   # ──────────────────────────── Linux ────────────────────────────
@@ -407,6 +409,14 @@ jobs:
             patchelf --set-rpath '$ORIGIN' "$so" 2>/dev/null || true
           done
 
+      # ── Stage vcglib (header-only) ──
+      - name: Stage vcglib
+        uses: ./.github/actions/stage-vcglib
+        with:
+          dist:    ${{ github.workspace }}/${{ steps.meta.outputs.stem }}
+          version: ${{ env.VCGLIB_VERSION }}
+          sha256:  ${{ env.VCGLIB_SHA256 }}
+
       - name: Pack tarball
         run: |
           STEM="${{ steps.meta.outputs.stem }}"
@@ -634,6 +644,14 @@ jobs:
             [ -L "$dy" ] && continue
             dylibbundler -od -b -x "$dy" -d "$DIST/lib" -p '@loader_path/' -of -cd || true
           done
+
+      # ── Stage vcglib (header-only) ──
+      - name: Stage vcglib
+        uses: ./.github/actions/stage-vcglib
+        with:
+          dist:    ${{ github.workspace }}/${{ steps.meta.outputs.stem }}
+          version: ${{ env.VCGLIB_VERSION }}
+          sha256:  ${{ env.VCGLIB_SHA256 }}
 
       - name: Pack zip
         run: |
@@ -1093,6 +1111,14 @@ jobs:
           Write-Host "NFFT3 staged:"
           Get-ChildItem "$dist/bin/*nfft*","$dist/bin/libfftw*","$dist/lib/nfft*","$dist/include/nfft*" -ErrorAction SilentlyContinue `
             | ForEach-Object { Write-Host "  $($_.FullName)" }
+
+      # ── Stage vcglib (header-only) ──
+      - name: Stage vcglib
+        uses: ./.github/actions/stage-vcglib
+        with:
+          dist:    ${{ github.workspace }}\${{ steps.meta.outputs.stem }}
+          version: ${{ env.VCGLIB_VERSION }}
+          sha256:  ${{ env.VCGLIB_SHA256 }}
 
       - name: Pack zip
         shell: pwsh

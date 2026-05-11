@@ -44,6 +44,17 @@ Every archive contains, in one tree:
 - LAPACK + BLAS (Linux apt LAPACK + reference BLAS; macOS brew
   `lapack`; Windows vcpkg `clapack` + `openblas`)
 
+**Mesh / geometry deps**
+
+- vcglib (header-only mesh processing library from the Visual
+  Computing Lab of ISTI - CNR). Same release on every platform,
+  fetched as a SHA256-pinned source tarball from GitHub and staged as
+  both `include/vcg/` + `include/wrap/` for plain `#include` use and
+  as `share/vcglib/` for `add_subdirectory()` use. A small
+  `vcglib-config.cmake` is generated so `find_package(vcglib CONFIG)`
+  exposes a `vcglib::vcglib` INTERFACE target that depends on the
+  libcvc-deps-bundled Eigen3.
+
 F2Dock additionally needs `cvc::xmlrpc` from libcvc itself; that is
 shipped by the libcvc release artifacts, not by libcvc-deps.
 
@@ -144,6 +155,8 @@ the toolkit installer's own setup.
 - Eigen3: 3.4.x distro / vcpkg / brew
 - LAPACK / BLAS: distro reference impl / brew `lapack` /
   vcpkg `clapack` + `openblas`
+- vcglib: 2025.07
+  (SHA256 `e49fc9342d5476b3e39a5e1939b965b57c91d7a17b4f97b8c5eaf01228b16cf0`)
 
 A given release of libcvc-deps is intended to be used with the
 corresponding (or older) libcvc release. Bumping a major version
