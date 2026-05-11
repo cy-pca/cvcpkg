@@ -112,13 +112,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential cmake ninja-build patchelf \
+            build-essential cmake ninja-build patchelf pkg-config \
             libboost-all-dev libhdf5-dev libfftw3-dev libgsl-dev \
             libmagick++-dev liblog4cplus-dev \
             libcgal-dev libgmp-dev libmpfr-dev \
             qt6-base-dev qt6-base-dev-tools libqt6opengl6-dev \
             libgl1-mesa-dev libxt-dev mesa-common-dev libglew-dev \
-            libxrender-dev libxcursor-dev libxinerama-dev libxi-dev
+            libxrender-dev libxcursor-dev libxinerama-dev libxi-dev \
+            libnfft3-dev libeigen3-dev liblapack-dev libblas-dev \
+            gfortran
 
       # ── VTK 9.5 built against Qt6, cached ──
       - name: Cache VTK install tree
@@ -197,6 +199,11 @@ jobs:
           copy_libs 'libCGAL'
           copy_libs 'libgmp'
           copy_libs 'libmpfr'
+          # F2Dock / F3Dock science stack
+          copy_libs 'libnfft3'
+          copy_libs 'liblapack'
+          copy_libs 'libblas'
+          copy_libs 'libgfortran'   # LAPACK NEEDED entry (Fortran runtime)
           # volrover3 GL deps that Qt6/VTK pull at runtime
           copy_libs 'libGLEW'
           copy_libs 'libQt6'
@@ -215,10 +222,15 @@ jobs:
             case "$base" in
               # Bundle CMake configs for everything we ship.
               Boost*|hdf5|HDF5|GSL|CGAL|log4cplus|ImageMagick|Magick*|\
-              Qt6*|VTK|vtk*|GLEW)
+              Qt6*|VTK|vtk*|GLEW|\
+              eigen3|Eigen3*|lapack*|LAPACK*|blas*|BLAS*)
                 cp -R "$d" "$DIST/lib/cmake/"
                 ;;
             esac
+          done
+          # Some distros ship Eigen3 cmake under /usr/lib/cmake/eigen3.
+          for d in /usr/lib/cmake/eigen3 /usr/share/eigen3/cmake; do
+            [ -d "$d" ] && cp -R "$d" "$DIST/lib/cmake/" || true
           done
           # Qt6 itself drops its top-level cmake configs under
           # /usr/lib/x86_64-linux-gnu/cmake/Qt6/ and per-module dirs
@@ -245,6 +257,30 @@ jobs:
               /usr/include/GL \
               /usr/include/x86_64-linux-gnu/qt6 ; do
             [ -d "$src" ] && cp -R "$src" "$DIST/include/"
+          done
+          # Eigen3 ships its headers under /usr/include/eigen3/{Eigen,unsupported};
+          # Eigen3Config.cmake's INTERFACE_INCLUDE_DIRECTORIES points at
+          # "include/eigen3", so preserve that nesting in the bundle.
+          if [ -d /usr/include/eigen3 ]; then
+            mkdir -p "$DIST/include/eigen3"
+            cp -R /usr/include/eigen3/. "$DIST/include/eigen3/"
+          fi
+          # NFFT3 header lives at the top level.
+          for f in /usr/include/nfft3.h /usr/include/nfft3mp.h \
+                   /usr/include/nfft3util.h ; do
+            [ -f "$f" ] && cp "$f" "$DIST/include/"
+          done
+          # NFFT3 has no CMake config; F2Dock discovers it via
+          # pkg_check_modules(NFFT IMPORTED_TARGET nfft3). Ship the
+          # .pc file (rewritten so prefix= follows the bundle root
+          # rather than the build-host /usr).
+          mkdir -p "$DIST/lib/pkgconfig"
+          for pc in /usr/lib/x86_64-linux-gnu/pkgconfig/nfft3*.pc; do
+            [ -f "$pc" ] || continue
+            sed -e 's|^prefix=.*|prefix=${pcfiledir}/../..|' \
+                -e 's|^libdir=.*|libdir=${prefix}/lib|' \
+                -e 's|^includedir=.*|includedir=${prefix}/include|' \
+                "$pc" > "$DIST/lib/pkgconfig/$(basename "$pc")"
           done
           # HDF5 headers live under /usr/include/hdf5/serial on Ubuntu.
           if [ -d /usr/include/hdf5/serial ]; then
@@ -432,7 +468,8 @@ jobs:
           brew install cmake ninja \
             boost hdf5 fftw gsl imagemagick log4cplus \
             cgal gmp mpfr \
-            qt@6 vtk
+            qt@6 vtk \
+            nfft eigen lapack
 
       - name: Configure + install marker config
         run: |
@@ -463,7 +500,8 @@ jobs:
           # Bulk-copy each brew prefix (include + lib + share +
           # bin) into the staged tree.
           for pkg in boost hdf5 fftw gsl log4cplus imagemagick \
-                     cgal gmp mpfr qt@6 vtk ; do
+                     cgal gmp mpfr qt@6 vtk \
+                     nfft eigen lapack ; do
             P=$(brew --prefix "$pkg" 2>/dev/null || true)
             [ -n "$P" ] || continue
             [ -d "$P/include" ] && cp -R "$P/include/." "$DIST/include/" 2>/dev/null || true
@@ -644,7 +682,15 @@ jobs:
             'boost-multi-array','boost-optional','boost-smart-ptr','boost-tuple',
             'boost-utility',
             'hdf5[cpp]','fftw3','gsl','imagemagick','log4cplus',
-            'cgal','glew'
+            'cgal','glew',
+            # F2Dock / F3Dock science stack.
+            #   eigen3   — header-only linear algebra (always added)
+            #   clapack  — LAPACK API for Windows (no MKL dep)
+            #   openblas — BLAS backend for clapack
+            # NFFT3 has no vcpkg port. F2Dock gates NFFT behind
+            # pkg_check_modules, which is QUIET-optional, so a Windows
+            # consumer simply builds without F2DOCK_HAVE_NFFT.
+            'eigen3','clapack','openblas'
           )
           for ($i = 1; $i -le 5; $i++) {
             Write-Host "vcpkg install attempt $i / 5"

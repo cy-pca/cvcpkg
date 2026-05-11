@@ -31,6 +31,17 @@ Every archive contains, in one tree:
 - VTK 9.5.0 built against Qt 6 (no QtQuick modules)
 - GLEW, OpenGL, Xrender/Xcursor/Xinerama/Xi (Linux)
 
+**F2Dock / F3Dock deps**
+
+- NFFT3 (Linux apt / macOS brew; not in vcpkg, so omitted on Windows —
+  F2Dock's NFFT discovery is QUIET-optional)
+- Eigen3 (header-only, all platforms)
+- LAPACK + BLAS (Linux apt LAPACK + reference BLAS; macOS brew
+  `lapack`; Windows vcpkg `clapack` + `openblas`)
+
+F2Dock additionally needs `cvc::xmlrpc` from libcvc itself; that is
+shipped by the libcvc release artifacts, not by libcvc-deps.
+
 All `*Config.cmake` files are placed under
 `<root>/lib/cmake/<Pkg>/` (Linux/macOS) or `<root>/share/<pkg>/` /
 `<root>/share/cmake/<Pkg>/` (Windows / vcpkg layout) so
@@ -122,6 +133,10 @@ the toolkit installer's own setup.
 - **Qt: 6.7.x** (`install-qt-action` `6.7.*` on Windows; `qt@6` / `qt6-base-dev`
   on macOS / Linux)
 - **VTK: 9.5.0** built against Qt 6 (no `GUISupportQtQuick` / `RenderingQtQuick`)
+- NFFT3: 3.x distro / brew (Linux: `libnfft3-dev`; macOS: brew `nfft`)
+- Eigen3: 3.4.x distro / vcpkg / brew
+- LAPACK / BLAS: distro reference impl / brew `lapack` /
+  vcpkg `clapack` + `openblas`
 
 A given release of libcvc-deps is intended to be used with the
 corresponding (or older) libcvc release. Bumping a major version
