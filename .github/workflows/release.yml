@@ -13,6 +13,17 @@ on:
         required: false
         type: boolean
         default: true
+  # Reusable from ci.yml so the per-PR build job produces the same
+  # artifact set as a tagged release. ci.yml supplies the SHA-suffix
+  # input; the release publishing job here is gated on a tag ref so
+  # it's a no-op for PR-driven runs.
+  workflow_call:
+    inputs:
+      sha_suffix:
+        description: 'Optional short SHA inserted into archive stems for CI builds (e.g. "abc1234"). Empty for tag releases.'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: write
@@ -81,7 +92,16 @@ jobs:
           else
             LINKSFX=""
           fi
-          STEM="libcvc-deps-${VERSION}-linux-${ARCH}-${BTLC}${LINKSFX}"
+          # CI builds (workflow_call from ci.yml) insert the short SHA
+          # so per-PR artifacts are uniquely identifiable; tag releases
+          # leave the suffix empty. Accept either a short or full SHA
+          # and truncate to 7 chars.
+          SHASFX=""
+          if [ -n "${{ inputs.sha_suffix }}" ]; then
+            short=$(echo "${{ inputs.sha_suffix }}" | cut -c1-7)
+            SHASFX="-${short}"
+          fi
+          STEM="libcvc-deps-${VERSION}${SHASFX}-linux-${ARCH}-${BTLC}${LINKSFX}"
           echo "version=$VERSION"  >> "$GITHUB_OUTPUT"
           echo "arch=$ARCH"        >> "$GITHUB_OUTPUT"
           echo "btlc=$BTLC"        >> "$GITHUB_OUTPUT"
@@ -320,7 +340,12 @@ jobs:
           else
             LINKSFX=""
           fi
-          STEM="libcvc-deps-${VERSION}-macos-${ARCH}-${BTLC}${LINKSFX}"
+          SHASFX=""
+          if [ -n "${{ inputs.sha_suffix }}" ]; then
+            short=$(echo "${{ inputs.sha_suffix }}" | cut -c1-7)
+            SHASFX="-${short}"
+          fi
+          STEM="libcvc-deps-${VERSION}${SHASFX}-macos-${ARCH}-${BTLC}${LINKSFX}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "arch=$ARCH"       >> "$GITHUB_OUTPUT"
           echo "btlc=$BTLC"       >> "$GITHUB_OUTPUT"
@@ -462,7 +487,12 @@ jobs:
             LINKSFX=""
             TRIPLET="x64-windows"
           fi
-          STEM="libcvc-deps-${VERSION}-windows-x86_64-${BTLC}${LINKSFX}"
+          SHASFX=""
+          if [ -n "${{ inputs.sha_suffix }}" ]; then
+            short=$(echo "${{ inputs.sha_suffix }}" | cut -c1-7)
+            SHASFX="-${short}"
+          fi
+          STEM="libcvc-deps-${VERSION}${SHASFX}-windows-x86_64-${BTLC}${LINKSFX}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "arch=x86_64"      >> "$GITHUB_OUTPUT"
           echo "btlc=$BTLC"       >> "$GITHUB_OUTPUT"

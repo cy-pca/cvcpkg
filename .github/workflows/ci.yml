@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [ master, main, develop ]
+  push:
+    branches: [ master, main ]
+
+# Cancel superseded runs on the same ref so a push during an
+# in-progress build doesn't waste runners. The VTK build cache is
+# saved via actions/cache@v4 inside release.yml; vcpkg likewise. Both
+# tolerate cancellation because the cache save runs as a post-step
+# only when the cache key is fresh.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ────────────────────── Per-commit dep bundle build ─────────────
+  #
+  # Delegates to the same matrix release.yml runs on tag pushes. The
+  # short commit SHA is threaded through `sha_suffix` so per-PR
+  # artifacts are uniquely identifiable in the GitHub Actions UI:
+  #
+  #   libcvc-deps-<ver>-<sha>-<os>-<arch>-<config>[-static].{tar.gz,zip}
+  #
+  # The `release` job inside release.yml is gated on a tag ref, so a
+  # PR-driven build only uploads workflow artifacts — no GitHub
+  # Release is touched.
+  build:
+    name: Build dep bundles
+    uses: ./.github/workflows/release.yml
+    with:
+      sha_suffix: ${{ github.sha }}
+    # The reusable workflow declares contents:write at its top level
+    # for the (skipped) release job; the calling job must grant at
+    # least that for `uses:` to satisfy GitHub Actions' permission
+    # propagation rules.
+    permissions:
+      contents: write
+    secrets: inherit
