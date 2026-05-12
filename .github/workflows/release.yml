@@ -879,8 +879,18 @@ jobs:
     needs: [linux, macos, windows]
     runs-on: ubuntu-latest
     # Skip the release step entirely for manual workflow_dispatch
-    # runs unless the workflow was triggered on a tag.
-    if: startsWith(github.ref, 'refs/tags/')
+    # runs unless the workflow was triggered on a tag. Run even if
+    # some platforms failed, so we still publish the artifacts that
+    # did build (e.g. Linux + macOS when a Windows config times out
+    # on a cold cache). Require at minimum that linux + macos
+    # succeeded — there's no point publishing a release with zero
+    # platforms.
+    if: |
+      always()
+      && !cancelled()
+      && startsWith(github.ref, 'refs/tags/')
+      && needs.linux.result == 'success'
+      && needs.macos.result == 'success'
     steps:
       - uses: actions/checkout@v4
 
