@@ -529,10 +529,173 @@ jobs:
           path: libcvc-deps-*.zip
           if-no-files-found: error
 
-  # ──────────────────────────── Windows ────────────────────────────
-  windows:
+  # ──────────────────── Windows: vcpkg deps prep ───────────────────
+  # Stage 1 of the Windows pipeline. One job per (build_type, triplet)
+  # so the per-job 6-hour limit only has to cover vcpkg install for a
+  # single configuration. Output is the vcpkg installed/ tree cached
+  # under a key the assemble stage restores from.
+  windows-vcpkg:
     runs-on: windows-latest
-    timeout-minutes: 420
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - build_type: Debug
+            triplet: x64-windows
+          - build_type: Release
+            triplet: x64-windows
+          - build_type: Debug
+            triplet: x64-windows-static
+          - build_type: Release
+            triplet: x64-windows-static
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 'Free disk space and route vcpkg to D: (Windows)'
+        shell: pwsh
+        run: |
+          foreach ($dir in @(
+              'C:\Android', 'C:\Program Files\dotnet',
+              'C:\hostedtoolcache\windows\Ruby',
+              'C:\hostedtoolcache\windows\PyPy',
+              'C:\hostedtoolcache\windows\go',
+              'C:\hostedtoolcache\windows\node')) {
+            if (Test-Path $dir) {
+              Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $dir
+            }
+          }
+          New-Item -ItemType Directory -Force -Path D:\vcpkg-buildtrees | Out-Null
+          New-Item -ItemType Directory -Force -Path D:\vcpkg-packages   | Out-Null
+          New-Item -ItemType Directory -Force -Path D:\vcpkg-downloads  | Out-Null
+          "VCPKG_DOWNLOADS=D:\vcpkg-downloads"   | Out-File -Append $env:GITHUB_ENV
+          "VCPKG_BUILDTREES=D:\vcpkg-buildtrees" | Out-File -Append $env:GITHUB_ENV
+          "VCPKG_PACKAGES=D:\vcpkg-packages"     | Out-File -Append $env:GITHUB_ENV
+
+      - name: Cache vcpkg installed packages
+        id: vcpkg-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.VCPKG_INSTALLATION_ROOT }}\installed
+            ~\AppData\Local\vcpkg\archives
+          key: vcpkg-deps-${{ matrix.build_type }}-${{ matrix.triplet }}-v2-${{ hashFiles('vcpkg-overlay/**', '.github/workflows/release.yml') }}
+          restore-keys: |
+            vcpkg-deps-${{ matrix.build_type }}-${{ matrix.triplet }}-v2-
+
+      - name: Restore vcpkg downloads cache
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        id: vcpkg-downloads-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: D:\vcpkg-downloads
+          key: vcpkg-downloads-${{ hashFiles('.github/workflows/release.yml') }}
+          restore-keys: |
+            vcpkg-downloads-
+
+      - name: Install vcpkg dependencies
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        env:
+          VCPKG_OVERLAY_PORTS: ${{ github.workspace }}\vcpkg-overlay\ports
+        run: |
+          $packages = @(
+            'boost-thread','boost-date-time','boost-regex','boost-filesystem',
+            'boost-system','boost-chrono','boost-program-options','boost-signals2',
+            'boost-format','boost-property-tree','boost-algorithm','boost-asio',
+            'boost-any','boost-array','boost-dynamic-bitset','boost-exception',
+            'boost-foreach','boost-function','boost-lambda','boost-lexical-cast',
+            'boost-multi-array','boost-optional','boost-smart-ptr','boost-tuple',
+            'boost-utility',
+            'hdf5[cpp]','fftw3','gsl','imagemagick','log4cplus',
+            'cgal','glew'
+          )
+          for ($i = 1; $i -le 5; $i++) {
+            Write-Host "vcpkg install attempt $i / 5"
+            vcpkg install @packages --triplet ${{ matrix.triplet }} `
+              --clean-after-build `
+              --x-buildtrees-root=D:\vcpkg-buildtrees `
+              --x-packages-root=D:\vcpkg-packages
+            if ($LASTEXITCODE -eq 0) { break }
+            if ($i -eq 5) { exit $LASTEXITCODE }
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue D:\vcpkg-buildtrees\*
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue D:\vcpkg-packages\*
+            $sleep = [Math]::Min(60 * $i, 180)
+            Start-Sleep -Seconds $sleep
+          }
+
+      - name: Save vcpkg downloads cache
+        if: always() && steps.vcpkg-downloads-cache.outputs.cache-hit != 'true' && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: D:\vcpkg-downloads
+          key: vcpkg-downloads-${{ hashFiles('.github/workflows/release.yml') }}
+
+  # ──────────────────── Windows: VTK build prep ────────────────────
+  # Stage 2 of the Windows pipeline. One job per build_type. VTK build
+  # output cached at D:\vtk-qt6 and consumed by the assemble stage.
+  # Link flavor (shared/static) does not affect VTK itself — VTK is
+  # always built shared (BUILD_SHARED_LIBS=ON) — so 2 jobs suffice.
+  windows-vtk:
+    runs-on: windows-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache VTK
+        id: vtk-cache
+        uses: actions/cache@v4
+        with:
+          path: D:\vtk-qt6
+          key: vtk-${{ env.VTK_VERSION }}-qt6-${{ runner.os }}-${{ matrix.build_type }}-v2
+
+      - name: Install Qt6
+        if: steps.vtk-cache.outputs.cache-hit != 'true'
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION_WINDOWS }}
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2019_64'
+          modules: ''
+          cache: true
+
+      - name: Build VTK from source against Qt6
+        if: steps.vtk-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/Kitware/VTK/archive/refs/tags/v${env:VTK_VERSION}.tar.gz" -OutFile vtk.tar.gz
+          tar xzf vtk.tar.gz
+          cmake -S "VTK-${env:VTK_VERSION}" -B D:\vtk-build `
+            -DCMAKE_INSTALL_PREFIX=D:\vtk-qt6 `
+            -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR" `
+            -DBUILD_SHARED_LIBS=ON `
+            -DVTK_GROUP_ENABLE_Qt=YES `
+            -DVTK_QT_VERSION=6 `
+            -DVTK_MODULE_ENABLE_VTK_GUISupportQtQuick=NO `
+            -DVTK_MODULE_ENABLE_VTK_RenderingQtQuick=NO `
+            -DVTK_BUILD_TESTING=OFF `
+            -DVTK_BUILD_EXAMPLES=OFF `
+            -DVTK_BUILD_DOCUMENTATION=OFF `
+            -DVTK_LEGACY_REMOVE=ON
+          cmake --build D:\vtk-build --config ${{ matrix.build_type }} --parallel --target install
+          Remove-Item -Recurse -Force D:\vtk-build
+          Remove-Item -Recurse -Force "VTK-${env:VTK_VERSION}"
+          Remove-Item -Force vtk.tar.gz
+
+  # ────────────────────── Windows: assemble ──────────────────────
+  # Stage 3 of the Windows pipeline. Restores both prep caches, then
+  # stages + zips + uploads the per-config artifact. This stage is
+  # fast (minutes) and should always finish well under the per-job
+  # time limit.
+  windows:
+    needs: [windows-vcpkg, windows-vtk]
+    runs-on: windows-latest
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -576,7 +739,6 @@ jobs:
           echo "triplet=$TRIPLET" >> "$GITHUB_OUTPUT"
           echo "stem=$STEM"       >> "$GITHUB_OUTPUT"
 
-      # ── Free disk space and route vcpkg working dirs to D: ──
       - name: 'Free disk space and route vcpkg to D: (Windows)'
         shell: pwsh
         run: |
@@ -590,121 +752,34 @@ jobs:
               Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $dir
             }
           }
-          New-Item -ItemType Directory -Force -Path D:\vcpkg-buildtrees | Out-Null
-          New-Item -ItemType Directory -Force -Path D:\vcpkg-packages   | Out-Null
-          New-Item -ItemType Directory -Force -Path D:\vcpkg-downloads  | Out-Null
-          "VCPKG_DOWNLOADS=D:\vcpkg-downloads"   | Out-File -Append $env:GITHUB_ENV
-          "VCPKG_BUILDTREES=D:\vcpkg-buildtrees" | Out-File -Append $env:GITHUB_ENV
-          "VCPKG_PACKAGES=D:\vcpkg-packages"     | Out-File -Append $env:GITHUB_ENV
 
-      - name: Cache vcpkg installed packages
-        uses: actions/cache@v4
+      - name: Restore vcpkg installed cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             ${{ env.VCPKG_INSTALLATION_ROOT }}\installed
-            ${{ env.VCPKG_INSTALLATION_ROOT }}\packages
             ~\AppData\Local\vcpkg\archives
-          key: vcpkg-deps-${{ matrix.build_type }}-${{ steps.meta.outputs.triplet }}-v1
+          key: vcpkg-deps-${{ matrix.build_type }}-${{ steps.meta.outputs.triplet }}-v2-${{ hashFiles('vcpkg-overlay/**', '.github/workflows/release.yml') }}
           restore-keys: |
-            vcpkg-deps-${{ matrix.build_type }}-${{ steps.meta.outputs.triplet }}-
+            vcpkg-deps-${{ matrix.build_type }}-${{ steps.meta.outputs.triplet }}-v2-
+          fail-on-cache-miss: true
 
-      - name: Restore vcpkg downloads cache
-        id: vcpkg-downloads-cache
+      - name: Restore VTK cache
         uses: actions/cache/restore@v4
         with:
-          path: D:\vcpkg-downloads
-          key: vcpkg-downloads-${{ hashFiles('.github/workflows/release.yml') }}
-          restore-keys: |
-            vcpkg-downloads-
+          path: D:\vtk-qt6
+          key: vtk-${{ env.VTK_VERSION }}-qt6-${{ runner.os }}-${{ matrix.build_type }}-v2
+          fail-on-cache-miss: true
 
-      # Qt6 from official prebuilt binaries (faster than vcpkg's
-      # source build of qt6-base).
       - name: Install Qt6
         uses: jurplel/install-qt-action@v4
         with:
           version: ${{ env.QT_VERSION_WINDOWS }}
           host: 'windows'
           target: 'desktop'
-          # msvc2019_64 is ABI-compatible with the MSVC 2022 toolchain
-          # on windows-latest; Qt does not publish msvc2022_64 for 6.7.x.
           arch: 'win64_msvc2019_64'
           modules: ''
           cache: true
-
-      - name: Install vcpkg dependencies
-        shell: pwsh
-        env:
-          VCPKG_OVERLAY_PORTS: ${{ github.workspace }}\vcpkg-overlay\ports
-        run: |
-          $packages = @(
-            'boost-thread','boost-date-time','boost-regex','boost-filesystem',
-            'boost-system','boost-chrono','boost-program-options','boost-signals2',
-            'boost-format','boost-property-tree','boost-algorithm','boost-asio',
-            'boost-any','boost-array','boost-dynamic-bitset','boost-exception',
-            'boost-foreach','boost-function','boost-lambda','boost-lexical-cast',
-            'boost-multi-array','boost-optional','boost-smart-ptr','boost-tuple',
-            'boost-utility',
-            'hdf5[cpp]','fftw3','gsl','imagemagick','log4cplus',
-            'cgal','glew'
-          )
-          for ($i = 1; $i -le 5; $i++) {
-            Write-Host "vcpkg install attempt $i / 5"
-            vcpkg install @packages --triplet ${{ steps.meta.outputs.triplet }} `
-              --clean-after-build `
-              --x-buildtrees-root=D:\vcpkg-buildtrees `
-              --x-packages-root=D:\vcpkg-packages
-            if ($LASTEXITCODE -eq 0) { break }
-            if ($i -eq 5) { exit $LASTEXITCODE }
-            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue D:\vcpkg-buildtrees\*
-            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue D:\vcpkg-packages\*
-            $sleep = [Math]::Min(60 * $i, 180)
-            Start-Sleep -Seconds $sleep
-          }
-
-      - name: Save vcpkg downloads cache
-        if: always() && steps.vcpkg-downloads-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: D:\vcpkg-downloads
-          key: vcpkg-downloads-${{ hashFiles('.github/workflows/release.yml') }}
-
-      # ── VTK 9.5 from source against aqt Qt6 ──
-      - name: Restore VTK cache
-        id: vtk-cache-windows
-        uses: actions/cache/restore@v4
-        with:
-          path: D:\vtk-qt6
-          key: vtk-${{ env.VTK_VERSION }}-qt6-${{ runner.os }}-${{ matrix.build_type }}-v1
-
-      - name: Build VTK from source against Qt6
-        if: steps.vtk-cache-windows.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          Invoke-WebRequest -Uri "https://github.com/Kitware/VTK/archive/refs/tags/v${env:VTK_VERSION}.tar.gz" -OutFile vtk.tar.gz
-          tar xzf vtk.tar.gz
-          cmake -S "VTK-${env:VTK_VERSION}" -B D:\vtk-build `
-            -DCMAKE_INSTALL_PREFIX=D:\vtk-qt6 `
-            -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR" `
-            -DBUILD_SHARED_LIBS=ON `
-            -DVTK_GROUP_ENABLE_Qt=YES `
-            -DVTK_QT_VERSION=6 `
-            -DVTK_MODULE_ENABLE_VTK_GUISupportQtQuick=NO `
-            -DVTK_MODULE_ENABLE_VTK_RenderingQtQuick=NO `
-            -DVTK_BUILD_TESTING=OFF `
-            -DVTK_BUILD_EXAMPLES=OFF `
-            -DVTK_BUILD_DOCUMENTATION=OFF `
-            -DVTK_LEGACY_REMOVE=ON
-          cmake --build D:\vtk-build --config ${{ matrix.build_type }} --parallel --target install
-          Remove-Item -Recurse -Force D:\vtk-build
-          Remove-Item -Recurse -Force "VTK-${env:VTK_VERSION}"
-          Remove-Item -Force vtk.tar.gz
-
-      - name: Save VTK cache
-        if: steps.vtk-cache-windows.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: D:\vtk-qt6
-          key: vtk-${{ env.VTK_VERSION }}-qt6-${{ runner.os }}-${{ matrix.build_type }}-v1
 
       - name: Configure + install marker config
         shell: pwsh
