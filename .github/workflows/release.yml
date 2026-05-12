@@ -530,21 +530,38 @@ jobs:
           if-no-files-found: error
 
   # ──────────────────────────── Windows ────────────────────────────
-  windows:
+  windows-debug-shared:
     runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - build_type: Debug
-            link: shared
-          - build_type: Release
-            link: shared
-          - build_type: Debug
-            link: static
-          - build_type: Release
-            link: static
+    timeout-minutes: 420
     steps:
+      - name: Set build config
+        run: echo "BUILD_TYPE=Debug" >> $GITHUB_ENV && echo "LINK=shared" >> $GITHUB_ENV
+      - name: Call main Windows build
+        uses: ./.github/actions/windows-build
+  windows-release-shared:
+    runs-on: windows-latest
+    timeout-minutes: 420
+    steps:
+      - name: Set build config
+        run: echo "BUILD_TYPE=Release" >> $GITHUB_ENV && echo "LINK=shared" >> $GITHUB_ENV
+      - name: Call main Windows build
+        uses: ./.github/actions/windows-build
+  windows-debug-static:
+    runs-on: windows-latest
+    timeout-minutes: 420
+    steps:
+      - name: Set build config
+        run: echo "BUILD_TYPE=Debug" >> $GITHUB_ENV && echo "LINK=static" >> $GITHUB_ENV
+      - name: Call main Windows build
+        uses: ./.github/actions/windows-build
+  windows-release-static:
+    runs-on: windows-latest
+    timeout-minutes: 420
+    steps:
+      - name: Set build config
+        run: echo "BUILD_TYPE=Release" >> $GITHUB_ENV && echo "LINK=static" >> $GITHUB_ENV
+      - name: Call main Windows build
+        uses: ./.github/actions/windows-build
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -800,7 +817,7 @@ jobs:
 
   # ──────────────────────────── Release ────────────────────────────
   release:
-    needs: [linux, macos, windows]
+    needs: [linux, macos, windows-debug-shared, windows-release-shared, windows-debug-static, windows-release-static]
     runs-on: ubuntu-latest
     # Skip the release step entirely for manual workflow_dispatch
     # runs unless the workflow was triggered on a tag.
@@ -828,3 +845,4 @@ jobs:
           files: |
             artifacts/libcvc-deps-*.tar.gz
             artifacts/libcvc-deps-*.zip
+          fail_on_unmatched_files: false
