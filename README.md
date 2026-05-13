@@ -103,6 +103,28 @@ dependencies regardless of where you extract. The static archives
 ship `.a` / `.lib`. Windows Debug archives carry MSVC `.pdb` files
 for every bundled DLL.
 
+### Compiler runtime libraries
+
+Shared bundles also carry compiler runtime libraries so consumers
+do not have to coordinate separate redistributable installs:
+
+- **Linux**: `libstdc++.so.6` and `libgcc_s.so.1` are bundled
+  alongside `libgfortran.so.5` and `libgomp.so.1`. Only glibc and
+  the dynamic loader are taken from the host.
+- **Windows Release**: the MSVC 2015–2022 CRT DLLs (`msvcp140*.dll`,
+  `vcruntime140*.dll`, `concrt140.dll`) are bundled in `bin/`. The
+  *Visual C++ Redistributable* installer is no longer required on
+  consumer machines. The Universal CRT is part of Windows and is
+  not bundled.
+- **Windows Debug**: the debug CRT is not redistributable under
+  Microsoft's license. Debug archives still require Visual Studio
+  2022 or the Windows SDK debug runtime on the consumer machine.
+- **macOS**: nothing extra to bundle; the OS provides `libSystem`
+  and `libc++` with a forward-compatibility guarantee.
+
+See [USAGE.md](USAGE.md#runtime-libraries-c--c--fortran-runtimes)
+for details, override knobs, and rpath guidance.
+
 ## Usage
 
 Download and extract the archive matching your toolchain, then pass
