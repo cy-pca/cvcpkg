@@ -607,7 +607,7 @@ jobs:
             'boost-foreach','boost-function','boost-lambda','boost-lexical-cast',
             'boost-multi-array','boost-optional','boost-smart-ptr','boost-tuple',
             'boost-utility',
-            'hdf5[cpp]','fftw3','gsl','log4cplus',
+            'hdf5[cpp]','fftw3','gsl','imagemagick','log4cplus',
             'cgal','glew'
           )
           for ($i = 1; $i -le 5; $i++) {
