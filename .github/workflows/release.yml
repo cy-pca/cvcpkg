@@ -716,8 +716,14 @@ jobs:
         id: vcpkg-cache
         uses: actions/cache@v4
         with:
+          # NOTE: hardcoded C:\vcpkg — the runner-provided
+          # VCPKG_INSTALLATION_ROOT env var is NOT visible to
+          # ${{ env.* }} template expansion (only workflow-declared env
+          # is), so using it here silently resolves to empty and the
+          # cache caches/restores a bogus path. C:\vcpkg is the well-
+          # known vcpkg location on windows-latest hosted runners.
           path: |
-            ${{ env.VCPKG_INSTALLATION_ROOT }}\installed
+            C:\vcpkg\installed
             ~\AppData\Local\vcpkg\archives
           key: vcpkg-deps-${{ matrix.build_type }}-${{ matrix.triplet }}-v2-${{ hashFiles('vcpkg-overlay/**', '.github/workflows/release.yml') }}
           restore-keys: |
@@ -904,8 +910,10 @@ jobs:
       - name: Restore vcpkg installed cache
         uses: actions/cache/restore@v4
         with:
+          # NOTE: hardcoded C:\vcpkg — see windows-vcpkg job for why
+          # ${{ env.VCPKG_INSTALLATION_ROOT }} cannot be used here.
           path: |
-            ${{ env.VCPKG_INSTALLATION_ROOT }}\installed
+            C:\vcpkg\installed
             ~\AppData\Local\vcpkg\archives
           key: vcpkg-deps-${{ matrix.build_type }}-${{ steps.meta.outputs.triplet }}-v2-${{ hashFiles('vcpkg-overlay/**', '.github/workflows/release.yml') }}
           restore-keys: |
