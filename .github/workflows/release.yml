@@ -60,6 +60,9 @@ env:
   QT_VERSION_LINUX_MACOS: '6'    # apt qt6-base-dev / brew qt@6
   QT_VERSION_WINDOWS: '6.7.*'    # install-qt-action spec
   VCGLIB_VERSION: '2025.07'
+  # log4cplus is built from source on Linux so we can ship a static
+  # archive (Ubuntu's liblog4cplus-dev only carries the .so).
+  LOG4CPLUS_VERSION: '2.1.2'
   VCGLIB_SHA256:  'e49fc9342d5476b3e39a5e1939b965b57c91d7a17b4f97b8c5eaf01228b16cf0'
 
 jobs:
@@ -116,13 +119,56 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build patchelf pkg-config \
             libboost-all-dev libhdf5-dev libfftw3-dev libgsl-dev \
-            libmagick++-dev liblog4cplus-dev \
+            libmagick++-dev \
             libcgal-dev libgmp-dev libmpfr-dev \
             qt6-base-dev qt6-base-dev-tools libqt6opengl6-dev \
             libgl1-mesa-dev libxt-dev mesa-common-dev libglew-dev \
             libxrender-dev libxcursor-dev libxinerama-dev libxi-dev \
             libnfft3-dev libeigen3-dev liblapack-dev libblas-dev \
             gfortran
+
+      # ── log4cplus built from source so we ship a .a in the
+      #    static bundles. Ubuntu's liblog4cplus-dev is .so-only.
+      #    Built with -fPIC so the .a is also usable by downstream
+      #    shared-link consumers.
+      - name: Cache log4cplus install
+        id: log4cplus-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/log4cplus-prefix
+          key: log4cplus-${{ env.LOG4CPLUS_VERSION }}-${{ runner.os }}-v1
+
+      - name: Build log4cplus from source
+        if: steps.log4cplus-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          ver=${LOG4CPLUS_VERSION}
+          tag="REL_${ver//./_}"
+          curl -L -o log4cplus.tar.xz \
+            "https://github.com/log4cplus/log4cplus/releases/download/${tag}/log4cplus-${ver}.tar.xz"
+          tar xf log4cplus.tar.xz
+          cmake -S log4cplus-${ver} -B log4cplus-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=$HOME/log4cplus-prefix \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DBUILD_SHARED_LIBS=ON \
+            -DLOG4CPLUS_BUILD_TESTING=OFF \
+            -DLOG4CPLUS_BUILD_LOGGINGSERVER=OFF \
+            -DWITH_UNIT_TESTS=OFF
+          cmake --build log4cplus-build --parallel --target install
+          # Second pass: static archive (CMakeLists doesn't emit both
+          # in one configure). Reuse the same prefix so headers and
+          # cmake configs from the shared pass stay; only add the .a.
+          cmake -S log4cplus-${ver} -B log4cplus-build-static -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=$HOME/log4cplus-prefix \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DLOG4CPLUS_BUILD_TESTING=OFF \
+            -DLOG4CPLUS_BUILD_LOGGINGSERVER=OFF \
+            -DWITH_UNIT_TESTS=OFF
+          cmake --build log4cplus-build-static --parallel --target install
+          rm -rf log4cplus-${ver} log4cplus-build log4cplus-build-static log4cplus.tar.xz
 
       # ── VTK 9.5 built against Qt6, cached ──
       - name: Cache VTK install tree
@@ -194,7 +240,21 @@ jobs:
           copy_libs 'libfftw3'
           copy_libs 'libgsl'
           copy_libs 'libgslcblas'
-          copy_libs 'liblog4cplus'
+          # log4cplus comes from our own source build (see earlier
+          # 'Build log4cplus from source' step). Pick the artifact
+          # flavor that matches this bundle: .a for static bundles,
+          # .so / .so.* for shared bundles.
+          if [ -d "$HOME/log4cplus-prefix/lib" ]; then
+            if [ "${{ matrix.link }}" = "static" ]; then
+              l4c_pats=('*.a')
+            else
+              l4c_pats=('*.so' '*.so.*')
+            fi
+            for pat in "${l4c_pats[@]}"; do
+              find "$HOME/log4cplus-prefix/lib" -maxdepth 1 -name "$pat" -print0 \
+                | xargs -0 -r cp -P -t "$DIST/lib/" 2>/dev/null || true
+            done
+          fi
           copy_libs 'libMagick++-'
           copy_libs 'libMagickCore-'
           copy_libs 'libMagickWand-'
@@ -223,7 +283,7 @@ jobs:
             base=$(basename "$d")
             case "$base" in
               # Bundle CMake configs for everything we ship.
-              Boost*|hdf5|HDF5|GSL|CGAL|log4cplus|ImageMagick|Magick*|\
+              Boost*|hdf5|HDF5|GSL|CGAL|ImageMagick|Magick*|\
               Qt6*|VTK|vtk*|GLEW|\
               eigen3|Eigen3*|lapack*|LAPACK*|blas*|BLAS*)
                 cp -R "$d" "$DIST/lib/cmake/"
@@ -250,7 +310,6 @@ jobs:
           for src in \
               /usr/include/boost \
               /usr/include/gsl \
-              /usr/include/log4cplus \
               /usr/include/CGAL \
               /usr/include/Magick++ \
               /usr/include/magick \
@@ -260,6 +319,14 @@ jobs:
               /usr/include/x86_64-linux-gnu/qt6 ; do
             [ -d "$src" ] && cp -R "$src" "$DIST/include/"
           done
+          # log4cplus headers + cmake config from our source build.
+          if [ -d "$HOME/log4cplus-prefix/include/log4cplus" ]; then
+            cp -R "$HOME/log4cplus-prefix/include/log4cplus" "$DIST/include/"
+          fi
+          if [ -d "$HOME/log4cplus-prefix/lib/cmake/log4cplus" ]; then
+            mkdir -p "$DIST/lib/cmake"
+            cp -R "$HOME/log4cplus-prefix/lib/cmake/log4cplus" "$DIST/lib/cmake/"
+          fi
           # Eigen3 ships its headers under /usr/include/eigen3/{Eigen,unsupported};
           # Eigen3Config.cmake's INTERFACE_INCLUDE_DIRECTORIES points at
           # "include/eigen3", so preserve that nesting in the bundle.
