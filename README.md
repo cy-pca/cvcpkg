@@ -165,7 +165,8 @@ of Qt or VTK is reflected by bumping libcvc-deps's own version.
 ## License
 
 This repository's own files (the workflow, the CMake glue, the
-README/USAGE docs) are MIT-licensed (see [`LICENSE`](LICENSE)).
+README/USAGE docs) are licensed under the GNU General Public
+License version 2 (see [`LICENSE`](LICENSE)).
 
 The archived release artifacts are derivative bundles of upstream
 projects. Each upstream component retains its own license; the
