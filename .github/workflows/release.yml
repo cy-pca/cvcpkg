@@ -187,8 +187,8 @@ jobs:
         id: log4cplus-cache
         uses: actions/cache@v4
         with:
-          path: ~/log4cplus-prefix
-          key: log4cplus-${{ env.LOG4CPLUS_VERSION }}-${{ runner.os }}-v1
+          path: ~/log4cplus-prefix-${{ matrix.build_type }}
+          key: log4cplus-${{ env.LOG4CPLUS_VERSION }}-${{ runner.os }}-${{ matrix.build_type }}-v1
 
       - name: Build log4cplus from source
         if: steps.log4cplus-cache.outputs.cache-hit != 'true'
@@ -196,12 +196,13 @@ jobs:
           set -euo pipefail
           ver=${LOG4CPLUS_VERSION}
           tag="REL_${ver//./_}"
+          PFX="$HOME/log4cplus-prefix-${{ matrix.build_type }}"
           curl -L -o log4cplus.tar.xz \
             "https://github.com/log4cplus/log4cplus/releases/download/${tag}/log4cplus-${ver}.tar.xz"
           tar xf log4cplus.tar.xz
           cmake -S log4cplus-${ver} -B log4cplus-build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=$HOME/log4cplus-prefix \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_INSTALL_PREFIX="$PFX" \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
             -DBUILD_SHARED_LIBS=ON \
             -DLOG4CPLUS_BUILD_TESTING=OFF \
@@ -212,8 +213,8 @@ jobs:
           # in one configure). Reuse the same prefix so headers and
           # cmake configs from the shared pass stay; only add the .a.
           cmake -S log4cplus-${ver} -B log4cplus-build-static -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=$HOME/log4cplus-prefix \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_INSTALL_PREFIX="$PFX" \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
             -DBUILD_SHARED_LIBS=OFF \
             -DLOG4CPLUS_BUILD_TESTING=OFF \
@@ -222,13 +223,14 @@ jobs:
           cmake --build log4cplus-build-static --parallel --target install
           rm -rf log4cplus-${ver} log4cplus-build log4cplus-build-static log4cplus.tar.xz
 
-      # ── VTK 9.5 built against Qt6, cached ──
+      # ── VTK 9.5 built against Qt6, cached (per build_type so the
+      #    Debug bundle actually ships a debuggable VTK).
       - name: Cache VTK install tree
         id: vtk-cache
         uses: actions/cache@v4
         with:
-          path: ~/vtk-qt6
-          key: vtk-${{ env.VTK_VERSION }}-qt6-${{ runner.os }}-v2
+          path: ~/vtk-qt6-${{ matrix.build_type }}
+          key: vtk-${{ env.VTK_VERSION }}-qt6-${{ runner.os }}-${{ matrix.build_type }}-v3
 
       - name: Build VTK from source (Qt6)
         if: steps.vtk-cache.outputs.cache-hit != 'true'
@@ -237,8 +239,8 @@ jobs:
           curl -L -o vtk.tar.gz https://github.com/Kitware/VTK/archive/refs/tags/v${VTK_VERSION}.tar.gz
           tar xzf vtk.tar.gz
           cmake -S VTK-${VTK_VERSION} -B vtk-build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=$HOME/vtk-qt6 \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_INSTALL_PREFIX=$HOME/vtk-qt6-${{ matrix.build_type }} \
             -DBUILD_SHARED_LIBS=ON \
             -DVTK_GROUP_ENABLE_Qt=YES \
             -DVTK_QT_VERSION=6 \
@@ -297,14 +299,15 @@ jobs:
           # 'Build log4cplus from source' step). Pick the artifact
           # flavor that matches this bundle: .a for static bundles,
           # .so / .so.* for shared bundles.
-          if [ -d "$HOME/log4cplus-prefix/lib" ]; then
+          LOG4CPLUS_PFX="$HOME/log4cplus-prefix-${{ matrix.build_type }}"
+          if [ -d "$LOG4CPLUS_PFX/lib" ]; then
             if [ "${{ matrix.link }}" = "static" ]; then
               l4c_pats=('*.a')
             else
               l4c_pats=('*.so' '*.so.*')
             fi
             for pat in "${l4c_pats[@]}"; do
-              find "$HOME/log4cplus-prefix/lib" -maxdepth 1 -name "$pat" -print0 \
+              find "$LOG4CPLUS_PFX/lib" -maxdepth 1 -name "$pat" -print0 \
                 | xargs -0 -r cp -P -t "$DIST/lib/" 2>/dev/null || true
             done
           fi
@@ -381,12 +384,13 @@ jobs:
             [ -d "$src" ] && cp -R "$src" "$DIST/include/"
           done
           # log4cplus headers + cmake config from our source build.
-          if [ -d "$HOME/log4cplus-prefix/include/log4cplus" ]; then
-            cp -R "$HOME/log4cplus-prefix/include/log4cplus" "$DIST/include/"
+          LOG4CPLUS_PFX="$HOME/log4cplus-prefix-${{ matrix.build_type }}"
+          if [ -d "$LOG4CPLUS_PFX/include/log4cplus" ]; then
+            cp -R "$LOG4CPLUS_PFX/include/log4cplus" "$DIST/include/"
           fi
-          if [ -d "$HOME/log4cplus-prefix/lib/cmake/log4cplus" ]; then
+          if [ -d "$LOG4CPLUS_PFX/lib/cmake/log4cplus" ]; then
             mkdir -p "$DIST/lib/cmake"
-            cp -R "$HOME/log4cplus-prefix/lib/cmake/log4cplus" "$DIST/lib/cmake/"
+            cp -R "$LOG4CPLUS_PFX/lib/cmake/log4cplus" "$DIST/lib/cmake/"
           fi
           # Eigen3 ships its headers under /usr/include/eigen3/{Eigen,unsupported};
           # Eigen3Config.cmake's INTERFACE_INCLUDE_DIRECTORIES points at
@@ -464,11 +468,12 @@ jobs:
         run: |
           set -euo pipefail
           DIST="$PWD/${{ steps.meta.outputs.stem }}"
-          if [ -d $HOME/vtk-qt6 ]; then
-            cp -R $HOME/vtk-qt6/include/. "$DIST/include/" 2>/dev/null || true
-            cp -R $HOME/vtk-qt6/lib/.     "$DIST/lib/"     2>/dev/null || true
-            [ -d $HOME/vtk-qt6/share ] && cp -R $HOME/vtk-qt6/share/. "$DIST/share/" 2>/dev/null || true
-            [ -d $HOME/vtk-qt6/bin ]   && cp -R $HOME/vtk-qt6/bin/.   "$DIST/bin/"   2>/dev/null || true
+          VTK_PFX="$HOME/vtk-qt6-${{ matrix.build_type }}"
+          if [ -d "$VTK_PFX" ]; then
+            cp -R "$VTK_PFX/include/." "$DIST/include/" 2>/dev/null || true
+            cp -R "$VTK_PFX/lib/."     "$DIST/lib/"     2>/dev/null || true
+            [ -d "$VTK_PFX/share" ] && cp -R "$VTK_PFX/share/." "$DIST/share/" 2>/dev/null || true
+            [ -d "$VTK_PFX/bin" ]   && cp -R "$VTK_PFX/bin/."   "$DIST/bin/"   2>/dev/null || true
           fi
 
       # ── Stage libiimod from the cached install ──
