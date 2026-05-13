@@ -760,12 +760,17 @@ jobs:
   # single configuration. Output is the vcpkg installed/ tree cached
   # under a key the assemble stage restores from.
   #
-  # NOTE: x64-windows-static is intentionally omitted from this matrix.
-  # vcpkg's `mpfr` port hangs indefinitely during the autotools/libtool
-  # link step on hosted GitHub Actions Windows runners when built for
-  # the x64-windows-static triplet — see docs/known-issues.md
-  # ("Windows static builds: mpfr hang in vcpkg"). The dynamic
-  # (x64-windows) flavor of mpfr completes in ~6 min via the same port.
+  # x64-windows-static is included so the static Windows release
+  # bundle can ship MSVC static .lib archives. vcpkg's `mpfr` port
+  # hangs indefinitely during the autotools/libtool link step on
+  # hosted GitHub Actions Windows runners when built for the
+  # x64-windows-static triplet (see docs/known-issues.md, "Windows
+  # static builds: mpfr hang in vcpkg"), so the static install set
+  # excludes mpfr and anything that transitively depends on it
+  # (gmp, cgal). Those three are filled in from the x64-windows
+  # (shared) cache during assembly — the static Windows bundle is
+  # therefore a hybrid: static .lib for everything that builds, and
+  # shared .dll + import .lib for cgal/gmp/mpfr.
   windows-vcpkg:
     runs-on: windows-latest
     timeout-minutes: 350
@@ -781,6 +786,7 @@ jobs:
       matrix:
         include:
           - triplet: x64-windows
+          - triplet: x64-windows-static
     steps:
       - uses: actions/checkout@v4
 
@@ -868,6 +874,13 @@ jobs:
             # MSYS2 mingw64 build in the assemble step.
             'eigen3','clapack','openblas'
           )
+          if ('${{ matrix.triplet }}' -eq 'x64-windows-static') {
+            # mpfr (and therefore gmp + cgal) hangs in vcpkg under the
+            # x64-windows-static triplet on hosted runners. Skip them
+            # here; the assemble stage stitches the shared-triplet
+            # builds of these three into the static bundle.
+            $packages = $packages | Where-Object { $_ -notin @('cgal') }
+          }
           for ($i = 1; $i -le 5; $i++) {
             Write-Host "vcpkg install attempt $i / 5"
             vcpkg install @packages --triplet ${{ matrix.triplet }} `
@@ -950,11 +963,13 @@ jobs:
   # stages + zips + uploads the per-config artifact. This stage is
   # fast (minutes) and should always finish well under the per-job
   # time limit.
-  # NOTE: only the shared (link: shared) configurations are produced
-  # on Windows. The static-link flavor depends on vcpkg's
-  # x64-windows-static triplet, which is currently blocked by an mpfr
-  # autotools/libtool hang on hosted Windows runners — see
-  # docs/known-issues.md ("Windows static builds: mpfr hang in vcpkg").
+  # NOTE: the static (link: static) Windows bundle is a hybrid \u2014 it
+  # ships static .lib for everything that builds under the
+  # x64-windows-static triplet, plus shared .dll + import .lib for
+  # cgal/gmp/mpfr (which can't be built static on hosted runners
+  # because vcpkg's mpfr port hangs there \u2014 see docs/known-issues.md,
+  # "Windows static builds: mpfr hang in vcpkg"). VTK and Qt6 remain
+  # shared in both link flavors (no static brew/aqtinstall flavor).
   windows:
     needs: [windows-vcpkg, windows-vtk]
     runs-on: windows-latest
@@ -967,6 +982,13 @@ jobs:
             link: shared
           - build_type: Release
             link: shared
+          # Hybrid static bundles: x64-windows-static for everything
+          # that builds, plus shared cgal/gmp/mpfr fallback (the mpfr
+          # vcpkg port hangs on the static triplet, see windows-vcpkg).
+          - build_type: Debug
+            link: static
+          - build_type: Release
+            link: static
     steps:
       - uses: actions/checkout@v4
         with:
@@ -1033,6 +1055,24 @@ jobs:
           key: vcpkg-deps-${{ steps.meta.outputs.triplet }}-v3-${{ hashFiles('vcpkg-overlay/**', '.github/workflows/release.yml') }}
           restore-keys: |
             vcpkg-deps-${{ steps.meta.outputs.triplet }}-v3-
+          fail-on-cache-miss: true
+
+      # For the hybrid static bundle, also restore the x64-windows
+      # (shared) cache so that cgal/gmp/mpfr (which can't be built
+      # for x64-windows-static on hosted runners) are available as
+      # DLL + import-lib fallbacks. The two caches populate disjoint
+      # subdirectories of C:\vcpkg\installed (per-triplet trees), so
+      # they coexist without conflict.
+      - name: Restore vcpkg shared cache (static-bundle fallback)
+        if: matrix.link == 'static'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            C:\vcpkg\installed
+            ~\AppData\Local\vcpkg\archives
+          key: vcpkg-deps-x64-windows-v3-${{ hashFiles('vcpkg-overlay/**', '.github/workflows/release.yml') }}
+          restore-keys: |
+            vcpkg-deps-x64-windows-v3-
           fail-on-cache-miss: true
 
       - name: Restore VTK cache
@@ -1103,6 +1143,63 @@ jobs:
             foreach ($p in $patterns) {
               Get-ChildItem -Path $binSrc -Filter $p -File `
                 | Copy-Item -Destination "$dist/bin/" -Force
+            }
+          }
+
+          # ── Hybrid-static fallback: mix in shared cgal/gmp/mpfr ──
+          # The x64-windows-static install set omits cgal/gmp/mpfr
+          # because the static mpfr port hangs on hosted runners.
+          # Pull import lib + DLL (and matching share/cmake configs)
+          # for these ports from the x64-windows (shared) installed
+          # tree, which was restored alongside the static cache.
+          if ('${{ matrix.link }}' -eq 'static') {
+            $shRoot = Join-Path $env:VCPKG_INSTALLATION_ROOT 'installed/x64-windows'
+            if (-not (Test-Path $shRoot)) {
+              throw "vcpkg shared (x64-windows) tree not found at $shRoot for static-bundle fallback"
+            }
+            $shLib = if ($isDebug) { Join-Path $shRoot 'debug/lib' } else { Join-Path $shRoot 'lib' }
+            $shBin = if ($isDebug) { Join-Path $shRoot 'debug/bin' } else { Join-Path $shRoot 'bin' }
+            # File-name prefixes that identify fallback ports and their
+            # transitive runtime dependencies (CGAL itself is mostly
+            # header-only but vcpkg ships a CGAL.dll for the small
+            # number of compiled symbols).
+            $fbPrefixes = @('cgal*','CGAL*','gmp*','mpfr*','mpir*')
+            if (Test-Path $shLib) {
+              foreach ($pat in $fbPrefixes) {
+                Get-ChildItem -Path $shLib -Filter "$pat.lib" -File -ErrorAction SilentlyContinue `
+                  | Copy-Item -Destination "$dist/lib/" -Force
+                if ($isDebug) {
+                  Get-ChildItem -Path $shLib -Filter "$pat.pdb" -File -ErrorAction SilentlyContinue `
+                    | Copy-Item -Destination "$dist/lib/" -Force
+                }
+              }
+            }
+            if (Test-Path $shBin) {
+              foreach ($pat in $fbPrefixes) {
+                Get-ChildItem -Path $shBin -Filter "$pat.dll" -File -ErrorAction SilentlyContinue `
+                  | Copy-Item -Destination "$dist/bin/" -Force
+                if ($isDebug) {
+                  Get-ChildItem -Path $shBin -Filter "$pat.pdb" -File -ErrorAction SilentlyContinue `
+                    | Copy-Item -Destination "$dist/bin/" -Force
+                }
+              }
+            }
+            # Headers + share/cmake/* for cgal/gmp/mpfr are
+            # config-agnostic. Headers in $vcRoot/include are already
+            # carried over via the static tree's copy above, but the
+            # static tree doesn't have these ports, so pull them in
+            # from the shared tree.
+            if (Test-Path "$shRoot/include") {
+              foreach ($pat in $fbPrefixes) {
+                Get-ChildItem -Path "$shRoot/include" -Filter $pat -ErrorAction SilentlyContinue `
+                  | Copy-Item -Recurse -Force -Destination "$dist/include/"
+              }
+            }
+            if (Test-Path "$shRoot/share") {
+              foreach ($pat in $fbPrefixes) {
+                Get-ChildItem -Path "$shRoot/share" -Filter $pat -ErrorAction SilentlyContinue `
+                  | Copy-Item -Recurse -Force -Destination "$dist/share/"
+              }
             }
           }
 
