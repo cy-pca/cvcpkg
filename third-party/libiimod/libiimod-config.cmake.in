@@ -1,0 +1,11 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(TIFF)
+
+include("${CMAKE_CURRENT_LIST_DIR}/libiimod-targets.cmake")
+
+set(libiimod_INCLUDE_DIRS "${PACKAGE_PREFIX_DIR}/include/libiimod")
+set(libiimod_LIBRARIES libiimod::iimod)
+
+check_required_components(libiimod)
