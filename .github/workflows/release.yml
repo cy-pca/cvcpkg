@@ -325,6 +325,18 @@ jobs:
           # volrover3 GL deps that Qt6/VTK pull at runtime
           copy_libs 'libGLEW'
           copy_libs 'libQt6'
+          # Qt6 cmake target imports use the Debian multiarch layout:
+          # Qt6CoreTargets.cmake sets IMPORTED_LOCATION to
+          # ${_IMPORT_PREFIX}/lib/x86_64-linux-gnu/libQt6<Module>.so.*.
+          # Mirror the Qt6 SOs into the multiarch subdir so those
+          # imported-target paths resolve to a real file inside $DIST.
+          mkdir -p "$DIST/lib/x86_64-linux-gnu"
+          for d in "${LIBDIRS[@]}"; do
+            for pat in "${patterns[@]}"; do
+              find "$d" -maxdepth 1 -name "libQt6${pat}" -print0 2>/dev/null \
+                | xargs -0 -r cp -P -t "$DIST/lib/x86_64-linux-gnu/" 2>/dev/null || true
+            done
+          done
           # X11 client libs needed by Qt6 xcb platform plugin
           for pre in libxcb libX11 libXrender libXcursor libXinerama libXi libXext libXfixes libXrandr; do
             copy_libs "$pre"
@@ -369,6 +381,15 @@ jobs:
           find /usr/lib/x86_64-linux-gnu/cmake -maxdepth 1 -type d \
             \( -name 'Boost*' -o -name 'boost*' \) \
             -exec cp -R {} "$DIST/lib/cmake/" \;
+          # Boost's per-component configs (boost_thread-config.cmake,
+          # etc.) include `../BoostDetectToolset-<ver>.cmake` relative
+          # to their own dir, which resolves to <prefix>/lib/cmake/
+          # BoostDetectToolset-<ver>.cmake. That toolset detect file
+          # is a plain .cmake at the cmake root, not inside a Boost*
+          # subdir, so the find above (`-type d`) misses it.
+          find /usr/lib/x86_64-linux-gnu/cmake -maxdepth 1 -type f \
+            -name 'BoostDetectToolset-*.cmake' \
+            -exec cp {} "$DIST/lib/cmake/" \;
 
           # Headers
           for src in \
