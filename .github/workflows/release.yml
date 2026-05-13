@@ -510,10 +510,20 @@ jobs:
           # Run dylibbundler on every top-level dylib in lib/. This is
           # idempotent; dylibbundler will rewrite install_names to
           # @rpath/<dylib> and add @loader_path/ rpaths.
+          #
+          # NOTE: do NOT pass -od. -od means "overwrite output DIR"
+          # which dylibbundler implements as `rm -rf $DEST_DIR` before
+          # the first copy. With -d "$DIST/lib" (same dir as the
+          # source dylib), -od wipes out every staged dylib on the
+          # first iteration, the source file vanishes, the loop's
+          # already-expanded glob keeps invoking dylibbundler on
+          # phantom paths, and the bundle ships with an empty lib/.
+          # The right flag for "replace existing files in place" is
+          # -of (overwrite files), which is what we use below.
           for dy in "$DIST"/lib/*.dylib; do
             [ -e "$dy" ] || continue
             [ -L "$dy" ] && continue
-            dylibbundler -od -b -x "$dy" -d "$DIST/lib" -p '@loader_path/' -of -cd || true
+            dylibbundler -b -x "$dy" -d "$DIST/lib" -p '@loader_path/' -of -cd || true
           done
 
       - name: Pack zip
