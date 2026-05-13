@@ -118,9 +118,36 @@ jobs:
           echo "stem=$STEM"        >> "$GITHUB_OUTPUT"
 
       - name: Install apt dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          set -euo pipefail
+          # Hosted Ubuntu runners occasionally get a wedged apt mirror
+          # that causes `apt-get` to block indefinitely on a download
+          # or lock with no progress output. Without a timeout the
+          # step burns the entire 6h job budget. Wrap each apt call
+          # in a 10-min timeout and retry up to 5 times.
+          apt_retry() {
+            local attempt
+            for attempt in 1 2 3 4 5; do
+              echo "::group::apt attempt $attempt: $*"
+              if timeout 600 "$@" \
+                   -o Dpkg::Use-Pty=0 \
+                   -o Acquire::Retries=3 \
+                   -o Acquire::http::Timeout=30 \
+                   -o Acquire::https::Timeout=30; then
+                echo "::endgroup::"
+                return 0
+              fi
+              echo "::endgroup::"
+              echo "apt attempt $attempt failed, sleeping before retry…"
+              sleep $((attempt * 15))
+            done
+            echo "apt: giving up after 5 attempts" >&2
+            return 1
+          }
+          apt_retry sudo -E apt-get update
+          apt_retry sudo -E apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build patchelf pkg-config \
             libboost-all-dev libhdf5-dev libfftw3-dev libgsl-dev \
             libmagick++-dev libtiff-dev \
