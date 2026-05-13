@@ -31,6 +31,33 @@ Every archive contains, in one tree:
 - VTK 9.5.0 built against Qt 6 (no QtQuick modules)
 - GLEW, OpenGL, Xrender/Xcursor/Xinerama/Xi (Linux)
 
+**F2Dock / F3Dock deps**
+
+- NFFT3 (Linux: `libnfft3-dev`; macOS and Windows: built from upstream
+  source via autotools — the same toolchain Linux's distro package and
+  upstream's own Windows release use — with OpenMP on Linux/Windows.
+  On Windows we additionally generate an MSVC-friendly import library
+  (`gendef` + `lib /def:`) and stage the mingw runtime DLLs it needs.
+  Source tarball is SHA256-pinned and fetched from the GitHub release
+  with a TU-Chemnitz mirror as fallback.)
+- Eigen3 (header-only, all platforms)
+- LAPACK + BLAS (Linux apt LAPACK + reference BLAS; macOS brew
+  `lapack`; Windows vcpkg `clapack` + `openblas`)
+
+**Mesh / geometry deps**
+
+- vcglib (header-only mesh processing library from the Visual
+  Computing Lab of ISTI - CNR). Same release on every platform,
+  fetched as a SHA256-pinned source tarball from GitHub and staged as
+  both `include/vcg/` + `include/wrap/` for plain `#include` use and
+  as `share/vcglib/` for `add_subdirectory()` use. A small
+  `vcglib-config.cmake` is generated so `find_package(vcglib CONFIG)`
+  exposes a `vcglib::vcglib` INTERFACE target that depends on the
+  libcvc-deps-bundled Eigen3.
+
+F2Dock additionally needs `cvc::xmlrpc` from libcvc itself; that is
+shipped by the libcvc release artifacts, not by libcvc-deps.
+
 All `*Config.cmake` files are placed under
 `<root>/lib/cmake/<Pkg>/` (Linux/macOS) or `<root>/share/<pkg>/` /
 `<root>/share/cmake/<Pkg>/` (Windows / vcpkg layout) so
@@ -122,6 +149,14 @@ the toolkit installer's own setup.
 - **Qt: 6.7.x** (`install-qt-action` `6.7.*` on Windows; `qt@6` / `qt6-base-dev`
   on macOS / Linux)
 - **VTK: 9.5.0** built against Qt 6 (no `GUISupportQtQuick` / `RenderingQtQuick`)
+- NFFT3: 3.5.3 (Linux apt `libnfft3-dev`; built from upstream source
+  on macOS and Windows;
+  SHA256 `caf1b3b3e5bf8c33a6bfd7eca811d954efce896605ecfd0144d47d0bebdf4371`)
+- Eigen3: 3.4.x distro / vcpkg / brew
+- LAPACK / BLAS: distro reference impl / brew `lapack` /
+  vcpkg `clapack` + `openblas`
+- vcglib: 2025.07
+  (SHA256 `e49fc9342d5476b3e39a5e1939b965b57c91d7a17b4f97b8c5eaf01228b16cf0`)
 
 A given release of libcvc-deps is intended to be used with the
 corresponding (or older) libcvc release. Bumping a major version
@@ -130,7 +165,8 @@ of Qt or VTK is reflected by bumping libcvc-deps's own version.
 ## License
 
 This repository's own files (the workflow, the CMake glue, the
-README/USAGE docs) are MIT-licensed (see [`LICENSE`](LICENSE)).
+README/USAGE docs) are licensed under the GNU General Public
+License version 2 (see [`LICENSE`](LICENSE)).
 
 The archived release artifacts are derivative bundles of upstream
 projects. Each upstream component retains its own license; the
