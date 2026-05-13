@@ -258,9 +258,111 @@ ABI-stable, host-supplied libraries is *not* bundled:
 
 | Platform | Host-supplied (not in archive)                                  |
 |----------|-----------------------------------------------------------------|
-| Linux    | glibc, `libstdc++.so.6`, `libgcc_s.so.1`, the dynamic loader, libpthread/libdl/librt/libm/libresolv (all part of glibc) |
-| macOS    | The system libc / libc++ shipped with the OS (everything else is rewritten via `dylibbundler` to `@loader_path/`) |
-| Windows  | The Universal C Runtime (UCRT). All other DLLs (Qt, VTK, boost, zlib, libpng, …) are in `bin/`. |
+| Linux    | glibc (`libc.so.6`, `libpthread.so.0`, `libdl.so.2`, `librt.so.1`, `libm.so.6`, `libresolv.so.2`, `libnsl.so.1`, `libutil.so.1`, `libanl.so.1`) and the dynamic loader (`ld-linux-x86-64.so.2`). **`libstdc++.so.6` and `libgcc_s.so.1` ARE bundled** (since v1.0.2). |
+| macOS    | The system libc / libc++ shipped with the OS (everything else is rewritten via `dylibbundler` to `@loader_path/`). |
+| Windows  | **Universal C Runtime only** (`ucrtbase.dll`, `api-ms-win-crt-*.dll`) — part of Windows 10/11. The MSVC C/C++ runtime DLLs (`msvcp140*.dll`, `vcruntime140*.dll`, `concrt140.dll`) ARE bundled in Release archives (since v1.0.2). Debug archives still require Visual Studio 2022 or the Windows SDK debug runtime on the consumer machine. |
+
+## Runtime libraries (C / C++ / Fortran runtimes)
+
+libcvc-deps ships compiler runtime DLLs/SOs alongside the bundled
+libraries so that consumers do not have to coordinate redistributable
+installs separately. Policy per platform:
+
+### Linux (shared bundles)
+
+- **glibc** (`libc.so.6`, `libpthread.so.0`, …): host-supplied. glibc
+  is forward-compatible — a binary built on the GitHub Actions
+  Ubuntu runner runs on any host with glibc ≥ the runner's glibc.
+  Floor as of v1.0.2: glibc ≥ 2.39 (Ubuntu 24.04).
+- **libstdc++.so.6, libgcc_s.so.1**: **bundled** in `lib/` and
+  resolved via `RPATH=$ORIGIN`. The runner's GCC 13 libstdc++ is
+  newer than (or equal to) anything a typical consumer ships, and
+  libstdc++ is forward-compatible, so the bundled copy satisfies
+  all our `.so`'s without depending on the host distro's GCC age.
+- **libgfortran.so.5**: **bundled** (LAPACK has an explicit Fortran
+  runtime dependency; libgfortran has no compatibility guarantee
+  across distros, so we always ship it).
+- **libgomp.so.1** (OpenMP runtime): **bundled** via the transitive
+  ldd sweep when any shipped library NEEDs it.
+
+If your application also links against the system's libstdc++ via
+its own toolchain (e.g. you compile `myapp.exe` with GCC on the
+host), prepend the bundle's `lib/` to your runtime library search
+path so the loader does not pick a mix of two libstdc++ copies:
+
+```sh
+export LD_LIBRARY_PATH="$DEPS/lib:${LD_LIBRARY_PATH:-}"
+```
+
+Or, preferred, set `RPATH=$ORIGIN/../lib` (or an absolute path) on
+your own binary at link time:
+
+```cmake
+set_target_properties(myapp PROPERTIES
+  BUILD_RPATH   "$<TARGET_FILE_DIR:myapp>/../lib"
+  INSTALL_RPATH "\$ORIGIN/../lib")
+```
+
+### Windows (Release bundles)
+
+- **Universal CRT** (`ucrtbase.dll`, `api-ms-win-crt-*.dll`):
+  host-supplied — it's part of Windows 10 and 11. Not bundled.
+- **MSVC 2015–2022 C/C++ runtime**: **bundled** in `bin/`. The
+  following DLLs are staged from the build runner's Visual Studio
+  install under `VC\Redist\MSVC\<ver>\x64\Microsoft.VC143.CRT\`:
+  `msvcp140.dll`, `msvcp140_1.dll`, `msvcp140_2.dll`,
+  `msvcp140_atomic_wait.dll`, `msvcp140_codecvt_ids.dll`,
+  `vcruntime140.dll`, `vcruntime140_1.dll`, `concrt140.dll`.
+  App-local deployment of these DLLs is explicitly permitted by
+  [Microsoft's redistribution license](https://learn.microsoft.com/en-us/visualstudio/productinfo/2022-redistribution-vs).
+  Consumers no longer need the *Visual C++ Redistributable for
+  Visual Studio 2015–2022* installer.
+- **MinGW C runtime** (used by NFFT3 only): **bundled** in `bin/`:
+  `libgcc_s_seh-1.dll`, `libwinpthread-1.dll`, `libgomp-1.dll`,
+  `libstdc++-6.dll`, plus `libfftw3-3.dll` / `libfftw3_threads-3.dll`
+  (FFTW's own DLLs that NFFT depends on).
+
+A small `share/msvc-crt-redist.txt` manifest inside Release
+archives records the exact MSVC toolset version the bundled CRT
+DLLs came from, for compliance / audit purposes.
+
+### Windows (Debug bundles)
+
+- **The debug CRT (`msvcp140d.dll`, `vcruntime140d.dll`,
+  `ucrtbased.dll`, `concrt140d.dll`) is NOT redistributable** under
+  Microsoft's license and is therefore **not** bundled in Debug
+  archives. Consumers of Debug archives must build on a machine
+  with Visual Studio 2022 or the Windows 10/11 SDK debug runtime
+  installed. This is the intended use of Debug bundles (developer
+  link-time consumption, not end-user deployment).
+
+### macOS
+
+- All system runtimes (`libSystem.B.dylib`, `libc++.1.dylib`, …)
+  are part of the OS and are not bundled. Apple guarantees forward
+  compatibility within each macOS major version.
+- The bundled `dylib` install names are rewritten via
+  `dylibbundler` to `@rpath/…` so the consumer-side `RPATH=@loader_path`
+  resolves them inside the archive.
+- **`libgfortran` is not present** because macOS LAPACK is the
+  Accelerate framework, which has no Fortran symbols.
+
+### Static archives
+
+The `-static` flavors ship `.a` / `.lib` only and never invoke the
+ldd / dylibbundler / CRT-staging steps. Transitive runtime deps
+are not a concern in the archive because everything is linked into
+the final consumer binary at static-link time. You are responsible
+for whatever the static linker pulls in (e.g. system `-ldl`,
+`-lpthread`, `kernel32.lib`).
+
+> **Windows note:** the `windows-x86_64-*-static` flavor is **not
+> produced** for v1.0.x. vcpkg's `mpfr` port hangs indefinitely on
+> the `x64-windows-static` triplet under hosted GitHub Actions
+> Windows runners. See `docs/known-issues.md` for the diagnosis
+> and re-enablement plan. Windows users should consume the
+> shared bundles (`windows-x86_64-debug.zip` /
+> `windows-x86_64-release.zip`).
 
 ### Linux: bundled transitive deps
 
@@ -274,21 +376,5 @@ of mismatches in `libicu`, `libpng`, `libxml2`, `liblzma`, `libssl`,
 
 You should only need a recent-ish glibc on the host. Practical
 floor: glibc ≥ 2.31 (Ubuntu 20.04). The archive is built on
-`ubuntu-latest` GitHub runners (currently 22.04, glibc 2.35); any
+`ubuntu-latest` GitHub runners (currently 24.04, glibc 2.39); any
 host with glibc ≥ that should be fully covered.
-
-### Static archives
-
-The `-static` flavors ship `.a` / `.lib` only and never invoke the
-`ldd` / `dylibbundler` step. Transitive runtime deps are not a
-concern because everything is linked into the final consumer
-binary at static-link time. You are responsible for whatever the
-static linker pulls in (e.g. system `-ldl`, `-lpthread`).
-
-> **Windows note:** the `windows-x86_64-*-static` flavor is **not
-> produced** for v1.0.0. vcpkg's `mpfr` port hangs indefinitely on
-> the `x64-windows-static` triplet under hosted GitHub Actions
-> Windows runners. See `docs/known-issues.md` for the diagnosis
-> and re-enablement plan. Windows users should consume the
-> shared bundles (`windows-x86_64-debug.zip` /
-> `windows-x86_64-release.zip`).

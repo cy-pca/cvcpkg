@@ -527,18 +527,29 @@ jobs:
       #
       # Resolve every NEEDED edge transitively via ldd and copy each
       # non-system .so into $DIST/lib/, leaving only the truly
-      # ABI-stable host primitives (glibc, ld-linux, libstdc++) to
-      # the loader.
+      # ABI-stable host primitives (glibc + the loader) to the
+      # consumer's system.
+      #
+      # libstdc++.so.6 and libgcc_s.so.1 ARE bundled. The builder's
+      # GCC (Ubuntu 24.04 ships GCC 13) is newer than any glibc-based
+      # target we care about, and libstdc++/libgcc_s are
+      # forward-compatible, so shipping the builder's copy gives a
+      # consumer on an older Ubuntu/RHEL exactly the symbols our
+      # binaries reference. The remaining host-supplied SONAMEs are
+      # glibc/loader-internal bits that cannot be safely bundled
+      # (libc.so is paired with ld-linux + libpthread + libdl at a
+      # specific version on every distro).
       - name: Bundle transitive NEEDED libs (ldd sweep)
         if: matrix.link == 'shared'
         run: |
           set -euo pipefail
           DIST="$PWD/${{ steps.meta.outputs.stem }}"
 
-          # SONAMEs that stay on the host. glibc + libstdc++ are
-          # forward-compatible; the rest are loader/runtime bits
-          # that must come from the host kernel/glibc ABI.
-          host_re='^(linux-vdso\.so|ld-linux-.*\.so|libc\.so|libpthread\.so|libdl\.so|librt\.so|libm\.so|libresolv\.so|libnsl\.so|libutil\.so|libstdc\+\+\.so|libgcc_s\.so|libanl\.so)'
+          # SONAMEs that stay on the host. glibc is forward-compatible
+          # but cannot be relocated, and the loader (ld-linux) must
+          # come from the host kernel ABI. Everything else, including
+          # libstdc++ and libgcc_s, is bundled below.
+          host_re='^(linux-vdso\.so|ld-linux-.*\.so|libc\.so|libpthread\.so|libdl\.so|librt\.so|libm\.so|libresolv\.so|libnsl\.so|libutil\.so|libanl\.so)'
 
           shopt -s globstar nullglob
           # Worklist seeded with every shipped .so. ldd's recursive
@@ -1653,6 +1664,104 @@ jobs:
           dist:    ${{ github.workspace }}\${{ steps.meta.outputs.stem }}
           version: ${{ env.VCGLIB_VERSION }}
           sha256:  ${{ env.VCGLIB_SHA256 }}
+
+      # ── Stage MSVC CRT redistributable DLLs (Release only) ──
+      # Ship the MSVC C/C++ runtime DLLs (msvcp140*.dll, vcruntime140*.dll,
+      # concrt140.dll) inside bin/ so consumer machines do not need the
+      # "Visual C++ Redistributable for Visual Studio 2015–2022"
+      # installed separately. App-local deployment is explicitly
+      # permitted by Microsoft's redistribution license for these DLLs
+      # (see learn.microsoft.com — "Redistributing Visual C++ Files").
+      #
+      # The Universal CRT (ucrtbase.dll, api-ms-win-crt-*.dll) is part
+      # of Windows 10/11 and never needs redistribution; we don't ship
+      # it.
+      #
+      # Debug builds CANNOT ship the debug CRT — msvcp140d.dll /
+      # vcruntime140d.dll / ucrtbased.dll are NOT redistributable
+      # under Microsoft's license. Debug archives therefore still
+      # require a developer-grade Windows install (Visual Studio
+      # 2022 or the Windows SDK debug runtime). This is consistent
+      # with how Debug bundles are intended to be used (linker
+      # consumers, not end-user deployment).
+      - name: Stage MSVC CRT redistributable
+        if: matrix.build_type == 'Release'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dist = Join-Path $env:GITHUB_WORKSPACE '${{ steps.meta.outputs.stem }}'
+          $binDir = Join-Path $dist 'bin'
+          New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+
+          # ilammy/msvc-dev-cmd@v1 (invoked earlier in this job for the
+          # NFFT import-lib step) writes VCToolsRedistDir into GITHUB_ENV.
+          # Fall back to vswhere if it isn't set for some reason.
+          $redistRoot = $env:VCToolsRedistDir
+          if (-not $redistRoot -or -not (Test-Path $redistRoot)) {
+            $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+            if (-not (Test-Path $vswhere)) {
+              throw "vswhere.exe not found; cannot locate VC redist DLLs"
+            }
+            $vsRoot = & $vswhere -latest -products * `
+              -requires Microsoft.VisualStudio.Component.VC.Redist.14.Latest `
+              -property installationPath
+            if (-not $vsRoot) { $vsRoot = & $vswhere -latest -property installationPath }
+            $verFile = Join-Path $vsRoot 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt'
+            $vcVer = (Get-Content $verFile -ErrorAction Stop).Trim()
+            $redistRoot = Join-Path $vsRoot "VC\Redist\MSVC\$vcVer"
+            if (-not (Test-Path $redistRoot)) {
+              # Some VS layouts drop a digit; pick the newest sibling.
+              $redistRoot = Get-ChildItem (Join-Path $vsRoot 'VC\Redist\MSVC') -Directory `
+                | Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty FullName
+            }
+          }
+          Write-Host "MSVC redist root: $redistRoot"
+
+          $crtDir = Join-Path $redistRoot 'x64\Microsoft.VC143.CRT'
+          if (-not (Test-Path $crtDir)) {
+            # Fallback for newer toolsets that bump the VC<NNN> dir.
+            $crtDir = Get-ChildItem (Join-Path $redistRoot 'x64') -Directory `
+              | Where-Object { $_.Name -like 'Microsoft.VC*.CRT' } `
+              | Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not (Test-Path $crtDir)) {
+            throw "MSVC CRT redist directory not found under $redistRoot"
+          }
+          Write-Host "Staging from: $crtDir"
+
+          # Redistributable list per Microsoft docs (VS 2015–2022, v143).
+          # api-ms-win-* are part of the OS UCRT and are NOT shipped.
+          $crtDlls = @(
+            'msvcp140.dll',
+            'msvcp140_1.dll',
+            'msvcp140_2.dll',
+            'msvcp140_atomic_wait.dll',
+            'msvcp140_codecvt_ids.dll',
+            'vcruntime140.dll',
+            'vcruntime140_1.dll',
+            'concrt140.dll'
+          )
+          foreach ($name in $crtDlls) {
+            $src = Join-Path $crtDir $name
+            if (Test-Path $src) {
+              Copy-Item -Force $src $binDir
+              Write-Host "Staged MSVC CRT: $name"
+            } else {
+              Write-Host "Skipping missing CRT DLL: $name"
+            }
+          }
+
+          # Drop a tiny manifest noting the source so consumers can
+          # match against the installed redist for compliance.
+          $stampLines = @(
+            "Visual C++ Redistributable DLLs bundled from:",
+            "  $crtDir",
+            "Bundled list:",
+            ($crtDlls | ForEach-Object { "  - $_" })
+          ) | ForEach-Object { $_ }
+          $stampPath = Join-Path $dist 'share\msvc-crt-redist.txt'
+          New-Item -ItemType Directory -Force -Path (Split-Path $stampPath) | Out-Null
+          Set-Content -Path $stampPath -Value $stampLines
 
       - name: Pack zip
         shell: pwsh
