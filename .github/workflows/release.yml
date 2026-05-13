@@ -1494,45 +1494,31 @@ jobs:
             }
           }
 
-          # ── Prune opposite-config DLL/LIB/PDB pairs ────────────
-          # install-qt-action ships both release (Qt6Core.dll) and
-          # debug (Qt6Cored.dll) variants side-by-side; VTK ships
-          # similar pairs when built with both configs. We bundle one
-          # config per artifact, so drop the mismatching sibling
-          # whenever a matched pair exists. Files without a sibling
-          # (Qt tools like lupdate.exe / qdoc.exe, single-config
-          # plugins, vcpkg libs already staged from the right tree)
-          # are left untouched, so the full Qt install is preserved
-          # in the appropriate config.
-          $pruneRoots = @('bin','lib','plugins','qml') |
-            ForEach-Object { Join-Path $dist $_ } |
-            Where-Object { Test-Path $_ }
-          foreach ($root in $pruneRoots) {
-            Get-ChildItem -Path $root -Recurse -File -Include *.dll,*.lib,*.pdb |
-              ForEach-Object {
-                $f    = $_
-                $ext  = $f.Extension     # .dll | .lib | .pdb
-                $stem = $f.BaseName      # e.g. Qt6Core or Qt6Cored
-                if ($isDebug) {
-                  # Keep d-suffixed; drop non-d if a d sibling exists.
-                  if ($stem -notmatch 'd$') {
-                    $sib = Join-Path $f.DirectoryName ($stem + 'd' + $ext)
-                    if (Test-Path -LiteralPath $sib) {
-                      Remove-Item -Force -LiteralPath $f.FullName
-                    }
-                  }
-                } else {
-                  # Keep non-d; drop d-suffixed if a non-d sibling exists.
-                  if ($stem -match 'd$') {
-                    $base = $stem.Substring(0, $stem.Length - 1)
-                    $sib  = Join-Path $f.DirectoryName ($base + $ext)
-                    if (Test-Path -LiteralPath $sib) {
-                      Remove-Item -Force -LiteralPath $f.FullName
-                    }
-                  }
-                }
-              }
-          }
+          # ── Keep both Qt6 release + debug variants side-by-side ──
+          # Qt6's CMake config files (e.g. Qt6CoreTargets-*.cmake) are
+          # MULTI-CONFIG: they declare both IMPORTED_LOCATION_DEBUG
+          # (Qt6Cored.dll) AND IMPORTED_LOCATION_RELWITHDEBINFO
+          # (Qt6Core.dll) for every target. On top of that,
+          # Qt6*AdditionalTargetInfo.cmake maps the RELEASE and
+          # MINSIZEREL configs to RELWITHDEBINFO at find_package time.
+          # That means find_package(Qt6) in a consumer project resolves
+          # the non-suffixed paths regardless of CMAKE_BUILD_TYPE.
+          #
+          # If we ship only the d-suffixed variants in the Debug
+          # bundle, consumer configures fail with "file not found" for
+          # Qt6Core.lib / Qt6Core.dll / qgif.dll / etc., and the user
+          # is left whack-a-mole-ing missing files across lib/, bin/,
+          # plugins/imageformats/, plugins/platforms/, plugins/styles/.
+          #
+          # install-qt-action and Qt's online installer always provide
+          # both variants in $QT_ROOT_DIR; we just copy them through
+          # untouched. The release bundle equivalently ships both
+          # (in that case both files are the release build).
+          #
+          # VTK is single-config per artifact (we build one config per
+          # windows-vtk job), so there are no opposite-config siblings
+          # to prune there. vcpkg trees likewise carry one config per
+          # triplet. Nothing else needs the prune.
 
       # NFFT3 has no vcpkg port. Rather than relying on an upstream
       # prebuilt zip (whose hosting and URLs we don't control), we
