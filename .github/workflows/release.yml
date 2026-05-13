@@ -44,10 +44,14 @@ permissions:
 #   libcvc-deps-<ver>-windows-<arch>-<config>[-static].zip
 #
 # Contents:
-#   - Boost, HDF5 (C+CXX), FFTW3, GSL, log4cplus, CGAL+GMP+MPFR,
-#     ImageMagick (Q16-HDRI)
+#   - Boost, HDF5 (C+CXX), FFTW3, GSL, log4cplus, libtiff,
+#     CGAL+GMP+MPFR, ImageMagick (Q16-HDRI)
 #   - Qt 6.7.x (Core, Gui, Widgets, OpenGL, OpenGLWidgets)
 #   - VTK 9.5.0 built against Qt 6 (no QtQuick modules)
+#   - libiimod (IMOD's MRC/TIFF image-file I/O subset, built from
+#     the LabShare-Archive/IMOD upstream at a pinned SHA — see
+#     third-party/libiimod/CMakeLists.txt; linked against the
+#     bundled libtiff so TIFF reads/writes are enabled)
 #
 # CUDA toolkit is intentionally NOT bundled — consumers install it
 # directly via Jimver/cuda-toolkit on the build host.
@@ -119,13 +123,34 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build patchelf pkg-config \
             libboost-all-dev libhdf5-dev libfftw3-dev libgsl-dev \
-            libmagick++-dev \
+            libmagick++-dev libtiff-dev \
             libcgal-dev libgmp-dev libmpfr-dev \
             qt6-base-dev qt6-base-dev-tools libqt6opengl6-dev \
             libgl1-mesa-dev libxt-dev mesa-common-dev libglew-dev \
             libxrender-dev libxcursor-dev libxinerama-dev libxi-dev \
             libnfft3-dev libeigen3-dev liblapack-dev libblas-dev \
             gfortran
+
+      # ── libiimod built from upstream LabShare-Archive/IMOD ──
+      #    Curated source set; CMakeLists in third-party/libiimod/
+      #    pins the upstream SHA and configures the bundle install.
+      - name: Cache libiimod install
+        id: libiimod-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/libiimod-prefix-${{ matrix.build_type }}
+          key: libiimod-${{ hashFiles('third-party/libiimod/**') }}-${{ runner.os }}-${{ matrix.build_type }}-v1
+
+      - name: Build libiimod from source
+        if: steps.libiimod-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          cmake -S third-party/libiimod -B libiimod-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_INSTALL_PREFIX=$HOME/libiimod-prefix-${{ matrix.build_type }} \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+          cmake --build libiimod-build --parallel --target install
+          rm -rf libiimod-build
 
       # ── log4cplus built from source so we ship a .a in the
       #    static bundles. Ubuntu's liblog4cplus-dev is .so-only.
@@ -240,6 +265,7 @@ jobs:
           copy_libs 'libfftw3'
           copy_libs 'libgsl'
           copy_libs 'libgslcblas'
+          copy_libs 'libtiff'
           # log4cplus comes from our own source build (see earlier
           # 'Build log4cplus from source' step). Pick the artifact
           # flavor that matches this bundle: .a for static bundles,
@@ -284,7 +310,7 @@ jobs:
             case "$base" in
               # Bundle CMake configs for everything we ship.
               Boost*|hdf5|HDF5|GSL|CGAL|ImageMagick|Magick*|\
-              Qt6*|VTK|vtk*|GLEW|\
+              Qt6*|VTK|vtk*|GLEW|tiff|TIFF|\
               eigen3|Eigen3*|lapack*|LAPACK*|blas*|BLAS*)
                 cp -R "$d" "$DIST/lib/cmake/"
                 ;;
@@ -356,10 +382,13 @@ jobs:
             mkdir -p "$DIST/include/hdf5"
             cp -R /usr/include/hdf5/serial/. "$DIST/include/hdf5/"
           fi
-          # Top-level header files (fftw3.h, gmp.h, mpfr.h, …)
+          # Top-level header files (fftw3.h, gmp.h, mpfr.h, tiff.h, …)
           for f in /usr/include/fftw3.h /usr/include/fftw3.f \
                    /usr/include/fftw3l.h /usr/include/fftw3q.h \
-                   /usr/include/gmp.h /usr/include/mpfr.h /usr/include/mpf2mpfr.h ; do
+                   /usr/include/gmp.h /usr/include/mpfr.h /usr/include/mpf2mpfr.h \
+                   /usr/include/tiff.h /usr/include/tiffio.h \
+                   /usr/include/tiffvers.h /usr/include/tiffconf.h \
+                   /usr/include/tiffio.hxx ; do
             [ -f "$f" ] && cp "$f" "$DIST/include/"
           done
 
@@ -395,6 +424,21 @@ jobs:
             cp -R $HOME/vtk-qt6/lib/.     "$DIST/lib/"     2>/dev/null || true
             [ -d $HOME/vtk-qt6/share ] && cp -R $HOME/vtk-qt6/share/. "$DIST/share/" 2>/dev/null || true
             [ -d $HOME/vtk-qt6/bin ]   && cp -R $HOME/vtk-qt6/bin/.   "$DIST/bin/"   2>/dev/null || true
+          fi
+
+      # ── Stage libiimod from the cached install ──
+      - name: Stage libiimod
+        run: |
+          set -euo pipefail
+          DIST="$PWD/${{ steps.meta.outputs.stem }}"
+          PFX="$HOME/libiimod-prefix-${{ matrix.build_type }}"
+          if [ -d "$PFX" ]; then
+            mkdir -p "$DIST/include/libiimod" "$DIST/lib/cmake/libiimod"
+            cp -R "$PFX/include/libiimod/." "$DIST/include/libiimod/"
+            cp -R "$PFX/lib/libiimod.a"     "$DIST/lib/" 2>/dev/null || true
+            if [ -d "$PFX/lib/cmake/libiimod" ]; then
+              cp -R "$PFX/lib/cmake/libiimod/." "$DIST/lib/cmake/libiimod/"
+            fi
           fi
 
       # ── Pull in transitive NEEDED libraries via ldd ──
@@ -558,11 +602,30 @@ jobs:
           # source in a later step using the same autotools toolchain
           # the Linux package and our Windows MSYS2 build use.
           brew install cmake ninja \
-            boost hdf5 fftw gsl imagemagick log4cplus \
+            boost hdf5 fftw gsl imagemagick log4cplus libtiff \
             cgal gmp mpfr \
             qt@6 vtk \
             eigen lapack \
             autoconf automake libtool
+
+      # ── libiimod built from upstream LabShare-Archive/IMOD ──
+      - name: Cache libiimod install
+        id: libiimod-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/libiimod-prefix-${{ matrix.build_type }}
+          key: libiimod-${{ hashFiles('third-party/libiimod/**') }}-${{ runner.os }}-${{ matrix.build_type }}-v1
+
+      - name: Build libiimod from source
+        if: steps.libiimod-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euxo pipefail
+          cmake -S third-party/libiimod -B libiimod-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_INSTALL_PREFIX="$HOME/libiimod-prefix-${{ matrix.build_type }}" \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+          cmake --build libiimod-build --parallel --target install
+          rm -rf libiimod-build
 
       - name: Configure + install marker config
         run: |
@@ -593,7 +656,7 @@ jobs:
           # Bulk-copy each brew prefix (include + lib + share +
           # bin) into the staged tree.
           for pkg in boost hdf5 fftw gsl log4cplus imagemagick \
-                     cgal gmp mpfr qt@6 vtk \
+                     cgal gmp mpfr qt@6 vtk libtiff \
                      eigen lapack ; do
             P=$(brew --prefix "$pkg" 2>/dev/null || true)
             [ -n "$P" ] || continue
@@ -628,6 +691,21 @@ jobs:
           if [ -n "$QT_PREFIX" ] && [ -d "$QT_PREFIX/share/qt/plugins" ]; then
             mkdir -p "$DIST/plugins"
             cp -R "$QT_PREFIX/share/qt/plugins/." "$DIST/plugins/"
+          fi
+
+      # ── Stage libiimod from the cached install ──
+      - name: Stage libiimod
+        run: |
+          set -euo pipefail
+          DIST="$PWD/${{ steps.meta.outputs.stem }}"
+          PFX="$HOME/libiimod-prefix-${{ matrix.build_type }}"
+          if [ -d "$PFX" ]; then
+            mkdir -p "$DIST/include/libiimod" "$DIST/lib/cmake/libiimod"
+            cp -R "$PFX/include/libiimod/." "$DIST/include/libiimod/"
+            cp -R "$PFX/lib/libiimod.a"     "$DIST/lib/" 2>/dev/null || true
+            if [ -d "$PFX/lib/cmake/libiimod" ]; then
+              cp -R "$PFX/lib/cmake/libiimod/." "$DIST/lib/cmake/libiimod/"
+            fi
           fi
 
       # ── Build NFFT3 from source ──
@@ -864,7 +942,7 @@ jobs:
             'boost-foreach','boost-function','boost-lambda','boost-lexical-cast',
             'boost-multi-array','boost-optional','boost-smart-ptr','boost-tuple',
             'boost-utility',
-            'hdf5[cpp]','fftw3','gsl','imagemagick','log4cplus',
+            'hdf5[cpp]','fftw3','gsl','imagemagick','log4cplus','tiff',
             'cgal','glew',
             # F2Dock / F3Dock science stack.
             #   eigen3   — header-only linear algebra
@@ -1102,6 +1180,51 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$dist"
           cmake --install build --config ${{ matrix.build_type }}
           New-Item -ItemType Directory -Force -Path "$dist/bin","$dist/lib","$dist/include","$dist/share" | Out-Null
+
+      # ── libiimod built from upstream LabShare-Archive/IMOD ──
+      - name: Cache libiimod install
+        id: libiimod-cache
+        uses: actions/cache@v4
+        with:
+          path: D:\libiimod-prefix-${{ matrix.build_type }}
+          key: libiimod-${{ hashFiles('third-party/libiimod/**') }}-${{ runner.os }}-${{ matrix.build_type }}-v2
+
+      - name: Build libiimod from source
+        if: steps.libiimod-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix  = "D:\libiimod-prefix-${{ matrix.build_type }}"
+          $triplet = '${{ steps.meta.outputs.triplet }}'
+          # Route find_package(TIFF) through the vcpkg-installed tree
+          # populated by the windows-vcpkg pre-job.
+          cmake -S third-party/libiimod -B D:\libiimod-build `
+            -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="C:/vcpkg/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET="$triplet" `
+            -DCMAKE_INSTALL_PREFIX="$prefix"
+          cmake --build D:\libiimod-build --config ${{ matrix.build_type }} --target install
+          Remove-Item -Recurse -Force D:\libiimod-build
+
+      - name: Stage libiimod
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stem   = '${{ steps.meta.outputs.stem }}'
+          $dist   = Join-Path $env:GITHUB_WORKSPACE $stem
+          $prefix = "D:\libiimod-prefix-${{ matrix.build_type }}"
+          if (Test-Path $prefix) {
+            New-Item -ItemType Directory -Force -Path "$dist/include/libiimod","$dist/lib/cmake/libiimod" | Out-Null
+            Copy-Item -Recurse -Force "$prefix/include/libiimod/*" "$dist/include/libiimod/"
+            $libDir = Join-Path $prefix 'lib'
+            if (Test-Path $libDir) {
+              Get-ChildItem -Path $libDir -Filter 'iimod.lib' -File -ErrorAction SilentlyContinue `
+                | Copy-Item -Destination "$dist/lib/" -Force
+              if (Test-Path "$prefix/lib/cmake/libiimod") {
+                Copy-Item -Recurse -Force "$prefix/lib/cmake/libiimod/*" "$dist/lib/cmake/libiimod/"
+              }
+            }
+          }
 
       - name: Stage vcpkg + Qt + VTK trees
         shell: pwsh

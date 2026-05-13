@@ -22,6 +22,7 @@ Every archive contains, in one tree:
 - FFTW3
 - GSL + GSL CBLAS
 - log4cplus
+- libtiff (provides TIFF read/write for `libiimod::iimod`)
 - CGAL + GMP + MPFR
 - ImageMagick (Q16-HDRI; Windows uses the [overlay port](vcpkg-overlay/ports/imagemagick))
 
@@ -54,6 +55,17 @@ Every archive contains, in one tree:
   `vcglib-config.cmake` is generated so `find_package(vcglib CONFIG)`
   exposes a `vcglib::vcglib` INTERFACE target that depends on the
   libcvc-deps-bundled Eigen3.
+- libiimod (MRC / TIFF / image-file I/O subset of IMOD, built from
+  the read-only archive [LabShare-Archive/IMOD](https://github.com/LabShare-Archive/IMOD)
+  at a pinned upstream commit — see
+  [`third-party/libiimod/CMakeLists.txt`](third-party/libiimod/CMakeLists.txt)).
+  Shipped as a static `libiimod.a` / `iimod.lib` plus headers under
+  `include/libiimod/` and a `libiimod-config.cmake` that exports
+  the `libiimod::iimod` imported target. TIFF reads/writes are
+  enabled — the target links transitively against the bundled
+  `TIFF::TIFF`, so consumers of `libiimod::iimod` get full TIFF
+  support without any extra `find_package` call. libcvc consumes
+  this in place of its previous in-tree copy.
 
 F2Dock additionally needs `cvc::xmlrpc` from libcvc itself; that is
 shipped by the libcvc release artifacts, not by libcvc-deps.
@@ -144,6 +156,7 @@ the toolkit installer's own setup.
 - FFTW3: distro / vcpkg / brew
 - GSL: distro / vcpkg / brew
 - log4cplus: distro / vcpkg / brew
+- libtiff: distro `libtiff-dev` / vcpkg `tiff` / brew `libtiff`
 - CGAL / GMP / MPFR: distro / vcpkg / brew
 - ImageMagick: 7.1.2-21 Q16-HDRI x64 (Windows overlay)
 - **Qt: 6.7.x** (`install-qt-action` `6.7.*` on Windows; `qt@6` / `qt6-base-dev`
@@ -157,6 +170,9 @@ the toolkit installer's own setup.
   vcpkg `clapack` + `openblas`
 - vcglib: 2025.07
   (SHA256 `e49fc9342d5476b3e39a5e1939b965b57c91d7a17b4f97b8c5eaf01228b16cf0`)
+- libiimod: LabShare-Archive/IMOD
+  commit `8c592ce4cfae5e0748314da56d73334de7465776` (archived,
+  read-only since 2018-07-15)
 
 A given release of libcvc-deps is intended to be used with the
 corresponding (or older) libcvc release. Bumping a major version
