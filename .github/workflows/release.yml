@@ -681,14 +681,18 @@ jobs:
   windows-vcpkg:
     runs-on: windows-latest
     timeout-minutes: 350
+    # NOTE: no build_type matrix. vcpkg builds both Debug and Release
+    # variants of each port in a single `vcpkg install` invocation (its
+    # default behavior for triplets that do not set VCPKG_BUILD_TYPE).
+    # A single job populates C:\vcpkg\installed/<triplet>/{,debug/}
+    # and the assemble stage cherry-picks the right subtree per
+    # build_type. Running this as a Debug/Release matrix would just do
+    # the same work twice.
     strategy:
       fail-fast: false
       matrix:
         include:
-          - build_type: Debug
-            triplet: x64-windows
-          - build_type: Release
-            triplet: x64-windows
+          - triplet: x64-windows
     steps:
       - uses: actions/checkout@v4
 
@@ -725,9 +729,9 @@ jobs:
           path: |
             C:\vcpkg\installed
             ~\AppData\Local\vcpkg\archives
-          key: vcpkg-deps-${{ matrix.build_type }}-${{ matrix.triplet }}-v2-${{ hashFiles('vcpkg-overlay/**', '.github/workflows/release.yml') }}
+          key: vcpkg-deps-${{ matrix.triplet }}-v3-${{ hashFiles('vcpkg-overlay/**', '.github/workflows/release.yml') }}
           restore-keys: |
-            vcpkg-deps-${{ matrix.build_type }}-${{ matrix.triplet }}-v2-
+            vcpkg-deps-${{ matrix.triplet }}-v3-
 
       - name: Restore vcpkg downloads cache
         if: steps.vcpkg-cache.outputs.cache-hit != 'true'
@@ -915,9 +919,9 @@ jobs:
           path: |
             C:\vcpkg\installed
             ~\AppData\Local\vcpkg\archives
-          key: vcpkg-deps-${{ matrix.build_type }}-${{ steps.meta.outputs.triplet }}-v2-${{ hashFiles('vcpkg-overlay/**', '.github/workflows/release.yml') }}
+          key: vcpkg-deps-${{ steps.meta.outputs.triplet }}-v3-${{ hashFiles('vcpkg-overlay/**', '.github/workflows/release.yml') }}
           restore-keys: |
-            vcpkg-deps-${{ matrix.build_type }}-${{ steps.meta.outputs.triplet }}-v2-
+            vcpkg-deps-${{ steps.meta.outputs.triplet }}-v3-
           fail-on-cache-miss: true
 
       - name: Restore VTK cache
