@@ -534,6 +534,13 @@ jobs:
   # so the per-job 6-hour limit only has to cover vcpkg install for a
   # single configuration. Output is the vcpkg installed/ tree cached
   # under a key the assemble stage restores from.
+  #
+  # NOTE: x64-windows-static is intentionally omitted from this matrix.
+  # vcpkg's `mpfr` port hangs indefinitely during the autotools/libtool
+  # link step on hosted GitHub Actions Windows runners when built for
+  # the x64-windows-static triplet — see docs/known-issues.md
+  # ("Windows static builds: mpfr hang in vcpkg"). The dynamic
+  # (x64-windows) flavor of mpfr completes in ~6 min via the same port.
   windows-vcpkg:
     runs-on: windows-latest
     timeout-minutes: 350
@@ -545,10 +552,6 @@ jobs:
             triplet: x64-windows
           - build_type: Release
             triplet: x64-windows
-          - build_type: Debug
-            triplet: x64-windows-static
-          - build_type: Release
-            triplet: x64-windows-static
     steps:
       - uses: actions/checkout@v4
 
@@ -692,6 +695,11 @@ jobs:
   # stages + zips + uploads the per-config artifact. This stage is
   # fast (minutes) and should always finish well under the per-job
   # time limit.
+  # NOTE: only the shared (link: shared) configurations are produced
+  # on Windows. The static-link flavor depends on vcpkg's
+  # x64-windows-static triplet, which is currently blocked by an mpfr
+  # autotools/libtool hang on hosted Windows runners — see
+  # docs/known-issues.md ("Windows static builds: mpfr hang in vcpkg").
   windows:
     needs: [windows-vcpkg, windows-vtk]
     runs-on: windows-latest
@@ -704,10 +712,6 @@ jobs:
             link: shared
           - build_type: Release
             link: shared
-          - build_type: Debug
-            link: static
-          - build_type: Release
-            link: static
     steps:
       - uses: actions/checkout@v4
         with:
