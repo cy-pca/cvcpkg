@@ -1350,6 +1350,46 @@ jobs:
             }
           }
 
+          # ── Prune opposite-config DLL/LIB/PDB pairs ────────────
+          # install-qt-action ships both release (Qt6Core.dll) and
+          # debug (Qt6Cored.dll) variants side-by-side; VTK ships
+          # similar pairs when built with both configs. We bundle one
+          # config per artifact, so drop the mismatching sibling
+          # whenever a matched pair exists. Files without a sibling
+          # (Qt tools like lupdate.exe / qdoc.exe, single-config
+          # plugins, vcpkg libs already staged from the right tree)
+          # are left untouched, so the full Qt install is preserved
+          # in the appropriate config.
+          $pruneRoots = @('bin','lib','plugins','qml') |
+            ForEach-Object { Join-Path $dist $_ } |
+            Where-Object { Test-Path $_ }
+          foreach ($root in $pruneRoots) {
+            Get-ChildItem -Path $root -Recurse -File -Include *.dll,*.lib,*.pdb |
+              ForEach-Object {
+                $f    = $_
+                $ext  = $f.Extension     # .dll | .lib | .pdb
+                $stem = $f.BaseName      # e.g. Qt6Core or Qt6Cored
+                if ($isDebug) {
+                  # Keep d-suffixed; drop non-d if a d sibling exists.
+                  if ($stem -notmatch 'd$') {
+                    $sib = Join-Path $f.DirectoryName ($stem + 'd' + $ext)
+                    if (Test-Path -LiteralPath $sib) {
+                      Remove-Item -Force -LiteralPath $f.FullName
+                    }
+                  }
+                } else {
+                  # Keep non-d; drop d-suffixed if a non-d sibling exists.
+                  if ($stem -match 'd$') {
+                    $base = $stem.Substring(0, $stem.Length - 1)
+                    $sib  = Join-Path $f.DirectoryName ($base + $ext)
+                    if (Test-Path -LiteralPath $sib) {
+                      Remove-Item -Force -LiteralPath $f.FullName
+                    }
+                  }
+                }
+              }
+          }
+
       # NFFT3 has no vcpkg port. Rather than relying on an upstream
       # prebuilt zip (whose hosting and URLs we don't control), we
       # build NFFT3 from source in MSYS2/mingw64 — the same toolchain
