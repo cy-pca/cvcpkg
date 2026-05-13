@@ -161,3 +161,11 @@ The `-static` flavors ship `.a` / `.lib` only and never invoke the
 concern because everything is linked into the final consumer
 binary at static-link time. You are responsible for whatever the
 static linker pulls in (e.g. system `-ldl`, `-lpthread`).
+
+> **Windows note:** the `windows-x86_64-*-static` flavor is **not
+> produced** for v1.0.0. vcpkg's `mpfr` port hangs indefinitely on
+> the `x64-windows-static` triplet under hosted GitHub Actions
+> Windows runners. See `docs/known-issues.md` for the diagnosis
+> and re-enablement plan. Windows users should consume the
+> shared bundles (`windows-x86_64-debug.zip` /
+> `windows-x86_64-release.zip`).
