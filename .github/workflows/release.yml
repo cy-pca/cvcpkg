@@ -697,17 +697,30 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: 'Free disk space and route vcpkg to D: (Windows)'
+        timeout-minutes: 10
         shell: pwsh
         run: |
+          # Each Remove-Item runs in a background job with a 60s
+          # timeout so an occasional file-lock hang under
+          # C:\Program Files\dotnet (intermittent on
+          # windows-2025-vs2026 runners) can't stall the whole job.
           foreach ($dir in @(
               'C:\Android', 'C:\Program Files\dotnet',
               'C:\hostedtoolcache\windows\Ruby',
               'C:\hostedtoolcache\windows\PyPy',
               'C:\hostedtoolcache\windows\go',
               'C:\hostedtoolcache\windows\node')) {
-            if (Test-Path $dir) {
-              Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $dir
+            if (-not (Test-Path $dir)) { continue }
+            Write-Host "Removing $dir ..."
+            $job = Start-Job -ScriptBlock {
+              param($p)
+              Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $p
+            } -ArgumentList $dir
+            if (-not (Wait-Job $job -Timeout 60)) {
+              Write-Host "  timed out after 60s, skipping $dir"
+              Stop-Job $job -ErrorAction SilentlyContinue
             }
+            Remove-Job $job -Force -ErrorAction SilentlyContinue
           }
           New-Item -ItemType Directory -Force -Path D:\vcpkg-buildtrees | Out-Null
           New-Item -ItemType Directory -Force -Path D:\vcpkg-packages   | Out-Null
@@ -898,17 +911,27 @@ jobs:
           echo "stem=$STEM"       >> "$GITHUB_OUTPUT"
 
       - name: 'Free disk space and route vcpkg to D: (Windows)'
+        timeout-minutes: 10
         shell: pwsh
         run: |
+          # See windows-vcpkg job for rationale on the per-dir timeout.
           foreach ($dir in @(
               'C:\Android', 'C:\Program Files\dotnet',
               'C:\hostedtoolcache\windows\Ruby',
               'C:\hostedtoolcache\windows\PyPy',
               'C:\hostedtoolcache\windows\go',
               'C:\hostedtoolcache\windows\node')) {
-            if (Test-Path $dir) {
-              Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $dir
+            if (-not (Test-Path $dir)) { continue }
+            Write-Host "Removing $dir ..."
+            $job = Start-Job -ScriptBlock {
+              param($p)
+              Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $p
+            } -ArgumentList $dir
+            if (-not (Wait-Job $job -Timeout 60)) {
+              Write-Host "  timed out after 60s, skipping $dir"
+              Stop-Job $job -ErrorAction SilentlyContinue
             }
+            Remove-Job $job -Force -ErrorAction SilentlyContinue
           }
 
       - name: Restore vcpkg installed cache
