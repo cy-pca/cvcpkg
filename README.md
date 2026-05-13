@@ -151,32 +151,67 @@ the toolkit installer's own setup.
 
 ## Version pins
 
-- Boost: latest in Ubuntu LTS / vcpkg / Homebrew (tracked, not pinned)
-- HDF5: distro / vcpkg / brew
-- FFTW3: distro / vcpkg / brew
-- GSL: distro / vcpkg / brew
-- log4cplus: distro / vcpkg / brew
-- libtiff: distro `libtiff-dev` / vcpkg `tiff` / brew `libtiff`
-- CGAL / GMP / MPFR: distro / vcpkg / brew
-- ImageMagick: 7.1.2-21 Q16-HDRI x64 (Windows overlay)
-- **Qt: 6.7.x** (`install-qt-action` `6.7.*` on Windows; `qt@6` / `qt6-base-dev`
-  on macOS / Linux)
-- **VTK: 9.5.0** built against Qt 6 (no `GUISupportQtQuick` / `RenderingQtQuick`)
-- NFFT3: 3.5.3 (Linux apt `libnfft3-dev`; built from upstream source
-  on macOS and Windows;
-  SHA256 `caf1b3b3e5bf8c33a6bfd7eca811d954efce896605ecfd0144d47d0bebdf4371`)
-- Eigen3: 3.4.x distro / vcpkg / brew
-- LAPACK / BLAS: distro reference impl / brew `lapack` /
-  vcpkg `clapack` + `openblas`
-- vcglib: 2025.07
-  (SHA256 `e49fc9342d5476b3e39a5e1939b965b57c91d7a17b4f97b8c5eaf01228b16cf0`)
-- libiimod: LabShare-Archive/IMOD
-  commit `8c592ce4cfae5e0748314da56d73334de7465776` (archived,
-  read-only since 2018-07-15)
+Some components are pinned in the workflow itself (VTK, Qt on Windows,
+log4cplus, NFFT, vcglib, libiimod, the Windows ImageMagick overlay
+port). Others are taken as-is from each platform's package manager and
+therefore drift between releases. For every tagged release of
+libcvc-deps we record the **exact versions actually shipped** in the
+artifacts below. Consumers who need bit-for-bit reproducible bundles
+should consume a tagged release rather than the moving tip.
 
 A given release of libcvc-deps is intended to be used with the
-corresponding (or older) libcvc release. Bumping a major version
-of Qt or VTK is reflected by bumping libcvc-deps's own version.
+corresponding (or older) libcvc release. Bumping a major version of
+Qt or VTK is reflected by bumping libcvc-deps's own version.
+
+### v1.0.0 (2026-05-13)
+
+Versions actually shipped in the `v1.0.0` release artifacts. Where a
+platform's package manager picked a different upstream version than
+the workflow's nominal pin (e.g. Homebrew's VTK bottle), the shipped
+version is recorded here verbatim.
+
+| Component | Linux (Ubuntu 24.04 apt) | macOS (arm64 Homebrew) | Windows (vcpkg / aqtinstall / MSYS2) |
+|---|---|---|---|
+| Boost | 1.83.0 | 1.90.0 | 1.90.0 (vcpkg) |
+| HDF5 | 1.10.10 | 2.1.1 | 2.1.1 (vcpkg) |
+| FFTW3 | 3.3.10 | 3.3.11 | 3.3.11 (MSYS2 `mingw-w64-x86_64-fftw`) |
+| GSL | 2.7.1 | 2.8 | 2.8 (vcpkg) |
+| log4cplus | 2.1.2 (source) | 2.1.2 | 2.1.2 (source) |
+| libtiff | 4.5.1 | 4.7.1 | 4.7.1 (vcpkg `tiff`) |
+| CGAL | 5.6 | 6.1.1 | 6.1.1 (vcpkg) |
+| GMP | 6.3.0 | 6.3.0 | 6.3.0 (vcpkg) |
+| MPFR | 4.2.1 | 4.2.2 | 4.2.2 (vcpkg) |
+| ImageMagick | 6.9.x Q16 (apt) | 7.1.2-21 Q16HDRI | 7.1.2-21 Q16-HDRI (vcpkg overlay) |
+| Qt | 6.4.2 (`qt6-base-dev`) | 6.11.0 (brew `qt@6` bottle) | 6.7.3 (`install-qt-action` `6.7.*`) |
+| VTK | 9.5.0 (source) | 9.5.2 (brew bottle) | 9.5.0 (source) |
+| NFFT3 | 3.5.3 (apt `libnfft3-dev`) | 3.5.3 (source) | 3.5.3 (source) |
+| Eigen3 | 3.4.0 | 5.0.1 (brew bottle) | 3.4.x (vcpkg) |
+| BLAS / LAPACK | Ubuntu reference 3.x | 3.12.1 (brew `lapack`) | OpenBLAS 0.3.29 (vcpkg) |
+| vcglib | 2025.07 | 2025.07 | 2025.07 |
+| libiimod | LabShare-Archive/IMOD `8c592ce4` | same | same |
+
+Pin-source notes:
+
+- `VTK_VERSION: 9.5.0`, `QT_VERSION_WINDOWS: 6.7.*`,
+  `VCGLIB_VERSION: 2025.07`, `LOG4CPLUS_VERSION: 2.1.2`,
+  `NFFT_VERSION: 3.5.3` are set in `.github/workflows/release.yml`.
+- vcglib SHA256:
+  `e49fc9342d5476b3e39a5e1939b965b57c91d7a17b4f97b8c5eaf01228b16cf0`.
+- NFFT3 source tarball SHA256:
+  `caf1b3b3e5bf8c33a6bfd7eca811d954efce896605ecfd0144d47d0bebdf4371`.
+- libiimod is built from
+  [LabShare-Archive/IMOD](https://github.com/LabShare-Archive/IMOD)
+  commit `8c592ce4cfae5e0748314da56d73334de7465776` (archived,
+  read-only since 2018-07-15).
+- macOS Homebrew's `vtk` bottle currently ships 9.5.2 even though the
+  workflow's nominal VTK pin is 9.5.0; the Linux and Windows builds use
+  the pinned 9.5.0 source.
+- macOS Homebrew's `eigen` bottle is on the 5.x release line; the
+  Linux/Windows builds remain on the 3.4 series. Consumer code should
+  not rely on Eigen ABI parity across platforms in v1.0.0.
+- Linux Ubuntu 24.04 ships ImageMagick 6 (Q16) via apt while macOS and
+  Windows ship ImageMagick 7. Code that includes `<Magick++.h>` builds
+  on both, but ABI differs.
 
 ## License
 
