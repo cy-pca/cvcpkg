@@ -304,13 +304,26 @@ jobs:
           # against the staged prefix without needing the host apt
           # packages.
           mkdir -p "$DIST/lib/cmake"
+          mkdir -p "$DIST/lib/x86_64-linux-gnu/cmake"
           for d in /usr/lib/x86_64-linux-gnu/cmake/*; do
             [ -d "$d" ] || continue
             base=$(basename "$d")
             case "$base" in
-              # Bundle CMake configs for everything we ship.
+              # Qt6 ships configs generated against the Debian multiarch
+              # layout: the per-module *Targets-none.cmake files walk
+              # _IMPORT_PREFIX up 4 directories from the file location,
+              # assuming the configs live at
+              # <prefix>/lib/x86_64-linux-gnu/cmake/Qt6<Module>/. They
+              # reference Qt6::moc as ${_IMPORT_PREFIX}/lib/qt6/libexec/moc
+              # and Qt6::qmake as ${_IMPORT_PREFIX}/bin/x86_64-linux-gnu-qmake6,
+              # so they MUST stay at the multiarch path inside the bundle
+              # for the walks to resolve back to $DIST.
+              Qt6*)
+                cp -R "$d" "$DIST/lib/x86_64-linux-gnu/cmake/"
+                ;;
+              # Everything else bundles cleanly under lib/cmake/.
               Boost*|hdf5|HDF5|GSL|CGAL|ImageMagick|Magick*|\
-              Qt6*|VTK|vtk*|GLEW|tiff|TIFF|\
+              VTK|vtk*|GLEW|tiff|TIFF|\
               eigen3|Eigen3*|lapack*|LAPACK*|blas*|BLAS*)
                 cp -R "$d" "$DIST/lib/cmake/"
                 ;;
@@ -320,11 +333,6 @@ jobs:
           for d in /usr/lib/cmake/eigen3 /usr/share/eigen3/cmake; do
             [ -d "$d" ] && cp -R "$d" "$DIST/lib/cmake/" || true
           done
-          # Qt6 itself drops its top-level cmake configs under
-          # /usr/lib/x86_64-linux-gnu/cmake/Qt6/ and per-module dirs
-          # alongside (Qt6Core, Qt6Gui, …). Sweep them all.
-          find /usr/lib/x86_64-linux-gnu/cmake -maxdepth 1 -type d -name 'Qt6*' \
-            -exec cp -R {} "$DIST/lib/cmake/" \;
 
           # Boost ships pkg-config + cmake under several paths; also
           # copy the dir at /usr/lib/x86_64-linux-gnu/cmake/Boost-*.
@@ -408,6 +416,16 @@ jobs:
               cp -R /usr/lib/qt6/libexec/. "$DIST/bin/" 2>/dev/null || true
             fi
           fi
+          # Qt6CoreToolsTargets-none.cmake references Qt6::qmake as
+          # ${_IMPORT_PREFIX}/bin/x86_64-linux-gnu-qmake6 (Debian's
+          # multiarch-suffixed qmake wrapper, installed at /usr/bin/),
+          # and Qt6 modules' own internal scripts also look for plain
+          # qmake6 on PATH. Both live under /usr/bin on the host, not
+          # /usr/lib/qt6/bin, so copy them explicitly into $DIST/bin.
+          for f in /usr/bin/x86_64-linux-gnu-qmake6 /usr/bin/qmake6 \
+                   /usr/bin/qtpaths6 /usr/bin/qtchooser; do
+            [ -e "$f" ] && cp -P "$f" "$DIST/bin/" || true
+          done
           # Qt6 platform/imageformat plugins
           if [ -d /usr/lib/x86_64-linux-gnu/qt6/plugins ]; then
             mkdir -p "$DIST/plugins"
