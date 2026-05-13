@@ -123,6 +123,129 @@ cmake -S app -B build \
   -DCMAKE_PREFIX_PATH="$DEPS_ROOT;$LIBCVC_ROOT"
 ```
 
+## Deploying a Windows app linked against libcvc-deps
+
+Qt6 on Windows ships as a relocatable set of DLLs + plugins. The
+libcvc-deps bundle places them at:
+
+```text
+<deps>/bin/Qt6Core.dll, Qt6Gui.dll, Qt6Widgets.dll, ...
+<deps>/bin/qt.conf                  # [Paths] Prefix=..
+<deps>/plugins/platforms/qwindows.dll
+<deps>/plugins/imageformats/*.dll
+<deps>/plugins/styles/*.dll
+<deps>/bin/windeployqt.exe          # bundled Qt deployment tool
+```
+
+When your `.exe` lives inside `<deps>/bin/` it boots fine — Qt6Core
+reads `<deps>/bin/qt.conf` and resolves plugins via `Prefix=..` →
+`<deps>/plugins`. When your `.exe` lives anywhere else and you copy
+only the Qt DLLs next to it, Qt can no longer find its plugins and
+fails to start with:
+
+```text
+This application failed to start because no Qt platform plugin could
+be initialized. Reinstalling the application may fix this problem.
+Available platform plugins are: ...
+```
+
+### Qt6 plugin resolution order
+
+`Qt6Core.dll` searches for its plugin directory in this order:
+
+1. `qt.conf` next to the running `.exe` (`[Paths] Plugins=` / `Prefix=`).
+2. `qt.conf` next to `Qt6Core.dll`.
+3. The `QT_PLUGIN_PATH` environment variable.
+4. The absolute path baked into `Qt6Core.dll` at build time. For our
+   bundle that is `D:\a\libcvc-deps\Qt\6.7.3\msvc2019_64\plugins`,
+   which **does not exist on your machine** — so (4) never works for
+   consumers.
+
+You need to make one of (1)–(3) point at a real plugin tree.
+
+### Recommended: `windeployqt`
+
+Run the bundled deployment tool against your built `.exe`. It copies
+every Qt DLL the .exe needs (Core, Gui, Widgets, OpenGL, …) plus the
+required plugin directories (`platforms/qwindows.dll`, image-format
+plugins, styles, …) next to the executable and writes a working
+`qt.conf`:
+
+```bat
+set DEPS=C:\path\to\libcvc-deps-1.0.0-windows-x86_64-release
+%DEPS%\bin\windeployqt.exe path\to\myapp.exe
+```
+
+For Debug builds use the Debug archive's `windeployqt.exe` against
+your Debug `.exe` so the Debug-flavor (`*d.dll`) DLLs and plugins
+are deployed.
+
+CMake integration via a post-build step:
+
+```cmake
+if(WIN32)
+  find_program(WINDEPLOYQT_EXECUTABLE windeployqt
+    HINTS "${Qt6_DIR}/../../../bin")
+  add_custom_command(TARGET myapp POST_BUILD
+    COMMAND "${WINDEPLOYQT_EXECUTABLE}"
+            --no-translations --no-system-d3d-compiler
+            "$<TARGET_FILE:myapp>")
+endif()
+```
+
+### Alternatives
+
+If you don't want `windeployqt`, any *one* of these is enough:
+
+- **Copy the plugin tree next to the .exe**: drop
+  `<deps>\plugins\` so the layout is `myapp.exe` +
+  `./plugins/platforms/qwindows.dll`. Qt finds it by default.
+- **Set `QT_PLUGIN_PATH`** before launching:
+  ```bat
+  set QT_PLUGIN_PATH=C:\path\to\libcvc-deps\plugins
+  myapp.exe
+  ```
+- **Drop a `qt.conf` next to your .exe** with an absolute prefix:
+  ```ini
+  [Paths]
+  Prefix=C:/path/to/libcvc-deps
+  Plugins=plugins
+  ```
+
+In all three cases the Qt6 DLLs (`Qt6Core.dll`, …) still have to be
+locatable at load time — either next to the .exe, or via a
+`<deps>\bin` entry on `PATH`.
+
+### Debugging plugin discovery
+
+If a launch still fails, set `QT_DEBUG_PLUGINS=1` and re-run. Qt
+will print every directory it searched and the reason each
+candidate plugin was rejected (e.g. release Qt loading debug
+plugin, missing transitive DLL, wrong architecture):
+
+```bat
+set QT_DEBUG_PLUGINS=1
+myapp.exe
+```
+
+The first "Cannot load library …" line names a path you can fix
+directly.
+
+### Common pitfalls
+
+- **Mixing Debug and Release.** A Release `.exe` will refuse to load
+  the `*d.dll` plugins (and vice versa). Use the matching libcvc-deps
+  archive flavor (`-release` / `-debug`) for your build type.
+- **Stale Qt on `PATH`.** If another Qt install (e.g. a system Qt5,
+  or an old aqtinstall tree) is earlier on `PATH`, its `Qt6Core.dll`
+  may load instead of the bundle's. Either prepend `<deps>\bin`
+  to `PATH` or rely on the side-by-side DLLs that `windeployqt`
+  copies.
+- **D3D compiler / OpenGL drivers.** Qt's `windows` platform plugin
+  needs `d3dcompiler_47.dll` for QtQuick / QML; `windeployqt`
+  copies it automatically. For pure QtWidgets apps it's not
+  required.
+
 ## Component pins
 
 See [`README.md`](README.md#version-pins) for the upstream versions
