@@ -677,7 +677,33 @@ jobs:
           echo "linksfx=$LINKSFX" >> "$GITHUB_OUTPUT"
           echo "stem=$STEM"       >> "$GITHUB_OUTPUT"
 
+      # ── Cache Homebrew bottle downloads ──
+      # The actual `brew install` step below still runs (it has to
+      # pour bottles + link symlinks into the prefix), but on a cache
+      # hit it skips the network download of each ~50-200 MB bottle
+      # (qt@6, vtk, boost, hdf5, imagemagick, …). Saves 1-3 min per
+      # job. Key on the brew package list itself so a workflow edit
+      # invalidates the cache; otherwise reuse across all matrix
+      # entries.
+      - name: Cache Homebrew bottle downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/Homebrew/downloads
+          key: brew-bottles-${{ runner.os }}-${{ hashFiles('.github/workflows/release.yml') }}-v1
+          restore-keys: |
+            brew-bottles-${{ runner.os }}-
+
       - name: Install brew dependencies
+        env:
+          # Skip the auto `brew update` that prefixes every install
+          # (clones thousands of git refs — 1-2 min per job for
+          # nothing). The Homebrew bottles available are already what
+          # the pinned runner image ships with; we don't need newer
+          # ones.
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: '1'
+          HOMEBREW_NO_ENV_HINTS: '1'
         run: |
           # Note: NFFT3 has no Homebrew formula (the old
           # homebrew-science tap was deprecated), so it is built from
@@ -688,7 +714,8 @@ jobs:
             cgal gmp mpfr \
             qt@6 vtk \
             eigen lapack \
-            autoconf automake libtool
+            autoconf automake libtool \
+            dylibbundler
 
       # ── libiimod built from upstream LabShare-Archive/IMOD ──
       - name: Cache libiimod install
@@ -796,14 +823,25 @@ jobs:
       # libnfft3-dev package and our Windows MSYS2 path use. The source
       # tarball is SHA256-pinned; we try the GitHub release first and
       # fall back to the TU-Chemnitz mirror.
+      - name: Cache NFFT3 install prefix
+        id: nfft-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/nfft-prefix
+          # NFFT is build-type-independent on macOS (always built with
+          # -O3 -ffast-math via the snippet below); a single cache
+          # covers all 4 matrix entries.
+          key: nfft-3.5.3-${{ runner.os }}-v1
+
       - name: Build NFFT3 from source (macOS)
+        if: steps.nfft-cache.outputs.cache-hit != 'true'
         env:
           NFFT_VERSION: '3.5.3'
           NFFT_SHA256:  'caf1b3b3e5bf8c33a6bfd7eca811d954efce896605ecfd0144d47d0bebdf4371'
         run: |
           set -euxo pipefail
-          DIST="$PWD/${{ steps.meta.outputs.stem }}"
-          NFFT_PREFIX="$PWD/nfft-install"
+          NFFT_PREFIX="$HOME/nfft-prefix"
+          rm -rf "$NFFT_PREFIX"
 
           url_gh="https://github.com/NFFT/nfft/releases/download/${NFFT_VERSION}/nfft-${NFFT_VERSION}.tar.gz"
           url_tuc="https://www-user.tu-chemnitz.de/~potts/nfft/download/nfft-${NFFT_VERSION}.tar.gz"
@@ -837,6 +875,14 @@ jobs:
             CC=clang
           make -j$(sysctl -n hw.ncpu)
           make install
+          cd ..
+          rm -rf "nfft-${NFFT_VERSION}" nfft.tar.gz
+
+      - name: Stage NFFT3 into bundle
+        run: |
+          set -euxo pipefail
+          DIST="$PWD/${{ steps.meta.outputs.stem }}"
+          NFFT_PREFIX="$HOME/nfft-prefix"
 
           # Stage into bundle. Use cp -R so we get headers, the dylib,
           # and pkgconfig in one go.
@@ -873,25 +919,41 @@ jobs:
         run: |
           set -euo pipefail
           DIST="$PWD/${{ steps.meta.outputs.stem }}"
-          brew install dylibbundler
-          # Run dylibbundler on every top-level dylib in lib/. This is
-          # idempotent; dylibbundler will rewrite install_names to
-          # @rpath/<dylib> and add @loader_path/ rpaths.
+          # dylibbundler was installed alongside the other brew
+          # dependencies above, so no extra install step here.
           #
-          # NOTE: do NOT pass -od. -od means "overwrite output DIR"
-          # which dylibbundler implements as `rm -rf $DEST_DIR` before
-          # the first copy. With -d "$DIST/lib" (same dir as the
-          # source dylib), -od wipes out every staged dylib on the
-          # first iteration, the source file vanishes, the loop's
-          # already-expanded glob keeps invoking dylibbundler on
-          # phantom paths, and the bundle ships with an empty lib/.
-          # The right flag for "replace existing files in place" is
-          # -of (overwrite files), which is what we use below.
+          # Pass every staged dylib as a -x argument in ONE invocation.
+          # dylibbundler then walks the union of their transitive dep
+          # graphs a single time, rewriting install_names to
+          # @rpath/<dylib> and adding @loader_path/ rpaths in a single
+          # O(N) pass. The previous per-dylib loop was O(N²) because
+          # each invocation re-walked overlapping subgraphs (libQt6Core
+          # / libicu / libpng / … are pulled in by almost every shipped
+          # dylib). On the macos-latest runner this step dropped from
+          # ~20 minutes per shared job to a couple of minutes.
+          #
+          # -of  : overwrite files in place (dylibs are already in
+          #        $DIST/lib).
+          # -cd  : codesign rewritten binaries (required on Apple
+          #        Silicon to keep them launchable).
+          # -p   : embed @loader_path/ as the lookup prefix.
+          # NOTE: we deliberately do NOT pass -od (overwrite output
+          # DIR). dylibbundler treats -od as `rm -rf $DEST_DIR` before
+          # the first copy; with -d = $DIST/lib (same directory as
+          # the source files) that would delete every staged dylib
+          # before processing starts.
+          xargs=()
           for dy in "$DIST"/lib/*.dylib; do
             [ -e "$dy" ] || continue
             [ -L "$dy" ] && continue
-            dylibbundler -b -x "$dy" -d "$DIST/lib" -p '@loader_path/' -of -cd || true
+            xargs+=( -x "$dy" )
           done
+          if [ "${#xargs[@]}" -eq 0 ]; then
+            echo "No dylibs found to bundle."
+            exit 0
+          fi
+          echo "Bundling $(( ${#xargs[@]} / 2 )) dylibs in a single dylibbundler pass."
+          dylibbundler -b -d "$DIST/lib" -p '@loader_path/' -of -cd "${xargs[@]}" || true
 
       # ── Stage vcglib (header-only) ──
       - name: Stage vcglib
