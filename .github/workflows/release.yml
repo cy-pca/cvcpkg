@@ -363,8 +363,19 @@ jobs:
               Qt6*)
                 cp -R "$d" "$DIST/lib/x86_64-linux-gnu/cmake/"
                 ;;
+              # Boost's per-component configs (boost_thread-config.cmake,
+              # etc.) set _IMPORT_PREFIX by walking 4 dirs up from the
+              # config file, assuming the Debian multiarch layout
+              # <prefix>/lib/x86_64-linux-gnu/cmake/Boost-<ver>/. They
+              # reference Boost::thread's INTERFACE_INCLUDE_DIRECTORIES
+              # as ${_IMPORT_PREFIX}/include, so they MUST stay at the
+              # multiarch path inside the bundle for the walk to resolve
+              # back to the bundle root.
+              Boost*|boost*)
+                cp -R "$d" "$DIST/lib/x86_64-linux-gnu/cmake/"
+                ;;
               # Everything else bundles cleanly under lib/cmake/.
-              Boost*|hdf5|HDF5|GSL|CGAL|ImageMagick|Magick*|\
+              hdf5|HDF5|GSL|CGAL|ImageMagick|Magick*|\
               VTK|vtk*|GLEW|tiff|TIFF|\
               eigen3|Eigen3*|lapack*|LAPACK*|blas*|BLAS*)
                 cp -R "$d" "$DIST/lib/cmake/"
@@ -376,20 +387,17 @@ jobs:
             [ -d "$d" ] && cp -R "$d" "$DIST/lib/cmake/" || true
           done
 
-          # Boost ships pkg-config + cmake under several paths; also
-          # copy the dir at /usr/lib/x86_64-linux-gnu/cmake/Boost-*.
-          find /usr/lib/x86_64-linux-gnu/cmake -maxdepth 1 -type d \
-            \( -name 'Boost*' -o -name 'boost*' \) \
-            -exec cp -R {} "$DIST/lib/cmake/" \;
-          # Boost's per-component configs (boost_thread-config.cmake,
-          # etc.) include `../BoostDetectToolset-<ver>.cmake` relative
-          # to their own dir, which resolves to <prefix>/lib/cmake/
-          # BoostDetectToolset-<ver>.cmake. That toolset detect file
-          # is a plain .cmake at the cmake root, not inside a Boost*
-          # subdir, so the find above (`-type d`) misses it.
+          # Boost's per-component configs include
+          # `../BoostDetectToolset-<ver>.cmake` relative to their own
+          # dir, which (after the Boost*/boost* dirs are placed under
+          # the multiarch cmake root above) resolves to
+          # <prefix>/lib/x86_64-linux-gnu/cmake/BoostDetectToolset-<ver>.cmake.
+          # That toolset detect file is a plain .cmake at the cmake
+          # root, not inside a Boost* subdir, so the case statement
+          # above misses it.
           find /usr/lib/x86_64-linux-gnu/cmake -maxdepth 1 -type f \
             -name 'BoostDetectToolset-*.cmake' \
-            -exec cp {} "$DIST/lib/cmake/" \;
+            -exec cp {} "$DIST/lib/x86_64-linux-gnu/cmake/" \;
 
           # Headers
           for src in \
