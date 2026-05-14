@@ -28,7 +28,7 @@ on:
 permissions:
   contents: write
 
-# ───────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # libcvc-deps release artifacts
 #
 # Self-contained CMAKE_PREFIX_PATH bundles holding every project-level
@@ -37,7 +37,7 @@ permissions:
 #
 #   <root>/{bin,lib,include,share,plugins,...}
 #
-# Build flavors per platform: (Debug|Release) × (shared|static).
+# Build flavors per platform: (Debug|Release) Ã— (shared|static).
 #
 #   libcvc-deps-<ver>-linux-<arch>-<config>[-static].tar.gz
 #   libcvc-deps-<ver>-macos-<arch>-<config>[-static].zip
@@ -49,15 +49,15 @@ permissions:
 #   - Qt 6.7.x (Core, Gui, Widgets, OpenGL, OpenGLWidgets)
 #   - VTK 9.5.0 built against Qt 6 (no QtQuick modules)
 #   - libiimod (IMOD's MRC/TIFF image-file I/O subset, built from
-#     the LabShare-Archive/IMOD upstream at a pinned SHA — see
+#     the LabShare-Archive/IMOD upstream at a pinned SHA â€” see
 #     third-party/libiimod/CMakeLists.txt; linked against the
 #     bundled libtiff so TIFF reads/writes are enabled)
 #
-# CUDA toolkit is intentionally NOT bundled — consumers install it
+# CUDA toolkit is intentionally NOT bundled â€” consumers install it
 # directly via Jimver/cuda-toolkit on the build host.
 # System libraries (glibc, libstdc++, Windows UCRT) are left to the
 # host.
-# ───────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 env:
   VTK_VERSION: '9.5.0'
@@ -70,7 +70,7 @@ env:
   VCGLIB_SHA256:  'e49fc9342d5476b3e39a5e1939b965b57c91d7a17b4f97b8c5eaf01228b16cf0'
 
 jobs:
-  # ──────────────────────────── Linux ────────────────────────────
+  # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Linux â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   linux:
     runs-on: ubuntu-latest
     strategy:
@@ -140,7 +140,7 @@ jobs:
                 return 0
               fi
               echo "::endgroup::"
-              echo "apt attempt $attempt failed, sleeping before retry…"
+              echo "apt attempt $attempt failed, sleeping before retryâ€¦"
               sleep $((attempt * 15))
             done
             echo "apt: giving up after 5 attempts" >&2
@@ -158,7 +158,7 @@ jobs:
             libnfft3-dev libeigen3-dev liblapack-dev libblas-dev \
             gfortran
 
-      # ── libiimod built from upstream LabShare-Archive/IMOD ──
+      # â”€â”€ libiimod built from upstream LabShare-Archive/IMOD â”€â”€
       #    Curated source set; CMakeLists in third-party/libiimod/
       #    pins the upstream SHA and configures the bundle install.
       - name: Cache libiimod install
@@ -179,7 +179,7 @@ jobs:
           cmake --build libiimod-build --parallel --target install
           rm -rf libiimod-build
 
-      # ── log4cplus built from source so we ship a .a in the
+      # â”€â”€ log4cplus built from source so we ship a .a in the
       #    static bundles. Ubuntu's liblog4cplus-dev is .so-only.
       #    Built with -fPIC so the .a is also usable by downstream
       #    shared-link consumers.
@@ -223,7 +223,7 @@ jobs:
           cmake --build log4cplus-build-static --parallel --target install
           rm -rf log4cplus-${ver} log4cplus-build log4cplus-build-static log4cplus.tar.xz
 
-      # ── VTK 9.5 built against Qt6, cached (per build_type so the
+      # â”€â”€ VTK 9.5 built against Qt6, cached (per build_type so the
       #    Debug bundle actually ships a debuggable VTK).
       - name: Cache VTK install tree
         id: vtk-cache
@@ -254,7 +254,7 @@ jobs:
           cmake --build vtk-build --parallel --target install
           rm -rf vtk-build VTK-${VTK_VERSION} vtk.tar.gz
 
-      # ── Install the marker libcvc-depsConfig.cmake ──
+      # â”€â”€ Install the marker libcvc-depsConfig.cmake â”€â”€
       - name: Configure + install marker config
         run: |
           STEM="${{ steps.meta.outputs.stem }}"
@@ -266,7 +266,7 @@ jobs:
           cmake --install build
           mkdir -p "$DIST/lib" "$DIST/include" "$DIST/bin" "$DIST/share"
 
-      # ── Stage every apt-installed dep into $DIST ──
+      # â”€â”€ Stage every apt-installed dep into $DIST â”€â”€
       - name: Stage apt deps
         run: |
           set -euo pipefail
@@ -466,7 +466,7 @@ jobs:
             mkdir -p "$DIST/include/hdf5"
             cp -R /usr/include/hdf5/serial/. "$DIST/include/hdf5/"
           fi
-          # Top-level header files (fftw3.h, gmp.h, mpfr.h, tiff.h, …)
+          # Top-level header files (fftw3.h, gmp.h, mpfr.h, tiff.h, â€¦)
           for f in /usr/include/fftw3.h /usr/include/fftw3.f \
                    /usr/include/fftw3l.h /usr/include/fftw3q.h \
                    /usr/include/gmp.h /usr/include/mpfr.h /usr/include/mpf2mpfr.h \
@@ -521,7 +521,7 @@ jobs:
               "$DIST/lib/x86_64-linux-gnu/qt6/"
           fi
 
-      # ── Stage VTK from the cached install ──
+      # â”€â”€ Stage VTK from the cached install â”€â”€
       - name: Stage VTK
         run: |
           set -euo pipefail
@@ -534,7 +534,7 @@ jobs:
             [ -d "$VTK_PFX/bin" ]   && cp -R "$VTK_PFX/bin/."   "$DIST/bin/"   2>/dev/null || true
           fi
 
-      # ── Stage libiimod from the cached install ──
+      # â”€â”€ Stage libiimod from the cached install â”€â”€
       - name: Stage libiimod
         run: |
           set -euo pipefail
@@ -549,17 +549,17 @@ jobs:
             fi
           fi
 
-      # ── Pull in transitive NEEDED libraries via ldd ──
+      # â”€â”€ Pull in transitive NEEDED libraries via ldd â”€â”€
       #
-      # The explicit allowlist above (libboost_*, libhdf5*, libQt6*, …)
+      # The explicit allowlist above (libboost_*, libhdf5*, libQt6*, â€¦)
       # covers the libraries the consumer calls directly, but their
       # own NEEDED entries pull in a second tier (libicu*, libpng16,
       # libxml2, liblzma, libz, libfreetype, libfontconfig, libssl,
-      # libharfbuzz, libdouble-conversion, …) that is bound to the
+      # libharfbuzz, libdouble-conversion, â€¦) that is bound to the
       # exact SONAME shipped on the builder's Ubuntu image. Without
       # bundling those, the archive only works on a host that happens
       # to match the builder's distro version (ICU SONAME changes
-      # between 22.04 → libicui18n.so.70 and 24.04 → libicui18n.so.74,
+      # between 22.04 â†’ libicui18n.so.70 and 24.04 â†’ libicui18n.so.74,
       # for example).
       #
       # Resolve every NEEDED edge transitively via ldd and copy each
@@ -635,8 +635,8 @@ jobs:
           rm -f "$tmp" "${tmp}.paths"
           echo "Bundled $copied additional transitive libs."
 
-      # ── Patch RPATH to $ORIGIN so the staged libs resolve each
-      #    other regardless of where the archive is extracted ──
+      # â”€â”€ Patch RPATH to $ORIGIN so the staged libs resolve each
+      #    other regardless of where the archive is extracted â”€â”€
       - name: Patch RPATH ($ORIGIN)
         if: matrix.link == 'shared'
         run: |
@@ -650,7 +650,7 @@ jobs:
             patchelf --set-rpath '$ORIGIN' "$so" 2>/dev/null || true
           done
 
-      # ── Stage vcglib (header-only) ──
+      # â”€â”€ Stage vcglib (header-only) â”€â”€
       - name: Stage vcglib
         uses: ./.github/actions/stage-vcglib
         with:
@@ -671,7 +671,7 @@ jobs:
           path: libcvc-deps-*.tar.gz
           if-no-files-found: error
 
-  # ──────────────────────────── macOS ────────────────────────────
+  # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ macOS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   macos:
     runs-on: macos-latest
     strategy:
@@ -714,11 +714,11 @@ jobs:
           echo "linksfx=$LINKSFX" >> "$GITHUB_OUTPUT"
           echo "stem=$STEM"       >> "$GITHUB_OUTPUT"
 
-      # ── Cache Homebrew bottle downloads ──
+      # â”€â”€ Cache Homebrew bottle downloads â”€â”€
       # The actual `brew install` step below still runs (it has to
       # pour bottles + link symlinks into the prefix), but on a cache
       # hit it skips the network download of each ~50-200 MB bottle
-      # (qt@6, vtk, boost, hdf5, imagemagick, …). Saves 1-3 min per
+      # (qt@6, vtk, boost, hdf5, imagemagick, â€¦). Saves 1-3 min per
       # job. Key on the brew package list itself so a workflow edit
       # invalidates the cache; otherwise reuse across all matrix
       # entries.
@@ -733,7 +733,7 @@ jobs:
       - name: Install brew dependencies
         env:
           # Skip the auto `brew update` that prefixes every install
-          # (clones thousands of git refs — 1-2 min per job for
+          # (clones thousands of git refs â€” 1-2 min per job for
           # nothing). The Homebrew bottles available are already what
           # the pinned runner image ships with; we don't need newer
           # ones.
@@ -754,7 +754,7 @@ jobs:
             autoconf automake libtool \
             dylibbundler
 
-      # ── libiimod built from upstream LabShare-Archive/IMOD ──
+      # â”€â”€ libiimod built from upstream LabShare-Archive/IMOD â”€â”€
       - name: Cache libiimod install
         id: libiimod-cache
         uses: actions/cache@v4
@@ -825,7 +825,7 @@ jobs:
           # Qt6 cmake configs / plugins live under qt@6/share/qt &
           # qt@6/lib/QtCore.framework etc on macOS. brew's qt@6 bottle
           # uses .framework bundles for the Qt libs themselves; the
-          # blanket `cp lib/*.dylib` above missed them — sweep them in
+          # blanket `cp lib/*.dylib` above missed them â€” sweep them in
           # explicitly.
           QT_PREFIX=$(brew --prefix qt@6 2>/dev/null || true)
           if [ -n "$QT_PREFIX" ] && [ -d "$QT_PREFIX/lib" ]; then
@@ -856,13 +856,15 @@ jobs:
             [ -d "$vtk_cmake_dir" ] || continue
             for tf in "$vtk_cmake_dir"/VTKPython-targets*.cmake; do
               [ -e "$tf" ] || continue
-              # Truncate to an empty file; cmake's include() of an
-              # empty file is a no-op and defines no targets.
+              # brew bottle files are copied with read-only perms;
+              # restore write so we can rewrite. Truncate to empty;
+              # cmake's include() of an empty file is a no-op.
+              chmod u+w "$tf"
               : > "$tf"
             done
           done
 
-      # ── Stage libiimod from the cached install ──
+      # â”€â”€ Stage libiimod from the cached install â”€â”€
       - name: Stage libiimod
         run: |
           set -euo pipefail
@@ -877,7 +879,7 @@ jobs:
             fi
           fi
 
-      # ── Build NFFT3 from source ──
+      # â”€â”€ Build NFFT3 from source â”€â”€
       # No Homebrew formula exists for NFFT3, so we build it from the
       # upstream tarball using the same autotools toolchain Linux's
       # libnfft3-dev package and our Windows MSYS2 path use. The source
@@ -972,8 +974,8 @@ jobs:
           echo "NFFT3 staged:"
           ls -la "$DIST/lib"/libnfft3* "$DIST/include"/nfft3* "$DIST/lib/pkgconfig/nfft3.pc" || true
 
-      # ── Rewrite install_names to @rpath / @loader_path so the
-      #    bundle is relocatable ──
+      # â”€â”€ Rewrite install_names to @rpath / @loader_path so the
+      #    bundle is relocatable â”€â”€
       - name: Bundle dylib install names
         if: matrix.link == 'shared'
         run: |
@@ -986,9 +988,9 @@ jobs:
           # dylibbundler then walks the union of their transitive dep
           # graphs a single time, rewriting install_names to
           # @rpath/<dylib> and adding @loader_path/ rpaths in a single
-          # O(N) pass. The previous per-dylib loop was O(N²) because
+          # O(N) pass. The previous per-dylib loop was O(NÂ²) because
           # each invocation re-walked overlapping subgraphs (libQt6Core
-          # / libicu / libpng / … are pulled in by almost every shipped
+          # / libicu / libpng / â€¦ are pulled in by almost every shipped
           # dylib). On the macos-latest runner this step dropped from
           # ~20 minutes per shared job to a couple of minutes.
           #
@@ -1022,7 +1024,7 @@ jobs:
           echo "Bundling $(( ${#xargs[@]} / 2 )) dylibs in a single dylibbundler pass."
           dylibbundler -b -d "$DIST/lib" -p '@rpath/' -of -cd "${xargs[@]}" || true
 
-      # ── Stage vcglib (header-only) ──
+      # â”€â”€ Stage vcglib (header-only) â”€â”€
       - name: Stage vcglib
         uses: ./.github/actions/stage-vcglib
         with:
@@ -1043,7 +1045,7 @@ jobs:
           path: libcvc-deps-*.zip
           if-no-files-found: error
 
-  # ──────────────────── Windows: vcpkg deps prep ───────────────────
+  # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Windows: vcpkg deps prep â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   # Stage 1 of the Windows pipeline. One job per (build_type, triplet)
   # so the per-job 6-hour limit only has to cover vcpkg install for a
   # single configuration. Output is the vcpkg installed/ tree cached
@@ -1057,7 +1059,7 @@ jobs:
   # static builds: mpfr hang in vcpkg"), so the static install set
   # excludes mpfr and anything that transitively depends on it
   # (gmp, cgal). Those three are filled in from the x64-windows
-  # (shared) cache during assembly — the static Windows bundle is
+  # (shared) cache during assembly â€” the static Windows bundle is
   # therefore a hybrid: static .lib for everything that builds, and
   # shared .dll + import .lib for cgal/gmp/mpfr.
   windows-vcpkg:
@@ -1116,7 +1118,7 @@ jobs:
         id: vcpkg-cache
         uses: actions/cache@v4
         with:
-          # NOTE: hardcoded C:\vcpkg — the runner-provided
+          # NOTE: hardcoded C:\vcpkg â€” the runner-provided
           # VCPKG_INSTALLATION_ROOT env var is NOT visible to
           # ${{ env.* }} template expansion (only workflow-declared env
           # is), so using it here silently resolves to empty and the
@@ -1156,9 +1158,9 @@ jobs:
             'hdf5[cpp]','fftw3','gsl','imagemagick','log4cplus','tiff',
             'cgal','glew',
             # F2Dock / F3Dock science stack.
-            #   eigen3   — header-only linear algebra
-            #   clapack  — LAPACK API for Windows (no MKL dep)
-            #   openblas — BLAS backend for clapack
+            #   eigen3   â€” header-only linear algebra
+            #   clapack  â€” LAPACK API for Windows (no MKL dep)
+            #   openblas â€” BLAS backend for clapack
             # NFFT3 has no vcpkg port; it is staged directly from the
             # MSYS2 mingw64 build in the assemble step.
             'eigen3','clapack','openblas'
@@ -1191,11 +1193,11 @@ jobs:
           path: D:\vcpkg-downloads
           key: vcpkg-downloads-${{ hashFiles('.github/workflows/release.yml') }}
 
-  # ──────────────────── Windows: VTK build prep ────────────────────
+  # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Windows: VTK build prep â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   # Stage 2 of the Windows pipeline. One job per build_type. VTK build
   # output cached at D:\vtk-qt6 and consumed by the assemble stage.
-  # Link flavor (shared/static) does not affect VTK itself — VTK is
-  # always built shared (BUILD_SHARED_LIBS=ON) — so 2 jobs suffice.
+  # Link flavor (shared/static) does not affect VTK itself â€” VTK is
+  # always built shared (BUILD_SHARED_LIBS=ON) â€” so 2 jobs suffice.
   windows-vtk:
     runs-on: windows-latest
     timeout-minutes: 350
@@ -1247,7 +1249,7 @@ jobs:
           Remove-Item -Recurse -Force "VTK-${env:VTK_VERSION}"
           Remove-Item -Force vtk.tar.gz
 
-  # ────────────────────── Windows: assemble ──────────────────────
+  # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Windows: assemble â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   # Stage 3 of the Windows pipeline. Restores both prep caches, then
   # stages + zips + uploads the per-config artifact. This stage is
   # fast (minutes) and should always finish well under the per-job
@@ -1336,7 +1338,7 @@ jobs:
       - name: Restore vcpkg installed cache
         uses: actions/cache/restore@v4
         with:
-          # NOTE: hardcoded C:\vcpkg — see windows-vcpkg job for why
+          # NOTE: hardcoded C:\vcpkg â€” see windows-vcpkg job for why
           # ${{ env.VCPKG_INSTALLATION_ROOT }} cannot be used here.
           path: |
             C:\vcpkg\installed
@@ -1392,7 +1394,7 @@ jobs:
           cmake --install build --config ${{ matrix.build_type }}
           New-Item -ItemType Directory -Force -Path "$dist/bin","$dist/lib","$dist/include","$dist/share" | Out-Null
 
-      # ── libiimod built from upstream LabShare-Archive/IMOD ──
+      # â”€â”€ libiimod built from upstream LabShare-Archive/IMOD â”€â”€
       - name: Cache libiimod install
         id: libiimod-cache
         uses: actions/cache@v4
@@ -1446,14 +1448,14 @@ jobs:
           $isDebug = '${{ matrix.build_type }}' -eq 'Debug'
           $triplet = '${{ steps.meta.outputs.triplet }}'
 
-          # ── vcpkg installed tree ───────────────────────────────
+          # â”€â”€ vcpkg installed tree â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
           $vcRoot = Join-Path $env:VCPKG_INSTALLATION_ROOT "installed/$triplet"
           if (-not (Test-Path $vcRoot)) {
             throw "vcpkg installed tree not found at $vcRoot"
           }
           # Layout per triplet:
-          #   <triplet>/{bin,lib,include,share}     — release
-          #   <triplet>/debug/{bin,lib}             — debug
+          #   <triplet>/{bin,lib,include,share}     â€” release
+          #   <triplet>/debug/{bin,lib}             â€” debug
           # Headers + share/cmake/* are config-agnostic and live in
           # the release subtree only.
           $libSrc = if ($isDebug) { Join-Path $vcRoot 'debug/lib' } else { Join-Path $vcRoot 'lib' }
@@ -1480,7 +1482,7 @@ jobs:
             }
           }
 
-          # ── Hybrid-static fallback: mix in shared cgal/gmp/mpfr ──
+          # â”€â”€ Hybrid-static fallback: mix in shared cgal/gmp/mpfr â”€â”€
           # The x64-windows-static install set omits cgal/gmp/mpfr
           # because the static mpfr port hangs on hosted runners.
           # Pull import lib + DLL (and matching share/cmake configs)
@@ -1537,7 +1539,7 @@ jobs:
             }
           }
 
-          # ── Qt6 (aqtinstall tree) ──────────────────────────────
+          # â”€â”€ Qt6 (aqtinstall tree) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
           if ($env:QT_ROOT_DIR -and (Test-Path $env:QT_ROOT_DIR)) {
             foreach ($sub in 'include','lib','bin','plugins','qml','mkspecs') {
               $src = Join-Path $env:QT_ROOT_DIR $sub
@@ -1549,7 +1551,7 @@ jobs:
             }
           }
 
-          # ── VTK 9.5 install tree ───────────────────────────────
+          # â”€â”€ VTK 9.5 install tree â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
           if (Test-Path D:\vtk-qt6) {
             foreach ($sub in 'include','lib','bin','share') {
               $src = "D:\vtk-qt6\$sub"
@@ -1561,7 +1563,7 @@ jobs:
             }
           }
 
-          # ── Keep both Qt6 release + debug variants side-by-side ──
+          # â”€â”€ Keep both Qt6 release + debug variants side-by-side â”€â”€
           # Qt6's CMake config files (e.g. Qt6CoreTargets-*.cmake) are
           # MULTI-CONFIG: they declare both IMPORTED_LOCATION_DEBUG
           # (Qt6Cored.dll) AND IMPORTED_LOCATION_RELWITHDEBINFO
@@ -1589,7 +1591,7 @@ jobs:
 
       # NFFT3 has no vcpkg port. Rather than relying on an upstream
       # prebuilt zip (whose hosting and URLs we don't control), we
-      # build NFFT3 from source in MSYS2/mingw64 — the same toolchain
+      # build NFFT3 from source in MSYS2/mingw64 â€” the same toolchain
       # upstream's `windows-build-dll.sh` uses to produce their
       # official Windows DLL release. The resulting `.dll` plus its
       # mingw runtime dependencies are staged alongside the rest of
@@ -1669,7 +1671,7 @@ jobs:
           $dist = Join-Path $env:GITHUB_WORKSPACE '${{ steps.meta.outputs.stem }}'
           $src  = Join-Path $env:GITHUB_WORKSPACE 'nfft-install'
           if (-not (Test-Path $src)) {
-            throw "NFFT3 install prefix not found at $src — did the MSYS2 build step fail?"
+            throw "NFFT3 install prefix not found at $src â€” did the MSYS2 build step fail?"
           }
 
           New-Item -ItemType Directory -Force -Path "$dist/bin","$dist/lib","$dist/include","$dist/lib/pkgconfig" | Out-Null
@@ -1686,7 +1688,7 @@ jobs:
 
           # Stage mingw runtime DLLs that NFFT depends on. FFTW from
           # MSYS2 is a shared library, so we have to ship it alongside
-          # — together with libgcc_s, libwinpthread, and libgomp for
+          # â€” together with libgcc_s, libwinpthread, and libgomp for
           # OpenMP. Without these, loading nfft3.dll under any non-
           # MSYS2 process will fail at runtime.
           $mingwBin = 'C:\msys64\mingw64\bin'
@@ -1708,7 +1710,7 @@ jobs:
             }
           }
 
-          # Headers → include/.
+          # Headers â†’ include/.
           if (Test-Path "$src/include") {
             Copy-Item "$src/include/*.h" "$dist/include/" -Force -ErrorAction SilentlyContinue
           }
@@ -1772,7 +1774,7 @@ jobs:
           Get-ChildItem "$dist/bin/*nfft*","$dist/bin/libfftw*","$dist/lib/nfft*","$dist/include/nfft*" -ErrorAction SilentlyContinue `
             | ForEach-Object { Write-Host "  $($_.FullName)" }
 
-      # ── Stage vcglib (header-only) ──
+      # â”€â”€ Stage vcglib (header-only) â”€â”€
       - name: Stage vcglib
         uses: ./.github/actions/stage-vcglib
         with:
@@ -1780,19 +1782,19 @@ jobs:
           version: ${{ env.VCGLIB_VERSION }}
           sha256:  ${{ env.VCGLIB_SHA256 }}
 
-      # ── Stage MSVC CRT redistributable DLLs (Release only) ──
+      # â”€â”€ Stage MSVC CRT redistributable DLLs (Release only) â”€â”€
       # Ship the MSVC C/C++ runtime DLLs (msvcp140*.dll, vcruntime140*.dll,
       # concrt140.dll) inside bin/ so consumer machines do not need the
-      # "Visual C++ Redistributable for Visual Studio 2015–2022"
+      # "Visual C++ Redistributable for Visual Studio 2015â€“2022"
       # installed separately. App-local deployment is explicitly
       # permitted by Microsoft's redistribution license for these DLLs
-      # (see learn.microsoft.com — "Redistributing Visual C++ Files").
+      # (see learn.microsoft.com â€” "Redistributing Visual C++ Files").
       #
       # The Universal CRT (ucrtbase.dll, api-ms-win-crt-*.dll) is part
       # of Windows 10/11 and never needs redistribution; we don't ship
       # it.
       #
-      # Debug builds CANNOT ship the debug CRT — msvcp140d.dll /
+      # Debug builds CANNOT ship the debug CRT â€” msvcp140d.dll /
       # vcruntime140d.dll / ucrtbased.dll are NOT redistributable
       # under Microsoft's license. Debug archives therefore still
       # require a developer-grade Windows install (Visual Studio
@@ -1844,7 +1846,7 @@ jobs:
           }
           Write-Host "Staging from: $crtDir"
 
-          # Redistributable list per Microsoft docs (VS 2015–2022, v143).
+          # Redistributable list per Microsoft docs (VS 2015â€“2022, v143).
           # api-ms-win-* are part of the OS UCRT and are NOT shipped.
           $crtDlls = @(
             'msvcp140.dll',
@@ -1893,7 +1895,7 @@ jobs:
           path: libcvc-deps-*.zip
           if-no-files-found: error
 
-  # ──────────────────────────── Release ────────────────────────────
+  # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Release â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   release:
     needs: [linux, macos, windows]
     runs-on: ubuntu-latest
@@ -1902,7 +1904,7 @@ jobs:
     # some platforms failed, so we still publish the artifacts that
     # did build (e.g. Linux + macOS when a Windows config times out
     # on a cold cache). Require at minimum that linux + macos
-    # succeeded — there's no point publishing a release with zero
+    # succeeded â€” there's no point publishing a release with zero
     # platforms.
     if: |
       always()
