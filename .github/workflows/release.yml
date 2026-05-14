@@ -839,6 +839,23 @@ jobs:
             cp -R "$QT_PREFIX/share/qt/plugins/." "$DIST/plugins/"
           fi
 
+          # brew's vtk bottle is built with Python wrapping enabled
+          # (VTK_WRAP_PYTHON=ON), so the staged lib/cmake/vtk-*/ dir
+          # contains VTKPython-targets.cmake referencing
+          # lib/python3.X/site-packages/vtkmodules/*.cpython-*-darwin.so
+          # files we do NOT copy into the bundle. vtk-config.cmake
+          # unconditionally includes the targets file, so consumers
+          # fail at configure time with "imported target references a
+          # file that does not exist".
+          #
+          # libcvc / volrover3 do not consume VTK's Python bindings.
+          # Strip the Python targets file (and the matching debug-
+          # variant, if any) from each shipped vtk-* cmake dir.
+          for vtk_cmake_dir in "$DIST"/lib/cmake/vtk-*; do
+            [ -d "$vtk_cmake_dir" ] || continue
+            rm -f "$vtk_cmake_dir"/VTKPython-targets*.cmake
+          done
+
       # ── Stage libiimod from the cached install ──
       - name: Stage libiimod
         run: |
