@@ -849,11 +849,21 @@ jobs:
           # file that does not exist".
           #
           # libcvc / volrover3 do not consume VTK's Python bindings.
-          # Strip the Python targets file (and the matching debug-
-          # variant, if any) from each shipped vtk-* cmake dir.
+          # Replace VTKPython-targets.cmake with an empty stub so
+          # vtk-config.cmake's include() succeeds but no Python
+          # imported targets are defined.
           for vtk_cmake_dir in "$DIST"/lib/cmake/vtk-*; do
             [ -d "$vtk_cmake_dir" ] || continue
-            rm -f "$vtk_cmake_dir"/VTKPython-targets*.cmake
+            for tf in "$vtk_cmake_dir"/VTKPython-targets*.cmake; do
+              [ -e "$tf" ] || continue
+              cat > "$tf" <<'EOF'
+# VTKPython-targets.cmake -- stubbed out by libcvc-deps.
+# brew's vtk bottle ships with Python wrapping enabled, but we do
+# not bundle the lib/python3.X/site-packages/vtkmodules/ tree.
+# libcvc and volrover3 do not consume VTK's Python bindings;
+# vtk-config.cmake's include() of this file becomes a no-op.
+EOF
+            done
           done
 
       # ── Stage libiimod from the cached install ──
