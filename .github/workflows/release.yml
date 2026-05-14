@@ -413,10 +413,20 @@ jobs:
               /usr/include/magick \
               /usr/include/MagickCore \
               /usr/include/MagickWand \
-              /usr/include/GL \
-              /usr/include/x86_64-linux-gnu/qt6 ; do
+              /usr/include/GL ; do
             [ -d "$src" ] && cp -R "$src" "$DIST/include/"
           done
+          # Qt6 headers: Qt6<Module>Targets.cmake sets
+          # INTERFACE_INCLUDE_DIRECTORIES to
+          # ${_IMPORT_PREFIX}/include/x86_64-linux-gnu/qt6/Qt<Module>,
+          # mirroring Debian's multiarch layout. Preserve that layout in
+          # the bundle so consumers don't trip CMake's "non-existent path
+          # in INTERFACE_INCLUDE_DIRECTORIES" generation-time error.
+          if [ -d /usr/include/x86_64-linux-gnu/qt6 ]; then
+            mkdir -p "$DIST/include/x86_64-linux-gnu"
+            cp -R /usr/include/x86_64-linux-gnu/qt6 \
+              "$DIST/include/x86_64-linux-gnu/"
+          fi
           # log4cplus headers + cmake config from our source build.
           LOG4CPLUS_PFX="$HOME/log4cplus-prefix-${{ matrix.build_type }}"
           if [ -d "$LOG4CPLUS_PFX/include/log4cplus" ]; then
