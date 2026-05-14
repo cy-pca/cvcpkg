@@ -330,11 +330,16 @@ jobs:
           # ${_IMPORT_PREFIX}/lib/x86_64-linux-gnu/libQt6<Module>.so.*.
           # Mirror the Qt6 SOs into the multiarch subdir so those
           # imported-target paths resolve to a real file inside $DIST.
+          # Same applies to Boost's per-component imported targets
+          # (Boost::thread etc.) which set IMPORTED_LOCATION to
+          # ${_IMPORT_PREFIX}/lib/x86_64-linux-gnu/libboost_<comp>.so.<ver>.
           mkdir -p "$DIST/lib/x86_64-linux-gnu"
           for d in "${LIBDIRS[@]}"; do
             for pat in "${patterns[@]}"; do
-              find "$d" -maxdepth 1 -name "libQt6${pat}" -print0 2>/dev/null \
-                | xargs -0 -r cp -P -t "$DIST/lib/x86_64-linux-gnu/" 2>/dev/null || true
+              for stem in 'libQt6' 'libboost_'; do
+                find "$d" -maxdepth 1 -name "${stem}${pat}" -print0 2>/dev/null \
+                  | xargs -0 -r cp -P -t "$DIST/lib/x86_64-linux-gnu/" 2>/dev/null || true
+              done
             done
           done
           # X11 client libs needed by Qt6 xcb platform plugin
@@ -944,7 +949,14 @@ jobs:
           #        $DIST/lib).
           # -cd  : codesign rewritten binaries (required on Apple
           #        Silicon to keep them launchable).
-          # -p   : embed @loader_path/ as the lookup prefix.
+          # -p   : embed @rpath/ as the lookup prefix so consumers
+          #        outside the bundle (e.g. test binaries in
+          #        <consumer-build>/bin) can locate the dylibs via
+          #        their own rpath, which CMake auto-populates with
+          #        the absolute-link-time directory of each dylib.
+          #        Internal bundle-to-bundle deps still resolve
+          #        because dylibbundler adds an @loader_path/ rpath
+          #        to each rewritten dylib.
           # NOTE: we deliberately do NOT pass -od (overwrite output
           # DIR). dylibbundler treats -od as `rm -rf $DEST_DIR` before
           # the first copy; with -d = $DIST/lib (same directory as
@@ -961,7 +973,7 @@ jobs:
             exit 0
           fi
           echo "Bundling $(( ${#xargs[@]} / 2 )) dylibs in a single dylibbundler pass."
-          dylibbundler -b -d "$DIST/lib" -p '@loader_path/' -of -cd "${xargs[@]}" || true
+          dylibbundler -b -d "$DIST/lib" -p '@rpath/' -of -cd "${xargs[@]}" || true
 
       # ── Stage vcglib (header-only) ──
       - name: Stage vcglib
