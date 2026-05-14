@@ -230,7 +230,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/vtk-qt6-${{ matrix.build_type }}
-          key: vtk-${{ env.VTK_VERSION }}-qt6-${{ runner.os }}-${{ matrix.build_type }}-v3
+          key: vtk-${{ env.VTK_VERSION }}-qt6-${{ runner.os }}-${{ matrix.build_type }}-v4
 
       - name: Build VTK from source (Qt6)
         if: steps.vtk-cache.outputs.cache-hit != 'true'
@@ -246,6 +246,7 @@ jobs:
             -DVTK_QT_VERSION=6 \
             -DVTK_MODULE_ENABLE_VTK_GUISupportQtQuick=NO \
             -DVTK_MODULE_ENABLE_VTK_RenderingQtQuick=NO \
+            -DVTK_WRAP_PYTHON=OFF \
             -DVTK_BUILD_TESTING=OFF \
             -DVTK_BUILD_EXAMPLES=OFF \
             -DVTK_BUILD_DOCUMENTATION=OFF \
