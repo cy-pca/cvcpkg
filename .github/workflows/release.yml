@@ -506,6 +506,19 @@ jobs:
             mkdir -p "$DIST/plugins"
             cp -R /usr/lib/x86_64-linux-gnu/qt6/plugins/. "$DIST/plugins/"
           fi
+          # Qt6 mkspecs: Qt6CoreTargets.cmake appends
+          #   ${_IMPORT_PREFIX}/lib/x86_64-linux-gnu/qt6/mkspecs/<spec>
+          # to INTERFACE_INCLUDE_DIRECTORIES on Qt6::Core (configured via
+          # qt6-base-dev's host_spec = linux-g++ on x86_64). Ship the
+          # full mkspecs tree at that multiarch path so consumers don't
+          # fail generate with:
+          #   Imported target "Qt6::Core" includes non-existent path
+          #     "<prefix>/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++"
+          if [ -d /usr/lib/x86_64-linux-gnu/qt6/mkspecs ]; then
+            mkdir -p "$DIST/lib/x86_64-linux-gnu/qt6"
+            cp -R /usr/lib/x86_64-linux-gnu/qt6/mkspecs \
+              "$DIST/lib/x86_64-linux-gnu/qt6/"
+          fi
 
       # ── Stage VTK from the cached install ──
       - name: Stage VTK
