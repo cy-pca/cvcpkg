@@ -94,8 +94,8 @@ libcvc-deps-<ver>-windows-<arch>-<config>[-static].zip
 
 Examples:
 
-- `libcvc-deps-1.0.0-linux-x86_64-release-shared.tar.gz`
-- `libcvc-deps-1.0.0-windows-x86_64-debug-static.zip`
+- `libcvc-deps-1.0.2-linux-x86_64-release-shared.tar.gz`
+- `libcvc-deps-1.0.2-windows-x86_64-debug-static.zip`
 
 The shared archives ship `.so` / `.dylib` / `.dll` with RPATH /
 install_name fixups so the loader resolves intra-archive
@@ -132,8 +132,8 @@ the extracted root to CMake as a prefix:
 
 ```sh
 # Linux example
-tar xzf libcvc-deps-1.0.0-linux-x86_64-release-shared.tar.gz
-export DEPS=$PWD/libcvc-deps-1.0.0-linux-x86_64-release-shared
+tar xzf libcvc-deps-1.0.2-linux-x86_64-release-shared.tar.gz
+export DEPS=$PWD/libcvc-deps-1.0.2-linux-x86_64-release-shared
 
 # Now build libcvc against the bundled deps
 cmake -S libcvc -B build -G Ninja \
@@ -155,7 +155,8 @@ copy-paste snippets for `libcvc` and downstream CI.
 
 ## Releases
 
-Tagged releases (`v1.0.0`, …) are produced by GitHub Actions
+Tagged releases (`v1.0.0`, `v1.0.1`, `v1.0.2`, …) are produced by
+GitHub Actions
 ([`.github/workflows/release.yml`](.github/workflows/release.yml))
 and uploaded to the corresponding [GitHub
 Release](https://github.com/transfix/libcvc-deps/releases). The
@@ -184,6 +185,78 @@ should consume a tagged release rather than the moving tip.
 A given release of libcvc-deps is intended to be used with the
 corresponding (or older) libcvc release. Bumping a major version of
 Qt or VTK is reflected by bumping libcvc-deps's own version.
+
+### v1.0.2 (2026-05-14)
+
+Point release fixing the macOS volrover3 bundle and tightening the
+Linux Qt6 layout discovered while exercising the v1.0.1 artifacts in
+libcvc's release pipeline. No upstream component versions changed
+from v1.0.1; the package manifest is identical.
+
+Fixes:
+
+- **VTK Python wrapping disabled (#22).** Homebrew's `vtk` bottle
+  links against `libpython3.13.dylib` from the brew Python keg.
+  Consumers building libcvc on a runner that doesn't carry that
+  exact Python were failing the macOS volrover3 link. The bundled
+  VTK is now built with `VTK_WRAP_PYTHON=OFF` on every platform,
+  removing the Python runtime dependency entirely. (Python wrapping
+  was never used by libcvc or volrover3.)
+- **Linux: Qt6 mkspecs at multiarch path (#21).** `Qt6CoreConfig.cmake`
+  resolves `QT_HOST_DATA_DIRS` relative to its own location and then
+  expects `mkspecs/` underneath. Apt installs the mkspecs at
+  `/usr/share/qt6/mkspecs`, so the bundle now mirrors them under
+  `lib/x86_64-linux-gnu/qt6/mkspecs/` to match.
+- **Linux: Qt6 headers at multiarch include path (#20).** Same kind
+  of relative-path issue: `Qt6CoreTargets.cmake` resolves
+  `INTERFACE_INCLUDE_DIRECTORIES` to
+  `<prefix>/include/x86_64-linux-gnu/qt6/QtCore`. Headers are now
+  staged under `include/x86_64-linux-gnu/qt6/` instead of plain
+  `include/qt6/`.
+- **Linux + macOS: Boost shared libraries at the multiarch path,
+  macOS install_name rewrite (#19).** Bundles the Boost SOs at
+  `lib/x86_64-linux-gnu/` and rewrites the macOS install_names of
+  bundled Boost dylibs to `@rpath/<dylib>` so the relocatable layout
+  actually works from the consumer's extract location.
+- **Linux: Boost cmake configs at multiarch path (#18).** Mirrors
+  `BoostConfig.cmake` + `Boost*-1.83.0.cmake` etc. under
+  `lib/x86_64-linux-gnu/cmake/Boost-*` so the `_IMPORT_PREFIX` walk
+  in the generated targets file resolves to the correct prefix.
+- **Windows: ship Qt6 release + debug variants side-by-side in both
+  bundles (#17).** The Windows Debug bundle was previously pruning
+  every non-`d`-suffixed Qt file (`Qt6Core.dll`, `Qt6Core.lib`, the
+  imageformats / platforms / styles plugins, …). Qt6's CMake exports
+  are multi-config and remap `RELEASE` / `MINSIZEREL` to
+  `RELWITHDEBINFO` at `find_package` time, so `find_package(Qt6)` in
+  consumer projects always tried to resolve the missing non-suffixed
+  paths. The prune step is gone; both variants now ship in both
+  bundles.
+- **macOS CI: batch `dylibbundler` + cache brew bottles + cache NFFT3
+  install prefix (#16).** No artifact change, but the macOS shared
+  release jobs are now much faster on warm caches (was ~35-45 min
+  per job, now ~5-8 min on a hit). See the PR for the breakdown.
+
+### v1.0.1 (2026-05-13)
+
+First point release. Same upstream component manifest as v1.0.0;
+fixes target the Linux artifact layout and add per-config VTK +
+log4cplus builds so the Debug Linux bundle no longer mixes release
+binaries.
+
+Fixes:
+
+- **Linux: build VTK + log4cplus per `matrix.build_type` (#12).**
+  The Linux Release and Debug bundles were both pulling VTK and
+  log4cplus from a single cached install prefix, so the Debug
+  archive shipped Release-compiled `libvtk*.so` / `liblog4cplus.so`.
+  Both libraries are now built separately for each
+  `matrix.build_type` and cached under per-build-type keys.
+- **Linux: mirror Qt6 SOs to the multiarch path + bundle
+  `BoostDetectToolset` (#13).** Stages the Qt6 SOs under
+  `lib/x86_64-linux-gnu/` so `Qt6CoreConfig.cmake`'s
+  `find_library(... PATHS "${_IMPORT_PREFIX}/lib/x86_64-linux-gnu")`
+  resolves, and ships Boost's `BoostDetectToolset.cmake` so
+  `find_package(Boost)` works without falling back to a system Boost.
 
 ### v1.0.0 (2026-05-13)
 
