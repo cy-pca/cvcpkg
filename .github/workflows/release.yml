@@ -856,13 +856,9 @@ jobs:
             [ -d "$vtk_cmake_dir" ] || continue
             for tf in "$vtk_cmake_dir"/VTKPython-targets*.cmake; do
               [ -e "$tf" ] || continue
-              cat > "$tf" <<'EOF'
-# VTKPython-targets.cmake -- stubbed out by libcvc-deps.
-# brew's vtk bottle ships with Python wrapping enabled, but we do
-# not bundle the lib/python3.X/site-packages/vtkmodules/ tree.
-# libcvc and volrover3 do not consume VTK's Python bindings;
-# vtk-config.cmake's include() of this file becomes a no-op.
-EOF
+              # Truncate to an empty file; cmake's include() of an
+              # empty file is a no-op and defines no targets.
+              : > "$tf"
             done
           done
 
