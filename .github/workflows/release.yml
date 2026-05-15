@@ -1497,6 +1497,10 @@ jobs:
           # the release subtree only.
           $libSrc = if ($isDebug) { Join-Path $vcRoot 'debug/lib' } else { Join-Path $vcRoot 'lib' }
           $binSrc = if ($isDebug) { Join-Path $vcRoot 'debug/bin' } else { Join-Path $vcRoot 'bin' }
+          $libRel = Join-Path $vcRoot 'lib'
+          $libDbg = Join-Path $vcRoot 'debug/lib'
+          $binRel = Join-Path $vcRoot 'bin'
+          $binDbg = Join-Path $vcRoot 'debug/bin'
 
           if (Test-Path "$vcRoot/include") {
             Copy-Item -Recurse -Force "$vcRoot/include/*" "$dist/include/"
@@ -1519,40 +1523,72 @@ jobs:
             }
           }
 
-          # ── Mirror debug bits at vcpkg's "debug/" layout ──
+          # ── Ship BOTH release- and debug-side vcpkg trees ──
           # vcpkg's per-port cmake target files (share/<port>/<port>-
-          # targets.cmake) declare BOTH a RELEASE imported config
-          # (IMPORTED_LOCATION_RELEASE = ${_IMPORT_PREFIX}/lib/<x>.lib)
-          # and a DEBUG imported config (IMPORTED_LOCATION_DEBUG =
-          # ${_IMPORT_PREFIX}/debug/lib/<x>.lib). When a consumer
-          # configures with CMAKE_BUILD_TYPE=Debug, find_package
-          # validates the DEBUG path; if the bundle ships the debug
-          # binaries only at top-level lib/ (the flat copy above),
-          # configure aborts with:
+          # targets.cmake) include BOTH a -release.cmake and a
+          # -debug.cmake fragment whenever vcpkg built both variants
+          # (the default for non-VCPKG_BUILD_TYPE-restricted ports).
+          # The -release fragment declares
+          #   IMPORTED_LOCATION_RELEASE = ${_IMPORT_PREFIX}/lib/<lib>
+          # and the -debug fragment declares
+          #   IMPORTED_LOCATION_DEBUG = ${_IMPORT_PREFIX}/debug/lib/<lib>
+          # Both are appended to _IMPORT_CHECK_FILES_FOR_<target>, and
+          # the validation foreach() at the bottom of *-targets.cmake
+          # checks EVERY listed file exists — unconditional on the
+          # consumer's CMAKE_BUILD_TYPE. A missing release- OR debug-
+          # side file aborts find_package with e.g.
           #
-          #   CMake Error at .../share/libaec/libaec_shared-targets.cmake:
-          #     The imported target "libaec::aec-shared" references the
-          #     file ".../debug/lib/aec.lib" but this file does not exist.
+          #   CMake Error at .../share/boost_atomic/boost_atomic-targets.cmake:85
+          #     Boost::atomic references .../lib/boost_atomic-vc143-mt-x64-1_90.lib
+          #     but this file does not exist
           #
-          # Mirror the staged debug-side .lib/.dll/.pdb to
-          # $dist/debug/{lib,bin}/ so the vcpkg-style DEBUG paths
-          # resolve too. Release bundles need no mirror — vcpkg ships
-          # cmake configs with the Release-side files at top-level
-          # lib/ exactly where IMPORTED_LOCATION_RELEASE expects them.
-          if ($isDebug -and (Test-Path $libSrc)) {
-            $dbgLib = Join-Path $dist 'debug/lib'
-            New-Item -ItemType Directory -Force -Path $dbgLib | Out-Null
-            foreach ($p in @('*.lib','*.pdb')) {
-              Get-ChildItem -Path $libSrc -Filter $p -File `
+          # So both bundles (Debug AND Release) must ship the .libs
+          # for BOTH configs. vcpkg-built debug libs use a -gd name
+          # suffix and release libs don't, so they coexist at lib/
+          # without name collisions. Put release-side at top-level
+          # lib/ (where IMPORTED_LOCATION_RELEASE points) and debug-
+          # side at debug/lib/ (where IMPORTED_LOCATION_DEBUG points),
+          # mirroring vcpkg's installed-tree layout exactly.
+          $dbgLib = Join-Path $dist 'debug/lib'
+          New-Item -ItemType Directory -Force -Path $dbgLib | Out-Null
+          if (Test-Path $libRel) {
+            Get-ChildItem -Path $libRel -Filter '*.lib' -File `
+              | Copy-Item -Destination "$dist/lib/" -Force
+          }
+          if (Test-Path $libDbg) {
+            Get-ChildItem -Path $libDbg -Filter '*.lib' -File `
+              | Copy-Item -Destination $dbgLib -Force
+          }
+          if ($isDebug) {
+            if (Test-Path $libRel) {
+              Get-ChildItem -Path $libRel -Filter '*.pdb' -File `
+                | Copy-Item -Destination "$dist/lib/" -Force
+            }
+            if (Test-Path $libDbg) {
+              Get-ChildItem -Path $libDbg -Filter '*.pdb' -File `
                 | Copy-Item -Destination $dbgLib -Force
             }
           }
-          if ($isDebug -and '${{ matrix.link }}' -eq 'shared' -and (Test-Path $binSrc)) {
+          if ('${{ matrix.link }}' -eq 'shared') {
             $dbgBin = Join-Path $dist 'debug/bin'
             New-Item -ItemType Directory -Force -Path $dbgBin | Out-Null
-            foreach ($p in @('*.dll','*.pdb')) {
-              Get-ChildItem -Path $binSrc -Filter $p -File `
+            if (Test-Path $binRel) {
+              Get-ChildItem -Path $binRel -Filter '*.dll' -File `
+                | Copy-Item -Destination "$dist/bin/" -Force
+            }
+            if (Test-Path $binDbg) {
+              Get-ChildItem -Path $binDbg -Filter '*.dll' -File `
                 | Copy-Item -Destination $dbgBin -Force
+            }
+            if ($isDebug) {
+              if (Test-Path $binRel) {
+                Get-ChildItem -Path $binRel -Filter '*.pdb' -File `
+                  | Copy-Item -Destination "$dist/bin/" -Force
+              }
+              if (Test-Path $binDbg) {
+                Get-ChildItem -Path $binDbg -Filter '*.pdb' -File `
+                  | Copy-Item -Destination $dbgBin -Force
+              }
             }
           }
 
@@ -1569,52 +1605,62 @@ jobs:
             }
             $shLib = if ($isDebug) { Join-Path $shRoot 'debug/lib' } else { Join-Path $shRoot 'lib' }
             $shBin = if ($isDebug) { Join-Path $shRoot 'debug/bin' } else { Join-Path $shRoot 'bin' }
+            $shLibRel = Join-Path $shRoot 'lib'
+            $shLibDbg = Join-Path $shRoot 'debug/lib'
+            $shBinRel = Join-Path $shRoot 'bin'
+            $shBinDbg = Join-Path $shRoot 'debug/bin'
             # File-name prefixes that identify fallback ports and their
             # transitive runtime dependencies (CGAL itself is mostly
             # header-only but vcpkg ships a CGAL.dll for the small
             # number of compiled symbols).
             $fbPrefixes = @('cgal*','CGAL*','gmp*','mpfr*','mpir*')
-            if (Test-Path $shLib) {
-              foreach ($pat in $fbPrefixes) {
-                Get-ChildItem -Path $shLib -Filter "$pat.lib" -File -ErrorAction SilentlyContinue `
+            # Same dual-config staging strategy as the primary vcpkg
+            # copy above: ship both release- and debug-side .lib/.dll
+            # so the vcpkg-generated cmake target files for cgal/gmp/
+            # mpfr validate both IMPORTED_LOCATION_RELEASE and
+            # IMPORTED_LOCATION_DEBUG paths successfully.
+            $dbgLib = Join-Path $dist 'debug/lib'
+            New-Item -ItemType Directory -Force -Path $dbgLib | Out-Null
+            foreach ($pat in $fbPrefixes) {
+              if (Test-Path $shLibRel) {
+                Get-ChildItem -Path $shLibRel -Filter "$pat.lib" -File -ErrorAction SilentlyContinue `
                   | Copy-Item -Destination "$dist/lib/" -Force
-                if ($isDebug) {
-                  Get-ChildItem -Path $shLib -Filter "$pat.pdb" -File -ErrorAction SilentlyContinue `
+              }
+              if (Test-Path $shLibDbg) {
+                Get-ChildItem -Path $shLibDbg -Filter "$pat.lib" -File -ErrorAction SilentlyContinue `
+                  | Copy-Item -Destination $dbgLib -Force
+              }
+              if ($isDebug) {
+                if (Test-Path $shLibRel) {
+                  Get-ChildItem -Path $shLibRel -Filter "$pat.pdb" -File -ErrorAction SilentlyContinue `
                     | Copy-Item -Destination "$dist/lib/" -Force
                 }
-              }
-            }
-            if (Test-Path $shBin) {
-              foreach ($pat in $fbPrefixes) {
-                Get-ChildItem -Path $shBin -Filter "$pat.dll" -File -ErrorAction SilentlyContinue `
-                  | Copy-Item -Destination "$dist/bin/" -Force
-                if ($isDebug) {
-                  Get-ChildItem -Path $shBin -Filter "$pat.pdb" -File -ErrorAction SilentlyContinue `
-                    | Copy-Item -Destination "$dist/bin/" -Force
+                if (Test-Path $shLibDbg) {
+                  Get-ChildItem -Path $shLibDbg -Filter "$pat.pdb" -File -ErrorAction SilentlyContinue `
+                    | Copy-Item -Destination $dbgLib -Force
                 }
               }
             }
-            # Mirror static-fallback debug bits at vcpkg's "debug/"
-            # layout for the same reason as the primary copy above
-            # (see "Mirror debug bits at vcpkg's 'debug/' layout").
-            if ($isDebug -and (Test-Path $shLib)) {
-              $dbgLib = Join-Path $dist 'debug/lib'
-              New-Item -ItemType Directory -Force -Path $dbgLib | Out-Null
-              foreach ($pat in $fbPrefixes) {
-                Get-ChildItem -Path $shLib -Filter "$pat.lib" -File -ErrorAction SilentlyContinue `
-                  | Copy-Item -Destination $dbgLib -Force
-                Get-ChildItem -Path $shLib -Filter "$pat.pdb" -File -ErrorAction SilentlyContinue `
-                  | Copy-Item -Destination $dbgLib -Force
+            $dbgBin = Join-Path $dist 'debug/bin'
+            New-Item -ItemType Directory -Force -Path $dbgBin | Out-Null
+            foreach ($pat in $fbPrefixes) {
+              if (Test-Path $shBinRel) {
+                Get-ChildItem -Path $shBinRel -Filter "$pat.dll" -File -ErrorAction SilentlyContinue `
+                  | Copy-Item -Destination "$dist/bin/" -Force
               }
-            }
-            if ($isDebug -and (Test-Path $shBin)) {
-              $dbgBin = Join-Path $dist 'debug/bin'
-              New-Item -ItemType Directory -Force -Path $dbgBin | Out-Null
-              foreach ($pat in $fbPrefixes) {
-                Get-ChildItem -Path $shBin -Filter "$pat.dll" -File -ErrorAction SilentlyContinue `
+              if (Test-Path $shBinDbg) {
+                Get-ChildItem -Path $shBinDbg -Filter "$pat.dll" -File -ErrorAction SilentlyContinue `
                   | Copy-Item -Destination $dbgBin -Force
-                Get-ChildItem -Path $shBin -Filter "$pat.pdb" -File -ErrorAction SilentlyContinue `
-                  | Copy-Item -Destination $dbgBin -Force
+              }
+              if ($isDebug) {
+                if (Test-Path $shBinRel) {
+                  Get-ChildItem -Path $shBinRel -Filter "$pat.pdb" -File -ErrorAction SilentlyContinue `
+                    | Copy-Item -Destination "$dist/bin/" -Force
+                }
+                if (Test-Path $shBinDbg) {
+                  Get-ChildItem -Path $shBinDbg -Filter "$pat.pdb" -File -ErrorAction SilentlyContinue `
+                    | Copy-Item -Destination $dbgBin -Force
+                }
               }
             }
             # Headers + share/cmake/* for cgal/gmp/mpfr are
