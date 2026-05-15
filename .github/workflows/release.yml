@@ -1024,6 +1024,43 @@ jobs:
           echo "Bundling $(( ${#xargs[@]} / 2 )) dylibs in a single dylibbundler pass."
           dylibbundler -b -d "$DIST/lib" -p '@rpath/' -of -cd "${xargs[@]}" || true
 
+          # ── Dedupe LC_RPATH entries ──
+          # brew's vtk-9.x dylibs ship with an `@rpath/` LC_RPATH load
+          # command baked in. dylibbundler unconditionally adds another
+          # `@rpath/` LC_RPATH to each rewritten dylib (a side effect
+          # of `-p '@rpath/'`), producing a duplicate LC_RPATH that
+          # newer Apple linkers (Xcode 15+, ld-1015) reject when a
+          # consumer (e.g. volrover3) links against the dylib:
+          #
+          #   ld: multiple errors: duplicate LC_RPATH '@rpath/' in
+          #       lib/libvtk*-9.5.9.5.dylib
+          #
+          # Walk every shipped dylib and collapse repeated identical
+          # rpath entries to one, then re-codesign so the load
+          # commands match the on-disk signature.
+          for dy in "$DIST"/lib/*.dylib; do
+            [ -e "$dy" ] || continue
+            [ -L "$dy" ] && continue
+            # Collect each LC_RPATH 'path' value, count duplicates.
+            rpaths=$(otool -l "$dy" \
+              | awk '/cmd LC_RPATH/{getline; getline; print $2}')
+            [ -z "$rpaths" ] && continue
+            changed=0
+            while IFS= read -r rp; do
+              [ -n "$rp" ] || continue
+              n=$(otool -l "$dy" \
+                | awk -v r="$rp" '/cmd LC_RPATH/{getline; getline; if ($2==r) c++} END{print c+0}')
+              while [ "$n" -gt 1 ]; do
+                install_name_tool -delete_rpath "$rp" "$dy" 2>/dev/null || break
+                n=$((n - 1))
+                changed=1
+              done
+            done <<< "$(printf '%s\n' "$rpaths" | sort -u)"
+            if [ "$changed" -eq 1 ]; then
+              codesign --force --sign - "$dy" 2>/dev/null || true
+            fi
+          done
+
       # ── Stage vcglib (header-only) ──
       - name: Stage vcglib
         uses: ./.github/actions/stage-vcglib
@@ -1482,6 +1519,43 @@ jobs:
             }
           }
 
+          # ── Mirror debug bits at vcpkg's "debug/" layout ──
+          # vcpkg's per-port cmake target files (share/<port>/<port>-
+          # targets.cmake) declare BOTH a RELEASE imported config
+          # (IMPORTED_LOCATION_RELEASE = ${_IMPORT_PREFIX}/lib/<x>.lib)
+          # and a DEBUG imported config (IMPORTED_LOCATION_DEBUG =
+          # ${_IMPORT_PREFIX}/debug/lib/<x>.lib). When a consumer
+          # configures with CMAKE_BUILD_TYPE=Debug, find_package
+          # validates the DEBUG path; if the bundle ships the debug
+          # binaries only at top-level lib/ (the flat copy above),
+          # configure aborts with:
+          #
+          #   CMake Error at .../share/libaec/libaec_shared-targets.cmake:
+          #     The imported target "libaec::aec-shared" references the
+          #     file ".../debug/lib/aec.lib" but this file does not exist.
+          #
+          # Mirror the staged debug-side .lib/.dll/.pdb to
+          # $dist/debug/{lib,bin}/ so the vcpkg-style DEBUG paths
+          # resolve too. Release bundles need no mirror — vcpkg ships
+          # cmake configs with the Release-side files at top-level
+          # lib/ exactly where IMPORTED_LOCATION_RELEASE expects them.
+          if ($isDebug -and (Test-Path $libSrc)) {
+            $dbgLib = Join-Path $dist 'debug/lib'
+            New-Item -ItemType Directory -Force -Path $dbgLib | Out-Null
+            foreach ($p in @('*.lib','*.pdb')) {
+              Get-ChildItem -Path $libSrc -Filter $p -File `
+                | Copy-Item -Destination $dbgLib -Force
+            }
+          }
+          if ($isDebug -and '${{ matrix.link }}' -eq 'shared' -and (Test-Path $binSrc)) {
+            $dbgBin = Join-Path $dist 'debug/bin'
+            New-Item -ItemType Directory -Force -Path $dbgBin | Out-Null
+            foreach ($p in @('*.dll','*.pdb')) {
+              Get-ChildItem -Path $binSrc -Filter $p -File `
+                | Copy-Item -Destination $dbgBin -Force
+            }
+          }
+
           # ── Hybrid-static fallback: mix in shared cgal/gmp/mpfr ──
           # The x64-windows-static install set omits cgal/gmp/mpfr
           # because the static mpfr port hangs on hosted runners.
@@ -1518,6 +1592,29 @@ jobs:
                   Get-ChildItem -Path $shBin -Filter "$pat.pdb" -File -ErrorAction SilentlyContinue `
                     | Copy-Item -Destination "$dist/bin/" -Force
                 }
+              }
+            }
+            # Mirror static-fallback debug bits at vcpkg's "debug/"
+            # layout for the same reason as the primary copy above
+            # (see "Mirror debug bits at vcpkg's 'debug/' layout").
+            if ($isDebug -and (Test-Path $shLib)) {
+              $dbgLib = Join-Path $dist 'debug/lib'
+              New-Item -ItemType Directory -Force -Path $dbgLib | Out-Null
+              foreach ($pat in $fbPrefixes) {
+                Get-ChildItem -Path $shLib -Filter "$pat.lib" -File -ErrorAction SilentlyContinue `
+                  | Copy-Item -Destination $dbgLib -Force
+                Get-ChildItem -Path $shLib -Filter "$pat.pdb" -File -ErrorAction SilentlyContinue `
+                  | Copy-Item -Destination $dbgLib -Force
+              }
+            }
+            if ($isDebug -and (Test-Path $shBin)) {
+              $dbgBin = Join-Path $dist 'debug/bin'
+              New-Item -ItemType Directory -Force -Path $dbgBin | Out-Null
+              foreach ($pat in $fbPrefixes) {
+                Get-ChildItem -Path $shBin -Filter "$pat.dll" -File -ErrorAction SilentlyContinue `
+                  | Copy-Item -Destination $dbgBin -Force
+                Get-ChildItem -Path $shBin -Filter "$pat.pdb" -File -ErrorAction SilentlyContinue `
+                  | Copy-Item -Destination $dbgBin -Force
               }
             }
             # Headers + share/cmake/* for cgal/gmp/mpfr are
