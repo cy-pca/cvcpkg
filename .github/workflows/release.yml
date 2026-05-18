@@ -466,6 +466,60 @@ jobs:
             mkdir -p "$DIST/include/hdf5"
             cp -R /usr/include/hdf5/serial/. "$DIST/include/hdf5/"
           fi
+          # HDF5 on Ubuntu has no upstream CMake config. Consumers
+          # have to use CMake's bundled FindHDF5.cmake module, which
+          # works by:
+          #   1. Finding a versionless `libhdf5.so` / `libhdf5_cpp.so`
+          #      etc. via find_library(),
+          #   2. Reading `libhdf5.settings` next to that library to
+          #      learn versions/build options,
+          #   3. Optionally calling `pkg-config --libs hdf5` for the
+          #      link line.
+          # The Debian `libhdf5-dev` package installs all three of
+          # those under /usr/lib/x86_64-linux-gnu/hdf5/serial/ (with
+          # SONAME-suffixed `libhdf5_serial.so` files plus versionless
+          # `libhdf5.so` -> ../../libhdf5_serial.so symlinks) and the
+          # corresponding hdf5.pc / hdf5-serial.pc under
+          # /usr/lib/x86_64-linux-gnu/pkgconfig/. The plain
+          # `copy_libs 'libhdf5'` glob above only pulled in the
+          # /usr/lib/x86_64-linux-gnu/libhdf5_serial*.so* SONAME
+          # files — none of the versionless symlinks find_library()
+          # actually looks for. Stage the serial subdir wholesale so
+          # find_package(HDF5) resolves inside the bundle.
+          if [ -d /usr/lib/x86_64-linux-gnu/hdf5/serial ]; then
+            mkdir -p "$DIST/lib/hdf5/serial"
+            # cp -RL follows the include/lib relative symlinks in the
+            # source dir so the bundle ends up with concrete copies of
+            # headers and libs at the multiarch-mirror path; consumers
+            # don't need the apt package on the host.
+            cp -RL /usr/lib/x86_64-linux-gnu/hdf5/serial/. "$DIST/lib/hdf5/serial/" 2>/dev/null || \
+              cp -R  /usr/lib/x86_64-linux-gnu/hdf5/serial/. "$DIST/lib/hdf5/serial/"
+            # Also drop versionless `libhdf5.so` -> libhdf5_serial.so
+            # convenience symlinks into $DIST/lib so a plain
+            # find_library(HDF5_LIBRARY NAMES hdf5) finds them without
+            # consumers having to add lib/hdf5/serial to their search
+            # paths. find_package(HDF5) appends hdf5/serial itself via
+            # HDF5_ROOT, but downstream code calling find_library()
+            # directly benefits from this fallback.
+            for stem in hdf5 hdf5_cpp hdf5_hl hdf5_hl_cpp hdf5_fortran hdf5hl_fortran; do
+              src="$DIST/lib/${stem}_serial.so"
+              [ -e "$src" ] || continue
+              [ -e "$DIST/lib/${stem}.so" ] || \
+                ln -sf "${stem}_serial.so" "$DIST/lib/${stem}.so"
+            done
+          fi
+          # HDF5 pkg-config files. Rewrite prefix= so they relocate
+          # with the bundle. FindHDF5.cmake consults these on
+          # platforms where the upstream HDF5 doesn't ship a CMake
+          # config (i.e. Linux).
+          for pc in /usr/lib/x86_64-linux-gnu/pkgconfig/hdf5*.pc; do
+            [ -f "$pc" ] || continue
+            sed -e 's|^prefix=.*|prefix=${pcfiledir}/../..|' \
+                -e 's|^exec_prefix=.*|exec_prefix=${prefix}|' \
+                -e 's|^libdir=.*|libdir=${prefix}/lib|' \
+                -e 's|^includedir=.*|includedir=${prefix}/include/hdf5|' \
+                "$pc" > "$DIST/lib/pkgconfig/$(basename "$pc")"
+          done
           # Top-level header files (fftw3.h, gmp.h, mpfr.h, tiff.h, …)
           for f in /usr/include/fftw3.h /usr/include/fftw3.f \
                    /usr/include/fftw3l.h /usr/include/fftw3q.h \
