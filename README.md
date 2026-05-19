@@ -44,6 +44,9 @@ Every archive contains, in one tree:
 - Eigen3 (header-only, all platforms)
 - LAPACK + BLAS (Linux apt LAPACK + reference BLAS; macOS brew
   `lapack`; Windows vcpkg `clapack` + `openblas`)
+- levmar 2.6, built with LAPACK enabled, exported as `levmar::levmar`
+- pthreads4w on Windows, so projects that use POSIX thread APIs can keep
+  using CMake's `find_package(Threads)` / `Threads::Threads` flow
 
 **Mesh / geometry deps**
 
@@ -94,8 +97,8 @@ libcvc-deps-<ver>-windows-<arch>-<config>[-static].zip
 
 Examples:
 
-- `libcvc-deps-1.0.2-linux-x86_64-release-shared.tar.gz`
-- `libcvc-deps-1.0.2-windows-x86_64-debug-static.zip`
+- `libcvc-deps-1.1.0-linux-x86_64-release-shared.tar.gz`
+- `libcvc-deps-1.1.0-windows-x86_64-debug-static.zip`
 
 The shared archives ship `.so` / `.dylib` / `.dll` with RPATH /
 install_name fixups so the loader resolves intra-archive
@@ -127,28 +130,170 @@ for details, override knobs, and rpath guidance.
 
 ## Usage
 
-Download and extract the archive matching your toolchain, then pass
-the extracted root to CMake as a prefix:
+Download and extract the archive matching your operating system,
+architecture, build type, and linkage preference. Then pass the
+extracted directory to CMake as a prefix. The bundle is intentionally
+laid out like a normal CMake package prefix: headers are under
+`include/`, libraries under `lib/` / `bin/`, and package files under
+`lib/cmake/`, `share/`, or `share/cmake/` depending on the upstream
+project's native layout.
+
+### Build libcvc against a release bundle
+
+`libcvc` is the canonical consumer. A Release shared build on Linux
+looks like this:
 
 ```sh
-# Linux example
-tar xzf libcvc-deps-1.0.2-linux-x86_64-release-shared.tar.gz
-export DEPS=$PWD/libcvc-deps-1.0.2-linux-x86_64-release-shared
+VER=1.1.0
+STEM=libcvc-deps-${VER}-linux-x86_64-release-shared
 
-# Now build libcvc against the bundled deps
+curl -fLO "https://github.com/transfix/libcvc-deps/releases/download/v${VER}/${STEM}.tar.gz"
+tar xzf "${STEM}.tar.gz"
+export LIBCVC_DEPS_ROOT="$PWD/${STEM}"
+
 cmake -S libcvc -B build -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_PREFIX_PATH="$DEPS" \
+  -DCMAKE_PREFIX_PATH="$LIBCVC_DEPS_ROOT" \
   -DCVC_BUILD_VOLROVER3=ON \
   -DCVC_ENABLE_MESHER=ON \
   -DCVC_ENABLE_SDF=ON
 cmake --build build --parallel
 ```
 
-A tiny `libcvc-depsConfig.cmake` is included so that
-`find_package(libcvc-deps CONFIG REQUIRED)` succeeds against the
-extracted tree — handy for downstream projects to assert that they
-are configured against a known dep distribution.
+On macOS and Windows, download the matching `.zip` archive and pass
+the extracted directory the same way. For example, on Windows:
+
+```powershell
+$ver = "1.1.0"
+$stem = "libcvc-deps-$ver-windows-x86_64-release-shared"
+Invoke-WebRequest `
+  -Uri "https://github.com/transfix/libcvc-deps/releases/download/v$ver/$stem.zip" `
+  -OutFile "$stem.zip"
+Expand-Archive "$stem.zip" -DestinationPath .
+
+cmake -S libcvc -B build -G "Visual Studio 17 2022" -A x64 `
+  -DCMAKE_PREFIX_PATH="$PWD\\$stem" `
+  -DCVC_BUILD_VOLROVER3=ON `
+  -DCVC_ENABLE_MESHER=ON `
+  -DCVC_ENABLE_SDF=ON
+cmake --build build --config Release --parallel
+```
+
+On single-config generators such as Ninja, the archive's build type
+should match `CMAKE_BUILD_TYPE`. On multi-config generators such as
+Visual Studio, build the configuration that matches the archive you
+extracted. Mixing Debug and Release is especially important to avoid
+on Windows because the MSVC runtime differs (`/MDd` vs `/MD`).
+
+### Use the bundle from another CMake project
+
+Downstream projects can treat `libcvc-deps` as a prebuilt science
+stack. The small `libcvc-depsConfig.cmake` package is provided as a
+smoke check: it proves that `CMAKE_PREFIX_PATH` points at a
+libcvc-deps distribution, but individual libraries should still be
+found with their normal package names.
+
+```cmake
+cmake_minimum_required(VERSION 3.24)
+project(MyScienceApp LANGUAGES C CXX)
+
+find_package(libcvc-deps CONFIG REQUIRED)
+
+find_package(Boost 1.90 REQUIRED COMPONENTS filesystem program_options system thread)
+find_package(HDF5 REQUIRED COMPONENTS C CXX)
+find_package(FFTW3 CONFIG REQUIRED)
+find_package(GSL REQUIRED)
+find_package(LAPACK REQUIRED)
+find_package(Eigen3 CONFIG REQUIRED)
+find_package(levmar CONFIG REQUIRED)
+find_package(log4cplus CONFIG REQUIRED)
+find_package(libiimod CONFIG REQUIRED)
+find_package(vcglib CONFIG REQUIRED)
+
+add_executable(my-science-app src/main.cpp)
+target_link_libraries(my-science-app PRIVATE
+  Boost::filesystem
+  Boost::program_options
+  Boost::system
+  Boost::thread
+  HDF5::HDF5
+  FFTW3::fftw3
+  GSL::gsl
+  GSL::gslcblas
+  LAPACK::LAPACK
+  Eigen3::Eigen
+  levmar::levmar
+  log4cplus::log4cplus
+  libiimod::iimod
+  vcglib::vcglib)
+```
+
+GUI applications can add Qt and VTK in the same prefix:
+
+```cmake
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
+find_package(VTK 9.5 REQUIRED COMPONENTS
+  CommonCore
+  CommonDataModel
+  FiltersCore
+  GUISupportQt
+  RenderingCore
+  RenderingOpenGL2)
+
+target_link_libraries(my-viewer PRIVATE
+  Qt6::Core
+  Qt6::Gui
+  Qt6::Widgets
+  Qt6::OpenGL
+  Qt6::OpenGLWidgets
+  ${VTK_LIBRARIES})
+```
+
+If your project consumes both a `libcvc-deps` bundle and an installed
+`libcvc` package, pass both prefixes. Put `libcvc-deps` first so its
+package files satisfy libcvc's transitive dependency lookups:
+
+```sh
+cmake -S app -B build -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH="$LIBCVC_DEPS_ROOT;$LIBCVC_ROOT"
+```
+
+Then in CMake:
+
+```cmake
+find_package(libcvc-deps CONFIG REQUIRED)
+find_package(cvc CONFIG REQUIRED)
+
+add_executable(my-tool src/my_tool.cpp)
+target_link_libraries(my-tool PRIVATE cvc::cvc)
+```
+
+### Fetch from GitHub Actions
+
+For GitHub Actions workflows, this repository also publishes a small
+fetch action. It downloads the archive for the current runner,
+extracts it, and exposes the prefix path for later CMake steps:
+
+```yaml
+- name: Fetch libcvc-deps
+  id: deps
+  uses: transfix/libcvc-deps/.github/actions/fetch@v1.1.0
+  with:
+    version: "1.1.0"
+    build_type: Release
+    link: shared
+
+- name: Configure
+  run: |
+    cmake -S . -B build -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_PREFIX_PATH="${{ steps.deps.outputs.path }}"
+```
+
+The action is intentionally thin; plain `curl` / `tar` /
+`Expand-Archive` scripts are just as valid for projects that need
+custom artifact selection.
 
 See [USAGE.md](USAGE.md) for matrix tables, version pins, and the
 copy-paste snippets for `libcvc` and downstream CI.
