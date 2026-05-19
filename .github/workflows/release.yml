@@ -1706,12 +1706,19 @@ jobs:
           $prefix  = "D:\levmar-prefix-${{ matrix.build_type }}"
           $triplet = '${{ steps.meta.outputs.triplet }}'
           # Route find_package(LAPACK) through the vcpkg-installed
-          # tree populated by the windows-vcpkg pre-job (clapack +
-          # openblas).
+          # tree populated by the windows-vcpkg pre-job. vcpkg's
+          # `clapack` port is a thin header-only wrapper that does
+          # NOT register a vcpkg-cmake-wrapper for LAPACK, so the
+          # standard FindLAPACK module runs and fails to locate
+          # `cheev_` in just openblas.lib. Pin BLA_VENDOR=OpenBLAS:
+          # vcpkg's openblas is built with USE_LAPACK=1 by default
+          # and exports the full reference LAPACK Fortran API, so
+          # FindLAPACK finds cheev_ in openblas.lib directly.
           cmake -S third-party/levmar -B D:\levmar-build `
             -G "Visual Studio 17 2022" -A x64 `
             -DCMAKE_TOOLCHAIN_FILE="C:/vcpkg/scripts/buildsystems/vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET="$triplet" `
+            -DBLA_VENDOR=OpenBLAS `
             -DCMAKE_INSTALL_PREFIX="$prefix"
           cmake --build D:\levmar-build --config ${{ matrix.build_type }} --target install
           Remove-Item -Recurse -Force D:\levmar-build
