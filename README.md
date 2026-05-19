@@ -320,16 +320,61 @@ the toolkit installer's own setup.
 ## Version pins
 
 Some components are pinned in the workflow itself (VTK, Qt on Windows,
-log4cplus, NFFT, vcglib, libiimod, the Windows ImageMagick overlay
-port). Others are taken as-is from each platform's package manager and
-therefore drift between releases. For every tagged release of
-libcvc-deps we record the **exact versions actually shipped** in the
+log4cplus, NFFT, vcglib, libiimod, levmar, the Windows ImageMagick
+overlay port). Others are taken as-is from each platform's package
+manager and therefore drift between releases. For every tagged release
+of libcvc-deps we record the **exact versions actually shipped** in the
 artifacts below. Consumers who need bit-for-bit reproducible bundles
 should consume a tagged release rather than the moving tip.
 
 A given release of libcvc-deps is intended to be used with the
 corresponding (or older) libcvc release. Bumping a major version of
 Qt or VTK is reflected by bumping libcvc-deps's own version.
+
+### v1.1.0 (2026-05-19)
+
+Feature release adding the pieces needed to move TexMol and other
+science applications off in-tree dependency copies and onto the shared
+libcvc-deps distribution. The v1.1.0 artifacts are based on the v1.0.2
+manifest, with these additions and notable packaging fixes:
+
+- **levmar 2.6 added on all platforms.** Built from the vendored
+  upstream 2.6 sources with LAPACK enabled and exported as
+  `levmar::levmar`.
+- **Windows: pthreads4w added.** The vcpkg `pthreads` port is staged so
+  projects that include `<pthread.h>` can continue using CMake's normal
+  `find_package(Threads)` / `Threads::Threads` target.
+- **macOS: Boost header-only component config stubs.** Homebrew's Boost
+  1.90 bottle omits several `boost_<component>-1.90.0` CMake package
+  directories for header-only components such as `boost_system`. The
+  bundle now synthesizes stubs forwarding those components to
+  `Boost::headers`, so downstream `find_package(Boost COMPONENTS
+  system ...)` works against the extracted archive.
+- **Linux: HDF5 staging hardened.** The stage step now skips recursive
+  self-referential symlinks in Ubuntu's HDF5 serial layout while still
+  copying the real libraries and package metadata.
+
+New / changed pins in v1.1.0:
+
+| Component | Linux | macOS | Windows |
+|---|---|---|---|
+| levmar | 2.6 (vendored source) | 2.6 (vendored source) | 2.6 (vendored source) |
+| pthreads4w | n/a | n/a | vcpkg `pthreads` |
+
+Pin-source notes for v1.1.0:
+
+- levmar 2.6 upstream tarball SHA256:
+  `3bf4ef1ea4475ded5315e8d8fc992a725f2e7940a74ca3b0f9029d9e6e94bad7`.
+  The source files are vendored under `third-party/levmar/upstream/`
+  because the upstream HTTPS endpoint's certificate chain is unreliable
+  on GitHub-hosted runners.
+- levmar is installed as a static library in every archive flavor. Its
+  exported `levmar::levmar` target links `LAPACK::LAPACK` transitively,
+  so consumers do not need to remember the LAPACK link dependency.
+- On Windows, levmar resolves LAPACK through vcpkg `clapack`'s CONFIG
+  package (`lapack` + `f2c`) rather than the system FindLAPACK module.
+  This avoids probing vcpkg `openblas.lib` for LAPACK symbols that are
+  not present in the MSVC OpenBLAS build.
 
 ### v1.0.2 (2026-05-14)
 
