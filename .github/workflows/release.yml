@@ -52,6 +52,13 @@ permissions:
 #     the LabShare-Archive/IMOD upstream at a pinned SHA — see
 #     third-party/libiimod/CMakeLists.txt; linked against the
 #     bundled libtiff so TIFF reads/writes are enabled)
+#   - levmar 2.6 (Lourakis Levenberg-Marquardt nonlinear least-squares,
+#     LAPACK-enabled — see third-party/levmar/CMakeLists.txt)
+#   - LAPACK / BLAS (Linux: liblapack/libblas; macOS: brew lapack +
+#     Accelerate; Windows: vcpkg clapack + openblas)
+#   - pthreads4w on Windows (vcpkg `pthreads`) so the bundle exposes a
+#     standard `find_package(Threads)` / `Threads::Threads` target
+#     across all three platforms.
 #
 # CUDA toolkit is intentionally NOT bundled — consumers install it
 # directly via Jimver/cuda-toolkit on the build host.
@@ -178,6 +185,27 @@ jobs:
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON
           cmake --build libiimod-build --parallel --target install
           rm -rf libiimod-build
+
+      # ── levmar built from upstream tarball (Lourakis) ──
+      #    Pinned tarball + SHA256 in third-party/levmar/CMakeLists.txt;
+      #    builds full LAPACK-enabled library, exports levmar::levmar.
+      - name: Cache levmar install
+        id: levmar-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/levmar-prefix-${{ matrix.build_type }}
+          key: levmar-${{ hashFiles('third-party/levmar/**') }}-${{ runner.os }}-${{ matrix.build_type }}-v1
+
+      - name: Build levmar from source
+        if: steps.levmar-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          cmake -S third-party/levmar -B levmar-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_INSTALL_PREFIX=$HOME/levmar-prefix-${{ matrix.build_type }} \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+          cmake --build levmar-build --parallel --target install
+          rm -rf levmar-build
 
       # ── log4cplus built from source so we ship a .a in the
       #    static bundles. Ubuntu's liblog4cplus-dev is .so-only.
@@ -488,12 +516,24 @@ jobs:
           # find_package(HDF5) resolves inside the bundle.
           if [ -d /usr/lib/x86_64-linux-gnu/hdf5/serial ]; then
             mkdir -p "$DIST/lib/hdf5/serial"
-            # cp -RL follows the include/lib relative symlinks in the
-            # source dir so the bundle ends up with concrete copies of
-            # headers and libs at the multiarch-mirror path; consumers
-            # don't need the apt package on the host.
-            cp -RL /usr/lib/x86_64-linux-gnu/hdf5/serial/. "$DIST/lib/hdf5/serial/" 2>/dev/null || \
-              cp -R  /usr/lib/x86_64-linux-gnu/hdf5/serial/. "$DIST/lib/hdf5/serial/"
+            # The Ubuntu hdf5-serial directory contains two recursive
+            # symlinks that break `cp -RL` (which dereferences):
+            #   lib     -> .                              (self-loop)
+            #   include -> ../../../../include/hdf5/serial
+            # We must NOT follow those, so iterate the entries and
+            # skip them explicitly. Everything else is a flat symlink
+            # to ../../libhdf5_serial*.{a,so,settings} — `cp -L`
+            # resolves to the concrete shared object/archive so the
+            # bundle ends up with real files at the multiarch-mirror
+            # path; consumers don't need libhdf5-dev on the host.
+            for entry in /usr/lib/x86_64-linux-gnu/hdf5/serial/*; do
+              base=$(basename "$entry")
+              case "$base" in
+                include|lib) continue ;;
+              esac
+              cp -L "$entry" "$DIST/lib/hdf5/serial/" 2>/dev/null || \
+                cp    "$entry" "$DIST/lib/hdf5/serial/"
+            done
             # Also drop versionless `libhdf5.so` -> libhdf5_serial.so
             # convenience symlinks into $DIST/lib so a plain
             # find_library(HDF5_LIBRARY NAMES hdf5) finds them without
@@ -600,6 +640,21 @@ jobs:
             cp -R "$PFX/lib/libiimod.a"     "$DIST/lib/" 2>/dev/null || true
             if [ -d "$PFX/lib/cmake/libiimod" ]; then
               cp -R "$PFX/lib/cmake/libiimod/." "$DIST/lib/cmake/libiimod/"
+            fi
+          fi
+
+      # ── Stage levmar from the cached install ──
+      - name: Stage levmar
+        run: |
+          set -euo pipefail
+          DIST="$PWD/${{ steps.meta.outputs.stem }}"
+          PFX="$HOME/levmar-prefix-${{ matrix.build_type }}"
+          if [ -d "$PFX" ]; then
+            mkdir -p "$DIST/include/levmar" "$DIST/lib/cmake/levmar"
+            cp -R "$PFX/include/levmar/." "$DIST/include/levmar/"
+            cp -R "$PFX/lib/liblevmar.a"  "$DIST/lib/" 2>/dev/null || true
+            if [ -d "$PFX/lib/cmake/levmar" ]; then
+              cp -R "$PFX/lib/cmake/levmar/." "$DIST/lib/cmake/levmar/"
             fi
           fi
 
@@ -827,6 +882,24 @@ jobs:
           cmake --build libiimod-build --parallel --target install
           rm -rf libiimod-build
 
+      - name: Cache levmar install
+        id: levmar-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/levmar-prefix-${{ matrix.build_type }}
+          key: levmar-${{ hashFiles('third-party/levmar/**') }}-${{ runner.os }}-${{ matrix.build_type }}-v1
+
+      - name: Build levmar from source
+        if: steps.levmar-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euxo pipefail
+          cmake -S third-party/levmar -B levmar-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_INSTALL_PREFIX="$HOME/levmar-prefix-${{ matrix.build_type }}" \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+          cmake --build levmar-build --parallel --target install
+          rm -rf levmar-build
+
       - name: Configure + install marker config
         run: |
           STEM="${{ steps.meta.outputs.stem }}"
@@ -918,6 +991,72 @@ jobs:
             done
           done
 
+          # brew's boost bottle's lib/cmake/ does NOT ship a
+          # per-component config for purely header-only libraries
+          # whose stubs upstream Boost has dropped from b2's install
+          # set (notably boost_system, which has been header-only
+          # since 1.69 and which the brew formula omits as of 1.90).
+          #
+          # BoostConfig.cmake's per-component lookup
+          #   find_package(boost_<comp> ${Boost_VERSION} EXACT CONFIG
+          #                ${_BOOST_REQUIRED} ...)
+          # is hard-required, so a downstream
+          #   find_package(Boost COMPONENTS system ...)
+          # fails inside the bundle even though the headers are
+          # present and Boost::system is genuinely header-only.
+          #
+          # Synthesize a stub `boost_<comp>-<ver>/boost_<comp>-config
+          # .cmake` for each well-known header-only component whose
+          # config is missing from the staged tree. Each stub defines
+          # an INTERFACE IMPORTED `Boost::<comp>` target that simply
+          # forwards to `Boost::headers`, which is what an end-user's
+          # `find_package(Boost COMPONENTS <comp>)` would have got
+          # against a from-source Boost install anyway.
+          BOOST_VER=$(ls -d "$DIST/lib/cmake/Boost-"*/ 2>/dev/null \
+                      | head -1 | sed -E 's@.*/Boost-([0-9.]+)/?$@\1@')
+          if [ -n "$BOOST_VER" ]; then
+            for comp in system assert bind config core function \
+                        lambda mpl optional preprocessor signals2 \
+                        smart_ptr static_assert tuple type_traits \
+                        utility variant any; do
+              dest="$DIST/lib/cmake/boost_${comp}-${BOOST_VER}"
+              cfg="$dest/boost_${comp}-config.cmake"
+              ver="$dest/boost_${comp}-config-version.cmake"
+              [ -e "$cfg" ] && continue
+              mkdir -p "$dest"
+              # Use printf rather than a heredoc because the YAML
+              # `run: |` block scalar requires every line to be
+              # indented past the block's column; heredoc body lines
+              # starting at column 1 break that.
+              {
+                printf '%s\n' \
+                  "# Auto-generated by libcvc-deps release.yml --" \
+                  "# brew's boost bottle did not ship boost_${comp}-config.cmake." \
+                  "# Boost::${comp} is header-only here; forward to Boost::headers." \
+                  "if(TARGET Boost::${comp})" \
+                  "  return()" \
+                  "endif()" \
+                  "if(NOT TARGET Boost::headers)" \
+                  "  include(\"\${CMAKE_CURRENT_LIST_DIR}/../boost_headers-${BOOST_VER}/boost_headers-config.cmake\")" \
+                  "endif()" \
+                  "add_library(Boost::${comp} INTERFACE IMPORTED)" \
+                  "set_target_properties(Boost::${comp} PROPERTIES" \
+                  "  INTERFACE_LINK_LIBRARIES \"Boost::headers\")" \
+                  "set(boost_${comp}_FOUND 1)"
+              } > "$cfg"
+              {
+                printf '%s\n' \
+                  "set(PACKAGE_VERSION \"${BOOST_VER}\")" \
+                  "if(\"\${PACKAGE_FIND_VERSION}\" VERSION_EQUAL \"\${PACKAGE_VERSION}\")" \
+                  "  set(PACKAGE_VERSION_EXACT TRUE)" \
+                  "  set(PACKAGE_VERSION_COMPATIBLE TRUE)" \
+                  "elseif(\"\${PACKAGE_FIND_VERSION}\" VERSION_LESS_EQUAL \"\${PACKAGE_VERSION}\")" \
+                  "  set(PACKAGE_VERSION_COMPATIBLE TRUE)" \
+                  "endif()"
+              } > "$ver"
+            done
+          fi
+
       # ── Stage libiimod from the cached install ──
       - name: Stage libiimod
         run: |
@@ -930,6 +1069,21 @@ jobs:
             cp -R "$PFX/lib/libiimod.a"     "$DIST/lib/" 2>/dev/null || true
             if [ -d "$PFX/lib/cmake/libiimod" ]; then
               cp -R "$PFX/lib/cmake/libiimod/." "$DIST/lib/cmake/libiimod/"
+            fi
+          fi
+
+      # ── Stage levmar from the cached install ──
+      - name: Stage levmar
+        run: |
+          set -euo pipefail
+          DIST="$PWD/${{ steps.meta.outputs.stem }}"
+          PFX="$HOME/levmar-prefix-${{ matrix.build_type }}"
+          if [ -d "$PFX" ]; then
+            mkdir -p "$DIST/include/levmar" "$DIST/lib/cmake/levmar"
+            cp -R "$PFX/include/levmar/." "$DIST/include/levmar/"
+            cp -R "$PFX/lib/liblevmar.a"  "$DIST/lib/" 2>/dev/null || true
+            if [ -d "$PFX/lib/cmake/levmar" ]; then
+              cp -R "$PFX/lib/cmake/levmar/." "$DIST/lib/cmake/levmar/"
             fi
           fi
 
@@ -1254,7 +1408,13 @@ jobs:
             #   openblas — BLAS backend for clapack
             # NFFT3 has no vcpkg port; it is staged directly from the
             # MSYS2 mingw64 build in the assemble step.
-            'eigen3','clapack','openblas'
+            'eigen3','clapack','openblas',
+            # pthreads4w (vcpkg port name `pthreads`). TexMol and
+            # F2Dock #include <pthread.h> in many modules; on
+            # Windows we ship pthreads4w so consumers can link via
+            # the standard CMake `find_package(Threads)` /
+            # `Threads::Threads` target.
+            'pthreads'
           )
           if ('${{ matrix.triplet }}' -eq 'x64-windows-static') {
             # mpfr (and therefore gmp + cgal) hangs in vcpkg under the
@@ -1526,6 +1686,57 @@ jobs:
                 | Copy-Item -Destination "$dist/lib/" -Force
               if (Test-Path "$prefix/lib/cmake/libiimod") {
                 Copy-Item -Recurse -Force "$prefix/lib/cmake/libiimod/*" "$dist/lib/cmake/libiimod/"
+              }
+            }
+          }
+
+      # ── levmar built from upstream tarball (Lourakis) ──
+      - name: Cache levmar install
+        id: levmar-cache
+        uses: actions/cache@v4
+        with:
+          path: D:\levmar-prefix-${{ matrix.build_type }}
+          key: levmar-${{ hashFiles('third-party/levmar/**') }}-${{ runner.os }}-${{ matrix.build_type }}-v1
+
+      - name: Build levmar from source
+        if: steps.levmar-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix  = "D:\levmar-prefix-${{ matrix.build_type }}"
+          $triplet = '${{ steps.meta.outputs.triplet }}'
+          # LAPACK is sourced from the vcpkg-installed clapack port
+          # (f2c'd reference LAPACK + libf2c, with vcpkg's openblas
+          # as the BLAS backend). third-party/levmar/CMakeLists.txt
+          # finds clapack via its CONFIG package directly and
+          # synthesises a LAPACK::LAPACK INTERFACE target — see the
+          # commentary there for why we cannot rely on
+          # find_package(LAPACK) via the system FindLAPACK module
+          # under MSVC.
+          cmake -S third-party/levmar -B D:\levmar-build `
+            -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="C:/vcpkg/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET="$triplet" `
+            -DCMAKE_INSTALL_PREFIX="$prefix"
+          cmake --build D:\levmar-build --config ${{ matrix.build_type }} --target install
+          Remove-Item -Recurse -Force D:\levmar-build
+
+      - name: Stage levmar
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stem   = '${{ steps.meta.outputs.stem }}'
+          $dist   = Join-Path $env:GITHUB_WORKSPACE $stem
+          $prefix = "D:\levmar-prefix-${{ matrix.build_type }}"
+          if (Test-Path $prefix) {
+            New-Item -ItemType Directory -Force -Path "$dist/include/levmar","$dist/lib/cmake/levmar" | Out-Null
+            Copy-Item -Recurse -Force "$prefix/include/levmar/*" "$dist/include/levmar/"
+            $libDir = Join-Path $prefix 'lib'
+            if (Test-Path $libDir) {
+              Get-ChildItem -Path $libDir -Filter 'levmar.lib' -File -ErrorAction SilentlyContinue `
+                | Copy-Item -Destination "$dist/lib/" -Force
+              if (Test-Path "$prefix/lib/cmake/levmar") {
+                Copy-Item -Recurse -Force "$prefix/lib/cmake/levmar/*" "$dist/lib/cmake/levmar/"
               }
             }
           }
