@@ -3,8 +3,8 @@ description: |
   Downloads a libcvc-deps release archive matching the current
   platform / build config and extracts it to a known prefix. The
   extracted root contains a self-contained CMake prefix (Boost, HDF5,
-  FFTW, GSL, log4cplus, CGAL, ImageMagick, Qt 6, VTK 9.5, plus levmar
-  and pthreads4w on Windows) so workflow steps can skip slow
+  FFTW, GSL, log4cplus, libyaml, CGAL, ImageMagick, Qt 6, VTK 9.5,
+  plus levmar and pthreads4w on Windows) so workflow steps can skip slow
   from-source dependency builds whenever a matching bundle is
   available.
 

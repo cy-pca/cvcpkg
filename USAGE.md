@@ -111,6 +111,7 @@ the install-deps / build-VTK steps can be replaced with:
 find_package(libcvc-deps CONFIG REQUIRED)  # smoke check, optional
 find_package(Boost REQUIRED COMPONENTS thread filesystem system)
 find_package(HDF5 REQUIRED COMPONENTS C CXX)
+find_package(yaml CONFIG REQUIRED)
 find_package(VTK 9.5 REQUIRED COMPONENTS CommonCore RenderingQt …)
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
 find_package(cvc CONFIG REQUIRED)
