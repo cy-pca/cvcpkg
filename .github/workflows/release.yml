@@ -1680,6 +1680,24 @@ jobs:
           Remove-Item -Recurse -Force "VTK-${env:VTK_VERSION}"
           Remove-Item -Force vtk.tar.gz
 
+      # Upload VTK install tree as a run-scoped artifact so the
+      # windows assemble jobs can consume it without going through
+      # the actions/cache LRU bucket. The cache step above is kept as
+      # a fast-path that skips the Qt install + VTK build on hit; the
+      # artifact upload always runs so the assemble jobs always have
+      # a copy that is immune to mid-run cache eviction (the repo's
+      # 10 GB cache quota was being hit by the two ~3.5 GB
+      # vcpkg-deps-x64-windows-v3 caches plus brew bottles, evicting
+      # the smaller VTK Debug cache before the assemble job could
+      # read it — see commit log for run 26125864896).
+      - name: Upload VTK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vtk-${{ matrix.build_type }}
+          path: D:\vtk-qt6
+          retention-days: 1
+          if-no-files-found: error
+
   # ────────────────────── Windows: assemble ──────────────────────
   # Stage 3 of the Windows pipeline. Restores both prep caches, then
   # stages + zips + uploads the per-config artifact. This stage is
@@ -1805,12 +1823,11 @@ jobs:
             vcpkg-deps-x64-windows-v3-
           fail-on-cache-miss: true
 
-      - name: Restore VTK cache
-        uses: actions/cache/restore@v4
+      - name: Download VTK artifact
+        uses: actions/download-artifact@v4
         with:
+          name: vtk-${{ matrix.build_type }}
           path: D:\vtk-qt6
-          key: vtk-${{ env.VTK_VERSION }}-qt6-${{ runner.os }}-${{ matrix.build_type }}-v2
-          fail-on-cache-miss: true
 
       - name: Install Qt6
         uses: jurplel/install-qt-action@v4
