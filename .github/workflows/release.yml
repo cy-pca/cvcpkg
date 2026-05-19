@@ -52,6 +52,13 @@ permissions:
 #     the LabShare-Archive/IMOD upstream at a pinned SHA — see
 #     third-party/libiimod/CMakeLists.txt; linked against the
 #     bundled libtiff so TIFF reads/writes are enabled)
+#   - levmar 2.6 (Lourakis Levenberg-Marquardt nonlinear least-squares,
+#     LAPACK-enabled — see third-party/levmar/CMakeLists.txt)
+#   - LAPACK / BLAS (Linux: liblapack/libblas; macOS: brew lapack +
+#     Accelerate; Windows: vcpkg clapack + openblas)
+#   - pthreads4w on Windows (vcpkg `pthreads`) so the bundle exposes a
+#     standard `find_package(Threads)` / `Threads::Threads` target
+#     across all three platforms.
 #
 # CUDA toolkit is intentionally NOT bundled — consumers install it
 # directly via Jimver/cuda-toolkit on the build host.
@@ -178,6 +185,27 @@ jobs:
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON
           cmake --build libiimod-build --parallel --target install
           rm -rf libiimod-build
+
+      # ── levmar built from upstream tarball (Lourakis) ──
+      #    Pinned tarball + SHA256 in third-party/levmar/CMakeLists.txt;
+      #    builds full LAPACK-enabled library, exports levmar::levmar.
+      - name: Cache levmar install
+        id: levmar-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/levmar-prefix-${{ matrix.build_type }}
+          key: levmar-${{ hashFiles('third-party/levmar/**') }}-${{ runner.os }}-${{ matrix.build_type }}-v1
+
+      - name: Build levmar from source
+        if: steps.levmar-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          cmake -S third-party/levmar -B levmar-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_INSTALL_PREFIX=$HOME/levmar-prefix-${{ matrix.build_type }} \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+          cmake --build levmar-build --parallel --target install
+          rm -rf levmar-build
 
       # ── log4cplus built from source so we ship a .a in the
       #    static bundles. Ubuntu's liblog4cplus-dev is .so-only.
@@ -603,6 +631,21 @@ jobs:
             fi
           fi
 
+      # ── Stage levmar from the cached install ──
+      - name: Stage levmar
+        run: |
+          set -euo pipefail
+          DIST="$PWD/${{ steps.meta.outputs.stem }}"
+          PFX="$HOME/levmar-prefix-${{ matrix.build_type }}"
+          if [ -d "$PFX" ]; then
+            mkdir -p "$DIST/include/levmar" "$DIST/lib/cmake/levmar"
+            cp -R "$PFX/include/levmar/." "$DIST/include/levmar/"
+            cp -R "$PFX/lib/liblevmar.a"  "$DIST/lib/" 2>/dev/null || true
+            if [ -d "$PFX/lib/cmake/levmar" ]; then
+              cp -R "$PFX/lib/cmake/levmar/." "$DIST/lib/cmake/levmar/"
+            fi
+          fi
+
       # ── Pull in transitive NEEDED libraries via ldd ──
       #
       # The explicit allowlist above (libboost_*, libhdf5*, libQt6*, …)
@@ -827,6 +870,24 @@ jobs:
           cmake --build libiimod-build --parallel --target install
           rm -rf libiimod-build
 
+      - name: Cache levmar install
+        id: levmar-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/levmar-prefix-${{ matrix.build_type }}
+          key: levmar-${{ hashFiles('third-party/levmar/**') }}-${{ runner.os }}-${{ matrix.build_type }}-v1
+
+      - name: Build levmar from source
+        if: steps.levmar-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euxo pipefail
+          cmake -S third-party/levmar -B levmar-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_INSTALL_PREFIX="$HOME/levmar-prefix-${{ matrix.build_type }}" \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+          cmake --build levmar-build --parallel --target install
+          rm -rf levmar-build
+
       - name: Configure + install marker config
         run: |
           STEM="${{ steps.meta.outputs.stem }}"
@@ -930,6 +991,21 @@ jobs:
             cp -R "$PFX/lib/libiimod.a"     "$DIST/lib/" 2>/dev/null || true
             if [ -d "$PFX/lib/cmake/libiimod" ]; then
               cp -R "$PFX/lib/cmake/libiimod/." "$DIST/lib/cmake/libiimod/"
+            fi
+          fi
+
+      # ── Stage levmar from the cached install ──
+      - name: Stage levmar
+        run: |
+          set -euo pipefail
+          DIST="$PWD/${{ steps.meta.outputs.stem }}"
+          PFX="$HOME/levmar-prefix-${{ matrix.build_type }}"
+          if [ -d "$PFX" ]; then
+            mkdir -p "$DIST/include/levmar" "$DIST/lib/cmake/levmar"
+            cp -R "$PFX/include/levmar/." "$DIST/include/levmar/"
+            cp -R "$PFX/lib/liblevmar.a"  "$DIST/lib/" 2>/dev/null || true
+            if [ -d "$PFX/lib/cmake/levmar" ]; then
+              cp -R "$PFX/lib/cmake/levmar/." "$DIST/lib/cmake/levmar/"
             fi
           fi
 
@@ -1254,7 +1330,13 @@ jobs:
             #   openblas — BLAS backend for clapack
             # NFFT3 has no vcpkg port; it is staged directly from the
             # MSYS2 mingw64 build in the assemble step.
-            'eigen3','clapack','openblas'
+            'eigen3','clapack','openblas',
+            # pthreads4w (vcpkg port name `pthreads`). TexMol and
+            # F2Dock #include <pthread.h> in many modules; on
+            # Windows we ship pthreads4w so consumers can link via
+            # the standard CMake `find_package(Threads)` /
+            # `Threads::Threads` target.
+            'pthreads'
           )
           if ('${{ matrix.triplet }}' -eq 'x64-windows-static') {
             # mpfr (and therefore gmp + cgal) hangs in vcpkg under the
@@ -1526,6 +1608,52 @@ jobs:
                 | Copy-Item -Destination "$dist/lib/" -Force
               if (Test-Path "$prefix/lib/cmake/libiimod") {
                 Copy-Item -Recurse -Force "$prefix/lib/cmake/libiimod/*" "$dist/lib/cmake/libiimod/"
+              }
+            }
+          }
+
+      # ── levmar built from upstream tarball (Lourakis) ──
+      - name: Cache levmar install
+        id: levmar-cache
+        uses: actions/cache@v4
+        with:
+          path: D:\levmar-prefix-${{ matrix.build_type }}
+          key: levmar-${{ hashFiles('third-party/levmar/**') }}-${{ runner.os }}-${{ matrix.build_type }}-v1
+
+      - name: Build levmar from source
+        if: steps.levmar-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix  = "D:\levmar-prefix-${{ matrix.build_type }}"
+          $triplet = '${{ steps.meta.outputs.triplet }}'
+          # Route find_package(LAPACK) through the vcpkg-installed
+          # tree populated by the windows-vcpkg pre-job (clapack +
+          # openblas).
+          cmake -S third-party/levmar -B D:\levmar-build `
+            -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="C:/vcpkg/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET="$triplet" `
+            -DCMAKE_INSTALL_PREFIX="$prefix"
+          cmake --build D:\levmar-build --config ${{ matrix.build_type }} --target install
+          Remove-Item -Recurse -Force D:\levmar-build
+
+      - name: Stage levmar
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stem   = '${{ steps.meta.outputs.stem }}'
+          $dist   = Join-Path $env:GITHUB_WORKSPACE $stem
+          $prefix = "D:\levmar-prefix-${{ matrix.build_type }}"
+          if (Test-Path $prefix) {
+            New-Item -ItemType Directory -Force -Path "$dist/include/levmar","$dist/lib/cmake/levmar" | Out-Null
+            Copy-Item -Recurse -Force "$prefix/include/levmar/*" "$dist/include/levmar/"
+            $libDir = Join-Path $prefix 'lib'
+            if (Test-Path $libDir) {
+              Get-ChildItem -Path $libDir -Filter 'levmar.lib' -File -ErrorAction SilentlyContinue `
+                | Copy-Item -Destination "$dist/lib/" -Force
+              if (Test-Path "$prefix/lib/cmake/levmar") {
+                Copy-Item -Recurse -Force "$prefix/lib/cmake/levmar/*" "$dist/lib/cmake/levmar/"
               }
             }
           }
