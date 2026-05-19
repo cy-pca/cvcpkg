@@ -1,26 +1,41 @@
 # levmar — Levenberg-Marquardt nonlinear least-squares (M. Lourakis),
-# built from the official upstream tarball at
+# built from the upstream 2.6 tarball
 #   https://users.ics.forth.gr/~lourakis/levmar/levmar-2.6.tgz
-# (last released November 2011 — stable).
+# (last released November 2011 — stable; SHA256
+#  3bf4ef1ea4475ded5315e8d8fc992a725f2e7940a74ca3b0f9029d9e6e94bad7).
 #
-# Upstream ships a tiny CMakeLists.txt with no install rules and a
-# loose LAPACK wire-up. We replace it: compile the full source set,
-# discover LAPACK via the standard CMake module, ship a configured
-# `levmar.h` with HAVE_LAPACK defined, and install a CMake config so
-# consumers can do `find_package(levmar CONFIG REQUIRED)` and link
-# `levmar::levmar`.
+# The sources are VENDORED in ./upstream/ (rather than fetched at
+# configure time) because the host users.ics.forth.gr serves the
+# tarball over an HTTPS endpoint whose certificate chain regularly
+# fails to validate on GitHub-hosted runners, which breaks CI
+# unreliably. Vendoring is also how libcvc historically shipped
+# levmar-2.5.
 #
-# LAPACK is mandatory: libcvc-deps already bundles LAPACK + BLAS on
-# all three platforms (Linux: liblapack-dev/libblas-dev; macOS:
-# brew lapack / Apple Accelerate; Windows: vcpkg clapack + openblas),
-# so wiring LAPACK in costs nothing and lights up the full levmar
-# API surface — including the constrained variants (`*_bc_*`,
-# `*_lec_*`, `*_blec_*`, `*_bleic_*`) that the LAPACK-free fallback
-# build cannot offer.
+# What is vendored (under ./upstream/):
+#   lm.c lm_core.c lm.h
+#   Axb.c Axb_core.c
+#   misc.c misc_core.c misc.h
+#   lmlec.c lmlec_core.c
+#   lmbc.c lmbc_core.c
+#   lmblec.c lmblec_core.c
+#   lmbleic.c lmbleic_core.c
+#   compiler.h
+#   levmar.h.in       (configured by us with HAVE_LAPACK defined)
+#   LICENSE README.txt
 #
-# This matches the behaviour of TexMol's existing vendored
-# levmar-2.5, which also defines HAVE_LAPACK and links against
-# system LAPACK.
+# Only the 7 top-level .c files are compiled; the _core.c files are
+# included twice (once for double, once for single precision) from
+# their respective top-level wrapper. Demo/Matlab sources (lmdemo.c,
+# expfit.c, matlab/) are NOT shipped.
+#
+# LAPACK is mandatory. libcvc-deps already provides LAPACK on all
+# three platforms (Linux: liblapack-dev/libblas-dev; macOS: brew
+# lapack / Apple Accelerate; Windows: vcpkg clapack + openblas), so
+# wiring LAPACK in costs nothing and lights up the full levmar API
+# surface — including the constrained variants (`*_bc_*`, `*_lec_*`,
+# `*_blec_*`, `*_bleic_*`) that the LAPACK-free fallback build
+# cannot offer. This matches TexMol's existing vendored levmar-2.5
+# which also defines HAVE_LAPACK.
 #
 # Output:
 #   ${CMAKE_INSTALL_LIBDIR}/liblevmar.{a,lib}
@@ -35,37 +50,18 @@ project(levmar
   LANGUAGES C
 )
 
-include(FetchContent)
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 
 # LAPACK is mandatory; see header comment.
 find_package(LAPACK REQUIRED)
 
-# Pinned upstream tarball. SHA256 captured 2026-05-18 from
-# https://users.ics.forth.gr/~lourakis/levmar/levmar-2.6.tgz
-set(LEVMAR_UPSTREAM_URL
-  "https://users.ics.forth.gr/~lourakis/levmar/levmar-2.6.tgz")
-set(LEVMAR_UPSTREAM_SHA256
-  "3bf4ef1ea4475ded5315e8d8fc992a725f2e7940a74ca3b0f9029d9e6e94bad7")
-
-FetchContent_Declare(levmar_upstream
-  URL                        "${LEVMAR_UPSTREAM_URL}"
-  URL_HASH                   "SHA256=${LEVMAR_UPSTREAM_SHA256}"
-  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-)
-# Download + extract but do NOT add_subdirectory(): upstream's
-# CMakeLists.txt defines a `levmar` target of its own (with its own
-# LAPACK wire-up) which would conflict with ours.
-FetchContent_GetProperties(levmar_upstream)
-if(NOT levmar_upstream_POPULATED)
-  FetchContent_Populate(levmar_upstream)
-endif()
-
-set(LEVMAR_SRC "${levmar_upstream_SOURCE_DIR}")
+set(LEVMAR_SRC "${CMAKE_CURRENT_SOURCE_DIR}/upstream")
 
 # ── Source / header lists ────────────────────────────────────────
 # Full library source set (unconstrained + constrained variants).
+# Only the top-level .c files are passed to the compiler; each
+# #includes its _core.c sibling twice (LM_DBL_PREC / LM_SNGL_PREC).
 set(LEVMAR_SOURCES
   "${LEVMAR_SRC}/lm.c"
   "${LEVMAR_SRC}/Axb.c"
@@ -76,27 +72,41 @@ set(LEVMAR_SOURCES
   "${LEVMAR_SRC}/lmbleic.c"
 )
 
-set(LEVMAR_PRIVATE_HEADERS
+# Files that must also be present (transitive _core.c includes +
+# private headers) — listed for the existence sanity-check below.
+set(LEVMAR_AUX_FILES
+  "${LEVMAR_SRC}/lm_core.c"
+  "${LEVMAR_SRC}/Axb_core.c"
+  "${LEVMAR_SRC}/misc_core.c"
+  "${LEVMAR_SRC}/lmlec_core.c"
+  "${LEVMAR_SRC}/lmbc_core.c"
+  "${LEVMAR_SRC}/lmblec_core.c"
+  "${LEVMAR_SRC}/lmbleic_core.c"
   "${LEVMAR_SRC}/misc.h"
   "${LEVMAR_SRC}/compiler.h"
   "${LEVMAR_SRC}/lm.h"
+  "${LEVMAR_SRC}/levmar.h.in"
 )
 
-foreach(_f IN LISTS LEVMAR_SOURCES LEVMAR_PRIVATE_HEADERS)
+foreach(_f IN LISTS LEVMAR_SOURCES LEVMAR_AUX_FILES)
   if(NOT EXISTS "${_f}")
     message(FATAL_ERROR
-      "levmar: expected upstream file not found: ${_f}\n"
-      "Pinned tarball ${LEVMAR_UPSTREAM_URL} layout may have changed.")
+      "levmar: expected vendored file not found: ${_f}\n"
+      "third-party/levmar/upstream/ may be missing or incomplete.")
   endif()
 endforeach()
 
 # ── Configure levmar.h (HAVE_LAPACK enabled) ────────────────────
-# Upstream's levmar.h.in has a single `#cmakedefine HAVE_LAPACK`
-# token; setting HAVE_LAPACK=1 here makes configure_file emit
-# `#define HAVE_LAPACK` in the installed header. The tarball also
-# ships a pre-generated `levmar.h` next to `levmar.h.in`; our
-# configured copy shadows it via the include-dir ordering below.
+# Upstream's levmar.h.in has `#cmakedefine` tokens for HAVE_LAPACK,
+# HAVE_PLASMA, LINSOLVERS_RETAIN_MEMORY, LM_DBL_PREC and LM_SNGL_PREC.
+# We enable LAPACK and BOTH precisions (matching the unconditional
+# code paths in the .c files which compile both flavours).
+# The tarball also ships a pre-generated `levmar.h` next to
+# `levmar.h.in`, but we deliberately do NOT vendor that file —
+# our configured copy is the authoritative one.
 set(HAVE_LAPACK 1)
+set(LM_DBL_PREC 1)
+set(LM_SNGL_PREC 1)
 configure_file(
   "${LEVMAR_SRC}/levmar.h.in"
   "${CMAKE_CURRENT_BINARY_DIR}/include/levmar/levmar.h"
@@ -115,8 +125,7 @@ set_target_properties(levmar PROPERTIES
 
 # Upstream sources `#include "levmar.h"` and "misc.h" / "compiler.h"
 # unqualified, so the upstream source dir must be on the include
-# path for the build, and the configured levmar.h must shadow the
-# tarball-shipped one. Order matters: configured-include dir first.
+# path for the build, and the configured levmar.h must come first.
 target_include_directories(levmar
   PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}/include/levmar"
