@@ -45,6 +45,7 @@ permissions:
 #
 # Contents:
 #   - Boost, HDF5 (C+CXX), FFTW3, GSL, log4cplus, libtiff, libyaml,
+#     protobuf, gRPC,
 #     CGAL+GMP+MPFR, ImageMagick (Q16-HDRI)
 #   - Qt 6.7.x (Core, Gui, Widgets, OpenGL, OpenGLWidgets)
 #   - VTK 9.5.0 built against Qt 6 (no QtQuick modules)
@@ -158,6 +159,8 @@ jobs:
             build-essential cmake ninja-build patchelf pkg-config \
             libboost-all-dev libhdf5-dev libfftw3-dev libgsl-dev \
             libmagick++-dev libtiff-dev libyaml-dev \
+            libprotobuf-dev protobuf-compiler \
+            libgrpc++-dev protobuf-compiler-grpc \
             libcgal-dev libgmp-dev libmpfr-dev \
             qt6-base-dev qt6-base-dev-tools libqt6opengl6-dev \
             libgl1-mesa-dev libxt-dev mesa-common-dev libglew-dev \
@@ -342,6 +345,22 @@ jobs:
           copy_libs 'libgslcblas'
           copy_libs 'libtiff'
           copy_libs 'libyaml'
+          # gRPC / protobuf transport stack. Include the usual
+          # transitive C++ link dependencies too so static bundles
+          # have the archives downstream linkers need.
+          copy_libs 'libprotobuf'
+          copy_libs 'libprotoc'
+          copy_libs 'libgrpc'
+          copy_libs 'libgpr'
+          copy_libs 'libaddress_sorting'
+          copy_libs 'libabsl_'
+          copy_libs 'libupb'
+          copy_libs 'libutf8_range'
+          copy_libs 'libcares'
+          copy_libs 'libre2'
+          copy_libs 'libssl'
+          copy_libs 'libcrypto'
+          copy_libs 'libz'
           # log4cplus comes from our own source build (see earlier
           # 'Build log4cplus from source' step). Pick the artifact
           # flavor that matches this bundle: .a for static bundles,
@@ -429,6 +448,7 @@ jobs:
               # Everything else bundles cleanly under lib/cmake/.
               hdf5|HDF5|GSL|CGAL|ImageMagick|Magick*|\
               VTK|vtk*|GLEW|tiff|TIFF|yaml|YAML|\
+              protobuf|Protobuf|gRPC|grpc|absl|upb|utf8_range|c-ares|c-ares*|re2|RE2|OpenSSL|\
               eigen3|Eigen3*|lapack*|LAPACK*|blas*|BLAS*)
                 cp -R "$d" "$DIST/lib/cmake/"
                 ;;
@@ -460,8 +480,21 @@ jobs:
               /usr/include/magick \
               /usr/include/MagickCore \
               /usr/include/MagickWand \
+              /usr/include/google \
+              /usr/include/grpc \
+              /usr/include/grpc++ \
+              /usr/include/grpcpp \
+              /usr/include/absl \
+              /usr/include/upb \
+              /usr/include/utf8_range \
+              /usr/include/re2 \
+              /usr/include/openssl \
               /usr/include/GL ; do
             [ -d "$src" ] && cp -R "$src" "$DIST/include/"
+          done
+          for f in /usr/include/ares.h /usr/include/ares_*.h \
+                   /usr/include/zconf.h /usr/include/zlib.h ; do
+            [ -f "$f" ] && cp "$f" "$DIST/include/"
           done
           # Qt6 headers: Qt6<Module>Targets.cmake sets
           # INTERFACE_INCLUDE_DIRECTORIES to
@@ -659,6 +692,39 @@ jobs:
               '  set(PACKAGE_VERSION_COMPATIBLE TRUE)' \
               'endif()'
           } > "$DIST/lib/cmake/yaml/yamlConfigVersion.cmake"
+          # Protobuf/gRPC pkg-config files for consumers that use
+          # pkg_check_modules() instead of CMake package configs.
+          for pc in /usr/lib/x86_64-linux-gnu/pkgconfig/protobuf*.pc \
+                    /usr/lib/x86_64-linux-gnu/pkgconfig/grpc*.pc \
+                    /usr/lib/x86_64-linux-gnu/pkgconfig/absl*.pc \
+                    /usr/lib/x86_64-linux-gnu/pkgconfig/upb*.pc \
+                    /usr/lib/x86_64-linux-gnu/pkgconfig/utf8_range*.pc \
+                    /usr/lib/x86_64-linux-gnu/pkgconfig/re2.pc \
+                    /usr/lib/x86_64-linux-gnu/pkgconfig/libcares.pc \
+                    /usr/lib/x86_64-linux-gnu/pkgconfig/openssl.pc \
+                    /usr/lib/x86_64-linux-gnu/pkgconfig/zlib.pc \
+                    /usr/lib/pkgconfig/protobuf*.pc \
+                    /usr/lib/pkgconfig/grpc*.pc \
+                    /usr/lib/pkgconfig/absl*.pc \
+                    /usr/lib/pkgconfig/upb*.pc \
+                    /usr/lib/pkgconfig/utf8_range*.pc \
+                    /usr/lib/pkgconfig/re2.pc \
+                    /usr/lib/pkgconfig/libcares.pc \
+                    /usr/lib/pkgconfig/openssl.pc \
+                    /usr/lib/pkgconfig/zlib.pc ; do
+            [ -f "$pc" ] || continue
+            sed -e 's|^prefix=.*|prefix=${pcfiledir}/../..|' \
+                -e 's|^exec_prefix=.*|exec_prefix=${prefix}|' \
+                -e 's|^libdir=.*|libdir=${prefix}/lib|' \
+                -e 's|^includedir=.*|includedir=${prefix}/include|' \
+                "$pc" > "$DIST/lib/pkgconfig/$(basename "$pc")"
+          done
+          # Code-generation tools used by downstream builds.
+          for tool in protoc grpc_cpp_plugin grpc_python_plugin grpc_node_plugin; do
+            if command -v "$tool" >/dev/null 2>&1; then
+              cp "$(command -v "$tool")" "$DIST/bin/"
+            fi
+          done
           # Top-level header files (fftw3.h, gmp.h, mpfr.h, tiff.h, …)
           for f in /usr/include/fftw3.h /usr/include/fftw3.f \
                    /usr/include/fftw3l.h /usr/include/fftw3q.h \
@@ -956,6 +1022,7 @@ jobs:
           # the Linux package and our Windows MSYS2 build use.
           brew install cmake ninja \
             boost hdf5 fftw gsl imagemagick log4cplus libtiff libyaml \
+            protobuf grpc abseil c-ares openssl@3 re2 \
             cgal gmp mpfr \
             qt@6 vtk \
             eigen lapack \
@@ -1029,6 +1096,7 @@ jobs:
           # bin) into the staged tree.
           for pkg in boost hdf5 fftw gsl log4cplus imagemagick \
                      cgal gmp mpfr qt@6 vtk libtiff libyaml \
+                     protobuf grpc abseil c-ares openssl@3 re2 \
                      eigen lapack ; do
             P=$(brew --prefix "$pkg" 2>/dev/null || true)
             [ -n "$P" ] || continue
@@ -1500,6 +1568,7 @@ jobs:
             'boost-multi-array','boost-optional','boost-smart-ptr','boost-tuple',
             'boost-utility',
             'hdf5[cpp]','fftw3','gsl','imagemagick','log4cplus','tiff','libyaml',
+            'protobuf[libprotoc]','grpc[codegen]',
             'cgal','glew',
             # F2Dock / F3Dock science stack.
             #   eigen3   — header-only linear algebra
@@ -1871,6 +1940,15 @@ jobs:
           }
           if (Test-Path "$vcRoot/share") {
             Copy-Item -Recurse -Force "$vcRoot/share/*" "$dist/share/"
+          }
+          if (Test-Path "$vcRoot/tools") {
+            New-Item -ItemType Directory -Force -Path "$dist/tools" | Out-Null
+            Copy-Item -Recurse -Force "$vcRoot/tools/*" "$dist/tools/"
+            foreach ($tool in @('protoc.exe','grpc_cpp_plugin.exe','grpc_csharp_plugin.exe','grpc_node_plugin.exe','grpc_python_plugin.exe')) {
+              Get-ChildItem -Path "$vcRoot/tools" -Recurse -Filter $tool -File -ErrorAction SilentlyContinue |
+                Select-Object -First 1 |
+                ForEach-Object { Copy-Item -Path $_.FullName -Destination "$dist/bin/" -Force }
+            }
           }
           if (Test-Path $libSrc) {
             $patterns = if ($isDebug) { @('*.lib','*.pdb') } else { @('*.lib') }
