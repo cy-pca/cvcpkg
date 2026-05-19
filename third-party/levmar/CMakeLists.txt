@@ -54,7 +54,43 @@ include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 
 # LAPACK is mandatory; see header comment.
-find_package(LAPACK REQUIRED)
+#
+# On Windows we prefer vcpkg's `clapack` port directly via its
+# CONFIG package, because:
+#   * vcpkg's openblas on MSVC ships only BLAS (LAPACK requires
+#     Fortran, which isn't available in the MSVC build), so the
+#     stock FindLAPACK module fails to locate `cheev_`.
+#   * vcpkg's `clapack` port DOES install a vcpkg-cmake-wrapper
+#     redirecting find_package(LAPACK), but that wrapper was only
+#     added in mid-2026 and runners with an older bundled vcpkg
+#     baseline don't have it — so we cannot rely on
+#     find_package(LAPACK) routing through clapack automatically.
+#
+# clapack's CONFIG package exports targets `lapack` (the LAPACK
+# library, f2c'd) and `f2c` (the libf2c runtime); it also pulls in
+# its BLAS backend (vcpkg's openblas) internally. We synthesise
+# the `LAPACK::LAPACK` INTERFACE target ourselves so the link
+# command below is platform-uniform.
+set(_levmar_have_lapack FALSE)
+if(WIN32)
+  find_package(clapack CONFIG QUIET)
+  if(clapack_FOUND AND TARGET lapack)
+    if(NOT TARGET LAPACK::LAPACK)
+      add_library(LAPACK::LAPACK INTERFACE IMPORTED)
+      set(_levmar_lapack_link lapack)
+      if(TARGET f2c)
+        list(APPEND _levmar_lapack_link f2c)
+      endif()
+      set_property(TARGET LAPACK::LAPACK PROPERTY
+        INTERFACE_LINK_LIBRARIES "${_levmar_lapack_link}")
+    endif()
+    set(_levmar_have_lapack TRUE)
+    message(STATUS "levmar: using vcpkg clapack CONFIG for LAPACK")
+  endif()
+endif()
+if(NOT _levmar_have_lapack)
+  find_package(LAPACK REQUIRED)
+endif()
 
 set(LEVMAR_SRC "${CMAKE_CURRENT_SOURCE_DIR}/upstream")
 
