@@ -1568,7 +1568,7 @@ jobs:
             'boost-multi-array','boost-optional','boost-smart-ptr','boost-tuple',
             'boost-utility',
             'hdf5[cpp]','fftw3','gsl','imagemagick','log4cplus','tiff','libyaml',
-            'protobuf[libprotoc]','grpc[codegen]',
+            'protobuf[libprotoc]','grpc',
             'cgal','glew',
             # F2Dock / F3Dock science stack.
             #   eigen3   — header-only linear algebra
