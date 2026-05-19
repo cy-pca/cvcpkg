@@ -1470,10 +1470,14 @@ jobs:
   # x64-windows-static triplet (see docs/known-issues.md, "Windows
   # static builds: mpfr hang in vcpkg"), so the static install set
   # excludes mpfr and anything that transitively depends on it
-  # (gmp, cgal). Those three are filled in from the x64-windows
-  # (shared) cache during assembly — the static Windows bundle is
-  # therefore a hybrid: static .lib for everything that builds, and
-  # shared .dll + import .lib for cgal/gmp/mpfr.
+  # (gmp, cgal). The gRPC / Protobuf stack exhibits the same hang
+  # pattern (see docs/known-issues.md, "Windows static builds: grpc
+  # hang in vcpkg") and is also excluded. All of these ports are
+  # filled in from the x64-windows (shared) cache during assembly
+  # — the static Windows bundle is therefore a hybrid: static .lib
+  # for everything that builds, and shared .dll + import .lib for
+  # cgal/gmp/mpfr plus the gRPC / Protobuf stack and its transitive
+  # support libraries.
   windows-vcpkg:
     runs-on: windows-latest
     timeout-minutes: 350
@@ -1586,10 +1590,18 @@ jobs:
           )
           if ('${{ matrix.triplet }}' -eq 'x64-windows-static') {
             # mpfr (and therefore gmp + cgal) hangs in vcpkg under the
-            # x64-windows-static triplet on hosted runners. Skip them
-            # here; the assemble stage stitches the shared-triplet
-            # builds of these three into the static bundle.
-            $packages = $packages | Where-Object { $_ -notin @('cgal') }
+            # x64-windows-static triplet on hosted runners. Same
+            # symptom for the gRPC / Protobuf stack (the abseil +
+            # c-ares + grpc build chain stalls for hours in vcpkg
+            # on x64-windows-static under hosted runners — see
+            # docs/known-issues.md, "Windows static builds: grpc
+            # hang in vcpkg"). Skip all of them here; the assemble
+            # stage stitches the shared-triplet builds of these
+            # ports into the static bundle as DLL + import-lib
+            # fallbacks.
+            $packages = $packages | Where-Object {
+              $_ -notin @('cgal','protobuf[libprotoc]','grpc')
+            }
           }
           for ($i = 1; $i -le 5; $i++) {
             Write-Host "vcpkg install attempt $i / 5"
@@ -1678,8 +1690,13 @@ jobs:
   # x64-windows-static triplet, plus shared .dll + import .lib for
   # cgal/gmp/mpfr (which can't be built static on hosted runners
   # because vcpkg's mpfr port hangs there \u2014 see docs/known-issues.md,
-  # "Windows static builds: mpfr hang in vcpkg"). VTK and Qt6 remain
-  # shared in both link flavors (no static brew/aqtinstall flavor).
+  # "Windows static builds: mpfr hang in vcpkg") and for the gRPC /
+  # Protobuf stack with its transitive support libraries (abseil,
+  # c-ares, OpenSSL, re2, upb, utf8_range, zlib), which exhibit the
+  # same hang pattern on x64-windows-static \u2014 see
+  # docs/known-issues.md, "Windows static builds: grpc hang in
+  # vcpkg". VTK and Qt6 remain shared in both link flavors (no
+  # static brew/aqtinstall flavor).
   windows:
     needs: [windows-vcpkg, windows-vtk]
     runs-on: windows-latest
@@ -1694,7 +1711,9 @@ jobs:
             link: shared
           # Hybrid static bundles: x64-windows-static for everything
           # that builds, plus shared cgal/gmp/mpfr fallback (the mpfr
-          # vcpkg port hangs on the static triplet, see windows-vcpkg).
+          # vcpkg port hangs on the static triplet, see windows-vcpkg)
+          # and shared grpc / protobuf + transitive support libs
+          # (same hang, see windows-vcpkg).
           - build_type: Debug
             link: static
           - build_type: Release
@@ -1768,11 +1787,12 @@ jobs:
           fail-on-cache-miss: true
 
       # For the hybrid static bundle, also restore the x64-windows
-      # (shared) cache so that cgal/gmp/mpfr (which can't be built
-      # for x64-windows-static on hosted runners) are available as
-      # DLL + import-lib fallbacks. The two caches populate disjoint
-      # subdirectories of C:\vcpkg\installed (per-triplet trees), so
-      # they coexist without conflict.
+      # (shared) cache so that cgal/gmp/mpfr and the gRPC / Protobuf
+      # stack (none of which can be built for x64-windows-static on
+      # hosted runners) are available as DLL + import-lib fallbacks.
+      # The two caches populate disjoint subdirectories of
+      # C:\vcpkg\installed (per-triplet trees), so they coexist
+      # without conflict.
       - name: Restore vcpkg shared cache (static-bundle fallback)
         if: matrix.link == 'static'
         uses: actions/cache/restore@v4
@@ -1950,6 +1970,30 @@ jobs:
                 ForEach-Object { Copy-Item -Path $_.FullName -Destination "$dist/bin/" -Force }
             }
           }
+          # On the static (hybrid) bundle, grpc / protobuf are not
+          # built in the x64-windows-static tree (see windows-vcpkg).
+          # Pull their tools (protoc.exe, grpc_*_plugin.exe and the
+          # tools/protobuf, tools/grpc subtrees that vcpkg generates)
+          # from the x64-windows (shared) tree which is restored
+          # alongside the static cache. Safe to overwrite/merge
+          # because tool layouts are config-agnostic.
+          if ('${{ matrix.link }}' -eq 'static') {
+            $shRootTools = Join-Path $env:VCPKG_INSTALLATION_ROOT 'installed/x64-windows/tools'
+            if (Test-Path $shRootTools) {
+              New-Item -ItemType Directory -Force -Path "$dist/tools" | Out-Null
+              foreach ($sub in @('protobuf','grpc')) {
+                $src = Join-Path $shRootTools $sub
+                if (Test-Path $src) {
+                  Copy-Item -Recurse -Force $src "$dist/tools/"
+                }
+              }
+              foreach ($tool in @('protoc.exe','grpc_cpp_plugin.exe','grpc_csharp_plugin.exe','grpc_node_plugin.exe','grpc_python_plugin.exe')) {
+                Get-ChildItem -Path $shRootTools -Recurse -Filter $tool -File -ErrorAction SilentlyContinue |
+                  Select-Object -First 1 |
+                  ForEach-Object { Copy-Item -Path $_.FullName -Destination "$dist/bin/" -Force }
+              }
+            }
+          }
           if (Test-Path $libSrc) {
             $patterns = if ($isDebug) { @('*.lib','*.pdb') } else { @('*.lib') }
             foreach ($p in $patterns) {
@@ -2034,9 +2078,13 @@ jobs:
             }
           }
 
-          # ── Hybrid-static fallback: mix in shared cgal/gmp/mpfr ──
+          # ── Hybrid-static fallback: mix in shared cgal/gmp/mpfr +
+          #    gRPC / Protobuf stack ──
           # The x64-windows-static install set omits cgal/gmp/mpfr
-          # because the static mpfr port hangs on hosted runners.
+          # because the static mpfr port hangs on hosted runners,
+          # and omits the gRPC / Protobuf stack for the same reason
+          # (the abseil + c-ares + grpc chain hangs on the static
+          # triplet — see docs/known-issues.md).
           # Pull import lib + DLL (and matching share/cmake configs)
           # for these ports from the x64-windows (shared) installed
           # tree, which was restored alongside the static cache.
@@ -2054,8 +2102,26 @@ jobs:
             # File-name prefixes that identify fallback ports and their
             # transitive runtime dependencies (CGAL itself is mostly
             # header-only but vcpkg ships a CGAL.dll for the small
-            # number of compiled symbols).
-            $fbPrefixes = @('cgal*','CGAL*','gmp*','mpfr*','mpir*')
+            # number of compiled symbols). The gRPC / Protobuf stack
+            # is also pulled from the shared tree here because it,
+            # like mpfr, cannot be built under x64-windows-static on
+            # hosted runners (see docs/known-issues.md). All of
+            # gRPC's transitive deps (abseil, c-ares, OpenSSL, re2,
+            # upb, utf8_range, zlib, address_sorting, gpr) are
+            # included so the DLL + import-lib fallback is
+            # self-consistent.
+            $fbPrefixes = @(
+              'cgal*','CGAL*','gmp*','mpfr*','mpir*',
+              'protobuf*','libprotobuf*','libprotoc*','google*',
+              'grpc*','libgrpc*','gpr*','libgpr*','address_sorting*',
+              'abseil*','absl*','absl_*',
+              'c-ares*','cares*','libcares*','ares*',
+              'libssl*','libcrypto*','openssl*',
+              're2*','RE2*',
+              'upb*','libupb*',
+              'utf8_range*','libutf8_range*',
+              'zlib*','zlib1*'
+            )
             # Same dual-config staging strategy as the primary vcpkg
             # copy above: ship both release- and debug-side .lib/.dll
             # so the vcpkg-generated cmake target files for cgal/gmp/

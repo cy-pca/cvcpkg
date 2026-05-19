@@ -130,3 +130,52 @@ If you need a static-link Windows bundle right now:
 Or, with our own self-hosted Windows runner (planned), the
 `x64-windows-static` matrix entries can be restored with
 `runs-on: [self-hosted, windows]` overriding the hosted runner.
+
+## Windows static builds: grpc hang in vcpkg
+
+### Symptom
+
+When running vcpkg's `grpc` port (or any of its transitive
+dependencies — `abseil`, `c-ares`, `protobuf`) against the
+`x64-windows-static` triplet on hosted GitHub Actions
+`windows-latest` runners, the build stalls indefinitely during the
+`Install vcpkg dependencies` step. We have observed >1.5 h with
+the job still in dependency install and no further progress, while
+the same packages against the `x64-windows` (shared) triplet
+finish in under 20 minutes.
+
+This is the same class of failure as the `mpfr` hang documented
+above: a vcpkg port build under `x64-windows-static` that completes
+quickly under `x64-windows`.
+
+### Mitigation in this repo
+
+The `windows-vcpkg` job skips `protobuf[libprotoc]` and `grpc`
+from the `x64-windows-static` install set. The `windows` assemble
+job then restores the `x64-windows` (shared) cache alongside the
+static one and stitches the gRPC / Protobuf stack into the static
+bundle as shared `.dll` + import `.lib` + headers + cmake configs,
+using the same hybrid-static fallback mechanism already in place
+for cgal/gmp/mpfr.
+
+The transitive support libraries shipped from the shared tree in
+the static bundle are: `abseil`, `c-ares`, `OpenSSL`, `re2`,
+`upb`, `utf8_range`, `zlib`. Codegen tools (`protoc.exe`,
+`grpc_*_plugin.exe`) and the `tools/protobuf` and `tools/grpc`
+subtrees are likewise copied from the shared tree.
+
+The result: the Windows static bundle exposes the same
+`find_package(Protobuf)` / `find_package(gRPC)` surface as the
+shared bundle, just with those packages resolving to `.dll`
+runtime artifacts inside an otherwise-`.lib` install prefix.
+
+### Re-enabling once fixed
+
+When upstream vcpkg or the affected ports resolve this on the
+static triplet, restore `'protobuf[libprotoc]','grpc'` to the
+static install package set in `.github/workflows/release.yml`
+(`windows-vcpkg` job, inside the
+`if ('${{ matrix.triplet }}' -eq 'x64-windows-static')` block)
+and drop the matching entries from the assemble job's
+`$fbPrefixes` fallback array.
+
