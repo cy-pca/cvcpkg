@@ -516,12 +516,24 @@ jobs:
           # find_package(HDF5) resolves inside the bundle.
           if [ -d /usr/lib/x86_64-linux-gnu/hdf5/serial ]; then
             mkdir -p "$DIST/lib/hdf5/serial"
-            # cp -RL follows the include/lib relative symlinks in the
-            # source dir so the bundle ends up with concrete copies of
-            # headers and libs at the multiarch-mirror path; consumers
-            # don't need the apt package on the host.
-            cp -RL /usr/lib/x86_64-linux-gnu/hdf5/serial/. "$DIST/lib/hdf5/serial/" 2>/dev/null || \
-              cp -R  /usr/lib/x86_64-linux-gnu/hdf5/serial/. "$DIST/lib/hdf5/serial/"
+            # The Ubuntu hdf5-serial directory contains two recursive
+            # symlinks that break `cp -RL` (which dereferences):
+            #   lib     -> .                              (self-loop)
+            #   include -> ../../../../include/hdf5/serial
+            # We must NOT follow those, so iterate the entries and
+            # skip them explicitly. Everything else is a flat symlink
+            # to ../../libhdf5_serial*.{a,so,settings} — `cp -L`
+            # resolves to the concrete shared object/archive so the
+            # bundle ends up with real files at the multiarch-mirror
+            # path; consumers don't need libhdf5-dev on the host.
+            for entry in /usr/lib/x86_64-linux-gnu/hdf5/serial/*; do
+              base=$(basename "$entry")
+              case "$base" in
+                include|lib) continue ;;
+              esac
+              cp -L "$entry" "$DIST/lib/hdf5/serial/" 2>/dev/null || \
+                cp    "$entry" "$DIST/lib/hdf5/serial/"
+            done
             # Also drop versionless `libhdf5.so` -> libhdf5_serial.so
             # convenience symlinks into $DIST/lib so a plain
             # find_library(HDF5_LIBRARY NAMES hdf5) finds them without
