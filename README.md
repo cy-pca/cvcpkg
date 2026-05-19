@@ -24,6 +24,7 @@ Every archive contains, in one tree:
 - log4cplus
 - libtiff (provides TIFF read/write for `libiimod::iimod`)
 - libyaml 0.2.x C parser/emitter for YAML configuration files
+- Protocol Buffers + gRPC C++ runtime and code-generation tools
 - CGAL + GMP + MPFR
 - ImageMagick (Q16-HDRI; Windows uses the [overlay port](vcpkg-overlay/ports/imagemagick))
 
@@ -210,6 +211,8 @@ find_package(levmar CONFIG REQUIRED)
 find_package(log4cplus CONFIG REQUIRED)
 find_package(libiimod CONFIG REQUIRED)
 find_package(yaml CONFIG REQUIRED)
+find_package(Protobuf CONFIG REQUIRED)
+find_package(gRPC CONFIG REQUIRED)
 find_package(vcglib CONFIG REQUIRED)
 
 add_executable(my-science-app src/main.cpp)
@@ -228,6 +231,8 @@ target_link_libraries(my-science-app PRIVATE
   log4cplus::log4cplus
   libiimod::iimod
   yaml
+  protobuf::libprotobuf
+  gRPC::grpc++
   vcglib::vcglib)
 ```
 
@@ -359,6 +364,11 @@ manifest, with these additions and notable packaging fixes:
 - **libyaml 0.2.5 added on all platforms.** Downstream projects can use
   `find_package(yaml CONFIG REQUIRED)` and link the `yaml` target for
   YAML configuration parsing/emitting.
+- **Protocol Buffers + gRPC added on all platforms.** Downstream
+  transport layers can use `find_package(Protobuf CONFIG REQUIRED)` and
+  `find_package(gRPC CONFIG REQUIRED)`, then link
+  `protobuf::libprotobuf` and `gRPC::grpc++`. Code-generation tools
+  such as `protoc` and `grpc_cpp_plugin` are staged in `bin/`.
 - **Linux: HDF5 / libtiff development layout completed.** The bundle
   now provides conventional versioned HDF5 aliases such as
   `libhdf5.so.<abi>` in addition to Ubuntu's `libhdf5_serial.so.<abi>`
@@ -372,6 +382,8 @@ New / changed pins in v1.1.0:
 |---|---|---|---|
 | levmar | 2.6 (vendored source) | 2.6 (vendored source) | 2.6 (vendored source) |
 | libyaml | 0.2.5 (`libyaml-dev`) | 0.2.5 (Homebrew `libyaml`) | 0.2.5 (vcpkg `libyaml`) |
+| Protobuf | 3.21.12 (`libprotobuf-dev`) | 34.1 (Homebrew `protobuf`) | 6.33.4 (vcpkg `protobuf`) |
+| gRPC | 1.51.1 (`libgrpc++-dev`) | 1.80.0 (Homebrew `grpc`) | 1.76.0 (vcpkg `grpc`) |
 | pthreads4w | n/a | n/a | vcpkg `pthreads` |
 
 Pin-source notes for v1.1.0:
@@ -392,6 +404,13 @@ Pin-source notes for v1.1.0:
   so libcvc-deps generates a small compatible `yamlConfig.cmake` that
   exposes both `yaml` and `yaml::yaml` targets. macOS and Windows use
   the package metadata provided by Homebrew / vcpkg.
+- Protobuf and gRPC are intentionally consumed from each platform's
+  package manager. Their CMake package names and target names are the
+  upstream ones (`Protobuf`, `gRPC`, `protobuf::libprotobuf`,
+  `gRPC::grpc++`), while platform-specific transitive dependencies
+  such as Abseil, c-ares, OpenSSL, RE2, utf8-range, and zlib are staged
+  alongside them so downstream projects can configure without installing
+  those development packages separately.
 
 ### v1.0.2 (2026-05-14)
 
