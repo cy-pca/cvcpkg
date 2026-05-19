@@ -320,6 +320,23 @@ jobs:
           # libcvc deps
           copy_libs 'libboost_'
           copy_libs 'libhdf5'
+          # Debian/Ubuntu installs HDF5 shared libraries with `_serial`
+          # in the actual SONAME names (libhdf5_serial.so.103, ...).
+          # Some downstream science packages look for the conventional
+          # upstream names directly, including the versioned SONAME
+          # aliases (libhdf5.so.103, libhdf5_cpp.so.103, ...). Provide
+          # those aliases at the bundle's top-level lib dir so the
+          # archive works as a general-purpose prefix, not only through
+          # CMake's FindHDF5 module.
+          if [ "${{ matrix.link }}" != "static" ]; then
+            for lib in "$DIST"/lib/libhdf5*_serial.so*; do
+              [ -e "$lib" ] || continue
+              base=$(basename "$lib")
+              alias=${base/_serial/}
+              [ "$alias" != "$base" ] || continue
+              [ -e "$DIST/lib/$alias" ] || ln -sf "$base" "$DIST/lib/$alias"
+            done
+          fi
           copy_libs 'libfftw3'
           copy_libs 'libgsl'
           copy_libs 'libgslcblas'
@@ -517,21 +534,20 @@ jobs:
           if [ -d /usr/lib/x86_64-linux-gnu/hdf5/serial ]; then
             mkdir -p "$DIST/lib/hdf5/serial"
             # The Ubuntu hdf5-serial directory contains two recursive
-            # symlinks that break `cp -RL` (which dereferences):
+            # symlinks that break recursive copies:
             #   lib     -> .                              (self-loop)
             #   include -> ../../../../include/hdf5/serial
             # We must NOT follow those, so iterate the entries and
             # skip them explicitly. Everything else is a flat symlink
-            # to ../../libhdf5_serial*.{a,so,settings} — `cp -L`
-            # resolves to the concrete shared object/archive so the
-            # bundle ends up with real files at the multiarch-mirror
-            # path; consumers don't need libhdf5-dev on the host.
+            # to ../../libhdf5_serial*.{a,so,settings}; preserve those
+            # symlinks so FindHDF5 sees the same layout it expects from
+            # the Debian package while the real files live at $DIST/lib.
             for entry in /usr/lib/x86_64-linux-gnu/hdf5/serial/*; do
               base=$(basename "$entry")
               case "$base" in
                 include|lib) continue ;;
               esac
-              cp -L "$entry" "$DIST/lib/hdf5/serial/" 2>/dev/null || \
+              cp -P "$entry" "$DIST/lib/hdf5/serial/" 2>/dev/null || \
                 cp    "$entry" "$DIST/lib/hdf5/serial/"
             done
             # Also drop versionless `libhdf5.so` -> libhdf5_serial.so
@@ -558,6 +574,25 @@ jobs:
                 -e 's|^exec_prefix=.*|exec_prefix=${prefix}|' \
                 -e 's|^libdir=.*|libdir=${prefix}/lib|' \
                 -e 's|^includedir=.*|includedir=${prefix}/include/hdf5|' \
+                "$pc" > "$DIST/lib/pkgconfig/$(basename "$pc")"
+          done
+          # libtiff development surface. libiimod only needs a couple
+          # of TIFF headers, but downstream consumers such as MolSurf
+          # can include any of the public libtiff headers and may use
+          # pkg-config. Ubuntu splits tiffconf.h into the multiarch
+          # include directory, so collect both locations.
+          for f in /usr/include/tiff*.h /usr/include/tiff*.hxx \
+                   /usr/include/x86_64-linux-gnu/tiff*.h \
+                   /usr/include/x86_64-linux-gnu/tiff*.hxx ; do
+            [ -f "$f" ] && cp "$f" "$DIST/include/"
+          done
+          for pc in /usr/lib/x86_64-linux-gnu/pkgconfig/libtiff*.pc \
+                    /usr/lib/pkgconfig/libtiff*.pc ; do
+            [ -f "$pc" ] || continue
+            sed -e 's|^prefix=.*|prefix=${pcfiledir}/../..|' \
+                -e 's|^exec_prefix=.*|exec_prefix=${prefix}|' \
+                -e 's|^libdir=.*|libdir=${prefix}/lib|' \
+                -e 's|^includedir=.*|includedir=${prefix}/include|' \
                 "$pc" > "$DIST/lib/pkgconfig/$(basename "$pc")"
           done
           # Top-level header files (fftw3.h, gmp.h, mpfr.h, tiff.h, …)

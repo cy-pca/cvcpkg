@@ -353,6 +353,12 @@ manifest, with these additions and notable packaging fixes:
 - **Linux: HDF5 staging hardened.** The stage step now skips recursive
   self-referential symlinks in Ubuntu's HDF5 serial layout while still
   copying the real libraries and package metadata.
+- **Linux: HDF5 / libtiff development layout completed.** The bundle
+  now provides conventional versioned HDF5 aliases such as
+  `libhdf5.so.<abi>` in addition to Ubuntu's `libhdf5_serial.so.<abi>`
+  names, and stages the full public libtiff header surface plus
+  relocated `libtiff*.pc` metadata for downstream projects that include
+  libtiff directly.
 
 New / changed pins in v1.1.0:
 
