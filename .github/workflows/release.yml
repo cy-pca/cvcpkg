@@ -2553,8 +2553,17 @@ jobs:
         run: |
           $stem = '${{ steps.meta.outputs.stem }}'
           $dist = Join-Path $env:GITHUB_WORKSPACE $stem
-          Compress-Archive -Path "$dist/*" -DestinationPath (Join-Path $env:GITHUB_WORKSPACE "$stem.zip") -Force
-          Get-ChildItem "$env:GITHUB_WORKSPACE/$stem.zip" | Format-List Name,Length
+          $zipPath = Join-Path $env:GITHUB_WORKSPACE "$stem.zip"
+          # Compress-Archive uses a .NET MemoryStream and fails on
+          # archives >2 GB with "Stream was too long." The Windows
+          # bundle exceeds 2 GB once VTK + Qt + vcpkg trees are
+          # stitched in, so use 7z (preinstalled on hosted Windows
+          # runners) which has no such limit. -mx=5 is the default
+          # compression level; -mmt=on enables multithreaded compress.
+          if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
+          & 7z a -tzip -mx=5 -mmt=on "$zipPath" "$dist\*"
+          if ($LASTEXITCODE -ne 0) { throw "7z failed ($LASTEXITCODE)" }
+          Get-ChildItem $zipPath | Format-List Name,Length
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
