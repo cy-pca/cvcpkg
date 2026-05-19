@@ -368,7 +368,14 @@ manifest, with these additions and notable packaging fixes:
   transport layers can use `find_package(Protobuf CONFIG REQUIRED)` and
   `find_package(gRPC CONFIG REQUIRED)`, then link
   `protobuf::libprotobuf` and `gRPC::grpc++`. Code-generation tools
-  such as `protoc` and `grpc_cpp_plugin` are staged in `bin/`.
+  such as `protoc` and `grpc_cpp_plugin` are staged in `bin/`. On the
+  Windows `*-static` bundle the Protobuf + gRPC stack (plus its
+  transitive support libraries — Abseil, c-ares, OpenSSL, RE2, upb,
+  utf8_range, zlib) is shipped as a shared `.dll` + import `.lib`
+  fallback, mirroring how CGAL/GMP/MPFR are handled on the same
+  bundle; the public CMake target surface is identical to the shared
+  bundle (see `docs/known-issues.md`, "Windows static builds: grpc
+  hang in vcpkg").
 - **Linux: HDF5 / libtiff development layout completed.** The bundle
   now provides conventional versioned HDF5 aliases such as
   `libhdf5.so.<abi>` in addition to Ubuntu's `libhdf5_serial.so.<abi>`
