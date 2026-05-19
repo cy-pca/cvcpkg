@@ -23,6 +23,7 @@ Every archive contains, in one tree:
 - GSL + GSL CBLAS
 - log4cplus
 - libtiff (provides TIFF read/write for `libiimod::iimod`)
+- libyaml 0.2.x C parser/emitter for YAML configuration files
 - CGAL + GMP + MPFR
 - ImageMagick (Q16-HDRI; Windows uses the [overlay port](vcpkg-overlay/ports/imagemagick))
 
@@ -208,6 +209,7 @@ find_package(Eigen3 CONFIG REQUIRED)
 find_package(levmar CONFIG REQUIRED)
 find_package(log4cplus CONFIG REQUIRED)
 find_package(libiimod CONFIG REQUIRED)
+find_package(yaml CONFIG REQUIRED)
 find_package(vcglib CONFIG REQUIRED)
 
 add_executable(my-science-app src/main.cpp)
@@ -225,6 +227,7 @@ target_link_libraries(my-science-app PRIVATE
   levmar::levmar
   log4cplus::log4cplus
   libiimod::iimod
+  yaml
   vcglib::vcglib)
 ```
 
@@ -353,6 +356,9 @@ manifest, with these additions and notable packaging fixes:
 - **Linux: HDF5 staging hardened.** The stage step now skips recursive
   self-referential symlinks in Ubuntu's HDF5 serial layout while still
   copying the real libraries and package metadata.
+- **libyaml 0.2.5 added on all platforms.** Downstream projects can use
+  `find_package(yaml CONFIG REQUIRED)` and link the `yaml` target for
+  YAML configuration parsing/emitting.
 - **Linux: HDF5 / libtiff development layout completed.** The bundle
   now provides conventional versioned HDF5 aliases such as
   `libhdf5.so.<abi>` in addition to Ubuntu's `libhdf5_serial.so.<abi>`
@@ -365,6 +371,7 @@ New / changed pins in v1.1.0:
 | Component | Linux | macOS | Windows |
 |---|---|---|---|
 | levmar | 2.6 (vendored source) | 2.6 (vendored source) | 2.6 (vendored source) |
+| libyaml | 0.2.5 (`libyaml-dev`) | 0.2.5 (Homebrew `libyaml`) | 0.2.5 (vcpkg `libyaml`) |
 | pthreads4w | n/a | n/a | vcpkg `pthreads` |
 
 Pin-source notes for v1.1.0:
@@ -381,6 +388,10 @@ Pin-source notes for v1.1.0:
   package (`lapack` + `f2c`) rather than the system FindLAPACK module.
   This avoids probing vcpkg `openblas.lib` for LAPACK symbols that are
   not present in the MSVC OpenBLAS build.
+- Linux's `libyaml-dev` package does not ship an upstream CMake package,
+  so libcvc-deps generates a small compatible `yamlConfig.cmake` that
+  exposes both `yaml` and `yaml::yaml` targets. macOS and Windows use
+  the package metadata provided by Homebrew / vcpkg.
 
 ### v1.0.2 (2026-05-14)
 
