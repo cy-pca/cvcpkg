@@ -384,6 +384,11 @@ New / changed pins in v1.1.0:
 | libyaml | 0.2.5 (`libyaml-dev`) | 0.2.5 (Homebrew `libyaml`) | 0.2.5 (vcpkg `libyaml`) |
 | Protobuf | 3.21.12 (`libprotobuf-dev`) | 34.1 (Homebrew `protobuf`) | 6.33.4 (vcpkg `protobuf`) |
 | gRPC | 1.51.1 (`libgrpc++-dev`) | 1.80.0 (Homebrew `grpc`) | 1.76.0 (vcpkg `grpc`) |
+| Abseil | 20220623.1 (`libabsl-dev`) | 20260107.1 (Homebrew `abseil`) | 20260107.1 (vcpkg `abseil`) |
+| c-ares | 1.27.0 (`libc-ares-dev`) | 1.34.6 (Homebrew `c-ares`) | 1.34.6 (vcpkg `c-ares`) |
+| OpenSSL | 3.0.13 (`libssl-dev`) | 3.6.2 (Homebrew `openssl@3`) | 3.6.2 (vcpkg `openssl`) |
+| RE2 | 20230301 (`libre2-dev`) | 2025-11-05 (Homebrew `re2`) | 2025-11-05 (vcpkg `re2`) |
+| zlib | 1.3 (`zlib1g-dev`) | macOS SDK / Homebrew dependency | 1.3.2 (vcpkg `zlib`) |
 | pthreads4w | n/a | n/a | vcpkg `pthreads` |
 
 Pin-source notes for v1.1.0:
@@ -411,6 +416,10 @@ Pin-source notes for v1.1.0:
   such as Abseil, c-ares, OpenSSL, RE2, utf8-range, and zlib are staged
   alongside them so downstream projects can configure without installing
   those development packages separately.
+- Protobuf support libraries such as `upb` and `utf8_range` are staged
+  when the platform package manager exposes them as installed libraries
+  or CMake/pkg-config metadata. They are treated as implementation
+  support for Protobuf/gRPC rather than as a primary downstream API.
 
 ### v1.0.2 (2026-05-14)
 
