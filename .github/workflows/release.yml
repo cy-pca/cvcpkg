@@ -2573,28 +2573,38 @@ jobs:
           New-Item -ItemType Directory -Force -Path (Split-Path $stampPath) | Out-Null
           Set-Content -Path $stampPath -Value $stampLines
 
-      - name: Pack zip
+      - name: Pack 7z
         shell: pwsh
         run: |
           $stem = '${{ steps.meta.outputs.stem }}'
           $dist = Join-Path $env:GITHUB_WORKSPACE $stem
-          $zipPath = Join-Path $env:GITHUB_WORKSPACE "$stem.zip"
-          # Compress-Archive uses a .NET MemoryStream and fails on
-          # archives >2 GB with "Stream was too long." The Windows
-          # bundle exceeds 2 GB once VTK + Qt + vcpkg trees are
-          # stitched in, so use 7z (preinstalled on hosted Windows
-          # runners) which has no such limit. -mx=5 is the default
-          # compression level; -mmt=on enables multithreaded compress.
-          if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
-          & 7z a -tzip -mx=5 -mmt=on "$zipPath" "$dist\*"
+          $archivePath = Join-Path $env:GITHUB_WORKSPACE "$stem.7z"
+          # The Windows bundle exceeds 2 GiB once VTK + Qt + vcpkg
+          # trees are stitched in; the GitHub Releases REST API
+          # rejects single assets >= 2 GiB ("size must be less than
+          # 2147483648"). Debug + static-link bundles in particular
+          # are full of redundant symbol data that LZMA2 compresses
+          # 3-5x tighter than deflate. We therefore ship Windows
+          # bundles as solid LZMA2 7z archives instead of zip. 7z is
+          # preinstalled on hosted Windows runners.
+          #
+          # Flags:
+          #   -t7z          7z container
+          #   -m0=lzma2     LZMA2 codec
+          #   -mx=9         ultra compression
+          #   -mfb=273      large fast-bytes window
+          #   -ms=on        solid archive (better ratio on similar files)
+          #   -mmt=on       multithreaded
+          if (Test-Path $archivePath) { Remove-Item -Force $archivePath }
+          & 7z a -t7z -m0=lzma2 -mx=9 -mfb=273 -ms=on -mmt=on "$archivePath" "$dist\*"
           if ($LASTEXITCODE -ne 0) { throw "7z failed ($LASTEXITCODE)" }
-          Get-ChildItem $zipPath | Format-List Name,Length
+          Get-ChildItem $archivePath | Format-List Name,Length
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-${{ matrix.build_type }}-${{ matrix.link }}
-          path: libcvc-deps-*.zip
+          path: libcvc-deps-*.7z
           if-no-files-found: error
 
   # ──────────────────────────── Release ────────────────────────────
@@ -2637,4 +2647,5 @@ jobs:
           files: |
             artifacts/libcvc-deps-*.tar.gz
             artifacts/libcvc-deps-*.zip
+            artifacts/libcvc-deps-*.7z
           fail_on_unmatched_files: false
