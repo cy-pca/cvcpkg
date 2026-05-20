@@ -848,7 +848,302 @@ deprecation timeline is announced via the release notes and
 `README.md`; the meta-bundle is removed in the second release after
 the split lands.
 
-## 7. CI changes (sketch only — no implementation in this doc)
+## 7. Build recipes
+
+A **recipe** is a self-contained YAML file plus a small directory
+of scripts and patches that fully describes how to build one
+component of `libcvc-deps` from upstream sources. Recipes are the
+source of truth for the CI pipeline that produces release
+bundles, and they are also directly executable by developers
+through `cvcpkg build`. The same recipe runs in both contexts,
+so a bundle built locally is bit-identical (modulo timestamps and
+build paths, which we normalize) to the one CI publishes.
+
+The goals:
+
+- Make it possible to **reproduce** any released bundle from
+  source on a developer's machine, without GitHub Actions.
+- Make it possible for a developer to **build the entire bundle
+  set** locally for an OS the lab cares about but hosted runners
+  don't cover well (e.g. an HPC login node with custom toolchains).
+- Move the implicit knowledge currently encoded in
+  `release.yml`'s monolithic shell steps into per-component
+  artifacts that can be reviewed, patched, and version-controlled
+  independently.
+
+### 7.1 Layout
+
+Recipes live in a top-level `recipes/` directory in this repo,
+one subdirectory per component:
+
+```
+recipes/
+  _common/                          # shared helpers, sourced by build.sh
+    env-linux.sh
+    env-macos.sh
+    env-windows.ps1
+    cmake-toolchain-<triplet>.cmake # optional toolchain files
+  boost/
+    recipe.yaml
+    patches/
+      0001-fix-cxx20-warning.patch
+      0002-disable-broken-test.patch
+    build.sh                        # POSIX (Linux + macOS)
+    build.ps1                       # PowerShell (Windows)
+    package.sh                      # optional: subset/install staging override
+    test.sh                         # optional: smoke test against the install tree
+  hdf5/
+    recipe.yaml
+    build.sh
+    build.ps1
+  grpc/
+    recipe.yaml
+    build.sh
+    build.ps1
+    patches/
+      0001-msvc-static-runtime.patch
+  vtk/
+    recipe.yaml
+    build.sh
+    build.ps1
+  ...
+```
+
+A recipe directory MUST contain `recipe.yaml` and at least one of
+`build.sh` / `build.ps1`. All other files are optional.
+
+### 7.2 `recipe.yaml` schema
+
+```yaml
+schema_version: 1
+recipe:
+  name: grpc                       # MUST match the bundle name in §3.3
+  upstream_version: 1.76.0         # version produced by this recipe
+  cvc_revision: 1                  # increment when this recipe changes such
+                                   # that build output changes
+  maintainer: "UT CVC Lab <cvc@cs.utexas.edu>"
+  homepage: https://grpc.io/
+  license: Apache-2.0              # SPDX expression
+
+source:
+  # One of: tarball | git | vcpkg | brew | apt
+  type: tarball
+  url: https://github.com/grpc/grpc/archive/refs/tags/v1.76.0.tar.gz
+  sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+  strip_components: 1
+  # For git sources, GIT_TAG MUST be a full 40-char SHA, not a tag
+  # or short hash (see user memory: git-fetchcontent-sha.md).
+  # type: git
+  # url: https://github.com/grpc/grpc.git
+  # commit: "5d4f5c5e4c2f1...full 40-char SHA..."
+  # submodules: true
+
+patches:
+  # Applied in order with `patch -p1` relative to the extracted source root.
+  - patches/0001-msvc-static-runtime.patch
+
+depends:
+  # Build-time dependencies, expressed in the same vocabulary
+  # as bundle dependencies (§3.2). Each one resolves to a
+  # previously-built bundle whose install tree is added to the
+  # CMAKE_PREFIX_PATH for this build.
+  build:
+    - name: abseil
+      version: ">=20240722,<20260000"
+    - name: openssl
+      version: "^3.0"
+    - name: zlib
+      version: "^1.3"
+  # Host tools required to be on PATH (not in the bundle graph).
+  host_tools:
+    - cmake
+    - ninja
+    - perl                          # OpenSSL build needs perl on Windows
+
+build:
+  # Maps each (platform, link) to the script that builds it.
+  # Each entry is relative to the recipe directory.
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+      vcpkg_port: grpc              # optional: when the canonical path is vcpkg
+      vcpkg_features: ["codegen"]   # optional, port-specific features
+
+package:
+  # Tells the packager which subset of the install tree belongs to
+  # this bundle. Mirrors `contents.files` in the bundle manifest
+  # (§3.2) so the recipe is the source of truth.
+  files:
+    - bin/grpc_cpp_plugin*
+    - bin/protoc*
+    - lib/grpc*
+    - lib/protobuf*
+    - include/grpc/
+    - include/grpcpp/
+    - include/google/protobuf/
+    - lib/cmake/grpc/
+    - lib/cmake/protobuf/
+  cmake_packages:
+    - { name: Protobuf, targets: [protobuf::libprotobuf] }
+    - { name: gRPC,     targets: [gRPC::grpc, gRPC::grpc++] }
+
+test:
+  # Optional smoke test the packager runs against the staged tree
+  # before archiving. Non-zero exit fails the build.
+  script: test.sh
+
+abi:
+  # Default ABI tag for bundles produced by this recipe; may be
+  # overridden per-platform/per-toolchain by the matrix entry.
+  cxx_std: 17
+  cxx_runtime: "$detect"           # filled in by build.sh from $CXX
+  libc: "$detect"
+  crt_link: "$detect"
+```
+
+### 7.3 Build script contract
+
+Every `build.sh` / `build.ps1` is invoked with a fixed set of
+environment variables provided by the builder (CI job or local
+`cvcpkg build`):
+
+| Variable | Meaning |
+|---|---|
+| `CVC_RECIPE_DIR` | Absolute path to this recipe directory |
+| `CVC_SOURCE_DIR` | Extracted upstream source, patches applied |
+| `CVC_BUILD_DIR` | Scratch directory for out-of-tree builds |
+| `CVC_INSTALL_DIR` | The bundle-private install prefix the script MUST install into |
+| `CVC_DEPS_PREFIX` | Merged `CMAKE_PREFIX_PATH` of all `depends.build` resolved bundles |
+| `CVC_PLATFORM` | `linux` \| `macos` \| `windows` |
+| `CVC_ARCH` | `x86_64` \| `arm64` |
+| `CVC_BUILD_TYPE` | `Release` \| `Debug` |
+| `CVC_LINK` | `shared` \| `static` |
+| `CVC_LINK_ACTUAL` | what the script will actually produce (§3.2 / D4) |
+| `CVC_JOBS` | Parallelism (e.g. nproc) |
+
+The script's only contract: populate `$CVC_INSTALL_DIR` with a
+relocatable prefix layout (`bin/`, `lib/`, `include/`, `share/`,
+`lib/cmake/`, etc.). The packager (§7.4) handles everything
+else — subsetting, manifest generation, archiving, hashing.
+
+Scripts MUST NOT touch anything outside `$CVC_BUILD_DIR`,
+`$CVC_INSTALL_DIR`, and `$CVC_SOURCE_DIR`. The builder runs them
+in a clean working directory with a sanitized environment.
+
+### 7.4 The packager
+
+The packager is a single Python entry point
+(`cvcpkg.recipes.package_recipe`, also exposed as the CLI
+`cvcpkg build <recipe>` and `cvcpkg pack <recipe>`) that:
+
+1. Reads `recipe.yaml`, resolves `depends.build` against the
+   local prefix or downloaded catalog bundles (same resolver as
+   §5.5).
+2. Fetches and verifies `source.url` against `source.sha256`,
+   extracts into `$CVC_SOURCE_DIR`, applies `patches/`.
+3. Sets up the env table from §7.3, invokes the matching
+   matrix-entry script.
+4. After the script returns, runs the `test.script` (if any)
+   against `$CVC_INSTALL_DIR`.
+5. Copies the subset described by `package.files` into a staging
+   directory, generates `share/libcvc-deps/manifest.yaml` from
+   `recipe.yaml` + measured file lists + probed upstream version,
+   archives the staging directory, and emits sha256 + size.
+
+Normalizations the packager applies for reproducibility:
+
+- Strips build-host paths from `lib/cmake/*` exported configs
+  (CMake's own `--install` handles most of this; we belt-and-
+  suspender it with a sed pass).
+- Zeros archive entry timestamps (`tar --mtime=@0`, `7z` with a
+  fixed `-mtm-` flag).
+- Sorts archive entries lexicographically.
+
+These give us identical bundle sha256s across runs of the same
+recipe (modulo upstream non-determinism, which we treat as a
+bug to be patched in `patches/`).
+
+### 7.5 `cvcpkg build`
+
+The `cvcpkg` CLI gains commands for working with recipes:
+
+```
+cvcpkg build <recipe>...   [--platform P] [--config release|debug]
+                           [--link shared|static] [--from-source]
+                           [--prefix DIR] [--keep-build-dir]
+cvcpkg pack  <recipe>...   # build + produce a tar.gz/zip in ./dist
+cvcpkg world [--from FILE] # build every recipe needed to satisfy the requirements
+cvcpkg recipes [--list | --show <name> | --validate]
+```
+
+- `cvcpkg build grpc` resolves dependencies (downloading prebuilt
+  bundles from the catalog if available, or recursively building
+  them with `--from-source`), invokes the recipe, and installs
+  the result into the active prefix.
+- `cvcpkg world --from cvc-requirements.yaml` is the developer
+  equivalent of the full CI pipeline: builds every recipe needed
+  to satisfy the requirements, in topological dependency order,
+  reusing already-built bundles when their `(recipe sha256,
+  depends sha256)` matches.
+- `cvcpkg recipes --validate` runs a static check on all
+  recipes: schema validation, `source.sha256` reachability,
+  patch applicability against a fresh source checkout, build
+  script existence and shebang, and no cycles in `depends.build`.
+
+### 7.6 Recipe sources of upstream packaging
+
+Some components are best built via an existing package manager
+(vcpkg on Windows for grpc/protobuf/openssl, Homebrew bottles on
+macOS for certain tools). Recipes can declare this directly:
+
+```yaml
+source:
+  type: vcpkg
+  port: grpc
+  triplet: x64-windows-static
+  baseline: "2025.10.19"             # vcpkg-baseline pin
+```
+
+When `source.type` is `vcpkg`, the packager invokes `vcpkg
+install <port>:<triplet>` against the pinned baseline, then
+copies the resulting tree out of `vcpkg_installed/<triplet>/`
+into `$CVC_INSTALL_DIR`. `patches:` for vcpkg ports are applied
+via the port-overlay mechanism the workflow already uses today.
+
+This matches what `release.yml` currently does in the
+`windows-vcpkg` job — the recipe just makes it explicit and
+per-component instead of one giant shell block.
+
+### 7.7 CI vs developer parity
+
+The CI `package` stage (§8) becomes a thin loop:
+
+```bash
+for recipe in recipes/*/recipe.yaml; do
+    cvcpkg pack "$(dirname "$recipe")" \
+        --platform $CVC_PLATFORM \
+        --config   $CVC_BUILD_TYPE \
+        --link     $CVC_LINK
+done
+```
+
+A developer running the same `cvcpkg pack ...` command on their
+laptop gets the same output (subject to toolchain identity —
+the ABI tag in the resulting manifest will reflect the
+developer's compiler, not the CI runner's). Recipes are the
+unit of trust: review changes to a recipe in PR, and that's the
+same thing CI will execute on merge.
+
+## 8. CI changes (sketch only — no implementation in this doc)
 
 - The existing `windows-vcpkg`, `windows-vtk`, `linux`, `macos`
   build jobs are unchanged.
@@ -856,12 +1151,14 @@ the split lands.
   `Pack zip` step. It:
   1. Reads `packaging/components.yaml` (the source of truth for
      §3.3's component table).
-  2. For each component, copies the matching subset of files from
-     the build install tree into a staging directory.
-  3. Generates `share/libcvc-deps/manifest.yaml` from
-     `packaging/components.yaml` + measured file lists +
-     upstream-version probes (`<pkg>-config.cmake`,
-     `pkg-config --modversion`, etc.).
+  2. For each component, invokes `cvcpkg pack recipes/<name>`
+     (§7.5), which executes the recipe's build script(s), stages
+     the install subset declared in `package.files`, and
+     archives it.
+  3. Generates `share/libcvc-deps/manifest.yaml` from the
+     recipe's `recipe.yaml` + measured file lists + upstream-
+     version probes (`<pkg>-config.cmake`, `pkg-config --modversion`,
+     etc.).
   4. Archives each component (tar.gz on Linux/macOS, zip via 7z on
      Windows) and computes SHA-256 + size.
   5. Aggregates per-component metadata into the release
@@ -871,11 +1168,11 @@ the split lands.
      `catalog/index.yaml` and `catalog/latest.yaml`, and pushes
      to the `gh-pages` branch.
   6. **Skips re-archiving** any component whose computed
-     `(upstream_version, build inputs hash)` matches a bundle
-     already published in a previous release; the new release
-     index simply references the existing artifact URL. This is
-     what makes `<upstream-version>+cvc.<rev>` stable across
-     releases when nothing about the component changed.
+     `(recipe sha256, depends sha256, toolchain id)` matches a
+     bundle already published in a previous release; the new
+     release index simply references the existing artifact URL.
+     This is what makes `<upstream-version>+cvc.<rev>` stable
+     across releases when nothing about the component changed.
 - The `release` job uploads all component archives plus the index
   to the GitHub Release.
 - An optional `meta-bundle` job assembles `libcvc-deps-all-*`
@@ -883,23 +1180,25 @@ the split lands.
   (cheap: just `tar -A` / 7z concatenate of already-built archives
   into one).
 
-## 8. Migration plan
+## 9. Migration plan
 
 | Phase | Goal | Output | Acceptance criterion |
 |---|---|---|---|
 | 0 | This doc | `docs/roadmap-split-distribution.md` | Reviewed |
 | 1 | `packaging/components.yaml` + manifest schema | Source of truth + JSON-Schema / YAML schema doc | `make validate-components` in CI passes |
-| 2 | `tools/cvcpkg/` Poetry package (CLI, catalog-aware resolver, downloader, cache) | Working `cvcpkg install` against a mocked catalog; `poetry build` produces a wheel | Unit tests pass; `pipx install ./dist/cvcpkg-*.whl` works; resolver picks correctly across two mock releases |
+| 1b | `recipes/` directory with recipe schema (§7.2) + builder contract (§7.3) | One reference recipe (`zlib`) end-to-end on Linux | `cvcpkg pack recipes/zlib` produces a valid bundle locally |
+| 2 | `tools/cvcpkg/` Poetry package (CLI, catalog-aware resolver, downloader, cache, recipe packager) | Working `cvcpkg install` against a mocked catalog and `cvcpkg pack` against one recipe; `poetry build` produces a wheel | Unit tests pass; `pipx install ./dist/cvcpkg-*.whl` works; resolver picks correctly across two mock releases |
 | 2b | `cvcpkg` published to PyPI as `0.1.0a1` | `pip install cvcpkg` works on Linux/macOS/Windows | Pre-release tag `cvcpkg-v0.1.0a1` triggers `cvcpkg-publish.yml`; package visible on pypi.org |
-| 3 | CI package stage on Linux first | Linux component bundles + per-release index + rolling catalog alongside the existing monolithic bundle | `cvcpkg install --from requirements.yaml --prefix /tmp/p` succeeds against the published catalog, downstream `libcvc` builds against `/tmp/p` |
-| 4 | macOS + Windows package stages | Full per-platform bundle set | All three platforms produce per-component bundles in CI |
+| 2c | Recipes for all components (§3.3) in `recipes/` | Every existing component has a recipe.yaml + build script(s) | `cvcpkg recipes --validate` passes; `cvcpkg world` reproduces the current Linux bundle set on a clean host |
+| 3 | CI package stage on Linux first | Linux component bundles + per-release index + rolling catalog alongside the existing monolithic bundle, produced via `cvcpkg pack` | `cvcpkg install --from requirements.yaml --prefix /tmp/p` succeeds against the published catalog, downstream `libcvc` builds against `/tmp/p` |
+| 4 | macOS + Windows package stages | Full per-platform bundle set via per-platform recipes | All three platforms produce per-component bundles in CI |
 | 5 | Downstream adoption | `libcvc`, `volrover3`, `TexMol`, `F2Dock`, `molsurf` switch to `cvc-requirements.yaml` | Each downstream's CI uses `cvcpkg` |
 | 6 | Deprecate monolithic bundle | First release without `libcvc-deps-all-*` | Release notes call out the removal |
 
 Each phase is independently shippable; phases 1–4 are pure
 additions and do not change consumer behavior.
 
-## 9. Decisions and follow-ups
+## 10. Decisions and follow-ups
 
 Decisions made (baked into the design above):
 
@@ -942,7 +1241,7 @@ Follow-ups (out of scope for v1, tracked for later releases):
   published public key, with the same `--ignore-signature`
   escape hatch pattern as ABI checks.
 
-## 10. Summary
+## 11. Summary
 
 - Split the monolithic `libcvc-deps` bundle into ~25 per-component
   archives. Each bundle has its **own** version
