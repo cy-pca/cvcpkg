@@ -515,11 +515,21 @@ PyYAML      = "^6.0"
 tqdm        = { version = "^4.66", optional = true }
 # Optional Sigstore verification (Follow-up F1); not required for v1.
 sigstore    = { version = "^3.0", optional = true }
+# Optional storage backends (§5.9).
+boto3                  = { version = "^1.34", optional = true }
+"google-cloud-storage" = { version = "^2.18", optional = true }
+"azure-storage-blob"   = { version = "^12.20", optional = true }
+paramiko               = { version = "^3.4",  optional = true }
 
 [tool.poetry.extras]
 progress = ["tqdm"]
 signing  = ["sigstore"]
-all      = ["tqdm", "sigstore"]
+s3       = ["boto3"]
+gcs      = ["google-cloud-storage"]
+azure    = ["azure-storage-blob"]
+sftp     = ["paramiko"]
+all      = ["tqdm", "sigstore", "boto3", "google-cloud-storage",
+            "azure-storage-blob", "paramiko"]
 
 [tool.poetry.group.dev.dependencies]
 pytest        = "^8.0"
@@ -568,6 +578,10 @@ Runtime/build-time dependencies:
 - `PyYAML` ^6.0 (single mandatory third-party dependency).
 - Stdlib `urllib.request`, `hashlib`, `tarfile`, `zipfile`,
   `argparse`, `concurrent.futures` for the rest.
+- Optional extras for non-HTTPS storage backends (§5.9): `boto3`
+  (S3), `google-cloud-storage` (GCS), `azure-storage-blob`,
+  `paramiko` (SFTP). `rsync` and `rclone` backends use the
+  system binary, no Python dep.
 - Optional extras: `tqdm` (progress bars), `sigstore` (catalog
   signature verification, see Follow-up F1). The tool degrades
   gracefully when extras are absent.
@@ -833,6 +847,196 @@ cvcpkg: ERROR: component 'mkl' is not present in any libcvc-deps
 
 The tool intentionally does **not** try to fall back to monolithic
 bundles, system packages, or vcpkg. Failure is loud and explicit.
+
+### 5.9 Storage backends
+
+The default catalog URL
+(`https://transfix.github.io/libcvc-deps/catalog/`) and the
+default bundle download URLs (GitHub release assets) are policy,
+not architecture. `cvcpkg` must be usable against arbitrary
+self-hosted or third-party storage: lab HTTPS mirrors, S3 / GCS /
+Azure Blob buckets, an SFTP server on a head node, an
+`rsync://` mirror, an internal Artifactory, or a directory on a
+shared NFS / SMB mount.
+
+The mechanism is **pluggable storage backends dispatched by URI
+scheme**, with no scheme being privileged over any other inside
+the resolver/installer.
+
+#### 5.9.1 Backend interface
+
+A storage backend is a small Python class registered against one
+or more URI schemes. The full interface is intentionally tiny so
+new backends are easy to add:
+
+```python
+class StorageBackend(Protocol):
+    schemes: ClassVar[tuple[str, ...]]      # e.g. ("https", "http")
+
+    def head(self, uri: str) -> ObjectInfo: ...
+        # returns size + optional precomputed sha256/etag
+
+    def open(self, uri: str) -> BinaryIO: ...
+        # streaming read; cvcpkg hashes while writing to cache
+
+    def list(self, uri: str) -> Iterable[str]:        # optional
+        ...                                           # for `cvcpkg mirror`
+
+    def supports_range(self, uri: str) -> bool:       # for resume
+        ...
+```
+
+Everything else — sha256 verification, retry/backoff, the cache
+in §5.6, progress bars, the resolver in §5.5 — is backend-agnostic
+and lives above this layer. A backend never decides whether an
+artifact is trustworthy; it only moves bytes. Trust is always
+established by sha256 against the signed catalog (§5.7).
+
+#### 5.9.2 Built-in backends
+
+Shipped in the wheel; no extra install required:
+
+| Scheme(s) | Implementation | Notes |
+|---|---|---|
+| `https`, `http` | stdlib `urllib.request` + `ssl` | Default. Honors `HTTPS_PROXY`, `NO_PROXY`. |
+| `file` | stdlib `pathlib` | Local filesystem / NFS / SMB mounts. Used by `cvcpkg pack` to publish into a directory layout. |
+| `gh-release` | `urllib` + GitHub REST API | Resolves `gh-release://owner/repo/tag/asset` to the asset's CDN URL. Used by the default catalog when assets are on GitHub Releases. |
+
+Shipped as **optional extras** (so PyPI install is tiny by default):
+
+| Scheme(s) | Extra | Backend |
+|---|---|---|
+| `s3` | `cvcpkg[s3]` → `boto3` | AWS S3 and any S3-compatible store (MinIO, Ceph RGW, Wasabi, Backblaze B2 via S3 API). Honors standard AWS credential chain + `AWS_PROFILE`. |
+| `gs` | `cvcpkg[gcs]` → `google-cloud-storage` | Google Cloud Storage. |
+| `azblob` | `cvcpkg[azure]` → `azure-storage-blob` | Azure Blob Storage. |
+| `sftp`, `ssh` | `cvcpkg[sftp]` → `paramiko` | SFTP / SCP over OpenSSH. Honors `~/.ssh/config`, agent keys. |
+
+Shipped as **subprocess shims** for tools that already exist in
+typical scientific-computing environments — no extra Python dep:
+
+| Scheme(s) | Required binary | Backend |
+|---|---|---|
+| `rsync` | `rsync` | Streams via `rsync --inplace --partial`. Best on intra-cluster mirrors. |
+| `rclone` | `rclone` | Any of the 70+ remotes rclone speaks (B2, Dropbox, OneDrive, Swift, WebDAV, …) via `rclone cat`. |
+| `s3-cli` | `aws` | Fallback to `aws s3 cp - -` for environments that don't want `boto3` (e.g., HPC sites with site-managed `aws` only). |
+
+Anything `cvcpkg` cannot fetch with a built-in or extra backend is
+still reachable if a `rclone` remote is configured, which covers
+essentially every remaining provider.
+
+#### 5.9.3 Configuration: mirrors and catalog overrides
+
+Three orthogonal knobs, in increasing precedence:
+
+1. **Compiled-in defaults** — the upstream
+   `transfix/libcvc-deps` catalog + GH-Releases asset URLs.
+2. **User config** — `~/.config/cvcpkg/config.yaml`:
+
+   ```yaml
+   schema_version: 1
+
+   # Override the catalog source. Same signature/sha256 rules apply.
+   catalog:
+     primary: https://mirror.cs.utexas.edu/cvc/catalog/
+     fallback:
+       - s3://cvc-lab-mirror/catalog/
+       - gh-release://transfix/libcvc-deps/catalog/latest.yaml
+
+   # Optional: rewrite artifact URLs before fetching. The first
+   # rule whose `match:` prefix matches is applied; the catalog's
+   # original URL is the final fallback.
+   mirrors:
+     - match: https://github.com/transfix/libcvc-deps/releases/download/
+       rewrite: https://mirror.cs.utexas.edu/cvc/releases/
+     - match: https://github.com/transfix/libcvc-deps/releases/download/
+       rewrite: s3://cvc-lab-mirror/releases/
+
+   # Per-scheme credentials/options. Backend-specific blocks only.
+   backends:
+     s3:
+       endpoint_url: https://s3.us-east-1.amazonaws.com   # or MinIO URL
+       region: us-east-1
+       # credentials come from AWS env / profile by default
+     sftp:
+       known_hosts: ~/.ssh/known_hosts
+       identity_file: ~/.ssh/id_ed25519_cvc
+   ```
+
+3. **Per-project overrides** — `cvc-requirements.yaml` may set
+   `catalog:` and `mirrors:` blocks with the same shape; project
+   settings win for that working tree only.
+4. **Command-line flags** — `--catalog URL`, `--mirror MATCH=REWRITE`
+   (repeatable), and `--backend SCHEME=CLASS` win above everything
+   else for ad-hoc runs and CI.
+
+Environment variables provide the same effect for unattended
+contexts: `CVCPKG_CATALOG_URL`, `CVCPKG_MIRROR_<N>=match=rewrite`,
+plus the standard `AWS_*`, `GOOGLE_APPLICATION_CREDENTIALS`,
+`SSH_AUTH_SOCK`, `HTTPS_PROXY`, etc., consumed by the underlying
+backends.
+
+#### 5.9.4 Fallback and integrity
+
+Mirror lists are tried in order. A single sha256 mismatch on a
+mirror is treated as a hard failure for that URL (it is **not**
+silently retried against the next mirror, because that would mask
+a poisoned mirror): the tool surfaces the mismatch and only then
+falls back. Network-class errors (timeout, 5xx, connection
+refused, DNS failure) do fall through to the next mirror. The
+sha256 in the (signed) catalog is the only authority on what a
+bundle's bytes must be — so a mirror can be public, untrusted,
+and still safe to use.
+
+#### 5.9.5 Publishing to alternative backends
+
+`cvcpkg push <bundle.tar.zst> --to <uri>` uploads a built bundle
+to any backend that exposes a writable `put(uri, blob)` (a
+superset of the read-only `StorageBackend` interface). Combined
+with `cvcpkg pack` from §7.4, this lets a lab run its own private
+release pipeline:
+
+```bash
+# CI for a private fork:
+cvcpkg pack    recipes/vtk
+cvcpkg push    out/vtk-9.3.0+cvc.1-linux-x86_64-glibc228-release-shared.tar.zst \
+               --to s3://cvc-lab-mirror/releases/0.2.0/
+cvcpkg catalog publish --rev 0.2.0 --to s3://cvc-lab-mirror/catalog/
+```
+
+The catalog itself is just an object in storage; pointing
+`config.yaml`'s `catalog.primary` at a different URI is all that's
+needed to consume it.
+
+#### 5.9.6 Extending with third-party backends
+
+External packages can ship additional backends and register them
+via a Python entry point group:
+
+```toml
+# in some third-party project's pyproject.toml:
+[project.entry-points."cvcpkg.storage_backends"]
+ipfs    = "cvcpkg_ipfs:IPFSBackend"
+hf-hub  = "cvcpkg_hf:HFBackend"
+```
+
+`cvcpkg` auto-discovers these on startup. This keeps niche
+backends (IPFS, IPNS, Hugging Face Hub, lab-specific protocols)
+out of the core wheel while still making them first-class — no
+patching, no monkey-patching, no shelling out.
+
+#### 5.9.7 Scope decisions
+
+- **No write-back to read-only mirrors.** `cvcpkg` never auto-
+  uploads a fetched bundle to a "closer" mirror; that is an
+  operator/CI concern (`cvcpkg push`).
+- **No bittorrent / p2p in core.** Possible later via an entry-
+  point backend; would need a "swarm" abstraction the basic
+  interface doesn't model.
+- **No credential storage by cvcpkg.** All auth is delegated to
+  the underlying backend's native mechanism (AWS profile chain,
+  SSH agent, OS keyring via the backend SDK). `cvcpkg` itself
+  reads no secrets from `config.yaml` beyond filesystem paths.
+
 ## 6. Compatibility with today's monolithic bundles
 
 For at least one release after the split lands, we ship **both**:
