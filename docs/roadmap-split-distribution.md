@@ -132,7 +132,7 @@ YAML chosen so we can reuse the libyaml dependency we already ship
 JSON. Schema:
 
 ```yaml
-schema_version: 2
+schema_version: 3
 bundle:
   name: grpc                       # short, lowercase, hyphen-separated
   version: 1.76.0+cvc.1            # component version (upstream+cvc.rev)
@@ -143,8 +143,22 @@ bundle:
   platform: windows                # linux | macos | windows
   arch: x86_64                     # x86_64 | arm64
   build_type: release              # release | debug | none
-  link: shared                     # shared | static | none
+  link: shared                     # consumer-facing link mode: shared | static | none
+  link_actual: shared              # what the bundle actually ships; may differ
+                                   # from `link` when upstream cannot be built
+                                   # static on this platform (e.g. on Windows
+                                   # x64-static, grpc/cgal bundles still ship
+                                   # .dll + import .lib fallbacks). Valid:
+                                   # shared | static | hybrid.
   triplet: x64-windows             # platform-native triplet/RID (optional)
+  abi:                             # ABI compatibility tag (see §3.2.1).
+                                   # Resolver enforces a-b compatibility by
+                                   # default; bypass with `cvcpkg --ignore-abi`.
+    cxx_std: 17                    # 11 | 14 | 17 | 20 | 23
+    cxx_runtime: msvc-14.4         # gcc-<major> | clang-<major> | msvc-<toolset>
+    libc: msvcrt                   # glibc-<ver> | musl-<ver> | msvcrt | libc++ABI
+    crt_link: dynamic              # dynamic | static (Windows /MD vs /MT)
+    extra: []                      # free-form additional discriminators
 
 contents:
   description: >
@@ -247,20 +261,68 @@ release was tested against (e.g. `boost: 1.90.0+cvc.1`,
 `grpc: 1.76.0+cvc.1`), so a consumer pinning only the release
 version still gets a reproducible install.
 
-In addition, a release **catalog** is published that aggregates
-every release index ever produced:
+In addition, a **catalog** is published that aggregates every
+release index ever produced. The catalog is append-only,
+versioned, and served from a stable URL on the project's GitHub
+Pages site:
 
 ```
-libcvc-deps-catalog.yaml      # union of all libcvc-deps-*-index.yaml
+https://transfix.github.io/libcvc-deps/catalog/latest.yaml      # pointer to newest revision
+https://transfix.github.io/libcvc-deps/catalog/<rev>.yaml       # immutable snapshot, rev is monotonic integer
+https://transfix.github.io/libcvc-deps/catalog/index.yaml       # list of all rev numbers + sha256s
 ```
+
+A dedicated workflow runs on every release tag, generates a new
+catalog revision by walking the just-published release index plus
+all previous indexes, and pushes the result to the `gh-pages`
+branch. Properties of the scheme:
+
+- **Append-only**: a new revision `N+1` MUST contain every bundle
+  entry from revision `N`, plus zero or more new entries. The
+  publish workflow refuses to push a revision that drops or
+  mutates an existing entry.
+- **Versioned**: each revision is addressable forever at
+  `catalog/<rev>.yaml`, and `catalog/index.yaml` lists every
+  revision with its sha256 and publish timestamp. A lockfile that
+  pins `catalog_revision: 17` can be re-resolved bit-identically
+  years later.
+- **Signed**: each revision is signed (planned Sigstore / cosign,
+  see Follow-up F1) and the signature is published alongside it
+  as `catalog/<rev>.yaml.sig`. The tool verifies the signature
+  before trusting the catalog content.
+- **Stable URL**: `catalog/latest.yaml` always serves the newest
+  revision. The tool fetches `latest.yaml` once per run, records
+  its `catalog_revision` integer, and uses that exact revision
+  for the remainder of the run.
 
 The catalog enables cross-release resolution (§5.5): the tool can
 find a component version that satisfies a dependency range even
 if no single release shipped exactly that combination. A bundle
-artifact is referenced by its archive URL (typically a GitHub
-Releases asset URL on the release that first shipped it), and is
-immutable once published. Catalog regeneration is mechanical and
-happens automatically on every release.
+artifact is referenced by its GitHub Releases asset URL on the
+release that first shipped it, and is immutable once published.
+
+### 3.2.1 ABI compatibility
+
+The `bundle.abi` block in each manifest declares the toolchain
+identity the bundle was built against. The resolver, by default,
+requires that **every pair of bundles in a resolution be
+ABI-compatible** under these rules:
+
+- Same `arch` and `platform` (already enforced by tuple matching).
+- `cxx_std`: a bundle declaring `cxx_std: 17` is compatible with
+  consumers requesting `>=17`; lower is a hard error.
+- `cxx_runtime`: must match family and major version (gcc-11 is
+  compatible with gcc-12 only if both are within the same
+  declared compatibility window, otherwise hard error).
+- `libc`: must match exactly on Linux (glibc bundles cannot be
+  mixed with musl); on Windows `msvcrt` must match exactly; on
+  macOS `libc++ABI` is assumed.
+- `crt_link` (Windows only): `/MD` and `/MT` bundles cannot mix.
+
+`cvcpkg --ignore-abi` (or `accept_abi_mismatch: true` in the
+requirements file) downgrades ABI errors to warnings. This is the
+escape hatch for downstreams that knowingly accept the risk
+(e.g. mixing a tiny header-only bundle across toolchains).
 
 ### 3.3 Component grouping
 
@@ -397,19 +459,27 @@ absent.
 ### 5.2 CLI surface
 
 ```
-cvcpkg install   --release <ver> [--prefix DIR] [--platform P]
+cvcpkg install   [--release <ver>] [--prefix DIR] [--platform P]
                  [--config release|debug] [--link shared|static]
-                 [--from FILE | <component>...]
-cvcpkg add       <component>...              # add to lockfile + install
+                 [--catalog-revision <rev>] [--ignore-abi]
+                 [--from FILE | <component>[==<ver>]...]
+cvcpkg add       <component>[==<ver>]...     # add to lockfile + install
 cvcpkg remove    <component>...              # remove + uninstall
 cvcpkg list      [--installed | --available]
 cvcpkg info      <component>
 cvcpkg verify                                # re-checksum the prefix
 cvcpkg lock                                  # write/refresh lockfile
 cvcpkg sync                                  # ensure prefix == lockfile
-cvcpkg index     --release <ver> [--mirror URL]
+cvcpkg catalog   [--refresh | --pin <rev> | --show]
 cvcpkg gc                                    # prune the local cache
 ```
+
+`--ignore-abi` disables the default ABI-tag enforcement
+(\u00a73.2.1) for that invocation. `--catalog-revision <rev>` pins
+the resolver to an exact append-only catalog snapshot for
+reproducible builds; without it the tool uses the current
+`catalog/latest.yaml` pointer and records the resolved revision
+into the lockfile.
 
 Single-file invocations (`cvcpkg install --from requirements.yaml`)
 are the recommended workflow for downstream projects so the
@@ -492,7 +562,8 @@ arch: x86_64
 config: release
 link: shared
 resolved_at: "2026-05-19T22:30:00Z"
-catalog_revision: "2026-05-19T20:00:00Z"   # catalog snapshot used
+catalog_revision: 17                       # exact append-only catalog snapshot
+catalog_sha256: "..."                      # sha256 of catalog/17.yaml at resolve time
 
 bundles:
   - name: boost
@@ -606,20 +677,21 @@ populate-then-cache pattern.
 
 Every `install`/`sync` action:
 
-1. Re-fetches the **catalog** (`libcvc-deps-catalog.yaml`) over
-   HTTPS, plus any per-release indexes it references that are not
-   already cached. The catalog itself carries integrity hashes
-   for each release index, and each release index carries
-   SHA-256s for its bundles, so trust chains back to the
-   `transfix/libcvc-deps` repo's signed release tags.
-2. For each resolved bundle, verifies SHA-256 against the
+1. Fetches `https://transfix.github.io/libcvc-deps/catalog/latest.yaml`
+   to learn the current `catalog_revision`. If the lockfile pins
+   a `catalog_revision` instead, fetches
+   `catalog/<rev>.yaml` directly. Catalogs are content-addressed
+   in the local cache so repeated runs are offline-friendly.
+2. Verifies the catalog's signature (when Follow-up F1 lands;
+   until then verifies sha256 against `catalog/index.yaml`).
+3. For each resolved bundle, verifies SHA-256 against the
    catalog entry before extraction. Because bundle artifacts are
    immutable (§5.5), a hash mismatch is always a hard error.
-3. After extraction, verifies the bundle's
+4. After extraction, verifies the bundle's
    `share/libcvc-deps/manifest.yaml` is internally consistent
    (every file listed under `contents.files` exists; no extras).
 
-`cvcpkg verify` repeats step 3 against an already-installed prefix.
+`cvcpkg verify` repeats step 4 against an already-installed prefix.
 
 ### 5.8 Out-of-band fallback
 
@@ -677,9 +749,11 @@ the split lands.
   4. Archives each component (tar.gz on Linux/macOS, zip via 7z on
      Windows) and computes SHA-256 + size.
   5. Aggregates per-component metadata into the release
-     `*-index.yaml` and merges that index into the rolling
-     `libcvc-deps-catalog.yaml` (republished as a release asset
-     on every release for easy fetch).
+     `*-index.yaml`. A separate `catalog-publish` workflow
+     triggered by the release tag merges this index into a new
+     append-only revision of `catalog/<rev>.yaml`, updates
+     `catalog/index.yaml` and `catalog/latest.yaml`, and pushes
+     to the `gh-pages` branch.
   6. **Skips re-archiving** any component whose computed
      `(upstream_version, build inputs hash)` matches a bundle
      already published in a previous release; the new release
@@ -708,53 +782,48 @@ the split lands.
 Each phase is independently shippable; phases 1–4 are pure
 additions and do not change consumer behavior.
 
-## 9. Open questions
+## 9. Decisions and follow-ups
 
-These need answers before phase 1, but explicitly left open here:
+Decisions made (baked into the design above):
 
-- **Q1.** Index/catalog hosting. The per-release `*-index.yaml`
-  files ship as release assets. The aggregated
-  `libcvc-deps-catalog.yaml` is regenerated on every release and
-  republished as an asset on the latest release; the tool falls
-  back to walking `gh api releases` to reconstruct the catalog if
-  the asset is missing. An alternative is a tiny
-  `gh-pages`-served `catalog.yaml` updated by a workflow on every
-  release — simpler to fetch (always at the same URL) but adds a
-  publishing path.
-- **Q2.** Catalog mutability. Component bundle artifacts are
-  immutable, but the catalog is regenerated each release. Should
-  the catalog also be append-only (signed, versioned), so a
-  reproducer can pin a `catalog_revision` and replay an old
-  resolution years later? The lockfile already records the
-  catalog snapshot timestamp; promoting that to a signed
-  catalog-version chain is a follow-up.
-- **Q3.** Signing. We currently rely on GitHub Release tags +
-  HTTPS for integrity. Should `cvcpkg` verify a Sigstore /
-  cosign signature on the catalog and per-release indexes
-  against the repo's published public key? Out of scope for v1
-  of the tool but worth a hook.
-- **Q4.** Static-link bundles on Windows. The current hybrid
-  static bundle stitches in shared `.dll` fallbacks for
-  cgal/gmp/mpfr + grpc/protobuf. When split into component
-  bundles, the `grpc` and `cgal` bundles for `link=static`
-  should still expose shared `.dll`s — i.e. the **bundle's
-  declared link mode is the consumer's expected
-  link mode for the bundle as a whole**, and the bundle is free
-  to ship `.dll`s when its underlying upstream cannot be built
-  static. Manifest should add a `link_actual` field next to
-  `link` to make this explicit.
-- **Q5.** Per-component debug PDBs. Today the Debug bundle
-  carries both release and debug `.lib`s plus PDBs. Should
-  PDBs become their own per-component bundle
-  (`libcvc-deps-<pkg>-pdb-...`) so consumers who do not debug
-  into our deps can skip half the Windows download? Defer to a
-  follow-up.
-- **Q6.** ABI compatibility metadata. Per-component version
-  ranges across releases mean we'll occasionally pair a bundle
-  with a transitive dep version it wasn't originally tested
-  against. Should manifests declare an explicit ABI tag
-  (e.g. `abi: cxx17-gcc11-glibc2.31`) that the resolver enforces
-  in addition to version ranges? Likely yes, in a `schema_version: 3`.
+- **D1 — Catalog hosting (was Q1).** The aggregated catalog is
+  served from GitHub Pages at
+  `https://transfix.github.io/libcvc-deps/catalog/`, updated by a
+  workflow on every release tag. `catalog/latest.yaml` is the
+  stable entry point; per-revision snapshots live at
+  `catalog/<rev>.yaml`. See §3.2.
+- **D2 — Append-only versioned catalog (was Q2).** Catalog
+  revisions are monotonically numbered, immutable once published,
+  and signed. Lockfiles pin both `catalog_revision` and
+  `catalog_sha256`, so any past resolution can be replayed
+  bit-identically. The publish workflow refuses to push a
+  revision that mutates or removes an existing entry. See §3.2
+  and §5.4.
+- **D4 — `link_actual` field (was Q4).** Manifests declare both
+  the consumer-facing `link` mode and a `link_actual` describing
+  what the bundle ships (`shared` | `static` | `hybrid`). This
+  makes Windows static bundles that stitch in DLL fallbacks for
+  grpc/cgal/etc. explicit. See §3.2.
+- **D5 — No separate PDB bundles (was Q5).** Debug bundles
+  continue to ship PDBs inline. Consumers who do not need to
+  debug into our deps should use the Release bundle.
+- **D6 — ABI tag enforced by default (was Q6).** Manifests
+  declare a `bundle.abi` block (`cxx_std`, `cxx_runtime`, `libc`,
+  `crt_link`). The resolver enforces pairwise ABI compatibility
+  by default and emits a hard error on mismatch. Users who
+  knowingly accept the risk can pass `cvcpkg --ignore-abi` or
+  set `accept_abi_mismatch: true` in the requirements file. See
+  §3.2.1.
+
+Follow-ups (out of scope for v1, tracked for later releases):
+
+- **F1 — Catalog signing (was Q3, deferred).** Until cosign /
+  Sigstore integration lands, catalog integrity is verified via
+  the `catalog/index.yaml` sha256 list (itself fetched over
+  HTTPS from GitHub Pages). A later release adds signature
+  verification of `catalog/<rev>.yaml.sig` against the project's
+  published public key, with the same `--ignore-signature`
+  escape hatch pattern as ABI checks.
 
 ## 10. Summary
 
