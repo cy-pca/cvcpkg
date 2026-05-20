@@ -484,7 +484,7 @@ tools/cvcpkg/
 name = "cvcpkg"
 version = "0.1.0"
 description = "Component package manager for libcvc-deps prebuilt dependency bundles"
-authors = ["UT CVC Lab <cvc@cs.utexas.edu>"]
+authors = ["CyberPC Angel, LLC"]
 license = "MIT"                                # match libcvc-deps
 readme = "README.md"
 homepage = "https://github.com/transfix/libcvc-deps"
@@ -1125,7 +1125,7 @@ recipe:
   upstream_version: 1.76.0         # version produced by this recipe
   cvc_revision: 1                  # increment when this recipe changes such
                                    # that build output changes
-  maintainer: "UT CVC Lab <cvc@cs.utexas.edu>"
+  maintainer: "CyberPC Angel, LLC"
   homepage: https://grpc.io/
   license: Apache-2.0              # SPDX expression
 
