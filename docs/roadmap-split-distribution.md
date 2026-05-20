@@ -1,0 +1,779 @@
+# Roadmap: split `libcvc-deps` into composable component bundles
+
+Status: proposal (not yet implemented).
+Author: roadmap drafted 2026-05-19 in response to Windows monolithic
+bundles tipping over 2 GB (PowerShell `Compress-Archive`'s 2 GB cap
+was hit on every Windows assemble flavor in run `26127717492`, and
+the 7z workaround in commit `af27d59` only buys headroom — the
+underlying problem of a single ~2 GB+ artifact per platform/config
+will keep growing as we add gRPC, MKL, additional VTK modules, etc.).
+
+The goal of this document is to describe **what** the split looks
+like and **how** downstream consumers (and developers) put the
+pieces back together into a single coherent install prefix, with no
+implementation work performed yet.
+
+## 1. Motivation
+
+The current `libcvc-deps` ships one archive per `(platform, arch,
+build_type, link)` tuple — eight archives in total for v1.1.0 (Linux
+× 2, macOS × 2, Windows × 4). Every archive is a complete install
+prefix: Boost, HDF5, FFTW3, GSL, log4cplus, libtiff, libyaml,
+Protobuf, gRPC, CGAL+GMP+MPFR, ImageMagick, Qt 6, VTK 9.5, libiimod,
+levmar, pthreads4w, plus all transitive support libraries.
+
+This bundling has served well, but it has three growing problems:
+
+1. **Archive size**. Windows bundles are ≥2 GB compressed today and
+   growing every release. Even minor additions (e.g. MKL, an
+   additional VTK module group, debug PDBs for a new package) push
+   the bundle further into territory where tooling — GitHub
+   Releases UI, GitHub Actions artifact upload, PowerShell's
+   `Compress-Archive`, some corporate proxies — starts to push back.
+2. **Download cost for narrow consumers**. A downstream that only
+   needs Boost + FFTW + HDF5 still pays the full ~2 GB for VTK and
+   Qt6. There is no way for a consumer to opt out of any subset.
+3. **Update granularity**. A single fix to one component (e.g. a
+   libtiff CVE patch) forces a full re-release and re-download of
+   the entire monolithic bundle on all platforms.
+
+A component-bundle distribution addresses all three: ship many
+small archives, each one self-describing via a manifest, and let
+consumers (or a small tool) materialize the install prefix they
+need from a list of requirements.
+
+## 2. Non-goals
+
+This proposal explicitly does **not**:
+
+- Replace `vcpkg`, `conan`, `spack`, or any general-purpose package
+  manager. The local tool we propose is intentionally tiny and
+  knows only about our component-bundle layout.
+- Continue to gate everything on a single `libcvc-deps` release
+  version. Each component bundle carries its **own** version
+  (derived from its upstream version plus a `libcvc-deps` build
+  revision), declares dependencies in terms of **other component
+  versions**, and is resolvable across any number of `libcvc-deps`
+  releases. The `libcvc-deps` release tag becomes a convenience
+  manifest pointing at a curated set of component versions, not a
+  hard coupling.
+- Change the on-disk layout consumers see after a `--build-prefix`
+  is materialized. A downstream's `CMAKE_PREFIX_PATH` still points
+  at one directory and `find_package(...)` calls still resolve
+  exactly as they do today against a monolithic bundle.
+- Change how upstream components are built in CI. The
+  `windows-vcpkg`, `windows-vtk`, `linux`, `macos` jobs continue to
+  produce the same install trees; only the post-build packaging
+  and the release-time artifact set change.
+
+## 3. Distribution shape
+
+### 3.1 Bundle archives
+
+A `libcvc-deps` release publishes a set of **component bundles**.
+Each bundle covers one logical component (or tightly-coupled
+component group — see §3.3) for one
+`(platform, arch, build_type, link)` tuple. Each bundle has its
+**own component version**, independent of the `libcvc-deps`
+release that introduced it. The archive naming therefore embeds
+the component version, not the release version:
+
+```
+libcvc-deps-<component>-<component-ver>-<platform>-<arch>-<config>[-<link>].<ext>
+```
+
+The component version is `<upstream-version>+cvc.<rev>`, where
+`<upstream-version>` is the upstream package's own version and
+`<rev>` is an integer that increments whenever we re-build the
+same upstream version (patch bump, build-flag change, transitive
+dep refresh). Two `libcvc-deps` releases that ship the
+bit-identical Boost 1.90.0 build re-use the same
+`boost-1.90.0+cvc.1` bundle artifact; only the
+`libcvc-deps-<release>-index.yaml` differs.
+
+Examples (a mixed set, all Linux x86_64, Release, shared):
+
+```
+libcvc-deps-boost-1.90.0+cvc.1-linux-x86_64-release-shared.tar.gz
+libcvc-deps-hdf5-1.14.4+cvc.2-linux-x86_64-release-shared.tar.gz
+libcvc-deps-fftw3-3.3.10+cvc.1-linux-x86_64-release-shared.tar.gz
+libcvc-deps-grpc-1.76.0+cvc.1-linux-x86_64-release-shared.tar.gz
+libcvc-deps-qt6-6.8.2+cvc.1-linux-x86_64-release-shared.tar.gz
+libcvc-deps-vtk-9.5.0+cvc.3-linux-x86_64-release-shared.tar.gz
+...
+```
+
+`+cvc.<rev>` is SemVer build-metadata; for ordering purposes only
+the leading `<upstream-version>` participates in version-range
+comparisons. The `<rev>` is a tiebreaker used by the resolver
+when multiple bundles with the same upstream version are
+available (highest `<rev>` wins, unless explicitly pinned).
+
+The `<config>` field (`debug`/`release`) is dropped for
+config-agnostic bundles (headers-only, build tools). The
+`<link>` field is dropped on platforms where it does not apply
+(e.g. macOS-only bundles where we ship one flavor).
+
+A bundle's archive is structurally identical to today's monolithic
+bundle — a `prefix/{bin,lib,include,share,...}` tree — but
+containing only the files for that one component plus its in-bundle
+metadata under `share/libcvc-deps/`.
+
+### 3.2 Manifest
+
+Each bundle ships a manifest at:
+
+```
+share/libcvc-deps/manifest.yaml
+```
+
+YAML chosen so we can reuse the libyaml dependency we already ship
+(no new runtime dep) and because humans read it more easily than
+JSON. Schema:
+
+```yaml
+schema_version: 2
+bundle:
+  name: grpc                       # short, lowercase, hyphen-separated
+  version: 1.76.0+cvc.1            # component version (upstream+cvc.rev)
+  upstream_version: 1.76.0         # convenience copy of the upstream version
+  cvc_revision: 1                  # convenience copy of the +cvc.<rev> int
+  introduced_in: 1.1.0             # earliest libcvc-deps release shipping this bundle
+  last_seen_in: 1.3.0              # latest libcvc-deps release shipping this bundle
+  platform: windows                # linux | macos | windows
+  arch: x86_64                     # x86_64 | arm64
+  build_type: release              # release | debug | none
+  link: shared                     # shared | static | none
+  triplet: x64-windows             # platform-native triplet/RID (optional)
+
+contents:
+  description: >
+    gRPC C++ runtime, codegen plugins, and the protobuf libraries
+    it depends on. Provides CMake CONFIG packages Protobuf and
+    gRPC.
+  files:
+    # Top-level paths (relative to bundle root) that this bundle
+    # owns. Used by the local tool for collision detection and
+    # for clean uninstall. Globs allowed.
+    - bin/protoc.exe
+    - bin/grpc_cpp_plugin.exe
+    - bin/grpc_*.dll
+    - lib/grpc*.lib
+    - lib/protobuf*.lib
+    - include/grpc/
+    - include/grpcpp/
+    - include/google/protobuf/
+    - share/grpc/
+    - share/protobuf/
+    - lib/cmake/grpc/
+    - lib/cmake/protobuf/
+  cmake_packages:
+    # find_package CONFIG packages this bundle provides.
+    - name: Protobuf
+      targets: [protobuf::libprotobuf, protobuf::libprotoc]
+    - name: gRPC
+      targets: [gRPC::grpc, gRPC::grpc++]
+  pkgconfig:
+    - protobuf.pc
+    - grpc.pc
+    - grpc++.pc
+  tools:
+    # Executables shipped in bin/ that consumers may invoke.
+    - protoc
+    - grpc_cpp_plugin
+
+dependencies:
+  # Other component bundles required at the bundled configuration.
+  # Versions are expressed in terms of the dependency component's
+  # OWN upstream version (NOT the libcvc-deps release version),
+  # so the resolver can satisfy them from any libcvc-deps release
+  # that ships a compatible bundle. SemVer range syntax
+  # (>=, <, ~>, ^, ==, plus ABI-compat ~=, plus '||' for unions).
+  required:
+    - name: abseil
+      version: ">=20240722,<20260000"      # ABI-stable LTS line
+      reason: gRPC ABI requires matching Abseil major
+    - name: openssl
+      version: "^3.0"                       # any 3.x
+    - name: c-ares
+      version: ">=1.34.0"
+    - name: re2
+      version: ">=2024-07-02"
+    - name: zlib
+      version: "^1.3"
+  optional: []
+
+provides:
+  # Virtual capabilities other bundles can depend on. Used so e.g.
+  # 'hdf5' can depend on 'zlib' without caring whether zlib comes
+  # from the 'zlib' bundle or is provided transitively by another
+  # bundle that bundled its own copy.
+  - protobuf-runtime
+  - grpc-runtime
+
+system_requirements:
+  # Things that must already be on the host; the local tool
+  # surfaces these as a checklist, not as something it installs.
+  linux:
+    apt:  []
+    yum:  []
+  macos:
+    brew: []
+  windows: {}
+
+integrity:
+  # Populated at release time by CI.
+  sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+  size_bytes: 0
+  built_at: "2026-05-19T22:00:00Z"
+  source:
+    type: vcpkg              # vcpkg | apt | brew | vendored | upstream-tarball
+    triplet: x64-windows
+```
+
+Each release ships one **release index** alongside the bundle
+archives:
+
+```
+libcvc-deps-1.1.0-index.yaml
+```
+
+containing the full list of bundle filenames, their component
+versions, their SHA-256s/sizes, and a copy of each bundle's
+`manifest.yaml.bundle` and `dependencies` blocks. The index is
+additionally curated: it carries a top-level
+`recommended:` map giving the exact component version this
+release was tested against (e.g. `boost: 1.90.0+cvc.1`,
+`grpc: 1.76.0+cvc.1`), so a consumer pinning only the release
+version still gets a reproducible install.
+
+In addition, a release **catalog** is published that aggregates
+every release index ever produced:
+
+```
+libcvc-deps-catalog.yaml      # union of all libcvc-deps-*-index.yaml
+```
+
+The catalog enables cross-release resolution (§5.5): the tool can
+find a component version that satisfies a dependency range even
+if no single release shipped exactly that combination. A bundle
+artifact is referenced by its archive URL (typically a GitHub
+Releases asset URL on the release that first shipped it), and is
+immutable once published. Catalog regeneration is mechanical and
+happens automatically on every release.
+
+### 3.3 Component grouping
+
+Not every upstream package gets its own bundle. The grouping
+principle: **bundle together packages that are always co-installed
+because they have hard 1:1 transitive dependencies and no useful
+independent use case**. Initial component list:
+
+| Bundle | Contents | Rationale |
+|---|---|---|
+| `boost` | All Boost libraries we ship | Single upstream release; consumers either need Boost or don't |
+| `hdf5` | HDF5 C + C++ + the few transitive bits | Always used together |
+| `fftw3` | FFTW3 single + double + threads | Always used together |
+| `gsl` | GSL | Standalone |
+| `log4cplus` | log4cplus | Standalone |
+| `tiff` | libtiff + libdeflate/jpeg if vendored | Always with tiff |
+| `yaml` | libyaml | Standalone, small |
+| `protobuf` | Protocol Buffers C++ runtime + protoc | Always under gRPC |
+| `grpc` | gRPC C++ runtime + plugins | Pulls protobuf, abseil, c-ares, openssl, re2, zlib |
+| `abseil` | Abseil | Often a transitive dep of grpc only, but used directly by some downstreams |
+| `c-ares` | c-ares | Standalone |
+| `openssl` | OpenSSL | Standalone |
+| `re2` | RE2 | Standalone |
+| `zlib` | zlib | Standalone |
+| `cgal` | CGAL + GMP + MPFR + MPIR | These three are useless apart |
+| `imagemagick` | ImageMagick Q16-HDRI | Standalone, large |
+| `qt6` | Qt 6 Core/Gui/Widgets/OpenGL/OpenGLWidgets | Always together |
+| `vtk` | VTK 9.5 (Qt6 enabled) | Depends on qt6 |
+| `libiimod` | IMOD's MRC/TIFF subset | Standalone |
+| `levmar` | levmar (LAPACK) | Standalone, vendored |
+| `pthreads4w` | pthreads4w | Windows-only |
+| `nfft3` | NFFT3 | Windows-only (MSYS2-built, staged) |
+| `clapack` | clapack + f2c | Windows-only, for levmar's LAPACK |
+| `openblas` | OpenBLAS | Standalone |
+
+A future refinement can split `vtk` into a kernel bundle plus
+opt-in modules (`vtk-rendering-qt`, `vtk-ioxml`, etc.) but that is
+out of scope for the initial split.
+
+### 3.4 Size estimate
+
+Rough breakdown of the current ~2 GB Windows Release/shared bundle:
+
+| Component | Approx size | % of total |
+|---|---|---|
+| Qt 6 (Core/Gui/Widgets/OpenGL/...) | 700 MB | 35% |
+| VTK 9.5 install tree | 500 MB | 25% |
+| Boost (all of it) | 250 MB | 13% |
+| ImageMagick Q16-HDRI | 150 MB | 8% |
+| HDF5 + tiff | 90 MB | 5% |
+| gRPC + Protobuf + transitives | 120 MB | 6% |
+| CGAL + GMP + MPFR | 40 MB | 2% |
+| Everything else combined | 150 MB | 8% |
+
+The biggest wins from splitting:
+
+- A consumer that needs only `boost + hdf5 + fftw3 + tiff` (e.g.
+  a headless command-line tool) downloads ~370 MB instead of 2 GB.
+- A consumer adding `qt6 + vtk` for visualization pulls another
+  ~1.2 GB, but only when they actually want it.
+- A grpc-only microservice that doesn't need any of our science
+  stack downloads ~130 MB (grpc + protobuf + transitives).
+
+## 4. Materialization layout
+
+Consumers do not run consumer tooling against the bundle archives
+directly. They:
+
+1. Either extract one bundle (works exactly like today for
+   single-component consumers), or
+2. Use the local tool from §5 to materialize a **build prefix**
+   that contains several bundles merged into one
+   `find_package`-compatible tree.
+
+The build prefix layout matches what a single monolithic bundle
+provides today:
+
+```
+<prefix>/
+  bin/                  # all executables and (on Windows) DLLs
+  lib/                  # static + import libs + .so/.dylib
+  lib/cmake/<pkg>/      # CMake CONFIG packages
+  lib/pkgconfig/        # pkg-config files
+  include/              # all headers
+  share/                # data, docs
+  share/libcvc-deps/
+    installed/<bundle>/manifest.yaml   # one per installed bundle
+    index.yaml                          # the release index that
+                                        # produced this prefix
+    lockfile.yaml                       # what bundles+versions are
+                                        # installed (see §5.4)
+```
+
+This is intentionally identical to today's bundle layout so the
+existing `CMAKE_PREFIX_PATH=<prefix>` usage pattern works
+unchanged.
+
+### 4.1 Collision policy
+
+When two bundles ship a file at the same path, the local tool:
+
+- **Identical-content collisions** (same SHA-256): silently OK.
+  Common for tiny shared headers (e.g. `share/cmake/<...>.cmake`
+  fragments injected by vcpkg).
+- **Differing-content collisions**: hard error with a manifest-
+  diagnostic message listing both owners and the diff path.
+  Resolved by tightening one bundle's `contents.files`.
+
+The manifest's `contents.files` declarations are checked at release
+time in CI so collisions cannot ship.
+
+## 5. Local management tool: `cvcpkg`
+
+A small Python tool that resolves a requirement set against a
+release index, downloads the relevant bundles, and materializes a
+build prefix. Lives under `tools/cvcpkg/` in this repo.
+
+Design goals: **simple, dependency-light, no daemons, no global
+state**. Everything is local to the current working tree.
+
+### 5.1 Dependencies
+
+- Python ≥3.10 (already a developer prerequisite in our
+  repos).
+- `PyYAML` (single third-party dependency, already pinned to
+  v6.x in the existing `generate_*.py` scripts in this workspace
+  for `CVC-modernization-plan.md` etc.).
+- Stdlib `urllib.request`, `hashlib`, `tarfile`, `zipfile`,
+  `argparse`, `concurrent.futures` for the rest.
+
+Optional: `tqdm` for progress bars; the tool degrades gracefully if
+absent.
+
+### 5.2 CLI surface
+
+```
+cvcpkg install   --release <ver> [--prefix DIR] [--platform P]
+                 [--config release|debug] [--link shared|static]
+                 [--from FILE | <component>...]
+cvcpkg add       <component>...              # add to lockfile + install
+cvcpkg remove    <component>...              # remove + uninstall
+cvcpkg list      [--installed | --available]
+cvcpkg info      <component>
+cvcpkg verify                                # re-checksum the prefix
+cvcpkg lock                                  # write/refresh lockfile
+cvcpkg sync                                  # ensure prefix == lockfile
+cvcpkg index     --release <ver> [--mirror URL]
+cvcpkg gc                                    # prune the local cache
+```
+
+Single-file invocations (`cvcpkg install --from requirements.yaml`)
+are the recommended workflow for downstream projects so the
+required set is checked into the consumer's repo.
+
+### 5.3 Requirements file
+
+A consumer ships a `cvc-requirements.yaml` in their repo. Two
+styles are supported and may be mixed:
+
+**Style A — pin a `libcvc-deps` release, take its recommended set:**
+
+```yaml
+platform: auto                 # auto | linux | macos | windows
+arch: auto                     # auto | x86_64 | arm64
+config: release                # release | debug
+link: shared                   # shared | static
+
+libcvc-deps: "1.1.0"           # use this release's recommended versions
+
+components:
+  - boost
+  - hdf5
+  - fftw3
+  - tiff
+  - grpc
+```
+
+**Style B — pin per-component versions, ignore the release umbrella:**
+
+```yaml
+platform: auto
+config: release
+link: shared
+
+# No top-level libcvc-deps key. The resolver searches the full
+# catalog across all releases.
+components:
+  - name: boost
+    version: "==1.86.0"        # downstream wants old Boost, not the latest
+  - name: hdf5
+    version: "^1.14"
+  - name: fftw3                  # no constraint => latest catalog match
+  - name: grpc
+    version: "~>1.76"            # 1.76.x, pulled in transitively too
+```
+
+**Mixed style — release as a default, with per-component overrides:**
+
+```yaml
+libcvc-deps: "1.3.0"           # baseline: use 1.3.0's recommended versions
+overrides:
+  - name: boost
+    version: "==1.86.0"        # but force old Boost
+  - name: vtk
+    exclude: true              # we don't want VTK at all
+components:
+  - boost
+  - hdf5
+  - grpc
+```
+
+`cvcpkg install --from cvc-requirements.yaml --prefix ./deps`
+resolves against the catalog and produces `./deps/` ready for
+`cmake -DCMAKE_PREFIX_PATH=$PWD/deps ...`.
+
+### 5.4 Lockfile
+
+After a successful install the tool writes
+`share/libcvc-deps/lockfile.yaml` in the prefix. The lockfile
+pins **per-component versions** and records the originating
+`libcvc-deps` release of each (so an audit can reproduce where
+every bit came from), but the lockfile itself is not tied to a
+single release:
+
+```yaml
+schema_version: 2
+platform: linux
+arch: x86_64
+config: release
+link: shared
+resolved_at: "2026-05-19T22:30:00Z"
+catalog_revision: "2026-05-19T20:00:00Z"   # catalog snapshot used
+
+bundles:
+  - name: boost
+    version: "1.86.0+cvc.2"
+    upstream_version: "1.86.0"
+    source_release: "1.0.0"                # libcvc-deps release that shipped it
+    sha256: "..."
+    size_bytes: 261000000
+    archive_url: "https://github.com/transfix/libcvc-deps/releases/download/v1.0.0/libcvc-deps-boost-1.86.0+cvc.2-linux-x86_64-release-shared.tar.gz"
+  - name: hdf5
+    version: "1.14.4+cvc.2"
+    source_release: "1.3.0"
+    ...
+  - name: grpc
+    version: "1.76.0+cvc.1"
+    source_release: "1.1.0"
+    ...
+```
+
+A single prefix can — and routinely will — contain bundles drawn
+from several `libcvc-deps` releases.
+
+The lockfile is also writable as `./cvc-lock.yaml` next to a
+requirements file when the consumer wants to commit it to their
+repo. `cvcpkg sync` reads the lockfile and idempotently brings the
+prefix to that exact state — this is how CI reproducibly
+materializes the same prefix across machines.
+
+### 5.5 Resolution algorithm
+
+The resolver is a small SAT-style backtracking solver over the
+catalog. Inputs: the requirements file (top-level constraints,
+optional `libcvc-deps:` baseline, `overrides`), the platform tuple,
+and the catalog (all bundles from all releases for that tuple).
+
+For each component, the **candidate set** is the list of all
+bundle versions in the catalog that:
+
+1. Match the requested `(platform, arch, config, link)` tuple.
+2. Satisfy any user-supplied version constraint.
+3. Are not excluded by the requirements file or by a higher-level
+   pin in the resolution stack.
+
+Candidates are ordered by preference: (a) the version explicitly
+pinned by the user, (b) the version `recommended` by the
+`libcvc-deps:` baseline release (if any), (c) the highest
+upstream version that satisfies all constraints, (d) within an
+upstream version, the highest `+cvc.<rev>`.
+
+```
+resolve(requirements, catalog):
+    constraints = collect_top_level(requirements)
+    return backtrack(constraints, picked={}, stack=[])
+
+backtrack(constraints, picked, stack):
+    if all constraints satisfied: return picked
+    name = pick_next_component(constraints, picked)
+    for cand in candidates(name, constraints, catalog):
+        new = picked | {name: cand}
+        new_constraints = constraints | cand.dependencies.required
+        if conflicts(new_constraints, new):
+            continue
+        result = backtrack(new_constraints, new, stack+[cand])
+        if result is not None: return result
+    return None        # backtrack; caller tries the next candidate
+```
+
+Conflict detection: a chosen bundle X for component A requires
+`B >=2.0`; an already-picked bundle Y for component C requires
+`B <2.0`. The solver backtracks and either picks a different X
+or a different Y. If no assignment exists the tool prints the
+full conflict chain and exits non-zero.
+
+Multi-release mixing model: a single prefix MAY contain bundles
+drawn from different `libcvc-deps` releases. The only hard
+constraint is that the resolved bundle set must form a
+consistent dependency graph. This is what makes the system
+robust to:
+
+- A downstream pinning an older `boost` for ABI reasons while
+  taking the newest `grpc` from a later release.
+- A component being dropped from a future `libcvc-deps` release
+  (e.g. `imagemagick` retired in 1.4.0): downstreams that still
+  need it pull it from the last release that shipped it (the
+  bundle's manifest declares `last_seen_in: 1.3.0`), no
+  republishing required.
+- A consumer pinning `libcvc-deps: 1.1.0` but selectively
+  upgrading a single component to a later release's bundle for a
+  bugfix.
+
+The one rule we still enforce: per-component **bundle identity**
+is immutable. A given `<name>-<version>` archive must be
+bit-identical no matter which release index references it; the
+resolver assumes archives are content-addressable by SHA-256.
+
+### 5.6 Cache
+
+Downloaded archives go to a content-addressed cache:
+
+```
+~/.cache/cvcpkg/<sha256>/<original-filename>
+```
+
+This is shared across all prefixes on the machine; `cvcpkg gc`
+prunes archives not referenced by any known lockfile. CI uses
+`CVCPKG_CACHE=$RUNNER_TEMP/cvcpkg-cache` plus
+`actions/cache@v4` keyed on the lockfile's hash for a one-time
+populate-then-cache pattern.
+
+### 5.7 Verification
+
+Every `install`/`sync` action:
+
+1. Re-fetches the **catalog** (`libcvc-deps-catalog.yaml`) over
+   HTTPS, plus any per-release indexes it references that are not
+   already cached. The catalog itself carries integrity hashes
+   for each release index, and each release index carries
+   SHA-256s for its bundles, so trust chains back to the
+   `transfix/libcvc-deps` repo's signed release tags.
+2. For each resolved bundle, verifies SHA-256 against the
+   catalog entry before extraction. Because bundle artifacts are
+   immutable (§5.5), a hash mismatch is always a hard error.
+3. After extraction, verifies the bundle's
+   `share/libcvc-deps/manifest.yaml` is internally consistent
+   (every file listed under `contents.files` exists; no extras).
+
+`cvcpkg verify` repeats step 3 against an already-installed prefix.
+
+### 5.8 Out-of-band fallback
+
+If no bundle in the catalog can satisfy the requirements, the
+tool emits a precise diagnostic citing the conflict chain:
+
+```
+cvcpkg: ERROR: cannot satisfy requirement 'grpc ~>1.76' together
+  with 'abseil <20240722' pinned by user.
+  Candidate grpc-1.76.0+cvc.1 (from libcvc-deps 1.1.0) requires
+    abseil >=20240722,<20260000
+  No other grpc-1.76.x bundle exists in the catalog.
+  Suggestion: relax the abseil pin, or pin grpc to an older line.
+```
+
+For a missing component:
+
+```
+cvcpkg: ERROR: component 'mkl' is not present in any libcvc-deps
+  release catalog entry for linux/x86_64/release/shared.
+  See https://github.com/transfix/libcvc-deps/releases
+```
+
+The tool intentionally does **not** try to fall back to monolithic
+bundles, system packages, or vcpkg. Failure is loud and explicit.
+## 6. Compatibility with today's monolithic bundles
+
+For at least one release after the split lands, we ship **both**:
+
+- The new component bundles (preferred).
+- A meta-bundle named `libcvc-deps-all-...` that is the
+  union of all components for that platform/config — i.e. the
+  monolithic bundle as it exists today, byte-for-byte.
+
+Consumers using `LIBCVC_DEPS_ROOT` with the existing monolithic
+bundle keep working unchanged during the transition. The
+deprecation timeline is announced via the release notes and
+`README.md`; the meta-bundle is removed in the second release after
+the split lands.
+
+## 7. CI changes (sketch only — no implementation in this doc)
+
+- The existing `windows-vcpkg`, `windows-vtk`, `linux`, `macos`
+  build jobs are unchanged.
+- A new `package` stage replaces the current single-archive
+  `Pack zip` step. It:
+  1. Reads `packaging/components.yaml` (the source of truth for
+     §3.3's component table).
+  2. For each component, copies the matching subset of files from
+     the build install tree into a staging directory.
+  3. Generates `share/libcvc-deps/manifest.yaml` from
+     `packaging/components.yaml` + measured file lists +
+     upstream-version probes (`<pkg>-config.cmake`,
+     `pkg-config --modversion`, etc.).
+  4. Archives each component (tar.gz on Linux/macOS, zip via 7z on
+     Windows) and computes SHA-256 + size.
+  5. Aggregates per-component metadata into the release
+     `*-index.yaml` and merges that index into the rolling
+     `libcvc-deps-catalog.yaml` (republished as a release asset
+     on every release for easy fetch).
+  6. **Skips re-archiving** any component whose computed
+     `(upstream_version, build inputs hash)` matches a bundle
+     already published in a previous release; the new release
+     index simply references the existing artifact URL. This is
+     what makes `<upstream-version>+cvc.<rev>` stable across
+     releases when nothing about the component changed.
+- The `release` job uploads all component archives plus the index
+  to the GitHub Release.
+- An optional `meta-bundle` job assembles `libcvc-deps-all-*`
+  from the per-component archives for backwards compatibility
+  (cheap: just `tar -A` / 7z concatenate of already-built archives
+  into one).
+
+## 8. Migration plan
+
+| Phase | Goal | Output | Acceptance criterion |
+|---|---|---|---|
+| 0 | This doc | `docs/roadmap-split-distribution.md` | Reviewed |
+| 1 | `packaging/components.yaml` + manifest schema | Source of truth + JSON-Schema / YAML schema doc | `make validate-components` in CI passes |
+| 2 | `tools/cvcpkg/` skeleton (CLI, catalog-aware resolver, downloader, cache) | Working `cvcpkg install` against a mocked catalog | Unit tests, can install a single fake bundle into a tmpdir; resolver picks correctly across two mock releases |
+| 3 | CI package stage on Linux first | Linux component bundles + per-release index + rolling catalog alongside the existing monolithic bundle | `cvcpkg install --from requirements.yaml --prefix /tmp/p` succeeds against the published catalog, downstream `libcvc` builds against `/tmp/p` |
+| 4 | macOS + Windows package stages | Full per-platform bundle set | All three platforms produce per-component bundles in CI |
+| 5 | Downstream adoption | `libcvc`, `volrover3`, `TexMol`, `F2Dock`, `molsurf` switch to `cvc-requirements.yaml` | Each downstream's CI uses `cvcpkg` |
+| 6 | Deprecate monolithic bundle | First release without `libcvc-deps-all-*` | Release notes call out the removal |
+
+Each phase is independently shippable; phases 1–4 are pure
+additions and do not change consumer behavior.
+
+## 9. Open questions
+
+These need answers before phase 1, but explicitly left open here:
+
+- **Q1.** Index/catalog hosting. The per-release `*-index.yaml`
+  files ship as release assets. The aggregated
+  `libcvc-deps-catalog.yaml` is regenerated on every release and
+  republished as an asset on the latest release; the tool falls
+  back to walking `gh api releases` to reconstruct the catalog if
+  the asset is missing. An alternative is a tiny
+  `gh-pages`-served `catalog.yaml` updated by a workflow on every
+  release — simpler to fetch (always at the same URL) but adds a
+  publishing path.
+- **Q2.** Catalog mutability. Component bundle artifacts are
+  immutable, but the catalog is regenerated each release. Should
+  the catalog also be append-only (signed, versioned), so a
+  reproducer can pin a `catalog_revision` and replay an old
+  resolution years later? The lockfile already records the
+  catalog snapshot timestamp; promoting that to a signed
+  catalog-version chain is a follow-up.
+- **Q3.** Signing. We currently rely on GitHub Release tags +
+  HTTPS for integrity. Should `cvcpkg` verify a Sigstore /
+  cosign signature on the catalog and per-release indexes
+  against the repo's published public key? Out of scope for v1
+  of the tool but worth a hook.
+- **Q4.** Static-link bundles on Windows. The current hybrid
+  static bundle stitches in shared `.dll` fallbacks for
+  cgal/gmp/mpfr + grpc/protobuf. When split into component
+  bundles, the `grpc` and `cgal` bundles for `link=static`
+  should still expose shared `.dll`s — i.e. the **bundle's
+  declared link mode is the consumer's expected
+  link mode for the bundle as a whole**, and the bundle is free
+  to ship `.dll`s when its underlying upstream cannot be built
+  static. Manifest should add a `link_actual` field next to
+  `link` to make this explicit.
+- **Q5.** Per-component debug PDBs. Today the Debug bundle
+  carries both release and debug `.lib`s plus PDBs. Should
+  PDBs become their own per-component bundle
+  (`libcvc-deps-<pkg>-pdb-...`) so consumers who do not debug
+  into our deps can skip half the Windows download? Defer to a
+  follow-up.
+- **Q6.** ABI compatibility metadata. Per-component version
+  ranges across releases mean we'll occasionally pair a bundle
+  with a transitive dep version it wasn't originally tested
+  against. Should manifests declare an explicit ABI tag
+  (e.g. `abi: cxx17-gcc11-glibc2.31`) that the resolver enforces
+  in addition to version ranges? Likely yes, in a `schema_version: 3`.
+
+## 10. Summary
+
+- Split the monolithic `libcvc-deps` bundle into ~25 per-component
+  archives. Each bundle has its **own** version
+  (`<upstream-version>+cvc.<rev>`) and declares dependencies in
+  terms of other components' versions, not the `libcvc-deps`
+  release version.
+- Publish a per-release `*-index.yaml` (the curated, tested set
+  for that release) **and** a rolling `libcvc-deps-catalog.yaml`
+  aggregating every bundle from every release.
+- Ship a small Python tool (`cvcpkg`) whose resolver searches the
+  full catalog, so a single materialized prefix can pull bundles
+  from multiple `libcvc-deps` releases as needed — supporting
+  downstreams that pin old component versions, downstreams that
+  want a future release's bugfix for one component only, and
+  components that get dropped from future releases.
+- Keep the existing monolithic bundle one extra release for
+  backwards compatibility.
+- Result: downstream projects download only what they need, the
+  >2 GB Windows monoliths go away, and the existing
+  `CMAKE_PREFIX_PATH=<prefix>` consumer story stays identical.
