@@ -438,23 +438,139 @@ time in CI so collisions cannot ship.
 
 A small Python tool that resolves a requirement set against a
 release index, downloads the relevant bundles, and materializes a
-build prefix. Lives under `tools/cvcpkg/` in this repo.
+build prefix. Lives under `tools/cvcpkg/` in this repo and is
+distributed as a standalone Python package on PyPI for use by lab
+collaborators and external downstreams who don't want to clone the
+`libcvc-deps` repo just to fetch its bundles.
 
 Design goals: **simple, dependency-light, no daemons, no global
 state**. Everything is local to the current working tree.
 
-### 5.1 Dependencies
+### 5.1 Packaging and distribution
 
-- Python ≥3.10 (already a developer prerequisite in our
-  repos).
-- `PyYAML` (single third-party dependency, already pinned to
-  v6.x in the existing `generate_*.py` scripts in this workspace
-  for `CVC-modernization-plan.md` etc.).
+`cvcpkg` is a Poetry-managed Python package, structured to be
+publishable to PyPI:
+
+```
+tools/cvcpkg/
+  pyproject.toml          # poetry build-system, project metadata, deps, entry point
+  README.md               # PyPI-rendered usage docs
+  LICENSE                 # mirrors the libcvc-deps top-level LICENSE
+  src/
+    cvcpkg/
+      __init__.py         # exports __version__
+      __main__.py         # `python -m cvcpkg` entry
+      cli.py              # argparse / command dispatch
+      catalog.py          # fetch + verify catalog/<rev>.yaml
+      resolver.py         # backtracking SAT-style resolver (\u00a75.5)
+      manifest.py         # pydantic / dataclass models for manifest.yaml
+      installer.py        # download, verify SHA-256, extract into prefix
+      lockfile.py         # read/write lockfile.yaml (\u00a75.4)
+      cache.py            # ~/.cache/cvcpkg/<sha256>/ management
+      abi.py              # ABI-tag compatibility checks (\u00a73.2.1)
+      platform.py         # auto-detect (platform, arch, libc, crt)
+      semver.py           # version-range parser (>=, <, ^, ~>, ==, ||)
+      errors.py           # typed exceptions
+  tests/
+    unit/                 # pure-function tests, no network
+    integration/          # against fixture catalogs in tests/fixtures/
+    fixtures/             # sample catalog/<rev>.yaml + tiny bundle tarballs
+```
+
+`pyproject.toml` highlights:
+
+```toml
+[tool.poetry]
+name = "cvcpkg"
+version = "0.1.0"
+description = "Component package manager for libcvc-deps prebuilt dependency bundles"
+authors = ["UT CVC Lab <cvc@cs.utexas.edu>"]
+license = "MIT"                                # match libcvc-deps
+readme = "README.md"
+homepage = "https://github.com/transfix/libcvc-deps"
+repository = "https://github.com/transfix/libcvc-deps"
+documentation = "https://transfix.github.io/libcvc-deps/"
+keywords = ["package-manager", "cmake", "scientific-computing", "libcvc-deps"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS :: MacOS X",
+  "Operating System :: Microsoft :: Windows",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Build Tools",
+]
+packages = [{ include = "cvcpkg", from = "src" }]
+
+[tool.poetry.dependencies]
+python      = "^3.10"
+PyYAML      = "^6.0"
+# Optional progress bars; falls back to silent if missing.
+tqdm        = { version = "^4.66", optional = true }
+# Optional Sigstore verification (Follow-up F1); not required for v1.
+sigstore    = { version = "^3.0", optional = true }
+
+[tool.poetry.extras]
+progress = ["tqdm"]
+signing  = ["sigstore"]
+all      = ["tqdm", "sigstore"]
+
+[tool.poetry.group.dev.dependencies]
+pytest        = "^8.0"
+pytest-cov    = "^5.0"
+ruff          = "^0.6"
+mypy          = "^1.10"
+
+[tool.poetry.scripts]
+cvcpkg = "cvcpkg.cli:main"
+
+[build-system]
+requires = ["poetry-core>=1.8.0"]
+build-backend = "poetry.core.masonry.api"
+```
+
+Install paths for collaborators:
+
+```bash
+# Recommended (isolated, latest):
+pipx install cvcpkg
+
+# Or:
+pip install --user cvcpkg
+pip install --user 'cvcpkg[progress]'        # with tqdm
+pip install --user 'cvcpkg[all]'             # everything optional
+
+# Or pin a specific version in a project's requirements:
+echo 'cvcpkg ~=0.1' >> requirements.txt
+```
+
+Release process (separate from the bundle release):
+
+- Tag `cvcpkg-vX.Y.Z` in this repo triggers a `cvcpkg-publish.yml`
+  GitHub Actions workflow that runs
+  `poetry build && poetry publish --username __token__ --password $PYPI_TOKEN`.
+- `PYPI_TOKEN` lives in the repo's Actions secrets, scoped to the
+  `cvcpkg` PyPI project only.
+- The `cvcpkg` package version is independent of the `libcvc-deps`
+  release version; the tool is forward- and backward-compatible
+  with any catalog whose `schema_version` is within its declared
+  supported range (`cvcpkg.__supported_schemas__ = {1, 2, 3}`).
+
+Runtime/build-time dependencies:
+
+- Python ≥3.10 (already a developer prerequisite in our repos).
+- `PyYAML` ^6.0 (single mandatory third-party dependency).
 - Stdlib `urllib.request`, `hashlib`, `tarfile`, `zipfile`,
   `argparse`, `concurrent.futures` for the rest.
-
-Optional: `tqdm` for progress bars; the tool degrades gracefully if
-absent.
+- Optional extras: `tqdm` (progress bars), `sigstore` (catalog
+  signature verification, see Follow-up F1). The tool degrades
+  gracefully when extras are absent.
 
 ### 5.2 CLI surface
 
@@ -773,7 +889,8 @@ the split lands.
 |---|---|---|---|
 | 0 | This doc | `docs/roadmap-split-distribution.md` | Reviewed |
 | 1 | `packaging/components.yaml` + manifest schema | Source of truth + JSON-Schema / YAML schema doc | `make validate-components` in CI passes |
-| 2 | `tools/cvcpkg/` skeleton (CLI, catalog-aware resolver, downloader, cache) | Working `cvcpkg install` against a mocked catalog | Unit tests, can install a single fake bundle into a tmpdir; resolver picks correctly across two mock releases |
+| 2 | `tools/cvcpkg/` Poetry package (CLI, catalog-aware resolver, downloader, cache) | Working `cvcpkg install` against a mocked catalog; `poetry build` produces a wheel | Unit tests pass; `pipx install ./dist/cvcpkg-*.whl` works; resolver picks correctly across two mock releases |
+| 2b | `cvcpkg` published to PyPI as `0.1.0a1` | `pip install cvcpkg` works on Linux/macOS/Windows | Pre-release tag `cvcpkg-v0.1.0a1` triggers `cvcpkg-publish.yml`; package visible on pypi.org |
 | 3 | CI package stage on Linux first | Linux component bundles + per-release index + rolling catalog alongside the existing monolithic bundle | `cvcpkg install --from requirements.yaml --prefix /tmp/p` succeeds against the published catalog, downstream `libcvc` builds against `/tmp/p` |
 | 4 | macOS + Windows package stages | Full per-platform bundle set | All three platforms produce per-component bundles in CI |
 | 5 | Downstream adoption | `libcvc`, `volrover3`, `TexMol`, `F2Dock`, `molsurf` switch to `cvc-requirements.yaml` | Each downstream's CI uses `cvcpkg` |

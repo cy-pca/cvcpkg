@@ -1691,6 +1691,31 @@ jobs:
       # the smaller VTK Debug cache before the assemble job could
       # read it — see commit log for run 26125864896).
       - name: Upload VTK artifact
+        id: upload_vtk
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: vtk-${{ matrix.build_type }}
+          path: D:\vtk-qt6
+          retention-days: 1
+          if-no-files-found: error
+      # actions/upload-artifact occasionally fails with transient
+      # "The server is busy" responses from Azure blob storage
+      # (seen on run 26133963158 / windows-vtk Debug, 2026-05-20).
+      # Retry up to two more times with short backoff before giving
+      # up; each attempt is a fresh upload.
+      - name: Upload VTK artifact (retry 1)
+        id: upload_vtk_2
+        if: steps.upload_vtk.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: vtk-${{ matrix.build_type }}
+          path: D:\vtk-qt6
+          retention-days: 1
+          if-no-files-found: error
+      - name: Upload VTK artifact (retry 2)
+        if: steps.upload_vtk_2.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: vtk-${{ matrix.build_type }}
