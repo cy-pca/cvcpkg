@@ -1388,7 +1388,7 @@ same thing CI will execute on merge.
 
 | Phase | Goal | Output | Acceptance criterion |
 |---|---|---|---|
-| 0 | This doc | `docs/roadmap-split-distribution.md` | Reviewed |
+| 0 | This doc | `docs/roadmap/split-distribution.md` | Reviewed |
 | 1 | `packaging/components.yaml` + manifest schema | Source of truth + JSON-Schema / YAML schema doc | `make validate-components` in CI passes |
 | 1b | `recipes/` directory with recipe schema (§7.2) + builder contract (§7.3) | One reference recipe (`zlib`) end-to-end on Linux | `cvcpkg pack recipes/zlib` produces a valid bundle locally |
 | 2 | `tools/cvcpkg/` Poetry package (CLI, catalog-aware resolver, downloader, cache, recipe packager) | Working `cvcpkg install` against a mocked catalog and `cvcpkg pack` against one recipe; `poetry build` produces a wheel | Unit tests pass; `pipx install ./dist/cvcpkg-*.whl` works; resolver picks correctly across two mock releases |
