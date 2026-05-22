@@ -1,0 +1,55 @@
+schema_version: 1
+recipe:
+  name: zlib
+  upstream_version: "1.3.1"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  homepage: https://zlib.net/
+  license: Zlib
+
+source:
+  type: tarball
+  url: https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
+  sha256: "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libz*
+    - lib/zlib*
+    - lib/z.lib
+    - lib/zlibd.lib
+    - lib/cmake/ZLIB/
+    - lib/pkgconfig/zlib.pc
+    - include/zconf.h
+    - include/zlib.h
+    - share/man/man3/zlib*
+  cmake_packages:
+    - { name: ZLIB, targets: ["ZLIB::ZLIB"] }
+
+test:
+  script: test.sh
+
+abi:
+  cxx_std: 17

@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# recipes/_common/env-linux.sh — shared environment for Linux recipe builds.
+#
+# Sourced by every build.sh on Linux.  Sets compiler flags, paths,
+# and helper functions that all recipes share.
+set -euo pipefail
+
+: "${CVC_BUILD_TYPE:=Release}"
+: "${CVC_LINK:=shared}"
+: "${CVC_JOBS:=$(nproc 2>/dev/null || echo 4)}"
+: "${CVC_INSTALL_DIR:?CVC_INSTALL_DIR must be set}"
+: "${CVC_SOURCE_DIR:?CVC_SOURCE_DIR must be set}"
+: "${CVC_BUILD_DIR:?CVC_BUILD_DIR must be set}"
+
+export CC="${CC:-gcc}"
+export CXX="${CXX:-g++}"
+
+# Build-type → CMake flags mapping.
+case "${CVC_BUILD_TYPE,,}" in
+    release) CMAKE_BUILD_TYPE=Release  ;;
+    debug)   CMAKE_BUILD_TYPE=Debug    ;;
+    *)       CMAKE_BUILD_TYPE=Release  ;;
+esac
+
+# Shared/static → CMake flags.
+if [[ "${CVC_LINK}" == "static" ]]; then
+    BUILD_SHARED_LIBS=OFF
+else
+    BUILD_SHARED_LIBS=ON
+fi
+
+# Assemble CMAKE_PREFIX_PATH from $CVC_DEPS_PREFIX if set.
+if [[ -n "${CVC_DEPS_PREFIX:-}" ]]; then
+    export CMAKE_PREFIX_PATH="${CVC_DEPS_PREFIX}"
+fi
+
+# Helper: run cmake configure + build + install in one call.
+cvc_cmake_build() {
+    local extra_args=("$@")
+    cmake -G Ninja \
+        -S "${CVC_SOURCE_DIR}" \
+        -B "${CVC_BUILD_DIR}" \
+        -DCMAKE_INSTALL_PREFIX="${CVC_INSTALL_DIR}" \
+        -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" \
+        -DBUILD_SHARED_LIBS="${BUILD_SHARED_LIBS}" \
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+        "${extra_args[@]}"
+    cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
+    cmake --install "${CVC_BUILD_DIR}"
+}
+
+echo "── env-linux.sh loaded ──"
+echo "  CC=${CC}  CXX=${CXX}"
+echo "  BUILD_TYPE=${CMAKE_BUILD_TYPE}  LINK=${CVC_LINK}  JOBS=${CVC_JOBS}"
