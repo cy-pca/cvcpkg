@@ -71,6 +71,34 @@ def _build_parser() -> argparse.ArgumentParser:
     val.add_argument("target", nargs="?", default="all",
                      help="What to validate: all | components | recipes | recipes/<name>")
 
+    # ── build ────────────────────────────────────────────────────
+    bld = sub.add_parser("build", help="Build a recipe from source")
+    bld.add_argument("recipe", nargs="+", help="Recipe directory or name")
+    bld.add_argument("--platform", default="auto")
+    bld.add_argument("--config", default="release", choices=["release", "debug"])
+    bld.add_argument("--link", default="shared", choices=["shared", "static"])
+    bld.add_argument("--prefix", metavar="DIR", help="Install prefix")
+    bld.add_argument("--keep-build-dir", action="store_true")
+
+    # ── pack ─────────────────────────────────────────────────────
+    pak = sub.add_parser("pack", help="Build + archive a recipe")
+    pak.add_argument("recipe", nargs="+", help="Recipe directory or name")
+    pak.add_argument("--platform", default="auto")
+    pak.add_argument("--config", default="release", choices=["release", "debug"])
+    pak.add_argument("--link", default="shared", choices=["shared", "static"])
+    pak.add_argument("--prefix", metavar="DIR", help="Install prefix")
+    pak.add_argument("--output-dir", default="./dist", metavar="DIR")
+    pak.add_argument("--keep-build-dir", action="store_true")
+
+    # ── recipes ──────────────────────────────────────────────────
+    rec = sub.add_parser("recipes", help="List or inspect recipes")
+    rec_g = rec.add_mutually_exclusive_group()
+    rec_g.add_argument("--list", action="store_true", dest="list_recipes",
+                       help="List all recipes")
+    rec_g.add_argument("--show", metavar="NAME", help="Show details of a recipe")
+    rec_g.add_argument("--validate", action="store_true", dest="validate_recipes",
+                       help="Validate all recipes")
+
     return p
 
 
@@ -201,6 +229,110 @@ def _cmd_gc(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_recipe_dir(name: str) -> Path:
+    """Resolve a recipe name or path to its directory."""
+    p = Path(name)
+    if p.is_dir() and (p / "recipe.yaml").is_file():
+        return p.resolve()
+    # Try as a name under the recipes/ directory
+    from cvcpkg.builder import find_recipes_dir
+    recipes_dir = find_recipes_dir()
+    candidate = recipes_dir / name
+    if candidate.is_dir() and (candidate / "recipe.yaml").is_file():
+        return candidate.resolve()
+    raise FileNotFoundError(f"Recipe not found: {name}")
+
+
+def _cmd_build(args: argparse.Namespace) -> int:
+    """Handle ``cvcpkg build <recipe>...``."""
+    from cvcpkg.builder import build_recipe
+    from cvcpkg.platform import detect_platform
+
+    platform = args.platform if args.platform != "auto" else detect_platform()
+    prefix = Path(args.prefix).resolve() if args.prefix else None
+
+    for name in args.recipe:
+        recipe_dir = _resolve_recipe_dir(name)
+        build_recipe(
+            recipe_dir,
+            platform=platform,
+            config=args.config,
+            link=args.link,
+            prefix=prefix,
+            keep_build_dir=args.keep_build_dir,
+        )
+    return 0
+
+
+def _cmd_pack(args: argparse.Namespace) -> int:
+    """Handle ``cvcpkg pack <recipe>...``."""
+    from cvcpkg.builder import pack_recipe
+    from cvcpkg.platform import detect_platform
+
+    platform = args.platform if args.platform != "auto" else detect_platform()
+    prefix = Path(args.prefix).resolve() if args.prefix else None
+    output_dir = Path(args.output_dir).resolve()
+
+    for name in args.recipe:
+        recipe_dir = _resolve_recipe_dir(name)
+        archive, sha, size = pack_recipe(
+            recipe_dir,
+            platform=platform,
+            config=args.config,
+            link=args.link,
+            prefix=prefix,
+            output_dir=output_dir,
+            keep_build_dir=args.keep_build_dir,
+        )
+        print(f"  {archive} ({size:,} bytes, sha256={sha})")
+    return 0
+
+
+def _cmd_recipes(args: argparse.Namespace) -> int:
+    """Handle ``cvcpkg recipes``."""
+    from cvcpkg.builder import Recipe, find_recipes_dir, list_recipes
+
+    if args.show:
+        recipes_dir = find_recipes_dir()
+        recipe_dir = recipes_dir / args.show
+        if not (recipe_dir / "recipe.yaml").is_file():
+            print(f"cvcpkg: recipe '{args.show}' not found.")
+            return 1
+        recipe = Recipe.load(recipe_dir)
+        print(f"Name:     {recipe.name}")
+        print(f"Version:  {recipe.full_version}")
+        print(f"Source:   {recipe.source.type}")
+        if recipe.source.url:
+            print(f"URL:      {recipe.source.url}")
+        platforms = [m.platform for m in recipe.build_matrix]
+        print(f"Platforms: {', '.join(platforms)}")
+        deps = recipe.raw.get("depends", {}).get("build", [])
+        if deps:
+            dep_names = []
+            for d in deps:
+                if isinstance(d, str):
+                    dep_names.append(d)
+                else:
+                    dep_names.append(d.get("name", "?"))
+            print(f"Depends:  {', '.join(dep_names)}")
+        return 0
+
+    if args.validate_recipes:
+        return _cmd_validate(argparse.Namespace(target="all"))
+
+    # Default: --list
+    recipes = list_recipes()
+    if not recipes:
+        print("cvcpkg: no recipes found.")
+        return 1
+    print(f"{'Name':<20} {'Version':<18} {'Platforms'}")
+    print("-" * 60)
+    for r in recipes:
+        platforms = ", ".join(m.platform for m in r.build_matrix)
+        print(f"{r.name:<20} {r.full_version:<18} {platforms}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -216,6 +348,9 @@ def main(argv: list[str] | None = None) -> int:
             "validate": _cmd_validate,
             "verify": _cmd_verify,
             "gc": _cmd_gc,
+            "build": _cmd_build,
+            "pack": _cmd_pack,
+            "recipes": _cmd_recipes,
         }
         handler = handlers.get(args.command)
         if handler:
