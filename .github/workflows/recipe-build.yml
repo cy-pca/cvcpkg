@@ -105,7 +105,8 @@ jobs:
             libxrender-dev libxcursor-dev libxinerama-dev libxi-dev \
             libxext-dev libxfixes-dev libxrandr-dev libxcb1-dev \
             libx11-dev libx11-xcb-dev libfontconfig1-dev \
-            libfreetype-dev libharfbuzz-dev
+            libfreetype-dev libharfbuzz-dev \
+            liblapack-dev libblas-dev
 
       # ── System build tools (macOS) ──
       - name: Install system build tools (macOS)
