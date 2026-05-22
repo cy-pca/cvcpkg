@@ -25,7 +25,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(libcvc-deps
-  VERSION 1.1.0
+  VERSION 1.3.0
   DESCRIPTION "Prebuilt third-party dependency bundle for libcvc and volrover3"
   LANGUAGES NONE)
 
