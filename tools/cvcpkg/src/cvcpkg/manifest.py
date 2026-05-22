@@ -237,6 +237,7 @@ class Requirements:
     libcvc_deps: str = ""  # optional release pin
     components: list[ComponentReq] = field(default_factory=list)
     overrides: list[ComponentReq] = field(default_factory=list)
+    accept_abi_mismatch: bool = False
 
     @classmethod
     def from_dict(cls, d: dict) -> "Requirements":
@@ -271,6 +272,7 @@ class Requirements:
             libcvc_deps=d.get("libcvc-deps", ""),
             components=components,
             overrides=overrides,
+            accept_abi_mismatch=d.get("accept_abi_mismatch", False),
         )
 
     @classmethod

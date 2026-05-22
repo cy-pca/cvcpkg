@@ -692,3 +692,106 @@ class TestMultiRecipesDir:
         out = capsys.readouterr().out
         # Should show the version from d2 (cvc_revision=2)
         assert "1.0.0+cvc.2" in out
+
+
+# ── add / remove commands ───────────────────────────────────────
+
+
+class TestAddCommand:
+    def test_add_component(self, tmp_path, capsys):
+        req = tmp_path / "req.yaml"
+        req.write_text(yaml.dump({"components": ["zlib"]}))
+        ret = main(["add", "boost", "--from", str(req)])
+        assert ret == 0
+        data = yaml.safe_load(req.read_text())
+        names = [c if isinstance(c, str) else c.get("name", "") for c in data["components"]]
+        assert "boost" in names
+        assert "zlib" in names
+
+    def test_add_duplicate_skipped(self, tmp_path, capsys):
+        req = tmp_path / "req.yaml"
+        req.write_text(yaml.dump({"components": ["zlib"]}))
+        ret = main(["add", "zlib", "--from", str(req)])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "already" in out or "nothing" in out
+
+    def test_add_with_version(self, tmp_path, capsys):
+        req = tmp_path / "req.yaml"
+        req.write_text(yaml.dump({"components": []}))
+        ret = main(["add", "hdf5==1.14.5+cvc.1", "--from", str(req)])
+        assert ret == 0
+        data = yaml.safe_load(req.read_text())
+        assert any(isinstance(c, dict) and c.get("name") == "hdf5" for c in data["components"])
+
+
+class TestRemoveCommand:
+    def test_remove_component(self, tmp_path, capsys):
+        req = tmp_path / "req.yaml"
+        req.write_text(yaml.dump({"components": ["zlib", "boost"]}))
+        ret = main(["remove", "boost", "--from", str(req)])
+        assert ret == 0
+        data = yaml.safe_load(req.read_text())
+        names = [c if isinstance(c, str) else c.get("name", "") for c in data["components"]]
+        assert "boost" not in names
+        assert "zlib" in names
+
+    def test_remove_nonexistent(self, tmp_path, capsys):
+        req = tmp_path / "req.yaml"
+        req.write_text(yaml.dump({"components": ["zlib"]}))
+        ret = main(["remove", "nonexistent", "--from", str(req)])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "none of" in out.lower()
+
+
+# ── push command ────────────────────────────────────────────────
+
+
+class TestPushCommand:
+    def test_push_help(self, capsys):
+        ret = main(["push", "--help"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "push" in out.lower() or "upload" in out.lower()
+
+    def test_push_file_backend(self, tmp_path, capsys):
+        """Push an archive to a file:// destination."""
+        archive = tmp_path / "test-1.0.tar.gz"
+        archive.write_bytes(b"fake archive data")
+        dest_dir = tmp_path / "dest"
+        dest_dir.mkdir()
+        ret = main(["push", str(archive), "--dest", f"file://{dest_dir}"])
+        assert ret == 0
+        assert (dest_dir / "test-1.0.tar.gz").exists()
+        assert (dest_dir / "test-1.0.tar.gz").read_bytes() == b"fake archive data"
+
+    def test_push_missing_file(self, tmp_path, capsys):
+        ret = main(["push", str(tmp_path / "nonexistent.tar.gz"), "--dest", f"file://{tmp_path}"])
+        assert ret == 1
+
+
+# ── world command ───────────────────────────────────────────────
+
+
+class TestWorldCommand:
+    def test_world_help(self, capsys):
+        ret = main(["world", "--help"])
+        assert ret == 0
+
+    def test_world_empty_requirements(self, tmp_path, capsys):
+        req = tmp_path / "req.yaml"
+        req.write_text(yaml.dump({"components": []}))
+        ret = main(["world", "--from", str(req), "--prefix", str(tmp_path / "pfx")])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "no" in out.lower()
+
+
+# ── new subcommand help coverage ────────────────────────────────
+
+
+@pytest.mark.parametrize("subcmd", ["push", "add", "remove", "world"])
+def test_new_subcommand_help(subcmd, capsys):
+    ret = main([subcmd, "--help"])
+    assert ret == 0

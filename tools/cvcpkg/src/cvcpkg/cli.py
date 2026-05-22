@@ -675,6 +675,269 @@ def gc() -> None:
     click.echo(f"cvcpkg: pruned {removed} cached archive(s).")
 
 
+# ── push ────────────────────────────────────────────────────────
+
+
+@cli.command()
+@click.argument("archives", nargs=-1, required=True)
+@click.option(
+    "--dest",
+    required=True,
+    metavar="URI",
+    help="Destination URI (e.g. s3://bucket/prefix, sftp://host/path, file:///local).",
+)
+def push(archives: tuple[str, ...], dest: str) -> None:
+    """Push bundle archive(s) to a storage backend.
+
+    Uploads each ARCHIVE file to DEST using the storage backend
+    registered for its URI scheme.
+
+    \b
+    Examples:
+      cvcpkg push dist/*.tar.zst --dest s3://my-bucket/cvcpkg/
+      cvcpkg push dist/*.tar.zst --dest sftp://builds.example.com/pub/cvcpkg/
+    """
+    from cvcpkg.storage import get_backend
+
+    backend = get_backend(dest)
+
+    for archive in archives:
+        p = Path(archive)
+        if not p.is_file():
+            raise click.ClickException(f"file not found: {archive}")
+        dest_uri = dest.rstrip("/") + "/" + p.name
+        click.echo(f"cvcpkg: uploading {p.name} → {dest_uri}")
+        try:
+            with open(p, "rb") as f:
+                backend.put(dest_uri, f)
+        except NotImplementedError:
+            raise click.ClickException(f"backend for {dest} does not support uploads (put).")
+        click.echo(f"  done ({p.stat().st_size:,} bytes)")
+
+    click.echo(f"cvcpkg: pushed {len(archives)} archive(s).")
+
+
+# ── add ─────────────────────────────────────────────────────────
+
+
+@cli.command()
+@click.argument("components", nargs=-1, required=True)
+@click.option(
+    "--from",
+    "from_file",
+    type=click.Path(exists=True),
+    required=True,
+    help="Path to cvc-requirements.yaml to add components to.",
+)
+def add(components: tuple[str, ...], from_file: str) -> None:
+    """Add component(s) to a requirements file.
+
+    Appends each COMPONENT to the components list in the
+    given cvc-requirements.yaml file if not already present.
+
+    \b
+    Examples:
+      cvcpkg add zlib boost --from cvc-requirements.yaml
+      cvcpkg add 'hdf5==1.14.5+cvc.1' --from cvc-requirements.yaml
+    """
+    path = Path(from_file)
+    with open(path) as f:
+        data = yaml.safe_load(f) or {}
+
+    comp_list = data.get("components", [])
+    existing_names = set()
+    for c in comp_list:
+        if isinstance(c, str):
+            existing_names.add(c.split("==")[0].split(">=")[0].split("<=")[0])
+        elif isinstance(c, dict):
+            existing_names.add(c.get("name", ""))
+
+    added = []
+    for comp in components:
+        name = comp.split("==")[0].split(">=")[0].split("<=")[0]
+        if name in existing_names:
+            click.echo(f"cvcpkg: {name} already in {from_file}, skipping.")
+            continue
+        if "==" in comp:
+            n, v = comp.split("==", 1)
+            comp_list.append({"name": n, "version": f"=={v}"})
+        else:
+            comp_list.append(comp)
+        added.append(name)
+
+    if not added:
+        click.echo("cvcpkg: nothing to add.")
+        return
+
+    data["components"] = comp_list
+    with open(path, "w") as f:
+        yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+    click.echo(f"cvcpkg: added {', '.join(added)} to {from_file}")
+
+
+# ── remove ──────────────────────────────────────────────────────
+
+
+@cli.command()
+@click.argument("components", nargs=-1, required=True)
+@click.option(
+    "--from",
+    "from_file",
+    type=click.Path(exists=True),
+    required=True,
+    help="Path to cvc-requirements.yaml to remove components from.",
+)
+def remove(components: tuple[str, ...], from_file: str) -> None:
+    """Remove component(s) from a requirements file.
+
+    Removes each COMPONENT from the components list in the
+    given cvc-requirements.yaml file.
+
+    \b
+    Examples:
+      cvcpkg remove boost --from cvc-requirements.yaml
+    """
+    path = Path(from_file)
+    with open(path) as f:
+        data = yaml.safe_load(f) or {}
+
+    comp_list = data.get("components", [])
+    remove_set = set(components)
+    new_list = []
+    removed = []
+    for c in comp_list:
+        if isinstance(c, str):
+            name = c.split("==")[0].split(">=")[0].split("<=")[0]
+        elif isinstance(c, dict):
+            name = c.get("name", "")
+        else:
+            new_list.append(c)
+            continue
+        if name in remove_set:
+            removed.append(name)
+        else:
+            new_list.append(c)
+
+    if not removed:
+        click.echo(f"cvcpkg: none of {', '.join(components)} found in {from_file}.")
+        return
+
+    data["components"] = new_list
+    with open(path, "w") as f:
+        yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+    click.echo(f"cvcpkg: removed {', '.join(removed)} from {from_file}")
+
+
+# ── world ───────────────────────────────────────────────────────
+
+
+@cli.command()
+@click.option(
+    "--from",
+    "from_file",
+    type=click.Path(exists=True),
+    required=True,
+    help="Path to cvc-requirements.yaml listing components to build.",
+)
+@_platform_opt
+@_config_opt
+@_link_opt
+@_prefix_opt
+@_keep_build_opt
+@_recipes_dir_opt
+def world(
+    from_file: str,
+    platform: str,
+    config: str,
+    link: str,
+    prefix: str,
+    keep_build_dir: bool,
+    recipes_dirs: tuple[str, ...],
+) -> None:
+    """Build all recipes needed by a requirements file.
+
+    Reads a cvc-requirements.yaml, resolves dependencies between
+    recipes, and builds them all in topological order into the prefix.
+
+    \b
+    Examples:
+      cvcpkg world --from cvc-requirements.yaml --prefix ./prefix
+      cvcpkg world --from cvc-requirements.yaml --config debug
+    """
+    from cvcpkg.builder import (
+        BuildContext,
+        Recipe,
+        BuildError,
+        build_recipe,
+        find_recipes_dir,
+        load_all_recipes,
+        resolve_build_order,
+    )
+    from cvcpkg.manifest import Requirements
+    from cvcpkg.platform import detect_arch, detect_platform
+
+    plat = _auto_platform(platform)
+    arc = detect_arch()
+    prefix_path = Path(prefix).resolve()
+
+    reqs = Requirements.from_yaml(from_file)
+    requested = {c.name for c in reqs.components if not c.exclude}
+
+    # Load all recipes.
+    if recipes_dirs:
+        rdirs = [Path(d) for d in recipes_dirs]
+        all_recipes = load_all_recipes(rdirs)
+    else:
+        all_recipes = [
+            Recipe.load(d) for d in find_recipes_dir().iterdir() if (d / "recipe.yaml").is_file()
+        ]
+
+    by_name = {r.name: r for r in all_recipes}
+
+    # Gather the transitive closure of requested components.
+    needed: set[str] = set()
+
+    def _gather(name: str) -> None:
+        if name in needed:
+            return
+        needed.add(name)
+        r = by_name.get(name)
+        if r is None:
+            return
+        for dep in r.raw.get("depends", {}).get("build", []):
+            dep_name = dep if isinstance(dep, str) else dep.get("name", "")
+            if dep_name:
+                _gather(dep_name)
+
+    for name in requested:
+        _gather(name)
+
+    if not needed:
+        click.echo("cvcpkg: no recipes match the requirements.")
+        return
+
+    # Filter to recipes we actually have.
+    to_build = [r for r in all_recipes if r.name in needed]
+    if not to_build:
+        click.echo("cvcpkg: no matching recipes found.")
+        return
+
+    order = resolve_build_order(to_build, platform=plat)
+    click.echo(f"cvcpkg: building {len(order)} recipe(s) in dependency order:")
+    for r in order:
+        click.echo(f"  {r.name} {r.full_version}")
+
+    for r in order:
+        click.echo(f"cvcpkg: building {r.name} ...")
+        ctx = BuildContext(recipe=r, platform=plat, config=config, link=link)
+        ctx.install_dir = prefix_path
+        ctx.keep_build_dir = keep_build_dir
+        build_recipe(ctx)
+        click.echo(f"  {r.name} done.")
+
+    click.echo(f"cvcpkg: world build complete — {len(order)} recipe(s) built to {prefix_path}")
+
+
 # ── Helper: resolve recipe dir ──────────────────────────────────
 
 
