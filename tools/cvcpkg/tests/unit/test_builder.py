@@ -373,6 +373,38 @@ class TestGenerateManifest:
         assert deps[0] == {"name": "zlib", "version": "^1.3"}
         assert deps[1] == {"name": "fftw3"}
 
+    def test_manifest_platform_filtered_deps(self, tmp_path):
+        """Platform-conditional deps are filtered in the manifest."""
+        recipe_dict = {
+            **MINIMAL_RECIPE,
+            "depends": {
+                "build": [
+                    {"name": "openblas", "version": ">=0.3", "platforms": ["linux", "macos"]},
+                    {"name": "clapack", "version": ">=3.2", "platforms": ["windows"]},
+                    {"name": "zlib", "version": "^1.3"},
+                ]
+            },
+        }
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+
+        install_dir = tmp_path / "install"
+        install_dir.mkdir()
+
+        m = generate_manifest(r, install_dir, "linux", "x86_64", "release", "shared")
+        deps = m["depends"]
+        assert len(deps) == 2
+        assert deps[0] == {"name": "openblas", "version": ">=0.3"}
+        assert deps[1] == {"name": "zlib", "version": "^1.3"}
+
+        # Windows should get clapack, not openblas
+        m2 = generate_manifest(r, install_dir, "windows", "x86_64", "release", "static")
+        deps2 = m2["depends"]
+        assert len(deps2) == 2
+        assert deps2[0] == {"name": "clapack", "version": ">=3.2"}
+        assert deps2[1] == {"name": "zlib", "version": "^1.3"}
+
     def test_manifest_recipe_sha256(self, tmp_path):
         recipe_dir = tmp_path / "recipes" / "testpkg"
         _write_recipe(recipe_dir, MINIMAL_RECIPE)
@@ -693,6 +725,54 @@ class TestResolveBuildOrder:
         order = resolve_build_order([b, a])
         names = [r.name for r in order]
         assert names.index("a") < names.index("b")
+
+    def test_platform_conditional_deps_included(self, tmp_path):
+        """Dep with matching platform is included in build order."""
+        a = self._make_recipe(tmp_path, "a")
+        b = self._make_recipe(
+            tmp_path, "b", deps=[{"name": "a", "platforms": ["linux"]}]
+        )
+        order = resolve_build_order([b, a], platform="linux")
+        names = [r.name for r in order]
+        assert names.index("a") < names.index("b")
+
+    def test_platform_conditional_deps_excluded(self, tmp_path):
+        """Dep with non-matching platform is excluded from build order."""
+        a = self._make_recipe(tmp_path, "a")
+        b = self._make_recipe(
+            tmp_path, "b", deps=[{"name": "a", "platforms": ["windows"]}]
+        )
+        # 'a' is not required by 'b' on linux, so order is unlinked
+        order = resolve_build_order([b, a], platform="linux")
+        names = [r.name for r in order]
+        assert "a" in names and "b" in names
+
+    def test_platform_conditional_deps_no_filter(self, tmp_path):
+        """Without platform filter, all deps are included regardless of platforms field."""
+        a = self._make_recipe(tmp_path, "a")
+        b = self._make_recipe(
+            tmp_path, "b", deps=[{"name": "a", "platforms": ["windows"]}]
+        )
+        order = resolve_build_order([b, a])
+        names = [r.name for r in order]
+        assert names.index("a") < names.index("b")
+
+    def test_platform_conditional_mixed_deps(self, tmp_path):
+        """Mix of platform-specific and unconditional deps."""
+        a = self._make_recipe(tmp_path, "a")
+        c = self._make_recipe(tmp_path, "c")
+        b = self._make_recipe(
+            tmp_path,
+            "b",
+            deps=[
+                {"name": "a", "platforms": ["linux", "macos"]},
+                {"name": "c", "platforms": ["windows"]},
+            ],
+        )
+        order = resolve_build_order([b, c, a], platform="linux")
+        names = [r.name for r in order]
+        assert names.index("a") < names.index("b")
+        # c is in the list (it's a recipe) but not required by b on linux
 
 
 # ── Hardening: fetch_tarball specific exceptions ───────────────

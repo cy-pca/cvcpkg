@@ -701,7 +701,11 @@ def recipes(mode: str, show_name: str | None) -> None:
                 if isinstance(d, str):
                     dep_names.append(d)
                 else:
-                    dep_names.append(d.get("name", "?"))
+                    label = d.get("name", "?")
+                    plats = d.get("platforms")
+                    if plats:
+                        label += f" [{','.join(plats)}]"
+                    dep_names.append(label)
             click.echo(f"Depends:  {', '.join(dep_names)}")
         return
 

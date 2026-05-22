@@ -412,13 +412,20 @@ def generate_manifest(
     abi = recipe.raw.get("abi", {})
     depends = recipe.raw.get("depends", {}).get("build", [])
 
-    # Normalize dep entries to dicts
+    # Normalize dep entries to dicts, filtering by target platform
     dep_list = []
     for d in depends:
         if isinstance(d, str):
             dep_list.append({"name": d})
         else:
-            dep_list.append(d)
+            plats = d.get("platforms")
+            if plats and platform not in plats:
+                continue
+            # Don't write platforms into the manifest — it's platform-specific
+            entry = {"name": d["name"]}
+            if d.get("version"):
+                entry["version"] = d["version"]
+            dep_list.append(entry)
 
     manifest: dict[str, Any] = {
         "schema_version": 3,
@@ -649,20 +656,32 @@ def pack_recipe(
 # ── Dependency resolution ───────────────────────────────────────
 
 
-def _dep_names(recipe: Recipe) -> list[str]:
-    """Extract build-dependency names from a recipe."""
+def _dep_names(recipe: Recipe, platform: str = "") -> list[str]:
+    """Extract build-dependency names from a recipe.
+
+    If *platform* is given, dependencies with a ``platforms`` list that
+    does not include *platform* are skipped.
+    """
     depends = recipe.raw.get("depends", {}).get("build", [])
     names: list[str] = []
     for d in depends:
         if isinstance(d, str):
             names.append(d)
         elif isinstance(d, dict):
+            plats = d.get("platforms")
+            if plats and platform and platform not in plats:
+                continue
             names.append(d["name"])
     return names
 
 
-def resolve_build_order(recipes: list[Recipe]) -> list[Recipe]:
+def resolve_build_order(
+    recipes: list[Recipe], platform: str = ""
+) -> list[Recipe]:
     """Return *recipes* in topological (dependency-first) order.
+
+    If *platform* is given, only dependencies that apply to that
+    platform are considered when building the graph.
 
     Raises ``RecipeError`` on dependency cycles or missing deps.
     """
@@ -679,7 +698,7 @@ def resolve_build_order(recipes: list[Recipe]) -> list[Recipe]:
         if name not in by_name:
             raise RecipeError(f"Unknown dependency: '{name}'")
         in_stack.add(name)
-        for dep in _dep_names(by_name[name]):
+        for dep in _dep_names(by_name[name], platform):
             visit(dep)
         in_stack.discard(name)
         visited.add(name)
@@ -705,7 +724,7 @@ def build_all(
     if not platform:
         platform = detect_platform()
     recipes = [r for r in recipes if any(m.platform == platform for m in r.build_matrix)]
-    ordered = resolve_build_order(recipes)
+    ordered = resolve_build_order(recipes, platform)
 
     if prefix is None:
         prefix = Path(tempfile.mkdtemp(prefix="cvcpkg-all-"))

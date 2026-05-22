@@ -21,6 +21,10 @@ depends:
   build:
     - name: openblas
       version: ">=0.3"
+      platforms: [linux, macos]
+    - name: clapack
+      version: ">=3.2"
+      platforms: [windows]
   host_tools:
     - cmake
     - ninja
