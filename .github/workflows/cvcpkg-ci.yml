@@ -46,15 +46,22 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install poetry
-          poetry install --with dev
+          poetry install --with dev --extras server
 
       - name: Run unit tests
         working-directory: tools/cvcpkg
-        run: poetry run pytest tests/unit/ -v --tb=short
+        run: poetry run pytest tests/unit/ -v --tb=short --junitxml=unit-results.xml
 
       - name: Run integration tests
         working-directory: tools/cvcpkg
-        run: poetry run pytest tests/integration/ -v --tb=short
+        run: poetry run pytest tests/integration/ -v --tb=short --junitxml=integration-results.xml
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}-py${{ matrix.python }}
+          path: tools/cvcpkg/*-results.xml
 
   validate:
     name: Validate schemas & recipes
@@ -87,7 +94,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install poetry
-          poetry install --with dev
+          poetry install --with dev --extras server
 
       - name: Ruff check
         working-directory: tools/cvcpkg

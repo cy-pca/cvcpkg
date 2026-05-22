@@ -7,6 +7,10 @@ from pathlib import Path
 
 import pytest
 import yaml
+
+fastapi = pytest.importorskip("fastapi", reason="server extras not installed")
+pydantic = pytest.importorskip("pydantic", reason="server extras not installed")
+
 from fastapi.testclient import TestClient
 
 from cvcpkg.server.app import create_app
