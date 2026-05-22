@@ -169,6 +169,7 @@ class TestInstallWithCatalog:
                 "--catalog", str(cat),
                 "--prefix", str(prefix),
                 "--platform", "linux",
+                "--arch", "x86_64",
             ])
         assert ret == 0
         out = capsys.readouterr().out
@@ -185,6 +186,7 @@ class TestInstallWithCatalog:
                 "--catalog", str(cat),
                 "--prefix", str(prefix),
                 "--platform", "linux",
+                "--arch", "x86_64",
             ])
         lock_path = prefix / "share" / "libcvc-deps" / "lockfile.yaml"
         assert lock_path.exists()
@@ -198,6 +200,7 @@ class TestInstallWithCatalog:
         req_file = tmp_path / "requirements.yaml"
         req_file.write_text(yaml.dump({
             "platform": "linux",
+            "arch": "x86_64",
             "config": "release",
             "link": "shared",
             "components": ["zlib"],
@@ -221,6 +224,7 @@ class TestInstallWithCatalog:
             "--catalog", str(cat),
             "--prefix", str(prefix),
             "--platform", "windows",
+            "--arch", "x86_64",
         ])
         assert ret == 1
 
