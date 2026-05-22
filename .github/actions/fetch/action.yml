@@ -25,6 +25,13 @@ description: |
       `steps.<id>.outputs.path != ''` and to add `path` to
       CMAKE_PREFIX_PATH when set.
 
+  Migration note (Phase 5):
+    For new consumers, prefer the `cvcpkg-install` action instead:
+      uses: transfix/libcvc-deps/.github/actions/cvcpkg-install@vX.Y.Z
+    It downloads only the components you need via cvcpkg, reducing
+    download sizes and enabling per-component version pinning.
+    See docs/roadmap/split-distribution.md §9 Phase 5.
+
 inputs:
   version:
     description: 'libcvc-deps release version (without leading v).'

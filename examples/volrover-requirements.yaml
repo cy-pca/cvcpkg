@@ -1,0 +1,37 @@
+# cvc-requirements.yaml — component set for volrover3.
+#
+# Usage:
+#   cvcpkg install --from cvc-requirements.yaml --prefix ./deps
+#
+# volrover3 is a full visualization application and needs most
+# of the libcvc-deps stack including Qt6, VTK, Boost, CGAL,
+# and the network/RPC libraries.
+
+platform: auto
+arch: auto
+config: release
+link: shared
+
+components:
+  - zlib
+  - yaml
+  - gsl
+  - log4cplus
+  - tiff
+  - fftw3
+  - openblas
+  - levmar
+  - hdf5
+  - imagemagick
+  - libiimod
+  - openssl
+  - c-ares
+  - re2
+  - abseil
+  - protobuf
+  - grpc
+  - boost
+  - cgal
+  - qt6
+  - vtk
+  - pthreads4w
