@@ -16,7 +16,8 @@ export CC="${CC:-gcc}"
 export CXX="${CXX:-g++}"
 
 # Build-type → CMake flags mapping.
-case "${CVC_BUILD_TYPE,,}" in
+_build_type_lc=$(echo "$CVC_BUILD_TYPE" | tr '[:upper:]' '[:lower:]')
+case "$_build_type_lc" in
     release) CMAKE_BUILD_TYPE=Release  ;;
     debug)   CMAKE_BUILD_TYPE=Debug    ;;
     *)       CMAKE_BUILD_TYPE=Release  ;;
