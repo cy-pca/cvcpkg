@@ -50,11 +50,18 @@ jobs:
 
       - name: Run unit tests
         working-directory: tools/cvcpkg
-        run: poetry run pytest tests/unit/ -v --tb=short --junitxml=unit-results.xml
+        run: |
+          poetry run pytest tests/unit/ -v --tb=short \
+            --junitxml=unit-results.xml \
+            --cov=cvcpkg --cov-branch --cov-report=xml:coverage-unit.xml
 
       - name: Run integration tests
         working-directory: tools/cvcpkg
-        run: poetry run pytest tests/integration/ -v --tb=short --junitxml=integration-results.xml
+        run: |
+          poetry run pytest tests/integration/ -v --tb=short \
+            --junitxml=integration-results.xml \
+            --cov=cvcpkg --cov-branch --cov-append --cov-report=xml:coverage.xml \
+            --cov-report=html:htmlcov
 
       - name: Upload test results
         if: always()
@@ -62,6 +69,15 @@ jobs:
         with:
           name: test-results-${{ matrix.os }}-py${{ matrix.python }}
           path: tools/cvcpkg/*-results.xml
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}-py${{ matrix.python }}
+          path: |
+            tools/cvcpkg/coverage.xml
+            tools/cvcpkg/htmlcov/
 
   validate:
     name: Validate schemas & recipes
