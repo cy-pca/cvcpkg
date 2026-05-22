@@ -6,18 +6,16 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 # Temporarily remove protobuf-installed upb headers from the prefix.
 # grpc builds its own upb from third_party/upb, and the protobuf-installed
 # upb headers at prefix/include/upb/ are a different version, causing
-# compile-time and link-time symbol mismatches.
+# compile-time symbol mismatches.  We keep the libupb* libraries in
+# place so protobuf's cmake config validates successfully.
 _upb_backup=""
 if [[ -d "${CVC_DEPS_PREFIX}/include/upb" ]]; then
     _upb_backup="$(mktemp -d)"
     mv "${CVC_DEPS_PREFIX}/include/upb" "${_upb_backup}/upb"
-    # Also move upb libraries aside so grpc's cmake doesn't link
-    # against protobuf's libupb (which has incompatible symbols).
-    mkdir -p "${_upb_backup}/lib"
-    for f in "${CVC_DEPS_PREFIX}"/lib/libupb*; do
-        [[ -e "$f" ]] && mv "$f" "${_upb_backup}/lib/"
-    done
-    echo "cvcpkg: moved prefix/include/upb and libupb* aside to avoid collision"
+    if [[ -d "${CVC_DEPS_PREFIX}/include/upb_generator" ]]; then
+        mv "${CVC_DEPS_PREFIX}/include/upb_generator" "${_upb_backup}/upb_generator"
+    fi
+    echo "cvcpkg: moved prefix/include/upb{,_generator} aside to avoid header collision"
 fi
 
 cvc_cmake_build \
@@ -39,11 +37,13 @@ cvc_cmake_build \
     -DCMAKE_CXX_STANDARD=17
 
 # Restore the upb headers so downstream consumers can use them.
-if [[ -n "${_upb_backup}" && -d "${_upb_backup}/upb" ]]; then
-    mv "${_upb_backup}/upb" "${CVC_DEPS_PREFIX}/include/upb"
-    for f in "${_upb_backup}"/lib/libupb*; do
-        [[ -e "$f" ]] && mv "$f" "${CVC_DEPS_PREFIX}/lib/"
-    done
+if [[ -n "${_upb_backup}" ]]; then
+    if [[ -d "${_upb_backup}/upb" ]]; then
+        mv "${_upb_backup}/upb" "${CVC_DEPS_PREFIX}/include/upb"
+    fi
+    if [[ -d "${_upb_backup}/upb_generator" ]]; then
+        mv "${_upb_backup}/upb_generator" "${CVC_DEPS_PREFIX}/include/upb_generator"
+    fi
     rm -rf "${_upb_backup}"
-    echo "cvcpkg: restored prefix/include/upb and libupb*"
+    echo "cvcpkg: restored prefix/include/upb headers"
 fi
