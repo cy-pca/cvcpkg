@@ -14,7 +14,8 @@ export CC="${CC:-clang}"
 export CXX="${CXX:-clang++}"
 export MACOSX_DEPLOYMENT_TARGET
 
-case "${CVC_BUILD_TYPE,,}" in
+_build_type_lc=$(echo "$CVC_BUILD_TYPE" | tr '[:upper:]' '[:lower:]')
+case "$_build_type_lc" in
     release) CMAKE_BUILD_TYPE=Release  ;;
     debug)   CMAKE_BUILD_TYPE=Debug    ;;
     *)       CMAKE_BUILD_TYPE=Release  ;;
