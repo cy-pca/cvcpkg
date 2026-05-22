@@ -10,7 +10,7 @@ recipe:
 source:
   type: tarball
   url: https://github.com/OpenMathLib/OpenBLAS/releases/download/v0.3.28/OpenBLAS-0.3.28.tar.gz
-  sha256: "f1003466ad074e9b0c8d421a204121100b0c0f6edd4571f9ba03e5e76eb26e5c"
+  sha256: "f1003466ad074e9b0c8d421a204121100b0751c96fc6fcf3d1456bd12f8a00a1"
   strip_components: 1
 
 patches: []

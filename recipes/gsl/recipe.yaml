@@ -10,7 +10,7 @@ recipe:
 source:
   type: tarball
   url: https://ftp.gnu.org/gnu/gsl/gsl-2.8.tar.gz
-  sha256: "6a99eeed15632c24fb2b3ff3b18f5e361a0e2a4b87ac6b2a2e46b77c29543e99"
+  sha256: "6a99eeed15632c6354895b1dd542ed5a855c0f15d9ad1326c6fe2b2c9e423190"
   strip_components: 1
 
 patches: []
