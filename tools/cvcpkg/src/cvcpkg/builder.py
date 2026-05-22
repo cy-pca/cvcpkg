@@ -150,6 +150,7 @@ def _sha256_file(path: Path) -> str:
 
 def _fetch_tarball(source: SourceSpec, dest: Path) -> Path:
     """Download a tarball, verify SHA-256, and extract."""
+    import urllib.error
     import urllib.request
 
     archive_path = dest / "source.tar.gz"
@@ -157,14 +158,18 @@ def _fetch_tarball(source: SourceSpec, dest: Path) -> Path:
     if not urls:
         raise RecipeError("source.type=tarball but no URL specified")
 
+    last_error: Exception | None = None
     for url in urls:
         try:
             urllib.request.urlretrieve(url, archive_path)  # noqa: S310
+            last_error = None
             break
-        except Exception:
-            if url == urls[-1]:
-                raise
-            continue
+        except (urllib.error.URLError, OSError) as e:
+            last_error = e
+            if url != urls[-1]:
+                continue
+    if last_error is not None:
+        raise RecipeError(f"failed to download source from {urls}: {last_error}") from last_error
 
     if source.sha256:
         actual = _sha256_file(archive_path)
@@ -180,7 +185,10 @@ def _fetch_tarball(source: SourceSpec, dest: Path) -> Path:
             resolved = (source_dir / member.name).resolve()
             if not str(resolved).startswith(str(source_dir.resolve())):
                 raise RecipeError(f"Tarball member escapes target: {member.name}")
-        tf.extractall(source_dir)
+        if sys.version_info >= (3, 12):
+            tf.extractall(source_dir, filter="data")
+        else:
+            tf.extractall(source_dir)
 
     # If strip_components>0, move the inner directory up
     if source.strip_components > 0:
@@ -231,14 +239,23 @@ def fetch_source(recipe: Recipe, work_dir: Path) -> Path:
 def apply_patches(recipe: Recipe, source_dir: Path) -> None:
     """Apply patches listed in the recipe."""
     for patch_file in recipe.patches:
-        patch_path = recipe.recipe_dir / patch_file
+        patch_path = (recipe.recipe_dir / patch_file).resolve()
+        # Security: ensure patch file doesn't escape the recipe directory
+        if not str(patch_path).startswith(str(recipe.recipe_dir.resolve())):
+            raise RecipeError(f"Patch path escapes recipe directory: {patch_file}")
         if not patch_path.is_file():
             raise RecipeError(f"Patch file not found: {patch_path}")
-        subprocess.run(
+        result = subprocess.run(
             ["patch", "-p1", "-i", str(patch_path)],
             cwd=source_dir,
-            check=True,
+            check=False,
+            capture_output=True,
         )
+        if result.returncode != 0:
+            raise RecipeError(
+                f"Failed to apply patch {patch_file}: "
+                f"{result.stderr.decode(errors='replace').strip()}"
+            )
 
 
 # ── Build execution ────────────────────────────────────────────
@@ -313,9 +330,15 @@ def run_build(ctx: BuildContext) -> None:
 
     # Determine the interpreter
     if script.suffix == ".sh":
-        cmd = ["bash", str(script)]
+        interpreter = shutil.which("bash")
+        if not interpreter:
+            raise BuildError("bash not found on PATH — required for .sh build scripts")
+        cmd = [interpreter, str(script)]
     elif script.suffix == ".ps1":
-        cmd = ["pwsh", "-NoProfile", "-NonInteractive", "-File", str(script)]
+        interpreter = shutil.which("pwsh")
+        if not interpreter:
+            raise BuildError("pwsh not found on PATH — required for .ps1 build scripts")
+        cmd = [interpreter, "-NoProfile", "-NonInteractive", "-File", str(script)]
     else:
         raise BuildError(f"Unknown script type: {script.suffix}")
 

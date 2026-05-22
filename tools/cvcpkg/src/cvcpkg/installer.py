@@ -26,6 +26,8 @@ def _safe_extractall(tf: tarfile.TarFile, path: Path) -> None:
 def download_bundle(
     entry: CatalogEntry,
     cache_dir: Path,
+    *,
+    max_bytes: int = 4 * 1024 * 1024 * 1024,  # 4 GB
 ) -> Path:
     """Download *entry*'s archive (or return from cache).
 
@@ -37,6 +39,9 @@ def download_bundle(
     if sha and cache_mod.is_cached(cache_dir, sha, filename):
         return cache_mod.cache_path(cache_dir, sha, filename)
 
+    import shutil
+    import tempfile
+    import urllib.error
     import urllib.request
 
     url = entry.archive_url
@@ -45,16 +50,42 @@ def download_bundle(
 
     try:
         with urllib.request.urlopen(url, timeout=120) as resp:  # noqa: S310
-            data = resp.read()
-    except Exception as e:
+            length = resp.headers.get("Content-Length")
+            if length is not None and int(length) > max_bytes:
+                raise InstallError(
+                    f"archive for {entry.name} is {int(length)} bytes, "
+                    f"exceeds {max_bytes} limit"
+                )
+            # Stream to a temp file instead of loading into memory
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                dir=cache_dir, delete=False, suffix=".download"
+            ) as tmp:
+                total = 0
+                h = hashlib.sha256()
+                while True:
+                    chunk = resp.read(1 << 16)  # 64 KB
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > max_bytes:
+                        os.unlink(tmp.name)
+                        raise InstallError(
+                            f"archive for {entry.name} exceeds {max_bytes} byte limit"
+                        )
+                    h.update(chunk)
+                    tmp.write(chunk)
+                tmp_path = Path(tmp.name)
+    except (OSError, urllib.error.URLError) as e:
         raise InstallError(f"failed to download {url}: {e}") from e
 
-    if sha:
-        actual = hashlib.sha256(data).hexdigest()
-        if actual != sha:
-            raise IntegrityError(f"sha256 mismatch for {filename}: expected {sha}, got {actual}")
+    actual = h.hexdigest()
+    if sha and actual != sha:
+        tmp_path.unlink(missing_ok=True)
+        raise IntegrityError(f"sha256 mismatch for {filename}: expected {sha}, got {actual}")
 
-    path = cache_mod.store(cache_dir, sha or hashlib.sha256(data).hexdigest(), filename, data)
+    final_sha = sha or actual
+    path = cache_mod.store_from_file(cache_dir, final_sha, filename, tmp_path)
     return path
 
 

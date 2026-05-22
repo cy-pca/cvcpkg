@@ -15,14 +15,35 @@ from cvcpkg.manifest import CatalogEntry, Dependency, ReleaseIndex
 DEFAULT_CATALOG_URL = "https://transfix.github.io/libcvc-deps/catalog/latest.yaml"
 
 
-def _fetch_url(url: str) -> bytes:
-    """Fetch a URL and return the raw bytes."""
-    import urllib.request
+_MAX_CATALOG_BYTES = 50 * 1024 * 1024  # 50 MB safety limit
+
+
+def _fetch_url(url: str, *, max_bytes: int = _MAX_CATALOG_BYTES) -> bytes:
+    """Fetch a URL and return the raw bytes.
+
+    Raises :class:`CatalogError` if the response exceeds *max_bytes*.
+    """
     import urllib.error
+    import urllib.request
 
     try:
         with urllib.request.urlopen(url, timeout=30) as resp:  # noqa: S310 — trusted URL
-            return resp.read()
+            length = resp.headers.get("Content-Length")
+            if length is not None and int(length) > max_bytes:
+                raise CatalogError(
+                    f"catalog at {url} is {int(length)} bytes, exceeds {max_bytes} limit"
+                )
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                chunk = resp.read(1 << 16)  # 64 KB
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    raise CatalogError(f"catalog at {url} exceeds {max_bytes} byte limit")
+                chunks.append(chunk)
+            return b"".join(chunks)
     except urllib.error.URLError as e:
         raise CatalogError(f"failed to fetch {url}: {e}") from e
 

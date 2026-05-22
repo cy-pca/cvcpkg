@@ -31,6 +31,7 @@ from cvcpkg.builder import (
     fetch_source,
     generate_manifest,
     list_recipes,
+    resolve_build_order,
     stage_bundle,
 )
 
@@ -548,3 +549,219 @@ class TestListRecipes:
 
         recipes = list_recipes(recipes_dir)
         assert len(recipes) == 0
+
+
+# ── Hardening: patch path traversal ────────────────────────────
+
+
+class TestPatchTraversal:
+    """Verify that apply_patches rejects patches that escape the recipe dir."""
+
+    def test_traversal_rejected(self, tmp_path):
+        """Patches referencing ../../ should raise RecipeError."""
+        recipe_dir = tmp_path / "recipes" / "evil"
+        recipe_dir.mkdir(parents=True)
+        _write_recipe(
+            recipe_dir,
+            {
+                **MINIMAL_RECIPE,
+                "patches": ["../../etc/passwd"],
+            },
+        )
+        recipe = Recipe.load(recipe_dir)
+
+        source_dir = tmp_path / "src"
+        source_dir.mkdir()
+
+        with pytest.raises(RecipeError, match="escapes recipe directory"):
+            apply_patches(recipe, source_dir)
+
+    def test_normal_patch_allowed(self, tmp_path):
+        """A patch file within the recipe dir should pass the traversal check."""
+        recipe_dir = tmp_path / "recipes" / "good"
+        recipe_dir.mkdir(parents=True)
+
+        # Create a valid (no-op) patch file
+        patch_file = recipe_dir / "fix.patch"
+        patch_file.write_text("")
+
+        _write_recipe(
+            recipe_dir,
+            {
+                **MINIMAL_RECIPE,
+                "patches": ["fix.patch"],
+            },
+        )
+        recipe = Recipe.load(recipe_dir)
+
+        source_dir = tmp_path / "src"
+        source_dir.mkdir()
+
+        # An empty patch file may succeed (no-op) or fail, but the key
+        # assertion is that it does NOT raise "escapes recipe directory".
+        try:
+            apply_patches(recipe, source_dir)
+        except RecipeError as e:
+            assert "escapes recipe directory" not in str(e)
+
+    def test_patch_not_found(self, tmp_path):
+        """A patch file that doesn't exist should raise RecipeError."""
+        recipe_dir = tmp_path / "recipes" / "missing"
+        recipe_dir.mkdir(parents=True)
+        _write_recipe(
+            recipe_dir,
+            {
+                **MINIMAL_RECIPE,
+                "patches": ["nonexistent.patch"],
+            },
+        )
+        recipe = Recipe.load(recipe_dir)
+
+        source_dir = tmp_path / "src"
+        source_dir.mkdir()
+
+        with pytest.raises(RecipeError, match="not found"):
+            apply_patches(recipe, source_dir)
+
+
+# ── Hardening: resolve_build_order ─────────────────────────────
+
+
+class TestResolveBuildOrder:
+    """Topological sort of recipes by dependency."""
+
+    def _make_recipe(self, tmp_path, name, deps=None):
+        """Create a minimal recipe with optional build dependencies."""
+        recipe_dir = tmp_path / "recipes" / name
+        recipe_dir.mkdir(parents=True, exist_ok=True)
+        d = {
+            **MINIMAL_RECIPE,
+            "recipe": {**MINIMAL_RECIPE["recipe"], "name": name},
+        }
+        if deps:
+            d["depends"] = {"build": deps}
+        _write_recipe(recipe_dir, d)
+        return Recipe.load(recipe_dir)
+
+    def test_no_deps(self, tmp_path):
+        a = self._make_recipe(tmp_path, "a")
+        b = self._make_recipe(tmp_path, "b")
+        order = resolve_build_order([a, b])
+        names = [r.name for r in order]
+        assert set(names) == {"a", "b"}
+
+    def test_linear_deps(self, tmp_path):
+        """c depends on b, b depends on a → order is a, b, c."""
+        a = self._make_recipe(tmp_path, "a")
+        b = self._make_recipe(tmp_path, "b", deps=["a"])
+        c = self._make_recipe(tmp_path, "c", deps=["b"])
+        order = resolve_build_order([c, b, a])
+        names = [r.name for r in order]
+        assert names.index("a") < names.index("b")
+        assert names.index("b") < names.index("c")
+
+    def test_diamond_deps(self, tmp_path):
+        """d depends on b and c; both depend on a."""
+        a = self._make_recipe(tmp_path, "a")
+        b = self._make_recipe(tmp_path, "b", deps=["a"])
+        c = self._make_recipe(tmp_path, "c", deps=["a"])
+        d = self._make_recipe(tmp_path, "d", deps=["b", "c"])
+        order = resolve_build_order([d, c, b, a])
+        names = [r.name for r in order]
+        assert names.index("a") < names.index("b")
+        assert names.index("a") < names.index("c")
+        assert names.index("b") < names.index("d")
+        assert names.index("c") < names.index("d")
+
+    def test_cycle_detected(self, tmp_path):
+        """Cycle a→b→a should raise RecipeError."""
+        a = self._make_recipe(tmp_path, "a", deps=["b"])
+        b = self._make_recipe(tmp_path, "b", deps=["a"])
+        with pytest.raises(RecipeError, match="cycle"):
+            resolve_build_order([a, b])
+
+    def test_missing_dep(self, tmp_path):
+        """Dependency on a recipe not in the list should raise RecipeError."""
+        a = self._make_recipe(tmp_path, "a", deps=["missing"])
+        with pytest.raises(RecipeError, match="Unknown dependency"):
+            resolve_build_order([a])
+
+    def test_dict_style_deps(self, tmp_path):
+        """Dependencies can also be specified as dicts with a 'name' key."""
+        a = self._make_recipe(tmp_path, "a")
+        b = self._make_recipe(tmp_path, "b", deps=[{"name": "a"}])
+        order = resolve_build_order([b, a])
+        names = [r.name for r in order]
+        assert names.index("a") < names.index("b")
+
+
+# ── Hardening: fetch_tarball specific exceptions ───────────────
+
+
+class TestFetchTarballExceptions:
+    """Verify _fetch_tarball catches specific urllib exceptions."""
+
+    def test_no_urls_raises(self, tmp_path):
+        """Source with no URL or mirror should raise RecipeError."""
+        source = SourceSpec(type="tarball", url="", mirror="")
+        with pytest.raises(RecipeError, match="no URL specified"):
+            from cvcpkg.builder import _fetch_tarball
+
+            _fetch_tarball(source, tmp_path)
+
+    def test_bad_url_raises(self, tmp_path):
+        """An unreachable URL should raise RecipeError (mocked)."""
+        import urllib.error
+
+        source = SourceSpec(
+            type="tarball",
+            url="http://example.invalid/nonexistent.tar.gz",
+        )
+        with patch(
+            "urllib.request.urlretrieve",
+            side_effect=urllib.error.URLError("connection refused"),
+        ):
+            with pytest.raises(RecipeError, match="failed to download"):
+                from cvcpkg.builder import _fetch_tarball
+
+                _fetch_tarball(source, tmp_path)
+
+
+# ── Hardening: run_build interpreter check ─────────────────────
+
+
+class TestRunBuildInterpreter:
+    """Verify run_build validates interpreter availability."""
+
+    def test_unknown_script_suffix(self, tmp_path):
+        """A script with an unknown suffix should raise BuildError."""
+        from cvcpkg.builder import run_build
+
+        recipe_dir = tmp_path / "recipes" / "bad"
+        recipe_dir.mkdir(parents=True)
+        d = {
+            **MINIMAL_RECIPE,
+            "build": {
+                "matrix": [
+                    {"platform": "linux", "script": "build.rb"},
+                ],
+            },
+        }
+        _write_recipe(recipe_dir, d)
+        # Create the script file so we pass the "not found" check
+        (recipe_dir / "build.rb").write_text("#!/usr/bin/env ruby\n")
+
+        recipe = Recipe.load(recipe_dir)
+        ctx = BuildContext(
+            recipe=recipe,
+            platform="linux",
+            config="release",
+            link="shared",
+            prefix=tmp_path / "prefix",
+            source_dir=tmp_path / "src",
+            build_dir=tmp_path / "build",
+            install_dir=tmp_path / "install",
+            work_dir=tmp_path / "work",
+        )
+        with pytest.raises(BuildError, match="Unknown script type"):
+            run_build(ctx)

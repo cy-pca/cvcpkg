@@ -7,6 +7,7 @@ dependency-light.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import yaml
 
@@ -81,65 +82,78 @@ class BundleManifest:
         if d.get("schema_version") not in (1, 2, 3):
             raise SchemaError(f"unsupported manifest schema_version: {d.get('schema_version')}")
 
-        b = d.get("bundle", {})
-        abi_raw = b.get("abi", {})
-        abi = AbiTag(
-            cxx_std=abi_raw.get("cxx_std", 17),
-            cxx_runtime=abi_raw.get("cxx_runtime", ""),
-            libc=abi_raw.get("libc", ""),
-            crt_link=abi_raw.get("crt_link", ""),
-            extra=abi_raw.get("extra", []),
-        )
+        try:
+            b = d.get("bundle", {})
+            abi_raw = b.get("abi", {})
+            abi = AbiTag(
+                cxx_std=abi_raw.get("cxx_std", 17),
+                cxx_runtime=abi_raw.get("cxx_runtime", ""),
+                libc=abi_raw.get("libc", ""),
+                crt_link=abi_raw.get("crt_link", ""),
+                extra=abi_raw.get("extra", []),
+            )
 
-        contents = d.get("contents", {})
-        deps = d.get("dependencies", {})
-        integrity = d.get("integrity", {})
+            contents = d.get("contents", {})
+            deps = d.get("dependencies", {})
+            integrity = d.get("integrity", {})
 
-        return cls(
-            schema_version=d["schema_version"],
-            name=b["name"],
-            version=b["version"],
-            upstream_version=b["upstream_version"],
-            cvc_revision=b["cvc_revision"],
-            platform=b["platform"],
-            arch=b["arch"],
-            build_type=b["build_type"],
-            link=b["link"],
-            link_actual=b.get("link_actual", b["link"]),
-            triplet=b.get("triplet", ""),
-            abi=abi,
-            introduced_in=b.get("introduced_in", ""),
-            last_seen_in=b.get("last_seen_in", ""),
-            description=contents.get("description", ""),
-            files=contents.get("files", []),
-            cmake_packages=[
-                CmakePackage(name=p["name"], targets=p["targets"])
-                for p in contents.get("cmake_packages", [])
-            ],
-            pkgconfig=contents.get("pkgconfig", []),
-            tools=contents.get("tools", []),
-            required_deps=[
-                Dependency(
-                    name=dep["name"], version=dep.get("version", ""), reason=dep.get("reason", "")
-                )
-                for dep in deps.get("required", [])
-            ],
-            optional_deps=[
-                Dependency(
-                    name=dep["name"], version=dep.get("version", ""), reason=dep.get("reason", "")
-                )
-                for dep in deps.get("optional", [])
-            ],
-            provides=d.get("provides", []),
-            sha256=integrity.get("sha256", ""),
-            size_bytes=integrity.get("size_bytes", 0),
-            built_at=integrity.get("built_at", ""),
-        )
+            return cls(
+                schema_version=d["schema_version"],
+                name=b["name"],
+                version=b["version"],
+                upstream_version=b["upstream_version"],
+                cvc_revision=b["cvc_revision"],
+                platform=b["platform"],
+                arch=b["arch"],
+                build_type=b["build_type"],
+                link=b["link"],
+                link_actual=b.get("link_actual", b["link"]),
+                triplet=b.get("triplet", ""),
+                abi=abi,
+                introduced_in=b.get("introduced_in", ""),
+                last_seen_in=b.get("last_seen_in", ""),
+                description=contents.get("description", ""),
+                files=contents.get("files", []),
+                cmake_packages=[
+                    CmakePackage(name=p["name"], targets=p["targets"])
+                    for p in contents.get("cmake_packages", [])
+                ],
+                pkgconfig=contents.get("pkgconfig", []),
+                tools=contents.get("tools", []),
+                required_deps=[
+                    Dependency(
+                        name=dep["name"],
+                        version=dep.get("version", ""),
+                        reason=dep.get("reason", ""),
+                    )
+                    for dep in deps.get("required", [])
+                ],
+                optional_deps=[
+                    Dependency(
+                        name=dep["name"],
+                        version=dep.get("version", ""),
+                        reason=dep.get("reason", ""),
+                    )
+                    for dep in deps.get("optional", [])
+                ],
+                provides=d.get("provides", []),
+                sha256=integrity.get("sha256", ""),
+                size_bytes=integrity.get("size_bytes", 0),
+                built_at=integrity.get("built_at", ""),
+            )
+        except KeyError as e:
+            raise SchemaError(f"manifest missing required field: {e}") from e
 
     @classmethod
     def from_yaml(cls, path: str) -> "BundleManifest":
-        with open(path) as f:
-            return cls.from_dict(yaml.safe_load(f))
+        p = Path(path)
+        if not p.is_file():
+            raise SchemaError(f"manifest file not found: {path}")
+        with open(p) as f:
+            data = yaml.safe_load(f)
+        if not isinstance(data, dict):
+            raise SchemaError(f"manifest is not a YAML mapping: {path}")
+        return cls.from_dict(data)
 
 
 # ── Catalog entry (lightweight view for the resolver) ────────────

@@ -301,3 +301,54 @@ class TestRequirements:
         assert r.components[0].version == ""
         assert r.components[1].name == "boost"
         assert r.components[1].version == "^1.80"
+
+
+# ── Hardening: error paths ──────────────────────────────────────
+
+
+class TestBundleManifestHardening:
+    """Tests for hardened from_dict / from_yaml error handling."""
+
+    def test_from_dict_missing_bundle_block(self):
+        """from_dict raises SchemaError when 'bundle' has no required keys."""
+        d = {"schema_version": 3}  # no bundle block at all
+        with pytest.raises(SchemaError, match="missing required field"):
+            BundleManifest.from_dict(d)
+
+    def test_from_dict_missing_required_bundle_key(self):
+        """from_dict raises SchemaError when a required bundle key is absent."""
+        d = {
+            "schema_version": 3,
+            "bundle": {
+                "name": "zlib",
+                # missing version, upstream_version, etc.
+            },
+        }
+        with pytest.raises(SchemaError, match="missing required field"):
+            BundleManifest.from_dict(d)
+
+    def test_from_yaml_nonexistent_file(self):
+        """from_yaml raises SchemaError for a missing file."""
+        with pytest.raises(SchemaError, match="not found"):
+            BundleManifest.from_yaml("/tmp/no-such-manifest-xyz.yaml")
+
+    def test_from_yaml_non_dict(self, tmp_path):
+        """from_yaml raises SchemaError if the YAML is not a mapping."""
+        p = tmp_path / "manifest.yaml"
+        p.write_text("- item1\n- item2\n")
+        with pytest.raises(SchemaError, match="not a YAML mapping"):
+            BundleManifest.from_yaml(str(p))
+
+    def test_from_yaml_empty_file(self, tmp_path):
+        """from_yaml raises SchemaError for an empty YAML file (None)."""
+        p = tmp_path / "manifest.yaml"
+        p.write_text("")
+        with pytest.raises(SchemaError, match="not a YAML mapping"):
+            BundleManifest.from_yaml(str(p))
+
+    def test_from_yaml_scalar(self, tmp_path):
+        """from_yaml raises SchemaError for a scalar YAML value."""
+        p = tmp_path / "manifest.yaml"
+        p.write_text("42\n")
+        with pytest.raises(SchemaError, match="not a YAML mapping"):
+            BundleManifest.from_yaml(str(p))
