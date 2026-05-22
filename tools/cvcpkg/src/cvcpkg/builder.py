@@ -358,7 +358,7 @@ def _file_list(root: Path) -> list[str]:
     files = []
     for p in sorted(root.rglob("*")):
         if p.is_file():
-            files.append(str(p.relative_to(root)))
+            files.append(p.relative_to(root).as_posix())
     return files
 
 

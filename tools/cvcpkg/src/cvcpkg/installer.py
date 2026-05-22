@@ -13,6 +13,15 @@ from cvcpkg.errors import InstallError, IntegrityError
 from cvcpkg.manifest import CatalogEntry
 
 
+def _safe_extractall(tf: tarfile.TarFile, path: Path) -> None:
+    """Extract with filter='data' on Python >=3.12, plain extractall on older."""
+    import sys
+    if sys.version_info >= (3, 12):
+        tf.extractall(path=path, filter="data")
+    else:
+        tf.extractall(path=path)
+
+
 def download_bundle(
     entry: CatalogEntry,
     cache_dir: Path,
@@ -60,7 +69,7 @@ def extract_bundle(archive: Path, prefix: Path) -> None:
             for member in tf.getmembers():
                 if member.name.startswith("/") or ".." in member.name.split("/"):
                     raise InstallError(f"unsafe path in archive: {member.name}")
-            tf.extractall(path=prefix, filter="data")
+            _safe_extractall(tf, prefix)
     elif archive.name.endswith(".zip"):
         with zipfile.ZipFile(archive) as zf:
             for info in zf.infolist():
@@ -72,7 +81,7 @@ def extract_bundle(archive: Path, prefix: Path) -> None:
             for member in tf.getmembers():
                 if member.name.startswith("/") or ".." in member.name.split("/"):
                     raise InstallError(f"unsafe path in archive: {member.name}")
-            tf.extractall(path=prefix, filter="data")
+            _safe_extractall(tf, prefix)
     else:
         raise InstallError(f"unsupported archive format: {archive.name}")
 
