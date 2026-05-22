@@ -1,0 +1,52 @@
+schema_version: 1
+recipe:
+  name: re2
+  upstream_version: "2024-07-02"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  homepage: https://github.com/google/re2
+  license: BSD-3-Clause
+
+source:
+  type: tarball
+  url: https://github.com/google/re2/releases/download/2024-07-02/re2-2024-07-02.tar.gz
+  sha256: "eb2df807c781601c14a260a507a5bb4509be1ee626024cb45acbd57cb9c4e86f"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: abseil
+      version: ">=20240722"
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+      vcpkg_port: re2
+
+package:
+  files:
+    - lib/libre2*
+    - lib/re2*
+    - lib/cmake/re2/
+    - lib/pkgconfig/re2*
+    - include/re2/
+  cmake_packages:
+    - { name: re2, targets: ["re2::re2"] }
+
+abi:
+  cxx_std: 17

@@ -1,0 +1,65 @@
+schema_version: 1
+recipe:
+  name: qt6
+  upstream_version: "6.8.2"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  homepage: https://www.qt.io/
+  license: LGPL-3.0-only
+
+source:
+  # Qt 6 is obtained differently per platform:
+  # Linux: apt (qt6-base-dev), macOS: brew (qt@6), Windows: aqtinstall.
+  # This recipe standardizes the interface; the build script handles
+  # the platform-specific acquisition method.
+  type: tarball
+  url: https://download.qt.io/archive/qt/6.8/6.8.2/submodules/qtbase-everywhere-src-6.8.2.tar.xz
+  sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: openssl
+      version: "^3.0"
+    - name: zlib
+      version: "^1.3"
+  host_tools:
+    - cmake
+    - ninja
+    - perl
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libQt6*
+    - lib/Qt6*
+    - lib/cmake/Qt6*/
+    - lib/qt6/
+    - lib/pkgconfig/Qt6*
+    - include/Qt*/
+    - bin/moc*
+    - bin/rcc*
+    - bin/uic*
+    - bin/qmake*
+    - bin/Qt6*
+    - plugins/
+    - share/qt6/
+  cmake_packages:
+    - { name: Qt6, targets: ["Qt6::Core", "Qt6::Gui", "Qt6::Widgets", "Qt6::OpenGL", "Qt6::OpenGLWidgets"] }
+
+abi:
+  cxx_std: 17

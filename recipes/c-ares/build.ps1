@@ -1,0 +1,9 @@
+# recipes/c-ares/build.ps1
+$ErrorActionPreference = 'Stop'
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+. "$scriptDir\..\\_common\\env-windows.ps1"
+
+Invoke-CvcCMakeBuild @(
+    '-DCARES_BUILD_TESTS=OFF',
+    '-DCARES_BUILD_TOOLS=OFF'
+)

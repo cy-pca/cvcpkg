@@ -1,0 +1,53 @@
+schema_version: 1
+recipe:
+  name: c-ares
+  upstream_version: "1.34.4"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  homepage: https://c-ares.org/
+  license: MIT
+
+source:
+  type: tarball
+  url: https://github.com/c-ares/c-ares/releases/download/v1.34.4/c-ares-1.34.4.tar.gz
+  sha256: "fa38a14cc5c621936e1e53a09a5c31b6e1c31d7e66145c0b11ef3d5a5e8c7a2a"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+      vcpkg_port: c-ares
+
+package:
+  files:
+    - lib/libcares*
+    - lib/cares*
+    - lib/cmake/c-ares/
+    - lib/pkgconfig/libcares*
+    - include/ares.h
+    - include/ares_build.h
+    - include/ares_dns.h
+    - include/ares_rules.h
+    - include/ares_version.h
+  cmake_packages:
+    - { name: c-ares, targets: ["c-ares::cares"] }
+
+abi:
+  cxx_std: 17

@@ -1,0 +1,54 @@
+schema_version: 1
+recipe:
+  name: openssl
+  upstream_version: "3.4.1"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  homepage: https://www.openssl.org/
+  license: Apache-2.0
+
+source:
+  type: tarball
+  url: https://github.com/openssl/openssl/releases/download/openssl-3.4.1/openssl-3.4.1.tar.gz
+  sha256: "002a2d6b30b58bf4bea46c43bdd96365aaf8daa6c428782aa4feee06da197df3"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - cmake
+    - perl
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+      vcpkg_port: openssl
+
+package:
+  files:
+    - lib/libssl*
+    - lib/libcrypto*
+    - lib/ssl*
+    - lib/crypto*
+    - lib/cmake/OpenSSL/
+    - lib/pkgconfig/openssl*
+    - lib/pkgconfig/libssl*
+    - lib/pkgconfig/libcrypto*
+    - include/openssl/
+    - bin/openssl*
+  cmake_packages:
+    - { name: OpenSSL, targets: ["OpenSSL::SSL", "OpenSSL::Crypto"] }
+
+abi:
+  cxx_std: 17
