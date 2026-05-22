@@ -16,8 +16,8 @@ from cvcpkg.manifest import (
     Requirements,
 )
 
-
 # ── BundleManifest ──────────────────────────────────────────────
+
 
 class TestBundleManifestFromDict:
     """BundleManifest.from_dict(d) parsing."""
@@ -71,7 +71,12 @@ class TestBundleManifestFromDict:
         d = {**self.MINIMAL}
         d["bundle"] = {
             **d["bundle"],
-            "abi": {"cxx_std": 20, "cxx_runtime": "libstdc++", "libc": "glibc-2.31", "crt_link": "dynamic"},
+            "abi": {
+                "cxx_std": 20,
+                "cxx_runtime": "libstdc++",
+                "libc": "glibc-2.31",
+                "crt_link": "dynamic",
+            },
         }
         m = BundleManifest.from_dict(d)
         assert m.abi.cxx_std == 20
@@ -150,6 +155,7 @@ class TestBundleManifestFromDict:
 
     def test_from_yaml(self, tmp_path):
         import yaml
+
         p = tmp_path / "manifest.yaml"
         p.write_text(yaml.dump(self.MINIMAL))
         m = BundleManifest.from_yaml(str(p))
@@ -157,6 +163,7 @@ class TestBundleManifestFromDict:
 
 
 # ── CatalogEntry ────────────────────────────────────────────────
+
 
 class TestCatalogEntry:
     def test_basic(self):
@@ -179,6 +186,7 @@ class TestCatalogEntry:
 
 
 # ── ReleaseIndex ────────────────────────────────────────────────
+
 
 class TestReleaseIndex:
     def test_from_dict(self):
@@ -229,6 +237,7 @@ class TestReleaseIndex:
 
 # ── Requirements ────────────────────────────────────────────────
 
+
 class TestRequirements:
     def test_from_dict_defaults(self):
         r = Requirements.from_dict({})
@@ -245,43 +254,101 @@ class TestRequirements:
         assert r.components[0].version == ""
 
     def test_dict_components(self):
-        r = Requirements.from_dict({
-            "components": [
-                {"name": "zlib", "version": "==1.3.1"},
-                {"name": "vtk", "exclude": True},
-            ]
-        })
+        r = Requirements.from_dict(
+            {
+                "components": [
+                    {"name": "zlib", "version": "==1.3.1"},
+                    {"name": "vtk", "exclude": True},
+                ]
+            }
+        )
         assert r.components[0].version == "==1.3.1"
         assert r.components[1].exclude is True
 
     def test_overrides(self):
-        r = Requirements.from_dict({
-            "overrides": [{"name": "boost", "version": "==1.85.0+cvc.2"}]
-        })
+        r = Requirements.from_dict({"overrides": [{"name": "boost", "version": "==1.85.0+cvc.2"}]})
         assert len(r.overrides) == 1
         assert r.overrides[0].name == "boost"
 
     def test_from_yaml(self, tmp_path):
         import yaml
+
         p = tmp_path / "reqs.yaml"
-        p.write_text(yaml.dump({
-            "platform": "linux",
-            "config": "debug",
-            "components": ["zlib", "boost"],
-        }))
+        p.write_text(
+            yaml.dump(
+                {
+                    "platform": "linux",
+                    "config": "debug",
+                    "components": ["zlib", "boost"],
+                }
+            )
+        )
         r = Requirements.from_yaml(str(p))
         assert r.platform == "linux"
         assert r.config == "debug"
         assert len(r.components) == 2
 
     def test_mixed_components(self):
-        r = Requirements.from_dict({
-            "components": [
-                "zlib",
-                {"name": "boost", "version": "^1.80"},
-            ]
-        })
+        r = Requirements.from_dict(
+            {
+                "components": [
+                    "zlib",
+                    {"name": "boost", "version": "^1.80"},
+                ]
+            }
+        )
         assert r.components[0].name == "zlib"
         assert r.components[0].version == ""
         assert r.components[1].name == "boost"
         assert r.components[1].version == "^1.80"
+
+
+# ── Hardening: error paths ──────────────────────────────────────
+
+
+class TestBundleManifestHardening:
+    """Tests for hardened from_dict / from_yaml error handling."""
+
+    def test_from_dict_missing_bundle_block(self):
+        """from_dict raises SchemaError when 'bundle' has no required keys."""
+        d = {"schema_version": 3}  # no bundle block at all
+        with pytest.raises(SchemaError, match="missing required field"):
+            BundleManifest.from_dict(d)
+
+    def test_from_dict_missing_required_bundle_key(self):
+        """from_dict raises SchemaError when a required bundle key is absent."""
+        d = {
+            "schema_version": 3,
+            "bundle": {
+                "name": "zlib",
+                # missing version, upstream_version, etc.
+            },
+        }
+        with pytest.raises(SchemaError, match="missing required field"):
+            BundleManifest.from_dict(d)
+
+    def test_from_yaml_nonexistent_file(self):
+        """from_yaml raises SchemaError for a missing file."""
+        with pytest.raises(SchemaError, match="not found"):
+            BundleManifest.from_yaml("/tmp/no-such-manifest-xyz.yaml")
+
+    def test_from_yaml_non_dict(self, tmp_path):
+        """from_yaml raises SchemaError if the YAML is not a mapping."""
+        p = tmp_path / "manifest.yaml"
+        p.write_text("- item1\n- item2\n")
+        with pytest.raises(SchemaError, match="not a YAML mapping"):
+            BundleManifest.from_yaml(str(p))
+
+    def test_from_yaml_empty_file(self, tmp_path):
+        """from_yaml raises SchemaError for an empty YAML file (None)."""
+        p = tmp_path / "manifest.yaml"
+        p.write_text("")
+        with pytest.raises(SchemaError, match="not a YAML mapping"):
+            BundleManifest.from_yaml(str(p))
+
+    def test_from_yaml_scalar(self, tmp_path):
+        """from_yaml raises SchemaError for a scalar YAML value."""
+        p = tmp_path / "manifest.yaml"
+        p.write_text("42\n")
+        with pytest.raises(SchemaError, match="not a YAML mapping"):
+            BundleManifest.from_yaml(str(p))

@@ -6,6 +6,7 @@ recipe:
   maintainer: "CyberPC Angel, LLC"
   homepage: https://www.qt.io/
   license: LGPL-3.0-only
+  tags: [graphics]
 
 source:
   # Qt 6 is obtained differently per platform:
@@ -14,7 +15,7 @@ source:
   # the platform-specific acquisition method.
   type: tarball
   url: https://download.qt.io/archive/qt/6.8/6.8.2/submodules/qtbase-everywhere-src-6.8.2.tar.xz
-  sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+  sha256: "012043ce6d411e6e8a91fdc4e05e6bedcfa10fcb1347d3c33908f7fdd10dfe05"
   strip_components: 1
 
 patches: []

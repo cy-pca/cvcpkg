@@ -31,11 +31,13 @@ from cvcpkg.builder import (
     fetch_source,
     generate_manifest,
     list_recipes,
+    load_all_recipes,
+    resolve_build_order,
     stage_bundle,
 )
 
-
 # ── Helpers ─────────────────────────────────────────────────────
+
 
 def _write_recipe(recipe_dir: Path, recipe_dict: dict) -> Path:
     """Write a recipe.yaml and return its path."""
@@ -68,13 +70,16 @@ MINIMAL_RECIPE = {
 
 # ── SourceSpec ──────────────────────────────────────────────────
 
+
 class TestSourceSpec:
     def test_from_dict_tarball(self):
-        s = SourceSpec.from_dict({
-            "type": "tarball",
-            "url": "https://example.com/pkg-1.0.tar.gz",
-            "sha256": "a" * 64,
-        })
+        s = SourceSpec.from_dict(
+            {
+                "type": "tarball",
+                "url": "https://example.com/pkg-1.0.tar.gz",
+                "sha256": "a" * 64,
+            }
+        )
         assert s.type == "tarball"
         assert s.url == "https://example.com/pkg-1.0.tar.gz"
         assert s.sha256 == "a" * 64
@@ -99,6 +104,7 @@ class TestSourceSpec:
 
 # ── MatrixEntry ─────────────────────────────────────────────────
 
+
 class TestMatrixEntry:
     def test_from_dict(self):
         m = MatrixEntry.from_dict({"platform": "linux", "script": "build.sh"})
@@ -107,15 +113,18 @@ class TestMatrixEntry:
         assert m.env == {}
 
     def test_with_env(self):
-        m = MatrixEntry.from_dict({
-            "platform": "windows",
-            "script": "build.ps1",
-            "env": {"FOO": "bar"},
-        })
+        m = MatrixEntry.from_dict(
+            {
+                "platform": "windows",
+                "script": "build.ps1",
+                "env": {"FOO": "bar"},
+            }
+        )
         assert m.env == {"FOO": "bar"}
 
 
 # ── Recipe loading ──────────────────────────────────────────────
+
 
 class TestRecipeLoad:
     def test_load_minimal(self, tmp_path):
@@ -178,6 +187,7 @@ class TestRecipeLoad:
 
 # ── Matrix selection ────────────────────────────────────────────
 
+
 class TestSelectMatrixEntry:
     def test_selects_linux(self, tmp_path):
         recipe_dir = tmp_path / "recipes" / "testpkg"
@@ -195,6 +205,7 @@ class TestSelectMatrixEntry:
 
 
 # ── Source fetching ─────────────────────────────────────────────
+
 
 class TestFetchSource:
     def test_vendored_source(self, tmp_path):
@@ -256,6 +267,7 @@ class TestFetchSource:
 
 # ── Patch application ──────────────────────────────────────────
 
+
 class TestApplyPatches:
     def test_no_patches_noop(self, tmp_path):
         recipe_dir = tmp_path / "recipes" / "testpkg"
@@ -275,6 +287,7 @@ class TestApplyPatches:
 
 # ── _sha256_file ────────────────────────────────────────────────
 
+
 class TestSha256File:
     def test_correct_hash(self, tmp_path):
         content = b"test content for sha256"
@@ -285,6 +298,7 @@ class TestSha256File:
 
 
 # ── _file_list ──────────────────────────────────────────────────
+
 
 class TestFileList:
     def test_lists_files(self, tmp_path):
@@ -309,6 +323,7 @@ class TestFileList:
 
 # ── _total_size ─────────────────────────────────────────────────
 
+
 class TestTotalSize:
     def test_counts_bytes(self, tmp_path):
         (tmp_path / "a").write_bytes(b"hello")
@@ -317,6 +332,7 @@ class TestTotalSize:
 
 
 # ── generate_manifest ──────────────────────────────────────────
+
 
 class TestGenerateManifest:
     def test_basic_manifest(self, tmp_path):
@@ -358,6 +374,38 @@ class TestGenerateManifest:
         assert deps[0] == {"name": "zlib", "version": "^1.3"}
         assert deps[1] == {"name": "fftw3"}
 
+    def test_manifest_platform_filtered_deps(self, tmp_path):
+        """Platform-conditional deps are filtered in the manifest."""
+        recipe_dict = {
+            **MINIMAL_RECIPE,
+            "depends": {
+                "build": [
+                    {"name": "openblas", "version": ">=0.3", "platforms": ["linux", "macos"]},
+                    {"name": "clapack", "version": ">=3.2", "platforms": ["windows"]},
+                    {"name": "zlib", "version": "^1.3"},
+                ]
+            },
+        }
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+
+        install_dir = tmp_path / "install"
+        install_dir.mkdir()
+
+        m = generate_manifest(r, install_dir, "linux", "x86_64", "release", "shared")
+        deps = m["depends"]
+        assert len(deps) == 2
+        assert deps[0] == {"name": "openblas", "version": ">=0.3"}
+        assert deps[1] == {"name": "zlib", "version": "^1.3"}
+
+        # Windows should get clapack, not openblas
+        m2 = generate_manifest(r, install_dir, "windows", "x86_64", "release", "static")
+        deps2 = m2["depends"]
+        assert len(deps2) == 2
+        assert deps2[0] == {"name": "clapack", "version": ">=3.2"}
+        assert deps2[1] == {"name": "zlib", "version": "^1.3"}
+
     def test_manifest_recipe_sha256(self, tmp_path):
         recipe_dir = tmp_path / "recipes" / "testpkg"
         _write_recipe(recipe_dir, MINIMAL_RECIPE)
@@ -371,6 +419,7 @@ class TestGenerateManifest:
 
 
 # ── stage_bundle ────────────────────────────────────────────────
+
 
 class TestStageBundle:
     def test_stages_files_and_manifest(self, tmp_path):
@@ -395,6 +444,7 @@ class TestStageBundle:
 
 # ── create_archive ──────────────────────────────────────────────
 
+
 class TestCreateArchive:
     def _make_staging(self, tmp_path):
         staging = tmp_path / "staging"
@@ -409,8 +459,14 @@ class TestCreateArchive:
         staging = self._make_staging(tmp_path)
         out = tmp_path / "dist"
         path, sha, size = create_archive(
-            staging, out, "testpkg", "1.0.0+cvc.1",
-            "linux", "x86_64", "release", "shared",
+            staging,
+            out,
+            "testpkg",
+            "1.0.0+cvc.1",
+            "linux",
+            "x86_64",
+            "release",
+            "shared",
         )
         assert path.suffix == ".gz"
         assert path.exists()
@@ -427,8 +483,14 @@ class TestCreateArchive:
         staging = self._make_staging(tmp_path)
         out = tmp_path / "dist"
         path, sha, size = create_archive(
-            staging, out, "testpkg", "1.0.0+cvc.1",
-            "windows", "x86_64", "release", "shared",
+            staging,
+            out,
+            "testpkg",
+            "1.0.0+cvc.1",
+            "windows",
+            "x86_64",
+            "release",
+            "shared",
         )
         assert path.suffix == ".zip"
         assert path.exists()
@@ -442,29 +504,44 @@ class TestCreateArchive:
         staging = self._make_staging(tmp_path)
         out1 = tmp_path / "dist1"
         out2 = tmp_path / "dist2"
-        _, sha1, _ = create_archive(staging, out1, "p", "1.0", "linux", "x86_64", "release", "shared")
-        _, sha2, _ = create_archive(staging, out2, "p", "1.0", "linux", "x86_64", "release", "shared")
+        _, sha1, _ = create_archive(
+            staging, out1, "p", "1.0", "linux", "x86_64", "release", "shared"
+        )
+        _, sha2, _ = create_archive(
+            staging, out2, "p", "1.0", "linux", "x86_64", "release", "shared"
+        )
         assert sha1 == sha2
 
     def test_deterministic_zip(self, tmp_path):
         staging = self._make_staging(tmp_path)
         out1 = tmp_path / "dist1"
         out2 = tmp_path / "dist2"
-        _, sha1, _ = create_archive(staging, out1, "p", "1.0", "windows", "x86_64", "release", "shared")
-        _, sha2, _ = create_archive(staging, out2, "p", "1.0", "windows", "x86_64", "release", "shared")
+        _, sha1, _ = create_archive(
+            staging, out1, "p", "1.0", "windows", "x86_64", "release", "shared"
+        )
+        _, sha2, _ = create_archive(
+            staging, out2, "p", "1.0", "windows", "x86_64", "release", "shared"
+        )
         assert sha1 == sha2
 
     def test_archive_stem_format(self, tmp_path):
         staging = self._make_staging(tmp_path)
         out = tmp_path / "dist"
         path, _, _ = create_archive(
-            staging, out, "zlib", "1.3.1+cvc.1",
-            "linux", "x86_64", "release", "shared",
+            staging,
+            out,
+            "zlib",
+            "1.3.1+cvc.1",
+            "linux",
+            "x86_64",
+            "release",
+            "shared",
         )
         assert path.name == "zlib-1.3.1+cvc.1-linux-x86_64-release-shared.tar.gz"
 
 
 # ── list_recipes (against the real recipes/ dir) ─────────────────
+
 
 class TestListRecipes:
     def test_list_synthetic(self, tmp_path):
@@ -477,10 +554,13 @@ class TestListRecipes:
         for name in ("alpha", "beta"):
             rd = recipes_dir / name
             rd.mkdir()
-            _write_recipe(rd, {
-                **MINIMAL_RECIPE,
-                "recipe": {**MINIMAL_RECIPE["recipe"], "name": name},
-            })
+            _write_recipe(
+                rd,
+                {
+                    **MINIMAL_RECIPE,
+                    "recipe": {**MINIMAL_RECIPE["recipe"], "name": name},
+                },
+            )
 
         recipes = list_recipes(recipes_dir)
         names = [r.name for r in recipes]
@@ -502,3 +582,346 @@ class TestListRecipes:
 
         recipes = list_recipes(recipes_dir)
         assert len(recipes) == 0
+
+
+# ── Hardening: patch path traversal ────────────────────────────
+
+
+class TestPatchTraversal:
+    """Verify that apply_patches rejects patches that escape the recipe dir."""
+
+    def test_traversal_rejected(self, tmp_path):
+        """Patches referencing ../../ should raise RecipeError."""
+        recipe_dir = tmp_path / "recipes" / "evil"
+        recipe_dir.mkdir(parents=True)
+        _write_recipe(
+            recipe_dir,
+            {
+                **MINIMAL_RECIPE,
+                "patches": ["../../etc/passwd"],
+            },
+        )
+        recipe = Recipe.load(recipe_dir)
+
+        source_dir = tmp_path / "src"
+        source_dir.mkdir()
+
+        with pytest.raises(RecipeError, match="escapes recipe directory"):
+            apply_patches(recipe, source_dir)
+
+    def test_normal_patch_allowed(self, tmp_path):
+        """A patch file within the recipe dir should pass the traversal check."""
+        recipe_dir = tmp_path / "recipes" / "good"
+        recipe_dir.mkdir(parents=True)
+
+        # Create a valid (no-op) patch file
+        patch_file = recipe_dir / "fix.patch"
+        patch_file.write_text("")
+
+        _write_recipe(
+            recipe_dir,
+            {
+                **MINIMAL_RECIPE,
+                "patches": ["fix.patch"],
+            },
+        )
+        recipe = Recipe.load(recipe_dir)
+
+        source_dir = tmp_path / "src"
+        source_dir.mkdir()
+
+        # An empty patch file may succeed (no-op) or fail, but the key
+        # assertion is that it does NOT raise "escapes recipe directory".
+        try:
+            apply_patches(recipe, source_dir)
+        except RecipeError as e:
+            assert "escapes recipe directory" not in str(e)
+
+    def test_patch_not_found(self, tmp_path):
+        """A patch file that doesn't exist should raise RecipeError."""
+        recipe_dir = tmp_path / "recipes" / "missing"
+        recipe_dir.mkdir(parents=True)
+        _write_recipe(
+            recipe_dir,
+            {
+                **MINIMAL_RECIPE,
+                "patches": ["nonexistent.patch"],
+            },
+        )
+        recipe = Recipe.load(recipe_dir)
+
+        source_dir = tmp_path / "src"
+        source_dir.mkdir()
+
+        with pytest.raises(RecipeError, match="not found"):
+            apply_patches(recipe, source_dir)
+
+
+# ── Hardening: resolve_build_order ─────────────────────────────
+
+
+class TestResolveBuildOrder:
+    """Topological sort of recipes by dependency."""
+
+    def _make_recipe(self, tmp_path, name, deps=None):
+        """Create a minimal recipe with optional build dependencies."""
+        recipe_dir = tmp_path / "recipes" / name
+        recipe_dir.mkdir(parents=True, exist_ok=True)
+        d = {
+            **MINIMAL_RECIPE,
+            "recipe": {**MINIMAL_RECIPE["recipe"], "name": name},
+        }
+        if deps:
+            d["depends"] = {"build": deps}
+        _write_recipe(recipe_dir, d)
+        return Recipe.load(recipe_dir)
+
+    def test_no_deps(self, tmp_path):
+        a = self._make_recipe(tmp_path, "a")
+        b = self._make_recipe(tmp_path, "b")
+        order = resolve_build_order([a, b])
+        names = [r.name for r in order]
+        assert set(names) == {"a", "b"}
+
+    def test_linear_deps(self, tmp_path):
+        """c depends on b, b depends on a → order is a, b, c."""
+        a = self._make_recipe(tmp_path, "a")
+        b = self._make_recipe(tmp_path, "b", deps=["a"])
+        c = self._make_recipe(tmp_path, "c", deps=["b"])
+        order = resolve_build_order([c, b, a])
+        names = [r.name for r in order]
+        assert names.index("a") < names.index("b")
+        assert names.index("b") < names.index("c")
+
+    def test_diamond_deps(self, tmp_path):
+        """d depends on b and c; both depend on a."""
+        a = self._make_recipe(tmp_path, "a")
+        b = self._make_recipe(tmp_path, "b", deps=["a"])
+        c = self._make_recipe(tmp_path, "c", deps=["a"])
+        d = self._make_recipe(tmp_path, "d", deps=["b", "c"])
+        order = resolve_build_order([d, c, b, a])
+        names = [r.name for r in order]
+        assert names.index("a") < names.index("b")
+        assert names.index("a") < names.index("c")
+        assert names.index("b") < names.index("d")
+        assert names.index("c") < names.index("d")
+
+    def test_cycle_detected(self, tmp_path):
+        """Cycle a→b→a should raise RecipeError."""
+        a = self._make_recipe(tmp_path, "a", deps=["b"])
+        b = self._make_recipe(tmp_path, "b", deps=["a"])
+        with pytest.raises(RecipeError, match="cycle"):
+            resolve_build_order([a, b])
+
+    def test_missing_dep(self, tmp_path):
+        """Dependency on a recipe not in the list should raise RecipeError."""
+        a = self._make_recipe(tmp_path, "a", deps=["missing"])
+        with pytest.raises(RecipeError, match="Unknown dependency"):
+            resolve_build_order([a])
+
+    def test_dict_style_deps(self, tmp_path):
+        """Dependencies can also be specified as dicts with a 'name' key."""
+        a = self._make_recipe(tmp_path, "a")
+        b = self._make_recipe(tmp_path, "b", deps=[{"name": "a"}])
+        order = resolve_build_order([b, a])
+        names = [r.name for r in order]
+        assert names.index("a") < names.index("b")
+
+    def test_platform_conditional_deps_included(self, tmp_path):
+        """Dep with matching platform is included in build order."""
+        a = self._make_recipe(tmp_path, "a")
+        b = self._make_recipe(tmp_path, "b", deps=[{"name": "a", "platforms": ["linux"]}])
+        order = resolve_build_order([b, a], platform="linux")
+        names = [r.name for r in order]
+        assert names.index("a") < names.index("b")
+
+    def test_platform_conditional_deps_excluded(self, tmp_path):
+        """Dep with non-matching platform is excluded from build order."""
+        a = self._make_recipe(tmp_path, "a")
+        b = self._make_recipe(tmp_path, "b", deps=[{"name": "a", "platforms": ["windows"]}])
+        # 'a' is not required by 'b' on linux, so order is unlinked
+        order = resolve_build_order([b, a], platform="linux")
+        names = [r.name for r in order]
+        assert "a" in names and "b" in names
+
+    def test_platform_conditional_deps_no_filter(self, tmp_path):
+        """Without platform filter, all deps are included regardless of platforms field."""
+        a = self._make_recipe(tmp_path, "a")
+        b = self._make_recipe(tmp_path, "b", deps=[{"name": "a", "platforms": ["windows"]}])
+        order = resolve_build_order([b, a])
+        names = [r.name for r in order]
+        assert names.index("a") < names.index("b")
+
+    def test_platform_conditional_mixed_deps(self, tmp_path):
+        """Mix of platform-specific and unconditional deps."""
+        a = self._make_recipe(tmp_path, "a")
+        c = self._make_recipe(tmp_path, "c")
+        b = self._make_recipe(
+            tmp_path,
+            "b",
+            deps=[
+                {"name": "a", "platforms": ["linux", "macos"]},
+                {"name": "c", "platforms": ["windows"]},
+            ],
+        )
+        order = resolve_build_order([b, c, a], platform="linux")
+        names = [r.name for r in order]
+        assert names.index("a") < names.index("b")
+        # c is in the list (it's a recipe) but not required by b on linux
+
+
+# ── Hardening: fetch_tarball specific exceptions ───────────────
+
+
+class TestFetchTarballExceptions:
+    """Verify _fetch_tarball catches specific urllib exceptions."""
+
+    def test_no_urls_raises(self, tmp_path):
+        """Source with no URL or mirror should raise RecipeError."""
+        source = SourceSpec(type="tarball", url="", mirror="")
+        with pytest.raises(RecipeError, match="no URL specified"):
+            from cvcpkg.builder import _fetch_tarball
+
+            _fetch_tarball(source, tmp_path)
+
+    def test_bad_url_raises(self, tmp_path):
+        """An unreachable URL should raise RecipeError (mocked)."""
+        import urllib.error
+
+        source = SourceSpec(
+            type="tarball",
+            url="http://example.invalid/nonexistent.tar.gz",
+        )
+        with patch(
+            "urllib.request.urlretrieve",
+            side_effect=urllib.error.URLError("connection refused"),
+        ):
+            with pytest.raises(RecipeError, match="failed to download"):
+                from cvcpkg.builder import _fetch_tarball
+
+                _fetch_tarball(source, tmp_path)
+
+
+# ── Hardening: run_build interpreter check ─────────────────────
+
+
+class TestRunBuildInterpreter:
+    """Verify run_build validates interpreter availability."""
+
+    def test_unknown_script_suffix(self, tmp_path):
+        """A script with an unknown suffix should raise BuildError."""
+        from cvcpkg.builder import run_build
+
+        recipe_dir = tmp_path / "recipes" / "bad"
+        recipe_dir.mkdir(parents=True)
+        d = {
+            **MINIMAL_RECIPE,
+            "build": {
+                "matrix": [
+                    {"platform": "linux", "script": "build.rb"},
+                ],
+            },
+        }
+        _write_recipe(recipe_dir, d)
+        # Create the script file so we pass the "not found" check
+        (recipe_dir / "build.rb").write_text("#!/usr/bin/env ruby\n")
+
+        recipe = Recipe.load(recipe_dir)
+        ctx = BuildContext(
+            recipe=recipe,
+            platform="linux",
+            config="release",
+            link="shared",
+            prefix=tmp_path / "prefix",
+            source_dir=tmp_path / "src",
+            build_dir=tmp_path / "build",
+            install_dir=tmp_path / "install",
+            work_dir=tmp_path / "work",
+        )
+        with pytest.raises(BuildError, match="Unknown script type"):
+            run_build(ctx)
+
+
+# ── Tags ────────────────────────────────────────────────────────
+
+
+class TestRecipeTags:
+    def test_load_recipe_with_tags(self, tmp_path):
+        recipe_dict = {**MINIMAL_RECIPE}
+        recipe_dict["recipe"] = {**recipe_dict["recipe"], "tags": ["math", "utils"]}
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        assert r.tags == ["math", "utils"]
+
+    def test_load_recipe_without_tags(self, tmp_path):
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, MINIMAL_RECIPE)
+        r = Recipe.load(recipe_dir)
+        assert r.tags == []
+
+    def test_load_recipe_empty_tags(self, tmp_path):
+        recipe_dict = {**MINIMAL_RECIPE}
+        recipe_dict["recipe"] = {**recipe_dict["recipe"], "tags": []}
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        assert r.tags == []
+
+
+# ── load_all_recipes ────────────────────────────────────────────
+
+
+class TestLoadAllRecipes:
+    def _make_recipe(self, recipes_dir, name, **overrides):
+        d = {**MINIMAL_RECIPE}
+        d["recipe"] = {**d["recipe"], "name": name, **overrides}
+        d["source"] = {"type": "vendored", "path": f"third-party/{name}"}
+        recipe_dir = recipes_dir / name
+        _write_recipe(recipe_dir, d)
+
+    def test_single_dir(self, tmp_path):
+        rd = tmp_path / "recipes"
+        self._make_recipe(rd, "alpha")
+        self._make_recipe(rd, "beta")
+        result = load_all_recipes([rd])
+        names = [r.name for r in result]
+        assert names == ["alpha", "beta"]
+
+    def test_multiple_dirs_merge(self, tmp_path):
+        rd1 = tmp_path / "dir1"
+        rd2 = tmp_path / "dir2"
+        self._make_recipe(rd1, "alpha")
+        self._make_recipe(rd2, "beta")
+        result = load_all_recipes([rd1, rd2])
+        names = [r.name for r in result]
+        assert names == ["alpha", "beta"]
+
+    def test_later_dir_overrides(self, tmp_path, capsys):
+        rd1 = tmp_path / "dir1"
+        rd2 = tmp_path / "dir2"
+        self._make_recipe(rd1, "alpha", cvc_revision=1)
+        self._make_recipe(rd2, "alpha", cvc_revision=2)
+        result = load_all_recipes([rd1, rd2])
+        assert len(result) == 1
+        assert result[0].cvc_revision == 2
+        captured = capsys.readouterr()
+        assert "overrides" in captured.out
+
+    def test_empty_dirs_raises(self):
+        with pytest.raises(RecipeError, match="No recipe directories"):
+            load_all_recipes([])
+
+    def test_three_dirs_overlay(self, tmp_path):
+        rd1 = tmp_path / "base"
+        rd2 = tmp_path / "overlay"
+        rd3 = tmp_path / "local"
+        self._make_recipe(rd1, "alpha")
+        self._make_recipe(rd1, "beta")
+        self._make_recipe(rd2, "gamma")
+        self._make_recipe(rd3, "beta", cvc_revision=5)
+        result = load_all_recipes([rd1, rd2, rd3])
+        names = [r.name for r in result]
+        assert names == ["alpha", "beta", "gamma"]
+        beta = [r for r in result if r.name == "beta"][0]
+        assert beta.cvc_revision == 5

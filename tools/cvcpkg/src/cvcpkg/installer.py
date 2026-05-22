@@ -16,6 +16,7 @@ from cvcpkg.manifest import CatalogEntry
 def _safe_extractall(tf: tarfile.TarFile, path: Path) -> None:
     """Extract with filter='data' on Python >=3.12, plain extractall on older."""
     import sys
+
     if sys.version_info >= (3, 12):
         tf.extractall(path=path, filter="data")
     else:
@@ -25,6 +26,8 @@ def _safe_extractall(tf: tarfile.TarFile, path: Path) -> None:
 def download_bundle(
     entry: CatalogEntry,
     cache_dir: Path,
+    *,
+    max_bytes: int = 4 * 1024 * 1024 * 1024,  # 4 GB
 ) -> Path:
     """Download *entry*'s archive (or return from cache).
 
@@ -36,26 +39,52 @@ def download_bundle(
     if sha and cache_mod.is_cached(cache_dir, sha, filename):
         return cache_mod.cache_path(cache_dir, sha, filename)
 
-    import urllib.request
+    import tempfile
+
+    from cvcpkg.storage import get_backend
 
     url = entry.archive_url
     if not url:
         raise InstallError(f"no archive_url for {entry.name}=={entry.version}")
 
     try:
-        with urllib.request.urlopen(url, timeout=120) as resp:  # noqa: S310
-            data = resp.read()
+        backend = get_backend(url)
+        info = backend.head(url)
+        if info.size >= 0 and info.size > max_bytes:
+            raise InstallError(
+                f"archive for {entry.name} is {info.size} bytes, " f"exceeds {max_bytes} limit"
+            )
+        # Stream to a temp file instead of loading into memory
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=cache_dir, delete=False, suffix=".download") as tmp:
+            total = 0
+            h = hashlib.sha256()
+            with backend.open(url) as stream:
+                while True:
+                    chunk = stream.read(1 << 16)  # 64 KB
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > max_bytes:
+                        os.unlink(tmp.name)
+                        raise InstallError(
+                            f"archive for {entry.name} exceeds {max_bytes} byte limit"
+                        )
+                    h.update(chunk)
+                    tmp.write(chunk)
+            tmp_path = Path(tmp.name)
+    except (InstallError, IntegrityError):
+        raise
     except Exception as e:
         raise InstallError(f"failed to download {url}: {e}") from e
 
-    if sha:
-        actual = hashlib.sha256(data).hexdigest()
-        if actual != sha:
-            raise IntegrityError(
-                f"sha256 mismatch for {filename}: expected {sha}, got {actual}"
-            )
+    actual = h.hexdigest()
+    if sha and actual != sha:
+        tmp_path.unlink(missing_ok=True)
+        raise IntegrityError(f"sha256 mismatch for {filename}: expected {sha}, got {actual}")
 
-    path = cache_mod.store(cache_dir, sha or hashlib.sha256(data).hexdigest(), filename, data)
+    final_sha = sha or actual
+    path = cache_mod.store_from_file(cache_dir, final_sha, filename, tmp_path)
     return path
 
 
@@ -64,6 +93,7 @@ def download_bundle(
 # Maps suffix → extractor function.  To support a new format, add
 # an entry to _EXTRACTORS.  Each extractor receives (archive, prefix)
 # and must handle path-traversal validation internally.
+
 
 def _extract_tar(archive: Path, prefix: Path) -> None:
     """Extract any tarball variant that Python's tarfile module supports."""
@@ -102,13 +132,13 @@ def _extract_7z(archive: Path, prefix: Path) -> None:
 
 # Ordered so the longest (most specific) suffix matches first.
 _EXTRACTORS: list[tuple[tuple[str, ...], callable]] = [
-    ((".tar.gz", ".tgz"),              _extract_tar),
-    ((".tar.bz2", ".tbz2"),            _extract_tar),
-    ((".tar.xz", ".txz"),              _extract_tar),
-    ((".tar.zst", ".tar.zstd"),         _extract_tar),
-    ((".tar",),                         _extract_tar),
-    ((".zip",),                         _extract_zip),
-    ((".7z",),                          _extract_7z),
+    ((".tar.gz", ".tgz"), _extract_tar),
+    ((".tar.bz2", ".tbz2"), _extract_tar),
+    ((".tar.xz", ".txz"), _extract_tar),
+    ((".tar.zst", ".tar.zstd"), _extract_tar),
+    ((".tar",), _extract_tar),
+    ((".zip",), _extract_zip),
+    ((".7z",), _extract_7z),
 ]
 
 

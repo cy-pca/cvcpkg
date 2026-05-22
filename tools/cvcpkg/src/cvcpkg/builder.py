@@ -24,8 +24,8 @@ import yaml
 from cvcpkg.errors import CvcpkgError
 from cvcpkg.platform import detect_platform
 
-
 # ── Errors ──────────────────────────────────────────────────────
+
 
 class RecipeError(CvcpkgError):
     """Problem loading or validating a recipe."""
@@ -41,9 +41,11 @@ class PackError(CvcpkgError):
 
 # ── Data model ──────────────────────────────────────────────────
 
+
 @dataclass
 class SourceSpec:
     """Parsed ``source:`` block from recipe.yaml."""
+
     type: str  # tarball | git | vcpkg | brew | apt | vendored
     url: str = ""
     mirror: str = ""
@@ -72,6 +74,7 @@ class SourceSpec:
 @dataclass
 class MatrixEntry:
     """One entry from ``build.matrix[]``."""
+
     platform: str
     script: str
     env: dict[str, str] = field(default_factory=dict)
@@ -88,6 +91,7 @@ class MatrixEntry:
 @dataclass
 class Recipe:
     """Parsed recipe.yaml."""
+
     name: str
     upstream_version: str
     cvc_revision: int
@@ -98,6 +102,7 @@ class Recipe:
     test_script: str | None
     raw: dict[str, Any]  # full parsed YAML for manifest generation
     recipe_dir: Path
+    tags: list[str] = field(default_factory=list)
 
     @property
     def full_version(self) -> str:
@@ -130,10 +135,12 @@ class Recipe:
             test_script=test_block.get("script") if test_block else None,
             raw=raw,
             recipe_dir=recipe_dir.resolve(),
+            tags=recipe_block.get("tags", []) or [],
         )
 
 
 # ── Source fetching ─────────────────────────────────────────────
+
 
 def _sha256_file(path: Path) -> str:
     h = hashlib.sha256()
@@ -145,6 +152,7 @@ def _sha256_file(path: Path) -> str:
 
 def _fetch_tarball(source: SourceSpec, dest: Path) -> Path:
     """Download a tarball, verify SHA-256, and extract."""
+    import urllib.error
     import urllib.request
 
     archive_path = dest / "source.tar.gz"
@@ -152,21 +160,23 @@ def _fetch_tarball(source: SourceSpec, dest: Path) -> Path:
     if not urls:
         raise RecipeError("source.type=tarball but no URL specified")
 
+    last_error: Exception | None = None
     for url in urls:
         try:
             urllib.request.urlretrieve(url, archive_path)  # noqa: S310
+            last_error = None
             break
-        except Exception:
-            if url == urls[-1]:
-                raise
-            continue
+        except (urllib.error.URLError, OSError) as e:
+            last_error = e
+            if url != urls[-1]:
+                continue
+    if last_error is not None:
+        raise RecipeError(f"failed to download source from {urls}: {last_error}") from last_error
 
     if source.sha256:
         actual = _sha256_file(archive_path)
         if actual != source.sha256:
-            raise RecipeError(
-                f"SHA-256 mismatch: expected {source.sha256}, got {actual}"
-            )
+            raise RecipeError(f"SHA-256 mismatch: expected {source.sha256}, got {actual}")
 
     # Extract
     source_dir = dest / "src"
@@ -177,7 +187,10 @@ def _fetch_tarball(source: SourceSpec, dest: Path) -> Path:
             resolved = (source_dir / member.name).resolve()
             if not str(resolved).startswith(str(source_dir.resolve())):
                 raise RecipeError(f"Tarball member escapes target: {member.name}")
-        tf.extractall(source_dir)
+        if sys.version_info >= (3, 12):
+            tf.extractall(source_dir, filter="data")
+        else:
+            tf.extractall(source_dir)
 
     # If strip_components>0, move the inner directory up
     if source.strip_components > 0:
@@ -224,20 +237,31 @@ def fetch_source(recipe: Recipe, work_dir: Path) -> Path:
 
 # ── Patch application ──────────────────────────────────────────
 
+
 def apply_patches(recipe: Recipe, source_dir: Path) -> None:
     """Apply patches listed in the recipe."""
     for patch_file in recipe.patches:
-        patch_path = recipe.recipe_dir / patch_file
+        patch_path = (recipe.recipe_dir / patch_file).resolve()
+        # Security: ensure patch file doesn't escape the recipe directory
+        if not str(patch_path).startswith(str(recipe.recipe_dir.resolve())):
+            raise RecipeError(f"Patch path escapes recipe directory: {patch_file}")
         if not patch_path.is_file():
             raise RecipeError(f"Patch file not found: {patch_path}")
-        subprocess.run(
+        result = subprocess.run(
             ["patch", "-p1", "-i", str(patch_path)],
             cwd=source_dir,
-            check=True,
+            check=False,
+            capture_output=True,
         )
+        if result.returncode != 0:
+            raise RecipeError(
+                f"Failed to apply patch {patch_file}: "
+                f"{result.stderr.decode(errors='replace').strip()}"
+            )
 
 
 # ── Build execution ────────────────────────────────────────────
+
 
 def _select_matrix_entry(recipe: Recipe, platform: str) -> MatrixEntry:
     """Pick the matrix entry matching the target platform."""
@@ -253,6 +277,7 @@ def _select_matrix_entry(recipe: Recipe, platform: str) -> MatrixEntry:
 @dataclass
 class BuildContext:
     """All paths and settings for a single build invocation."""
+
     recipe: Recipe
     platform: str
     config: str  # release | debug
@@ -278,6 +303,13 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
     env["CVC_LINK"] = ctx.link
     env["CVC_COMPONENT"] = ctx.recipe.name
     env["CVC_VERSION"] = ctx.recipe.upstream_version
+    env["CVC_RECIPE_DIR"] = str(ctx.recipe.recipe_dir)
+
+    # CVC_DEPS_PREFIX tells build.sh where to find previously-built
+    # dependencies.  When building into a shared prefix this equals
+    # install_dir; callers building into isolated per-component dirs
+    # can override via the prefix field.
+    env["CVC_DEPS_PREFIX"] = str(ctx.prefix)
 
     build_type = "Release" if ctx.config == "release" else "Debug"
     env["CMAKE_BUILD_TYPE"] = build_type
@@ -300,17 +332,25 @@ def run_build(ctx: BuildContext) -> None:
 
     # Determine the interpreter
     if script.suffix == ".sh":
-        cmd = ["bash", str(script)]
+        interpreter = shutil.which("bash")
+        if not interpreter:
+            raise BuildError("bash not found on PATH — required for .sh build scripts")
+        cmd = [interpreter, str(script)]
     elif script.suffix == ".ps1":
-        cmd = ["pwsh", "-NoProfile", "-NonInteractive", "-File", str(script)]
+        interpreter = shutil.which("pwsh")
+        if not interpreter:
+            raise BuildError("pwsh not found on PATH — required for .ps1 build scripts")
+        cmd = [interpreter, "-NoProfile", "-NonInteractive", "-File", str(script)]
     else:
         raise BuildError(f"Unknown script type: {script.suffix}")
 
     ctx.build_dir.mkdir(parents=True, exist_ok=True)
     ctx.install_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"cvcpkg: building {ctx.recipe.name} {ctx.recipe.full_version} "
-          f"({ctx.platform}/{ctx.config}/{ctx.link})")
+    print(
+        f"cvcpkg: building {ctx.recipe.name} {ctx.recipe.full_version} "
+        f"({ctx.platform}/{ctx.config}/{ctx.link})"
+    )
     print(f"cvcpkg: script: {script}")
     print(f"cvcpkg: install dir: {ctx.install_dir}")
 
@@ -320,12 +360,11 @@ def run_build(ctx: BuildContext) -> None:
         env=env,
     )
     if result.returncode != 0:
-        raise BuildError(
-            f"Build script for {ctx.recipe.name} exited with code {result.returncode}"
-        )
+        raise BuildError(f"Build script for {ctx.recipe.name} exited with code {result.returncode}")
 
 
 # ── Test execution ──────────────────────────────────────────────
+
 
 def run_test(ctx: BuildContext) -> None:
     """Run the recipe's test script if one exists."""
@@ -346,12 +385,11 @@ def run_test(ctx: BuildContext) -> None:
         env=env,
     )
     if result.returncode != 0:
-        raise BuildError(
-            f"Test for {ctx.recipe.name} failed with code {result.returncode}"
-        )
+        raise BuildError(f"Test for {ctx.recipe.name} failed with code {result.returncode}")
 
 
 # ── Manifest generation ────────────────────────────────────────
+
 
 def _file_list(root: Path) -> list[str]:
     """Recursively list all files under *root* as relative POSIX paths."""
@@ -366,9 +404,9 @@ def _total_size(root: Path) -> int:
     return sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
 
 
-def generate_manifest(recipe: Recipe, install_dir: Path,
-                      platform: str, arch: str,
-                      config: str, link: str) -> dict[str, Any]:
+def generate_manifest(
+    recipe: Recipe, install_dir: Path, platform: str, arch: str, config: str, link: str
+) -> dict[str, Any]:
     """Generate a bundle manifest.yaml from the recipe + installed tree."""
     files = _file_list(install_dir)
     cmake_packages = recipe.raw.get("package", {}).get("cmake_packages", [])
@@ -376,13 +414,20 @@ def generate_manifest(recipe: Recipe, install_dir: Path,
     abi = recipe.raw.get("abi", {})
     depends = recipe.raw.get("depends", {}).get("build", [])
 
-    # Normalize dep entries to dicts
+    # Normalize dep entries to dicts, filtering by target platform
     dep_list = []
     for d in depends:
         if isinstance(d, str):
             dep_list.append({"name": d})
         else:
-            dep_list.append(d)
+            plats = d.get("platforms")
+            if plats and platform not in plats:
+                continue
+            # Don't write platforms into the manifest — it's platform-specific
+            entry = {"name": d["name"]}
+            if d.get("version"):
+                entry["version"] = d["version"]
+            dep_list.append(entry)
 
     manifest: dict[str, Any] = {
         "schema_version": 3,
@@ -413,8 +458,8 @@ def generate_manifest(recipe: Recipe, install_dir: Path,
 
 # ── Staging & archiving ─────────────────────────────────────────
 
-def stage_bundle(install_dir: Path, manifest: dict[str, Any],
-                 staging_dir: Path) -> None:
+
+def stage_bundle(install_dir: Path, manifest: dict[str, Any], staging_dir: Path) -> None:
     """Copy the installed tree and manifest into a staging directory."""
     # Copy entire install tree
     if install_dir.is_dir():
@@ -429,7 +474,13 @@ def stage_bundle(install_dir: Path, manifest: dict[str, Any],
 
 def _archive_tar_gz(staging_dir: Path, output: Path) -> str:
     """Create a deterministic .tar.gz archive. Returns SHA-256."""
-    with tarfile.open(output, "w:gz") as tf:
+    import gzip
+    import io
+
+    # Use a two-step approach: write tar to memory, then gzip with
+    # mtime=0 to ensure the gzip header is reproducible across machines.
+    tar_buf = io.BytesIO()
+    with tarfile.open(fileobj=tar_buf, mode="w") as tf:
         for entry in sorted(staging_dir.rglob("*")):
             arcname = str(entry.relative_to(staging_dir))
             info = tf.gettarinfo(str(entry), arcname=arcname)
@@ -444,6 +495,9 @@ def _archive_tar_gz(staging_dir: Path, output: Path) -> str:
                     tf.addfile(info, fobj)
             else:
                 tf.addfile(info)
+    with open(output, "wb") as f_out:
+        with gzip.GzipFile(fileobj=f_out, mode="wb", mtime=0) as gz:
+            gz.write(tar_buf.getvalue())
     return _sha256_file(output)
 
 
@@ -461,10 +515,16 @@ def _archive_zip(staging_dir: Path, output: Path) -> str:
     return _sha256_file(output)
 
 
-def create_archive(staging_dir: Path, output_dir: Path,
-                   name: str, version: str,
-                   platform: str, arch: str,
-                   config: str, link: str) -> tuple[Path, str, int]:
+def create_archive(
+    staging_dir: Path,
+    output_dir: Path,
+    name: str,
+    version: str,
+    platform: str,
+    arch: str,
+    config: str,
+    link: str,
+) -> tuple[Path, str, int]:
     """Archive the staging directory. Returns (path, sha256, size)."""
     stem = f"{name}-{version}-{platform}-{arch}-{config}-{link}"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -481,6 +541,7 @@ def create_archive(staging_dir: Path, output_dir: Path,
 
 
 # ── High-level entry points ────────────────────────────────────
+
 
 def build_recipe(
     recipe_dir: Path,
@@ -559,8 +620,12 @@ def pack_recipe(
     )
 
     manifest = generate_manifest(
-        ctx.recipe, ctx.install_dir,
-        ctx.platform, arch, ctx.config, ctx.link,
+        ctx.recipe,
+        ctx.install_dir,
+        ctx.platform,
+        arch,
+        ctx.config,
+        ctx.link,
     )
 
     staging = ctx.work_dir / "staging"
@@ -568,9 +633,14 @@ def pack_recipe(
     stage_bundle(ctx.install_dir, manifest, staging)
 
     archive_path, sha256, size = create_archive(
-        staging, output_dir,
-        ctx.recipe.name, ctx.recipe.full_version,
-        ctx.platform, arch, ctx.config, ctx.link,
+        staging,
+        output_dir,
+        ctx.recipe.name,
+        ctx.recipe.full_version,
+        ctx.platform,
+        arch,
+        ctx.config,
+        ctx.link,
     )
 
     print(f"cvcpkg: packed {archive_path.name} ({size:,} bytes)")
@@ -584,6 +654,106 @@ def pack_recipe(
 
 
 # ── Recipe listing / inspection ─────────────────────────────────
+
+# ── Dependency resolution ───────────────────────────────────────
+
+
+def _dep_names(recipe: Recipe, platform: str = "") -> list[str]:
+    """Extract build-dependency names from a recipe.
+
+    If *platform* is given, dependencies with a ``platforms`` list that
+    does not include *platform* are skipped.
+    """
+    depends = recipe.raw.get("depends", {}).get("build", [])
+    names: list[str] = []
+    for d in depends:
+        if isinstance(d, str):
+            names.append(d)
+        elif isinstance(d, dict):
+            plats = d.get("platforms")
+            if plats and platform and platform not in plats:
+                continue
+            names.append(d["name"])
+    return names
+
+
+def resolve_build_order(recipes: list[Recipe], platform: str = "") -> list[Recipe]:
+    """Return *recipes* in topological (dependency-first) order.
+
+    If *platform* is given, only dependencies that apply to that
+    platform are considered when building the graph.
+
+    Raises ``RecipeError`` on dependency cycles or missing deps.
+    """
+    by_name: dict[str, Recipe] = {r.name: r for r in recipes}
+    visited: set[str] = set()
+    in_stack: set[str] = set()
+    order: list[Recipe] = []
+
+    def visit(name: str) -> None:
+        if name in visited:
+            return
+        if name in in_stack:
+            raise RecipeError(f"Dependency cycle detected involving '{name}'")
+        if name not in by_name:
+            raise RecipeError(f"Unknown dependency: '{name}'")
+        in_stack.add(name)
+        for dep in _dep_names(by_name[name], platform):
+            visit(dep)
+        in_stack.discard(name)
+        visited.add(name)
+        order.append(by_name[name])
+
+    for r in recipes:
+        visit(r.name)
+    return order
+
+
+def build_all(
+    recipes_dir: Path | list[Path],
+    *,
+    platform: str = "",
+    config: str = "release",
+    link: str = "shared",
+    prefix: Path | None = None,
+    keep_build_dir: bool = False,
+) -> list[BuildContext]:
+    """Build every recipe in dependency order into a shared *prefix*.
+
+    *recipes_dir* may be a single path or a list of paths.  When
+    multiple directories are given, later directories override
+    earlier ones on name collisions (with a warning).
+    """
+    if isinstance(recipes_dir, list):
+        recipes = load_all_recipes(recipes_dir)
+    else:
+        recipes = list_recipes(recipes_dir)
+    # Filter to recipes that have a matrix entry for this platform
+    if not platform:
+        platform = detect_platform()
+    recipes = [r for r in recipes if any(m.platform == platform for m in r.build_matrix)]
+    ordered = resolve_build_order(recipes, platform)
+
+    if prefix is None:
+        prefix = Path(tempfile.mkdtemp(prefix="cvcpkg-all-"))
+    prefix = prefix.resolve()
+
+    contexts: list[BuildContext] = []
+    for recipe in ordered:
+        print(f"\ncvcpkg: ══ {recipe.name} ({recipe.full_version}) ══")
+        ctx = build_recipe(
+            recipe.recipe_dir,
+            platform=platform,
+            config=config,
+            link=link,
+            prefix=prefix,
+            keep_build_dir=keep_build_dir,
+        )
+        contexts.append(ctx)
+
+    print(f"\ncvcpkg: all {len(contexts)} components built into {prefix}")
+    return contexts
+
 
 def find_recipes_dir() -> Path:
     """Locate the recipes/ directory relative to the repo root."""
@@ -601,7 +771,7 @@ def find_recipes_dir() -> Path:
 
 
 def list_recipes(recipes_dir: Path | None = None) -> list[Recipe]:
-    """Load all recipes from the recipes/ directory."""
+    """Load all recipes from a single recipes/ directory."""
     if recipes_dir is None:
         recipes_dir = find_recipes_dir()
     recipes = []
@@ -610,3 +780,30 @@ def list_recipes(recipes_dir: Path | None = None) -> list[Recipe]:
         if child.is_dir() and recipe_yaml.is_file():
             recipes.append(Recipe.load(child))
     return recipes
+
+
+def load_all_recipes(recipe_dirs: list[Path]) -> list[Recipe]:
+    """Load recipes from multiple directories, with conflict detection.
+
+    Directories listed later take precedence: if two directories both
+    contain a recipe with the same name, the one from the later
+    directory wins and a warning is printed.
+
+    Raises ``RecipeError`` if *recipe_dirs* is empty.
+    """
+    if not recipe_dirs:
+        raise RecipeError("No recipe directories specified")
+    by_name: dict[str, Recipe] = {}
+    for rdir in recipe_dirs:
+        for child in sorted(rdir.iterdir()):
+            recipe_yaml = child / "recipe.yaml"
+            if child.is_dir() and recipe_yaml.is_file():
+                recipe = Recipe.load(child)
+                if recipe.name in by_name:
+                    prev = by_name[recipe.name]
+                    print(
+                        f"cvcpkg: warning: recipe '{recipe.name}' from "
+                        f"{recipe.recipe_dir} overrides {prev.recipe_dir}"
+                    )
+                by_name[recipe.name] = recipe
+    return sorted(by_name.values(), key=lambda r: r.name)

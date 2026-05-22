@@ -1,43 +1,34 @@
 #!/usr/bin/env bash
-# Build NFFT3 from upstream autotools tarball (Linux & macOS).
-# Mirrors the CI logic in .github/workflows/release.yml.
+# recipes/nfft3/build.sh — build NFFT3 from upstream autotools tarball.
+# Source is fetched by cvcpkg and available at $CVC_SOURCE_DIR.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/../_common/env-$(uname -s | tr '[:upper:]' '[:lower:]' | sed 's/darwin/macos/').sh"
+source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 
-NFFT_VERSION="3.5.3"
-NFFT_SHA256="caf1b3b3e5bf8c33a6bfd7eca811d954efce896605ecfd0144d47d0bebdf4371"
-
-PREFIX="${CVC_PREFIX:?CVC_PREFIX must be set}"
 JOBS="${CVC_JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
 
-# ── Fetch source ──
-URL_GH="https://github.com/NFFT/nfft/releases/download/${NFFT_VERSION}/nfft-${NFFT_VERSION}.tar.gz"
-URL_TUC="https://www-user.tu-chemnitz.de/~potts/nfft/download/nfft-${NFFT_VERSION}.tar.gz"
-
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
-cd "$WORK"
-
-curl -fsSL "$URL_GH" -o nfft.tar.gz || curl -fsSL "$URL_TUC" -o nfft.tar.gz
-echo "${NFFT_SHA256}  nfft.tar.gz" | shasum -a 256 -c -
-tar -xzf nfft.tar.gz
-cd "nfft-${NFFT_VERSION}"
-
 # ── Locate FFTW3 ──
-if [[ "$(uname -s)" == "Darwin" ]]; then
-    FFTW_PREFIX="$(brew --prefix fftw 2>/dev/null || echo /opt/homebrew)"
+# In build-all mode, FFTW3 is already installed at $CVC_DEPS_PREFIX
+# (set by cvcpkg builder).  In standalone mode, it should be at
+# $CVC_INSTALL_DIR (the recipe's own install prefix).
+if [[ -n "${CVC_DEPS_PREFIX:-}" && -d "${CVC_DEPS_PREFIX}/include" ]]; then
+    FFTW_PREFIX="${CVC_DEPS_PREFIX}"
+else
+    FFTW_PREFIX="${CVC_INSTALL_DIR}"
+fi
+
+# ── Platform-specific configure flags ──
+CONFIGURE_CC=""
+OPENMP_FLAG="--enable-openmp"
+if [[ "${CVC_PLATFORM}" == "macos" ]]; then
     CONFIGURE_CC="CC=clang"
     OPENMP_FLAG="--disable-openmp"
-else
-    FFTW_PREFIX="${CVC_PREFIX}"
-    CONFIGURE_CC=""
-    OPENMP_FLAG="--enable-openmp"
 fi
 
 # ── Configure & build ──
+cd "${CVC_SOURCE_DIR}"
 ./configure \
-    --prefix="$PREFIX" \
+    --prefix="${CVC_INSTALL_DIR}" \
     --enable-shared \
     --enable-static \
     --with-pic \
@@ -53,7 +44,7 @@ make -j"$JOBS"
 make install
 
 # ── Rewrite .pc for relocatability ──
-PC="$PREFIX/lib/pkgconfig/nfft3.pc"
+PC="${CVC_INSTALL_DIR}/lib/pkgconfig/nfft3.pc"
 if [ -f "$PC" ]; then
     sed -i.bak \
         -e 's|^prefix=.*|prefix=${pcfiledir}/../..|' \
@@ -64,4 +55,4 @@ if [ -f "$PC" ]; then
     rm -f "${PC}.bak"
 fi
 
-echo "NFFT3 ${NFFT_VERSION} installed to ${PREFIX}"
+echo "NFFT3 installed to ${CVC_INSTALL_DIR}"

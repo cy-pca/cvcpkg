@@ -6,11 +6,12 @@ recipe:
   maintainer: "CyberPC Angel, LLC"
   homepage: https://vtk.org/
   license: BSD-3-Clause
+  tags: [graphics]
 
 source:
   type: tarball
   url: https://www.vtk.org/files/release/9.5/VTK-9.5.0.tar.gz
-  sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+  sha256: "04ae86246b9557c6b61afbc534a6df099244fbc8f3937f82e6bc0570953af87d"
   strip_components: 1
 
 patches: []

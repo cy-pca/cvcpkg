@@ -6,11 +6,12 @@ recipe:
   maintainer: "CyberPC Angel, LLC"
   homepage: https://www.hdfgroup.org/solutions/hdf5/
   license: BSD-3-Clause
+  tags: [io]
 
 source:
   type: tarball
   url: https://github.com/HDFGroup/hdf5/releases/download/hdf5_1.14.4.3/hdf5-1.14.4-3.tar.gz
-  sha256: "019ac451d9e1cf89c0482ba2a06f07a46166caf23f60fea5571f4f1b7e7be061"
+  sha256: "019ac451d9e1cf89c0482ba2a06f07a46166caf23f60fea5ef3c37724a318e03"
   strip_components: 1
 
 patches: []

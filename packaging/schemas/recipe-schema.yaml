@@ -67,6 +67,12 @@ $defs:
       license:
         type: string
         description: "SPDX license expression"
+      tags:
+        type: array
+        items:
+          type: string
+          pattern: "^[a-z][a-z0-9-]*$"
+        description: "Category tags (e.g. math, graphics, utils, networking)"
 
   source_block:
     type: object
@@ -131,6 +137,13 @@ $defs:
         type: string
       version:
         type: string
+      platforms:
+        type: array
+        items:
+          type: string
+          enum: [linux, macos, windows]
+        minItems: 1
+        description: "Platforms this dependency applies to (omit for all)"
 
   build_block:
     type: object

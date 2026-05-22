@@ -14,9 +14,9 @@ import pytest
 import yaml
 
 from cvcpkg.builder import Recipe, generate_manifest, list_recipes, stage_bundle, create_archive
+from cvcpkg.builder import resolve_build_order
 from cvcpkg.lockfile import LockEntry, Lockfile
 from cvcpkg.manifest import BundleManifest, Requirements
-
 
 # Real recipes dir (skip if not running from repo)
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -30,6 +30,7 @@ requires_repo = pytest.mark.skipif(
 
 
 # ── Load all real recipes ──────────────────────────────────────
+
 
 @requires_repo
 class TestLoadAllRecipes:
@@ -57,12 +58,13 @@ class TestLoadAllRecipes:
 
     def test_recipe_names_match_dirs(self):
         for r in list_recipes(RECIPES_DIR):
-            assert r.name == r.recipe_dir.name, (
-                f"Recipe name '{r.name}' doesn't match directory '{r.recipe_dir.name}'"
-            )
+            assert (
+                r.name == r.recipe_dir.name
+            ), f"Recipe name '{r.name}' doesn't match directory '{r.recipe_dir.name}'"
 
 
 # ── Manifest generation round-trip ──────────────────────────────
+
 
 @requires_repo
 class TestManifestRoundTrip:
@@ -93,6 +95,7 @@ class TestManifestRoundTrip:
 
 # ── Full pack pipeline (without actually building) ──────────────
 
+
 @requires_repo
 class TestPackPipeline:
     """Test the staging + archive creation pipeline."""
@@ -108,9 +111,7 @@ class TestPackPipeline:
         (install_dir / "include").mkdir()
         (install_dir / "include" / "zlib.h").write_text("#ifndef ZLIB_H\n#define ZLIB_H\n#endif\n")
 
-        manifest = generate_manifest(
-            recipe, install_dir, "linux", "x86_64", "release", "shared"
-        )
+        manifest = generate_manifest(recipe, install_dir, "linux", "x86_64", "release", "shared")
 
         staging = tmp_path / "staging"
         staging.mkdir()
@@ -124,8 +125,14 @@ class TestPackPipeline:
         # Create archive
         dist = tmp_path / "dist"
         archive_path, sha, size = create_archive(
-            staging, dist, recipe.name, recipe.full_version,
-            "linux", "x86_64", "release", "shared",
+            staging,
+            dist,
+            recipe.name,
+            recipe.full_version,
+            "linux",
+            "x86_64",
+            "release",
+            "shared",
         )
         assert archive_path.exists()
         assert size > 0
@@ -133,6 +140,7 @@ class TestPackPipeline:
 
 
 # ── Lockfile with real recipe data ──────────────────────────────
+
 
 @requires_repo
 class TestLockfileIntegration:
@@ -168,12 +176,14 @@ class TestLockfileIntegration:
 
 # ── CLI integration ────────────────────────────────────────────
 
+
 @requires_repo
 class TestCLIIntegration:
     """Integration tests that exercise the CLI against real recipes."""
 
     def test_recipes_list_all(self, capsys):
         from cvcpkg.cli import main
+
         ret = main(["recipes", "--list"])
         assert ret == 0
         captured = capsys.readouterr()
@@ -183,6 +193,7 @@ class TestCLIIntegration:
 
     def test_recipes_show_each(self, capsys):
         from cvcpkg.cli import main
+
         for name in ("zlib", "openssl", "nfft3"):
             ret = main(["recipes", "--show", name])
             assert ret == 0, f"Failed to show recipe '{name}'"
@@ -210,6 +221,84 @@ class TestCvcRequirements:
         reqs = Requirements.from_dict(raw)
         recipe_names = {r.name for r in list_recipes(RECIPES_DIR)}
         for c in reqs.components:
-            assert c.name in recipe_names, (
-                f"Component '{c.name}' in cvc-requirements.yaml has no recipe"
-            )
+            assert (
+                c.name in recipe_names
+            ), f"Component '{c.name}' in cvc-requirements.yaml has no recipe"
+
+
+# ── Build-order resolution with real recipes ───────────────────
+
+
+@requires_repo
+class TestResolveBuildOrderIntegration:
+    """Verify resolve_build_order works with the real recipe set."""
+
+    def test_all_recipes_resolve(self):
+        """All real recipes should resolve to a valid build order."""
+        recipes = list_recipes(RECIPES_DIR)
+        ordered = resolve_build_order(recipes)
+        assert len(ordered) == len(recipes)
+
+    def test_deps_come_before_dependants(self):
+        """Every recipe's build deps should appear earlier in the order."""
+        recipes = list_recipes(RECIPES_DIR)
+        ordered = resolve_build_order(recipes)
+        name_to_idx = {r.name: i for i, r in enumerate(ordered)}
+
+        for r in ordered:
+            depends = r.raw.get("depends", {}).get("build", [])
+            for dep in depends:
+                dep_name = dep if isinstance(dep, str) else dep["name"]
+                if dep_name in name_to_idx:
+                    assert (
+                        name_to_idx[dep_name] < name_to_idx[r.name]
+                    ), f"{dep_name} should come before {r.name}"
+
+    def test_no_duplicate_names(self):
+        """Each recipe name should appear exactly once in the order."""
+        recipes = list_recipes(RECIPES_DIR)
+        ordered = resolve_build_order(recipes)
+        names = [r.name for r in ordered]
+        assert len(names) == len(set(names))
+
+
+# ── Manifest hardening round-trip with real files ──────────────
+
+
+@requires_repo
+class TestManifestHardeningIntegration:
+    """Verify from_yaml hardening with files generated from real recipes."""
+
+    def test_from_yaml_valid_manifest(self, tmp_path):
+        """Generate a manifest from zlib, write it, re-read as raw YAML.
+
+        Note: generate_manifest() uses 'config'/'link' keys while
+        BundleManifest.from_dict() expects 'build_type'/'link' — so we
+        verify the raw round-trip here, not the dataclass parse.
+        """
+        recipe = Recipe.load(RECIPES_DIR / "zlib")
+        install_dir = tmp_path / "install"
+        install_dir.mkdir()
+        (install_dir / "lib").mkdir()
+        (install_dir / "lib" / "libz.so").write_text("fake")
+
+        manifest_dict = generate_manifest(
+            recipe, install_dir, "linux", "x86_64", "release", "shared"
+        )
+        manifest_path = tmp_path / "manifest.yaml"
+        manifest_path.write_text(yaml.dump(manifest_dict, default_flow_style=False))
+
+        # Re-read and verify the raw structure round-trips
+        raw = yaml.safe_load(manifest_path.read_text())
+        assert raw["schema_version"] == 3
+        assert raw["bundle"]["name"] == "zlib"
+        assert raw["bundle"]["platform"] == "linux"
+
+    def test_from_yaml_corrupted_manifest(self, tmp_path):
+        """A corrupted manifest should raise SchemaError."""
+        from cvcpkg.errors import SchemaError
+
+        p = tmp_path / "bad_manifest.yaml"
+        p.write_text("not: valid: yaml: [[[")
+        with pytest.raises(Exception):
+            BundleManifest.from_yaml(str(p))

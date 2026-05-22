@@ -1,0 +1,4 @@
+.coverage
+htmlcov/
+coverage*.xml
+*-results.xml
