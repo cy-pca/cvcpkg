@@ -91,14 +91,29 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p prefix
+
+          # Generic extractor — handles any archive format the
+          # platform build jobs might produce (.tar.gz, .zip, .7z,
+          # .tar.xz, .tar.bz2, .tar.zst, etc.).
+          extract() {
+            local f="$1" dst="$2"
+            case "$f" in
+              *.tar.gz|*.tgz)   tar xzf  "$f" --strip-components=1 -C "$dst" ;;
+              *.tar.bz2|*.tbz2) tar xjf  "$f" --strip-components=1 -C "$dst" ;;
+              *.tar.xz|*.txz)   tar xJf  "$f" --strip-components=1 -C "$dst" ;;
+              *.tar.zst)        tar --zstd -xf "$f" --strip-components=1 -C "$dst" ;;
+              *.tar)            tar xf   "$f" --strip-components=1 -C "$dst" ;;
+              *.zip)            unzip -o "$f" -d "$dst" ;;
+              *.7z)             7z x "$f" -o"$dst" -y ;;
+              *) echo "Unknown archive format: $f" >&2; return 1 ;;
+            esac
+          }
+
           cd monolithic
-          for f in *.tar.gz *.tgz; do
-            [ -e "$f" ] || continue
-            tar xzf "$f" --strip-components=1 -C ../prefix
-          done
-          for f in *.zip; do
-            [ -e "$f" ] || continue
-            unzip -o "$f" -d ../prefix
+          for f in *; do
+            [ -f "$f" ] || continue
+            echo "Extracting: $f"
+            extract "$f" ../prefix
           done
           echo "Prefix contents:"
           ls ../prefix/ || true
