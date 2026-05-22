@@ -23,28 +23,28 @@ def _fetch_url(url: str, *, max_bytes: int = _MAX_CATALOG_BYTES) -> bytes:
 
     Raises :class:`CatalogError` if the response exceeds *max_bytes*.
     """
-    import urllib.error
-    import urllib.request
+    from cvcpkg.storage import get_backend
 
     try:
-        with urllib.request.urlopen(url, timeout=30) as resp:  # noqa: S310 — trusted URL
-            length = resp.headers.get("Content-Length")
-            if length is not None and int(length) > max_bytes:
-                raise CatalogError(
-                    f"catalog at {url} is {int(length)} bytes, exceeds {max_bytes} limit"
-                )
-            chunks: list[bytes] = []
-            total = 0
+        backend = get_backend(url)
+        info = backend.head(url)
+        if info.size >= 0 and info.size > max_bytes:
+            raise CatalogError(f"catalog at {url} is {info.size} bytes, exceeds {max_bytes} limit")
+        chunks: list[bytes] = []
+        total = 0
+        with backend.open(url) as stream:
             while True:
-                chunk = resp.read(1 << 16)  # 64 KB
+                chunk = stream.read(1 << 16)  # 64 KB
                 if not chunk:
                     break
                 total += len(chunk)
                 if total > max_bytes:
                     raise CatalogError(f"catalog at {url} exceeds {max_bytes} byte limit")
                 chunks.append(chunk)
-            return b"".join(chunks)
-    except urllib.error.URLError as e:
+        return b"".join(chunks)
+    except CatalogError:
+        raise
+    except Exception as e:
         raise CatalogError(f"failed to fetch {url}: {e}") from e
 
 
