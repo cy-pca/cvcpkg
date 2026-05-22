@@ -98,3 +98,7 @@ jobs:
         working-directory: tools/cvcpkg
         run: poetry run ruff format --check src/ tests/
         continue-on-error: true
+
+      - name: Black format check
+        working-directory: tools/cvcpkg
+        run: poetry run black --check --diff src/ tests/

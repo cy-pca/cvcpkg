@@ -81,22 +81,24 @@ def catalog_entries(
             continue
         if link and b.get("link", "") != link:
             continue
-        entries.append(CatalogEntry(
-            name=b["name"],
-            version=b["version"],
-            upstream_version=b.get("upstream_version", ""),
-            cvc_revision=b.get("cvc_revision", 1),
-            platform=b.get("platform", ""),
-            arch=b.get("arch", ""),
-            build_type=b.get("build_type", ""),
-            link=b.get("link", ""),
-            sha256=b.get("sha256", ""),
-            size_bytes=b.get("size_bytes", 0),
-            archive_url=b.get("archive_url", ""),
-            source_release=b.get("source_release", ""),
-            required_deps=[
-                Dependency(name=d["name"], version=d.get("version", ""))
-                for d in b.get("required_deps", [])
-            ],
-        ))
+        entries.append(
+            CatalogEntry(
+                name=b["name"],
+                version=b["version"],
+                upstream_version=b.get("upstream_version", ""),
+                cvc_revision=b.get("cvc_revision", 1),
+                platform=b.get("platform", ""),
+                arch=b.get("arch", ""),
+                build_type=b.get("build_type", ""),
+                link=b.get("link", ""),
+                sha256=b.get("sha256", ""),
+                size_bytes=b.get("size_bytes", 0),
+                archive_url=b.get("archive_url", ""),
+                source_release=b.get("source_release", ""),
+                required_deps=[
+                    Dependency(name=d["name"], version=d.get("version", ""))
+                    for d in b.get("required_deps", [])
+                ],
+            )
+        )
     return entries

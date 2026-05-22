@@ -10,8 +10,8 @@ import yaml
 from cvcpkg.catalog import catalog_entries, load_catalog_from_file
 from cvcpkg.manifest import CatalogEntry
 
-
 # ── load_catalog_from_file ──────────────────────────────────────
+
 
 class TestLoadCatalogFromFile:
     def test_load(self, tmp_path):
@@ -49,32 +49,49 @@ class TestLoadCatalogFromFile:
 
 # ── catalog_entries ─────────────────────────────────────────────
 
+
 class TestCatalogEntries:
     CATALOG = {
         "bundles": [
             {
-                "name": "zlib", "version": "1.3.1+cvc.1",
-                "platform": "linux", "arch": "x86_64",
-                "build_type": "release", "link": "shared",
-                "sha256": "a" * 64, "archive_url": "https://example.com/zlib-linux.tar.gz",
+                "name": "zlib",
+                "version": "1.3.1+cvc.1",
+                "platform": "linux",
+                "arch": "x86_64",
+                "build_type": "release",
+                "link": "shared",
+                "sha256": "a" * 64,
+                "archive_url": "https://example.com/zlib-linux.tar.gz",
             },
             {
-                "name": "zlib", "version": "1.3.1+cvc.1",
-                "platform": "windows", "arch": "x86_64",
-                "build_type": "release", "link": "shared",
-                "sha256": "b" * 64, "archive_url": "https://example.com/zlib-win.zip",
+                "name": "zlib",
+                "version": "1.3.1+cvc.1",
+                "platform": "windows",
+                "arch": "x86_64",
+                "build_type": "release",
+                "link": "shared",
+                "sha256": "b" * 64,
+                "archive_url": "https://example.com/zlib-win.zip",
             },
             {
-                "name": "boost", "version": "1.86.0+cvc.1",
-                "platform": "linux", "arch": "x86_64",
-                "build_type": "release", "link": "shared",
-                "sha256": "c" * 64, "archive_url": "https://example.com/boost.tar.gz",
+                "name": "boost",
+                "version": "1.86.0+cvc.1",
+                "platform": "linux",
+                "arch": "x86_64",
+                "build_type": "release",
+                "link": "shared",
+                "sha256": "c" * 64,
+                "archive_url": "https://example.com/boost.tar.gz",
             },
             {
-                "name": "boost", "version": "1.86.0+cvc.1",
-                "platform": "linux", "arch": "x86_64",
-                "build_type": "debug", "link": "shared",
-                "sha256": "d" * 64, "archive_url": "https://example.com/boost-dbg.tar.gz",
+                "name": "boost",
+                "version": "1.86.0+cvc.1",
+                "platform": "linux",
+                "arch": "x86_64",
+                "build_type": "debug",
+                "link": "shared",
+                "sha256": "d" * 64,
+                "archive_url": "https://example.com/boost-dbg.tar.gz",
             },
         ],
     }
@@ -115,9 +132,12 @@ class TestCatalogEntries:
         catalog = {
             "bundles": [
                 {
-                    "name": "grpc", "version": "1.76.0+cvc.1",
-                    "platform": "linux", "arch": "x86_64",
-                    "build_type": "release", "link": "shared",
+                    "name": "grpc",
+                    "version": "1.76.0+cvc.1",
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "build_type": "release",
+                    "link": "shared",
                     "sha256": "e" * 64,
                     "archive_url": "https://example.com/grpc.tar.gz",
                     "required_deps": [

@@ -11,12 +11,9 @@ import yaml
 from cvcpkg import __version__
 from cvcpkg.errors import CvcpkgError
 
-
 # ── Shared option groups ────────────────────────────────────────
 
-_platform_opt = click.option(
-    "--platform", default="auto", help="Target platform (auto-detected)."
-)
+_platform_opt = click.option("--platform", default="auto", help="Target platform (auto-detected).")
 _config_opt = click.option(
     "--config",
     type=click.Choice(["release", "debug"], case_sensitive=False),
@@ -29,27 +26,32 @@ _link_opt = click.option(
     default="shared",
     help="Link mode.",
 )
-_prefix_opt = click.option(
-    "--prefix", type=click.Path(), default="./deps", help="Install prefix."
-)
+_prefix_opt = click.option("--prefix", type=click.Path(), default="./deps", help="Install prefix.")
 _keep_build_opt = click.option(
     "--keep-build-dir", is_flag=True, help="Keep intermediate build directories."
 )
 _recipes_dir_opt = click.option(
-    "--recipes-dir", type=click.Path(exists=True), default=None,
+    "--recipes-dir",
+    type=click.Path(exists=True),
+    default=None,
     help="Path to recipes/ directory.",
 )
 
 
 # ── Root group ──────────────────────────────────────────────────
 
-@click.group()
+
+@click.group(invoke_without_command=True)
 @click.version_option(__version__, prog_name="cvcpkg")
-def cli() -> None:
+@click.pass_context
+def cli(ctx: click.Context) -> None:
     """Component package manager for libcvc-deps prebuilt dependency bundles."""
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
 
 
 # ── install ─────────────────────────────────────────────────────
+
 
 @cli.command()
 @click.argument("components", nargs=-1)
@@ -135,6 +137,7 @@ def install(
         candidates.setdefault(e.name, []).append(e)
 
     from cvcpkg.resolver import resolve
+
     result = resolve(reqs.components, candidates)
     picked = result.picked
 
@@ -148,18 +151,23 @@ def install(
         entry = picked[name]
         click.echo(f"cvcpkg: installing {name} {entry.version} ...")
         install_entry(entry, prefix_path, cache_dir)
-        lock_entries.append(LockEntry(
-            name=entry.name,
-            version=entry.version,
-            upstream_version=entry.upstream_version,
-            source_release=entry.source_release,
-            sha256=entry.sha256,
-            size_bytes=entry.size_bytes,
-            archive_url=entry.archive_url,
-        ))
+        lock_entries.append(
+            LockEntry(
+                name=entry.name,
+                version=entry.version,
+                upstream_version=entry.upstream_version,
+                source_release=entry.source_release,
+                sha256=entry.sha256,
+                size_bytes=entry.size_bytes,
+                archive_url=entry.archive_url,
+            )
+        )
 
     lock = Lockfile(
-        platform=plat, arch=arc, config=reqs.config, link=reqs.link,
+        platform=plat,
+        arch=arc,
+        config=reqs.config,
+        link=reqs.link,
         catalog_revision=cat.get("revision", 0),
         bundles=lock_entries,
     )
@@ -170,6 +178,7 @@ def install(
 
 
 # ── list ────────────────────────────────────────────────────────
+
 
 @cli.command("list")
 @click.option("--installed", "mode", flag_value="installed", help="Show installed bundles.")
@@ -184,6 +193,7 @@ def list_cmd(mode: str | None, prefix: str) -> None:
         if not lock_path.exists():
             raise click.ClickException("no lockfile found — prefix may not be managed by cvcpkg.")
         from cvcpkg.lockfile import Lockfile
+
         lock = Lockfile.read(lock_path)
         if not lock.bundles:
             click.echo("cvcpkg: no bundles installed.")
@@ -195,6 +205,7 @@ def list_cmd(mode: str | None, prefix: str) -> None:
     if mode == "available":
         from cvcpkg.cache import default_cache_dir
         from cvcpkg.catalog import catalog_entries, fetch_catalog
+
         cat = fetch_catalog(cache_dir=default_cache_dir())
         entries = catalog_entries(cat)
         if not entries:
@@ -213,6 +224,7 @@ def list_cmd(mode: str | None, prefix: str) -> None:
 
 # ── info ────────────────────────────────────────────────────────
 
+
 @cli.command()
 @click.argument("component")
 def info(component: str) -> None:
@@ -227,6 +239,7 @@ def info(component: str) -> None:
         raise click.ClickException(f"component '{component}' not found in catalog.")
 
     from cvcpkg.semver import Version
+
     matches.sort(key=lambda e: Version.parse(e.version), reverse=True)
     latest = matches[0]
 
@@ -236,14 +249,14 @@ def info(component: str) -> None:
     click.echo(f"Source release:   {latest.source_release}")
     if latest.required_deps:
         deps = ", ".join(
-            f"{d.name}" + (f" {d.version}" if d.version else "")
-            for d in latest.required_deps
+            f"{d.name}" + (f" {d.version}" if d.version else "") for d in latest.required_deps
         )
         click.echo(f"Dependencies:     {deps}")
     click.echo(f"Available versions: {', '.join(sorted({e.version for e in matches}))}")
 
 
 # ── validate ────────────────────────────────────────────────────
+
 
 @cli.command()
 @click.argument("target", default="all")
@@ -279,6 +292,7 @@ def validate(target: str) -> None:
 
 
 # ── verify ──────────────────────────────────────────────────────
+
 
 @cli.command()
 @_prefix_opt
@@ -320,6 +334,7 @@ def verify(prefix: str) -> None:
 
 # ── lock ────────────────────────────────────────────────────────
 
+
 @cli.command()
 def lock() -> None:
     """Write or refresh the lockfile."""
@@ -328,6 +343,7 @@ def lock() -> None:
 
 
 # ── sync ────────────────────────────────────────────────────────
+
 
 @cli.command()
 @_prefix_opt
@@ -352,9 +368,7 @@ def sync(prefix: str) -> None:
         if manifest_path.exists():
             continue
         if not entry.archive_url:
-            raise click.ClickException(
-                f"cannot sync {entry.name} — no archive_url in lockfile."
-            )
+            raise click.ClickException(f"cannot sync {entry.name} — no archive_url in lockfile.")
         cat_entry = CatalogEntry(
             name=entry.name,
             version=entry.version,
@@ -380,6 +394,7 @@ def sync(prefix: str) -> None:
 
 
 # ── catalog ─────────────────────────────────────────────────────
+
 
 @cli.command()
 @click.option("--refresh", is_flag=True, help="Re-fetch the catalog.")
@@ -424,6 +439,7 @@ def catalog(refresh: bool, pin: int | None, show: bool) -> None:
 
 # ── gc ──────────────────────────────────────────────────────────
 
+
 @cli.command()
 def gc() -> None:
     """Prune the local download cache."""
@@ -440,12 +456,14 @@ def gc() -> None:
 
 # ── Helper: resolve recipe dir ──────────────────────────────────
 
+
 def _resolve_recipe_dir(name: str) -> Path:
     """Resolve a recipe name or path to its directory."""
     p = Path(name)
     if p.is_dir() and (p / "recipe.yaml").is_file():
         return p.resolve()
     from cvcpkg.builder import find_recipes_dir
+
     recipes_dir = find_recipes_dir()
     candidate = recipes_dir / name
     if candidate.is_dir() and (candidate / "recipe.yaml").is_file():
@@ -456,11 +474,13 @@ def _resolve_recipe_dir(name: str) -> Path:
 def _auto_platform(platform: str) -> str:
     if platform == "auto":
         from cvcpkg.platform import detect_platform
+
         return detect_platform()
     return platform
 
 
 # ── build ───────────────────────────────────────────────────────
+
 
 @cli.command()
 @click.argument("recipe", nargs=-1, required=True)
@@ -496,6 +516,7 @@ def build(
 
 
 # ── pack ────────────────────────────────────────────────────────
+
 
 @cli.command()
 @click.argument("recipe", nargs=-1, required=True)
@@ -537,6 +558,7 @@ def pack(
 
 # ── build-all ───────────────────────────────────────────────────
 
+
 @cli.command("build-all")
 @_platform_opt
 @_config_opt
@@ -571,6 +593,7 @@ def build_all_cmd(
 
 # ── pack-all ────────────────────────────────────────────────────
 
+
 @cli.command("pack-all")
 @_platform_opt
 @_config_opt
@@ -589,7 +612,13 @@ def pack_all_cmd(
     recipes_dir: str | None,
 ) -> None:
     """Build and archive all recipes."""
-    from cvcpkg.builder import build_all, create_archive, find_recipes_dir, generate_manifest, stage_bundle
+    from cvcpkg.builder import (
+        build_all,
+        create_archive,
+        find_recipes_dir,
+        generate_manifest,
+        stage_bundle,
+    )
     from cvcpkg.platform import detect_arch
 
     plat = _auto_platform(platform)
@@ -610,20 +639,31 @@ def pack_all_cmd(
     output.mkdir(parents=True, exist_ok=True)
     for ctx in contexts:
         manifest = generate_manifest(
-            ctx.recipe, ctx.install_dir, plat, arch, config, link,
+            ctx.recipe,
+            ctx.install_dir,
+            plat,
+            arch,
+            config,
+            link,
         )
         staging = ctx.work_dir / "staging"
         staging.mkdir(exist_ok=True)
         stage_bundle(ctx.install_dir, manifest, staging)
         archive_path, sha256, size = create_archive(
-            staging, output,
-            ctx.recipe.name, ctx.recipe.full_version,
-            plat, arch, config, link,
+            staging,
+            output,
+            ctx.recipe.name,
+            ctx.recipe.full_version,
+            plat,
+            arch,
+            config,
+            link,
         )
         click.echo(f"  {archive_path.name} ({size:,} bytes, sha256={sha256})")
 
 
 # ── recipes ─────────────────────────────────────────────────────
+
 
 @cli.command()
 @click.option("--list", "mode", flag_value="list", default=True, help="List all recipes.")
@@ -674,6 +714,7 @@ def recipes(mode: str, show_name: str | None) -> None:
 
 
 # ── main() wrapper for backward compat with tests ──────────────
+
 
 def main(argv: list[str] | None = None) -> int:
     """Entry point compatible with the old argparse-based CLI.

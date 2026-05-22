@@ -12,8 +12,8 @@ import yaml
 
 from cvcpkg.errors import SchemaError
 
-
 # ── Bundle manifest (share/libcvc-deps/manifest.yaml) ───────────
+
 
 @dataclass
 class AbiTag:
@@ -119,11 +119,15 @@ class BundleManifest:
             pkgconfig=contents.get("pkgconfig", []),
             tools=contents.get("tools", []),
             required_deps=[
-                Dependency(name=dep["name"], version=dep.get("version", ""), reason=dep.get("reason", ""))
+                Dependency(
+                    name=dep["name"], version=dep.get("version", ""), reason=dep.get("reason", "")
+                )
                 for dep in deps.get("required", [])
             ],
             optional_deps=[
-                Dependency(name=dep["name"], version=dep.get("version", ""), reason=dep.get("reason", ""))
+                Dependency(
+                    name=dep["name"], version=dep.get("version", ""), reason=dep.get("reason", "")
+                )
                 for dep in deps.get("optional", [])
             ],
             provides=d.get("provides", []),
@@ -139,6 +143,7 @@ class BundleManifest:
 
 
 # ── Catalog entry (lightweight view for the resolver) ────────────
+
 
 @dataclass
 class CatalogEntry:
@@ -160,6 +165,7 @@ class CatalogEntry:
 
 
 # ── Release index (libcvc-deps-<ver>-index.yaml) ────────────────
+
 
 @dataclass
 class ReleaseIndex:
@@ -200,6 +206,7 @@ class ReleaseIndex:
 
 # ── Requirements file (cvc-requirements.yaml) ───────────────────
 
+
 @dataclass
 class ComponentReq:
     name: str
@@ -224,19 +231,23 @@ class Requirements:
             if isinstance(c, str):
                 components.append(ComponentReq(name=c))
             else:
-                components.append(ComponentReq(
-                    name=c["name"],
-                    version=c.get("version", ""),
-                    exclude=c.get("exclude", False),
-                ))
+                components.append(
+                    ComponentReq(
+                        name=c["name"],
+                        version=c.get("version", ""),
+                        exclude=c.get("exclude", False),
+                    )
+                )
 
         overrides: list[ComponentReq] = []
         for o in d.get("overrides", []):
-            overrides.append(ComponentReq(
-                name=o["name"],
-                version=o.get("version", ""),
-                exclude=o.get("exclude", False),
-            ))
+            overrides.append(
+                ComponentReq(
+                    name=o["name"],
+                    version=o.get("version", ""),
+                    exclude=o.get("exclude", False),
+                )
+            )
 
         return cls(
             platform=d.get("platform", "auto"),
