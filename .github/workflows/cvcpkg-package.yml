@@ -1,0 +1,263 @@
+# Per-component package stage for libcvc-deps.
+#
+# This workflow splits a built monolithic install prefix into
+# per-component bundle archives using the recipe definitions.
+# It runs as a post-step after the existing platform build jobs
+# and produces per-component archives alongside the monolithic
+# ones.
+#
+# Can be called as a reusable workflow from release.yml or run
+# standalone on a pre-built prefix.
+#
+# See docs/roadmap/split-distribution.md §8 for the design.
+
+name: Package components
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        description: "Target platform (linux, macos, windows)"
+        required: true
+        type: string
+      arch:
+        description: "Target architecture (x86_64, arm64)"
+        required: false
+        type: string
+        default: x86_64
+      config:
+        description: "Build config (release, debug)"
+        required: true
+        type: string
+      link:
+        description: "Link mode (shared, static)"
+        required: true
+        type: string
+      prefix_artifact:
+        description: "Name of the artifact containing the built prefix"
+        required: true
+        type: string
+      version:
+        description: "Release version (e.g. 1.2.0)"
+        required: false
+        type: string
+        default: ''
+
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Target platform"
+        required: true
+        type: choice
+        options: [linux, macos, windows]
+      config:
+        description: "Build config"
+        required: true
+        type: choice
+        options: [release, debug]
+      link:
+        description: "Link mode"
+        required: true
+        type: choice
+        options: [shared, static]
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package (${{ inputs.platform }}/${{ inputs.config }}/${{ inputs.link }})
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install cvcpkg
+        run: |
+          pip install --upgrade pip
+          pip install ./tools/cvcpkg
+
+      - name: Download built prefix
+        if: inputs.prefix_artifact != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.prefix_artifact }}
+          path: monolithic/
+
+      - name: Extract monolithic bundle
+        run: |
+          set -euo pipefail
+          mkdir -p prefix
+          cd monolithic
+          for f in *.tar.gz *.tgz; do
+            [ -e "$f" ] || continue
+            tar xzf "$f" --strip-components=1 -C ../prefix
+          done
+          for f in *.zip; do
+            [ -e "$f" ] || continue
+            unzip -o "$f" -d ../prefix
+          done
+          echo "Prefix contents:"
+          ls ../prefix/ || true
+
+      # Split the monolithic prefix into per-component bundles.
+      # For each recipe, the script:
+      #   1. Reads package.files globs from recipe.yaml
+      #   2. Copies matching files from the prefix into a staging dir
+      #   3. Generates a manifest.yaml
+      #   4. Archives the staging dir
+      - name: Split into per-component bundles
+        env:
+          CVC_PLATFORM: ${{ inputs.platform }}
+          CVC_CONFIG: ${{ inputs.config }}
+          CVC_LINK: ${{ inputs.link }}
+          CVC_ARCH: ${{ inputs.arch || 'x86_64' }}
+          CVC_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PYTHON_SCRIPT'
+          import fnmatch
+          import os
+          import sys
+          from pathlib import Path
+
+          import yaml
+
+          # Add cvcpkg to path
+          sys.path.insert(0, str(Path("tools/cvcpkg/src")))
+          from cvcpkg.builder import (
+              Recipe,
+              create_archive,
+              generate_manifest,
+              list_recipes,
+              stage_bundle,
+          )
+
+          prefix = Path("prefix")
+          dist = Path("dist")
+          dist.mkdir(exist_ok=True)
+          index_entries = []
+
+          platform = os.environ.get("CVC_PLATFORM", "linux")
+          config = os.environ.get("CVC_CONFIG", "release")
+          link = os.environ.get("CVC_LINK", "shared")
+          arch = os.environ.get("CVC_ARCH", "x86_64")
+          version = os.environ.get("CVC_VERSION", "")
+
+          recipes_dir = Path("recipes")
+          recipes = list_recipes(recipes_dir)
+
+          # Collect all files in the prefix
+          all_files = []
+          for p in sorted(prefix.rglob("*")):
+              if p.is_file():
+                  all_files.append(str(p.relative_to(prefix)))
+
+          print(f"Prefix has {len(all_files)} files")
+          print(f"Found {len(recipes)} recipes")
+
+          for recipe in recipes:
+              # Check if this recipe targets the current platform
+              platforms = [m.platform for m in recipe.build_matrix]
+              if platform not in platforms:
+                  print(f"  SKIP {recipe.name} (not for {platform})")
+                  continue
+
+              # Match files using the recipe's package.files globs
+              matched = set()
+              for pattern in recipe.package_files:
+                  for f in all_files:
+                      if fnmatch.fnmatch(f, pattern):
+                          matched.add(f)
+
+              if not matched:
+                  print(f"  SKIP {recipe.name} (no matching files in prefix)")
+                  continue
+
+              print(f"  {recipe.name}: {len(matched)} files")
+
+              # Stage matched files
+              staging = Path(f"staging-{recipe.name}")
+              staging.mkdir(exist_ok=True)
+              for f in sorted(matched):
+                  src = prefix / f
+                  dst = staging / f
+                  dst.parent.mkdir(parents=True, exist_ok=True)
+                  # Preserve symlinks
+                  if src.is_symlink():
+                      dst.symlink_to(os.readlink(src))
+                  else:
+                      import shutil
+                      shutil.copy2(src, dst)
+
+              # Generate manifest
+              manifest = generate_manifest(
+                  recipe, staging, platform, arch, config, link
+              )
+
+              # Write manifest into staging
+              manifest_dir = staging / "share" / "libcvc-deps"
+              manifest_dir.mkdir(parents=True, exist_ok=True)
+              with open(manifest_dir / "manifest.yaml", "w") as f:
+                  yaml.dump(manifest, f, default_flow_style=False, sort_keys=False)
+
+              # Create archive
+              archive_path, sha256, size = create_archive(
+                  staging, dist,
+                  recipe.name, recipe.full_version,
+                  platform, arch, config, link,
+              )
+
+              index_entries.append({
+                  "name": recipe.name,
+                  "version": recipe.full_version,
+                  "upstream_version": recipe.upstream_version,
+                  "cvc_revision": recipe.cvc_revision,
+                  "platform": platform,
+                  "arch": arch,
+                  "config": config,
+                  "link": link,
+                  "sha256": sha256,
+                  "size_bytes": size,
+                  "archive": archive_path.name,
+              })
+
+              # Cleanup staging
+              import shutil
+              shutil.rmtree(staging)
+
+          # Write release index
+          index = {
+              "schema_version": 1,
+              "release_version": version,
+              "platform": platform,
+              "arch": arch,
+              "config": config,
+              "link": link,
+              "bundles": index_entries,
+          }
+          index_path = dist / f"index-{platform}-{arch}-{config}-{link}.yaml"
+          with open(index_path, "w") as f:
+              yaml.dump(index, f, default_flow_style=False, sort_keys=False)
+
+          print(f"\nGenerated {len(index_entries)} component bundles in {dist}/")
+          print(f"Index: {index_path}")
+          PYTHON_SCRIPT
+
+      - name: List component bundles
+        run: |
+          echo "=== Component bundles ==="
+          ls -lh dist/
+          echo ""
+          echo "=== Index ==="
+          cat dist/index-*.yaml
+
+      - name: Upload component bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: components-${{ inputs.platform }}-${{ inputs.config }}-${{ inputs.link }}
+          path: dist/
+          if-no-files-found: error

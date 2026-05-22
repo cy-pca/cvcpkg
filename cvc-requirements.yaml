@@ -1,0 +1,40 @@
+# cvc-requirements.yaml — default component set for libcvc / volrover3.
+#
+# Usage:
+#   cvcpkg install --from cvc-requirements.yaml --prefix ./deps
+#
+# This file declares the full set of components needed to build
+# libcvc and volrover3. Downstream projects can create their own
+# requirements file with a subset (e.g. F2Dock only needs fftw3,
+# nfft3, boost, and hdf5).
+#
+# See docs/roadmap/split-distribution.md §5 for details.
+
+platform: auto
+arch: auto
+config: release
+link: shared
+
+components:
+  - name: zlib
+  - name: yaml
+  - name: gsl
+  - name: log4cplus
+  - name: tiff
+  - name: fftw3
+  - name: openblas
+  - name: levmar
+  - name: hdf5
+  - name: imagemagick
+  - name: libiimod
+  - name: openssl
+  - name: c-ares
+  - name: re2
+  - name: abseil
+  - name: protobuf
+  - name: grpc
+  - name: cgal
+  - name: boost
+  - name: qt6
+  - name: vtk
+  - name: nfft3
