@@ -18,7 +18,18 @@ if [[ -d "${CVC_DEPS_PREFIX}/include/upb" ]]; then
     echo "cvcpkg: moved prefix/include/upb{,_generator} aside to avoid header collision"
 fi
 
+# On macOS shared builds, grpc's internal upb dylibs reference protobuf
+# descriptor mini-table symbols (_google__protobuf__*_msg_init) that live
+# in protobuf's libupb.  macOS requires all symbols resolved at link time,
+# so we allow deferred lookup — the symbols resolve at load time when both
+# grpc and protobuf dylibs are present.
+_extra_cmake_flags=()
+if [[ "${CVC_PLATFORM}" == "macos" && "${CVC_LINK}" == "shared" ]]; then
+    _extra_cmake_flags+=("-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-undefined,dynamic_lookup")
+fi
+
 cvc_cmake_build \
+    ${_extra_cmake_flags[@]+"${_extra_cmake_flags[@]}"} \
     -DgRPC_BUILD_TESTS=OFF \
     -DgRPC_BUILD_CSHARP_EXT=OFF \
     -DgRPC_BUILD_GRPC_CPP_PLUGIN=ON \
