@@ -1,0 +1,84 @@
+# JSON-Schema (expressed in YAML) for packaging/components.yaml.
+# Validated by: python -m cvcpkg.validate packaging/components.yaml
+# or:           make validate-components
+
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://transfix.github.io/libcvc-deps/schemas/components-v1.yaml"
+title: "libcvc-deps component table"
+description: >
+  Source of truth for the per-component bundle list.
+  See docs/roadmap/split-distribution.md §3.3.
+
+type: object
+required: [schema_version, components]
+additionalProperties: false
+
+properties:
+  schema_version:
+    type: integer
+    const: 1
+
+  components:
+    type: object
+    minProperties: 1
+    additionalProperties:
+      $ref: "#/$defs/component"
+
+$defs:
+  component:
+    type: object
+    required: [description, upstream_packages, platforms, cmake_packages, dependencies]
+    additionalProperties: false
+    properties:
+      description:
+        type: string
+        minLength: 1
+      upstream_packages:
+        type: array
+        items: { type: string }
+        minItems: 1
+      platforms:
+        type: array
+        items:
+          type: string
+          enum: [linux, macos, windows]
+        minItems: 1
+        uniqueItems: true
+      cmake_packages:
+        type: array
+        items:
+          $ref: "#/$defs/cmake_package"
+      pkgconfig:
+        type: array
+        items: { type: string }
+      tools:
+        type: array
+        items: { type: string }
+      dependencies:
+        type: array
+        items:
+          $ref: "#/$defs/dependency"
+
+  cmake_package:
+    type: object
+    required: [name, targets]
+    additionalProperties: false
+    properties:
+      name:
+        type: string
+      targets:
+        type: array
+        items: { type: string }
+        minItems: 1
+
+  dependency:
+    type: object
+    required: [name]
+    additionalProperties: false
+    properties:
+      name:
+        type: string
+      version:
+        type: string
+        description: >
+          SemVer range expression (>=, <, ^, ~>, ==, or comma-separated).
