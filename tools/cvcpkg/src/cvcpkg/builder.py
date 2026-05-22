@@ -278,6 +278,13 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
     env["CVC_LINK"] = ctx.link
     env["CVC_COMPONENT"] = ctx.recipe.name
     env["CVC_VERSION"] = ctx.recipe.upstream_version
+    env["CVC_RECIPE_DIR"] = str(ctx.recipe.recipe_dir)
+
+    # CVC_DEPS_PREFIX tells build.sh where to find previously-built
+    # dependencies.  When building into a shared prefix this equals
+    # install_dir; callers building into isolated per-component dirs
+    # can override via the prefix field.
+    env["CVC_DEPS_PREFIX"] = str(ctx.prefix)
 
     build_type = "Release" if ctx.config == "release" else "Debug"
     env["CMAKE_BUILD_TYPE"] = build_type
@@ -584,6 +591,90 @@ def pack_recipe(
 
 
 # ── Recipe listing / inspection ─────────────────────────────────
+
+# ── Dependency resolution ───────────────────────────────────────
+
+def _dep_names(recipe: Recipe) -> list[str]:
+    """Extract build-dependency names from a recipe."""
+    depends = recipe.raw.get("depends", {}).get("build", [])
+    names: list[str] = []
+    for d in depends:
+        if isinstance(d, str):
+            names.append(d)
+        elif isinstance(d, dict):
+            names.append(d["name"])
+    return names
+
+
+def resolve_build_order(recipes: list[Recipe]) -> list[Recipe]:
+    """Return *recipes* in topological (dependency-first) order.
+
+    Raises ``RecipeError`` on dependency cycles or missing deps.
+    """
+    by_name: dict[str, Recipe] = {r.name: r for r in recipes}
+    visited: set[str] = set()
+    in_stack: set[str] = set()
+    order: list[Recipe] = []
+
+    def visit(name: str) -> None:
+        if name in visited:
+            return
+        if name in in_stack:
+            raise RecipeError(f"Dependency cycle detected involving '{name}'")
+        if name not in by_name:
+            raise RecipeError(f"Unknown dependency: '{name}'")
+        in_stack.add(name)
+        for dep in _dep_names(by_name[name]):
+            visit(dep)
+        in_stack.discard(name)
+        visited.add(name)
+        order.append(by_name[name])
+
+    for r in recipes:
+        visit(r.name)
+    return order
+
+
+def build_all(
+    recipes_dir: Path,
+    *,
+    platform: str = "",
+    config: str = "release",
+    link: str = "shared",
+    prefix: Path | None = None,
+    keep_build_dir: bool = False,
+) -> list[BuildContext]:
+    """Build every recipe in dependency order into a shared *prefix*."""
+    recipes = list_recipes(recipes_dir)
+    # Filter to recipes that have a matrix entry for this platform
+    if not platform:
+        platform = detect_platform()
+    recipes = [
+        r for r in recipes
+        if any(m.platform == platform for m in r.build_matrix)
+    ]
+    ordered = resolve_build_order(recipes)
+
+    if prefix is None:
+        prefix = Path(tempfile.mkdtemp(prefix="cvcpkg-all-"))
+    prefix = prefix.resolve()
+
+    contexts: list[BuildContext] = []
+    for recipe in ordered:
+        print(f"\ncvcpkg: ══ {recipe.name} ({recipe.full_version}) ══")
+        ctx = build_recipe(
+            recipe.recipe_dir,
+            platform=platform,
+            config=config,
+            link=link,
+            prefix=prefix,
+            keep_build_dir=keep_build_dir,
+        )
+        contexts.append(ctx)
+
+    print(f"\ncvcpkg: all {len(contexts)} components built into {prefix}")
+    return contexts
+
 
 def find_recipes_dir() -> Path:
     """Locate the recipes/ directory relative to the repo root."""

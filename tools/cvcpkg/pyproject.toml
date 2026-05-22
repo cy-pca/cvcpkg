@@ -29,6 +29,7 @@ packages = [{ include = "cvcpkg", from = "src" }]
 [tool.poetry.dependencies]
 python = "^3.10"
 PyYAML = "^6.0"
+click = "^8.1"
 tqdm = { version = "^4.66", optional = true }
 
 [tool.poetry.extras]
@@ -41,7 +42,7 @@ ruff = "^0.6"
 mypy = "^1.10"
 
 [tool.poetry.scripts]
-cvcpkg = "cvcpkg.cli:main"
+cvcpkg = "cvcpkg.cli:cli"
 
 [build-system]
 requires = ["poetry-core>=1.8.0"]
