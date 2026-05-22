@@ -67,6 +67,12 @@ $defs:
       license:
         type: string
         description: "SPDX license expression"
+      tags:
+        type: array
+        items:
+          type: string
+          pattern: "^[a-z][a-z0-9-]*$"
+        description: "Category tags (e.g. math, graphics, utils, networking)"
 
   source_block:
     type: object

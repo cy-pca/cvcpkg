@@ -31,6 +31,7 @@ from cvcpkg.builder import (
     fetch_source,
     generate_manifest,
     list_recipes,
+    load_all_recipes,
     resolve_build_order,
     stage_bundle,
 )
@@ -839,3 +840,88 @@ class TestRunBuildInterpreter:
         )
         with pytest.raises(BuildError, match="Unknown script type"):
             run_build(ctx)
+
+
+# ── Tags ────────────────────────────────────────────────────────
+
+
+class TestRecipeTags:
+    def test_load_recipe_with_tags(self, tmp_path):
+        recipe_dict = {**MINIMAL_RECIPE}
+        recipe_dict["recipe"] = {**recipe_dict["recipe"], "tags": ["math", "utils"]}
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        assert r.tags == ["math", "utils"]
+
+    def test_load_recipe_without_tags(self, tmp_path):
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, MINIMAL_RECIPE)
+        r = Recipe.load(recipe_dir)
+        assert r.tags == []
+
+    def test_load_recipe_empty_tags(self, tmp_path):
+        recipe_dict = {**MINIMAL_RECIPE}
+        recipe_dict["recipe"] = {**recipe_dict["recipe"], "tags": []}
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        assert r.tags == []
+
+
+# ── load_all_recipes ────────────────────────────────────────────
+
+
+class TestLoadAllRecipes:
+    def _make_recipe(self, recipes_dir, name, **overrides):
+        d = {**MINIMAL_RECIPE}
+        d["recipe"] = {**d["recipe"], "name": name, **overrides}
+        d["source"] = {"type": "vendored", "path": f"third-party/{name}"}
+        recipe_dir = recipes_dir / name
+        _write_recipe(recipe_dir, d)
+
+    def test_single_dir(self, tmp_path):
+        rd = tmp_path / "recipes"
+        self._make_recipe(rd, "alpha")
+        self._make_recipe(rd, "beta")
+        result = load_all_recipes([rd])
+        names = [r.name for r in result]
+        assert names == ["alpha", "beta"]
+
+    def test_multiple_dirs_merge(self, tmp_path):
+        rd1 = tmp_path / "dir1"
+        rd2 = tmp_path / "dir2"
+        self._make_recipe(rd1, "alpha")
+        self._make_recipe(rd2, "beta")
+        result = load_all_recipes([rd1, rd2])
+        names = [r.name for r in result]
+        assert names == ["alpha", "beta"]
+
+    def test_later_dir_overrides(self, tmp_path, capsys):
+        rd1 = tmp_path / "dir1"
+        rd2 = tmp_path / "dir2"
+        self._make_recipe(rd1, "alpha", cvc_revision=1)
+        self._make_recipe(rd2, "alpha", cvc_revision=2)
+        result = load_all_recipes([rd1, rd2])
+        assert len(result) == 1
+        assert result[0].cvc_revision == 2
+        captured = capsys.readouterr()
+        assert "overrides" in captured.out
+
+    def test_empty_dirs_raises(self):
+        with pytest.raises(RecipeError, match="No recipe directories"):
+            load_all_recipes([])
+
+    def test_three_dirs_overlay(self, tmp_path):
+        rd1 = tmp_path / "base"
+        rd2 = tmp_path / "overlay"
+        rd3 = tmp_path / "local"
+        self._make_recipe(rd1, "alpha")
+        self._make_recipe(rd1, "beta")
+        self._make_recipe(rd2, "gamma")
+        self._make_recipe(rd3, "beta", cvc_revision=5)
+        result = load_all_recipes([rd1, rd2, rd3])
+        names = [r.name for r in result]
+        assert names == ["alpha", "beta", "gamma"]
+        beta = [r for r in result if r.name == "beta"][0]
+        assert beta.cvc_revision == 5

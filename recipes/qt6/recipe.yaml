@@ -6,6 +6,7 @@ recipe:
   maintainer: "CyberPC Angel, LLC"
   homepage: https://www.qt.io/
   license: LGPL-3.0-only
+  tags: [graphics]
 
 source:
   # Qt 6 is obtained differently per platform:

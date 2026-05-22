@@ -6,6 +6,7 @@ recipe:
   maintainer: "CyberPC Angel, LLC"
   homepage: https://imagemagick.org/
   license: Apache-2.0
+  tags: [graphics, io]
 
 source:
   type: tarball

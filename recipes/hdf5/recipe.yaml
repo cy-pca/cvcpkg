@@ -6,6 +6,7 @@ recipe:
   maintainer: "CyberPC Angel, LLC"
   homepage: https://www.hdfgroup.org/solutions/hdf5/
   license: BSD-3-Clause
+  tags: [io]
 
 source:
   type: tarball

@@ -6,6 +6,7 @@ recipe:
   maintainer: "CyberPC Angel, LLC"
   homepage: https://www.netlib.org/clapack/
   license: BSD-3-Clause
+  tags: [math]
 
 source:
   type: vcpkg

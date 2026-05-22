@@ -6,6 +6,7 @@ recipe:
   maintainer: "CyberPC Angel, LLC"
   homepage: https://zlib.net/
   license: Zlib
+  tags: [utils, io]
 
 source:
   type: tarball
