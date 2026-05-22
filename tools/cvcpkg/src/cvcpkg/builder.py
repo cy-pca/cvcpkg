@@ -675,9 +675,7 @@ def _dep_names(recipe: Recipe, platform: str = "") -> list[str]:
     return names
 
 
-def resolve_build_order(
-    recipes: list[Recipe], platform: str = ""
-) -> list[Recipe]:
+def resolve_build_order(recipes: list[Recipe], platform: str = "") -> list[Recipe]:
     """Return *recipes* in topological (dependency-first) order.
 
     If *platform* is given, only dependencies that apply to that
