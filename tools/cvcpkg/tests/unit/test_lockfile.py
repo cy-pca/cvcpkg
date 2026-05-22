@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
 import yaml
 
+from cvcpkg.errors import SchemaError
 from cvcpkg.lockfile import LockEntry, Lockfile
 
 
@@ -75,3 +77,48 @@ class TestLockfile:
         assert lf.schema_version == 2
         assert lf.bundles == []
         assert lf.catalog_revision == 0
+
+
+# ── Hardening: error paths ──────────────────────────────────────
+
+
+class TestLockfileHardening:
+    """Tests for hardened from_dict / read error handling."""
+
+    def test_from_dict_malformed_bundle(self):
+        """from_dict raises SchemaError when a bundle entry is malformed."""
+        d = {"bundles": [{"not_name": "broken"}]}  # missing "name" key
+        with pytest.raises(SchemaError, match="malformed lockfile"):
+            Lockfile.from_dict(d)
+
+    def test_from_dict_none_bundles(self):
+        """from_dict raises SchemaError when bundles contains None."""
+        d = {"bundles": [None]}
+        with pytest.raises(SchemaError, match="malformed lockfile"):
+            Lockfile.from_dict(d)
+
+    def test_read_nonexistent_file(self, tmp_path):
+        """read() raises SchemaError for a missing file."""
+        with pytest.raises(SchemaError, match="not found"):
+            Lockfile.read(tmp_path / "nope.yaml")
+
+    def test_read_non_dict_yaml(self, tmp_path):
+        """read() raises SchemaError if the YAML is a list."""
+        p = tmp_path / "lockfile.yaml"
+        p.write_text("- a\n- b\n")
+        with pytest.raises(SchemaError, match="not a YAML mapping"):
+            Lockfile.read(p)
+
+    def test_read_empty_file(self, tmp_path):
+        """read() raises SchemaError for an empty YAML file."""
+        p = tmp_path / "lockfile.yaml"
+        p.write_text("")
+        with pytest.raises(SchemaError, match="not a YAML mapping"):
+            Lockfile.read(p)
+
+    def test_read_scalar_yaml(self, tmp_path):
+        """read() raises SchemaError for a scalar YAML file."""
+        p = tmp_path / "lockfile.yaml"
+        p.write_text("42\n")
+        with pytest.raises(SchemaError, match="not a YAML mapping"):
+            Lockfile.read(p)

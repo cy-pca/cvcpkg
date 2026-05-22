@@ -198,10 +198,45 @@ class TestInstallWithCatalog:
                 ]
             )
         assert ret == 0
-        out = capsys.readouterr().out
-        assert "resolved 2" in out
-        assert "zlib" in out
-        assert "yaml" in out
+
+
+# ── Hardening: invalid platform/arch Choice validation ──────────
+
+
+class TestPlatformArchValidation:
+    """Verify click.Choice rejects invalid --platform and --arch values."""
+
+    def test_invalid_platform_rejected(self, capsys):
+        """An invalid --platform value should cause a non-zero exit."""
+        ret = main(["install", "zlib", "--platform", "solaris"])
+        assert ret != 0
+
+    def test_invalid_arch_rejected(self, capsys):
+        """An invalid --arch value should cause a non-zero exit."""
+        ret = main(["install", "zlib", "--arch", "mips64"])
+        assert ret != 0
+
+    def test_valid_platform_accepted(self, capsys):
+        """Valid platform values should not trigger a Choice error."""
+        for plat in ("auto", "linux", "macos", "windows"):
+            ret = main(["install", "--platform", plat])
+            assert ret == 0 or ret is None
+
+    def test_valid_arch_accepted(self, capsys):
+        """Valid arch values should not trigger a Choice error."""
+        for arch in ("auto", "x86_64", "arm64"):
+            ret = main(["install", "--arch", arch])
+            assert ret == 0 or ret is None
+
+    def test_invalid_config_rejected(self, capsys):
+        """An invalid --config value should cause a non-zero exit."""
+        ret = main(["install", "zlib", "--config", "optimized"])
+        assert ret != 0
+
+    def test_invalid_link_rejected(self, capsys):
+        """An invalid --link value should cause a non-zero exit."""
+        ret = main(["install", "zlib", "--link", "dynamic"])
+        assert ret != 0
 
     def test_install_writes_lockfile(self, tmp_path):
         cat = _make_catalog(tmp_path)

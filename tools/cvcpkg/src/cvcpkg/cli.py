@@ -13,7 +13,15 @@ from cvcpkg.errors import CvcpkgError
 
 # ── Shared option groups ────────────────────────────────────────
 
-_platform_opt = click.option("--platform", default="auto", help="Target platform (auto-detected).")
+_VALID_PLATFORMS = ["auto", "linux", "macos", "windows"]
+_VALID_ARCHES = ["auto", "x86_64", "arm64"]
+
+_platform_opt = click.option(
+    "--platform",
+    type=click.Choice(_VALID_PLATFORMS, case_sensitive=False),
+    default="auto",
+    help="Target platform (auto-detected).",
+)
 _config_opt = click.option(
     "--config",
     type=click.Choice(["release", "debug"], case_sensitive=False),
@@ -59,7 +67,7 @@ def cli(ctx: click.Context) -> None:
 @_prefix_opt
 @click.option("--release", metavar="VER", help="Pin to a libcvc-deps release version.")
 @_platform_opt
-@click.option("--arch", default="auto")
+@click.option("--arch", type=click.Choice(_VALID_ARCHES, case_sensitive=False), default="auto")
 @_config_opt
 @_link_opt
 @click.option("--catalog", metavar="URL", help="Override catalog URL.")
