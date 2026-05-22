@@ -13,7 +13,6 @@ import re
 from dataclasses import dataclass
 from functools import total_ordering
 
-
 _VER_RE = re.compile(
     r"^(?P<major>0|[1-9]\d*)"
     r"(?:\.(?P<minor>0|[1-9]\d*))?"
@@ -81,11 +80,12 @@ class Version:
 
 # ── Range constraints ───────────────────────────────────────────
 
+
 @dataclass(frozen=True, slots=True)
 class _Constraint:
     """Single comparison constraint."""
 
-    op: str   # ==, >=, <=, >, <, ^, ~>
+    op: str  # ==, >=, <=, >, <, ^, ~>
     ver: Version
 
     def satisfied_by(self, v: Version) -> bool:
@@ -136,7 +136,7 @@ def parse_range(spec: str) -> list[_Constraint]:
         m = _OP_RE.match(part)
         if m:
             op = m.group(1)
-            ver_str = part[m.end():].strip()
+            ver_str = part[m.end() :].strip()
         else:
             # Bare version string → treat as ==
             op = "=="

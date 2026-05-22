@@ -36,20 +36,24 @@ class TestResolverBasic:
 
     def test_picks_highest_version(self):
         reqs = [ComponentReq(name="zlib")]
-        candidates = {"zlib": [
-            _entry("zlib", "1.3.0+cvc.1"),
-            _entry("zlib", "1.3.1+cvc.1"),
-            _entry("zlib", "1.2.13+cvc.1"),
-        ]}
+        candidates = {
+            "zlib": [
+                _entry("zlib", "1.3.0+cvc.1"),
+                _entry("zlib", "1.3.1+cvc.1"),
+                _entry("zlib", "1.2.13+cvc.1"),
+            ]
+        }
         result = resolve(reqs, candidates)
         assert result.picked["zlib"].version == "1.3.1+cvc.1"
 
     def test_version_constraint(self):
         reqs = [ComponentReq(name="zlib", version="==1.3.0")]
-        candidates = {"zlib": [
-            _entry("zlib", "1.3.0+cvc.1"),
-            _entry("zlib", "1.3.1+cvc.1"),
-        ]}
+        candidates = {
+            "zlib": [
+                _entry("zlib", "1.3.0+cvc.1"),
+                _entry("zlib", "1.3.1+cvc.1"),
+            ]
+        }
         result = resolve(reqs, candidates)
         assert result.picked["zlib"].version == "1.3.0+cvc.1"
 
@@ -72,9 +76,15 @@ class TestResolverDeps:
         """hdf5 depends on zlib — resolver should pull zlib automatically."""
         reqs = [ComponentReq(name="hdf5")]
         candidates = {
-            "hdf5": [_entry("hdf5", "1.14.4+cvc.1", deps=[
-                Dependency(name="zlib", version="^1.3"),
-            ])],
+            "hdf5": [
+                _entry(
+                    "hdf5",
+                    "1.14.4+cvc.1",
+                    deps=[
+                        Dependency(name="zlib", version="^1.3"),
+                    ],
+                )
+            ],
             "zlib": [
                 _entry("zlib", "1.3.1+cvc.1"),
                 _entry("zlib", "1.2.13+cvc.1"),
@@ -90,12 +100,24 @@ class TestResolverDeps:
         """Two deps with incompatible constraints on a third."""
         reqs = [ComponentReq(name="a"), ComponentReq(name="b")]
         candidates = {
-            "a": [_entry("a", "1.0.0+cvc.1", deps=[
-                Dependency(name="c", version=">=2.0.0"),
-            ])],
-            "b": [_entry("b", "1.0.0+cvc.1", deps=[
-                Dependency(name="c", version="<2.0.0"),
-            ])],
+            "a": [
+                _entry(
+                    "a",
+                    "1.0.0+cvc.1",
+                    deps=[
+                        Dependency(name="c", version=">=2.0.0"),
+                    ],
+                )
+            ],
+            "b": [
+                _entry(
+                    "b",
+                    "1.0.0+cvc.1",
+                    deps=[
+                        Dependency(name="c", version="<2.0.0"),
+                    ],
+                )
+            ],
             "c": [
                 _entry("c", "1.9.0+cvc.1"),
                 _entry("c", "2.1.0+cvc.1"),
@@ -106,9 +128,11 @@ class TestResolverDeps:
 
     def test_recommended_preferred(self):
         reqs = [ComponentReq(name="zlib")]
-        candidates = {"zlib": [
-            _entry("zlib", "1.3.0+cvc.1"),
-            _entry("zlib", "1.3.1+cvc.1"),
-        ]}
+        candidates = {
+            "zlib": [
+                _entry("zlib", "1.3.0+cvc.1"),
+                _entry("zlib", "1.3.1+cvc.1"),
+            ]
+        }
         result = resolve(reqs, candidates, recommended={"zlib": "1.3.0+cvc.1"})
         assert result.picked["zlib"].version == "1.3.0+cvc.1"

@@ -39,7 +39,8 @@ class Lockfile:
             "arch": self.arch,
             "config": self.config,
             "link": self.link,
-            "resolved_at": self.resolved_at or datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "resolved_at": self.resolved_at
+            or datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "catalog_revision": self.catalog_revision,
             "catalog_sha256": self.catalog_sha256,
             "bundles": [

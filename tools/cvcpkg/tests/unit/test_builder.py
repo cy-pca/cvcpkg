@@ -34,8 +34,8 @@ from cvcpkg.builder import (
     stage_bundle,
 )
 
-
 # ── Helpers ─────────────────────────────────────────────────────
+
 
 def _write_recipe(recipe_dir: Path, recipe_dict: dict) -> Path:
     """Write a recipe.yaml and return its path."""
@@ -68,13 +68,16 @@ MINIMAL_RECIPE = {
 
 # ── SourceSpec ──────────────────────────────────────────────────
 
+
 class TestSourceSpec:
     def test_from_dict_tarball(self):
-        s = SourceSpec.from_dict({
-            "type": "tarball",
-            "url": "https://example.com/pkg-1.0.tar.gz",
-            "sha256": "a" * 64,
-        })
+        s = SourceSpec.from_dict(
+            {
+                "type": "tarball",
+                "url": "https://example.com/pkg-1.0.tar.gz",
+                "sha256": "a" * 64,
+            }
+        )
         assert s.type == "tarball"
         assert s.url == "https://example.com/pkg-1.0.tar.gz"
         assert s.sha256 == "a" * 64
@@ -99,6 +102,7 @@ class TestSourceSpec:
 
 # ── MatrixEntry ─────────────────────────────────────────────────
 
+
 class TestMatrixEntry:
     def test_from_dict(self):
         m = MatrixEntry.from_dict({"platform": "linux", "script": "build.sh"})
@@ -107,15 +111,18 @@ class TestMatrixEntry:
         assert m.env == {}
 
     def test_with_env(self):
-        m = MatrixEntry.from_dict({
-            "platform": "windows",
-            "script": "build.ps1",
-            "env": {"FOO": "bar"},
-        })
+        m = MatrixEntry.from_dict(
+            {
+                "platform": "windows",
+                "script": "build.ps1",
+                "env": {"FOO": "bar"},
+            }
+        )
         assert m.env == {"FOO": "bar"}
 
 
 # ── Recipe loading ──────────────────────────────────────────────
+
 
 class TestRecipeLoad:
     def test_load_minimal(self, tmp_path):
@@ -178,6 +185,7 @@ class TestRecipeLoad:
 
 # ── Matrix selection ────────────────────────────────────────────
 
+
 class TestSelectMatrixEntry:
     def test_selects_linux(self, tmp_path):
         recipe_dir = tmp_path / "recipes" / "testpkg"
@@ -195,6 +203,7 @@ class TestSelectMatrixEntry:
 
 
 # ── Source fetching ─────────────────────────────────────────────
+
 
 class TestFetchSource:
     def test_vendored_source(self, tmp_path):
@@ -256,6 +265,7 @@ class TestFetchSource:
 
 # ── Patch application ──────────────────────────────────────────
 
+
 class TestApplyPatches:
     def test_no_patches_noop(self, tmp_path):
         recipe_dir = tmp_path / "recipes" / "testpkg"
@@ -275,6 +285,7 @@ class TestApplyPatches:
 
 # ── _sha256_file ────────────────────────────────────────────────
 
+
 class TestSha256File:
     def test_correct_hash(self, tmp_path):
         content = b"test content for sha256"
@@ -285,6 +296,7 @@ class TestSha256File:
 
 
 # ── _file_list ──────────────────────────────────────────────────
+
 
 class TestFileList:
     def test_lists_files(self, tmp_path):
@@ -309,6 +321,7 @@ class TestFileList:
 
 # ── _total_size ─────────────────────────────────────────────────
 
+
 class TestTotalSize:
     def test_counts_bytes(self, tmp_path):
         (tmp_path / "a").write_bytes(b"hello")
@@ -317,6 +330,7 @@ class TestTotalSize:
 
 
 # ── generate_manifest ──────────────────────────────────────────
+
 
 class TestGenerateManifest:
     def test_basic_manifest(self, tmp_path):
@@ -372,6 +386,7 @@ class TestGenerateManifest:
 
 # ── stage_bundle ────────────────────────────────────────────────
 
+
 class TestStageBundle:
     def test_stages_files_and_manifest(self, tmp_path):
         install_dir = tmp_path / "install"
@@ -395,6 +410,7 @@ class TestStageBundle:
 
 # ── create_archive ──────────────────────────────────────────────
 
+
 class TestCreateArchive:
     def _make_staging(self, tmp_path):
         staging = tmp_path / "staging"
@@ -409,8 +425,14 @@ class TestCreateArchive:
         staging = self._make_staging(tmp_path)
         out = tmp_path / "dist"
         path, sha, size = create_archive(
-            staging, out, "testpkg", "1.0.0+cvc.1",
-            "linux", "x86_64", "release", "shared",
+            staging,
+            out,
+            "testpkg",
+            "1.0.0+cvc.1",
+            "linux",
+            "x86_64",
+            "release",
+            "shared",
         )
         assert path.suffix == ".gz"
         assert path.exists()
@@ -427,8 +449,14 @@ class TestCreateArchive:
         staging = self._make_staging(tmp_path)
         out = tmp_path / "dist"
         path, sha, size = create_archive(
-            staging, out, "testpkg", "1.0.0+cvc.1",
-            "windows", "x86_64", "release", "shared",
+            staging,
+            out,
+            "testpkg",
+            "1.0.0+cvc.1",
+            "windows",
+            "x86_64",
+            "release",
+            "shared",
         )
         assert path.suffix == ".zip"
         assert path.exists()
@@ -442,29 +470,44 @@ class TestCreateArchive:
         staging = self._make_staging(tmp_path)
         out1 = tmp_path / "dist1"
         out2 = tmp_path / "dist2"
-        _, sha1, _ = create_archive(staging, out1, "p", "1.0", "linux", "x86_64", "release", "shared")
-        _, sha2, _ = create_archive(staging, out2, "p", "1.0", "linux", "x86_64", "release", "shared")
+        _, sha1, _ = create_archive(
+            staging, out1, "p", "1.0", "linux", "x86_64", "release", "shared"
+        )
+        _, sha2, _ = create_archive(
+            staging, out2, "p", "1.0", "linux", "x86_64", "release", "shared"
+        )
         assert sha1 == sha2
 
     def test_deterministic_zip(self, tmp_path):
         staging = self._make_staging(tmp_path)
         out1 = tmp_path / "dist1"
         out2 = tmp_path / "dist2"
-        _, sha1, _ = create_archive(staging, out1, "p", "1.0", "windows", "x86_64", "release", "shared")
-        _, sha2, _ = create_archive(staging, out2, "p", "1.0", "windows", "x86_64", "release", "shared")
+        _, sha1, _ = create_archive(
+            staging, out1, "p", "1.0", "windows", "x86_64", "release", "shared"
+        )
+        _, sha2, _ = create_archive(
+            staging, out2, "p", "1.0", "windows", "x86_64", "release", "shared"
+        )
         assert sha1 == sha2
 
     def test_archive_stem_format(self, tmp_path):
         staging = self._make_staging(tmp_path)
         out = tmp_path / "dist"
         path, _, _ = create_archive(
-            staging, out, "zlib", "1.3.1+cvc.1",
-            "linux", "x86_64", "release", "shared",
+            staging,
+            out,
+            "zlib",
+            "1.3.1+cvc.1",
+            "linux",
+            "x86_64",
+            "release",
+            "shared",
         )
         assert path.name == "zlib-1.3.1+cvc.1-linux-x86_64-release-shared.tar.gz"
 
 
 # ── list_recipes (against the real recipes/ dir) ─────────────────
+
 
 class TestListRecipes:
     def test_list_synthetic(self, tmp_path):
@@ -477,10 +520,13 @@ class TestListRecipes:
         for name in ("alpha", "beta"):
             rd = recipes_dir / name
             rd.mkdir()
-            _write_recipe(rd, {
-                **MINIMAL_RECIPE,
-                "recipe": {**MINIMAL_RECIPE["recipe"], "name": name},
-            })
+            _write_recipe(
+                rd,
+                {
+                    **MINIMAL_RECIPE,
+                    "recipe": {**MINIMAL_RECIPE["recipe"], "name": name},
+                },
+            )
 
         recipes = list_recipes(recipes_dir)
         names = [r.name for r in recipes]

@@ -24,8 +24,8 @@ import yaml
 from cvcpkg.errors import CvcpkgError
 from cvcpkg.platform import detect_platform
 
-
 # ── Errors ──────────────────────────────────────────────────────
+
 
 class RecipeError(CvcpkgError):
     """Problem loading or validating a recipe."""
@@ -41,9 +41,11 @@ class PackError(CvcpkgError):
 
 # ── Data model ──────────────────────────────────────────────────
 
+
 @dataclass
 class SourceSpec:
     """Parsed ``source:`` block from recipe.yaml."""
+
     type: str  # tarball | git | vcpkg | brew | apt | vendored
     url: str = ""
     mirror: str = ""
@@ -72,6 +74,7 @@ class SourceSpec:
 @dataclass
 class MatrixEntry:
     """One entry from ``build.matrix[]``."""
+
     platform: str
     script: str
     env: dict[str, str] = field(default_factory=dict)
@@ -88,6 +91,7 @@ class MatrixEntry:
 @dataclass
 class Recipe:
     """Parsed recipe.yaml."""
+
     name: str
     upstream_version: str
     cvc_revision: int
@@ -135,6 +139,7 @@ class Recipe:
 
 # ── Source fetching ─────────────────────────────────────────────
 
+
 def _sha256_file(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -164,9 +169,7 @@ def _fetch_tarball(source: SourceSpec, dest: Path) -> Path:
     if source.sha256:
         actual = _sha256_file(archive_path)
         if actual != source.sha256:
-            raise RecipeError(
-                f"SHA-256 mismatch: expected {source.sha256}, got {actual}"
-            )
+            raise RecipeError(f"SHA-256 mismatch: expected {source.sha256}, got {actual}")
 
     # Extract
     source_dir = dest / "src"
@@ -224,6 +227,7 @@ def fetch_source(recipe: Recipe, work_dir: Path) -> Path:
 
 # ── Patch application ──────────────────────────────────────────
 
+
 def apply_patches(recipe: Recipe, source_dir: Path) -> None:
     """Apply patches listed in the recipe."""
     for patch_file in recipe.patches:
@@ -239,6 +243,7 @@ def apply_patches(recipe: Recipe, source_dir: Path) -> None:
 
 # ── Build execution ────────────────────────────────────────────
 
+
 def _select_matrix_entry(recipe: Recipe, platform: str) -> MatrixEntry:
     """Pick the matrix entry matching the target platform."""
     for entry in recipe.build_matrix:
@@ -253,6 +258,7 @@ def _select_matrix_entry(recipe: Recipe, platform: str) -> MatrixEntry:
 @dataclass
 class BuildContext:
     """All paths and settings for a single build invocation."""
+
     recipe: Recipe
     platform: str
     config: str  # release | debug
@@ -316,8 +322,10 @@ def run_build(ctx: BuildContext) -> None:
     ctx.build_dir.mkdir(parents=True, exist_ok=True)
     ctx.install_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"cvcpkg: building {ctx.recipe.name} {ctx.recipe.full_version} "
-          f"({ctx.platform}/{ctx.config}/{ctx.link})")
+    print(
+        f"cvcpkg: building {ctx.recipe.name} {ctx.recipe.full_version} "
+        f"({ctx.platform}/{ctx.config}/{ctx.link})"
+    )
     print(f"cvcpkg: script: {script}")
     print(f"cvcpkg: install dir: {ctx.install_dir}")
 
@@ -327,12 +335,11 @@ def run_build(ctx: BuildContext) -> None:
         env=env,
     )
     if result.returncode != 0:
-        raise BuildError(
-            f"Build script for {ctx.recipe.name} exited with code {result.returncode}"
-        )
+        raise BuildError(f"Build script for {ctx.recipe.name} exited with code {result.returncode}")
 
 
 # ── Test execution ──────────────────────────────────────────────
+
 
 def run_test(ctx: BuildContext) -> None:
     """Run the recipe's test script if one exists."""
@@ -353,12 +360,11 @@ def run_test(ctx: BuildContext) -> None:
         env=env,
     )
     if result.returncode != 0:
-        raise BuildError(
-            f"Test for {ctx.recipe.name} failed with code {result.returncode}"
-        )
+        raise BuildError(f"Test for {ctx.recipe.name} failed with code {result.returncode}")
 
 
 # ── Manifest generation ────────────────────────────────────────
+
 
 def _file_list(root: Path) -> list[str]:
     """Recursively list all files under *root* as relative POSIX paths."""
@@ -373,9 +379,9 @@ def _total_size(root: Path) -> int:
     return sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
 
 
-def generate_manifest(recipe: Recipe, install_dir: Path,
-                      platform: str, arch: str,
-                      config: str, link: str) -> dict[str, Any]:
+def generate_manifest(
+    recipe: Recipe, install_dir: Path, platform: str, arch: str, config: str, link: str
+) -> dict[str, Any]:
     """Generate a bundle manifest.yaml from the recipe + installed tree."""
     files = _file_list(install_dir)
     cmake_packages = recipe.raw.get("package", {}).get("cmake_packages", [])
@@ -420,8 +426,8 @@ def generate_manifest(recipe: Recipe, install_dir: Path,
 
 # ── Staging & archiving ─────────────────────────────────────────
 
-def stage_bundle(install_dir: Path, manifest: dict[str, Any],
-                 staging_dir: Path) -> None:
+
+def stage_bundle(install_dir: Path, manifest: dict[str, Any], staging_dir: Path) -> None:
     """Copy the installed tree and manifest into a staging directory."""
     # Copy entire install tree
     if install_dir.is_dir():
@@ -468,10 +474,16 @@ def _archive_zip(staging_dir: Path, output: Path) -> str:
     return _sha256_file(output)
 
 
-def create_archive(staging_dir: Path, output_dir: Path,
-                   name: str, version: str,
-                   platform: str, arch: str,
-                   config: str, link: str) -> tuple[Path, str, int]:
+def create_archive(
+    staging_dir: Path,
+    output_dir: Path,
+    name: str,
+    version: str,
+    platform: str,
+    arch: str,
+    config: str,
+    link: str,
+) -> tuple[Path, str, int]:
     """Archive the staging directory. Returns (path, sha256, size)."""
     stem = f"{name}-{version}-{platform}-{arch}-{config}-{link}"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -488,6 +500,7 @@ def create_archive(staging_dir: Path, output_dir: Path,
 
 
 # ── High-level entry points ────────────────────────────────────
+
 
 def build_recipe(
     recipe_dir: Path,
@@ -566,8 +579,12 @@ def pack_recipe(
     )
 
     manifest = generate_manifest(
-        ctx.recipe, ctx.install_dir,
-        ctx.platform, arch, ctx.config, ctx.link,
+        ctx.recipe,
+        ctx.install_dir,
+        ctx.platform,
+        arch,
+        ctx.config,
+        ctx.link,
     )
 
     staging = ctx.work_dir / "staging"
@@ -575,9 +592,14 @@ def pack_recipe(
     stage_bundle(ctx.install_dir, manifest, staging)
 
     archive_path, sha256, size = create_archive(
-        staging, output_dir,
-        ctx.recipe.name, ctx.recipe.full_version,
-        ctx.platform, arch, ctx.config, ctx.link,
+        staging,
+        output_dir,
+        ctx.recipe.name,
+        ctx.recipe.full_version,
+        ctx.platform,
+        arch,
+        ctx.config,
+        ctx.link,
     )
 
     print(f"cvcpkg: packed {archive_path.name} ({size:,} bytes)")
@@ -593,6 +615,7 @@ def pack_recipe(
 # ── Recipe listing / inspection ─────────────────────────────────
 
 # ── Dependency resolution ───────────────────────────────────────
+
 
 def _dep_names(recipe: Recipe) -> list[str]:
     """Extract build-dependency names from a recipe."""
@@ -649,10 +672,7 @@ def build_all(
     # Filter to recipes that have a matrix entry for this platform
     if not platform:
         platform = detect_platform()
-    recipes = [
-        r for r in recipes
-        if any(m.platform == platform for m in r.build_matrix)
-    ]
+    recipes = [r for r in recipes if any(m.platform == platform for m in r.build_matrix)]
     ordered = resolve_build_order(recipes)
 
     if prefix is None:

@@ -16,8 +16,8 @@ from cvcpkg.manifest import (
     Requirements,
 )
 
-
 # ── BundleManifest ──────────────────────────────────────────────
+
 
 class TestBundleManifestFromDict:
     """BundleManifest.from_dict(d) parsing."""
@@ -71,7 +71,12 @@ class TestBundleManifestFromDict:
         d = {**self.MINIMAL}
         d["bundle"] = {
             **d["bundle"],
-            "abi": {"cxx_std": 20, "cxx_runtime": "libstdc++", "libc": "glibc-2.31", "crt_link": "dynamic"},
+            "abi": {
+                "cxx_std": 20,
+                "cxx_runtime": "libstdc++",
+                "libc": "glibc-2.31",
+                "crt_link": "dynamic",
+            },
         }
         m = BundleManifest.from_dict(d)
         assert m.abi.cxx_std == 20
@@ -150,6 +155,7 @@ class TestBundleManifestFromDict:
 
     def test_from_yaml(self, tmp_path):
         import yaml
+
         p = tmp_path / "manifest.yaml"
         p.write_text(yaml.dump(self.MINIMAL))
         m = BundleManifest.from_yaml(str(p))
@@ -157,6 +163,7 @@ class TestBundleManifestFromDict:
 
 
 # ── CatalogEntry ────────────────────────────────────────────────
+
 
 class TestCatalogEntry:
     def test_basic(self):
@@ -179,6 +186,7 @@ class TestCatalogEntry:
 
 
 # ── ReleaseIndex ────────────────────────────────────────────────
+
 
 class TestReleaseIndex:
     def test_from_dict(self):
@@ -229,6 +237,7 @@ class TestReleaseIndex:
 
 # ── Requirements ────────────────────────────────────────────────
 
+
 class TestRequirements:
     def test_from_dict_defaults(self):
         r = Requirements.from_dict({})
@@ -245,42 +254,49 @@ class TestRequirements:
         assert r.components[0].version == ""
 
     def test_dict_components(self):
-        r = Requirements.from_dict({
-            "components": [
-                {"name": "zlib", "version": "==1.3.1"},
-                {"name": "vtk", "exclude": True},
-            ]
-        })
+        r = Requirements.from_dict(
+            {
+                "components": [
+                    {"name": "zlib", "version": "==1.3.1"},
+                    {"name": "vtk", "exclude": True},
+                ]
+            }
+        )
         assert r.components[0].version == "==1.3.1"
         assert r.components[1].exclude is True
 
     def test_overrides(self):
-        r = Requirements.from_dict({
-            "overrides": [{"name": "boost", "version": "==1.85.0+cvc.2"}]
-        })
+        r = Requirements.from_dict({"overrides": [{"name": "boost", "version": "==1.85.0+cvc.2"}]})
         assert len(r.overrides) == 1
         assert r.overrides[0].name == "boost"
 
     def test_from_yaml(self, tmp_path):
         import yaml
+
         p = tmp_path / "reqs.yaml"
-        p.write_text(yaml.dump({
-            "platform": "linux",
-            "config": "debug",
-            "components": ["zlib", "boost"],
-        }))
+        p.write_text(
+            yaml.dump(
+                {
+                    "platform": "linux",
+                    "config": "debug",
+                    "components": ["zlib", "boost"],
+                }
+            )
+        )
         r = Requirements.from_yaml(str(p))
         assert r.platform == "linux"
         assert r.config == "debug"
         assert len(r.components) == 2
 
     def test_mixed_components(self):
-        r = Requirements.from_dict({
-            "components": [
-                "zlib",
-                {"name": "boost", "version": "^1.80"},
-            ]
-        })
+        r = Requirements.from_dict(
+            {
+                "components": [
+                    "zlib",
+                    {"name": "boost", "version": "^1.80"},
+                ]
+            }
+        )
         assert r.components[0].name == "zlib"
         assert r.components[0].version == ""
         assert r.components[1].name == "boost"

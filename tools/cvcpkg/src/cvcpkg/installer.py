@@ -16,6 +16,7 @@ from cvcpkg.manifest import CatalogEntry
 def _safe_extractall(tf: tarfile.TarFile, path: Path) -> None:
     """Extract with filter='data' on Python >=3.12, plain extractall on older."""
     import sys
+
     if sys.version_info >= (3, 12):
         tf.extractall(path=path, filter="data")
     else:
@@ -51,9 +52,7 @@ def download_bundle(
     if sha:
         actual = hashlib.sha256(data).hexdigest()
         if actual != sha:
-            raise IntegrityError(
-                f"sha256 mismatch for {filename}: expected {sha}, got {actual}"
-            )
+            raise IntegrityError(f"sha256 mismatch for {filename}: expected {sha}, got {actual}")
 
     path = cache_mod.store(cache_dir, sha or hashlib.sha256(data).hexdigest(), filename, data)
     return path
@@ -64,6 +63,7 @@ def download_bundle(
 # Maps suffix → extractor function.  To support a new format, add
 # an entry to _EXTRACTORS.  Each extractor receives (archive, prefix)
 # and must handle path-traversal validation internally.
+
 
 def _extract_tar(archive: Path, prefix: Path) -> None:
     """Extract any tarball variant that Python's tarfile module supports."""
@@ -102,13 +102,13 @@ def _extract_7z(archive: Path, prefix: Path) -> None:
 
 # Ordered so the longest (most specific) suffix matches first.
 _EXTRACTORS: list[tuple[tuple[str, ...], callable]] = [
-    ((".tar.gz", ".tgz"),              _extract_tar),
-    ((".tar.bz2", ".tbz2"),            _extract_tar),
-    ((".tar.xz", ".txz"),              _extract_tar),
-    ((".tar.zst", ".tar.zstd"),         _extract_tar),
-    ((".tar",),                         _extract_tar),
-    ((".zip",),                         _extract_zip),
-    ((".7z",),                          _extract_7z),
+    ((".tar.gz", ".tgz"), _extract_tar),
+    ((".tar.bz2", ".tbz2"), _extract_tar),
+    ((".tar.xz", ".txz"), _extract_tar),
+    ((".tar.zst", ".tar.zstd"), _extract_tar),
+    ((".tar",), _extract_tar),
+    ((".zip",), _extract_zip),
+    ((".7z",), _extract_7z),
 ]
 
 
