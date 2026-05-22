@@ -465,7 +465,13 @@ def stage_bundle(install_dir: Path, manifest: dict[str, Any], staging_dir: Path)
 
 def _archive_tar_gz(staging_dir: Path, output: Path) -> str:
     """Create a deterministic .tar.gz archive. Returns SHA-256."""
-    with tarfile.open(output, "w:gz") as tf:
+    import gzip
+    import io
+
+    # Use a two-step approach: write tar to memory, then gzip with
+    # mtime=0 to ensure the gzip header is reproducible across machines.
+    tar_buf = io.BytesIO()
+    with tarfile.open(fileobj=tar_buf, mode="w") as tf:
         for entry in sorted(staging_dir.rglob("*")):
             arcname = str(entry.relative_to(staging_dir))
             info = tf.gettarinfo(str(entry), arcname=arcname)
@@ -480,6 +486,9 @@ def _archive_tar_gz(staging_dir: Path, output: Path) -> str:
                     tf.addfile(info, fobj)
             else:
                 tf.addfile(info)
+    with open(output, "wb") as f_out:
+        with gzip.GzipFile(fileobj=f_out, mode="wb", mtime=0) as gz:
+            gz.write(tar_buf.getvalue())
     return _sha256_file(output)
 
 
