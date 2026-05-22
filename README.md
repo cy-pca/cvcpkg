@@ -303,6 +303,50 @@ The action is intentionally thin; plain `curl` / `tar` /
 `Expand-Archive` scripts are just as valid for projects that need
 custom artifact selection.
 
+### Install via cvcpkg (recommended for new projects)
+
+The `cvcpkg-install` action downloads only the components you
+actually need, instead of the full monolithic bundle. Create a
+`cvc-requirements.yaml` in your repo listing the components you
+use, then reference the action:
+
+```yaml
+# cvc-requirements.yaml (in your repo root)
+platform: auto
+arch: auto
+config: release
+link: shared
+
+components:
+  - boost
+  - hdf5
+  - fftw3
+  - qt6
+  - vtk
+```
+
+```yaml
+# In your GitHub Actions workflow:
+- name: Install libcvc-deps
+  id: deps
+  uses: transfix/libcvc-deps/.github/actions/cvcpkg-install@v1.2.0
+  with:
+    requirements: cvc-requirements.yaml
+    build_type: Release
+
+- name: Configure
+  if: steps.deps.outputs.path != ''
+  run: |
+    cmake -S . -B build -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_PREFIX_PATH="${{ steps.deps.outputs.path }}"
+```
+
+The action sparse-checks-out `libcvc-deps`, installs `cvcpkg`,
+resolves dependencies from the catalog, and downloads only the
+matching component bundles. See `examples/` for per-project
+requirements files (volrover, TexMol, F2Dock).
+
 See [USAGE.md](USAGE.md) for matrix tables, version pins, and the
 copy-paste snippets for `libcvc` and downstream CI.
 

@@ -1,0 +1,175 @@
+name: 'Install libcvc-deps via cvcpkg'
+description: |
+  Installs libcvc-deps component bundles into a CMake-ready prefix
+  using `cvcpkg install`. This is the recommended replacement for
+  the monolithic `fetch` action: instead of downloading one large
+  archive, it resolves and installs only the components listed in
+  a `cvc-requirements.yaml` file.
+
+  Usage in a downstream workflow:
+
+      - uses: transfix/libcvc-deps/.github/actions/cvcpkg-install@vX.Y.Z
+        id: deps
+        with:
+          requirements: cvc-requirements.yaml
+          build_type: Release
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_PREFIX_PATH=${{ steps.deps.outputs.path }} ...
+
+  The action:
+    1. Checks out libcvc-deps (sparse, tools/ + packaging/ only).
+    2. Installs cvcpkg from the local tree.
+    3. Runs `cvcpkg install --from <requirements> --prefix <prefix>`.
+    4. Exports the prefix path as the `path` output.
+
+  Falls back gracefully: if the catalog is unavailable (no release
+  has published component bundles yet), `path` is set to empty so
+  the caller can fall back to building from source.
+
+inputs:
+  requirements:
+    description: >
+      Path to the cvc-requirements.yaml file in the *consumer* repo.
+      If empty, uses the default cvc-requirements.yaml shipped with
+      libcvc-deps.
+    required: false
+    default: ''
+  build_type:
+    description: 'Release or Debug.'
+    required: true
+  link:
+    description: 'shared or static.'
+    required: false
+    default: 'shared'
+  prefix:
+    description: 'Directory to install bundles into.'
+    required: false
+    default: ''
+  libcvc_deps_ref:
+    description: >
+      Git ref of libcvc-deps to check out (for cvcpkg and default
+      requirements). Usually a release tag like v1.2.0.
+    required: false
+    default: 'master'
+  catalog_url:
+    description: 'Override the catalog URL. Defaults to GitHub Pages.'
+    required: false
+    default: ''
+  python_version:
+    description: 'Python version to use for cvcpkg.'
+    required: false
+    default: '3.12'
+
+outputs:
+  path:
+    description: >
+      Absolute path to the installed prefix (contains bin/, lib/,
+      include/, share/). Empty string if install failed.
+    value: ${{ steps.install.outputs.path }}
+
+runs:
+  using: 'composite'
+  steps:
+    # Sparse-checkout libcvc-deps for the cvcpkg tool and default
+    # requirements, without pulling the entire repo history.
+    - name: Checkout libcvc-deps (sparse)
+      uses: actions/checkout@v4
+      with:
+        repository: transfix/libcvc-deps
+        ref: ${{ inputs.libcvc_deps_ref }}
+        path: _libcvc-deps
+        sparse-checkout: |
+          tools/cvcpkg
+          packaging
+          cvc-requirements.yaml
+        sparse-checkout-cone-mode: false
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python_version }}
+
+    - name: Install cvcpkg
+      shell: bash
+      run: pip install ./_libcvc-deps/tools/cvcpkg
+
+    - name: 'cvcpkg: resolve & install'
+      id: install
+      shell: bash
+      env:
+        LCD_REQUIREMENTS: ${{ inputs.requirements }}
+        LCD_BUILD_TYPE:   ${{ inputs.build_type }}
+        LCD_LINK:         ${{ inputs.link }}
+        LCD_PREFIX:       ${{ inputs.prefix }}
+        LCD_CATALOG_URL:  ${{ inputs.catalog_url }}
+        RUNNER_OS:        ${{ runner.os }}
+      run: |
+        set -euo pipefail
+
+        # --- Resolve platform ---
+        case "$RUNNER_OS" in
+          Linux)   platform=linux ;;
+          macOS)   platform=macos ;;
+          Windows) platform=windows ;;
+          *)       platform=$(echo "$RUNNER_OS" | tr '[:upper:]' '[:lower:]') ;;
+        esac
+
+        # --- Resolve arch ---
+        if [ "$platform" = "windows" ]; then
+          arch="x86_64"
+        else
+          arch=$(uname -m)
+        fi
+
+        # --- Resolve prefix ---
+        prefix="${LCD_PREFIX}"
+        if [ -z "$prefix" ]; then
+          if [ "$platform" = "windows" ]; then
+            prefix="D:/libcvc-deps"
+          else
+            prefix="$HOME/libcvc-deps"
+          fi
+        fi
+        mkdir -p "$prefix"
+
+        # --- Resolve requirements file ---
+        reqs="${LCD_REQUIREMENTS}"
+        if [ -z "$reqs" ]; then
+          reqs="_libcvc-deps/cvc-requirements.yaml"
+        fi
+
+        if [ ! -f "$reqs" ]; then
+          echo "cvcpkg-install: requirements file not found: $reqs"
+          echo "path=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # --- Build cvcpkg arguments ---
+        config=$(echo "${LCD_BUILD_TYPE}" | tr '[:upper:]' '[:lower:]')
+
+        cmd=(
+          cvcpkg install
+          --from "$reqs"
+          --prefix "$prefix"
+          --platform "$platform"
+          --arch "$arch"
+          --config "$config"
+          --link "${LCD_LINK}"
+        )
+
+        if [ -n "${LCD_CATALOG_URL}" ]; then
+          cmd+=(--catalog "${LCD_CATALOG_URL}")
+        fi
+
+        echo "cvcpkg-install: ${cmd[*]}"
+
+        if "${cmd[@]}"; then
+          echo "cvcpkg-install: installed to $prefix"
+          ls "$prefix" | head -20 || true
+          echo "path=$prefix" >> "$GITHUB_OUTPUT"
+        else
+          echo "cvcpkg-install: install failed; falling back."
+          echo "path=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
