@@ -2608,8 +2608,97 @@ jobs:
           if-no-files-found: error
 
   # ──────────────────────────── Release ────────────────────────────
+  # ────────────────────── Per-component packaging ──────────────────
+  # Split each monolithic prefix into per-component bundle archives.
+  # One job per platform so all 4 matrix entries (Debug/Release ×
+  # shared/static) are split in parallel.
+
+  package-linux:
+    needs: [linux]
+    if: always() && needs.linux.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - config: debug
+            link: shared
+            artifact: linux-Debug-shared
+          - config: release
+            link: shared
+            artifact: linux-Release-shared
+          - config: debug
+            link: static
+            artifact: linux-Debug-static
+          - config: release
+            link: static
+            artifact: linux-Release-static
+    uses: ./.github/workflows/cvcpkg-package.yml
+    with:
+      platform: linux
+      arch: x86_64
+      config: ${{ matrix.config }}
+      link: ${{ matrix.link }}
+      prefix_artifact: ${{ matrix.artifact }}
+      version: ${{ github.ref_name }}
+
+  package-macos:
+    needs: [macos]
+    if: always() && needs.macos.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - config: debug
+            link: shared
+            artifact: macos-Debug-shared
+          - config: release
+            link: shared
+            artifact: macos-Release-shared
+          - config: debug
+            link: static
+            artifact: macos-Debug-static
+          - config: release
+            link: static
+            artifact: macos-Release-static
+    uses: ./.github/workflows/cvcpkg-package.yml
+    with:
+      platform: macos
+      arch: arm64
+      config: ${{ matrix.config }}
+      link: ${{ matrix.link }}
+      prefix_artifact: ${{ matrix.artifact }}
+      version: ${{ github.ref_name }}
+
+  package-windows:
+    needs: [windows]
+    if: always() && needs.windows.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - config: debug
+            link: shared
+            artifact: windows-Debug-shared
+          - config: release
+            link: shared
+            artifact: windows-Release-shared
+          - config: debug
+            link: static
+            artifact: windows-Debug-static
+          - config: release
+            link: static
+            artifact: windows-Release-static
+    uses: ./.github/workflows/cvcpkg-package.yml
+    with:
+      platform: windows
+      arch: x86_64
+      config: ${{ matrix.config }}
+      link: ${{ matrix.link }}
+      prefix_artifact: ${{ matrix.artifact }}
+      version: ${{ github.ref_name }}
+
   release:
-    needs: [linux, macos, windows]
+    needs: [linux, macos, windows, package-linux, package-macos, package-windows]
     runs-on: ubuntu-latest
     # Skip the release step entirely for manual workflow_dispatch
     # runs unless the workflow was triggered on a tag. Run even if
@@ -2642,10 +2731,10 @@ jobs:
           tag_name: ${{ github.ref_name }}
           prerelease: ${{ inputs.prerelease || false }}
           generate_release_notes: false
-          # Explicit prefix so stray files from third-party actions
-          # can never ride along.
+          # Upload monolithic bundles + per-component bundles + indexes.
           files: |
             artifacts/libcvc-deps-*.tar.gz
             artifacts/libcvc-deps-*.zip
             artifacts/libcvc-deps-*.7z
+            artifacts/*-index.yaml
           fail_on_unmatched_files: false
