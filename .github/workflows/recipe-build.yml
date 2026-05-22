@@ -124,7 +124,7 @@ jobs:
       - name: Install cvcpkg
         shell: bash
         run: |
-          python3 -m pip install --quiet ./tools/cvcpkg
+          python3 -m pip install --quiet --break-system-packages ./tools/cvcpkg
 
       # ── Cache the built prefix ──
       - name: Compute recipe cache key
