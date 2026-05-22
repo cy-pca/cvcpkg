@@ -13,6 +13,7 @@ source:
   # that break CI. The CMakeLists.txt in third-party/levmar/
   # handles the build.
   type: vendored
+  path: third-party/levmar
 
 patches: []
 

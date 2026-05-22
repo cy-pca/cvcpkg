@@ -15,6 +15,12 @@ cd "${CVC_SOURCE_DIR}"
     --with-magick-plus-plus \
     --without-perl \
     --without-x \
+    --without-jpeg \
+    --without-png \
+    --without-webp \
+    --without-jbig \
+    --without-raw \
+    --without-openjp2 \
     --disable-docs \
     CFLAGS="${CFLAGS:-"-O2 -fPIC"}" \
     CXXFLAGS="${CXXFLAGS:-"-O2 -fPIC -std=c++17"}"
