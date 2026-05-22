@@ -1,0 +1,48 @@
+schema_version: 1
+recipe:
+  name: libiimod
+  upstream_version: "4.0.6"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  homepage: https://github.com/LabShare-Archive/IMOD
+  license: GPL-2.0-or-later
+
+source:
+  # Vendored in third-party/libiimod/ — curated subset of IMOD's
+  # image-file I/O library, built with our own CMakeLists.txt.
+  type: vendored
+
+patches: []
+
+depends:
+  build:
+    - name: tiff
+      version: "^4.6"
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/liblibiimod*
+    - lib/libiimod*
+    - lib/cmake/libiimod/
+    - include/libiimod/
+  cmake_packages:
+    - { name: libiimod, targets: ["libiimod::libiimod"] }
+
+abi:
+  cxx_std: 17

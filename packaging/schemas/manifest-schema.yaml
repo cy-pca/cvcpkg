@@ -1,0 +1,197 @@
+# JSON-Schema (expressed in YAML) for the per-bundle manifest.yaml
+# that ships inside every component bundle at:
+#
+#   share/libcvc-deps/manifest.yaml
+#
+# See docs/roadmap/split-distribution.md §3.2 for the full
+# specification.
+
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://transfix.github.io/libcvc-deps/schemas/manifest-v3.yaml"
+title: "libcvc-deps bundle manifest"
+description: >
+  Metadata shipped inside every component bundle archive.  The schema
+  version tracks the manifest format independently of the libcvc-deps
+  release version.
+
+type: object
+required: [schema_version, bundle, contents, dependencies, integrity]
+additionalProperties: false
+
+properties:
+  schema_version:
+    type: integer
+    const: 3
+
+  bundle:
+    $ref: "#/$defs/bundle_block"
+
+  contents:
+    $ref: "#/$defs/contents_block"
+
+  dependencies:
+    $ref: "#/$defs/dependencies_block"
+
+  provides:
+    type: array
+    items: { type: string }
+
+  system_requirements:
+    $ref: "#/$defs/system_requirements"
+
+  integrity:
+    $ref: "#/$defs/integrity_block"
+
+$defs:
+  bundle_block:
+    type: object
+    required: [name, version, upstream_version, cvc_revision,
+               platform, arch, build_type, link]
+    additionalProperties: false
+    properties:
+      name:
+        type: string
+        pattern: "^[a-z][a-z0-9-]*$"
+      version:
+        type: string
+        description: "<upstream-version>+cvc.<rev>"
+      upstream_version:
+        type: string
+      cvc_revision:
+        type: integer
+        minimum: 1
+      introduced_in:
+        type: string
+      last_seen_in:
+        type: string
+      platform:
+        type: string
+        enum: [linux, macos, windows]
+      arch:
+        type: string
+        enum: [x86_64, arm64]
+      build_type:
+        type: string
+        enum: [release, debug, none]
+      link:
+        type: string
+        enum: [shared, static, none]
+      link_actual:
+        type: string
+        enum: [shared, static, hybrid]
+      triplet:
+        type: string
+      abi:
+        $ref: "#/$defs/abi_block"
+
+  abi_block:
+    type: object
+    additionalProperties: false
+    properties:
+      cxx_std:
+        type: integer
+        enum: [11, 14, 17, 20, 23]
+      cxx_runtime:
+        type: string
+      libc:
+        type: string
+      crt_link:
+        type: string
+        enum: [dynamic, static]
+      extra:
+        type: array
+        items: { type: string }
+
+  contents_block:
+    type: object
+    required: [description, files, cmake_packages]
+    additionalProperties: false
+    properties:
+      description:
+        type: string
+      files:
+        type: array
+        items: { type: string }
+        minItems: 1
+      cmake_packages:
+        type: array
+        items:
+          type: object
+          required: [name, targets]
+          additionalProperties: false
+          properties:
+            name: { type: string }
+            targets:
+              type: array
+              items: { type: string }
+      pkgconfig:
+        type: array
+        items: { type: string }
+      tools:
+        type: array
+        items: { type: string }
+
+  dependencies_block:
+    type: object
+    required: [required]
+    additionalProperties: false
+    properties:
+      required:
+        type: array
+        items:
+          $ref: "#/$defs/dependency_entry"
+      optional:
+        type: array
+        items:
+          $ref: "#/$defs/dependency_entry"
+
+  dependency_entry:
+    type: object
+    required: [name, version]
+    additionalProperties: false
+    properties:
+      name:
+        type: string
+      version:
+        type: string
+      reason:
+        type: string
+
+  system_requirements:
+    type: object
+    additionalProperties: false
+    properties:
+      linux:
+        type: object
+        properties:
+          apt: { type: array, items: { type: string } }
+          yum: { type: array, items: { type: string } }
+      macos:
+        type: object
+        properties:
+          brew: { type: array, items: { type: string } }
+      windows:
+        type: object
+
+  integrity_block:
+    type: object
+    required: [sha256, size_bytes, built_at]
+    additionalProperties: false
+    properties:
+      sha256:
+        type: string
+        pattern: "^[0-9a-f]{64}$"
+      size_bytes:
+        type: integer
+        minimum: 0
+      built_at:
+        type: string
+        format: date-time
+      source:
+        type: object
+        properties:
+          type:
+            type: string
+            enum: [vcpkg, apt, brew, vendored, upstream-tarball]
+          triplet:
+            type: string

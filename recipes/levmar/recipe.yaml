@@ -1,0 +1,49 @@
+schema_version: 1
+recipe:
+  name: levmar
+  upstream_version: "2.6"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  homepage: https://users.ics.forth.gr/~lourakis/levmar/
+  license: GPL-2.0-or-later
+
+source:
+  # Vendored in third-party/levmar/upstream/ because the upstream
+  # host (users.ics.forth.gr) has unreliable HTTPS certificates
+  # that break CI. The CMakeLists.txt in third-party/levmar/
+  # handles the build.
+  type: vendored
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/liblevmar*
+    - lib/levmar*
+    - lib/cmake/levmar/
+    - include/levmar/
+    - include/levmar.h
+  cmake_packages:
+    - { name: levmar, targets: ["levmar::levmar"] }
+
+abi:
+  cxx_std: 17

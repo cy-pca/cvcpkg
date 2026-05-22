@@ -1,0 +1,62 @@
+schema_version: 1
+recipe:
+  name: imagemagick
+  upstream_version: "7.1.1"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  homepage: https://imagemagick.org/
+  license: Apache-2.0
+
+source:
+  type: tarball
+  url: https://github.com/ImageMagick/ImageMagick/archive/refs/tags/7.1.1-41.tar.gz
+  sha256: "6a88f2e381f26ea0423e01ddd73e74e8fb10a5e9a2bb36a309e8e3ea3679e1f7"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: zlib
+      version: "^1.3"
+    - name: tiff
+      version: "^4.6"
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+      vcpkg_port: imagemagick
+
+package:
+  files:
+    - lib/libMagick*
+    - lib/ImageMagick*
+    - lib/cmake/ImageMagick/
+    - lib/pkgconfig/Magick*
+    - lib/pkgconfig/ImageMagick*
+    - include/Magick++/
+    - include/Magick++.h
+    - include/MagickCore/
+    - include/MagickWand/
+    - include/ImageMagick*/
+    - bin/magick*
+    - bin/Magick*
+    - share/ImageMagick*/
+  cmake_packages:
+    - { name: ImageMagick, targets: ["ImageMagick::Magick++"] }
+
+abi:
+  cxx_std: 17

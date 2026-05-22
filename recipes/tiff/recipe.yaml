@@ -1,0 +1,55 @@
+schema_version: 1
+recipe:
+  name: tiff
+  upstream_version: "4.7.0"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  homepage: https://libtiff.gitlab.io/libtiff/
+  license: libtiff
+
+source:
+  type: tarball
+  url: https://download.osgeo.org/libtiff/tiff-4.7.0.tar.gz
+  sha256: "67160e3457365ab96c5b3286a0903aa6e78bdc44c4bc737d2e486bcecb6ba976"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: zlib
+      version: "^1.3"
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+      vcpkg_port: tiff
+
+package:
+  files:
+    - lib/libtiff*
+    - lib/tiff*
+    - lib/cmake/tiff/
+    - lib/pkgconfig/libtiff*
+    - include/tiff.h
+    - include/tiffio.h
+    - include/tiffio.hxx
+    - include/tiffvers.h
+    - include/tiffconf.h
+  cmake_packages:
+    - { name: TIFF, targets: ["TIFF::TIFF"] }
+
+abi:
+  cxx_std: 17
