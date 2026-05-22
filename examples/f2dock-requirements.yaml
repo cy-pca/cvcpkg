@@ -1,0 +1,23 @@
+# cvc-requirements.yaml — minimal component set for F2Dock.
+#
+# Usage:
+#   cvcpkg install --from cvc-requirements.yaml --prefix ./deps
+#
+# F2Dock is a standalone docking program. It primarily uses FFTW3
+# and LAPACK. It fetches libcvc via FetchContent when available
+# but does not need the full libcvc-deps stack.
+# Currently F2Dock uses apt/brew/vcpkg for its dependencies and
+# does not consume libcvc-deps bundles, but this file is provided
+# for future use if the project wants to adopt cvcpkg.
+
+platform: auto
+arch: auto
+config: release
+link: shared
+
+components:
+  - zlib
+  - fftw3
+  - boost
+  - hdf5
+  - pthreads4w
