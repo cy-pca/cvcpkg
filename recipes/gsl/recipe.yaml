@@ -1,0 +1,49 @@
+schema_version: 1
+recipe:
+  name: gsl
+  upstream_version: "2.8"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  homepage: https://www.gnu.org/software/gsl/
+  license: GPL-3.0-or-later
+
+source:
+  type: tarball
+  url: https://ftp.gnu.org/gnu/gsl/gsl-2.8.tar.gz
+  sha256: "6a99eeed15632c24fb2b3ff3b18f5e361a0e2a4b87ac6b2a2e46b77c29543e99"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+      vcpkg_port: gsl
+
+package:
+  files:
+    - lib/libgsl*
+    - lib/gsl*
+    - lib/cmake/GSL/
+    - lib/pkgconfig/gsl*
+    - include/gsl/
+  cmake_packages:
+    - { name: GSL, targets: ["GSL::gsl", "GSL::gslcblas"] }
+
+abi:
+  cxx_std: 17

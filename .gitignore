@@ -10,3 +10,10 @@ _CPack_Packages/
 .vscode/
 .idea/
 .DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+*.whl

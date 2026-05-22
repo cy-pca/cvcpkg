@@ -1,0 +1,65 @@
+[tool.poetry]
+name = "cvcpkg"
+version = "0.1.0a1"
+description = "Component package manager for libcvc-deps prebuilt dependency bundles"
+authors = ["CyberPC Angel, LLC"]
+license = "MIT"
+readme = "README.md"
+homepage = "https://github.com/transfix/libcvc-deps"
+repository = "https://github.com/transfix/libcvc-deps"
+documentation = "https://transfix.github.io/libcvc-deps/"
+keywords = ["package-manager", "cmake", "scientific-computing", "libcvc-deps"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Build Tools",
+]
+packages = [{ include = "cvcpkg", from = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+PyYAML = "^6.0"
+tqdm = { version = "^4.66", optional = true }
+
+[tool.poetry.extras]
+progress = ["tqdm"]
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+pytest-cov = "^5.0"
+ruff = "^0.6"
+mypy = "^1.10"
+
+[tool.poetry.scripts]
+cvcpkg = "cvcpkg.cli:main"
+
+[build-system]
+requires = ["poetry-core>=1.8.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"

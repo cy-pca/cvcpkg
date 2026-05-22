@@ -1,0 +1,42 @@
+schema_version: 1
+recipe:
+  name: clapack
+  upstream_version: "3.2.1"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  homepage: https://www.netlib.org/clapack/
+  license: BSD-3-Clause
+
+source:
+  type: vcpkg
+  port: clapack
+  triplet: x64-windows
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: windows
+      script: build.ps1
+      vcpkg_port: clapack
+
+package:
+  files:
+    - lib/lapack*
+    - lib/blas*
+    - lib/f2c*
+    - lib/cmake/clapack/
+    - include/blaswrap.h
+    - include/clapack.h
+    - include/f2c.h
+  cmake_packages:
+    - { name: LAPACK, targets: ["LAPACK::LAPACK"] }
+
+abi:
+  cxx_std: 17

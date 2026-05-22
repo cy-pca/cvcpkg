@@ -1,0 +1,212 @@
+# JSON-Schema (expressed in YAML) for recipes/<component>/recipe.yaml.
+#
+# See docs/roadmap/split-distribution.md §7.2 for the full
+# specification of the recipe format.
+
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://transfix.github.io/libcvc-deps/schemas/recipe-v1.yaml"
+title: "libcvc-deps build recipe"
+description: >
+  Self-contained recipe that fully describes how to build one
+  component of libcvc-deps from upstream sources.
+
+type: object
+required: [schema_version, recipe, source, build, package]
+additionalProperties: false
+
+properties:
+  schema_version:
+    type: integer
+    const: 1
+
+  recipe:
+    $ref: "#/$defs/recipe_block"
+
+  source:
+    $ref: "#/$defs/source_block"
+
+  patches:
+    type: array
+    items: { type: string }
+    description: "Patch files applied in order with patch -p1"
+
+  depends:
+    $ref: "#/$defs/depends_block"
+
+  build:
+    $ref: "#/$defs/build_block"
+
+  package:
+    $ref: "#/$defs/package_block"
+
+  test:
+    $ref: "#/$defs/test_block"
+
+  abi:
+    $ref: "#/$defs/abi_block"
+
+$defs:
+  recipe_block:
+    type: object
+    required: [name, upstream_version, cvc_revision]
+    additionalProperties: false
+    properties:
+      name:
+        type: string
+        pattern: "^[a-z][a-z0-9-]*$"
+      upstream_version:
+        type: string
+      cvc_revision:
+        type: integer
+        minimum: 1
+      maintainer:
+        type: string
+      homepage:
+        type: string
+        format: uri
+      license:
+        type: string
+        description: "SPDX license expression"
+
+  source_block:
+    type: object
+    required: [type]
+    additionalProperties: false
+    properties:
+      type:
+        type: string
+        enum: [tarball, git, vcpkg, brew, apt, vendored]
+      url:
+        type: string
+        format: uri
+      mirror:
+        type: string
+        format: uri
+        description: "Fallback mirror URL"
+      sha256:
+        type: string
+        pattern: "^[0-9a-f]{64}$"
+      path:
+        type: string
+        description: "Relative path to vendored source tree"
+      strip_components:
+        type: integer
+        minimum: 0
+      commit:
+        type: string
+        pattern: "^[0-9a-f]{40}$"
+        description: "Full 40-char SHA for git sources"
+      submodules:
+        type: boolean
+      port:
+        type: string
+        description: "vcpkg port name"
+      triplet:
+        type: string
+        description: "vcpkg triplet"
+      baseline:
+        type: string
+        description: "vcpkg baseline pin"
+
+  depends_block:
+    type: object
+    additionalProperties: false
+    properties:
+      build:
+        type: array
+        items:
+          oneOf:
+            - type: string
+            - $ref: "#/$defs/dep_entry"
+      host_tools:
+        type: array
+        items: { type: string }
+
+  dep_entry:
+    type: object
+    required: [name]
+    additionalProperties: false
+    properties:
+      name:
+        type: string
+      version:
+        type: string
+
+  build_block:
+    type: object
+    required: [matrix]
+    additionalProperties: false
+    properties:
+      matrix:
+        type: array
+        items:
+          $ref: "#/$defs/matrix_entry"
+        minItems: 1
+
+  matrix_entry:
+    type: object
+    required: [platform, script]
+    additionalProperties: false
+    properties:
+      platform:
+        type: string
+        enum: [linux, macos, windows]
+      script:
+        type: string
+      vcpkg_port:
+        type: string
+      vcpkg_features:
+        type: array
+        items: { type: string }
+      env:
+        type: object
+        additionalProperties: { type: string }
+      note:
+        type: string
+        description: "Human-readable build note"
+
+  package_block:
+    type: object
+    required: [files, cmake_packages]
+    additionalProperties: false
+    properties:
+      files:
+        type: array
+        items: { type: string }
+        minItems: 1
+      cmake_packages:
+        type: array
+        items:
+          type: object
+          required: [name, targets]
+          properties:
+            name: { type: string }
+            targets:
+              type: array
+              items: { type: string }
+      pkg_config:
+        type: array
+        items: { type: string }
+        description: "pkg-config module names shipped by this component"
+
+  test_block:
+    type: object
+    additionalProperties: false
+    properties:
+      script:
+        type: string
+
+  abi_block:
+    type: object
+    additionalProperties: false
+    properties:
+      cxx_std:
+        type: integer
+        enum: [11, 14, 17, 20, 23]
+      cxx_runtime:
+        type: string
+      libc:
+        type: string
+      crt_link:
+        type: string
+        enum: [dynamic, static]

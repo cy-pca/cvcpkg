@@ -1,0 +1,42 @@
+schema_version: 1
+recipe:
+  name: pthreads4w
+  upstream_version: "3.0.0"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  homepage: https://sourceforge.net/projects/pthreads4w/
+  license: Apache-2.0
+
+source:
+  type: vcpkg
+  port: pthreads
+  triplet: x64-windows
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: windows
+      script: build.ps1
+      vcpkg_port: pthreads
+
+package:
+  files:
+    - lib/pthreadV*
+    - lib/pthread*
+    - lib/cmake/pthreads/
+    - include/pthread.h
+    - include/sched.h
+    - include/semaphore.h
+    - bin/pthread*
+  cmake_packages:
+    - { name: Threads, targets: ["Threads::Threads"] }
+
+abi:
+  cxx_std: 17
