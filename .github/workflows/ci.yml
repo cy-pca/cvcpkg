@@ -16,6 +16,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ────────────────────── cvcpkg test suite ────────────────────────
+  #
+  # Runs the cvcpkg unit + integration tests and schema validation
+  # on every PR and merge. Fast (<10s) and catches recipe/schema
+  # regressions before the heavy dep-bundle build starts.
+  cvcpkg-test:
+    name: cvcpkg tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install pyyaml jsonschema pytest
+
+      - name: Validate schemas & recipes
+        run: python packaging/validate.py
+
+      - name: Run cvcpkg test suite
+        run: python -m pytest tools/cvcpkg/tests/ -v --tb=short
+
   # ────────────────────── Per-commit dep bundle build ─────────────
   #
   # Delegates to the same matrix release.yml runs on tag pushes. The

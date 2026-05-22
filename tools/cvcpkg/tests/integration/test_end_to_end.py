@@ -15,12 +15,13 @@ import yaml
 
 from cvcpkg.builder import Recipe, generate_manifest, list_recipes, stage_bundle, create_archive
 from cvcpkg.lockfile import LockEntry, Lockfile
-from cvcpkg.manifest import BundleManifest
+from cvcpkg.manifest import BundleManifest, Requirements
 
 
 # Real recipes dir (skip if not running from repo)
 REPO_ROOT = Path(__file__).resolve().parents[4]
 RECIPES_DIR = REPO_ROOT / "recipes"
+REQUIREMENTS_FILE = REPO_ROOT / "cvc-requirements.yaml"
 
 requires_repo = pytest.mark.skipif(
     not RECIPES_DIR.is_dir(),
@@ -185,3 +186,30 @@ class TestCLIIntegration:
         for name in ("zlib", "openssl", "nfft3"):
             ret = main(["recipes", "--show", name])
             assert ret == 0, f"Failed to show recipe '{name}'"
+
+
+# ── cvc-requirements.yaml validation ──────────────────────────
+
+requires_requirements = pytest.mark.skipif(
+    not REQUIREMENTS_FILE.is_file(),
+    reason="cvc-requirements.yaml not found at repo root",
+)
+
+
+@requires_requirements
+class TestCvcRequirements:
+    """Validate the real cvc-requirements.yaml loads correctly."""
+
+    def test_load(self):
+        raw = yaml.safe_load(REQUIREMENTS_FILE.read_text())
+        reqs = Requirements.from_dict(raw)
+        assert len(reqs.components) >= 20
+
+    def test_all_components_have_recipes(self):
+        raw = yaml.safe_load(REQUIREMENTS_FILE.read_text())
+        reqs = Requirements.from_dict(raw)
+        recipe_names = {r.name for r in list_recipes(RECIPES_DIR)}
+        for c in reqs.components:
+            assert c.name in recipe_names, (
+                f"Component '{c.name}' in cvc-requirements.yaml has no recipe"
+            )

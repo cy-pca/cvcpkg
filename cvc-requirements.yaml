@@ -16,25 +16,25 @@ config: release
 link: shared
 
 components:
-  - name: zlib
-  - name: yaml
-  - name: gsl
-  - name: log4cplus
-  - name: tiff
-  - name: fftw3
-  - name: openblas
-  - name: levmar
-  - name: hdf5
-  - name: imagemagick
-  - name: libiimod
-  - name: openssl
-  - name: c-ares
-  - name: re2
-  - name: abseil
-  - name: protobuf
-  - name: grpc
-  - name: cgal
-  - name: boost
-  - name: qt6
-  - name: vtk
-  - name: nfft3
+  - zlib
+  - yaml
+  - gsl
+  - log4cplus
+  - tiff
+  - fftw3
+  - openblas
+  - levmar
+  - hdf5
+  - imagemagick
+  - libiimod
+  - openssl
+  - c-ares
+  - re2
+  - abseil
+  - protobuf
+  - grpc
+  - cgal
+  - boost
+  - qt6
+  - vtk
+  - nfft3
