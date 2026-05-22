@@ -18,7 +18,9 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - name: openblas
+      version: ">=0.3"
   host_tools:
     - cmake
     - ninja
