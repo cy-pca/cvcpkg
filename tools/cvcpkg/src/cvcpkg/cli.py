@@ -1,4 +1,27 @@
-"""cvcpkg command-line interface (click-based)."""
+"""cvcpkg command-line interface (click-based).
+
+This module defines the entire CLI surface for cvcpkg, the component
+package manager for libcvc-deps.  It provides two main workflows:
+
+**Consumer workflow** (downstream projects like libcvc, TexMol)::
+
+    # Install prebuilt bundles from the catalog
+    cvcpkg install --from cvc-requirements.yaml --prefix ./deps
+    cvcpkg install --from cvc-requirements.yaml --config debug  # override config
+    cvcpkg list --installed --prefix ./deps
+    cvcpkg verify --prefix ./deps
+
+**Producer workflow** (libcvc-deps maintainers)::
+
+    # Build all recipes from source into a shared prefix
+    cvcpkg build-all --platform linux --config release --link shared --prefix ./prefix
+    # Package into per-component archives for the catalog
+    cvcpkg pack-all --platform linux --config release --link shared --output-dir ./dist
+    # Inspect and validate recipes
+    cvcpkg recipes --list
+    cvcpkg recipes --show grpc
+    cvcpkg validate
+"""
 
 from __future__ import annotations
 
@@ -11,7 +34,12 @@ import yaml
 from cvcpkg import __version__
 from cvcpkg.errors import CvcpkgError
 
-# ── Shared option groups ────────────────────────────────────────
+# ── Shared option decorators ────────────────────────────────────
+#
+# These are reusable click.option decorators applied to multiple
+# commands.  Each produces a keyword argument of the same name in
+# the decorated function.  "auto" sentinels are resolved at runtime
+# by detect_platform() / detect_arch().
 
 _VALID_PLATFORMS = ["auto", "linux", "macos", "windows"]
 _VALID_ARCHES = ["auto", "x86_64", "arm64"]
@@ -20,29 +48,36 @@ _platform_opt = click.option(
     "--platform",
     type=click.Choice(_VALID_PLATFORMS, case_sensitive=False),
     default="auto",
-    help="Target platform (auto-detected).",
+    help="Target platform.  'auto' detects the current OS.",
 )
 _config_opt = click.option(
     "--config",
     type=click.Choice(["release", "debug"], case_sensitive=False),
     default="release",
-    help="Build configuration.",
+    help="Build configuration (maps to CMAKE_BUILD_TYPE).",
 )
 _link_opt = click.option(
     "--link",
     type=click.Choice(["shared", "static"], case_sensitive=False),
     default="shared",
-    help="Link mode.",
+    help="Link mode — shared (.so/.dylib/.dll) or static (.a/.lib).",
 )
-_prefix_opt = click.option("--prefix", type=click.Path(), default="./deps", help="Install prefix.")
+_prefix_opt = click.option(
+    "--prefix",
+    type=click.Path(),
+    default="./deps",
+    help="Install prefix directory (will contain bin/, lib/, include/).",
+)
 _keep_build_opt = click.option(
-    "--keep-build-dir", is_flag=True, help="Keep intermediate build directories."
+    "--keep-build-dir",
+    is_flag=True,
+    help="Keep intermediate build directories for debugging.",
 )
 _recipes_dir_opt = click.option(
     "--recipes-dir",
     type=click.Path(exists=True),
     default=None,
-    help="Path to recipes/ directory.",
+    help="Path to recipes/ directory.  Auto-detected from repo root if omitted.",
 )
 
 
@@ -53,7 +88,21 @@ _recipes_dir_opt = click.option(
 @click.version_option(__version__, prog_name="cvcpkg")
 @click.pass_context
 def cli(ctx: click.Context) -> None:
-    """Component package manager for libcvc-deps prebuilt dependency bundles."""
+    """Component package manager for libcvc-deps prebuilt dependency bundles.
+
+    cvcpkg resolves, downloads, and installs prebuilt component bundles
+    from the libcvc-deps catalog, or builds them from source recipes.
+
+    \b
+    Quick start (downstream consumer):
+      cvcpkg install --from cvc-requirements.yaml
+      cmake -B build -DCMAKE_PREFIX_PATH=./deps
+
+    \b
+    Quick start (libcvc-deps maintainer):
+      cvcpkg build-all --prefix ./prefix --recipes-dir recipes
+      cvcpkg validate
+    """
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
 
@@ -63,16 +112,43 @@ def cli(ctx: click.Context) -> None:
 
 @cli.command()
 @click.argument("components", nargs=-1)
-@click.option("--from", "from_file", type=click.Path(exists=True), help="Requirements YAML file.")
+@click.option(
+    "--from",
+    "from_file",
+    type=click.Path(exists=True),
+    help="Path to a cvc-requirements.yaml file listing components to install.",
+)
 @_prefix_opt
-@click.option("--release", metavar="VER", help="Pin to a libcvc-deps release version.")
+@click.option(
+    "--release",
+    metavar="VER",
+    help="Pin to a specific libcvc-deps release version (e.g. 1.2.0).",
+)
 @_platform_opt
-@click.option("--arch", type=click.Choice(_VALID_ARCHES, case_sensitive=False), default="auto")
+@click.option(
+    "--arch",
+    type=click.Choice(_VALID_ARCHES, case_sensitive=False),
+    default="auto",
+    help="Target architecture.  'auto' detects the current CPU.",
+)
 @_config_opt
 @_link_opt
-@click.option("--catalog", metavar="URL", help="Override catalog URL.")
-@click.option("--catalog-revision", type=int, metavar="REV")
-@click.option("--ignore-abi", is_flag=True)
+@click.option(
+    "--catalog",
+    metavar="URL",
+    help="Override catalog URL or path to a local catalog YAML file.",
+)
+@click.option(
+    "--catalog-revision",
+    type=int,
+    metavar="REV",
+    help="Pin to a specific catalog revision number.",
+)
+@click.option(
+    "--ignore-abi",
+    is_flag=True,
+    help="Skip ABI compatibility checks (C++ standard, runtime, etc.).",
+)
 def install(
     components: tuple[str, ...],
     from_file: str | None,
@@ -88,9 +164,28 @@ def install(
 ) -> None:
     """Install component bundles into a prefix.
 
-    CLI flags ``--config`` and ``--link`` override values from the
-    requirements file when both ``--from`` and one of these flags
-    are provided.
+    Downloads and extracts prebuilt component archives from the
+    libcvc-deps release catalog.  Components can be specified as
+    positional arguments or loaded from a cvc-requirements.yaml
+    file via --from.
+
+    \b
+    Examples:
+      # Install from a requirements file
+      cvcpkg install --from cvc-requirements.yaml --prefix ./deps
+
+      # Override config for a debug build (file says release)
+      cvcpkg install --from cvc-requirements.yaml --config debug
+
+      # Install individual components by name
+      cvcpkg install zlib boost --prefix ./deps
+
+      # Pin a specific component version
+      cvcpkg install zlib==1.3.1+cvc.1 --prefix ./deps
+
+    When using --from, the CLI flags --platform, --arch, --config,
+    and --link override the corresponding values in the requirements
+    file if explicitly provided on the command line.
     """
     from cvcpkg.cache import default_cache_dir
     from cvcpkg.catalog import catalog_entries, fetch_catalog, load_catalog_from_file
@@ -102,6 +197,10 @@ def install(
     ctx = click.get_current_context()
     prefix_path = Path(prefix).resolve()
 
+    # ── Load or build the Requirements object ──
+    #
+    # Either parse a cvc-requirements.yaml file (--from) or construct
+    # one from positional COMPONENTS arguments + CLI flags.
     if from_file:
         reqs = Requirements.from_yaml(from_file)
     else:
@@ -121,7 +220,13 @@ def install(
             components=comp_list,
         )
 
-    # CLI flags override requirements-file values.
+    # ── CLI flag overrides ──
+    #
+    # When --from is used, the requirements file provides defaults for
+    # platform/arch/config/link.  Explicit CLI flags take precedence.
+    # For platform/arch, "auto" is the sentinel (default).  For config
+    # and link, we check Click's ParameterSource to distinguish "user
+    # passed --config debug" from "defaulted to release".
     if platform != "auto":
         reqs.platform = platform
     if arch != "auto":
@@ -131,6 +236,7 @@ def install(
     if ctx.get_parameter_source("link") == click.core.ParameterSource.COMMANDLINE:
         reqs.link = link
 
+    # Resolve "auto" sentinels to concrete values.
     plat = reqs.platform if reqs.platform != "auto" else detect_platform()
     arc = reqs.arch if reqs.arch != "auto" else detect_arch()
 
@@ -141,6 +247,12 @@ def install(
         click.echo("cvcpkg: no components requested, nothing to do.")
         return
 
+    # ── Fetch the catalog and resolve dependencies ──
+    #
+    # The catalog is a YAML index of all published component bundles.
+    # We filter entries by the target platform tuple (platform/arch/
+    # config/link), then run the backtracking SAT-style resolver to
+    # pick compatible versions for all requested components.
     catalog_url = catalog or ""
     if catalog_url and Path(catalog_url).is_file():
         cat = load_catalog_from_file(catalog_url)
@@ -151,6 +263,7 @@ def install(
     if not entries:
         raise click.ClickException("no bundles found in catalog for this platform tuple.")
 
+    # Group candidate entries by component name for the resolver.
     candidates: dict[str, list] = {}
     for e in entries:
         candidates.setdefault(e.name, []).append(e)
@@ -164,6 +277,7 @@ def install(
     for name in sorted(picked):
         click.echo(f"  {name} == {picked[name].version}")
 
+    # ── Download and extract each resolved bundle ──
     cache_dir = default_cache_dir()
     lock_entries: list[LockEntry] = []
     for name in sorted(picked):
@@ -182,6 +296,11 @@ def install(
             )
         )
 
+    # ── Write lockfile ──
+    #
+    # The lockfile records exactly which bundles were installed, their
+    # SHA-256 hashes, and archive URLs.  It enables 'cvcpkg verify'
+    # (integrity check) and 'cvcpkg sync' (re-download missing bundles).
     lock = Lockfile(
         platform=plat,
         arch=arc,
@@ -200,11 +319,27 @@ def install(
 
 
 @cli.command("list")
-@click.option("--installed", "mode", flag_value="installed", help="Show installed bundles.")
-@click.option("--available", "mode", flag_value="available", help="Show available bundles.")
+@click.option(
+    "--installed",
+    "mode",
+    flag_value="installed",
+    help="Show bundles installed in the prefix (reads the lockfile).",
+)
+@click.option(
+    "--available",
+    "mode",
+    flag_value="available",
+    help="Show all bundles published in the catalog.",
+)
 @_prefix_opt
 def list_cmd(mode: str | None, prefix: str) -> None:
-    """List installed or available components."""
+    """List installed or available components.
+
+    \b
+    Examples:
+      cvcpkg list --installed --prefix ./deps
+      cvcpkg list --available
+    """
     prefix_path = Path(prefix).resolve()
 
     if mode == "installed":
@@ -247,7 +382,15 @@ def list_cmd(mode: str | None, prefix: str) -> None:
 @cli.command()
 @click.argument("component")
 def info(component: str) -> None:
-    """Show component details from the catalog."""
+    """Show component details from the catalog.
+
+    Displays the latest version, upstream version, dependencies, and
+    all available versions for COMPONENT.
+
+    \b
+    Example:
+      cvcpkg info grpc
+    """
     from cvcpkg.cache import default_cache_dir
     from cvcpkg.catalog import catalog_entries, fetch_catalog
 
@@ -280,9 +423,23 @@ def info(component: str) -> None:
 @cli.command()
 @click.argument("target", default="all")
 def validate(target: str) -> None:
-    """Validate packaging YAML files.
+    """Validate packaging YAML files against their JSON Schemas.
 
-    TARGET can be: all, components, recipes, or recipes/<name>.
+    Checks recipe.yaml files for schema conformance, verifies that
+    referenced build scripts and patches exist, and validates the
+    dependency graph for cycles or missing dependencies.
+
+    \b
+    TARGET can be:
+      all              Validate everything (default)
+      components       Validate components.yaml only
+      recipes          Validate all recipe.yaml files
+      recipes/<name>   Validate a single recipe
+
+    \b
+    Examples:
+      cvcpkg validate
+      cvcpkg validate recipes/grpc
     """
     import importlib.util
 
@@ -316,7 +473,16 @@ def validate(target: str) -> None:
 @cli.command()
 @_prefix_opt
 def verify(prefix: str) -> None:
-    """Verify prefix integrity against the lockfile."""
+    """Verify prefix integrity against the lockfile.
+
+    Checks that every bundle recorded in the lockfile has a matching
+    manifest.yaml in the prefix with the correct version.  Use this
+    after install to confirm nothing is missing or corrupted.
+
+    \b
+    Example:
+      cvcpkg verify --prefix ./deps
+    """
     prefix_path = Path(prefix).resolve()
     lock_path = prefix_path / "share" / "libcvc-deps" / "lockfile.yaml"
     if not lock_path.exists():
@@ -356,7 +522,11 @@ def verify(prefix: str) -> None:
 
 @cli.command()
 def lock() -> None:
-    """Write or refresh the lockfile."""
+    """Write or refresh the lockfile.
+
+    The lockfile is written automatically by 'cvcpkg install'.
+    This command is a convenience reminder.
+    """
     click.echo("cvcpkg: lockfile is written automatically by 'cvcpkg install'.")
     click.echo("cvcpkg: to re-lock, run 'cvcpkg install --from <requirements>'.")
 
@@ -367,7 +537,16 @@ def lock() -> None:
 @cli.command()
 @_prefix_opt
 def sync(prefix: str) -> None:
-    """Ensure prefix matches lockfile."""
+    """Ensure prefix matches lockfile.
+
+    Re-downloads and extracts any bundles that are recorded in the
+    lockfile but missing from the prefix.  Useful after a clean
+    checkout or if the prefix was partially deleted.
+
+    \b
+    Example:
+      cvcpkg sync --prefix ./deps
+    """
     prefix_path = Path(prefix).resolve()
     lock_path = prefix_path / "share" / "libcvc-deps" / "lockfile.yaml"
     if not lock_path.exists():
@@ -416,11 +595,24 @@ def sync(prefix: str) -> None:
 
 
 @cli.command()
-@click.option("--refresh", is_flag=True, help="Re-fetch the catalog.")
-@click.option("--pin", type=int, metavar="REV", help="Pin to a specific catalog revision.")
-@click.option("--show", is_flag=True, help="Show catalog summary.")
+@click.option("--refresh", is_flag=True, help="Re-fetch the catalog from the remote server.")
+@click.option("--pin", type=int, metavar="REV", help="Pin to a specific catalog revision number.")
+@click.option(
+    "--show", is_flag=True, help="Show catalog revision, bundle count, and component names."
+)
 def catalog(refresh: bool, pin: int | None, show: bool) -> None:
-    """Catalog management."""
+    """Manage the component catalog.
+
+    The catalog is a YAML index published to GitHub Pages that lists
+    all available prebuilt component bundles with their versions,
+    hashes, and download URLs.
+
+    \b
+    Examples:
+      cvcpkg catalog --show
+      cvcpkg catalog --refresh
+      cvcpkg catalog --pin 42
+    """
     from cvcpkg.cache import default_cache_dir
     from cvcpkg.catalog import fetch_catalog
 
@@ -461,7 +653,12 @@ def catalog(refresh: bool, pin: int | None, show: bool) -> None:
 
 @cli.command()
 def gc() -> None:
-    """Prune the local download cache."""
+    """Prune the local download cache.
+
+    Removes downloaded archives from ~/.cache/cvcpkg/ that are no
+    longer referenced by any installed prefix.  Safe to run at
+    any time — bundles will be re-downloaded if needed.
+    """
     from cvcpkg.cache import default_cache_dir
     from cvcpkg.cache import gc as run_gc
 
@@ -477,7 +674,12 @@ def gc() -> None:
 
 
 def _resolve_recipe_dir(name: str) -> Path:
-    """Resolve a recipe name or path to its directory."""
+    """Resolve a recipe name or path to its directory.
+
+    Accepts either a path to a directory containing recipe.yaml, or
+    a bare recipe name (e.g. "grpc") which is looked up relative to
+    the auto-detected recipes/ directory.
+    """
     p = Path(name)
     if p.is_dir() and (p / "recipe.yaml").is_file():
         return p.resolve()
@@ -491,6 +693,7 @@ def _resolve_recipe_dir(name: str) -> Path:
 
 
 def _auto_platform(platform: str) -> str:
+    """Resolve 'auto' to the detected platform, pass others through."""
     if platform == "auto":
         from cvcpkg.platform import detect_platform
 
@@ -516,7 +719,17 @@ def build(
     prefix: str | None,
     keep_build_dir: bool,
 ) -> None:
-    """Build one or more recipes from source."""
+    """Build one or more recipes from source.
+
+    Downloads the upstream source (or uses vendored sources), applies
+    patches, and runs the recipe's platform-specific build script.
+    Results are installed into --prefix.
+
+    \b
+    Examples:
+      cvcpkg build zlib --prefix ./prefix
+      cvcpkg build grpc protobuf --config debug --link static
+    """
     from cvcpkg.builder import build_recipe
 
     plat = _auto_platform(platform)
@@ -554,7 +767,16 @@ def pack(
     output_dir: str,
     keep_build_dir: bool,
 ) -> None:
-    """Build and archive one or more recipes."""
+    """Build and archive one or more recipes.
+
+    Like 'build', but also creates a distributable .tar.gz archive
+    for each recipe containing the installed files, manifest.yaml,
+    and SHA-256 checksum.  Archives are written to --output-dir.
+
+    \b
+    Example:
+      cvcpkg pack zlib boost --output-dir ./dist
+    """
     from cvcpkg.builder import pack_recipe
 
     plat = _auto_platform(platform)
@@ -593,7 +815,20 @@ def build_all_cmd(
     keep_build_dir: bool,
     recipes_dir: str | None,
 ) -> None:
-    """Build all recipes in dependency order."""
+    """Build all recipes in dependency order.
+
+    Performs a topological sort of the recipe dependency graph and
+    builds each recipe in order into a shared --prefix.  Each recipe
+    can find previously-built dependencies via CMAKE_PREFIX_PATH.
+
+    This is the primary command used by CI to produce the full
+    dependency bundle.
+
+    \b
+    Example:
+      cvcpkg build-all --platform linux --config release --link shared \\
+          --prefix ./prefix --recipes-dir recipes
+    """
     from cvcpkg.builder import build_all, find_recipes_dir
 
     plat = _auto_platform(platform)
@@ -630,7 +865,17 @@ def pack_all_cmd(
     keep_build_dir: bool,
     recipes_dir: str | None,
 ) -> None:
-    """Build and archive all recipes."""
+    """Build and archive all recipes.
+
+    Combines build-all with per-component packaging.  Each recipe is
+    built into a shared prefix, then staged and archived individually
+    into --output-dir as .tar.gz files ready for catalog publishing.
+
+    \b
+    Example:
+      cvcpkg pack-all --platform linux --config release --link shared \\
+          --output-dir ./dist --recipes-dir recipes
+    """
     from cvcpkg.builder import (
         build_all,
         create_archive,
@@ -689,7 +934,14 @@ def pack_all_cmd(
 @click.option("--show", "show_name", metavar="NAME", help="Show details of a recipe.")
 @click.option("--validate", "mode", flag_value="validate", help="Validate all recipes.")
 def recipes(mode: str, show_name: str | None) -> None:
-    """List or inspect recipes."""
+    """List or inspect recipes.
+
+    \b
+    Examples:
+      cvcpkg recipes               # list all recipes
+      cvcpkg recipes --show grpc   # show details of a recipe
+      cvcpkg recipes --validate    # validate all recipe.yaml files
+    """
     from cvcpkg.builder import Recipe, find_recipes_dir, list_recipes
 
     if show_name:
@@ -740,10 +992,18 @@ def recipes(mode: str, show_name: str | None) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Entry point compatible with the old argparse-based CLI.
+    """Entry point for programmatic invocation and tests.
 
-    Accepts an argv-style list so existing tests can call
-    ``main(["recipes", "--list"])`` etc.
+    Wraps the Click CLI group so callers get a clean integer return
+    code instead of SystemExit.  All CvcpkgError and ClickException
+    errors are caught, printed, and mapped to exit code 1.
+
+    Args:
+        argv: Command-line arguments, e.g. ``["install", "--from", "req.yaml"]``.
+              Defaults to ``sys.argv[1:]`` when ``None``.
+
+    Returns:
+        0 on success, non-zero on error.
     """
     try:
         cli(args=argv, standalone_mode=False)
