@@ -8,13 +8,11 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 JOBS="${CVC_JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
 
 # ── Locate FFTW3 ──
-# When building in a shared prefix, FFTW3 is already installed at
-# $CVC_DEPS_PREFIX (set by cvcpkg builder).  On macOS standalone
-# builds, fall back to Homebrew.
+# In build-all mode, FFTW3 is already installed at $CVC_DEPS_PREFIX
+# (set by cvcpkg builder).  In standalone mode, it should be at
+# $CVC_INSTALL_DIR (the recipe's own install prefix).
 if [[ -n "${CVC_DEPS_PREFIX:-}" && -d "${CVC_DEPS_PREFIX}/include" ]]; then
     FFTW_PREFIX="${CVC_DEPS_PREFIX}"
-elif [[ "${CVC_PLATFORM}" == "macos" ]]; then
-    FFTW_PREFIX="$(brew --prefix fftw 2>/dev/null || echo /opt/homebrew)"
 else
     FFTW_PREFIX="${CVC_INSTALL_DIR}"
 fi
