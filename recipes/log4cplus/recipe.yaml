@@ -1,0 +1,50 @@
+schema_version: 1
+recipe:
+  name: log4cplus
+  upstream_version: "2.1.2"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  homepage: https://log4cplus.sourceforge.io/
+  license: Apache-2.0
+
+source:
+  type: tarball
+  url: https://github.com/log4cplus/log4cplus/releases/download/REL_2_1_2/log4cplus-2.1.2.tar.gz
+  sha256: "610c13df77b2bfb14ee95c3aa7e640e36c3e5c880aba3c8fae1cc1e613a8f8b5"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+      vcpkg_port: log4cplus
+
+package:
+  files:
+    - lib/liblog4cplus*
+    - lib/log4cplus*
+    - lib/cmake/log4cplus/
+    - lib/pkgconfig/log4cplus*
+    - include/log4cplus/
+  cmake_packages:
+    - { name: log4cplus, targets: ["log4cplus::log4cplus"] }
+
+abi:
+  cxx_std: 17

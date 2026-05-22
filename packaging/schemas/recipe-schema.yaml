@@ -75,13 +75,20 @@ $defs:
     properties:
       type:
         type: string
-        enum: [tarball, git, vcpkg, brew, apt]
+        enum: [tarball, git, vcpkg, brew, apt, vendored]
       url:
         type: string
         format: uri
+      mirror:
+        type: string
+        format: uri
+        description: "Fallback mirror URL"
       sha256:
         type: string
         pattern: "^[0-9a-f]{64}$"
+      path:
+        type: string
+        description: "Relative path to vendored source tree"
       strip_components:
         type: integer
         minimum: 0
@@ -108,7 +115,9 @@ $defs:
       build:
         type: array
         items:
-          $ref: "#/$defs/dep_entry"
+          oneOf:
+            - type: string
+            - $ref: "#/$defs/dep_entry"
       host_tools:
         type: array
         items: { type: string }
@@ -152,6 +161,9 @@ $defs:
       env:
         type: object
         additionalProperties: { type: string }
+      note:
+        type: string
+        description: "Human-readable build note"
 
   package_block:
     type: object
@@ -172,6 +184,10 @@ $defs:
             targets:
               type: array
               items: { type: string }
+      pkg_config:
+        type: array
+        items: { type: string }
+        description: "pkg-config module names shipped by this component"
 
   test_block:
     type: object

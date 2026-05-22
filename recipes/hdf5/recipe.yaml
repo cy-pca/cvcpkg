@@ -1,0 +1,57 @@
+schema_version: 1
+recipe:
+  name: hdf5
+  upstream_version: "1.14.4"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  homepage: https://www.hdfgroup.org/solutions/hdf5/
+  license: BSD-3-Clause
+
+source:
+  type: tarball
+  url: https://github.com/HDFGroup/hdf5/releases/download/hdf5_1.14.4.3/hdf5-1.14.4-3.tar.gz
+  sha256: "019ac451d9e1cf89c0482ba2a06f07a46166caf23f60fea5571f4f1b7e7be061"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: zlib
+      version: "^1.3"
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+      vcpkg_port: hdf5
+      vcpkg_features: ["cpp"]
+
+package:
+  files:
+    - lib/libhdf5*
+    - lib/hdf5*
+    - lib/cmake/hdf5/
+    - lib/pkgconfig/hdf5*
+    - include/hdf5.h
+    - include/hdf5_hl.h
+    - include/H5*.h
+    - include/H5*.hpp
+    - bin/h5*
+  cmake_packages:
+    - { name: HDF5, targets: ["HDF5::HDF5"] }
+
+abi:
+  cxx_std: 17

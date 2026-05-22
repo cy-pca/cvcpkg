@@ -1,0 +1,58 @@
+schema_version: 1
+recipe:
+  name: cgal
+  upstream_version: "6.0.1"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  homepage: https://www.cgal.org/
+  license: GPL-3.0-or-later
+
+source:
+  type: tarball
+  url: https://github.com/CGAL/cgal/releases/download/v6.0.1/CGAL-6.0.1.tar.xz
+  sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: boost
+      version: ">=1.82.0"
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+      vcpkg_port: cgal
+
+package:
+  files:
+    - lib/libCGAL*
+    - lib/CGAL*
+    - lib/libgmp*
+    - lib/libmpfr*
+    - lib/gmp*
+    - lib/mpfr*
+    - lib/cmake/CGAL/
+    - include/CGAL/
+    - include/gmp.h
+    - include/gmpxx.h
+    - include/mpfr.h
+    - include/mpf2mpfr.h
+  cmake_packages:
+    - { name: CGAL, targets: ["CGAL::CGAL"] }
+
+abi:
+  cxx_std: 17

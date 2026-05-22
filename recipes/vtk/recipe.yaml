@@ -1,0 +1,58 @@
+schema_version: 1
+recipe:
+  name: vtk
+  upstream_version: "9.5.0"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  homepage: https://vtk.org/
+  license: BSD-3-Clause
+
+source:
+  type: tarball
+  url: https://www.vtk.org/files/release/9.5/VTK-9.5.0.tar.gz
+  sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: qt6
+      version: ">=6.7"
+    - name: hdf5
+      version: "^1.14"
+    - name: tiff
+      version: "^4.6"
+    - name: zlib
+      version: "^1.3"
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libvtk*
+    - lib/vtk*
+    - lib/cmake/vtk*/
+    - include/vtk*/
+    - bin/vtk*
+    - share/vtk*/
+    - share/licenses/VTK/
+  cmake_packages:
+    - { name: VTK, targets: ["VTK::CommonCore", "VTK::RenderingCore"] }
+
+abi:
+  cxx_std: 17
