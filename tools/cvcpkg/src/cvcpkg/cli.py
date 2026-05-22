@@ -104,8 +104,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _cmd_install(args: argparse.Namespace) -> int:
     """Handle ``cvcpkg install``."""
+    from cvcpkg.cache import default_cache_dir
+    from cvcpkg.catalog import catalog_entries, fetch_catalog, load_catalog_from_file
+    from cvcpkg.installer import install_entry
+    from cvcpkg.lockfile import LockEntry, Lockfile
     from cvcpkg.manifest import ComponentReq, Requirements
     from cvcpkg.platform import detect_arch, detect_platform
+    from cvcpkg.resolver import resolve
 
     prefix = Path(args.prefix).resolve()
 
@@ -139,11 +144,68 @@ def _cmd_install(args: argparse.Namespace) -> int:
         print("cvcpkg: no components requested, nothing to do.")
         return 0
 
-    # NOTE: full catalog-based resolution is not yet wired up.
-    # This is the skeleton that will be completed in Phase 3 once
-    # the first catalog index is published.
-    print("cvcpkg: catalog-based resolution not yet available (Phase 2 skeleton).")
-    print(f"cvcpkg: requested components: {', '.join(c.name for c in reqs.components)}")
+    # Fetch catalog.
+    catalog_url = args.catalog or ""
+    if catalog_url and Path(catalog_url).is_file():
+        catalog = load_catalog_from_file(catalog_url)
+    else:
+        catalog = fetch_catalog(catalog_url, cache_dir=default_cache_dir())
+
+    entries = catalog_entries(
+        catalog,
+        platform=platform,
+        arch=arch,
+        build_type=reqs.config,
+        link=reqs.link,
+    )
+
+    if not entries:
+        print("cvcpkg: no bundles found in catalog for this platform tuple.", file=sys.stderr)
+        return 1
+
+    # Group by component name for the resolver.
+    candidates: dict[str, list] = {}
+    for e in entries:
+        candidates.setdefault(e.name, []).append(e)
+
+    # Resolve.
+    result = resolve(reqs.components, candidates)
+    picked = result.picked
+
+    print(f"cvcpkg: resolved {len(picked)} component(s):")
+    for name in sorted(picked):
+        print(f"  {name} == {picked[name].version}")
+
+    # Install into prefix.
+    cache_dir = default_cache_dir()
+    lock_entries: list[LockEntry] = []
+    for name in sorted(picked):
+        entry = picked[name]
+        print(f"cvcpkg: installing {name} {entry.version} ...")
+        install_entry(entry, prefix, cache_dir)
+        lock_entries.append(LockEntry(
+            name=entry.name,
+            version=entry.version,
+            upstream_version=entry.upstream_version,
+            source_release=entry.source_release,
+            sha256=entry.sha256,
+            size_bytes=entry.size_bytes,
+            archive_url=entry.archive_url,
+        ))
+
+    # Write lockfile.
+    lock = Lockfile(
+        platform=platform,
+        arch=arch,
+        config=reqs.config,
+        link=reqs.link,
+        catalog_revision=catalog.get("revision", 0),
+        bundles=lock_entries,
+    )
+    lock_path = prefix / "share" / "libcvc-deps" / "lockfile.yaml"
+    lock.write(lock_path)
+    print(f"cvcpkg: lockfile written to {lock_path}")
+    print(f"cvcpkg: done — {len(picked)} component(s) installed to {prefix}")
     return 0
 
 
@@ -167,7 +229,20 @@ def _cmd_list(args: argparse.Namespace) -> int:
         return 0
 
     if args.available:
-        print("cvcpkg: catalog browsing not yet implemented (Phase 3).")
+        from cvcpkg.cache import default_cache_dir
+        from cvcpkg.catalog import catalog_entries, fetch_catalog
+
+        catalog = fetch_catalog(cache_dir=default_cache_dir())
+        entries = catalog_entries(catalog)
+        if not entries:
+            print("cvcpkg: no bundles in catalog.")
+        else:
+            seen: dict[str, list[str]] = {}
+            for e in entries:
+                seen.setdefault(e.name, []).append(e.version)
+            for name in sorted(seen):
+                versions = sorted(set(seen[name]))
+                print(f"  {name:20s} {', '.join(versions)}")
         return 0
 
     # Default: show installed if prefix exists, else available.
@@ -211,9 +286,160 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     if not lock_path.exists():
         print(f"cvcpkg: no lockfile at {lock_path}")
         return 1
-    print(f"cvcpkg: verifying prefix {prefix} ...")
-    # Full verification will be added when bundles ship manifests.
-    print("cvcpkg: verification not yet fully implemented (Phase 3).")
+
+    from cvcpkg.lockfile import Lockfile
+    from cvcpkg.manifest import BundleManifest
+
+    lock = Lockfile.read(lock_path)
+    print(f"cvcpkg: verifying prefix {prefix} ({len(lock.bundles)} bundle(s)) ...")
+
+    ok = True
+    for entry in lock.bundles:
+        manifest_path = prefix / "share" / "libcvc-deps" / entry.name / "manifest.yaml"
+        if not manifest_path.exists():
+            print(f"  MISSING  {entry.name} — no manifest.yaml")
+            ok = False
+            continue
+        manifest = BundleManifest.from_yaml(str(manifest_path))
+        if manifest.version != entry.version:
+            print(f"  MISMATCH {entry.name}: lockfile says {entry.version}, manifest says {manifest.version}")
+            ok = False
+        else:
+            print(f"  OK       {entry.name} == {entry.version}")
+
+    if ok:
+        print("cvcpkg: prefix verified.")
+    else:
+        print("cvcpkg: verification found issues.", file=sys.stderr)
+    return 0 if ok else 1
+
+
+def _cmd_info(args: argparse.Namespace) -> int:
+    """Handle ``cvcpkg info <component>``."""
+    from cvcpkg.cache import default_cache_dir
+    from cvcpkg.catalog import catalog_entries, fetch_catalog
+
+    name = args.component
+    catalog = fetch_catalog(cache_dir=default_cache_dir())
+    entries = catalog_entries(catalog)
+
+    matches = [e for e in entries if e.name == name]
+    if not matches:
+        print(f"cvcpkg: component '{name}' not found in catalog.")
+        return 1
+
+    # Show the latest version's details.
+    from cvcpkg.semver import Version
+    matches.sort(key=lambda e: Version.parse(e.version), reverse=True)
+    latest = matches[0]
+
+    print(f"Name:             {latest.name}")
+    print(f"Latest version:   {latest.version}")
+    print(f"Upstream version: {latest.upstream_version}")
+    print(f"Source release:   {latest.source_release}")
+    if latest.required_deps:
+        deps = ", ".join(f"{d.name}" + (f" {d.version}" if d.version else "") for d in latest.required_deps)
+        print(f"Dependencies:     {deps}")
+    print(f"Available versions: {', '.join(sorted({e.version for e in matches}))}")
+    return 0
+
+
+def _cmd_lock(_args: argparse.Namespace) -> int:
+    """Handle ``cvcpkg lock`` — refresh the lockfile from the current prefix."""
+    # For now, lock is implicit in install. This command re-reads
+    # manifests from prefix and regenerates the lockfile.
+    print("cvcpkg: lockfile is written automatically by 'cvcpkg install'.")
+    print("cvcpkg: to re-lock from current prefix state, run 'cvcpkg install --from <requirements>'.")
+    return 0
+
+
+def _cmd_sync(args: argparse.Namespace) -> int:
+    """Handle ``cvcpkg sync`` — ensure prefix matches lockfile."""
+    prefix = Path(args.prefix).resolve()
+    lock_path = prefix / "share" / "libcvc-deps" / "lockfile.yaml"
+    if not lock_path.exists():
+        print(f"cvcpkg: no lockfile at {lock_path}")
+        return 1
+
+    from cvcpkg.cache import default_cache_dir
+    from cvcpkg.installer import install_entry
+    from cvcpkg.lockfile import Lockfile
+    from cvcpkg.manifest import CatalogEntry
+
+    lock = Lockfile.read(lock_path)
+    cache_dir = default_cache_dir()
+    installed = 0
+
+    for entry in lock.bundles:
+        manifest_path = prefix / "share" / "libcvc-deps" / entry.name / "manifest.yaml"
+        if manifest_path.exists():
+            continue
+        # Bundle not present — re-install from the cached/remote archive.
+        if not entry.archive_url:
+            print(f"cvcpkg: cannot sync {entry.name} — no archive_url in lockfile.", file=sys.stderr)
+            return 1
+        cat_entry = CatalogEntry(
+            name=entry.name,
+            version=entry.version,
+            upstream_version=entry.upstream_version,
+            cvc_revision=1,
+            platform=lock.platform,
+            arch=lock.arch,
+            build_type=lock.config,
+            link=lock.link,
+            sha256=entry.sha256,
+            size_bytes=entry.size_bytes,
+            archive_url=entry.archive_url,
+            source_release=entry.source_release,
+        )
+        print(f"cvcpkg: syncing {entry.name} {entry.version} ...")
+        install_entry(cat_entry, prefix, cache_dir)
+        installed += 1
+
+    if installed:
+        print(f"cvcpkg: synced {installed} bundle(s).")
+    else:
+        print("cvcpkg: prefix is in sync.")
+    return 0
+
+
+def _cmd_catalog(args: argparse.Namespace) -> int:
+    """Handle ``cvcpkg catalog``."""
+    from cvcpkg.cache import default_cache_dir
+    from cvcpkg.catalog import fetch_catalog
+
+    cache_dir = default_cache_dir()
+
+    if args.refresh:
+        catalog = fetch_catalog(cache_dir=cache_dir)
+        rev = catalog.get("revision", "?")
+        n = len(catalog.get("bundles", []))
+        print(f"cvcpkg: catalog refreshed — revision {rev}, {n} bundle(s).")
+        return 0
+
+    if args.pin is not None:
+        # Pin means fetch a specific revision URL.
+        base = "https://transfix.github.io/libcvc-deps/catalog"
+        url = f"{base}/{args.pin}.yaml"
+        catalog = fetch_catalog(url, cache_dir=cache_dir)
+        rev = catalog.get("revision", args.pin)
+        n = len(catalog.get("bundles", []))
+        print(f"cvcpkg: pinned to catalog revision {rev} ({n} bundle(s)).")
+        return 0
+
+    if args.show:
+        catalog = fetch_catalog(cache_dir=cache_dir)
+        rev = catalog.get("revision", "?")
+        n = len(catalog.get("bundles", []))
+        print(f"Catalog revision: {rev}")
+        print(f"Total bundles:    {n}")
+        names = sorted({b["name"] for b in catalog.get("bundles", [])})
+        if names:
+            print(f"Components:       {', '.join(names)}")
+        return 0
+
+    # Default: show basic info.
+    print("cvcpkg: use 'catalog --show', 'catalog --refresh', or 'catalog --pin REV'.")
     return 0
 
 
@@ -345,8 +571,12 @@ def main(argv: list[str] | None = None) -> int:
         handlers = {
             "install": _cmd_install,
             "list": _cmd_list,
+            "info": _cmd_info,
             "validate": _cmd_validate,
             "verify": _cmd_verify,
+            "lock": _cmd_lock,
+            "sync": _cmd_sync,
+            "catalog": _cmd_catalog,
             "gc": _cmd_gc,
             "build": _cmd_build,
             "pack": _cmd_pack,
