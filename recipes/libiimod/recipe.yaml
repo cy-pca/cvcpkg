@@ -6,6 +6,7 @@ recipe:
   maintainer: "CyberPC Angel, LLC"
   homepage: https://github.com/LabShare-Archive/IMOD
   license: GPL-2.0-or-later
+  tags: [bio, io]
 
 source:
   # Vendored in third-party/libiimod/ — curated subset of IMOD's

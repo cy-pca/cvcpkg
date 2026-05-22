@@ -6,6 +6,7 @@ recipe:
   maintainer: "CyberPC Angel, LLC"
   homepage: https://users.ics.forth.gr/~lourakis/levmar/
   license: GPL-2.0-or-later
+  tags: [math]
 
 source:
   # Vendored in third-party/levmar/upstream/ because the upstream

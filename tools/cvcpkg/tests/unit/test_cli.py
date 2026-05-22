@@ -599,3 +599,96 @@ class TestCatalogCommand:
         assert ret == 0
         out = capsys.readouterr().out
         assert "refreshed" in out.lower()
+
+
+# ── recipes --tag filtering ─────────────────────────────────────
+
+
+class TestRecipesTagFilter:
+    def test_tag_filter_shows_matching(self, capsys):
+        """'cvcpkg recipes --tag math' should show only math recipes."""
+        ret = main(["recipes", "--tag", "math"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        # At least fftw3, gsl, openblas should appear
+        assert "fftw3" in out
+        assert "gsl" in out
+        # zlib is tagged utils/io, not math
+        assert "zlib" not in out.split("Name")[1] if "Name" in out else True
+
+    def test_tag_filter_no_match(self, capsys):
+        """Non-existent tag should fail."""
+        ret = main(["recipes", "--tag", "nonexistent-tag-xyz"])
+        assert ret == 1
+
+    def test_recipes_show_displays_tags(self, capsys):
+        """'cvcpkg recipes --show zlib' should display tags."""
+        ret = main(["recipes", "--show", "zlib"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "Tags:" in out
+        assert "utils" in out
+
+    def test_recipes_list_shows_tags_column(self, capsys):
+        """Default list should include a Tags column."""
+        ret = main(["recipes"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "Tags" in out
+
+
+# ── multi --recipes-dir ─────────────────────────────────────────
+
+
+class TestMultiRecipesDir:
+    def _make_recipe_dir(self, base, name, tags=None, revision=1):
+        """Create a minimal recipe directory."""
+        rdir = base / name
+        rdir.mkdir(parents=True, exist_ok=True)
+        recipe = {
+            "schema_version": 1,
+            "recipe": {
+                "name": name,
+                "upstream_version": "1.0.0",
+                "cvc_revision": revision,
+            },
+            "source": {"type": "vendored", "path": f"third-party/{name}"},
+            "build": {"matrix": [{"platform": "linux", "script": "build.sh"}]},
+            "package": {"files": ["lib/*"], "cmake_packages": []},
+        }
+        if tags:
+            recipe["recipe"]["tags"] = tags
+        (rdir / "recipe.yaml").write_text(yaml.dump(recipe, default_flow_style=False))
+        (rdir / "build.sh").write_text("#!/bin/bash\ntrue\n")
+
+    def test_custom_recipes_dir(self, tmp_path, capsys):
+        """'cvcpkg recipes --recipes-dir <dir>' uses that directory."""
+        self._make_recipe_dir(tmp_path, "mypkg", tags=["custom"])
+        ret = main(["recipes", "--recipes-dir", str(tmp_path)])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "mypkg" in out
+
+    def test_multiple_recipes_dirs(self, tmp_path, capsys):
+        """Multiple --recipes-dir flags merge recipes."""
+        d1 = tmp_path / "dir1"
+        d2 = tmp_path / "dir2"
+        self._make_recipe_dir(d1, "alpha")
+        self._make_recipe_dir(d2, "beta")
+        ret = main(["recipes", "--recipes-dir", str(d1), "--recipes-dir", str(d2)])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "alpha" in out
+        assert "beta" in out
+
+    def test_override_recipe_warning(self, tmp_path, capsys):
+        """Later --recipes-dir overrides earlier on name conflict."""
+        d1 = tmp_path / "dir1"
+        d2 = tmp_path / "dir2"
+        self._make_recipe_dir(d1, "alpha", revision=1)
+        self._make_recipe_dir(d2, "alpha", revision=2)
+        ret = main(["recipes", "--recipes-dir", str(d1), "--recipes-dir", str(d2)])
+        assert ret == 0
+        out = capsys.readouterr().out
+        # Should show the version from d2 (cvc_revision=2)
+        assert "1.0.0+cvc.2" in out

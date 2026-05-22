@@ -75,9 +75,14 @@ _keep_build_opt = click.option(
 )
 _recipes_dir_opt = click.option(
     "--recipes-dir",
+    "recipes_dirs",
     type=click.Path(exists=True),
-    default=None,
-    help="Path to recipes/ directory.  Auto-detected from repo root if omitted.",
+    multiple=True,
+    help=(
+        "Path to a recipes/ directory.  May be specified multiple times "
+        "to overlay directories (later directories win on name conflicts).  "
+        "Auto-detected from the repo root if omitted."
+    ),
 )
 
 
@@ -673,16 +678,25 @@ def gc() -> None:
 # ── Helper: resolve recipe dir ──────────────────────────────────
 
 
-def _resolve_recipe_dir(name: str) -> Path:
+def _resolve_recipe_dir(name: str, recipes_dirs: tuple[str, ...] = ()) -> Path:
     """Resolve a recipe name or path to its directory.
 
     Accepts either a path to a directory containing recipe.yaml, or
-    a bare recipe name (e.g. "grpc") which is looked up relative to
-    the auto-detected recipes/ directory.
+    a bare recipe name (e.g. "grpc") which is looked up in the
+    provided *recipes_dirs* (later dirs take precedence) or the
+    auto-detected recipes/ directory.
     """
     p = Path(name)
     if p.is_dir() and (p / "recipe.yaml").is_file():
         return p.resolve()
+
+    # Search provided dirs in reverse order (later = higher priority).
+    for rdir in reversed(recipes_dirs):
+        candidate = Path(rdir) / name
+        if candidate.is_dir() and (candidate / "recipe.yaml").is_file():
+            return candidate.resolve()
+
+    # Fallback to auto-detected dir.
     from cvcpkg.builder import find_recipes_dir
 
     recipes_dir = find_recipes_dir()
@@ -711,6 +725,7 @@ def _auto_platform(platform: str) -> str:
 @_link_opt
 @click.option("--prefix", type=click.Path(), default=None, help="Install prefix.")
 @_keep_build_opt
+@_recipes_dir_opt
 def build(
     recipe: tuple[str, ...],
     platform: str,
@@ -718,6 +733,7 @@ def build(
     link: str,
     prefix: str | None,
     keep_build_dir: bool,
+    recipes_dirs: tuple[str, ...],
 ) -> None:
     """Build one or more recipes from source.
 
@@ -729,6 +745,7 @@ def build(
     Examples:
       cvcpkg build zlib --prefix ./prefix
       cvcpkg build grpc protobuf --config debug --link static
+      cvcpkg build mypkg --recipes-dir ./my-recipes --recipes-dir recipes
     """
     from cvcpkg.builder import build_recipe
 
@@ -736,7 +753,7 @@ def build(
     prefix_path = Path(prefix).resolve() if prefix else None
 
     for name in recipe:
-        recipe_dir = _resolve_recipe_dir(name)
+        recipe_dir = _resolve_recipe_dir(name, recipes_dirs)
         build_recipe(
             recipe_dir,
             platform=plat,
@@ -758,6 +775,7 @@ def build(
 @click.option("--prefix", type=click.Path(), default=None, help="Install prefix.")
 @click.option("--output-dir", type=click.Path(), default="./dist", help="Output directory.")
 @_keep_build_opt
+@_recipes_dir_opt
 def pack(
     recipe: tuple[str, ...],
     platform: str,
@@ -766,6 +784,7 @@ def pack(
     prefix: str | None,
     output_dir: str,
     keep_build_dir: bool,
+    recipes_dirs: tuple[str, ...],
 ) -> None:
     """Build and archive one or more recipes.
 
@@ -784,7 +803,7 @@ def pack(
     output = Path(output_dir).resolve()
 
     for name in recipe:
-        recipe_dir = _resolve_recipe_dir(name)
+        recipe_dir = _resolve_recipe_dir(name, recipes_dirs)
         archive, sha, size = pack_recipe(
             recipe_dir,
             platform=plat,
@@ -813,7 +832,7 @@ def build_all_cmd(
     link: str,
     prefix: str | None,
     keep_build_dir: bool,
-    recipes_dir: str | None,
+    recipes_dirs: tuple[str, ...],
 ) -> None:
     """Build all recipes in dependency order.
 
@@ -833,10 +852,10 @@ def build_all_cmd(
 
     plat = _auto_platform(platform)
     prefix_path = Path(prefix).resolve() if prefix else None
-    rdir = Path(recipes_dir) if recipes_dir else find_recipes_dir()
+    rdirs = [Path(d) for d in recipes_dirs] if recipes_dirs else [find_recipes_dir()]
 
     build_all(
-        rdir,
+        rdirs if len(rdirs) > 1 else rdirs[0],
         platform=plat,
         config=config,
         link=link,
@@ -863,7 +882,7 @@ def pack_all_cmd(
     prefix: str | None,
     output_dir: str,
     keep_build_dir: bool,
-    recipes_dir: str | None,
+    recipes_dirs: tuple[str, ...],
 ) -> None:
     """Build and archive all recipes.
 
@@ -889,10 +908,10 @@ def pack_all_cmd(
     arch = detect_arch()
     prefix_path = Path(prefix).resolve() if prefix else None
     output = Path(output_dir).resolve()
-    rdir = Path(recipes_dir) if recipes_dir else find_recipes_dir()
+    rdirs = [Path(d) for d in recipes_dirs] if recipes_dirs else [find_recipes_dir()]
 
     contexts = build_all(
-        rdir,
+        rdirs if len(rdirs) > 1 else rdirs[0],
         platform=plat,
         config=config,
         link=link,
@@ -933,7 +952,15 @@ def pack_all_cmd(
 @click.option("--list", "mode", flag_value="list", default=True, help="List all recipes.")
 @click.option("--show", "show_name", metavar="NAME", help="Show details of a recipe.")
 @click.option("--validate", "mode", flag_value="validate", help="Validate all recipes.")
-def recipes(mode: str, show_name: str | None) -> None:
+@click.option(
+    "--tag",
+    metavar="TAG",
+    help="Filter recipe list to those with this tag (e.g. math, graphics).",
+)
+@_recipes_dir_opt
+def recipes(
+    mode: str, show_name: str | None, tag: str | None, recipes_dirs: tuple[str, ...]
+) -> None:
     """List or inspect recipes.
 
     \b
@@ -941,14 +968,13 @@ def recipes(mode: str, show_name: str | None) -> None:
       cvcpkg recipes               # list all recipes
       cvcpkg recipes --show grpc   # show details of a recipe
       cvcpkg recipes --validate    # validate all recipe.yaml files
+      cvcpkg recipes --tag math    # list only math recipes
+      cvcpkg recipes --recipes-dir ./my-recipes  # use custom recipe dir
     """
-    from cvcpkg.builder import Recipe, find_recipes_dir, list_recipes
+    from cvcpkg.builder import Recipe, find_recipes_dir, list_recipes, load_all_recipes
 
     if show_name:
-        rd = find_recipes_dir()
-        recipe_dir = rd / show_name
-        if not (recipe_dir / "recipe.yaml").is_file():
-            raise click.ClickException(f"recipe '{show_name}' not found.")
+        recipe_dir = _resolve_recipe_dir(show_name, recipes_dirs)
         recipe = Recipe.load(recipe_dir)
         click.echo(f"Name:     {recipe.name}")
         click.echo(f"Version:  {recipe.full_version}")
@@ -957,6 +983,8 @@ def recipes(mode: str, show_name: str | None) -> None:
             click.echo(f"URL:      {recipe.source.url}")
         platforms = [m.platform for m in recipe.build_matrix]
         click.echo(f"Platforms: {', '.join(platforms)}")
+        if recipe.tags:
+            click.echo(f"Tags:     {', '.join(recipe.tags)}")
         deps = recipe.raw.get("depends", {}).get("build", [])
         if deps:
             dep_names = []
@@ -978,14 +1006,25 @@ def recipes(mode: str, show_name: str | None) -> None:
         return
 
     # Default: list
-    all_recipes = list_recipes()
+    if recipes_dirs:
+        rdirs = [Path(d) for d in recipes_dirs]
+        all_recipes = load_all_recipes(rdirs)
+    else:
+        all_recipes = list_recipes()
+
+    # Apply tag filter if requested.
+    if tag:
+        all_recipes = [r for r in all_recipes if tag in r.tags]
+
     if not all_recipes:
-        raise click.ClickException("no recipes found.")
-    click.echo(f"{'Name':<20} {'Version':<18} {'Platforms'}")
-    click.echo("-" * 60)
+        msg = f"no recipes found with tag '{tag}'." if tag else "no recipes found."
+        raise click.ClickException(msg)
+    click.echo(f"{'Name':<20} {'Version':<18} {'Tags':<20} {'Platforms'}")
+    click.echo("-" * 78)
     for r in all_recipes:
         platforms = ", ".join(m.platform for m in r.build_matrix)
-        click.echo(f"{r.name:<20} {r.full_version:<18} {platforms}")
+        tags_str = ", ".join(r.tags) if r.tags else ""
+        click.echo(f"{r.name:<20} {r.full_version:<18} {tags_str:<20} {platforms}")
 
 
 # ── main() wrapper for backward compat with tests ──────────────

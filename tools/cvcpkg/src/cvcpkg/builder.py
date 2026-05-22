@@ -102,6 +102,7 @@ class Recipe:
     test_script: str | None
     raw: dict[str, Any]  # full parsed YAML for manifest generation
     recipe_dir: Path
+    tags: list[str] = field(default_factory=list)
 
     @property
     def full_version(self) -> str:
@@ -134,6 +135,7 @@ class Recipe:
             test_script=test_block.get("script") if test_block else None,
             raw=raw,
             recipe_dir=recipe_dir.resolve(),
+            tags=recipe_block.get("tags", []) or [],
         )
 
 
@@ -708,7 +710,7 @@ def resolve_build_order(recipes: list[Recipe], platform: str = "") -> list[Recip
 
 
 def build_all(
-    recipes_dir: Path,
+    recipes_dir: Path | list[Path],
     *,
     platform: str = "",
     config: str = "release",
@@ -716,8 +718,16 @@ def build_all(
     prefix: Path | None = None,
     keep_build_dir: bool = False,
 ) -> list[BuildContext]:
-    """Build every recipe in dependency order into a shared *prefix*."""
-    recipes = list_recipes(recipes_dir)
+    """Build every recipe in dependency order into a shared *prefix*.
+
+    *recipes_dir* may be a single path or a list of paths.  When
+    multiple directories are given, later directories override
+    earlier ones on name collisions (with a warning).
+    """
+    if isinstance(recipes_dir, list):
+        recipes = load_all_recipes(recipes_dir)
+    else:
+        recipes = list_recipes(recipes_dir)
     # Filter to recipes that have a matrix entry for this platform
     if not platform:
         platform = detect_platform()
@@ -761,7 +771,7 @@ def find_recipes_dir() -> Path:
 
 
 def list_recipes(recipes_dir: Path | None = None) -> list[Recipe]:
-    """Load all recipes from the recipes/ directory."""
+    """Load all recipes from a single recipes/ directory."""
     if recipes_dir is None:
         recipes_dir = find_recipes_dir()
     recipes = []
@@ -770,3 +780,30 @@ def list_recipes(recipes_dir: Path | None = None) -> list[Recipe]:
         if child.is_dir() and recipe_yaml.is_file():
             recipes.append(Recipe.load(child))
     return recipes
+
+
+def load_all_recipes(recipe_dirs: list[Path]) -> list[Recipe]:
+    """Load recipes from multiple directories, with conflict detection.
+
+    Directories listed later take precedence: if two directories both
+    contain a recipe with the same name, the one from the later
+    directory wins and a warning is printed.
+
+    Raises ``RecipeError`` if *recipe_dirs* is empty.
+    """
+    if not recipe_dirs:
+        raise RecipeError("No recipe directories specified")
+    by_name: dict[str, Recipe] = {}
+    for rdir in recipe_dirs:
+        for child in sorted(rdir.iterdir()):
+            recipe_yaml = child / "recipe.yaml"
+            if child.is_dir() and recipe_yaml.is_file():
+                recipe = Recipe.load(child)
+                if recipe.name in by_name:
+                    prev = by_name[recipe.name]
+                    print(
+                        f"cvcpkg: warning: recipe '{recipe.name}' from "
+                        f"{recipe.recipe_dir} overrides {prev.recipe_dir}"
+                    )
+                by_name[recipe.name] = recipe
+    return sorted(by_name.values(), key=lambda r: r.name)
