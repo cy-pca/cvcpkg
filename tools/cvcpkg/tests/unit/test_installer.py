@@ -104,6 +104,43 @@ class TestExtractBundle:
         assert (prefix / "lib" / "libb.so").exists()
         assert (prefix / "include" / "a.h").exists()
 
+    def test_extract_tar_bz2(self, tmp_path):
+        archive = tmp_path / "archive.tar.bz2"
+        with tarfile.open(archive, "w:bz2") as tf:
+            info = tarfile.TarInfo(name="lib/libz.so")
+            info.size = 8
+            tf.addfile(info, io.BytesIO(b"fake lib"))
+        prefix = tmp_path / "prefix"
+        extract_bundle(archive, prefix)
+        assert (prefix / "lib" / "libz.so").exists()
+
+    def test_extract_tar_xz(self, tmp_path):
+        archive = tmp_path / "archive.tar.xz"
+        with tarfile.open(archive, "w:xz") as tf:
+            info = tarfile.TarInfo(name="lib/libz.so")
+            info.size = 8
+            tf.addfile(info, io.BytesIO(b"fake lib"))
+        prefix = tmp_path / "prefix"
+        extract_bundle(archive, prefix)
+        assert (prefix / "lib" / "libz.so").exists()
+
+    def test_extract_plain_tar(self, tmp_path):
+        archive = tmp_path / "archive.tar"
+        with tarfile.open(archive, "w") as tf:
+            info = tarfile.TarInfo(name="lib/libz.so")
+            info.size = 8
+            tf.addfile(info, io.BytesIO(b"fake lib"))
+        prefix = tmp_path / "prefix"
+        extract_bundle(archive, prefix)
+        assert (prefix / "lib" / "libz.so").exists()
+
+    def test_case_insensitive_suffix(self, tmp_path):
+        """Archive names with mixed case should still be recognized."""
+        archive = self._make_tar_gz(tmp_path, name="Archive.TAR.GZ")
+        prefix = tmp_path / "prefix"
+        extract_bundle(archive, prefix)
+        assert (prefix / "lib" / "libz.so").exists()
+
 
 # ── _archive_filename ──────────────────────────────────────────
 
