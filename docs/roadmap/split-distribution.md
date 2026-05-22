@@ -1,6 +1,6 @@
 # Roadmap: split `libcvc-deps` into composable component bundles
 
-Status: proposal (not yet implemented).
+Status: **Phase 5 in progress**. Phases 0–4 merged to master.
 Author: roadmap drafted 2026-05-19 in response to Windows monolithic
 bundles tipping over 2 GB (PowerShell `Compress-Archive`'s 2 GB cap
 was hit on every Windows assemble flavor in run `26127717492`, and
@@ -1386,18 +1386,18 @@ same thing CI will execute on merge.
 
 ## 9. Migration plan
 
-| Phase | Goal | Output | Acceptance criterion |
-|---|---|---|---|
-| 0 | This doc | `docs/roadmap/split-distribution.md` | Reviewed |
-| 1 | `packaging/components.yaml` + manifest schema | Source of truth + JSON-Schema / YAML schema doc | `make validate-components` in CI passes |
-| 1b | `recipes/` directory with recipe schema (§7.2) + builder contract (§7.3) | One reference recipe (`zlib`) end-to-end on Linux | `cvcpkg pack recipes/zlib` produces a valid bundle locally |
-| 2 | `tools/cvcpkg/` Poetry package (CLI, catalog-aware resolver, downloader, cache, recipe packager) | Working `cvcpkg install` against a mocked catalog and `cvcpkg pack` against one recipe; `poetry build` produces a wheel | Unit tests pass; `pipx install ./dist/cvcpkg-*.whl` works; resolver picks correctly across two mock releases |
-| 2b | `cvcpkg` published to PyPI as `0.1.0a1` | `pip install cvcpkg` works on Linux/macOS/Windows | Pre-release tag `cvcpkg-v0.1.0a1` triggers `cvcpkg-publish.yml`; package visible on pypi.org |
-| 2c | Recipes for all components (§3.3) in `recipes/` | Every existing component has a recipe.yaml + build script(s) | `cvcpkg recipes --validate` passes; `cvcpkg world` reproduces the current Linux bundle set on a clean host |
-| 3 | CI package stage on Linux first | Linux component bundles + per-release index + rolling catalog alongside the existing monolithic bundle, produced via `cvcpkg pack` | `cvcpkg install --from requirements.yaml --prefix /tmp/p` succeeds against the published catalog, downstream `libcvc` builds against `/tmp/p` |
-| 4 | macOS + Windows package stages | Full per-platform bundle set via per-platform recipes | All three platforms produce per-component bundles in CI |
-| 5 | Downstream adoption | `libcvc`, `volrover3`, `TexMol`, `F2Dock`, `molsurf` switch to `cvc-requirements.yaml` | Each downstream's CI uses `cvcpkg` |
-| 6 | Deprecate monolithic bundle | First release without `libcvc-deps-all-*` | Release notes call out the removal |
+| Phase | Goal | Output | Acceptance criterion | Status |
+|---|---|---|---|---|
+| 0 | This doc | `docs/roadmap/split-distribution.md` | Reviewed | **Done** (PR #31) |
+| 1 | `packaging/components.yaml` + manifest schema | Source of truth + JSON-Schema / YAML schema doc | `make validate-components` in CI passes | **Done** (PR #32) |
+| 1b | `recipes/` directory with recipe schema (§7.2) + builder contract (§7.3) | One reference recipe (`zlib`) end-to-end on Linux | `cvcpkg pack recipes/zlib` produces a valid bundle locally | **Done** (PR #32) |
+| 2 | `tools/cvcpkg/` Poetry package (CLI, catalog-aware resolver, downloader, cache, recipe packager) | Working `cvcpkg install` against a mocked catalog and `cvcpkg pack` against one recipe; `poetry build` produces a wheel | Unit tests pass; `pipx install ./dist/cvcpkg-*.whl` works; resolver picks correctly across two mock releases | **Done** (PR #32) |
+| 2b | `cvcpkg` published to PyPI as `0.1.0a1` | `pip install cvcpkg` works on Linux/macOS/Windows | Pre-release tag `cvcpkg-v0.1.0a1` triggers `cvcpkg-publish.yml`; package visible on pypi.org | **Done** (PR #32) |
+| 2c | Recipes for all components (§3.3) in `recipes/` | Every existing component has a recipe.yaml + build script(s) | `cvcpkg recipes --validate` passes; `cvcpkg world` reproduces the current Linux bundle set on a clean host | **Done** (PR #32) |
+| 3 | CI package stage on Linux first | Linux component bundles + per-release index + rolling catalog alongside the existing monolithic bundle, produced via `cvcpkg pack` | `cvcpkg install --from requirements.yaml --prefix /tmp/p` succeeds against the published catalog, downstream `libcvc` builds against `/tmp/p` | **Done** (PR #32) |
+| 4 | macOS + Windows package stages | Full per-platform bundle set via per-platform recipes | All three platforms produce per-component bundles in CI | **Done** (PR #33) |
+| 5 | Downstream adoption | `libcvc`, `volrover3`, `TexMol`, `F2Dock`, `molsurf` switch to `cvc-requirements.yaml` | Each downstream's CI uses `cvcpkg` | **In progress** |
+| 6 | Deprecate monolithic bundle | First release without `libcvc-deps-all-*` | Release notes call out the removal | Not started |
 
 Each phase is independently shippable; phases 1–4 are pure
 additions and do not change consumer behavior.

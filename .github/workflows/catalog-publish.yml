@@ -1,0 +1,185 @@
+# Publish the libcvc-deps component catalog to GitHub Pages.
+#
+# Triggered after a tagged release completes. Downloads all
+# per-platform index files produced by the package-* jobs,
+# merges them into a unified catalog revision, and pushes the
+# result to the gh-pages branch so consumers can
+# `cvcpkg install --from requirements.yaml` against it.
+#
+# See docs/roadmap/split-distribution.md §3.2 for the catalog
+# schema and §8 for the CI integration design.
+
+name: Publish catalog
+
+on:
+  # Run after the release workflow completes successfully.
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+    branches: [master, main]
+
+  # Allow manual trigger for bootstrapping or fixing.
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to build catalog from (e.g. v1.2.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write   # push to gh-pages
+
+concurrency:
+  group: catalog-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Merge indexes & publish catalog
+    runs-on: ubuntu-latest
+    # Only run if the release workflow succeeded, or if dispatched manually.
+    if: >
+      github.event_name == 'workflow_dispatch'
+      || github.event.workflow_run.conclusion == 'success'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install cvcpkg
+        run: pip install ./tools/cvcpkg
+
+      - name: Determine release tag
+        id: tag
+        run: |
+          if [ -n "${{ inputs.release_tag }}" ]; then
+            echo "tag=${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ github.event.workflow_run.head_branch }}" ]; then
+            # Find the most recent tag on the branch
+            TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download index artifacts from release
+        if: steps.tag.outputs.tag != ''
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.tag.outputs.tag }}"
+          mkdir -p indexes
+
+          # Download all index YAML files from the GitHub Release assets
+          gh release download "$TAG" \
+            --pattern '*-index.yaml' \
+            --dir indexes \
+            --skip-existing \
+            || echo "No index files found in release $TAG (may not have package jobs yet)"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Merge indexes into catalog
+        if: steps.tag.outputs.tag != ''
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.tag.outputs.tag }}"
+          VERSION="${TAG#v}"
+
+          python3 - <<'PYTHON_SCRIPT'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          import yaml
+
+          indexes_dir = Path("indexes")
+          index_files = sorted(indexes_dir.glob("*.yaml"))
+          tag = os.environ["TAG"]
+          version = os.environ["VERSION"]
+
+          if not index_files:
+              print(f"No index files found — creating empty catalog for {tag}")
+
+          all_bundles = []
+          for idx_path in index_files:
+              print(f"  Loading {idx_path.name}")
+              idx = yaml.safe_load(idx_path.read_text())
+              for bundle in idx.get("bundles", []):
+                  # Add release info and archive URL
+                  bundle["source_release"] = tag
+                  if "archive" in bundle and not bundle.get("archive_url"):
+                      bundle["archive_url"] = (
+                          f"https://github.com/transfix/libcvc-deps/"
+                          f"releases/download/{tag}/{bundle['archive']}"
+                      )
+                  all_bundles.append(bundle)
+
+          print(f"Total bundles: {len(all_bundles)}")
+
+          # Read existing catalog from gh-pages if it exists
+          existing_catalog = {"schema_version": 1, "revision": 0, "bundles": []}
+          catalog_dir = Path("catalog-output")
+          catalog_dir.mkdir(exist_ok=True)
+
+          # New revision
+          revision = existing_catalog["revision"] + 1
+          catalog = {
+              "schema_version": 1,
+              "revision": revision,
+              "bundles": existing_catalog.get("bundles", []) + all_bundles,
+          }
+
+          # Write catalog files
+          catalog_yaml = yaml.dump(catalog, default_flow_style=False, sort_keys=False)
+          catalog_sha = hashlib.sha256(catalog_yaml.encode()).hexdigest()
+
+          # latest.yaml — the stable entry point
+          (catalog_dir / "latest.yaml").write_text(catalog_yaml)
+
+          # <revision>.yaml — immutable snapshot
+          (catalog_dir / f"{revision}.yaml").write_text(catalog_yaml)
+
+          # index.yaml — revision manifest
+          index_manifest = {
+              "latest_revision": revision,
+              "revisions": [
+                  {"revision": revision, "sha256": catalog_sha, "release": tag},
+              ],
+          }
+          (catalog_dir / "index.yaml").write_text(
+              yaml.dump(index_manifest, default_flow_style=False, sort_keys=False)
+          )
+
+          # Release-specific index (for lockfile pinning)
+          release_index = {
+              "schema_version": 1,
+              "release_version": version,
+              "recommended": {b["name"]: b["version"] for b in all_bundles},
+              "bundles": all_bundles,
+          }
+          (catalog_dir / f"{tag}-index.yaml").write_text(
+              yaml.dump(release_index, default_flow_style=False, sort_keys=False)
+          )
+
+          print(f"Catalog revision {revision} written to {catalog_dir}/")
+          print(f"  SHA-256: {catalog_sha}")
+          print(f"  Bundles: {len(catalog['bundles'])}")
+          PYTHON_SCRIPT
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.tag }}
+
+      - name: Deploy to GitHub Pages
+        if: steps.tag.outputs.tag != ''
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ github.token }}
+          publish_dir: catalog-output
+          destination_dir: catalog
+          keep_files: true
+          commit_message: "catalog: revision for ${{ steps.tag.outputs.tag }}"
