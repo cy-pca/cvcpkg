@@ -729,9 +729,7 @@ class TestResolveBuildOrder:
     def test_platform_conditional_deps_included(self, tmp_path):
         """Dep with matching platform is included in build order."""
         a = self._make_recipe(tmp_path, "a")
-        b = self._make_recipe(
-            tmp_path, "b", deps=[{"name": "a", "platforms": ["linux"]}]
-        )
+        b = self._make_recipe(tmp_path, "b", deps=[{"name": "a", "platforms": ["linux"]}])
         order = resolve_build_order([b, a], platform="linux")
         names = [r.name for r in order]
         assert names.index("a") < names.index("b")
@@ -739,9 +737,7 @@ class TestResolveBuildOrder:
     def test_platform_conditional_deps_excluded(self, tmp_path):
         """Dep with non-matching platform is excluded from build order."""
         a = self._make_recipe(tmp_path, "a")
-        b = self._make_recipe(
-            tmp_path, "b", deps=[{"name": "a", "platforms": ["windows"]}]
-        )
+        b = self._make_recipe(tmp_path, "b", deps=[{"name": "a", "platforms": ["windows"]}])
         # 'a' is not required by 'b' on linux, so order is unlinked
         order = resolve_build_order([b, a], platform="linux")
         names = [r.name for r in order]
@@ -750,9 +746,7 @@ class TestResolveBuildOrder:
     def test_platform_conditional_deps_no_filter(self, tmp_path):
         """Without platform filter, all deps are included regardless of platforms field."""
         a = self._make_recipe(tmp_path, "a")
-        b = self._make_recipe(
-            tmp_path, "b", deps=[{"name": "a", "platforms": ["windows"]}]
-        )
+        b = self._make_recipe(tmp_path, "b", deps=[{"name": "a", "platforms": ["windows"]}])
         order = resolve_build_order([b, a])
         names = [r.name for r in order]
         assert names.index("a") < names.index("b")
