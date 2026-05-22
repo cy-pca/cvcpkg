@@ -28,6 +28,7 @@ def _build_parser() -> argparse.ArgumentParser:
     inst.add_argument("--prefix", default="./deps", help="Install prefix (default: ./deps)")
     inst.add_argument("--release", metavar="VER", help="Pin to a libcvc-deps release version")
     inst.add_argument("--platform", default="auto")
+    inst.add_argument("--arch", default="auto")
     inst.add_argument("--config", default="release", choices=["release", "debug"])
     inst.add_argument("--link", default="shared", choices=["shared", "static"])
     inst.add_argument("--catalog", metavar="URL", help="Override catalog URL")
@@ -127,11 +128,18 @@ def _cmd_install(args: argparse.Namespace) -> int:
                 components.append(ComponentReq(name=c))
         reqs = Requirements(
             platform=args.platform,
+            arch=args.arch,
             config=args.config,
             link=args.link,
             libcvc_deps=args.release or "",
             components=components,
         )
+
+    # CLI --platform / --arch override the requirements file values.
+    if args.platform != "auto":
+        reqs.platform = args.platform
+    if args.arch != "auto":
+        reqs.arch = args.arch
 
     # Resolve platform.
     platform = reqs.platform if reqs.platform != "auto" else detect_platform()
