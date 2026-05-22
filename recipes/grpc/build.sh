@@ -11,7 +11,13 @@ _upb_backup=""
 if [[ -d "${CVC_DEPS_PREFIX}/include/upb" ]]; then
     _upb_backup="$(mktemp -d)"
     mv "${CVC_DEPS_PREFIX}/include/upb" "${_upb_backup}/upb"
-    echo "cvcpkg: moved prefix/include/upb aside to avoid header collision"
+    # Also move upb libraries aside so grpc's cmake doesn't link
+    # against protobuf's libupb (which has incompatible symbols).
+    mkdir -p "${_upb_backup}/lib"
+    for f in "${CVC_DEPS_PREFIX}"/lib/libupb*; do
+        [[ -e "$f" ]] && mv "$f" "${_upb_backup}/lib/"
+    done
+    echo "cvcpkg: moved prefix/include/upb and libupb* aside to avoid collision"
 fi
 
 cvc_cmake_build \
@@ -35,6 +41,9 @@ cvc_cmake_build \
 # Restore the upb headers so downstream consumers can use them.
 if [[ -n "${_upb_backup}" && -d "${_upb_backup}/upb" ]]; then
     mv "${_upb_backup}/upb" "${CVC_DEPS_PREFIX}/include/upb"
-    rmdir "${_upb_backup}" 2>/dev/null || true
-    echo "cvcpkg: restored prefix/include/upb"
+    for f in "${_upb_backup}"/lib/libupb*; do
+        [[ -e "$f" ]] && mv "$f" "${CVC_DEPS_PREFIX}/lib/"
+    done
+    rm -rf "${_upb_backup}"
+    echo "cvcpkg: restored prefix/include/upb and libupb*"
 fi
