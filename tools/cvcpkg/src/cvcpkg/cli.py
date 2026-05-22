@@ -86,7 +86,12 @@ def install(
     catalog_revision: int | None,
     ignore_abi: bool,
 ) -> None:
-    """Install component bundles into a prefix."""
+    """Install component bundles into a prefix.
+
+    CLI flags ``--config`` and ``--link`` override values from the
+    requirements file when both ``--from`` and one of these flags
+    are provided.
+    """
     from cvcpkg.cache import default_cache_dir
     from cvcpkg.catalog import catalog_entries, fetch_catalog, load_catalog_from_file
     from cvcpkg.installer import install_entry
@@ -94,6 +99,7 @@ def install(
     from cvcpkg.manifest import ComponentReq, Requirements
     from cvcpkg.platform import detect_arch, detect_platform
 
+    ctx = click.get_current_context()
     prefix_path = Path(prefix).resolve()
 
     if from_file:
@@ -115,10 +121,15 @@ def install(
             components=comp_list,
         )
 
+    # CLI flags override requirements-file values.
     if platform != "auto":
         reqs.platform = platform
     if arch != "auto":
         reqs.arch = arch
+    if ctx.get_parameter_source("config") == click.core.ParameterSource.COMMANDLINE:
+        reqs.config = config
+    if ctx.get_parameter_source("link") == click.core.ParameterSource.COMMANDLINE:
+        reqs.link = link
 
     plat = reqs.platform if reqs.platform != "auto" else detect_platform()
     arc = reqs.arch if reqs.arch != "auto" else detect_arch()

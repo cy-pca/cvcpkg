@@ -293,6 +293,121 @@ class TestPlatformArchValidation:
         out = capsys.readouterr().out
         assert "zlib" in out
 
+    def test_install_config_overrides_requirements(self, tmp_path, capsys):
+        """--config on CLI overrides config in requirements file."""
+        # Create a catalog with a debug entry
+        catalog = {
+            "schema_version": 1,
+            "revision": 1,
+            "bundles": [
+                {
+                    "name": "zlib",
+                    "version": "1.3.1+cvc.1",
+                    "upstream_version": "1.3.1",
+                    "cvc_revision": 1,
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "build_type": "debug",
+                    "link": "shared",
+                    "sha256": "abc123",
+                    "size_bytes": 100000,
+                    "archive_url": "",
+                    "source_release": "v1.1.0",
+                },
+            ],
+        }
+        cat = tmp_path / "catalog-debug.yaml"
+        cat.write_text(yaml.dump(catalog, default_flow_style=False))
+
+        prefix = tmp_path / "prefix"
+        req_file = tmp_path / "requirements.yaml"
+        req_file.write_text(
+            yaml.dump(
+                {
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "config": "release",
+                    "link": "shared",
+                    "components": ["zlib"],
+                }
+            )
+        )
+        with mock.patch("cvcpkg.installer.install_entry"):
+            ret = main(
+                [
+                    "install",
+                    "--from",
+                    str(req_file),
+                    "--config",
+                    "debug",
+                    "--catalog",
+                    str(cat),
+                    "--prefix",
+                    str(prefix),
+                ]
+            )
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "debug" in out
+        assert "zlib" in out
+
+    def test_install_link_overrides_requirements(self, tmp_path, capsys):
+        """--link on CLI overrides link in requirements file."""
+        catalog = {
+            "schema_version": 1,
+            "revision": 1,
+            "bundles": [
+                {
+                    "name": "zlib",
+                    "version": "1.3.1+cvc.1",
+                    "upstream_version": "1.3.1",
+                    "cvc_revision": 1,
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "build_type": "release",
+                    "link": "static",
+                    "sha256": "abc123",
+                    "size_bytes": 100000,
+                    "archive_url": "",
+                    "source_release": "v1.1.0",
+                },
+            ],
+        }
+        cat = tmp_path / "catalog-static.yaml"
+        cat.write_text(yaml.dump(catalog, default_flow_style=False))
+
+        prefix = tmp_path / "prefix"
+        req_file = tmp_path / "requirements.yaml"
+        req_file.write_text(
+            yaml.dump(
+                {
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "config": "release",
+                    "link": "shared",
+                    "components": ["zlib"],
+                }
+            )
+        )
+        with mock.patch("cvcpkg.installer.install_entry"):
+            ret = main(
+                [
+                    "install",
+                    "--from",
+                    str(req_file),
+                    "--link",
+                    "static",
+                    "--catalog",
+                    str(cat),
+                    "--prefix",
+                    str(prefix),
+                ]
+            )
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "static" in out
+        assert "zlib" in out
+
     def test_install_no_catalog_match(self, tmp_path, capsys):
         cat = _make_catalog(tmp_path)
         prefix = tmp_path / "prefix"
