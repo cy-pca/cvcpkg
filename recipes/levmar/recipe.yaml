@@ -6,6 +6,7 @@ recipe:
   maintainer: "CyberPC Angel, LLC"
   homepage: https://users.ics.forth.gr/~lourakis/levmar/
   license: GPL-2.0-or-later
+  tags: [math]
 
 source:
   # Vendored in third-party/levmar/upstream/ because the upstream
@@ -13,11 +14,18 @@ source:
   # that break CI. The CMakeLists.txt in third-party/levmar/
   # handles the build.
   type: vendored
+  path: third-party/levmar
 
 patches: []
 
 depends:
-  build: []
+  build:
+    - name: openblas
+      version: ">=0.3"
+      platforms: [linux, macos]
+    - name: clapack
+      version: ">=3.2"
+      platforms: [windows]
   host_tools:
     - cmake
     - ninja

@@ -20,6 +20,79 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## v1.3.0 (2026-05-22)
+
+Feature release introducing **cvcpkg** — the recipe-driven package manager
+for libcvc-deps — as the recommended way for downstream projects to consume
+prebuilt dependency bundles. Downstream consumers should adopt `cvcpkg` and
+a `cvc-requirements.yaml` file instead of manually extracting the monolithic
+archive.
+
+### Highlights
+
+- **`cvcpkg` package manager (tools/cvcpkg):**
+  - Recipe-driven build system: 25 recipes covering all bundled components.
+  - `cvcpkg install --from cvc-requirements.yaml` resolves, downloads,
+    verifies, and installs only the components you need.
+  - Per-component bundle archives (smaller downloads, cacheable).
+  - Lockfile support (`cvcpkg.lock.yaml`) for reproducible CI builds.
+  - Platform auto-detection (Linux/macOS/Windows, x86_64/arm64).
+  - `--config` and `--link` CLI overrides for build configuration.
+  - Platform-conditional dependencies in recipe schema.
+  - Recipe tags and multi `--recipes-dir` support.
+  - Pluggable storage backends: local, HTTPS, S3, GCS, Azure Blob,
+    SFTP, rsync, rclone, GitHub Releases.
+  - User/project config files with mirror support.
+  - `push`, `add`, `remove`, `world` CLI commands for managing
+    requirements.
+
+- **cvcpkg-server (FastAPI REST API):**
+  - Publish/serve per-component bundle archives.
+  - HMAC-SHA256 token authentication with role-based access control
+    (reader / publisher / admin).
+  - Append-only audit log with tamper-evident chained SHA-256 hashes.
+  - Yank/unyank/delete operations with full audit trail.
+  - CLI admin tool (`cvcpkg-server run`, `token create/list/revoke`,
+    `audit log/verify`).
+
+- **CI improvements:**
+  - `recipe-build.yml`: reusable workflow builds all recipes from
+    source in dependency order using `cvcpkg build-all`.
+  - `cvcpkg-package.yml`: splits monolithic prefix into per-component
+    bundles with manifests.
+  - `catalog-publish.yml`: merges per-platform indexes and publishes
+    a unified catalog to GitHub Pages.
+  - `cvcpkg-ci.yml`: test coverage reports (XML + HTML) uploaded as
+    CI artifacts on every PR/push.
+
+### Recipe fixes since v1.2.0
+
+- **grpc:** deferred symbol lookup on macOS shared builds; move only
+  upb headers aside (keep libupb libs); downgrade to 1.68.2 for
+  protobuf 28.3 compatibility.
+- **fftw3:** add `CMAKE_POLICY_VERSION_MINIMUM=3.5` for newer CMake.
+- **levmar:** use openblas recipe for LAPACK instead of system packages.
+- **Deterministic archives:** zero gzip mtime for reproducibility.
+- **Fix:** correct SHA-256 hashes for 8 tarball recipes.
+- **Fix:** portable lowercase in env scripts (macOS bash 3.2).
+
+### Breaking changes
+
+None. The monolithic archive is still produced by the release workflow
+alongside the new per-component bundles. Downstream consumers can
+migrate to `cvcpkg` at their own pace.
+
+---
+
+## v1.2.0 (2026-05-20)
+
+Initial recipe-driven split-distribution release. Adds the `cvcpkg`
+package scaffolding, recipe YAML schema, per-component CI packaging
+pipeline, and catalog publishing infrastructure. All existing
+monolithic bundle artifacts continue to be built as before.
+
+---
+
 ## v1.1.0 (2026-05-19)
 
 Feature release adding the pieces needed to move TexMol and other

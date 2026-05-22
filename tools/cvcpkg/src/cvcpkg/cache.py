@@ -47,6 +47,16 @@ def store(cache_dir: Path, sha256: str, filename: str, data: bytes) -> Path:
     return p
 
 
+def store_from_file(cache_dir: Path, sha256: str, filename: str, src: Path) -> Path:
+    """Move *src* into the cache and return the final path."""
+    import shutil
+
+    p = cache_path(cache_dir, sha256, filename)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(p))
+    return p
+
+
 def file_sha256(path: Path) -> str:
     """Compute the SHA-256 of a file."""
     h = hashlib.sha256()

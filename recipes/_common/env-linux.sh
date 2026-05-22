@@ -16,7 +16,8 @@ export CC="${CC:-gcc}"
 export CXX="${CXX:-g++}"
 
 # Build-type → CMake flags mapping.
-case "${CVC_BUILD_TYPE,,}" in
+_build_type_lc=$(echo "$CVC_BUILD_TYPE" | tr '[:upper:]' '[:lower:]')
+case "$_build_type_lc" in
     release) CMAKE_BUILD_TYPE=Release  ;;
     debug)   CMAKE_BUILD_TYPE=Debug    ;;
     *)       CMAKE_BUILD_TYPE=Release  ;;
@@ -44,6 +45,7 @@ cvc_cmake_build() {
         -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" \
         -DBUILD_SHARED_LIBS="${BUILD_SHARED_LIBS}" \
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+        -DCMAKE_CXX_STANDARD=17 \
         "${extra_args[@]}"
     cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
     cmake --install "${CVC_BUILD_DIR}"

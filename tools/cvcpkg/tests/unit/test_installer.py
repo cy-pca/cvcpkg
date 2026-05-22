@@ -14,15 +14,15 @@ from cvcpkg.errors import InstallError, IntegrityError
 from cvcpkg.installer import _archive_filename, extract_bundle
 from cvcpkg.manifest import CatalogEntry
 
-
 # ── extract_bundle ──────────────────────────────────────────────
+
 
 class TestExtractBundle:
     def _make_tar_gz(self, tmp_path, name="archive.tar.gz", members=None):
         """Create a test .tar.gz archive."""
         archive_path = tmp_path / name
         with tarfile.open(archive_path, "w:gz") as tf:
-            for fname, content in (members or [("lib/libz.so", b"fake lib")]):
+            for fname, content in members or [("lib/libz.so", b"fake lib")]:
                 info = tarfile.TarInfo(name=fname)
                 info.size = len(content)
                 tf.addfile(info, io.BytesIO(content))
@@ -31,7 +31,7 @@ class TestExtractBundle:
     def _make_zip(self, tmp_path, name="archive.zip", members=None):
         archive_path = tmp_path / name
         with zipfile.ZipFile(archive_path, "w") as zf:
-            for fname, content in (members or [("lib/libz.so", b"fake lib")]):
+            for fname, content in members or [("lib/libz.so", b"fake lib")]:
                 zf.writestr(fname, content)
         return archive_path
 
@@ -144,23 +144,39 @@ class TestExtractBundle:
 
 # ── _archive_filename ──────────────────────────────────────────
 
+
 class TestArchiveFilename:
     def test_from_url(self):
         e = CatalogEntry(
-            name="zlib", version="1.3.1+cvc.1", upstream_version="1.3.1",
-            cvc_revision=1, platform="linux", arch="x86_64",
-            build_type="release", link="shared", sha256="",
-            size_bytes=0, archive_url="https://example.com/zlib-1.3.1.tar.gz",
+            name="zlib",
+            version="1.3.1+cvc.1",
+            upstream_version="1.3.1",
+            cvc_revision=1,
+            platform="linux",
+            arch="x86_64",
+            build_type="release",
+            link="shared",
+            sha256="",
+            size_bytes=0,
+            archive_url="https://example.com/zlib-1.3.1.tar.gz",
             source_release="",
         )
         assert _archive_filename(e) == "zlib-1.3.1.tar.gz"
 
     def test_fallback_linux(self):
         e = CatalogEntry(
-            name="zlib", version="1.3.1+cvc.1", upstream_version="1.3.1",
-            cvc_revision=1, platform="linux", arch="x86_64",
-            build_type="release", link="shared", sha256="",
-            size_bytes=0, archive_url="", source_release="",
+            name="zlib",
+            version="1.3.1+cvc.1",
+            upstream_version="1.3.1",
+            cvc_revision=1,
+            platform="linux",
+            arch="x86_64",
+            build_type="release",
+            link="shared",
+            sha256="",
+            size_bytes=0,
+            archive_url="",
+            source_release="",
         )
         fn = _archive_filename(e)
         assert fn.endswith(".tar.gz")
@@ -168,10 +184,18 @@ class TestArchiveFilename:
 
     def test_fallback_windows(self):
         e = CatalogEntry(
-            name="zlib", version="1.3.1+cvc.1", upstream_version="1.3.1",
-            cvc_revision=1, platform="windows", arch="x86_64",
-            build_type="release", link="shared", sha256="",
-            size_bytes=0, archive_url="", source_release="",
+            name="zlib",
+            version="1.3.1+cvc.1",
+            upstream_version="1.3.1",
+            cvc_revision=1,
+            platform="windows",
+            arch="x86_64",
+            build_type="release",
+            link="shared",
+            sha256="",
+            size_bytes=0,
+            archive_url="",
+            source_release="",
         )
         fn = _archive_filename(e)
         assert fn.endswith(".zip")

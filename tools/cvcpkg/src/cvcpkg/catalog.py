@@ -15,15 +15,36 @@ from cvcpkg.manifest import CatalogEntry, Dependency, ReleaseIndex
 DEFAULT_CATALOG_URL = "https://transfix.github.io/libcvc-deps/catalog/latest.yaml"
 
 
-def _fetch_url(url: str) -> bytes:
-    """Fetch a URL and return the raw bytes."""
-    import urllib.request
-    import urllib.error
+_MAX_CATALOG_BYTES = 50 * 1024 * 1024  # 50 MB safety limit
+
+
+def _fetch_url(url: str, *, max_bytes: int = _MAX_CATALOG_BYTES) -> bytes:
+    """Fetch a URL and return the raw bytes.
+
+    Raises :class:`CatalogError` if the response exceeds *max_bytes*.
+    """
+    from cvcpkg.storage import get_backend
 
     try:
-        with urllib.request.urlopen(url, timeout=30) as resp:  # noqa: S310 — trusted URL
-            return resp.read()
-    except urllib.error.URLError as e:
+        backend = get_backend(url)
+        info = backend.head(url)
+        if info.size >= 0 and info.size > max_bytes:
+            raise CatalogError(f"catalog at {url} is {info.size} bytes, exceeds {max_bytes} limit")
+        chunks: list[bytes] = []
+        total = 0
+        with backend.open(url) as stream:
+            while True:
+                chunk = stream.read(1 << 16)  # 64 KB
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    raise CatalogError(f"catalog at {url} exceeds {max_bytes} byte limit")
+                chunks.append(chunk)
+        return b"".join(chunks)
+    except CatalogError:
+        raise
+    except Exception as e:
         raise CatalogError(f"failed to fetch {url}: {e}") from e
 
 
@@ -81,22 +102,24 @@ def catalog_entries(
             continue
         if link and b.get("link", "") != link:
             continue
-        entries.append(CatalogEntry(
-            name=b["name"],
-            version=b["version"],
-            upstream_version=b.get("upstream_version", ""),
-            cvc_revision=b.get("cvc_revision", 1),
-            platform=b.get("platform", ""),
-            arch=b.get("arch", ""),
-            build_type=b.get("build_type", ""),
-            link=b.get("link", ""),
-            sha256=b.get("sha256", ""),
-            size_bytes=b.get("size_bytes", 0),
-            archive_url=b.get("archive_url", ""),
-            source_release=b.get("source_release", ""),
-            required_deps=[
-                Dependency(name=d["name"], version=d.get("version", ""))
-                for d in b.get("required_deps", [])
-            ],
-        ))
+        entries.append(
+            CatalogEntry(
+                name=b["name"],
+                version=b["version"],
+                upstream_version=b.get("upstream_version", ""),
+                cvc_revision=b.get("cvc_revision", 1),
+                platform=b.get("platform", ""),
+                arch=b.get("arch", ""),
+                build_type=b.get("build_type", ""),
+                link=b.get("link", ""),
+                sha256=b.get("sha256", ""),
+                size_bytes=b.get("size_bytes", 0),
+                archive_url=b.get("archive_url", ""),
+                source_release=b.get("source_release", ""),
+                required_deps=[
+                    Dependency(name=d["name"], version=d.get("version", ""))
+                    for d in b.get("required_deps", [])
+                ],
+            )
+        )
     return entries

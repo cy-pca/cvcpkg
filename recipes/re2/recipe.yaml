@@ -6,11 +6,12 @@ recipe:
   maintainer: "CyberPC Angel, LLC"
   homepage: https://github.com/google/re2
   license: BSD-3-Clause
+  tags: [utils]
 
 source:
   type: tarball
   url: https://github.com/google/re2/releases/download/2024-07-02/re2-2024-07-02.tar.gz
-  sha256: "eb2df807c781601c14a260a507a5bb4509be1ee626024cb45acbd57cb9c4e86f"
+  sha256: "eb2df807c781601c14a260a507a5bb4509be1ee626024cb45acbd57cb9d4032b"
   strip_components: 1
 
 patches: []

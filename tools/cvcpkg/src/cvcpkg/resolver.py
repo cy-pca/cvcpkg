@@ -75,9 +75,7 @@ def resolve(
     conflict_trail: list[str] = []
 
     if not _backtrack(needed, constraints, sorted_candidates, picked, conflict_trail):
-        raise ResolveError(
-            "cannot satisfy requirements:\n  " + "\n  ".join(conflict_trail[-10:])
-        )
+        raise ResolveError("cannot satisfy requirements:\n  " + "\n  ".join(conflict_trail[-10:]))
 
     return ResolveResult(picked=picked)
 
@@ -140,9 +138,7 @@ def _backtrack(
 
         # Check compatibility with already-picked bundles' constraints on us.
         if not _compatible_with_picked(name, entry, picked):
-            trail.append(
-                f"{name}=={entry.version} conflicts with already-picked dependencies"
-            )
+            trail.append(f"{name}=={entry.version} conflicts with already-picked dependencies")
             continue
 
         # Tentatively pick this candidate.

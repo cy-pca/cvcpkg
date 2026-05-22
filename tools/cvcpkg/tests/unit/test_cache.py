@@ -13,6 +13,7 @@ from cvcpkg.cache import (
     gc,
     is_cached,
     store,
+    store_from_file,
 )
 
 
@@ -119,3 +120,45 @@ class TestGC:
             store(tmp_path, f"{i}" * 64, f"file{i}.tar.gz", b"data")
         removed = gc(tmp_path, set())
         assert removed == 3
+
+
+# ── store_from_file ────────────────────────────────────────────
+
+
+class TestStoreFromFile:
+    def test_moves_file_into_cache(self, tmp_path):
+        """store_from_file moves a temp file into the content-addressed cache."""
+        data = b"archive contents here"
+        sha = hashlib.sha256(data).hexdigest()
+        src = tmp_path / "download.tmp"
+        src.write_bytes(data)
+
+        result = store_from_file(tmp_path / "cache", sha, "pkg.tar.gz", src)
+        assert result.exists()
+        assert result.read_bytes() == data
+        assert result.parent.name == sha
+        assert result.name == "pkg.tar.gz"
+        # Original file should be gone (moved, not copied)
+        assert not src.exists()
+
+    def test_creates_parent_directory(self, tmp_path):
+        """store_from_file creates the sha256 subdirectory."""
+        sha = "f" * 64
+        src = tmp_path / "src.tmp"
+        src.write_bytes(b"data")
+        cache_dir = tmp_path / "cache"
+
+        result = store_from_file(cache_dir, sha, "file.tar.gz", src)
+        assert (cache_dir / sha).is_dir()
+        assert result == cache_dir / sha / "file.tar.gz"
+
+    def test_is_cached_after_store_from_file(self, tmp_path):
+        """After store_from_file, is_cached returns True."""
+        data = b"cached data"
+        sha = hashlib.sha256(data).hexdigest()
+        src = tmp_path / "temp.download"
+        src.write_bytes(data)
+        cache_dir = tmp_path / "cache"
+
+        store_from_file(cache_dir, sha, "archive.tar.gz", src)
+        assert is_cached(cache_dir, sha, "archive.tar.gz") is True

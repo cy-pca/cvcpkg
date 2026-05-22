@@ -6,6 +6,7 @@ recipe:
   maintainer: "CyberPC Angel, LLC"
   homepage: https://sourceforge.net/projects/pthreads4w/
   license: Apache-2.0
+  tags: [concurrency]
 
 source:
   type: vcpkg

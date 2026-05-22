@@ -6,11 +6,12 @@ recipe:
   maintainer: "CyberPC Angel, LLC"
   homepage: https://log4cplus.sourceforge.io/
   license: Apache-2.0
+  tags: [utils]
 
 source:
   type: tarball
   url: https://github.com/log4cplus/log4cplus/releases/download/REL_2_1_2/log4cplus-2.1.2.tar.gz
-  sha256: "610c13df77b2bfb14ee95c3aa7e640e36c3e5c880aba3c8fae1cc1e613a8f8b5"
+  sha256: "e2673815ea34886f29b2213fff19cc1a6707a7e65099927a19ea49b4eb018822"
   strip_components: 1
 
 patches: []

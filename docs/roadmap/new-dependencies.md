@@ -36,7 +36,8 @@ split-distribution catalog.
 - [1. Emscripten SDK (WASM toolchain)](#1-emscripten-sdk-wasm-toolchain)
 - [2. SWIG (Python and C# wrapper generator)](#2-swig-python-and-c-wrapper-generator)
 - [3. Qt 6 `wasm_singlethread` build](#3-qt-6-wasm_singlethread-build)
-- [4. Sequencing and integration notes](#4-sequencing-and-integration-notes)
+- [4. Zstd (fast compression library)](#4-zstd-fast-compression-library)
+- [5. Sequencing and integration notes](#5-sequencing-and-integration-notes)
 
 ---
 
@@ -353,13 +354,120 @@ size_uncompressed_mb: ~1200    # rough, dominated by libQt6Core.a +
 
 ---
 
-## 4. Sequencing and integration notes
+## 4. Zstd (fast compression library)
 
-The three components above interact:
+### Why
+
+Several libcvc consumers and dependencies already handle compressed
+data (HDF5 filters, archive I/O, volume datasets). Today the
+project relies on zlib for general-purpose compression, but Zstd
+(Zstandard) offers significantly better compression ratios at
+comparable speed, and dramatically faster decompression — typically
+3-5× faster than zlib at equivalent ratios. Concrete motivations:
+
+- **HDF5 filter integration.** HDF5 supports Zstd as a
+  third-party filter via `hdf5-zstd-filter`. Volume datasets
+  stored in HDF5 (a core libcvc workflow) would benefit from
+  smaller files and faster reads.
+- **Archive format support.** `cvcpkg` already handles `.tar.zst`
+  archives (via Python's stdlib `tarfile` + the `zstandard`
+  module). Shipping a native Zstd library lets C/C++ code in
+  libcvc and volrover3 decompress the same archives without a
+  Python dependency.
+- **Upstream adoption.** Zstd has become a de-facto standard in
+  systems software (Linux kernel, systemd, LLVM, Blosc2, Apache
+  Arrow). Adding it now aligns future work with the ecosystem.
+
+### What we ship
+
+```
+zstd-<ver>-<platform>-<arch>/
+├── bin/zstd                    # CLI tool (zstd.exe on Windows)
+├── include/
+│   ├── zstd.h
+│   ├── zstd_errors.h
+│   └── zdict.h
+├── lib/
+│   ├── libzstd.{a,so,dylib}   # static and/or shared per link mode
+│   └── cmake/zstd/             # upstream CMake config files
+│       ├── zstdConfig.cmake
+│       ├── zstdConfigVersion.cmake
+│       └── zstdTargets*.cmake
+└── lib/pkgconfig/libzstd.pc
+```
+
+Layout matches a stock `cmake --install` from upstream. Consumers
+discover via `find_package(zstd CONFIG)` and link
+`zstd::libzstd_static` or `zstd::libzstd_shared`.
+
+### Versioning
+
+Pin to a specific upstream release (e.g. `1.5.x`). Zstd maintains
+strong backward-compatibility guarantees on both the frame format
+and the library ABI; version bumps are low-risk.
+
+### Build approach
+
+Zstd builds in under a minute from source via CMake:
+
+```bash
+cmake -S build/cmake -B _build \
+  -DCMAKE_INSTALL_PREFIX="$CVC_INSTALL_DIR" \
+  -DZSTD_BUILD_PROGRAMS=ON \
+  -DZSTD_BUILD_TESTS=OFF \
+  -DZSTD_MULTITHREAD_SUPPORT=ON
+cmake --build _build --config Release
+cmake --install _build --config Release
+```
+
+No external dependencies beyond a C compiler. The recipe is
+self-contained and trivial — comparable to zlib in complexity.
+
+### Platforms
+
+- Linux x86_64
+- macOS arm64
+- Windows x86_64 (MSVC)
+
+All three are tier-1 upstream. No platform exclusions.
+
+### Catalog entry
+
+```yaml
+name: zstd
+version: "<upstream>+cvc<rev>"
+provides:
+  - zstd
+runtime_requires: []
+build_type_independent: false
+link_mode: shared              # ship both; default shared
+size_uncompressed_mb: ~15      # tiny
+```
+
+### Open questions
+
+- Whether to also ship the `zstd` CLI tool (`ZSTD_BUILD_PROGRAMS=ON`)
+  or only the library. The CLI is useful for ad-hoc compression in
+  CI scripts and adds <1 MB. **Recommendation: ship it.**
+- Whether to enable the dictionary builder (`ZSTD_BUILD_DICTBUILDER`).
+  Useful if volume datasets adopt dictionary-aided compression.
+  Low cost, so **recommendation: enable**.
+- Whether to register a Zstd HDF5 filter plugin as part of this
+  component or as a separate `hdf5-zstd-filter` bundle.
+  **Recommendation:** separate bundle — the filter plugin depends
+  on both HDF5 and Zstd, and belongs as its own recipe with
+  `build_requires: [hdf5, zstd]`.
+
+---
+
+## 5. Sequencing and integration notes
+
+The four components above interact:
 
 ```
 emsdk  ─────────────► qt6-wasm-singlethread  (build-time dep)
 swig                                          (independent)
+zstd                                          (independent)
 ```
 
 Order in which to land them post-split-distribution:
@@ -367,10 +475,13 @@ Order in which to land them post-split-distribution:
 1. **SWIG first.** Smallest payload (~30 MB), independent of the
    other two, and unblocks Python / C# wrapper work that is
    already in early scoping.
-2. **emsdk second.** Standalone toolchain; large but mechanical
+2. **Zstd second.** Tiny (~15 MB), zero dependencies, trivial
+   recipe. Unblocks HDF5 Zstd filter work and native archive
+   decompression in libcvc.
+3. **emsdk third.** Standalone toolchain; large but mechanical
    to ship. Validates that the split-distribution catalog handles
    large per-component bundles cleanly.
-3. **qt6-wasm-singlethread third.** Needs emsdk on the CI builder
+4. **qt6-wasm-singlethread fourth.** Needs emsdk on the CI builder
    to even produce the artifact; once emsdk is in catalog the CI
    recipe just declares `build_requires: [emsdk]`.
 

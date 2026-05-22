@@ -33,7 +33,5 @@ def check_abi_compat(a: AbiTag, b: AbiTag, *, strict: bool = True) -> list[str]:
         issues.append(f"CRT link mismatch: {a.crt_link} vs {b.crt_link}")
 
     if strict and issues:
-        raise AbiError(
-            "ABI incompatibility detected:\n  " + "\n  ".join(issues)
-        )
+        raise AbiError("ABI incompatibility detected:\n  " + "\n  ".join(issues))
     return issues

@@ -33,14 +33,63 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pyyaml jsonschema pytest
+          pip install pyyaml jsonschema pytest black
           pip install -e tools/cvcpkg
+
+      - name: Black format check
+        run: black --check --diff tools/cvcpkg/src/ tools/cvcpkg/tests/
 
       - name: Validate schemas & recipes
         run: python packaging/validate.py
 
       - name: Run cvcpkg test suite
         run: python -m pytest tools/cvcpkg/tests/ -v --tb=short
+
+  # ────────────────────── Recipe build validation ─────────────────
+  #
+  # Validates that every recipe can be loaded, dependencies resolve
+  # without cycles, and the topological build order is sane. Also
+  # verifies every recipe has a build script for at least one
+  # platform. This catches recipe-graph regressions without running
+  # any actual builds.
+  recipe-validate:
+    name: Validate recipe graph
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install cvcpkg
+        run: pip install -e tools/cvcpkg
+
+      - name: Validate dependency graph & build order
+        run: |
+          python3 -c "
+          from cvcpkg.builder import list_recipes, resolve_build_order
+          from pathlib import Path
+
+          recipes = list_recipes(Path('recipes'))
+          print(f'Loaded {len(recipes)} recipes')
+
+          ordered = resolve_build_order(recipes)
+          print('Build order:')
+          for i, r in enumerate(ordered, 1):
+              deps = r.raw.get('depends', {}).get('build', [])
+              dep_names = [d if isinstance(d, str) else d['name'] for d in deps]
+              suffix = f' (depends: {', '.join(dep_names)})' if dep_names else ''
+              print(f'  {i:2d}. {r.name}{suffix}')
+
+          # Verify every recipe has at least one build matrix entry
+          for r in recipes:
+              assert r.build_matrix, f'{r.name}: no build matrix entries'
+              for m in r.build_matrix:
+                  script = r.recipe_dir / m.script
+                  assert script.is_file(), f'{r.name}: missing build script {m.script}'
+          print('All recipes valid.')
+          "
 
   # ────────────────────── Per-commit dep bundle build ─────────────
   #

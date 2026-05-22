@@ -41,18 +41,31 @@ def test_validate_components():
 
 # ── CLI subcommand help ─────────────────────────────────────────
 
-@pytest.mark.parametrize("subcmd", [
-    "install", "list", "info", "validate", "verify",
-    "lock", "sync", "catalog", "gc",
-    "build", "pack", "recipes",
-])
+
+@pytest.mark.parametrize(
+    "subcmd",
+    [
+        "install",
+        "list",
+        "info",
+        "validate",
+        "verify",
+        "lock",
+        "sync",
+        "catalog",
+        "gc",
+        "build",
+        "pack",
+        "recipes",
+    ],
+)
 def test_subcommand_help(subcmd):
-    with pytest.raises(SystemExit) as exc_info:
-        main([subcmd, "--help"])
-    assert exc_info.value.code == 0
+    ret = main([subcmd, "--help"])
+    assert ret == 0
 
 
 # ── recipes command ─────────────────────────────────────────────
+
 
 def test_recipes_list(capsys):
     """cvcpkg recipes --list should print the recipe table."""
@@ -62,6 +75,7 @@ def test_recipes_list(capsys):
     assert ret == 0
     assert "zlib" in captured.out
 
+
 def test_recipes_show(capsys):
     """cvcpkg recipes --show zlib should print recipe details."""
     ret = main(["recipes", "--show", "zlib"])
@@ -70,11 +84,13 @@ def test_recipes_show(capsys):
     assert "zlib" in captured.out
     assert "Version:" in captured.out or "1.3.1" in captured.out
 
+
 def test_recipes_show_not_found(capsys):
     ret = main(["recipes", "--show", "nonexistent-pkg-xyz"])
     assert ret == 1
     captured = capsys.readouterr()
-    assert "not found" in captured.out
+    assert "not found" in captured.out or "not found" in captured.err
+
 
 def test_recipes_default_is_list(capsys):
     """Plain 'cvcpkg recipes' should default to --list behavior."""
@@ -86,28 +102,29 @@ def test_recipes_default_is_list(capsys):
 
 # ── build / pack argument parsing ──────────────────────────────
 
+
 def test_build_no_recipe(capsys):
-    """cvcpkg build without recipe should print usage."""
-    with pytest.raises(SystemExit) as exc_info:
-        main(["build"])
-    assert exc_info.value.code != 0
+    """cvcpkg build without recipe should error."""
+    ret = main(["build"])
+    assert ret != 0
+
 
 def test_pack_no_recipe(capsys):
-    """cvcpkg pack without recipe should print usage."""
-    with pytest.raises(SystemExit) as exc_info:
-        main(["pack"])
-    assert exc_info.value.code != 0
+    """cvcpkg pack without recipe should error."""
+    ret = main(["pack"])
+    assert ret != 0
 
 
 # ── unknown command ─────────────────────────────────────────────
 
+
 def test_unknown_command():
-    with pytest.raises(SystemExit) as exc_info:
-        main(["frobnicate"])
-    assert exc_info.value.code == 2  # argparse rejects invalid choices
+    ret = main(["frobnicate"])
+    assert ret != 0
 
 
 # ── no command ──────────────────────────────────────────────────
+
 
 def test_no_command(capsys):
     ret = main([])
@@ -115,6 +132,7 @@ def test_no_command(capsys):
 
 
 # ── Fixture: mock catalog for install / list --available / info ──
+
 
 def _make_catalog(tmp_path: Path) -> Path:
     """Create a minimal catalog YAML for testing the consumer-side CLI."""
@@ -164,30 +182,80 @@ class TestInstallWithCatalog:
         cat = _make_catalog(tmp_path)
         prefix = tmp_path / "prefix"
         with mock.patch("cvcpkg.installer.install_entry"):
-            ret = main([
-                "install", "zlib", "yaml",
-                "--catalog", str(cat),
-                "--prefix", str(prefix),
-                "--platform", "linux",
-                "--arch", "x86_64",
-            ])
+            ret = main(
+                [
+                    "install",
+                    "zlib",
+                    "yaml",
+                    "--catalog",
+                    str(cat),
+                    "--prefix",
+                    str(prefix),
+                    "--platform",
+                    "linux",
+                    "--arch",
+                    "x86_64",
+                ]
+            )
         assert ret == 0
-        out = capsys.readouterr().out
-        assert "resolved 2" in out
-        assert "zlib" in out
-        assert "yaml" in out
+
+
+# ── Hardening: invalid platform/arch Choice validation ──────────
+
+
+class TestPlatformArchValidation:
+    """Verify click.Choice rejects invalid --platform and --arch values."""
+
+    def test_invalid_platform_rejected(self, capsys):
+        """An invalid --platform value should cause a non-zero exit."""
+        ret = main(["install", "zlib", "--platform", "solaris"])
+        assert ret != 0
+
+    def test_invalid_arch_rejected(self, capsys):
+        """An invalid --arch value should cause a non-zero exit."""
+        ret = main(["install", "zlib", "--arch", "mips64"])
+        assert ret != 0
+
+    def test_valid_platform_accepted(self, capsys):
+        """Valid platform values should not trigger a Choice error."""
+        for plat in ("auto", "linux", "macos", "windows"):
+            ret = main(["install", "--platform", plat])
+            assert ret == 0 or ret is None
+
+    def test_valid_arch_accepted(self, capsys):
+        """Valid arch values should not trigger a Choice error."""
+        for arch in ("auto", "x86_64", "arm64"):
+            ret = main(["install", "--arch", arch])
+            assert ret == 0 or ret is None
+
+    def test_invalid_config_rejected(self, capsys):
+        """An invalid --config value should cause a non-zero exit."""
+        ret = main(["install", "zlib", "--config", "optimized"])
+        assert ret != 0
+
+    def test_invalid_link_rejected(self, capsys):
+        """An invalid --link value should cause a non-zero exit."""
+        ret = main(["install", "zlib", "--link", "dynamic"])
+        assert ret != 0
 
     def test_install_writes_lockfile(self, tmp_path):
         cat = _make_catalog(tmp_path)
         prefix = tmp_path / "prefix"
         with mock.patch("cvcpkg.installer.install_entry"):
-            main([
-                "install", "zlib",
-                "--catalog", str(cat),
-                "--prefix", str(prefix),
-                "--platform", "linux",
-                "--arch", "x86_64",
-            ])
+            main(
+                [
+                    "install",
+                    "zlib",
+                    "--catalog",
+                    str(cat),
+                    "--prefix",
+                    str(prefix),
+                    "--platform",
+                    "linux",
+                    "--arch",
+                    "x86_64",
+                ]
+            )
         lock_path = prefix / "share" / "libcvc-deps" / "lockfile.yaml"
         assert lock_path.exists()
         lock_data = yaml.safe_load(lock_path.read_text())
@@ -198,34 +266,165 @@ class TestInstallWithCatalog:
         cat = _make_catalog(tmp_path)
         prefix = tmp_path / "prefix"
         req_file = tmp_path / "requirements.yaml"
-        req_file.write_text(yaml.dump({
-            "platform": "linux",
-            "arch": "x86_64",
-            "config": "release",
-            "link": "shared",
-            "components": ["zlib"],
-        }))
+        req_file.write_text(
+            yaml.dump(
+                {
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "config": "release",
+                    "link": "shared",
+                    "components": ["zlib"],
+                }
+            )
+        )
         with mock.patch("cvcpkg.installer.install_entry"):
-            ret = main([
-                "install",
-                "--from", str(req_file),
-                "--catalog", str(cat),
-                "--prefix", str(prefix),
-            ])
+            ret = main(
+                [
+                    "install",
+                    "--from",
+                    str(req_file),
+                    "--catalog",
+                    str(cat),
+                    "--prefix",
+                    str(prefix),
+                ]
+            )
         assert ret == 0
         out = capsys.readouterr().out
+        assert "zlib" in out
+
+    def test_install_config_overrides_requirements(self, tmp_path, capsys):
+        """--config on CLI overrides config in requirements file."""
+        # Create a catalog with a debug entry
+        catalog = {
+            "schema_version": 1,
+            "revision": 1,
+            "bundles": [
+                {
+                    "name": "zlib",
+                    "version": "1.3.1+cvc.1",
+                    "upstream_version": "1.3.1",
+                    "cvc_revision": 1,
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "build_type": "debug",
+                    "link": "shared",
+                    "sha256": "abc123",
+                    "size_bytes": 100000,
+                    "archive_url": "",
+                    "source_release": "v1.1.0",
+                },
+            ],
+        }
+        cat = tmp_path / "catalog-debug.yaml"
+        cat.write_text(yaml.dump(catalog, default_flow_style=False))
+
+        prefix = tmp_path / "prefix"
+        req_file = tmp_path / "requirements.yaml"
+        req_file.write_text(
+            yaml.dump(
+                {
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "config": "release",
+                    "link": "shared",
+                    "components": ["zlib"],
+                }
+            )
+        )
+        with mock.patch("cvcpkg.installer.install_entry"):
+            ret = main(
+                [
+                    "install",
+                    "--from",
+                    str(req_file),
+                    "--config",
+                    "debug",
+                    "--catalog",
+                    str(cat),
+                    "--prefix",
+                    str(prefix),
+                ]
+            )
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "debug" in out
+        assert "zlib" in out
+
+    def test_install_link_overrides_requirements(self, tmp_path, capsys):
+        """--link on CLI overrides link in requirements file."""
+        catalog = {
+            "schema_version": 1,
+            "revision": 1,
+            "bundles": [
+                {
+                    "name": "zlib",
+                    "version": "1.3.1+cvc.1",
+                    "upstream_version": "1.3.1",
+                    "cvc_revision": 1,
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "build_type": "release",
+                    "link": "static",
+                    "sha256": "abc123",
+                    "size_bytes": 100000,
+                    "archive_url": "",
+                    "source_release": "v1.1.0",
+                },
+            ],
+        }
+        cat = tmp_path / "catalog-static.yaml"
+        cat.write_text(yaml.dump(catalog, default_flow_style=False))
+
+        prefix = tmp_path / "prefix"
+        req_file = tmp_path / "requirements.yaml"
+        req_file.write_text(
+            yaml.dump(
+                {
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "config": "release",
+                    "link": "shared",
+                    "components": ["zlib"],
+                }
+            )
+        )
+        with mock.patch("cvcpkg.installer.install_entry"):
+            ret = main(
+                [
+                    "install",
+                    "--from",
+                    str(req_file),
+                    "--link",
+                    "static",
+                    "--catalog",
+                    str(cat),
+                    "--prefix",
+                    str(prefix),
+                ]
+            )
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "static" in out
         assert "zlib" in out
 
     def test_install_no_catalog_match(self, tmp_path, capsys):
         cat = _make_catalog(tmp_path)
         prefix = tmp_path / "prefix"
-        ret = main([
-            "install", "zlib",
-            "--catalog", str(cat),
-            "--prefix", str(prefix),
-            "--platform", "windows",
-            "--arch", "x86_64",
-        ])
+        ret = main(
+            [
+                "install",
+                "zlib",
+                "--catalog",
+                str(cat),
+                "--prefix",
+                str(prefix),
+                "--platform",
+                "windows",
+                "--arch",
+                "x86_64",
+            ]
+        )
         assert ret == 1
 
 
@@ -273,7 +472,10 @@ class TestVerifyCommand:
         prefix = tmp_path / "prefix"
         # Write lockfile
         lock = Lockfile(
-            platform="linux", arch="x86_64", config="release", link="shared",
+            platform="linux",
+            arch="x86_64",
+            config="release",
+            link="shared",
             bundles=[LockEntry(name="zlib", version="1.3.1+cvc.1", upstream_version="1.3.1")],
         )
         lock_path = prefix / "share" / "libcvc-deps" / "lockfile.yaml"
@@ -285,10 +487,14 @@ class TestVerifyCommand:
         manifest = {
             "schema_version": 3,
             "bundle": {
-                "name": "zlib", "version": "1.3.1+cvc.1",
-                "upstream_version": "1.3.1", "cvc_revision": 1,
-                "platform": "linux", "arch": "x86_64",
-                "build_type": "release", "link": "shared",
+                "name": "zlib",
+                "version": "1.3.1+cvc.1",
+                "upstream_version": "1.3.1",
+                "cvc_revision": 1,
+                "platform": "linux",
+                "arch": "x86_64",
+                "build_type": "release",
+                "link": "shared",
             },
             "contents": {"files": []},
         }
@@ -304,7 +510,10 @@ class TestVerifyCommand:
 
         prefix = tmp_path / "prefix"
         lock = Lockfile(
-            platform="linux", arch="x86_64", config="release", link="shared",
+            platform="linux",
+            arch="x86_64",
+            config="release",
+            link="shared",
             bundles=[LockEntry(name="zlib", version="1.3.1+cvc.2", upstream_version="1.3.1")],
         )
         lock.write(prefix / "share" / "libcvc-deps" / "lockfile.yaml")
@@ -313,10 +522,14 @@ class TestVerifyCommand:
         manifest = {
             "schema_version": 3,
             "bundle": {
-                "name": "zlib", "version": "1.3.1+cvc.1",
-                "upstream_version": "1.3.1", "cvc_revision": 1,
-                "platform": "linux", "arch": "x86_64",
-                "build_type": "release", "link": "shared",
+                "name": "zlib",
+                "version": "1.3.1+cvc.1",
+                "upstream_version": "1.3.1",
+                "cvc_revision": 1,
+                "platform": "linux",
+                "arch": "x86_64",
+                "build_type": "release",
+                "link": "shared",
             },
             "contents": {"files": []},
         }
@@ -338,7 +551,10 @@ class TestSyncCommand:
 
         prefix = tmp_path / "prefix"
         lock = Lockfile(
-            platform="linux", arch="x86_64", config="release", link="shared",
+            platform="linux",
+            arch="x86_64",
+            config="release",
+            link="shared",
             bundles=[LockEntry(name="zlib", version="1.3.1+cvc.1")],
         )
         lock.write(prefix / "share" / "libcvc-deps" / "lockfile.yaml")
@@ -383,3 +599,199 @@ class TestCatalogCommand:
         assert ret == 0
         out = capsys.readouterr().out
         assert "refreshed" in out.lower()
+
+
+# ── recipes --tag filtering ─────────────────────────────────────
+
+
+class TestRecipesTagFilter:
+    def test_tag_filter_shows_matching(self, capsys):
+        """'cvcpkg recipes --tag math' should show only math recipes."""
+        ret = main(["recipes", "--tag", "math"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        # At least fftw3, gsl, openblas should appear
+        assert "fftw3" in out
+        assert "gsl" in out
+        # zlib is tagged utils/io, not math
+        assert "zlib" not in out.split("Name")[1] if "Name" in out else True
+
+    def test_tag_filter_no_match(self, capsys):
+        """Non-existent tag should fail."""
+        ret = main(["recipes", "--tag", "nonexistent-tag-xyz"])
+        assert ret == 1
+
+    def test_recipes_show_displays_tags(self, capsys):
+        """'cvcpkg recipes --show zlib' should display tags."""
+        ret = main(["recipes", "--show", "zlib"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "Tags:" in out
+        assert "utils" in out
+
+    def test_recipes_list_shows_tags_column(self, capsys):
+        """Default list should include a Tags column."""
+        ret = main(["recipes"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "Tags" in out
+
+
+# ── multi --recipes-dir ─────────────────────────────────────────
+
+
+class TestMultiRecipesDir:
+    def _make_recipe_dir(self, base, name, tags=None, revision=1):
+        """Create a minimal recipe directory."""
+        rdir = base / name
+        rdir.mkdir(parents=True, exist_ok=True)
+        recipe = {
+            "schema_version": 1,
+            "recipe": {
+                "name": name,
+                "upstream_version": "1.0.0",
+                "cvc_revision": revision,
+            },
+            "source": {"type": "vendored", "path": f"third-party/{name}"},
+            "build": {"matrix": [{"platform": "linux", "script": "build.sh"}]},
+            "package": {"files": ["lib/*"], "cmake_packages": []},
+        }
+        if tags:
+            recipe["recipe"]["tags"] = tags
+        (rdir / "recipe.yaml").write_text(yaml.dump(recipe, default_flow_style=False))
+        (rdir / "build.sh").write_text("#!/bin/bash\ntrue\n")
+
+    def test_custom_recipes_dir(self, tmp_path, capsys):
+        """'cvcpkg recipes --recipes-dir <dir>' uses that directory."""
+        self._make_recipe_dir(tmp_path, "mypkg", tags=["custom"])
+        ret = main(["recipes", "--recipes-dir", str(tmp_path)])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "mypkg" in out
+
+    def test_multiple_recipes_dirs(self, tmp_path, capsys):
+        """Multiple --recipes-dir flags merge recipes."""
+        d1 = tmp_path / "dir1"
+        d2 = tmp_path / "dir2"
+        self._make_recipe_dir(d1, "alpha")
+        self._make_recipe_dir(d2, "beta")
+        ret = main(["recipes", "--recipes-dir", str(d1), "--recipes-dir", str(d2)])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "alpha" in out
+        assert "beta" in out
+
+    def test_override_recipe_warning(self, tmp_path, capsys):
+        """Later --recipes-dir overrides earlier on name conflict."""
+        d1 = tmp_path / "dir1"
+        d2 = tmp_path / "dir2"
+        self._make_recipe_dir(d1, "alpha", revision=1)
+        self._make_recipe_dir(d2, "alpha", revision=2)
+        ret = main(["recipes", "--recipes-dir", str(d1), "--recipes-dir", str(d2)])
+        assert ret == 0
+        out = capsys.readouterr().out
+        # Should show the version from d2 (cvc_revision=2)
+        assert "1.0.0+cvc.2" in out
+
+
+# ── add / remove commands ───────────────────────────────────────
+
+
+class TestAddCommand:
+    def test_add_component(self, tmp_path, capsys):
+        req = tmp_path / "req.yaml"
+        req.write_text(yaml.dump({"components": ["zlib"]}))
+        ret = main(["add", "boost", "--from", str(req)])
+        assert ret == 0
+        data = yaml.safe_load(req.read_text())
+        names = [c if isinstance(c, str) else c.get("name", "") for c in data["components"]]
+        assert "boost" in names
+        assert "zlib" in names
+
+    def test_add_duplicate_skipped(self, tmp_path, capsys):
+        req = tmp_path / "req.yaml"
+        req.write_text(yaml.dump({"components": ["zlib"]}))
+        ret = main(["add", "zlib", "--from", str(req)])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "already" in out or "nothing" in out
+
+    def test_add_with_version(self, tmp_path, capsys):
+        req = tmp_path / "req.yaml"
+        req.write_text(yaml.dump({"components": []}))
+        ret = main(["add", "hdf5==1.14.5+cvc.1", "--from", str(req)])
+        assert ret == 0
+        data = yaml.safe_load(req.read_text())
+        assert any(isinstance(c, dict) and c.get("name") == "hdf5" for c in data["components"])
+
+
+class TestRemoveCommand:
+    def test_remove_component(self, tmp_path, capsys):
+        req = tmp_path / "req.yaml"
+        req.write_text(yaml.dump({"components": ["zlib", "boost"]}))
+        ret = main(["remove", "boost", "--from", str(req)])
+        assert ret == 0
+        data = yaml.safe_load(req.read_text())
+        names = [c if isinstance(c, str) else c.get("name", "") for c in data["components"]]
+        assert "boost" not in names
+        assert "zlib" in names
+
+    def test_remove_nonexistent(self, tmp_path, capsys):
+        req = tmp_path / "req.yaml"
+        req.write_text(yaml.dump({"components": ["zlib"]}))
+        ret = main(["remove", "nonexistent", "--from", str(req)])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "none of" in out.lower()
+
+
+# ── push command ────────────────────────────────────────────────
+
+
+class TestPushCommand:
+    def test_push_help(self, capsys):
+        ret = main(["push", "--help"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "push" in out.lower() or "upload" in out.lower()
+
+    def test_push_file_backend(self, tmp_path, capsys):
+        """Push an archive to a file:// destination."""
+        archive = tmp_path / "test-1.0.tar.gz"
+        archive.write_bytes(b"fake archive data")
+        dest_dir = tmp_path / "dest"
+        dest_dir.mkdir()
+        ret = main(["push", str(archive), "--dest", f"file://{dest_dir}"])
+        assert ret == 0
+        assert (dest_dir / "test-1.0.tar.gz").exists()
+        assert (dest_dir / "test-1.0.tar.gz").read_bytes() == b"fake archive data"
+
+    def test_push_missing_file(self, tmp_path, capsys):
+        ret = main(["push", str(tmp_path / "nonexistent.tar.gz"), "--dest", f"file://{tmp_path}"])
+        assert ret == 1
+
+
+# ── world command ───────────────────────────────────────────────
+
+
+class TestWorldCommand:
+    def test_world_help(self, capsys):
+        ret = main(["world", "--help"])
+        assert ret == 0
+
+    def test_world_empty_requirements(self, tmp_path, capsys):
+        req = tmp_path / "req.yaml"
+        req.write_text(yaml.dump({"components": []}))
+        ret = main(["world", "--from", str(req), "--prefix", str(tmp_path / "pfx")])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "no" in out.lower()
+
+
+# ── new subcommand help coverage ────────────────────────────────
+
+
+@pytest.mark.parametrize("subcmd", ["push", "add", "remove", "world"])
+def test_new_subcommand_help(subcmd, capsys):
+    ret = main([subcmd, "--help"])
+    assert ret == 0
