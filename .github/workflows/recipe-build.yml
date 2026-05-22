@@ -1,0 +1,238 @@
+# Recipe-driven build for libcvc-deps.
+#
+# Builds every recipe in dependency order using `cvcpkg build-all`,
+# then uploads the prefix as an artifact.  Each recipe builds from
+# its pinned source (tarball, vendored, or vcpkg) so the result is
+# fully reproducible from the recipe files alone.
+#
+# Reusable from release.yml and ci.yml.
+
+name: Recipe Build
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        description: "Target platform (linux, macos, windows)"
+        required: true
+        type: string
+      config:
+        description: "Build config (release, debug)"
+        required: true
+        type: string
+      link:
+        description: "Link mode (shared, static)"
+        required: true
+        type: string
+      sha_suffix:
+        description: "Short SHA for CI builds (empty for tag releases)"
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  VCGLIB_VERSION: '2025.07'
+  VCGLIB_SHA256:  'e49fc9342d5476b3e39a5e1939b965b57c91d7a17b4f97b8c5eaf01228b16cf0'
+
+jobs:
+  build:
+    runs-on: ${{ inputs.platform == 'macos' && 'macos-latest' || inputs.platform == 'windows' && 'windows-latest' || 'ubuntu-latest' }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute artifact metadata
+        id: meta
+        shell: bash
+        run: |
+          VERSION=$(awk '/^[[:space:]]*VERSION[[:space:]]+[0-9]/{gsub(/[^0-9.]/,"",$2); print $2; exit}' CMakeLists.txt)
+          BTLC=$(echo "${{ inputs.config }}" | tr '[:upper:]' '[:lower:]')
+          LINKSFX=""
+          [ "${{ inputs.link }}" = "static" ] && LINKSFX="-static"
+          SHASFX=""
+          if [ -n "${{ inputs.sha_suffix }}" ]; then
+            short=$(echo "${{ inputs.sha_suffix }}" | cut -c1-7)
+            SHASFX="-${short}"
+          fi
+          case "${{ inputs.platform }}" in
+            linux)   ARCH=x86_64 ;;
+            macos)   ARCH=arm64  ;;
+            windows) ARCH=x86_64 ;;
+          esac
+          STEM="libcvc-deps-${VERSION}${SHASFX}-${{ inputs.platform }}-${ARCH}-${BTLC}${LINKSFX}"
+          echo "version=$VERSION"   >> "$GITHUB_OUTPUT"
+          echo "arch=$ARCH"         >> "$GITHUB_OUTPUT"
+          echo "btlc=$BTLC"        >> "$GITHUB_OUTPUT"
+          echo "stem=$STEM"         >> "$GITHUB_OUTPUT"
+
+      # ── System build tools (Linux) ──
+      - name: Install system build tools (Linux)
+        if: inputs.platform == 'linux'
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          set -euo pipefail
+          apt_retry() {
+            local attempt
+            for attempt in 1 2 3 4 5; do
+              echo "::group::apt attempt $attempt: $*"
+              if timeout 600 "$@" \
+                   -o Dpkg::Use-Pty=0 \
+                   -o Acquire::Retries=3 \
+                   -o Acquire::http::Timeout=30 \
+                   -o Acquire::https::Timeout=30; then
+                echo "::endgroup::"
+                return 0
+              fi
+              echo "::endgroup::"
+              echo "apt attempt $attempt failed, sleeping before retry…"
+              sleep $((attempt * 15))
+            done
+            echo "apt: giving up after 5 attempts" >&2
+            return 1
+          }
+          apt_retry sudo -E apt-get update
+          apt_retry sudo -E apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build patchelf pkg-config \
+            autoconf automake libtool gfortran perl \
+            python3 python3-pip python3-venv \
+            libgl1-mesa-dev libxt-dev mesa-common-dev libglew-dev \
+            libxrender-dev libxcursor-dev libxinerama-dev libxi-dev \
+            libxext-dev libxfixes-dev libxrandr-dev libxcb1-dev \
+            libx11-dev libx11-xcb-dev libfontconfig1-dev \
+            libfreetype-dev libharfbuzz-dev
+
+      # ── System build tools (macOS) ──
+      - name: Install system build tools (macOS)
+        if: inputs.platform == 'macos'
+        run: |
+          brew install cmake ninja autoconf automake libtool pkg-config
+
+      # ── System build tools (Windows) ──
+      - name: Install system build tools (Windows)
+        if: inputs.platform == 'windows'
+        shell: pwsh
+        run: |
+          choco install ninja cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
+
+      # ── Install cvcpkg ──
+      - name: Install cvcpkg
+        shell: bash
+        run: |
+          python3 -m pip install --quiet ./tools/cvcpkg
+
+      # ── Cache the built prefix ──
+      - name: Compute recipe cache key
+        id: cache-key
+        shell: bash
+        run: |
+          # Hash all recipe files + common env scripts for a stable cache key
+          HASH=$(find recipes/ -type f \( -name '*.yaml' -o -name '*.sh' -o -name '*.ps1' \) \
+                 | sort | xargs cat | sha256sum | cut -d' ' -f1)
+          KEY="recipe-build-${{ inputs.platform }}-${{ inputs.config }}-${{ inputs.link }}-${HASH}"
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Cache built prefix
+        id: prefix-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/prefix
+          key: ${{ steps.cache-key.outputs.key }}
+
+      # ── Build all recipes ──
+      - name: Build all recipes (cvcpkg build-all)
+        if: steps.prefix-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cvcpkg build-all \
+            --platform "${{ inputs.platform }}" \
+            --config "${{ inputs.config }}" \
+            --link "${{ inputs.link }}" \
+            --prefix "${{ github.workspace }}/prefix" \
+            --recipes-dir recipes
+
+      # ── Install marker cmake config ──
+      - name: Install libcvc-deps marker config
+        shell: bash
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ inputs.config == 'release' && 'Release' || 'Debug' }} \
+            -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/prefix"
+          cmake --install build
+
+      # ── Stage vcglib (header-only) ──
+      - name: Stage vcglib
+        uses: ./.github/actions/stage-vcglib
+        with:
+          dist:    ${{ github.workspace }}/prefix
+          version: ${{ env.VCGLIB_VERSION }}
+          sha256:  ${{ env.VCGLIB_SHA256 }}
+
+      # ── Linux: patch RPATH to $ORIGIN ──
+      - name: Patch RPATH ($ORIGIN)
+        if: inputs.platform == 'linux' && inputs.link == 'shared'
+        run: |
+          set -euo pipefail
+          PREFIX="${{ github.workspace }}/prefix"
+          shopt -s globstar nullglob
+          for so in "$PREFIX"/lib/**/*.so* "$PREFIX"/lib/*.so*; do
+            [ -e "$so" ] || continue
+            [ -L "$so" ] && continue
+            patchelf --remove-rpath "$so" 2>/dev/null || true
+            patchelf --set-rpath '$ORIGIN' "$so" 2>/dev/null || true
+          done
+
+      # ── Rename prefix directory to the artifact stem ──
+      - name: Rename prefix to artifact stem
+        shell: bash
+        run: |
+          STEM="${{ steps.meta.outputs.stem }}"
+          if [ -d "${{ github.workspace }}/prefix" ] && [ "${{ github.workspace }}/prefix" != "${{ github.workspace }}/${STEM}" ]; then
+            mv "${{ github.workspace }}/prefix" "${{ github.workspace }}/${STEM}"
+          fi
+
+      # ── Archive and upload ──
+      - name: Pack archive (Linux/macOS)
+        if: inputs.platform != 'windows'
+        run: |
+          STEM="${{ steps.meta.outputs.stem }}"
+          tar czf "${STEM}.tar.gz" "$STEM"
+          du -sh "$STEM" "${STEM}.tar.gz"
+
+      - name: Pack archive (Windows)
+        if: inputs.platform == 'windows'
+        shell: pwsh
+        run: |
+          $stem = "${{ steps.meta.outputs.stem }}"
+          Compress-Archive -Path $stem -DestinationPath "${stem}.zip"
+          Get-ChildItem "${stem}.zip" | Select-Object Name, Length
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.platform }}-${{ steps.meta.outputs.btlc }}-${{ inputs.link }}
+          path: |
+            ${{ steps.meta.outputs.stem }}.tar.gz
+            ${{ steps.meta.outputs.stem }}.zip
+          if-no-files-found: error
+
+      # Also upload the raw prefix for the per-component packaging stage
+      - name: Re-stage prefix for packaging
+        shell: bash
+        run: |
+          STEM="${{ steps.meta.outputs.stem }}"
+          # Rename back so package workflow gets a consistent artifact
+          [ -d "${STEM}" ] && [ ! -d prefix ] && mv "${STEM}" prefix || true
+
+      - name: Upload prefix for packaging
+        uses: actions/upload-artifact@v4
+        with:
+          name: prefix-${{ inputs.platform }}-${{ inputs.config }}-${{ inputs.link }}
+          path: prefix/
+          if-no-files-found: error
