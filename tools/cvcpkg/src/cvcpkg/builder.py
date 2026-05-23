@@ -332,9 +332,7 @@ def run_build(ctx: BuildContext) -> None:
 
     # Determine the interpreter
     if script.suffix == ".sh":
-        interpreter = shutil.which("bash")
-        if not interpreter:
-            raise BuildError("bash not found on PATH — required for .sh build scripts")
+        interpreter = _find_bash()
         cmd = [interpreter, str(script)]
     elif script.suffix == ".ps1":
         interpreter = shutil.which("pwsh")
@@ -366,6 +364,20 @@ def run_build(ctx: BuildContext) -> None:
 # ── Test execution ──────────────────────────────────────────────
 
 
+def _find_bash() -> str:
+    """Find a real bash executable, preferring Git Bash over WSL on Windows."""
+    if sys.platform == "win32":
+        # On Windows, shutil.which("bash") may return WSL bash which fails
+        # if no distro is installed.  Prefer Git-for-Windows bash.
+        git_bash = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git" / "bin" / "bash.exe"
+        if git_bash.is_file():
+            return str(git_bash)
+    found = shutil.which("bash")
+    if found:
+        return found
+    raise BuildError("bash not found on PATH")
+
+
 def run_test(ctx: BuildContext) -> None:
     """Run the recipe's test script if one exists."""
     if not ctx.recipe.test_script:
@@ -378,35 +390,14 @@ def run_test(ctx: BuildContext) -> None:
     env["CVC_PREFIX"] = ctx.install_dir.as_posix()
     env["CVC_INSTALL_DIR"] = ctx.install_dir.as_posix()
 
+    bash = _find_bash()
     print(f"cvcpkg: running test for {ctx.recipe.name}")
 
-    # On Windows, .sh files may have CRLF endings which break bash.
-    # Write a cleaned copy with LF-only line endings.
-    if sys.platform == "win32":
-        cleaned = test_path.read_bytes().replace(b"\r\n", b"\n")
-        tmp_script = Path(tempfile.mktemp(suffix=".sh", prefix="cvcpkg-test-"))
-        tmp_script.write_bytes(cleaned)
-        try:
-            result = subprocess.run(
-                ["bash", str(tmp_script)],
-                cwd=ctx.install_dir,
-                env=env,
-                capture_output=True,
-                text=True,
-                errors="replace",
-            )
-            if result.stdout:
-                print(result.stdout, end="")
-            if result.stderr:
-                print(result.stderr, end="", file=sys.stderr)
-        finally:
-            tmp_script.unlink(missing_ok=True)
-    else:
-        result = subprocess.run(
-            ["bash", str(test_path)],
-            cwd=ctx.install_dir,
-            env=env,
-        )
+    result = subprocess.run(
+        [bash, str(test_path)],
+        cwd=ctx.install_dir,
+        env=env,
+    )
     if result.returncode != 0:
         raise BuildError(f"Test for {ctx.recipe.name} failed with code {result.returncode}")
 
