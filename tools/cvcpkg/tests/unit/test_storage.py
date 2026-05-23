@@ -110,7 +110,13 @@ class TestUriToPath:
         assert "C:" in str(p) or str(p).startswith("/C:")
 
     def test_backslash_netloc_fallback(self):
-        """On Linux, file://C:\\\\path puts whole path in netloc."""
-        p = _uri_to_path("file://C\\Users\\test")
-        # netloc='C\\Users\\test', path='' → should use netloc as path
-        assert "C" in str(p)
+        """On some Python/OS combos, file://C:\\path puts C:\\path in netloc."""
+        p = _uri_to_path("file://C:\\Users\\test")
+        # netloc='C\\Users\\test', path='' → should detect drive letter at [1]
+        assert str(p).startswith("C:")
+
+    def test_windows_drive_colon_in_netloc(self):
+        """file://C:/Users/test/ → netloc='C', path='/Users/test/'."""
+        p = _uri_to_path("file://C:/Users/test/")
+        # Single-letter netloc → drive letter
+        assert str(p).startswith("C:")

@@ -15,11 +15,14 @@ from cvcpkg.storage import ObjectInfo, StorageBackend
 def _uri_to_path(uri: str) -> Path:
     """Convert a ``file://`` URI or plain path to a ``Path``.
 
-    Handles Windows drive-letter URIs such as ``file://C:/path``
-    (which ``urlparse`` splits into ``netloc='C'``, ``path='/path'``)
-    and the correct ``file:///C:/path`` form.  Also handles the case
-    where the entire Windows path lands in ``netloc`` (e.g. Python
-    on Linux parsing ``file://C:\\Users\\path``).
+    Handles Windows drive-letter URIs robustly across Python versions
+    and platforms.  Common cases:
+
+    * ``file:///C:/path``  → netloc='', path='/C:/path'  (correct URI)
+    * ``file://C/path``    → netloc='C', path='/path'    (Win backslash normalised)
+    * ``file://C:\\path/`` → netloc='C:\\path', path='/' (backslash kept in netloc)
+    * ``file://C:\\path``  → netloc='C:\\path', path=''  (no trailing slash)
+    * ``file:///tmp/foo``  → netloc='', path='/tmp/foo'  (Unix)
     """
     parsed = urlparse(uri)
     if parsed.scheme and parsed.scheme != "file":
@@ -30,16 +33,17 @@ def _uri_to_path(uri: str) -> Path:
     path_str = unquote(parsed.path)
     netloc = unquote(parsed.netloc)
 
-    # On Windows Python, file://C:\path is parsed as netloc='C', path='/path'.
-    # Reconstruct the drive-letter prefix.
+    # Case: entire Windows path landed in netloc (e.g. C:\Users\...)
+    # Detected by drive-letter pattern at position [1].
+    if len(netloc) >= 2 and netloc[1] == ":":
+        return Path(netloc)
+
+    # Case: urlparse normalised backslashes — single-letter netloc is a drive.
+    # e.g. file://C/Users/path → netloc='C', path='/Users/path'
     if len(netloc) == 1 and netloc.isalpha():
         return Path(netloc + ":" + path_str)
 
-    # On Linux Python, file://C:\path is parsed with the entire path in netloc
-    # (backslash is not a separator). Fall back to netloc + path.
-    if netloc and not path_str:
-        return Path(netloc)
-
+    # Case: netloc is empty or a network host — use path directly.
     if not path_str and netloc:
         return Path(netloc)
 
