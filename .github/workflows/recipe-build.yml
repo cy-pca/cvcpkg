@@ -119,6 +119,21 @@ jobs:
         shell: pwsh
         run: |
           choco install ninja cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
+          # vcpkg is pre-installed on windows-latest at C:\vcpkg
+          echo "C:\vcpkg" | Out-File -Append $env:GITHUB_PATH
+          vcpkg version
+
+      # ── Qt6 (Windows — pre-built via aqtinstall) ──
+      - name: Install Qt6 (Windows)
+        if: inputs.platform == 'windows'
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.*'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2019_64'
+          modules: ''
+          cache: true
 
       # ── Install cvcpkg ──
       - name: Install cvcpkg
