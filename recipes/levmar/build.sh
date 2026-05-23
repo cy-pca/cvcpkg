@@ -24,6 +24,6 @@ cmake -G Ninja \
     -DCMAKE_PREFIX_PATH="${CVC_DEPS_PREFIX}" \
     -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-    "${LEVMAR_CMAKE_EXTRA[@]}"
+    ${LEVMAR_CMAKE_EXTRA[@]+"${LEVMAR_CMAKE_EXTRA[@]}"}
 cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 cmake --install "${CVC_BUILD_DIR}"
