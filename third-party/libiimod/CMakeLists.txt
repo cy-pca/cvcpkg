@@ -38,6 +38,9 @@ include(TestBigEndian)
 # libtiff is a hard dependency — iitif.c (which provides the TIFF
 # read/write paths used by libcvc) #include's <tiffio.h> and calls
 # TIFFOpen/TIFFGetField/... directly when NOTIFFLIBS is not defined.
+# ZLIB must be found first: TIFF's installed cmake config references
+# ZLIB::ZLIB as a transitive dependency (for static builds).
+find_package(ZLIB REQUIRED)
 find_package(TIFF REQUIRED)
 
 # Pinned to LabShare-Archive/IMOD master HEAD as of 2026-05-13.

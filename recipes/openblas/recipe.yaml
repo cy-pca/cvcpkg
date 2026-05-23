@@ -28,10 +28,6 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
-    - platform: macos
-      script: build.sh
-      env:
-        MACOSX_DEPLOYMENT_TARGET: "13.0"
     - platform: windows
       script: build.ps1
       vcpkg_port: openblas

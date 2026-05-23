@@ -5,5 +5,6 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 Invoke-CvcCMakeBuild @(
     '-DBUILD_TESTS=OFF',
-    '-DENABLE_THREADS=ON'
+    '-DENABLE_THREADS=ON',
+    '-DWITH_COMBINED_THREADS=ON'
 )
