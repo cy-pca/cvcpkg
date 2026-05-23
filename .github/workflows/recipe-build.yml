@@ -111,14 +111,17 @@ jobs:
       - name: Install system build tools (macOS)
         if: inputs.platform == 'macos'
         run: |
-          brew install cmake ninja autoconf automake libtool pkg-config libomp
+          brew install ninja autoconf automake libtool pkg-config libomp
+          # Pin cmake to 3.x — Boost 1.86 cmake files are incompatible with cmake 4.x
+          pip3 install --break-system-packages cmake==3.31.7
 
       # ── System build tools (Windows) ──
       - name: Install system build tools (Windows)
         if: inputs.platform == 'windows'
         shell: pwsh
         run: |
-          choco install ninja cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
+          choco install ninja -y
+          choco install cmake --version=3.31.7 --installargs 'ADD_CMAKE_TO_PATH=System' -y
           # vcpkg is pre-installed on windows-latest at C:\vcpkg
           echo "C:\vcpkg" | Out-File -Append $env:GITHUB_PATH
           vcpkg version
