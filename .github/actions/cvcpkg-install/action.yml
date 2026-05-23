@@ -15,7 +15,7 @@ description: |
           build_type: Release
 
       - name: Configure
-        run: cmake -B build -DCMAKE_PREFIX_PATH="${{ steps.deps.outputs.path }}" ...
+        run: cmake -B build -DCMAKE_PREFIX_PATH=<steps.deps.outputs.path> ...
 
   The action:
     1. Checks out libcvc-deps (sparse, tools/ + packaging/ only).
