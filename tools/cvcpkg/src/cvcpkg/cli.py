@@ -706,7 +706,7 @@ def push(archives: tuple[str, ...], dest: str) -> None:
         if not p.is_file():
             raise click.ClickException(f"file not found: {archive}")
         dest_uri = dest.rstrip("/") + "/" + p.name
-        click.echo(f"cvcpkg: uploading {p.name} → {dest_uri}")
+        click.echo(f"cvcpkg: uploading {p.name} -> {dest_uri}")
         try:
             with open(p, "rb") as f:
                 backend.put(dest_uri, f)

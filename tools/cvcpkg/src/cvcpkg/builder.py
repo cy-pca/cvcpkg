@@ -740,7 +740,7 @@ def build_all(
 
     contexts: list[BuildContext] = []
     for recipe in ordered:
-        print(f"\ncvcpkg: ══ {recipe.name} ({recipe.full_version}) ══")
+        print(f"\ncvcpkg: == {recipe.name} ({recipe.full_version}) ==")
         ctx = build_recipe(
             recipe.recipe_dir,
             platform=platform,
