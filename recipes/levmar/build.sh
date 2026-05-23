@@ -15,6 +15,8 @@ LEVMAR_CMAKE_EXTRA=()
 if [[ "${CVC_PLATFORM}" == "linux" ]]; then
     LEVMAR_CMAKE_EXTRA+=(-DBLA_VENDOR=OpenBLAS)
     LEVMAR_CMAKE_EXTRA+=(-DCMAKE_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib")
+    # FindBLAS in CMake ≥3.31 needs OpenBLAS on the linker search path
+    export LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
 fi
 
 cmake -G Ninja \
