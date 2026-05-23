@@ -23,6 +23,8 @@ depends:
     - ninja
 
 build:
+  # No macOS entry: macOS provides BLAS/LAPACK via the Accelerate
+  # framework, so we use the system libraries there instead.
   matrix:
     - platform: linux
       script: build.sh

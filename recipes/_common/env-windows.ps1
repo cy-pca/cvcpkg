@@ -19,10 +19,11 @@ $cmakeBuildType = switch ($env:CVC_BUILD_TYPE.ToLower()) {
 $buildSharedLibs = if ($env:CVC_LINK -eq 'static') { 'OFF' } else { 'ON' }
 
 # MSVC runtime library: static link -> /MT (static CRT), shared -> /MD (dynamic CRT)
+# The Debug infix goes BEFORE DLL: MultiThreaded[Debug][DLL]
 $msvcRuntime = if ($env:CVC_LINK -eq 'static') {
     'MultiThreaded$<$<CONFIG:Debug>:Debug>'
 } else {
-    'MultiThreadedDLL$<$<CONFIG:Debug>:Debug>'
+    'MultiThreaded$<$<CONFIG:Debug>:Debug>DLL'
 }
 
 if ($env:CVC_DEPS_PREFIX) {
