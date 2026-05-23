@@ -120,3 +120,8 @@ class TestUriToPath:
         p = _uri_to_path("file://C:/Users/test/")
         # Single-letter netloc → drive letter
         assert str(p).startswith("C:")
+
+    def test_windows_netloc_with_path_suffix(self):
+        """file://C:\\dir/file.tar.gz must include the path suffix."""
+        p = _uri_to_path("file://C:\\dir/file.tar.gz")
+        assert str(p).endswith("file.tar.gz")
