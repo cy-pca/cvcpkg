@@ -30,7 +30,8 @@ function Invoke-CvcCMakeBuild {
         '-B', $env:CVC_BUILD_DIR,
         "-DCMAKE_INSTALL_PREFIX=$env:CVC_INSTALL_DIR",
         "-DCMAKE_BUILD_TYPE=$cmakeBuildType",
-        "-DBUILD_SHARED_LIBS=$buildSharedLibs"
+        "-DBUILD_SHARED_LIBS=$buildSharedLibs",
+        "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
     ) + $ExtraArgs
 
     & cmake @allArgs
@@ -41,6 +42,63 @@ function Invoke-CvcCMakeBuild {
 
     & cmake --install $env:CVC_BUILD_DIR
     if ($LASTEXITCODE -ne 0) { throw "cmake install failed" }
+}
+
+function Invoke-CvcVcpkgInstall {
+    <#
+    .SYNOPSIS
+      Install a vcpkg port and stage its files into the cvcpkg prefix.
+    .PARAMETER Port
+      The vcpkg port name (e.g. "clapack", "pthreads").
+    .PARAMETER Triplet
+      vcpkg triplet. Defaults to x64-windows or x64-windows-static based on CVC_LINK.
+    .PARAMETER Features
+      Optional feature list (e.g. @("cpp")).
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Port,
+        [string]$Triplet = '',
+        [string[]]$Features = @()
+    )
+
+    if (-not $Triplet) {
+        $Triplet = if ($env:CVC_LINK -eq 'static') { 'x64-windows-static' } else { 'x64-windows' }
+    }
+
+    if (-not (Get-Command vcpkg -ErrorAction SilentlyContinue)) {
+        throw "vcpkg not found on PATH — required for port '$Port'"
+    }
+
+    $spec = if ($Features.Count -gt 0) {
+        "${Port}[$($Features -join ',')]:${Triplet}"
+    } else {
+        "${Port}:${Triplet}"
+    }
+
+    Write-Host "cvcpkg: vcpkg install $spec"
+    & vcpkg install $spec --x-install-root="$env:CVC_BUILD_DIR/vcpkg-installed"
+    if ($LASTEXITCODE -ne 0) { throw "vcpkg install $spec failed" }
+
+    $installed = Join-Path $env:CVC_BUILD_DIR "vcpkg-installed/$Triplet"
+    foreach ($sub in @('include','lib','bin','share','tools')) {
+        $src = Join-Path $installed $sub
+        if (Test-Path $src) {
+            Copy-Item -Recurse -Force $src $env:CVC_INSTALL_DIR
+        }
+    }
+    # Also copy debug libs if debug build
+    if ($cmakeBuildType -eq 'Debug') {
+        $debugDir = Join-Path $installed "debug"
+        if (Test-Path $debugDir) {
+            foreach ($sub in @('lib','bin')) {
+                $src = Join-Path $debugDir $sub
+                if (Test-Path $src) {
+                    Copy-Item -Recurse -Force $src $env:CVC_INSTALL_DIR
+                }
+            }
+        }
+    }
+    Write-Host "cvcpkg: $Port staged to $env:CVC_INSTALL_DIR"
 }
 
 Write-Host "-- env-windows.ps1 loaded --"
