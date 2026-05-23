@@ -18,6 +18,13 @@ $cmakeBuildType = switch ($env:CVC_BUILD_TYPE.ToLower()) {
 
 $buildSharedLibs = if ($env:CVC_LINK -eq 'static') { 'OFF' } else { 'ON' }
 
+# MSVC runtime library: static link -> /MT (static CRT), shared -> /MD (dynamic CRT)
+$msvcRuntime = if ($env:CVC_LINK -eq 'static') {
+    'MultiThreaded$<$<CONFIG:Debug>:Debug>'
+} else {
+    'MultiThreadedDLL$<$<CONFIG:Debug>:Debug>'
+}
+
 if ($env:CVC_DEPS_PREFIX) {
     $env:CMAKE_PREFIX_PATH = $env:CVC_DEPS_PREFIX
 }
@@ -31,6 +38,7 @@ function Invoke-CvcCMakeBuild {
         "-DCMAKE_INSTALL_PREFIX=$env:CVC_INSTALL_DIR",
         "-DCMAKE_BUILD_TYPE=$cmakeBuildType",
         "-DBUILD_SHARED_LIBS=$buildSharedLibs",
+        "-DCMAKE_MSVC_RUNTIME_LIBRARY=$msvcRuntime",
         "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
     ) + $ExtraArgs
 
