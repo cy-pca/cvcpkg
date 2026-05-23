@@ -22,7 +22,7 @@ depends:
   build:
     - name: openblas
       version: ">=0.3"
-      platforms: [linux, macos]
+      platforms: [linux]
     - name: clapack
       version: ">=3.2"
       platforms: [windows]

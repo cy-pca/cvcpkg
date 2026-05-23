@@ -50,6 +50,7 @@ jobs:
 
       - name: Run unit tests
         working-directory: tools/cvcpkg
+        shell: bash
         run: |
           poetry run pytest tests/unit/ -v --tb=short \
             --junitxml=unit-results.xml \
@@ -57,6 +58,7 @@ jobs:
 
       - name: Run integration tests
         working-directory: tools/cvcpkg
+        shell: bash
         run: |
           poetry run pytest tests/integration/ -v --tb=short \
             --junitxml=integration-results.xml \
