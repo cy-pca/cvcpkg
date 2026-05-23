@@ -369,7 +369,9 @@ def _find_bash() -> str:
     if sys.platform == "win32":
         # On Windows, shutil.which("bash") may return WSL bash which fails
         # if no distro is installed.  Prefer Git-for-Windows bash.
-        git_bash = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git" / "bin" / "bash.exe"
+        git_bash = (
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git" / "bin" / "bash.exe"
+        )
         if git_bash.is_file():
             return str(git_bash)
     found = shutil.which("bash")
