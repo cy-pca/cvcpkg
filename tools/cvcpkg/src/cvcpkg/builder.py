@@ -375,8 +375,8 @@ def run_test(ctx: BuildContext) -> None:
         raise BuildError(f"Test script not found: {test_path}")
 
     env = os.environ.copy()
-    env["CVC_PREFIX"] = str(ctx.install_dir)
-    env["CVC_INSTALL_DIR"] = str(ctx.install_dir)
+    env["CVC_PREFIX"] = ctx.install_dir.as_posix()
+    env["CVC_INSTALL_DIR"] = ctx.install_dir.as_posix()
 
     print(f"cvcpkg: running test for {ctx.recipe.name}")
     result = subprocess.run(

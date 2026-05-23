@@ -7,7 +7,7 @@ set -euo pipefail
 
 : "${CVC_INSTALL_DIR:?CVC_INSTALL_DIR must be set}"
 
-echo "── zlib smoke test ──"
+echo "-- zlib smoke test --"
 
 # 1. Check that the header exists.
 test -f "${CVC_INSTALL_DIR}/include/zlib.h" \
@@ -27,9 +27,9 @@ done
 
 # 3. Check that the CMake config package is findable.
 if [[ -d "${CVC_INSTALL_DIR}/lib/cmake/ZLIB" ]]; then
-    echo "  ✓ CMake config package found"
+    echo "  OK: CMake config package found"
 else
-    echo "  ⚠ No CMake config package (may be OK if upstream zlib version predates it)"
+    echo "  WARN: No CMake config package (may be OK if upstream zlib version predates it)"
 fi
 
 # 4. Compile a trivial program that links against zlib.
@@ -50,10 +50,10 @@ EOF
     && {
         LD_LIBRARY_PATH="${CVC_INSTALL_DIR}/lib:${LD_LIBRARY_PATH:-}" \
             "${TMPDIR}/test_zlib"
-        echo "  ✓ compile + link + run OK"
-    } || echo "  ⚠ compile/link test skipped (compiler issue)"
+        echo "  OK: compile + link + run OK"
+    } || echo "  WARN: compile/link test skipped (compiler issue)"
 else
-    echo "  ⚠ no C compiler on PATH, skipping compile test"
+    echo "  WARN: no C compiler on PATH, skipping compile test"
 fi
 
-echo "── zlib smoke test passed ──"
+echo "-- zlib smoke test passed --"
