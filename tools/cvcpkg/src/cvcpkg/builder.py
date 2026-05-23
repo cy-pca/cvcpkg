@@ -381,16 +381,26 @@ def run_test(ctx: BuildContext) -> None:
     print(f"cvcpkg: running test for {ctx.recipe.name}")
 
     # On Windows, .sh files may have CRLF endings which break bash.
-    # Read the script, strip \r, and pipe through stdin.
+    # Write a cleaned copy with LF-only line endings.
     if sys.platform == "win32":
-        script_text = test_path.read_text(encoding="utf-8").replace("\r\n", "\n")
-        result = subprocess.run(
-            ["bash", "-s", "--"],
-            input=script_text,
-            text=True,
-            cwd=ctx.install_dir,
-            env=env,
-        )
+        cleaned = test_path.read_bytes().replace(b"\r\n", b"\n")
+        tmp_script = Path(tempfile.mktemp(suffix=".sh", prefix="cvcpkg-test-"))
+        tmp_script.write_bytes(cleaned)
+        try:
+            result = subprocess.run(
+                ["bash", str(tmp_script)],
+                cwd=ctx.install_dir,
+                env=env,
+                capture_output=True,
+                text=True,
+                errors="replace",
+            )
+            if result.stdout:
+                print(result.stdout, end="")
+            if result.stderr:
+                print(result.stderr, end="", file=sys.stderr)
+        finally:
+            tmp_script.unlink(missing_ok=True)
     else:
         result = subprocess.run(
             ["bash", str(test_path)],
