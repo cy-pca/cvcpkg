@@ -35,7 +35,10 @@ def _uri_to_path(uri: str) -> Path:
 
     # Case: entire Windows path landed in netloc (e.g. C:\Users\...)
     # Detected by drive-letter pattern at position [1].
+    # Any remaining path component must be appended (e.g. /file.tar.gz).
     if len(netloc) >= 2 and netloc[1] == ":":
+        if path_str and path_str != "/":
+            return Path(netloc + path_str)
         return Path(netloc)
 
     # Case: urlparse normalised backslashes — single-letter netloc is a drive.
