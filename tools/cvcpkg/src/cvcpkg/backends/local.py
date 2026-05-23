@@ -13,14 +13,36 @@ from cvcpkg.storage import ObjectInfo, StorageBackend
 
 
 def _uri_to_path(uri: str) -> Path:
-    """Convert a ``file://`` URI or plain path to a ``Path``."""
+    """Convert a ``file://`` URI or plain path to a ``Path``.
+
+    Handles Windows drive-letter URIs such as ``file://C:/path``
+    (which ``urlparse`` splits into ``netloc='C'``, ``path='/path'``)
+    and the correct ``file:///C:/path`` form.  Also handles the case
+    where the entire Windows path lands in ``netloc`` (e.g. Python
+    on Linux parsing ``file://C:\\Users\\path``).
+    """
     parsed = urlparse(uri)
     if parsed.scheme and parsed.scheme != "file":
         raise ValueError(f"FileBackend does not handle scheme '{parsed.scheme}'")
-    # file:///absolute/path or file://host/path or plain /path
+    if not parsed.scheme:
+        return Path(uri)
+
     path_str = unquote(parsed.path)
-    if not path_str:
-        path_str = unquote(parsed.netloc + parsed.path) if parsed.netloc else uri
+    netloc = unquote(parsed.netloc)
+
+    # On Windows Python, file://C:\path is parsed as netloc='C', path='/path'.
+    # Reconstruct the drive-letter prefix.
+    if len(netloc) == 1 and netloc.isalpha():
+        return Path(netloc + ":" + path_str)
+
+    # On Linux Python, file://C:\path is parsed with the entire path in netloc
+    # (backslash is not a separator). Fall back to netloc + path.
+    if netloc and not path_str:
+        return Path(netloc)
+
+    if not path_str and netloc:
+        return Path(netloc)
+
     return Path(path_str)
 
 

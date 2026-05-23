@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from cvcpkg.backends.local import _uri_to_path
 from cvcpkg.storage import ObjectInfo, available_schemes, get_backend, register
 
 
@@ -84,3 +85,32 @@ class TestFileBackend:
         backend = get_backend(f"file://{f}")
         info = backend.head(f"file://{f}")
         assert info.size == 4
+
+
+class TestUriToPath:
+    """Verify _uri_to_path handles various file:// URI forms."""
+
+    def test_posix_triple_slash(self):
+        p = _uri_to_path("file:///tmp/foo.txt")
+        assert p == Path("/tmp/foo.txt")
+
+    def test_windows_drive_letter_netloc(self):
+        """file://C/Users/test parses as netloc='C', path='/Users/test'.
+
+        On Windows Python, file://C:\\path is also parsed this way
+        because backslashes are normalised to forward slashes.
+        """
+        p = _uri_to_path("file://C/Users/test")
+        assert str(p) == "C:/Users/test" or str(p) == "C:\\Users\\test"
+
+    def test_windows_triple_slash(self):
+        """file:///C:/Users/test — correct Windows URI."""
+        p = _uri_to_path("file:///C:/Users/test")
+        # On Linux this stays as-is (/C:/Users/test); on Windows it resolves
+        assert "C:" in str(p) or str(p).startswith("/C:")
+
+    def test_backslash_netloc_fallback(self):
+        """On Linux, file://C:\\\\path puts whole path in netloc."""
+        p = _uri_to_path("file://C\\Users\\test")
+        # netloc='C\\Users\\test', path='' → should use netloc as path
+        assert "C" in str(p)

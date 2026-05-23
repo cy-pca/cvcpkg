@@ -111,7 +111,7 @@ jobs:
       - name: Install system build tools (macOS)
         if: inputs.platform == 'macos'
         run: |
-          brew install cmake ninja autoconf automake libtool pkg-config
+          brew install cmake ninja autoconf automake libtool pkg-config libomp
 
       # ── System build tools (Windows) ──
       - name: Install system build tools (Windows)
