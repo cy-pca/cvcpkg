@@ -123,6 +123,14 @@ jobs:
           echo "C:\vcpkg" | Out-File -Append $env:GITHUB_PATH
           vcpkg version
 
+      # ── Activate MSVC environment (Windows) ──
+      # Required so Ninja/CMake find cl.exe instead of MinGW g++.
+      - name: Set up MSVC developer environment
+        if: inputs.platform == 'windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       # ── Qt6 (Windows — pre-built via aqtinstall) ──
       - name: Install Qt6 (Windows)
         if: inputs.platform == 'windows'
