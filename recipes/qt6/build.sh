@@ -4,6 +4,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 
+# Qt6's CMake rejects build paths containing symlinks (macOS /var -> /private/var).
+# Resolve the build dir to its real path.
+CVC_BUILD_DIR="$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "${CVC_BUILD_DIR}")"
+export CVC_BUILD_DIR
+
 cd "${CVC_SOURCE_DIR}"
 
 cmake -G Ninja \
