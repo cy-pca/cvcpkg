@@ -7,4 +7,10 @@ cvc_cmake_build \
     -Dtiff-tests=OFF \
     -Dtiff-tools=OFF \
     -Dtiff-contrib=OFF \
-    -Dtiff-docs=OFF
+    -Dtiff-docs=OFF \
+    -Dtiff-jpeg=OFF \
+    -Dtiff-jbig=OFF \
+    -Dtiff-lzma=OFF \
+    -Dtiff-webp=OFF \
+    -Dtiff-zstd=OFF \
+    -Dtiff-lerc=OFF
