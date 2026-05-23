@@ -379,11 +379,24 @@ def run_test(ctx: BuildContext) -> None:
     env["CVC_INSTALL_DIR"] = ctx.install_dir.as_posix()
 
     print(f"cvcpkg: running test for {ctx.recipe.name}")
-    result = subprocess.run(
-        ["bash", str(test_path)],
-        cwd=ctx.install_dir,
-        env=env,
-    )
+
+    # On Windows, .sh files may have CRLF endings which break bash.
+    # Read the script, strip \r, and pipe through stdin.
+    if sys.platform == "win32":
+        script_text = test_path.read_text(encoding="utf-8").replace("\r\n", "\n")
+        result = subprocess.run(
+            ["bash", "-s", "--"],
+            input=script_text,
+            text=True,
+            cwd=ctx.install_dir,
+            env=env,
+        )
+    else:
+        result = subprocess.run(
+            ["bash", str(test_path)],
+            cwd=ctx.install_dir,
+            env=env,
+        )
     if result.returncode != 0:
         raise BuildError(f"Test for {ctx.recipe.name} failed with code {result.returncode}")
 
