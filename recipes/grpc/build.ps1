@@ -20,8 +20,8 @@ Invoke-CvcCMakeBuild @(
     '-DgRPC_SSL_PROVIDER=package',
     '-DgRPC_ZLIB_PROVIDER=package',
     '-DCMAKE_CXX_STANDARD=17',
-    # gRPC's upb sub-libraries don't export symbols properly on Windows,
-    # causing LNK2019 for upb_alloc_global etc.  Force static even in
-    # "shared" builds — consumers link gRPC statically on Windows.
-    '-DBUILD_SHARED_LIBS=OFF'
+    # gRPC's upb sub-libraries lack proper __declspec(dllexport)
+    # annotations, so CMake-generated .def files miss data symbols
+    # like upb_alloc_global.  Let CMake auto-export everything.
+    '-DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON'
 )
