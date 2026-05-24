@@ -9,5 +9,7 @@ Invoke-CvcCMakeBuild @(
     '-Dprotobuf_BUILD_PROTOC_BINARIES=ON',
     '-Dprotobuf_BUILD_LIBPROTOC=ON',
     '-Dprotobuf_ABSL_PROVIDER=package',
-    '-DCMAKE_CXX_STANDARD=17'
+    '-DCMAKE_CXX_STANDARD=17',
+    # Static on Windows -- see grpc/build.ps1 comment.
+    '-DBUILD_SHARED_LIBS=OFF'
 )

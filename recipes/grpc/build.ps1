@@ -20,8 +20,9 @@ Invoke-CvcCMakeBuild @(
     '-DgRPC_SSL_PROVIDER=package',
     '-DgRPC_ZLIB_PROVIDER=package',
     '-DCMAKE_CXX_STANDARD=17',
-    # gRPC's upb sub-libraries lack proper __declspec(dllexport)
-    # annotations, so CMake-generated .def files miss data symbols
-    # like upb_alloc_global.  Let CMake auto-export everything.
-    '-DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON'
+    # gRPC's upb sub-libraries lack proper DLL symbol exports on
+    # Windows (LNK2019 for upb_alloc_global etc.).  Build the entire
+    # protobuf ecosystem as static libs -- the .lib files still use
+    # /MD (dynamic CRT) so they link cleanly into shared consumers.
+    '-DBUILD_SHARED_LIBS=OFF'
 )
