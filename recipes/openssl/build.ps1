@@ -19,6 +19,13 @@ if (Test-Path $strawberry) {
     $env:PATH = "$strawberry;$env:PATH"
 }
 
+# Remove directories that ship a Unix-style 'link' command (creates
+# hard links) which shadows MSVC's link.exe (the linker).  Without
+# this, nmake's link step fails: "link: extra operand '/dll'".
+$env:PATH = ($env:PATH -split ';' | Where-Object {
+    -not ($_ -like '*\Strawberry\c\bin*' -or $_ -like '*\Git\usr\bin*')
+}) -join ';'
+
 # Choose the target: VC-WIN64A is 64-bit MSVC on x64
 $target = 'VC-WIN64A'
 
