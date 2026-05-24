@@ -38,9 +38,53 @@ include(TestBigEndian)
 # libtiff is a hard dependency — iitif.c (which provides the TIFF
 # read/write paths used by libcvc) #include's <tiffio.h> and calls
 # TIFFOpen/TIFFGetField/... directly when NOTIFFLIBS is not defined.
-# ZLIB must be found first: TIFF's installed cmake config references
-# ZLIB::ZLIB as a transitive dependency (for static builds).
+#
+# For static TIFF builds, TiffTargets.cmake references transitive
+# deps by their imported-target names. We must ensure those targets
+# exist before calling find_package(TIFF).
 find_package(ZLIB REQUIRED)
+find_package(JPEG REQUIRED)
+find_package(liblzma REQUIRED)
+find_package(WebP CONFIG REQUIRED)
+
+# TIFF references ZSTD::ZSTD (from its bundled FindZSTD). zstd's own
+# cmake config creates zstd::libzstd_shared / zstd::libzstd_static.
+# Bridge the target name for static TIFF builds.
+find_package(zstd CONFIG REQUIRED)
+if(NOT TARGET ZSTD::ZSTD)
+    add_library(ZSTD::ZSTD IMPORTED INTERFACE)
+    if(TARGET zstd::libzstd_shared)
+        set_property(TARGET ZSTD::ZSTD PROPERTY
+            INTERFACE_LINK_LIBRARIES zstd::libzstd_shared)
+    elseif(TARGET zstd::libzstd_static)
+        set_property(TARGET ZSTD::ZSTD PROPERTY
+            INTERFACE_LINK_LIBRARIES zstd::libzstd_static)
+    endif()
+endif()
+
+# TIFF references LERC::LERC (from its bundled FindLERC). LERC only
+# ships pkgconfig, not cmake config, so locate it manually.
+find_library(LERC_LIBRARY NAMES LercLib Lerc)
+find_path(LERC_INCLUDE_DIR NAMES Lerc_c_api.h)
+if(LERC_LIBRARY AND LERC_INCLUDE_DIR AND NOT TARGET LERC::LERC)
+    add_library(LERC::LERC UNKNOWN IMPORTED)
+    set_target_properties(LERC::LERC PROPERTIES
+        IMPORTED_LOCATION "${LERC_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${LERC_INCLUDE_DIR}")
+endif()
+
+# TIFF references CMath::CMath (just libm on Unix, empty on Windows).
+if(NOT TARGET CMath::CMath)
+    find_library(_cmath_lib m)
+    if(_cmath_lib)
+        add_library(CMath::CMath UNKNOWN IMPORTED)
+        set_target_properties(CMath::CMath PROPERTIES
+            IMPORTED_LOCATION "${_cmath_lib}")
+    else()
+        add_library(CMath::CMath INTERFACE IMPORTED)
+    endif()
+endif()
+
 find_package(TIFF REQUIRED)
 
 # Pinned to LabShare-Archive/IMOD master HEAD as of 2026-05-13.

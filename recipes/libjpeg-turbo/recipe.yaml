@@ -1,0 +1,56 @@
+schema_version: 1
+recipe:
+  name: libjpeg-turbo
+  upstream_version: "3.1.0"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  homepage: https://libjpeg-turbo.org/
+  license: IJG AND BSD-3-Clause AND Zlib
+  tags: [graphics, io]
+
+source:
+  type: tarball
+  url: https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.1.0/libjpeg-turbo-3.1.0.tar.gz
+  sha256: "9564c72b1dfd1d6fe6274c5f95a8d989b59854575d4bbee44ade7bc17aa9bc93"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libjpeg*
+    - lib/libturbojpeg*
+    - lib/jpeg*
+    - lib/turbojpeg*
+    - lib/cmake/libjpeg-turbo/
+    - lib/pkgconfig/libjpeg.pc
+    - lib/pkgconfig/libturbojpeg.pc
+    - include/jconfig.h
+    - include/jerror.h
+    - include/jmorecfg.h
+    - include/jpeglib.h
+    - include/turbojpeg.h
+  cmake_packages:
+    - { name: libjpeg-turbo, targets: ["libjpeg-turbo::jpeg", "libjpeg-turbo::turbojpeg"] }
+
+abi:
+  cxx_std: 17

@@ -1,0 +1,51 @@
+schema_version: 1
+recipe:
+  name: zstd
+  upstream_version: "1.5.7"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  homepage: https://facebook.github.io/zstd/
+  license: BSD-3-Clause AND GPL-2.0-only
+  tags: [utils, io]
+
+source:
+  type: tarball
+  url: https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz
+  sha256: "eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libzstd*
+    - lib/zstd*
+    - lib/cmake/zstd/
+    - lib/pkgconfig/libzstd.pc
+    - include/zstd.h
+    - include/zstd_errors.h
+    - include/zdict.h
+  cmake_packages:
+    - { name: zstd, targets: ["zstd::libzstd"] }
+
+abi:
+  cxx_std: 17
