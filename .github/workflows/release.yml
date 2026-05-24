@@ -268,8 +268,10 @@ jobs:
           prerelease: ${{ inputs.prerelease || false }}
           generate_release_notes: false
           # Upload monolithic bundles + per-component bundles + indexes.
+          # Per-component archives are named <name>-<ver>-<plat>-<arch>-<cfg>-<link>.<ext>
           files: |
-            artifacts/libcvc-deps-*.tar.gz
-            artifacts/libcvc-deps-*.zip
+            artifacts/*.tar.gz
+            artifacts/*.zip
+            artifacts/*.7z
             artifacts/*-index.yaml
           fail_on_unmatched_files: false
