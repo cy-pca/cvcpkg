@@ -102,15 +102,16 @@ function Invoke-CvcVcpkgInstall {
             Copy-Item -Recurse -Force $src $env:CVC_INSTALL_DIR
         }
     }
-    # Also copy debug libs if debug build
-    if ($cmakeBuildType -eq 'Debug') {
-        $debugDir = Join-Path $installed "debug"
-        if (Test-Path $debugDir) {
-            foreach ($sub in @('lib','bin')) {
-                $src = Join-Path $debugDir $sub
-                if (Test-Path $src) {
-                    Copy-Item -Recurse -Force $src $env:CVC_INSTALL_DIR
-                }
+    # Always stage debug/ subdirectory — vcpkg cmake targets reference both
+    # release and debug lib paths (e.g. ${_IMPORT_PREFIX}/debug/lib/foo.lib).
+    $debugDir = Join-Path $installed "debug"
+    if (Test-Path $debugDir) {
+        $destDebug = Join-Path $env:CVC_INSTALL_DIR "debug"
+        if (-not (Test-Path $destDebug)) { New-Item -ItemType Directory -Path $destDebug | Out-Null }
+        foreach ($sub in @('lib','bin')) {
+            $src = Join-Path $debugDir $sub
+            if (Test-Path $src) {
+                Copy-Item -Recurse -Force $src $destDebug
             }
         }
     }
