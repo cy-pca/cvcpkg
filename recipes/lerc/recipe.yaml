@@ -1,0 +1,48 @@
+schema_version: 1
+recipe:
+  name: lerc
+  upstream_version: "4.0.0"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  homepage: https://github.com/Esri/lerc
+  license: Apache-2.0
+  tags: [graphics, io]
+
+source:
+  type: tarball
+  url: https://github.com/Esri/lerc/archive/refs/tags/v4.0.0.tar.gz
+  sha256: "91431c2b16d0e3de6cbaea188603359f87caed08259a645fd5a3805784ee30a0"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libLerc*
+    - lib/Lerc*
+    - lib/pkgconfig/Lerc.pc
+    - include/Lerc_c_api.h
+    - include/Lerc_types.h
+  cmake_packages: []
+
+abi:
+  cxx_std: 17
