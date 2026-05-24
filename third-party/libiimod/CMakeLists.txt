@@ -44,7 +44,10 @@ include(TestBigEndian)
 # exist before calling find_package(TIFF).
 find_package(ZLIB REQUIRED)
 find_package(JPEG REQUIRED)
-find_package(liblzma REQUIRED)
+# Use CONFIG mode so we get the liblzma::liblzma target that TIFF's
+# cmake config references (the built-in FindLibLZMA module creates
+# LibLZMA::LibLZMA which is a different target name).
+find_package(liblzma CONFIG REQUIRED)
 find_package(WebP CONFIG REQUIRED)
 
 # TIFF references ZSTD::ZSTD (from its bundled FindZSTD). zstd's own
