@@ -23,8 +23,7 @@ try {
         --prefix="$env:CVC_INSTALL_DIR" `
         --openssldir="$env:CVC_INSTALL_DIR\ssl" `
         $sharedFlag `
-        no-tests `
-        no-asm
+        no-tests
     if ($LASTEXITCODE -ne 0) { throw "OpenSSL Configure failed" }
 
     & nmake /NOLOGO
