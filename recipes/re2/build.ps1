@@ -5,5 +5,7 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 Invoke-CvcCMakeBuild @(
     '-DRE2_BUILD_TESTING=OFF',
-    '-DCMAKE_CXX_STANDARD=17'
+    '-DCMAKE_CXX_STANDARD=17',
+    # Static on Windows -- see grpc/build.ps1 comment.
+    '-DBUILD_SHARED_LIBS=OFF'
 )

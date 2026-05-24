@@ -6,7 +6,11 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $extra = @(
     '-DABSL_BUILD_TESTING=OFF',
     '-DABSL_USE_GOOGLETEST_HEAD=OFF',
-    '-DCMAKE_CXX_STANDARD=17'
+    '-DCMAKE_CXX_STANDARD=17',
+    # Build abseil as static on Windows in all configurations.
+    # gRPC's DLL builds are broken (upb export issues), so the
+    # entire protobuf ecosystem ships as static .lib files.
+    '-DBUILD_SHARED_LIBS=OFF'
 )
 
 # Abseil defaults ABSL_MSVC_STATIC_RUNTIME=OFF, which forces /MD even when
