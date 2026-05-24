@@ -32,7 +32,6 @@ if [[ -n "${CVC_DEPS_PREFIX:-}" ]]; then
 fi
 
 cvc_cmake_build() {
-    local extra_args=("$@")
     cmake -G Ninja \
         -S "${CVC_SOURCE_DIR}" \
         -B "${CVC_BUILD_DIR}" \
@@ -43,7 +42,7 @@ cvc_cmake_build() {
         -DCMAKE_CXX_STANDARD=17 \
         -DCMAKE_OSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET}" \
         -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-        "${extra_args[@]}"
+        "$@"
     cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
     cmake --install "${CVC_BUILD_DIR}"
 }

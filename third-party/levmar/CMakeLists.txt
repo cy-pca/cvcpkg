@@ -89,6 +89,22 @@ if(WIN32)
   endif()
 endif()
 if(NOT _levmar_have_lapack)
+  # On Linux with static OpenBLAS the stock FindBLAS module fails because
+  # the link-test for sgemm_ cannot resolve gfortran runtime symbols.
+  # OpenBLAS's own CMake config handles transitive deps correctly and
+  # provides both BLAS and LAPACK, so prefer it when available.
+  find_package(OpenBLAS CONFIG QUIET)
+  if(OpenBLAS_FOUND AND TARGET OpenBLAS::OpenBLAS)
+    if(NOT TARGET LAPACK::LAPACK)
+      add_library(LAPACK::LAPACK INTERFACE IMPORTED)
+      set_property(TARGET LAPACK::LAPACK PROPERTY
+        INTERFACE_LINK_LIBRARIES OpenBLAS::OpenBLAS)
+    endif()
+    set(_levmar_have_lapack TRUE)
+    message(STATUS "levmar: using OpenBLAS CONFIG for LAPACK")
+  endif()
+endif()
+if(NOT _levmar_have_lapack)
   find_package(LAPACK REQUIRED)
 endif()
 
