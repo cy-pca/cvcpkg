@@ -21,6 +21,7 @@ depends:
   host_tools:
     - cmake
     - ninja
+    - nasm
 
 build:
   matrix:

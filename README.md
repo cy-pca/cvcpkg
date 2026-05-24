@@ -130,6 +130,13 @@ do not have to coordinate separate redistributable installs:
 See [USAGE.md](USAGE.md#runtime-libraries-c--c--fortran-runtimes)
 for details, override knobs, and rpath guidance.
 
+## Building from source
+
+If you want to rebuild every dependency from source (instead of
+downloading a pre-built archive), see **[BUILDING.md](BUILDING.md)**
+for the complete list of required tools and system packages on each
+platform.
+
 ## Usage
 
 Download and extract the archive matching your operating system,

@@ -21,6 +21,7 @@ depends:
   host_tools:
     - cmake
     - perl
+    - nasm
 
 build:
   matrix:
