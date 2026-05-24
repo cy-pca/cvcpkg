@@ -294,10 +294,12 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
     """Construct the environment for the build script."""
     env = os.environ.copy()
     # Standard CVC env vars (§7.3 of the roadmap)
-    env["CVC_PREFIX"] = str(ctx.install_dir)
-    env["CVC_SOURCE_DIR"] = str(ctx.source_dir)
-    env["CVC_BUILD_DIR"] = str(ctx.build_dir)
-    env["CVC_INSTALL_DIR"] = str(ctx.install_dir)
+    # Resolve symlinks so build systems that reject symlinked paths
+    # (e.g. Qt6) work on macOS where /var -> /private/var.
+    env["CVC_PREFIX"] = str(ctx.install_dir.resolve())
+    env["CVC_SOURCE_DIR"] = str(ctx.source_dir.resolve())
+    env["CVC_BUILD_DIR"] = str(ctx.build_dir.resolve())
+    env["CVC_INSTALL_DIR"] = str(ctx.install_dir.resolve())
     env["CVC_PLATFORM"] = ctx.platform
     env["CVC_CONFIG"] = ctx.config
     env["CVC_LINK"] = ctx.link
@@ -354,7 +356,7 @@ def run_build(ctx: BuildContext) -> None:
 
     result = subprocess.run(
         cmd,
-        cwd=ctx.build_dir,
+        cwd=ctx.build_dir.resolve(),
         env=env,
     )
     if result.returncode != 0:
