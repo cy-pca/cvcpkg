@@ -63,11 +63,14 @@ function Invoke-CvcVcpkgInstall {
       vcpkg triplet. Defaults to x64-windows or x64-windows-static based on CVC_LINK.
     .PARAMETER Features
       Optional feature list (e.g. @("cpp")).
+    .PARAMETER OverlayPorts
+      Optional path to an overlay-ports directory (passed as --overlay-ports to vcpkg).
     #>
     param(
         [Parameter(Mandatory)][string]$Port,
         [string]$Triplet = '',
-        [string[]]$Features = @()
+        [string[]]$Features = @(),
+        [string]$OverlayPorts = ''
     )
 
     if (-not $Triplet) {
@@ -85,7 +88,11 @@ function Invoke-CvcVcpkgInstall {
     }
 
     Write-Host "cvcpkg: vcpkg install $spec"
-    & vcpkg install $spec --x-install-root="$env:CVC_BUILD_DIR/vcpkg-installed"
+    $vcpkgArgs = @('install', $spec, "--x-install-root=$env:CVC_BUILD_DIR/vcpkg-installed")
+    if ($OverlayPorts) {
+        $vcpkgArgs += "--overlay-ports=$OverlayPorts"
+    }
+    & vcpkg @vcpkgArgs
     if ($LASTEXITCODE -ne 0) { throw "vcpkg install $spec failed" }
 
     $installed = Join-Path $env:CVC_BUILD_DIR "vcpkg-installed/$Triplet"
