@@ -11,6 +11,14 @@ if (-not $env:CVC_INSTALL_DIR) { throw 'CVC_INSTALL_DIR must be set' }
 if (-not $env:CVC_LINK)        { $env:CVC_LINK = 'shared' }
 if (-not $env:CVC_JOBS)        { $env:CVC_JOBS = [Environment]::ProcessorCount }
 
+# Ensure Strawberry Perl is on PATH *before* MSYS2/Git-for-Windows Perl.
+# The MSYS2 perl shipped with Git for Windows lacks IPC::Cmd and
+# Params::Check, making OpenSSL Configure fail.
+$strawberry = 'C:\Strawberry\perl\bin'
+if (Test-Path $strawberry) {
+    $env:PATH = "$strawberry;$env:PATH"
+}
+
 # Choose the target: VC-WIN64A is 64-bit MSVC on x64
 $target = 'VC-WIN64A'
 
