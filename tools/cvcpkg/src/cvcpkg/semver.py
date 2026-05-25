@@ -32,7 +32,7 @@ class Version:
     build: str  # ignored in comparisons
 
     @classmethod
-    def parse(cls, s: str) -> "Version":
+    def parse(cls, s: str) -> Version:
         m = _VER_RE.match(s.strip())
         if not m:
             raise ValueError(f"invalid version: {s!r}")

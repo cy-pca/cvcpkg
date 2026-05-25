@@ -7,14 +7,19 @@ recipes/ directory in the repository.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
 import yaml
 
-from cvcpkg.builder import Recipe, generate_manifest, list_recipes, stage_bundle, create_archive
-from cvcpkg.builder import resolve_build_order
+from cvcpkg.builder import (
+    Recipe,
+    create_archive,
+    generate_manifest,
+    list_recipes,
+    resolve_build_order,
+    stage_bundle,
+)
 from cvcpkg.lockfile import LockEntry, Lockfile
 from cvcpkg.manifest import BundleManifest, Requirements
 
@@ -299,7 +304,6 @@ class TestManifestHardeningIntegration:
 
     def test_from_yaml_corrupted_manifest(self, tmp_path):
         """A corrupted manifest should raise SchemaError."""
-        from cvcpkg.errors import SchemaError
 
         p = tmp_path / "bad_manifest.yaml"
         p.write_text("not: valid: yaml: [[[")

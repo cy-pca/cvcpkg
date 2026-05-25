@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 from pathlib import Path
 
 import yaml
 
 from cvcpkg.errors import CatalogError, IntegrityError
-from cvcpkg.manifest import CatalogEntry, Dependency, ReleaseIndex
+from cvcpkg.manifest import CatalogEntry, Dependency
 
-DEFAULT_CATALOG_URL = "https://transfix.github.io/libcvc-deps/catalog/latest.yaml"
+DEFAULT_CATALOG_URL = "https://pkg.tx.wtf/v1/catalog"
+GITHUB_CATALOG_URL = "https://transfix.github.io/libcvc-deps/catalog/latest.yaml"
 
 
 _MAX_CATALOG_BYTES = 50 * 1024 * 1024  # 50 MB safety limit
@@ -53,28 +53,46 @@ def fetch_catalog(
     *,
     cache_dir: Path | None = None,
     expected_sha256: str = "",
+    fallback_urls: list[str] | None = None,
 ) -> dict:
     """Fetch a catalog YAML and return it as a dict.
 
+    Tries *url* first, then each URL in *fallback_urls* in order.
     If *cache_dir* is given, cache the raw bytes under
     ``<cache_dir>/catalog/<sha256>.yaml``.
     """
     url = url or os.environ.get("CVCPKG_CATALOG_URL", DEFAULT_CATALOG_URL)
 
-    data = _fetch_url(url)
-    actual_sha = hashlib.sha256(data).hexdigest()
+    urls_to_try = [url] + (fallback_urls or [])
+    last_error: Exception | None = None
 
-    if expected_sha256 and actual_sha != expected_sha256:
-        raise IntegrityError(
-            f"catalog sha256 mismatch: expected {expected_sha256}, got {actual_sha}"
-        )
+    for try_url in urls_to_try:
+        try:
+            data = _fetch_url(try_url)
+        except CatalogError as e:
+            last_error = e
+            if len(urls_to_try) > 1:
+                import sys
 
-    if cache_dir:
-        cat_cache = cache_dir / "catalog"
-        cat_cache.mkdir(parents=True, exist_ok=True)
-        (cat_cache / f"{actual_sha}.yaml").write_bytes(data)
+                print(f"cvcpkg: catalog fetch failed for {try_url}: {e}", file=sys.stderr)
+                print("cvcpkg: trying next catalog source...", file=sys.stderr)
+            continue
 
-    return yaml.safe_load(data)
+        actual_sha = hashlib.sha256(data).hexdigest()
+
+        if expected_sha256 and actual_sha != expected_sha256:
+            raise IntegrityError(
+                f"catalog sha256 mismatch: expected {expected_sha256}, got {actual_sha}"
+            )
+
+        if cache_dir:
+            cat_cache = cache_dir / "catalog"
+            cat_cache.mkdir(parents=True, exist_ok=True)
+            (cat_cache / f"{actual_sha}.yaml").write_bytes(data)
+
+        return yaml.safe_load(data)
+
+    raise CatalogError(f"all catalog sources failed; last error: {last_error}")
 
 
 def load_catalog_from_file(path: str | Path) -> dict:

@@ -15,11 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import io
-import json
-import os
 import tarfile
-import textwrap
-from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -682,7 +678,7 @@ class TestServerCLI:
         from cvcpkg.server.cli import server_cli
 
         # Create a token
-        result = server_cli(
+        server_cli(
             [
                 "token",
                 "create",

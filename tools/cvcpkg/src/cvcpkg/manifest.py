@@ -77,7 +77,7 @@ class BundleManifest:
     built_at: str = ""
 
     @classmethod
-    def from_dict(cls, d: dict) -> "BundleManifest":
+    def from_dict(cls, d: dict) -> BundleManifest:
         """Parse a manifest.yaml dict into a BundleManifest."""
         if d.get("schema_version") not in (1, 2, 3):
             raise SchemaError(f"unsupported manifest schema_version: {d.get('schema_version')}")
@@ -145,7 +145,7 @@ class BundleManifest:
             raise SchemaError(f"manifest missing required field: {e}") from e
 
     @classmethod
-    def from_yaml(cls, path: str) -> "BundleManifest":
+    def from_yaml(cls, path: str) -> BundleManifest:
         p = Path(path)
         if not p.is_file():
             raise SchemaError(f"manifest file not found: {path}")
@@ -192,7 +192,7 @@ class ReleaseIndex:
     bundles: list[CatalogEntry]
 
     @classmethod
-    def from_dict(cls, d: dict) -> "ReleaseIndex":
+    def from_dict(cls, d: dict) -> ReleaseIndex:
         return cls(
             schema_version=d.get("schema_version", 1),
             release_version=d.get("release_version", ""),
@@ -244,7 +244,7 @@ class Requirements:
     accept_abi_mismatch: bool = False
 
     @classmethod
-    def from_dict(cls, d: dict) -> "Requirements":
+    def from_dict(cls, d: dict) -> Requirements:
         components: list[ComponentReq] = []
         for c in d.get("components", []):
             if isinstance(c, str):
@@ -280,6 +280,6 @@ class Requirements:
         )
 
     @classmethod
-    def from_yaml(cls, path: str) -> "Requirements":
+    def from_yaml(cls, path: str) -> Requirements:
         with open(path) as f:
             return cls.from_dict(yaml.safe_load(f))

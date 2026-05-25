@@ -158,6 +158,16 @@ def cli(ctx: click.Context) -> None:
     help="Pin to a specific catalog revision number.",
 )
 @click.option(
+    "--source",
+    type=click.Choice(["auto", "server", "github"], case_sensitive=False),
+    default="auto",
+    help=(
+        "Catalog source strategy.  'server' uses pkg.tx.wtf only; "
+        "'github' uses GitHub Pages/Releases only; 'auto' tries "
+        "server first then falls back to GitHub (default)."
+    ),
+)
+@click.option(
     "--ignore-abi",
     is_flag=True,
     help="Skip ABI compatibility checks (C++ standard, runtime, etc.).",
@@ -184,6 +194,7 @@ def install(
     link: str,
     catalog: str | None,
     catalog_revision: int | None,
+    source: str,
     ignore_abi: bool,
     verify_signatures: bool,
     fallback_to_source: bool,
@@ -215,7 +226,16 @@ def install(
     file if explicitly provided on the command line.
     """
     from cvcpkg.cache import default_cache_dir
-    from cvcpkg.catalog import catalog_entries, fetch_catalog, load_catalog_from_file
+    from cvcpkg.catalog import (
+        GITHUB_CATALOG_URL,
+        catalog_entries,
+        fetch_catalog,
+        load_catalog_from_file,
+    )
+    from cvcpkg.config import (
+        load_user_config,
+        merge_cli_overrides,
+    )
     from cvcpkg.errors import InstallError, IntegrityError
     from cvcpkg.installer import build_from_source_fallback, install_entry
     from cvcpkg.lockfile import LockEntry, Lockfile
@@ -281,6 +301,11 @@ def install(
     # We filter entries by the target platform tuple (platform/arch/
     # config/link), then run the backtracking SAT-style resolver to
     # pick compatible versions for all requested components.
+    #
+    # --source controls catalog source strategy:
+    #   auto   → primary (pkg.tx.wtf) with GitHub Pages fallback
+    #   server → pkg.tx.wtf only, no fallback
+    #   github → GitHub Pages only, no fallback
     catalog_url = catalog or ""
     catalog_failed = False
     try:
@@ -331,6 +356,20 @@ def install(
         elif fallback_to_source:
             source_only = requested_names
     else:
+        cfg = load_user_config()
+        cfg = merge_cli_overrides(cfg, catalog_url=catalog_url or "")
+
+        if source == "server":
+            primary = catalog_url or cfg.catalog_primary
+            fallbacks: list[str] = []
+        elif source == "github":
+            primary = catalog_url or GITHUB_CATALOG_URL
+            fallbacks = []
+        else:  # auto
+            primary = catalog_url or cfg.catalog_primary
+            fallbacks = cfg.catalog_fallbacks
+
+        cat = fetch_catalog(primary, cache_dir=default_cache_dir(), fallback_urls=fallbacks)
         source_only = requested_names
 
     if picked:
@@ -823,7 +862,9 @@ def push(archives: tuple[str, ...], dest: str) -> None:
             with open(p, "rb") as f:
                 backend.put(dest_uri, f)
         except NotImplementedError:
-            raise click.ClickException(f"backend for {dest} does not support uploads (put).")
+            raise click.ClickException(
+                f"backend for {dest} does not support uploads (put)."
+            ) from None
         click.echo(f"  done ({p.stat().st_size:,} bytes)")
 
     click.echo(f"cvcpkg: pushed {len(archives)} archive(s).")
@@ -883,12 +924,6 @@ def publish(
       cvcpkg publish dist/*.tar.gz --server https://pkg.tx.wtf --token cvctok_...
       CVCPKG_SERVER_URL=https://pkg.tx.wtf CVCPKG_TOKEN=cvctok_... cvcpkg publish dist/*.tar.gz
     """
-    import io
-    import tarfile
-    import zipfile
-
-    import httpx
-
     base = server.rstrip("/")
     headers = {"Authorization": f"Bearer {token}"}
     ok = 0
@@ -944,7 +979,6 @@ def publish(
 
 def _extract_manifest(archive_path: Path) -> dict:
     """Extract manifest.yaml from a cvcpkg archive."""
-    import io
     import tarfile
     import zipfile
 
@@ -965,7 +999,7 @@ def _extract_manifest(archive_path: Path) -> dict:
                             manifest = yaml.safe_load(f.read())
                         break
     except (tarfile.TarError, zipfile.BadZipFile) as exc:
-        raise click.ClickException(f"{archive_path.name}: cannot read archive: {exc}")
+        raise click.ClickException(f"{archive_path.name}: cannot read archive: {exc}") from exc
 
     if not manifest:
         raise click.ClickException(
@@ -1109,7 +1143,7 @@ def _publish_chunked(
                     else:
                         raise click.ClickException(
                             f"chunk upload failed after {max_retries} retries: {exc}"
-                        )
+                        ) from exc
 
     # 3. Finalise
     expected_sha256 = sha256.hexdigest()
@@ -1278,17 +1312,14 @@ def world(
     from cvcpkg.builder import (
         BuildContext,
         Recipe,
-        BuildError,
         build_recipe,
         find_recipes_dir,
         load_all_recipes,
         resolve_build_order,
     )
     from cvcpkg.manifest import Requirements
-    from cvcpkg.platform import detect_arch, detect_platform
 
     plat = _auto_platform(platform)
-    arc = detect_arch()
     prefix_path = Path(prefix).resolve()
 
     reqs = Requirements.from_yaml(from_file)
@@ -1431,7 +1462,7 @@ def build(
       cvcpkg build mypkg --recipes-dir ./my-recipes --recipes-dir recipes
       cvcpkg build vtk --no-deps --prefix ./prefix
     """
-    from cvcpkg.builder import build_recipe, find_recipes_dir, resolve_build_order, Recipe
+    from cvcpkg.builder import build_recipe, find_recipes_dir, resolve_build_order
 
     plat = _auto_platform(platform)
     prefix_path = Path(prefix).resolve() if prefix else None
@@ -1439,7 +1470,7 @@ def build(
     if with_deps:
         # Resolve all deps and build in topological order
         rdirs = [Path(d) for d in recipes_dirs] if recipes_dirs else [find_recipes_dir()]
-        from cvcpkg.builder import load_all_recipes, list_recipes
+        from cvcpkg.builder import list_recipes, load_all_recipes
 
         if len(rdirs) > 1:
             all_recipes = load_all_recipes(rdirs)
@@ -1738,7 +1769,7 @@ def recipes(
       cvcpkg recipes --tag math    # list only math recipes
       cvcpkg recipes --recipes-dir ./my-recipes  # use custom recipe dir
     """
-    from cvcpkg.builder import Recipe, find_recipes_dir, list_recipes, load_all_recipes
+    from cvcpkg.builder import Recipe, list_recipes, load_all_recipes
 
     if show_name:
         recipe_dir = _resolve_recipe_dir(show_name, recipes_dirs)

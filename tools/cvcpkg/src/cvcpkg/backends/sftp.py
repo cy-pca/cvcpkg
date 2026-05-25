@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import io
 import os
-from pathlib import Path
-from typing import BinaryIO, ClassVar, Iterable
+from collections.abc import Iterable
+from typing import BinaryIO, ClassVar
 from urllib.parse import unquote, urlparse
 
 from cvcpkg.storage import ObjectInfo, StorageBackend

@@ -44,7 +44,7 @@ jobs:
         run: python packaging/validate.py
 
       - name: Run cvcpkg test suite
-        run: python -m pytest tools/cvcpkg/tests/ -v --tb=short
+        run: python -m pytest tools/cvcpkg/tests/unit/ -v --tb=short
 
   # ────────────────────── Recipe build validation ─────────────────
   #

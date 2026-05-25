@@ -6,12 +6,8 @@ import pytest
 
 from cvcpkg.errors import SchemaError
 from cvcpkg.manifest import (
-    AbiTag,
     BundleManifest,
     CatalogEntry,
-    CmakePackage,
-    ComponentReq,
-    Dependency,
     ReleaseIndex,
     Requirements,
 )

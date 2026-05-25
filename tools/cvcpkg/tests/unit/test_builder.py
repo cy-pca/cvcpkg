@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import tarfile
 import zipfile
 from pathlib import Path
@@ -16,12 +15,9 @@ from cvcpkg.builder import (
     BuildContext,
     BuildError,
     MatrixEntry,
-    PackError,
     Recipe,
     RecipeError,
     SourceSpec,
-    _archive_tar_gz,
-    _archive_zip,
     _file_list,
     _select_matrix_entry,
     _sha256_file,

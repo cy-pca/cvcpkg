@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import io
 import os
-from typing import BinaryIO, ClassVar, Iterable
+from collections.abc import Iterable
+from typing import BinaryIO, ClassVar
 from urllib.parse import urlparse
 
 from cvcpkg.storage import ObjectInfo, StorageBackend
