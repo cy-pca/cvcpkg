@@ -262,6 +262,8 @@ jobs:
         run: find artifacts -type f | sort
 
       - name: Create GitHub Release
+        id: gh_release
+        continue-on-error: true
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
@@ -276,6 +278,21 @@ jobs:
             artifacts/*-index.yaml
           fail_on_unmatched_files: false
 
+      - name: Verify release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.ref_name }}"
+          asset_count=$(gh release view "$tag" --json assets --jq '.assets | length')
+          echo "Release $tag has $asset_count assets"
+          if [ "$asset_count" -eq 0 ]; then
+            echo "::error::Release $tag has no assets — upload failed"
+            exit 1
+          fi
+          if [ "${{ steps.gh_release.outcome }}" = "failure" ]; then
+            echo "::warning::softprops/action-gh-release reported failure (likely GitHub secondary rate limit) but release has $asset_count assets — continuing"
+          fi
+
   # ──────────────── Publish to cvcpkg-server (pkg.tx.wtf) ────────
   # After the GitHub Release is created, publish all per-component
   # bundles to the cvcpkg-server so downstream users can
@@ -288,7 +305,7 @@ jobs:
       always()
       && !cancelled()
       && startsWith(github.ref, 'refs/tags/')
-      && needs.release.result == 'success'
+      && (needs.release.result == 'success' || needs.release.result == 'failure')
     steps:
       - uses: actions/checkout@v5
 
