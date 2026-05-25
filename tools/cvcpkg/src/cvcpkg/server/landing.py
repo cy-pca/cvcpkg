@@ -7,7 +7,12 @@ the API docs.  Uses Bulma CSS for styling.
 
 from __future__ import annotations
 
+import os
+
 from cvcpkg import __version__
+
+_GITHUB_REPO = os.environ.get("CVCPKG_GITHUB_REPO", "transfix/libcvc-deps")
+_GITHUB_URL = f"https://github.com/{_GITHUB_REPO}"
 
 # Minimal overrides on top of Bulma's dark theme
 _CSS = r"""
@@ -333,7 +338,7 @@ def landing_html() -> str:
           <span class="icon"><i class="fas fa-list"></i></span>
           <span>Catalog</span>
         </a>
-        <a class="navbar-item" href="https://github.com/transfix/libcvc-deps">
+        <a class="navbar-item" href="{_GITHUB_URL}">
           <span class="icon"><i class="fab fa-github"></i></span>
           <span>GitHub</span>
         </a>
@@ -467,7 +472,7 @@ def landing_html() -> str:
 <footer class="footer has-background-black-ter has-text-grey-light">
   <div class="content has-text-centered">
     <p>
-      <a href="https://github.com/transfix/libcvc-deps" class="has-text-grey-light">
+      <a href="{_GITHUB_URL}" class="has-text-grey-light">
         <span class="icon"><i class="fab fa-github"></i></span> cvcpkg
       </a>
       \u2014 cross-platform binary package archive for scientific computing
