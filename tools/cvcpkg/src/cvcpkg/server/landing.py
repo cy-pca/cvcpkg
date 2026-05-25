@@ -44,6 +44,10 @@ th.is-sorted { color: #3273dc; }
 .platform-tag.darwin { background-color: rgba(255, 221, 87, 0.15); color: #ffdd57; }
 .platform-tag.windows { background-color: rgba(50, 115, 220, 0.15); color: #3273dc; }
 
+.release-tag { font-size: 0.75em; }
+.release-tag.is-release { background-color: rgba(72, 199, 116, 0.15); color: #48c774; }
+.release-tag.is-live { background-color: rgba(255, 221, 87, 0.15); color: #ffdd57; }
+
 .empty-hero { padding: 4rem 1rem; }
 
 .footer { padding: 2rem 1.5rem; }
@@ -54,6 +58,7 @@ let allPackages = [];
 let currentSort = { key: 'name', dir: 'asc' };
 let searchTerm = '';
 let platformFilter = '';
+let releaseFilter = '';
 
 async function init() {
   try {
@@ -78,6 +83,7 @@ function updateStats() {
   document.getElementById('stat-platforms').textContent = platforms.size;
   document.getElementById('stat-size').textContent = fmtSizeLarge(totalSize);
 
+  // Populate platform filter
   const sel = document.getElementById('platform-filter');
   const existing = new Set(Array.from(sel.options).map(o => o.value));
   [...platforms].sort().forEach(p => {
@@ -86,6 +92,19 @@ function updateStats() {
       opt.value = p;
       opt.textContent = p;
       sel.appendChild(opt);
+    }
+  });
+
+  // Populate release filter
+  const releases = new Set(allPackages.map(p => p.release_tag).filter(Boolean));
+  const relSel = document.getElementById('release-filter');
+  const existingRel = new Set(Array.from(relSel.options).map(o => o.value));
+  [...releases].sort().reverse().forEach(r => {
+    if (!existingRel.has(r)) {
+      const opt = document.createElement('option');
+      opt.value = r;
+      opt.textContent = r;
+      relSel.appendChild(opt);
     }
   });
 }
@@ -104,6 +123,11 @@ function render() {
   }
   if (platformFilter) {
     pkgs = pkgs.filter(p => p.platform === platformFilter);
+  }
+  if (releaseFilter === 'live') {
+    pkgs = pkgs.filter(p => !p.release_tag);
+  } else if (releaseFilter) {
+    pkgs = pkgs.filter(p => p.release_tag === releaseFilter);
   }
 
   pkgs.sort((a, b) => {
@@ -130,9 +154,9 @@ function render() {
 
   const tbody = document.getElementById('pkg-body');
   if (pkgs.length === 0) {
-    const hasFilter = searchTerm || platformFilter;
+    const hasFilter = searchTerm || platformFilter || releaseFilter;
     tbody.innerHTML = `
-      <tr><td colspan="7">
+      <tr><td colspan="8">
         <div class="empty-hero has-text-centered">
           <span class="icon is-large has-text-grey-light">
             <i class="fas fa-box-open fa-3x"></i>
@@ -164,6 +188,7 @@ function render() {
       <td><span class="is-size-7">${esc(p.arch)}</span></td>
       <td><span class="is-size-7">${esc(p.build_type)}/${esc(p.link)}</span></td>
       <td><span class="is-family-monospace is-size-7 has-text-grey-light">${fmtSize(p.size_bytes)}</span></td>
+      <td>${releaseTag(p.release_tag)}</td>
       <td><span class="is-size-7 has-text-grey-light">${fmtDate(p.published_at)}</span></td>
     </tr>
   `).join('');
@@ -197,6 +222,11 @@ function platformTag(platform) {
   else if (lp.includes('darwin') || lp.includes('macos')) cls = 'darwin';
   else if (lp.includes('win')) cls = 'windows';
   return '<span class="tag is-rounded platform-tag ' + cls + '">' + esc(platform) + '</span>';
+}
+
+function releaseTag(tag) {
+  if (!tag) return '<span class="tag is-rounded release-tag is-live">live</span>';
+  return '<span class="tag is-rounded release-tag is-release">' + esc(tag) + '</span>';
 }
 
 function fmtSize(bytes) {
@@ -244,6 +274,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('platform-filter').addEventListener('change', e => {
     platformFilter = e.target.value;
+    render();
+  });
+
+  document.getElementById('release-filter').addEventListener('change', e => {
+    releaseFilter = e.target.value;
     render();
   });
 
@@ -383,7 +418,19 @@ def landing_html() -> str:
           </div>
         </div>
       </div>
-      <div class="column is-4 has-text-right">
+      <div class="column is-2">
+        <div class="field">
+          <div class="control">
+            <div class="select is-dark is-fullwidth">
+              <select id="release-filter">
+                <option value="">All channels</option>
+                <option value="live">Live only</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="column is-2 has-text-right">
         <span class="is-size-7 has-text-grey-light" id="pkg-count">&nbsp;</span>
       </div>
     </div>
@@ -398,12 +445,13 @@ def landing_html() -> str:
             <th class="is-sortable" data-key="arch">Arch <span class="sort-arrow"></span></th>
             <th class="is-sortable" data-key="build_type">Build <span class="sort-arrow"></span></th>
             <th class="is-sortable" data-key="size_bytes">Size <span class="sort-arrow"></span></th>
+            <th class="is-sortable" data-key="release_tag">Release <span class="sort-arrow"></span></th>
             <th class="is-sortable" data-key="published_at">Published <span class="sort-arrow"></span></th>
           </tr>
         </thead>
         <tbody id="pkg-body">
           <tr>
-            <td colspan="7" class="has-text-centered py-6">
+            <td colspan="8" class="has-text-centered py-6">
               <span class="icon is-large has-text-link">
                 <i class="fas fa-spinner fa-spin fa-2x"></i>
               </span>

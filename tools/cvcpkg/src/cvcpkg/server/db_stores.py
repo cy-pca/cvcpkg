@@ -289,6 +289,7 @@ class DbPackageIndex:
         *,
         name: str = "",
         platform: str = "",
+        release: str = "",
         limit: int = 1000,
         offset: int = 0,
     ) -> tuple[list[PackageInfo], int]:
@@ -301,6 +302,9 @@ class DbPackageIndex:
             if platform:
                 q = q.where(PackageRow.platform == platform)
                 count_q = count_q.where(PackageRow.platform == platform)
+            if release:
+                q = q.where(PackageRow.release_tag == release)
+                count_q = count_q.where(PackageRow.release_tag == release)
 
             total_result = await session.execute(count_q)
             total = total_result.scalar() or 0
@@ -322,6 +326,8 @@ class DbPackageIndex:
                     yanked=row.yanked,
                     signature=row.signature,
                     key_fingerprint=row.key_fingerprint,
+                    release_tag=row.release_tag,
+                    recipe_version=row.recipe_version,
                 )
                 for row in result.scalars().all()
             ]
@@ -348,6 +354,8 @@ class DbPackageIndex:
                     "yanked": False,
                     "signature": row.signature,
                     "key_fingerprint": row.key_fingerprint,
+                    "release_tag": row.release_tag,
+                    "recipe_version": row.recipe_version,
                 }
                 for row in result.scalars().all()
             ]
@@ -385,6 +393,8 @@ class DbPackageIndex:
         archive_url: str,
         signature: str = "",
         key_fingerprint: str = "",
+        release_tag: str = "",
+        recipe_version: str = "",
     ) -> None:
         async with get_session() as session:
             row = PackageRow(
@@ -399,6 +409,8 @@ class DbPackageIndex:
                 archive_url=archive_url,
                 signature=signature,
                 key_fingerprint=key_fingerprint,
+                release_tag=release_tag,
+                recipe_version=recipe_version,
             )
             session.add(row)
 

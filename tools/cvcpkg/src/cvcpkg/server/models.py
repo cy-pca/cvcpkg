@@ -78,6 +78,22 @@ class PackageInfo(BaseModel):
     yanked: bool = False
     signature: str = ""
     key_fingerprint: str = ""
+    release_tag: str = Field(
+        default="",
+        description=(
+            "cvcpkg release this package belongs to (e.g. 'v1.3.0'). "
+            "Empty string means the package is a live/updated build "
+            "that is not yet part of an official release."
+        ),
+    )
+    recipe_version: str = Field(
+        default="",
+        description=(
+            "Recipe revision that produced this build (e.g. commit SHA or "
+            "recipe file hash).  When this differs from the release recipe "
+            "version, the package is divergent from the official release."
+        ),
+    )
 
 
 class PublishResponse(BaseModel):
