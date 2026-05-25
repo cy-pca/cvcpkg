@@ -176,6 +176,7 @@ class CatalogEntry:
     archive_url: str
     source_release: str  # libcvc-deps release that first shipped it
     required_deps: list[Dependency] = field(default_factory=list)
+    mirror_urls: list[str] = field(default_factory=list)  # fallback download URLs
     signature: str = ""  # base64url Ed25519 sig (empty = unsigned)
     key_fingerprint: str = ""  # SHA-256 of signing public key
 
@@ -214,6 +215,7 @@ class ReleaseIndex:
                         Dependency(name=dep["name"], version=dep.get("version", ""))
                         for dep in e.get("required_deps", [])
                     ],
+                    mirror_urls=e.get("mirror_urls", []),
                 )
                 for e in d.get("bundles", [])
             ],
