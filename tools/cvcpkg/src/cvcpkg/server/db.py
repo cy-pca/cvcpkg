@@ -59,6 +59,12 @@ class PackageRow(Base):
     yanked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     signature: Mapped[str] = mapped_column(Text, nullable=False, default="")
     key_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    release_tag: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", server_default="", index=True,
+    )
+    recipe_version: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="", server_default="",
+    )
 
     __table_args__ = (
         Index(

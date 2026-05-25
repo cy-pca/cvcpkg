@@ -268,14 +268,28 @@ def create_app(
     async def list_packages(
         name: str = Query("", description="Filter by component name"),
         platform: str = Query("", description="Filter by platform"),
+        release: str = Query(
+            "",
+            description=(
+                "Filter by release tag (e.g. 'v1.3.0').  Use 'live' to see "
+                "only packages not yet in any release."
+            ),
+        ),
         limit: int = Query(100, ge=1, le=1000),
         offset: int = Query(0, ge=0),
         _auth: None = Depends(optional_reader_auth),
     ):
         if _use_db:
+            # 'live' is a virtual tag meaning release_tag == ""
+            db_release = "" if release == "live" else release
             packages, total = await _db_packages.get_bundles(
-                name=name, platform=platform, limit=limit, offset=offset
+                name=name, platform=platform, release=db_release,
+                limit=limit, offset=offset,
             )
+            if release == "live":
+                # get_bundles with release="" returns all — filter to empty tag
+                packages = [p for p in packages if not p.release_tag]
+                total = len(packages)
             return PackageListResponse(total=total, packages=packages)
         state = _get_state()
         bundles = state.index.get("bundles", [])
@@ -283,6 +297,10 @@ def create_app(
             bundles = [b for b in bundles if b.get("name") == name]
         if platform:
             bundles = [b for b in bundles if b.get("platform") == platform]
+        if release == "live":
+            bundles = [b for b in bundles if not b.get("release_tag")]
+        elif release:
+            bundles = [b for b in bundles if b.get("release_tag") == release]
         total = len(bundles)
         page = bundles[offset : offset + limit]
         packages = [
@@ -372,6 +390,18 @@ def create_app(
         link: str = Query("shared"),
         signature: str = Query("", description="Base64url Ed25519 signature"),
         key_fingerprint: str = Query("", description="SHA-256 fingerprint of signing key"),
+        release_tag: str = Query(
+            "",
+            description=(
+                "cvcpkg release tag (e.g. 'v1.3.0').  Leave empty for live/updated builds."
+            ),
+        ),
+        recipe_version: str = Query(
+            "",
+            description=(
+                "Recipe revision that produced this build (commit SHA or recipe hash)."
+            ),
+        ),
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
         state = _get_state()
@@ -435,12 +465,14 @@ def create_app(
                 archive_url=archive_url,
                 signature=signature,
                 key_fingerprint=key_fingerprint,
+                release_tag=release_tag,
+                recipe_version=recipe_version,
             )
             await _db_audit.record(
                 action=AuditAction.publish,
                 actor=actor.name,
                 target=f"{name}=={version}",
-                detail=f"platform={platform} arch={arch} sha256={sha256}",
+                detail=f"platform={platform} arch={arch} sha256={sha256} release={release_tag or 'live'}",
             )
         else:
             bundle = {
@@ -457,6 +489,8 @@ def create_app(
                 "yanked": False,
                 "signature": signature,
                 "key_fingerprint": key_fingerprint,
+                "release_tag": release_tag,
+                "recipe_version": recipe_version,
             }
             state.index.setdefault("bundles", []).append(bundle)
             state.save_index()
@@ -464,7 +498,7 @@ def create_app(
                 action=AuditAction.publish,
                 actor=actor.name,
                 target=f"{name}=={version}",
-                detail=f"platform={platform} arch={arch} sha256={sha256}",
+                detail=f"platform={platform} arch={arch} sha256={sha256} release={release_tag or 'live'}",
             )
 
         return PublishResponse(
