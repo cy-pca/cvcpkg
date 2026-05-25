@@ -6,6 +6,8 @@
 #
 # Usage:
 #   cp .env.production.example .env.production
+
+name: cvcpkg-prod
 #   # Edit .env.production with real secrets
 #   docker compose -f docker-compose.production.yml --env-file .env.production up -d
 
