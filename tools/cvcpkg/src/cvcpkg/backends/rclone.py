@@ -13,8 +13,9 @@ import io
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
-from typing import BinaryIO, ClassVar, Iterable
+from typing import BinaryIO, ClassVar
 
 from cvcpkg.storage import ObjectInfo, StorageBackend
 

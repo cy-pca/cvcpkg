@@ -8,7 +8,8 @@ URI format: ``gs://bucket/key``
 from __future__ import annotations
 
 import io
-from typing import BinaryIO, ClassVar, Iterable
+from collections.abc import Iterable
+from typing import BinaryIO, ClassVar
 
 from cvcpkg.storage import ObjectInfo, StorageBackend
 

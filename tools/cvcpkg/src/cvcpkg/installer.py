@@ -207,7 +207,7 @@ def install_entry(
     archive = download_bundle(entry, cache_dir)
 
     if verify_signatures and entry.signature:
-        from cvcpkg.signing import Signature, verify_file, SigningError
+        from cvcpkg.signing import Signature, SigningError, verify_file
 
         sig = Signature(
             sig_b64=entry.signature,
@@ -251,7 +251,9 @@ def build_from_source_fallback(
         try:
             search_dirs = [find_recipes_dir()]
         except RecipeError:
-            raise InstallError(f"no prebuilt binary and no recipes directory found for {name}")
+            raise InstallError(
+                f"no prebuilt binary and no recipes directory found for {name}"
+            ) from None
 
     recipe_dir: Path | None = None
     for rdir in search_dirs:

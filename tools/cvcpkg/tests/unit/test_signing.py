@@ -3,28 +3,26 @@
 from __future__ import annotations
 
 import sys
-
-import pytest
 from pathlib import Path
 
+import pytest
+
+from cvcpkg.errors import SigningError
 from cvcpkg.signing import (
-    Signature,
     KeyInfo,
+    Signature,
     fingerprint,
     generate_keypair,
     import_public_key,
     list_keys,
     load_private_key,
-    load_public_key,
-    sign_file,
-    sign_bytes,
-    verify_file,
-    verify_bytes,
-    write_signature,
     read_signature,
-    _pub_fingerprint,
+    sign_bytes,
+    sign_file,
+    verify_bytes,
+    verify_file,
+    write_signature,
 )
-from cvcpkg.errors import SigningError
 
 # ── Fixtures ────────────────────────────────────────────────────
 
@@ -68,7 +66,7 @@ class TestKeyGeneration:
         assert mode == 0o600
 
     def test_generate_with_password(self, keys_dir: Path) -> None:
-        info = generate_keypair("pw", keys_dir=keys_dir, password="s3cret")
+        generate_keypair("pw", keys_dir=keys_dir, password="s3cret")
         priv_path = keys_dir / "pw.key"
         # Loading without password should fail
         with pytest.raises(Exception):
@@ -229,6 +227,7 @@ class TestVerification:
 class TestCLI:
     def test_key_generate(self, keys_dir: Path) -> None:
         from click.testing import CliRunner
+
         from cvcpkg.cli import cli
 
         runner = CliRunner()
@@ -241,6 +240,7 @@ class TestCLI:
 
     def test_key_list(self, keys_dir: Path) -> None:
         from click.testing import CliRunner
+
         from cvcpkg.cli import cli
 
         generate_keypair("mykey", keys_dir=keys_dir)
@@ -251,6 +251,7 @@ class TestCLI:
 
     def test_key_export(self, keys_dir: Path) -> None:
         from click.testing import CliRunner
+
         from cvcpkg.cli import cli
 
         generate_keypair("exp", keys_dir=keys_dir)
@@ -263,6 +264,7 @@ class TestCLI:
 
     def test_sign_and_verify_cli(self, keys_dir: Path, tmp_path: Path) -> None:
         from click.testing import CliRunner
+
         from cvcpkg.cli import cli
 
         generate_keypair("signer", keys_dir=keys_dir)
@@ -300,6 +302,7 @@ class TestCLI:
 
     def test_key_import_cli(self, keys_dir: Path, tmp_path: Path) -> None:
         from click.testing import CliRunner
+
         from cvcpkg.cli import cli
 
         info = generate_keypair("source", keys_dir=keys_dir)

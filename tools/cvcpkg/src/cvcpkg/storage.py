@@ -26,8 +26,9 @@ entry-point group.
 from __future__ import annotations
 
 import importlib.metadata
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import BinaryIO, ClassVar, Iterable, Protocol, runtime_checkable
+from typing import BinaryIO, ClassVar, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
 # ── Object info ─────────────────────────────────────────────────
@@ -98,11 +99,11 @@ def _load_builtins() -> None:
         return
     _loaded_builtins = True
 
+    from cvcpkg.backends.gh_release import GhReleaseBackend
     from cvcpkg.backends.https import HttpsBackend
     from cvcpkg.backends.local import FileBackend
-    from cvcpkg.backends.gh_release import GhReleaseBackend
-    from cvcpkg.backends.rsync import RsyncBackend
     from cvcpkg.backends.rclone import RcloneBackend
+    from cvcpkg.backends.rsync import RsyncBackend
 
     register(HttpsBackend())
     register(FileBackend())

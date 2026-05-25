@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from cvcpkg.backends.local import _uri_to_path
-from cvcpkg.storage import ObjectInfo, available_schemes, get_backend, register
+from cvcpkg.storage import ObjectInfo, available_schemes, get_backend
 
 
 class TestObjectInfo:

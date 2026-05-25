@@ -20,10 +20,17 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from cvcpkg.errors import SigningError
+
+if TYPE_CHECKING:
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PrivateKey,
+        Ed25519PublicKey,
+    )
 
 # ── Key fingerprinting ──────────────────────────────────────────
 
@@ -81,8 +88,8 @@ def generate_keypair(
         <keys_dir>/<label>.pub      — public key  (PEM)
         <keys_dir>/<label>.fp       — fingerprint (hex string)
     """
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
     if keys_dir is None:
         keys_dir = _default_keys_dir()
@@ -137,7 +144,7 @@ def generate_keypair(
 def load_private_key(
     key_path: Path,
     password: str | None = None,
-) -> "Ed25519PrivateKey":  # type: ignore[name-defined]
+) -> Ed25519PrivateKey:  # type: ignore[name-defined]
     """Load an Ed25519 private key from a PEM file."""
     from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
@@ -152,7 +159,7 @@ def load_private_key(
     return key
 
 
-def load_public_key(pub_path: Path) -> "Ed25519PublicKey":  # type: ignore[name-defined]
+def load_public_key(pub_path: Path) -> Ed25519PublicKey:  # type: ignore[name-defined]
     """Load an Ed25519 public key from a PEM file."""
     from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
@@ -166,7 +173,7 @@ def load_public_key(pub_path: Path) -> "Ed25519PublicKey":  # type: ignore[name-
     return key
 
 
-def _pub_fingerprint(pub_key: "Ed25519PublicKey") -> str:  # type: ignore[name-defined]
+def _pub_fingerprint(pub_key: Ed25519PublicKey) -> str:  # type: ignore[name-defined]
     """Get the fingerprint of an Ed25519 public key object."""
     from cryptography.hazmat.primitives import serialization
 
@@ -216,9 +223,9 @@ def import_public_key(
     keys_dir: Path | None = None,
 ) -> KeyInfo:
     """Import a public key PEM string into the keyring."""
-    from cryptography.hazmat.primitives.serialization import load_pem_public_key
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
     key = load_pem_public_key(pub_pem.encode())
     if not isinstance(key, Ed25519PublicKey):
@@ -329,7 +336,6 @@ def verify_file(
     Returns the ``KeyInfo`` of the key that validated the signature.
     Raises ``SigningError`` if no trusted key can verify the sig.
     """
-    from cryptography.exceptions import InvalidSignature
 
     digest = hashlib.sha256(file_path.read_bytes()).digest()
     return _verify_digest(digest, sig, keys_dir)
@@ -374,7 +380,7 @@ def _verify_digest(
                 raise SigningError(
                     f"Signature invalid: key '{ki.label}' ({ki.fingerprint[:16]}…) "
                     "did not verify"
-                )
+                ) from None
 
     # If no fingerprint match, try all keys (allows rotation)
     for ki in trusted:
