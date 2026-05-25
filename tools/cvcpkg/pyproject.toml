@@ -89,10 +89,6 @@ ignore = ["SIM102", "SIM105", "SIM108", "SIM112", "SIM117"]
 "src/cvcpkg/server/app.py" = ["B008"]
 "tests/**" = ["E402", "B017"]
 
-[tool.ruff.lint.per-file-ignores]
-"src/cvcpkg/server/app.py" = ["B008"]
-"tests/*" = ["E402", "B017"]
-
 [tool.mypy]
 python_version = "3.10"
 strict = true
