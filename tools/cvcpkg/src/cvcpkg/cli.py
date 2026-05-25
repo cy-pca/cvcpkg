@@ -158,6 +158,16 @@ def cli(ctx: click.Context) -> None:
     help="Pin to a specific catalog revision number.",
 )
 @click.option(
+    "--source",
+    type=click.Choice(["auto", "server", "github"], case_sensitive=False),
+    default="auto",
+    help=(
+        "Catalog source strategy.  'server' uses pkg.tx.wtf only; "
+        "'github' uses GitHub Pages/Releases only; 'auto' tries "
+        "server first then falls back to GitHub (default)."
+    ),
+)
+@click.option(
     "--ignore-abi",
     is_flag=True,
     help="Skip ABI compatibility checks (C++ standard, runtime, etc.).",
@@ -184,6 +194,7 @@ def install(
     link: str,
     catalog: str | None,
     catalog_revision: int | None,
+    source: str,
     ignore_abi: bool,
     verify_signatures: bool,
     fallback_to_source: bool,
@@ -215,7 +226,18 @@ def install(
     file if explicitly provided on the command line.
     """
     from cvcpkg.cache import default_cache_dir
-    from cvcpkg.catalog import catalog_entries, fetch_catalog, load_catalog_from_file
+    from cvcpkg.catalog import (
+        GITHUB_CATALOG_URL,
+        catalog_entries,
+        fetch_catalog,
+        load_catalog_from_file,
+    )
+    from cvcpkg.config import (
+        DEFAULT_CATALOG_URL,
+        GITHUB_CATALOG_URL as CFG_GITHUB_URL,
+        load_user_config,
+        merge_cli_overrides,
+    )
     from cvcpkg.errors import InstallError, IntegrityError
     from cvcpkg.installer import build_from_source_fallback, install_entry
     from cvcpkg.lockfile import LockEntry, Lockfile
@@ -281,6 +303,11 @@ def install(
     # We filter entries by the target platform tuple (platform/arch/
     # config/link), then run the backtracking SAT-style resolver to
     # pick compatible versions for all requested components.
+    #
+    # --source controls catalog source strategy:
+    #   auto   → primary (pkg.tx.wtf) with GitHub Pages fallback
+    #   server → pkg.tx.wtf only, no fallback
+    #   github → GitHub Pages only, no fallback
     catalog_url = catalog or ""
     catalog_failed = False
     try:
@@ -331,6 +358,20 @@ def install(
         elif fallback_to_source:
             source_only = requested_names
     else:
+        cfg = load_user_config()
+        cfg = merge_cli_overrides(cfg, catalog_url=catalog_url or "")
+
+        if source == "server":
+            primary = catalog_url or cfg.catalog_primary
+            fallbacks: list[str] = []
+        elif source == "github":
+            primary = catalog_url or GITHUB_CATALOG_URL
+            fallbacks = []
+        else:  # auto
+            primary = catalog_url or cfg.catalog_primary
+            fallbacks = cfg.catalog_fallbacks
+
+        cat = fetch_catalog(primary, cache_dir=default_cache_dir(), fallback_urls=fallbacks)
         source_only = requested_names
 
     if picked:

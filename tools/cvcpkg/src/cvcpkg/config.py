@@ -21,7 +21,9 @@ import yaml
 
 # ── Defaults ────────────────────────────────────────────────────
 
-DEFAULT_CATALOG_URL = "https://transfix.github.io/libcvc-deps/catalog/latest.yaml"
+DEFAULT_CATALOG_URL = "https://pkg.tx.wtf/v1/catalog"
+GITHUB_CATALOG_URL = "https://transfix.github.io/libcvc-deps/catalog/latest.yaml"
+DEFAULT_CATALOG_FALLBACKS = [GITHUB_CATALOG_URL]
 
 
 # ── Data model ──────────────────────────────────────────────────
@@ -42,7 +44,7 @@ class CvcpkgConfig:
 
     # Catalog
     catalog_primary: str = DEFAULT_CATALOG_URL
-    catalog_fallbacks: list[str] = field(default_factory=list)
+    catalog_fallbacks: list[str] = field(default_factory=lambda: list(DEFAULT_CATALOG_FALLBACKS))
 
     # Mirror rewrite rules (tried in order)
     mirrors: list[MirrorRule] = field(default_factory=list)
@@ -103,7 +105,7 @@ def load_user_config(config_dir: Path | None = None) -> CvcpkgConfig:
     catalog = d.get("catalog", {})
     return CvcpkgConfig(
         catalog_primary=catalog.get("primary", DEFAULT_CATALOG_URL),
-        catalog_fallbacks=catalog.get("fallback", []),
+        catalog_fallbacks=catalog.get("fallback", list(DEFAULT_CATALOG_FALLBACKS)),
         mirrors=_parse_mirrors(d.get("mirrors", [])),
         backend_options=d.get("backends", {}),
         accept_abi_mismatch=d.get("accept_abi_mismatch", False),
