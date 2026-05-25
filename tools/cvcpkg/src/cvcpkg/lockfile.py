@@ -66,7 +66,7 @@ class Lockfile:
             yaml.safe_dump(self.to_dict(), f, default_flow_style=False, sort_keys=False)
 
     @classmethod
-    def from_dict(cls, d: dict) -> "Lockfile":
+    def from_dict(cls, d: dict) -> Lockfile:
         try:
             return cls(
                 schema_version=d.get("schema_version", 2),
@@ -94,7 +94,7 @@ class Lockfile:
             raise SchemaError(f"malformed lockfile: {e}") from e
 
     @classmethod
-    def read(cls, path: Path) -> "Lockfile":
+    def read(cls, path: Path) -> Lockfile:
         if not path.is_file():
             raise SchemaError(f"lockfile not found: {path}")
         with open(path) as f:

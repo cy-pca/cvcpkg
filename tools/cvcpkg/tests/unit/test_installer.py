@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 import io
 import tarfile
 import zipfile
-from pathlib import Path
 
 import pytest
 
-from cvcpkg.errors import InstallError, IntegrityError
+from cvcpkg.errors import InstallError
 from cvcpkg.installer import _archive_filename, extract_bundle
 from cvcpkg.manifest import CatalogEntry
 

@@ -1,8 +1,6 @@
 """Tests for cvcpkg.semver — version parsing and range matching."""
 
-import pytest
-
-from cvcpkg.semver import Version, parse_range, satisfies
+from cvcpkg.semver import Version, satisfies
 
 
 class TestVersionParse:

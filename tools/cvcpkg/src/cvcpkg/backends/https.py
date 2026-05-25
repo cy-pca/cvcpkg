@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import io
-import ssl
 import urllib.error
 import urllib.request
 from typing import BinaryIO, ClassVar

@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import io
-import os
 import shutil
+from collections.abc import Iterable
 from pathlib import Path
-from typing import BinaryIO, ClassVar, Iterable
+from typing import BinaryIO, ClassVar
 from urllib.parse import unquote, urlparse
 
 from cvcpkg.storage import ObjectInfo, StorageBackend
