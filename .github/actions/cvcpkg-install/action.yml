@@ -56,6 +56,10 @@ inputs:
     description: 'Override the catalog URL. Defaults to GitHub Pages.'
     required: false
     default: ''
+  repository:
+    description: 'GitHub owner/repo to checkout for cvcpkg (e.g. transfix/libcvc-deps).'
+    required: false
+    default: 'transfix/libcvc-deps'
   python_version:
     description: 'Python version to use for cvcpkg.'
     required: false
@@ -76,7 +80,7 @@ runs:
     - name: Checkout libcvc-deps (sparse)
       uses: actions/checkout@v4
       with:
-        repository: transfix/libcvc-deps
+        repository: ${{ inputs.repository }}
         ref: ${{ inputs.libcvc_deps_ref }}
         path: _libcvc-deps
         sparse-checkout: |

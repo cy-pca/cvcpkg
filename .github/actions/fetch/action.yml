@@ -56,6 +56,10 @@ inputs:
     description: 'Directory under which to extract the archive.'
     required: false
     default: ''
+  repository:
+    description: 'GitHub owner/repo for release downloads (e.g. transfix/libcvc-deps).'
+    required: false
+    default: 'transfix/libcvc-deps'
 
 outputs:
   path:
@@ -75,6 +79,7 @@ runs:
         LCD_BUILD_TYPE: ${{ inputs.build_type }}
         LCD_LINK:       ${{ inputs.link }}
         LCD_PREFIX:     ${{ inputs.prefix }}
+        LCD_REPO:       ${{ inputs.repository }}
         RUNNER_OS:      ${{ runner.os }}
       run: |
         set -euo pipefail
@@ -115,7 +120,7 @@ runs:
         fi
 
         stem="libcvc-deps-${LCD_VERSION}-${os}-${arch}-${btlc}${linksfx}"
-        url="https://github.com/transfix/libcvc-deps/releases/download/v${LCD_VERSION}/${stem}.${ext}"
+        url="https://github.com/${LCD_REPO}/releases/download/v${LCD_VERSION}/${stem}.${ext}"
 
         prefix="${LCD_PREFIX}"
         if [ -z "$prefix" ]; then

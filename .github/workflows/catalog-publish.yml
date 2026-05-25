@@ -88,6 +88,8 @@ jobs:
           set -euo pipefail
           TAG="${{ steps.tag.outputs.tag }}"
           VERSION="${TAG#v}"
+          GITHUB_REPO="$GITHUB_REPOSITORY"
+          export TAG VERSION GITHUB_REPO
 
           python3 - <<'PYTHON_SCRIPT'
           import hashlib
@@ -101,6 +103,7 @@ jobs:
           index_files = sorted(indexes_dir.glob("*.yaml"))
           tag = os.environ["TAG"]
           version = os.environ["VERSION"]
+          gh_repo = os.environ.get("GITHUB_REPO", "transfix/libcvc-deps")
 
           if not index_files:
               print(f"No index files found — creating empty catalog for {tag}")
@@ -116,7 +119,7 @@ jobs:
                   bundle["source_release"] = tag
                   if "archive" in bundle:
                       gh_url = (
-                          f"https://github.com/transfix/libcvc-deps/"
+                          f"https://github.com/{gh_repo}/"
                           f"releases/download/{tag}/{bundle['archive']}"
                       )
                       server_url = os.environ.get(

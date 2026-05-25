@@ -36,8 +36,9 @@ FROM python:3.12-slim
 
 ARG CVCPKG_RELEASE=unknown
 ENV CVCPKG_RELEASE=${CVCPKG_RELEASE}
+ARG GITHUB_REPO=transfix/libcvc-deps
 LABEL org.opencontainers.image.title="cvcpkg-server" \
-      org.opencontainers.image.source="https://github.com/transfix/libcvc-deps" \
+      org.opencontainers.image.source="https://github.com/${GITHUB_REPO}" \
       org.opencontainers.image.version="${CVCPKG_RELEASE}"
 
 WORKDIR /app
