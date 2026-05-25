@@ -55,6 +55,10 @@ jobs:
           REPO_DIR: ${{ github.workspace }}
         run: |
           cd tools/cvcpkg
+          # Copy .env.production from the persistent host location
+          if [[ -f /home/tfx/libcvc-deps/tools/cvcpkg/.env.production ]]; then
+            cp /home/tfx/libcvc-deps/tools/cvcpkg/.env.production .env.production
+          fi
           # Ensure .env.production exists on this host
           if [[ ! -f .env.production ]]; then
             echo "::error::.env.production not found — run initial setup first"
