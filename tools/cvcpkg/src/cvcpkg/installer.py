@@ -58,7 +58,9 @@ def download_bundle(
             import logging
 
             logging.getLogger("cvcpkg").debug(
-                "download from %s failed (%s), trying next mirror...", url, exc,
+                "download from %s failed (%s), trying next mirror...",
+                url,
+                exc,
             )
             continue
 
@@ -97,9 +99,7 @@ def _download_from_url(
                     total += len(chunk)
                     if total > max_bytes:
                         os.unlink(tmp.name)
-                        raise InstallError(
-                            f"archive for {filename} exceeds {max_bytes} byte limit"
-                        )
+                        raise InstallError(f"archive for {filename} exceeds {max_bytes} byte limit")
                     h.update(chunk)
                     tmp.write(chunk)
             tmp_path = Path(tmp.name)
@@ -251,9 +251,7 @@ def build_from_source_fallback(
         try:
             search_dirs = [find_recipes_dir()]
         except RecipeError:
-            raise InstallError(
-                f"no prebuilt binary and no recipes directory found for {name}"
-            )
+            raise InstallError(f"no prebuilt binary and no recipes directory found for {name}")
 
     recipe_dir: Path | None = None
     for rdir in search_dirs:
@@ -263,9 +261,7 @@ def build_from_source_fallback(
             break
 
     if recipe_dir is None:
-        raise InstallError(
-            f"no prebuilt binary and no recipe found for '{name}'"
-        )
+        raise InstallError(f"no prebuilt binary and no recipe found for '{name}'")
 
     try:
         build_recipe(
@@ -276,9 +272,7 @@ def build_from_source_fallback(
             prefix=prefix,
         )
     except (BuildError, RecipeError) as exc:
-        raise InstallError(
-            f"source build for '{name}' failed: {exc}"
-        ) from exc
+        raise InstallError(f"source build for '{name}' failed: {exc}") from exc
 
 
 def _archive_filename(entry: CatalogEntry) -> str:

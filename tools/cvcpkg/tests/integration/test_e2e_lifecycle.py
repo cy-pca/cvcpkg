@@ -71,13 +71,22 @@ def _make_fake_archive(files: dict[str, bytes]) -> bytes:
 def _exec_in_backend(*cmd: str) -> str:
     """Run a command inside the backend container via docker compose exec."""
     full_cmd = [
-        "docker", "compose", "-f", "docker-compose.test.yml",
-        "exec", "-T", "backend", *cmd,
+        "docker",
+        "compose",
+        "-f",
+        "docker-compose.test.yml",
+        "exec",
+        "-T",
+        "backend",
+        *cmd,
     ]
     # Compose files live in tools/cvcpkg/
     cwd = Path(__file__).resolve().parents[2]
     result = subprocess.run(
-        full_cmd, capture_output=True, text=True, cwd=str(cwd),
+        full_cmd,
+        capture_output=True,
+        text=True,
+        cwd=str(cwd),
     )
     if result.returncode != 0:
         pytest.skip(f"docker exec failed: {result.stderr.strip()}")
@@ -98,10 +107,15 @@ def client():
 def admin_token():
     """Bootstrap admin token via CLI exec in the backend container."""
     output = _exec_in_backend(
-        "cvcpkg-server", "token", "create",
-        "--name", "e2e-admin",
-        "--role", "admin",
-        "--state-dir", "/app/data",
+        "cvcpkg-server",
+        "token",
+        "create",
+        "--name",
+        "e2e-admin",
+        "--role",
+        "admin",
+        "--state-dir",
+        "/app/data",
     )
     for line in output.split("\n"):
         line = line.strip()
@@ -176,10 +190,7 @@ def zlib_build(tmp_path_factory):
     assert len(sha256) == 64
 
     with tarfile.open(archive_path, "r:*") as tf:
-        manifest_entries = [
-            m for m in tf.getmembers()
-            if m.name.endswith("manifest.yaml")
-        ]
+        manifest_entries = [m for m in tf.getmembers() if m.name.endswith("manifest.yaml")]
         assert len(manifest_entries) == 1
         f = tf.extractfile(manifest_entries[0])
         assert f is not None
@@ -355,7 +366,9 @@ class TestBuildPackPublish:
         assert data["total"] >= 1
         assert any(p["name"] == "zlib" for p in data["packages"])
 
-    def test_duplicate_publish_rejected(self, client, publisher_headers, zlib_build, published_zlib):
+    def test_duplicate_publish_rejected(
+        self, client, publisher_headers, zlib_build, published_zlib
+    ):
         """Publishing the same exact package again should fail with 409."""
         archive_data = zlib_build["archive_path"].read_bytes()
         manifest = zlib_build["manifest"]

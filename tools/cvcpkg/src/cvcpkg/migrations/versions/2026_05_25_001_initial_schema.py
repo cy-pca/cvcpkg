@@ -6,13 +6,13 @@ Create Date: 2026-05-25
 
 Matches the ORM models defined in cvcpkg.server.db as of v1.3.0.
 """
+
 from __future__ import annotations
 
 from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
-
 
 revision: str = "001"
 down_revision: Union[str, None] = None

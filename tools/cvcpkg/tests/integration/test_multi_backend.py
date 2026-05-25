@@ -106,10 +106,15 @@ def _bootstrap_admin(state_dir: str, db_url: str) -> str:
     token_name = f"admin-{os.getpid()}-{_TOKEN_COUNTER}"
     result = subprocess.run(
         [
-            "cvcpkg-server", "token", "create",
-            "--name", token_name,
-            "--role", "admin",
-            "--state-dir", state_dir,
+            "cvcpkg-server",
+            "token",
+            "create",
+            "--name",
+            token_name,
+            "--role",
+            "admin",
+            "--state-dir",
+            state_dir,
         ],
         capture_output=True,
         text=True,
@@ -158,7 +163,9 @@ def _make_dummy_archive(name: str = "testpkg", version: str = "1.0.0") -> bytes:
 class ServerInstance:
     """Tracks a running server process for a specific backend."""
 
-    def __init__(self, db_url: str, base_url: str, process: multiprocessing.Process, state_dir: str):
+    def __init__(
+        self, db_url: str, base_url: str, process: multiprocessing.Process, state_dir: str
+    ):
         self.db_url = db_url
         self.base_url = base_url
         self.process = process
