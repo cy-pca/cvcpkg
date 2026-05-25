@@ -18,15 +18,18 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import secrets
 import signal
+import tempfile
 import time
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 
 from cvcpkg import __version__
 from cvcpkg.server.audit import AuditLog
@@ -55,6 +58,12 @@ _START_TIME = 0.0
 
 # Maximum upload size in bytes (default 512 MiB)
 MAX_UPLOAD_BYTES = int(os.environ.get("CVCPKG_MAX_UPLOAD_BYTES", str(512 * 1024 * 1024)))
+
+# Chunked upload chunk size (default 8 MiB)
+CHUNK_SIZE = int(os.environ.get("CVCPKG_CHUNK_SIZE", str(8 * 1024 * 1024)))
+
+# Upload session expiry in seconds (default 1 hour)
+UPLOAD_SESSION_TTL = int(os.environ.get("CVCPKG_UPLOAD_SESSION_TTL", "3600"))
 
 # Rate limiting: requests per minute for write endpoints
 RATE_LIMIT_RPM = int(os.environ.get("CVCPKG_RATE_LIMIT_RPM", "60"))
@@ -124,6 +133,48 @@ def _get_state() -> ServerState:
     if _state is None:
         raise RuntimeError("server not initialised")
     return _state
+
+
+# ── Chunked upload session tracking ────────────────────────────
+
+
+@dataclass
+class UploadSession:
+    """Tracks an in-progress chunked upload."""
+
+    upload_id: str
+    name: str
+    version: str
+    platform: str
+    arch: str
+    build_type: str
+    link: str
+    signature: str
+    key_fingerprint: str
+    release_tag: str
+    recipe_version: str
+    actor_name: str
+    temp_path: Path
+    hasher: hashlib._Hash = field(default_factory=lambda: hashlib.sha256())
+    bytes_received: int = 0
+    total_size: int = 0  # 0 = unknown
+    created_at: float = field(default_factory=time.monotonic)
+
+
+# Map of upload_id -> UploadSession (process-local, single-worker safe)
+_upload_sessions: dict[str, UploadSession] = {}
+
+
+def _purge_expired_sessions() -> None:
+    """Remove upload sessions older than UPLOAD_SESSION_TTL."""
+    now = time.monotonic()
+    expired = [
+        uid for uid, s in _upload_sessions.items() if now - s.created_at > UPLOAD_SESSION_TTL
+    ]
+    for uid in expired:
+        s = _upload_sessions.pop(uid, None)
+        if s and s.temp_path.exists():
+            s.temp_path.unlink(missing_ok=True)
 
 
 # ── Auth dependency ─────────────────────────────────────────────
@@ -563,35 +614,41 @@ def create_app(
                         "Yank the existing version first, or use a new revision.",
                     )
 
-        # Read and hash the upload with size enforcement
+        # Read and hash the upload — stream to disk to avoid holding
+        # large archives in memory.
         h = hashlib.sha256()
-        chunks: list[bytes] = []
         total_size = 0
-        while True:
-            chunk = await file.read(1 << 16)  # 64 KiB chunks
-            if not chunk:
-                break
-            total_size += len(chunk)
-            if total_size > MAX_UPLOAD_BYTES:
-                raise HTTPException(
-                    413,
-                    f"upload exceeds maximum size of {MAX_UPLOAD_BYTES} bytes",
-                )
-            h.update(chunk)
-            chunks.append(chunk)
-        content = b"".join(chunks)
-        sha256 = h.hexdigest()
-        size_bytes = total_size
-
-        # Store the archive
         safe_filename = f"{name}-{version}-{platform}-{arch}-{build_type}-{link}.tar.zst"
-        # Remove any unsafe characters
         safe_filename = "".join(
             c if c in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-+" else "_"
             for c in safe_filename
         )
         dest = state.archives_dir() / safe_filename
-        dest.write_bytes(content)
+
+        # Write to temp file in the same directory, then rename for atomicity
+        fd, tmp_path_str = tempfile.mkstemp(dir=state.archives_dir(), suffix=".upload")
+        tmp_path = Path(tmp_path_str)
+        try:
+            with os.fdopen(fd, "wb") as tmp_f:
+                while True:
+                    chunk = await file.read(1 << 16)  # 64 KiB chunks
+                    if not chunk:
+                        break
+                    total_size += len(chunk)
+                    if total_size > MAX_UPLOAD_BYTES:
+                        raise HTTPException(
+                            413,
+                            f"upload exceeds maximum size of {MAX_UPLOAD_BYTES} bytes",
+                        )
+                    h.update(chunk)
+                    tmp_f.write(chunk)
+            tmp_path.rename(dest)
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
+
+        sha256 = h.hexdigest()
+        size_bytes = total_size
 
         # Update the index
         import datetime
@@ -656,6 +713,294 @@ def create_app(
             sha256=sha256,
             archive_url=archive_url,
         )
+
+    # ── Chunked / resumable upload ──────────────────────────
+
+    @app.post("/v1/upload/init", tags=["upload"])
+    async def upload_init(
+        request: Request,
+        name: str = Query(..., description="Component name"),
+        version: str = Query(..., description="Component version"),
+        platform: str = Query("", description="Target platform"),
+        arch: str = Query("", description="Target architecture"),
+        build_type: str = Query("release"),
+        link: str = Query("shared"),
+        total_size: int = Query(0, description="Total file size in bytes (0 = unknown)"),
+        signature: str = Query(""),
+        key_fingerprint: str = Query(""),
+        release_tag: str = Query(""),
+        recipe_version: str = Query(""),
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Initialise a chunked upload session.
+
+        Returns an ``upload_id`` and recommended ``chunk_size``.
+        Upload chunks with ``PATCH /v1/upload/{upload_id}``, then
+        finalise with ``POST /v1/upload/{upload_id}/complete``.
+        """
+        _check_rate_limit(request)
+        _purge_expired_sessions()
+        state = _get_state()
+
+        if total_size > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                413, f"declared size {total_size} exceeds maximum {MAX_UPLOAD_BYTES} bytes"
+            )
+
+        # Check for duplicates
+        if _use_db:
+            if await _db_packages.check_duplicate(name, version, platform, arch, build_type, link):
+                raise HTTPException(
+                    409,
+                    f"{name}=={version} ({platform}/{arch}/{build_type}/{link}) already published.",
+                )
+        else:
+            for b in state.index.get("bundles", []):
+                if (
+                    b["name"] == name
+                    and b["version"] == version
+                    and b.get("platform") == platform
+                    and b.get("arch") == arch
+                    and b.get("build_type") == build_type
+                    and b.get("link") == link
+                ):
+                    raise HTTPException(
+                        409,
+                        f"{name}=={version} ({platform}/{arch}/{build_type}/{link}) already published.",
+                    )
+
+        upload_id = secrets.token_urlsafe(32)
+        fd, tmp_path_str = tempfile.mkstemp(dir=state.archives_dir(), suffix=".chunk")
+        os.close(fd)
+        tmp_path = Path(tmp_path_str)
+
+        _upload_sessions[upload_id] = UploadSession(
+            upload_id=upload_id,
+            name=name,
+            version=version,
+            platform=platform,
+            arch=arch,
+            build_type=build_type,
+            link=link,
+            signature=signature,
+            key_fingerprint=key_fingerprint,
+            release_tag=release_tag,
+            recipe_version=recipe_version,
+            actor_name=actor.name,
+            temp_path=tmp_path,
+            total_size=total_size,
+        )
+
+        return JSONResponse(
+            {
+                "upload_id": upload_id,
+                "chunk_size": CHUNK_SIZE,
+                "max_size": MAX_UPLOAD_BYTES,
+                "expires_in": UPLOAD_SESSION_TTL,
+            },
+            status_code=201,
+        )
+
+    @app.get("/v1/upload/{upload_id}", tags=["upload"])
+    async def upload_status(
+        upload_id: str,
+        _actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Return current status of a chunked upload (bytes received so far)."""
+        session = _upload_sessions.get(upload_id)
+        if not session:
+            raise HTTPException(404, "upload session not found or expired")
+        return {
+            "upload_id": upload_id,
+            "bytes_received": session.bytes_received,
+            "total_size": session.total_size,
+            "name": session.name,
+            "version": session.version,
+        }
+
+    @app.patch("/v1/upload/{upload_id}", tags=["upload"])
+    async def upload_chunk(
+        upload_id: str,
+        request: Request,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Append a chunk to an in-progress upload.
+
+        Send the raw chunk bytes as the request body
+        (``Content-Type: application/octet-stream``).
+        Include ``Content-Range: bytes {start}-{end}/{total}``
+        for resume safety — the server verifies that ``start``
+        matches ``bytes_received``.
+        """
+        session = _upload_sessions.get(upload_id)
+        if not session:
+            raise HTTPException(404, "upload session not found or expired")
+        if session.actor_name != actor.name:
+            raise HTTPException(403, "upload session belongs to a different actor")
+
+        # Parse Content-Range if provided for resume verification
+        content_range = request.headers.get("content-range", "")
+        if content_range:
+            # Format: bytes start-end/total
+            try:
+                range_spec = content_range.split(" ", 1)[1]  # drop "bytes"
+                range_part, total_part = range_spec.split("/")
+                range_start = int(range_part.split("-")[0])
+            except (IndexError, ValueError):
+                raise HTTPException(400, f"malformed Content-Range: {content_range}")
+            if range_start != session.bytes_received:
+                raise HTTPException(
+                    409,
+                    f"offset mismatch: server has {session.bytes_received} bytes, "
+                    f"chunk starts at {range_start}. Resume from {session.bytes_received}.",
+                )
+
+        # Stream chunk to disk
+        chunk_bytes = 0
+        with open(session.temp_path, "ab") as f:
+            async for body_chunk in request.stream():
+                chunk_bytes += len(body_chunk)
+                if session.bytes_received + chunk_bytes > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        413,
+                        f"upload would exceed maximum size of {MAX_UPLOAD_BYTES} bytes",
+                    )
+                session.hasher.update(body_chunk)
+                f.write(body_chunk)
+
+        session.bytes_received += chunk_bytes
+
+        return {
+            "upload_id": upload_id,
+            "bytes_received": session.bytes_received,
+            "total_size": session.total_size,
+        }
+
+    @app.post("/v1/upload/{upload_id}/complete", response_model=PublishResponse, tags=["upload"])
+    async def upload_complete(
+        upload_id: str,
+        request: Request,
+        expected_sha256: str = Query("", description="Expected SHA-256 for verification"),
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Finalise a chunked upload — verify integrity and register the package."""
+        _check_rate_limit(request)
+        session = _upload_sessions.get(upload_id)
+        if not session:
+            raise HTTPException(404, "upload session not found or expired")
+        if session.actor_name != actor.name:
+            raise HTTPException(403, "upload session belongs to a different actor")
+        if session.bytes_received == 0:
+            raise HTTPException(400, "no data uploaded")
+
+        sha256 = session.hasher.hexdigest()
+        if expected_sha256 and sha256 != expected_sha256:
+            # Integrity mismatch — discard
+            session.temp_path.unlink(missing_ok=True)
+            _upload_sessions.pop(upload_id, None)
+            raise HTTPException(
+                422,
+                f"SHA-256 mismatch: expected {expected_sha256}, got {sha256}",
+            )
+
+        state = _get_state()
+
+        # Build safe filename and move temp → final
+        safe_filename = (
+            f"{session.name}-{session.version}-{session.platform}-{session.arch}"
+            f"-{session.build_type}-{session.link}.tar.zst"
+        )
+        safe_filename = "".join(
+            c if c in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-+" else "_"
+            for c in safe_filename
+        )
+        dest = state.archives_dir() / safe_filename
+        session.temp_path.rename(dest)
+
+        archive_url = f"/v1/download/{safe_filename}"
+        size_bytes = session.bytes_received
+
+        import datetime
+
+        if _use_db:
+            await _db_packages.add_package(
+                name=session.name,
+                version=session.version,
+                platform=session.platform,
+                arch=session.arch,
+                build_type=session.build_type,
+                link=session.link,
+                sha256=sha256,
+                size_bytes=size_bytes,
+                archive_url=archive_url,
+                signature=session.signature,
+                key_fingerprint=session.key_fingerprint,
+                release_tag=session.release_tag,
+                recipe_version=session.recipe_version,
+            )
+            await _db_audit.record(
+                action=AuditAction.publish,
+                actor=actor.name,
+                target=f"{session.name}=={session.version}",
+                detail=(
+                    f"platform={session.platform} arch={session.arch} "
+                    f"sha256={sha256} release={session.release_tag or 'live'} chunked=yes"
+                ),
+            )
+        else:
+            bundle = {
+                "name": session.name,
+                "version": session.version,
+                "platform": session.platform,
+                "arch": session.arch,
+                "build_type": session.build_type,
+                "link": session.link,
+                "sha256": sha256,
+                "size_bytes": size_bytes,
+                "archive_url": archive_url,
+                "published_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "yanked": False,
+                "signature": session.signature,
+                "key_fingerprint": session.key_fingerprint,
+                "release_tag": session.release_tag,
+                "recipe_version": session.recipe_version,
+            }
+            state.index.setdefault("bundles", []).append(bundle)
+            state.save_index()
+            state.audit.record(
+                action=AuditAction.publish,
+                actor=actor.name,
+                target=f"{session.name}=={session.version}",
+                detail=(
+                    f"platform={session.platform} arch={session.arch} "
+                    f"sha256={sha256} release={session.release_tag or 'live'} chunked=yes"
+                ),
+            )
+
+        _metrics["publishes_total"] += 1
+        _metrics["bytes_uploaded_total"] += size_bytes
+        _upload_sessions.pop(upload_id, None)
+
+        return PublishResponse(
+            name=session.name,
+            version=session.version,
+            sha256=sha256,
+            archive_url=archive_url,
+        )
+
+    @app.delete("/v1/upload/{upload_id}", tags=["upload"], status_code=204)
+    async def upload_cancel(
+        upload_id: str,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Cancel and discard an in-progress upload session."""
+        session = _upload_sessions.get(upload_id)
+        if not session:
+            raise HTTPException(404, "upload session not found or expired")
+        if session.actor_name != actor.name:
+            raise HTTPException(403, "upload session belongs to a different actor")
+        session.temp_path.unlink(missing_ok=True)
+        _upload_sessions.pop(upload_id, None)
 
     # ── Yank / Unyank (write) ──────────────────────────────
 

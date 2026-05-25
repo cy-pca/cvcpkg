@@ -30,8 +30,12 @@ import pytest
 
 # ── Paths ───────────────────────────────────────────────────────
 
-_CVCPKG_ROOT = Path(__file__).resolve().parents[2]  # tools/cvcpkg
-_REPO_ROOT = _CVCPKG_ROOT.parents[1]  # libcvc-deps
+try:
+    _CVCPKG_ROOT = Path(__file__).resolve().parents[2]  # tools/cvcpkg
+    _REPO_ROOT = _CVCPKG_ROOT.parents[1]  # libcvc-deps
+except IndexError:
+    _CVCPKG_ROOT = Path("/nonexistent")
+    _REPO_ROOT = Path("/nonexistent")
 _RECIPES_DIR = _REPO_ROOT / "recipes"
 
 # Skip the entire module if the recipes directory is missing (e.g.

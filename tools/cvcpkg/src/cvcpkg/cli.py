@@ -852,17 +852,29 @@ def push(archives: tuple[str, ...], dest: str) -> None:
     default="",
     help="Release tag (e.g. 'v1.3.0').  Empty for live builds.",
 )
+@click.option(
+    "--chunked-threshold",
+    default=10 * 1024 * 1024,
+    type=int,
+    help="Files larger than this (bytes) use chunked upload.  [default: 10MB]",
+    show_default=True,
+)
 def publish(
     archives: tuple[str, ...],
     server: str,
     token: str,
     release_tag: str,
+    chunked_threshold: int,
 ) -> None:
     """Publish bundle archive(s) to a cvcpkg-server via its REST API.
 
     Reads the embedded manifest.yaml from each archive to extract
     component metadata (name, version, platform, arch, config, link),
-    then uploads the archive to the server's /v1/publish endpoint.
+    then uploads the archive to the server.
+
+    Small archives (< 10 MB by default) are uploaded in a single request
+    via ``POST /v1/publish``.  Larger archives use chunked upload with
+    automatic resume on transient failures.
 
     Archives are produced by ``cvcpkg pack``.
 
@@ -887,31 +899,7 @@ def publish(
             raise click.ClickException(f"file not found: {archive}")
 
         # Extract manifest from archive
-        manifest = None
-        raw = p.read_bytes()
-        try:
-            if p.name.endswith(".zip"):
-                with zipfile.ZipFile(io.BytesIO(raw)) as zf:
-                    for entry in zf.namelist():
-                        if entry.endswith("manifest.yaml"):
-                            manifest = yaml.safe_load(zf.read(entry))
-                            break
-            else:
-                with tarfile.open(fileobj=io.BytesIO(raw), mode="r:*") as tf:
-                    for member in tf.getmembers():
-                        if member.name.endswith("manifest.yaml"):
-                            f = tf.extractfile(member)
-                            if f:
-                                manifest = yaml.safe_load(f.read())
-                            break
-        except (tarfile.TarError, zipfile.BadZipFile) as exc:
-            raise click.ClickException(f"{p.name}: cannot read archive: {exc}")
-
-        if not manifest:
-            raise click.ClickException(
-                f"{p.name}: no manifest.yaml found — is this a cvcpkg archive?"
-            )
-
+        manifest = _extract_manifest(p)
         bundle = manifest.get("bundle", {})
         name = bundle.get("name", "")
         version = bundle.get("version", "")
@@ -924,38 +912,220 @@ def publish(
         if not name or not version:
             raise click.ClickException(f"{p.name}: manifest missing name or version")
 
+        file_size = p.stat().st_size
         click.echo(
             f"cvcpkg: publishing {name}=={version} "
-            f"({plat}/{arch}/{build_type}/{link}) -> {base}"
+            f"({plat}/{arch}/{build_type}/{link}) "
+            f"[{file_size / 1024 / 1024:.1f} MB] -> {base}"
         )
 
-        with httpx.Client(timeout=300) as client:
+        params = {
+            "name": name,
+            "version": version,
+            "platform": plat,
+            "arch": arch,
+            "build_type": build_type,
+            "link": link,
+            "release_tag": release_tag,
+            "recipe_version": recipe_version,
+        }
+
+        if file_size <= chunked_threshold:
+            result = _publish_simple(base, headers, params, p)
+        else:
+            result = _publish_chunked(base, headers, params, p, file_size)
+
+        if result == "published":
+            ok += 1
+        # result == "skipped" → already counted
+
+    click.echo(f"cvcpkg: published {ok}/{len(archives)} archive(s).")
+
+
+def _extract_manifest(archive_path: Path) -> dict:
+    """Extract manifest.yaml from a cvcpkg archive."""
+    import io
+    import tarfile
+    import zipfile
+
+    manifest = None
+    try:
+        if archive_path.name.endswith(".zip"):
+            with zipfile.ZipFile(archive_path) as zf:
+                for entry in zf.namelist():
+                    if entry.endswith("manifest.yaml"):
+                        manifest = yaml.safe_load(zf.read(entry))
+                        break
+        else:
+            with tarfile.open(archive_path, mode="r:*") as tf:
+                for member in tf.getmembers():
+                    if member.name.endswith("manifest.yaml"):
+                        f = tf.extractfile(member)
+                        if f:
+                            manifest = yaml.safe_load(f.read())
+                        break
+    except (tarfile.TarError, zipfile.BadZipFile) as exc:
+        raise click.ClickException(f"{archive_path.name}: cannot read archive: {exc}")
+
+    if not manifest:
+        raise click.ClickException(
+            f"{archive_path.name}: no manifest.yaml found — is this a cvcpkg archive?"
+        )
+    return manifest
+
+
+def _publish_simple(base: str, headers: dict, params: dict, archive_path: Path) -> str:
+    """Upload a small archive in a single POST request.  Returns 'published' or 'skipped'."""
+    import httpx
+
+    with httpx.Client(timeout=300) as client:
+        with open(archive_path, "rb") as f:
             resp = client.post(
                 f"{base}/v1/publish",
-                params={
-                    "name": name,
-                    "version": version,
-                    "platform": plat,
-                    "arch": arch,
-                    "build_type": build_type,
-                    "link": link,
-                    "release_tag": release_tag,
-                    "recipe_version": recipe_version,
-                },
-                files={"file": (p.name, raw, "application/octet-stream")},
+                params=params,
+                files={"file": (archive_path.name, f, "application/octet-stream")},
                 headers=headers,
             )
 
-        if resp.status_code == 200:
-            data = resp.json()
-            click.echo(f"  published: sha256={data['sha256']}")
-            ok += 1
-        elif resp.status_code == 409:
-            click.echo(f"  skipped (already published): {resp.json().get('detail', '')}")
-        else:
-            raise click.ClickException(f"publish failed ({resp.status_code}): {resp.text}")
+    if resp.status_code == 200:
+        data = resp.json()
+        click.echo(f"  published: sha256={data['sha256']}")
+        return "published"
+    elif resp.status_code == 409:
+        click.echo(f"  skipped (already published): {resp.json().get('detail', '')}")
+        return "skipped"
+    else:
+        raise click.ClickException(f"publish failed ({resp.status_code}): {resp.text}")
 
-    click.echo(f"cvcpkg: published {ok}/{len(archives)} archive(s).")
+
+def _publish_chunked(
+    base: str,
+    headers: dict,
+    params: dict,
+    archive_path: Path,
+    file_size: int,
+    max_retries: int = 3,
+) -> str:
+    """Upload a large archive using chunked upload with resume.
+
+    Returns 'published' or 'skipped'.
+    """
+    import hashlib
+
+    import httpx
+
+    # 1. Init upload session
+    with httpx.Client(timeout=60) as client:
+        resp = client.post(
+            f"{base}/v1/upload/init",
+            params={**params, "total_size": file_size},
+            headers=headers,
+        )
+
+    if resp.status_code == 409:
+        click.echo(f"  skipped (already published): {resp.json().get('detail', '')}")
+        return "skipped"
+    if resp.status_code != 201:
+        raise click.ClickException(f"upload init failed ({resp.status_code}): {resp.text}")
+
+    init_data = resp.json()
+    upload_id = init_data["upload_id"]
+    chunk_size = init_data.get("chunk_size", 8 * 1024 * 1024)
+
+    # 2. Upload chunks with retry + resume
+    offset = 0
+    sha256 = hashlib.sha256()
+
+    with open(archive_path, "rb") as f:
+        while offset < file_size:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
+
+            sha256.update(chunk)
+            end = offset + len(chunk) - 1
+
+            for attempt in range(1, max_retries + 1):
+                try:
+                    with httpx.Client(timeout=120) as client:
+                        resp = client.patch(
+                            f"{base}/v1/upload/{upload_id}",
+                            content=chunk,
+                            headers={
+                                **headers,
+                                "Content-Type": "application/octet-stream",
+                                "Content-Range": f"bytes {offset}-{end}/{file_size}",
+                            },
+                        )
+
+                    if resp.status_code == 409:
+                        # Offset mismatch — check server status and resume
+                        with httpx.Client(timeout=30) as client:
+                            status_resp = client.get(
+                                f"{base}/v1/upload/{upload_id}",
+                                headers=headers,
+                            )
+                        if status_resp.status_code == 200:
+                            server_offset = status_resp.json()["bytes_received"]
+                            if server_offset > offset:
+                                # Server already has this chunk, skip forward
+                                offset = server_offset
+                                f.seek(offset)
+                                # Recompute hash from start (needed for verification)
+                                sha256 = hashlib.sha256()
+                                f.seek(0)
+                                remaining = offset
+                                while remaining > 0:
+                                    rehash_chunk = f.read(min(chunk_size, remaining))
+                                    sha256.update(rehash_chunk)
+                                    remaining -= len(rehash_chunk)
+                                break
+                        raise click.ClickException(f"chunk upload offset mismatch: {resp.text}")
+
+                    if resp.status_code != 200:
+                        raise click.ClickException(
+                            f"chunk upload failed ({resp.status_code}): {resp.text}"
+                        )
+
+                    received = resp.json()["bytes_received"]
+                    pct = received * 100 // file_size
+                    click.echo(
+                        f"  chunk {offset}-{end}: "
+                        f"{received / 1024 / 1024:.1f}/{file_size / 1024 / 1024:.1f} MB ({pct}%)"
+                    )
+                    offset = received
+                    break  # success
+
+                except httpx.TransportError as exc:
+                    if attempt < max_retries:
+                        import time
+
+                        wait = 2**attempt
+                        click.echo(
+                            f"  chunk upload error (attempt {attempt}/{max_retries}): "
+                            f"{exc} — retrying in {wait}s"
+                        )
+                        time.sleep(wait)
+                    else:
+                        raise click.ClickException(
+                            f"chunk upload failed after {max_retries} retries: {exc}"
+                        )
+
+    # 3. Finalise
+    expected_sha256 = sha256.hexdigest()
+    with httpx.Client(timeout=60) as client:
+        resp = client.post(
+            f"{base}/v1/upload/{upload_id}/complete",
+            params={"expected_sha256": expected_sha256},
+            headers=headers,
+        )
+
+    if resp.status_code == 200:
+        data = resp.json()
+        click.echo(f"  published (chunked): sha256={data['sha256']}")
+        return "published"
+    else:
+        raise click.ClickException(f"upload complete failed ({resp.status_code}): {resp.text}")
 
 
 # ── add ─────────────────────────────────────────────────────────
