@@ -5,6 +5,8 @@
 #   docker compose -f docker-compose.test.yml run --rm test
 #   docker compose -f docker-compose.test.yml down -v
 
+name: cvcpkg-test
+
 services:
     postgres:
         image: postgres:16-alpine
