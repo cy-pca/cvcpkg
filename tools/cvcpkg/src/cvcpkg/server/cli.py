@@ -91,7 +91,7 @@ def run(
         raise click.ClickException(
             "uvicorn is required to run the server. "
             "Install it with: pip install 'cvcpkg[server]'"
-        )
+        ) from None
 
     click.echo(f"cvcpkg-server: starting on {host}:{port}")
     click.echo(f"cvcpkg-server: state directory: {Path(state_dir).resolve()}")
@@ -107,8 +107,6 @@ def run(
 
     log_config = None
     if log_json:
-        import logging.config
-
         log_config = {
             "version": 1,
             "disable_existing_loggers": False,
@@ -343,6 +341,89 @@ def audit_verify(state_dir: str) -> None:
     else:
         click.echo(f"FAILED: {message}")
         raise SystemExit(1)
+
+
+# ── migrate ─────────────────────────────────────────────────────
+
+
+@server_cli.group()
+def migrate() -> None:
+    """Database schema migrations (requires Alembic)."""
+
+
+def _require_alembic():
+    """Import alembic.command or raise a user-friendly error."""
+    try:
+        from alembic import command
+
+        return command
+    except ImportError:
+        raise click.ClickException(
+            "alembic is required for migrations. Install it with: pip install 'cvcpkg[db]'"
+        ) from None
+
+
+def _require_db_url():
+    """Ensure CVCPKG_DATABASE_URL is set."""
+    import os
+
+    if not os.environ.get("CVCPKG_DATABASE_URL"):
+        raise click.ClickException("CVCPKG_DATABASE_URL must be set for migrations.")
+
+
+@migrate.command("upgrade")
+@click.argument("revision", default="head")
+def migrate_upgrade(revision: str) -> None:
+    """Upgrade the database schema to REVISION (default: head)."""
+    command = _require_alembic()
+    _require_db_url()
+    alembic_cfg = _alembic_config()
+    command.upgrade(alembic_cfg, revision)
+    click.echo(f"Upgraded to {revision}.")
+
+
+@migrate.command("downgrade")
+@click.argument("revision")
+def migrate_downgrade(revision: str) -> None:
+    """Downgrade the database schema to REVISION."""
+    command = _require_alembic()
+    _require_db_url()
+    alembic_cfg = _alembic_config()
+    command.downgrade(alembic_cfg, revision)
+    click.echo(f"Downgraded to {revision}.")
+
+
+@migrate.command("current")
+def migrate_current() -> None:
+    """Show the current migration revision."""
+    command = _require_alembic()
+    _require_db_url()
+    alembic_cfg = _alembic_config()
+    command.current(alembic_cfg, verbose=True)
+
+
+@migrate.command("history")
+def migrate_history() -> None:
+    """Show migration revision history."""
+    command = _require_alembic()
+    _require_db_url()
+    alembic_cfg = _alembic_config()
+    command.history(alembic_cfg, verbose=True)
+
+
+def _alembic_config():
+    """Build an Alembic Config pointing at our migrations."""
+    from alembic.config import Config
+
+    cfg_path = Path(__file__).resolve().parents[3] / "alembic.ini"
+    if not cfg_path.is_file():
+        # Fallback: build config programmatically
+        cfg = Config()
+        cfg.set_main_option(
+            "script_location", str(Path(__file__).resolve().parent.parent / "migrations")
+        )
+        return cfg
+    return Config(str(cfg_path))
 
 
 if __name__ == "__main__":
