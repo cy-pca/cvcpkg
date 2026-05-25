@@ -138,11 +138,30 @@ def token() -> None:
 )
 def token_create(name: str, role: str, expires_in_days: int | None, state_dir: str) -> None:
     """Create a new API token (prints the secret once)."""
-    from cvcpkg.server.auth import TokenStore
+    import asyncio
+    import os
+
     from cvcpkg.server.models import TokenRole
 
-    store = TokenStore(Path(state_dir))
-    raw = store.create(name=name, role=TokenRole(role), expires_in_days=expires_in_days)
+    db_url = os.environ.get("CVCPKG_DATABASE_URL", "")
+    if db_url:
+        from cvcpkg.server.db import create_tables, dispose_engine, init_db
+        from cvcpkg.server.db_stores import DbTokenStore
+
+        async def _create():
+            init_db(db_url)
+            await create_tables()
+            store = DbTokenStore(Path(state_dir))
+            raw = await store.create(name=name, role=TokenRole(role), expires_in_days=expires_in_days)
+            await dispose_engine()
+            return raw
+
+        raw = asyncio.run(_create())
+    else:
+        from cvcpkg.server.auth import TokenStore
+
+        store = TokenStore(Path(state_dir))
+        raw = store.create(name=name, role=TokenRole(role), expires_in_days=expires_in_days)
     click.echo(f"Token created for '{name}' (role={role}):")
     click.echo(f"  {raw}")
     click.echo("Save this token — it will not be shown again.")
@@ -157,10 +176,28 @@ def token_create(name: str, role: str, expires_in_days: int | None, state_dir: s
 )
 def token_list(state_dir: str) -> None:
     """List all tokens (without secrets)."""
-    from cvcpkg.server.auth import TokenStore
+    import asyncio
+    import os
 
-    store = TokenStore(Path(state_dir))
-    tokens = store.list_tokens()
+    db_url = os.environ.get("CVCPKG_DATABASE_URL", "")
+    if db_url:
+        from cvcpkg.server.db import create_tables, dispose_engine, init_db
+        from cvcpkg.server.db_stores import DbTokenStore
+
+        async def _list():
+            init_db(db_url)
+            await create_tables()
+            store = DbTokenStore(Path(state_dir))
+            tokens = await store.list_tokens()
+            await dispose_engine()
+            return tokens
+
+        tokens = asyncio.run(_list())
+    else:
+        from cvcpkg.server.auth import TokenStore
+
+        store = TokenStore(Path(state_dir))
+        tokens = store.list_tokens()
     if not tokens:
         click.echo("No tokens found.")
         return
@@ -182,13 +219,34 @@ def token_list(state_dir: str) -> None:
 )
 def token_revoke(name: str, state_dir: str) -> None:
     """Revoke a token by name."""
-    from cvcpkg.server.auth import TokenStore
+    import asyncio
+    import os
 
-    store = TokenStore(Path(state_dir))
-    if store.revoke(name):
-        click.echo(f"Token '{name}' revoked.")
+    db_url = os.environ.get("CVCPKG_DATABASE_URL", "")
+    if db_url:
+        from cvcpkg.server.db import create_tables, dispose_engine, init_db
+        from cvcpkg.server.db_stores import DbTokenStore
+
+        async def _revoke():
+            init_db(db_url)
+            await create_tables()
+            store = DbTokenStore(Path(state_dir))
+            result = await store.revoke(name)
+            await dispose_engine()
+            return result
+
+        if asyncio.run(_revoke()):
+            click.echo(f"Token '{name}' revoked.")
+        else:
+            click.echo(f"Token '{name}' not found or already revoked.")
     else:
-        click.echo(f"Token '{name}' not found or already revoked.")
+        from cvcpkg.server.auth import TokenStore
+
+        store = TokenStore(Path(state_dir))
+        if store.revoke(name):
+            click.echo(f"Token '{name}' revoked.")
+        else:
+            click.echo(f"Token '{name}' not found or already revoked.")
 
 
 # ── audit ───────────────────────────────────────────────────────
