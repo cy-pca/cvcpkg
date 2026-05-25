@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from cvcpkg.errors import ResolveError
-from cvcpkg.manifest import CatalogEntry, ComponentReq, Dependency
+from cvcpkg.manifest import CatalogEntry, ComponentReq
 from cvcpkg.semver import Version, satisfies
 
 
@@ -174,7 +174,7 @@ def _compatible_with_picked(
     picked: dict[str, CatalogEntry],
 ) -> bool:
     """Check that *candidate* doesn't violate constraints from already-picked bundles."""
-    for picked_name, picked_entry in picked.items():
+    for _picked_name, picked_entry in picked.items():
         for dep in picked_entry.required_deps:
             if dep.name == name and dep.version:
                 try:

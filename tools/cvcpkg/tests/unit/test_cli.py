@@ -468,7 +468,6 @@ class TestVerifyCommand:
 
     def test_verify_ok(self, tmp_path, capsys):
         from cvcpkg.lockfile import LockEntry, Lockfile
-        from cvcpkg.manifest import BundleManifest
 
         prefix = tmp_path / "prefix"
         # Write lockfile

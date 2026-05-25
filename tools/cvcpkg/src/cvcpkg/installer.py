@@ -207,7 +207,7 @@ def install_entry(
     archive = download_bundle(entry, cache_dir)
 
     if verify_signatures and entry.signature:
-        from cvcpkg.signing import Signature, verify_file, SigningError
+        from cvcpkg.signing import Signature, SigningError, verify_file
 
         sig = Signature(
             sig_b64=entry.signature,

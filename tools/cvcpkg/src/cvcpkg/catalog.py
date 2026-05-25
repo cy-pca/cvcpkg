@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 from pathlib import Path
 
 import yaml
 
 from cvcpkg.errors import CatalogError, IntegrityError
-from cvcpkg.manifest import CatalogEntry, Dependency, ReleaseIndex
+from cvcpkg.manifest import CatalogEntry, Dependency
 
 DEFAULT_CATALOG_URL = "https://pkg.tx.wtf/v1/catalog"
 GITHUB_CATALOG_URL = "https://transfix.github.io/libcvc-deps/catalog/latest.yaml"
@@ -74,8 +73,9 @@ def fetch_catalog(
             last_error = e
             if len(urls_to_try) > 1:
                 import sys
+
                 print(f"cvcpkg: catalog fetch failed for {try_url}: {e}", file=sys.stderr)
-                print(f"cvcpkg: trying next catalog source...", file=sys.stderr)
+                print("cvcpkg: trying next catalog source...", file=sys.stderr)
             continue
 
         actual_sha = hashlib.sha256(data).hexdigest()

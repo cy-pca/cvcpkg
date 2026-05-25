@@ -16,7 +16,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import BinaryIO, ClassVar, Iterable
+from typing import BinaryIO, ClassVar
 
 from cvcpkg.storage import ObjectInfo, StorageBackend
 
@@ -45,9 +45,9 @@ class S3CliBackend(StorageBackend):
 
     def head(self, uri: str) -> ObjectInfo:
         exe = _require_aws()
-        s3_uri = _to_s3_uri(uri)
+        _to_s3_uri(uri)
         try:
-            result = subprocess.run(
+            subprocess.run(
                 [exe, "s3api", "head-object", "--bucket", "", "--key", ""],
                 check=False,
                 capture_output=True,

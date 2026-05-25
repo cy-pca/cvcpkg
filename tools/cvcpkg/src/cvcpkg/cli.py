@@ -233,8 +233,6 @@ def install(
         load_catalog_from_file,
     )
     from cvcpkg.config import (
-        DEFAULT_CATALOG_URL,
-        GITHUB_CATALOG_URL as CFG_GITHUB_URL,
         load_user_config,
         merge_cli_overrides,
     )
@@ -864,7 +862,9 @@ def push(archives: tuple[str, ...], dest: str) -> None:
             with open(p, "rb") as f:
                 backend.put(dest_uri, f)
         except NotImplementedError:
-            raise click.ClickException(f"backend for {dest} does not support uploads (put).")
+            raise click.ClickException(
+                f"backend for {dest} does not support uploads (put)."
+            ) from None
         click.echo(f"  done ({p.stat().st_size:,} bytes)")
 
     click.echo(f"cvcpkg: pushed {len(archives)} archive(s).")
@@ -1319,17 +1319,14 @@ def world(
     from cvcpkg.builder import (
         BuildContext,
         Recipe,
-        BuildError,
         build_recipe,
         find_recipes_dir,
         load_all_recipes,
         resolve_build_order,
     )
     from cvcpkg.manifest import Requirements
-    from cvcpkg.platform import detect_arch, detect_platform
 
     plat = _auto_platform(platform)
-    arc = detect_arch()
     prefix_path = Path(prefix).resolve()
 
     reqs = Requirements.from_yaml(from_file)
@@ -1472,7 +1469,7 @@ def build(
       cvcpkg build mypkg --recipes-dir ./my-recipes --recipes-dir recipes
       cvcpkg build vtk --no-deps --prefix ./prefix
     """
-    from cvcpkg.builder import build_recipe, find_recipes_dir, resolve_build_order, Recipe
+    from cvcpkg.builder import build_recipe, find_recipes_dir, resolve_build_order
 
     plat = _auto_platform(platform)
     prefix_path = Path(prefix).resolve() if prefix else None
@@ -1480,7 +1477,7 @@ def build(
     if with_deps:
         # Resolve all deps and build in topological order
         rdirs = [Path(d) for d in recipes_dirs] if recipes_dirs else [find_recipes_dir()]
-        from cvcpkg.builder import load_all_recipes, list_recipes
+        from cvcpkg.builder import list_recipes, load_all_recipes
 
         if len(rdirs) > 1:
             all_recipes = load_all_recipes(rdirs)
@@ -1779,7 +1776,7 @@ def recipes(
       cvcpkg recipes --tag math    # list only math recipes
       cvcpkg recipes --recipes-dir ./my-recipes  # use custom recipe dir
     """
-    from cvcpkg.builder import Recipe, find_recipes_dir, list_recipes, load_all_recipes
+    from cvcpkg.builder import Recipe, list_recipes, load_all_recipes
 
     if show_name:
         recipe_dir = _resolve_recipe_dir(show_name, recipes_dirs)

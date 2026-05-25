@@ -2,9 +2,9 @@
 
 import pytest
 
-from cvcpkg.manifest import CatalogEntry, ComponentReq, Dependency
-from cvcpkg.resolver import ResolveResult, resolve
 from cvcpkg.errors import ResolveError
+from cvcpkg.manifest import CatalogEntry, ComponentReq, Dependency
+from cvcpkg.resolver import resolve
 
 
 def _entry(name: str, version: str, deps: list[Dependency] | None = None) -> CatalogEntry:

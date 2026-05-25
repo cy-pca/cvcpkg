@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import pytest
 import yaml
 
 from cvcpkg.catalog import catalog_entries, load_catalog_from_file

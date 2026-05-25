@@ -1,7 +1,5 @@
 """Tests for cvcpkg.config — configuration loading and merging."""
 
-from pathlib import Path
-
 import yaml
 
 from cvcpkg.config import (
