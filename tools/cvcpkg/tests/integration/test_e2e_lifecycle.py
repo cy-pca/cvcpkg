@@ -35,6 +35,7 @@ import io
 import os
 import subprocess
 import tarfile
+from pathlib import Path
 
 import pytest
 import yaml

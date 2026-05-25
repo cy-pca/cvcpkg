@@ -58,6 +58,12 @@ def server_cli() -> None:
     help="PostgreSQL URL (e.g. postgresql+asyncpg://user:pass@host/db). "
     "Enables DB backend instead of YAML files.",
 )
+@click.option(
+    "--log-json",
+    is_flag=True,
+    envvar="CVCPKG_LOG_JSON",
+    help="Emit structured JSON log lines.",
+)
 def run(
     state_dir: str,
     host: str,
@@ -66,6 +72,7 @@ def run(
     require_auth_reads: bool,
     workers: int,
     database_url: str,
+    log_json: bool,
 ) -> None:
     """Start the cvcpkg package server."""
     import os
@@ -98,6 +105,37 @@ def run(
         click.echo("cvcpkg-server: backend: YAML files")
     click.echo(f"cvcpkg-server: docs at http://{host}:{port}/docs")
 
+    log_config = None
+    if log_json:
+        import logging.config
+
+        log_config = {
+            "version": 1,
+            "disable_existing_loggers": False,
+            "formatters": {
+                "json": {
+                    "()": "cvcpkg.server.log_fmt.JsonFormatter",
+                },
+            },
+            "handlers": {
+                "default": {
+                    "class": "logging.StreamHandler",
+                    "formatter": "json",
+                    "stream": "ext://sys.stdout",
+                },
+            },
+            "root": {
+                "level": "INFO",
+                "handlers": ["default"],
+            },
+            "loggers": {
+                "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
+                "uvicorn.error": {"handlers": ["default"], "level": "INFO", "propagate": False},
+                "uvicorn.access": {"handlers": ["default"], "level": "INFO", "propagate": False},
+                "cvcpkg.server": {"handlers": ["default"], "level": "INFO", "propagate": False},
+            },
+        }
+
     uvicorn.run(
         "cvcpkg.server.app:create_app",
         factory=True,
@@ -105,6 +143,7 @@ def run(
         port=port,
         workers=workers,
         log_level="info",
+        log_config=log_config,
     )
 
 
@@ -152,7 +191,9 @@ def token_create(name: str, role: str, expires_in_days: int | None, state_dir: s
             init_db(db_url)
             await create_tables()
             store = DbTokenStore(Path(state_dir))
-            raw = await store.create(name=name, role=TokenRole(role), expires_in_days=expires_in_days)
+            raw = await store.create(
+                name=name, role=TokenRole(role), expires_in_days=expires_in_days
+            )
             await dispose_engine()
             return raw
 

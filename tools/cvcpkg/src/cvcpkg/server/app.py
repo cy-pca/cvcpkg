@@ -16,15 +16,16 @@ persistent state; otherwise it falls back to YAML files on disk.
 from __future__ import annotations
 
 import hashlib
-import io
+import logging
 import os
+import signal
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated
 
 import yaml
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from cvcpkg import __version__
@@ -49,6 +50,21 @@ from cvcpkg.server.models import (
 _INDEX_FILE = "index.yaml"
 _ARCHIVES_DIR = "archives"
 _START_TIME = 0.0
+
+# ── Configurable limits ────────────────────────────────────────
+
+# Maximum upload size in bytes (default 512 MiB)
+MAX_UPLOAD_BYTES = int(os.environ.get("CVCPKG_MAX_UPLOAD_BYTES", str(512 * 1024 * 1024)))
+
+# Rate limiting: requests per minute for write endpoints
+RATE_LIMIT_RPM = int(os.environ.get("CVCPKG_RATE_LIMIT_RPM", "60"))
+
+# CORS allowed origins (comma-separated, empty = deny all cross-origin)
+CORS_ALLOWED_ORIGINS = [
+    o.strip() for o in os.environ.get("CVCPKG_CORS_ORIGINS", "").split(",") if o.strip()
+]
+
+logger = logging.getLogger("cvcpkg.server")
 
 
 class ServerState:
@@ -100,7 +116,7 @@ class ServerState:
 _state: ServerState | None = None
 _use_db: bool = False
 _db_tokens = None  # DbTokenStore when using DB backend
-_db_audit = None   # DbAuditLog when using DB backend
+_db_audit = None  # DbAuditLog when using DB backend
 _db_packages = None  # DbPackageIndex when using DB backend
 
 
@@ -180,6 +196,17 @@ def create_app(
         _START_TIME = time.monotonic()
         sd = state_dir or Path(os.environ.get("CVCPKG_SERVER_STATE_DIR", "/var/lib/cvcpkg-server"))
 
+        # Register graceful shutdown on SIGTERM (only works in main thread)
+        import threading
+
+        if threading.current_thread() is threading.main_thread():
+
+            def _handle_sigterm(signum, frame):
+                logger.info("received SIGTERM — shutting down gracefully")
+                raise SystemExit(0)
+
+            signal.signal(signal.SIGTERM, _handle_sigterm)
+
         db_url = os.environ.get("CVCPKG_DATABASE_URL", "")
         if db_url:
             from cvcpkg.server.db import create_tables, dispose_engine, init_db
@@ -198,6 +225,7 @@ def create_app(
                 require_auth_for_reads=require_auth_for_reads,
             )
             yield
+            logger.info("shutting down — disposing database engine")
             await dispose_engine()
             _use_db = False
             _state = None
@@ -209,6 +237,7 @@ def create_app(
                 require_auth_for_reads=require_auth_for_reads,
             )
             yield
+            logger.info("shutting down")
             _state = None
 
     app = FastAPI(
@@ -217,6 +246,32 @@ def create_app(
         description="Package server for libcvc-deps component bundles",
         lifespan=lifespan,
     )
+
+    # ── CORS middleware ───────────────────────────────────
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=CORS_ALLOWED_ORIGINS,
+        allow_methods=["GET", "POST", "DELETE"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
+
+    # ── Rate limiting state (per-IP, sliding window) ──────
+    _rate_buckets: dict[str, list[float]] = {}
+
+    def _check_rate_limit(request: Request) -> None:
+        """Raise 429 if the client exceeds RATE_LIMIT_RPM requests/minute."""
+        if RATE_LIMIT_RPM <= 0:
+            return
+        client_ip = request.client.host if request.client else "unknown"
+        now = time.monotonic()
+        window = _rate_buckets.setdefault(client_ip, [])
+        # Prune entries older than 60s
+        cutoff = now - 60
+        _rate_buckets[client_ip] = [t for t in window if t > cutoff]
+        window = _rate_buckets[client_ip]
+        if len(window) >= RATE_LIMIT_RPM:
+            raise HTTPException(429, "rate limit exceeded — try again later")
+        window.append(now)
 
     # ── Landing page ──────────────────────────────────────
 
@@ -283,8 +338,11 @@ def create_app(
             # 'live' is a virtual tag meaning release_tag == ""
             db_release = "" if release == "live" else release
             packages, total = await _db_packages.get_bundles(
-                name=name, platform=platform, release=db_release,
-                limit=limit, offset=offset,
+                name=name,
+                platform=platform,
+                release=db_release,
+                limit=limit,
+                offset=offset,
             )
             if release == "live":
                 # get_bundles with release="" returns all — filter to empty tag
@@ -381,6 +439,7 @@ def create_app(
 
     @app.post("/v1/publish", response_model=PublishResponse, tags=["publish"])
     async def publish(
+        request: Request,
         file: UploadFile,
         name: str = Query(..., description="Component name"),
         version: str = Query(..., description="Component version"),
@@ -398,12 +457,11 @@ def create_app(
         ),
         recipe_version: str = Query(
             "",
-            description=(
-                "Recipe revision that produced this build (commit SHA or recipe hash)."
-            ),
+            description=("Recipe revision that produced this build (commit SHA or recipe hash)."),
         ),
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
+        _check_rate_limit(request)
         state = _get_state()
 
         # Check for duplicates
@@ -430,12 +488,25 @@ def create_app(
                         "Yank the existing version first, or use a new revision.",
                     )
 
-        # Read and hash the upload
+        # Read and hash the upload with size enforcement
         h = hashlib.sha256()
-        content = await file.read()
-        h.update(content)
+        chunks: list[bytes] = []
+        total_size = 0
+        while True:
+            chunk = await file.read(1 << 16)  # 64 KiB chunks
+            if not chunk:
+                break
+            total_size += len(chunk)
+            if total_size > MAX_UPLOAD_BYTES:
+                raise HTTPException(
+                    413,
+                    f"upload exceeds maximum size of {MAX_UPLOAD_BYTES} bytes",
+                )
+            h.update(chunk)
+            chunks.append(chunk)
+        content = b"".join(chunks)
         sha256 = h.hexdigest()
-        size_bytes = len(content)
+        size_bytes = total_size
 
         # Store the archive
         safe_filename = f"{name}-{version}-{platform}-{arch}-{build_type}-{link}.tar.zst"

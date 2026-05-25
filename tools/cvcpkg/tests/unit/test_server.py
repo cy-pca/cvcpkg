@@ -459,3 +459,52 @@ class TestPathTraversal:
         client, *_ = server_env
         resp = client.get("/v1/download/..%2F..%2Fetc%2Fpasswd")
         assert resp.status_code == 404
+
+
+class TestUploadSizeLimit:
+    """Ensure uploads exceeding MAX_UPLOAD_BYTES are rejected."""
+
+    def test_oversized_upload_rejected(self, tmp_path, monkeypatch):
+        import cvcpkg.server.app as app_mod
+
+        monkeypatch.setattr(app_mod, "MAX_UPLOAD_BYTES", 100)
+
+        store = TokenStore(tmp_path)
+        pub_token = store.create("pub", TokenRole.publisher)
+        test_app = create_app(state_dir=tmp_path)
+        with TestClient(test_app) as client:
+            big_content = b"x" * 200
+            resp = client.post(
+                "/v1/publish",
+                params={"name": "toobig", "version": "1.0"},
+                files={"file": ("toobig.tar.zst", io.BytesIO(big_content))},
+                headers={"Authorization": f"Bearer {pub_token}"},
+            )
+            assert resp.status_code == 413
+            assert "maximum size" in resp.json()["detail"]
+
+
+class TestRateLimit:
+    """Ensure rate limiting rejects excess requests."""
+
+    def test_rate_limit_enforced(self, tmp_path, monkeypatch):
+        import cvcpkg.server.app as app_mod
+
+        monkeypatch.setattr(app_mod, "RATE_LIMIT_RPM", 2)
+
+        store = TokenStore(tmp_path)
+        pub_token = store.create("pub", TokenRole.publisher)
+        test_app = create_app(state_dir=tmp_path)
+        with TestClient(test_app) as client:
+            content = b"archive data"
+            for i in range(3):
+                resp = client.post(
+                    "/v1/publish",
+                    params={"name": f"pkg{i}", "version": "1.0"},
+                    files={"file": (f"pkg{i}.tar.zst", io.BytesIO(content))},
+                    headers={"Authorization": f"Bearer {pub_token}"},
+                )
+                if i < 2:
+                    assert resp.status_code == 200, f"request {i} should succeed"
+                else:
+                    assert resp.status_code == 429, "third request should be rate limited"
