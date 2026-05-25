@@ -1,0 +1,98 @@
+# Docker Compose — cvcpkg-server production stack
+#
+# Services:
+#   postgres  — PostgreSQL 16 with persistent data
+#   backend   — cvcpkg-server (FastAPI + uvicorn)
+#
+# Usage:
+#   cp .env.production.example .env.production
+#   # Edit .env.production with real secrets
+#   docker compose -f docker-compose.production.yml --env-file .env.production up -d
+
+services:
+    postgres:
+        image: postgres:16-alpine
+        container_name: cvcpkg-prod-postgres
+        restart: unless-stopped
+        environment:
+            POSTGRES_USER: ${POSTGRES_USER:-cvcpkg}
+            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+            POSTGRES_DB: ${POSTGRES_DB:-cvcpkg}
+        ports:
+            - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+        volumes:
+            - cvcpkg-prod-postgres-data:/var/lib/postgresql/data
+        command: >
+            postgres
+            -c shared_buffers=128MB
+            -c effective_cache_size=384MB
+            -c work_mem=8MB
+            -c maintenance_work_mem=64MB
+            -c max_connections=50
+            -c checkpoint_timeout=10min
+            -c wal_compression=on
+            -c log_statement=mod
+            -c log_min_duration_statement=1000
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cvcpkg} -d ${POSTGRES_DB:-cvcpkg}"]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+            start_period: 20s
+        networks:
+            - cvcpkg-prod
+        deploy:
+            resources:
+                limits:
+                    memory: 512M
+                reservations:
+                    memory: 128M
+
+    backend:
+        build:
+            context: .
+            dockerfile: Dockerfile.production
+            args:
+                CVCPKG_RELEASE: ${CVCPKG_RELEASE:-dev}
+        image: cvcpkg-server:${CVCPKG_RELEASE:-dev}
+        container_name: cvcpkg-prod-backend
+        restart: unless-stopped
+        depends_on:
+            postgres:
+                condition: service_healthy
+        environment:
+            CVCPKG_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cvcpkg}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-cvcpkg}
+            CVCPKG_SERVER_STATE_DIR: /app/data
+            CVCPKG_SERVER_REQUIRE_AUTH_READS: ${REQUIRE_AUTH_READS:-}
+            TZ: ${TIMEZONE:-UTC}
+        ports:
+            - "127.0.0.1:${BACKEND_PORT:-8420}:8420"
+        volumes:
+            - cvcpkg-prod-data:/app/data
+            - cvcpkg-prod-logs:/app/logs
+        healthcheck:
+            test: ["CMD", "curl", "-f", "http://localhost:8420/healthz"]
+            interval: 30s
+            timeout: 10s
+            retries: 3
+            start_period: 30s
+        networks:
+            - cvcpkg-prod
+        deploy:
+            resources:
+                limits:
+                    memory: 1G
+                reservations:
+                    memory: 256M
+
+networks:
+    cvcpkg-prod:
+        driver: bridge
+
+volumes:
+    cvcpkg-prod-postgres-data:
+        name: cvcpkg-prod-postgres-data
+    cvcpkg-prod-data:
+        name: cvcpkg-prod-data
+    cvcpkg-prod-logs:
+        name: cvcpkg-prod-logs

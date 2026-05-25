@@ -1,0 +1,76 @@
+name: deploy-prod
+
+# Deploys cvcpkg-server to pkg.tx.wtf on every push to the `prod` branch.
+#
+# The self-hosted runner on catx-03.tx.wtf picks up the job and runs
+# the auto-deploy script which rebuilds the Docker image and restarts
+# the production stack.
+#
+# Required repo secrets:
+#   (none — the runner IS the production host)
+
+on:
+  push:
+    branches: [prod]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit SHA to deploy (defaults to prod HEAD)"
+        required: false
+        type: string
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to pkg.tx.wtf
+    runs-on: [self-hosted, Linux, cvcpkg-prod]
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve target SHA
+        id: target
+        run: |
+          if [[ -n "${{ inputs.sha }}" ]]; then
+            sha="${{ inputs.sha }}"
+          else
+            sha="${{ github.sha }}"
+          fi
+          if ! [[ "$sha" =~ ^[0-9a-f]{7,40}$ ]]; then
+            echo "::error::invalid sha: $sha"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Deploying sha: $sha"
+
+      - name: Run auto-deploy
+        env:
+          REPO_DIR: ${{ github.workspace }}
+        run: |
+          cd tools/cvcpkg
+          # Ensure .env.production exists on this host
+          if [[ ! -f .env.production ]]; then
+            echo "::error::.env.production not found — run initial setup first"
+            exit 1
+          fi
+          bash scripts/auto-deploy.sh "${{ steps.target.outputs.sha }}"
+
+      - name: Verify deployment
+        run: |
+          echo "Waiting 10s for health..."
+          sleep 10
+          response=$(curl -sf http://127.0.0.1:8420/healthz)
+          echo "Health response: $response"
+          echo "$response" | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          assert data['status'] == 'ok', f'unhealthy: {data}'
+          print(f'Deployed: v{data[\"version\"]}, {data[\"packages_count\"]} packages')
+          "
