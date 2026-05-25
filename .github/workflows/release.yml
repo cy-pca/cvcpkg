@@ -176,6 +176,8 @@ jobs:
       link: ${{ matrix.link }}
       prefix_artifact: ${{ matrix.artifact }}
       version: ${{ github.ref_name }}
+      release_tag: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+    secrets: inherit
 
   package-macos:
     needs: [macos]
@@ -204,6 +206,8 @@ jobs:
       link: ${{ matrix.link }}
       prefix_artifact: ${{ matrix.artifact }}
       version: ${{ github.ref_name }}
+      release_tag: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+    secrets: inherit
 
   package-windows:
     needs: [windows]
@@ -232,6 +236,8 @@ jobs:
       link: ${{ matrix.link }}
       prefix_artifact: ${{ matrix.artifact }}
       version: ${{ github.ref_name }}
+      release_tag: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+    secrets: inherit
 
   release:
     needs: [linux, macos, windows, package-linux, package-macos, package-windows]
@@ -293,19 +299,21 @@ jobs:
             echo "::warning::softprops/action-gh-release reported failure (likely GitHub secondary rate limit) but release has $asset_count assets — continuing"
           fi
 
-  # ──────────────── Publish to cvcpkg-server (pkg.tx.wtf) ────────
-  # After the GitHub Release is created, publish all per-component
-  # bundles to the cvcpkg-server so downstream users can
-  # `cvcpkg install` from the package registry directly.  The GitHub
-  # Release assets serve as a backup if pkg.tx.wtf is unavailable.
+  # ──────────────── Verify cvcpkg-server (pkg.tx.wtf) ────────────
+  # Each package-* job publishes its own bundles immediately after
+  # packaging.  This final job re-publishes any stragglers (e.g. if
+  # a per-platform publish step was interrupted) and logs the total
+  # count.  It runs regardless of the release job outcome.
   publish-to-server:
-    needs: [release, package-linux, package-macos, package-windows]
+    needs: [package-linux, package-macos, package-windows]
     runs-on: ubuntu-latest
     if: |
       always()
       && !cancelled()
       && startsWith(github.ref, 'refs/tags/')
-      && (needs.release.result == 'success' || needs.release.result == 'failure')
+      && (needs.package-linux.result == 'success'
+          || needs.package-macos.result == 'success'
+          || needs.package-windows.result == 'success')
     steps:
       - uses: actions/checkout@v5
 
@@ -323,32 +331,25 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: List component bundles
-        run: |
-          echo "=== Bundles to publish ==="
-          find dist -name '*.tar.gz' -o -name '*.zip' | sort
-          echo ""
-          echo "Total: $(find dist \( -name '*.tar.gz' -o -name '*.zip' \) | wc -l) archives"
-
-      - name: Publish to pkg.tx.wtf
+      - name: Publish stragglers to pkg.tx.wtf
         env:
           CVCPKG_SERVER_URL: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
           CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISH_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "$CVCPKG_TOKEN" ]; then
+          if [ -z "${CVCPKG_TOKEN:-}" ]; then
             echo "::warning::CVCPKG_PUBLISH_TOKEN secret not set — skipping server publish"
             exit 0
           fi
 
-          # Publish each component archive (skip index YAML files)
           archives=$(find dist \( -name '*.tar.gz' -o -name '*.zip' \) | sort)
           if [ -z "$archives" ]; then
             echo "::warning::No archives found in dist/"
             exit 0
           fi
 
-          echo "Publishing $(echo "$archives" | wc -l) archives to $CVCPKG_SERVER_URL ..."
+          count=$(echo "$archives" | wc -l)
+          echo "Re-publishing $count archives to $CVCPKG_SERVER_URL (already-published will be skipped) ..."
           # shellcheck disable=SC2086
           cvcpkg publish $archives \
             --server "$CVCPKG_SERVER_URL" \

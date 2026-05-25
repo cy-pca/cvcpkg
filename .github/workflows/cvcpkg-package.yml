@@ -42,6 +42,15 @@ on:
         required: false
         type: string
         default: ''
+      release_tag:
+        description: "Git tag for the release (e.g. v1.4.1). When set, publish packages to cvcpkg-server after packaging."
+        required: false
+        type: string
+        default: ''
+    secrets:
+      CVCPKG_PUBLISH_TOKEN:
+        description: "Token for publishing to cvcpkg-server (pkg.tx.wtf)"
+        required: false
 
   workflow_dispatch:
     inputs:
@@ -300,3 +309,32 @@ jobs:
           name: components-${{ inputs.platform }}-${{ inputs.config }}-${{ inputs.link }}
           path: dist/
           if-no-files-found: error
+
+      # ── Publish to cvcpkg-server immediately after packaging ──
+      # Each platform/config/link publishes its own bundles as soon
+      # as they're ready, instead of waiting for all platforms.
+      - name: Publish to cvcpkg-server
+        if: inputs.release_tag != ''
+        env:
+          CVCPKG_SERVER_URL: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CVCPKG_TOKEN:-}" ]; then
+            echo "::warning::CVCPKG_PUBLISH_TOKEN secret not set — skipping server publish"
+            exit 0
+          fi
+
+          archives=$(find dist \( -name '*.tar.gz' -o -name '*.zip' \) | sort)
+          if [ -z "$archives" ]; then
+            echo "::warning::No component archives to publish for ${{ inputs.platform }}/${{ inputs.config }}/${{ inputs.link }}"
+            exit 0
+          fi
+
+          count=$(echo "$archives" | wc -l)
+          echo "Publishing $count archives (${{ inputs.platform }}/${{ inputs.config }}/${{ inputs.link }}) to $CVCPKG_SERVER_URL ..."
+          # shellcheck disable=SC2086
+          cvcpkg publish $archives \
+            --server "$CVCPKG_SERVER_URL" \
+            --token "$CVCPKG_TOKEN" \
+            --release-tag "${{ inputs.release_tag }}"
