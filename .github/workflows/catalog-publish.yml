@@ -110,13 +110,24 @@ jobs:
               print(f"  Loading {idx_path.name}")
               idx = yaml.safe_load(idx_path.read_text())
               for bundle in idx.get("bundles", []):
-                  # Add release info and archive URL
+                  # Add release info and download URLs.
+                  # Primary URL: pkg.tx.wtf (fast, no rate limits).
+                  # Mirror: GitHub Releases CDN (always available as backup).
                   bundle["source_release"] = tag
-                  if "archive" in bundle and not bundle.get("archive_url"):
-                      bundle["archive_url"] = (
+                  if "archive" in bundle:
+                      gh_url = (
                           f"https://github.com/transfix/libcvc-deps/"
                           f"releases/download/{tag}/{bundle['archive']}"
                       )
+                      server_url = os.environ.get(
+                          "CVCPKG_SERVER_URL", "https://pkg.tx.wtf"
+                      )
+                      pkg_url = (
+                          f"{server_url}/v1/download/{bundle['archive']}"
+                      )
+                      if not bundle.get("archive_url"):
+                          bundle["archive_url"] = pkg_url
+                      bundle["mirror_urls"] = [gh_url]
                   all_bundles.append(bundle)
 
           print(f"Total bundles: {len(all_bundles)}")
@@ -173,6 +184,7 @@ jobs:
         env:
           TAG: ${{ steps.tag.outputs.tag }}
           VERSION: ${{ steps.tag.outputs.tag }}
+          CVCPKG_SERVER_URL: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
 
       - name: Deploy to GitHub Pages
         if: steps.tag.outputs.tag != ''

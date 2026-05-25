@@ -31,7 +31,8 @@ def download_bundle(
 ) -> Path:
     """Download *entry*'s archive (or return from cache).
 
-    Returns the local path to the verified archive.
+    Tries ``archive_url`` first, then each URL in ``mirror_urls``
+    before giving up.  Returns the local path to the verified archive.
     """
     filename = _archive_filename(entry)
     sha = entry.sha256
@@ -39,20 +40,49 @@ def download_bundle(
     if sha and cache_mod.is_cached(cache_dir, sha, filename):
         return cache_mod.cache_path(cache_dir, sha, filename)
 
+    urls: list[str] = []
+    if entry.archive_url:
+        urls.append(entry.archive_url)
+    urls.extend(getattr(entry, "mirror_urls", None) or [])
+
+    if not urls:
+        raise InstallError(f"no archive_url for {entry.name}=={entry.version}")
+
+    last_error: Exception | None = None
+    for url in urls:
+        try:
+            path = _download_from_url(url, filename, sha, cache_dir, max_bytes)
+            return path
+        except (InstallError, IntegrityError) as exc:
+            last_error = exc
+            import logging
+
+            logging.getLogger("cvcpkg").debug(
+                "download from %s failed (%s), trying next mirror...", url, exc,
+            )
+            continue
+
+    raise last_error  # type: ignore[misc]
+
+
+def _download_from_url(
+    url: str,
+    filename: str,
+    sha: str,
+    cache_dir: Path,
+    max_bytes: int,
+) -> Path:
+    """Download a single URL, verify SHA-256, store in cache."""
     import tempfile
 
     from cvcpkg.storage import get_backend
-
-    url = entry.archive_url
-    if not url:
-        raise InstallError(f"no archive_url for {entry.name}=={entry.version}")
 
     try:
         backend = get_backend(url)
         info = backend.head(url)
         if info.size >= 0 and info.size > max_bytes:
             raise InstallError(
-                f"archive for {entry.name} is {info.size} bytes, " f"exceeds {max_bytes} limit"
+                f"archive for {filename} is {info.size} bytes, " f"exceeds {max_bytes} limit"
             )
         # Stream to a temp file instead of loading into memory
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -68,7 +98,7 @@ def download_bundle(
                     if total > max_bytes:
                         os.unlink(tmp.name)
                         raise InstallError(
-                            f"archive for {entry.name} exceeds {max_bytes} byte limit"
+                            f"archive for {filename} exceeds {max_bytes} byte limit"
                         )
                     h.update(chunk)
                     tmp.write(chunk)
