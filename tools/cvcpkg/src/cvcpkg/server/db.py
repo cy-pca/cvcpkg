@@ -66,16 +66,28 @@ class PackageRow(Base):
     signature: Mapped[str] = mapped_column(Text, nullable=False, default="")
     key_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     release_tag: Mapped[str] = mapped_column(
-        String(64), nullable=False, default="", server_default="", index=True,
+        String(64),
+        nullable=False,
+        default="",
+        server_default="",
+        index=True,
     )
     recipe_version: Mapped[str] = mapped_column(
-        String(128), nullable=False, default="", server_default="",
+        String(128),
+        nullable=False,
+        default="",
+        server_default="",
     )
 
     __table_args__ = (
         Index(
             "ix_packages_unique_variant",
-            "name", "version", "platform", "arch", "build_type", "link",
+            "name",
+            "version",
+            "platform",
+            "arch",
+            "build_type",
+            "link",
             unique=True,
         ),
     )
@@ -141,7 +153,12 @@ def init_db(database_url: str) -> None:
         )
     else:
         _engine = create_async_engine(
-            database_url, echo=False, pool_size=10, max_overflow=20,
+            database_url,
+            echo=False,
+            pool_size=10,
+            max_overflow=20,
+            pool_pre_ping=True,
+            pool_recycle=3600,
         )
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
 
