@@ -1,0 +1,128 @@
+#!/usr/bin/expect -f
+#
+# Automated OpenBSD 7.7 installation via serial console on Incus VM.
+#
+# Prerequisites:
+#   - VM "openbsd-build" created with --vm --empty, ISO attached
+#   - Run on the Incus host (not remotely)
+#
+# Usage: expect install-openbsd.exp
+#
+set timeout 60
+log_file -noappend /tmp/openbsd-expect.log
+
+spawn incus console openbsd-build --force
+
+expect "boot>"
+sleep 0.3
+send "set tty com0\r"
+
+expect "boot>"
+sleep 0.3
+send "boot\r"
+
+set timeout 180
+expect "(I)nstall"
+send "I\r"
+
+expect "Terminal type"
+send "vt220\r"
+
+expect "System hostname"
+send "openbsd-build\r"
+
+expect "Network interface to configure"
+send "vio0\r"
+
+expect "IPv4 address"
+send "autoconf\r"
+
+expect "IPv6 address"
+send "none\r"
+
+expect "Network interface to configure"
+send "done\r"
+
+expect "Password for root"
+send "build123\r"
+
+expect "Password for root"
+send "build123\r"
+
+expect "sshd"
+send "yes\r"
+
+expect -re "X Window|xenodm"
+send "no\r"
+
+expect "console to com0"
+send "yes\r"
+
+expect "speed should com0"
+send "115200\r"
+
+# Note: "build" is a reserved username on OpenBSD — use "builder"
+expect "Setup a user"
+send "builder\r"
+
+expect "Full name"
+send "Builder\r"
+
+expect "Password"
+send "build123\r"
+
+expect "Password"
+send "build123\r"
+
+expect "root ssh login"
+send "yes\r"
+
+expect "timezone"
+send "UTC\r"
+
+expect "Which disk"
+send "sd0\r"
+
+# Encrypt root disk? No (press Enter for default)
+expect "Encrypt the root"
+send "\r"
+
+# Use GPT for EFI boot (required for Incus VMs)
+expect -re "\\(W\\)hole|\\(G\\)PT|MBR"
+send "G\r"
+
+# Auto layout
+expect -re "\\(A\\)uto|layout"
+send "A\r"
+
+expect "Location of sets"
+send "cd0\r"
+
+expect "Pathname"
+send "7.7/amd64\r"
+
+expect -re "Set name.*\]"
+send "done\r"
+
+expect {
+    "without verification" { send "yes\r" }
+    "without SHA256.sig" { send "yes\r" }
+    "Continue without verification" { send "yes\r" }
+}
+
+set timeout 900
+expect {
+    "Location of sets" { send "done\r" }
+    timeout { puts "TIMEOUT during extraction"; exit 1 }
+}
+
+set timeout 300
+expect "CONGRATULATIONS"
+send "\r"
+
+expect -re "\\(S\\)hell|\\(H\\)alt|\\(R\\)eboot|#"
+send "R\r"
+
+sleep 5
+puts "\nOpenBSD installation complete!"
+exit 0
