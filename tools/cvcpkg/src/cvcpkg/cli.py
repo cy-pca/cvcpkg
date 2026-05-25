@@ -301,7 +301,11 @@ def install(
 
     if not catalog_failed:
         entries = catalog_entries(
-            cat, platform=plat, arch=arc, build_type=reqs.config, link=reqs.link,
+            cat,
+            platform=plat,
+            arch=arc,
+            build_type=reqs.config,
+            link=reqs.link,
         )
 
         # Group candidate entries by component name for the resolver.
@@ -310,9 +314,7 @@ def install(
             candidates.setdefault(e.name, []).append(e)
 
         if not entries and not fallback_to_source:
-            raise click.ClickException(
-                "no bundles found in catalog for this platform tuple."
-            )
+            raise click.ClickException("no bundles found in catalog for this platform tuple.")
 
         if entries:
             from cvcpkg.resolver import resolve
@@ -325,9 +327,7 @@ def install(
 
             # Components not in the catalog need source build.
             if fallback_to_source:
-                source_only = [
-                    c.name for c in reqs.components if c.name not in picked
-                ]
+                source_only = [c.name for c in reqs.components if c.name not in picked]
         elif fallback_to_source:
             source_only = requested_names
     else:
@@ -343,9 +343,7 @@ def install(
             + ", ".join(source_only)
         )
     if not picked and not source_only:
-        raise click.ClickException(
-            "no bundles found in catalog for this platform tuple."
-        )
+        raise click.ClickException("no bundles found in catalog for this platform tuple.")
 
     # ── Download and extract each resolved bundle ──
     cache_dir = default_cache_dir()
@@ -361,8 +359,12 @@ def install(
                 raise
             click.echo(f"cvcpkg: download failed for {name} ({exc}), building from source...")
             build_from_source_fallback(
-                name, prefix_path, platform=plat, config=reqs.config,
-                link=reqs.link, recipes_dirs=rdirs,
+                name,
+                prefix_path,
+                platform=plat,
+                config=reqs.config,
+                link=reqs.link,
+                recipes_dirs=rdirs,
             )
             lock_entries.append(
                 LockEntry(
@@ -392,8 +394,12 @@ def install(
     for name in source_only:
         click.echo(f"cvcpkg: building {name} from source...")
         build_from_source_fallback(
-            name, prefix_path, platform=plat, config=reqs.config,
-            link=reqs.link, recipes_dirs=rdirs,
+            name,
+            prefix_path,
+            platform=plat,
+            config=reqs.config,
+            link=reqs.link,
+            recipes_dirs=rdirs,
         )
         lock_entries.append(
             LockEntry(
@@ -916,9 +922,7 @@ def publish(
         recipe_version = manifest.get("meta", {}).get("recipe_sha256", "")
 
         if not name or not version:
-            raise click.ClickException(
-                f"{p.name}: manifest missing name or version"
-            )
+            raise click.ClickException(f"{p.name}: manifest missing name or version")
 
         click.echo(
             f"cvcpkg: publishing {name}=={version} "
@@ -949,9 +953,7 @@ def publish(
         elif resp.status_code == 409:
             click.echo(f"  skipped (already published): {resp.json().get('detail', '')}")
         else:
-            raise click.ClickException(
-                f"publish failed ({resp.status_code}): {resp.text}"
-            )
+            raise click.ClickException(f"publish failed ({resp.status_code}): {resp.text}")
 
     click.echo(f"cvcpkg: published {ok}/{len(archives)} archive(s).")
 

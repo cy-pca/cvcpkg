@@ -31,7 +31,7 @@ import pytest
 # ── Paths ───────────────────────────────────────────────────────
 
 _CVCPKG_ROOT = Path(__file__).resolve().parents[2]  # tools/cvcpkg
-_REPO_ROOT = _CVCPKG_ROOT.parents[1]                # libcvc-deps
+_REPO_ROOT = _CVCPKG_ROOT.parents[1]  # libcvc-deps
 _RECIPES_DIR = _REPO_ROOT / "recipes"
 
 # Skip the entire module if the recipes directory is missing (e.g.
@@ -47,10 +47,14 @@ pytestmark = [
 
 # ── Helpers ─────────────────────────────────────────────────────
 
+
 def _has_build_tools() -> bool:
     """Check that cmake and a C compiler are available."""
     import shutil
-    return bool(shutil.which("cmake") and (shutil.which("cc") or shutil.which("gcc") or shutil.which("cl")))
+
+    return bool(
+        shutil.which("cmake") and (shutil.which("cc") or shutil.which("gcc") or shutil.which("cl"))
+    )
 
 
 def _run_cvcpkg(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -77,11 +81,15 @@ class TestSourceFallback:
         """When the catalog URL is unreachable, zlib is built from source."""
         prefix = tmp_path / "prefix"
         result = _run_cvcpkg(
-            "install", "zlib",
-            "--prefix", str(prefix),
-            "--catalog", "https://localhost:1/nonexistent-catalog.yaml",
+            "install",
+            "zlib",
+            "--prefix",
+            str(prefix),
+            "--catalog",
+            "https://localhost:1/nonexistent-catalog.yaml",
             "--fallback-to-source",
-            "--recipes-dir", str(_RECIPES_DIR),
+            "--recipes-dir",
+            str(_RECIPES_DIR),
             check=False,
         )
         # The command should succeed (exit 0).
@@ -89,12 +97,16 @@ class TestSourceFallback:
             f"cvcpkg install --fallback-to-source failed:\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
-        assert "building" in result.stdout.lower() or "building" in result.stderr.lower() or \
-               "source" in result.stdout.lower()
+        assert (
+            "building" in result.stdout.lower()
+            or "building" in result.stderr.lower()
+            or "source" in result.stdout.lower()
+        )
         # zlib should produce include/zlib.h and a library.
-        assert (prefix / "include" / "zlib.h").is_file(), (
-            f"zlib.h not found in {prefix / 'include'}; contents: "
-            + str(list((prefix / "include").iterdir()) if (prefix / "include").is_dir() else "N/A")
+        assert (
+            prefix / "include" / "zlib.h"
+        ).is_file(), f"zlib.h not found in {prefix / 'include'}; contents: " + str(
+            list((prefix / "include").iterdir()) if (prefix / "include").is_dir() else "N/A"
         )
 
     def test_fallback_on_missing_component(self, tmp_path: Path) -> None:
@@ -102,18 +114,27 @@ class TestSourceFallback:
         # Create a minimal valid empty catalog.
         catalog_file = tmp_path / "empty-catalog.yaml"
         import yaml
-        catalog_file.write_text(yaml.dump({
-            "schema_version": 1,
-            "revision": 1,
-            "bundles": [],
-        }))
+
+        catalog_file.write_text(
+            yaml.dump(
+                {
+                    "schema_version": 1,
+                    "revision": 1,
+                    "bundles": [],
+                }
+            )
+        )
         prefix = tmp_path / "prefix"
         result = _run_cvcpkg(
-            "install", "zlib",
-            "--prefix", str(prefix),
-            "--catalog", str(catalog_file),
+            "install",
+            "zlib",
+            "--prefix",
+            str(prefix),
+            "--catalog",
+            str(catalog_file),
             "--fallback-to-source",
-            "--recipes-dir", str(_RECIPES_DIR),
+            "--recipes-dir",
+            str(_RECIPES_DIR),
             check=False,
         )
         assert result.returncode == 0, (
@@ -126,16 +147,24 @@ class TestSourceFallback:
         """Without --fallback-to-source, a missing component errors out."""
         catalog_file = tmp_path / "empty-catalog.yaml"
         import yaml
-        catalog_file.write_text(yaml.dump({
-            "schema_version": 1,
-            "revision": 1,
-            "bundles": [],
-        }))
+
+        catalog_file.write_text(
+            yaml.dump(
+                {
+                    "schema_version": 1,
+                    "revision": 1,
+                    "bundles": [],
+                }
+            )
+        )
         prefix = tmp_path / "prefix"
         result = _run_cvcpkg(
-            "install", "zlib",
-            "--prefix", str(prefix),
-            "--catalog", str(catalog_file),
+            "install",
+            "zlib",
+            "--prefix",
+            str(prefix),
+            "--catalog",
+            str(catalog_file),
             check=False,
         )
         # Should report an error — either via exit code or error message.
@@ -151,49 +180,67 @@ class TestSourceFallback:
         """Fallback for a component with no recipe gives a clear error."""
         catalog_file = tmp_path / "empty-catalog.yaml"
         import yaml
-        catalog_file.write_text(yaml.dump({
-            "schema_version": 1,
-            "revision": 1,
-            "bundles": [],
-        }))
+
+        catalog_file.write_text(
+            yaml.dump(
+                {
+                    "schema_version": 1,
+                    "revision": 1,
+                    "bundles": [],
+                }
+            )
+        )
         empty_recipes = tmp_path / "empty-recipes"
         empty_recipes.mkdir()
         prefix = tmp_path / "prefix"
         result = _run_cvcpkg(
-            "install", "nonexistent-pkg",
-            "--prefix", str(prefix),
-            "--catalog", str(catalog_file),
+            "install",
+            "nonexistent-pkg",
+            "--prefix",
+            str(prefix),
+            "--catalog",
+            str(catalog_file),
             "--fallback-to-source",
-            "--recipes-dir", str(empty_recipes),
+            "--recipes-dir",
+            str(empty_recipes),
             check=False,
         )
         combined = result.stdout + result.stderr
         assert result.returncode != 0 or "error" in combined.lower()
-        assert "no recipe found" in combined.lower() or \
-               "no prebuilt binary" in combined.lower() or \
-               "error" in combined.lower()
+        assert (
+            "no recipe found" in combined.lower()
+            or "no prebuilt binary" in combined.lower()
+            or "error" in combined.lower()
+        )
 
     def test_lockfile_records_source_build(self, tmp_path: Path) -> None:
         """Source-built components appear in the lockfile with source marker."""
         catalog_file = tmp_path / "empty-catalog.yaml"
         import yaml
-        catalog_file.write_text(yaml.dump({
-            "schema_version": 1,
-            "revision": 1,
-            "bundles": [],
-        }))
+
+        catalog_file.write_text(
+            yaml.dump(
+                {
+                    "schema_version": 1,
+                    "revision": 1,
+                    "bundles": [],
+                }
+            )
+        )
         prefix = tmp_path / "prefix"
         result = _run_cvcpkg(
-            "install", "zlib",
-            "--prefix", str(prefix),
-            "--catalog", str(catalog_file),
+            "install",
+            "zlib",
+            "--prefix",
+            str(prefix),
+            "--catalog",
+            str(catalog_file),
             "--fallback-to-source",
-            "--recipes-dir", str(_RECIPES_DIR),
+            "--recipes-dir",
+            str(_RECIPES_DIR),
             check=False,
         )
-        assert result.returncode == 0, (
-            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-        )
+        assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         lockfile = prefix / "share" / "libcvc-deps" / "lockfile.yaml"
         assert lockfile.is_file(), "lockfile not written"
         lock_data = yaml.safe_load(lockfile.read_text())

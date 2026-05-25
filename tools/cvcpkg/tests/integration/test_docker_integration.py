@@ -78,14 +78,26 @@ def bootstrap_admin_token():
 
     result = subprocess.run(
         [
-            "docker", "compose", "-f", "docker-compose.test.yml",
-            "exec", "-T", "backend",
-            "cvcpkg-server", "token", "create",
-            "--name", "test-admin",
-            "--role", "admin",
-            "--state-dir", "/app/data",
+            "docker",
+            "compose",
+            "-f",
+            "docker-compose.test.yml",
+            "exec",
+            "-T",
+            "backend",
+            "cvcpkg-server",
+            "token",
+            "create",
+            "--name",
+            "test-admin",
+            "--role",
+            "admin",
+            "--state-dir",
+            "/app/data",
         ],
-        capture_output=True, text=True, cwd=os.path.dirname(os.path.dirname(__file__)) or ".",
+        capture_output=True,
+        text=True,
+        cwd=os.path.dirname(os.path.dirname(__file__)) or ".",
     )
     if result.returncode != 0:
         pytest.skip(f"Cannot create bootstrap token: {result.stderr}")
@@ -182,10 +194,12 @@ class TestPublishAndInstallLifecycle:
         return {"Authorization": f"Bearer {self._pub_token}"}
 
     def test_01_publish_package(self, client, pub_headers):
-        archive = _make_tar_archive({
-            "lib/libzlib.so": b"fake-zlib-library-content",
-            "include/zlib.h": b"/* zlib header */",
-        })
+        archive = _make_tar_archive(
+            {
+                "lib/libzlib.so": b"fake-zlib-library-content",
+                "include/zlib.h": b"/* zlib header */",
+            }
+        )
         r = client.post(
             "/v1/publish",
             params={

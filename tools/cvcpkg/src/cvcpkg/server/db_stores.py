@@ -67,7 +67,9 @@ class DbTokenStore:
     ) -> str:
         async with get_session() as session:
             existing = await session.execute(
-                select(TokenRow).where(TokenRow.name == name, TokenRow.revoked == False)  # noqa: E712
+                select(TokenRow).where(
+                    TokenRow.name == name, TokenRow.revoked == False
+                )  # noqa: E712
             )
             if existing.scalars().first() is not None:
                 raise ValueError(f"active token named '{name}' already exists")
@@ -169,9 +171,7 @@ class DbAuditLog:
     ) -> AuditEntry:
         async with get_session() as session:
             # Get prev hash from last entry
-            result = await session.execute(
-                select(AuditRow).order_by(AuditRow.id.desc()).limit(1)
-            )
+            result = await session.execute(select(AuditRow).order_by(AuditRow.id.desc()).limit(1))
             last = result.scalars().first()
             prev_hash = ""
             if last is not None:
@@ -309,7 +309,11 @@ class DbPackageIndex:
             total_result = await session.execute(count_q)
             total = total_result.scalar() or 0
 
-            q = q.order_by(PackageRow.name, PackageRow.published_at.desc()).offset(offset).limit(limit)
+            q = (
+                q.order_by(PackageRow.name, PackageRow.published_at.desc())
+                .offset(offset)
+                .limit(limit)
+            )
             result = await session.execute(q)
             packages = [
                 PackageInfo(
@@ -337,7 +341,9 @@ class DbPackageIndex:
         """Return the full catalog as a dict (for /v1/catalog YAML response)."""
         async with get_session() as session:
             result = await session.execute(
-                select(PackageRow).where(PackageRow.yanked == False).order_by(PackageRow.name)  # noqa: E712
+                select(PackageRow)
+                .where(PackageRow.yanked == False)
+                .order_by(PackageRow.name)  # noqa: E712
             )
             bundles = [
                 {
@@ -437,8 +443,6 @@ class DbPackageIndex:
 
         async with get_session() as session:
             result = await session.execute(
-                sa_delete(PackageRow).where(
-                    PackageRow.name == name, PackageRow.version == version
-                )
+                sa_delete(PackageRow).where(PackageRow.name == name, PackageRow.version == version)
             )
             return result.rowcount
