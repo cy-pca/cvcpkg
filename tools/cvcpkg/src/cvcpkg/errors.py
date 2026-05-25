@@ -33,3 +33,7 @@ class CollisionError(InstallError):
 
 class AbiError(CvcpkgError):
     """ABI-tag mismatch between two bundles."""
+
+
+class SigningError(CvcpkgError):
+    """A signing or verification operation failed."""

@@ -76,6 +76,8 @@ class PackageInfo(BaseModel):
     archive_url: str
     published_at: datetime.datetime
     yanked: bool = False
+    signature: str = ""
+    key_fingerprint: str = ""
 
 
 class PublishResponse(BaseModel):

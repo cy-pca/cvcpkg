@@ -2,3 +2,4 @@
 htmlcov/
 coverage*.xml
 *-results.xml
+src/cvcpkg/recipes/

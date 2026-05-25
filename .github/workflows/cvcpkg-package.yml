@@ -210,7 +210,8 @@ jobs:
 
               # Generate manifest
               manifest = generate_manifest(
-                  recipe, staging, platform, arch, config, link
+                  recipe, staging, platform, arch, config, link,
+                  maintainer="CyberPC Angel, LLC",
               )
 
               # Write manifest into staging
@@ -218,6 +219,15 @@ jobs:
               manifest_dir.mkdir(parents=True, exist_ok=True)
               with open(manifest_dir / "manifest.yaml", "w") as f:
                   yaml.dump(manifest, f, default_flow_style=False, sort_keys=False)
+
+              # Include the recipe that produced this package
+              recipe_dest = manifest_dir / "recipe"
+              recipe_dest.mkdir(parents=True, exist_ok=True)
+              import shutil as _shutil
+              _exts = {".yaml", ".sh", ".ps1", ".cmake", ".patch"}
+              for rf in sorted(recipe.recipe_dir.iterdir()):
+                  if rf.is_file() and rf.suffix in _exts:
+                      _shutil.copy2(rf, recipe_dest / rf.name)
 
               # Create archive
               archive_path, sha256, size = create_archive(
