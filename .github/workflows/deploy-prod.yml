@@ -50,31 +50,70 @@ jobs:
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "Deploying sha: $sha"
 
-      - name: Run auto-deploy
-        env:
-          REPO_DIR: ${{ github.workspace }}
+      - name: Deploy
         run: |
+          set -euo pipefail
+          SHA="${{ steps.target.outputs.sha }}"
+          SHORT_SHA="${SHA:0:7}"
+          RELEASE_TAG="prod-${SHORT_SHA}"
+
           cd tools/cvcpkg
+
           # Copy .env.production from the persistent host location
           if [[ -f /home/tfx/libcvc-deps/tools/cvcpkg/.env.production ]]; then
             cp /home/tfx/libcvc-deps/tools/cvcpkg/.env.production .env.production
-          fi
-          # Ensure .env.production exists on this host
-          if [[ ! -f .env.production ]]; then
-            echo "::error::.env.production not found — run initial setup first"
+          else
+            echo "::error::.env.production not found at /home/tfx/libcvc-deps/tools/cvcpkg/"
             exit 1
           fi
-          bash scripts/auto-deploy.sh "${{ steps.target.outputs.sha }}"
 
-      - name: Verify deployment
-        run: |
-          echo "Waiting 10s for health..."
-          sleep 10
-          response=$(curl -sf http://127.0.0.1:8420/healthz)
-          echo "Health response: $response"
-          echo "$response" | python3 -c "
+          # Detect docker compose
+          if docker compose version &>/dev/null; then
+            DC="docker compose"
+          elif command -v docker-compose &>/dev/null; then
+            DC="docker-compose"
+          else
+            echo "::error::docker compose not available"
+            exit 1
+          fi
+
+          COMPOSE="$DC -f docker-compose.production.yml --env-file .env.production"
+          export CVCPKG_RELEASE="$RELEASE_TAG"
+
+          # Backup database if postgres is running
+          if $COMPOSE exec -T postgres pg_isready -U cvcpkg >/dev/null 2>&1; then
+            mkdir -p backups
+            $COMPOSE exec -T postgres pg_dump -U cvcpkg cvcpkg \
+              | gzip > "backups/pre-deploy-${SHORT_SHA}.sql.gz"
+            echo "Database backup created"
+          else
+            echo "Postgres not running; skipping backup"
+          fi
+
+          # Build and deploy
+          echo "Building cvcpkg-server:${RELEASE_TAG}..."
+          $COMPOSE build --build-arg "CVCPKG_RELEASE=${RELEASE_TAG}" backend
+          echo "Ensuring postgres is up..."
+          $COMPOSE up -d postgres
+          echo "Restarting backend..."
+          $COMPOSE up -d --force-recreate backend
+
+          # Wait for health
+          echo "Waiting for health (timeout 120s)..."
+          deadline=$(( $(date +%s) + 120 ))
+          while (( $(date +%s) < deadline )); do
+            if curl -fsS --max-time 3 http://127.0.0.1:8420/healthz 2>/dev/null | grep -q '"ok"'; then
+              echo "Backend healthy!"
+              curl -s http://127.0.0.1:8420/healthz | python3 -c "
           import json, sys
-          data = json.load(sys.stdin)
-          assert data['status'] == 'ok', f'unhealthy: {data}'
-          print(f'Deployed: v{data[\"version\"]}, {data[\"packages_count\"]} packages')
+          d = json.load(sys.stdin)
+          print(f'Deployed: v{d[\"version\"]}, {d[\"packages_count\"]} packages')
           "
+              exit 0
+            fi
+            sleep 3
+          done
+
+          echo "::error::Backend failed health check within 120s"
+          $COMPOSE logs --tail=80 backend || true
+          exit 1
