@@ -927,6 +927,7 @@ def publish(
     base = server.rstrip("/")
     headers = {"Authorization": f"Bearer {token}"}
     ok = 0
+    failed: list[str] = []
 
     for archive in archives:
         p = Path(archive)
@@ -948,9 +949,9 @@ def publish(
             raise click.ClickException(f"{p.name}: manifest missing name or version")
 
         file_size = p.stat().st_size
+        label = f"{name}=={version} ({plat}/{arch}/{build_type}/{link})"
         click.echo(
-            f"cvcpkg: publishing {name}=={version} "
-            f"({plat}/{arch}/{build_type}/{link}) "
+            f"cvcpkg: publishing {label} "
             f"[{file_size / 1024 / 1024:.1f} MB] -> {base}"
         )
 
@@ -965,16 +966,27 @@ def publish(
             "recipe_version": recipe_version,
         }
 
-        if file_size <= chunked_threshold:
-            result = _publish_simple(base, headers, params, p)
-        else:
-            result = _publish_chunked(base, headers, params, p, file_size)
+        try:
+            if file_size <= chunked_threshold:
+                result = _publish_simple(base, headers, params, p)
+            else:
+                result = _publish_chunked(base, headers, params, p, file_size)
 
-        if result == "published":
-            ok += 1
-        # result == "skipped" → already counted
+            if result == "published":
+                ok += 1
+            # result == "skipped" → already counted
+        except click.ClickException as exc:
+            click.echo(f"  ERROR: {exc.format_message()}", err=True)
+            failed.append(label)
 
     click.echo(f"cvcpkg: published {ok}/{len(archives)} archive(s).")
+    if failed:
+        click.echo(f"cvcpkg: {len(failed)} archive(s) failed:", err=True)
+        for f in failed:
+            click.echo(f"  - {f}", err=True)
+        raise click.ClickException(
+            f"publish completed with {len(failed)} error(s)"
+        )
 
 
 def _extract_manifest(archive_path: Path) -> dict:
