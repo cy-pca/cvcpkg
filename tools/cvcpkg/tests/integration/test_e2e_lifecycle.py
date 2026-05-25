@@ -47,7 +47,10 @@ SERVER_URL = os.environ.get("CVCPKG_TEST_SERVER_URL", "http://127.0.0.1:8421")
 # Real recipes are bind-mounted at /repo/recipes inside the test container.
 # When running outside Docker (local dev), fall back to the repo tree.
 _CONTAINER_RECIPES = Path("/repo/recipes")
-_LOCAL_RECIPES = Path(__file__).resolve().parents[4] / "recipes"
+try:
+    _LOCAL_RECIPES = Path(__file__).resolve().parents[4] / "recipes"
+except IndexError:
+    _LOCAL_RECIPES = Path("/nonexistent")
 RECIPES_DIR = _CONTAINER_RECIPES if _CONTAINER_RECIPES.is_dir() else _LOCAL_RECIPES
 
 # ── Helpers ─────────────────────────────────────────────────────
@@ -81,7 +84,10 @@ def _exec_in_backend(*cmd: str) -> str:
         *cmd,
     ]
     # Compose files live in tools/cvcpkg/
-    cwd = Path(__file__).resolve().parents[2]
+    try:
+        cwd = Path(__file__).resolve().parents[2]
+    except IndexError:
+        pytest.skip("cannot resolve cvcpkg root from inside container")
     result = subprocess.run(
         full_cmd,
         capture_output=True,

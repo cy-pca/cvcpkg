@@ -664,3 +664,237 @@ class TestAuditChainTamperDetection:
         ok, msg = log2.verify_chain()
         assert not ok
         assert "chain broken" in msg.lower() or "mismatch" in msg.lower()
+
+
+# ── Chunked upload ──────────────────────────────────────────────
+
+
+class TestChunkedUpload:
+    """Test the chunked / resumable upload flow."""
+
+    def test_chunked_upload_full_flow(self, server_env):
+        """Init → chunks → complete → download verifies content."""
+        client, admin_token, pub_token, tmp_path = server_env
+        content = b"A" * 1024 * 50  # 50 KiB in total
+
+        # Init session
+        resp = client.post(
+            "/v1/upload/init",
+            params={
+                "name": "chunked-test",
+                "version": "1.0.0",
+                "platform": "linux",
+                "arch": "x86_64",
+                "total_size": len(content),
+            },
+            headers={"Authorization": f"Bearer {pub_token}"},
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        upload_id = data["upload_id"]
+        assert "chunk_size" in data
+
+        # Upload in two chunks
+        half = len(content) // 2
+        chunk1 = content[:half]
+        chunk2 = content[half:]
+
+        resp = client.patch(
+            f"/v1/upload/{upload_id}",
+            content=chunk1,
+            headers={
+                "Authorization": f"Bearer {pub_token}",
+                "Content-Type": "application/octet-stream",
+                "Content-Range": f"bytes 0-{half - 1}/{len(content)}",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["bytes_received"] == half
+
+        resp = client.patch(
+            f"/v1/upload/{upload_id}",
+            content=chunk2,
+            headers={
+                "Authorization": f"Bearer {pub_token}",
+                "Content-Type": "application/octet-stream",
+                "Content-Range": f"bytes {half}-{len(content) - 1}/{len(content)}",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["bytes_received"] == len(content)
+
+        # Complete
+        import hashlib
+
+        expected_sha256 = hashlib.sha256(content).hexdigest()
+        resp = client.post(
+            f"/v1/upload/{upload_id}/complete",
+            params={"expected_sha256": expected_sha256},
+            headers={"Authorization": f"Bearer {pub_token}"},
+        )
+        assert resp.status_code == 200
+        result = resp.json()
+        assert result["sha256"] == expected_sha256
+        assert result["name"] == "chunked-test"
+
+        # Verify download
+        resp = client.get(result["archive_url"])
+        assert resp.status_code == 200
+        assert resp.content == content
+
+    def test_upload_status(self, server_env):
+        """GET /v1/upload/{id} returns bytes received."""
+        client, admin_token, pub_token, tmp_path = server_env
+
+        resp = client.post(
+            "/v1/upload/init",
+            params={"name": "status-test", "version": "1.0"},
+            headers={"Authorization": f"Bearer {pub_token}"},
+        )
+        assert resp.status_code == 201
+        upload_id = resp.json()["upload_id"]
+
+        resp = client.get(
+            f"/v1/upload/{upload_id}",
+            headers={"Authorization": f"Bearer {pub_token}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["bytes_received"] == 0
+
+    def test_upload_sha256_mismatch(self, server_env):
+        """Complete with wrong SHA-256 returns 422."""
+        client, admin_token, pub_token, tmp_path = server_env
+
+        resp = client.post(
+            "/v1/upload/init",
+            params={"name": "sha-test", "version": "1.0"},
+            headers={"Authorization": f"Bearer {pub_token}"},
+        )
+        upload_id = resp.json()["upload_id"]
+
+        client.patch(
+            f"/v1/upload/{upload_id}",
+            content=b"hello",
+            headers={
+                "Authorization": f"Bearer {pub_token}",
+                "Content-Type": "application/octet-stream",
+            },
+        )
+
+        resp = client.post(
+            f"/v1/upload/{upload_id}/complete",
+            params={
+                "expected_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            headers={"Authorization": f"Bearer {pub_token}"},
+        )
+        assert resp.status_code == 422
+        assert "mismatch" in resp.json()["detail"].lower()
+
+    def test_upload_not_found(self, server_env):
+        """Operations on nonexistent upload_id return 404."""
+        client, admin_token, pub_token, tmp_path = server_env
+        headers = {"Authorization": f"Bearer {pub_token}"}
+
+        assert client.get("/v1/upload/nonexistent", headers=headers).status_code == 404
+        assert (
+            client.patch("/v1/upload/nonexistent", content=b"x", headers=headers).status_code == 404
+        )
+        assert client.post("/v1/upload/nonexistent/complete", headers=headers).status_code == 404
+        assert client.delete("/v1/upload/nonexistent", headers=headers).status_code == 404
+
+    def test_upload_cancel(self, server_env):
+        """DELETE /v1/upload/{id} discards the session."""
+        client, admin_token, pub_token, tmp_path = server_env
+
+        resp = client.post(
+            "/v1/upload/init",
+            params={"name": "cancel-test", "version": "1.0"},
+            headers={"Authorization": f"Bearer {pub_token}"},
+        )
+        upload_id = resp.json()["upload_id"]
+
+        resp = client.delete(
+            f"/v1/upload/{upload_id}",
+            headers={"Authorization": f"Bearer {pub_token}"},
+        )
+        assert resp.status_code == 204
+
+        # Session should be gone
+        resp = client.get(
+            f"/v1/upload/{upload_id}",
+            headers={"Authorization": f"Bearer {pub_token}"},
+        )
+        assert resp.status_code == 404
+
+    def test_upload_duplicate_rejected(self, server_env):
+        """Init rejects duplicate component (409)."""
+        client, admin_token, pub_token, tmp_path = server_env
+
+        # Publish something first via simple upload
+        client.post(
+            "/v1/publish",
+            params={"name": "dup-chunked", "version": "1.0", "platform": "linux", "arch": "x86_64"},
+            files={"file": ("dup.tar.zst", io.BytesIO(b"data"))},
+            headers={"Authorization": f"Bearer {pub_token}"},
+        )
+
+        # Try chunked init for same coordinates
+        resp = client.post(
+            "/v1/upload/init",
+            params={"name": "dup-chunked", "version": "1.0", "platform": "linux", "arch": "x86_64"},
+            headers={"Authorization": f"Bearer {pub_token}"},
+        )
+        assert resp.status_code == 409
+
+    def test_upload_offset_mismatch(self, server_env):
+        """Chunk with wrong Content-Range offset returns 409."""
+        client, admin_token, pub_token, tmp_path = server_env
+
+        resp = client.post(
+            "/v1/upload/init",
+            params={"name": "offset-test", "version": "1.0"},
+            headers={"Authorization": f"Bearer {pub_token}"},
+        )
+        upload_id = resp.json()["upload_id"]
+
+        # First chunk at offset 0 succeeds
+        client.patch(
+            f"/v1/upload/{upload_id}",
+            content=b"A" * 100,
+            headers={
+                "Authorization": f"Bearer {pub_token}",
+                "Content-Type": "application/octet-stream",
+                "Content-Range": "bytes 0-99/1000",
+            },
+        )
+
+        # Second chunk with wrong offset (should be 100, not 0)
+        resp = client.patch(
+            f"/v1/upload/{upload_id}",
+            content=b"B" * 100,
+            headers={
+                "Authorization": f"Bearer {pub_token}",
+                "Content-Type": "application/octet-stream",
+                "Content-Range": "bytes 0-99/1000",
+            },
+        )
+        assert resp.status_code == 409
+        assert "offset mismatch" in resp.json()["detail"].lower()
+
+    def test_upload_empty_complete_rejected(self, server_env):
+        """Complete with zero bytes uploaded returns 400."""
+        client, admin_token, pub_token, tmp_path = server_env
+
+        resp = client.post(
+            "/v1/upload/init",
+            params={"name": "empty-test", "version": "1.0"},
+            headers={"Authorization": f"Bearer {pub_token}"},
+        )
+        upload_id = resp.json()["upload_id"]
+
+        resp = client.post(
+            f"/v1/upload/{upload_id}/complete",
+            headers={"Authorization": f"Bearer {pub_token}"},
+        )
+        assert resp.status_code == 400

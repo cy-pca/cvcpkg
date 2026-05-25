@@ -19,7 +19,10 @@ from cvcpkg.lockfile import LockEntry, Lockfile
 from cvcpkg.manifest import BundleManifest, Requirements
 
 # Real recipes dir (skip if not running from repo)
-REPO_ROOT = Path(__file__).resolve().parents[4]
+try:
+    REPO_ROOT = Path(__file__).resolve().parents[4]
+except IndexError:
+    REPO_ROOT = Path("/nonexistent")
 RECIPES_DIR = REPO_ROOT / "recipes"
 REQUIREMENTS_FILE = REPO_ROOT / "cvc-requirements.yaml"
 
