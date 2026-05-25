@@ -57,13 +57,22 @@ jobs:
           SHORT_SHA="${SHA:0:7}"
           RELEASE_TAG="prod-${SHORT_SHA}"
 
-          cd tools/cvcpkg
+          # ── Sync checkout into persistent deploy directory ──────
+          # Running docker compose from a persistent location ensures
+          # containers survive runner workspace cleanup between jobs.
+          DEPLOY_DIR="/home/tfx/libcvc-deps"
+          CVCPKG_DIR="${DEPLOY_DIR}/tools/cvcpkg"
 
-          # Copy .env.production from the persistent host location
-          if [[ -f /home/tfx/libcvc-deps/tools/cvcpkg/.env.production ]]; then
-            cp /home/tfx/libcvc-deps/tools/cvcpkg/.env.production .env.production
-          else
-            echo "::error::.env.production not found at /home/tfx/libcvc-deps/tools/cvcpkg/"
+          echo "Syncing checkout to ${DEPLOY_DIR}..."
+          rsync -a --delete \
+            --exclude '.env.production' \
+            --exclude 'backups/' \
+            "${GITHUB_WORKSPACE}/" "${DEPLOY_DIR}/"
+
+          cd "$CVCPKG_DIR"
+
+          if [[ ! -f .env.production ]]; then
+            echo "::error::.env.production not found at ${CVCPKG_DIR}/"
             exit 1
           fi
 
