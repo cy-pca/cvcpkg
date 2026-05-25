@@ -35,8 +35,6 @@ import io
 import os
 import subprocess
 import tarfile
-import tempfile
-from pathlib import Path
 
 import pytest
 import yaml
@@ -116,6 +114,120 @@ def admin_headers(admin_token):
     return {"Authorization": f"Bearer {admin_token}"}
 
 
+@pytest.fixture(scope="module")
+def reader_token(client, admin_headers):
+    """Admin creates a reader token."""
+    r = client.post(
+        "/v1/tokens",
+        json={"name": "e2e-reader", "role": "reader"},
+        headers=admin_headers,
+    )
+    assert r.status_code == 200
+    return r.json()["token"]
+
+
+@pytest.fixture(scope="module")
+def publisher_token(client, admin_headers):
+    """Admin creates a publisher token."""
+    r = client.post(
+        "/v1/tokens",
+        json={"name": "e2e-publisher", "role": "publisher"},
+        headers=admin_headers,
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["role"] == "publisher"
+    assert data["token"].startswith("cvctok_")
+    return data["token"]
+
+
+@pytest.fixture(scope="module")
+def publisher_headers(publisher_token):
+    return {"Authorization": f"Bearer {publisher_token}"}
+
+
+@pytest.fixture(scope="module")
+def zlib_build(tmp_path_factory):
+    """Build zlib from the real recipe and return archive metadata."""
+    if not RECIPES_DIR.is_dir():
+        pytest.skip("recipes directory not available")
+    if not (RECIPES_DIR / "zlib").is_dir():
+        pytest.skip("zlib recipe not found")
+
+    from cvcpkg.builder import pack_recipe
+    from cvcpkg.platform import detect_arch, detect_platform
+
+    plat = detect_platform()
+    arch = detect_arch()
+    out = tmp_path_factory.mktemp("dist")
+
+    archive_path, sha256, size = pack_recipe(
+        RECIPES_DIR / "zlib",
+        platform=plat,
+        arch=arch,
+        config="release",
+        link="shared",
+        output_dir=out,
+    )
+
+    assert archive_path.is_file()
+    assert size > 0
+    assert len(sha256) == 64
+
+    with tarfile.open(archive_path, "r:*") as tf:
+        manifest_entries = [
+            m for m in tf.getmembers()
+            if m.name.endswith("manifest.yaml")
+        ]
+        assert len(manifest_entries) == 1
+        f = tf.extractfile(manifest_entries[0])
+        assert f is not None
+        manifest = yaml.safe_load(f.read())
+
+    return {
+        "archive_path": archive_path,
+        "sha256": sha256,
+        "size": size,
+        "platform": plat,
+        "arch": arch,
+        "manifest": manifest,
+    }
+
+
+@pytest.fixture(scope="module")
+def published_zlib(client, publisher_headers, zlib_build):
+    """Publish the zlib archive and return the server response."""
+    archive_data = zlib_build["archive_path"].read_bytes()
+    manifest = zlib_build["manifest"]
+
+    r = client.post(
+        "/v1/publish",
+        params={
+            "name": manifest["bundle"]["name"],
+            "version": manifest["bundle"]["version"],
+            "platform": manifest["bundle"]["platform"],
+            "arch": manifest["bundle"]["arch"],
+            "build_type": manifest["bundle"]["config"],
+            "link": manifest["bundle"]["link"],
+            "release_tag": "",
+            "recipe_version": manifest["meta"].get("recipe_sha256", ""),
+        },
+        files={
+            "file": (
+                zlib_build["archive_path"].name,
+                archive_data,
+                "application/octet-stream",
+            ),
+        },
+        headers=publisher_headers,
+    )
+    assert r.status_code == 200, f"publish failed: {r.text}"
+    data = r.json()
+    assert data["name"] == "zlib"
+    assert data["sha256"] == zlib_build["sha256"]
+    return data
+
+
 # ── Test classes (ordered) ──────────────────────────────────────
 
 
@@ -139,18 +251,7 @@ class TestServerHealth:
 class TestRBACEnforcement:
     """Phase 2–3: Reader tokens cannot publish; only publishers/admins can."""
 
-    @pytest.fixture(autouse=True, scope="class")
-    def _create_reader(self, client, admin_headers):
-        """Admin creates a reader token."""
-        r = client.post(
-            "/v1/tokens",
-            json={"name": "e2e-reader", "role": "reader"},
-            headers=admin_headers,
-        )
-        assert r.status_code == 200
-        TestRBACEnforcement._reader_token = r.json()["token"]
-
-    def test_reader_cannot_publish(self, client):
+    def test_reader_cannot_publish(self, client, reader_token):
         """A reader token should get 403 when trying to publish."""
         archive = _make_fake_archive({"dummy.txt": b"hello"})
         r = client.post(
@@ -164,16 +265,16 @@ class TestRBACEnforcement:
                 "link": "shared",
             },
             files={"file": ("test.tar.gz", archive, "application/octet-stream")},
-            headers={"Authorization": f"Bearer {self._reader_token}"},
+            headers={"Authorization": f"Bearer {reader_token}"},
         )
         assert r.status_code == 403
 
-    def test_reader_cannot_create_tokens(self, client):
+    def test_reader_cannot_create_tokens(self, client, reader_token):
         """A reader token should get 403 when trying to create tokens."""
         r = client.post(
             "/v1/tokens",
             json={"name": "sneaky", "role": "publisher"},
-            headers={"Authorization": f"Bearer {self._reader_token}"},
+            headers={"Authorization": f"Bearer {reader_token}"},
         )
         assert r.status_code == 403
 
@@ -196,26 +297,13 @@ class TestRBACEnforcement:
 class TestPublisherGrant:
     """Phase 4: Admin grants a publisher token."""
 
-    @pytest.fixture(autouse=True, scope="class")
-    def _grant_publisher(self, client, admin_headers):
-        r = client.post(
-            "/v1/tokens",
-            json={"name": "e2e-publisher", "role": "publisher"},
-            headers=admin_headers,
-        )
-        assert r.status_code == 200
-        data = r.json()
-        assert data["role"] == "publisher"
-        assert data["token"].startswith("cvctok_")
-        TestPublisherGrant._pub_token = data["token"]
-
-    def test_publisher_token_in_list(self, client, admin_headers):
+    def test_publisher_token_in_list(self, client, admin_headers, publisher_token):
         r = client.get("/v1/tokens", headers=admin_headers)
         assert r.status_code == 200
         names = [t["name"] for t in r.json()["tokens"]]
         assert "e2e-publisher" in names
 
-    def test_publisher_token_has_correct_role(self, client, admin_headers):
+    def test_publisher_token_has_correct_role(self, client, admin_headers, publisher_token):
         r = client.get("/v1/tokens", headers=admin_headers)
         for t in r.json()["tokens"]:
             if t["name"] == "e2e-publisher":
@@ -230,94 +318,24 @@ class TestBuildPackPublish:
     recipe → build → pack → archive → publish → visible in catalog.
     """
 
-    @pytest.fixture(autouse=True, scope="class")
-    def _setup(self):
-        """Ensure recipes are available."""
-        if not RECIPES_DIR.is_dir():
-            pytest.skip("recipes directory not available")
-        zlib_recipe = RECIPES_DIR / "zlib"
-        if not zlib_recipe.is_dir():
-            pytest.skip("zlib recipe not found")
+    def test_build_produces_valid_archive(self, zlib_build):
+        """Build zlib from the real recipe and verify the archive."""
+        assert zlib_build["archive_path"].is_file()
+        assert zlib_build["size"] > 0
+        assert len(zlib_build["sha256"]) == 64
 
-    def test_01_build_and_pack_zlib(self, tmp_path):
-        """Build zlib from the real recipe and create an archive."""
-        from cvcpkg.builder import pack_recipe
-        from cvcpkg.platform import detect_arch, detect_platform
+    def test_archive_contains_manifest(self, zlib_build):
+        """The archive should contain a manifest.yaml with correct metadata."""
+        manifest = zlib_build["manifest"]
+        assert manifest["bundle"]["name"] == "zlib"
+        assert manifest["bundle"]["platform"] == zlib_build["platform"]
+        assert manifest["bundle"]["arch"] == zlib_build["arch"]
 
-        plat = detect_platform()
-        arch = detect_arch()
-
-        archive_path, sha256, size = pack_recipe(
-            RECIPES_DIR / "zlib",
-            platform=plat,
-            arch=arch,
-            config="release",
-            link="shared",
-            output_dir=tmp_path / "dist",
-        )
-
-        assert archive_path.is_file()
-        assert size > 0
-        assert len(sha256) == 64
-
-        # Stash for later tests
-        TestBuildPackPublish._archive_path = archive_path
-        TestBuildPackPublish._sha256 = sha256
-        TestBuildPackPublish._platform = plat
-        TestBuildPackPublish._arch = arch
-
-    def test_02_archive_contains_manifest(self):
-        """The archive should contain a manifest.yaml."""
-        archive_path = self._archive_path
-        with tarfile.open(archive_path, "r:*") as tf:
-            manifest_entries = [
-                m for m in tf.getmembers()
-                if m.name.endswith("manifest.yaml")
-            ]
-            assert len(manifest_entries) == 1, "archive must contain exactly one manifest.yaml"
-
-            f = tf.extractfile(manifest_entries[0])
-            assert f is not None
-            manifest = yaml.safe_load(f.read())
-            assert manifest["bundle"]["name"] == "zlib"
-            assert manifest["bundle"]["platform"] == self._platform
-            assert manifest["bundle"]["arch"] == self._arch
-
-            TestBuildPackPublish._manifest = manifest
-
-    def test_03_publish_via_api(self, client):
+    def test_publish_via_api(self, published_zlib):
         """Publish the real zlib archive to the server."""
-        archive_data = self._archive_path.read_bytes()
-        manifest = self._manifest
+        assert published_zlib["name"] == "zlib"
 
-        r = client.post(
-            "/v1/publish",
-            params={
-                "name": manifest["bundle"]["name"],
-                "version": manifest["bundle"]["version"],
-                "platform": manifest["bundle"]["platform"],
-                "arch": manifest["bundle"]["arch"],
-                "build_type": manifest["bundle"]["config"],
-                "link": manifest["bundle"]["link"],
-                "release_tag": "",
-                "recipe_version": manifest["meta"].get("recipe_sha256", ""),
-            },
-            files={
-                "file": (
-                    self._archive_path.name,
-                    archive_data,
-                    "application/octet-stream",
-                ),
-            },
-            headers={"Authorization": f"Bearer {TestPublisherGrant._pub_token}"},
-        )
-        assert r.status_code == 200, f"publish failed: {r.text}"
-        data = r.json()
-        assert data["name"] == "zlib"
-        assert data["sha256"] == self._sha256
-        TestBuildPackPublish._archive_url = data["archive_url"]
-
-    def test_04_catalog_shows_zlib(self, client):
+    def test_catalog_shows_zlib(self, client, published_zlib, zlib_build):
         """After publish, zlib should appear in the catalog."""
         r = client.get("/v1/catalog")
         assert r.status_code == 200
@@ -325,10 +343,10 @@ class TestBuildPackPublish:
         zlib_entries = [b for b in bundles if b["name"] == "zlib"]
         assert len(zlib_entries) >= 1
         entry = zlib_entries[0]
-        assert entry["platform"] == self._platform
-        assert entry["arch"] == self._arch
+        assert entry["platform"] == zlib_build["platform"]
+        assert entry["arch"] == zlib_build["arch"]
 
-    def test_05_packages_endpoint_shows_zlib(self, client):
+    def test_packages_endpoint_shows_zlib(self, client, published_zlib):
         """The packages endpoint should list zlib."""
         r = client.get("/v1/packages/zlib")
         assert r.status_code == 200
@@ -336,10 +354,10 @@ class TestBuildPackPublish:
         assert data["total"] >= 1
         assert any(p["name"] == "zlib" for p in data["packages"])
 
-    def test_06_duplicate_publish_rejected(self, client):
+    def test_duplicate_publish_rejected(self, client, publisher_headers, zlib_build, published_zlib):
         """Publishing the same exact package again should fail with 409."""
-        archive_data = self._archive_path.read_bytes()
-        manifest = self._manifest
+        archive_data = zlib_build["archive_path"].read_bytes()
+        manifest = zlib_build["manifest"]
         r = client.post(
             "/v1/publish",
             params={
@@ -352,12 +370,12 @@ class TestBuildPackPublish:
             },
             files={
                 "file": (
-                    self._archive_path.name,
+                    zlib_build["archive_path"].name,
                     archive_data,
                     "application/octet-stream",
                 ),
             },
-            headers={"Authorization": f"Bearer {TestPublisherGrant._pub_token}"},
+            headers=publisher_headers,
         )
         assert r.status_code == 409
 
@@ -365,17 +383,17 @@ class TestBuildPackPublish:
 class TestInstallAndSmokeTest:
     """Phase 8–10: Download, install, and verify the published package."""
 
-    def test_01_download_archive(self, client):
+    def test_download_archive(self, client, published_zlib, zlib_build):
         """Download the published archive and verify its SHA-256."""
-        url = TestBuildPackPublish._archive_url
+        url = published_zlib["archive_url"]
         r = client.get(url)
         assert r.status_code == 200
-        assert _sha256(r.content) == TestBuildPackPublish._sha256
-        TestInstallAndSmokeTest._downloaded = r.content
+        assert _sha256(r.content) == zlib_build["sha256"]
 
-    def test_02_install_and_verify_files(self, tmp_path):
+    def test_install_and_verify_files(self, client, published_zlib, tmp_path):
         """Extract the downloaded archive and verify key files exist."""
-        archive_data = self._downloaded
+        url = published_zlib["archive_url"]
+        archive_data = client.get(url).content
         install_dir = tmp_path / "prefix"
         install_dir.mkdir()
 
@@ -413,13 +431,12 @@ class TestInstallAndSmokeTest:
 class TestYankUnyankCycle:
     """Phase 11: Yank and unyank the published package."""
 
-    def test_01_yank(self, client):
+    def test_01_yank(self, client, published_zlib, publisher_headers, zlib_build):
         """Publisher yanks the package."""
-        manifest = TestBuildPackPublish._manifest
-        version = manifest["bundle"]["version"]
+        version = zlib_build["manifest"]["bundle"]["version"]
         r = client.post(
             f"/v1/packages/zlib/{version}/yank",
-            headers={"Authorization": f"Bearer {TestPublisherGrant._pub_token}"},
+            headers=publisher_headers,
         )
         assert r.status_code == 200
 
@@ -430,10 +447,9 @@ class TestYankUnyankCycle:
         zlib_entries = [b for b in bundles if b["name"] == "zlib" and not b.get("yanked")]
         assert len(zlib_entries) == 0
 
-    def test_03_unyank(self, client, admin_headers):
+    def test_03_unyank(self, client, admin_headers, zlib_build):
         """Admin un-yanks the package."""
-        manifest = TestBuildPackPublish._manifest
-        version = manifest["bundle"]["version"]
+        version = zlib_build["manifest"]["bundle"]["version"]
         r = client.post(
             f"/v1/packages/zlib/{version}/unyank",
             headers=admin_headers,
@@ -485,9 +501,8 @@ class TestAuditTrailVerification:
 class TestCleanup:
     """Final cleanup — delete the test package."""
 
-    def test_delete_zlib(self, client, admin_headers):
-        manifest = TestBuildPackPublish._manifest
-        version = manifest["bundle"]["version"]
+    def test_delete_zlib(self, client, admin_headers, zlib_build, published_zlib):
+        version = zlib_build["manifest"]["bundle"]["version"]
         r = client.delete(
             f"/v1/packages/zlib/{version}",
             headers=admin_headers,

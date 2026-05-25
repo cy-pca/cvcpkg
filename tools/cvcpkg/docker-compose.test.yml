@@ -26,6 +26,27 @@ services:
         tmpfs:
             - /var/lib/postgresql/data
 
+    mysql:
+        image: mysql:8.0
+        container_name: cvcpkg-test-mysql
+        environment:
+            MYSQL_ROOT_PASSWORD: testpass
+            MYSQL_DATABASE: cvcpkg_test
+            MYSQL_USER: cvcpkg_test
+            MYSQL_PASSWORD: testpass
+        ports:
+            - "127.0.0.1:3307:3306"
+        healthcheck:
+            test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-ptestpass"]
+            interval: 5s
+            timeout: 3s
+            retries: 10
+            start_period: 20s
+        networks:
+            - cvcpkg-test
+        tmpfs:
+            - /var/lib/mysql
+
     backend:
         build:
             context: .
@@ -56,9 +77,12 @@ services:
         depends_on:
             backend:
                 condition: service_healthy
+            mysql:
+                condition: service_healthy
         environment:
             CVCPKG_TEST_SERVER_URL: http://backend:8420
             CVCPKG_DATABASE_URL: postgresql+asyncpg://cvcpkg_test:testpass@postgres:5432/cvcpkg_test
+            CVCPKG_TEST_MYSQL_URL: mysql+aiomysql://cvcpkg_test:testpass@mysql:3306/cvcpkg_test
         volumes:
             - ../../recipes:/repo/recipes:ro
         networks:

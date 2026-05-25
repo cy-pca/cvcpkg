@@ -1,9 +1,15 @@
-"""PostgreSQL database backend for cvcpkg-server.
+"""Database backend for cvcpkg-server.
 
 Provides SQLAlchemy models and async session management.  The server
-uses PostgreSQL for all persistent state (packages, tokens, audit log)
-when ``CVCPKG_DATABASE_URL`` is set; otherwise falls back to the
+uses a SQL database for all persistent state (packages, tokens, audit
+log) when ``CVCPKG_DATABASE_URL`` is set; otherwise falls back to the
 original YAML-file backend.
+
+Supported backends:
+    - PostgreSQL: ``postgresql+asyncpg://user:pass@host/dbname``
+    - SQLite:     ``sqlite+aiosqlite:///path/to/db.sqlite``
+                  ``sqlite+aiosqlite://`` (in-memory)
+    - MySQL:      ``mysql+aiomysql://user:pass@host/dbname``
 
 Tables:
     packages   — published bundle metadata
@@ -118,11 +124,25 @@ _session_factory: async_sessionmaker[AsyncSession] | None = None
 def init_db(database_url: str) -> None:
     """Initialise the async engine and session factory.
 
-    Call this once at startup with a URL like
-    ``postgresql+asyncpg://user:pass@host/dbname``.
+    Call this once at startup with a URL like:
+        ``postgresql+asyncpg://user:pass@host/dbname``
+        ``sqlite+aiosqlite:///path/to/db.sqlite``
+        ``mysql+aiomysql://user:pass@host/dbname``
     """
     global _engine, _session_factory
-    _engine = create_async_engine(database_url, echo=False, pool_size=10, max_overflow=20)
+
+    # SQLite doesn't support connection pooling options
+    is_sqlite = database_url.startswith("sqlite")
+    if is_sqlite:
+        _engine = create_async_engine(
+            database_url,
+            echo=False,
+            connect_args={"check_same_thread": False},
+        )
+    else:
+        _engine = create_async_engine(
+            database_url, echo=False, pool_size=10, max_overflow=20,
+        )
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
 
 
