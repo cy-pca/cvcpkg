@@ -25,7 +25,7 @@ from typing import Annotated
 
 import yaml
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 
 from cvcpkg import __version__
 from cvcpkg.server.audit import AuditLog
@@ -217,6 +217,14 @@ def create_app(
         description="Package server for libcvc-deps component bundles",
         lifespan=lifespan,
     )
+
+    # ── Landing page ──────────────────────────────────────
+
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    async def landing_page():
+        from cvcpkg.server.landing import landing_html
+
+        return HTMLResponse(landing_html())
 
     # ── Health ──────────────────────────────────────────────
 
