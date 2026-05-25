@@ -251,7 +251,9 @@ def build_from_source_fallback(
         try:
             search_dirs = [find_recipes_dir()]
         except RecipeError:
-            raise InstallError(f"no prebuilt binary and no recipes directory found for {name}")
+            raise InstallError(
+                f"no prebuilt binary and no recipes directory found for {name}"
+            ) from None
 
     recipe_dir: Path | None = None
     for rdir in search_dirs:

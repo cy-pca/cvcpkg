@@ -924,12 +924,6 @@ def publish(
       cvcpkg publish dist/*.tar.gz --server https://pkg.tx.wtf --token cvctok_...
       CVCPKG_SERVER_URL=https://pkg.tx.wtf CVCPKG_TOKEN=cvctok_... cvcpkg publish dist/*.tar.gz
     """
-    import io
-    import tarfile
-    import zipfile
-
-    import httpx
-
     base = server.rstrip("/")
     headers = {"Authorization": f"Bearer {token}"}
     ok = 0
@@ -985,7 +979,6 @@ def publish(
 
 def _extract_manifest(archive_path: Path) -> dict:
     """Extract manifest.yaml from a cvcpkg archive."""
-    import io
     import tarfile
     import zipfile
 
@@ -1006,7 +999,7 @@ def _extract_manifest(archive_path: Path) -> dict:
                             manifest = yaml.safe_load(f.read())
                         break
     except (tarfile.TarError, zipfile.BadZipFile) as exc:
-        raise click.ClickException(f"{archive_path.name}: cannot read archive: {exc}")
+        raise click.ClickException(f"{archive_path.name}: cannot read archive: {exc}") from exc
 
     if not manifest:
         raise click.ClickException(
@@ -1150,7 +1143,7 @@ def _publish_chunked(
                     else:
                         raise click.ClickException(
                             f"chunk upload failed after {max_retries} retries: {exc}"
-                        )
+                        ) from exc
 
     # 3. Finalise
     expected_sha256 = sha256.hexdigest()
