@@ -25,6 +25,9 @@ classifiers = [
     "Topic :: Software Development :: Build Tools",
 ]
 packages = [{ include = "cvcpkg", from = "src" }]
+include = [
+    { path = "src/cvcpkg/recipes", format = ["sdist", "wheel"] },
+]
 
 [tool.poetry.dependencies]
 python = "^3.10"
@@ -35,6 +38,7 @@ fastapi = { version = ">=0.100", optional = true }
 uvicorn = { version = ">=0.20", optional = true }
 pydantic = { version = "^2.0", optional = true }
 python-multipart = { version = ">=0.0.5", optional = true }
+cryptography = ">=41.0"
 
 [tool.poetry.extras]
 progress = ["tqdm"]
@@ -55,7 +59,8 @@ cvcpkg-server = "cvcpkg.server.cli:server_cli"
 
 [build-system]
 requires = ["poetry-core>=1.8.0"]
-build-backend = "poetry.core.masonry.api"
+build-backend = "backend"
+backend-path = ["."]
 
 [tool.black]
 line-length = 100

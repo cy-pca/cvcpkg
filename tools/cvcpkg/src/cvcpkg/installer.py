@@ -161,12 +161,34 @@ def install_entry(
     entry: CatalogEntry,
     prefix: Path,
     cache_dir: Path,
+    *,
+    verify_signatures: bool = False,
+    keys_dir: Path | None = None,
 ) -> Path:
     """Download, verify, and extract one bundle into *prefix*.
+
+    If *verify_signatures* is True and the entry has a signature,
+    the archive is verified against the trusted keyring before
+    extraction.  Unsigned entries are skipped (warning only) unless
+    no trusted keys exist.
 
     Returns the archive path from the cache.
     """
     archive = download_bundle(entry, cache_dir)
+
+    if verify_signatures and entry.signature:
+        from cvcpkg.signing import Signature, verify_file, SigningError
+
+        sig = Signature(
+            sig_b64=entry.signature,
+            key_fingerprint=entry.key_fingerprint,
+        )
+        try:
+            ki = verify_file(archive, sig, keys_dir)
+            print(f"cvcpkg: signature verified for {entry.name} (key: {ki.label})")
+        except SigningError as e:
+            raise IntegrityError(f"Signature verification failed for {entry.name}: {e}") from e
+
     extract_bundle(archive, prefix)
     return archive
 

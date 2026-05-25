@@ -84,6 +84,12 @@ _recipes_dir_opt = click.option(
         "Auto-detected from the repo root if omitted."
     ),
 )
+_maintainer_opt = click.option(
+    "--maintainer",
+    type=str,
+    default="",
+    help="Override the maintainer field in the package manifest.",
+)
 
 
 # ── Root group ──────────────────────────────────────────────────
@@ -154,6 +160,11 @@ def cli(ctx: click.Context) -> None:
     is_flag=True,
     help="Skip ABI compatibility checks (C++ standard, runtime, etc.).",
 )
+@click.option(
+    "--verify-signatures/--no-verify-signatures",
+    default=False,
+    help="Verify Ed25519 signatures on downloaded archives.",
+)
 def install(
     components: tuple[str, ...],
     from_file: str | None,
@@ -166,6 +177,7 @@ def install(
     catalog: str | None,
     catalog_revision: int | None,
     ignore_abi: bool,
+    verify_signatures: bool,
 ) -> None:
     """Install component bundles into a prefix.
 
@@ -288,7 +300,7 @@ def install(
     for name in sorted(picked):
         entry = picked[name]
         click.echo(f"cvcpkg: installing {name} {entry.version} ...")
-        install_entry(entry, prefix_path, cache_dir)
+        install_entry(entry, prefix_path, cache_dir, verify_signatures=verify_signatures)
         lock_entries.append(
             LockEntry(
                 name=entry.name,
@@ -989,6 +1001,11 @@ def _auto_platform(platform: str) -> str:
 @click.option("--prefix", type=click.Path(), default=None, help="Install prefix.")
 @_keep_build_opt
 @_recipes_dir_opt
+@click.option(
+    "--with-deps/--no-deps",
+    default=True,
+    help="Also build dependencies in order (default: --with-deps).",
+)
 def build(
     recipe: tuple[str, ...],
     platform: str,
@@ -997,6 +1014,7 @@ def build(
     prefix: str | None,
     keep_build_dir: bool,
     recipes_dirs: tuple[str, ...],
+    with_deps: bool,
 ) -> None:
     """Build one or more recipes from source.
 
@@ -1004,27 +1022,80 @@ def build(
     patches, and runs the recipe's platform-specific build script.
     Results are installed into --prefix.
 
+    Dependencies are automatically resolved and built first unless
+    --no-deps is specified.
+
     \b
     Examples:
       cvcpkg build zlib --prefix ./prefix
       cvcpkg build grpc protobuf --config debug --link static
       cvcpkg build mypkg --recipes-dir ./my-recipes --recipes-dir recipes
+      cvcpkg build vtk --no-deps --prefix ./prefix
     """
-    from cvcpkg.builder import build_recipe
+    from cvcpkg.builder import build_recipe, find_recipes_dir, resolve_build_order, Recipe
 
     plat = _auto_platform(platform)
     prefix_path = Path(prefix).resolve() if prefix else None
 
-    for name in recipe:
-        recipe_dir = _resolve_recipe_dir(name, recipes_dirs)
-        build_recipe(
-            recipe_dir,
-            platform=plat,
-            config=config,
-            link=link,
-            prefix=prefix_path,
-            keep_build_dir=keep_build_dir,
-        )
+    if with_deps:
+        # Resolve all deps and build in topological order
+        rdirs = [Path(d) for d in recipes_dirs] if recipes_dirs else [find_recipes_dir()]
+        from cvcpkg.builder import load_all_recipes, list_recipes
+
+        if len(rdirs) > 1:
+            all_recipes = load_all_recipes(rdirs)
+        else:
+            all_recipes = list_recipes(rdirs[0])
+        by_name = {r.name: r for r in all_recipes}
+
+        # Collect requested + their transitive deps
+        needed: set[str] = set()
+
+        def _collect(name: str) -> None:
+            if name in needed:
+                return
+            needed.add(name)
+            if name not in by_name:
+                return
+            r = by_name[name]
+            deps = r.raw.get("depends", {}).get("build", [])
+            for d in deps:
+                dep_name = d if isinstance(d, str) else d.get("name", "")
+                plats = d.get("platforms") if isinstance(d, dict) else None
+                if plats and plat not in plats:
+                    continue
+                if dep_name:
+                    _collect(dep_name)
+
+        for name in recipe:
+            _collect(name)
+
+        # Filter to what's available, resolve order
+        to_build = [by_name[n] for n in needed if n in by_name]
+        to_build = [r for r in to_build if any(m.platform == plat for m in r.build_matrix)]
+        ordered = resolve_build_order(to_build, plat)
+
+        for r in ordered:
+            print(f"\ncvcpkg: ══ {r.name} ({r.full_version}) ══")
+            build_recipe(
+                r.recipe_dir,
+                platform=plat,
+                config=config,
+                link=link,
+                prefix=prefix_path,
+                keep_build_dir=keep_build_dir,
+            )
+    else:
+        for name in recipe:
+            recipe_dir = _resolve_recipe_dir(name, recipes_dirs)
+            build_recipe(
+                recipe_dir,
+                platform=plat,
+                config=config,
+                link=link,
+                prefix=prefix_path,
+                keep_build_dir=keep_build_dir,
+            )
 
 
 # ── pack ────────────────────────────────────────────────────────
@@ -1039,6 +1110,13 @@ def build(
 @click.option("--output-dir", type=click.Path(), default="./dist", help="Output directory.")
 @_keep_build_opt
 @_recipes_dir_opt
+@_maintainer_opt
+@click.option(
+    "--signing-key",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to Ed25519 private key to sign archives.",
+)
 def pack(
     recipe: tuple[str, ...],
     platform: str,
@@ -1048,6 +1126,8 @@ def pack(
     output_dir: str,
     keep_build_dir: bool,
     recipes_dirs: tuple[str, ...],
+    maintainer: str,
+    signing_key: str | None,
 ) -> None:
     """Build and archive one or more recipes.
 
@@ -1075,8 +1155,16 @@ def pack(
             prefix=prefix_path,
             output_dir=output,
             keep_build_dir=keep_build_dir,
+            maintainer=maintainer,
         )
         click.echo(f"  {archive} ({size:,} bytes, sha256={sha})")
+        if signing_key:
+            from cvcpkg.signing import sign_file, write_signature
+
+            sig = sign_file(archive, Path(signing_key))
+            sig_path = archive.with_suffix(archive.suffix + ".sig")
+            write_signature(sig, sig_path)
+            click.echo(f"  Signed: {sig_path.name} (key: {sig.key_fingerprint[:16]}…)")
 
 
 # ── build-all ───────────────────────────────────────────────────
@@ -1138,6 +1226,13 @@ def build_all_cmd(
 @click.option("--output-dir", type=click.Path(), default="./dist", help="Output directory.")
 @_keep_build_opt
 @_recipes_dir_opt
+@_maintainer_opt
+@click.option(
+    "--signing-key",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to Ed25519 private key to sign archives.",
+)
 def pack_all_cmd(
     platform: str,
     config: str,
@@ -1146,6 +1241,8 @@ def pack_all_cmd(
     output_dir: str,
     keep_build_dir: bool,
     recipes_dirs: tuple[str, ...],
+    maintainer: str,
+    signing_key: str | None,
 ) -> None:
     """Build and archive all recipes.
 
@@ -1191,10 +1288,11 @@ def pack_all_cmd(
             arch,
             config,
             link,
+            maintainer=maintainer,
         )
         staging = ctx.work_dir / "staging"
         staging.mkdir(exist_ok=True)
-        stage_bundle(ctx.install_dir, manifest, staging)
+        stage_bundle(ctx.install_dir, manifest, staging, recipe_dir=ctx.recipe.recipe_dir)
         archive_path, sha256, size = create_archive(
             staging,
             output,
@@ -1206,6 +1304,13 @@ def pack_all_cmd(
             link,
         )
         click.echo(f"  {archive_path.name} ({size:,} bytes, sha256={sha256})")
+        if signing_key:
+            from cvcpkg.signing import sign_file, write_signature
+
+            sig = sign_file(archive_path, Path(signing_key))
+            sig_path = archive_path.with_suffix(archive_path.suffix + ".sig")
+            write_signature(sig, sig_path)
+            click.echo(f"  Signed: {sig_path.name} (key: {sig.key_fingerprint[:16]}…)")
 
 
 # ── recipes ─────────────────────────────────────────────────────
@@ -1288,6 +1393,179 @@ def recipes(
         platforms = ", ".join(m.platform for m in r.build_matrix)
         tags_str = ", ".join(r.tags) if r.tags else ""
         click.echo(f"{r.name:<20} {r.full_version:<18} {tags_str:<20} {platforms}")
+
+
+# ── key ─────────────────────────────────────────────────────────
+
+
+@cli.group()
+def key() -> None:
+    """Manage Ed25519 signing keys.
+
+    Generate keypairs, import public keys from trusted publishers,
+    and list the local keyring.
+
+    \b
+    Examples:
+      cvcpkg key generate --label release
+      cvcpkg key list
+      cvcpkg key import publisher.pub --label upstream
+      cvcpkg key export --label release
+    """
+
+
+@key.command("generate")
+@click.option("--label", required=True, help="Human-readable label for this key.")
+@click.option("--password", default=None, help="Password-protect the private key.")
+@click.option(
+    "--keys-dir",
+    type=click.Path(),
+    default=None,
+    help="Override key storage directory.",
+)
+def key_generate(label: str, password: str | None, keys_dir: str | None) -> None:
+    """Generate a new Ed25519 signing keypair."""
+    from cvcpkg.signing import generate_keypair
+
+    kd = Path(keys_dir) if keys_dir else None
+    info = generate_keypair(label, keys_dir=kd, password=password)
+    click.echo(f"Generated key '{info.label}'")
+    click.echo(f"  Fingerprint: {info.fingerprint}")
+    click.echo(f"  Private key: {info.path}")
+    click.echo(f"  Public key:  {info.path.with_suffix('.pub') if info.path else 'N/A'}")
+
+
+@key.command("list")
+@click.option(
+    "--keys-dir",
+    type=click.Path(),
+    default=None,
+    help="Override key storage directory.",
+)
+def key_list(keys_dir: str | None) -> None:
+    """List all keys in the keyring."""
+    from cvcpkg.signing import list_keys
+
+    kd = Path(keys_dir) if keys_dir else None
+    keys = list_keys(kd)
+    if not keys:
+        click.echo("No keys found.")
+        return
+    for ki in keys:
+        kind = "private+public" if ki.has_private else "public only"
+        click.echo(f"  {ki.label:<20} {ki.fingerprint[:16]}…  ({kind})")
+
+
+@key.command("import")
+@click.argument("pub_file", type=click.Path(exists=True))
+@click.option("--label", required=True, help="Label for the imported key.")
+@click.option(
+    "--keys-dir",
+    type=click.Path(),
+    default=None,
+    help="Override key storage directory.",
+)
+def key_import(pub_file: str, label: str, keys_dir: str | None) -> None:
+    """Import a public key into the trusted keyring."""
+    from cvcpkg.signing import import_public_key
+
+    kd = Path(keys_dir) if keys_dir else None
+    pub_pem = Path(pub_file).read_text()
+    info = import_public_key(pub_pem, label, keys_dir=kd)
+    click.echo(f"Imported '{info.label}' ({info.fingerprint[:16]}…)")
+
+
+@key.command("export")
+@click.option("--label", required=True, help="Label of the key to export.")
+@click.option(
+    "--keys-dir",
+    type=click.Path(),
+    default=None,
+    help="Override key storage directory.",
+)
+def key_export(label: str, keys_dir: str | None) -> None:
+    """Export a public key (PEM) to stdout."""
+    from cvcpkg.signing import list_keys
+
+    kd = Path(keys_dir) if keys_dir else None
+    keys = list_keys(kd)
+    for ki in keys:
+        if ki.label == label:
+            click.echo(ki.public_pem, nl=False)
+            return
+    raise click.ClickException(f"Key '{label}' not found")
+
+
+# ── sign ────────────────────────────────────────────────────────
+
+
+@cli.command()
+@click.argument("archive", type=click.Path(exists=True))
+@click.option(
+    "--signing-key",
+    required=True,
+    type=click.Path(exists=True),
+    help="Path to Ed25519 private key (.key).",
+)
+@click.option("--password", default=None, help="Password for the signing key.")
+def sign(archive: str, signing_key: str, password: str | None) -> None:
+    """Sign an archive file.
+
+    Creates a detached ``<archive>.sig`` signature file alongside
+    the archive.
+
+    \b
+    Example:
+      cvcpkg sign dist/zlib-1.3.1+cvc.1-linux-x86_64-release-shared.tar.gz \\
+          --signing-key ~/.config/cvcpkg/keys/release.key
+    """
+    from cvcpkg.signing import sign_file, write_signature
+
+    archive_path = Path(archive)
+    sig = sign_file(archive_path, Path(signing_key), password)
+    sig_path = archive_path.with_suffix(archive_path.suffix + ".sig")
+    write_signature(sig, sig_path)
+    click.echo(f"Signed: {sig_path.name} (key: {sig.key_fingerprint[:16]}…)")
+
+
+# ── verify-sig ──────────────────────────────────────────────────
+
+
+@cli.command("verify-sig")
+@click.argument("archive", type=click.Path(exists=True))
+@click.option(
+    "--sig-file",
+    type=click.Path(exists=True),
+    default=None,
+    help="Signature file (defaults to <archive>.sig).",
+)
+@click.option(
+    "--keys-dir",
+    type=click.Path(),
+    default=None,
+    help="Override key storage directory.",
+)
+def verify_sig(archive: str, sig_file: str | None, keys_dir: str | None) -> None:
+    """Verify the signature of an archive against trusted keys.
+
+    \b
+    Example:
+      cvcpkg verify-sig dist/zlib-1.3.1+cvc.1-linux-x86_64-release-shared.tar.gz
+    """
+    from cvcpkg.signing import read_signature, verify_file
+
+    archive_path = Path(archive)
+    if sig_file:
+        sp = Path(sig_file)
+    else:
+        sp = archive_path.with_suffix(archive_path.suffix + ".sig")
+    if not sp.is_file():
+        raise click.ClickException(f"Signature file not found: {sp}")
+
+    kd = Path(keys_dir) if keys_dir else None
+    sig = read_signature(sp)
+    ki = verify_file(archive_path, sig, kd)
+    click.echo(f"Verified: signed by '{ki.label}' ({ki.fingerprint[:16]}…)")
 
 
 # ── main() wrapper for backward compat with tests ──────────────

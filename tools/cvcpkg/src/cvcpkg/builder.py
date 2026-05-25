@@ -423,7 +423,14 @@ def _total_size(root: Path) -> int:
 
 
 def generate_manifest(
-    recipe: Recipe, install_dir: Path, platform: str, arch: str, config: str, link: str
+    recipe: Recipe,
+    install_dir: Path,
+    platform: str,
+    arch: str,
+    config: str,
+    link: str,
+    *,
+    maintainer: str = "",
 ) -> dict[str, Any]:
     """Generate a bundle manifest.yaml from the recipe + installed tree."""
     files = _file_list(install_dir)
@@ -469,6 +476,7 @@ def generate_manifest(
         "meta": {
             "recipe_sha256": _sha256_file(recipe.recipe_dir / "recipe.yaml"),
             "built_at": datetime.now(timezone.utc).isoformat(),
+            "maintainer": maintainer or "Community",
         },
     }
     return manifest
@@ -477,17 +485,31 @@ def generate_manifest(
 # ── Staging & archiving ─────────────────────────────────────────
 
 
-def stage_bundle(install_dir: Path, manifest: dict[str, Any], staging_dir: Path) -> None:
-    """Copy the installed tree and manifest into a staging directory."""
+def stage_bundle(
+    install_dir: Path,
+    manifest: dict[str, Any],
+    staging_dir: Path,
+    recipe_dir: Path | None = None,
+) -> None:
+    """Copy the installed tree, manifest, and recipe into a staging directory."""
     # Copy entire install tree
     if install_dir.is_dir():
         shutil.copytree(install_dir, staging_dir, dirs_exist_ok=True)
 
     # Write manifest
-    manifest_dir = staging_dir / "share" / "libcvc-deps"
-    manifest_dir.mkdir(parents=True, exist_ok=True)
-    with open(manifest_dir / "manifest.yaml", "w") as f:
+    meta_dir = staging_dir / "share" / "libcvc-deps"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    with open(meta_dir / "manifest.yaml", "w") as f:
         yaml.dump(manifest, f, default_flow_style=False, sort_keys=False)
+
+    # Include the recipe that produced this package
+    if recipe_dir and recipe_dir.is_dir():
+        dest_recipe = meta_dir / "recipe"
+        dest_recipe.mkdir(parents=True, exist_ok=True)
+        exts = {".yaml", ".sh", ".ps1", ".cmake", ".patch"}
+        for f in sorted(recipe_dir.iterdir()):
+            if f.is_file() and f.suffix in exts:
+                shutil.copy2(f, dest_recipe / f.name)
 
 
 def _archive_tar_gz(staging_dir: Path, output: Path) -> str:
@@ -619,6 +641,7 @@ def pack_recipe(
     prefix: Path | None = None,
     output_dir: Path | None = None,
     keep_build_dir: bool = False,
+    maintainer: str = "",
 ) -> tuple[Path, str, int]:
     """Build + package a recipe. Returns (archive_path, sha256, size)."""
     from cvcpkg.platform import detect_arch
@@ -644,11 +667,12 @@ def pack_recipe(
         arch,
         ctx.config,
         ctx.link,
+        maintainer=maintainer,
     )
 
     staging = ctx.work_dir / "staging"
     staging.mkdir()
-    stage_bundle(ctx.install_dir, manifest, staging)
+    stage_bundle(ctx.install_dir, manifest, staging, recipe_dir=ctx.recipe.recipe_dir)
 
     archive_path, sha256, size = create_archive(
         staging,
@@ -774,14 +798,24 @@ def build_all(
 
 
 def find_recipes_dir() -> Path:
-    """Locate the recipes/ directory relative to the repo root."""
-    # Walk up from the cvcpkg package to find the repo
+    """Locate the recipes/ directory.
+
+    Search order:
+    1. Bundled recipes shipped inside the installed package.
+    2. Walk up from the package source to find a repo checkout.
+    3. Fallback: recipes/ in the current working directory.
+    """
+    # 1. Bundled recipes (installed via pip)
+    bundled = Path(__file__).resolve().parent / "recipes"
+    if bundled.is_dir() and (bundled / "_common").is_dir():
+        return bundled
+    # 2. Walk up from the cvcpkg package to find the repo
     pkg_dir = Path(__file__).resolve().parent
     for ancestor in pkg_dir.parents:
         candidate = ancestor / "recipes"
         if candidate.is_dir() and (candidate / "_common").is_dir():
             return candidate
-    # Fallback: CWD
+    # 3. Fallback: CWD
     candidate = Path.cwd() / "recipes"
     if candidate.is_dir():
         return candidate

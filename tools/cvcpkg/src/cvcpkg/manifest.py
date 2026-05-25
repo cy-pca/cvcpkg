@@ -176,6 +176,8 @@ class CatalogEntry:
     archive_url: str
     source_release: str  # libcvc-deps release that first shipped it
     required_deps: list[Dependency] = field(default_factory=list)
+    signature: str = ""  # base64url Ed25519 sig (empty = unsigned)
+    key_fingerprint: str = ""  # SHA-256 of signing public key
 
 
 # ── Release index (libcvc-deps-<ver>-index.yaml) ────────────────

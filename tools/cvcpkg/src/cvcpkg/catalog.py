@@ -120,6 +120,8 @@ def catalog_entries(
                     Dependency(name=d["name"], version=d.get("version", ""))
                     for d in b.get("required_deps", [])
                 ],
+                signature=b.get("signature", ""),
+                key_fingerprint=b.get("key_fingerprint", ""),
             )
         )
     return entries

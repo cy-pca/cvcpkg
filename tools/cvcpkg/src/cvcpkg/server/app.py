@@ -305,6 +305,8 @@ def create_app(
         arch: str = Query("", description="Target architecture"),
         build_type: str = Query("release"),
         link: str = Query("shared"),
+        signature: str = Query("", description="Base64url Ed25519 signature"),
+        key_fingerprint: str = Query("", description="SHA-256 fingerprint of signing key"),
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
         state = _get_state()
@@ -358,6 +360,8 @@ def create_app(
             "archive_url": archive_url,
             "published_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "yanked": False,
+            "signature": signature,
+            "key_fingerprint": key_fingerprint,
         }
         state.index.setdefault("bundles", []).append(bundle)
         state.save_index()
