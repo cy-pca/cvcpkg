@@ -1,4 +1,6 @@
 """cvcpkg — component package manager for libcvc-deps."""
 
-__version__ = "0.1.0a1"
+from importlib.metadata import version as _pkg_version
+
+__version__ = _pkg_version("cvcpkg")
 __supported_schemas__ = {1, 2, 3}
