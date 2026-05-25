@@ -103,7 +103,21 @@ jobs:
               *.tar.xz|*.txz)   tar xJf  "$f" --strip-components=1 -C "$dst" ;;
               *.tar.zst)        tar --zstd -xf "$f" --strip-components=1 -C "$dst" ;;
               *.tar)            tar xf   "$f" --strip-components=1 -C "$dst" ;;
-              *.zip)            unzip -o "$f" -d "$dst" ;;
+              *.zip)
+                # unzip has no --strip-components; extract to temp dir
+                # then move contents of the single top-level dir up.
+                local tmp
+                tmp=$(mktemp -d)
+                unzip -o "$f" -d "$tmp"
+                local top
+                top=$(find "$tmp" -mindepth 1 -maxdepth 1 -type d)
+                if [ "$(echo "$top" | wc -l)" -eq 1 ] && [ -d "$top" ]; then
+                  cp -a "$top"/. "$dst"/
+                else
+                  cp -a "$tmp"/. "$dst"/
+                fi
+                rm -rf "$tmp"
+                ;;
               *.7z)             7z x "$f" -o"$dst" -y ;;
               *) echo "Unknown archive format: $f" >&2; return 1 ;;
             esac
