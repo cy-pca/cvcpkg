@@ -57,7 +57,7 @@ _START_TIME = 0.0
 # ── Configurable limits ────────────────────────────────────────
 
 # Maximum upload size in bytes (default 512 MiB)
-MAX_UPLOAD_BYTES = int(os.environ.get("CVCPKG_MAX_UPLOAD_BYTES", str(512 * 1024 * 1024)))
+MAX_UPLOAD_BYTES = int(os.environ.get("CVCPKG_MAX_UPLOAD_BYTES", str(1024 * 1024 * 1024)))
 
 # Chunked upload chunk size (default 8 MiB)
 CHUNK_SIZE = int(os.environ.get("CVCPKG_CHUNK_SIZE", str(8 * 1024 * 1024)))
@@ -66,7 +66,7 @@ CHUNK_SIZE = int(os.environ.get("CVCPKG_CHUNK_SIZE", str(8 * 1024 * 1024)))
 UPLOAD_SESSION_TTL = int(os.environ.get("CVCPKG_UPLOAD_SESSION_TTL", "3600"))
 
 # Rate limiting: requests per minute for write endpoints
-RATE_LIMIT_RPM = int(os.environ.get("CVCPKG_RATE_LIMIT_RPM", "60"))
+RATE_LIMIT_RPM = int(os.environ.get("CVCPKG_RATE_LIMIT_RPM", "300"))
 
 # CORS allowed origins (comma-separated, empty = deny all cross-origin)
 CORS_ALLOWED_ORIGINS = [
