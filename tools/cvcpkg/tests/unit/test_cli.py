@@ -56,6 +56,7 @@ def test_validate_components():
         "gc",
         "build",
         "pack",
+        "publish",
         "recipes",
     ],
 )

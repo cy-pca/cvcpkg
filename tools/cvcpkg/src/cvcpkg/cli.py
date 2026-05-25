@@ -17,6 +17,8 @@ package manager for libcvc-deps.  It provides two main workflows:
     cvcpkg build-all --platform linux --config release --link shared --prefix ./prefix
     # Package into per-component archives for the catalog
     cvcpkg pack-all --platform linux --config release --link shared --output-dir ./dist
+    # Publish archives to the cvcpkg-server
+    cvcpkg publish dist/*.tar.gz --server https://pkg.tx.wtf --token cvctok_...
     # Inspect and validate recipes
     cvcpkg recipes --list
     cvcpkg recipes --show grpc
@@ -727,6 +729,139 @@ def push(archives: tuple[str, ...], dest: str) -> None:
         click.echo(f"  done ({p.stat().st_size:,} bytes)")
 
     click.echo(f"cvcpkg: pushed {len(archives)} archive(s).")
+
+
+# ── publish ─────────────────────────────────────────────────────
+
+
+@cli.command()
+@click.argument("archives", nargs=-1, required=True)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL (e.g. https://pkg.tx.wtf).  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token with publisher or admin role.  [env: CVCPKG_TOKEN]",
+)
+@click.option(
+    "--release-tag",
+    default="",
+    help="Release tag (e.g. 'v1.3.0').  Empty for live builds.",
+)
+def publish(
+    archives: tuple[str, ...],
+    server: str,
+    token: str,
+    release_tag: str,
+) -> None:
+    """Publish bundle archive(s) to a cvcpkg-server via its REST API.
+
+    Reads the embedded manifest.yaml from each archive to extract
+    component metadata (name, version, platform, arch, config, link),
+    then uploads the archive to the server's /v1/publish endpoint.
+
+    Archives are produced by ``cvcpkg pack``.
+
+    \b
+    Examples:
+      cvcpkg publish dist/*.tar.gz --server https://pkg.tx.wtf --token cvctok_...
+      CVCPKG_SERVER_URL=https://pkg.tx.wtf CVCPKG_TOKEN=cvctok_... cvcpkg publish dist/*.tar.gz
+    """
+    import io
+    import tarfile
+    import zipfile
+
+    import httpx
+
+    base = server.rstrip("/")
+    headers = {"Authorization": f"Bearer {token}"}
+    ok = 0
+
+    for archive in archives:
+        p = Path(archive)
+        if not p.is_file():
+            raise click.ClickException(f"file not found: {archive}")
+
+        # Extract manifest from archive
+        manifest = None
+        raw = p.read_bytes()
+        try:
+            if p.name.endswith(".zip"):
+                with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+                    for entry in zf.namelist():
+                        if entry.endswith("manifest.yaml"):
+                            manifest = yaml.safe_load(zf.read(entry))
+                            break
+            else:
+                with tarfile.open(fileobj=io.BytesIO(raw), mode="r:*") as tf:
+                    for member in tf.getmembers():
+                        if member.name.endswith("manifest.yaml"):
+                            f = tf.extractfile(member)
+                            if f:
+                                manifest = yaml.safe_load(f.read())
+                            break
+        except (tarfile.TarError, zipfile.BadZipFile) as exc:
+            raise click.ClickException(f"{p.name}: cannot read archive: {exc}")
+
+        if not manifest:
+            raise click.ClickException(
+                f"{p.name}: no manifest.yaml found — is this a cvcpkg archive?"
+            )
+
+        bundle = manifest.get("bundle", {})
+        name = bundle.get("name", "")
+        version = bundle.get("version", "")
+        plat = bundle.get("platform", "")
+        arch = bundle.get("arch", "")
+        build_type = bundle.get("config", "release")
+        link = bundle.get("link", "shared")
+        recipe_version = manifest.get("meta", {}).get("recipe_sha256", "")
+
+        if not name or not version:
+            raise click.ClickException(
+                f"{p.name}: manifest missing name or version"
+            )
+
+        click.echo(
+            f"cvcpkg: publishing {name}=={version} "
+            f"({plat}/{arch}/{build_type}/{link}) -> {base}"
+        )
+
+        with httpx.Client(timeout=300) as client:
+            resp = client.post(
+                f"{base}/v1/publish",
+                params={
+                    "name": name,
+                    "version": version,
+                    "platform": plat,
+                    "arch": arch,
+                    "build_type": build_type,
+                    "link": link,
+                    "release_tag": release_tag,
+                    "recipe_version": recipe_version,
+                },
+                files={"file": (p.name, raw, "application/octet-stream")},
+                headers=headers,
+            )
+
+        if resp.status_code == 200:
+            data = resp.json()
+            click.echo(f"  published: sha256={data['sha256']}")
+            ok += 1
+        elif resp.status_code == 409:
+            click.echo(f"  skipped (already published): {resp.json().get('detail', '')}")
+        else:
+            raise click.ClickException(
+                f"publish failed ({resp.status_code}): {resp.text}"
+            )
+
+    click.echo(f"cvcpkg: published {ok}/{len(archives)} archive(s).")
 
 
 # ── add ─────────────────────────────────────────────────────────
