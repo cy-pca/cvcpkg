@@ -2,339 +2,51 @@
 
 Serves a self-contained single-page index at ``/`` that displays
 published packages, supports sorting and filtering, and links to
-the API docs.
+the API docs.  Uses Bulma CSS for styling.
 """
 
 from __future__ import annotations
 
 from cvcpkg import __version__
 
+# Minimal overrides on top of Bulma's dark theme
 _CSS = r"""
-:root {
-  --bg: #0d1117;
-  --surface: #161b22;
-  --border: #30363d;
-  --text: #e6edf3;
-  --text-muted: #8b949e;
-  --accent: #58a6ff;
-  --accent-hover: #79c0ff;
-  --green: #3fb950;
-  --yellow: #d29922;
-  --red: #f85149;
-  --radius: 8px;
-}
+html { background-color: #0a0a0a; }
 
-* { margin: 0; padding: 0; box-sizing: border-box; }
-
-body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-  background: var(--bg);
-  color: var(--text);
-  line-height: 1.6;
-  min-height: 100vh;
-}
-
-a { color: var(--accent); text-decoration: none; }
-a:hover { color: var(--accent-hover); text-decoration: underline; }
-
-.container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
-
-/* ── Header ─── */
-header {
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-  padding: 20px 0;
-}
-
-.header-inner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 16px;
-}
-
-.logo {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+.hero-gradient {
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
 }
 
 .logo-icon {
-  width: 40px; height: 40px;
-  background: linear-gradient(135deg, var(--accent), var(--green));
-  border-radius: var(--radius);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 20px; font-weight: 700; color: var(--bg);
-}
-
-.logo h1 {
-  font-size: 24px;
-  font-weight: 600;
-}
-
-.logo .version {
-  font-size: 13px;
-  color: var(--text-muted);
-  font-weight: 400;
-  margin-left: 4px;
-}
-
-.header-links {
-  display: flex;
-  gap: 20px;
-  font-size: 14px;
-}
-
-/* ── Stats bar ─── */
-.stats-bar {
-  display: flex;
-  gap: 24px;
-  padding: 16px 0;
-  border-bottom: 1px solid var(--border);
-  flex-wrap: wrap;
-}
-
-.stat {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.stat-value {
-  font-size: 22px;
-  font-weight: 600;
-  color: var(--accent);
-}
-
-.stat-label {
-  font-size: 12px;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-/* ── Description section ─── */
-.description {
-  padding: 24px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.description p {
-  color: var(--text-muted);
-  font-size: 15px;
-  max-width: 800px;
-  line-height: 1.7;
-}
-
-.description p strong { color: var(--text); }
-
-/* ── Controls ─── */
-.controls {
-  display: flex;
-  gap: 12px;
-  padding: 20px 0;
-  flex-wrap: wrap;
-  align-items: center;
-}
-
-.search-box {
-  flex: 1;
-  min-width: 200px;
-  max-width: 400px;
-  position: relative;
-}
-
-.search-box input {
-  width: 100%;
-  padding: 8px 12px 8px 36px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  color: var(--text);
-  font-size: 14px;
-  outline: none;
-  transition: border-color 0.2s;
-}
-
-.search-box input:focus { border-color: var(--accent); }
-
-.search-box::before {
-  content: "⌕";
-  position: absolute;
-  left: 10px; top: 50%;
-  transform: translateY(-50%);
-  color: var(--text-muted);
-  font-size: 16px;
-  pointer-events: none;
-}
-
-select, .btn {
-  padding: 8px 14px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  color: var(--text);
-  font-size: 14px;
-  cursor: pointer;
-  outline: none;
-  transition: border-color 0.2s;
-}
-
-select:focus, .btn:focus { border-color: var(--accent); }
-select:hover, .btn:hover { border-color: var(--text-muted); }
-
-.sort-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-muted);
-  font-size: 13px;
-}
-
-/* ── Package table ─── */
-.pkg-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin-bottom: 40px;
-}
-
-.pkg-table th {
-  text-align: left;
-  padding: 10px 12px;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--text-muted);
-  border-bottom: 2px solid var(--border);
-  cursor: pointer;
-  user-select: none;
-  white-space: nowrap;
-}
-
-.pkg-table th:hover { color: var(--accent); }
-.pkg-table th.sorted { color: var(--accent); }
-.pkg-table th .arrow { margin-left: 4px; font-size: 10px; }
-
-.pkg-table td {
-  padding: 12px;
-  border-bottom: 1px solid var(--border);
-  font-size: 14px;
+  width: 48px; height: 48px;
+  background: linear-gradient(135deg, #3273dc, #48c774);
+  border-radius: 10px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 24px; font-weight: 700; color: #fff;
+  margin-right: 12px;
   vertical-align: middle;
 }
 
-.pkg-table tr:hover td { background: rgba(88, 166, 255, 0.04); }
-
-.pkg-name {
-  font-weight: 600;
-  color: var(--accent);
-}
-
-.pkg-version {
-  font-family: "SFMono-Regular", "Cascadia Code", "Fira Code", monospace;
-  font-size: 13px;
-  background: rgba(88, 166, 255, 0.1);
-  padding: 2px 8px;
-  border-radius: 4px;
-}
-
-.pkg-platform {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.platform-badge {
-  font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-weight: 500;
-}
-
-.platform-badge.linux { background: rgba(63, 185, 80, 0.15); color: var(--green); }
-.platform-badge.darwin, .platform-badge.macos { background: rgba(210, 153, 34, 0.15); color: var(--yellow); }
-.platform-badge.windows, .platform-badge.win64 { background: rgba(88, 166, 255, 0.15); color: var(--accent); }
-.platform-badge.other { background: rgba(139, 148, 158, 0.15); color: var(--text-muted); }
-
-.badge-yanked {
-  font-size: 11px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: rgba(248, 81, 73, 0.15);
-  color: var(--red);
-  font-weight: 500;
-  margin-left: 6px;
-}
-
-.pkg-size {
-  font-family: monospace;
-  color: var(--text-muted);
-  font-size: 13px;
-}
-
-.pkg-date {
-  color: var(--text-muted);
-  font-size: 13px;
-  white-space: nowrap;
-}
-
-/* ── Empty state ─── */
-.empty-state {
+.stat-box {
   text-align: center;
-  padding: 80px 20px;
-  color: var(--text-muted);
+  padding: 1.25rem 1rem;
 }
 
-.empty-state .icon { font-size: 48px; margin-bottom: 16px; }
-.empty-state h2 { font-size: 20px; color: var(--text); margin-bottom: 8px; }
-.empty-state p { max-width: 500px; margin: 0 auto; font-size: 14px; }
-.empty-state code {
-  display: inline-block;
-  margin-top: 16px;
-  padding: 8px 16px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  font-size: 13px;
-  color: var(--green);
-}
+.stat-box .title { margin-bottom: 0.25rem !important; }
 
-/* ── Footer ─── */
-footer {
-  border-top: 1px solid var(--border);
-  padding: 24px 0;
-  text-align: center;
-  color: var(--text-muted);
-  font-size: 13px;
-}
+th.is-sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+th.is-sortable:hover { color: #3273dc; }
+th.is-sorted { color: #3273dc; }
 
-footer a { color: var(--text-muted); }
-footer a:hover { color: var(--accent); }
+.sort-arrow { font-size: 0.65em; margin-left: 4px; }
 
-/* ── Loading ─── */
-.loading {
-  text-align: center;
-  padding: 40px;
-  color: var(--text-muted);
-}
+.platform-tag.linux { background-color: rgba(72, 199, 116, 0.15); color: #48c774; }
+.platform-tag.darwin { background-color: rgba(255, 221, 87, 0.15); color: #ffdd57; }
+.platform-tag.windows { background-color: rgba(50, 115, 220, 0.15); color: #3273dc; }
 
-.spinner {
-  display: inline-block;
-  width: 24px; height: 24px;
-  border: 3px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
+.empty-hero { padding: 4rem 1rem; }
 
-@keyframes spin { to { transform: rotate(360deg); } }
-
-/* ── Responsive ─── */
-@media (max-width: 768px) {
-  .pkg-table th:nth-child(n+5),
-  .pkg-table td:nth-child(n+5) { display: none; }
-  .header-inner { flex-direction: column; align-items: flex-start; }
-}
+.footer { padding: 2rem 1.5rem; }
 """
 
 _JS = r"""
@@ -352,7 +64,7 @@ async function init() {
     render();
   } catch (err) {
     document.getElementById('pkg-body').innerHTML =
-      '<tr><td colspan="7" class="empty-state"><p>Failed to load packages.</p></td></tr>';
+      '<tr><td colspan="7" class="has-text-centered has-text-grey-light">Failed to load packages.</td></tr>';
   }
 }
 
@@ -366,7 +78,6 @@ function updateStats() {
   document.getElementById('stat-platforms').textContent = platforms.size;
   document.getElementById('stat-size').textContent = fmtSizeLarge(totalSize);
 
-  // Populate platform filter
   const sel = document.getElementById('platform-filter');
   const existing = new Set(Array.from(sel.options).map(o => o.value));
   [...platforms].sort().forEach(p => {
@@ -382,7 +93,6 @@ function updateStats() {
 function render() {
   let pkgs = [...allPackages];
 
-  // Filter
   if (searchTerm) {
     const q = searchTerm.toLowerCase();
     pkgs = pkgs.filter(p =>
@@ -396,7 +106,6 @@ function render() {
     pkgs = pkgs.filter(p => p.platform === platformFilter);
   }
 
-  // Sort
   pkgs.sort((a, b) => {
     let va = a[currentSort.key] || '';
     let vb = b[currentSort.key] || '';
@@ -416,18 +125,28 @@ function render() {
     return 0;
   });
 
+  document.getElementById('pkg-count').textContent =
+    pkgs.length + (pkgs.length === 1 ? ' result' : ' results');
+
   const tbody = document.getElementById('pkg-body');
   if (pkgs.length === 0) {
+    const hasFilter = searchTerm || platformFilter;
     tbody.innerHTML = `
       <tr><td colspan="7">
-        <div class="empty-state">
-          <div class="icon">&#x1F4E6;</div>
-          <h2>No packages${searchTerm || platformFilter ? ' match your filter' : ' published yet'}</h2>
-          <p>${searchTerm || platformFilter
-            ? 'Try adjusting your search or platform filter.'
-            : 'Publish your first package to see it here.'}</p>
-          ${!searchTerm && !platformFilter
-            ? '<code>cvcpkg publish --server https://pkg.tx.wtf &lt;archive&gt;</code>'
+        <div class="empty-hero has-text-centered">
+          <span class="icon is-large has-text-grey-light">
+            <i class="fas fa-box-open fa-3x"></i>
+          </span>
+          <p class="title is-5 has-text-grey-light mt-4">
+            ${hasFilter ? 'No packages match your filter' : 'No packages published yet'}
+          </p>
+          <p class="subtitle is-6 has-text-grey">
+            ${hasFilter
+              ? 'Try adjusting your search or platform filter.'
+              : 'Publish your first package to see it here.'}
+          </p>
+          ${!hasFilter
+            ? '<pre class="has-background-dark has-text-success p-3 mt-3" style="display:inline-block;border-radius:6px;">cvcpkg publish --server https://pkg.tx.wtf &lt;archive&gt;</pre>'
             : ''}
         </div>
       </td></tr>`;
@@ -436,26 +155,26 @@ function render() {
 
   tbody.innerHTML = pkgs.map(p => `
     <tr>
-      <td><span class="pkg-name">${esc(p.name)}</span>${
-        p.yanked ? '<span class="badge-yanked">yanked</span>' : ''
-      }</td>
-      <td><span class="pkg-version">${esc(p.version)}</span></td>
-      <td>${platformBadge(p.platform)}</td>
-      <td>${esc(p.arch)}</td>
-      <td>${esc(p.build_type)}/${esc(p.link)}</td>
-      <td class="pkg-size">${fmtSize(p.size_bytes)}</td>
-      <td class="pkg-date">${fmtDate(p.published_at)}</td>
+      <td>
+        <strong class="has-text-link">${esc(p.name)}</strong>
+        ${p.yanked ? '<span class="tag is-danger is-light is-small ml-2">yanked</span>' : ''}
+      </td>
+      <td><code>${esc(p.version)}</code></td>
+      <td>${platformTag(p.platform)}</td>
+      <td><span class="is-size-7">${esc(p.arch)}</span></td>
+      <td><span class="is-size-7">${esc(p.build_type)}/${esc(p.link)}</span></td>
+      <td><span class="is-family-monospace is-size-7 has-text-grey-light">${fmtSize(p.size_bytes)}</span></td>
+      <td><span class="is-size-7 has-text-grey-light">${fmtDate(p.published_at)}</span></td>
     </tr>
   `).join('');
 
-  // Update sort arrows
-  document.querySelectorAll('.pkg-table th[data-key]').forEach(th => {
-    const arrow = th.querySelector('.arrow');
+  document.querySelectorAll('th.is-sortable').forEach(th => {
+    const arrow = th.querySelector('.sort-arrow');
     if (th.dataset.key === currentSort.key) {
-      th.classList.add('sorted');
-      arrow.textContent = currentSort.dir === 'asc' ? '▲' : '▼';
+      th.classList.add('is-sorted');
+      arrow.textContent = currentSort.dir === 'asc' ? ' \u25B2' : ' \u25BC';
     } else {
-      th.classList.remove('sorted');
+      th.classList.remove('is-sorted');
       arrow.textContent = '';
     }
   });
@@ -470,21 +189,20 @@ function sortBy(key) {
   render();
 }
 
-function platformBadge(platform) {
-  if (!platform) return '<span class="text-muted">—</span>';
-  let cls = 'other';
+function platformTag(platform) {
+  if (!platform) return '<span class="has-text-grey">\u2014</span>';
+  let cls = '';
   const lp = platform.toLowerCase();
   if (lp.includes('linux')) cls = 'linux';
   else if (lp.includes('darwin') || lp.includes('macos')) cls = 'darwin';
   else if (lp.includes('win')) cls = 'windows';
-  return `<span class="platform-badge ${cls}">${esc(platform)}</span>`;
+  return '<span class="tag is-rounded platform-tag ' + cls + '">' + esc(platform) + '</span>';
 }
 
 function fmtSize(bytes) {
-  if (!bytes) return '—';
+  if (!bytes) return '\u2014';
   const units = ['B', 'KB', 'MB', 'GB'];
-  let i = 0;
-  let sz = bytes;
+  let i = 0, sz = bytes;
   while (sz >= 1024 && i < units.length - 1) { sz /= 1024; i++; }
   return sz.toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
 }
@@ -498,7 +216,7 @@ function fmtSizeLarge(bytes) {
 }
 
 function fmtDate(iso) {
-  if (!iso) return '—';
+  if (!iso) return '\u2014';
   const d = new Date(iso);
   return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 }
@@ -510,8 +228,15 @@ function esc(s) {
   return div.innerHTML;
 }
 
-// Event listeners
 document.addEventListener('DOMContentLoaded', () => {
+  const burger = document.querySelector('.navbar-burger');
+  if (burger) {
+    burger.addEventListener('click', () => {
+      burger.classList.toggle('is-active');
+      document.getElementById(burger.dataset.target).classList.toggle('is-active');
+    });
+  }
+
   document.getElementById('search').addEventListener('input', e => {
     searchTerm = e.target.value;
     render();
@@ -522,7 +247,7 @@ document.addEventListener('DOMContentLoaded', () => {
     render();
   });
 
-  document.querySelectorAll('.pkg-table th[data-key]').forEach(th => {
+  document.querySelectorAll('th.is-sortable').forEach(th => {
     th.addEventListener('click', () => sortBy(th.dataset.key));
   });
 
@@ -534,96 +259,170 @@ document.addEventListener('DOMContentLoaded', () => {
 def landing_html() -> str:
     """Return the complete HTML for the landing page."""
     return f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark" class="has-background-black-bis">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>cvcpkg &mdash; Package Archive</title>
+  <title>cvcpkg \u2014 Package Archive</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.4/css/bulma.min.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
+        integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA=="
+        crossorigin="anonymous" referrerpolicy="no-referrer" />
   <style>{_CSS}</style>
 </head>
-<body>
+<body class="has-background-black-bis has-text-light">
 
-<header>
-  <div class="container header-inner">
-    <div class="logo">
-      <div class="logo-icon">C</div>
-      <h1>cvcpkg <span class="version">v{__version__}</span></h1>
-    </div>
-    <nav class="header-links">
-      <a href="/docs">API Docs</a>
-      <a href="/v1/catalog">Catalog JSON</a>
-      <a href="https://github.com/transfix/libcvc-deps">GitHub</a>
-    </nav>
-  </div>
-</header>
-
-<main class="container">
-  <div class="stats-bar">
-    <div class="stat">
-      <span class="stat-value" id="stat-packages">—</span>
-      <span class="stat-label">Packages</span>
-    </div>
-    <div class="stat">
-      <span class="stat-value" id="stat-builds">—</span>
-      <span class="stat-label">Builds</span>
-    </div>
-    <div class="stat">
-      <span class="stat-value" id="stat-platforms">—</span>
-      <span class="stat-label">Platforms</span>
-    </div>
-    <div class="stat">
-      <span class="stat-value" id="stat-size">—</span>
-      <span class="stat-label">Total Size</span>
-    </div>
-  </div>
-
-  <div class="description">
-    <p>
-      <strong>cvcpkg</strong> is a cross-platform, language-agnostic package archive
-      built for the scientific computing community.  It provides pre-built binary
-      packages for C/C++ libraries across Linux, macOS, and Windows.  Each
-      <strong>cvcpkg release</strong> defines a curated, tested set of recipes
-      that is treated as a long-term support snapshot &mdash; guaranteeing
-      reproducible downstream builds.  Updated and community-contributed recipes
-      are made available live while we harden the next release.
-    </p>
-  </div>
-
-  <div class="controls">
-    <div class="search-box">
-      <input type="text" id="search" placeholder="Search packages..." />
-    </div>
-    <div class="sort-group">
-      <label for="platform-filter">Platform:</label>
-      <select id="platform-filter">
-        <option value="">All platforms</option>
-      </select>
-    </div>
-  </div>
-
-  <table class="pkg-table">
-    <thead>
-      <tr>
-        <th data-key="name">Name <span class="arrow"></span></th>
-        <th data-key="version">Version <span class="arrow"></span></th>
-        <th data-key="platform">Platform <span class="arrow"></span></th>
-        <th data-key="arch">Arch <span class="arrow"></span></th>
-        <th data-key="build_type">Build <span class="arrow"></span></th>
-        <th data-key="size_bytes">Size <span class="arrow"></span></th>
-        <th data-key="published_at">Published <span class="arrow"></span></th>
-      </tr>
-    </thead>
-    <tbody id="pkg-body">
-      <tr><td colspan="7" class="loading"><div class="spinner"></div></td></tr>
-    </tbody>
-  </table>
-</main>
-
-<footer>
+<!-- Navbar -->
+<nav class="navbar is-dark" role="navigation" aria-label="main navigation">
   <div class="container">
+    <div class="navbar-brand">
+      <a class="navbar-item" href="/">
+        <span class="logo-icon">C</span>
+        <strong class="is-size-4">cvcpkg</strong>
+        <span class="tag is-dark is-rounded ml-2">v{__version__}</span>
+      </a>
+      <a role="button" class="navbar-burger" aria-label="menu" aria-expanded="false" data-target="navMenu">
+        <span aria-hidden="true"></span>
+        <span aria-hidden="true"></span>
+        <span aria-hidden="true"></span>
+        <span aria-hidden="true"></span>
+      </a>
+    </div>
+    <div id="navMenu" class="navbar-menu">
+      <div class="navbar-end">
+        <a class="navbar-item" href="/docs">
+          <span class="icon"><i class="fas fa-book"></i></span>
+          <span>API Docs</span>
+        </a>
+        <a class="navbar-item" href="/v1/catalog">
+          <span class="icon"><i class="fas fa-list"></i></span>
+          <span>Catalog</span>
+        </a>
+        <a class="navbar-item" href="https://github.com/transfix/libcvc-deps">
+          <span class="icon"><i class="fab fa-github"></i></span>
+          <span>GitHub</span>
+        </a>
+      </div>
+    </div>
+  </div>
+</nav>
+
+<!-- Hero -->
+<section class="hero hero-gradient is-medium">
+  <div class="hero-body">
+    <div class="container">
+      <p class="title is-2 has-text-white">
+        <span class="icon is-large mr-2"><i class="fas fa-cubes"></i></span>
+        cvcpkg
+      </p>
+      <p class="subtitle is-5 has-text-grey-lighter" style="max-width: 740px;">
+        A cross-platform, language-agnostic binary package archive for the
+        scientific computing community. Pre-built C/C++ libraries for Linux,
+        macOS, and Windows \u2014 with curated LTS releases for reproducible
+        downstream builds.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- Stats -->
+<section class="section pt-4 pb-4 has-background-black-ter">
+  <div class="container">
+    <div class="columns is-mobile is-multiline">
+      <div class="column is-3-desktop is-6-mobile">
+        <div class="stat-box">
+          <p class="title is-3 has-text-link" id="stat-packages">\u2014</p>
+          <p class="heading has-text-grey-light">Packages</p>
+        </div>
+      </div>
+      <div class="column is-3-desktop is-6-mobile">
+        <div class="stat-box">
+          <p class="title is-3 has-text-info" id="stat-builds">\u2014</p>
+          <p class="heading has-text-grey-light">Builds</p>
+        </div>
+      </div>
+      <div class="column is-3-desktop is-6-mobile">
+        <div class="stat-box">
+          <p class="title is-3 has-text-success" id="stat-platforms">\u2014</p>
+          <p class="heading has-text-grey-light">Platforms</p>
+        </div>
+      </div>
+      <div class="column is-3-desktop is-6-mobile">
+        <div class="stat-box">
+          <p class="title is-3 has-text-warning" id="stat-size">\u2014</p>
+          <p class="heading has-text-grey-light">Total Size</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Package index -->
+<section class="section has-background-black-bis">
+  <div class="container">
+    <div class="columns is-vcentered mb-4">
+      <div class="column is-5">
+        <div class="field">
+          <div class="control has-icons-left">
+            <input class="input is-dark" type="text" id="search"
+                   placeholder="Search packages..." />
+            <span class="icon is-left">
+              <i class="fas fa-search"></i>
+            </span>
+          </div>
+        </div>
+      </div>
+      <div class="column is-3">
+        <div class="field">
+          <div class="control">
+            <div class="select is-dark is-fullwidth">
+              <select id="platform-filter">
+                <option value="">All platforms</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="column is-4 has-text-right">
+        <span class="is-size-7 has-text-grey-light" id="pkg-count">&nbsp;</span>
+      </div>
+    </div>
+
+    <div class="table-container">
+      <table class="table is-fullwidth is-hoverable is-dark is-striped">
+        <thead>
+          <tr>
+            <th class="is-sortable" data-key="name">Name <span class="sort-arrow"></span></th>
+            <th class="is-sortable" data-key="version">Version <span class="sort-arrow"></span></th>
+            <th class="is-sortable" data-key="platform">Platform <span class="sort-arrow"></span></th>
+            <th class="is-sortable" data-key="arch">Arch <span class="sort-arrow"></span></th>
+            <th class="is-sortable" data-key="build_type">Build <span class="sort-arrow"></span></th>
+            <th class="is-sortable" data-key="size_bytes">Size <span class="sort-arrow"></span></th>
+            <th class="is-sortable" data-key="published_at">Published <span class="sort-arrow"></span></th>
+          </tr>
+        </thead>
+        <tbody id="pkg-body">
+          <tr>
+            <td colspan="7" class="has-text-centered py-6">
+              <span class="icon is-large has-text-link">
+                <i class="fas fa-spinner fa-spin fa-2x"></i>
+              </span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer class="footer has-background-black-ter has-text-grey-light">
+  <div class="content has-text-centered">
     <p>
-      <a href="https://github.com/transfix/libcvc-deps">cvcpkg</a> &mdash;
-      cross-platform binary package archive for scientific computing
+      <a href="https://github.com/transfix/libcvc-deps" class="has-text-grey-light">
+        <span class="icon"><i class="fab fa-github"></i></span> cvcpkg
+      </a>
+      \u2014 cross-platform binary package archive for scientific computing
     </p>
   </div>
 </footer>
@@ -631,9 +430,3 @@ def landing_html() -> str:
 <script>{_JS}</script>
 </body>
 </html>"""
-
-
-class HealthResponse:
-    """Unused — for type-checking landing page only."""
-
-    pass
