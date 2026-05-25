@@ -1,0 +1,60 @@
+# Exercises the source-build fallback path in `cvcpkg install`.
+#
+# Runs on merge to master (and on PRs touching the relevant code for
+# early feedback).  Builds zlib from source using the real recipe when
+# no prebuilt binary is available, verifying the full fallback chain.
+
+name: Source-fallback integration tests
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'tools/cvcpkg/src/cvcpkg/installer.py'
+      - 'tools/cvcpkg/src/cvcpkg/builder.py'
+      - 'tools/cvcpkg/src/cvcpkg/cli.py'
+      - 'recipes/**'
+      - 'tools/cvcpkg/tests/integration/test_source_fallback.py'
+      - '.github/workflows/source-fallback-ci.yml'
+  pull_request:
+    paths:
+      - 'tools/cvcpkg/src/cvcpkg/installer.py'
+      - 'tools/cvcpkg/src/cvcpkg/builder.py'
+      - 'tools/cvcpkg/src/cvcpkg/cli.py'
+      - 'recipes/**'
+      - 'tools/cvcpkg/tests/integration/test_source_fallback.py'
+      - '.github/workflows/source-fallback-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  source-fallback:
+    name: Source fallback (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends cmake ninja-build gcc g++
+
+      - name: Install cvcpkg
+        working-directory: tools/cvcpkg
+        run: pip install .
+
+      - name: Run source-fallback integration tests
+        working-directory: tools/cvcpkg
+        run: |
+          pip install pytest pyyaml
+          python -m pytest tests/integration/test_source_fallback.py -v -m source_fallback
