@@ -28,6 +28,7 @@ permissions:
 jobs:
   test:
     name: Test (Python ${{ matrix.python }}, ${{ matrix.os }})
+    if: github.event_name == 'push' || github.actor == 'transfix'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -83,6 +84,7 @@ jobs:
 
   validate:
     name: Validate schemas & recipes
+    if: github.event_name == 'push' || github.actor == 'transfix'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -99,6 +101,7 @@ jobs:
 
   lint:
     name: Lint & type-check
+    if: github.event_name == 'push' || github.actor == 'transfix'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
