@@ -51,6 +51,13 @@ def server_cli() -> None:
     help="Require authentication even for read endpoints.",
 )
 @click.option("--workers", default=1, type=int, help="Number of uvicorn workers.")
+@click.option(
+    "--database-url",
+    default="",
+    envvar="CVCPKG_DATABASE_URL",
+    help="PostgreSQL URL (e.g. postgresql+asyncpg://user:pass@host/db). "
+    "Enables DB backend instead of YAML files.",
+)
 def run(
     state_dir: str,
     host: str,
@@ -58,6 +65,7 @@ def run(
     storage: str,
     require_auth_reads: bool,
     workers: int,
+    database_url: str,
 ) -> None:
     """Start the cvcpkg package server."""
     import os
@@ -67,6 +75,8 @@ def run(
         os.environ["CVCPKG_SERVER_STORAGE_URI"] = storage
     if require_auth_reads:
         os.environ["CVCPKG_SERVER_REQUIRE_AUTH_READS"] = "1"
+    if database_url:
+        os.environ["CVCPKG_DATABASE_URL"] = database_url
 
     try:
         import uvicorn
@@ -78,6 +88,14 @@ def run(
 
     click.echo(f"cvcpkg-server: starting on {host}:{port}")
     click.echo(f"cvcpkg-server: state directory: {Path(state_dir).resolve()}")
+    if database_url:
+        # Mask the password in log output
+        import re
+
+        masked = re.sub(r"://([^:]+):([^@]+)@", r"://\1:***@", database_url)
+        click.echo(f"cvcpkg-server: database: {masked}")
+    else:
+        click.echo("cvcpkg-server: backend: YAML files")
     click.echo(f"cvcpkg-server: docs at http://{host}:{port}/docs")
 
     uvicorn.run(

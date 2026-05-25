@@ -8,6 +8,9 @@ All mutating endpoints require a bearer token with an appropriate
 role.  Read-only endpoints (GET /v1/catalog, GET /v1/packages,
 GET /v1/download) are unauthenticated by default but can be locked
 down via configuration.
+
+When ``CVCPKG_DATABASE_URL`` is set the server uses PostgreSQL for
+persistent state; otherwise it falls back to YAML files on disk.
 """
 
 from __future__ import annotations
@@ -95,6 +98,10 @@ class ServerState:
 
 # Singleton — set by create_app() or lifespan
 _state: ServerState | None = None
+_use_db: bool = False
+_db_tokens = None  # DbTokenStore when using DB backend
+_db_audit = None   # DbAuditLog when using DB backend
+_db_packages = None  # DbPackageIndex when using DB backend
 
 
 def _get_state() -> ServerState:
@@ -119,12 +126,15 @@ def _extract_token(authorization: str | None = Header(None)) -> str | None:
 def require_role(*roles: TokenRole):
     """FastAPI dependency that requires one of the given roles."""
 
-    def _dep(authorization: str | None = Header(None)) -> TokenRecord:
+    async def _dep(authorization: str | None = Header(None)) -> TokenRecord:
         state = _get_state()
         raw = _extract_token(authorization)
         if raw is None:
             raise HTTPException(401, "missing Authorization header")
-        record = state.tokens.verify(raw)
+        if _use_db:
+            record = await _db_tokens.verify(raw)
+        else:
+            record = state.tokens.verify(raw)
         if record is None:
             raise HTTPException(401, "invalid or expired token")
         if record.role not in roles:
@@ -137,7 +147,7 @@ def require_role(*roles: TokenRole):
     return _dep
 
 
-def optional_reader_auth(authorization: str | None = Header(None)) -> TokenRecord | None:
+async def optional_reader_auth(authorization: str | None = Header(None)) -> TokenRecord | None:
     """For read endpoints: enforce auth only if configured."""
     state = _get_state()
     if not state.require_auth_for_reads:
@@ -145,7 +155,10 @@ def optional_reader_auth(authorization: str | None = Header(None)) -> TokenRecor
     raw = _extract_token(authorization)
     if raw is None:
         raise HTTPException(401, "this server requires authentication for reads")
-    record = state.tokens.verify(raw)
+    if _use_db:
+        record = await _db_tokens.verify(raw)
+    else:
+        record = state.tokens.verify(raw)
     if record is None:
         raise HTTPException(401, "invalid or expired token")
     return record
@@ -163,16 +176,40 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        global _state, _START_TIME
+        global _state, _START_TIME, _use_db, _db_tokens, _db_audit, _db_packages
         _START_TIME = time.monotonic()
         sd = state_dir or Path(os.environ.get("CVCPKG_SERVER_STATE_DIR", "/var/lib/cvcpkg-server"))
-        _state = ServerState(
-            sd,
-            storage_uri=storage_uri,
-            require_auth_for_reads=require_auth_for_reads,
-        )
-        yield
-        _state = None
+
+        db_url = os.environ.get("CVCPKG_DATABASE_URL", "")
+        if db_url:
+            from cvcpkg.server.db import create_tables, dispose_engine, init_db
+            from cvcpkg.server.db_stores import DbAuditLog, DbPackageIndex, DbTokenStore
+
+            init_db(db_url)
+            await create_tables()
+            _db_tokens = DbTokenStore(sd)
+            _db_audit = DbAuditLog()
+            _db_packages = DbPackageIndex()
+            _use_db = True
+            # Still need ServerState for archives dir and storage_uri
+            _state = ServerState(
+                sd,
+                storage_uri=storage_uri,
+                require_auth_for_reads=require_auth_for_reads,
+            )
+            yield
+            await dispose_engine()
+            _use_db = False
+            _state = None
+        else:
+            _use_db = False
+            _state = ServerState(
+                sd,
+                storage_uri=storage_uri,
+                require_auth_for_reads=require_auth_for_reads,
+            )
+            yield
+            _state = None
 
     app = FastAPI(
         title="cvcpkg-server",
@@ -186,12 +223,18 @@ def create_app(
     @app.get("/healthz", response_model=HealthResponse, tags=["health"])
     async def healthz():
         state = _get_state()
+        if _use_db:
+            pkgs, _ = await _db_packages.get_bundles(limit=0, offset=0)
+            cat = await _db_packages.get_catalog_dict()
+            pkg_count = len(cat.get("bundles", []))
+        else:
+            pkg_count = len(state.index.get("bundles", []))
         return HealthResponse(
             version=__version__,
             storage_scheme=(
                 state.storage_uri.split("://")[0] if "://" in state.storage_uri else "file"
             ),
-            packages_count=len(state.index.get("bundles", [])),
+            packages_count=pkg_count,
             uptime_seconds=round(time.monotonic() - _START_TIME, 2),
         )
 
@@ -199,6 +242,12 @@ def create_app(
 
     @app.get("/v1/catalog", response_model=CatalogResponse, tags=["catalog"])
     async def get_catalog(_auth: None = Depends(optional_reader_auth)):
+        if _use_db:
+            cat = await _db_packages.get_catalog_dict()
+            return CatalogResponse(
+                revision=cat.get("revision", 0),
+                bundles=cat.get("bundles", []),
+            )
         state = _get_state()
         return CatalogResponse(
             revision=state.index.get("revision", 0),
@@ -215,6 +264,11 @@ def create_app(
         offset: int = Query(0, ge=0),
         _auth: None = Depends(optional_reader_auth),
     ):
+        if _use_db:
+            packages, total = await _db_packages.get_bundles(
+                name=name, platform=platform, limit=limit, offset=offset
+            )
+            return PackageListResponse(total=total, packages=packages)
         state = _get_state()
         bundles = state.index.get("bundles", [])
         if name:
@@ -246,6 +300,9 @@ def create_app(
         name: str,
         _auth: None = Depends(optional_reader_auth),
     ):
+        if _use_db:
+            packages, total = await _db_packages.get_bundles(name=name)
+            return PackageListResponse(total=total, packages=packages)
         state = _get_state()
         bundles = [b for b in state.index.get("bundles", []) if b.get("name") == name]
         packages = [
@@ -312,20 +369,28 @@ def create_app(
         state = _get_state()
 
         # Check for duplicates
-        for b in state.index.get("bundles", []):
-            if (
-                b["name"] == name
-                and b["version"] == version
-                and b.get("platform") == platform
-                and b.get("arch") == arch
-                and b.get("build_type") == build_type
-                and b.get("link") == link
-            ):
+        if _use_db:
+            if await _db_packages.check_duplicate(name, version, platform, arch, build_type, link):
                 raise HTTPException(
                     409,
                     f"{name}=={version} ({platform}/{arch}/{build_type}/{link}) already published. "
                     "Yank the existing version first, or use a new revision.",
                 )
+        else:
+            for b in state.index.get("bundles", []):
+                if (
+                    b["name"] == name
+                    and b["version"] == version
+                    and b.get("platform") == platform
+                    and b.get("arch") == arch
+                    and b.get("build_type") == build_type
+                    and b.get("link") == link
+                ):
+                    raise HTTPException(
+                        409,
+                        f"{name}=={version} ({platform}/{arch}/{build_type}/{link}) already published. "
+                        "Yank the existing version first, or use a new revision.",
+                    )
 
         # Read and hash the upload
         h = hashlib.sha256()
@@ -348,31 +413,51 @@ def create_app(
         import datetime
 
         archive_url = f"/v1/download/{safe_filename}"
-        bundle = {
-            "name": name,
-            "version": version,
-            "platform": platform,
-            "arch": arch,
-            "build_type": build_type,
-            "link": link,
-            "sha256": sha256,
-            "size_bytes": size_bytes,
-            "archive_url": archive_url,
-            "published_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "yanked": False,
-            "signature": signature,
-            "key_fingerprint": key_fingerprint,
-        }
-        state.index.setdefault("bundles", []).append(bundle)
-        state.save_index()
 
-        # Audit
-        state.audit.record(
-            action=AuditAction.publish,
-            actor=actor.name,
-            target=f"{name}=={version}",
-            detail=f"platform={platform} arch={arch} sha256={sha256}",
-        )
+        if _use_db:
+            await _db_packages.add_package(
+                name=name,
+                version=version,
+                platform=platform,
+                arch=arch,
+                build_type=build_type,
+                link=link,
+                sha256=sha256,
+                size_bytes=size_bytes,
+                archive_url=archive_url,
+                signature=signature,
+                key_fingerprint=key_fingerprint,
+            )
+            await _db_audit.record(
+                action=AuditAction.publish,
+                actor=actor.name,
+                target=f"{name}=={version}",
+                detail=f"platform={platform} arch={arch} sha256={sha256}",
+            )
+        else:
+            bundle = {
+                "name": name,
+                "version": version,
+                "platform": platform,
+                "arch": arch,
+                "build_type": build_type,
+                "link": link,
+                "sha256": sha256,
+                "size_bytes": size_bytes,
+                "archive_url": archive_url,
+                "published_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "yanked": False,
+                "signature": signature,
+                "key_fingerprint": key_fingerprint,
+            }
+            state.index.setdefault("bundles", []).append(bundle)
+            state.save_index()
+            state.audit.record(
+                action=AuditAction.publish,
+                actor=actor.name,
+                target=f"{name}=={version}",
+                detail=f"platform={platform} arch={arch} sha256={sha256}",
+            )
 
         return PublishResponse(
             name=name,
@@ -389,16 +474,24 @@ def create_app(
         version: str,
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
-        state = _get_state()
-        for b in state.index.get("bundles", []):
-            if b["name"] == name and b["version"] == version:
-                b["yanked"] = True
-        state.save_index()
-        state.audit.record(
-            action=AuditAction.yank,
-            actor=actor.name,
-            target=f"{name}=={version}",
-        )
+        if _use_db:
+            await _db_packages.yank(name, version)
+            await _db_audit.record(
+                action=AuditAction.yank,
+                actor=actor.name,
+                target=f"{name}=={version}",
+            )
+        else:
+            state = _get_state()
+            for b in state.index.get("bundles", []):
+                if b["name"] == name and b["version"] == version:
+                    b["yanked"] = True
+            state.save_index()
+            state.audit.record(
+                action=AuditAction.yank,
+                actor=actor.name,
+                target=f"{name}=={version}",
+            )
         return {"message": f"yanked {name}=={version}"}
 
     @app.post("/v1/packages/{name}/{version}/unyank", tags=["publish"])
@@ -407,16 +500,24 @@ def create_app(
         version: str,
         actor: TokenRecord = Depends(require_role(TokenRole.admin)),
     ):
-        state = _get_state()
-        for b in state.index.get("bundles", []):
-            if b["name"] == name and b["version"] == version:
-                b["yanked"] = False
-        state.save_index()
-        state.audit.record(
-            action=AuditAction.unyank,
-            actor=actor.name,
-            target=f"{name}=={version}",
-        )
+        if _use_db:
+            await _db_packages.unyank(name, version)
+            await _db_audit.record(
+                action=AuditAction.unyank,
+                actor=actor.name,
+                target=f"{name}=={version}",
+            )
+        else:
+            state = _get_state()
+            for b in state.index.get("bundles", []):
+                if b["name"] == name and b["version"] == version:
+                    b["yanked"] = False
+            state.save_index()
+            state.audit.record(
+                action=AuditAction.unyank,
+                actor=actor.name,
+                target=f"{name}=={version}",
+            )
         return {"message": f"unyanked {name}=={version}"}
 
     # ── Delete (admin only) ─────────────────────────────────
@@ -427,6 +528,16 @@ def create_app(
         version: str,
         actor: TokenRecord = Depends(require_role(TokenRole.admin)),
     ):
+        if _use_db:
+            removed = await _db_packages.delete(name, version)
+            if removed == 0:
+                raise HTTPException(404, f"{name}=={version} not found")
+            await _db_audit.record(
+                action=AuditAction.delete,
+                actor=actor.name,
+                target=f"{name}=={version}",
+            )
+            return {"message": f"deleted {name}=={version}", "removed": removed}
         state = _get_state()
         before = len(state.index.get("bundles", []))
         state.index["bundles"] = [
@@ -453,18 +564,32 @@ def create_app(
         actor: TokenRecord = Depends(require_role(TokenRole.admin)),
     ):
         state = _get_state()
-        raw = state.tokens.create(
-            name=req.name,
-            role=req.role,
-            expires_in_days=req.expires_in_days,
-        )
-        state.audit.record(
-            action=AuditAction.token_create,
-            actor=actor.name,
-            target=req.name,
-            detail=f"role={req.role.value}",
-        )
-        record = state.tokens.verify(raw)
+        if _use_db:
+            raw = await _db_tokens.create(
+                name=req.name,
+                role=req.role,
+                expires_in_days=req.expires_in_days,
+            )
+            await _db_audit.record(
+                action=AuditAction.token_create,
+                actor=actor.name,
+                target=req.name,
+                detail=f"role={req.role.value}",
+            )
+            record = await _db_tokens.verify(raw)
+        else:
+            raw = state.tokens.create(
+                name=req.name,
+                role=req.role,
+                expires_in_days=req.expires_in_days,
+            )
+            state.audit.record(
+                action=AuditAction.token_create,
+                actor=actor.name,
+                target=req.name,
+                detail=f"role={req.role.value}",
+            )
+            record = state.tokens.verify(raw)
         return TokenCreateResponse(
             name=req.name,
             role=req.role,
@@ -478,21 +603,33 @@ def create_app(
         actor: TokenRecord = Depends(require_role(TokenRole.admin)),
     ):
         state = _get_state()
-        if not state.tokens.revoke(name):
-            raise HTTPException(404, f"token '{name}' not found")
-        state.audit.record(
-            action=AuditAction.token_revoke,
-            actor=actor.name,
-            target=name,
-        )
+        if _use_db:
+            if not await _db_tokens.revoke(name):
+                raise HTTPException(404, f"token '{name}' not found")
+            await _db_audit.record(
+                action=AuditAction.token_revoke,
+                actor=actor.name,
+                target=name,
+            )
+        else:
+            if not state.tokens.revoke(name):
+                raise HTTPException(404, f"token '{name}' not found")
+            state.audit.record(
+                action=AuditAction.token_revoke,
+                actor=actor.name,
+                target=name,
+            )
         return {"message": f"revoked token '{name}'"}
 
     @app.get("/v1/tokens", tags=["tokens"])
     async def list_tokens(
         _actor: TokenRecord = Depends(require_role(TokenRole.admin)),
     ):
-        state = _get_state()
-        tokens = state.tokens.list_tokens()
+        if _use_db:
+            tokens = await _db_tokens.list_tokens()
+        else:
+            state = _get_state()
+            tokens = state.tokens.list_tokens()
         return {
             "tokens": [
                 {
@@ -516,18 +653,26 @@ def create_app(
         target: str = Query(""),
         _actor: TokenRecord = Depends(require_role(TokenRole.admin)),
     ):
-        state = _get_state()
-        entries, total = state.audit.entries(
-            limit=limit, offset=offset, action=action, target=target
-        )
+        if _use_db:
+            entries, total = await _db_audit.entries(
+                limit=limit, offset=offset, action=action, target=target
+            )
+        else:
+            state = _get_state()
+            entries, total = state.audit.entries(
+                limit=limit, offset=offset, action=action, target=target
+            )
         return AuditLogResponse(entries=entries, total=total)
 
     @app.get("/v1/audit/verify", tags=["audit"])
     async def verify_audit_chain(
         _actor: TokenRecord = Depends(require_role(TokenRole.admin)),
     ):
-        state = _get_state()
-        ok, message = state.audit.verify_chain()
+        if _use_db:
+            ok, message = await _db_audit.verify_chain()
+        else:
+            state = _get_state()
+            ok, message = state.audit.verify_chain()
         status_code = 200 if ok else 409
         return {"ok": ok, "message": message}
 
