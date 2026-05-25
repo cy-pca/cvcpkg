@@ -78,7 +78,7 @@ runs:
     # Sparse-checkout libcvc-deps for the cvcpkg tool and default
     # requirements, without pulling the entire repo history.
     - name: Checkout libcvc-deps (sparse)
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
       with:
         repository: ${{ inputs.repository }}
         ref: ${{ inputs.libcvc_deps_ref }}

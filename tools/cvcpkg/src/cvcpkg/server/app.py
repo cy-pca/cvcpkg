@@ -26,7 +26,7 @@ from pathlib import Path
 import yaml
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
 
 from cvcpkg import __version__
 from cvcpkg.server.audit import AuditLog
@@ -273,6 +273,34 @@ def create_app(
             raise HTTPException(429, "rate limit exceeded — try again later")
         window.append(now)
 
+    # ── Metrics counters ──────────────────────────────────
+    _metrics: dict[str, int | float] = {
+        "requests_total": 0,
+        "requests_by_method_GET": 0,
+        "requests_by_method_POST": 0,
+        "requests_by_method_DELETE": 0,
+        "responses_2xx": 0,
+        "responses_4xx": 0,
+        "responses_5xx": 0,
+        "publishes_total": 0,
+        "bytes_uploaded_total": 0,
+    }
+
+    @app.middleware("http")
+    async def metrics_middleware(request: Request, call_next):
+        _metrics["requests_total"] += 1
+        method_key = f"requests_by_method_{request.method}"
+        if method_key in _metrics:
+            _metrics[method_key] += 1
+        response = await call_next(request)
+        if 200 <= response.status_code < 300:
+            _metrics["responses_2xx"] += 1
+        elif 400 <= response.status_code < 500:
+            _metrics["responses_4xx"] += 1
+        elif response.status_code >= 500:
+            _metrics["responses_5xx"] += 1
+        return response
+
     # ── Landing page ──────────────────────────────────────
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
@@ -299,6 +327,53 @@ def create_app(
             ),
             packages_count=pkg_count,
             uptime_seconds=round(time.monotonic() - _START_TIME, 2),
+        )
+
+    # ── Metrics (Prometheus text format) ────────────────────
+
+    @app.get("/metrics", tags=["health"], response_class=PlainTextResponse)
+    async def prometheus_metrics():
+        state = _get_state()
+        if _use_db:
+            cat = await _db_packages.get_catalog_dict()
+            pkg_count = len(cat.get("bundles", []))
+        else:
+            pkg_count = len(state.index.get("bundles", []))
+
+        uptime = round(time.monotonic() - _START_TIME, 2)
+        lines = [
+            "# HELP cvcpkg_up Whether the server is up (always 1).",
+            "# TYPE cvcpkg_up gauge",
+            "cvcpkg_up 1",
+            "# HELP cvcpkg_uptime_seconds Server uptime in seconds.",
+            "# TYPE cvcpkg_uptime_seconds gauge",
+            f"cvcpkg_uptime_seconds {uptime}",
+            "# HELP cvcpkg_packages_total Total published packages.",
+            "# TYPE cvcpkg_packages_total gauge",
+            f"cvcpkg_packages_total {pkg_count}",
+            "# HELP cvcpkg_requests_total Total HTTP requests served.",
+            "# TYPE cvcpkg_requests_total counter",
+            f"cvcpkg_requests_total {_metrics['requests_total']}",
+            "# HELP cvcpkg_requests_by_method HTTP requests by method.",
+            "# TYPE cvcpkg_requests_by_method counter",
+            f'cvcpkg_requests_by_method{{method="GET"}} {_metrics["requests_by_method_GET"]}',
+            f'cvcpkg_requests_by_method{{method="POST"}} {_metrics["requests_by_method_POST"]}',
+            f'cvcpkg_requests_by_method{{method="DELETE"}} {_metrics["requests_by_method_DELETE"]}',
+            "# HELP cvcpkg_responses HTTP responses by status class.",
+            "# TYPE cvcpkg_responses counter",
+            f'cvcpkg_responses{{status="2xx"}} {_metrics["responses_2xx"]}',
+            f'cvcpkg_responses{{status="4xx"}} {_metrics["responses_4xx"]}',
+            f'cvcpkg_responses{{status="5xx"}} {_metrics["responses_5xx"]}',
+            "# HELP cvcpkg_publishes_total Total successful publishes.",
+            "# TYPE cvcpkg_publishes_total counter",
+            f"cvcpkg_publishes_total {_metrics['publishes_total']}",
+            "# HELP cvcpkg_bytes_uploaded_total Total bytes uploaded.",
+            "# TYPE cvcpkg_bytes_uploaded_total counter",
+            f"cvcpkg_bytes_uploaded_total {_metrics['bytes_uploaded_total']}",
+        ]
+        return PlainTextResponse(
+            "\n".join(lines) + "\n",
+            media_type="text/plain; version=0.0.4; charset=utf-8",
         )
 
     # ── Catalog (read) ──────────────────────────────────────
@@ -572,6 +647,9 @@ def create_app(
                 detail=f"platform={platform} arch={arch} sha256={sha256} release={release_tag or 'live'}",
             )
 
+        _metrics["publishes_total"] += 1
+        _metrics["bytes_uploaded_total"] += size_bytes
+
         return PublishResponse(
             name=name,
             version=version,
@@ -786,7 +864,6 @@ def create_app(
         else:
             state = _get_state()
             ok, message = state.audit.verify_chain()
-        status_code = 200 if ok else 409
         return {"ok": ok, "message": message}
 
     return app

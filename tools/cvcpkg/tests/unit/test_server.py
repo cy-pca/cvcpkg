@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import io
-from pathlib import Path
 
 import pytest
-import yaml
 
 fastapi = pytest.importorskip("fastapi", reason="server extras not installed")
 pydantic = pytest.importorskip("pydantic", reason="server extras not installed")
@@ -508,3 +506,161 @@ class TestRateLimit:
                     assert resp.status_code == 200, f"request {i} should succeed"
                 else:
                     assert resp.status_code == 429, "third request should be rate limited"
+
+
+class TestMetricsEndpoint:
+    """Verify Prometheus /metrics endpoint."""
+
+    def test_metrics_returns_prometheus_text(self, server_env):
+        client, *_ = server_env
+        resp = client.get("/metrics")
+        assert resp.status_code == 200
+        body = resp.text
+        assert "cvcpkg_up 1" in body
+        assert "cvcpkg_uptime_seconds" in body
+        assert "cvcpkg_packages_total" in body
+        assert "cvcpkg_requests_total" in body
+
+    def test_metrics_increments_after_requests(self, server_env):
+        client, *_ = server_env
+        # Make a few requests
+        client.get("/healthz")
+        client.get("/v1/catalog")
+        resp = client.get("/metrics")
+        body = resp.text
+        # requests_total should be > 0 (at least the prior calls + /metrics itself)
+        for line in body.splitlines():
+            if line.startswith("cvcpkg_requests_total "):
+                count = int(line.split()[-1])
+                assert count >= 3
+
+
+class TestSQLInjectionPrevention:
+    """Verify parameterised queries prevent SQL injection."""
+
+    def test_sql_injection_in_package_name(self, server_env):
+        client, admin_tok, pub_tok, _ = server_env
+        # Attempt SQL injection via package name query parameter
+        resp = client.get("/v1/packages", params={"name": "'; DROP TABLE packages; --"})
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 0
+
+    def test_sql_injection_in_path_param(self, server_env):
+        client, *_ = server_env
+        resp = client.get("/v1/packages/%27%3B%20DROP%20TABLE%20packages%3B%20--")
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 0
+
+    def test_sql_injection_in_publish_name(self, server_env):
+        client, admin_tok, pub_tok, _ = server_env
+        resp = client.post(
+            "/v1/publish",
+            params={
+                "name": "x'; DROP TABLE packages; --",
+                "version": "1.0",
+            },
+            files={"file": ("test.tar.zst", io.BytesIO(b"data"))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        # Should succeed (name is just a string held in YAML) or 200 for yaml backend
+        assert resp.status_code == 200
+
+
+class TestMalformedTokens:
+    """Verify malformed Authorization headers are safely rejected."""
+
+    def test_empty_bearer(self, server_env):
+        client, *_ = server_env
+        resp = client.post(
+            "/v1/publish",
+            params={"name": "x", "version": "1.0"},
+            files={"file": ("x.tar.zst", io.BytesIO(b"data"))},
+            headers={"Authorization": "Bearer "},
+        )
+        assert resp.status_code == 401
+
+    def test_no_bearer_prefix(self, server_env):
+        client, *_ = server_env
+        resp = client.post(
+            "/v1/publish",
+            params={"name": "x", "version": "1.0"},
+            files={"file": ("x.tar.zst", io.BytesIO(b"data"))},
+            headers={"Authorization": "Token some-value"},
+        )
+        assert resp.status_code == 401
+
+    def test_bearer_with_extra_parts(self, server_env):
+        client, *_ = server_env
+        resp = client.post(
+            "/v1/publish",
+            params={"name": "x", "version": "1.0"},
+            files={"file": ("x.tar.zst", io.BytesIO(b"data"))},
+            headers={"Authorization": "Bearer tok1 tok2 tok3"},
+        )
+        assert resp.status_code == 401
+
+    def test_garbage_token(self, server_env):
+        client, *_ = server_env
+        resp = client.post(
+            "/v1/publish",
+            params={"name": "x", "version": "1.0"},
+            files={"file": ("x.tar.zst", io.BytesIO(b"data"))},
+            headers={"Authorization": "Bearer !!!invalid-garbage-$$$"},
+        )
+        assert resp.status_code == 401
+
+
+class TestConcurrentPublish:
+    """Verify concurrent publishes to different packages don't conflict."""
+
+    def test_concurrent_publishes(self, tmp_path):
+        from concurrent.futures import ThreadPoolExecutor
+
+        store = TokenStore(tmp_path)
+        pub_token = store.create("pub", TokenRole.publisher)
+        test_app = create_app(state_dir=tmp_path)
+
+        with TestClient(test_app) as client:
+
+            def publish_one(idx):
+                resp = client.post(
+                    "/v1/publish",
+                    params={"name": f"concurrent-{idx}", "version": "1.0"},
+                    files={"file": (f"c{idx}.tar.zst", io.BytesIO(b"archive" * (idx + 1)))},
+                    headers={"Authorization": f"Bearer {pub_token}"},
+                )
+                return resp.status_code
+
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                futures = [pool.submit(publish_one, i) for i in range(4)]
+                results = [f.result() for f in futures]
+
+        assert all(s == 200 for s in results), f"Some publishes failed: {results}"
+
+
+class TestAuditChainTamperDetection:
+    """Verify audit chain detects tampering."""
+
+    def test_tamper_detected(self, tmp_path):
+        from cvcpkg.server.audit import AuditLog
+        from cvcpkg.server.models import AuditAction
+
+        log = AuditLog(tmp_path)
+        log.record(AuditAction.publish, "bot", "zlib==1.0")
+        log.record(AuditAction.publish, "bot", "boost==1.0")
+
+        # Verify chain is valid before tampering
+        ok, _ = log.verify_chain()
+        assert ok
+
+        # Tamper with the audit log file
+        audit_file = tmp_path / "audit.yaml"
+        content = audit_file.read_text()
+        content = content.replace("zlib==1.0", "TAMPERED==0.0")
+        audit_file.write_text(content)
+
+        # Reload and verify — should detect tampering
+        log2 = AuditLog(tmp_path)
+        ok, msg = log2.verify_chain()
+        assert not ok
+        assert "chain broken" in msg.lower() or "mismatch" in msg.lower()
