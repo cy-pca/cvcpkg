@@ -167,6 +167,12 @@ def cli(ctx: click.Context) -> None:
     default=False,
     help="Verify Ed25519 signatures on downloaded archives.",
 )
+@click.option(
+    "--fallback-to-source/--no-fallback-to-source",
+    default=False,
+    help="Build from source recipe when no prebuilt binary is available.",
+)
+@_recipes_dir_opt
 def install(
     components: tuple[str, ...],
     from_file: str | None,
@@ -180,6 +186,8 @@ def install(
     catalog_revision: int | None,
     ignore_abi: bool,
     verify_signatures: bool,
+    fallback_to_source: bool,
+    recipes_dirs: tuple[str, ...],
 ) -> None:
     """Install component bundles into a prefix.
 
@@ -208,9 +216,10 @@ def install(
     """
     from cvcpkg.cache import default_cache_dir
     from cvcpkg.catalog import catalog_entries, fetch_catalog, load_catalog_from_file
-    from cvcpkg.installer import install_entry
+    from cvcpkg.errors import InstallError, IntegrityError
+    from cvcpkg.installer import build_from_source_fallback, install_entry
     from cvcpkg.lockfile import LockEntry, Lockfile
-    from cvcpkg.manifest import ComponentReq, Requirements
+    from cvcpkg.manifest import CatalogEntry, ComponentReq, Requirements
     from cvcpkg.platform import detect_arch, detect_platform
 
     ctx = click.get_current_context()
@@ -273,36 +282,100 @@ def install(
     # config/link), then run the backtracking SAT-style resolver to
     # pick compatible versions for all requested components.
     catalog_url = catalog or ""
-    if catalog_url and Path(catalog_url).is_file():
-        cat = load_catalog_from_file(catalog_url)
+    catalog_failed = False
+    try:
+        if catalog_url and Path(catalog_url).is_file():
+            cat = load_catalog_from_file(catalog_url)
+        else:
+            cat = fetch_catalog(catalog_url, cache_dir=default_cache_dir())
+    except Exception as exc:
+        if not fallback_to_source:
+            raise
+        click.echo(f"cvcpkg: catalog unavailable ({exc}), will build from source.")
+        catalog_failed = True
+        cat = {"bundles": []}
+
+    picked: dict[str, CatalogEntry] = {}
+    source_only: list[str] = []
+    requested_names = [c.name for c in reqs.components]
+
+    if not catalog_failed:
+        entries = catalog_entries(
+            cat, platform=plat, arch=arc, build_type=reqs.config, link=reqs.link,
+        )
+
+        # Group candidate entries by component name for the resolver.
+        candidates: dict[str, list] = {}
+        for e in entries:
+            candidates.setdefault(e.name, []).append(e)
+
+        if not entries and not fallback_to_source:
+            raise click.ClickException(
+                "no bundles found in catalog for this platform tuple."
+            )
+
+        if entries:
+            from cvcpkg.resolver import resolve
+
+            # Only resolve components that have candidates in the catalog.
+            resolvable = [c for c in reqs.components if c.name in candidates]
+            if resolvable:
+                result = resolve(resolvable, candidates)
+                picked = result.picked
+
+            # Components not in the catalog need source build.
+            if fallback_to_source:
+                source_only = [
+                    c.name for c in reqs.components if c.name not in picked
+                ]
+        elif fallback_to_source:
+            source_only = requested_names
     else:
-        cat = fetch_catalog(catalog_url, cache_dir=default_cache_dir())
+        source_only = requested_names
 
-    entries = catalog_entries(cat, platform=plat, arch=arc, build_type=reqs.config, link=reqs.link)
-    if not entries:
-        raise click.ClickException("no bundles found in catalog for this platform tuple.")
-
-    # Group candidate entries by component name for the resolver.
-    candidates: dict[str, list] = {}
-    for e in entries:
-        candidates.setdefault(e.name, []).append(e)
-
-    from cvcpkg.resolver import resolve
-
-    result = resolve(reqs.components, candidates)
-    picked = result.picked
-
-    click.echo(f"cvcpkg: resolved {len(picked)} component(s):")
-    for name in sorted(picked):
-        click.echo(f"  {name} == {picked[name].version}")
+    if picked:
+        click.echo(f"cvcpkg: resolved {len(picked)} component(s) from catalog:")
+        for name in sorted(picked):
+            click.echo(f"  {name} == {picked[name].version}")
+    if source_only:
+        click.echo(
+            f"cvcpkg: {len(source_only)} component(s) will be built from source: "
+            + ", ".join(source_only)
+        )
+    if not picked and not source_only:
+        raise click.ClickException(
+            "no bundles found in catalog for this platform tuple."
+        )
 
     # ── Download and extract each resolved bundle ──
     cache_dir = default_cache_dir()
     lock_entries: list[LockEntry] = []
+    rdirs = [Path(d) for d in recipes_dirs] if recipes_dirs else None
     for name in sorted(picked):
         entry = picked[name]
         click.echo(f"cvcpkg: installing {name} {entry.version} ...")
-        install_entry(entry, prefix_path, cache_dir, verify_signatures=verify_signatures)
+        try:
+            install_entry(entry, prefix_path, cache_dir, verify_signatures=verify_signatures)
+        except (InstallError, IntegrityError) as exc:
+            if not fallback_to_source:
+                raise
+            click.echo(f"cvcpkg: download failed for {name} ({exc}), building from source...")
+            build_from_source_fallback(
+                name, prefix_path, platform=plat, config=reqs.config,
+                link=reqs.link, recipes_dirs=rdirs,
+            )
+            lock_entries.append(
+                LockEntry(
+                    name=entry.name,
+                    version=entry.version,
+                    upstream_version=entry.upstream_version,
+                    source_release="source-build",
+                    sha256="",
+                    size_bytes=0,
+                    archive_url="",
+                )
+            )
+            continue
         lock_entries.append(
             LockEntry(
                 name=entry.name,
@@ -312,6 +385,25 @@ def install(
                 sha256=entry.sha256,
                 size_bytes=entry.size_bytes,
                 archive_url=entry.archive_url,
+            )
+        )
+
+    # ── Build from source for components not in the catalog ──
+    for name in source_only:
+        click.echo(f"cvcpkg: building {name} from source...")
+        build_from_source_fallback(
+            name, prefix_path, platform=plat, config=reqs.config,
+            link=reqs.link, recipes_dirs=rdirs,
+        )
+        lock_entries.append(
+            LockEntry(
+                name=name,
+                version="source",
+                upstream_version="",
+                source_release="source-build",
+                sha256="",
+                size_bytes=0,
+                archive_url="",
             )
         )
 

@@ -223,6 +223,64 @@ def install_entry(
     return archive
 
 
+def build_from_source_fallback(
+    name: str,
+    prefix: Path,
+    *,
+    platform: str,
+    config: str = "release",
+    link: str = "shared",
+    recipes_dirs: list[Path] | None = None,
+) -> None:
+    """Build a component from its recipe as a last-resort fallback.
+
+    Called when no prebuilt binary is available (network error, missing
+    package, etc.).  Raises ``InstallError`` if the recipe cannot be
+    found or the build fails.
+    """
+    import logging
+
+    from cvcpkg.builder import BuildError, RecipeError, build_recipe, find_recipes_dir
+
+    log = logging.getLogger("cvcpkg")
+    log.info("falling back to source build for %s", name)
+
+    # Locate the recipe directory for this component.
+    search_dirs = recipes_dirs or []
+    if not search_dirs:
+        try:
+            search_dirs = [find_recipes_dir()]
+        except RecipeError:
+            raise InstallError(
+                f"no prebuilt binary and no recipes directory found for {name}"
+            )
+
+    recipe_dir: Path | None = None
+    for rdir in search_dirs:
+        candidate = rdir / name
+        if (candidate / "recipe.yaml").is_file():
+            recipe_dir = candidate
+            break
+
+    if recipe_dir is None:
+        raise InstallError(
+            f"no prebuilt binary and no recipe found for '{name}'"
+        )
+
+    try:
+        build_recipe(
+            recipe_dir,
+            platform=platform,
+            config=config,
+            link=link,
+            prefix=prefix,
+        )
+    except (BuildError, RecipeError) as exc:
+        raise InstallError(
+            f"source build for '{name}' failed: {exc}"
+        ) from exc
+
+
 def _archive_filename(entry: CatalogEntry) -> str:
     """Derive the expected archive filename from a catalog entry."""
     if entry.archive_url:
