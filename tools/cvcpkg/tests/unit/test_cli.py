@@ -828,12 +828,14 @@ class TestBuildCrossPlatformDeps:
         recipes_dir = tmp_path / "recipes"
         # emsdk: host-only tool (linux/macos/windows, no wasm)
         self._make_recipe(
-            recipes_dir, "emsdk",
+            recipes_dir,
+            "emsdk",
             matrix=[{"platform": "linux", "script": "build.sh"}],
         )
         # wasmlib: wasm target depending on emsdk
         self._make_recipe(
-            recipes_dir, "wasmlib",
+            recipes_dir,
+            "wasmlib",
             matrix=[{"platform": "wasm", "script": "build.sh"}],
             deps=[{"name": "emsdk", "version": ">=1.0"}],
         )
@@ -845,14 +847,22 @@ class TestBuildCrossPlatformDeps:
             # Return a minimal mock context
             return mock.MagicMock()
 
-        with mock.patch("cvcpkg.builder.build_recipe", side_effect=mock_build_recipe), \
-             mock.patch("cvcpkg.platform.detect_platform", return_value="linux"):
-            ret = main([
-                "build", "wasmlib",
-                "--platform", "wasm",
-                "--prefix", str(tmp_path / "pfx"),
-                "--recipes-dir", str(recipes_dir),
-            ])
+        with (
+            mock.patch("cvcpkg.builder.build_recipe", side_effect=mock_build_recipe),
+            mock.patch("cvcpkg.platform.detect_platform", return_value="linux"),
+        ):
+            ret = main(
+                [
+                    "build",
+                    "wasmlib",
+                    "--platform",
+                    "wasm",
+                    "--prefix",
+                    str(tmp_path / "pfx"),
+                    "--recipes-dir",
+                    str(recipes_dir),
+                ]
+            )
 
         assert ret == 0
         assert len(build_calls) == 2
@@ -865,11 +875,13 @@ class TestBuildCrossPlatformDeps:
         """When building for a native platform, no host-tool splitting occurs."""
         recipes_dir = tmp_path / "recipes"
         self._make_recipe(
-            recipes_dir, "liba",
+            recipes_dir,
+            "liba",
             matrix=[{"platform": "linux", "script": "build.sh"}],
         )
         self._make_recipe(
-            recipes_dir, "libb",
+            recipes_dir,
+            "libb",
             matrix=[{"platform": "linux", "script": "build.sh"}],
             deps=["liba"],
         )
@@ -880,14 +892,22 @@ class TestBuildCrossPlatformDeps:
             build_calls.append((recipe_dir.name, platform))
             return mock.MagicMock()
 
-        with mock.patch("cvcpkg.builder.build_recipe", side_effect=mock_build_recipe), \
-             mock.patch("cvcpkg.platform.detect_platform", return_value="linux"):
-            ret = main([
-                "build", "libb",
-                "--platform", "linux",
-                "--prefix", str(tmp_path / "pfx"),
-                "--recipes-dir", str(recipes_dir),
-            ])
+        with (
+            mock.patch("cvcpkg.builder.build_recipe", side_effect=mock_build_recipe),
+            mock.patch("cvcpkg.platform.detect_platform", return_value="linux"),
+        ):
+            ret = main(
+                [
+                    "build",
+                    "libb",
+                    "--platform",
+                    "linux",
+                    "--prefix",
+                    str(tmp_path / "pfx"),
+                    "--recipes-dir",
+                    str(recipes_dir),
+                ]
+            )
 
         assert ret == 0
         assert len(build_calls) == 2
