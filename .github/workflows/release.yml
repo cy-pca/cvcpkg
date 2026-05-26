@@ -150,24 +150,48 @@ jobs:
       sha_suffix: ${{ inputs.sha_suffix || '' }}
 
   # ──────────────────────────── WASM ─────────────────────────────
-  # Cross-compile wasm-platform recipes on a Linux host.
+  # Cross-compile wasm-platform recipes using Emscripten.
   # Only static linking — wasm does not support shared libraries.
-  # Split across GitHub-hosted and self-hosted runners.
+  # Sharded across Linux, macOS, and Windows hosts for parallelism.
   wasm:
     strategy:
       fail-fast: false
       matrix:
         include:
+          # Debug builds — one shard per host platform
           - config: debug
             link: static
+            host_platform: linux
+            shard: '0/3'
+          - config: debug
+            link: static
+            host_platform: macos
+            shard: '1/3'
+          - config: debug
+            link: static
+            host_platform: windows
+            shard: '2/3'
+          # Release builds — sharded the same way
           - config: release
             link: static
+            host_platform: linux
+            shard: '0/3'
             runner: '["self-hosted","Linux","X64","cvcpkg-builder"]'
+          - config: release
+            link: static
+            host_platform: macos
+            shard: '1/3'
+          - config: release
+            link: static
+            host_platform: windows
+            shard: '2/3'
     uses: ./.github/workflows/recipe-build.yml
     with:
       platform: wasm
       config: ${{ matrix.config }}
       link: ${{ matrix.link }}
+      host_platform: ${{ matrix.host_platform }}
+      shard: ${{ matrix.shard }}
       runner: ${{ matrix.runner || '' }}
       sha_suffix: ${{ inputs.sha_suffix || '' }}
 

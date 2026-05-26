@@ -199,6 +199,58 @@ class TestSelectMatrixEntry:
         with pytest.raises(RecipeError, match="No build matrix entry for platform 'windows'"):
             _select_matrix_entry(r, "windows")
 
+    def test_host_platform_selects_matching_entry(self, tmp_path):
+        """When host_platform is given, prefer the entry with matching host_platform."""
+        recipe_dict = {
+            **MINIMAL_RECIPE,
+            "build": {
+                "matrix": [
+                    {"platform": "wasm", "host_platform": "linux", "script": "build-wasm.sh"},
+                    {"platform": "wasm", "host_platform": "windows", "script": "build-wasm.ps1"},
+                ],
+            },
+        }
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        m = _select_matrix_entry(r, "wasm", "windows")
+        assert m.host_platform == "windows"
+        assert m.script == "build-wasm.ps1"
+
+    def test_host_platform_falls_back_to_first_match(self, tmp_path):
+        """Without host_platform, falls back to the first platform match."""
+        recipe_dict = {
+            **MINIMAL_RECIPE,
+            "build": {
+                "matrix": [
+                    {"platform": "wasm", "host_platform": "linux", "script": "build-wasm.sh"},
+                    {"platform": "wasm", "host_platform": "windows", "script": "build-wasm.ps1"},
+                ],
+            },
+        }
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        m = _select_matrix_entry(r, "wasm")
+        assert m.host_platform == "linux"
+        assert m.script == "build-wasm.sh"
+
+    def test_host_platform_no_match_uses_fallback(self, tmp_path):
+        """If host_platform doesn't match any entry, fall back to first platform match."""
+        recipe_dict = {
+            **MINIMAL_RECIPE,
+            "build": {
+                "matrix": [
+                    {"platform": "wasm", "host_platform": "linux", "script": "build-wasm.sh"},
+                ],
+            },
+        }
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        m = _select_matrix_entry(r, "wasm", "windows")
+        assert m.host_platform == "linux"  # falls back
+
 
 # ── Source fetching ─────────────────────────────────────────────
 

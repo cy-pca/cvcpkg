@@ -266,11 +266,29 @@ def apply_patches(recipe: Recipe, source_dir: Path) -> None:
 # ── Build execution ────────────────────────────────────────────
 
 
-def _select_matrix_entry(recipe: Recipe, platform: str) -> MatrixEntry:
-    """Pick the matrix entry matching the target platform."""
+def _select_matrix_entry(
+    recipe: Recipe, platform: str, host_platform: str = ""
+) -> MatrixEntry:
+    """Pick the matrix entry matching the target platform.
+
+    When *host_platform* is given (e.g. ``"linux"``, ``"windows"``),
+    prefer entries whose ``host_platform`` matches.  This allows
+    cross-compilation recipes (like wasm) to select the correct build
+    script for the current host OS.
+
+    Falls back to the first ``platform`` match when no
+    ``host_platform`` match is found.
+    """
+    fallback: MatrixEntry | None = None
     for entry in recipe.build_matrix:
-        if entry.platform == platform:
+        if entry.platform != platform:
+            continue
+        if host_platform and entry.host_platform == host_platform:
             return entry
+        if fallback is None:
+            fallback = entry
+    if fallback is not None:
+        return fallback
     raise RecipeError(
         f"No build matrix entry for platform '{platform}' in recipe '{recipe.name}'. "
         f"Available: {[e.platform for e in recipe.build_matrix]}"
@@ -291,6 +309,7 @@ class BuildContext:
     install_dir: Path
     work_dir: Path
     keep_build_dir: bool = False
+    host_platform: str = ""
 
 
 def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
@@ -363,7 +382,7 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
 
 def run_build(ctx: BuildContext) -> None:
     """Execute the build script for the given context."""
-    matrix = _select_matrix_entry(ctx.recipe, ctx.platform)
+    matrix = _select_matrix_entry(ctx.recipe, ctx.platform, ctx.host_platform)
     script = ctx.recipe.recipe_dir / matrix.script
 
     if not script.is_file():
@@ -668,6 +687,7 @@ def build_recipe(
     link: str = "shared",
     prefix: Path | None = None,
     keep_build_dir: bool = False,
+    host_platform: str = "",
 ) -> BuildContext:
     """Build a single recipe. Returns the BuildContext."""
     recipe = Recipe.load(recipe_dir)
@@ -693,6 +713,7 @@ def build_recipe(
         install_dir=install_dir,
         work_dir=work_dir,
         keep_build_dir=keep_build_dir,
+        host_platform=host_platform,
     )
 
     run_build(ctx)
@@ -899,6 +920,8 @@ def build_all(
     prefix: Path | None = None,
     keep_build_dir: bool = False,
     per_component: bool = False,
+    host_platform: str = "",
+    shard: tuple[int, int] | None = None,
 ) -> list[BuildContext]:
     """Build every recipe in dependency order into a shared *prefix*.
 
@@ -917,6 +940,16 @@ def build_all(
     Only recipes with a matrix entry for *platform* are built.
     Cross-platform dependencies (e.g. emsdk for wasm builds) are
     assumed to be pre-installed in the prefix.
+
+    *host_platform*, when given, is forwarded to
+    ``_select_matrix_entry`` so the correct build script is chosen
+    for the current host OS (relevant for cross-compilation targets
+    like wasm).
+
+    *shard*, when given as ``(index, total)``, partitions the recipe
+    list by name hash.  Only recipes assigned to this shard are
+    packaged (returned in contexts), but their dependencies are still
+    built so they can link correctly.
     """
     if isinstance(recipes_dir, list):
         all_recipes = load_all_recipes(recipes_dir)
@@ -928,13 +961,41 @@ def build_all(
     recipes = [r for r in all_recipes if any(m.platform == platform for m in r.build_matrix)]
     ordered = resolve_build_order(recipes, platform)
 
+    # Determine which recipes are assigned to this shard.
+    if shard is not None:
+        shard_idx, shard_total = shard
+        assigned = {
+            r.name
+            for r in ordered
+            if hashlib.md5(r.name.encode()).digest()[0] % shard_total == shard_idx
+        }
+        # Also include transitive deps of assigned recipes so they build.
+        by_name = {r.name: r for r in ordered}
+        needed: set[str] = set()
+
+        def _collect_deps(name: str) -> None:
+            if name in needed or name not in by_name:
+                return
+            needed.add(name)
+            for dep in _dep_names(by_name[name], platform):
+                _collect_deps(dep)
+
+        for name in assigned:
+            _collect_deps(name)
+        # Build only what this shard needs, in topological order.
+        ordered = [r for r in ordered if r.name in needed]
+    else:
+        assigned = {r.name for r in ordered}
+
     if prefix is None:
         prefix = Path(tempfile.mkdtemp(prefix="cvcpkg-all-"))
     prefix = prefix.resolve()
 
     contexts: list[BuildContext] = []
     for recipe in ordered:
-        print(f"\ncvcpkg: == {recipe.name} ({recipe.full_version}) ==")
+        is_assigned = recipe.name in assigned
+        label = "" if is_assigned else " (dep)"
+        print(f"\ncvcpkg: == {recipe.name} ({recipe.full_version}){label} ==")
         if per_component:
             work_dir = Path(tempfile.mkdtemp(prefix=f"cvcpkg-{recipe.name}-"))
             install_dir = work_dir / "install"
@@ -952,6 +1013,7 @@ def build_all(
                 install_dir=install_dir,
                 work_dir=work_dir,
                 keep_build_dir=keep_build_dir,
+                host_platform=host_platform,
             )
             run_build(ctx)
             if recipe.test_script:
@@ -972,8 +1034,11 @@ def build_all(
                 link=link,
                 prefix=prefix,
                 keep_build_dir=keep_build_dir,
+                host_platform=host_platform,
             )
-        contexts.append(ctx)
+        # Only include assigned recipes in contexts (for packaging).
+        if is_assigned:
+            contexts.append(ctx)
 
     print(f"\ncvcpkg: all {len(contexts)} components built into {prefix}")
     return contexts
