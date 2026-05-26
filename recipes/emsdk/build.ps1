@@ -20,11 +20,13 @@ if ($LASTEXITCODE -ne 0) { throw "emsdk install failed" }
 & .\emsdk.bat activate $emsdkVer
 if ($LASTEXITCODE -ne 0) { throw "emsdk activate failed" }
 
-# Source the environment for ports pre-build.
-& .\emsdk_env.bat
+# Add emsdk paths to the current PowerShell session.
+# emsdk_env.bat only affects cmd subprocesses, so set PATH manually.
+$env:EMSDK = $emsdkDir
+$env:PATH = "$emsdkDir;$emsdkDir\upstream\emscripten;$env:PATH"
 
 # Pre-populate the Emscripten ports cache.
-& embuilder build MINIMAL
+& python "$emsdkDir\upstream\emscripten\embuilder.py" build MINIMAL
 if ($LASTEXITCODE -ne 0) { Write-Warning "embuilder MINIMAL failed (non-fatal)" }
 
 # Stage into install prefix — copy the entire activated tree.
