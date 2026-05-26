@@ -460,6 +460,7 @@ def generate_manifest(
                 entry["version"] = d["version"]
             dep_list.append(entry)
 
+    recipe_block = recipe.raw.get("recipe", {})
     manifest: dict[str, Any] = {
         "schema_version": 3,
         "bundle": {
@@ -486,7 +487,11 @@ def generate_manifest(
                 else _sha256_file(recipe.recipe_dir / "recipe.yaml")
             ),
             "built_at": datetime.now(timezone.utc).isoformat(),
-            "maintainer": maintainer or "Community",
+            "maintainer": maintainer or recipe_block.get("maintainer", "Community"),
+            "description": recipe_block.get("description", ""),
+            "homepage": recipe_block.get("homepage", ""),
+            "license": recipe_block.get("license", ""),
+            "tags": ",".join(recipe.tags) if recipe.tags else "",
         },
     }
     return manifest

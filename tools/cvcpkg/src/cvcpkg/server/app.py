@@ -155,6 +155,11 @@ class UploadSession:
     recipe_version: str
     actor_name: str
     temp_path: Path
+    description: str = ""
+    homepage: str = ""
+    pkg_license: str = ""
+    maintainer: str = ""
+    tags: str = ""
     hasher: hashlib._Hash = field(default_factory=lambda: hashlib.sha256())
     bytes_received: int = 0
     total_size: int = 0  # 0 = unknown
@@ -360,6 +365,12 @@ def create_app(
 
         return HTMLResponse(landing_html())
 
+    @app.get("/package/{name}", response_class=HTMLResponse, include_in_schema=False)
+    async def package_detail_page(name: str):
+        from cvcpkg.server.landing import package_detail_html
+
+        return HTMLResponse(package_detail_html(name))
+
     # ── Health ──────────────────────────────────────────────
 
     @app.get("/healthz", response_model=HealthResponse, tags=["health"])
@@ -456,6 +467,7 @@ def create_app(
                 "only packages not yet in any release."
             ),
         ),
+        search: str = Query("", description="Full-text search across all attributes"),
         limit: int = Query(100, ge=1, le=1000),
         offset: int = Query(0, ge=0),
         _auth: None = Depends(optional_reader_auth),
@@ -467,6 +479,7 @@ def create_app(
                 name=name,
                 platform=platform,
                 release=db_release,
+                search=search,
                 limit=limit,
                 offset=offset,
             )
@@ -585,6 +598,11 @@ def create_app(
             "",
             description=("Recipe revision that produced this build (commit SHA or recipe hash)."),
         ),
+        description: str = Query("", description="Short description of the component"),
+        homepage: str = Query("", description="Upstream project homepage URL"),
+        pkg_license: str = Query("", alias="license", description="SPDX license identifier"),
+        maintainer: str = Query("", description="Package maintainer"),
+        pkg_tags: str = Query("", alias="tags", description="Comma-separated tags"),
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
         _check_rate_limit(request)
@@ -671,6 +689,11 @@ def create_app(
                 key_fingerprint=key_fingerprint,
                 release_tag=release_tag,
                 recipe_version=recipe_version,
+                description=description,
+                homepage=homepage,
+                pkg_license=pkg_license,
+                maintainer=maintainer,
+                tags=pkg_tags,
             )
             await _db_audit.record(
                 action=AuditAction.publish,
@@ -737,6 +760,11 @@ def create_app(
         key_fingerprint: str = Query(""),
         release_tag: str = Query(""),
         recipe_version: str = Query(""),
+        description: str = Query(""),
+        homepage: str = Query(""),
+        pkg_license: str = Query("", alias="license"),
+        maintainer: str = Query(""),
+        pkg_tags: str = Query("", alias="tags"),
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
         """Initialise a chunked upload session.
@@ -794,6 +822,11 @@ def create_app(
             key_fingerprint=key_fingerprint,
             release_tag=release_tag,
             recipe_version=recipe_version,
+            description=description,
+            homepage=homepage,
+            pkg_license=pkg_license,
+            maintainer=maintainer,
+            tags=pkg_tags,
             actor_name=actor.name,
             temp_path=tmp_path,
             total_size=total_size,
@@ -945,6 +978,11 @@ def create_app(
                 key_fingerprint=session.key_fingerprint,
                 release_tag=session.release_tag,
                 recipe_version=session.recipe_version,
+                description=session.description,
+                homepage=session.homepage,
+                pkg_license=session.pkg_license,
+                maintainer=session.maintainer,
+                tags=session.tags,
             )
             await _db_audit.record(
                 action=AuditAction.publish,
