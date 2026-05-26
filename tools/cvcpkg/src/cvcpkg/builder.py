@@ -808,7 +808,12 @@ def resolve_build_order(recipes: list[Recipe], platform: str = "") -> list[Recip
     If *platform* is given, only dependencies that apply to that
     platform are considered when building the graph.
 
-    Raises ``RecipeError`` on dependency cycles or missing deps.
+    Dependencies that are not in the candidate *recipes* list are
+    silently skipped — they are assumed to be pre-installed in the
+    prefix (e.g. emsdk built as a linux recipe before building wasm
+    recipes).
+
+    Raises ``RecipeError`` on dependency cycles.
     """
     by_name: dict[str, Recipe] = {r.name: r for r in recipes}
     visited: set[str] = set()
@@ -821,7 +826,8 @@ def resolve_build_order(recipes: list[Recipe], platform: str = "") -> list[Recip
         if name in in_stack:
             raise RecipeError(f"Dependency cycle detected involving '{name}'")
         if name not in by_name:
-            raise RecipeError(f"Unknown dependency: '{name}'")
+            # Not in our candidate set — assumed pre-installed.
+            return
         in_stack.add(name)
         for dep in _dep_names(by_name[name], platform):
             visit(dep)
@@ -848,15 +854,22 @@ def build_all(
     *recipes_dir* may be a single path or a list of paths.  When
     multiple directories are given, later directories override
     earlier ones on name collisions (with a warning).
+
+    Only recipes with a matrix entry for *platform* are built.
+    Cross-platform dependencies (e.g. emsdk for wasm builds) are
+    assumed to be pre-installed in the prefix.
     """
     if isinstance(recipes_dir, list):
-        recipes = load_all_recipes(recipes_dir)
+        all_recipes = load_all_recipes(recipes_dir)
     else:
-        recipes = list_recipes(recipes_dir)
+        all_recipes = list_recipes(recipes_dir)
     # Filter to recipes that have a matrix entry for this platform
     if not platform:
         platform = detect_platform()
-    recipes = [r for r in recipes if any(m.platform == platform for m in r.build_matrix)]
+    recipes = [
+        r for r in all_recipes
+        if any(m.platform == platform for m in r.build_matrix)
+    ]
     ordered = resolve_build_order(recipes, platform)
 
     if prefix is None:

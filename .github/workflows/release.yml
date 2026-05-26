@@ -143,6 +143,26 @@ jobs:
       config: ${{ matrix.config }}
       link: ${{ matrix.link }}
       sha_suffix: ${{ inputs.sha_suffix || '' }}
+
+  # ──────────────────────────── WASM ─────────────────────────────
+  # Cross-compile wasm-platform recipes on a Linux host.
+  # Only static linking — wasm does not support shared libraries.
+  wasm:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - config: debug
+            link: static
+          - config: release
+            link: static
+    uses: ./.github/workflows/recipe-build.yml
+    with:
+      platform: wasm
+      config: ${{ matrix.config }}
+      link: ${{ matrix.link }}
+      sha_suffix: ${{ inputs.sha_suffix || '' }}
+
   # ──────────────────────────── Release ────────────────────────────
   # ────────────────────── Per-component packaging ──────────────────
   # Split each monolithic prefix into per-component bundle archives.
@@ -239,8 +259,32 @@ jobs:
       release_tag: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
     secrets: inherit
 
+  package-wasm:
+    needs: [wasm]
+    if: always() && needs.wasm.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - config: debug
+            link: static
+            artifact: wasm-debug-static
+          - config: release
+            link: static
+            artifact: wasm-release-static
+    uses: ./.github/workflows/cvcpkg-package.yml
+    with:
+      platform: wasm
+      arch: wasm32
+      config: ${{ matrix.config }}
+      link: ${{ matrix.link }}
+      prefix_artifact: ${{ matrix.artifact }}
+      version: ${{ github.ref_name }}
+      release_tag: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+    secrets: inherit
+
   release:
-    needs: [linux, macos, windows, package-linux, package-macos, package-windows]
+    needs: [linux, macos, windows, wasm, package-linux, package-macos, package-windows, package-wasm]
     runs-on: ubuntu-latest
     # Skip the release step entirely for manual workflow_dispatch
     # runs unless the workflow was triggered on a tag. Run even if
@@ -305,7 +349,7 @@ jobs:
   # a per-platform publish step was interrupted) and logs the total
   # count.  It runs regardless of the release job outcome.
   publish-to-server:
-    needs: [package-linux, package-macos, package-windows]
+    needs: [package-linux, package-macos, package-windows, package-wasm]
     runs-on: ubuntu-latest
     if: |
       always()
@@ -313,7 +357,8 @@ jobs:
       && startsWith(github.ref, 'refs/tags/')
       && (needs.package-linux.result == 'success'
           || needs.package-macos.result == 'success'
-          || needs.package-windows.result == 'success')
+          || needs.package-windows.result == 'success'
+          || needs.package-wasm.result == 'success')
     steps:
       - uses: actions/checkout@v5
 
