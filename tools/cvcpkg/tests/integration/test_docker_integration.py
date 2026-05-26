@@ -66,24 +66,17 @@ def client():
 
 @pytest.fixture(scope="module")
 def bootstrap_admin_token():
-    """Create a bootstrap admin token directly via the DB.
+    """Create a bootstrap admin token via the CLI.
 
-    The server has no tokens at first boot. For Docker integration
-    tests we create one by exec'ing into the backend container or
-    directly via the CLI. This fixture uses the CLI approach which
-    writes to the shared state-dir volume.
+    The server has no tokens at first boot.  The test container has
+    ``cvcpkg-server`` installed and ``CVCPKG_DATABASE_URL`` set by
+    docker-compose.test.yml, so we can call the CLI directly instead
+    of shelling out to ``docker compose exec``.
     """
     import subprocess
 
     result = subprocess.run(
         [
-            "docker",
-            "compose",
-            "-f",
-            "docker-compose.test.yml",
-            "exec",
-            "-T",
-            "backend",
             "cvcpkg-server",
             "token",
             "create",
@@ -92,11 +85,11 @@ def bootstrap_admin_token():
             "--role",
             "admin",
             "--state-dir",
-            "/app/data",
+            "/tmp/cvcpkg-test-state",
         ],
         capture_output=True,
         text=True,
-        cwd=os.path.dirname(os.path.dirname(__file__)) or ".",
+        timeout=30,
     )
     if result.returncode != 0:
         pytest.skip(f"Cannot create bootstrap token: {result.stderr}")
