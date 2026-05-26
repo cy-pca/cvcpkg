@@ -197,8 +197,12 @@ class TestPublishAndInstallLifecycle:
         )
         assert resp.status_code == 200
 
-        # Catalog still lists it, but marked yanked
+        # Default listing hides yanked packages
         resp = client.get("/v1/packages/yaml")
+        assert resp.json()["total"] == 0
+
+        # But visible with include_yanked=true
+        resp = client.get("/v1/packages/yaml?include_yanked=true")
         assert resp.json()["packages"][0]["yanked"] is True
 
         # ── Step 7: Unyank (admin only) ─────────────────────

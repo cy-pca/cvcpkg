@@ -564,6 +564,7 @@ def create_app(
             ),
         ),
         search: str = Query("", description="Full-text search across all attributes"),
+        include_yanked: bool = Query(False, description="Include yanked packages in results"),
         limit: int = Query(100, ge=1, le=1000),
         offset: int = Query(0, ge=0),
         _auth: None = Depends(optional_reader_auth),
@@ -576,6 +577,7 @@ def create_app(
                 platform=platform,
                 release=db_release,
                 search=search,
+                include_yanked=include_yanked,
                 limit=limit,
                 offset=offset,
             )
@@ -586,6 +588,8 @@ def create_app(
             return PackageListResponse(total=total, packages=packages)
         state = _get_state()
         bundles = state.index.get("bundles", [])
+        if not include_yanked:
+            bundles = [b for b in bundles if not b.get("yanked", False)]
         if name:
             bundles = [b for b in bundles if b.get("name") == name]
         if platform:
@@ -617,13 +621,18 @@ def create_app(
     @app.get("/v1/packages/{name}", response_model=PackageListResponse, tags=["packages"])
     async def get_package(
         name: str,
+        include_yanked: bool = Query(False, description="Include yanked packages in results"),
         _auth: None = Depends(optional_reader_auth),
     ):
         if _use_db:
-            packages, total = await _db_packages.get_bundles(name=name)
+            packages, total = await _db_packages.get_bundles(
+                name=name, include_yanked=include_yanked
+            )
             return PackageListResponse(total=total, packages=packages)
         state = _get_state()
         bundles = [b for b in state.index.get("bundles", []) if b.get("name") == name]
+        if not include_yanked:
+            bundles = [b for b in bundles if not b.get("yanked", False)]
         packages = [
             PackageInfo(
                 name=b["name"],

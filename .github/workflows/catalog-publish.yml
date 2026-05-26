@@ -89,7 +89,7 @@ jobs:
           TAG="${{ steps.tag.outputs.tag }}"
           VERSION="${TAG#v}"
           GITHUB_REPO="$GITHUB_REPOSITORY"
-          export TAG VERSION GITHUB_REPO
+          export TAG VERSION
 
           python3 - <<'PYTHON_SCRIPT'
           import hashlib
@@ -103,7 +103,6 @@ jobs:
           index_files = sorted(indexes_dir.glob("*.yaml"))
           tag = os.environ["TAG"]
           version = os.environ["VERSION"]
-          gh_repo = os.environ.get("GITHUB_REPO", "transfix/libcvc-deps")
 
           if not index_files:
               print(f"No index files found — creating empty catalog for {tag}")
@@ -118,10 +117,6 @@ jobs:
                   # Mirror: GitHub Releases CDN (always available as backup).
                   bundle["source_release"] = tag
                   if "archive" in bundle:
-                      gh_url = (
-                          f"https://github.com/{gh_repo}/"
-                          f"releases/download/{tag}/{bundle['archive']}"
-                      )
                       server_url = os.environ.get(
                           "CVCPKG_SERVER_URL", "https://pkg.tx.wtf"
                       )
@@ -130,7 +125,10 @@ jobs:
                       )
                       if not bundle.get("archive_url"):
                           bundle["archive_url"] = pkg_url
-                      bundle["mirror_urls"] = [gh_url]
+                      # Binary archives are no longer mirrored to GitHub
+                      # Releases (only index metadata is uploaded there)
+                      # to avoid hitting abuse-detection limits.
+                      bundle.pop("mirror_urls", None)
                   all_bundles.append(bundle)
 
           print(f"Total bundles: {len(all_bundles)}")

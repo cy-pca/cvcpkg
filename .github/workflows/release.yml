@@ -401,12 +401,10 @@ jobs:
           tag_name: ${{ github.ref_name }}
           prerelease: ${{ inputs.prerelease || false }}
           generate_release_notes: false
-          # Upload monolithic bundles + per-component bundles + indexes.
-          # Per-component archives are named <name>-<ver>-<plat>-<arch>-<cfg>-<link>.<ext>
+          # Only upload index metadata to GitHub Releases.  Binary
+          # archives are published exclusively to pkg.tx.wtf to avoid
+          # hitting GitHub's abuse-detection limits on large uploads.
           files: |
-            artifacts/*.tar.gz
-            artifacts/*.zip
-            artifacts/*.7z
             artifacts/*-index.yaml
           fail_on_unmatched_files: false
 
