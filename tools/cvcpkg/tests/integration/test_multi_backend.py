@@ -196,7 +196,10 @@ def server(request, tmp_path) -> Generator[ServerInstance, None, None]:
     else:
         pytest.skip(f"Unknown backend: {backend}")
 
-    proc = multiprocessing.Process(
+    # Use "spawn" to avoid inheriting stale SQLAlchemy async engine
+    # state from the parent process (e.g. from test_server_integration).
+    ctx = multiprocessing.get_context("spawn")
+    proc = ctx.Process(
         target=_run_server,
         args=(db_url, port, state_dir),
         daemon=True,
