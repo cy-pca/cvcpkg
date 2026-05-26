@@ -950,6 +950,12 @@ def publish(
 
         file_size = p.stat().st_size
         label = f"{name}=={version} ({plat}/{arch}/{build_type}/{link})"
+
+        # Pre-check: skip if this exact variant already exists on the server
+        if _variant_exists(base, headers, name, version, plat, arch, build_type, link):
+            click.echo(f"cvcpkg: skipping {label} (already on server)")
+            continue
+
         click.echo(
             f"cvcpkg: publishing {label} "
             f"[{file_size / 1024 / 1024:.1f} MB] -> {base}"
@@ -1018,6 +1024,42 @@ def _extract_manifest(archive_path: Path) -> dict:
             f"{archive_path.name}: no manifest.yaml found — is this a cvcpkg archive?"
         )
     return manifest
+
+
+def _variant_exists(
+    base: str,
+    headers: dict,
+    name: str,
+    version: str,
+    platform: str,
+    arch: str,
+    build_type: str,
+    link: str,
+) -> bool:
+    """Check if this exact package variant already exists on the server."""
+    import httpx
+
+    try:
+        with httpx.Client(timeout=30) as client:
+            resp = client.get(
+                f"{base}/v1/packages/{name}",
+                params={"platform": platform, "limit": 200},
+                headers=headers,
+            )
+        if resp.status_code != 200:
+            return False
+        for pkg in resp.json().get("packages", []):
+            if (
+                pkg.get("version") == version
+                and pkg.get("platform") == platform
+                and pkg.get("arch") == arch
+                and pkg.get("build_type") == build_type
+                and pkg.get("link") == link
+            ):
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def _publish_simple(base: str, headers: dict, params: dict, archive_path: Path) -> str:
