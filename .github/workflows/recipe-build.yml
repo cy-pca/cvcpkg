@@ -178,12 +178,32 @@ jobs:
             ${{ github.workspace }}/dist
           key: ${{ steps.cache-key.outputs.key }}
 
+      # Validate that the restored cache actually contains a
+      # populated prefix.  A prior cancelled or failed build may
+      # have cached an empty directory.
+      - name: Validate cache contents
+        id: cache-valid
+        shell: bash
+        run: |
+          if [ "${{ steps.prefix-cache.outputs.cache-hit }}" = "true" ] \
+             && [ -d "${{ github.workspace }}/prefix" ] \
+             && [ -n "$(ls -A "${{ github.workspace }}/prefix" 2>/dev/null)" ] \
+             && [ -d "${{ github.workspace }}/dist" ] \
+             && [ -n "$(ls -A "${{ github.workspace }}/dist" 2>/dev/null)" ]; then
+            echo "valid=true" >> "$GITHUB_OUTPUT"
+            echo "Cache is valid — skipping build"
+          else
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            echo "Cache miss or empty — will build from scratch"
+            rm -rf "${{ github.workspace }}/prefix" "${{ github.workspace }}/dist"
+          fi
+
       # ── Pre-build emsdk for wasm cross-compilation ──
       # Wasm recipes run on a Linux host but target wasm. The emsdk
       # recipe is a linux-platform build-tool that provides the
       # Emscripten compiler. Install it into the prefix first.
       - name: Pre-build emsdk (wasm)
-        if: inputs.platform == 'wasm' && steps.prefix-cache.outputs.cache-hit != 'true'
+        if: inputs.platform == 'wasm' && steps.cache-valid.outputs.valid != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -193,7 +213,7 @@ jobs:
 
       # ── Build and package all recipes (per-component) ──
       - name: Build and package all recipes (cvcpkg pack-all)
-        if: steps.prefix-cache.outputs.cache-hit != 'true'
+        if: steps.cache-valid.outputs.valid != 'true'
         shell: bash
         run: |
           set -euo pipefail
