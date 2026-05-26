@@ -200,7 +200,7 @@ async function init() {
     allPackages = data.packages || [];
   } catch (err) {
     document.getElementById('pkg-body').innerHTML =
-      '<tr><td colspan="7" class="has-text-centered has-text-grey-light">Failed to load packages.</td></tr>';
+      '<tr><td colspan="6" class="has-text-centered has-text-grey-light">Failed to load packages.</td></tr>';
     return;
   }
   // Fetch recipe metadata for license/description fallback and mainline badge
@@ -263,10 +263,8 @@ function render() {
       (p.arch || '').toLowerCase().includes(q) ||
       (p.build_type || '').toLowerCase().includes(q) ||
       (p.link || '').toLowerCase().includes(q) ||
-      (p.description || '').toLowerCase().includes(q) ||
       (p.tags || '').toLowerCase().includes(q) ||
       (p.maintainer || '').toLowerCase().includes(q) ||
-      (p.license || '').toLowerCase().includes(q) ||
       (p.release_tag || '').toLowerCase().includes(q)
     );
   }
@@ -281,8 +279,6 @@ function render() {
       groups[p.name] = {
         name: p.name,
         version: p.version,
-        description: p.description || '',
-        license: p.license || '',
         builds: [],
         platforms: new Set(),
         totalSize: 0,
@@ -320,7 +316,7 @@ function render() {
   if (sorted.length === 0) {
     const hasFilter = searchTerm || platformFilter || releaseFilter;
     tbody.innerHTML = `
-      <tr><td colspan="7">
+      <tr><td colspan="6">
         <div class="empty-hero has-text-centered">
           <span class="icon is-large has-text-grey-light"><i class="fas fa-box-open fa-3x"></i></span>
           <p class="title is-5 has-text-grey-light mt-4">
@@ -346,15 +342,11 @@ function render() {
         <a class="pkg-link" href="/package/${encodeURIComponent(g.name)}">
           <strong>${esc(g.name)}</strong>
         </a>
-        ${g.description ? '<br><span class="is-size-7 has-text-grey-light">' + esc(g.description) + '</span>' : ''}
       </td>
       <td><code>${esc(g.version)}</code></td>
       <td>${[...g.platforms].sort().map(p => platformTag(p)).join(' ')}</td>
       <td><span class="tag is-dark is-rounded">${g.builds.length}</span></td>
       <td><span class="is-family-monospace is-size-7 has-text-grey-light">${fmtSize(g.totalSize)}</span></td>
-      <td>
-        ${g.license ? '<span class="tag is-dark is-rounded is-small">' + esc(g.license) + '</span>' : '<span class="has-text-grey">&mdash;</span>'}
-      </td>
       <td>${badge}</td>
     </tr>
   `}).join('');
@@ -449,7 +441,7 @@ def landing_html() -> str:
         <div class="field">
           <div class="control has-icons-left">
             <input class="input is-dark" type="text" id="search"
-                   placeholder="Search packages by name, platform, license, tags..." />
+                   placeholder="Search packages by name, platform, tags..." />
             <span class="icon is-left"><i class="fas fa-search"></i></span>
           </div>
         </div>
@@ -489,13 +481,12 @@ def landing_html() -> str:
             <th>Platforms</th>
             <th class="is-sortable" data-key="builds">Builds <span class="sort-arrow"></span></th>
             <th class="is-sortable" data-key="totalSize">Size <span class="sort-arrow"></span></th>
-            <th class="is-sortable" data-key="license">License <span class="sort-arrow"></span></th>
             <th>Source</th>
           </tr>
         </thead>
         <tbody id="pkg-body">
           <tr>
-            <td colspan="7" class="has-text-centered py-6">
+            <td colspan="6" class="has-text-centered py-6">
               <span class="icon is-large has-text-link">
                 <i class="fas fa-spinner fa-spin fa-2x"></i>
               </span>
@@ -562,7 +553,7 @@ async function init(name) {
     renderBuilds();
   } catch (err) {
     document.getElementById('builds-body').innerHTML =
-      '<tr><td colspan="8" class="has-text-centered has-text-grey-light">Failed to load package data.</td></tr>';
+      '<tr><td colspan="6" class="has-text-centered has-text-grey-light">Failed to load package data.</td></tr>';
   }
   // Fetch dependency graph and recipe metadata
   try {
