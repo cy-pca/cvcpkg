@@ -956,10 +956,7 @@ def publish(
             click.echo(f"cvcpkg: skipping {label} (already on server)")
             continue
 
-        click.echo(
-            f"cvcpkg: publishing {label} "
-            f"[{file_size / 1024 / 1024:.1f} MB] -> {base}"
-        )
+        click.echo(f"cvcpkg: publishing {label} " f"[{file_size / 1024 / 1024:.1f} MB] -> {base}")
 
         params = {
             "name": name,
@@ -990,9 +987,7 @@ def publish(
         click.echo(f"cvcpkg: {len(failed)} archive(s) failed:", err=True)
         for f in failed:
             click.echo(f"  - {f}", err=True)
-        raise click.ClickException(
-            f"publish completed with {len(failed)} error(s)"
-        )
+        raise click.ClickException(f"publish completed with {len(failed)} error(s)")
 
 
 def _extract_manifest(archive_path: Path) -> dict:
