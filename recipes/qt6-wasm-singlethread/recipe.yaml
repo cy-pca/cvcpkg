@@ -7,11 +7,12 @@ recipe:
   homepage: https://www.qt.io/
   license: LGPL-3.0-only
   tags: [graphics, wasm]
-  # Qt 6 built for the wasm_singlethread target.  Produces static .a
-  # libraries that link into Emscripten-compiled WASM applications.
-  # The host-side tools (moc, rcc, uic) are native binaries bundled
-  # inside for convenience so consumers don't need a separate native
-  # Qt6 install at matching version.
+  description: >-
+    Qt 6 built for the wasm_singlethread target.  Produces static .a
+    libraries that link into Emscripten-compiled WASM applications.
+    The host-side tools (moc, rcc, uic) are native binaries bundled
+    inside for convenience so consumers don't need a separate native
+    Qt6 install at matching version.
 
 source:
   type: tarball
@@ -71,3 +72,31 @@ package:
 abi:
   cxx_std: 17
   link: static
+
+toolchain:
+  emscripten:
+    min_version: "3.1.50"
+    recommended: "5.0"
+    description: "Emscripten SDK for C++ → WASM cross-compilation (provided by emsdk recipe)"
+  cc:
+    min_version: "any"
+    description: "Native C/C++17 compiler needed for host tools (moc, rcc, uic)"
+
+notes:
+  - title: "Cross-compiled to wasm from a native host"
+    platforms: [wasm]
+    description: >-
+      This recipe targets the 'wasm' platform but runs on a native host
+      (linux or macos).  The emsdk dependency provides emcc/em++.  The
+      build matrix uses 'host_platform' to indicate the native build host.
+  - title: "Static-only build"
+    platforms: [wasm]
+    description: >-
+      WASM builds are always static.  The resulting .a libraries are linked
+      into the final .wasm binary by emcc at application link time.
+  - title: "Very long build time"
+    platforms: [wasm]
+    description: >-
+      A full Qt6 cross-compilation for WASM can take 30-60 minutes on a
+      fast machine.  The recipe builds only qtbase (Core, Gui, Widgets,
+      Network).

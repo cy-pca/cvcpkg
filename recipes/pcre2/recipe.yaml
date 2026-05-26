@@ -7,6 +7,9 @@ recipe:
   homepage: https://www.pcre.org/
   license: BSD-3-Clause
   tags: [utils]
+  description: >-
+    PCRE2 — Perl Compatible Regular Expressions library.
+    Used as a dependency of SWIG.
 
 source:
   type: tarball
@@ -50,5 +53,12 @@ package:
 test:
   script: test.sh
 
+toolchain:
+  cc:
+    min_version: "any"
+    description: "C99-capable compiler"
+
 abi:
   cxx_std: 17
+
+notes: []

@@ -7,8 +7,9 @@ recipe:
   homepage: https://www.gnu.org/software/bison/
   license: GPL-3.0-or-later
   tags: [tools, codegen]
-  # GNU Bison — parser generator required by SWIG and other code generators.
-  # Build-time host tool only.
+  description: >-
+    GNU Bison — parser generator required by SWIG and other code generators.
+    Build-time host tool only.
 
 source:
   type: tarball
@@ -44,3 +45,16 @@ package:
     - share/bison/
     - share/aclocal/bison*
     - share/man/man1/bison*
+
+toolchain:
+  cc:
+    min_version: "any"
+    description: "C99-capable compiler (gcc, clang, or MSVC)"
+
+notes:
+  - title: "Windows uses winflexbison pre-built binaries"
+    platforms: [windows]
+    description: >-
+      On Windows the recipe downloads winflexbison pre-built binaries
+      instead of building GNU Bison from source, since the autotools
+      build system is not available.

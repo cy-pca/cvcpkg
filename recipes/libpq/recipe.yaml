@@ -7,14 +7,15 @@ recipe:
   homepage: https://www.postgresql.org/
   license: PostgreSQL
   tags: [database]
-  # libpq — the PostgreSQL C client library, built standalone.
-  # Enables Qt6 QPSQL SQL driver plugin and libcvc database layer.
-  # Only the client library is built, not the PostgreSQL server.
+  description: >-
+    libpq — the PostgreSQL C client library, built standalone.
+    Enables Qt6 QPSQL SQL driver plugin and libcvc database layer.
+    Only the client library is built, not the PostgreSQL server.
 
 source:
   type: tarball
-  url: https://ftp.postgresql.org/pub/source/v18.4/postgresql-18.4.tar.bz2
-  sha256: "FIXME"  # Compute: curl -sL <url> | sha256sum
+  url: https://github.com/postgres/postgres/archive/refs/tags/REL_18_4.tar.gz
+  sha256: "9b4f86dd2ac00b914582e9893d1bad1f54bc9be7108fa794318b8184f921ec08"
   strip_components: 1
 
 patches: []
@@ -28,6 +29,8 @@ depends:
   host_tools:
     - meson
     - ninja
+    - flex
+    - bison
 
 build:
   matrix:
@@ -45,8 +48,10 @@ build:
 package:
   files:
     - lib/libpq*
+    - lib/*/libpq*
     - lib/pq*
     - lib/pkgconfig/libpq.pc
+    - lib/*/pkgconfig/libpq.pc
     - include/libpq-fe.h
     - include/libpq-events.h
     - include/libpq/
@@ -57,3 +62,36 @@ package:
 
 abi:
   cxx_std: 17
+
+toolchain:
+  cc:
+    min_version: "any"
+    description: "C99-capable compiler"
+  meson:
+    min_version: "0.54"
+    description: "Meson build system required by PostgreSQL >= 16"
+
+notes:
+  - title: "Meson build system required"
+    platforms: [linux, macos]
+    description: >-
+      PostgreSQL 16+ uses Meson as its build system.  The meson and
+      ninja host tools must be available.  On Ubuntu: apt install meson ninja-build.
+  - title: "flex and bison required"
+    platforms: [linux, macos]
+    description: >-
+      PostgreSQL requires flex and bison to build its parsers.
+      On Ubuntu: apt install flex bison.
+  - title: "Full PostgreSQL built, only libpq packaged"
+    platforms: [linux, macos, windows]
+    description: >-
+      The meson build builds the entire PostgreSQL tree including the
+      server.  Only libpq client library artifacts are selected by the
+      package.files globs.  This is because PostgreSQL's meson build
+      does not support building just libpq standalone.
+  - title: "Multiarch library path on Debian/Ubuntu"
+    platforms: [linux]
+    description: >-
+      On Debian-based systems, meson installs libraries to
+      lib/x86_64-linux-gnu/ instead of lib/.  The package.files globs
+      include lib/*/libpq* to handle this.

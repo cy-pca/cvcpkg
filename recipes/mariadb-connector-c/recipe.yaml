@@ -7,8 +7,9 @@ recipe:
   homepage: https://mariadb.com/downloads/connectors/connectors-data-access/
   license: Apache-2.0
   tags: [database]
-  # MariaDB Connector/C — wire-compatible MySQL client library.
-  # Enables Qt6 QMYSQL SQL driver plugin and libcvc database layer.
+  description: >-
+    MariaDB Connector/C — wire-compatible MySQL client library.
+    Enables Qt6 QMYSQL SQL driver plugin and libcvc database layer.
 
 source:
   type: tarball
@@ -54,3 +55,15 @@ package:
 
 abi:
   cxx_std: 17
+
+toolchain:
+  cc:
+    min_version: "any"
+    description: "C99-capable compiler"
+
+notes:
+  - title: "Depends on OpenSSL and zlib"
+    platforms: [linux, macos, windows]
+    description: >-
+      The openssl and zlib recipes are listed as build dependencies
+      and will be resolved and built automatically before this recipe.
