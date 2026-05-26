@@ -1,0 +1,46 @@
+schema_version: 1
+recipe:
+  name: emsdk
+  upstream_version: "5.0.7"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  homepage: https://emscripten.org/
+  license: MIT
+  tags: [tools, wasm]
+  # The Emscripten SDK provides the C/C++ → wasm compiler toolchain.
+  # This is a build-time host tool — it runs natively on the build host
+  # and cross-compiles to the "wasm" platform target.
+
+source:
+  type: git
+  url: https://github.com/emscripten-core/emsdk.git
+  tag: "5.0.7"
+  # No tarball SHA256 — we clone + activate the emsdk at a pinned tag.
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - python3
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+      env: {}
+    - platform: macos
+      script: build.sh
+      env: {}
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - emsdk/
+    - upstream/
+    - node/
+    - bin/
+    - emsdk_env.sh
+    - emsdk_env.ps1
