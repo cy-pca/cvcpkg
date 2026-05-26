@@ -29,6 +29,11 @@ on:
         required: false
         type: string
         default: ''
+      runner:
+        description: "JSON runs-on override (e.g. '[\"self-hosted\",\"Linux\",\"X64\",\"cvcpkg-builder\"]'). Leave empty for platform default."
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -39,8 +44,9 @@ env:
 
 jobs:
   build:
-    runs-on: ${{ inputs.platform == 'macos' && 'macos-latest' || inputs.platform == 'windows' && 'windows-latest' || fromJSON('["self-hosted","Linux","X64","cvcpkg-builder"]') }}
-    # wasm cross-compiles on linux; linux+wasm builds use self-hosted runners
+    runs-on: ${{ inputs.runner != '' && fromJSON(inputs.runner) || inputs.platform == 'macos' && 'macos-latest' || inputs.platform == 'windows' && 'windows-latest' || 'ubuntu-latest' }}
+    # Default: ubuntu-latest for linux/wasm, platform-latest for mac/win.
+    # Callers can override via the 'runner' input to route to self-hosted.
 
     steps:
       - uses: actions/checkout@v5
