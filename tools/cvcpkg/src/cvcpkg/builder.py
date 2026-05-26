@@ -408,6 +408,21 @@ def run_test(ctx: BuildContext) -> None:
     env = os.environ.copy()
     env["CVC_PREFIX"] = ctx.install_dir.as_posix()
     env["CVC_INSTALL_DIR"] = ctx.install_dir.as_posix()
+    env["CVC_DEPS_PREFIX"] = ctx.prefix.as_posix()
+
+    # Ensure shared-library dependencies (e.g. abseil for protoc) are
+    # discoverable at test time.  Include both the component's own lib
+    # dir and the shared prefix where dependencies were installed.
+    lib_dirs = [
+        (ctx.install_dir / "lib").as_posix(),
+        (ctx.prefix / "lib").as_posix(),
+    ]
+    if sys.platform == "darwin":
+        existing = env.get("DYLD_LIBRARY_PATH", "")
+        env["DYLD_LIBRARY_PATH"] = ":".join(lib_dirs + ([existing] if existing else []))
+    else:
+        existing = env.get("LD_LIBRARY_PATH", "")
+        env["LD_LIBRARY_PATH"] = ":".join(lib_dirs + ([existing] if existing else []))
 
     bash = _find_bash()
     print(f"cvcpkg: running test for {ctx.recipe.name}")
