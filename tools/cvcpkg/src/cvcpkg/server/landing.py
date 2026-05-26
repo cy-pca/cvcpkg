@@ -523,6 +523,33 @@ async function init(name) {
     document.getElementById('builds-body').innerHTML =
       '<tr><td colspan="8" class="has-text-centered has-text-grey-light">Failed to load package data.</td></tr>';
   }
+  // Fetch dependency graph
+  try {
+    const dresp = await fetch('/v1/deps');
+    const ddata = await dresp.json();
+    renderDeps(ddata.forward || {}, ddata.reverse || {});
+  } catch (_) {}
+}
+
+function renderDeps(forward, reverse) {
+  const deps = forward[pkgName] || [];
+  const depEl = document.getElementById('pkg-deps');
+  if (deps.length > 0) {
+    depEl.innerHTML = deps.sort().map(d =>
+      '<a class="tag is-link is-light is-rounded mr-1 mb-1" href="/package/' +
+      encodeURIComponent(d) + '">' + esc(d) + '</a>'
+    ).join('');
+    depEl.parentElement.style.display = '';
+  }
+  const rdeps = reverse[pkgName] || [];
+  const rdepEl = document.getElementById('pkg-rdeps');
+  if (rdeps.length > 0) {
+    rdepEl.innerHTML = rdeps.sort().map(d =>
+      '<a class="tag is-success is-light is-rounded mr-1 mb-1" href="/package/' +
+      encodeURIComponent(d) + '">' + esc(d) + '</a>'
+    ).join('');
+    rdepEl.parentElement.style.display = '';
+  }
 }
 
 function renderInfo() {
@@ -679,6 +706,12 @@ def package_detail_html(name: str) -> str:
           </div>
           <div style="display:none"><strong class="has-text-grey-light">Tags:</strong>
             <span id="pkg-tags"></span>
+          </div>
+          <div style="display:none"><strong class="has-text-grey-light">Dependencies:</strong>
+            <span id="pkg-deps"></span>
+          </div>
+          <div style="display:none"><strong class="has-text-grey-light">Used By:</strong>
+            <span id="pkg-rdeps"></span>
           </div>
         </div>
       </div>
