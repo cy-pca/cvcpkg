@@ -948,7 +948,7 @@ def package_detail_html(name: str) -> str:
       </h3>
       <div class="content">
         <p class="has-text-grey-lighter">Install the pre-built binary:</p>
-        <pre class="has-background-dark has-text-success p-3" style="border-radius:6px;">cvcpkg install {safe_name}</pre>
+        <pre class="has-background-dark has-text-success p-3" style="border-radius:6px;">cvcpkg install {safe_name} --prefix /path/to/prefix</pre>
 
         <p class="has-text-grey-lighter mt-4">Or build from source using the recipe:</p>
         <pre class="has-background-dark has-text-success p-3" style="border-radius:6px;">cvcpkg build {safe_name} --prefix /path/to/prefix</pre>
