@@ -356,20 +356,10 @@ def install(
         elif fallback_to_source:
             source_only = requested_names
     else:
-        cfg = load_user_config()
-        cfg = merge_cli_overrides(cfg, catalog_url=catalog_url or "")
-
-        if source == "server":
-            primary = catalog_url or cfg.catalog_primary
-            fallbacks: list[str] = []
-        elif source == "github":
-            primary = catalog_url or GITHUB_CATALOG_URL
-            fallbacks = []
-        else:  # auto
-            primary = catalog_url or cfg.catalog_primary
-            fallbacks = cfg.catalog_fallbacks
-
-        cat = fetch_catalog(primary, cache_dir=default_cache_dir(), fallback_urls=fallbacks)
+        # Catalog was unreachable — all requested components must be
+        # built from source (the fallback_to_source flag is already
+        # verified above, so this branch is only reachable when the
+        # flag is set).
         source_only = requested_names
 
     if picked:
