@@ -93,6 +93,19 @@ services:
         networks:
             - cvcpkg-test
 
+    playwright:
+        build:
+            context: .
+            dockerfile: Dockerfile.playwright
+        container_name: cvcpkg-test-playwright
+        depends_on:
+            backend:
+                condition: service_healthy
+        environment:
+            CVCPKG_TEST_SERVER_URL: http://backend:8420
+        networks:
+            - cvcpkg-test
+
 volumes:
     cvcpkg-state:
 

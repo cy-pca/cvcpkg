@@ -1,0 +1,31 @@
+# Dockerfile for cvcpkg Playwright browser integration tests
+#
+# Uses the official Playwright image which bundles Chromium, Firefox,
+# and WebKit along with all required system libraries.
+#
+# Build: docker build -f Dockerfile.playwright -t cvcpkg-playwright .
+# Run:   docker run --rm --network cvcpkg-test cvcpkg-playwright
+
+FROM mcr.microsoft.com/playwright/python:v1.52.0-noble
+
+WORKDIR /app
+
+# Install Poetry and project deps (no browser-incompatible extras needed)
+ENV POETRY_HOME=/opt/poetry \
+    POETRY_VERSION=1.8.2
+RUN curl -sSL https://install.python-poetry.org | python3 - && \
+    ln -s /opt/poetry/bin/poetry /usr/local/bin/poetry
+
+ENV POETRY_VIRTUALENVS_CREATE=false
+
+COPY pyproject.toml poetry.lock* ./
+RUN poetry install --no-interaction --no-ansi --with dev -E server
+
+COPY . .
+RUN pip install --no-cache-dir -e ".[server]" && \
+    pip install --no-cache-dir pytest-playwright && \
+    playwright install --with-deps chromium
+
+ENV PYTHONPATH=/app
+
+CMD ["pytest", "tests/integration/test_browser.py", "-v", "--tb=short", "--browser", "chromium"]
