@@ -4,6 +4,8 @@ recipe:
   upstream_version: "4.4.1"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
+  maintainer_email: "cvcpkg@cyberpcangel.com"
+  maintainer_url: "https://cyberpcangel.com"
   homepage: https://swig.org/
   license: GPL-3.0-or-later
   tags: [tools, codegen]

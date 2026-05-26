@@ -55,10 +55,14 @@ cmake --build "${WASM_BUILD_DIR}" -j "${CVC_JOBS}"
 cmake --install "${WASM_BUILD_DIR}"
 
 # Also copy the native host tools into the install prefix for convenience.
+# Qt 6.8+ moved moc/rcc/uic from bin/ to libexec/, so check both.
 for tool in moc rcc uic qmake6; do
-    if [[ -f "${CVC_BUILD_DIR}/host-qt-install/bin/${tool}" ]]; then
-        cp "${CVC_BUILD_DIR}/host-qt-install/bin/${tool}" "${CVC_INSTALL_DIR}/bin/"
-    fi
+    for dir in bin libexec; do
+        if [[ -f "${CVC_BUILD_DIR}/host-qt-install/${dir}/${tool}" ]]; then
+            cp "${CVC_BUILD_DIR}/host-qt-install/${dir}/${tool}" "${CVC_INSTALL_DIR}/bin/"
+            break
+        fi
+    done
 done
 
 echo "Qt 6 wasm_singlethread installed to ${CVC_INSTALL_DIR}"

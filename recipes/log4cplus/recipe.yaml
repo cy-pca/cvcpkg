@@ -4,7 +4,8 @@ recipe:
   upstream_version: "2.1.2"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
-  maintainer_email: "joe.rivera@cyberpcangel.com"
+  maintainer_email: "cvcpkg@cyberpcangel.com"
+  maintainer_url: "https://cyberpcangel.com"
   description: "log4cplus — a simple-to-use C++ logging library modeled after Java's log4j."
   homepage: https://log4cplus.sourceforge.io/
   license: Apache-2.0

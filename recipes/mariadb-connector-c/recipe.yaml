@@ -4,6 +4,8 @@ recipe:
   upstream_version: "3.4.8"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
+  maintainer_email: "cvcpkg@cyberpcangel.com"
+  maintainer_url: "https://cyberpcangel.com"
   homepage: https://mariadb.com/downloads/connectors/connectors-data-access/
   license: Apache-2.0
   tags: [database]

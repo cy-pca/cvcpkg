@@ -4,6 +4,8 @@ recipe:
   upstream_version: "3.8.2"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
+  maintainer_email: "cvcpkg@cyberpcangel.com"
+  maintainer_url: "https://cyberpcangel.com"
   homepage: https://www.gnu.org/software/bison/
   license: GPL-3.0-or-later
   tags: [tools, codegen]
