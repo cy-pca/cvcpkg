@@ -148,7 +148,7 @@ jobs:
         working-directory: tools/cvcpkg
         run: |
           docker compose -f docker-compose.test.yml down -v 2>/dev/null || true
-          docker compose -f docker-compose.test.yml build --no-cache test
+          docker compose -f docker-compose.test.yml build --no-cache test playwright
           docker compose -f docker-compose.test.yml up -d --build postgres backend
           echo "Waiting for backend health..."
           timeout 120 bash -c 'until curl -sf http://127.0.0.1:8421/healthz; do sleep 2; done'
@@ -161,6 +161,11 @@ jobs:
           CVCPKG_TEST_SERVER_URL: http://127.0.0.1:8421
         run: |
           docker compose -f docker-compose.test.yml run --build --rm test
+
+      - name: Run Playwright browser tests
+        working-directory: tools/cvcpkg
+        run: |
+          docker compose -f docker-compose.test.yml run --build --rm playwright
 
       - name: Collect logs on failure
         if: failure()
