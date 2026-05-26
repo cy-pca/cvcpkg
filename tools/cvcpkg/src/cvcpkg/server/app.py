@@ -1525,7 +1525,7 @@ def create_app(
             raise HTTPException(400, "logo must be 512 KB or smaller")
 
         # Save to state_dir/logos/<slug>.<ext>
-        logos_dir = state.state_dir / "logos"
+        logos_dir = _get_state().state_dir / "logos"
         logos_dir.mkdir(parents=True, exist_ok=True)
         # Remove any existing logo for this org
         for old in logos_dir.glob(f"{slug}.*"):
@@ -1547,7 +1547,7 @@ def create_app(
     @app.get("/v1/orgs/{slug}/logo", tags=["organizations"])
     async def serve_org_logo(slug: str):
         """Serve the uploaded logo for an organization."""
-        logos_dir = state.state_dir / "logos"
+        logos_dir = _get_state().state_dir / "logos"
         for candidate in logos_dir.glob(f"{slug}.*"):
             if candidate.is_file():
                 ct_map = {".png": "image/png", ".jpg": "image/jpeg", ".svg": "image/svg+xml", ".webp": "image/webp"}

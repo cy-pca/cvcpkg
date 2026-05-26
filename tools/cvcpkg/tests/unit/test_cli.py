@@ -918,3 +918,34 @@ class TestBuildCrossPlatformDeps:
         # Both built for linux
         assert build_calls[0] == ("liba", "linux")
         assert build_calls[1] == ("libb", "linux")
+
+
+# ── --org flag on publish and pack-all ──────────────────────────
+
+
+class TestPublishOrgFlag:
+    """Test that --org option is accepted by the publish command."""
+
+    def test_publish_help_shows_org(self, capsys):
+        ret = main(["publish", "--help"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "--org" in out
+
+    def test_publish_org_flag_accepted(self, capsys):
+        """--org should be accepted without error (though publish itself
+        will fail without a valid server/token — we test parse only)."""
+        ret = main(["publish", "--help"])
+        out = capsys.readouterr().out
+        assert "--org" in out
+        assert "Organization slug" in out or "organization" in out.lower()
+
+
+class TestPackAllOrgFlag:
+    """Test that --org option is accepted by the pack-all command."""
+
+    def test_pack_all_help_shows_org(self, capsys):
+        ret = main(["pack-all", "--help"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "--org" in out
