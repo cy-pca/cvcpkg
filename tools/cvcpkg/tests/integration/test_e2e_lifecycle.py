@@ -502,9 +502,12 @@ class TestAuditTrailVerification:
         """The publish audit entry should reference zlib."""
         r = client.get("/v1/audit", headers=admin_headers)
         entries = r.json()["entries"]
-        publish_entries = [e for e in entries if e["action"] == "publish"]
+        publish_entries = [
+            e
+            for e in entries
+            if e["action"] == "publish" and "zlib" in e.get("target", "")
+        ]
         assert len(publish_entries) >= 1
-        assert "zlib" in publish_entries[0]["target"]
         assert publish_entries[0]["actor"] == "e2e-publisher"
 
 
