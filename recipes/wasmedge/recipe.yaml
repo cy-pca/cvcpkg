@@ -1,0 +1,92 @@
+schema_version: 1
+recipe:
+  name: wasmedge
+  upstream_version: "0.17.0"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  maintainer_email: "cvcpkg@cyberpcangel.com"
+  maintainer_url: "https://cyberpcangel.com"
+  homepage: https://wasmedge.org/
+  license: Apache-2.0
+  tags: [wasm, runtime]
+  description: >
+    WasmEdge — high-performance WASM runtime with WASI-NN support
+    for ML inference inside Wasm modules.  CMake-based C++ project.
+
+source:
+  type: tarball
+  url: https://github.com/WasmEdge/WasmEdge/archive/refs/tags/0.17.0.tar.gz
+  sha256: "7db6052113447efb6901746a7ca24e1a22cb9fe1edcca623b0307e7a5c5216ae"
+  strip_components: 1
+
+patches:
+  - 0001-disable-Werror-for-gcc13-compat.patch
+
+depends:
+  build: []
+  host_tools:
+    - cmake
+    - ninja
+
+toolchain:
+  llvm:
+    min_version: "14"
+    recommended: "18"
+    install:
+      apt: "llvm-18-dev lld-18 liblld-18-dev"
+      brew: "llvm@18"
+      choco: "llvm --version=18"
+  gcc:
+    min_version: "11"
+  clang:
+    min_version: "14"
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libwasmedge*
+    - lib/wasmedge*
+    - lib/cmake/wasmedge/
+    - include/wasmedge/
+  cmake_packages:
+    - { name: wasmedge, targets: ["wasmedge::wasmedge"] }
+
+abi:
+  cxx_std: 17
+
+notes:
+  - title: "-Werror breaks GCC 13+ builds"
+    platforms: [linux]
+    description: >
+      WasmEdge 0.17.0 hardcodes -Werror in cmake/Helper.cmake.
+      GCC 13 emits -Warray-bounds and -Wmaybe-uninitialized warnings
+      on valid code in coredump.cpp and other files, causing build
+      failures.  The patch 0001-disable-Werror-for-gcc13-compat.patch
+      replaces -Werror with -Wno-error.
+  - title: "CLI tools fail to link (shared lib build)"
+    platforms: [linux]
+    description: >
+      The wasmedge and wasmedgec CLI tool targets fail to link when
+      building with -DWASMEDGE_BUILD_SHARED_LIB=ON due to unresolved
+      symbols across the internal shared library split.  This is an
+      upstream issue in 0.17.0.  We build with -DWASMEDGE_BUILD_TOOLS=OFF
+      since the C API shared library (libwasmedge.so) is what downstream
+      projects consume.
+  - title: "Static library bundling broken"
+    platforms: [linux]
+    description: >
+      Building with -DWASMEDGE_BUILD_STATIC_LIB=ON fails because the
+      CMake bundling step tries to 'ar -x' shared .so files into a
+      combined static archive.  Disabled via -DWASMEDGE_BUILD_STATIC_LIB=OFF.

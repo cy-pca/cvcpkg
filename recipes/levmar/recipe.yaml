@@ -4,7 +4,8 @@ recipe:
   upstream_version: "2.6"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
-  maintainer_email: "joe.rivera@cyberpcangel.com"
+  maintainer_email: "cvcpkg@cyberpcangel.com"
+  maintainer_url: "https://cyberpcangel.com"
   description: "levmar — a Levenberg-Marquardt nonlinear least squares algorithm in C/C++."
   homepage: https://users.ics.forth.gr/~lourakis/levmar/
   license: GPL-2.0-or-later

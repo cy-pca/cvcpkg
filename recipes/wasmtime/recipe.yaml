@@ -1,0 +1,70 @@
+schema_version: 1
+recipe:
+  name: wasmtime
+  upstream_version: "45.0.0"
+  cvc_revision: 1
+  maintainer: "Bytecode Alliance"
+  homepage: https://wasmtime.dev/
+  license: Apache-2.0
+  tags: [wasm, runtime]
+  description: >-
+    Wasmtime — production-quality WASM runtime from the Bytecode Alliance.
+    Ships a C API that can be consumed from C++ via header-only bindings.
+    Supports WASI (WebAssembly System Interface).
+    This recipe downloads pre-built C API release artifacts from GitHub
+    rather than building from source (which would require a Rust toolchain).
+
+source:
+  # Source URL is platform-dependent; build scripts download the correct
+  # artifact at build time.  The recipe.yaml source entry is a placeholder
+  # pointing to the release page.
+  type: prebuilt
+  base_url: https://github.com/bytecodealliance/wasmtime/releases/download/v45.0.0
+  artifacts:
+    linux-x86_64: wasmtime-v45.0.0-x86_64-linux-c-api.tar.xz
+    macos-arm64: wasmtime-v45.0.0-aarch64-macos-c-api.tar.xz
+    macos-x86_64: wasmtime-v45.0.0-x86_64-macos-c-api.tar.xz
+    windows-x86_64: wasmtime-v45.0.0-x86_64-windows-c-api.zip
+  # FIXME: pin SHA256 per artifact once CI validates downloads.
+
+patches: []
+
+depends:
+  build: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env: {}
+    - platform: macos
+      script: build.sh
+      env: {}
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libwasmtime*
+    - lib/wasmtime*
+    - lib/cmake/wasmtime/
+    - include/wasmtime.h
+    - include/wasmtime/
+    - include/wasm.h
+    - include/wasi.h
+  cmake_packages:
+    - { name: wasmtime, targets: ["wasmtime::wasmtime"] }
+
+toolchain:
+  note: >-
+    Pre-built binaries; no compiler required at build time.
+    A Rust toolchain would be needed only to build from source.
+
+notes:
+  - title: "Pre-built C API artifacts"
+    platforms: [linux, macos, windows]
+    description: >-
+      Downloads pre-compiled release artifacts from GitHub Releases.
+      The build script stages headers, libraries, and generates a CMake
+      config file.  No compilation occurs.

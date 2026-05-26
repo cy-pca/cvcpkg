@@ -4,7 +4,8 @@ recipe:
   upstream_version: "1.86.0"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
-  maintainer_email: "joe.rivera@cyberpcangel.com"
+  maintainer_email: "cvcpkg@cyberpcangel.com"
+  maintainer_url: "https://cyberpcangel.com"
   description: "Boost C++ Libraries — portable, peer-reviewed C++ source libraries for general-purpose programming."
   homepage: https://www.boost.org/
   license: BSL-1.0

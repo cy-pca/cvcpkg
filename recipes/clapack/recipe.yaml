@@ -4,7 +4,8 @@ recipe:
   upstream_version: "3.2.1"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
-  maintainer_email: "joe.rivera@cyberpcangel.com"
+  maintainer_email: "cvcpkg@cyberpcangel.com"
+  maintainer_url: "https://cyberpcangel.com"
   description: "CLAPACK — a C translation of the Fortran LAPACK linear algebra package."
   homepage: https://www.netlib.org/clapack/
   license: BSD-3-Clause

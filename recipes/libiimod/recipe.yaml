@@ -4,7 +4,8 @@ recipe:
   upstream_version: "4.0.6"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
-  maintainer_email: "joe.rivera@cyberpcangel.com"
+  maintainer_email: "cvcpkg@cyberpcangel.com"
+  maintainer_url: "https://cyberpcangel.com"
   description: "IMOD image I/O library — low-level routines for reading and writing MRC, TIFF, and other microscopy image formats."
   homepage: https://github.com/LabShare-Archive/IMOD
   license: GPL-2.0-or-later
