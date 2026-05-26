@@ -332,6 +332,21 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
         if emsdk_env.is_file():
             env["CVC_EMSDK_DIR"] = str(ctx.prefix)
 
+    # Ensure shared-library dependencies installed in the prefix are
+    # discoverable at build time.  Build steps may invoke tools (e.g.
+    # gRPC running protoc) that link against shared libs from earlier
+    # recipes.
+    lib_dirs = [
+        str((ctx.prefix / "lib").resolve()),
+        str((ctx.install_dir / "lib").resolve()),
+    ]
+    if sys.platform == "darwin":
+        existing = env.get("DYLD_LIBRARY_PATH", "")
+        env["DYLD_LIBRARY_PATH"] = ":".join(lib_dirs + ([existing] if existing else []))
+    elif ctx.platform != "wasm":
+        existing = env.get("LD_LIBRARY_PATH", "")
+        env["LD_LIBRARY_PATH"] = ":".join(lib_dirs + ([existing] if existing else []))
+
     # Merge matrix-entry env overrides
     env.update(matrix.env)
     return env
