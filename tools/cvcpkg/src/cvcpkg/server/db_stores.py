@@ -18,8 +18,8 @@ from sqlalchemy import or_, select, update
 
 from cvcpkg.server.db import (
     AuditRow,
-    OrgMemberRow,
     OrganizationRow,
+    OrgMemberRow,
     PackageRow,
     TokenRow,
     get_session,
@@ -550,9 +550,7 @@ class DbOrgStore:
                 return None
             return self._row_to_info(row)
 
-    async def list_orgs(
-        self, *, limit: int = 100, offset: int = 0
-    ) -> tuple[list[OrgInfo], int]:
+    async def list_orgs(self, *, limit: int = 100, offset: int = 0) -> tuple[list[OrgInfo], int]:
         async with get_session() as session:
             count_q = select(sa_func.count(OrganizationRow.id))
             total = (await session.execute(count_q)).scalar() or 0
@@ -595,33 +593,47 @@ class DbOrgStore:
 
     async def add_member(self, slug: str, token_name: str, role: OrgRole = OrgRole.member) -> bool:
         async with get_session() as session:
-            org = (await session.execute(
-                select(OrganizationRow).where(OrganizationRow.slug == slug)
-            )).scalars().first()
+            org = (
+                (await session.execute(select(OrganizationRow).where(OrganizationRow.slug == slug)))
+                .scalars()
+                .first()
+            )
             if org is None:
                 raise ValueError(f"organization '{slug}' not found")
 
-            existing = (await session.execute(
-                select(OrgMemberRow).where(
-                    OrgMemberRow.org_id == org.id,
-                    OrgMemberRow.token_name == token_name,
+            existing = (
+                (
+                    await session.execute(
+                        select(OrgMemberRow).where(
+                            OrgMemberRow.org_id == org.id,
+                            OrgMemberRow.token_name == token_name,
+                        )
+                    )
                 )
-            )).scalars().first()
+                .scalars()
+                .first()
+            )
             if existing is not None:
                 return False  # already a member
 
-            session.add(OrgMemberRow(
-                org_id=org.id, token_name=token_name, role=role.value,
-            ))
+            session.add(
+                OrgMemberRow(
+                    org_id=org.id,
+                    token_name=token_name,
+                    role=role.value,
+                )
+            )
             return True
 
     async def remove_member(self, slug: str, token_name: str) -> bool:
         from sqlalchemy import delete as sa_delete
 
         async with get_session() as session:
-            org = (await session.execute(
-                select(OrganizationRow).where(OrganizationRow.slug == slug)
-            )).scalars().first()
+            org = (
+                (await session.execute(select(OrganizationRow).where(OrganizationRow.slug == slug)))
+                .scalars()
+                .first()
+            )
             if org is None:
                 raise ValueError(f"organization '{slug}' not found")
 
@@ -635,9 +647,11 @@ class DbOrgStore:
 
     async def get_members(self, slug: str) -> list[OrgMember]:
         async with get_session() as session:
-            org = (await session.execute(
-                select(OrganizationRow).where(OrganizationRow.slug == slug)
-            )).scalars().first()
+            org = (
+                (await session.execute(select(OrganizationRow).where(OrganizationRow.slug == slug)))
+                .scalars()
+                .first()
+            )
             if org is None:
                 return []
 
@@ -657,9 +671,11 @@ class DbOrgStore:
 
     async def is_member(self, slug: str, token_name: str) -> bool:
         async with get_session() as session:
-            org = (await session.execute(
-                select(OrganizationRow).where(OrganizationRow.slug == slug)
-            )).scalars().first()
+            org = (
+                (await session.execute(select(OrganizationRow).where(OrganizationRow.slug == slug)))
+                .scalars()
+                .first()
+            )
             if org is None:
                 return False
             result = await session.execute(
@@ -672,9 +688,11 @@ class DbOrgStore:
 
     async def is_owner(self, slug: str, token_name: str) -> bool:
         async with get_session() as session:
-            org = (await session.execute(
-                select(OrganizationRow).where(OrganizationRow.slug == slug)
-            )).scalars().first()
+            org = (
+                (await session.execute(select(OrganizationRow).where(OrganizationRow.slug == slug)))
+                .scalars()
+                .first()
+            )
             if org is None:
                 return False
             result = await session.execute(
@@ -688,9 +706,11 @@ class DbOrgStore:
 
     async def update_storage_used(self, slug: str, delta_bytes: int) -> None:
         async with get_session() as session:
-            org = (await session.execute(
-                select(OrganizationRow).where(OrganizationRow.slug == slug)
-            )).scalars().first()
+            org = (
+                (await session.execute(select(OrganizationRow).where(OrganizationRow.slug == slug)))
+                .scalars()
+                .first()
+            )
             if org is not None:
                 org.storage_used_bytes = max(0, org.storage_used_bytes + delta_bytes)
                 await session.flush()
@@ -698,9 +718,11 @@ class DbOrgStore:
     async def check_storage_limit(self, slug: str, additional_bytes: int) -> bool:
         """Return True if adding additional_bytes would stay within the org's limit."""
         async with get_session() as session:
-            org = (await session.execute(
-                select(OrganizationRow).where(OrganizationRow.slug == slug)
-            )).scalars().first()
+            org = (
+                (await session.execute(select(OrganizationRow).where(OrganizationRow.slug == slug)))
+                .scalars()
+                .first()
+            )
             if org is None:
                 return False
             return (org.storage_used_bytes + additional_bytes) <= org.storage_limit_bytes

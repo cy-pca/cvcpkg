@@ -122,11 +122,15 @@ class OrganizationRow(Base):
     logo_url: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     homepage: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     storage_limit_bytes: Mapped[int] = mapped_column(
-        BigInteger, nullable=False, default=10 * 1024 * 1024 * 1024,
+        BigInteger,
+        nullable=False,
+        default=10 * 1024 * 1024 * 1024,
     )
     storage_used_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(),
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
     )
     created_by: Mapped[str] = mapped_column(String(255), nullable=False)
 
@@ -136,12 +140,16 @@ class OrgMemberRow(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     org_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False,
+        Integer,
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
     )
     token_name: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="member")
     added_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(),
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
     )
 
     __table_args__ = (
