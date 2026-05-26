@@ -81,6 +81,9 @@ jobs:
             macos)   ARCH=arm64  ;;
             windows) ARCH=x86_64 ;;
             wasm)    ARCH=wasm32 ;;
+            freebsd) ARCH=x86_64 ;;
+            openbsd) ARCH=x86_64 ;;
+            netbsd)  ARCH=x86_64 ;;
           esac
           STEM="libcvc-deps-${VERSION}${SHASFX}-${{ inputs.platform }}-${ARCH}-${BTLC}${LINKSFX}"
           echo "version=$VERSION"   >> "$GITHUB_OUTPUT"

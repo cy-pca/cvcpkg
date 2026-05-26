@@ -41,7 +41,7 @@ $defs:
         type: array
         items:
           type: string
-          enum: [linux, macos, windows]
+          enum: [linux, macos, windows, freebsd, openbsd, netbsd]
         minItems: 1
         uniqueItems: true
       cmake_packages:

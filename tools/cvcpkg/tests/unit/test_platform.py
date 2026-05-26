@@ -34,8 +34,24 @@ class TestDetectPlatform:
         monkeypatch.setattr("sys.platform", "cygwin")
         assert detect_platform() == "windows"
 
-    def test_unsupported(self, monkeypatch):
+    def test_freebsd(self, monkeypatch):
         monkeypatch.setattr("sys.platform", "freebsd14")
+        assert detect_platform() == "freebsd"
+
+    def test_freebsd13(self, monkeypatch):
+        monkeypatch.setattr("sys.platform", "freebsd13")
+        assert detect_platform() == "freebsd"
+
+    def test_openbsd(self, monkeypatch):
+        monkeypatch.setattr("sys.platform", "openbsd7")
+        assert detect_platform() == "openbsd"
+
+    def test_netbsd(self, monkeypatch):
+        monkeypatch.setattr("sys.platform", "netbsd10")
+        assert detect_platform() == "netbsd"
+
+    def test_unsupported(self, monkeypatch):
+        monkeypatch.setattr("sys.platform", "haiku1")
         with pytest.raises(RuntimeError, match="unsupported platform"):
             detect_platform()
 
@@ -76,11 +92,23 @@ class TestDetectLibc:
         assert isinstance(result, str)
         assert len(result) > 0
 
+    def test_freebsd_libc(self, monkeypatch):
+        monkeypatch.setattr("sys.platform", "freebsd14")
+        assert detect_libc() == "freebsd-libc"
+
+    def test_openbsd_libc(self, monkeypatch):
+        monkeypatch.setattr("sys.platform", "openbsd7")
+        assert detect_libc() == "openbsd-libc"
+
+    def test_netbsd_libc(self, monkeypatch):
+        monkeypatch.setattr("sys.platform", "netbsd10")
+        assert detect_libc() == "netbsd-libc"
+
 
 class TestDefaultTuple:
     def test_returns_dict(self):
         t = default_tuple()
         assert "platform" in t
         assert "arch" in t
-        assert t["platform"] in ("linux", "macos", "windows")
+        assert t["platform"] in ("linux", "macos", "windows", "freebsd", "openbsd", "netbsd")
         assert t["arch"] in ("x86_64", "arm64")
