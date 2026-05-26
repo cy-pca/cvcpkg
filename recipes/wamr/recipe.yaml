@@ -1,0 +1,56 @@
+schema_version: 1
+recipe:
+  name: wamr
+  upstream_version: "2.4.4"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  homepage: https://github.com/bytecodealliance/wasm-micro-runtime
+  license: Apache-2.0
+  tags: [wasm, runtime]
+  # WAMR — WebAssembly Micro Runtime from the Bytecode Alliance.
+  # Extremely lightweight and embeddable, targets resource-constrained
+  # environments.  CMake-based C project.
+
+source:
+  type: tarball
+  url: https://github.com/bytecodealliance/wasm-micro-runtime/archive/refs/tags/WAMR-2.4.4.tar.gz
+  sha256: "FIXME"  # Compute: curl -sL <url> | sha256sum
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libvmlib*
+    - lib/libiwasm*
+    - lib/vmlib*
+    - lib/iwasm*
+    - lib/cmake/iwasm/
+    - include/wasm_export.h
+    - include/wasm_c_api.h
+    - include/lib_export.h
+    - bin/iwasm*
+  cmake_packages:
+    - { name: iwasm, targets: ["iwasm::iwasm"] }
+
+abi:
+  cxx_std: 17

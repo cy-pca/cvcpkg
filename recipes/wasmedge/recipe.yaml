@@ -1,0 +1,51 @@
+schema_version: 1
+recipe:
+  name: wasmedge
+  upstream_version: "0.17.0"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  homepage: https://wasmedge.org/
+  license: Apache-2.0
+  tags: [wasm, runtime]
+  # WasmEdge — high-performance WASM runtime with WASI-NN support
+  # for ML inference inside Wasm modules.  CMake-based C++ project.
+
+source:
+  type: tarball
+  url: https://github.com/WasmEdge/WasmEdge/archive/refs/tags/0.17.0.tar.gz
+  sha256: "FIXME"  # Compute: curl -sL <url> | sha256sum
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libwasmedge*
+    - lib/wasmedge*
+    - lib/cmake/wasmedge/
+    - include/wasmedge/
+    - bin/wasmedge*
+  cmake_packages:
+    - { name: wasmedge, targets: ["wasmedge::wasmedge"] }
+
+abi:
+  cxx_std: 17
