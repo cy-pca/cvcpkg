@@ -2,7 +2,18 @@
 #
 # Builds recipes on BSD virtual machines (FreeBSD, OpenBSD, NetBSD)
 # hosted on the Incus cluster.  The workflow runs on self-hosted
-# Linux runners and SSH's into the target BSD VM to execute the build.
+# Linux runners (which ARE the Incus cluster nodes) and executes
+# builds inside the BSD VMs:
+#
+#   FreeBSD  — incus exec  (Incus agent runs inside the VM)
+#   OpenBSD  — ssh          (no Incus agent; runner has direct access)
+#   NetBSD   — ssh          (no Incus agent; runner has direct access)
+#
+# No GitHub secrets required — the runners already have incus CLI
+# access and SSH connectivity to the VMs on the br-uplink LAN bridge.
+#
+# Prerequisite: the runner user's SSH key must be authorized on the
+# OpenBSD and NetBSD VMs (one-time ssh-copy-id).
 #
 # Reusable from release.yml and ci.yml.
 
@@ -65,6 +76,7 @@ jobs:
           echo "btlc=$BTLC"        >> "$GITHUB_OUTPUT"
           echo "stem=$STEM"         >> "$GITHUB_OUTPUT"
 
+      # ── Resolve VM name, access method, and python path ──
       - name: Resolve BSD VM connection
         id: vm
         shell: bash
@@ -78,28 +90,16 @@ jobs:
             openbsd)
               echo "method=ssh" >> "$GITHUB_OUTPUT"
               echo "vm_name=openbsd-build" >> "$GITHUB_OUTPUT"
-              echo "host=${{ secrets.OPENBSD_HOST }}" >> "$GITHUB_OUTPUT"
+              echo "host=10.66.77.197" >> "$GITHUB_OUTPUT"
               echo "python=python3.12" >> "$GITHUB_OUTPUT"
               ;;
             netbsd)
               echo "method=ssh" >> "$GITHUB_OUTPUT"
               echo "vm_name=netbsd-build" >> "$GITHUB_OUTPUT"
-              echo "host=${{ secrets.NETBSD_HOST }}" >> "$GITHUB_OUTPUT"
+              echo "host=10.66.77.214" >> "$GITHUB_OUTPUT"
               echo "python=python3.13" >> "$GITHUB_OUTPUT"
               ;;
           esac
-
-      # ── SSH key setup for OpenBSD/NetBSD ──
-      - name: Set up SSH key
-        if: steps.vm.outputs.method == 'ssh'
-        shell: bash
-        run: |
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          echo "${{ secrets.BSD_SSH_PRIVATE_KEY }}" > ~/.ssh/bsd_build_key
-          chmod 600 ~/.ssh/bsd_build_key
-          # Accept host keys for BSD VMs
-          ssh-keyscan -H "${{ steps.vm.outputs.host }}" >> ~/.ssh/known_hosts 2>/dev/null || true
 
       # ── Sync repository to BSD VM ──
       - name: Sync repository to BSD VM
@@ -109,15 +109,12 @@ jobs:
           REMOTE_DIR="/tmp/libcvc-deps-build-$$"
 
           if [ "${{ steps.vm.outputs.method }}" = "incus" ]; then
-            # FreeBSD: use incus file push
             incus exec "${{ steps.vm.outputs.vm_name }}" -- mkdir -p "${REMOTE_DIR}"
-            # tar up the repo (excluding .git and build artifacts) and push
             tar cf - --exclude='.git' --exclude='build' --exclude='prefix' \
               --exclude='dist' --exclude='__pycache__' --exclude='*.egg-info' . \
               | incus exec "${{ steps.vm.outputs.vm_name }}" -- tar xf - -C "${REMOTE_DIR}"
           else
-            # OpenBSD/NetBSD: use SSH/rsync
-            SSH_OPTS="-i ~/.ssh/bsd_build_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
+            SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o BatchMode=yes"
             ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" "mkdir -p ${REMOTE_DIR}"
             tar cf - --exclude='.git' --exclude='build' --exclude='prefix' \
               --exclude='dist' --exclude='__pycache__' --exclude='*.egg-info' . \
@@ -135,7 +132,7 @@ jobs:
           if [ "${{ steps.vm.outputs.method }}" = "incus" ]; then
             incus exec "${{ steps.vm.outputs.vm_name }}" -- sh -c "cd ${remote_dir} && ${INSTALL_CMD}"
           else
-            SSH_OPTS="-i ~/.ssh/bsd_build_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
+            SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o BatchMode=yes"
             ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" "cd ${remote_dir} && ${INSTALL_CMD}"
           fi
 
@@ -156,7 +153,7 @@ jobs:
           if [ "${{ steps.vm.outputs.method }}" = "incus" ]; then
             incus exec "${{ steps.vm.outputs.vm_name }}" -- sh -c "cd ${remote_dir} && ${BUILD_CMD}"
           else
-            SSH_OPTS="-i ~/.ssh/bsd_build_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
+            SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o BatchMode=yes"
             ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" "cd ${remote_dir} && ${BUILD_CMD}"
           fi
 
@@ -173,7 +170,7 @@ jobs:
           if [ "${{ steps.vm.outputs.method }}" = "incus" ]; then
             incus exec "${{ steps.vm.outputs.vm_name }}" -- sh -c "cd ${remote_dir} && ${MARKER_CMD}"
           else
-            SSH_OPTS="-i ~/.ssh/bsd_build_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
+            SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o BatchMode=yes"
             ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" "cd ${remote_dir} && ${MARKER_CMD}"
           fi
 
@@ -196,7 +193,7 @@ jobs:
           if [ "${{ steps.vm.outputs.method }}" = "incus" ]; then
             incus exec "${{ steps.vm.outputs.vm_name }}" -- sh -c "${STAGE_CMD}"
           else
-            SSH_OPTS="-i ~/.ssh/bsd_build_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
+            SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o BatchMode=yes"
             ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" "${STAGE_CMD}"
           fi
 
@@ -206,8 +203,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # BSD uses patchelf if available, otherwise the env scripts
-          # already set CMAKE_INSTALL_RPATH=$ORIGIN during build.
           RPATH_CMD="set -e && \
             PREFIX='${remote_dir}/prefix' && \
             if command -v patchelf >/dev/null 2>&1; then \
@@ -222,7 +217,7 @@ jobs:
           if [ "${{ steps.vm.outputs.method }}" = "incus" ]; then
             incus exec "${{ steps.vm.outputs.vm_name }}" -- sh -c "${RPATH_CMD}"
           else
-            SSH_OPTS="-i ~/.ssh/bsd_build_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
+            SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o BatchMode=yes"
             ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" "${RPATH_CMD}"
           fi
 
@@ -235,23 +230,19 @@ jobs:
           mkdir -p "${{ github.workspace }}/dist"
 
           if [ "${{ steps.vm.outputs.method }}" = "incus" ]; then
-            # Rename prefix to stem on the VM, tar it, and pull back
             incus exec "${{ steps.vm.outputs.vm_name }}" -- sh -c \
               "cd ${remote_dir} && mv prefix '${STEM}' && tar czf '${STEM}.tar.gz' '${STEM}'"
             incus file pull "${{ steps.vm.outputs.vm_name }}${remote_dir}/${STEM}.tar.gz" \
               "${{ github.workspace }}/${STEM}.tar.gz"
-            # Pull dist directory
             incus exec "${{ steps.vm.outputs.vm_name }}" -- sh -c \
               "cd ${remote_dir} && tar cf - dist" \
               | tar xf - -C "${{ github.workspace }}"
           else
-            SSH_OPTS="-i ~/.ssh/bsd_build_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
-            # Rename prefix to stem on the VM, tar it, and pull back
+            SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o BatchMode=yes"
             ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" \
               "cd ${remote_dir} && mv prefix '${STEM}' && tar czf '${STEM}.tar.gz' '${STEM}'"
             scp ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}:${remote_dir}/${STEM}.tar.gz" \
               "${{ github.workspace }}/${STEM}.tar.gz"
-            # Pull dist directory
             ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" \
               "cd ${remote_dir} && tar cf - dist" \
               | tar xf - -C "${{ github.workspace }}"
@@ -268,15 +259,9 @@ jobs:
           if [ "${{ steps.vm.outputs.method }}" = "incus" ]; then
             incus exec "${{ steps.vm.outputs.vm_name }}" -- rm -rf "${remote_dir}" || true
           else
-            SSH_OPTS="-i ~/.ssh/bsd_build_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
+            SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o BatchMode=yes"
             ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" "rm -rf ${remote_dir}" || true
           fi
-
-      # ── Clean up SSH key ──
-      - name: Clean up SSH key
-        if: always() && steps.vm.outputs.method == 'ssh'
-        shell: bash
-        run: rm -f ~/.ssh/bsd_build_key
 
       # ── Upload artifacts ──
       - name: Upload artifact

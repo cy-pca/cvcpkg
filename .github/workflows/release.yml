@@ -217,7 +217,6 @@ jobs:
       config: ${{ matrix.config }}
       link: ${{ matrix.link }}
       sha_suffix: ${{ inputs.sha_suffix || '' }}
-    secrets: inherit
 
   # ──────────────────────────── OpenBSD ────────────────────────────
   openbsd:
@@ -239,7 +238,6 @@ jobs:
       config: ${{ matrix.config }}
       link: ${{ matrix.link }}
       sha_suffix: ${{ inputs.sha_suffix || '' }}
-    secrets: inherit
 
   # ──────────────────────────── NetBSD ────────────────────────────
   netbsd:
@@ -261,7 +259,6 @@ jobs:
       config: ${{ matrix.config }}
       link: ${{ matrix.link }}
       sha_suffix: ${{ inputs.sha_suffix || '' }}
-    secrets: inherit
 
   # ──────────────────────────── Release ────────────────────────────
   # ────────────────────── Publish per-component packages ──────────
