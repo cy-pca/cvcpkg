@@ -828,12 +828,21 @@ def build_all(
     link: str = "shared",
     prefix: Path | None = None,
     keep_build_dir: bool = False,
+    per_component: bool = False,
 ) -> list[BuildContext]:
     """Build every recipe in dependency order into a shared *prefix*.
 
     *recipes_dir* may be a single path or a list of paths.  When
     multiple directories are given, later directories override
     earlier ones on name collisions (with a warning).
+
+    When *per_component* is ``True``, each recipe is built into its
+    own isolated install directory while using the shared *prefix*
+    for finding previously-built dependencies via ``CVC_DEPS_PREFIX``.
+    After each build, the install directory is merged into *prefix*
+    so subsequent recipes can find the new files.  The returned
+    ``BuildContext.install_dir`` points to the isolated per-recipe
+    directory (useful for packaging only that recipe's files).
     """
     if isinstance(recipes_dir, list):
         recipes = load_all_recipes(recipes_dir)
@@ -852,14 +861,44 @@ def build_all(
     contexts: list[BuildContext] = []
     for recipe in ordered:
         print(f"\ncvcpkg: == {recipe.name} ({recipe.full_version}) ==")
-        ctx = build_recipe(
-            recipe.recipe_dir,
-            platform=platform,
-            config=config,
-            link=link,
-            prefix=prefix,
-            keep_build_dir=keep_build_dir,
-        )
+        if per_component:
+            work_dir = Path(tempfile.mkdtemp(prefix=f"cvcpkg-{recipe.name}-"))
+            install_dir = work_dir / "install"
+            source_dir = fetch_source(recipe, work_dir)
+            if recipe.patches:
+                apply_patches(recipe, source_dir)
+            ctx = BuildContext(
+                recipe=recipe,
+                platform=platform,
+                config=config,
+                link=link,
+                prefix=prefix,
+                source_dir=source_dir,
+                build_dir=work_dir / "build",
+                install_dir=install_dir,
+                work_dir=work_dir,
+                keep_build_dir=keep_build_dir,
+            )
+            run_build(ctx)
+            if recipe.test_script:
+                run_test(ctx)
+            # Merge this recipe's install into the shared prefix so
+            # subsequent recipes can find it via CVC_DEPS_PREFIX.
+            if install_dir.is_dir():
+                shutil.copytree(install_dir, prefix, dirs_exist_ok=True)
+            if not keep_build_dir:
+                build_dir = work_dir / "build"
+                if build_dir.is_dir():
+                    shutil.rmtree(build_dir, ignore_errors=True)
+        else:
+            ctx = build_recipe(
+                recipe.recipe_dir,
+                platform=platform,
+                config=config,
+                link=link,
+                prefix=prefix,
+                keep_build_dir=keep_build_dir,
+            )
         contexts.append(ctx)
 
     print(f"\ncvcpkg: all {len(contexts)} components built into {prefix}")

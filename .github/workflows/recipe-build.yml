@@ -171,20 +171,23 @@ jobs:
         id: prefix-cache
         uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}/prefix
+          path: |
+            ${{ github.workspace }}/prefix
+            ${{ github.workspace }}/dist
           key: ${{ steps.cache-key.outputs.key }}
 
-      # ── Build all recipes ──
-      - name: Build all recipes (cvcpkg build-all)
+      # ── Build and package all recipes (per-component) ──
+      - name: Build and package all recipes (cvcpkg pack-all)
         if: steps.prefix-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
-          cvcpkg build-all \
+          cvcpkg pack-all \
             --platform "${{ inputs.platform }}" \
             --config "${{ inputs.config }}" \
             --link "${{ inputs.link }}" \
             --prefix "${{ github.workspace }}/prefix" \
+            --output-dir "${{ github.workspace }}/dist" \
             --recipes-dir recipes
 
       # ── Install marker cmake config ──
@@ -252,17 +255,10 @@ jobs:
             ${{ steps.meta.outputs.stem }}.zip
           if-no-files-found: error
 
-      # Also upload the raw prefix for the per-component packaging stage
-      - name: Re-stage prefix for packaging
-        shell: bash
-        run: |
-          STEM="${{ steps.meta.outputs.stem }}"
-          # Rename back so package workflow gets a consistent artifact
-          [ -d "${STEM}" ] && [ ! -d prefix ] && mv "${STEM}" prefix || true
-
-      - name: Upload prefix for packaging
+      # Upload per-component bundles for publishing to cvcpkg-server
+      - name: Upload per-component bundles
         uses: actions/upload-artifact@v4
         with:
-          name: prefix-${{ inputs.platform }}-${{ inputs.config }}-${{ inputs.link }}
-          path: prefix/
+          name: components-${{ inputs.platform }}-${{ steps.meta.outputs.btlc }}-${{ inputs.link }}
+          path: dist/
           if-no-files-found: error

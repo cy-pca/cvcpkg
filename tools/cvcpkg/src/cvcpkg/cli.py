@@ -1731,9 +1731,10 @@ def pack_all_cmd(
 ) -> None:
     """Build and archive all recipes.
 
-    Combines build-all with per-component packaging.  Each recipe is
-    built into a shared prefix, then staged and archived individually
-    into --output-dir as .tar.gz files ready for catalog publishing.
+    Each recipe is built into its own isolated install directory while
+    using a shared prefix for dependency lookup.  After each build the
+    recipe's files are merged into the prefix so later recipes can find
+    them, and a per-component archive is created in --output-dir.
 
     \b
     Example:
@@ -1745,6 +1746,7 @@ def pack_all_cmd(
         create_archive,
         find_recipes_dir,
         generate_manifest,
+        list_recipes,
         stage_bundle,
     )
     from cvcpkg.platform import detect_arch
@@ -1755,6 +1757,15 @@ def pack_all_cmd(
     output = Path(output_dir).resolve()
     rdirs = [Path(d) for d in recipes_dirs] if recipes_dirs else [find_recipes_dir()]
 
+    # Load all recipes for chain_hash computation
+    if len(rdirs) > 1:
+        from cvcpkg.builder import load_all_recipes
+
+        all_recipe_list = load_all_recipes(rdirs)
+    else:
+        all_recipe_list = list_recipes(rdirs[0])
+    all_recipes = {r.name: r for r in all_recipe_list}
+
     contexts = build_all(
         rdirs if len(rdirs) > 1 else rdirs[0],
         platform=plat,
@@ -1762,6 +1773,7 @@ def pack_all_cmd(
         link=link,
         prefix=prefix_path,
         keep_build_dir=keep_build_dir,
+        per_component=True,
     )
 
     output.mkdir(parents=True, exist_ok=True)
@@ -1774,6 +1786,7 @@ def pack_all_cmd(
             config,
             link,
             maintainer=maintainer,
+            all_recipes=all_recipes,
         )
         staging = ctx.work_dir / "staging"
         staging.mkdir(exist_ok=True)
