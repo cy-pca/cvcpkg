@@ -780,3 +780,332 @@ document.addEventListener('DOMContentLoaded', () => {{
 </script>
 </body>
 </html>"""
+
+
+# ── Shared HTML fragments ────────────────────────────────────────
+
+def _head_html(title: str) -> str:
+    return f"""<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{title}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.4/css/bulma.min.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
+        integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA=="
+        crossorigin="anonymous" referrerpolicy="no-referrer" />
+  <style>{_CSS}</style>
+</head>"""
+
+
+def _navbar_html() -> str:
+    return f"""<nav class="navbar is-dark" role="navigation" aria-label="main navigation">
+  <div class="container">
+    <div class="navbar-brand">
+      <a class="navbar-item" href="/">
+        <span class="logo-icon">C</span>
+        <strong class="is-size-4">cvcpkg</strong>
+        <span class="tag is-dark is-rounded ml-2">v{__version__}</span>
+      </a>
+    </div>
+    <div id="navMenu" class="navbar-menu">
+      <div class="navbar-end">
+        <a class="navbar-item" href="/orgs">
+          <span class="icon"><i class="fas fa-building"></i></span><span>Organizations</span>
+        </a>
+        <a class="navbar-item" href="/docs">
+          <span class="icon"><i class="fas fa-book"></i></span><span>API Docs</span>
+        </a>
+        <a class="navbar-item" href="/v1/catalog">
+          <span class="icon"><i class="fas fa-list"></i></span><span>Catalog</span>
+        </a>
+        <a class="navbar-item" href="{_GITHUB_URL}">
+          <span class="icon"><i class="fab fa-github"></i></span><span>GitHub</span>
+        </a>
+      </div>
+    </div>
+  </div>
+</nav>"""
+
+
+def _footer_frag() -> str:
+    return f"""<footer class="footer has-background-black-ter has-text-grey-light">
+  <div class="content has-text-centered">
+    <p>
+      <a href="{_GITHUB_URL}" class="has-text-grey-light">
+        <span class="icon"><i class="fab fa-github"></i></span> cvcpkg
+      </a>
+      &mdash; cross-platform binary package archive for scientific computing
+    </p>
+  </div>
+</footer>"""
+
+
+# ── Helpers JS (shared) ─────────────────────────────────────────
+
+_HELPERS_JS = r"""
+function esc(s) {
+  if (s == null) return '';
+  const div = document.createElement('div');
+  div.appendChild(document.createTextNode(String(s)));
+  return div.innerHTML;
+}
+function fmtSize(bytes) {
+  if (!bytes) return '\u2014';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let i = 0, sz = bytes;
+  while (sz >= 1024 && i < units.length - 1) { sz /= 1024; i++; }
+  return sz.toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
+}
+"""
+
+
+# ── Organizations listing page ───────────────────────────────────
+
+def orgs_listing_html() -> str:
+    """Return the HTML for the organizations listing page."""
+    return f"""<!DOCTYPE html>
+<html lang="en" data-theme="dark" class="has-background-black-bis">
+{_head_html("Organizations &mdash; cvcpkg")}
+<body class="has-background-black-bis has-text-light">
+
+{_navbar_html()}
+
+<section class="section has-background-black-bis">
+  <div class="container">
+    <h1 class="title is-3 has-text-white">
+      <span class="icon mr-2"><i class="fas fa-building"></i></span> Organizations
+    </h1>
+    <p class="subtitle is-6 has-text-grey-lighter mb-5">
+      Organizations can publish and manage their own packages on cvcpkg.
+    </p>
+
+    <div id="orgs-list">
+      <div class="has-text-centered py-6">
+        <span class="icon is-large has-text-link"><i class="fas fa-spinner fa-spin fa-2x"></i></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+{_footer_frag()}
+
+<script>
+{_HELPERS_JS}
+
+async function init() {{
+  try {{
+    const resp = await fetch('/v1/orgs?limit=200');
+    const data = await resp.json();
+    const orgs = data.organizations || [];
+    render(orgs);
+  }} catch (err) {{
+    document.getElementById('orgs-list').innerHTML =
+      '<p class="has-text-grey-light">Failed to load organizations.</p>';
+  }}
+}}
+
+function render(orgs) {{
+  const container = document.getElementById('orgs-list');
+  if (orgs.length === 0) {{
+    container.innerHTML = `
+      <div class="has-text-centered py-6">
+        <span class="icon is-large has-text-grey-light"><i class="fas fa-building fa-3x"></i></span>
+        <p class="title is-5 has-text-grey-light mt-4">No organizations yet</p>
+        <p class="subtitle is-6 has-text-grey">
+          Create one via the API: <code>POST /v1/orgs</code>
+        </p>
+      </div>`;
+    return;
+  }}
+
+  container.innerHTML = '<div class="columns is-multiline">' +
+    orgs.map(o => `
+      <div class="column is-4">
+        <div class="box has-background-black-ter" style="height:100%">
+          <article class="media">
+            <div class="media-left">
+              ${{o.logo_url
+                ? '<figure class="image is-64x64"><img src="' + esc(o.logo_url) + '" alt="' + esc(o.slug) + '" style="border-radius:8px"></figure>'
+                : '<span class="icon is-large has-text-link"><i class="fas fa-building fa-2x"></i></span>'
+              }}
+            </div>
+            <div class="media-content">
+              <a href="/org/${{encodeURIComponent(o.slug)}}" class="title is-5 has-text-link">${{esc(o.display_name)}}</a>
+              <p class="is-size-7 has-text-grey-light">${{esc(o.slug)}}</p>
+              ${{o.description ? '<p class="is-size-7 has-text-grey-lighter mt-2">' + esc(o.description) + '</p>' : ''}}
+              <p class="is-size-7 has-text-grey mt-2">
+                Storage: ${{fmtSize(o.storage_used_bytes)}} / ${{fmtSize(o.storage_limit_bytes)}}
+              </p>
+            </div>
+          </article>
+        </div>
+      </div>
+    `).join('') +
+    '</div>';
+}}
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>"""
+
+
+# ── Organization detail page ─────────────────────────────────────
+
+def org_detail_html(slug: str) -> str:
+    """Return the HTML for an organization detail page."""
+    import html as _html
+    import json as _json
+    safe_slug = _html.escape(slug, quote=True)
+
+    return f"""<!DOCTYPE html>
+<html lang="en" data-theme="dark" class="has-background-black-bis">
+{_head_html(f"{safe_slug} &mdash; cvcpkg")}
+<body class="has-background-black-bis has-text-light">
+
+{_navbar_html()}
+
+<section class="section pt-4 pb-2 has-background-black-bis">
+  <div class="container">
+    <nav class="breadcrumb" aria-label="breadcrumbs">
+      <ul>
+        <li><a href="/" class="has-text-grey-light">Home</a></li>
+        <li><a href="/orgs" class="has-text-grey-light">Organizations</a></li>
+        <li class="is-active"><a href="#" class="has-text-light">{safe_slug}</a></li>
+      </ul>
+    </nav>
+  </div>
+</section>
+
+<section class="section pt-2 has-background-black-bis">
+  <div class="container">
+    <div class="columns">
+      <div class="column is-8">
+        <div class="media mb-4">
+          <div class="media-left" id="org-logo">
+            <span class="icon is-large has-text-link"><i class="fas fa-building fa-2x"></i></span>
+          </div>
+          <div class="media-content">
+            <h1 class="title is-2 has-text-white" id="org-name">{safe_slug}</h1>
+            <p class="subtitle is-6 has-text-grey-lighter" id="org-desc"></p>
+          </div>
+        </div>
+        <div id="org-homepage" style="display:none" class="mb-3">
+          <span class="icon"><i class="fas fa-link"></i></span>
+          <a id="org-homepage-link" href="#" class="has-text-link" target="_blank" rel="noopener noreferrer"></a>
+        </div>
+      </div>
+      <div class="column is-4">
+        <div class="box has-background-black-ter">
+          <div class="columns is-mobile">
+            <div class="column has-text-centered">
+              <p class="title is-4 has-text-info" id="org-pkg-count">&mdash;</p>
+              <p class="heading has-text-grey-light">Packages</p>
+            </div>
+            <div class="column has-text-centered">
+              <p class="title is-4 has-text-warning" id="org-storage">&mdash;</p>
+              <p class="heading has-text-grey-light">Storage</p>
+            </div>
+          </div>
+          <progress class="progress is-small is-link mt-2" id="org-storage-bar" value="0" max="100">0%</progress>
+        </div>
+      </div>
+    </div>
+
+    <h3 class="title is-5 has-text-white mt-5 mb-3">
+      <span class="icon mr-1"><i class="fas fa-users"></i></span> Members
+    </h3>
+    <div id="org-members" class="mb-5">
+      <span class="has-text-grey-light">Loading...</span>
+    </div>
+
+    <h3 class="title is-5 has-text-white mt-5 mb-3">
+      <span class="icon mr-1"><i class="fas fa-box"></i></span> Packages
+    </h3>
+    <div id="org-packages">
+      <span class="has-text-grey-light">Loading...</span>
+    </div>
+  </div>
+</section>
+
+{_footer_frag()}
+
+<script>
+{_HELPERS_JS}
+
+async function init() {{
+  try {{
+    const resp = await fetch('/v1/orgs/' + encodeURIComponent({_json.dumps(slug)}));
+    const data = await resp.json();
+    renderOrg(data);
+  }} catch (err) {{
+    document.getElementById('org-packages').innerHTML =
+      '<p class="has-text-grey-light">Failed to load organization.</p>';
+  }}
+}}
+
+function renderOrg(data) {{
+  const o = data.org;
+  document.getElementById('org-name').textContent = o.display_name;
+  if (o.description) document.getElementById('org-desc').textContent = o.description;
+  if (o.logo_url) {{
+    document.getElementById('org-logo').innerHTML =
+      '<figure class="image is-64x64"><img src="' + esc(o.logo_url) + '" style="border-radius:8px"></figure>';
+  }}
+  if (o.homepage) {{
+    const el = document.getElementById('org-homepage');
+    el.style.display = '';
+    const link = document.getElementById('org-homepage-link');
+    link.href = o.homepage;
+    link.textContent = o.homepage;
+  }}
+
+  document.getElementById('org-storage').textContent = fmtSize(o.storage_used_bytes);
+  const pct = o.storage_limit_bytes > 0 ? Math.round(o.storage_used_bytes / o.storage_limit_bytes * 100) : 0;
+  document.getElementById('org-storage-bar').value = pct;
+
+  // Members
+  const members = data.members || [];
+  const memEl = document.getElementById('org-members');
+  if (members.length === 0) {{
+    memEl.innerHTML = '<p class="has-text-grey">No members.</p>';
+  }} else {{
+    memEl.innerHTML = '<div class="tags">' + members.map(m =>
+      '<span class="tag is-dark is-medium">' +
+      '<span class="icon is-small mr-1"><i class="fas fa-user"></i></span>' +
+      esc(m.token_name) +
+      (m.role === 'owner' ? ' <span class="tag is-warning is-light is-small ml-1">owner</span>' : '') +
+      '</span>'
+    ).join(' ') + '</div>';
+  }}
+
+  // Packages
+  const pkgs = data.packages || [];
+  document.getElementById('org-pkg-count').textContent = pkgs.length;
+  const pkgEl = document.getElementById('org-packages');
+  if (pkgs.length === 0) {{
+    pkgEl.innerHTML = '<p class="has-text-grey">No packages published yet.</p>';
+  }} else {{
+    const groups = {{}};
+    pkgs.forEach(p => {{
+      if (!groups[p.name]) groups[p.name] = [];
+      groups[p.name].push(p);
+    }});
+    pkgEl.innerHTML = '<div class="table-container"><table class="table is-fullwidth is-hoverable is-dark is-striped"><thead><tr>' +
+      '<th>Package</th><th>Version</th><th>Builds</th><th>Size</th>' +
+      '</tr></thead><tbody>' +
+      Object.entries(groups).sort((a,b) => a[0].localeCompare(b[0])).map(([name, builds]) => {{
+        const totalSize = builds.reduce((s, b) => s + (b.size_bytes || 0), 0);
+        return '<tr><td><strong class="has-text-link">' + esc(name) + '</strong></td>' +
+          '<td><code>' + esc(builds[0].version) + '</code></td>' +
+          '<td><span class="tag is-dark is-rounded">' + builds.length + '</span></td>' +
+          '<td class="is-family-monospace is-size-7 has-text-grey-light">' + fmtSize(totalSize) + '</td></tr>';
+      }}).join('') +
+      '</tbody></table></div>';
+  }}
+}}
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>"""
