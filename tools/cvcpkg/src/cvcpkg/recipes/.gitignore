@@ -1,0 +1,4 @@
+# Recipes are copied here at deploy time from the repo root.
+# See .github/workflows/deploy-prod.yml
+*
+!.gitignore

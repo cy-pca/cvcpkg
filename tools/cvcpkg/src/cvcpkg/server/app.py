@@ -467,6 +467,38 @@ def create_app(
             bundles=state.index.get("bundles", []),
         )
 
+    # ── Dependency graph (read) ────────────────────────────
+
+    @app.get("/v1/deps", tags=["packages"])
+    async def get_dependency_graph(
+        _auth: None = Depends(optional_reader_auth),
+    ):
+        """Return forward and reverse dependency maps derived from recipes."""
+        from cvcpkg.builder import RecipeError, find_recipes_dir, list_recipes
+
+        try:
+            recipes = list_recipes(find_recipes_dir())
+        except RecipeError:
+            return JSONResponse({"forward": {}, "reverse": {}})
+
+        forward: dict[str, list[str]] = {}
+        for r in recipes:
+            build_deps = r.raw.get("depends", {}).get("build", [])
+            names: list[str] = []
+            for d in build_deps:
+                if isinstance(d, str):
+                    names.append(d)
+                elif isinstance(d, dict):
+                    names.append(d["name"])
+            forward[r.name] = names
+
+        reverse: dict[str, list[str]] = {}
+        for pkg, deps in forward.items():
+            for dep in deps:
+                reverse.setdefault(dep, []).append(pkg)
+
+        return JSONResponse({"forward": forward, "reverse": reverse})
+
     # ── Packages (read) ─────────────────────────────────────
 
     @app.get("/v1/packages", response_model=PackageListResponse, tags=["packages"])
