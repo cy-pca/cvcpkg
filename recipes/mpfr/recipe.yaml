@@ -1,0 +1,53 @@
+schema_version: 1
+recipe:
+  name: mpfr
+  upstream_version: "4.2.1"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  maintainer_email: "cvcpkg@cyberpcangel.com"
+  maintainer_url: "https://cyberpcangel.com"
+  description: "MPFR — the GNU Multiple Precision Floating-Point Reliable library for correct rounding of arbitrary-precision floating-point computations."
+  homepage: https://www.mpfr.org/
+  license: LGPL-3.0-or-later
+  tags: [math]
+
+source:
+  type: tarball
+  url: https://www.mpfr.org/mpfr-4.2.1/mpfr-4.2.1.tar.xz
+  sha256: "e582e8bfc4e229b288c151c7e96e6d26e6b3fe7fb4af586bb45de3fe107fbc57"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: gmp
+      version: ">=6.1.0"
+  host_tools:
+    - make
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+      vcpkg_port: mpfr
+
+package:
+  files:
+    - lib/libmpfr*
+    - lib/mpfr*
+    - lib/pkgconfig/mpfr*
+    - include/mpfr.h
+    - include/mpf2mpfr.h
+  cmake_packages: []
+
+abi:
+  cxx_std: 17

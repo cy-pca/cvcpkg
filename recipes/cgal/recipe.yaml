@@ -23,6 +23,10 @@ depends:
   build:
     - name: boost
       version: ">=1.82.0"
+    - name: gmp
+      version: ">=6.1.0"
+    - name: mpfr
+      version: ">=4.1.0"
   host_tools:
     - cmake
     - ninja
@@ -45,16 +49,8 @@ package:
   files:
     - lib/libCGAL*
     - lib/CGAL*
-    - lib/libgmp*
-    - lib/libmpfr*
-    - lib/gmp*
-    - lib/mpfr*
     - lib/cmake/CGAL/
     - include/CGAL/
-    - include/gmp.h
-    - include/gmpxx.h
-    - include/mpfr.h
-    - include/mpf2mpfr.h
   cmake_packages:
     - { name: CGAL, targets: ["CGAL::CGAL"] }
 

@@ -1,4 +1,5 @@
-# recipes/cgal/build.ps1
+# recipes/cgal/build.ps1 — build CGAL on Windows.
+# GMP and MPFR are provided by the prefix (built by their own recipes).
 $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\..\\_common\\env-windows.ps1"
