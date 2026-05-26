@@ -784,6 +784,7 @@ document.addEventListener('DOMContentLoaded', () => {{
 
 # ── Shared HTML fragments ────────────────────────────────────────
 
+
 def _head_html(title: str) -> str:
     return f"""<head>
   <meta charset="utf-8" />
@@ -860,6 +861,7 @@ function fmtSize(bytes) {
 
 
 # ── Organizations listing page ───────────────────────────────────
+
 
 def orgs_listing_html() -> str:
     """Return the HTML for the organizations listing page."""
@@ -952,10 +954,12 @@ document.addEventListener('DOMContentLoaded', init);
 
 # ── Organization detail page ─────────────────────────────────────
 
+
 def org_detail_html(slug: str) -> str:
     """Return the HTML for an organization detail page."""
     import html as _html
     import json as _json
+
     safe_slug = _html.escape(slug, quote=True)
 
     return f"""<!DOCTYPE html>

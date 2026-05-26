@@ -704,9 +704,7 @@ def create_app(
             if org and _db_orgs is not None:
                 if not await _db_orgs.check_storage_limit(org, size_bytes):
                     dest.unlink(missing_ok=True)
-                    raise HTTPException(
-                        413, f"organization '{org}' storage limit exceeded"
-                    )
+                    raise HTTPException(413, f"organization '{org}' storage limit exceeded")
 
             await _db_packages.add_package(
                 name=name,
@@ -1317,7 +1315,7 @@ def create_app(
                 storage_limit_bytes=ORG_STORAGE_LIMIT_BYTES,
             )
         except ValueError as exc:
-            raise HTTPException(409, str(exc))
+            raise HTTPException(409, str(exc)) from exc
         await _db_audit.record(
             action=AuditAction.org_create,
             actor=actor.name,
@@ -1387,7 +1385,7 @@ def create_app(
         try:
             added = await _db_orgs.add_member(slug, token_name, role)
         except ValueError as exc:
-            raise HTTPException(404, str(exc))
+            raise HTTPException(404, str(exc)) from exc
         if not added:
             raise HTTPException(409, f"'{token_name}' is already a member of '{slug}'")
         await _db_audit.record(
@@ -1411,7 +1409,7 @@ def create_app(
         try:
             removed = await _db_orgs.remove_member(slug, token_name)
         except ValueError as exc:
-            raise HTTPException(404, str(exc))
+            raise HTTPException(404, str(exc)) from exc
         if not removed:
             raise HTTPException(404, f"'{token_name}' is not a member of '{slug}'")
         await _db_audit.record(
