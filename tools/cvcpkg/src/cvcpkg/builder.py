@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import platform as _platform_module
 import shutil
 import subprocess
 import sys
@@ -488,10 +489,18 @@ def generate_manifest(
             ),
             "built_at": datetime.now(timezone.utc).isoformat(),
             "maintainer": maintainer or recipe_block.get("maintainer", "Community"),
+            "maintainer_email": recipe_block.get("maintainer_email", ""),
             "description": recipe_block.get("description", ""),
             "homepage": recipe_block.get("homepage", ""),
             "license": recipe_block.get("license", ""),
             "tags": ",".join(recipe.tags) if recipe.tags else "",
+        },
+        "provenance": {
+            "builder_hostname": _platform_module.node(),
+            "builder_os": _platform_module.system(),
+            "builder_os_version": _platform_module.version(),
+            "builder_arch": _platform_module.machine(),
+            "python_version": _platform_module.python_version(),
         },
     }
     return manifest

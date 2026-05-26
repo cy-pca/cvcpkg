@@ -523,15 +523,34 @@ async function init(name) {
     document.getElementById('builds-body').innerHTML =
       '<tr><td colspan="8" class="has-text-centered has-text-grey-light">Failed to load package data.</td></tr>';
   }
-  // Fetch dependency graph
+  // Fetch dependency graph and recipe metadata
   try {
     const dresp = await fetch('/v1/deps');
     const ddata = await dresp.json();
-    renderDeps(ddata.forward || {}, ddata.reverse || {});
+    renderDeps(ddata.forward || {}, ddata.reverse || {}, ddata.meta || {});
   } catch (_) {}
 }
 
-function renderDeps(forward, reverse) {
+function renderDeps(forward, reverse, meta) {
+  // Fill in description/maintainer from recipe if not in package data
+  const m = meta[pkgName];
+  if (m) {
+    const descEl = document.getElementById('pkg-description');
+    if (descEl && !descEl.textContent && m.description) {
+      descEl.textContent = m.description;
+      descEl.style.display = '';
+    }
+    if (m.maintainer_email) {
+      const maintEl = document.getElementById('pkg-maintainer');
+      if (maintEl && maintEl.textContent) {
+        const link = document.createElement('a');
+        link.href = 'mailto:' + m.maintainer_email;
+        link.className = 'has-text-link';
+        link.textContent = ' <' + m.maintainer_email + '>';
+        maintEl.appendChild(link);
+      }
+    }
+  }
   const deps = forward[pkgName] || [];
   const depEl = document.getElementById('pkg-deps');
   if (deps.length > 0) {
@@ -549,6 +568,55 @@ function renderDeps(forward, reverse) {
       encodeURIComponent(d) + '">' + esc(d) + '</a>'
     ).join('');
     rdepEl.parentElement.style.display = '';
+  }
+
+  // Populate manual install section with dependency-aware download script
+  const manualEl = document.getElementById('manual-install');
+  const scriptEl = document.getElementById('manual-script');
+  if (manualEl && scriptEl && allBuilds.length > 0) {
+    // Collect all transitive deps
+    function transitiveDeps(name, seen) {
+      if (seen.has(name)) return;
+      seen.add(name);
+      (forward[name] || []).forEach(d => transitiveDeps(d, seen));
+    }
+    const allDeps = new Set();
+    transitiveDeps(pkgName, allDeps);
+    allDeps.delete(pkgName);
+
+    // Pick best build for first platform available
+    const firstBuild = allBuilds[0];
+    const plat = firstBuild.platform;
+    const arch = firstBuild.arch;
+
+    // Group builds by platform
+    const byPlatform = {};
+    allBuilds.forEach(b => {
+      const key = b.platform + '/' + b.arch;
+      if (!byPlatform[key]) byPlatform[key] = [];
+      byPlatform[key].push(b);
+    });
+
+    const depNames = [...allDeps].sort();
+    let lines = ['mkdir -p /opt/cvcpkg', ''];
+    if (depNames.length > 0) {
+      lines.push('# Download dependencies first:');
+      depNames.forEach(d => {
+        lines.push('# ' + d + ': https://pkg.tx.wtf/package/' + encodeURIComponent(d));
+      });
+      lines.push('');
+    }
+    lines.push('# Download and extract ' + pkgName + ':');
+    const url = 'https://pkg.tx.wtf' + firstBuild.archive_url;
+    const fname = firstBuild.archive_url.split('/').pop();
+    lines.push('curl -LO ' + url);
+    lines.push('tar --zstd -xf ' + fname + ' -C /opt/cvcpkg');
+    lines.push('');
+    lines.push('# Point CMake at the prefix:');
+    lines.push('cmake -DCMAKE_PREFIX_PATH=/opt/cvcpkg ..');
+
+    scriptEl.textContent = lines.join('\n');
+    manualEl.style.display = '';
   }
 }
 
@@ -751,6 +819,28 @@ def package_detail_html(name: str) -> str:
 
         <p class="has-text-grey-lighter mt-4">Use in a downstream CMake project:</p>
         <pre class="has-background-dark has-text-success p-3" style="border-radius:6px;">cmake -DCMAKE_PREFIX_PATH=/path/to/prefix ..</pre>
+      </div>
+    </div>
+
+    <!-- Manual install guide -->
+    <div class="box has-background-black-ter mt-4" id="manual-install" style="display:none">
+      <h3 class="title is-5 has-text-white">
+        <span class="icon mr-1"><i class="fas fa-download"></i></span> Manual Install
+      </h3>
+      <div class="content">
+        <p class="has-text-grey-lighter">
+          You can manually download and extract packages without using the cvcpkg
+          CLI. Download <strong>{safe_name}</strong> and all its dependencies for your
+          platform, then extract them into a single prefix directory:
+        </p>
+        <pre class="has-background-dark has-text-success p-3" style="border-radius:6px;" id="manual-script">mkdir -p /opt/cvcpkg
+# Download {safe_name} and its dependencies, then:
+tar --zstd -xf &lt;package&gt;.tar.zst -C /opt/cvcpkg</pre>
+        <p class="has-text-grey-lighter mt-3">
+          Each package extracts into the same prefix layout (<code>lib/</code>, <code>include/</code>, etc.)
+          so they compose correctly. Then point CMake at the prefix:
+        </p>
+        <pre class="has-background-dark has-text-success p-3" style="border-radius:6px;">cmake -DCMAKE_PREFIX_PATH=/opt/cvcpkg ..</pre>
       </div>
     </div>
   </div>
