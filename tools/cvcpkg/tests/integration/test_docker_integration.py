@@ -85,7 +85,7 @@ def bootstrap_admin_token():
             "--role",
             "admin",
             "--state-dir",
-            "/tmp/cvcpkg-test-state",
+            "/app/data",
         ],
         capture_output=True,
         text=True,

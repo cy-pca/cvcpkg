@@ -111,7 +111,7 @@ def admin_token():
         "--role",
         "admin",
         "--state-dir",
-        "/tmp/cvcpkg-e2e-state",
+        "/app/data",
     )
     for line in output.split("\n"):
         line = line.strip()
