@@ -503,9 +503,7 @@ class TestAuditTrailVerification:
         r = client.get("/v1/audit", headers=admin_headers)
         entries = r.json()["entries"]
         publish_entries = [
-            e
-            for e in entries
-            if e["action"] == "publish" and "zlib" in e.get("target", "")
+            e for e in entries if e["action"] == "publish" and "zlib" in e.get("target", "")
         ]
         assert len(publish_entries) >= 1
         assert publish_entries[0]["actor"] == "e2e-publisher"
