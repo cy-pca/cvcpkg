@@ -4,7 +4,7 @@ recipe:
   upstream_version: "1.14.4"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
-  maintainer_email: "joe@angelx.dev"
+  maintainer_email: "joe.rivera@cyberpcangel.com"
   description: "HDF5 — a data model, library, and file format for storing and managing large, complex data."
   homepage: https://www.hdfgroup.org/solutions/hdf5/
   license: BSD-3-Clause

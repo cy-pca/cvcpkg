@@ -4,7 +4,7 @@ recipe:
   upstream_version: "20240722.0"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
-  maintainer_email: "joe@angelx.dev"
+  maintainer_email: "joe.rivera@cyberpcangel.com"
   description: "Abseil C++ Common Libraries — a collection of open-source C++ code designed to augment the standard library."
   homepage: https://abseil.io/
   license: Apache-2.0

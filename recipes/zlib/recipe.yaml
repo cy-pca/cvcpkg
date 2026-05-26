@@ -4,7 +4,7 @@ recipe:
   upstream_version: "1.3.1"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
-  maintainer_email: "joe@angelx.dev"
+  maintainer_email: "joe.rivera@cyberpcangel.com"
   description: "zlib — a general-purpose lossless data compression library."
   homepage: https://zlib.net/
   license: Zlib
