@@ -947,11 +947,11 @@ def package_detail_html(name: str) -> str:
         <span class="icon mr-1"><i class="fas fa-terminal"></i></span> Quick Start
       </h3>
       <div class="content">
-        <p class="has-text-grey-lighter">Install the pre-built binary from pkg.tx.wtf:</p>
-        <pre class="has-background-dark has-text-success p-3" style="border-radius:6px;">cvcpkg install {safe_name} --server https://pkg.tx.wtf</pre>
+        <p class="has-text-grey-lighter">Install the pre-built binary:</p>
+        <pre class="has-background-dark has-text-success p-3" style="border-radius:6px;">cvcpkg install {safe_name}</pre>
 
         <p class="has-text-grey-lighter mt-4">Or build from source using the recipe:</p>
-        <pre class="has-background-dark has-text-success p-3" style="border-radius:6px;">cvcpkg build recipes/{safe_name} --prefix /path/to/prefix</pre>
+        <pre class="has-background-dark has-text-success p-3" style="border-radius:6px;">cvcpkg build {safe_name} --prefix /path/to/prefix</pre>
 
         <p class="has-text-grey-lighter mt-4">Use in a downstream CMake project:</p>
         <pre class="has-background-dark has-text-success p-3" style="border-radius:6px;">cmake -DCMAKE_PREFIX_PATH=/path/to/prefix ..</pre>
