@@ -68,6 +68,8 @@ services:
             timeout: 3s
             retries: 10
             start_period: 15s
+        volumes:
+            - cvcpkg-state:/app/data
         networks:
             - cvcpkg-test
 
@@ -86,9 +88,13 @@ services:
             CVCPKG_DATABASE_URL: postgresql+asyncpg://cvcpkg_test:testpass@postgres:5432/cvcpkg_test
             CVCPKG_TEST_MYSQL_URL: mysql+aiomysql://cvcpkg_test:testpass@mysql:3306/cvcpkg_test
         volumes:
+            - cvcpkg-state:/app/data
             - ../../recipes:/repo/recipes:ro
         networks:
             - cvcpkg-test
+
+volumes:
+    cvcpkg-state:
 
 networks:
     cvcpkg-test:
