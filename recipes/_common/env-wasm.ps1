@@ -9,6 +9,13 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 if (-not $env:CVC_EMSDK_DIR) { throw 'CVC_EMSDK_DIR must point to the activated emsdk bundle' }
 
+# Remove MSYS2/Git Bash env vars that confuse emsdk.py into emitting
+# UNIX-format paths (`:` separator, `/c/` prefixes) inside PowerShell.
+# This happens when the cvcpkg workflow step uses `shell: bash` on Windows.
+Remove-Item Env:\MSYSTEM -ErrorAction SilentlyContinue
+Remove-Item Env:\MSYSTEM_PREFIX -ErrorAction SilentlyContinue
+Remove-Item Env:\MSYSTEM_CHOST -ErrorAction SilentlyContinue
+
 # Activate Emscripten.
 $emsdkEnv = Join-Path $env:CVC_EMSDK_DIR 'emsdk_env.ps1'
 if (-not (Test-Path $emsdkEnv)) {
