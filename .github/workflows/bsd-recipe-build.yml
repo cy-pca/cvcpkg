@@ -3,17 +3,15 @@
 # Builds recipes on BSD virtual machines (FreeBSD, OpenBSD, NetBSD)
 # hosted on the Incus cluster.  The workflow runs on self-hosted
 # Linux runners (which ARE the Incus cluster nodes) and executes
-# builds inside the BSD VMs:
+# builds inside the BSD VMs via SSH over the br-uplink LAN bridge.
 #
-#   FreeBSD  — incus exec  (Incus agent runs inside the VM)
-#   OpenBSD  — ssh          (no Incus agent; runner has direct access)
-#   NetBSD   — ssh          (no Incus agent; runner has direct access)
+# All three BSDs are accessed uniformly via SSH (root, key-based).
 #
-# No GitHub secrets required — the runners already have incus CLI
-# access and SSH connectivity to the VMs on the br-uplink LAN bridge.
+# No GitHub secrets required — the runners already have key-based
+# SSH access to every BSD VM on the 10.66.77.0/24 LAN.
 #
-# Prerequisite: the runner user's SSH key must be authorized on the
-# OpenBSD and NetBSD VMs (one-time ssh-copy-id).
+# Prerequisite: the runner user's SSH key must be authorized on all
+# three BSD VMs (one-time setup via incus exec + authorized_keys).
 #
 # Reusable from release.yml and ci.yml.
 
@@ -44,8 +42,7 @@ permissions:
   contents: read
 
 env:
-  VCGLIB_VERSION: '2025.07'
-  VCGLIB_SHA256:  'e49fc9342d5476b3e39a5e1939b965b57c91d7a17b4f97b8c5eaf01228b16cf0'
+  SSH_OPTS: '-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o BatchMode=yes'
 
 jobs:
   build:
@@ -76,26 +73,21 @@ jobs:
           echo "btlc=$BTLC"        >> "$GITHUB_OUTPUT"
           echo "stem=$STEM"         >> "$GITHUB_OUTPUT"
 
-      # ── Resolve VM name, access method, and python path ──
+      # ── Resolve VM host IP and python path ──
       - name: Resolve BSD VM connection
         id: vm
         shell: bash
         run: |
           case "${{ inputs.platform }}" in
             freebsd)
-              echo "method=incus" >> "$GITHUB_OUTPUT"
-              echo "vm_name=freebsd-build" >> "$GITHUB_OUTPUT"
+              echo "host=10.66.77.174" >> "$GITHUB_OUTPUT"
               echo "python=python3.11" >> "$GITHUB_OUTPUT"
               ;;
             openbsd)
-              echo "method=ssh" >> "$GITHUB_OUTPUT"
-              echo "vm_name=openbsd-build" >> "$GITHUB_OUTPUT"
               echo "host=10.66.77.197" >> "$GITHUB_OUTPUT"
               echo "python=python3.12" >> "$GITHUB_OUTPUT"
               ;;
             netbsd)
-              echo "method=ssh" >> "$GITHUB_OUTPUT"
-              echo "vm_name=netbsd-build" >> "$GITHUB_OUTPUT"
               echo "host=10.66.77.214" >> "$GITHUB_OUTPUT"
               echo "python=python3.13" >> "$GITHUB_OUTPUT"
               ;;
@@ -106,20 +98,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          VM="root@${{ steps.vm.outputs.host }}"
           REMOTE_DIR="/tmp/libcvc-deps-build-$$"
 
-          if [ "${{ steps.vm.outputs.method }}" = "incus" ]; then
-            incus exec "${{ steps.vm.outputs.vm_name }}" -- mkdir -p "${REMOTE_DIR}"
-            tar cf - --exclude='.git' --exclude='build' --exclude='prefix' \
-              --exclude='dist' --exclude='__pycache__' --exclude='*.egg-info' . \
-              | incus exec "${{ steps.vm.outputs.vm_name }}" -- tar xf - -C "${REMOTE_DIR}"
-          else
-            SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o BatchMode=yes"
-            ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" "mkdir -p ${REMOTE_DIR}"
-            tar cf - --exclude='.git' --exclude='build' --exclude='prefix' \
-              --exclude='dist' --exclude='__pycache__' --exclude='*.egg-info' . \
-              | ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" "tar xf - -C ${REMOTE_DIR}"
-          fi
+          ssh ${SSH_OPTS} "${VM}" "mkdir -p ${REMOTE_DIR}"
+          tar cf - --exclude='.git' --exclude='build' --exclude='prefix' \
+            --exclude='dist' --exclude='__pycache__' --exclude='*.egg-info' . \
+            | ssh ${SSH_OPTS} "${VM}" "tar xf - -C ${REMOTE_DIR}"
+
           echo "remote_dir=${REMOTE_DIR}" >> "$GITHUB_ENV"
 
       # ── Install cvcpkg on BSD VM ──
@@ -127,20 +113,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          VM="root@${{ steps.vm.outputs.host }}"
           PYTHON="${{ steps.vm.outputs.python }}"
           INSTALL_CMD="${PYTHON} -m pip install --break-system-packages ./tools/cvcpkg || ${PYTHON} -m pip install ./tools/cvcpkg"
-          if [ "${{ steps.vm.outputs.method }}" = "incus" ]; then
-            incus exec "${{ steps.vm.outputs.vm_name }}" -- sh -c "cd ${remote_dir} && ${INSTALL_CMD}"
-          else
-            SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o BatchMode=yes"
-            ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" "cd ${remote_dir} && ${INSTALL_CMD}"
-          fi
+          ssh ${SSH_OPTS} "${VM}" "cd ${remote_dir} && ${INSTALL_CMD}"
 
       # ── Build all recipes on BSD VM ──
       - name: Build and package all recipes (cvcpkg pack-all)
         shell: bash
         run: |
           set -euo pipefail
+          VM="root@${{ steps.vm.outputs.host }}"
           PYTHON="${{ steps.vm.outputs.python }}"
           BUILD_CMD="${PYTHON} -m cvcpkg pack-all \
             --platform ${{ inputs.platform }} \
@@ -150,52 +133,20 @@ jobs:
             --output-dir ${remote_dir}/dist \
             --recipes-dir recipes"
 
-          if [ "${{ steps.vm.outputs.method }}" = "incus" ]; then
-            incus exec "${{ steps.vm.outputs.vm_name }}" -- sh -c "cd ${remote_dir} && ${BUILD_CMD}"
-          else
-            SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o BatchMode=yes"
-            ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" "cd ${remote_dir} && ${BUILD_CMD}"
-          fi
+          ssh ${SSH_OPTS} "${VM}" "cd ${remote_dir} && ${BUILD_CMD}"
 
       # ── Install marker cmake config on BSD VM ──
       - name: Install libcvc-deps marker config
         shell: bash
         run: |
           set -euo pipefail
+          VM="root@${{ steps.vm.outputs.host }}"
           MARKER_CMD="cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=${{ inputs.config == 'release' && 'Release' || 'Debug' }} \
             -DCMAKE_INSTALL_PREFIX=${remote_dir}/prefix && \
             cmake --install build"
 
-          if [ "${{ steps.vm.outputs.method }}" = "incus" ]; then
-            incus exec "${{ steps.vm.outputs.vm_name }}" -- sh -c "cd ${remote_dir} && ${MARKER_CMD}"
-          else
-            SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o BatchMode=yes"
-            ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" "cd ${remote_dir} && ${MARKER_CMD}"
-          fi
-
-      # ── Stage vcglib (header-only) ──
-      - name: Stage vcglib on BSD VM
-        shell: bash
-        run: |
-          set -euo pipefail
-          VCGLIB_URL="https://github.com/cnr-isti-vclab/vcglib/archive/refs/tags/${{ env.VCGLIB_VERSION }}.tar.gz"
-          STAGE_CMD="set -e && \
-            cd ${remote_dir} && \
-            curl -fsSL '${VCGLIB_URL}' -o vcglib.tar.gz && \
-            echo '${{ env.VCGLIB_SHA256 }}  vcglib.tar.gz' | sha256sum -c - || \
-            echo '${{ env.VCGLIB_SHA256 }}  vcglib.tar.gz' | shasum -a 256 -c - && \
-            mkdir -p vcglib-src && \
-            tar xf vcglib.tar.gz --strip-components=1 -C vcglib-src && \
-            mkdir -p prefix/include && \
-            cp -R vcglib-src/vcg prefix/include/vcg"
-
-          if [ "${{ steps.vm.outputs.method }}" = "incus" ]; then
-            incus exec "${{ steps.vm.outputs.vm_name }}" -- sh -c "${STAGE_CMD}"
-          else
-            SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o BatchMode=yes"
-            ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" "${STAGE_CMD}"
-          fi
+          ssh ${SSH_OPTS} "${VM}" "cd ${remote_dir} && ${MARKER_CMD}"
 
       # ── Patch RPATH to $ORIGIN on BSD (shared builds) ──
       - name: Patch RPATH ($ORIGIN)
@@ -203,6 +154,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          VM="root@${{ steps.vm.outputs.host }}"
           RPATH_CMD="set -e && \
             PREFIX='${remote_dir}/prefix' && \
             if command -v patchelf >/dev/null 2>&1; then \
@@ -214,39 +166,24 @@ jobs:
               echo 'patchelf not available, relying on build-time RPATH'; \
             fi"
 
-          if [ "${{ steps.vm.outputs.method }}" = "incus" ]; then
-            incus exec "${{ steps.vm.outputs.vm_name }}" -- sh -c "${RPATH_CMD}"
-          else
-            SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o BatchMode=yes"
-            ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" "${RPATH_CMD}"
-          fi
+          ssh ${SSH_OPTS} "${VM}" "${RPATH_CMD}"
 
       # ── Copy artifacts back from BSD VM ──
       - name: Retrieve artifacts from BSD VM
         shell: bash
         run: |
           set -euo pipefail
+          VM="root@${{ steps.vm.outputs.host }}"
           STEM="${{ steps.meta.outputs.stem }}"
           mkdir -p "${{ github.workspace }}/dist"
 
-          if [ "${{ steps.vm.outputs.method }}" = "incus" ]; then
-            incus exec "${{ steps.vm.outputs.vm_name }}" -- sh -c \
-              "cd ${remote_dir} && mv prefix '${STEM}' && tar czf '${STEM}.tar.gz' '${STEM}'"
-            incus file pull "${{ steps.vm.outputs.vm_name }}${remote_dir}/${STEM}.tar.gz" \
-              "${{ github.workspace }}/${STEM}.tar.gz"
-            incus exec "${{ steps.vm.outputs.vm_name }}" -- sh -c \
-              "cd ${remote_dir} && tar cf - dist" \
-              | tar xf - -C "${{ github.workspace }}"
-          else
-            SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o BatchMode=yes"
-            ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" \
-              "cd ${remote_dir} && mv prefix '${STEM}' && tar czf '${STEM}.tar.gz' '${STEM}'"
-            scp ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}:${remote_dir}/${STEM}.tar.gz" \
-              "${{ github.workspace }}/${STEM}.tar.gz"
-            ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" \
-              "cd ${remote_dir} && tar cf - dist" \
-              | tar xf - -C "${{ github.workspace }}"
-          fi
+          ssh ${SSH_OPTS} "${VM}" \
+            "cd ${remote_dir} && mv prefix '${STEM}' && tar czf '${STEM}.tar.gz' '${STEM}'"
+          scp ${SSH_OPTS} "${VM}:${remote_dir}/${STEM}.tar.gz" \
+            "${{ github.workspace }}/${STEM}.tar.gz"
+          ssh ${SSH_OPTS} "${VM}" \
+            "cd ${remote_dir} && tar cf - dist" \
+            | tar xf - -C "${{ github.workspace }}"
 
           du -sh "${{ github.workspace }}/${STEM}.tar.gz"
           ls -la "${{ github.workspace }}/dist/"
@@ -256,12 +193,8 @@ jobs:
         if: always()
         shell: bash
         run: |
-          if [ "${{ steps.vm.outputs.method }}" = "incus" ]; then
-            incus exec "${{ steps.vm.outputs.vm_name }}" -- rm -rf "${remote_dir}" || true
-          else
-            SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o BatchMode=yes"
-            ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" "rm -rf ${remote_dir}" || true
-          fi
+          VM="root@${{ steps.vm.outputs.host }}"
+          ssh ${SSH_OPTS} "${VM}" "rm -rf ${remote_dir}" || true
 
       # ── Upload artifacts ──
       - name: Upload artifact
