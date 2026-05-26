@@ -2,11 +2,14 @@
 # recipes/swig/build.sh — build SWIG from source on Linux and macOS.
 #
 # SWIG 4.4.1 supports JavaScript/Emscripten target for WASM output.
-# We statically link PCRE2 so the host doesn't need to provide it.
+# Uses PCRE2 from the cvcpkg prefix (built as a separate recipe).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
+
+# Put the cvcpkg prefix bin on PATH so bison from our recipe is found.
+export PATH="${CVC_DEPS_PREFIX}/bin:${PATH}"
 
 cd "${CVC_SOURCE_DIR}"
 
@@ -15,15 +18,17 @@ if [[ ! -f configure ]]; then
     ./autogen.sh
 fi
 
-# Download and build PCRE2 statically into the SWIG tree.
-# SWIG provides a helper script for this.
-if [[ -f Tools/pcre-build.sh ]]; then
-    Tools/pcre-build.sh
+# Use PCRE2 from the cvcpkg deps prefix.
+PCRE2_CONFIG="${CVC_DEPS_PREFIX}/bin/pcre2-config"
+if [[ ! -x "${PCRE2_CONFIG}" ]]; then
+    echo "ERROR: pcre2-config not found at ${PCRE2_CONFIG}" >&2
+    echo "       Build the pcre2 recipe first: cvcpkg build pcre2" >&2
+    exit 1
 fi
 
 ./configure \
     --prefix="${CVC_INSTALL_DIR}" \
-    --with-pcre2
+    --with-pcre2-prefix="${CVC_DEPS_PREFIX}"
 
 make -j "${CVC_JOBS}"
 make install
