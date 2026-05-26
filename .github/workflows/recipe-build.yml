@@ -39,8 +39,8 @@ env:
 
 jobs:
   build:
-    runs-on: ${{ inputs.platform == 'macos' && 'macos-latest' || inputs.platform == 'windows' && 'windows-latest' || 'ubuntu-latest' }}
-    # wasm cross-compiles on linux and also uses ubuntu-latest
+    runs-on: ${{ inputs.platform == 'macos' && 'macos-latest' || inputs.platform == 'windows' && 'windows-latest' || fromJSON('["self-hosted","Linux","X64","cvcpkg-builder"]') }}
+    # wasm cross-compiles on linux; linux+wasm builds use self-hosted runners
 
     steps:
       - uses: actions/checkout@v5
@@ -156,7 +156,8 @@ jobs:
       - name: Install cvcpkg
         shell: bash
         run: |
-          python3 -m pip install --quiet --break-system-packages ./tools/cvcpkg
+          python3 -m pip install --quiet --break-system-packages ./tools/cvcpkg \
+            || python3 -m pip install --quiet ./tools/cvcpkg
 
       # ── Cache the built prefix ──
       - name: Compute recipe cache key
