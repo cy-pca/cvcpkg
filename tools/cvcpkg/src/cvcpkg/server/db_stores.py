@@ -299,12 +299,16 @@ class DbPackageIndex:
         release: str = "",
         search: str = "",
         org_slug: str = "",
+        include_yanked: bool = False,
         limit: int = 1000,
         offset: int = 0,
     ) -> tuple[list[PackageInfo], int]:
         async with get_session() as session:
             q = select(PackageRow)
             count_q = select(sa_func.count(PackageRow.id))
+            if not include_yanked:
+                q = q.where(PackageRow.yanked == False)  # noqa: E712
+                count_q = count_q.where(PackageRow.yanked == False)  # noqa: E712
             if name:
                 q = q.where(PackageRow.name == name)
                 count_q = count_q.where(PackageRow.name == name)

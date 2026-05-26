@@ -271,8 +271,12 @@ class TestYankFlow:
         )
         assert resp.status_code == 200
 
-        # Check yanked
+        # Yanked packages hidden from default listing
         pkgs = client.get("/v1/packages/boost").json()
+        assert pkgs["total"] == 0
+
+        # But visible with include_yanked=true
+        pkgs = client.get("/v1/packages/boost?include_yanked=true").json()
         assert pkgs["packages"][0]["yanked"] is True
 
         # Unyank (admin only)
