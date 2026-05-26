@@ -80,6 +80,8 @@ env:
 jobs:
   # ──────────────────────────── Linux ────────────────────────────
   # Build every recipe from source in dependency order.
+  # Half the matrix runs on GitHub-hosted ubuntu-latest, half on
+  # self-hosted cvcpkg-builder runners for maximum parallelism.
   linux:
     strategy:
       fail-fast: false
@@ -89,8 +91,10 @@ jobs:
             link: shared
           - config: release
             link: shared
+            runner: '["self-hosted","Linux","X64","cvcpkg-builder"]'
           - config: debug
             link: static
+            runner: '["self-hosted","Linux","X64","cvcpkg-builder"]'
           - config: release
             link: static
     uses: ./.github/workflows/recipe-build.yml
@@ -98,6 +102,7 @@ jobs:
       platform: linux
       config: ${{ matrix.config }}
       link: ${{ matrix.link }}
+      runner: ${{ matrix.runner || '' }}
       sha_suffix: ${{ inputs.sha_suffix || '' }}
 
   # ──────────────────────────── macOS ────────────────────────────
@@ -147,6 +152,7 @@ jobs:
   # ──────────────────────────── WASM ─────────────────────────────
   # Cross-compile wasm-platform recipes on a Linux host.
   # Only static linking — wasm does not support shared libraries.
+  # Split across GitHub-hosted and self-hosted runners.
   wasm:
     strategy:
       fail-fast: false
@@ -156,11 +162,13 @@ jobs:
             link: static
           - config: release
             link: static
+            runner: '["self-hosted","Linux","X64","cvcpkg-builder"]'
     uses: ./.github/workflows/recipe-build.yml
     with:
       platform: wasm
       config: ${{ matrix.config }}
       link: ${{ matrix.link }}
+      runner: ${{ matrix.runner || '' }}
       sha_suffix: ${{ inputs.sha_suffix || '' }}
 
   # ──────────────────────────── Release ────────────────────────────

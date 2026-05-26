@@ -384,6 +384,12 @@ def create_app(
 
         return HTMLResponse(package_detail_html(name))
 
+    @app.get("/guide", response_class=HTMLResponse, include_in_schema=False)
+    async def guide_page():
+        from cvcpkg.server.landing import guide_html
+
+        return HTMLResponse(guide_html())
+
     # ── Health ──────────────────────────────────────────────
 
     @app.get("/healthz", response_model=HealthResponse, tags=["health"])
