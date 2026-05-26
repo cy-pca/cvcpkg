@@ -224,7 +224,7 @@ def fetch_source(recipe: Recipe, work_dir: Path) -> Path:
         return _fetch_tarball(src, work_dir)
     if src.type == "vendored":
         return _resolve_vendored(src, recipe.recipe_dir)
-    if src.type in ("vcpkg", "brew", "apt"):
+    if src.type in ("vcpkg", "brew", "apt", "prebuilt"):
         # These are handled by the build script itself; return a
         # dummy source directory.
         dummy = work_dir / "src"

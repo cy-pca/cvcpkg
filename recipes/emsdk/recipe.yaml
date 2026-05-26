@@ -7,15 +7,16 @@ recipe:
   homepage: https://emscripten.org/
   license: MIT
   tags: [tools, wasm]
-  # The Emscripten SDK provides the C/C++ → wasm compiler toolchain.
-  # This is a build-time host tool — it runs natively on the build host
-  # and cross-compiles to the "wasm" platform target.
+  description: >-
+    The Emscripten SDK provides the C/C++ → wasm compiler toolchain.
+    This is a build-time host tool — it runs natively on the build host
+    and cross-compiles to the "wasm" platform target.
 
 source:
-  type: git
+  type: prebuilt
   url: https://github.com/emscripten-core/emsdk.git
-  tag: "5.0.7"
-  # No tarball SHA256 — we clone + activate the emsdk at a pinned tag.
+  # The build script clones, installs, and activates the emsdk at a pinned tag.
+  # No tarball — emsdk is a release bundler that downloads its own toolchain.
 
 patches: []
 
@@ -44,3 +45,25 @@ package:
     - bin/
     - emsdk_env.sh
     - emsdk_env.ps1
+
+toolchain:
+  python:
+    min_version: "3.8"
+    description: "Python 3 is required by the emsdk installer"
+  note: >-
+    The emsdk is itself a toolchain provider.  It downloads and manages
+    its own compiler (emcc/em++) and system libraries internally.
+
+notes:
+  - title: "Large download (~3 GB)"
+    platforms: [linux, macos, windows]
+    description: >-
+      The emsdk install step downloads the Emscripten compiler, system
+      headers, and precompiled system libraries.  Total download is
+      approximately 3 GB.
+  - title: "Self-contained git clone approach"
+    platforms: [linux, macos, windows]
+    description: >-
+      The recipe uses source type 'prebuilt' and clones the emsdk git
+      repo in the build script, since emsdk is a release bundler that
+      downloads its own toolchain rather than being a traditional tarball.

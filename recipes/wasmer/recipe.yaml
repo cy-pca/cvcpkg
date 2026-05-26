@@ -7,9 +7,10 @@ recipe:
   homepage: https://wasmer.io/
   license: MIT
   tags: [wasm, runtime]
-  # Wasmer — WASM runtime with multiple compilation backends
-  # (Cranelift, LLVM, Singlepass).  Ships a C API consumed from C++.
-  # Pre-built release artifacts from GitHub Releases.
+  description: >-
+    Wasmer — WASM runtime with multiple compilation backends
+    (Cranelift, LLVM, Singlepass).  Ships a C API consumed from C++.
+    Pre-built release artifacts from GitHub Releases.
 
 source:
   type: prebuilt
@@ -49,3 +50,16 @@ package:
     - include/wasm.h
   cmake_packages:
     - { name: wasmer, targets: ["wasmer::wasmer"] }
+
+toolchain:
+  note: >-
+    Pre-built binaries; no compiler required at build time.
+    A Rust toolchain would be needed only to build from source.
+
+notes:
+  - title: "Pre-built C API artifacts"
+    platforms: [linux, macos, windows]
+    description: >-
+      Downloads pre-compiled release artifacts from GitHub Releases.
+      The build script stages headers, libraries, and generates a CMake
+      config file.  No compilation occurs.

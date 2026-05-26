@@ -10,11 +10,10 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 
 cd "${CVC_SOURCE_DIR}"
 
-# Meson-based build for libpq only.
+# Meson-based build.
 meson setup "${CVC_BUILD_DIR}" \
     --prefix="${CVC_INSTALL_DIR}" \
     --buildtype=release \
-    -Dlibpq=true \
     -Dssl=openssl \
     -Dzlib=enabled \
     -Dreadline=disabled \
@@ -23,8 +22,10 @@ meson setup "${CVC_BUILD_DIR}" \
     -Dnls=disabled
 
 cd "${CVC_BUILD_DIR}"
-# Build only the libpq target.
-ninja -j "${CVC_JOBS}" src/interfaces/libpq:pq
+# Build only the libpq shared library and install the whole project.
+# Meson's install step will install everything, but the package.files
+# glob in recipe.yaml filters to just the libpq artifacts.
+ninja -j "${CVC_JOBS}"
 ninja install
 
 # Generate a minimal CMake find module so find_package(PostgreSQL) works.

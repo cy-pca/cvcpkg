@@ -7,8 +7,15 @@
 set -euo pipefail
 
 EMSDK_VER="5.0.7"
+EMSDK_REPO="https://github.com/emscripten-core/emsdk.git"
 
-cd "${CVC_SOURCE_DIR}"
+# Clone the emsdk repo at the pinned tag.
+EMSDK_DIR="${CVC_BUILD_DIR}/emsdk"
+if [[ ! -d "${EMSDK_DIR}" ]]; then
+    git clone --depth 1 --branch "${EMSDK_VER}" "${EMSDK_REPO}" "${EMSDK_DIR}"
+fi
+
+cd "${EMSDK_DIR}"
 
 # Install and activate the pinned version.
 ./emsdk install "${EMSDK_VER}"
@@ -21,6 +28,6 @@ embuilder build MINIMAL
 # Stage the entire activated tree into the install prefix.
 # Exclude .git and CI metadata to save space.
 rsync -a --exclude='.git' --exclude='.github' \
-    "${CVC_SOURCE_DIR}/" "${CVC_INSTALL_DIR}/"
+    "${EMSDK_DIR}/" "${CVC_INSTALL_DIR}/"
 
 echo "emsdk ${EMSDK_VER} staged to ${CVC_INSTALL_DIR}"
