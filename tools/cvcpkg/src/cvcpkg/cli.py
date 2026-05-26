@@ -944,6 +944,7 @@ def publish(
         build_type = bundle.get("config", "release")
         link = bundle.get("link", "shared")
         recipe_version = manifest.get("meta", {}).get("recipe_sha256", "")
+        meta = manifest.get("meta", {})
 
         if not name or not version:
             raise click.ClickException(f"{p.name}: manifest missing name or version")
@@ -967,6 +968,11 @@ def publish(
             "link": link,
             "release_tag": release_tag,
             "recipe_version": recipe_version,
+            "description": meta.get("description", ""),
+            "homepage": meta.get("homepage", ""),
+            "license": meta.get("license", ""),
+            "maintainer": meta.get("maintainer", ""),
+            "tags": meta.get("tags", ""),
         }
 
         try:

@@ -94,6 +94,11 @@ class PackageInfo(BaseModel):
             "version, the package is divergent from the official release."
         ),
     )
+    description: str = ""
+    homepage: str = ""
+    license: str = ""
+    maintainer: str = ""
+    tags: str = ""
 
 
 class PublishResponse(BaseModel):
