@@ -3,7 +3,7 @@ recipe:
   name: emsdk
   upstream_version: "5.0.7"
   cvc_revision: 1
-  maintainer: "CyberPC Angel, LLC"
+  maintainer: "Emscripten Contributors"
   homepage: https://emscripten.org/
   license: MIT
   tags: [tools, wasm]

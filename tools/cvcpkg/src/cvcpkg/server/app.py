@@ -482,9 +482,11 @@ def create_app(
             return JSONResponse({"forward": {}, "reverse": {}})
 
         forward: dict[str, list[str]] = {}
-        meta: dict[str, dict[str, str]] = {}
+        meta: dict[str, dict] = {}
+        recipe_names: list[str] = []
         for r in recipes:
             recipe_block = r.raw.get("recipe", {})
+            recipe_names.append(r.name)
             build_deps = r.raw.get("depends", {}).get("build", [])
             names: list[str] = []
             for d in build_deps:
@@ -499,6 +501,8 @@ def create_app(
                 "license": recipe_block.get("license", ""),
                 "maintainer": recipe_block.get("maintainer", ""),
                 "maintainer_email": recipe_block.get("maintainer_email", ""),
+                "notes": r.raw.get("notes", []) or [],
+                "toolchain": r.raw.get("toolchain", {}),
             }
 
         reverse: dict[str, list[str]] = {}
@@ -506,7 +510,43 @@ def create_app(
             for dep in deps:
                 reverse.setdefault(dep, []).append(pkg)
 
-        return JSONResponse({"forward": forward, "reverse": reverse, "meta": meta})
+        return JSONResponse({
+            "forward": forward,
+            "reverse": reverse,
+            "meta": meta,
+            "recipe_names": recipe_names,
+        })
+
+    # ── Recipe content (read) ──────────────────────────────
+
+    @app.get("/v1/recipe/{name}", tags=["packages"])
+    async def get_recipe(
+        name: str,
+        _auth: None = Depends(optional_reader_auth),
+    ):
+        """Return the raw recipe.yaml content for a named recipe."""
+        import re
+
+        from cvcpkg.builder import RecipeError, find_recipes_dir
+
+        # Validate name to prevent path traversal
+        if not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$", name):
+            return JSONResponse({"error": "invalid recipe name"}, status_code=400)
+
+        try:
+            recipes_dir = find_recipes_dir()
+        except RecipeError:
+            return JSONResponse({"error": "recipes not available"}, status_code=404)
+
+        recipe_path = (recipes_dir / name / "recipe.yaml").resolve()
+        # Ensure resolved path is inside recipes_dir
+        if not str(recipe_path).startswith(str(recipes_dir.resolve())):
+            return JSONResponse({"error": "invalid recipe name"}, status_code=400)
+        if not recipe_path.is_file():
+            return JSONResponse({"error": "recipe not found"}, status_code=404)
+
+        content = recipe_path.read_text(encoding="utf-8")
+        return PlainTextResponse(content, media_type="text/yaml")
 
     # ── Packages (read) ─────────────────────────────────────
 

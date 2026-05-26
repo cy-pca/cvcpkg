@@ -60,6 +60,22 @@ th.is-sorted { color: #3273dc; }
 .pkg-card:hover { transform: translateY(-2px); }
 a.pkg-link { color: #3273dc; text-decoration: none; }
 a.pkg-link:hover { text-decoration: underline; }
+
+.badge-mainline {
+  background: linear-gradient(135deg, #3273dc, #48c774);
+  color: #fff; font-size: 0.7em; font-weight: 600;
+  padding: 2px 8px; border-radius: 4px; vertical-align: middle;
+}
+.badge-community {
+  background-color: rgba(255, 221, 87, 0.15);
+  color: #ffdd57; font-size: 0.7em; font-weight: 600;
+  padding: 2px 8px; border-radius: 4px; vertical-align: middle;
+}
+.note-card { border-left: 3px solid #3273dc; padding: 0.75rem 1rem; margin-bottom: 0.75rem; }
+.recipe-viewer { max-height: 500px; overflow-y: auto; }
+.recipe-viewer pre { white-space: pre; word-break: normal; overflow-x: auto; }
+.collapsible-header { cursor: pointer; user-select: none; }
+.collapsible-header:hover { color: #3273dc; }
 """
 
 # ── Shared HTML fragments ────────────────────────────────────────
@@ -169,6 +185,7 @@ function fmtDate(iso) {
 
 _LANDING_JS = r"""
 let allPackages = [];
+let recipeNames = [];
 let currentSort = { key: 'name', dir: 'asc' };
 let searchTerm = '';
 let platformFilter = '';
@@ -183,8 +200,15 @@ async function init() {
     render();
   } catch (err) {
     document.getElementById('pkg-body').innerHTML =
-      '<tr><td colspan="6" class="has-text-centered has-text-grey-light">Failed to load packages.</td></tr>';
+      '<tr><td colspan="7" class="has-text-centered has-text-grey-light">Failed to load packages.</td></tr>';
   }
+  // Fetch recipe names for mainline badge
+  try {
+    const dresp = await fetch('/v1/deps');
+    const ddata = await dresp.json();
+    recipeNames = ddata.recipe_names || [];
+    render();  // re-render with badges
+  } catch (_) {}
 }
 
 function updateStats() {
@@ -286,7 +310,7 @@ function render() {
   if (sorted.length === 0) {
     const hasFilter = searchTerm || platformFilter || releaseFilter;
     tbody.innerHTML = `
-      <tr><td colspan="6">
+      <tr><td colspan="7">
         <div class="empty-hero has-text-centered">
           <span class="icon is-large has-text-grey-light"><i class="fas fa-box-open fa-3x"></i></span>
           <p class="title is-5 has-text-grey-light mt-4">
@@ -301,7 +325,12 @@ function render() {
     return;
   }
 
-  tbody.innerHTML = sorted.map(g => `
+  tbody.innerHTML = sorted.map(g => {
+    const isMainline = recipeNames.includes(g.name);
+    const badge = isMainline
+      ? '<span class="badge-mainline" title="Official cvcpkg recipe"><i class="fas fa-check-circle"></i> cvcpkg</span>'
+      : '<span class="badge-community" title="Community upload"><i class="fas fa-users"></i> community</span>';
+    return `
     <tr class="pkg-card">
       <td>
         <a class="pkg-link" href="/package/${encodeURIComponent(g.name)}">
@@ -316,8 +345,9 @@ function render() {
       <td>
         ${g.license ? '<span class="tag is-dark is-rounded is-small">' + esc(g.license) + '</span>' : '<span class="has-text-grey">&mdash;</span>'}
       </td>
+      <td>${badge}</td>
     </tr>
-  `).join('');
+  `}).join('');
 
   document.querySelectorAll('th.is-sortable').forEach(th => {
     const arrow = th.querySelector('.sort-arrow');
@@ -450,11 +480,12 @@ def landing_html() -> str:
             <th class="is-sortable" data-key="builds">Builds <span class="sort-arrow"></span></th>
             <th class="is-sortable" data-key="totalSize">Size <span class="sort-arrow"></span></th>
             <th class="is-sortable" data-key="license">License <span class="sort-arrow"></span></th>
+            <th>Source</th>
           </tr>
         </thead>
         <tbody id="pkg-body">
           <tr>
-            <td colspan="6" class="has-text-centered py-6">
+            <td colspan="7" class="has-text-centered py-6">
               <span class="icon is-large has-text-link">
                 <i class="fas fa-spinner fa-spin fa-2x"></i>
               </span>
@@ -527,11 +558,25 @@ async function init(name) {
   try {
     const dresp = await fetch('/v1/deps');
     const ddata = await dresp.json();
-    renderDeps(ddata.forward || {}, ddata.reverse || {}, ddata.meta || {});
+    renderDeps(ddata.forward || {}, ddata.reverse || {}, ddata.meta || {},
+               ddata.recipe_names || []);
   } catch (_) {}
 }
 
-function renderDeps(forward, reverse, meta) {
+function renderDeps(forward, reverse, meta, recipeNames) {
+  const isMainline = recipeNames.includes(pkgName);
+
+  // Show mainline/community badge
+  const badgeEl = document.getElementById('pkg-source-badge');
+  if (badgeEl) {
+    if (isMainline) {
+      badgeEl.innerHTML = '<span class="badge-mainline" title="Official cvcpkg recipe — maintained as part of the cvcpkg distribution"><i class="fas fa-check-circle"></i> cvcpkg</span>';
+    } else {
+      badgeEl.innerHTML = '<span class="badge-community" title="Community-uploaded package — not part of the mainline cvcpkg recipe set"><i class="fas fa-users"></i> community</span>';
+    }
+    badgeEl.style.display = 'inline';
+  }
+
   // Fill in description/maintainer from recipe if not in package data
   const m = meta[pkgName];
   if (m) {
@@ -617,6 +662,79 @@ function renderDeps(forward, reverse, meta) {
 
     scriptEl.textContent = lines.join('\n');
     manualEl.style.display = '';
+  }
+
+  // Render notes from recipe
+  if (m && m.notes && m.notes.length > 0) {
+    const notesEl = document.getElementById('pkg-notes-list');
+    const notesSection = document.getElementById('pkg-notes-section');
+    if (notesEl && notesSection) {
+      notesEl.innerHTML = m.notes.map(n => `
+        <div class="note-card has-background-black-ter">
+          <p class="has-text-weight-semibold has-text-white">
+            <span class="icon is-small mr-1"><i class="fas fa-sticky-note"></i></span>
+            ${esc(n.title || 'Note')}
+            ${(n.platforms || []).map(p => '<span class="tag is-small is-dark is-rounded ml-1">' + esc(p) + '</span>').join('')}
+          </p>
+          <p class="has-text-grey-lighter is-size-7 mt-1">${esc(n.description || '')}</p>
+        </div>
+      `).join('');
+      notesSection.style.display = '';
+    }
+  }
+
+  // Render toolchain requirements
+  if (m && m.toolchain && Object.keys(m.toolchain).length > 0) {
+    const tcEl = document.getElementById('pkg-toolchain');
+    if (tcEl) {
+      let items = [];
+      for (const [key, val] of Object.entries(m.toolchain)) {
+        if (key === 'note') {
+          items.push('<span class="is-size-7 has-text-grey-lighter">' + esc(String(val)) + '</span>');
+        } else if (typeof val === 'object' && val !== null) {
+          const desc = val.description || key;
+          const ver = val.min_version ? ' >= ' + val.min_version : '';
+          const rec = val.recommended ? ' (recommended: ' + val.recommended + ')' : '';
+          items.push('<span class="tag is-dark is-rounded mr-1 mb-1" title="' + esc(desc) + '">' +
+            esc(key) + esc(ver) + esc(rec) + '</span>');
+        }
+      }
+      if (items.length > 0) {
+        tcEl.innerHTML = items.join(' ');
+        tcEl.parentElement.style.display = '';
+      }
+    }
+  }
+
+  // Load recipe YAML viewer
+  if (isMainline) {
+    fetchRecipe();
+  }
+}
+
+async function fetchRecipe() {
+  try {
+    const resp = await fetch('/v1/recipe/' + encodeURIComponent(pkgName));
+    if (!resp.ok) return;
+    const text = await resp.text();
+    const recipeEl = document.getElementById('recipe-content');
+    const recipeSection = document.getElementById('recipe-section');
+    if (recipeEl && recipeSection) {
+      recipeEl.textContent = text;
+      recipeSection.style.display = '';
+    }
+  } catch (_) {}
+}
+
+function toggleRecipe() {
+  const body = document.getElementById('recipe-body');
+  const icon = document.getElementById('recipe-toggle-icon');
+  if (body.style.display === 'none') {
+    body.style.display = '';
+    icon.className = 'fas fa-chevron-up';
+  } else {
+    body.style.display = 'none';
+    icon.className = 'fas fa-chevron-down';
   }
 }
 
@@ -759,6 +877,7 @@ def package_detail_html(name: str) -> str:
           <span class="icon mr-2"><i class="fas fa-cube"></i></span>
           <span id="pkg-title">{safe_name}</span>
           <span class="tag is-link is-rounded is-medium ml-3" id="pkg-version">&hellip;</span>
+          <span id="pkg-source-badge" class="ml-2" style="display:none"></span>
         </h1>
         <p class="subtitle is-5 has-text-grey-lighter" id="pkg-description" style="display:none"></p>
 
@@ -780,6 +899,9 @@ def package_detail_html(name: str) -> str:
           </div>
           <div style="display:none"><strong class="has-text-grey-light">Used By:</strong>
             <span id="pkg-rdeps"></span>
+          </div>
+          <div style="display:none"><strong class="has-text-grey-light">Toolchain:</strong>
+            <span id="pkg-toolchain"></span>
           </div>
         </div>
       </div>
@@ -841,6 +963,37 @@ tar --zstd -xf &lt;package&gt;.tar.zst -C /opt/cvcpkg</pre>
           so they compose correctly. Then point CMake at the prefix:
         </p>
         <pre class="has-background-dark has-text-success p-3" style="border-radius:6px;">cmake -DCMAKE_PREFIX_PATH=/opt/cvcpkg ..</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Build Notes -->
+<section class="section pt-0 has-background-black-bis" id="pkg-notes-section" style="display:none">
+  <div class="container">
+    <h2 class="title is-5 has-text-white mb-3">
+      <span class="icon mr-1"><i class="fas fa-sticky-note"></i></span> Build Notes
+    </h2>
+    <div id="pkg-notes-list"></div>
+  </div>
+</section>
+
+<!-- Recipe viewer -->
+<section class="section pt-0 has-background-black-bis" id="recipe-section" style="display:none">
+  <div class="container">
+    <div class="box has-background-black-ter">
+      <h3 class="title is-5 has-text-white collapsible-header" onclick="toggleRecipe()">
+        <span class="icon mr-1"><i class="fas fa-file-code"></i></span> Recipe
+        <span class="icon is-small ml-2"><i id="recipe-toggle-icon" class="fas fa-chevron-down"></i></span>
+        <a class="button is-small is-link is-outlined ml-3" id="recipe-download-link"
+           href="/v1/recipe/{safe_name}" download="recipe.yaml" title="Download recipe.yaml"
+           onclick="event.stopPropagation()">
+          <span class="icon is-small"><i class="fas fa-download"></i></span>
+          <span>Download</span>
+        </a>
+      </h3>
+      <div id="recipe-body" style="display:none" class="recipe-viewer">
+        <pre class="has-background-dark has-text-light p-3" style="border-radius:6px;"><code id="recipe-content"></code></pre>
       </div>
     </div>
   </div>

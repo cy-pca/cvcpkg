@@ -3,7 +3,7 @@ recipe:
   name: wasmer
   upstream_version: "7.1.0"
   cvc_revision: 1
-  maintainer: "CyberPC Angel, LLC"
+  maintainer: "Wasmer, Inc."
   homepage: https://wasmer.io/
   license: MIT
   tags: [wasm, runtime]
