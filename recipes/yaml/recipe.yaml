@@ -4,7 +4,8 @@ recipe:
   upstream_version: "0.2.5"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
-  maintainer_email: "joe.rivera@cyberpcangel.com"
+  maintainer_email: "cvcpkg@cyberpcangel.com"
+  maintainer_url: "https://cyberpcangel.com"
   description: "libyaml — a fast YAML 1.1 parser and emitter library written in C."
   homepage: https://pyyaml.org/wiki/LibYAML
   license: MIT

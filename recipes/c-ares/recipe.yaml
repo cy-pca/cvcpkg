@@ -4,7 +4,8 @@ recipe:
   upstream_version: "1.34.4"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
-  maintainer_email: "joe.rivera@cyberpcangel.com"
+  maintainer_email: "cvcpkg@cyberpcangel.com"
+  maintainer_url: "https://cyberpcangel.com"
   description: "c-ares — an asynchronous DNS resolver library for C applications."
   homepage: https://c-ares.org/
   license: MIT

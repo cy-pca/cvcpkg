@@ -4,6 +4,8 @@ recipe:
   upstream_version: "18.4"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
+  maintainer_email: "cvcpkg@cyberpcangel.com"
+  maintainer_url: "https://cyberpcangel.com"
   homepage: https://www.postgresql.org/
   license: PostgreSQL
   tags: [database]

@@ -4,6 +4,8 @@ recipe:
   upstream_version: "2.4.4"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
+  maintainer_email: "cvcpkg@cyberpcangel.com"
+  maintainer_url: "https://cyberpcangel.com"
   homepage: https://github.com/bytecodealliance/wasm-micro-runtime
   license: Apache-2.0
   tags: [wasm, runtime]

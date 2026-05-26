@@ -79,6 +79,7 @@ class MatrixEntry:
     platform: str
     script: str
     env: dict[str, str] = field(default_factory=dict)
+    host_platform: str | None = None
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> MatrixEntry:
@@ -86,6 +87,7 @@ class MatrixEntry:
             platform=d["platform"],
             script=d["script"],
             env=d.get("env", {}),
+            host_platform=d.get("host_platform"),
         )
 
 
@@ -317,6 +319,18 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
     build_type = "Release" if ctx.config == "release" else "Debug"
     env["CMAKE_BUILD_TYPE"] = build_type
     env.setdefault("BUILD_SHARED_LIBS", "ON" if ctx.link == "shared" else "OFF")
+
+    # Cross-compilation: set CVC_HOST_PLATFORM when the matrix
+    # entry specifies a host_platform different from the target.
+    if matrix.host_platform:
+        env["CVC_HOST_PLATFORM"] = matrix.host_platform
+
+    # If building for wasm and emsdk was built into the shared prefix,
+    # point CVC_EMSDK_DIR there so build scripts can find it.
+    if ctx.platform == "wasm" and "CVC_EMSDK_DIR" not in env:
+        emsdk_env = ctx.prefix / "emsdk_env.sh"
+        if emsdk_env.is_file():
+            env["CVC_EMSDK_DIR"] = str(ctx.prefix)
 
     # Merge matrix-entry env overrides
     env.update(matrix.env)
