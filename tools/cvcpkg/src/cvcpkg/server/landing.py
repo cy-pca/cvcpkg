@@ -15,6 +15,15 @@ from cvcpkg import __version__
 
 _GITHUB_REPO = os.environ.get("CVCPKG_GITHUB_REPO", "transfix/libcvc-deps")
 _GITHUB_URL = f"https://github.com/{_GITHUB_REPO}"
+_SITE_TITLE = os.environ.get("CVCPKG_SITE_TITLE", "cvcpkg")
+_SITE_TAGLINE = os.environ.get("CVCPKG_SITE_TAGLINE", "Package Archive")
+_SITE_HERO = os.environ.get(
+    "CVCPKG_SITE_HERO",
+    "A cross-platform, language-agnostic binary package archive for the"
+    " scientific computing community. Pre-built C/C++ libraries for Linux,"
+    " macOS, and Windows &mdash; with curated LTS releases for reproducible"
+    " downstream builds.",
+)
 
 # ── Shared CSS ───────────────────────────────────────────────────
 
@@ -76,9 +85,65 @@ a.pkg-link:hover { text-decoration: underline; }
 .recipe-viewer pre { white-space: pre; word-break: normal; overflow-x: auto; }
 .collapsible-header { cursor: pointer; user-select: none; }
 .collapsible-header:hover { color: #3273dc; }
+
+.navbar-dropdown {
+  background-color: #1a1a2e !important;
+  border-top: 2px solid #3273dc !important;
+}
+.navbar-dropdown .navbar-item {
+  color: #f5f5f5 !important;
+}
+.navbar-dropdown .navbar-item:hover {
+  background-color: #16213e !important;
+  color: #3273dc !important;
+}
+.navbar-link::after { border-color: #f5f5f5 !important; }
 """
 
 # ── Shared HTML fragments ────────────────────────────────────────
+
+
+_NAVBAR_JS = r"""
+(function() {
+  // Burger toggle
+  const burger = document.querySelector('.navbar-burger');
+  if (burger) {
+    burger.addEventListener('click', () => {
+      burger.classList.toggle('is-active');
+      document.getElementById(burger.dataset.target).classList.toggle('is-active');
+    });
+  }
+  // Dropdown: click-to-toggle for touch devices
+  document.querySelectorAll('.navbar-item.has-dropdown').forEach(dd => {
+    const link = dd.querySelector('.navbar-link');
+    if (link) {
+      link.addEventListener('click', e => {
+        e.preventDefault();
+        // Close other open dropdowns
+        document.querySelectorAll('.navbar-item.has-dropdown.is-active').forEach(other => {
+          if (other !== dd) other.classList.remove('is-active');
+        });
+        dd.classList.toggle('is-active');
+      });
+    }
+  });
+  // Close menus on outside tap
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.navbar-item.has-dropdown')) {
+      document.querySelectorAll('.navbar-item.has-dropdown.is-active').forEach(
+        dd => dd.classList.remove('is-active')
+      );
+    }
+    if (!e.target.closest('.navbar-burger') && !e.target.closest('.navbar-menu')) {
+      const b = document.querySelector('.navbar-burger');
+      if (b && b.classList.contains('is-active')) {
+        b.classList.remove('is-active');
+        document.getElementById(b.dataset.target).classList.remove('is-active');
+      }
+    }
+  });
+})()
+"""
 
 
 def _navbar_html() -> str:
@@ -91,14 +156,28 @@ def _navbar_html() -> str:
         <span class="tag is-dark is-rounded ml-2">v{__version__}</span>
       </a>
       <a role="button" class="navbar-burger" aria-label="menu" aria-expanded="false" data-target="navMenu">
-        <span aria-hidden="true"></span><span aria-hidden="true"></span>
-        <span aria-hidden="true"></span><span aria-hidden="true"></span>
+        <span aria-hidden="true"></span>
+        <span aria-hidden="true"></span>
+        <span aria-hidden="true"></span>
       </a>
     </div>
     <div id="navMenu" class="navbar-menu">
       <div class="navbar-end">
-        <a class="navbar-item" href="/docs">
-          <span class="icon"><i class="fas fa-book"></i></span><span>API Docs</span>
+        <div class="navbar-item has-dropdown is-hoverable">
+          <a class="navbar-link">
+            <span class="icon"><i class="fas fa-book"></i></span><span>Docs</span>
+          </a>
+          <div class="navbar-dropdown is-right is-boxed">
+            <a class="navbar-item" href="/guide">
+              <span class="icon"><i class="fas fa-rocket"></i></span><span>Getting Started</span>
+            </a>
+            <a class="navbar-item" href="/docs">
+              <span class="icon"><i class="fas fa-code"></i></span><span>API Reference</span>
+            </a>
+          </div>
+        </div>
+        <a class="navbar-item" href="/orgs">
+          <span class="icon"><i class="fas fa-building"></i></span><span>Organizations</span>
         </a>
         <a class="navbar-item" href="/v1/catalog">
           <span class="icon"><i class="fas fa-list"></i></span><span>Catalog</span>
@@ -376,9 +455,11 @@ function sortBy(key) {
 
 def landing_html() -> str:
     """Return the complete HTML for the landing page."""
+    page_title = _html.escape(f"{_SITE_TITLE} &mdash; {_SITE_TAGLINE}", quote=False)
+    hero_title = _html.escape(_SITE_TITLE)
     return f"""<!DOCTYPE html>
 <html lang="en" data-theme="dark" class="has-background-black-bis">
-{_head_html("cvcpkg &mdash; Package Archive")}
+{_head_html(page_title)}
 <body class="has-background-black-bis has-text-light">
 
 {_navbar_html()}
@@ -389,13 +470,10 @@ def landing_html() -> str:
     <div class="container">
       <p class="title is-2 has-text-white">
         <span class="icon is-large mr-2"><i class="fas fa-cubes"></i></span>
-        cvcpkg
+        {hero_title}
       </p>
       <p class="subtitle is-5 has-text-grey-lighter" style="max-width: 740px;">
-        A cross-platform, language-agnostic binary package archive for the
-        scientific computing community. Pre-built C/C++ libraries for Linux,
-        macOS, and Windows &mdash; with curated LTS releases for reproducible
-        downstream builds.
+        {_SITE_HERO}
       </p>
     </div>
   </div>
@@ -505,13 +583,7 @@ def landing_html() -> str:
 {_LANDING_JS}
 
 document.addEventListener('DOMContentLoaded', () => {{
-  const burger = document.querySelector('.navbar-burger');
-  if (burger) {{
-    burger.addEventListener('click', () => {{
-      burger.classList.toggle('is-active');
-      document.getElementById(burger.dataset.target).classList.toggle('is-active');
-    }});
-  }}
+  {_NAVBAR_JS}
 
   document.getElementById('search').addEventListener('input', e => {{
     searchTerm = e.target.value;
@@ -1046,13 +1118,7 @@ tar --zstd -xf &lt;package&gt;.tar.zst -C /opt/cvcpkg</pre>
 {_DETAIL_JS}
 
 document.addEventListener('DOMContentLoaded', () => {{
-  const burger = document.querySelector('.navbar-burger');
-  if (burger) {{
-    burger.addEventListener('click', () => {{
-      burger.classList.toggle('is-active');
-      document.getElementById(burger.dataset.target).classList.toggle('is-active');
-    }});
-  }}
+  {_NAVBAR_JS}
   document.querySelectorAll('#builds-table th.is-sortable').forEach(th => {{
     th.addEventListener('click', () => sortBy(th.dataset.key));
   }});
@@ -1061,65 +1127,6 @@ document.addEventListener('DOMContentLoaded', () => {{
 </script>
 </body>
 </html>"""
-
-
-# ── Shared HTML fragments ────────────────────────────────────────
-
-
-def _head_html(title: str) -> str:
-    return f"""<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{title}</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.4/css/bulma.min.css" />
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
-        integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA=="
-        crossorigin="anonymous" referrerpolicy="no-referrer" />
-  <style>{_CSS}</style>
-</head>"""
-
-
-def _navbar_html() -> str:
-    return f"""<nav class="navbar is-dark" role="navigation" aria-label="main navigation">
-  <div class="container">
-    <div class="navbar-brand">
-      <a class="navbar-item" href="/">
-        <span class="logo-icon">C</span>
-        <strong class="is-size-4">cvcpkg</strong>
-        <span class="tag is-dark is-rounded ml-2">v{__version__}</span>
-      </a>
-    </div>
-    <div id="navMenu" class="navbar-menu">
-      <div class="navbar-end">
-        <a class="navbar-item" href="/orgs">
-          <span class="icon"><i class="fas fa-building"></i></span><span>Organizations</span>
-        </a>
-        <a class="navbar-item" href="/docs">
-          <span class="icon"><i class="fas fa-book"></i></span><span>API Docs</span>
-        </a>
-        <a class="navbar-item" href="/v1/catalog">
-          <span class="icon"><i class="fas fa-list"></i></span><span>Catalog</span>
-        </a>
-        <a class="navbar-item" href="{_GITHUB_URL}">
-          <span class="icon"><i class="fab fa-github"></i></span><span>GitHub</span>
-        </a>
-      </div>
-    </div>
-  </div>
-</nav>"""
-
-
-def _footer_frag() -> str:
-    return f"""<footer class="footer has-background-black-ter has-text-grey-light">
-  <div class="content has-text-centered">
-    <p>
-      <a href="{_GITHUB_URL}" class="has-text-grey-light">
-        <span class="icon"><i class="fab fa-github"></i></span> cvcpkg
-      </a>
-      &mdash; cross-platform binary package archive for scientific computing
-    </p>
-  </div>
-</footer>"""
 
 
 # ── Organizations listing page ───────────────────────────────────
@@ -1151,10 +1158,11 @@ def orgs_listing_html() -> str:
   </div>
 </section>
 
-{_footer_frag()}
+{_footer_html()}
 
 <script>
 {_HELPERS_JS}
+{_NAVBAR_JS}
 
 async function init() {{
   try {{
@@ -1294,10 +1302,11 @@ def org_detail_html(slug: str) -> str:
   </div>
 </section>
 
-{_footer_frag()}
+{_footer_html()}
 
 <script>
 {_HELPERS_JS}
+{_NAVBAR_JS}
 
 async function init() {{
   try {{
@@ -1372,6 +1381,663 @@ function renderOrg(data) {{
 }}
 
 document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>"""
+
+
+# ── Guide / Getting Started page ─────────────────────────────────
+
+_GUIDE_CSS = r"""
+.guide-section { padding: 2rem 0; }
+.guide-section + .guide-section { border-top: 1px solid #363636; }
+.guide-code pre {
+  background: #1a1a2e; border-radius: 6px; padding: 1rem 1.25rem;
+  overflow-x: auto; font-size: 0.9rem;
+}
+.guide-code code { color: #48c774; }
+.guide-step {
+  counter-increment: guide-step;
+  padding-left: 2.5rem; position: relative; margin-bottom: 1.5rem;
+}
+.guide-step::before {
+  content: counter(guide-step);
+  position: absolute; left: 0; top: 0;
+  width: 1.75rem; height: 1.75rem; border-radius: 50%;
+  background: linear-gradient(135deg, #3273dc, #48c774);
+  color: #fff; font-weight: 700; font-size: 0.85rem;
+  display: flex; align-items: center; justify-content: center;
+}
+.toc a { color: #3273dc; text-decoration: none; }
+.toc a:hover { text-decoration: underline; }
+.toc li { margin-bottom: 0.35rem; }
+"""
+
+
+def guide_html() -> str:
+    """Return the complete HTML for the Getting Started guide page."""
+    repo = _html.escape(_GITHUB_REPO)
+    return f"""\
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" class="has-background-black-bis">
+{_head_html("Getting Started &mdash; cvcpkg")}
+<style>{_GUIDE_CSS}</style>
+<body class="has-background-black-bis has-text-light">
+
+{_navbar_html()}
+
+<section class="section">
+  <div class="container" style="max-width: 860px;">
+
+    <h1 class="title is-2 has-text-white mb-2">
+      <span class="icon mr-2"><i class="fas fa-rocket"></i></span>
+      Getting Started with cvcpkg
+    </h1>
+    <p class="subtitle is-5 has-text-grey-lighter mb-5">
+      Install pre-built C/C++ libraries in seconds. No compilation required.
+    </p>
+
+    <!-- Table of Contents -->
+    <div class="box has-background-black-ter mb-6">
+      <p class="has-text-weight-bold has-text-grey-light mb-3">
+        <span class="icon"><i class="fas fa-list-ul"></i></span> Contents
+      </p>
+      <ol class="toc ml-4">
+        <li><a href="#install">Installation</a></li>
+        <li><a href="#quick-start">Quick Start</a></li>
+        <li><a href="#requirements">Requirements Files</a></li>
+        <li><a href="#commands">CLI Reference</a></li>
+        <li><a href="#cmake">CMake Integration</a></li>
+        <li><a href="#recipes">Creating Recipes</a></li>
+        <li><a href="#publishing">Publishing Builds</a></li>
+        <li><a href="#orgs">Organizations</a></li>
+        <li><a href="#server">Self-Hosting</a></li>
+        <li><a href="#server-config">Server Configuration</a></li>
+        <li><a href="#api">REST API</a></li>
+      </ol>
+    </div>
+
+    <!-- Installation -->
+    <div id="install" class="guide-section" style="counter-reset: guide-step;">
+      <h2 class="title is-4 has-text-white">
+        <span class="icon mr-1"><i class="fas fa-download"></i></span>
+        Installation
+      </h2>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">Install from PyPI:</p>
+        <div class="guide-code"><pre><code>pip install cvcpkg</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">Or install from the repository:</p>
+        <div class="guide-code"><pre><code>git clone https://github.com/{repo}.git
+cd libcvc-deps/tools/cvcpkg
+pip install .</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">Verify the installation:</p>
+        <div class="guide-code"><pre><code>cvcpkg --version</code></pre></div>
+      </div>
+    </div>
+
+    <!-- Quick Start -->
+    <div id="quick-start" class="guide-section" style="counter-reset: guide-step;">
+      <h2 class="title is-4 has-text-white">
+        <span class="icon mr-1"><i class="fas fa-bolt"></i></span>
+        Quick Start
+      </h2>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          Install a package into a local prefix:
+        </p>
+        <div class="guide-code"><pre><code># Install zlib into ./deps
+cvcpkg install zlib --prefix ./deps
+
+# Install multiple packages
+cvcpkg install boost hdf5 fftw3 --prefix ./deps</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          Choose build configuration and link mode:
+        </p>
+        <div class="guide-code"><pre><code># Release + shared (default)
+cvcpkg install qt6 --prefix ./deps
+
+# Debug + static
+cvcpkg install qt6 --prefix ./deps --config debug --link static</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          List installed packages:
+        </p>
+        <div class="guide-code"><pre><code>cvcpkg list --prefix ./deps</code></pre></div>
+      </div>
+    </div>
+
+    <!-- Requirements Files -->
+    <div id="requirements" class="guide-section" style="counter-reset: guide-step;">
+      <h2 class="title is-4 has-text-white">
+        <span class="icon mr-1"><i class="fas fa-file-alt"></i></span>
+        Requirements Files
+      </h2>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          Create a <code>cvc-requirements.yaml</code> to declare your
+          dependencies:
+        </p>
+        <div class="guide-code"><pre><code># cvc-requirements.yaml
+components:
+  - name: boost
+    version: "&gt;=1.86"
+  - name: hdf5
+    version: "^1.14"
+  - name: qt6
+    version: "~6.8"
+  - name: vtk
+    version: "^9.5"
+
+config: release
+link: shared</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          Install everything from the requirements file:
+        </p>
+        <div class="guide-code"><pre><code>\
+cvcpkg install --from cvc-requirements.yaml --prefix ./deps</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          Lock versions for reproducible builds:
+        </p>
+        <div class="guide-code"><pre><code>cvcpkg lock     # creates cvc-lock.yaml
+cvcpkg sync     # installs exactly what's in the lockfile</code></pre></div>
+      </div>
+    </div>
+
+    <!-- CLI Commands -->
+    <div id="commands" class="guide-section">
+      <h2 class="title is-4 has-text-white">
+        <span class="icon mr-1"><i class="fas fa-terminal"></i></span>
+        CLI Reference
+      </h2>
+      <div class="table-container">
+        <table class="table is-fullwidth is-hoverable is-dark is-striped">
+          <thead>
+            <tr>
+              <th>Command</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><code>cvcpkg install</code></td>
+                <td>Install packages into a prefix</td></tr>
+            <tr><td><code>cvcpkg list</code></td>
+                <td>List installed packages</td></tr>
+            <tr><td><code>cvcpkg info &lt;name&gt;</code></td>
+                <td>Show package details and dependencies</td></tr>
+            <tr><td><code>cvcpkg add &lt;name&gt;</code></td>
+                <td>Add a component to requirements</td></tr>
+            <tr><td><code>cvcpkg remove &lt;name&gt;</code></td>
+                <td>Remove a component from requirements</td></tr>
+            <tr><td><code>cvcpkg lock</code></td>
+                <td>Lock dependency versions</td></tr>
+            <tr><td><code>cvcpkg sync</code></td>
+                <td>Install from lockfile</td></tr>
+            <tr><td><code>cvcpkg catalog</code></td>
+                <td>Browse or refresh the package catalog</td></tr>
+            <tr><td><code>cvcpkg verify</code></td>
+                <td>Verify integrity of installed packages</td></tr>
+            <tr><td><code>cvcpkg validate</code></td>
+                <td>Validate recipe files</td></tr>
+            <tr><td><code>cvcpkg gc</code></td>
+                <td>Remove unused cached downloads</td></tr>
+            <tr><td><code>cvcpkg publish</code></td>
+                <td>Publish archives to a cvcpkg server</td></tr>
+            <tr><td><code>cvcpkg world</code></td>
+                <td>Show the dependency world set</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- CMake Integration -->
+    <div id="cmake" class="guide-section" style="counter-reset: guide-step;">
+      <h2 class="title is-4 has-text-white">
+        <span class="icon mr-1"><i class="fas fa-cogs"></i></span>
+        CMake Integration
+      </h2>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          Point <code>CMAKE_PREFIX_PATH</code> at your cvcpkg prefix:
+        </p>
+        <div class="guide-code"><pre><code>cmake -B build \\
+  -DCMAKE_PREFIX_PATH=$(pwd)/deps \\
+  -DCMAKE_BUILD_TYPE=Release</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          Use <code>find_package()</code> in your CMakeLists.txt as usual
+          &mdash; all packages install standard CMake config files:
+        </p>
+        <div class="guide-code"><pre><code>find_package(Boost REQUIRED COMPONENTS system filesystem)
+find_package(HDF5 REQUIRED COMPONENTS CXX)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
+find_package(VTK REQUIRED)</code></pre></div>
+      </div>
+    </div>
+
+    <!-- Creating Recipes -->
+    <div id="recipes" class="guide-section" style="counter-reset: guide-step;">
+      <h2 class="title is-4 has-text-white">
+        <span class="icon mr-1"><i class="fas fa-mortar-pestle"></i></span>
+        Creating Recipes
+      </h2>
+      <p class="has-text-grey-lighter mb-4">
+        A recipe describes how to fetch, build, and package a library.
+        Each recipe lives in its own directory under <code>recipes/</code>
+        with a <code>recipe.yaml</code> and one or more build scripts.
+      </p>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">Create a recipe directory:</p>
+        <div class="guide-code"><pre><code>mkdir -p recipes/mylib
+cd recipes/mylib</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          Write <code>recipe.yaml</code> &mdash; the full schema:
+        </p>
+        <div class="guide-code"><pre><code>schema_version: 1
+
+recipe:
+  name: mylib
+  upstream_version: "2.1.0"
+  cvc_revision: 1
+  maintainer: "Your Name"
+  maintainer_email: "you@example.com"
+  description: "A great library"
+  homepage: https://example.com/mylib
+  license: MIT
+  tags: [utils, io]
+
+source:
+  type: tarball
+  url: https://example.com/mylib-2.1.0.tar.gz
+  sha256: abc123...   # required for tarball sources
+  strip_components: 1
+
+depends:
+  build:
+    - name: zlib      # build-time dependency
+    - name: boost
+      version: "&gt;=1.86"
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libmylib*
+    - include/mylib/**
+  cmake_packages:
+    - {{{{ name: mylib, targets: [mylib::mylib] }}}}
+
+test:
+  script: test.sh</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          Write a build script (<code>build.sh</code>). Standard
+          <code>CVC_*</code> environment variables are provided:
+        </p>
+        <div class="guide-code"><pre><code>#!/usr/bin/env bash
+set -euo pipefail
+
+cmake -S "$CVC_SOURCE_DIR" -B "$CVC_BUILD_DIR" -G Ninja \\
+  -DCMAKE_INSTALL_PREFIX="$CVC_INSTALL_DIR" \\
+  -DCMAKE_PREFIX_PATH="$CVC_DEPS_PREFIX" \\
+  -DCMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE" \\
+  -DBUILD_SHARED_LIBS="$BUILD_SHARED_LIBS"
+
+cmake --build "$CVC_BUILD_DIR" --parallel
+cmake --install "$CVC_BUILD_DIR"</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          Validate your recipe and build locally:
+        </p>
+        <div class="guide-code"><pre><code># Validate recipe.yaml schema
+cvcpkg validate recipes/mylib
+
+# Build and package
+cvcpkg build recipes/mylib --prefix ./deps
+
+# The archive is written to dist/
+ls dist/mylib-*.tar.gz</code></pre></div>
+      </div>
+      <div class="box has-background-black-ter mt-4">
+        <p class="has-text-grey-lighter">
+          <span class="icon"><i class="fas fa-info-circle has-text-link"></i></span>
+          <strong class="has-text-white">Source types:</strong>
+          <code>tarball</code>, <code>git</code>,
+          <code>vcpkg</code>, <code>brew</code>, <code>apt</code>,
+          <code>vendored</code>, and <code>prebuilt</code>.
+          For tarballs, the <code>sha256</code> field is required.
+          A <code>mirror</code> URL can be specified as a fallback.
+        </p>
+      </div>
+    </div>
+
+    <!-- Publishing Builds -->
+    <div id="publishing" class="guide-section" style="counter-reset: guide-step;">
+      <h2 class="title is-4 has-text-white">
+        <span class="icon mr-1"><i class="fas fa-cloud-upload-alt"></i></span>
+        Publishing Builds
+      </h2>
+      <p class="has-text-grey-lighter mb-4">
+        Publishing requires a token with the <code>publisher</code> or
+        <code>admin</code> role. Publishing to the community archive is
+        admin-gated &mdash; contact an administrator for access.
+        Organization members can publish to their own org namespace.
+      </p>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          Publish an archive to a cvcpkg server:
+        </p>
+        <div class="guide-code"><pre><code>cvcpkg publish dist/mylib-2.1.0-linux-x86_64-release-shared.tar.gz \\
+  --server https://pkg.tx.wtf \\
+  --token cvctok_...</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          Publish to an organization namespace:
+        </p>
+        <div class="guide-code"><pre><code>cvcpkg publish dist/mylib-*.tar.gz \\
+  --server https://pkg.tx.wtf \\
+  --token cvctok_... \\
+  --org my-team</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          Tag a release (optional; untagged builds are "live"):
+        </p>
+        <div class="guide-code"><pre><code>cvcpkg publish dist/mylib-*.tar.gz \\
+  --server https://pkg.tx.wtf \\
+  --token cvctok_... \\
+  --release-tag v2.1.0</code></pre></div>
+      </div>
+      <div class="box has-background-black-ter mt-4">
+        <p class="has-text-grey-lighter">
+          <span class="icon"><i class="fas fa-info-circle has-text-link"></i></span>
+          <strong class="has-text-white">Token roles:</strong>
+          <code>reader</code> (read-only access),
+          <code>publisher</code> (publish + yank),
+          <code>admin</code> (full access including token/org management
+          and hard deletes). Use <code>CVCPKG_SERVER_URL</code> and
+          <code>CVCPKG_TOKEN</code> environment variables to avoid
+          passing flags every time.
+        </p>
+      </div>
+    </div>
+
+    <!-- Organizations -->
+    <div id="orgs" class="guide-section" style="counter-reset: guide-step;">
+      <h2 class="title is-4 has-text-white">
+        <span class="icon mr-1"><i class="fas fa-building"></i></span>
+        Organizations
+      </h2>
+      <p class="has-text-grey-lighter mb-4">
+        Organizations let teams publish and manage packages under a shared
+        namespace. Each org has a configurable storage quota (default
+        <strong class="has-text-white">10&nbsp;GiB</strong>) set by the
+        <code>CVCPKG_ORG_STORAGE_LIMIT_BYTES</code> environment variable.
+        Admins can adjust the limit per-org via the API.
+      </p>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          Create an organization:
+        </p>
+        <div class="guide-code"><pre><code>curl -X POST https://pkg.tx.wtf/v1/orgs \\
+  -H "Authorization: Bearer cvctok_..." \\
+  -H "Content-Type: application/json" \\
+  -d '{{{{"slug": "my-team", "display_name": "My Team"}}}}'</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          Add members (requires org owner or admin token):
+        </p>
+        <div class="guide-code"><pre><code>curl -X POST https://pkg.tx.wtf/v1/orgs/my-team/members \\
+  -H "Authorization: Bearer cvctok_..." \\
+  -H "Content-Type: application/json" \\
+  -d '{{{{"token_name": "alice-token", "role": "member"}}}}'</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          Update the storage limit (admin only):
+        </p>
+        <div class="guide-code"><pre><code># Set to 50 GiB
+curl -X PATCH https://pkg.tx.wtf/v1/orgs/my-team \\
+  -H "Authorization: Bearer cvctok_..." \\
+  -H "Content-Type: application/json" \\
+  -d '{{{{"storage_limit_bytes": 53687091200}}}}'</code></pre></div>
+      </div>
+      <div class="box has-background-black-ter mt-4">
+        <p class="has-text-grey-lighter">
+          <span class="icon"><i class="fas fa-info-circle has-text-link"></i></span>
+          <strong class="has-text-white">Storage enforcement:</strong>
+          When publishing to an organization, the server checks that
+          <code>storage_used + upload_size &le; storage_limit</code>.
+          If the limit is exceeded the upload is rejected with
+          <span class="tag is-danger is-light">HTTP 413</span>.
+          Organizations require the database backend
+          (<code>CVCPKG_DATABASE_URL</code>).
+        </p>
+      </div>
+    </div>
+
+    <!-- Self-Hosting -->
+    <div id="server" class="guide-section" style="counter-reset: guide-step;">
+      <h2 class="title is-4 has-text-white">
+        <span class="icon mr-1"><i class="fas fa-server"></i></span>
+        Self-Hosting a Package Server
+      </h2>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          Run a local server for development or private packages:
+        </p>
+        <div class="guide-code"><pre><code>\
+cvcpkg-server run --state-dir ./my-packages --port 8420</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          Or use the Docker Compose production stack:
+        </p>
+        <div class="guide-code"><pre><code>cd tools/cvcpkg
+cp .env.production.example .env.production
+# Edit .env.production with your secrets
+docker compose -f docker-compose.production.yml \\
+  --env-file .env.production up -d</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          Create an API token and publish packages:
+        </p>
+        <div class="guide-code"><pre><code>\
+# Create a publisher token
+cvcpkg-server token create --name ci-bot --role publisher
+
+# Publish an archive
+cvcpkg publish my-lib-1.0-linux-x86_64-release-shared.tar.zst \\
+  --server http://localhost:8420 \\
+  --token cvctok_...</code></pre></div>
+      </div>
+    </div>
+
+    <!-- Server Configuration -->
+    <div id="server-config" class="guide-section">
+      <h2 class="title is-4 has-text-white">
+        <span class="icon mr-1"><i class="fas fa-sliders-h"></i></span>
+        Server Configuration
+      </h2>
+      <p class="has-text-grey-lighter mb-4">
+        Server settings are controlled via environment variables or
+        <code>cvcpkg-server run</code> CLI flags. State (index, tokens,
+        audit log, archives) is stored under the state directory
+        (<code>CVCPKG_SERVER_STATE_DIR</code>, default
+        <code>/var/lib/cvcpkg-server</code>). The HMAC signing key is
+        stored in <code>&lt;state-dir&gt;/hmac_key</code> (mode 0600).
+      </p>
+      <div class="table-container">
+        <table class="table is-fullwidth is-hoverable is-dark is-striped">
+          <thead>
+            <tr>
+              <th>Variable / Flag</th>
+              <th>Default</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><code>CVCPKG_DATABASE_URL</code><br>
+                    <span class="is-size-7 has-text-grey">--database-url</span></td>
+                <td><em>empty</em></td>
+                <td>PostgreSQL URL; enables DB backend (required for orgs)</td></tr>
+            <tr><td><code>CVCPKG_SERVER_STATE_DIR</code><br>
+                    <span class="is-size-7 has-text-grey">--state-dir</span></td>
+                <td><code>./cvcpkg-server-data</code></td>
+                <td>Directory for index, tokens, audit log, and archives</td></tr>
+            <tr><td><code>CVCPKG_SERVER_STORAGE_URI</code><br>
+                    <span class="is-size-7 has-text-grey">--storage</span></td>
+                <td><code>file://&lt;state-dir&gt;</code></td>
+                <td>Storage backend URI (file, S3, etc.)</td></tr>
+            <tr><td><code>CVCPKG_MAX_UPLOAD_BYTES</code></td>
+                <td>1 GiB</td>
+                <td>Maximum upload size per file</td></tr>
+            <tr><td><code>CVCPKG_CHUNK_SIZE</code></td>
+                <td>8 MiB</td>
+                <td>Chunk size for chunked uploads</td></tr>
+            <tr><td><code>CVCPKG_UPLOAD_SESSION_TTL</code></td>
+                <td>3600 s</td>
+                <td>Chunked upload session timeout</td></tr>
+            <tr><td><code>CVCPKG_RATE_LIMIT_RPM</code></td>
+                <td>300</td>
+                <td>Write-endpoint rate limit (requests/min, 0 = disabled)</td></tr>
+            <tr><td><code>CVCPKG_ORG_STORAGE_LIMIT_BYTES</code></td>
+                <td>10 GiB</td>
+                <td>Default per-organization storage quota</td></tr>
+            <tr><td><code>CVCPKG_CORS_ORIGINS</code></td>
+                <td><em>empty</em></td>
+                <td>Comma-separated allowed CORS origins</td></tr>
+            <tr><td><code>CVCPKG_SERVER_REQUIRE_AUTH_READS</code><br>
+                    <span class="is-size-7 has-text-grey">--require-auth-reads</span></td>
+                <td>false</td>
+                <td>Require auth token for read endpoints</td></tr>
+            <tr><td><code>CVCPKG_LOG_JSON</code><br>
+                    <span class="is-size-7 has-text-grey">--log-json</span></td>
+                <td>false</td>
+                <td>Structured JSON log output</td></tr>
+            <tr><td><span class="is-size-7 has-text-grey">--host</span></td>
+                <td>0.0.0.0</td>
+                <td>Bind address</td></tr>
+            <tr><td><span class="is-size-7 has-text-grey">--port</span></td>
+                <td>8420</td>
+                <td>Listen port</td></tr>
+            <tr><td><span class="is-size-7 has-text-grey">--workers</span></td>
+                <td>1</td>
+                <td>Number of uvicorn workers</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="has-text-grey-lighter mt-4">
+        <span class="icon"><i class="fas fa-info-circle has-text-link"></i></span>
+        For Docker deployments, copy <code>.env.production.example</code>
+        and set <code>POSTGRES_PASSWORD</code>, <code>POSTGRES_USER</code>,
+        <code>POSTGRES_DB</code>, <code>BACKEND_PORT</code>, and
+        <code>CVCPKG_RELEASE</code>. See
+        <code>docker-compose.production.yml</code>.
+      </p>
+      <div class="box has-background-black-ter mt-4">
+        <p class="has-text-grey-lighter">
+          <span class="icon"><i class="fas fa-shield-alt has-text-link"></i></span>
+          <strong class="has-text-white">Branding:</strong>
+          Customize the landing page with
+          <code>CVCPKG_SITE_TITLE</code>,
+          <code>CVCPKG_SITE_TAGLINE</code>, and
+          <code>CVCPKG_SITE_HERO</code>.
+          Set <code>CVCPKG_GITHUB_REPO</code> to change the
+          GitHub link (default: <code>transfix/libcvc-deps</code>).
+        </p>
+      </div>
+    </div>
+
+    <!-- REST API -->
+    <div id="api" class="guide-section">
+      <h2 class="title is-4 has-text-white">
+        <span class="icon mr-1"><i class="fas fa-code"></i></span>
+        REST API
+      </h2>
+      <p class="has-text-grey-lighter mb-4">
+        The cvcpkg server exposes a full REST API. Key endpoints:
+      </p>
+      <div class="table-container">
+        <table class="table is-fullwidth is-hoverable is-dark is-striped">
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Endpoint</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><span class="tag is-success is-light">GET</span></td>
+                <td><code>/v1/packages</code></td>
+                <td>List all packages (filterable, paginated)</td></tr>
+            <tr><td><span class="tag is-success is-light">GET</span></td>
+                <td><code>/v1/packages/{{name}}</code></td>
+                <td>Get builds for a specific package</td></tr>
+            <tr><td><span class="tag is-success is-light">GET</span></td>
+                <td><code>/v1/catalog</code></td>
+                <td>Full catalog (YAML)</td></tr>
+            <tr><td><span class="tag is-success is-light">GET</span></td>
+                <td><code>/v1/deps</code></td>
+                <td>Dependency graph and recipe metadata</td></tr>
+            <tr><td><span class="tag is-success is-light">GET</span></td>
+                <td><code>/v1/download/{{file}}</code></td>
+                <td>Download a package archive</td></tr>
+            <tr><td><span class="tag is-info is-light">POST</span></td>
+                <td><code>/v1/publish</code></td>
+                <td>Publish a new package</td></tr>
+            <tr><td><span class="tag is-warning is-light">POST</span></td>
+                <td><code>/v1/packages/{{name}}/{{ver}}/yank</code></td>
+                <td>Yank a package version</td></tr>
+            <tr><td><span class="tag is-danger is-light">DEL</span></td>
+                <td><code>/v1/packages/{{name}}/{{ver}}</code></td>
+                <td>Delete a package (admin)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="has-text-grey-lighter mt-4">
+        <span class="icon"><i class="fas fa-external-link-alt"></i></span>
+        See the full interactive API documentation at
+        <a href="/docs" class="has-text-link">/docs</a> (Swagger UI) or
+        <a href="/redoc" class="has-text-link">/redoc</a> (ReDoc).
+      </p>
+    </div>
+
+  </div>
+</section>
+
+{_footer_html()}
+
+<script>
+{_NAVBAR_JS}
 </script>
 </body>
 </html>"""

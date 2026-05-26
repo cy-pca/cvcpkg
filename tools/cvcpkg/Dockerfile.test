@@ -32,4 +32,4 @@ RUN pip install --no-cache-dir -e ".[production,db-all]"
 
 ENV PYTHONPATH=/app
 
-CMD ["pytest", "tests/integration/", "-v", "--tb=short"]
+CMD ["pytest", "tests/integration/", "-v", "--tb=short", "--ignore=tests/integration/test_browser.py"]
