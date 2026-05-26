@@ -517,6 +517,7 @@ class DbOrgStore:
         description: str = "",
         logo_url: str = "",
         homepage: str = "",
+        is_private: bool = False,
         created_by: str,
         storage_limit_bytes: int = 10 * 1024 * 1024 * 1024,
     ) -> OrgInfo:
@@ -533,6 +534,7 @@ class DbOrgStore:
                 description=description,
                 logo_url=logo_url,
                 homepage=homepage,
+                is_private=is_private,
                 created_by=created_by,
                 storage_limit_bytes=storage_limit_bytes,
             )
@@ -559,13 +561,19 @@ class DbOrgStore:
                 return None
             return self._row_to_info(row)
 
-    async def list_orgs(self, *, limit: int = 100, offset: int = 0) -> tuple[list[OrgInfo], int]:
+    async def list_orgs(
+        self, *, limit: int = 100, offset: int = 0, include_private: bool = False,
+    ) -> tuple[list[OrgInfo], int]:
         async with get_session() as session:
-            count_q = select(sa_func.count(OrganizationRow.id))
+            base_filter = (
+                True if include_private else OrganizationRow.is_private == False  # noqa: E712
+            )
+            count_q = select(sa_func.count(OrganizationRow.id)).where(base_filter)
             total = (await session.execute(count_q)).scalar() or 0
 
             q = (
                 select(OrganizationRow)
+                .where(base_filter)
                 .order_by(OrganizationRow.display_name)
                 .offset(offset)
                 .limit(limit)
@@ -581,6 +589,7 @@ class DbOrgStore:
         description: str | None = None,
         logo_url: str | None = None,
         homepage: str | None = None,
+        is_private: bool | None = None,
     ) -> OrgInfo | None:
         async with get_session() as session:
             result = await session.execute(
@@ -597,6 +606,8 @@ class DbOrgStore:
                 row.logo_url = logo_url
             if homepage is not None:
                 row.homepage = homepage
+            if is_private is not None:
+                row.is_private = is_private
             await session.flush()
             return self._row_to_info(row)
 
@@ -744,6 +755,7 @@ class DbOrgStore:
             description=row.description,
             logo_url=row.logo_url,
             homepage=row.homepage,
+            is_private=row.is_private,
             storage_limit_bytes=row.storage_limit_bytes,
             storage_used_bytes=row.storage_used_bytes,
             created_at=row.created_at,
