@@ -54,6 +54,9 @@ build:
       script: build-wasm.sh
       env:
         CXXFLAGS: "-O2 -std=c++17"
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
 
 package:
   files:
