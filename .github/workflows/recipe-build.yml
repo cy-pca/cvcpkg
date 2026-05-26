@@ -48,10 +48,6 @@ on:
 permissions:
   contents: read
 
-env:
-  VCGLIB_VERSION: '2025.07'
-  VCGLIB_SHA256:  'e49fc9342d5476b3e39a5e1939b965b57c91d7a17b4f97b8c5eaf01228b16cf0'
-
 jobs:
   build:
     runs-on: ${{ inputs.runner != '' && fromJSON(inputs.runner) || inputs.host_platform == 'macos' && 'macos-latest' || inputs.host_platform == 'windows' && 'windows-latest' || inputs.platform == 'macos' && 'macos-latest' || inputs.platform == 'windows' && 'windows-latest' || 'ubuntu-latest' }}
@@ -271,15 +267,6 @@ jobs:
             -DCMAKE_BUILD_TYPE=${{ inputs.config == 'release' && 'Release' || 'Debug' }} \
             -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/prefix"
           cmake --install build
-
-      # ── Stage vcglib (header-only) ──
-      - name: Stage vcglib
-        if: inputs.platform != 'wasm'
-        uses: ./.github/actions/stage-vcglib
-        with:
-          dist:    ${{ github.workspace }}/prefix
-          version: ${{ env.VCGLIB_VERSION }}
-          sha256:  ${{ env.VCGLIB_SHA256 }}
 
       # ── Linux: patch RPATH to $ORIGIN ──
       - name: Patch RPATH ($ORIGIN)
