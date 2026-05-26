@@ -30,7 +30,6 @@ import hashlib
 import io
 import os
 import tarfile
-import time
 
 import pytest
 

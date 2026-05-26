@@ -4,6 +4,8 @@ recipe:
   upstream_version: "28.3"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
+  maintainer_email: "joe.rivera@cyberpcangel.com"
+  description: "Protocol Buffers — Google's language-neutral, platform-neutral extensible mechanism for serializing structured data."
   homepage: https://protobuf.dev/
   license: BSD-3-Clause
   tags: [networking]

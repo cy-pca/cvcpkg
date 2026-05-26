@@ -4,6 +4,8 @@ recipe:
   upstream_version: "4.0.0"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
+  maintainer_email: "joe.rivera@cyberpcangel.com"
+  description: "LERC — Limited Error Raster Compression, an open-source image/raster format for lossy and lossless compression."
   homepage: https://github.com/Esri/lerc
   license: Apache-2.0
   tags: [graphics, io]

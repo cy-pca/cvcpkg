@@ -20,17 +20,19 @@ Tables:
 from __future__ import annotations
 
 import datetime
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    ForeignKey,
     Index,
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -78,6 +80,23 @@ class PackageRow(Base):
         default="",
         server_default="",
     )
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    homepage: Mapped[str] = mapped_column(
+        String(512), nullable=False, default="", server_default=""
+    )
+    license: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    maintainer: Mapped[str] = mapped_column(
+        String(255), nullable=False, default="", server_default=""
+    )
+    tags: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+
+    org_slug: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        default="",
+        server_default="",
+        index=True,
+    )
 
     __table_args__ = (
         Index(
@@ -90,6 +109,53 @@ class PackageRow(Base):
             "link",
             unique=True,
         ),
+    )
+
+
+class OrganizationRow(Base):
+    __tablename__ = "organizations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    slug: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    logo_url: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    homepage: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    storage_limit_bytes: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=10 * 1024 * 1024 * 1024,
+    )
+    storage_used_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    created_by: Mapped[str] = mapped_column(String(255), nullable=False)
+
+
+class OrgMemberRow(Base):
+    __tablename__ = "org_members"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    org_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    token_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="member")
+    added_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "token_name", name="uq_org_member"),
+        Index("ix_org_members_org_id", "org_id"),
+        Index("ix_org_members_token_name", "token_name"),
     )
 
 

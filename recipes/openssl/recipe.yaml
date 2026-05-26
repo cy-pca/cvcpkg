@@ -4,6 +4,8 @@ recipe:
   upstream_version: "3.4.1"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
+  maintainer_email: "joe.rivera@cyberpcangel.com"
+  description: "OpenSSL — a robust, full-featured toolkit for TLS/SSL and general-purpose cryptography."
   homepage: https://www.openssl.org/
   license: Apache-2.0
   tags: [networking, crypto]
