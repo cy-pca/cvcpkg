@@ -143,6 +143,26 @@ jobs:
       config: ${{ matrix.config }}
       link: ${{ matrix.link }}
       sha_suffix: ${{ inputs.sha_suffix || '' }}
+
+  # ──────────────────────────── WASM ─────────────────────────────
+  # Cross-compile wasm-platform recipes on a Linux host.
+  # Only static linking — wasm does not support shared libraries.
+  wasm:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - config: debug
+            link: static
+          - config: release
+            link: static
+    uses: ./.github/workflows/recipe-build.yml
+    with:
+      platform: wasm
+      config: ${{ matrix.config }}
+      link: ${{ matrix.link }}
+      sha_suffix: ${{ inputs.sha_suffix || '' }}
+
   # ──────────────────────────── Release ────────────────────────────
   # ────────────────────── Publish per-component packages ──────────
   # Publish pre-built per-component archives to cvcpkg-server.
@@ -299,8 +319,54 @@ jobs:
             --token "$CVCPKG_TOKEN" \
             --release-tag "${{ github.ref_name }}"
 
+  publish-wasm:
+    needs: [wasm]
+    if: always() && needs.wasm.result == 'success' && startsWith(github.ref, 'refs/tags/')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - config: debug
+            link: static
+          - config: release
+            link: static
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install cvcpkg
+        run: pip install ./tools/cvcpkg
+      - name: Download per-component bundles
+        uses: actions/download-artifact@v4
+        with:
+          name: components-wasm-${{ matrix.config }}-${{ matrix.link }}
+          path: dist/
+      - name: Publish to cvcpkg-server
+        env:
+          CVCPKG_SERVER_URL: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CVCPKG_TOKEN:-}" ]; then
+            echo "::warning::CVCPKG_PUBLISH_TOKEN secret not set — skipping publish"
+            exit 0
+          fi
+          archives=$(find dist \( -name '*.tar.gz' -o -name '*.zip' \) | sort)
+          if [ -z "$archives" ]; then
+            echo "::warning::No component archives to publish"
+            exit 0
+          fi
+          count=$(echo "$archives" | wc -l)
+          echo "Publishing $count archives (wasm/${{ matrix.config }}/${{ matrix.link }}) to $CVCPKG_SERVER_URL ..."
+          cvcpkg publish $archives \
+            --server "$CVCPKG_SERVER_URL" \
+            --token "$CVCPKG_TOKEN" \
+            --release-tag "${{ github.ref_name }}"
+
   release:
-    needs: [linux, macos, windows, publish-linux, publish-macos, publish-windows]
+    needs: [linux, macos, windows, wasm, publish-linux, publish-macos, publish-windows, publish-wasm]
     runs-on: ubuntu-latest
     # Skip the release step entirely for manual workflow_dispatch
     # runs unless the workflow was triggered on a tag. Run even if
@@ -365,7 +431,7 @@ jobs:
   # a per-platform publish step was interrupted) and logs the total
   # count.  It runs regardless of the release job outcome.
   publish-to-server:
-    needs: [publish-linux, publish-macos, publish-windows]
+    needs: [publish-linux, publish-macos, publish-windows, publish-wasm]
     runs-on: ubuntu-latest
     if: |
       always()
@@ -373,7 +439,8 @@ jobs:
       && startsWith(github.ref, 'refs/tags/')
       && (needs.publish-linux.result == 'success'
           || needs.publish-macos.result == 'success'
-          || needs.publish-windows.result == 'success')
+          || needs.publish-windows.result == 'success'
+          || needs.publish-wasm.result == 'success')
     steps:
       - uses: actions/checkout@v5
 

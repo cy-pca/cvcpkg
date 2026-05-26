@@ -4,7 +4,8 @@ recipe:
   upstream_version: "3.1.0"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
-  maintainer_email: "joe.rivera@cyberpcangel.com"
+  maintainer_email: "cvcpkg@cyberpcangel.com"
+  maintainer_url: "https://cyberpcangel.com"
   description: "libjpeg-turbo — a JPEG image codec that uses SIMD instructions for accelerated encoding and decoding."
   homepage: https://libjpeg-turbo.org/
   license: IJG AND BSD-3-Clause AND Zlib

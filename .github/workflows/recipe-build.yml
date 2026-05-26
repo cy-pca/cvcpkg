@@ -13,7 +13,7 @@ on:
   workflow_call:
     inputs:
       platform:
-        description: "Target platform (linux, macos, windows)"
+        description: "Target platform (linux, macos, windows, wasm)"
         required: true
         type: string
       config:
@@ -40,6 +40,7 @@ env:
 jobs:
   build:
     runs-on: ${{ inputs.platform == 'macos' && 'macos-latest' || inputs.platform == 'windows' && 'windows-latest' || 'ubuntu-latest' }}
+    # wasm cross-compiles on linux and also uses ubuntu-latest
 
     steps:
       - uses: actions/checkout@v5
@@ -63,6 +64,7 @@ jobs:
             linux)   ARCH=x86_64 ;;
             macos)   ARCH=arm64  ;;
             windows) ARCH=x86_64 ;;
+            wasm)    ARCH=wasm32 ;;
           esac
           STEM="libcvc-deps-${VERSION}${SHASFX}-${{ inputs.platform }}-${ARCH}-${BTLC}${LINKSFX}"
           echo "version=$VERSION"   >> "$GITHUB_OUTPUT"
@@ -72,7 +74,7 @@ jobs:
 
       # ── System build tools (Linux) ──
       - name: Install system build tools (Linux)
-        if: inputs.platform == 'linux'
+        if: inputs.platform == 'linux' || inputs.platform == 'wasm'
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
@@ -176,6 +178,19 @@ jobs:
             ${{ github.workspace }}/dist
           key: ${{ steps.cache-key.outputs.key }}
 
+      # ── Pre-build emsdk for wasm cross-compilation ──
+      # Wasm recipes run on a Linux host but target wasm. The emsdk
+      # recipe is a linux-platform build-tool that provides the
+      # Emscripten compiler. Install it into the prefix first.
+      - name: Pre-build emsdk (wasm)
+        if: inputs.platform == 'wasm' && steps.prefix-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cvcpkg build emsdk --platform linux --no-deps \
+            --prefix "${{ github.workspace }}/prefix" \
+            --recipes-dir recipes
+
       # ── Build and package all recipes (per-component) ──
       - name: Build and package all recipes (cvcpkg pack-all)
         if: steps.prefix-cache.outputs.cache-hit != 'true'
@@ -192,6 +207,7 @@ jobs:
 
       # ── Install marker cmake config ──
       - name: Install libcvc-deps marker config
+        if: inputs.platform != 'wasm'
         shell: bash
         run: |
           cmake -B build -G Ninja \
@@ -201,6 +217,7 @@ jobs:
 
       # ── Stage vcglib (header-only) ──
       - name: Stage vcglib
+        if: inputs.platform != 'wasm'
         uses: ./.github/actions/stage-vcglib
         with:
           dist:    ${{ github.workspace }}/prefix

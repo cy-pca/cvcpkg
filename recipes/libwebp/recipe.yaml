@@ -4,7 +4,8 @@ recipe:
   upstream_version: "1.5.0"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
-  maintainer_email: "joe.rivera@cyberpcangel.com"
+  maintainer_email: "cvcpkg@cyberpcangel.com"
+  maintainer_url: "https://cyberpcangel.com"
   description: "libwebp — a library to encode and decode images in the WebP format."
   homepage: https://developers.google.com/speed/webp/
   license: BSD-3-Clause

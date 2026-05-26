@@ -58,7 +58,7 @@ on:
         description: "Target platform"
         required: true
         type: choice
-        options: [linux, macos, windows]
+        options: [linux, macos, windows, wasm]
       config:
         description: "Build config"
         required: true
@@ -203,8 +203,14 @@ jobs:
               # Check if this recipe targets the current platform
               platforms = [m.platform for m in recipe.build_matrix]
               if platform not in platforms:
-                  print(f"  SKIP {recipe.name} (not for {platform})")
-                  continue
+                  # Also check host_platform for cross-compile recipes
+                  host_plats = [
+                      m.host_platform for m in recipe.build_matrix
+                      if m.host_platform
+                  ]
+                  if platform not in host_plats:
+                      print(f"  SKIP {recipe.name} (not for {platform})")
+                      continue
 
               # Match files using the recipe's package.files globs
               matched = set()
