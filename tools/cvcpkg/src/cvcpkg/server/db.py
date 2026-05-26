@@ -79,9 +79,13 @@ class PackageRow(Base):
         server_default="",
     )
     description: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
-    homepage: Mapped[str] = mapped_column(String(512), nullable=False, default="", server_default="")
+    homepage: Mapped[str] = mapped_column(
+        String(512), nullable=False, default="", server_default=""
+    )
     license: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
-    maintainer: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    maintainer: Mapped[str] = mapped_column(
+        String(255), nullable=False, default="", server_default=""
+    )
     tags: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
 
     __table_args__ = (
