@@ -1,0 +1,54 @@
+schema_version: 1
+recipe:
+  name: pcre2
+  upstream_version: "10.44"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  homepage: https://www.pcre.org/
+  license: BSD-3-Clause
+  tags: [utils]
+
+source:
+  type: tarball
+  url: https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.44/pcre2-10.44.tar.gz
+  sha256: "86b9cb0aa3bcb7994faa88018292bc704cdbb708e785f7c74352ff6ea7d3175b"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libpcre2*
+    - lib/pcre2*
+    - lib/cmake/pcre2/
+    - lib/pkgconfig/libpcre2*
+    - include/pcre2.h
+    - include/pcre2posix.h
+    - bin/pcre2*
+  cmake_packages:
+    - { name: pcre2, targets: ["pcre2::pcre2-8", "pcre2::pcre2-posix"] }
+
+test:
+  script: test.sh
+
+abi:
+  cxx_std: 17

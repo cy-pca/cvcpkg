@@ -19,12 +19,15 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - name: pcre2
+      version: ">=10.40"
+    - name: bison
+      version: ">=3.8"
   host_tools:
     - cmake
     - autoconf
     - automake
-    - bison
 
 build:
   build_type_independent: true
