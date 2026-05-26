@@ -875,10 +875,7 @@ def build_all(
     # Filter to recipes that have a matrix entry for this platform
     if not platform:
         platform = detect_platform()
-    recipes = [
-        r for r in all_recipes
-        if any(m.platform == platform for m in r.build_matrix)
-    ]
+    recipes = [r for r in all_recipes if any(m.platform == platform for m in r.build_matrix)]
     ordered = resolve_build_order(recipes, platform)
 
     if prefix is None:
