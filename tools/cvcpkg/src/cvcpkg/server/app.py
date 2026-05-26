@@ -39,6 +39,12 @@ from cvcpkg.server.models import (
     AuditLogResponse,
     CatalogResponse,
     HealthResponse,
+    OrgCreateRequest,
+    OrgDetailResponse,
+    OrgInfo,
+    OrgListResponse,
+    OrgRole,
+    OrgUpdateRequest,
     PackageInfo,
     PackageListResponse,
     PublishResponse,
@@ -67,6 +73,11 @@ UPLOAD_SESSION_TTL = int(os.environ.get("CVCPKG_UPLOAD_SESSION_TTL", "3600"))
 
 # Rate limiting: requests per minute for write endpoints
 RATE_LIMIT_RPM = int(os.environ.get("CVCPKG_RATE_LIMIT_RPM", "300"))
+
+# Default storage limit per organization in bytes (default 10 GiB)
+ORG_STORAGE_LIMIT_BYTES = int(
+    os.environ.get("CVCPKG_ORG_STORAGE_LIMIT_BYTES", str(10 * 1024 * 1024 * 1024))
+)
 
 # CORS allowed origins (comma-separated, empty = deny all cross-origin)
 CORS_ALLOWED_ORIGINS = [
@@ -127,6 +138,7 @@ _use_db: bool = False
 _db_tokens = None  # DbTokenStore when using DB backend
 _db_audit = None  # DbAuditLog when using DB backend
 _db_packages = None  # DbPackageIndex when using DB backend
+_db_orgs = None  # DbOrgStore when using DB backend
 
 
 def _get_state() -> ServerState:
@@ -248,7 +260,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        global _state, _START_TIME, _use_db, _db_tokens, _db_audit, _db_packages
+        global _state, _START_TIME, _use_db, _db_tokens, _db_audit, _db_packages, _db_orgs
         _START_TIME = time.monotonic()
         sd = state_dir or Path(os.environ.get("CVCPKG_SERVER_STATE_DIR", "/var/lib/cvcpkg-server"))
 
@@ -266,13 +278,14 @@ def create_app(
         db_url = os.environ.get("CVCPKG_DATABASE_URL", "")
         if db_url:
             from cvcpkg.server.db import create_tables, dispose_engine, init_db
-            from cvcpkg.server.db_stores import DbAuditLog, DbPackageIndex, DbTokenStore
+            from cvcpkg.server.db_stores import DbAuditLog, DbOrgStore, DbPackageIndex, DbTokenStore
 
             init_db(db_url)
             await create_tables()
             _db_tokens = DbTokenStore(sd)
             _db_audit = DbAuditLog()
             _db_packages = DbPackageIndex()
+            _db_orgs = DbOrgStore()
             _use_db = True
             # Still need ServerState for archives dir and storage_uri
             _state = ServerState(
@@ -603,10 +616,22 @@ def create_app(
         pkg_license: str = Query("", alias="license", description="SPDX license identifier"),
         maintainer: str = Query("", description="Package maintainer"),
         pkg_tags: str = Query("", alias="tags", description="Comma-separated tags"),
+        org: str = Query(
+            "",
+            description="Organization slug. Empty for official/public packages.",
+        ),
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
         _check_rate_limit(request)
         state = _get_state()
+
+        # Validate org membership and storage limit if publishing to an org
+        if org and _use_db and _db_orgs is not None:
+            org_info = await _db_orgs.get(org)
+            if org_info is None:
+                raise HTTPException(404, f"organization '{org}' not found")
+            if not await _db_orgs.is_member(org, actor.name):
+                raise HTTPException(403, f"you are not a member of organization '{org}'")
 
         # Check for duplicates
         if _use_db:
@@ -675,6 +700,12 @@ def create_app(
         archive_url = f"/v1/download/{safe_filename}"
 
         if _use_db:
+            # Check org storage limit before registering
+            if org and _db_orgs is not None:
+                if not await _db_orgs.check_storage_limit(org, size_bytes):
+                    dest.unlink(missing_ok=True)
+                    raise HTTPException(413, f"organization '{org}' storage limit exceeded")
+
             await _db_packages.add_package(
                 name=name,
                 version=version,
@@ -694,7 +725,13 @@ def create_app(
                 pkg_license=pkg_license,
                 maintainer=maintainer,
                 tags=pkg_tags,
+                org_slug=org,
             )
+
+            # Track org storage usage
+            if org and _db_orgs is not None:
+                await _db_orgs.update_storage_used(org, size_bytes)
+
             await _db_audit.record(
                 action=AuditAction.publish,
                 actor=actor.name,
@@ -702,6 +739,7 @@ def create_app(
                 detail=(
                     f"platform={platform} arch={arch}"
                     f" sha256={sha256} release={release_tag or 'live'}"
+                    f" org={org or 'public'}"
                 ),
             )
         else:
@@ -1256,5 +1294,144 @@ def create_app(
             state = _get_state()
             ok, message = state.audit.verify_chain()
         return {"ok": ok, "message": message}
+
+    # ── Organizations ───────────────────────────────────────
+
+    @app.post("/v1/orgs", response_model=OrgInfo, tags=["organizations"])
+    async def create_org(
+        body: OrgCreateRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        if not _use_db or _db_orgs is None:
+            raise HTTPException(501, "organizations require database backend")
+        try:
+            org = await _db_orgs.create(
+                slug=body.slug,
+                display_name=body.display_name,
+                description=body.description,
+                logo_url=body.logo_url,
+                homepage=body.homepage,
+                created_by=actor.name,
+                storage_limit_bytes=ORG_STORAGE_LIMIT_BYTES,
+            )
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        await _db_audit.record(
+            action=AuditAction.org_create,
+            actor=actor.name,
+            target=body.slug,
+            detail=f"display_name={body.display_name}",
+        )
+        return org
+
+    @app.get("/v1/orgs", response_model=OrgListResponse, tags=["organizations"])
+    async def list_orgs(
+        limit: int = Query(100, ge=1, le=1000),
+        offset: int = Query(0, ge=0),
+    ):
+        if not _use_db or _db_orgs is None:
+            return OrgListResponse(total=0, organizations=[])
+        orgs, total = await _db_orgs.list_orgs(limit=limit, offset=offset)
+        return OrgListResponse(total=total, organizations=orgs)
+
+    @app.get("/v1/orgs/{slug}", response_model=OrgDetailResponse, tags=["organizations"])
+    async def get_org(slug: str):
+        if not _use_db or _db_orgs is None:
+            raise HTTPException(404, "organization not found")
+        org = await _db_orgs.get(slug)
+        if org is None:
+            raise HTTPException(404, f"organization '{slug}' not found")
+        members = await _db_orgs.get_members(slug)
+        packages, _ = await _db_packages.get_bundles(org_slug=slug)
+        return OrgDetailResponse(org=org, members=members, packages=packages)
+
+    @app.patch("/v1/orgs/{slug}", response_model=OrgInfo, tags=["organizations"])
+    async def update_org(
+        slug: str,
+        body: OrgUpdateRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        if not _use_db or _db_orgs is None:
+            raise HTTPException(501, "organizations require database backend")
+        if not await _db_orgs.is_owner(slug, actor.name) and actor.role != TokenRole.admin:
+            raise HTTPException(403, "only org owners or admins can update organization settings")
+        updated = await _db_orgs.update(
+            slug,
+            display_name=body.display_name,
+            description=body.description,
+            logo_url=body.logo_url,
+            homepage=body.homepage,
+        )
+        if updated is None:
+            raise HTTPException(404, f"organization '{slug}' not found")
+        await _db_audit.record(
+            action=AuditAction.org_update,
+            actor=actor.name,
+            target=slug,
+        )
+        return updated
+
+    @app.post("/v1/orgs/{slug}/members", tags=["organizations"])
+    async def add_org_member(
+        slug: str,
+        token_name: str = Query(..., description="Token name to add as member"),
+        role: OrgRole = Query(OrgRole.member),
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        if not _use_db or _db_orgs is None:
+            raise HTTPException(501, "organizations require database backend")
+        if not await _db_orgs.is_owner(slug, actor.name) and actor.role != TokenRole.admin:
+            raise HTTPException(403, "only org owners or admins can manage members")
+        try:
+            added = await _db_orgs.add_member(slug, token_name, role)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        if not added:
+            raise HTTPException(409, f"'{token_name}' is already a member of '{slug}'")
+        await _db_audit.record(
+            action=AuditAction.org_add_member,
+            actor=actor.name,
+            target=slug,
+            detail=f"member={token_name} role={role.value}",
+        )
+        return {"message": f"added '{token_name}' to '{slug}' as {role.value}"}
+
+    @app.delete("/v1/orgs/{slug}/members/{token_name}", tags=["organizations"])
+    async def remove_org_member(
+        slug: str,
+        token_name: str,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        if not _use_db or _db_orgs is None:
+            raise HTTPException(501, "organizations require database backend")
+        if not await _db_orgs.is_owner(slug, actor.name) and actor.role != TokenRole.admin:
+            raise HTTPException(403, "only org owners or admins can manage members")
+        try:
+            removed = await _db_orgs.remove_member(slug, token_name)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        if not removed:
+            raise HTTPException(404, f"'{token_name}' is not a member of '{slug}'")
+        await _db_audit.record(
+            action=AuditAction.org_remove_member,
+            actor=actor.name,
+            target=slug,
+            detail=f"member={token_name}",
+        )
+        return {"message": f"removed '{token_name}' from '{slug}'"}
+
+    # ── Org HTML pages ──────────────────────────────────────
+
+    @app.get("/orgs", response_class=HTMLResponse, include_in_schema=False)
+    async def orgs_listing_page():
+        from cvcpkg.server.landing import orgs_listing_html
+
+        return HTMLResponse(orgs_listing_html())
+
+    @app.get("/org/{slug}", response_class=HTMLResponse, include_in_schema=False)
+    async def org_detail_page(slug: str):
+        from cvcpkg.server.landing import org_detail_html
+
+        return HTMLResponse(org_detail_html(slug))
 
     return app

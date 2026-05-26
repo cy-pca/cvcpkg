@@ -18,6 +18,8 @@ from sqlalchemy import or_, select, update
 
 from cvcpkg.server.db import (
     AuditRow,
+    OrganizationRow,
+    OrgMemberRow,
     PackageRow,
     TokenRow,
     get_session,
@@ -25,6 +27,9 @@ from cvcpkg.server.db import (
 from cvcpkg.server.models import (
     AuditAction,
     AuditEntry,
+    OrgInfo,
+    OrgMember,
+    OrgRole,
     PackageInfo,
     TokenRecord,
     TokenRole,
@@ -293,6 +298,7 @@ class DbPackageIndex:
         platform: str = "",
         release: str = "",
         search: str = "",
+        org_slug: str = "",
         limit: int = 1000,
         offset: int = 0,
     ) -> tuple[list[PackageInfo], int]:
@@ -325,6 +331,9 @@ class DbPackageIndex:
                 )
                 q = q.where(search_filter)
                 count_q = count_q.where(search_filter)
+            if org_slug:
+                q = q.where(PackageRow.org_slug == org_slug)
+                count_q = count_q.where(PackageRow.org_slug == org_slug)
 
             total_result = await session.execute(count_q)
             total = total_result.scalar() or 0
@@ -431,6 +440,7 @@ class DbPackageIndex:
         pkg_license: str = "",
         maintainer: str = "",
         tags: str = "",
+        org_slug: str = "",
     ) -> None:
         async with get_session() as session:
             row = PackageRow(
@@ -452,6 +462,7 @@ class DbPackageIndex:
                 license=pkg_license,
                 maintainer=maintainer,
                 tags=tags,
+                org_slug=org_slug,
             )
             session.add(row)
 
@@ -481,3 +492,251 @@ class DbPackageIndex:
                 sa_delete(PackageRow).where(PackageRow.name == name, PackageRow.version == version)
             )
             return result.rowcount
+
+
+# ── DB Organization Store ───────────────────────────────────────
+
+
+class DbOrgStore:
+    """Organization management backed by the ``organizations`` and ``org_members`` tables."""
+
+    async def create(
+        self,
+        *,
+        slug: str,
+        display_name: str,
+        description: str = "",
+        logo_url: str = "",
+        homepage: str = "",
+        created_by: str,
+        storage_limit_bytes: int = 10 * 1024 * 1024 * 1024,
+    ) -> OrgInfo:
+        async with get_session() as session:
+            existing = await session.execute(
+                select(OrganizationRow).where(OrganizationRow.slug == slug)
+            )
+            if existing.scalars().first() is not None:
+                raise ValueError(f"organization '{slug}' already exists")
+
+            row = OrganizationRow(
+                slug=slug,
+                display_name=display_name,
+                description=description,
+                logo_url=logo_url,
+                homepage=homepage,
+                created_by=created_by,
+                storage_limit_bytes=storage_limit_bytes,
+            )
+            session.add(row)
+            await session.flush()
+
+            # Creator is automatically the owner
+            member = OrgMemberRow(
+                org_id=row.id,
+                token_name=created_by,
+                role=OrgRole.owner.value,
+            )
+            session.add(member)
+
+            return self._row_to_info(row)
+
+    async def get(self, slug: str) -> OrgInfo | None:
+        async with get_session() as session:
+            result = await session.execute(
+                select(OrganizationRow).where(OrganizationRow.slug == slug)
+            )
+            row = result.scalars().first()
+            if row is None:
+                return None
+            return self._row_to_info(row)
+
+    async def list_orgs(self, *, limit: int = 100, offset: int = 0) -> tuple[list[OrgInfo], int]:
+        async with get_session() as session:
+            count_q = select(sa_func.count(OrganizationRow.id))
+            total = (await session.execute(count_q)).scalar() or 0
+
+            q = (
+                select(OrganizationRow)
+                .order_by(OrganizationRow.display_name)
+                .offset(offset)
+                .limit(limit)
+            )
+            result = await session.execute(q)
+            return [self._row_to_info(r) for r in result.scalars().all()], total
+
+    async def update(
+        self,
+        slug: str,
+        *,
+        display_name: str | None = None,
+        description: str | None = None,
+        logo_url: str | None = None,
+        homepage: str | None = None,
+    ) -> OrgInfo | None:
+        async with get_session() as session:
+            result = await session.execute(
+                select(OrganizationRow).where(OrganizationRow.slug == slug)
+            )
+            row = result.scalars().first()
+            if row is None:
+                return None
+            if display_name is not None:
+                row.display_name = display_name
+            if description is not None:
+                row.description = description
+            if logo_url is not None:
+                row.logo_url = logo_url
+            if homepage is not None:
+                row.homepage = homepage
+            await session.flush()
+            return self._row_to_info(row)
+
+    async def add_member(self, slug: str, token_name: str, role: OrgRole = OrgRole.member) -> bool:
+        async with get_session() as session:
+            org = (
+                (await session.execute(select(OrganizationRow).where(OrganizationRow.slug == slug)))
+                .scalars()
+                .first()
+            )
+            if org is None:
+                raise ValueError(f"organization '{slug}' not found")
+
+            existing = (
+                (
+                    await session.execute(
+                        select(OrgMemberRow).where(
+                            OrgMemberRow.org_id == org.id,
+                            OrgMemberRow.token_name == token_name,
+                        )
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if existing is not None:
+                return False  # already a member
+
+            session.add(
+                OrgMemberRow(
+                    org_id=org.id,
+                    token_name=token_name,
+                    role=role.value,
+                )
+            )
+            return True
+
+    async def remove_member(self, slug: str, token_name: str) -> bool:
+        from sqlalchemy import delete as sa_delete
+
+        async with get_session() as session:
+            org = (
+                (await session.execute(select(OrganizationRow).where(OrganizationRow.slug == slug)))
+                .scalars()
+                .first()
+            )
+            if org is None:
+                raise ValueError(f"organization '{slug}' not found")
+
+            result = await session.execute(
+                sa_delete(OrgMemberRow).where(
+                    OrgMemberRow.org_id == org.id,
+                    OrgMemberRow.token_name == token_name,
+                )
+            )
+            return result.rowcount > 0
+
+    async def get_members(self, slug: str) -> list[OrgMember]:
+        async with get_session() as session:
+            org = (
+                (await session.execute(select(OrganizationRow).where(OrganizationRow.slug == slug)))
+                .scalars()
+                .first()
+            )
+            if org is None:
+                return []
+
+            result = await session.execute(
+                select(OrgMemberRow)
+                .where(OrgMemberRow.org_id == org.id)
+                .order_by(OrgMemberRow.added_at)
+            )
+            return [
+                OrgMember(
+                    token_name=m.token_name,
+                    role=OrgRole(m.role),
+                    added_at=m.added_at,
+                )
+                for m in result.scalars().all()
+            ]
+
+    async def is_member(self, slug: str, token_name: str) -> bool:
+        async with get_session() as session:
+            org = (
+                (await session.execute(select(OrganizationRow).where(OrganizationRow.slug == slug)))
+                .scalars()
+                .first()
+            )
+            if org is None:
+                return False
+            result = await session.execute(
+                select(OrgMemberRow).where(
+                    OrgMemberRow.org_id == org.id,
+                    OrgMemberRow.token_name == token_name,
+                )
+            )
+            return result.scalars().first() is not None
+
+    async def is_owner(self, slug: str, token_name: str) -> bool:
+        async with get_session() as session:
+            org = (
+                (await session.execute(select(OrganizationRow).where(OrganizationRow.slug == slug)))
+                .scalars()
+                .first()
+            )
+            if org is None:
+                return False
+            result = await session.execute(
+                select(OrgMemberRow).where(
+                    OrgMemberRow.org_id == org.id,
+                    OrgMemberRow.token_name == token_name,
+                    OrgMemberRow.role == OrgRole.owner.value,
+                )
+            )
+            return result.scalars().first() is not None
+
+    async def update_storage_used(self, slug: str, delta_bytes: int) -> None:
+        async with get_session() as session:
+            org = (
+                (await session.execute(select(OrganizationRow).where(OrganizationRow.slug == slug)))
+                .scalars()
+                .first()
+            )
+            if org is not None:
+                org.storage_used_bytes = max(0, org.storage_used_bytes + delta_bytes)
+                await session.flush()
+
+    async def check_storage_limit(self, slug: str, additional_bytes: int) -> bool:
+        """Return True if adding additional_bytes would stay within the org's limit."""
+        async with get_session() as session:
+            org = (
+                (await session.execute(select(OrganizationRow).where(OrganizationRow.slug == slug)))
+                .scalars()
+                .first()
+            )
+            if org is None:
+                return False
+            return (org.storage_used_bytes + additional_bytes) <= org.storage_limit_bytes
+
+    @staticmethod
+    def _row_to_info(row: OrganizationRow) -> OrgInfo:
+        return OrgInfo(
+            slug=row.slug,
+            display_name=row.display_name,
+            description=row.description,
+            logo_url=row.logo_url,
+            homepage=row.homepage,
+            storage_limit_bytes=row.storage_limit_bytes,
+            storage_used_bytes=row.storage_used_bytes,
+            created_at=row.created_at,
+            created_by=row.created_by,
+        )

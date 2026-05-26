@@ -28,6 +28,10 @@ class AuditAction(str, Enum):
     token_create = "token_create"
     token_revoke = "token_revoke"
     catalog_rebuild = "catalog_rebuild"
+    org_create = "org_create"
+    org_add_member = "org_add_member"
+    org_remove_member = "org_remove_member"
+    org_update = "org_update"
 
 
 # ── Token management ───────────────────────────────────────────
@@ -154,3 +158,65 @@ class HealthResponse(BaseModel):
     storage_scheme: str
     packages_count: int
     uptime_seconds: float
+
+
+# ── Organizations ───────────────────────────────────────────────
+
+
+class OrgRole(str, Enum):
+    """Membership roles within an organization."""
+
+    owner = "owner"
+    member = "member"
+
+
+class OrgInfo(BaseModel):
+    """Summary of an organization."""
+
+    slug: str
+    display_name: str
+    description: str = ""
+    logo_url: str = ""
+    homepage: str = ""
+    storage_limit_bytes: int = 10 * 1024 * 1024 * 1024
+    storage_used_bytes: int = 0
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
+    created_by: str = ""
+
+
+class OrgMember(BaseModel):
+    """An organization membership record."""
+
+    token_name: str
+    role: OrgRole = OrgRole.member
+    added_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
+
+
+class OrgCreateRequest(BaseModel):
+    slug: str = Field(..., min_length=2, max_length=64, pattern=r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
+    display_name: str = Field(..., min_length=1, max_length=255)
+    description: str = ""
+    logo_url: str = ""
+    homepage: str = ""
+
+
+class OrgUpdateRequest(BaseModel):
+    display_name: str | None = None
+    description: str | None = None
+    logo_url: str | None = None
+    homepage: str | None = None
+
+
+class OrgDetailResponse(BaseModel):
+    org: OrgInfo
+    members: list[OrgMember]
+    packages: list[PackageInfo]
+
+
+class OrgListResponse(BaseModel):
+    total: int
+    organizations: list[OrgInfo]
