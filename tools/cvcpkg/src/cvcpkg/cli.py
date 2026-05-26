@@ -1766,11 +1766,15 @@ def pack_all_cmd(
 
     output.mkdir(parents=True, exist_ok=True)
     for ctx in contexts:
+        # Cross-compiled recipes (e.g. wasm built on linux) use their
+        # actual target platform and arch, not the host's.
+        ctx_plat = ctx.platform
+        ctx_arch = "wasm32" if ctx_plat == "wasm" else arch
         manifest = generate_manifest(
             ctx.recipe,
             ctx.install_dir,
-            plat,
-            arch,
+            ctx_plat,
+            ctx_arch,
             config,
             link,
             maintainer=maintainer,
@@ -1783,8 +1787,8 @@ def pack_all_cmd(
             output,
             ctx.recipe.name,
             ctx.recipe.full_version,
-            plat,
-            arch,
+            ctx_plat,
+            ctx_arch,
             config,
             link,
         )
