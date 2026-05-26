@@ -168,6 +168,7 @@ jobs:
           sys.path.insert(0, str(Path("tools/cvcpkg/src")))
           from cvcpkg.builder import (
               Recipe,
+              chain_hash,
               create_archive,
               generate_manifest,
               list_recipes,
@@ -187,6 +188,7 @@ jobs:
 
           recipes_dir = Path("recipes")
           recipes = list_recipes(recipes_dir)
+          all_recipes = {r.name: r for r in recipes}
 
           # Collect all files in the prefix
           all_files = []
@@ -235,6 +237,7 @@ jobs:
               manifest = generate_manifest(
                   recipe, staging, platform, arch, config, link,
                   maintainer="CyberPC Angel, LLC",
+                  all_recipes=all_recipes,
               )
 
               # Write manifest into staging
