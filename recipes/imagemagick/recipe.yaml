@@ -4,7 +4,7 @@ recipe:
   upstream_version: "7.1.1"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
-  maintainer_email: "joe@angelx.dev"
+  maintainer_email: "joe.rivera@cyberpcangel.com"
   description: "ImageMagick — a software suite for creating, editing, composing, and converting images."
   homepage: https://imagemagick.org/
   license: Apache-2.0

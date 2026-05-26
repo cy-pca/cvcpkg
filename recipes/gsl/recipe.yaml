@@ -4,7 +4,7 @@ recipe:
   upstream_version: "2.8"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
-  maintainer_email: "joe@angelx.dev"
+  maintainer_email: "joe.rivera@cyberpcangel.com"
   description: "GNU Scientific Library — a numerical library for C and C++ programmers."
   homepage: https://www.gnu.org/software/gsl/
   license: GPL-3.0-or-later
