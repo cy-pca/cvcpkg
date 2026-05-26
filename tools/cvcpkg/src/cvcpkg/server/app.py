@@ -625,7 +625,9 @@ def create_app(
         _auth: None = Depends(optional_reader_auth),
     ):
         if _use_db:
-            packages, total = await _db_packages.get_bundles(name=name, include_yanked=include_yanked)
+            packages, total = await _db_packages.get_bundles(
+                name=name, include_yanked=include_yanked
+            )
             return PackageListResponse(total=total, packages=packages)
         state = _get_state()
         bundles = [b for b in state.index.get("bundles", []) if b.get("name") == name]
