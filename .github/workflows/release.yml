@@ -144,103 +144,163 @@ jobs:
       link: ${{ matrix.link }}
       sha_suffix: ${{ inputs.sha_suffix || '' }}
   # ──────────────────────────── Release ────────────────────────────
-  # ────────────────────── Per-component packaging ──────────────────
-  # Split each monolithic prefix into per-component bundle archives.
-  # One job per platform so all 4 matrix entries (Debug/Release ×
-  # shared/static) are split in parallel.
+  # ────────────────────── Publish per-component packages ──────────
+  # Publish pre-built per-component archives to cvcpkg-server.
+  # Each build job already ran `cvcpkg pack-all` which built each
+  # recipe individually and produced per-component archives.
 
-  package-linux:
+  publish-linux:
     needs: [linux]
-    if: always() && needs.linux.result == 'success'
+    if: always() && needs.linux.result == 'success' && startsWith(github.ref, 'refs/tags/')
     strategy:
       fail-fast: false
       matrix:
         include:
           - config: debug
             link: shared
-            artifact: linux-debug-shared
           - config: release
             link: shared
-            artifact: linux-release-shared
           - config: debug
             link: static
-            artifact: linux-debug-static
           - config: release
             link: static
-            artifact: linux-release-static
-    uses: ./.github/workflows/cvcpkg-package.yml
-    with:
-      platform: linux
-      arch: x86_64
-      config: ${{ matrix.config }}
-      link: ${{ matrix.link }}
-      prefix_artifact: ${{ matrix.artifact }}
-      version: ${{ github.ref_name }}
-      release_tag: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
-    secrets: inherit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install cvcpkg
+        run: pip install ./tools/cvcpkg
+      - name: Download per-component bundles
+        uses: actions/download-artifact@v4
+        with:
+          name: components-linux-${{ matrix.config }}-${{ matrix.link }}
+          path: dist/
+      - name: Publish to cvcpkg-server
+        env:
+          CVCPKG_SERVER_URL: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CVCPKG_TOKEN:-}" ]; then
+            echo "::warning::CVCPKG_PUBLISH_TOKEN secret not set — skipping publish"
+            exit 0
+          fi
+          archives=$(find dist \( -name '*.tar.gz' -o -name '*.zip' \) | sort)
+          if [ -z "$archives" ]; then
+            echo "::warning::No component archives to publish"
+            exit 0
+          fi
+          count=$(echo "$archives" | wc -l)
+          echo "Publishing $count archives (linux/${{ matrix.config }}/${{ matrix.link }}) to $CVCPKG_SERVER_URL ..."
+          cvcpkg publish $archives \
+            --server "$CVCPKG_SERVER_URL" \
+            --token "$CVCPKG_TOKEN" \
+            --release-tag "${{ github.ref_name }}"
 
-  package-macos:
+  publish-macos:
     needs: [macos]
-    if: always() && needs.macos.result == 'success'
+    if: always() && needs.macos.result == 'success' && startsWith(github.ref, 'refs/tags/')
     strategy:
       fail-fast: false
       matrix:
         include:
           - config: debug
             link: shared
-            artifact: macos-debug-shared
           - config: release
             link: shared
-            artifact: macos-release-shared
           - config: debug
             link: static
-            artifact: macos-debug-static
           - config: release
             link: static
-            artifact: macos-release-static
-    uses: ./.github/workflows/cvcpkg-package.yml
-    with:
-      platform: macos
-      arch: arm64
-      config: ${{ matrix.config }}
-      link: ${{ matrix.link }}
-      prefix_artifact: ${{ matrix.artifact }}
-      version: ${{ github.ref_name }}
-      release_tag: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
-    secrets: inherit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install cvcpkg
+        run: pip install ./tools/cvcpkg
+      - name: Download per-component bundles
+        uses: actions/download-artifact@v4
+        with:
+          name: components-macos-${{ matrix.config }}-${{ matrix.link }}
+          path: dist/
+      - name: Publish to cvcpkg-server
+        env:
+          CVCPKG_SERVER_URL: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CVCPKG_TOKEN:-}" ]; then
+            echo "::warning::CVCPKG_PUBLISH_TOKEN secret not set — skipping publish"
+            exit 0
+          fi
+          archives=$(find dist \( -name '*.tar.gz' -o -name '*.zip' \) | sort)
+          if [ -z "$archives" ]; then
+            echo "::warning::No component archives to publish"
+            exit 0
+          fi
+          count=$(echo "$archives" | wc -l)
+          echo "Publishing $count archives (macos/${{ matrix.config }}/${{ matrix.link }}) to $CVCPKG_SERVER_URL ..."
+          cvcpkg publish $archives \
+            --server "$CVCPKG_SERVER_URL" \
+            --token "$CVCPKG_TOKEN" \
+            --release-tag "${{ github.ref_name }}"
 
-  package-windows:
+  publish-windows:
     needs: [windows]
-    if: always() && needs.windows.result == 'success'
+    if: always() && needs.windows.result == 'success' && startsWith(github.ref, 'refs/tags/')
     strategy:
       fail-fast: false
       matrix:
         include:
           - config: debug
             link: shared
-            artifact: windows-debug-shared
           - config: release
             link: shared
-            artifact: windows-release-shared
           - config: debug
             link: static
-            artifact: windows-debug-static
           - config: release
             link: static
-            artifact: windows-release-static
-    uses: ./.github/workflows/cvcpkg-package.yml
-    with:
-      platform: windows
-      arch: x86_64
-      config: ${{ matrix.config }}
-      link: ${{ matrix.link }}
-      prefix_artifact: ${{ matrix.artifact }}
-      version: ${{ github.ref_name }}
-      release_tag: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
-    secrets: inherit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install cvcpkg
+        run: pip install ./tools/cvcpkg
+      - name: Download per-component bundles
+        uses: actions/download-artifact@v4
+        with:
+          name: components-windows-${{ matrix.config }}-${{ matrix.link }}
+          path: dist/
+      - name: Publish to cvcpkg-server
+        env:
+          CVCPKG_SERVER_URL: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CVCPKG_TOKEN:-}" ]; then
+            echo "::warning::CVCPKG_PUBLISH_TOKEN secret not set — skipping publish"
+            exit 0
+          fi
+          archives=$(find dist \( -name '*.tar.gz' -o -name '*.zip' \) | sort)
+          if [ -z "$archives" ]; then
+            echo "::warning::No component archives to publish"
+            exit 0
+          fi
+          count=$(echo "$archives" | wc -l)
+          echo "Publishing $count archives (windows/${{ matrix.config }}/${{ matrix.link }}) to $CVCPKG_SERVER_URL ..."
+          cvcpkg publish $archives \
+            --server "$CVCPKG_SERVER_URL" \
+            --token "$CVCPKG_TOKEN" \
+            --release-tag "${{ github.ref_name }}"
 
   release:
-    needs: [linux, macos, windows, package-linux, package-macos, package-windows]
+    needs: [linux, macos, windows, publish-linux, publish-macos, publish-windows]
     runs-on: ubuntu-latest
     # Skip the release step entirely for manual workflow_dispatch
     # runs unless the workflow was triggered on a tag. Run even if
@@ -305,15 +365,15 @@ jobs:
   # a per-platform publish step was interrupted) and logs the total
   # count.  It runs regardless of the release job outcome.
   publish-to-server:
-    needs: [package-linux, package-macos, package-windows]
+    needs: [publish-linux, publish-macos, publish-windows]
     runs-on: ubuntu-latest
     if: |
       always()
       && !cancelled()
       && startsWith(github.ref, 'refs/tags/')
-      && (needs.package-linux.result == 'success'
-          || needs.package-macos.result == 'success'
-          || needs.package-windows.result == 'success')
+      && (needs.publish-linux.result == 'success'
+          || needs.publish-macos.result == 'success'
+          || needs.publish-windows.result == 'success')
     steps:
       - uses: actions/checkout@v5
 
