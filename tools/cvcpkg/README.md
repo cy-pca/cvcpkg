@@ -177,7 +177,7 @@ cmake_packages:
 
 ```bash
 # Build using the recipe (fetches source, runs cmake, stages output):
-cvcpkg build recipes/my-library --prefix ./stage \
+cvcpkg build my-library --prefix ./stage \
   --config release --link shared
 
 # Or if you already have a built install tree:
@@ -319,11 +319,11 @@ before extracting — a mismatch aborts the install.
 
 ```bash
 # 1. Build a component from recipe:
-cvcpkg build recipes/zlib --prefix ./stage \
+cvcpkg build zlib --prefix ./stage \
   --config release --link shared
 
 # 2. Pack to an archive:
-cvcpkg pack recipes/zlib --prefix ./stage \
+cvcpkg pack zlib --prefix ./stage \
   --config release --link shared
 
 # 3. Publish to server:
@@ -340,7 +340,7 @@ a signing key (see [Package Signing](#package-signing) below), then
 pass `--signing-key` during pack:
 
 ```bash
-cvcpkg pack recipes/zlib --prefix ./stage \
+cvcpkg pack zlib --prefix ./stage \
   --config release --link shared \
   --signing-key ~/.config/cvcpkg/keys/release.key
 ```
@@ -431,7 +431,7 @@ The easiest way: pass `--signing-key` to `cvcpkg pack` or
 `cvcpkg pack-all` and the archive is signed automatically:
 
 ```bash
-cvcpkg pack recipes/zlib --prefix ./stage \
+cvcpkg pack zlib --prefix ./stage \
   --config release --link shared \
   --signing-key ~/.config/cvcpkg/keys/release.key
 ```
@@ -526,8 +526,8 @@ aborts with a clear error.
     chmod 600 ~/.config/cvcpkg/keys/ci.key
 
     # Build, pack (with signature), and publish:
-    cvcpkg build recipes/$COMPONENT --prefix ./stage
-    cvcpkg pack recipes/$COMPONENT --prefix ./stage \
+    cvcpkg build $COMPONENT --prefix ./stage
+    cvcpkg pack $COMPONENT --prefix ./stage \
       --signing-key ~/.config/cvcpkg/keys/ci.key \
       --config release --link shared
 ```
