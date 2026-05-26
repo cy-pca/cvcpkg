@@ -9,7 +9,7 @@ recipe:
   description: "libyaml — a fast YAML 1.1 parser and emitter library written in C."
   homepage: https://pyyaml.org/wiki/LibYAML
   license: MIT
-  tags: [utils]
+  tags: [utils, wasm]
 
 source:
   type: tarball
@@ -20,7 +20,9 @@ source:
 patches: []
 
 depends:
-  build: []
+  build: 
+    - name: emsdk
+      version: ">=5.0"
   host_tools:
     - cmake
     - ninja
@@ -38,6 +40,9 @@ build:
     - platform: windows
       script: build.ps1
       vcpkg_port: libyaml
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
 
 package:
   files:

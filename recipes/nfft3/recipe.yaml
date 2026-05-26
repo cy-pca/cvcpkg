@@ -9,7 +9,7 @@ recipe:
   description: "NFFT — a library for nonequispaced fast Fourier transforms in various dimensions."
   homepage: https://www-user.tu-chemnitz.de/~potts/nfft/
   license: GPL-2.0-or-later
-  tags: [math]
+  tags: [math, wasm]
 
 source:
   type: tarball
@@ -22,6 +22,8 @@ patches: []
 depends:
   build:
     - fftw3
+    - name: emsdk
+      version: ">=5.0"
   host_tools:
     - autoconf
     - automake
@@ -38,6 +40,9 @@ build:
       note: >
         Windows builds use MSYS2/mingw64 (autotools+gcc), then
         gendef + MSVC lib /def: to produce an MSVC-friendly import lib.
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
 
 package:
   files:

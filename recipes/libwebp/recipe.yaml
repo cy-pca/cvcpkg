@@ -9,7 +9,7 @@ recipe:
   description: "libwebp — a library to encode and decode images in the WebP format."
   homepage: https://developers.google.com/speed/webp/
   license: BSD-3-Clause
-  tags: [graphics, io]
+  tags: [graphics, io, wasm]
 
 source:
   type: tarball
@@ -20,7 +20,9 @@ source:
 patches: []
 
 depends:
-  build: []
+  build: 
+    - name: emsdk
+      version: ">=5.0"
   host_tools:
     - cmake
     - ninja
@@ -37,6 +39,9 @@ build:
         MACOSX_DEPLOYMENT_TARGET: "13.0"
     - platform: windows
       script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
 
 package:
   files:

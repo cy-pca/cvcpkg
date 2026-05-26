@@ -9,7 +9,7 @@ recipe:
   description: "c-ares — an asynchronous DNS resolver library for C applications."
   homepage: https://c-ares.org/
   license: MIT
-  tags: [networking]
+  tags: [networking, wasm]
 
 source:
   type: tarball
@@ -20,7 +20,9 @@ source:
 patches: []
 
 depends:
-  build: []
+  build: 
+    - name: emsdk
+      version: ">=5.0"
   host_tools:
     - cmake
     - ninja
@@ -38,6 +40,9 @@ build:
     - platform: windows
       script: build.ps1
       vcpkg_port: c-ares
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
 
 package:
   files:
