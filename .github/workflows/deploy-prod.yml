@@ -71,6 +71,11 @@ jobs:
 
           cd "$CVCPKG_DIR"
 
+          # Bundle recipes into the server package so the Docker image
+          # can serve dependency information without the repo root.
+          rm -rf src/cvcpkg/recipes
+          cp -r "${DEPLOY_DIR}/recipes" src/cvcpkg/recipes
+
           if [[ ! -f .env.production ]]; then
             echo "::error::.env.production not found at ${CVCPKG_DIR}/"
             exit 1

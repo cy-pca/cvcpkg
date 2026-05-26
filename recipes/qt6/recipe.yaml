@@ -4,6 +4,8 @@ recipe:
   upstream_version: "6.8.2"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
+  maintainer_email: "joe.rivera@cyberpcangel.com"
+  description: "Qt 6 — a cross-platform application framework for GUI development and beyond."
   homepage: https://www.qt.io/
   license: LGPL-3.0-only
   tags: [graphics]

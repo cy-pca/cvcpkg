@@ -4,6 +4,8 @@ recipe:
   upstream_version: "3.3.10"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
+  maintainer_email: "joe.rivera@cyberpcangel.com"
+  description: "FFTW — a library for computing discrete Fourier transforms with high performance."
   homepage: https://fftw.org/
   license: GPL-2.0-or-later
   tags: [math]

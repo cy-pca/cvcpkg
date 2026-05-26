@@ -4,6 +4,8 @@ recipe:
   upstream_version: "0.3.28"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
+  maintainer_email: "joe.rivera@cyberpcangel.com"
+  description: "OpenBLAS — an optimized BLAS (Basic Linear Algebra Subprograms) library."
   homepage: https://www.openblas.net/
   license: BSD-3-Clause
   tags: [math]

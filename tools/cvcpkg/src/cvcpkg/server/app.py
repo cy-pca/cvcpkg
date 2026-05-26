@@ -39,6 +39,12 @@ from cvcpkg.server.models import (
     AuditLogResponse,
     CatalogResponse,
     HealthResponse,
+    OrgCreateRequest,
+    OrgDetailResponse,
+    OrgInfo,
+    OrgListResponse,
+    OrgRole,
+    OrgUpdateRequest,
     PackageInfo,
     PackageListResponse,
     PublishResponse,
@@ -67,6 +73,11 @@ UPLOAD_SESSION_TTL = int(os.environ.get("CVCPKG_UPLOAD_SESSION_TTL", "3600"))
 
 # Rate limiting: requests per minute for write endpoints
 RATE_LIMIT_RPM = int(os.environ.get("CVCPKG_RATE_LIMIT_RPM", "300"))
+
+# Default storage limit per organization in bytes (default 10 GiB)
+ORG_STORAGE_LIMIT_BYTES = int(
+    os.environ.get("CVCPKG_ORG_STORAGE_LIMIT_BYTES", str(10 * 1024 * 1024 * 1024))
+)
 
 # CORS allowed origins (comma-separated, empty = deny all cross-origin)
 CORS_ALLOWED_ORIGINS = [
@@ -127,6 +138,7 @@ _use_db: bool = False
 _db_tokens = None  # DbTokenStore when using DB backend
 _db_audit = None  # DbAuditLog when using DB backend
 _db_packages = None  # DbPackageIndex when using DB backend
+_db_orgs = None  # DbOrgStore when using DB backend
 
 
 def _get_state() -> ServerState:
@@ -155,6 +167,11 @@ class UploadSession:
     recipe_version: str
     actor_name: str
     temp_path: Path
+    description: str = ""
+    homepage: str = ""
+    pkg_license: str = ""
+    maintainer: str = ""
+    tags: str = ""
     hasher: hashlib._Hash = field(default_factory=lambda: hashlib.sha256())
     bytes_received: int = 0
     total_size: int = 0  # 0 = unknown
@@ -243,7 +260,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        global _state, _START_TIME, _use_db, _db_tokens, _db_audit, _db_packages
+        global _state, _START_TIME, _use_db, _db_tokens, _db_audit, _db_packages, _db_orgs
         _START_TIME = time.monotonic()
         sd = state_dir or Path(os.environ.get("CVCPKG_SERVER_STATE_DIR", "/var/lib/cvcpkg-server"))
 
@@ -261,13 +278,14 @@ def create_app(
         db_url = os.environ.get("CVCPKG_DATABASE_URL", "")
         if db_url:
             from cvcpkg.server.db import create_tables, dispose_engine, init_db
-            from cvcpkg.server.db_stores import DbAuditLog, DbPackageIndex, DbTokenStore
+            from cvcpkg.server.db_stores import DbAuditLog, DbOrgStore, DbPackageIndex, DbTokenStore
 
             init_db(db_url)
             await create_tables()
             _db_tokens = DbTokenStore(sd)
             _db_audit = DbAuditLog()
             _db_packages = DbPackageIndex()
+            _db_orgs = DbOrgStore()
             _use_db = True
             # Still need ServerState for archives dir and storage_uri
             _state = ServerState(
@@ -360,6 +378,12 @@ def create_app(
 
         return HTMLResponse(landing_html())
 
+    @app.get("/package/{name}", response_class=HTMLResponse, include_in_schema=False)
+    async def package_detail_page(name: str):
+        from cvcpkg.server.landing import package_detail_html
+
+        return HTMLResponse(package_detail_html(name))
+
     # ── Health ──────────────────────────────────────────────
 
     @app.get("/healthz", response_model=HealthResponse, tags=["health"])
@@ -443,6 +467,47 @@ def create_app(
             bundles=state.index.get("bundles", []),
         )
 
+    # ── Dependency graph (read) ────────────────────────────
+
+    @app.get("/v1/deps", tags=["packages"])
+    async def get_dependency_graph(
+        _auth: None = Depends(optional_reader_auth),
+    ):
+        """Return forward and reverse dependency maps derived from recipes."""
+        from cvcpkg.builder import RecipeError, find_recipes_dir, list_recipes
+
+        try:
+            recipes = list_recipes(find_recipes_dir())
+        except RecipeError:
+            return JSONResponse({"forward": {}, "reverse": {}})
+
+        forward: dict[str, list[str]] = {}
+        meta: dict[str, dict[str, str]] = {}
+        for r in recipes:
+            recipe_block = r.raw.get("recipe", {})
+            build_deps = r.raw.get("depends", {}).get("build", [])
+            names: list[str] = []
+            for d in build_deps:
+                if isinstance(d, str):
+                    names.append(d)
+                elif isinstance(d, dict):
+                    names.append(d["name"])
+            forward[r.name] = names
+            meta[r.name] = {
+                "description": recipe_block.get("description", ""),
+                "homepage": recipe_block.get("homepage", ""),
+                "license": recipe_block.get("license", ""),
+                "maintainer": recipe_block.get("maintainer", ""),
+                "maintainer_email": recipe_block.get("maintainer_email", ""),
+            }
+
+        reverse: dict[str, list[str]] = {}
+        for pkg, deps in forward.items():
+            for dep in deps:
+                reverse.setdefault(dep, []).append(pkg)
+
+        return JSONResponse({"forward": forward, "reverse": reverse, "meta": meta})
+
     # ── Packages (read) ─────────────────────────────────────
 
     @app.get("/v1/packages", response_model=PackageListResponse, tags=["packages"])
@@ -456,6 +521,7 @@ def create_app(
                 "only packages not yet in any release."
             ),
         ),
+        search: str = Query("", description="Full-text search across all attributes"),
         limit: int = Query(100, ge=1, le=1000),
         offset: int = Query(0, ge=0),
         _auth: None = Depends(optional_reader_auth),
@@ -467,6 +533,7 @@ def create_app(
                 name=name,
                 platform=platform,
                 release=db_release,
+                search=search,
                 limit=limit,
                 offset=offset,
             )
@@ -585,10 +652,27 @@ def create_app(
             "",
             description=("Recipe revision that produced this build (commit SHA or recipe hash)."),
         ),
+        description: str = Query("", description="Short description of the component"),
+        homepage: str = Query("", description="Upstream project homepage URL"),
+        pkg_license: str = Query("", alias="license", description="SPDX license identifier"),
+        maintainer: str = Query("", description="Package maintainer"),
+        pkg_tags: str = Query("", alias="tags", description="Comma-separated tags"),
+        org: str = Query(
+            "",
+            description="Organization slug. Empty for official/public packages.",
+        ),
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
         _check_rate_limit(request)
         state = _get_state()
+
+        # Validate org membership and storage limit if publishing to an org
+        if org and _use_db and _db_orgs is not None:
+            org_info = await _db_orgs.get(org)
+            if org_info is None:
+                raise HTTPException(404, f"organization '{org}' not found")
+            if not await _db_orgs.is_member(org, actor.name):
+                raise HTTPException(403, f"you are not a member of organization '{org}'")
 
         # Check for duplicates
         if _use_db:
@@ -610,7 +694,8 @@ def create_app(
                 ):
                     raise HTTPException(
                         409,
-                        f"{name}=={version} ({platform}/{arch}/{build_type}/{link}) already published. "
+                        f"{name}=={version} ({platform}/{arch}/{build_type}"
+                        f"/{link}) already published. "
                         "Yank the existing version first, or use a new revision.",
                     )
 
@@ -656,6 +741,12 @@ def create_app(
         archive_url = f"/v1/download/{safe_filename}"
 
         if _use_db:
+            # Check org storage limit before registering
+            if org and _db_orgs is not None:
+                if not await _db_orgs.check_storage_limit(org, size_bytes):
+                    dest.unlink(missing_ok=True)
+                    raise HTTPException(413, f"organization '{org}' storage limit exceeded")
+
             await _db_packages.add_package(
                 name=name,
                 version=version,
@@ -670,12 +761,27 @@ def create_app(
                 key_fingerprint=key_fingerprint,
                 release_tag=release_tag,
                 recipe_version=recipe_version,
+                description=description,
+                homepage=homepage,
+                pkg_license=pkg_license,
+                maintainer=maintainer,
+                tags=pkg_tags,
+                org_slug=org,
             )
+
+            # Track org storage usage
+            if org and _db_orgs is not None:
+                await _db_orgs.update_storage_used(org, size_bytes)
+
             await _db_audit.record(
                 action=AuditAction.publish,
                 actor=actor.name,
                 target=f"{name}=={version}",
-                detail=f"platform={platform} arch={arch} sha256={sha256} release={release_tag or 'live'}",
+                detail=(
+                    f"platform={platform} arch={arch}"
+                    f" sha256={sha256} release={release_tag or 'live'}"
+                    f" org={org or 'public'}"
+                ),
             )
         else:
             bundle = {
@@ -701,7 +807,10 @@ def create_app(
                 action=AuditAction.publish,
                 actor=actor.name,
                 target=f"{name}=={version}",
-                detail=f"platform={platform} arch={arch} sha256={sha256} release={release_tag or 'live'}",
+                detail=(
+                    f"platform={platform} arch={arch}"
+                    f" sha256={sha256} release={release_tag or 'live'}"
+                ),
             )
 
         _metrics["publishes_total"] += 1
@@ -730,6 +839,11 @@ def create_app(
         key_fingerprint: str = Query(""),
         release_tag: str = Query(""),
         recipe_version: str = Query(""),
+        description: str = Query(""),
+        homepage: str = Query(""),
+        pkg_license: str = Query("", alias="license"),
+        maintainer: str = Query(""),
+        pkg_tags: str = Query("", alias="tags"),
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
         """Initialise a chunked upload session.
@@ -766,7 +880,8 @@ def create_app(
                 ):
                     raise HTTPException(
                         409,
-                        f"{name}=={version} ({platform}/{arch}/{build_type}/{link}) already published.",
+                        f"{name}=={version} ({platform}/{arch}/{build_type}"
+                        f"/{link}) already published.",
                     )
 
         upload_id = secrets.token_urlsafe(32)
@@ -786,6 +901,11 @@ def create_app(
             key_fingerprint=key_fingerprint,
             release_tag=release_tag,
             recipe_version=recipe_version,
+            description=description,
+            homepage=homepage,
+            pkg_license=pkg_license,
+            maintainer=maintainer,
+            tags=pkg_tags,
             actor_name=actor.name,
             temp_path=tmp_path,
             total_size=total_size,
@@ -846,8 +966,8 @@ def create_app(
                 range_spec = content_range.split(" ", 1)[1]  # drop "bytes"
                 range_part, total_part = range_spec.split("/")
                 range_start = int(range_part.split("-")[0])
-            except (IndexError, ValueError):
-                raise HTTPException(400, f"malformed Content-Range: {content_range}")
+            except (IndexError, ValueError) as exc:
+                raise HTTPException(400, f"malformed Content-Range: {content_range}") from exc
             if range_start != session.bytes_received:
                 raise HTTPException(
                     409,
@@ -937,6 +1057,11 @@ def create_app(
                 key_fingerprint=session.key_fingerprint,
                 release_tag=session.release_tag,
                 recipe_version=session.recipe_version,
+                description=session.description,
+                homepage=session.homepage,
+                pkg_license=session.pkg_license,
+                maintainer=session.maintainer,
+                tags=session.tags,
             )
             await _db_audit.record(
                 action=AuditAction.publish,
@@ -1210,5 +1335,144 @@ def create_app(
             state = _get_state()
             ok, message = state.audit.verify_chain()
         return {"ok": ok, "message": message}
+
+    # ── Organizations ───────────────────────────────────────
+
+    @app.post("/v1/orgs", response_model=OrgInfo, tags=["organizations"])
+    async def create_org(
+        body: OrgCreateRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        if not _use_db or _db_orgs is None:
+            raise HTTPException(501, "organizations require database backend")
+        try:
+            org = await _db_orgs.create(
+                slug=body.slug,
+                display_name=body.display_name,
+                description=body.description,
+                logo_url=body.logo_url,
+                homepage=body.homepage,
+                created_by=actor.name,
+                storage_limit_bytes=ORG_STORAGE_LIMIT_BYTES,
+            )
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        await _db_audit.record(
+            action=AuditAction.org_create,
+            actor=actor.name,
+            target=body.slug,
+            detail=f"display_name={body.display_name}",
+        )
+        return org
+
+    @app.get("/v1/orgs", response_model=OrgListResponse, tags=["organizations"])
+    async def list_orgs(
+        limit: int = Query(100, ge=1, le=1000),
+        offset: int = Query(0, ge=0),
+    ):
+        if not _use_db or _db_orgs is None:
+            return OrgListResponse(total=0, organizations=[])
+        orgs, total = await _db_orgs.list_orgs(limit=limit, offset=offset)
+        return OrgListResponse(total=total, organizations=orgs)
+
+    @app.get("/v1/orgs/{slug}", response_model=OrgDetailResponse, tags=["organizations"])
+    async def get_org(slug: str):
+        if not _use_db or _db_orgs is None:
+            raise HTTPException(404, "organization not found")
+        org = await _db_orgs.get(slug)
+        if org is None:
+            raise HTTPException(404, f"organization '{slug}' not found")
+        members = await _db_orgs.get_members(slug)
+        packages, _ = await _db_packages.get_bundles(org_slug=slug)
+        return OrgDetailResponse(org=org, members=members, packages=packages)
+
+    @app.patch("/v1/orgs/{slug}", response_model=OrgInfo, tags=["organizations"])
+    async def update_org(
+        slug: str,
+        body: OrgUpdateRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        if not _use_db or _db_orgs is None:
+            raise HTTPException(501, "organizations require database backend")
+        if not await _db_orgs.is_owner(slug, actor.name) and actor.role != TokenRole.admin:
+            raise HTTPException(403, "only org owners or admins can update organization settings")
+        updated = await _db_orgs.update(
+            slug,
+            display_name=body.display_name,
+            description=body.description,
+            logo_url=body.logo_url,
+            homepage=body.homepage,
+        )
+        if updated is None:
+            raise HTTPException(404, f"organization '{slug}' not found")
+        await _db_audit.record(
+            action=AuditAction.org_update,
+            actor=actor.name,
+            target=slug,
+        )
+        return updated
+
+    @app.post("/v1/orgs/{slug}/members", tags=["organizations"])
+    async def add_org_member(
+        slug: str,
+        token_name: str = Query(..., description="Token name to add as member"),
+        role: OrgRole = Query(OrgRole.member),
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        if not _use_db or _db_orgs is None:
+            raise HTTPException(501, "organizations require database backend")
+        if not await _db_orgs.is_owner(slug, actor.name) and actor.role != TokenRole.admin:
+            raise HTTPException(403, "only org owners or admins can manage members")
+        try:
+            added = await _db_orgs.add_member(slug, token_name, role)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        if not added:
+            raise HTTPException(409, f"'{token_name}' is already a member of '{slug}'")
+        await _db_audit.record(
+            action=AuditAction.org_add_member,
+            actor=actor.name,
+            target=slug,
+            detail=f"member={token_name} role={role.value}",
+        )
+        return {"message": f"added '{token_name}' to '{slug}' as {role.value}"}
+
+    @app.delete("/v1/orgs/{slug}/members/{token_name}", tags=["organizations"])
+    async def remove_org_member(
+        slug: str,
+        token_name: str,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        if not _use_db or _db_orgs is None:
+            raise HTTPException(501, "organizations require database backend")
+        if not await _db_orgs.is_owner(slug, actor.name) and actor.role != TokenRole.admin:
+            raise HTTPException(403, "only org owners or admins can manage members")
+        try:
+            removed = await _db_orgs.remove_member(slug, token_name)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        if not removed:
+            raise HTTPException(404, f"'{token_name}' is not a member of '{slug}'")
+        await _db_audit.record(
+            action=AuditAction.org_remove_member,
+            actor=actor.name,
+            target=slug,
+            detail=f"member={token_name}",
+        )
+        return {"message": f"removed '{token_name}' from '{slug}'"}
+
+    # ── Org HTML pages ──────────────────────────────────────
+
+    @app.get("/orgs", response_class=HTMLResponse, include_in_schema=False)
+    async def orgs_listing_page():
+        from cvcpkg.server.landing import orgs_listing_html
+
+        return HTMLResponse(orgs_listing_html())
+
+    @app.get("/org/{slug}", response_class=HTMLResponse, include_in_schema=False)
+    async def org_detail_page(slug: str):
+        from cvcpkg.server.landing import org_detail_html
+
+        return HTMLResponse(org_detail_html(slug))
 
     return app

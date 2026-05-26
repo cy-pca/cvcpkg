@@ -4,6 +4,8 @@ recipe:
   upstream_version: "6.0.1"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
+  maintainer_email: "joe.rivera@cyberpcangel.com"
+  description: "CGAL — the Computational Geometry Algorithms Library providing geometric data structures and algorithms."
   homepage: https://www.cgal.org/
   license: GPL-3.0-or-later
   tags: [math, graphics]
