@@ -431,8 +431,14 @@ def generate_manifest(
     link: str,
     *,
     maintainer: str = "",
+    all_recipes: dict[str, Recipe] | None = None,
 ) -> dict[str, Any]:
-    """Generate a bundle manifest.yaml from the recipe + installed tree."""
+    """Generate a bundle manifest.yaml from the recipe + installed tree.
+
+    When *all_recipes* is provided, ``recipe_sha256`` is a transitive
+    dependency chain hash instead of a single-file hash.  This makes the
+    hash sensitive to changes anywhere in the dependency tree.
+    """
     files = _file_list(install_dir)
     cmake_packages = recipe.raw.get("package", {}).get("cmake_packages", [])
     pkg_config = recipe.raw.get("package", {}).get("pkg_config", [])
@@ -474,7 +480,11 @@ def generate_manifest(
             "pkg_config": pkg_config,
         },
         "meta": {
-            "recipe_sha256": _sha256_file(recipe.recipe_dir / "recipe.yaml"),
+            "recipe_sha256": (
+                chain_hash(recipe, all_recipes, platform)
+                if all_recipes
+                else _sha256_file(recipe.recipe_dir / "recipe.yaml")
+            ),
             "built_at": datetime.now(timezone.utc).isoformat(),
             "maintainer": maintainer or "Community",
         },
@@ -717,6 +727,51 @@ def _dep_names(recipe: Recipe, platform: str = "") -> list[str]:
                 continue
             names.append(d["name"])
     return names
+
+
+def chain_hash(
+    recipe: Recipe,
+    all_recipes: dict[str, Recipe],
+    platform: str = "",
+    *,
+    _seen: set[str] | None = None,
+) -> str:
+    """Compute a transitive dependency chain hash for *recipe*.
+
+    The hash covers the recipe's own ``recipe.yaml`` content plus the
+    ``recipe.yaml`` content of every transitive build dependency.  Two
+    builds of the same recipe are binary-identical when their chain
+    hashes match.
+
+    Returns a hex-encoded SHA-256 digest.
+    """
+    if _seen is None:
+        _seen = set()
+    if recipe.name in _seen:
+        return ""
+    _seen.add(recipe.name)
+
+    h = hashlib.sha256()
+    # Include this recipe's own YAML content
+    h.update(_sha256_file(recipe.recipe_dir / "recipe.yaml").encode())
+    # Also include build scripts referenced by the recipe
+    for me in recipe.build_matrix:
+        script_path = recipe.recipe_dir / me.script
+        if script_path.is_file():
+            h.update(_sha256_file(script_path).encode())
+    # Include patches
+    for patch_name in recipe.patches:
+        patch_path = recipe.recipe_dir / patch_name
+        if patch_path.is_file():
+            h.update(_sha256_file(patch_path).encode())
+    # Recursively include dependency chain hashes (sorted for determinism)
+    for dep_name in sorted(_dep_names(recipe, platform)):
+        dep = all_recipes.get(dep_name)
+        if dep is not None:
+            dep_hash = chain_hash(dep, all_recipes, platform, _seen=_seen)
+            if dep_hash:
+                h.update(dep_hash.encode())
+    return h.hexdigest()
 
 
 def resolve_build_order(recipes: list[Recipe], platform: str = "") -> list[Recipe]:
