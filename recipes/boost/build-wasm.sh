@@ -10,4 +10,4 @@ cvc_cmake_build \
     -DBUILD_TESTING=OFF \
     -DBOOST_INSTALL_LAYOUT=system \
     -DCMAKE_CXX_FLAGS="-DBOOST_HAS_PTHREADS" \
-    -DBOOST_EXCLUDE_LIBRARIES="context;coroutine;fiber;stacktrace;asio;cobalt"
+    -DBOOST_EXCLUDE_LIBRARIES="context;coroutine;fiber;stacktrace;asio;cobalt;log;process;beast"
