@@ -396,6 +396,11 @@ class DbPackageIndex:
                     "key_fingerprint": row.key_fingerprint,
                     "release_tag": row.release_tag,
                     "recipe_version": row.recipe_version,
+                    "description": row.description,
+                    "homepage": row.homepage,
+                    "license": row.license,
+                    "maintainer": row.maintainer,
+                    "tags": row.tags,
                 }
                 for row in result.scalars().all()
             ]

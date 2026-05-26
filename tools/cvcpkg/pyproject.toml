@@ -38,7 +38,7 @@ fastapi = { version = ">=0.100", optional = true }
 uvicorn = { version = ">=0.20", optional = true }
 pydantic = { version = "^2.0", optional = true }
 python-multipart = { version = ">=0.0.5", optional = true }
-sqlalchemy = { version = "^2.0", optional = true }
+sqlalchemy = "^2.0"
 alembic = { version = ">=1.13", optional = true }
 asyncpg = { version = ">=0.28", optional = true }
 aiosqlite = { version = ">=0.20", optional = true }
@@ -49,11 +49,11 @@ httpx = ">=0.24"
 [tool.poetry.extras]
 progress = ["tqdm"]
 server = ["fastapi", "uvicorn", "pydantic", "python-multipart"]
-db = ["sqlalchemy", "asyncpg", "alembic"]
-db-sqlite = ["sqlalchemy", "aiosqlite", "alembic"]
-db-mysql = ["sqlalchemy", "aiomysql", "alembic"]
-db-all = ["sqlalchemy", "asyncpg", "aiosqlite", "aiomysql", "alembic"]
-production = ["fastapi", "uvicorn", "pydantic", "python-multipart", "sqlalchemy", "asyncpg", "alembic"]
+db = ["asyncpg", "alembic"]
+db-sqlite = ["aiosqlite", "alembic"]
+db-mysql = ["aiomysql", "alembic"]
+db-all = ["asyncpg", "aiosqlite", "aiomysql", "alembic"]
+production = ["fastapi", "uvicorn", "pydantic", "python-multipart", "asyncpg", "alembic"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"
