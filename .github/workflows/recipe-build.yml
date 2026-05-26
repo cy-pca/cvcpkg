@@ -100,8 +100,8 @@ jobs:
           }
           apt_retry sudo -E apt-get update
           apt_retry sudo -E apt-get install -y --no-install-recommends \
-            build-essential cmake ninja-build patchelf pkg-config \
-            autoconf automake libtool gfortran perl \
+            build-essential cmake ninja-build meson patchelf pkg-config \
+            autoconf automake libtool gfortran perl flex bison \
             python3 python3-pip python3-venv \
             libgl1-mesa-dev libxt-dev mesa-common-dev libglew-dev \
             libxrender-dev libxcursor-dev libxinerama-dev libxi-dev \
@@ -113,7 +113,7 @@ jobs:
       - name: Install system build tools (macOS)
         if: inputs.platform == 'macos'
         run: |
-          brew install ninja autoconf automake libtool pkg-config libomp
+          brew install ninja autoconf automake libtool pkg-config libomp meson flex bison
           # Pin cmake to 3.x — Boost 1.86 cmake files are incompatible with cmake 4.x
           pip3 install --break-system-packages "cmake>=3.31,<4"
 

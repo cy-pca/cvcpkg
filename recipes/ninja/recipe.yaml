@@ -1,0 +1,61 @@
+schema_version: 1
+recipe:
+  name: ninja
+  upstream_version: "1.12.1"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  maintainer_email: "cvcpkg@cyberpcangel.com"
+  maintainer_url: "https://cyberpcangel.com"
+  homepage: https://ninja-build.org/
+  license: Apache-2.0
+  tags: [tools, build-system]
+  description: >-
+    Ninja — small, fast build system focused on speed.  Used as the
+    default CMake generator by cvcpkg.
+
+source:
+  type: tarball
+  url: https://github.com/ninja-build/ninja/archive/refs/tags/v1.12.1.tar.gz
+  sha256: "821bdff48a3f683bc4bb3b6f0b5fe7b2d647cf65d52aeb63328c91a6c6df285a"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - bin/ninja*
+
+toolchain:
+  cc:
+    min_version: "any"
+    description: "C++11-capable compiler"
+
+notes:
+  - title: "Self-bootstrapping build"
+    platforms: [linux, macos]
+    description: >-
+      Ninja bootstraps itself using its included configure.py script,
+      which builds the ninja binary without needing an existing ninja.
+  - title: "Windows uses pre-built binaries"
+    platforms: [windows]
+    description: >-
+      On Windows the recipe downloads pre-built ninja binaries from
+      the official GitHub release.
