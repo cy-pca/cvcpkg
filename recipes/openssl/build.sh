@@ -6,13 +6,20 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 
 cd "${CVC_SOURCE_DIR}"
 
-if [[ "${CVC_PLATFORM}" == "macos" ]]; then
-    TARGET="darwin64-arm64-cc"
-    [[ "$(uname -m)" == "x86_64" ]] && TARGET="darwin64-x86_64-cc"
-else
-    TARGET="linux-x86_64"
-    [[ "$(uname -m)" == "aarch64" ]] && TARGET="linux-aarch64"
-fi
+case "${CVC_PLATFORM}" in
+    macos)
+        TARGET="darwin64-arm64-cc"
+        [[ "$(uname -m)" == "x86_64" ]] && TARGET="darwin64-x86_64-cc"
+        ;;
+    freebsd|openbsd|netbsd)
+        TARGET="BSD-x86_64"
+        [[ "$(uname -m)" == "aarch64" ]] && TARGET="BSD-aarch64"
+        ;;
+    *)
+        TARGET="linux-x86_64"
+        [[ "$(uname -m)" == "aarch64" ]] && TARGET="linux-aarch64"
+        ;;
+esac
 
 ./Configure "${TARGET}" \
     --prefix="${CVC_INSTALL_DIR}" \

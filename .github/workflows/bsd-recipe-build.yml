@@ -1,0 +1,295 @@
+# BSD recipe-driven build for libcvc-deps.
+#
+# Builds recipes on BSD virtual machines (FreeBSD, OpenBSD, NetBSD)
+# hosted on the Incus cluster.  The workflow runs on self-hosted
+# Linux runners and SSH's into the target BSD VM to execute the build.
+#
+# Reusable from release.yml and ci.yml.
+
+name: BSD Recipe Build
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        description: "Target BSD platform (freebsd, openbsd, netbsd)"
+        required: true
+        type: string
+      config:
+        description: "Build config (release, debug)"
+        required: true
+        type: string
+      link:
+        description: "Link mode (shared, static)"
+        required: true
+        type: string
+      sha_suffix:
+        description: "Short SHA for CI builds (empty for tag releases)"
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  VCGLIB_VERSION: '2025.07'
+  VCGLIB_SHA256:  'e49fc9342d5476b3e39a5e1939b965b57c91d7a17b4f97b8c5eaf01228b16cf0'
+
+jobs:
+  build:
+    runs-on: ["self-hosted", "Linux", "X64", "cvcpkg-builder"]
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Compute artifact metadata
+        id: meta
+        shell: bash
+        run: |
+          VERSION=$(awk '/^[[:space:]]*VERSION[[:space:]]+[0-9]/{gsub(/[^0-9.]/,"",$2); print $2; exit}' CMakeLists.txt)
+          BTLC=$(echo "${{ inputs.config }}" | tr '[:upper:]' '[:lower:]')
+          LINKSFX=""
+          [ "${{ inputs.link }}" = "static" ] && LINKSFX="-static"
+          SHASFX=""
+          if [ -n "${{ inputs.sha_suffix }}" ]; then
+            short=$(echo "${{ inputs.sha_suffix }}" | cut -c1-7)
+            SHASFX="-${short}"
+          fi
+          ARCH=x86_64
+          STEM="libcvc-deps-${VERSION}${SHASFX}-${{ inputs.platform }}-${ARCH}-${BTLC}${LINKSFX}"
+          echo "version=$VERSION"   >> "$GITHUB_OUTPUT"
+          echo "arch=$ARCH"         >> "$GITHUB_OUTPUT"
+          echo "btlc=$BTLC"        >> "$GITHUB_OUTPUT"
+          echo "stem=$STEM"         >> "$GITHUB_OUTPUT"
+
+      - name: Resolve BSD VM connection
+        id: vm
+        shell: bash
+        run: |
+          case "${{ inputs.platform }}" in
+            freebsd)
+              echo "method=incus" >> "$GITHUB_OUTPUT"
+              echo "vm_name=freebsd-build" >> "$GITHUB_OUTPUT"
+              echo "python=python3.11" >> "$GITHUB_OUTPUT"
+              ;;
+            openbsd)
+              echo "method=ssh" >> "$GITHUB_OUTPUT"
+              echo "vm_name=openbsd-build" >> "$GITHUB_OUTPUT"
+              echo "host=${{ secrets.OPENBSD_HOST }}" >> "$GITHUB_OUTPUT"
+              echo "python=python3.12" >> "$GITHUB_OUTPUT"
+              ;;
+            netbsd)
+              echo "method=ssh" >> "$GITHUB_OUTPUT"
+              echo "vm_name=netbsd-build" >> "$GITHUB_OUTPUT"
+              echo "host=${{ secrets.NETBSD_HOST }}" >> "$GITHUB_OUTPUT"
+              echo "python=python3.13" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      # ── SSH key setup for OpenBSD/NetBSD ──
+      - name: Set up SSH key
+        if: steps.vm.outputs.method == 'ssh'
+        shell: bash
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "${{ secrets.BSD_SSH_PRIVATE_KEY }}" > ~/.ssh/bsd_build_key
+          chmod 600 ~/.ssh/bsd_build_key
+          # Accept host keys for BSD VMs
+          ssh-keyscan -H "${{ steps.vm.outputs.host }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      # ── Sync repository to BSD VM ──
+      - name: Sync repository to BSD VM
+        shell: bash
+        run: |
+          set -euo pipefail
+          REMOTE_DIR="/tmp/libcvc-deps-build-$$"
+
+          if [ "${{ steps.vm.outputs.method }}" = "incus" ]; then
+            # FreeBSD: use incus file push
+            incus exec "${{ steps.vm.outputs.vm_name }}" -- mkdir -p "${REMOTE_DIR}"
+            # tar up the repo (excluding .git and build artifacts) and push
+            tar cf - --exclude='.git' --exclude='build' --exclude='prefix' \
+              --exclude='dist' --exclude='__pycache__' --exclude='*.egg-info' . \
+              | incus exec "${{ steps.vm.outputs.vm_name }}" -- tar xf - -C "${REMOTE_DIR}"
+          else
+            # OpenBSD/NetBSD: use SSH/rsync
+            SSH_OPTS="-i ~/.ssh/bsd_build_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
+            ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" "mkdir -p ${REMOTE_DIR}"
+            tar cf - --exclude='.git' --exclude='build' --exclude='prefix' \
+              --exclude='dist' --exclude='__pycache__' --exclude='*.egg-info' . \
+              | ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" "tar xf - -C ${REMOTE_DIR}"
+          fi
+          echo "remote_dir=${REMOTE_DIR}" >> "$GITHUB_ENV"
+
+      # ── Install cvcpkg on BSD VM ──
+      - name: Install cvcpkg on BSD VM
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHON="${{ steps.vm.outputs.python }}"
+          INSTALL_CMD="${PYTHON} -m pip install --break-system-packages ./tools/cvcpkg || ${PYTHON} -m pip install ./tools/cvcpkg"
+          if [ "${{ steps.vm.outputs.method }}" = "incus" ]; then
+            incus exec "${{ steps.vm.outputs.vm_name }}" -- sh -c "cd ${remote_dir} && ${INSTALL_CMD}"
+          else
+            SSH_OPTS="-i ~/.ssh/bsd_build_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
+            ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" "cd ${remote_dir} && ${INSTALL_CMD}"
+          fi
+
+      # ── Build all recipes on BSD VM ──
+      - name: Build and package all recipes (cvcpkg pack-all)
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHON="${{ steps.vm.outputs.python }}"
+          BUILD_CMD="${PYTHON} -m cvcpkg pack-all \
+            --platform ${{ inputs.platform }} \
+            --config ${{ inputs.config }} \
+            --link ${{ inputs.link }} \
+            --prefix ${remote_dir}/prefix \
+            --output-dir ${remote_dir}/dist \
+            --recipes-dir recipes"
+
+          if [ "${{ steps.vm.outputs.method }}" = "incus" ]; then
+            incus exec "${{ steps.vm.outputs.vm_name }}" -- sh -c "cd ${remote_dir} && ${BUILD_CMD}"
+          else
+            SSH_OPTS="-i ~/.ssh/bsd_build_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
+            ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" "cd ${remote_dir} && ${BUILD_CMD}"
+          fi
+
+      # ── Install marker cmake config on BSD VM ──
+      - name: Install libcvc-deps marker config
+        shell: bash
+        run: |
+          set -euo pipefail
+          MARKER_CMD="cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ inputs.config == 'release' && 'Release' || 'Debug' }} \
+            -DCMAKE_INSTALL_PREFIX=${remote_dir}/prefix && \
+            cmake --install build"
+
+          if [ "${{ steps.vm.outputs.method }}" = "incus" ]; then
+            incus exec "${{ steps.vm.outputs.vm_name }}" -- sh -c "cd ${remote_dir} && ${MARKER_CMD}"
+          else
+            SSH_OPTS="-i ~/.ssh/bsd_build_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
+            ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" "cd ${remote_dir} && ${MARKER_CMD}"
+          fi
+
+      # ── Stage vcglib (header-only) ──
+      - name: Stage vcglib on BSD VM
+        shell: bash
+        run: |
+          set -euo pipefail
+          VCGLIB_URL="https://github.com/cnr-isti-vclab/vcglib/archive/refs/tags/${{ env.VCGLIB_VERSION }}.tar.gz"
+          STAGE_CMD="set -e && \
+            cd ${remote_dir} && \
+            curl -fsSL '${VCGLIB_URL}' -o vcglib.tar.gz && \
+            echo '${{ env.VCGLIB_SHA256 }}  vcglib.tar.gz' | sha256sum -c - || \
+            echo '${{ env.VCGLIB_SHA256 }}  vcglib.tar.gz' | shasum -a 256 -c - && \
+            mkdir -p vcglib-src && \
+            tar xf vcglib.tar.gz --strip-components=1 -C vcglib-src && \
+            mkdir -p prefix/include && \
+            cp -R vcglib-src/vcg prefix/include/vcg"
+
+          if [ "${{ steps.vm.outputs.method }}" = "incus" ]; then
+            incus exec "${{ steps.vm.outputs.vm_name }}" -- sh -c "${STAGE_CMD}"
+          else
+            SSH_OPTS="-i ~/.ssh/bsd_build_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
+            ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" "${STAGE_CMD}"
+          fi
+
+      # ── Patch RPATH to $ORIGIN on BSD (shared builds) ──
+      - name: Patch RPATH ($ORIGIN)
+        if: inputs.link == 'shared'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # BSD uses patchelf if available, otherwise the env scripts
+          # already set CMAKE_INSTALL_RPATH=$ORIGIN during build.
+          RPATH_CMD="set -e && \
+            PREFIX='${remote_dir}/prefix' && \
+            if command -v patchelf >/dev/null 2>&1; then \
+              find \"\${PREFIX}/lib\" -name '*.so*' -type f 2>/dev/null | while read -r so; do \
+                patchelf --remove-rpath \"\${so}\" 2>/dev/null || true; \
+                patchelf --set-rpath '\$ORIGIN' \"\${so}\" 2>/dev/null || true; \
+              done; \
+            else \
+              echo 'patchelf not available, relying on build-time RPATH'; \
+            fi"
+
+          if [ "${{ steps.vm.outputs.method }}" = "incus" ]; then
+            incus exec "${{ steps.vm.outputs.vm_name }}" -- sh -c "${RPATH_CMD}"
+          else
+            SSH_OPTS="-i ~/.ssh/bsd_build_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
+            ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" "${RPATH_CMD}"
+          fi
+
+      # ── Copy artifacts back from BSD VM ──
+      - name: Retrieve artifacts from BSD VM
+        shell: bash
+        run: |
+          set -euo pipefail
+          STEM="${{ steps.meta.outputs.stem }}"
+          mkdir -p "${{ github.workspace }}/dist"
+
+          if [ "${{ steps.vm.outputs.method }}" = "incus" ]; then
+            # Rename prefix to stem on the VM, tar it, and pull back
+            incus exec "${{ steps.vm.outputs.vm_name }}" -- sh -c \
+              "cd ${remote_dir} && mv prefix '${STEM}' && tar czf '${STEM}.tar.gz' '${STEM}'"
+            incus file pull "${{ steps.vm.outputs.vm_name }}${remote_dir}/${STEM}.tar.gz" \
+              "${{ github.workspace }}/${STEM}.tar.gz"
+            # Pull dist directory
+            incus exec "${{ steps.vm.outputs.vm_name }}" -- sh -c \
+              "cd ${remote_dir} && tar cf - dist" \
+              | tar xf - -C "${{ github.workspace }}"
+          else
+            SSH_OPTS="-i ~/.ssh/bsd_build_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
+            # Rename prefix to stem on the VM, tar it, and pull back
+            ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" \
+              "cd ${remote_dir} && mv prefix '${STEM}' && tar czf '${STEM}.tar.gz' '${STEM}'"
+            scp ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}:${remote_dir}/${STEM}.tar.gz" \
+              "${{ github.workspace }}/${STEM}.tar.gz"
+            # Pull dist directory
+            ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" \
+              "cd ${remote_dir} && tar cf - dist" \
+              | tar xf - -C "${{ github.workspace }}"
+          fi
+
+          du -sh "${{ github.workspace }}/${STEM}.tar.gz"
+          ls -la "${{ github.workspace }}/dist/"
+
+      # ── Clean up remote build directory ──
+      - name: Clean up BSD VM
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ steps.vm.outputs.method }}" = "incus" ]; then
+            incus exec "${{ steps.vm.outputs.vm_name }}" -- rm -rf "${remote_dir}" || true
+          else
+            SSH_OPTS="-i ~/.ssh/bsd_build_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
+            ssh ${SSH_OPTS} "root@${{ steps.vm.outputs.host }}" "rm -rf ${remote_dir}" || true
+          fi
+
+      # ── Clean up SSH key ──
+      - name: Clean up SSH key
+        if: always() && steps.vm.outputs.method == 'ssh'
+        shell: bash
+        run: rm -f ~/.ssh/bsd_build_key
+
+      # ── Upload artifacts ──
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.platform }}-${{ steps.meta.outputs.btlc }}-${{ inputs.link }}
+          path: |
+            ${{ steps.meta.outputs.stem }}.tar.gz
+          if-no-files-found: error
+
+      - name: Upload per-component bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: components-${{ inputs.platform }}-${{ steps.meta.outputs.btlc }}-${{ inputs.link }}
+          path: dist/
+          if-no-files-found: error

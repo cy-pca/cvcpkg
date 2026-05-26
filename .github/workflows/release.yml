@@ -195,6 +195,74 @@ jobs:
       runner: ${{ matrix.runner || '' }}
       sha_suffix: ${{ inputs.sha_suffix || '' }}
 
+  # ──────────────────────────── FreeBSD ────────────────────────────
+  # Build on FreeBSD VM via Incus on self-hosted runners.
+  # Only shared linking for now — static requires more testing.
+  freebsd:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - config: debug
+            link: shared
+          - config: release
+            link: shared
+          - config: debug
+            link: static
+          - config: release
+            link: static
+    uses: ./.github/workflows/bsd-recipe-build.yml
+    with:
+      platform: freebsd
+      config: ${{ matrix.config }}
+      link: ${{ matrix.link }}
+      sha_suffix: ${{ inputs.sha_suffix || '' }}
+    secrets: inherit
+
+  # ──────────────────────────── OpenBSD ────────────────────────────
+  openbsd:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - config: debug
+            link: shared
+          - config: release
+            link: shared
+          - config: debug
+            link: static
+          - config: release
+            link: static
+    uses: ./.github/workflows/bsd-recipe-build.yml
+    with:
+      platform: openbsd
+      config: ${{ matrix.config }}
+      link: ${{ matrix.link }}
+      sha_suffix: ${{ inputs.sha_suffix || '' }}
+    secrets: inherit
+
+  # ──────────────────────────── NetBSD ────────────────────────────
+  netbsd:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - config: debug
+            link: shared
+          - config: release
+            link: shared
+          - config: debug
+            link: static
+          - config: release
+            link: static
+    uses: ./.github/workflows/bsd-recipe-build.yml
+    with:
+      platform: netbsd
+      config: ${{ matrix.config }}
+      link: ${{ matrix.link }}
+      sha_suffix: ${{ inputs.sha_suffix || '' }}
+    secrets: inherit
+
   # ──────────────────────────── Release ────────────────────────────
   # ────────────────────── Publish per-component packages ──────────
   # Publish pre-built per-component archives to cvcpkg-server.
@@ -397,8 +465,158 @@ jobs:
             --token "$CVCPKG_TOKEN" \
             --release-tag "${{ github.ref_name }}"
 
+  publish-freebsd:
+    needs: [freebsd]
+    if: always() && needs.freebsd.result == 'success' && startsWith(github.ref, 'refs/tags/')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - config: debug
+            link: shared
+          - config: release
+            link: shared
+          - config: debug
+            link: static
+          - config: release
+            link: static
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install cvcpkg
+        run: pip install ./tools/cvcpkg
+      - name: Download per-component bundles
+        uses: actions/download-artifact@v4
+        with:
+          name: components-freebsd-${{ matrix.config }}-${{ matrix.link }}
+          path: dist/
+      - name: Publish to cvcpkg-server
+        env:
+          CVCPKG_SERVER_URL: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CVCPKG_TOKEN:-}" ]; then
+            echo "::warning::CVCPKG_PUBLISH_TOKEN secret not set — skipping publish"
+            exit 0
+          fi
+          archives=$(find dist \( -name '*.tar.gz' -o -name '*.zip' \) | sort)
+          if [ -z "$archives" ]; then
+            echo "::warning::No component archives to publish"
+            exit 0
+          fi
+          count=$(echo "$archives" | wc -l)
+          echo "Publishing $count archives (freebsd/${{ matrix.config }}/${{ matrix.link }}) to $CVCPKG_SERVER_URL ..."
+          cvcpkg publish $archives \
+            --server "$CVCPKG_SERVER_URL" \
+            --token "$CVCPKG_TOKEN" \
+            --release-tag "${{ github.ref_name }}"
+
+  publish-openbsd:
+    needs: [openbsd]
+    if: always() && needs.openbsd.result == 'success' && startsWith(github.ref, 'refs/tags/')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - config: debug
+            link: shared
+          - config: release
+            link: shared
+          - config: debug
+            link: static
+          - config: release
+            link: static
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install cvcpkg
+        run: pip install ./tools/cvcpkg
+      - name: Download per-component bundles
+        uses: actions/download-artifact@v4
+        with:
+          name: components-openbsd-${{ matrix.config }}-${{ matrix.link }}
+          path: dist/
+      - name: Publish to cvcpkg-server
+        env:
+          CVCPKG_SERVER_URL: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CVCPKG_TOKEN:-}" ]; then
+            echo "::warning::CVCPKG_PUBLISH_TOKEN secret not set — skipping publish"
+            exit 0
+          fi
+          archives=$(find dist \( -name '*.tar.gz' -o -name '*.zip' \) | sort)
+          if [ -z "$archives" ]; then
+            echo "::warning::No component archives to publish"
+            exit 0
+          fi
+          count=$(echo "$archives" | wc -l)
+          echo "Publishing $count archives (openbsd/${{ matrix.config }}/${{ matrix.link }}) to $CVCPKG_SERVER_URL ..."
+          cvcpkg publish $archives \
+            --server "$CVCPKG_SERVER_URL" \
+            --token "$CVCPKG_TOKEN" \
+            --release-tag "${{ github.ref_name }}"
+
+  publish-netbsd:
+    needs: [netbsd]
+    if: always() && needs.netbsd.result == 'success' && startsWith(github.ref, 'refs/tags/')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - config: debug
+            link: shared
+          - config: release
+            link: shared
+          - config: debug
+            link: static
+          - config: release
+            link: static
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install cvcpkg
+        run: pip install ./tools/cvcpkg
+      - name: Download per-component bundles
+        uses: actions/download-artifact@v4
+        with:
+          name: components-netbsd-${{ matrix.config }}-${{ matrix.link }}
+          path: dist/
+      - name: Publish to cvcpkg-server
+        env:
+          CVCPKG_SERVER_URL: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CVCPKG_TOKEN:-}" ]; then
+            echo "::warning::CVCPKG_PUBLISH_TOKEN secret not set — skipping publish"
+            exit 0
+          fi
+          archives=$(find dist \( -name '*.tar.gz' -o -name '*.zip' \) | sort)
+          if [ -z "$archives" ]; then
+            echo "::warning::No component archives to publish"
+            exit 0
+          fi
+          count=$(echo "$archives" | wc -l)
+          echo "Publishing $count archives (netbsd/${{ matrix.config }}/${{ matrix.link }}) to $CVCPKG_SERVER_URL ..."
+          cvcpkg publish $archives \
+            --server "$CVCPKG_SERVER_URL" \
+            --token "$CVCPKG_TOKEN" \
+            --release-tag "${{ github.ref_name }}"
+
   release:
-    needs: [linux, macos, windows, wasm, publish-linux, publish-macos, publish-windows, publish-wasm]
+    needs: [linux, macos, windows, wasm, freebsd, openbsd, netbsd, publish-linux, publish-macos, publish-windows, publish-wasm, publish-freebsd, publish-openbsd, publish-netbsd]
     runs-on: ubuntu-latest
     # Skip the release step entirely for manual workflow_dispatch
     # runs unless the workflow was triggered on a tag. Run even if
@@ -461,7 +679,7 @@ jobs:
   # a per-platform publish step was interrupted) and logs the total
   # count.  It runs regardless of the release job outcome.
   publish-to-server:
-    needs: [publish-linux, publish-macos, publish-windows, publish-wasm]
+    needs: [publish-linux, publish-macos, publish-windows, publish-wasm, publish-freebsd, publish-openbsd, publish-netbsd]
     runs-on: ubuntu-latest
     if: |
       always()

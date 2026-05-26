@@ -8,7 +8,7 @@ import sys
 
 
 def detect_platform() -> str:
-    """Return 'linux', 'macos', or 'windows'."""
+    """Return 'linux', 'macos', 'windows', 'freebsd', 'openbsd', or 'netbsd'."""
     s = sys.platform
     if s.startswith("linux"):
         return "linux"
@@ -16,6 +16,12 @@ def detect_platform() -> str:
         return "macos"
     if s in ("win32", "cygwin"):
         return "windows"
+    if s.startswith("freebsd"):
+        return "freebsd"
+    if s.startswith("openbsd"):
+        return "openbsd"
+    if s.startswith("netbsd"):
+        return "netbsd"
     raise RuntimeError(f"unsupported platform: {s}")
 
 
@@ -41,6 +47,12 @@ def detect_libc() -> str:
         return "msvcrt"
     if plat == "macos":
         return "libc++ABI"
+    if plat == "freebsd":
+        return "freebsd-libc"
+    if plat == "openbsd":
+        return "openbsd-libc"
+    if plat == "netbsd":
+        return "netbsd-libc"
     # Linux: try to distinguish glibc vs musl.
     try:
         import ctypes
