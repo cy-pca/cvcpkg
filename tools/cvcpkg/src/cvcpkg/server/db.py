@@ -80,7 +80,7 @@ class PackageRow(Base):
         default="",
         server_default="",
     )
-    description: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     homepage: Mapped[str] = mapped_column(
         String(512), nullable=False, default="", server_default=""
     )
@@ -88,7 +88,7 @@ class PackageRow(Base):
     maintainer: Mapped[str] = mapped_column(
         String(255), nullable=False, default="", server_default=""
     )
-    tags: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    tags: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
     org_slug: Mapped[str] = mapped_column(
         String(64),
