@@ -13,7 +13,8 @@ import json
 import secrets
 from pathlib import Path
 
-from sqlalchemy import select, func as sa_func, update
+from sqlalchemy import func as sa_func
+from sqlalchemy import select, update
 
 from cvcpkg.server.db import (
     AuditRow,
@@ -68,8 +69,9 @@ class DbTokenStore:
         async with get_session() as session:
             existing = await session.execute(
                 select(TokenRow).where(
-                    TokenRow.name == name, TokenRow.revoked == False
-                )  # noqa: E712
+                    TokenRow.name == name,
+                    TokenRow.revoked == False,  # noqa: E712
+                )
             )
             if existing.scalars().first() is not None:
                 raise ValueError(f"active token named '{name}' already exists")
@@ -342,8 +344,8 @@ class DbPackageIndex:
         async with get_session() as session:
             result = await session.execute(
                 select(PackageRow)
-                .where(PackageRow.yanked == False)
-                .order_by(PackageRow.name)  # noqa: E712
+                .where(PackageRow.yanked == False)  # noqa: E712
+                .order_by(PackageRow.name)
             )
             bundles = [
                 {

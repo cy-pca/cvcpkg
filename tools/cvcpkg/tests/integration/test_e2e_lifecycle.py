@@ -515,7 +515,7 @@ class TestAuditTrailVerification:
         publish_entries = [e for e in entries if e["action"] == "publish"]
         assert len(publish_entries) >= 1
         assert "zlib" in publish_entries[0]["target"]
-        assert "e2e-publisher" == publish_entries[0]["actor"]
+        assert publish_entries[0]["actor"] == "e2e-publisher"
 
 
 class TestCleanup:

@@ -20,8 +20,8 @@ Tables:
 from __future__ import annotations
 
 import datetime
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 from sqlalchemy import (
     BigInteger,
