@@ -841,25 +841,6 @@ def _footer_frag() -> str:
 </footer>"""
 
 
-# ── Helpers JS (shared) ─────────────────────────────────────────
-
-_HELPERS_JS = r"""
-function esc(s) {
-  if (s == null) return '';
-  const div = document.createElement('div');
-  div.appendChild(document.createTextNode(String(s)));
-  return div.innerHTML;
-}
-function fmtSize(bytes) {
-  if (!bytes) return '\u2014';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  let i = 0, sz = bytes;
-  while (sz >= 1024 && i < units.length - 1) { sz /= 1024; i++; }
-  return sz.toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
-}
-"""
-
-
 # ── Organizations listing page ───────────────────────────────────
 
 
