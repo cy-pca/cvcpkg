@@ -482,7 +482,9 @@ def create_app(
             return JSONResponse({"forward": {}, "reverse": {}})
 
         forward: dict[str, list[str]] = {}
+        meta: dict[str, dict[str, str]] = {}
         for r in recipes:
+            recipe_block = r.raw.get("recipe", {})
             build_deps = r.raw.get("depends", {}).get("build", [])
             names: list[str] = []
             for d in build_deps:
@@ -491,13 +493,20 @@ def create_app(
                 elif isinstance(d, dict):
                     names.append(d["name"])
             forward[r.name] = names
+            meta[r.name] = {
+                "description": recipe_block.get("description", ""),
+                "homepage": recipe_block.get("homepage", ""),
+                "license": recipe_block.get("license", ""),
+                "maintainer": recipe_block.get("maintainer", ""),
+                "maintainer_email": recipe_block.get("maintainer_email", ""),
+            }
 
         reverse: dict[str, list[str]] = {}
         for pkg, deps in forward.items():
             for dep in deps:
                 reverse.setdefault(dep, []).append(pkg)
 
-        return JSONResponse({"forward": forward, "reverse": reverse})
+        return JSONResponse({"forward": forward, "reverse": reverse, "meta": meta})
 
     # ── Packages (read) ─────────────────────────────────────
 

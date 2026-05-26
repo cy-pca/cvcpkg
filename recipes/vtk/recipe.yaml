@@ -4,6 +4,8 @@ recipe:
   upstream_version: "9.5.0"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
+  maintainer_email: "joe@angelx.dev"
+  description: "VTK — the Visualization Toolkit, an open-source system for 3D computer graphics, image processing, and visualization."
   homepage: https://vtk.org/
   license: BSD-3-Clause
   tags: [graphics]
