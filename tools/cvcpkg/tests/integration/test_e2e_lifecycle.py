@@ -71,31 +71,21 @@ def _make_fake_archive(files: dict[str, bytes]) -> bytes:
     return buf.getvalue()
 
 
-def _exec_in_backend(*cmd: str) -> str:
-    """Run a command inside the backend container via docker compose exec."""
-    full_cmd = [
-        "docker",
-        "compose",
-        "-f",
-        "docker-compose.test.yml",
-        "exec",
-        "-T",
-        "backend",
-        *cmd,
-    ]
-    # Compose files live in tools/cvcpkg/
-    try:
-        cwd = Path(__file__).resolve().parents[2]
-    except IndexError:
-        pytest.skip("cannot resolve cvcpkg root from inside container")
+def _run_cli(*cmd: str) -> str:
+    """Run a cvcpkg-server CLI command directly.
+
+    The test container has ``cvcpkg-server`` installed and
+    ``CVCPKG_DATABASE_URL`` set by docker-compose.test.yml, so we
+    can invoke the CLI without ``docker compose exec``.
+    """
     result = subprocess.run(
-        full_cmd,
+        list(cmd),
         capture_output=True,
         text=True,
-        cwd=str(cwd),
+        timeout=30,
     )
     if result.returncode != 0:
-        pytest.skip(f"docker exec failed: {result.stderr.strip()}")
+        pytest.skip(f"CLI command failed: {result.stderr.strip()}")
     return result.stdout.strip()
 
 
@@ -111,8 +101,8 @@ def client():
 
 @pytest.fixture(scope="module")
 def admin_token():
-    """Bootstrap admin token via CLI exec in the backend container."""
-    output = _exec_in_backend(
+    """Bootstrap admin token via the cvcpkg-server CLI."""
+    output = _run_cli(
         "cvcpkg-server",
         "token",
         "create",
@@ -121,7 +111,7 @@ def admin_token():
         "--role",
         "admin",
         "--state-dir",
-        "/app/data",
+        "/tmp/cvcpkg-e2e-state",
     )
     for line in output.split("\n"):
         line = line.strip()

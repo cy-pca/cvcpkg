@@ -30,6 +30,18 @@ from cvcpkg.server.app import create_app
 from cvcpkg.server.auth import TokenStore
 from cvcpkg.server.models import TokenRole
 
+# ── Module-wide env cleanup ─────────────────────────────────────
+# These tests use in-process TestClient with file-based TokenStore.
+# When running inside the Docker test container, CVCPKG_DATABASE_URL
+# is set, which causes create_app() to use DbTokenStore instead —
+# creating a mismatch.  Clear it for this entire module.
+
+
+@pytest.fixture(autouse=True)
+def _clear_database_url(monkeypatch):
+    monkeypatch.delenv("CVCPKG_DATABASE_URL", raising=False)
+
+
 # ── Helpers ─────────────────────────────────────────────────────
 
 
