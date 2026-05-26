@@ -332,6 +332,15 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
         if emsdk_env.is_file():
             env["CVC_EMSDK_DIR"] = str(ctx.prefix)
 
+    # Ensure host tools built into the prefix (cmake, ninja, protoc,
+    # etc.) are found before system versions.
+    bin_dirs = [
+        str((ctx.prefix / "bin").resolve()),
+        str((ctx.install_dir / "bin").resolve()),
+    ]
+    existing_path = env.get("PATH", "")
+    env["PATH"] = os.pathsep.join(bin_dirs + ([existing_path] if existing_path else []))
+
     # Ensure shared-library dependencies installed in the prefix are
     # discoverable at build time.  Build steps may invoke tools (e.g.
     # gRPC running protoc) that link against shared libs from earlier
@@ -773,10 +782,16 @@ def _dep_names(recipe: Recipe, platform: str = "") -> list[str]:
 
     If *platform* is given, dependencies with a ``platforms`` list that
     does not include *platform* are skipped.
+
+    Both ``depends.build`` and ``depends.host_tools`` entries are
+    returned so that host tools (cmake, ninja, etc.) are built before
+    recipes that need them.
     """
-    depends = recipe.raw.get("depends", {}).get("build", [])
+    depends = recipe.raw.get("depends", {})
+    build_deps = depends.get("build", [])
+    host_tools = depends.get("host_tools", [])
     names: list[str] = []
-    for d in depends:
+    for d in build_deps:
         if isinstance(d, str):
             names.append(d)
         elif isinstance(d, dict):
@@ -784,6 +799,11 @@ def _dep_names(recipe: Recipe, platform: str = "") -> list[str]:
             if plats and platform and platform not in plats:
                 continue
             names.append(d["name"])
+    for t in host_tools:
+        if isinstance(t, str):
+            names.append(t)
+        elif isinstance(t, dict):
+            names.append(t["name"])
     return names
 
 
