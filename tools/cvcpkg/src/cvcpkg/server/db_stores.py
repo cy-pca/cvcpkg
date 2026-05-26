@@ -14,7 +14,7 @@ import secrets
 from pathlib import Path
 
 from sqlalchemy import func as sa_func
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 
 from cvcpkg.server.db import (
     AuditRow,
@@ -292,6 +292,7 @@ class DbPackageIndex:
         name: str = "",
         platform: str = "",
         release: str = "",
+        search: str = "",
         limit: int = 1000,
         offset: int = 0,
     ) -> tuple[list[PackageInfo], int]:
@@ -307,6 +308,23 @@ class DbPackageIndex:
             if release:
                 q = q.where(PackageRow.release_tag == release)
                 count_q = count_q.where(PackageRow.release_tag == release)
+            if search:
+                like_pat = f"%{search}%"
+                search_filter = or_(
+                    PackageRow.name.ilike(like_pat),
+                    PackageRow.version.ilike(like_pat),
+                    PackageRow.platform.ilike(like_pat),
+                    PackageRow.arch.ilike(like_pat),
+                    PackageRow.build_type.ilike(like_pat),
+                    PackageRow.link.ilike(like_pat),
+                    PackageRow.description.ilike(like_pat),
+                    PackageRow.tags.ilike(like_pat),
+                    PackageRow.maintainer.ilike(like_pat),
+                    PackageRow.license.ilike(like_pat),
+                    PackageRow.release_tag.ilike(like_pat),
+                )
+                q = q.where(search_filter)
+                count_q = count_q.where(search_filter)
 
             total_result = await session.execute(count_q)
             total = total_result.scalar() or 0
@@ -334,6 +352,11 @@ class DbPackageIndex:
                     key_fingerprint=row.key_fingerprint,
                     release_tag=row.release_tag,
                     recipe_version=row.recipe_version,
+                    description=row.description,
+                    homepage=row.homepage,
+                    license=row.license,
+                    maintainer=row.maintainer,
+                    tags=row.tags,
                 )
                 for row in result.scalars().all()
             ]
@@ -403,6 +426,11 @@ class DbPackageIndex:
         key_fingerprint: str = "",
         release_tag: str = "",
         recipe_version: str = "",
+        description: str = "",
+        homepage: str = "",
+        pkg_license: str = "",
+        maintainer: str = "",
+        tags: str = "",
     ) -> None:
         async with get_session() as session:
             row = PackageRow(
@@ -419,6 +447,11 @@ class DbPackageIndex:
                 key_fingerprint=key_fingerprint,
                 release_tag=release_tag,
                 recipe_version=recipe_version,
+                description=description,
+                homepage=homepage,
+                license=pkg_license,
+                maintainer=maintainer,
+                tags=tags,
             )
             session.add(row)
 
