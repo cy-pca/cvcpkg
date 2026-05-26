@@ -55,10 +55,8 @@ build:
       env:
         CXXFLAGS: "-O2 -std=c++17"
     - platform: wasm
-      host_platform: macos
-      script: build-wasm.sh
-      env:
-        MACOSX_DEPLOYMENT_TARGET: "13.0"
+      host_platform: windows
+      script: build-wasm.ps1
 
 package:
   files:

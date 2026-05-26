@@ -1481,6 +1481,11 @@ def _auto_platform(platform: str) -> str:
     default=True,
     help="Also build dependencies in order (default: --with-deps).",
 )
+@click.option(
+    "--host-platform",
+    default="",
+    help="Host platform for cross-compilation (e.g. linux, macos, windows).",
+)
 def build(
     recipe: tuple[str, ...],
     platform: str,
@@ -1490,6 +1495,7 @@ def build(
     keep_build_dir: bool,
     recipes_dirs: tuple[str, ...],
     with_deps: bool,
+    host_platform: str,
 ) -> None:
     """Build one or more recipes from source.
 
@@ -1587,6 +1593,7 @@ def build(
                 link=link,
                 prefix=prefix_path,
                 keep_build_dir=keep_build_dir,
+                host_platform=host_platform,
             )
     else:
         for name in recipe:
@@ -1598,6 +1605,7 @@ def build(
                 link=link,
                 prefix=prefix_path,
                 keep_build_dir=keep_build_dir,
+                host_platform=host_platform,
             )
 
 
@@ -1680,6 +1688,11 @@ def pack(
 @click.option("--prefix", type=click.Path(), default=None, help="Shared install prefix.")
 @_keep_build_opt
 @_recipes_dir_opt
+@click.option(
+    "--host-platform",
+    default="",
+    help="Host platform for cross-compilation (e.g. linux, macos, windows).",
+)
 def build_all_cmd(
     platform: str,
     config: str,
@@ -1687,6 +1700,7 @@ def build_all_cmd(
     prefix: str | None,
     keep_build_dir: bool,
     recipes_dirs: tuple[str, ...],
+    host_platform: str,
 ) -> None:
     """Build all recipes in dependency order.
 
@@ -1715,6 +1729,7 @@ def build_all_cmd(
         link=link,
         prefix=prefix_path,
         keep_build_dir=keep_build_dir,
+        host_platform=host_platform,
     )
 
 
@@ -1736,6 +1751,19 @@ def build_all_cmd(
     default=None,
     help="Path to Ed25519 private key to sign archives.",
 )
+@click.option(
+    "--host-platform",
+    default="",
+    help="Host platform for cross-compilation (e.g. linux, macos, windows). "
+    "Selects the matching build script when multiple host_platform entries exist.",
+)
+@click.option(
+    "--shard",
+    default="",
+    help="Recipe shard in INDEX/TOTAL format (e.g. 0/3). "
+    "Only recipes assigned to this shard are packaged; "
+    "their dependencies are still built.",
+)
 def pack_all_cmd(
     platform: str,
     config: str,
@@ -1746,6 +1774,8 @@ def pack_all_cmd(
     recipes_dirs: tuple[str, ...],
     maintainer: str,
     signing_key: str | None,
+    host_platform: str,
+    shard: str,
 ) -> None:
     """Build and archive all recipes.
 
@@ -1758,6 +1788,11 @@ def pack_all_cmd(
     Example:
       cvcpkg pack-all --platform linux --config release --link shared \\
           --output-dir ./dist --recipes-dir recipes
+    \b
+      # Shard across 3 hosts for parallel wasm builds:
+      cvcpkg pack-all --platform wasm --shard 0/3 --host-platform linux ...
+      cvcpkg pack-all --platform wasm --shard 1/3 --host-platform macos ...
+      cvcpkg pack-all --platform wasm --shard 2/3 --host-platform windows ...
     """
     from cvcpkg.builder import (
         build_all,
@@ -1784,6 +1819,19 @@ def pack_all_cmd(
         all_recipe_list = list_recipes(rdirs[0])
     all_recipes = {r.name: r for r in all_recipe_list}
 
+    # Parse shard spec
+    shard_tuple: tuple[int, int] | None = None
+    if shard:
+        try:
+            idx_s, total_s = shard.split("/")
+            shard_tuple = (int(idx_s), int(total_s))
+            if shard_tuple[0] < 0 or shard_tuple[0] >= shard_tuple[1]:
+                raise ValueError
+        except (ValueError, TypeError):
+            raise click.BadParameter(
+                f"Invalid shard format '{shard}'. Expected INDEX/TOTAL (e.g. 0/3)."
+            )
+
     contexts = build_all(
         rdirs if len(rdirs) > 1 else rdirs[0],
         platform=plat,
@@ -1792,6 +1840,8 @@ def pack_all_cmd(
         prefix=prefix_path,
         keep_build_dir=keep_build_dir,
         per_component=True,
+        host_platform=host_platform,
+        shard=shard_tuple,
     )
 
     output.mkdir(parents=True, exist_ok=True)

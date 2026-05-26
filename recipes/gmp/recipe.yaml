@@ -9,7 +9,7 @@ recipe:
   description: "GMP — the GNU Multiple Precision Arithmetic Library for arbitrary precision integer, rational, and floating-point arithmetic."
   homepage: https://gmplib.org/
   license: LGPL-3.0-or-later
-  tags: [math]
+  tags: [math, wasm]
 
 source:
   type: tarball
@@ -21,7 +21,9 @@ source:
 patches: []
 
 depends:
-  build: []
+  build: 
+    - name: emsdk
+      version: ">=5.0"
   host_tools:
     - make
 
@@ -38,6 +40,12 @@ build:
     - platform: windows
       script: build.ps1
       vcpkg_port: gmp
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
 
 package:
   files:

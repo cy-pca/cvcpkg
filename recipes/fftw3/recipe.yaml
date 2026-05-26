@@ -9,7 +9,7 @@ recipe:
   description: "FFTW — a library for computing discrete Fourier transforms with high performance."
   homepage: https://fftw.org/
   license: GPL-2.0-or-later
-  tags: [math]
+  tags: [math, wasm]
 
 source:
   type: tarball
@@ -20,7 +20,9 @@ source:
 patches: []
 
 depends:
-  build: []
+  build: 
+    - name: emsdk
+      version: ">=5.0"
   host_tools:
     - cmake
     - ninja
@@ -38,6 +40,12 @@ build:
     - platform: windows
       script: build.ps1
       vcpkg_port: fftw3
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
 
 package:
   files:

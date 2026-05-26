@@ -9,7 +9,7 @@ recipe:
   description: "HDF5 — a data model, library, and file format for storing and managing large, complex data."
   homepage: https://www.hdfgroup.org/solutions/hdf5/
   license: BSD-3-Clause
-  tags: [io]
+  tags: [io, wasm]
 
 source:
   type: tarball
@@ -23,6 +23,8 @@ depends:
   build:
     - name: zlib
       version: "^1.3"
+    - name: emsdk
+      version: ">=5.0"
   host_tools:
     - cmake
     - ninja
@@ -42,6 +44,12 @@ build:
       script: build.ps1
       vcpkg_port: hdf5
       vcpkg_features: ["cpp"]
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
 
 package:
   files:

@@ -9,7 +9,7 @@ recipe:
   description: "levmar — a Levenberg-Marquardt nonlinear least squares algorithm in C/C++."
   homepage: https://users.ics.forth.gr/~lourakis/levmar/
   license: GPL-2.0-or-later
-  tags: [math]
+  tags: [math, wasm]
 
 source:
   # Vendored in third-party/levmar/upstream/ because the upstream
@@ -29,6 +29,8 @@ depends:
     - name: clapack
       version: ">=3.2"
       platforms: [windows]
+    - name: emsdk
+      version: ">=5.0"
   host_tools:
     - cmake
     - ninja
@@ -45,6 +47,12 @@ build:
         MACOSX_DEPLOYMENT_TARGET: "13.0"
     - platform: windows
       script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
 
 package:
   files:
