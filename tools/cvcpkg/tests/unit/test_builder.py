@@ -710,10 +710,11 @@ class TestResolveBuildOrder:
             resolve_build_order([a, b])
 
     def test_missing_dep(self, tmp_path):
-        """Dependency on a recipe not in the list should raise RecipeError."""
+        """Dependency on a recipe not in the list is silently skipped (assumed pre-installed)."""
         a = self._make_recipe(tmp_path, "a", deps=["missing"])
-        with pytest.raises(RecipeError, match="Unknown dependency"):
-            resolve_build_order([a])
+        order = resolve_build_order([a])
+        names = [r.name for r in order]
+        assert names == ["a"]
 
     def test_dict_style_deps(self, tmp_path):
         """Dependencies can also be specified as dicts with a 'name' key."""
