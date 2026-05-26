@@ -174,17 +174,33 @@ let searchTerm = '';
 let platformFilter = '';
 let releaseFilter = '';
 
+let recipeMeta = {};
+
 async function init() {
   try {
     const resp = await fetch('/v1/packages?limit=1000');
     const data = await resp.json();
     allPackages = data.packages || [];
-    updateStats();
-    render();
   } catch (err) {
     document.getElementById('pkg-body').innerHTML =
       '<tr><td colspan="6" class="has-text-centered has-text-grey-light">Failed to load packages.</td></tr>';
+    return;
   }
+  // Fetch recipe metadata for license/description fallback
+  try {
+    const dresp = await fetch('/v1/deps');
+    const ddata = await dresp.json();
+    recipeMeta = ddata.meta || {};
+    // Enrich packages with recipe metadata when DB fields are empty
+    allPackages.forEach(p => {
+      const m = recipeMeta[p.name];
+      if (!m) return;
+      if (!p.license && m.license) p.license = m.license;
+      if (!p.description && m.description) p.description = m.description;
+    });
+  } catch (_) {}
+  updateStats();
+  render();
 }
 
 function updateStats() {
@@ -532,13 +548,18 @@ async function init(name) {
 }
 
 function renderDeps(forward, reverse, meta) {
-  // Fill in description/maintainer from recipe if not in package data
+  // Fill in description/license/maintainer from recipe if not in package data
   const m = meta[pkgName];
   if (m) {
     const descEl = document.getElementById('pkg-description');
     if (descEl && !descEl.textContent && m.description) {
       descEl.textContent = m.description;
       descEl.style.display = '';
+    }
+    const licEl = document.getElementById('pkg-license');
+    if (licEl && !licEl.textContent && m.license) {
+      licEl.textContent = m.license;
+      licEl.style.display = '';
     }
     if (m.maintainer_email) {
       const maintEl = document.getElementById('pkg-maintainer');
@@ -637,8 +658,9 @@ function renderInfo() {
     el.parentElement.style.display = '';
   }
   if (p.license) {
-    document.getElementById('pkg-license').textContent = p.license;
-    document.getElementById('pkg-license').parentElement.style.display = '';
+    const el = document.getElementById('pkg-license');
+    el.textContent = p.license;
+    el.style.display = '';
   }
   if (p.maintainer) {
     document.getElementById('pkg-maintainer').textContent = p.maintainer;
@@ -759,15 +781,13 @@ def package_detail_html(name: str) -> str:
           <span class="icon mr-2"><i class="fas fa-cube"></i></span>
           <span id="pkg-title">{safe_name}</span>
           <span class="tag is-link is-rounded is-medium ml-3" id="pkg-version">&hellip;</span>
+          <span class="tag is-warning is-rounded is-medium ml-2" id="pkg-license" style="display:none"></span>
         </h1>
         <p class="subtitle is-5 has-text-grey-lighter" id="pkg-description" style="display:none"></p>
 
         <div class="content">
           <div style="display:none"><strong class="has-text-grey-light">Homepage:</strong>
             <a id="pkg-homepage" href="#" class="has-text-link" target="_blank" rel="noopener noreferrer"></a>
-          </div>
-          <div style="display:none"><strong class="has-text-grey-light">License:</strong>
-            <span id="pkg-license" class="tag is-dark is-rounded"></span>
           </div>
           <div style="display:none"><strong class="has-text-grey-light">Maintainer:</strong>
             <span id="pkg-maintainer"></span>
