@@ -510,12 +510,14 @@ def create_app(
             for dep in deps:
                 reverse.setdefault(dep, []).append(pkg)
 
-        return JSONResponse({
-            "forward": forward,
-            "reverse": reverse,
-            "meta": meta,
-            "recipe_names": recipe_names,
-        })
+        return JSONResponse(
+            {
+                "forward": forward,
+                "reverse": reverse,
+                "meta": meta,
+                "recipe_names": recipe_names,
+            }
+        )
 
     # ── Recipe content (read) ──────────────────────────────
 

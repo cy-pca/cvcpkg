@@ -61,6 +61,7 @@ def _free_port() -> int:
 def _run_server(db_url: str, port: int, state_dir: str) -> None:
     """Start the cvcpkg-server in this process.  Called by multiprocessing."""
     os.environ["CVCPKG_DATABASE_URL"] = db_url
+    os.environ["CVCPKG_SERVER_STATE_DIR"] = state_dir
     import uvicorn
 
     from cvcpkg.server.app import create_app  # noqa: E402

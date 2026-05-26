@@ -45,6 +45,20 @@ properties:
   abi:
     $ref: "#/$defs/abi_block"
 
+  notes:
+    oneOf:
+      - type: string
+      - type: array
+        items:
+          type: object
+    description: "Human-readable build notes or special instructions"
+
+  toolchain:
+    oneOf:
+      - type: string
+      - type: object
+    description: "Toolchain requirements (e.g. cmake, autotools, meson)"
+
 $defs:
   recipe_block:
     type: object
@@ -61,6 +75,14 @@ $defs:
         minimum: 1
       maintainer:
         type: string
+      maintainer_email:
+        type: string
+      maintainer_url:
+        type: string
+        format: uri
+      description:
+        type: string
+        description: "Short human-readable description of the component"
       homepage:
         type: string
         format: uri
@@ -81,7 +103,7 @@ $defs:
     properties:
       type:
         type: string
-        enum: [tarball, git, vcpkg, brew, apt, vendored]
+        enum: [tarball, git, vcpkg, brew, apt, vendored, prebuilt]
       url:
         type: string
         format: uri
@@ -113,6 +135,18 @@ $defs:
       baseline:
         type: string
         description: "vcpkg baseline pin"
+      base_url:
+        type: string
+        format: uri
+        description: "Base URL for prebuilt artifact downloads"
+      artifacts:
+        type: object
+        additionalProperties:
+          oneOf:
+            - type: string
+            - type: object
+              additionalProperties: { type: string }
+        description: "Platform-keyed map of prebuilt artifact filenames and checksums"
 
   depends_block:
     type: object
@@ -141,7 +175,7 @@ $defs:
         type: array
         items:
           type: string
-          enum: [linux, macos, windows]
+          enum: [linux, macos, windows, wasm]
         minItems: 1
         description: "Platforms this dependency applies to (omit for all)"
 
@@ -150,6 +184,9 @@ $defs:
     required: [matrix]
     additionalProperties: false
     properties:
+      build_type_independent:
+        type: boolean
+        description: "If true, only one config (Release) is built"
       matrix:
         type: array
         items:
@@ -163,7 +200,11 @@ $defs:
     properties:
       platform:
         type: string
+        enum: [linux, macos, windows, wasm]
+      host_platform:
+        type: string
         enum: [linux, macos, windows]
+        description: "Host platform for cross-compilation (e.g. linux for wasm builds)"
       script:
         type: string
       vcpkg_port:
@@ -180,7 +221,7 @@ $defs:
 
   package_block:
     type: object
-    required: [files, cmake_packages]
+    required: [files]
     additionalProperties: false
     properties:
       files:
@@ -223,3 +264,7 @@ $defs:
       crt_link:
         type: string
         enum: [dynamic, static]
+      link:
+        type: string
+        enum: [static, shared]
+        description: "Link type for this component"
