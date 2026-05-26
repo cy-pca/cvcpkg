@@ -14,7 +14,7 @@ recipe:
 source:
   type: tarball
   url: https://www.mpfr.org/mpfr-4.2.1/mpfr-4.2.1.tar.xz
-  sha256: "e582e8bfc4e229b288c151c7e96e6d26e6b3fe7fb4af586bb45de3fe107fbc57"
+  sha256: "277807353a6726978996945af13e52829e3abd7a9a5b7fb2793894e18f1fcbb2"
   strip_components: 1
 
 patches: []
