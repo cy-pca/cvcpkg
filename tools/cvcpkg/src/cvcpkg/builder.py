@@ -503,6 +503,7 @@ def generate_manifest(
     *,
     maintainer: str = "",
     all_recipes: dict[str, Recipe] | None = None,
+    org_slug: str = "",
 ) -> dict[str, Any]:
     """Generate a bundle manifest.yaml from the recipe + installed tree.
 
@@ -544,6 +545,7 @@ def generate_manifest(
             "config": config,
             "link": link,
             "abi": abi,
+            **({"org": org_slug} if org_slug else {}),
         },
         "depends": dep_list,
         "contents": {

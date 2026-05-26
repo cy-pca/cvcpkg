@@ -29,7 +29,7 @@ from pathlib import Path
 import yaml
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 
 from cvcpkg import __version__
 from cvcpkg.server.audit import AuditLog
@@ -246,6 +246,17 @@ async def optional_reader_auth(authorization: str | None = Header(None)) -> Toke
     if record is None:
         raise HTTPException(401, "invalid or expired token")
     return record
+
+
+async def optional_token(authorization: str | None = Header(None)) -> TokenRecord | None:
+    """Try to resolve a bearer token if present, but never require it."""
+    raw = _extract_token(authorization)
+    if raw is None:
+        return None
+    if _use_db:
+        return await _db_tokens.verify(raw)
+    state = _get_state()
+    return state.tokens.verify(raw)
 
 
 # ── App factory ─────────────────────────────────────────────────
@@ -1409,6 +1420,7 @@ def create_app(
                 description=body.description,
                 logo_url=body.logo_url,
                 homepage=body.homepage,
+                is_private=body.is_private,
                 created_by=actor.name,
                 storage_limit_bytes=ORG_STORAGE_LIMIT_BYTES,
             )
@@ -1429,16 +1441,28 @@ def create_app(
     ):
         if not _use_db or _db_orgs is None:
             return OrgListResponse(total=0, organizations=[])
-        orgs, total = await _db_orgs.list_orgs(limit=limit, offset=offset)
+        orgs, total = await _db_orgs.list_orgs(
+            limit=limit, offset=offset, include_private=False,
+        )
         return OrgListResponse(total=total, organizations=orgs)
 
     @app.get("/v1/orgs/{slug}", response_model=OrgDetailResponse, tags=["organizations"])
-    async def get_org(slug: str):
+    async def get_org(
+        slug: str,
+        caller: TokenRecord | None = Depends(optional_token),
+    ):
         if not _use_db or _db_orgs is None:
             raise HTTPException(404, "organization not found")
         org = await _db_orgs.get(slug)
         if org is None:
             raise HTTPException(404, f"organization '{slug}' not found")
+        # Private orgs are only visible to members and admins
+        if org.is_private:
+            caller_name = caller.name if caller else None
+            is_admin = caller is not None and caller.role == TokenRole.admin
+            is_member = caller_name is not None and await _db_orgs.is_member(slug, caller_name)
+            if not is_admin and not is_member:
+                raise HTTPException(404, f"organization '{slug}' not found")
         members = await _db_orgs.get_members(slug)
         packages, _ = await _db_packages.get_bundles(org_slug=slug)
         return OrgDetailResponse(org=org, members=members, packages=packages)
@@ -1459,6 +1483,7 @@ def create_app(
             description=body.description,
             logo_url=body.logo_url,
             homepage=body.homepage,
+            is_private=body.is_private,
         )
         if updated is None:
             raise HTTPException(404, f"organization '{slug}' not found")
@@ -1468,6 +1493,67 @@ def create_app(
             target=slug,
         )
         return updated
+
+    @app.post("/v1/orgs/{slug}/logo", tags=["organizations"])
+    async def upload_org_logo(
+        slug: str,
+        file: UploadFile,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Upload an organization logo image (PNG, JPEG, SVG, WebP; max 512 KB)."""
+        if not _use_db or _db_orgs is None:
+            raise HTTPException(501, "organizations require database backend")
+        if not await _db_orgs.is_owner(slug, actor.name) and actor.role != TokenRole.admin:
+            raise HTTPException(403, "only org owners or admins can update the logo")
+        org = await _db_orgs.get(slug)
+        if org is None:
+            raise HTTPException(404, f"organization '{slug}' not found")
+
+        # Validate content type
+        allowed = {"image/png", "image/jpeg", "image/svg+xml", "image/webp"}
+        ct = (file.content_type or "").lower()
+        if ct not in allowed:
+            raise HTTPException(
+                400, f"unsupported image type '{ct}'; allowed: {', '.join(sorted(allowed))}"
+            )
+        ext_map = {"image/png": ".png", "image/jpeg": ".jpg", "image/svg+xml": ".svg", "image/webp": ".webp"}
+        ext = ext_map.get(ct, ".png")
+
+        # Read and validate size (512 KB max)
+        data = await file.read()
+        if len(data) > 512 * 1024:
+            raise HTTPException(400, "logo must be 512 KB or smaller")
+
+        # Save to state_dir/logos/<slug>.<ext>
+        logos_dir = state.state_dir / "logos"
+        logos_dir.mkdir(parents=True, exist_ok=True)
+        # Remove any existing logo for this org
+        for old in logos_dir.glob(f"{slug}.*"):
+            old.unlink(missing_ok=True)
+        logo_path = logos_dir / f"{slug}{ext}"
+        logo_path.write_bytes(data)
+
+        # Update the org's logo_url to the serve endpoint
+        logo_url = f"/v1/orgs/{slug}/logo"
+        await _db_orgs.update(slug, logo_url=logo_url)
+        await _db_audit.record(
+            action=AuditAction.org_update,
+            actor=actor.name,
+            target=slug,
+            detail="logo uploaded",
+        )
+        return {"message": "logo uploaded", "logo_url": logo_url}
+
+    @app.get("/v1/orgs/{slug}/logo", tags=["organizations"])
+    async def serve_org_logo(slug: str):
+        """Serve the uploaded logo for an organization."""
+        logos_dir = state.state_dir / "logos"
+        for candidate in logos_dir.glob(f"{slug}.*"):
+            if candidate.is_file():
+                ct_map = {".png": "image/png", ".jpg": "image/jpeg", ".svg": "image/svg+xml", ".webp": "image/webp"}
+                content_type = ct_map.get(candidate.suffix.lower(), "application/octet-stream")
+                return FileResponse(candidate, media_type=content_type)
+        raise HTTPException(404, "no logo found")
 
     @app.post("/v1/orgs/{slug}/members", tags=["organizations"])
     async def add_org_member(
