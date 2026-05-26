@@ -34,6 +34,16 @@ on:
         required: false
         type: string
         default: ''
+      host_platform:
+        description: "Host OS for cross-compilation (e.g. linux, macos, windows). Only used with platform=wasm."
+        required: false
+        type: string
+        default: ''
+      shard:
+        description: "Recipe shard in INDEX/TOTAL format (e.g. 0/3). Empty = build all."
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -44,9 +54,9 @@ env:
 
 jobs:
   build:
-    runs-on: ${{ inputs.runner != '' && fromJSON(inputs.runner) || inputs.platform == 'macos' && 'macos-latest' || inputs.platform == 'windows' && 'windows-latest' || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.runner != '' && fromJSON(inputs.runner) || inputs.host_platform == 'macos' && 'macos-latest' || inputs.host_platform == 'windows' && 'windows-latest' || inputs.platform == 'macos' && 'macos-latest' || inputs.platform == 'windows' && 'windows-latest' || 'ubuntu-latest' }}
     # Default: ubuntu-latest for linux/wasm, platform-latest for mac/win.
-    # Callers can override via the 'runner' input to route to self-hosted.
+    # For wasm with host_platform, the HOST selects the runner.
 
     steps:
       - uses: actions/checkout@v5
@@ -80,7 +90,7 @@ jobs:
 
       # ── System build tools (Linux) ──
       - name: Install system build tools (Linux)
-        if: inputs.platform == 'linux' || inputs.platform == 'wasm'
+        if: inputs.platform == 'linux' || (inputs.platform == 'wasm' && (inputs.host_platform == 'linux' || inputs.host_platform == ''))
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
@@ -175,7 +185,9 @@ jobs:
           # Hash all recipe files + common env scripts for a stable cache key
           HASH=$(find recipes/ -type f \( -name '*.yaml' -o -name '*.sh' -o -name '*.ps1' \) \
                  | sort | xargs cat | sha256sum | cut -d' ' -f1)
-          KEY="recipe-build-${{ inputs.platform }}-${{ inputs.config }}-${{ inputs.link }}-${HASH}"
+          HOST="${{ inputs.host_platform }}"
+          SHARD="${{ inputs.shard }}"
+          KEY="recipe-build-${{ inputs.platform }}-${HOST:-native}-${SHARD:-all}-${{ inputs.config }}-${{ inputs.link }}-${HASH}"
           echo "key=$KEY" >> "$GITHUB_OUTPUT"
 
       - name: Cache built prefix
@@ -208,15 +220,17 @@ jobs:
           fi
 
       # ── Pre-build emsdk for wasm cross-compilation ──
-      # Wasm recipes run on a Linux host but target wasm. The emsdk
-      # recipe is a linux-platform build-tool that provides the
-      # Emscripten compiler. Install it into the prefix first.
+      # Wasm recipes run on a host that has the Emscripten SDK.  The
+      # emsdk recipe is a host-platform build-tool.  Install it into
+      # the prefix first, using the host platform (linux/macos/windows).
       - name: Pre-build emsdk (wasm)
         if: inputs.platform == 'wasm' && steps.cache-valid.outputs.valid != 'true'
         shell: bash
         run: |
           set -euo pipefail
-          cvcpkg build emsdk --platform linux --no-deps \
+          HOST_PLAT="${{ inputs.host_platform }}"
+          [ -z "$HOST_PLAT" ] && HOST_PLAT="linux"
+          cvcpkg build emsdk --platform "$HOST_PLAT" --no-deps \
             --prefix "${{ github.workspace }}/prefix" \
             --recipes-dir recipes
 
@@ -226,13 +240,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          EXTRA_ARGS=""
+          if [ -n "${{ inputs.host_platform }}" ]; then
+            EXTRA_ARGS="$EXTRA_ARGS --host-platform ${{ inputs.host_platform }}"
+          fi
+          if [ -n "${{ inputs.shard }}" ]; then
+            EXTRA_ARGS="$EXTRA_ARGS --shard ${{ inputs.shard }}"
+          fi
           cvcpkg pack-all \
             --platform "${{ inputs.platform }}" \
             --config "${{ inputs.config }}" \
             --link "${{ inputs.link }}" \
             --prefix "${{ github.workspace }}/prefix" \
             --output-dir "${{ github.workspace }}/dist" \
-            --recipes-dir recipes
+            --recipes-dir recipes \
+            $EXTRA_ARGS
 
       # ── Install marker cmake config ──
       - name: Install libcvc-deps marker config

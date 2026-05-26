@@ -9,7 +9,7 @@ recipe:
   description: "OpenSSL — a robust, full-featured toolkit for TLS/SSL and general-purpose cryptography."
   homepage: https://www.openssl.org/
   license: Apache-2.0
-  tags: [networking, crypto]
+  tags: [networking, crypto, wasm]
 
 source:
   type: tarball
@@ -20,7 +20,9 @@ source:
 patches: []
 
 depends:
-  build: []
+  build: 
+    - name: emsdk
+      version: ">=5.0"
   host_tools:
     - cmake
     - perl
@@ -39,6 +41,12 @@ build:
     - platform: windows
       script: build.ps1
       vcpkg_port: openssl
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
 
 package:
   files:

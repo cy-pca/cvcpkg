@@ -9,7 +9,7 @@ recipe:
   description: "log4cplus — a simple-to-use C++ logging library modeled after Java's log4j."
   homepage: https://log4cplus.sourceforge.io/
   license: Apache-2.0
-  tags: [utils]
+  tags: [utils, wasm]
 
 source:
   type: tarball
@@ -20,7 +20,9 @@ source:
 patches: []
 
 depends:
-  build: []
+  build: 
+    - name: emsdk
+      version: ">=5.0"
   host_tools:
     - cmake
     - ninja
@@ -39,6 +41,12 @@ build:
     - platform: windows
       script: build.ps1
       vcpkg_port: log4cplus
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
 
 package:
   files:

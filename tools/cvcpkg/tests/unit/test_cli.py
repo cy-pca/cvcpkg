@@ -842,7 +842,9 @@ class TestBuildCrossPlatformDeps:
 
         build_calls = []
 
-        def mock_build_recipe(recipe_dir, *, platform, config, link, prefix, keep_build_dir):
+        def mock_build_recipe(
+            recipe_dir, *, platform, config, link, prefix, keep_build_dir, host_platform=""
+        ):
             build_calls.append((recipe_dir.name, platform))
             # Return a minimal mock context
             return mock.MagicMock()
@@ -888,7 +890,9 @@ class TestBuildCrossPlatformDeps:
 
         build_calls = []
 
-        def mock_build_recipe(recipe_dir, *, platform, config, link, prefix, keep_build_dir):
+        def mock_build_recipe(
+            recipe_dir, *, platform, config, link, prefix, keep_build_dir, host_platform=""
+        ):
             build_calls.append((recipe_dir.name, platform))
             return mock.MagicMock()
 

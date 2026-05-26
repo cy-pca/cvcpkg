@@ -9,7 +9,7 @@ recipe:
   description: "MPFR — the GNU Multiple Precision Floating-Point Reliable library for correct rounding of arbitrary-precision floating-point computations."
   homepage: https://www.mpfr.org/
   license: LGPL-3.0-or-later
-  tags: [math]
+  tags: [math, wasm]
 
 source:
   type: tarball
@@ -24,6 +24,8 @@ depends:
   build:
     - name: gmp
       version: ">=6.1.0"
+    - name: emsdk
+      version: ">=5.0"
   host_tools:
     - make
 
@@ -40,6 +42,12 @@ build:
     - platform: windows
       script: build.ps1
       vcpkg_port: mpfr
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
 
 package:
   files:

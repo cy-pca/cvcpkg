@@ -9,7 +9,7 @@ recipe:
   description: "CGAL — the Computational Geometry Algorithms Library providing geometric data structures and algorithms."
   homepage: https://www.cgal.org/
   license: GPL-3.0-or-later
-  tags: [math, graphics]
+  tags: [math, graphics, wasm]
 
 source:
   type: tarball
@@ -27,6 +27,8 @@ depends:
       version: ">=6.1.0"
     - name: mpfr
       version: ">=4.1.0"
+    - name: emsdk
+      version: ">=5.0"
   host_tools:
     - cmake
     - ninja
@@ -44,6 +46,12 @@ build:
     - platform: windows
       script: build.ps1
       vcpkg_port: cgal
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
 
 package:
   files:
