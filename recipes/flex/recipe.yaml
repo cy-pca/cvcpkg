@@ -1,0 +1,61 @@
+schema_version: 1
+recipe:
+  name: flex
+  upstream_version: "2.6.4"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  maintainer_email: "cvcpkg@cyberpcangel.com"
+  maintainer_url: "https://cyberpcangel.com"
+  homepage: https://github.com/westes/flex
+  license: BSD-2-Clause
+  tags: [tools, codegen]
+  description: >-
+    flex — fast lexical analyser generator.  Build-time host tool
+    required by PostgreSQL, SWIG, and other projects that generate
+    scanner code.
+
+source:
+  type: tarball
+  url: https://github.com/westes/flex/releases/download/v2.6.4/flex-2.6.4.tar.gz
+  sha256: "e87aae032bf07c26f85ac0ed3250998c37621d95f8bd748b31f15b33c45ee995"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - bin/flex*
+    - lib/libfl*
+    - include/FlexLexer.h
+    - share/man/man1/flex*
+
+toolchain:
+  cc:
+    min_version: "any"
+    description: "C99-capable compiler"
+
+notes:
+  - title: "Windows uses winflexbison pre-built binaries"
+    platforms: [windows]
+    description: >-
+      On Windows the recipe downloads winflexbison pre-built binaries
+      instead of building GNU flex from source, since the autotools
+      build system is not available.

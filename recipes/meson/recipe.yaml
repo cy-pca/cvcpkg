@@ -1,0 +1,51 @@
+schema_version: 1
+recipe:
+  name: meson
+  upstream_version: "1.7.3"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  maintainer_email: "cvcpkg@cyberpcangel.com"
+  maintainer_url: "https://cyberpcangel.com"
+  homepage: https://mesonbuild.com/
+  license: Apache-2.0
+  tags: [tools, build-system]
+  description: >-
+    Meson — high-performance build system with simple syntax.
+    Required by libpq (PostgreSQL >= 16) and other modern projects.
+
+source:
+  type: tarball
+  url: https://github.com/mesonbuild/meson/releases/download/1.7.3/meson-1.7.3.tar.gz
+  sha256: "0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+      env: {}
+    - platform: macos
+      script: build.sh
+      env: {}
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - bin/meson*
+    - lib/meson/
+
+notes:
+  - title: "Python-based build system"
+    platforms: [linux, macos, windows]
+    description: >-
+      Meson is a Python application.  The recipe installs meson.py
+      and its package tree into the prefix, with a wrapper script in
+      bin/ that invokes the correct Python interpreter.
