@@ -770,3 +770,150 @@ class TestServerCLI:
         )
         captured = capsys.readouterr()
         assert "OK" in captured.out
+
+
+# ── Organization lifecycle (file-backend only) ──────────────────
+
+
+class TestOrgEndpointsFileBacked:
+    """Org endpoints gracefully handle the file-based (no-DB) backend."""
+
+    def test_create_org_fails_without_db(self, env):
+        client, admin_tok, _, _, _ = env
+        resp = client.post(
+            "/v1/orgs",
+            json={"slug": "test-org", "display_name": "Test Org"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 501
+
+    def test_list_orgs_empty_without_db(self, env):
+        client, *_ = env
+        resp = client.get("/v1/orgs")
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 0
+
+    def test_get_org_404_without_db(self, env):
+        client, *_ = env
+        resp = client.get("/v1/orgs/nonexistent")
+        assert resp.status_code == 404
+
+    def test_add_member_501_without_db(self, env):
+        client, admin_tok, _, _, _ = env
+        resp = client.post(
+            "/v1/orgs/test-org/members",
+            params={"token_name": "ci-bot"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 501
+
+    def test_remove_member_501_without_db(self, env):
+        client, admin_tok, _, _, _ = env
+        resp = client.delete(
+            "/v1/orgs/test-org/members/ci-bot",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 501
+
+
+class TestOrgLogoEndpoints:
+    """Test logo upload/serve endpoints against the file-backed store."""
+
+    def test_logo_upload_501_without_db(self, env):
+        client, admin_tok, _, _, _ = env
+        resp = client.post(
+            "/v1/orgs/test-org/logo",
+            files={"file": ("logo.png", b"\x89PNG\r\n", "image/png")},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 501
+
+    def test_logo_serve_404(self, env):
+        client, *_ = env
+        resp = client.get("/v1/orgs/no-such-org/logo")
+        assert resp.status_code == 404
+
+    def test_logo_serve_from_disk(self, env):
+        client, _, _, _, tmp_path = env
+        logos_dir = tmp_path / "logos"
+        logos_dir.mkdir(exist_ok=True)
+        (logos_dir / "test-org.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 20)
+
+        resp = client.get("/v1/orgs/test-org/logo")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "image/png"
+
+    def test_logo_serve_svg(self, env):
+        client, _, _, _, tmp_path = env
+        logos_dir = tmp_path / "logos"
+        logos_dir.mkdir(exist_ok=True)
+        (logos_dir / "svg-org.svg").write_bytes(b"<svg></svg>")
+
+        resp = client.get("/v1/orgs/svg-org/logo")
+        assert resp.status_code == 200
+        assert "svg" in resp.headers["content-type"]
+
+
+class TestOrgHTMLPagesIntegration:
+    """Test that organization HTML pages render."""
+
+    def test_orgs_listing_page(self, env):
+        client, *_ = env
+        resp = client.get("/orgs")
+        assert resp.status_code == 200
+        assert "Organizations" in resp.text
+
+    def test_org_detail_page(self, env):
+        client, *_ = env
+        resp = client.get("/org/any-slug")
+        assert resp.status_code == 200
+
+    def test_orgs_page_has_navbar(self, env):
+        client, *_ = env
+        resp = client.get("/orgs")
+        assert "navbar" in resp.text.lower()
+
+
+class TestPublishWithOrgParam:
+    """Test that publish accepts the org query parameter."""
+
+    def test_publish_with_org(self, env):
+        client, _, pub_tok, _, _ = env
+        resp = _publish(client, pub_tok, "org-pkg", "1.0")
+        assert resp["name"] == "org-pkg"
+
+    def test_publish_with_org_param_accepted(self, env):
+        client, _, pub_tok, _, _ = env
+        archive = _make_tar_archive(
+            {
+                "lib/libfoo.so": b"\x7fELF\x00" * 10,
+                "share/libcvc-deps/orgpkg/manifest.yaml": yaml.dump(
+                    {
+                        "schema_version": 3,
+                        "bundle": {
+                            "name": "orgpkg",
+                            "version": "1.0",
+                            "platform": "linux",
+                            "arch": "x86_64",
+                            "config": "release",
+                            "link": "shared",
+                            "org": "my-org",
+                        },
+                    }
+                ).encode(),
+            }
+        )
+        resp = client.post(
+            "/v1/publish",
+            params={
+                "name": "orgpkg",
+                "version": "1.0",
+                "platform": "linux",
+                "arch": "x86_64",
+                "org": "my-org",
+            },
+            files={"file": ("orgpkg.tar.zst", io.BytesIO(archive))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "orgpkg"

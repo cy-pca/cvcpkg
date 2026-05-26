@@ -18,9 +18,11 @@ from cvcpkg.builder import (
     Recipe,
     RecipeError,
     SourceSpec,
+    _cache_key,
     _file_list,
     _select_matrix_entry,
     _sha256_file,
+    _source_cache_dir,
     _total_size,
     apply_patches,
     create_archive,
@@ -345,6 +347,177 @@ class TestSha256File:
         assert _sha256_file(p) == expected
 
 
+# ── Source cache ────────────────────────────────────────────────
+
+
+class TestSourceCacheDir:
+    """Test _source_cache_dir() default and env-override behavior."""
+
+    def test_default_cache_dir(self, monkeypatch):
+        monkeypatch.delenv("CVCPKG_SOURCE_CACHE_DIR", raising=False)
+        monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+        d = _source_cache_dir()
+        assert d is not None
+        assert str(d).endswith("cvcpkg/sources")
+        assert ".cache" in str(d)
+
+    def test_xdg_cache_home(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("CVCPKG_SOURCE_CACHE_DIR", raising=False)
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+        d = _source_cache_dir()
+        assert d == tmp_path / "xdg" / "cvcpkg" / "sources"
+
+    def test_env_override(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("CVCPKG_SOURCE_CACHE_DIR", str(tmp_path / "custom"))
+        d = _source_cache_dir()
+        assert d == tmp_path / "custom"
+
+    def test_env_empty_disables(self, monkeypatch):
+        monkeypatch.setenv("CVCPKG_SOURCE_CACHE_DIR", "")
+        d = _source_cache_dir()
+        assert d is None
+
+
+class TestCacheKey:
+    """Test _cache_key() returns a stable hash."""
+
+    def test_sha256_key(self):
+        s = SourceSpec.from_dict({
+            "type": "tarball",
+            "url": "https://example.com/pkg.tar.gz",
+            "sha256": "a" * 64,
+        })
+        assert _cache_key(s) == "a" * 64
+
+    def test_url_fallback_key(self):
+        s = SourceSpec.from_dict({
+            "type": "tarball",
+            "url": "https://example.com/pkg.tar.gz",
+        })
+        key = _cache_key(s)
+        assert len(key) == 64
+        # Same URL should give same key
+        s2 = SourceSpec.from_dict({
+            "type": "tarball",
+            "url": "https://example.com/pkg.tar.gz",
+        })
+        assert _cache_key(s2) == key
+
+    def test_different_url_different_key(self):
+        s1 = SourceSpec.from_dict({"type": "tarball", "url": "https://a.com/x.tar.gz"})
+        s2 = SourceSpec.from_dict({"type": "tarball", "url": "https://b.com/y.tar.gz"})
+        assert _cache_key(s1) != _cache_key(s2)
+
+
+class TestSourceCacheFetchTarball:
+    """Test that _fetch_tarball uses the source cache correctly."""
+
+    def _make_tarball(self, tmp_path, name="hello.txt", content=b"hello world"):
+        """Create a tarball with a single file and return (path, sha256)."""
+        import io
+
+        tarball_path = tmp_path / "source.tar.gz"
+        inner_dir = f"pkg-1.0"
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            info = tarfile.TarInfo(name=f"{inner_dir}/{name}")
+            info.size = len(content)
+            tf.addfile(info, io.BytesIO(content))
+        data = buf.getvalue()
+        tarball_path.write_bytes(data)
+        sha = hashlib.sha256(data).hexdigest()
+        return tarball_path, sha, data
+
+    def test_cache_populated_after_download(self, tmp_path, monkeypatch):
+        """After downloading, the tarball should be cached."""
+        cache_dir = tmp_path / "cache"
+        monkeypatch.setenv("CVCPKG_SOURCE_CACHE_DIR", str(cache_dir))
+
+        tarball, sha, data = self._make_tarball(tmp_path)
+
+        source = SourceSpec.from_dict({
+            "type": "tarball",
+            "url": f"file://{tarball}",
+            "sha256": sha,
+        })
+        dest = tmp_path / "work"
+        dest.mkdir()
+        from cvcpkg.builder import _fetch_tarball
+        _fetch_tarball(source, dest)
+
+        # Cache should now have the file
+        cached = cache_dir / f"{sha}.tar.gz"
+        assert cached.is_file()
+        assert _sha256_file(cached) == sha
+
+    def test_cache_hit_avoids_download(self, tmp_path, monkeypatch):
+        """If cached tarball exists, download should be skipped."""
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir(parents=True)
+        monkeypatch.setenv("CVCPKG_SOURCE_CACHE_DIR", str(cache_dir))
+
+        tarball, sha, data = self._make_tarball(tmp_path)
+
+        # Pre-populate cache
+        cached = cache_dir / f"{sha}.tar.gz"
+        cached.write_bytes(data)
+
+        source = SourceSpec.from_dict({
+            "type": "tarball",
+            "url": "https://unreachable.example.com/pkg.tar.gz",  # Would fail if contacted
+            "sha256": sha,
+        })
+        dest = tmp_path / "work"
+        dest.mkdir()
+        from cvcpkg.builder import _fetch_tarball
+        # Should succeed via cache even though URL is unreachable
+        src_dir = _fetch_tarball(source, dest)
+        assert src_dir.is_dir()
+        assert (src_dir / "hello.txt").exists()
+
+    def test_cache_disabled_via_env(self, tmp_path, monkeypatch):
+        """CVCPKG_SOURCE_CACHE_DIR='' should disable caching."""
+        monkeypatch.setenv("CVCPKG_SOURCE_CACHE_DIR", "")
+
+        tarball, sha, data = self._make_tarball(tmp_path)
+        source = SourceSpec.from_dict({
+            "type": "tarball",
+            "url": f"file://{tarball}",
+            "sha256": sha,
+        })
+        dest = tmp_path / "work"
+        dest.mkdir()
+        from cvcpkg.builder import _fetch_tarball
+        _fetch_tarball(source, dest)
+        # No cache dir should have been created
+        assert not (tmp_path / "cache").exists()
+
+    def test_corrupted_cache_re_downloads(self, tmp_path, monkeypatch):
+        """If cached file has wrong SHA-256, re-download should occur."""
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir(parents=True)
+        monkeypatch.setenv("CVCPKG_SOURCE_CACHE_DIR", str(cache_dir))
+
+        tarball, sha, data = self._make_tarball(tmp_path)
+
+        # Write corrupted cache entry
+        cached = cache_dir / f"{sha}.tar.gz"
+        cached.write_bytes(b"corrupted data")
+
+        source = SourceSpec.from_dict({
+            "type": "tarball",
+            "url": f"file://{tarball}",
+            "sha256": sha,
+        })
+        dest = tmp_path / "work"
+        dest.mkdir()
+        from cvcpkg.builder import _fetch_tarball
+        src_dir = _fetch_tarball(source, dest)
+        assert src_dir.is_dir()
+        # Cache should now be updated with correct data
+        assert _sha256_file(cached) == sha
+
+
 # ── _file_list ──────────────────────────────────────────────────
 
 
@@ -464,6 +637,38 @@ class TestGenerateManifest:
         m = generate_manifest(r, install_dir, "linux", "x86_64", "release", "shared")
         assert len(m["meta"]["recipe_sha256"]) == 64
         assert m["meta"]["built_at"]
+
+    def test_manifest_org_slug_included(self, tmp_path):
+        """When org_slug is set, the bundle includes an 'org' key."""
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, MINIMAL_RECIPE)
+        r = Recipe.load(recipe_dir)
+        install_dir = tmp_path / "install"
+        install_dir.mkdir()
+
+        m = generate_manifest(
+            r, install_dir, "linux", "x86_64", "release", "shared",
+            org_slug="cvc-lab",
+        )
+        assert m["bundle"]["org"] == "cvc-lab"
+
+    def test_manifest_org_slug_omitted_when_empty(self, tmp_path):
+        """When org_slug is empty, the bundle should not include 'org'."""
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, MINIMAL_RECIPE)
+        r = Recipe.load(recipe_dir)
+        install_dir = tmp_path / "install"
+        install_dir.mkdir()
+
+        m = generate_manifest(r, install_dir, "linux", "x86_64", "release", "shared")
+        assert "org" not in m["bundle"]
+
+        # Also explicit empty string
+        m2 = generate_manifest(
+            r, install_dir, "linux", "x86_64", "release", "shared",
+            org_slug="",
+        )
+        assert "org" not in m2["bundle"]
 
 
 # ── stage_bundle ────────────────────────────────────────────────

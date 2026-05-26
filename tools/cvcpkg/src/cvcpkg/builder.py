@@ -153,8 +153,39 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def _source_cache_dir() -> Path | None:
+    """Return the source tarball cache directory, or None if caching is disabled.
+
+    Controlled by ``CVCPKG_SOURCE_CACHE_DIR`` (set to empty string to disable).
+    Default: ``~/.cache/cvcpkg/sources``.
+    """
+    env = os.environ.get("CVCPKG_SOURCE_CACHE_DIR")
+    if env is not None:
+        if not env:
+            return None  # explicitly disabled
+        return Path(env)
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    if xdg:
+        return Path(xdg) / "cvcpkg" / "sources"
+    return Path.home() / ".cache" / "cvcpkg" / "sources"
+
+
+def _cache_key(source: SourceSpec) -> str:
+    """Return a stable cache key for a tarball source spec."""
+    if source.sha256:
+        return source.sha256
+    # Fallback: hash the URL so we still get some cache benefit
+    return hashlib.sha256(source.url.encode()).hexdigest()
+
+
 def _fetch_tarball(source: SourceSpec, dest: Path) -> Path:
-    """Download a tarball, verify SHA-256, and extract."""
+    """Download a tarball, verify SHA-256, and extract.
+
+    If a source cache directory is configured (default
+    ``~/.cache/cvcpkg/sources``), verified tarballs are stored there
+    keyed by SHA-256.  Subsequent builds skip the download entirely
+    when the cached file is present and matches.
+    """
     import urllib.error
     import urllib.request
 
@@ -163,23 +194,53 @@ def _fetch_tarball(source: SourceSpec, dest: Path) -> Path:
     if not urls:
         raise RecipeError("source.type=tarball but no URL specified")
 
-    last_error: Exception | None = None
-    for url in urls:
-        try:
-            urllib.request.urlretrieve(url, archive_path)  # noqa: S310
-            last_error = None
-            break
-        except (urllib.error.URLError, OSError) as e:
-            last_error = e
-            if url != urls[-1]:
-                continue
-    if last_error is not None:
-        raise RecipeError(f"failed to download source from {urls}: {last_error}") from last_error
+    cache_dir = _source_cache_dir()
+    cache_hit = False
+
+    # Try the cache first
+    if cache_dir is not None:
+        key = _cache_key(source)
+        cached = cache_dir / f"{key}.tar.gz"
+        if cached.is_file():
+            # Verify integrity when SHA-256 is known
+            if source.sha256:
+                actual = _sha256_file(cached)
+                if actual == source.sha256:
+                    shutil.copy2(str(cached), str(archive_path))
+                    cache_hit = True
+                # Mismatched cache entry — re-download
+            else:
+                # No SHA-256 to check — trust the cache
+                shutil.copy2(str(cached), str(archive_path))
+                cache_hit = True
+
+    if not cache_hit:
+        last_error: Exception | None = None
+        for url in urls:
+            try:
+                urllib.request.urlretrieve(url, archive_path)  # noqa: S310
+                last_error = None
+                break
+            except (urllib.error.URLError, OSError) as e:
+                last_error = e
+                if url != urls[-1]:
+                    continue
+        if last_error is not None:
+            raise RecipeError(
+                f"failed to download source from {urls}: {last_error}"
+            ) from last_error
 
     if source.sha256:
         actual = _sha256_file(archive_path)
         if actual != source.sha256:
             raise RecipeError(f"SHA-256 mismatch: expected {source.sha256}, got {actual}")
+
+    # Populate cache after successful verification
+    if not cache_hit and cache_dir is not None:
+        key = _cache_key(source)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cached = cache_dir / f"{key}.tar.gz"
+        shutil.copy2(str(archive_path), str(cached))
 
     # Extract
     source_dir = dest / "src"
