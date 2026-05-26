@@ -610,7 +610,8 @@ def create_app(
                 ):
                     raise HTTPException(
                         409,
-                        f"{name}=={version} ({platform}/{arch}/{build_type}/{link}) already published. "
+                        f"{name}=={version} ({platform}/{arch}/{build_type}"
+                        f"/{link}) already published. "
                         "Yank the existing version first, or use a new revision.",
                     )
 
@@ -675,7 +676,10 @@ def create_app(
                 action=AuditAction.publish,
                 actor=actor.name,
                 target=f"{name}=={version}",
-                detail=f"platform={platform} arch={arch} sha256={sha256} release={release_tag or 'live'}",
+                detail=(
+                    f"platform={platform} arch={arch}"
+                    f" sha256={sha256} release={release_tag or 'live'}"
+                ),
             )
         else:
             bundle = {
@@ -701,7 +705,10 @@ def create_app(
                 action=AuditAction.publish,
                 actor=actor.name,
                 target=f"{name}=={version}",
-                detail=f"platform={platform} arch={arch} sha256={sha256} release={release_tag or 'live'}",
+                detail=(
+                    f"platform={platform} arch={arch}"
+                    f" sha256={sha256} release={release_tag or 'live'}"
+                ),
             )
 
         _metrics["publishes_total"] += 1
@@ -766,7 +773,8 @@ def create_app(
                 ):
                     raise HTTPException(
                         409,
-                        f"{name}=={version} ({platform}/{arch}/{build_type}/{link}) already published.",
+                        f"{name}=={version} ({platform}/{arch}/{build_type}"
+                        f"/{link}) already published.",
                     )
 
         upload_id = secrets.token_urlsafe(32)
@@ -846,8 +854,8 @@ def create_app(
                 range_spec = content_range.split(" ", 1)[1]  # drop "bytes"
                 range_part, total_part = range_spec.split("/")
                 range_start = int(range_part.split("-")[0])
-            except (IndexError, ValueError):
-                raise HTTPException(400, f"malformed Content-Range: {content_range}")
+            except (IndexError, ValueError) as exc:
+                raise HTTPException(400, f"malformed Content-Range: {content_range}") from exc
             if range_start != session.bytes_received:
                 raise HTTPException(
                     409,
