@@ -8,7 +8,7 @@ recipe:
   maintainer_url: "https://cyberpcangel.com"
   homepage: https://www.pcre.org/
   license: BSD-3-Clause
-  tags: [utils]
+  tags: [utils, wasm]
   description: >-
     PCRE2 — Perl Compatible Regular Expressions library.
     Used as a dependency of SWIG.
@@ -22,7 +22,9 @@ source:
 patches: []
 
 depends:
-  build: []
+  build: 
+    - name: emsdk
+      version: ">=5.0"
   host_tools:
     - cmake
     - ninja
@@ -39,6 +41,9 @@ build:
         MACOSX_DEPLOYMENT_TARGET: "13.0"
     - platform: windows
       script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
 
 package:
   files:

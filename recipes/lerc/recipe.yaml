@@ -9,7 +9,7 @@ recipe:
   description: "LERC — Limited Error Raster Compression, an open-source image/raster format for lossy and lossless compression."
   homepage: https://github.com/Esri/lerc
   license: Apache-2.0
-  tags: [graphics, io]
+  tags: [graphics, io, wasm]
 
 source:
   type: tarball
@@ -20,7 +20,9 @@ source:
 patches: []
 
 depends:
-  build: []
+  build: 
+    - name: emsdk
+      version: ">=5.0"
   host_tools:
     - cmake
     - ninja
@@ -37,6 +39,9 @@ build:
         MACOSX_DEPLOYMENT_TARGET: "13.0"
     - platform: windows
       script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
 
 package:
   files:

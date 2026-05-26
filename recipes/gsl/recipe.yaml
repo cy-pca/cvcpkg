@@ -9,7 +9,7 @@ recipe:
   description: "GNU Scientific Library — a numerical library for C and C++ programmers."
   homepage: https://www.gnu.org/software/gsl/
   license: GPL-3.0-or-later
-  tags: [math]
+  tags: [math, wasm]
 
 source:
   type: tarball
@@ -20,7 +20,9 @@ source:
 patches: []
 
 depends:
-  build: []
+  build: 
+    - name: emsdk
+      version: ">=5.0"
   host_tools:
     - cmake
     - ninja
@@ -38,6 +40,9 @@ build:
     - platform: windows
       script: build.ps1
       vcpkg_port: gsl
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
 
 package:
   files:

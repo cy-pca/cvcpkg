@@ -9,7 +9,7 @@ recipe:
   description: "IMOD image I/O library — low-level routines for reading and writing MRC, TIFF, and other microscopy image formats."
   homepage: https://github.com/LabShare-Archive/IMOD
   license: GPL-2.0-or-later
-  tags: [bio, io]
+  tags: [bio, io, wasm]
 
 source:
   # Vendored in third-party/libiimod/ — curated subset of IMOD's
@@ -23,6 +23,8 @@ depends:
   build:
     - name: tiff
       version: "^4.6"
+    - name: emsdk
+      version: ">=5.0"
   host_tools:
     - cmake
     - ninja
@@ -39,6 +41,9 @@ build:
         MACOSX_DEPLOYMENT_TARGET: "13.0"
     - platform: windows
       script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
 
 package:
   files:
