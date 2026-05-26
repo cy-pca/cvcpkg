@@ -266,9 +266,7 @@ def apply_patches(recipe: Recipe, source_dir: Path) -> None:
 # ── Build execution ────────────────────────────────────────────
 
 
-def _select_matrix_entry(
-    recipe: Recipe, platform: str, host_platform: str = ""
-) -> MatrixEntry:
+def _select_matrix_entry(recipe: Recipe, platform: str, host_platform: str = "") -> MatrixEntry:
     """Pick the matrix entry matching the target platform.
 
     When *host_platform* is given (e.g. ``"linux"``, ``"windows"``),
