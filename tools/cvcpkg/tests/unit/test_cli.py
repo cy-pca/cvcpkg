@@ -795,3 +795,102 @@ class TestWorldCommand:
 def test_new_subcommand_help(subcmd, capsys):
     ret = main([subcmd, "--help"])
     assert ret == 0
+
+
+# ── cross-platform (wasm) build dependency handling ─────────────
+
+
+class TestBuildCrossPlatformDeps:
+    """Verify that `cvcpkg build --platform wasm --with-deps` builds
+    host-tool dependencies (like emsdk) for the native host platform
+    before building the wasm target recipe."""
+
+    def _make_recipe(self, recipes_dir, name, *, matrix, deps=None):
+        d = recipes_dir / name
+        d.mkdir(parents=True)
+        recipe = {
+            "schema_version": 1,
+            "recipe": {"name": name, "upstream_version": "1.0.0", "cvc_revision": 1},
+            "source": {"type": "vendored", "path": "."},
+            "patches": [],
+            "build": {"matrix": matrix},
+            "package": {"files": ["lib/*"]},
+        }
+        if deps:
+            recipe["depends"] = {"build": deps}
+        (d / "recipe.yaml").write_text(yaml.dump(recipe))
+        # Create dummy build scripts referenced by matrix entries
+        for m in matrix:
+            (d / m["script"]).write_text("#!/bin/sh\ntrue\n")
+
+    def test_host_tool_built_before_wasm_target(self, tmp_path):
+        """emsdk-like host tool is built with host platform, then wasm target."""
+        recipes_dir = tmp_path / "recipes"
+        # emsdk: host-only tool (linux/macos/windows, no wasm)
+        self._make_recipe(
+            recipes_dir, "emsdk",
+            matrix=[{"platform": "linux", "script": "build.sh"}],
+        )
+        # wasmlib: wasm target depending on emsdk
+        self._make_recipe(
+            recipes_dir, "wasmlib",
+            matrix=[{"platform": "wasm", "script": "build.sh"}],
+            deps=[{"name": "emsdk", "version": ">=1.0"}],
+        )
+
+        build_calls = []
+
+        def mock_build_recipe(recipe_dir, *, platform, config, link, prefix, keep_build_dir):
+            build_calls.append((recipe_dir.name, platform))
+            # Return a minimal mock context
+            return mock.MagicMock()
+
+        with mock.patch("cvcpkg.builder.build_recipe", side_effect=mock_build_recipe), \
+             mock.patch("cvcpkg.platform.detect_platform", return_value="linux"):
+            ret = main([
+                "build", "wasmlib",
+                "--platform", "wasm",
+                "--prefix", str(tmp_path / "pfx"),
+                "--recipes-dir", str(recipes_dir),
+            ])
+
+        assert ret == 0
+        assert len(build_calls) == 2
+        # emsdk built first, for the host platform
+        assert build_calls[0] == ("emsdk", "linux")
+        # wasmlib built second, for the wasm target
+        assert build_calls[1] == ("wasmlib", "wasm")
+
+    def test_native_build_no_host_tool_split(self, tmp_path):
+        """When building for a native platform, no host-tool splitting occurs."""
+        recipes_dir = tmp_path / "recipes"
+        self._make_recipe(
+            recipes_dir, "liba",
+            matrix=[{"platform": "linux", "script": "build.sh"}],
+        )
+        self._make_recipe(
+            recipes_dir, "libb",
+            matrix=[{"platform": "linux", "script": "build.sh"}],
+            deps=["liba"],
+        )
+
+        build_calls = []
+
+        def mock_build_recipe(recipe_dir, *, platform, config, link, prefix, keep_build_dir):
+            build_calls.append((recipe_dir.name, platform))
+            return mock.MagicMock()
+
+        with mock.patch("cvcpkg.builder.build_recipe", side_effect=mock_build_recipe), \
+             mock.patch("cvcpkg.platform.detect_platform", return_value="linux"):
+            ret = main([
+                "build", "libb",
+                "--platform", "linux",
+                "--prefix", str(tmp_path / "pfx"),
+                "--recipes-dir", str(recipes_dir),
+            ])
+
+        assert ret == 0
+        assert len(build_calls) == 2
+        # Both built for linux
+        assert build_calls[0] == ("liba", "linux")
+        assert build_calls[1] == ("libb", "linux")

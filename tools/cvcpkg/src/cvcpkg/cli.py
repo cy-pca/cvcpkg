@@ -1545,11 +1545,39 @@ def build(
         for name in recipe:
             _collect(name)
 
-        # Filter to what's available, resolve order
-        to_build = [by_name[n] for n in needed if n in by_name]
-        to_build = [r for r in to_build if any(m.platform == plat for m in r.build_matrix)]
-        ordered = resolve_build_order(to_build, plat)
+        # Filter to what's available
+        available = [by_name[n] for n in needed if n in by_name]
 
+        # Split into target-platform recipes and host-tool recipes.
+        # Host tools are deps that have no matrix entry for the target
+        # platform but do have one for the native host (e.g. emsdk when
+        # cross-compiling to wasm).
+        from cvcpkg.platform import detect_platform
+
+        host_plat = detect_platform()
+        target_recipes: list = []
+        host_tool_recipes: list = []
+        for r in available:
+            if any(m.platform == plat for m in r.build_matrix):
+                target_recipes.append(r)
+            elif plat != host_plat and any(m.platform == host_plat for m in r.build_matrix):
+                host_tool_recipes.append(r)
+
+        # Build host tools first (e.g. emsdk), then target recipes
+        if host_tool_recipes:
+            host_ordered = resolve_build_order(host_tool_recipes, host_plat)
+            for r in host_ordered:
+                print(f"\ncvcpkg: ══ {r.name} ({r.full_version}) [host tool] ══")
+                build_recipe(
+                    r.recipe_dir,
+                    platform=host_plat,
+                    config=config,
+                    link=link,
+                    prefix=prefix_path,
+                    keep_build_dir=keep_build_dir,
+                )
+
+        ordered = resolve_build_order(target_recipes, plat)
         for r in ordered:
             print(f"\ncvcpkg: ══ {r.name} ({r.full_version}) ══")
             build_recipe(
