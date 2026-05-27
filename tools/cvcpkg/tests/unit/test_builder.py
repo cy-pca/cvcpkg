@@ -1424,3 +1424,297 @@ class TestManifestOrgDeps:
         assert deps[0] == {"name": "custom-lib", "org": "myorg", "version": ">=1.0"}
         assert deps[1] == {"name": "their-lib", "org": "otherog"}
         assert deps[2] == {"name": "zlib"}
+
+
+# ── Revision bumping ──────────────────────────────────────────
+
+
+class TestGetReverseDeps:
+    """Tests for get_reverse_deps()."""
+
+    def _make_recipe(self, recipes_dir, name, deps=None):
+        d = dict(MINIMAL_RECIPE)
+        d = {**d, "recipe": {**d["recipe"], "name": name}}
+        if deps:
+            d["depends"] = {"build": deps}
+        _write_recipe(recipes_dir / name, d)
+        return Recipe.load(recipes_dir / name)
+
+    def test_empty(self, tmp_path):
+        from cvcpkg.builder import get_reverse_deps
+
+        a = self._make_recipe(tmp_path, "a")
+        rd = get_reverse_deps([a])
+        assert rd == {}
+
+    def test_single_dep(self, tmp_path):
+        from cvcpkg.builder import get_reverse_deps
+
+        a = self._make_recipe(tmp_path, "a")
+        b = self._make_recipe(tmp_path, "b", deps=["a"])
+        rd = get_reverse_deps([a, b])
+        assert rd == {"a": {"b"}}
+
+    def test_diamond(self, tmp_path):
+        from cvcpkg.builder import get_reverse_deps
+
+        a = self._make_recipe(tmp_path, "a")
+        b = self._make_recipe(tmp_path, "b", deps=["a"])
+        c = self._make_recipe(tmp_path, "c", deps=["a"])
+        d = self._make_recipe(tmp_path, "d", deps=["b", "c"])
+        rd = get_reverse_deps([a, b, c, d])
+        assert rd["a"] == {"b", "c"}
+        assert rd["b"] == {"d"}
+        assert rd["c"] == {"d"}
+
+    def test_platform_filter(self, tmp_path):
+        from cvcpkg.builder import get_reverse_deps
+
+        a = self._make_recipe(tmp_path, "a")
+        b = self._make_recipe(tmp_path, "b", deps=[{"name": "a", "platforms": ["linux"]}])
+        rd_linux = get_reverse_deps([a, b], platform="linux")
+        assert rd_linux == {"a": {"b"}}
+        rd_windows = get_reverse_deps([a, b], platform="windows")
+        assert rd_windows == {}
+
+
+class TestGetDownstream:
+    """Tests for get_downstream()."""
+
+    def _make_recipe(self, recipes_dir, name, deps=None):
+        d = dict(MINIMAL_RECIPE)
+        d = {**d, "recipe": {**d["recipe"], "name": name}}
+        if deps:
+            d["depends"] = {"build": deps}
+        _write_recipe(recipes_dir / name, d)
+        return Recipe.load(recipes_dir / name)
+
+    def test_no_downstream(self, tmp_path):
+        from cvcpkg.builder import get_downstream
+
+        a = self._make_recipe(tmp_path, "a")
+        assert get_downstream("a", [a]) == []
+
+    def test_single_downstream(self, tmp_path):
+        from cvcpkg.builder import get_downstream
+
+        a = self._make_recipe(tmp_path, "a")
+        b = self._make_recipe(tmp_path, "b", deps=["a"])
+        result = get_downstream("a", [a, b])
+        assert result == ["b"]
+
+    def test_chain(self, tmp_path):
+        """a → b → c: downstream of a includes both b and c."""
+        from cvcpkg.builder import get_downstream
+
+        a = self._make_recipe(tmp_path, "a")
+        b = self._make_recipe(tmp_path, "b", deps=["a"])
+        c = self._make_recipe(tmp_path, "c", deps=["b"])
+        result = get_downstream("a", [a, b, c])
+        assert "b" in result
+        assert "c" in result
+
+    def test_diamond(self, tmp_path):
+        """a → {b, c} → d: all are downstream of a."""
+        from cvcpkg.builder import get_downstream
+
+        a = self._make_recipe(tmp_path, "a")
+        b = self._make_recipe(tmp_path, "b", deps=["a"])
+        c = self._make_recipe(tmp_path, "c", deps=["a"])
+        d = self._make_recipe(tmp_path, "d", deps=["b", "c"])
+        result = get_downstream("a", [a, b, c, d])
+        assert set(result) == {"b", "c", "d"}
+
+    def test_middle_node(self, tmp_path):
+        """Bumping b only cascades to c, not a."""
+        from cvcpkg.builder import get_downstream
+
+        a = self._make_recipe(tmp_path, "a")
+        b = self._make_recipe(tmp_path, "b", deps=["a"])
+        c = self._make_recipe(tmp_path, "c", deps=["b"])
+        result = get_downstream("b", [a, b, c])
+        assert result == ["c"]
+
+
+class TestBumpRevisionInYaml:
+    """Tests for _bump_revision_in_yaml()."""
+
+    def test_basic_bump(self, tmp_path):
+        from cvcpkg.builder import _bump_revision_in_yaml
+
+        p = tmp_path / "recipe.yaml"
+        p.write_text(
+            "recipe:\n" "  name: foo\n" "  upstream_version: '1.0.0'\n" "  cvc_revision: 1\n"
+        )
+        _bump_revision_in_yaml(p, 2)
+        text = p.read_text()
+        assert "cvc_revision: 2" in text
+        assert "cvc_revision: 1" not in text
+
+    def test_preserves_other_content(self, tmp_path):
+        from cvcpkg.builder import _bump_revision_in_yaml
+
+        original = (
+            "schema_version: 1\n"
+            "recipe:\n"
+            "  name: bar\n"
+            "  upstream_version: '2.0.0'\n"
+            "  cvc_revision: 3\n"
+            "  description: 'A useful library'\n"
+            "source:\n"
+            "  type: vendored\n"
+        )
+        p = tmp_path / "recipe.yaml"
+        p.write_text(original)
+        _bump_revision_in_yaml(p, 4)
+        text = p.read_text()
+        assert "cvc_revision: 4" in text
+        assert "description: 'A useful library'" in text
+        assert "schema_version: 1" in text
+        assert "type: vendored" in text
+
+    def test_inserts_when_missing(self, tmp_path):
+        from cvcpkg.builder import _bump_revision_in_yaml
+
+        p = tmp_path / "recipe.yaml"
+        p.write_text(
+            "recipe:\n" "  name: baz\n" "  upstream_version: '1.0.0'\n" "  description: 'test'\n"
+        )
+        _bump_revision_in_yaml(p, 5)
+        text = p.read_text()
+        assert "cvc_revision: 5" in text
+
+    def test_multidigit_revision(self, tmp_path):
+        from cvcpkg.builder import _bump_revision_in_yaml
+
+        p = tmp_path / "recipe.yaml"
+        p.write_text(
+            "recipe:\n" "  name: multi\n" "  upstream_version: '1.0.0'\n" "  cvc_revision: 99\n"
+        )
+        _bump_revision_in_yaml(p, 100)
+        text = p.read_text()
+        assert "cvc_revision: 100" in text
+        assert "cvc_revision: 99" not in text
+
+
+class TestRevBump:
+    """Tests for rev_bump() — integrated revision bumping."""
+
+    def _make_recipe(self, recipes_dir, name, deps=None, revision=1):
+        d = {
+            "schema_version": 1,
+            "recipe": {
+                "name": name,
+                "upstream_version": "1.0.0",
+                "cvc_revision": revision,
+            },
+            "source": {"type": "vendored", "path": f"third-party/{name}"},
+            "patches": [],
+            "build": {
+                "matrix": [{"platform": "linux", "script": "build.sh"}],
+            },
+            "package": {"files": ["lib/*"], "cmake_packages": []},
+        }
+        if deps:
+            d["depends"] = {"build": deps}
+        _write_recipe(recipes_dir / name, d)
+
+    def test_bump_single_no_cascade(self, tmp_path):
+        from cvcpkg.builder import rev_bump
+
+        recipes_dir = tmp_path / "recipes"
+        self._make_recipe(recipes_dir, "a")
+        self._make_recipe(recipes_dir, "b", deps=["a"])
+
+        bumped = rev_bump("a", recipes_dir, cascade=False)
+        assert len(bumped) == 1
+        assert bumped[0] == ("a", 1, 2)
+
+        # Verify YAML was updated
+        r = Recipe.load(recipes_dir / "a")
+        assert r.cvc_revision == 2
+
+        # Verify b was NOT bumped
+        r = Recipe.load(recipes_dir / "b")
+        assert r.cvc_revision == 1
+
+    def test_bump_with_cascade(self, tmp_path):
+        from cvcpkg.builder import rev_bump
+
+        recipes_dir = tmp_path / "recipes"
+        self._make_recipe(recipes_dir, "a")
+        self._make_recipe(recipes_dir, "b", deps=["a"])
+        self._make_recipe(recipes_dir, "c", deps=["b"])
+
+        bumped = rev_bump("a", recipes_dir, cascade=True)
+        names = [b[0] for b in bumped]
+        assert "a" in names
+        assert "b" in names
+        assert "c" in names
+        assert len(bumped) == 3
+
+        # All revisions should be 2 now
+        for name in ["a", "b", "c"]:
+            r = Recipe.load(recipes_dir / name)
+            assert r.cvc_revision == 2
+
+    def test_bump_diamond(self, tmp_path):
+        from cvcpkg.builder import rev_bump
+
+        recipes_dir = tmp_path / "recipes"
+        self._make_recipe(recipes_dir, "a")
+        self._make_recipe(recipes_dir, "b", deps=["a"])
+        self._make_recipe(recipes_dir, "c", deps=["a"])
+        self._make_recipe(recipes_dir, "d", deps=["b", "c"])
+
+        bumped = rev_bump("a", recipes_dir)
+        names = [b[0] for b in bumped]
+        assert set(names) == {"a", "b", "c", "d"}
+
+    def test_bump_leaf_no_cascade(self, tmp_path):
+        """Bumping a leaf recipe with no dependents."""
+        from cvcpkg.builder import rev_bump
+
+        recipes_dir = tmp_path / "recipes"
+        self._make_recipe(recipes_dir, "a")
+        self._make_recipe(recipes_dir, "b", deps=["a"])
+
+        bumped = rev_bump("b", recipes_dir)
+        assert len(bumped) == 1
+        assert bumped[0] == ("b", 1, 2)
+
+    def test_bump_nonexistent_raises(self, tmp_path):
+        from cvcpkg.builder import rev_bump
+
+        recipes_dir = tmp_path / "recipes"
+        self._make_recipe(recipes_dir, "a")
+
+        with pytest.raises(RecipeError, match="not found"):
+            rev_bump("nonexistent", recipes_dir)
+
+    def test_bump_preserves_existing_revision(self, tmp_path):
+        """Recipes with different starting revisions get +1."""
+        from cvcpkg.builder import rev_bump
+
+        recipes_dir = tmp_path / "recipes"
+        self._make_recipe(recipes_dir, "a", revision=5)
+        self._make_recipe(recipes_dir, "b", deps=["a"], revision=3)
+
+        bumped = rev_bump("a", recipes_dir)
+        revs = {name: (old, new) for name, old, new in bumped}
+        assert revs["a"] == (5, 6)
+        assert revs["b"] == (3, 4)
+
+    def test_bump_idempotent_yaml(self, tmp_path):
+        """Bumping twice produces revision 3."""
+        from cvcpkg.builder import rev_bump
+
+        recipes_dir = tmp_path / "recipes"
+        self._make_recipe(recipes_dir, "a")
+
+        rev_bump("a", recipes_dir, cascade=False)
+        bumped = rev_bump("a", recipes_dir, cascade=False)
+        assert bumped[0] == ("a", 2, 3)
+
+        r = Recipe.load(recipes_dir / "a")
+        assert r.cvc_revision == 3
