@@ -121,6 +121,7 @@ class OrganizationRow(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     logo_url: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     homepage: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    is_private: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     storage_limit_bytes: Mapped[int] = mapped_column(
         BigInteger,
         nullable=False,

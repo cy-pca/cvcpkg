@@ -178,6 +178,7 @@ class OrgInfo(BaseModel):
     description: str = ""
     logo_url: str = ""
     homepage: str = ""
+    is_private: bool = False
     storage_limit_bytes: int = 10 * 1024 * 1024 * 1024
     storage_used_bytes: int = 0
     created_at: datetime.datetime = Field(
@@ -202,6 +203,7 @@ class OrgCreateRequest(BaseModel):
     description: str = ""
     logo_url: str = ""
     homepage: str = ""
+    is_private: bool = False
 
 
 class OrgUpdateRequest(BaseModel):
@@ -209,6 +211,7 @@ class OrgUpdateRequest(BaseModel):
     description: str | None = None
     logo_url: str | None = None
     homepage: str | None = None
+    is_private: bool | None = None
 
 
 class OrgDetailResponse(BaseModel):
