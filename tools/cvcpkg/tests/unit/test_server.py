@@ -902,3 +902,141 @@ class TestChunkedUpload:
             headers={"Authorization": f"Bearer {pub_token}"},
         )
         assert resp.status_code == 400
+
+
+# ── Organization endpoints (file-backend, no DB) ───────────────
+
+
+class TestOrgEndpointsNoDB:
+    """Org endpoints should gracefully degrade when no DB backend is configured."""
+
+    def test_create_org_returns_501(self, server_env):
+        client, admin_tok, *_ = server_env
+        resp = client.post(
+            "/v1/orgs",
+            json={
+                "slug": "my-org",
+                "display_name": "My Org",
+            },
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 501
+
+    def test_list_orgs_empty_without_db(self, server_env):
+        client, *_ = server_env
+        resp = client.get("/v1/orgs")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 0
+        assert data["organizations"] == []
+
+    def test_get_org_returns_404_without_db(self, server_env):
+        client, *_ = server_env
+        resp = client.get("/v1/orgs/nonexistent")
+        assert resp.status_code == 404
+
+    def test_update_org_returns_501(self, server_env):
+        client, admin_tok, *_ = server_env
+        resp = client.patch(
+            "/v1/orgs/some-org",
+            json={"display_name": "Updated"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 501
+
+    def test_upload_logo_returns_501(self, server_env):
+        client, admin_tok, *_ = server_env
+        resp = client.post(
+            "/v1/orgs/some-org/logo",
+            files={"file": ("logo.png", io.BytesIO(b"\x89PNG"), "image/png")},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 501
+
+    def test_serve_logo_returns_404(self, server_env):
+        client, *_ = server_env
+        resp = client.get("/v1/orgs/nonexistent/logo")
+        assert resp.status_code == 404
+
+
+class TestOrgLogoServe:
+    """Test logo serving from disk (no DB required for the serve endpoint)."""
+
+    def test_serve_logo_png(self, tmp_path):
+        store = TokenStore(tmp_path)
+        store.create("admin", TokenRole.admin)
+        # Place a logo file directly
+        logos_dir = tmp_path / "logos"
+        logos_dir.mkdir()
+        (logos_dir / "test-org.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 20)
+
+        app = create_app(state_dir=tmp_path)
+        with TestClient(app) as client:
+            resp = client.get("/v1/orgs/test-org/logo")
+            assert resp.status_code == 200
+            assert resp.headers["content-type"] == "image/png"
+
+    def test_serve_logo_not_found(self, tmp_path):
+        store = TokenStore(tmp_path)
+        store.create("admin", TokenRole.admin)
+        # Ensure logos dir exists but no logo for this slug
+        (tmp_path / "logos").mkdir()
+
+        app = create_app(state_dir=tmp_path)
+        with TestClient(app) as client:
+            resp = client.get("/v1/orgs/no-org/logo")
+            assert resp.status_code == 404
+
+
+class TestOrgHTMLPages:
+    """Test that org HTML pages render without errors."""
+
+    def test_orgs_listing_page(self, server_env):
+        client, *_ = server_env
+        resp = client.get("/orgs")
+        assert resp.status_code == 200
+        assert "Organizations" in resp.text
+
+    def test_org_detail_page(self, server_env):
+        client, *_ = server_env
+        resp = client.get("/org/test-org")
+        assert resp.status_code == 200
+
+
+class TestOptionalToken:
+    """Test that the optional_token dependency works correctly."""
+
+    def test_get_org_without_auth(self, server_env):
+        """GET /v1/orgs/{slug} should work without auth (for public orgs or 404)."""
+        client, *_ = server_env
+        resp = client.get("/v1/orgs/nonexistent")
+        # Should get 404 not 401 — auth is optional
+        assert resp.status_code == 404
+
+    def test_orgs_list_without_auth(self, server_env):
+        client, *_ = server_env
+        resp = client.get("/v1/orgs")
+        assert resp.status_code == 200
+
+
+class TestPublishWithOrg:
+    """Test that the publish endpoint accepts the org query parameter."""
+
+    def test_publish_with_org_param(self, server_env):
+        client, _, pub_tok, _ = server_env
+        archive = b"fake archive content"
+        resp = client.post(
+            "/v1/publish",
+            params={
+                "name": "org-test-pkg",
+                "version": "1.0",
+                "platform": "linux",
+                "arch": "x86_64",
+                "org": "cvc-lab",
+            },
+            files={"file": ("org-test-pkg.tar.zst", io.BytesIO(archive))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["name"] == "org-test-pkg"

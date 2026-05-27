@@ -394,3 +394,57 @@ class TestDropdownTouch:
         page.locator("section.hero").click()
         page.wait_for_timeout(300)
         assert not dropdown.evaluate("el => el.classList.contains('is-active')")
+
+
+# ── Organization detail page ───────────────────────────────────
+
+
+class TestOrgDetailPage:
+    """Tests for the /org/{slug} detail page."""
+
+    def test_org_detail_page_loads(self, page):
+        page.goto(f"{SERVER_URL}/org/test-org")
+        assert page.locator("nav.navbar").is_visible()
+        # Page should render even if org doesn't exist
+        page.wait_for_load_state("networkidle")
+
+    def test_org_detail_has_navbar(self, page):
+        page.goto(f"{SERVER_URL}/org/any-org")
+        navbar = page.locator("nav.navbar")
+        assert navbar.is_visible()
+        brand = page.locator(".navbar-brand a.navbar-item").first
+        assert brand.is_visible()
+
+    def test_org_detail_burger_on_mobile(self, page):
+        page.set_viewport_size({"width": 375, "height": 812})
+        page.goto(f"{SERVER_URL}/org/any-org")
+        burger = page.locator(".navbar-burger")
+        assert burger.is_visible()
+
+
+class TestOrganizationsPagePrivacy:
+    """Tests for privacy features on the orgs listing page."""
+
+    def test_orgs_page_no_auth_required(self, page):
+        """The /orgs page should load without any authentication."""
+        resp = page.request.get(f"{SERVER_URL}/orgs")
+        assert resp.status == 200
+        assert "Organizations" in resp.text()
+
+    def test_orgs_api_returns_json(self, page):
+        """The /v1/orgs endpoint should return a valid JSON array."""
+        resp = page.request.get(f"{SERVER_URL}/v1/orgs")
+        assert resp.status == 200
+        data = resp.json()
+        assert "total" in data
+        assert "organizations" in data
+        assert isinstance(data["organizations"], list)
+
+    def test_orgs_navbar_link_works(self, page):
+        """Organizations link in navbar should navigate to /orgs."""
+        page.goto(SERVER_URL)
+        orgs_link = page.locator(".navbar-end a[href='/orgs']")
+        if orgs_link.count() > 0:
+            orgs_link.click()
+            page.wait_for_url(re.compile(r"/orgs"))
+            assert "Organizations" in page.content()

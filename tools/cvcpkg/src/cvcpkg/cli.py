@@ -890,12 +890,18 @@ def push(archives: tuple[str, ...], dest: str) -> None:
     help="Files larger than this (bytes) use chunked upload.  [default: 10MB]",
     show_default=True,
 )
+@click.option(
+    "--org",
+    default="",
+    help="Organization slug to publish packages under.",
+)
 def publish(
     archives: tuple[str, ...],
     server: str,
     token: str,
     release_tag: str,
     chunked_threshold: int,
+    org: str,
 ) -> None:
     """Publish bundle archive(s) to a cvcpkg-server via its REST API.
 
@@ -963,6 +969,7 @@ def publish(
             "license": meta.get("license", ""),
             "maintainer": meta.get("maintainer", ""),
             "tags": meta.get("tags", ""),
+            "org": org,
         }
 
         try:
@@ -1764,6 +1771,11 @@ def build_all_cmd(
     "Only recipes assigned to this shard are packaged; "
     "their dependencies are still built.",
 )
+@click.option(
+    "--org",
+    default="",
+    help="Organization slug to embed in manifests.",
+)
 def pack_all_cmd(
     platform: str,
     config: str,
@@ -1776,6 +1788,7 @@ def pack_all_cmd(
     signing_key: str | None,
     host_platform: str,
     shard: str,
+    org: str,
 ) -> None:
     """Build and archive all recipes.
 
@@ -1859,6 +1872,7 @@ def pack_all_cmd(
             link,
             maintainer=maintainer,
             all_recipes=all_recipes,
+            org_slug=org,
         )
         staging = ctx.work_dir / "staging"
         staging.mkdir(exist_ok=True)
