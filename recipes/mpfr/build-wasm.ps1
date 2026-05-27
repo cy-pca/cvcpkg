@@ -4,14 +4,17 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\..\_common\env-wasm.ps1"
 
+$msysPrefix = ConvertTo-MsysPath $env:CVC_INSTALL_DIR
+$msysDepsPrefix = ConvertTo-MsysPath $env:CVC_DEPS_PREFIX
+
 Push-Location $env:CVC_SOURCE_DIR
 try {
     & emconfigure bash ./configure `
-        --prefix="$env:CVC_INSTALL_DIR" `
+        --prefix="$msysPrefix" `
         --host=none-none-none `
         --disable-shared `
         --enable-static `
-        --with-gmp="$env:CVC_DEPS_PREFIX"
+        --with-gmp="$msysDepsPrefix"
     if ($LASTEXITCODE -ne 0) { throw "configure failed" }
 
     & emmake make -j $env:CVC_JOBS

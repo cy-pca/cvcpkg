@@ -11,10 +11,13 @@ $fftwPrefix = if ($env:CVC_DEPS_PREFIX -and (Test-Path "$env:CVC_DEPS_PREFIX\inc
     $env:CVC_INSTALL_DIR
 }
 
+$msysPrefix = ConvertTo-MsysPath $env:CVC_INSTALL_DIR
+$msysFftwPrefix = ConvertTo-MsysPath $fftwPrefix
+
 Push-Location $env:CVC_SOURCE_DIR
 try {
     & emconfigure bash ./configure `
-        --prefix="$env:CVC_INSTALL_DIR" `
+        --prefix="$msysPrefix" `
         --host=none-none-none `
         --disable-shared `
         --enable-static `
@@ -22,8 +25,8 @@ try {
         --disable-examples `
         --disable-applications `
         --disable-openmp `
-        "--with-fftw3-includedir=$fftwPrefix\include" `
-        "--with-fftw3-libdir=$fftwPrefix\lib" `
+        "--with-fftw3-includedir=$msysFftwPrefix/include" `
+        "--with-fftw3-libdir=$msysFftwPrefix/lib" `
         'CFLAGS=-O3 -ffast-math'
     if ($LASTEXITCODE -ne 0) { throw "configure failed" }
 
