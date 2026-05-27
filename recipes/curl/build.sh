@@ -47,8 +47,9 @@ if [[ -n "${CVC_DEPS_PREFIX}" && -d "${CVC_DEPS_PREFIX}/include/openssl" ]]; the
     CONFIGURE_ARGS+=(--with-openssl="${CVC_DEPS_PREFIX}")
     export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
     export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-    # Embed RPATH so libcurl finds our OpenSSL at runtime without LD_LIBRARY_PATH.
-    export LDFLAGS="${LDFLAGS:-} -Wl,-rpath,${CVC_DEPS_PREFIX}/lib"
+    # Embed $ORIGIN RPATH so libcurl finds libssl next to itself in any prefix.
+    # The temporary build prefix gets cleaned up, so absolute RPATHs won't work.
+    export LDFLAGS="${LDFLAGS:-} -Wl,-rpath,\$ORIGIN"
 fi
 
 ./configure "${CONFIGURE_ARGS[@]}"
