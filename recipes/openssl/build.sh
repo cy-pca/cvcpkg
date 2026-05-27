@@ -21,10 +21,17 @@ case "${CVC_PLATFORM}" in
         ;;
 esac
 
+OPENSSL_OPTS=()
+if [[ "${CVC_LINK}" == "static" ]]; then
+    OPENSSL_OPTS+=(no-shared)
+else
+    OPENSSL_OPTS+=(shared)
+fi
+
 ./Configure "${TARGET}" \
     --prefix="${CVC_INSTALL_DIR}" \
     --openssldir="${CVC_INSTALL_DIR}/etc/ssl" \
-    shared \
+    "${OPENSSL_OPTS[@]}" \
     no-tests
 
 make -j "${CVC_JOBS}"
