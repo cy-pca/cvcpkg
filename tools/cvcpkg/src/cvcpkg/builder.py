@@ -1257,3 +1257,111 @@ def load_all_recipes(recipe_dirs: list[Path]) -> list[Recipe]:
                     )
                 by_name[recipe.name] = recipe
     return sorted(by_name.values(), key=lambda r: r.name)
+
+
+# ── Revision bumping ───────────────────────────────────────────
+
+
+def get_reverse_deps(
+    recipes: list[Recipe],
+    platform: str = "",
+) -> dict[str, set[str]]:
+    """Build a reverse dependency map: package → set of direct dependants.
+
+    Each key is a recipe name; its value is the set of recipe names
+    that list it as a build or host-tool dependency.
+    """
+    reverse: dict[str, set[str]] = {}
+    for r in recipes:
+        for dep_name in _dep_names(r, platform):
+            reverse.setdefault(dep_name, set()).add(r.name)
+    return reverse
+
+
+def get_downstream(
+    name: str,
+    recipes: list[Recipe],
+    platform: str = "",
+) -> list[str]:
+    """Return all recipes that transitively depend on *name*.
+
+    The returned list is in topological (dependency-first) order so
+    that a caller can bump revisions leaf-to-root.
+    """
+    reverse = get_reverse_deps(recipes, platform)
+    visited: set[str] = set()
+    result: list[str] = []
+
+    def walk(n: str) -> None:
+        for dependent in sorted(reverse.get(n, ())):
+            if dependent not in visited:
+                visited.add(dependent)
+                walk(dependent)
+                result.append(dependent)
+
+    walk(name)
+    return result
+
+
+def _bump_revision_in_yaml(recipe_yaml: Path, new_revision: int) -> None:
+    """Edit the ``cvc_revision`` field in a recipe.yaml in-place.
+
+    Uses a regex replacement so comments and formatting are preserved.
+    If there is no ``cvc_revision`` line, one is inserted after the
+    ``upstream_version`` line.
+    """
+    import re
+
+    text = recipe_yaml.read_text()
+    pattern = re.compile(r"^(\s*cvc_revision\s*:\s*)\d+", re.MULTILINE)
+    if pattern.search(text):
+        text = pattern.sub(rf"\g<1>{new_revision}", text)
+    else:
+        # Insert after upstream_version line
+        uv_pattern = re.compile(r"^(\s*upstream_version\s*:.*\n)", re.MULTILINE)
+        m = uv_pattern.search(text)
+        if m:
+            indent = re.match(r"\s*", m.group(1)).group()  # type: ignore[union-attr]
+            insertion = f"{indent}cvc_revision: {new_revision}\n"
+            text = text[: m.end()] + insertion + text[m.end() :]
+        else:
+            raise RecipeError(f"Cannot find upstream_version in {recipe_yaml}")
+    recipe_yaml.write_text(text)
+
+
+def rev_bump(
+    name: str,
+    recipes_dir: Path,
+    *,
+    platform: str = "",
+    cascade: bool = True,
+) -> list[tuple[str, int, int]]:
+    """Bump ``cvc_revision`` for a recipe and its downstream dependents.
+
+    Returns a list of ``(recipe_name, old_revision, new_revision)``
+    tuples for every recipe that was modified.
+
+    When *cascade* is ``True`` (the default), all transitive
+    dependents also have their revisions bumped so that consumers
+    pick up the patched dependency tree.
+    """
+    recipes = list_recipes(recipes_dir)
+    by_name = {r.name: r for r in recipes}
+
+    if name not in by_name:
+        raise RecipeError(f"Recipe '{name}' not found in {recipes_dir}")
+
+    targets = [name]
+    if cascade:
+        targets.extend(get_downstream(name, recipes, platform))
+
+    bumped: list[tuple[str, int, int]] = []
+    for target_name in targets:
+        recipe = by_name[target_name]
+        old_rev = recipe.cvc_revision
+        new_rev = old_rev + 1
+        recipe_yaml = recipe.recipe_dir / "recipe.yaml"
+        _bump_revision_in_yaml(recipe_yaml, new_rev)
+        bumped.append((target_name, old_rev, new_rev))
+
+    return bumped
