@@ -307,12 +307,21 @@ def install(
     #   server → pkg.tx.wtf only, no fallback
     #   github → GitHub Pages only, no fallback
     catalog_url = catalog or ""
+    if source == "github":
+        catalog_url = catalog_url or GITHUB_CATALOG_URL
+    fallback_urls: list[str] = []
+    if source == "auto" and not catalog_url:
+        fallback_urls = [GITHUB_CATALOG_URL]
     catalog_failed = False
     try:
         if catalog_url and Path(catalog_url).is_file():
             cat = load_catalog_from_file(catalog_url)
         else:
-            cat = fetch_catalog(catalog_url, cache_dir=default_cache_dir())
+            cat = fetch_catalog(
+                catalog_url,
+                cache_dir=default_cache_dir(),
+                fallback_urls=fallback_urls or None,
+            )
     except Exception as exc:
         if not fallback_to_source:
             raise
