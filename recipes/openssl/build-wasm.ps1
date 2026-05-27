@@ -4,12 +4,14 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\..\_common\env-wasm.ps1"
 
+$msysInstallDir = ConvertTo-MsysPath $env:CVC_INSTALL_DIR
+
 Push-Location $env:CVC_SOURCE_DIR
 try {
     & emconfigure perl Configure `
         linux-generic32 `
-        --prefix="$env:CVC_INSTALL_DIR" `
-        --openssldir="$env:CVC_INSTALL_DIR\ssl" `
+        --prefix="$msysInstallDir" `
+        --openssldir="$msysInstallDir/ssl" `
         no-shared `
         no-asm `
         no-threads `

@@ -71,5 +71,17 @@ function Invoke-CvcWasmCMakeBuild {
     if ($LASTEXITCODE -ne 0) { throw "cmake install failed" }
 }
 
+function ConvertTo-MsysPath {
+    # Convert a Windows path (C:\foo\bar) to MSYS/Git-Bash style (/c/foo/bar)
+    # so that autotools configure scripts invoked via `bash` work correctly.
+    param([string]$Path)
+    if ($Path -match '^([A-Za-z]):(.*)$') {
+        $drive = $Matches[1].ToLower()
+        $rest = $Matches[2] -replace '\\','/'
+        return "/$drive$rest"
+    }
+    return ($Path -replace '\\','/')
+}
+
 Write-Host "-- env-wasm.ps1 loaded --"
 Write-Host "  EMSDK=$env:CVC_EMSDK_DIR  BUILD_TYPE=$cmakeBuildType  LINK=static  JOBS=$env:CVC_JOBS"
