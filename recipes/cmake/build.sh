@@ -22,6 +22,11 @@ CMAKE_FLAGS=(
 
 if [[ -n "${CVC_DEPS_PREFIX:-}" ]]; then
     CMAKE_FLAGS+=(-DCMAKE_PREFIX_PATH="${CVC_DEPS_PREFIX}")
+    # Embed RPATH so the cmake binary (and any helpers) can find
+    # recipe-built shared libs (libcurl, libssl) at build-time AND
+    # install-time without relying on LD_LIBRARY_PATH alone.
+    CMAKE_FLAGS+=(-DCMAKE_BUILD_RPATH="${CVC_DEPS_PREFIX}/lib")
+    CMAKE_FLAGS+=(-DCMAKE_INSTALL_RPATH="${CVC_DEPS_PREFIX}/lib")
     export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
     export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 fi
@@ -29,4 +34,14 @@ fi
 ./bootstrap "${BOOTSTRAP_ARGS[@]}" -- "${CMAKE_FLAGS[@]}"
 
 make -j "${CVC_JOBS}"
+
+# Debug: verify libssl and libcurl are discoverable before install
+echo "=== cmake build.sh: LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-<unset>}"
+if [[ -n "${CVC_DEPS_PREFIX:-}" ]]; then
+    echo "=== cmake build.sh: CVC_DEPS_PREFIX=${CVC_DEPS_PREFIX}"
+    ls -la "${CVC_DEPS_PREFIX}/lib"/libssl* "${CVC_DEPS_PREFIX}/lib"/libcurl* 2>/dev/null || echo "=== WARNING: libssl/libcurl not found in prefix/lib"
+    echo "=== cmake build.sh: checking bin/cmake dynamic deps:"
+    ldd bin/cmake 2>/dev/null | grep -E "ssl|curl|crypto" || true
+fi
+
 make install
