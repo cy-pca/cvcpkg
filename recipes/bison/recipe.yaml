@@ -23,7 +23,8 @@ patches: []
 
 depends:
   build: []
-  host_tools: []
+  host_tools:
+    - m4
 
 build:
   build_type_independent: true
