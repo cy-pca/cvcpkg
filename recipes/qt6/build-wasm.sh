@@ -16,8 +16,11 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_HOST_PLATFORM:-${CVC_PLATFORM}}.sh"
 : "${CVC_EMSDK_DIR:?CVC_EMSDK_DIR must point to the activated emsdk bundle}"
 
 # --- Step 1: Build a native host Qt (needed for moc/rcc/uic). ---
+# Clear CMAKE_PREFIX_PATH so the host build doesn't pick up wasm
+# libraries from the cross-compilation prefix (e.g. wasm libz.a
+# causes "file format not recognized" when linking native rcc).
 HOST_BUILD_DIR="${CVC_BUILD_DIR}/host-qt"
-cmake -G Ninja \
+CMAKE_PREFIX_PATH="" cmake -G Ninja \
     -S "${CVC_SOURCE_DIR}" \
     -B "${HOST_BUILD_DIR}" \
     -DCMAKE_INSTALL_PREFIX="${CVC_BUILD_DIR}/host-qt-install" \
