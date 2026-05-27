@@ -35,6 +35,13 @@ CONFIGURE_ARGS=(
     --disable-tftp
 )
 
+# Respect static/shared link mode.
+if [[ "${CVC_LINK:-shared}" == "static" ]]; then
+    CONFIGURE_ARGS+=(--disable-shared --enable-static)
+else
+    CONFIGURE_ARGS+=(--enable-shared --disable-static)
+fi
+
 # Point to our openssl if built as a dependency.
 if [[ -n "${CVC_DEPS_PREFIX}" && -d "${CVC_DEPS_PREFIX}/include/openssl" ]]; then
     CONFIGURE_ARGS+=(--with-openssl="${CVC_DEPS_PREFIX}")
