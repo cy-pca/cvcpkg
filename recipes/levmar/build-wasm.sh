@@ -13,6 +13,7 @@ cmake -G Ninja \
     -B "${CVC_BUILD_DIR}" \
     -DCMAKE_INSTALL_PREFIX="${CVC_INSTALL_DIR}" \
     -DCMAKE_PREFIX_PATH="${CVC_DEPS_PREFIX}" \
+    -DCMAKE_FIND_ROOT_PATH="${CVC_DEPS_PREFIX}" \
     -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     -DCMAKE_TOOLCHAIN_FILE="${EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake" \

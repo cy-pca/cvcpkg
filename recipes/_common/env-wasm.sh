@@ -24,6 +24,10 @@ export CVC_LINK
 
 # Re-define cvc_cmake_build to inject the Emscripten toolchain file.
 cvc_cmake_build() {
+    local _find_root_path_args=()
+    if [[ -n "${CVC_DEPS_PREFIX:-}" ]]; then
+        _find_root_path_args+=(-DCMAKE_FIND_ROOT_PATH="${CVC_DEPS_PREFIX}")
+    fi
     cmake -G Ninja \
         -S "${CVC_SOURCE_DIR}" \
         -B "${CVC_BUILD_DIR}" \
@@ -34,6 +38,7 @@ cvc_cmake_build() {
         -DCMAKE_CXX_STANDARD=17 \
         -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
         -DCMAKE_TOOLCHAIN_FILE="${EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake" \
+        ${_find_root_path_args[@]+"${_find_root_path_args[@]}"} \
         "$@"
     cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
     cmake --install "${CVC_BUILD_DIR}"
