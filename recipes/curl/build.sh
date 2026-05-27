@@ -14,9 +14,10 @@ cd "${CVC_SOURCE_DIR}"
 CONFIGURE_ARGS=(
     --prefix="${CVC_INSTALL_DIR}"
     --with-openssl
+    --with-zlib                 # system zlib (can't use our recipe — circular dep)
     --without-libpsl
     --without-brotli
-    --without-zstd
+    --without-zstd              # our zstd recipe depends on cmake (circular)
     --without-nghttp2
     --without-libidn2
     --without-libssh2
