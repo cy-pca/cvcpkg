@@ -9,10 +9,13 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 # CMakeLists.txt pass and cmake skips its own flaky downloads.
 _grpc_fetch_archive() {
     local dest="$1" url="$2" sha256="$3" strip_dir="$4"
-    if [[ -e "$dest" ]]; then return 0; fi
+    if [[ -e "$dest" ]]; then
+        echo "cvcpkg: $dest already exists, skipping download"
+        return 0
+    fi
     local tmp
     tmp="$(mktemp -d)"
-    echo "cvcpkg: downloading $(basename "$dest") ..."
+    echo "cvcpkg: downloading $dest from $url ..."
     curl -fsSL --retry 5 --retry-delay 3 -o "$tmp/archive" "$url"
     local actual
     actual="$(sha256sum "$tmp/archive" | awk '{print $1}')"
@@ -30,9 +33,10 @@ _grpc_fetch_archive() {
     mkdir -p "$(dirname "$dest")"
     mv "$tmp/extract/$strip_dir" "$dest"
     rm -rf "$tmp"
+    echo "cvcpkg: installed $dest ($(ls "$dest" | wc -l) entries)"
 }
 
-_src="${CVC_SRC_DIR:-$PWD}"
+_src="${CVC_SOURCE_DIR}"
 _grpc_fetch_archive \
     "$_src/third_party/envoy-api" \
     "https://github.com/envoyproxy/data-plane-api/archive/f8b75d1efa92bbf534596a013d9ca5873f79dd30.tar.gz" \

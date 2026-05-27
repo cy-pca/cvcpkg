@@ -48,7 +48,7 @@ function Invoke-GrpcFetchArchive {
     Remove-Item -Recurse -Force $tmp
 }
 
-$srcDir = if ($env:CVC_SRC_DIR) { $env:CVC_SRC_DIR } else { $PWD.Path }
+$srcDir = $env:CVC_SOURCE_DIR
 
 Invoke-GrpcFetchArchive `
     -Dest "$srcDir\third_party\envoy-api" `
