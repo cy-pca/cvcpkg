@@ -1,5 +1,74 @@
 # Known Issues
 
+## BSD: cryptography package requires OS-level installation
+
+### Symptom
+
+`pip install cvcpkg` fails on FreeBSD, OpenBSD, and NetBSD when
+building the `cryptography` dependency from source:
+
+```
+× pip subprocess to install build dependencies did not run successfully.
+│ exit code: 1
+  Collecting maturin!=1.12.0,<2,>=1.9.4
+    Unsupported platform: 312
+    Rust not found, installing into a temporary directory
+  error: metadata-generation-failed
+```
+
+### Root cause
+
+The `cryptography` Python package uses **maturin** as its build
+backend (a Rust-based tool). On BSD platforms:
+
+1. **maturin's platform detection fails** — it emits "Unsupported
+   platform: 312" and cannot determine the target OS.
+2. **Even with Rust installed from packages**, building maturin from
+   source via `cargo install` either:
+   - Fails due to Cargo.lock pinning dependencies that require a
+     newer Rust (e.g., `time@0.3.47` needs rustc 1.88+, but OpenBSD
+     7.7 ships rustc 1.86).
+   - Segfaults (SIGSEGV in `cc1plus` or `rustc`) on OpenBSD 7.7
+     due to compiler bugs.
+3. **OpenBSD disk layout** — the default auto-partitioning allocates
+   only ~3GB to `/usr` and 1GB to `/`. Rust alone needs ~750MB
+   under `/usr/local`, and `cargo build` fills `/tmp` (on root).
+
+### Solution
+
+Install `cryptography` from **OS packages** (pre-built by
+ports/packages maintainers) before running `pip install cvcpkg`:
+
+| OS | Command | Package version |
+|---|---|---|
+| FreeBSD 14.4 | `pkg install -y py311-cryptography` | 46.0.7 |
+| OpenBSD 7.7 | `pkg_add py3-cryptography` | 44.0.2 |
+| NetBSD 10.1 | `pkgin -y install py313-cryptography` | 46.0.5 |
+
+The CI workflow (`bsd-recipe-build.yml`) runs this step automatically
+before installing cvcpkg.
+
+### OpenBSD disk requirements
+
+The `openbsd-build` VM has the following disk layout to accommodate
+Rust and build artifacts:
+
+- `/usr/local` mounted on a separate 43GB partition (`sd0f`) —
+  required because the default `/usr` is only 3GB.
+- `TMPDIR=/usr/local/tmp` must be set for all builds to avoid
+  filling the 1GB root partition.
+- fstab entry: `/dev/sd0f /usr/local ffs rw,nodev 1 2`
+
+### Verified functionality
+
+With the OS-packaged `cryptography`, the full `cvcpkg.signing`
+module works on OpenBSD 7.7:
+
+- Ed25519 key generation (`generate_keypair`)
+- File signing (`sign_file`) and verification (`verify_file`)
+- Bytes signing (`sign_bytes`) and verification (`verify_bytes`)
+- PEM key serialization and keyring management
+
 ## Windows static builds: mpfr hang in vcpkg
 
 ### Symptom
