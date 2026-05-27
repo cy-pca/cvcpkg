@@ -949,3 +949,110 @@ class TestPackAllOrgFlag:
         assert ret == 0
         out = capsys.readouterr().out
         assert "--org" in out
+
+
+# ── rev-bump CLI ────────────────────────────────────────────────
+
+
+class TestRevBumpCli:
+    """Tests for the cvcpkg rev-bump CLI command."""
+
+    @staticmethod
+    def _make_recipe(recipes_dir, name, deps=None, revision=1):
+        d = recipes_dir / name
+        d.mkdir(parents=True, exist_ok=True)
+        recipe = {
+            "schema_version": 1,
+            "recipe": {
+                "name": name,
+                "upstream_version": "1.0.0",
+                "cvc_revision": revision,
+            },
+            "source": {"type": "vendored", "path": f"third-party/{name}"},
+            "patches": [],
+            "build": {"matrix": [{"platform": "linux", "script": "build.sh"}]},
+            "package": {"files": ["lib/*"], "cmake_packages": []},
+        }
+        if deps:
+            recipe["depends"] = {"build": deps}
+        (d / "recipe.yaml").write_text(yaml.dump(recipe, default_flow_style=False))
+
+    def test_help(self, capsys):
+        ret = main(["rev-bump", "--help"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "cvc_revision" in out
+        assert "--no-cascade" in out
+
+    def test_bump_single(self, tmp_path, capsys):
+        recipes_dir = tmp_path / "recipes"
+        self._make_recipe(recipes_dir, "alpha")
+        self._make_recipe(recipes_dir, "beta", deps=["alpha"])
+
+        ret = main(
+            [
+                "rev-bump",
+                "alpha",
+                "--no-cascade",
+                "--recipes-dir",
+                str(recipes_dir),
+            ]
+        )
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "alpha: cvc_revision 1" in out
+        assert "1 recipe(s) bumped" in out
+
+    def test_bump_with_cascade(self, tmp_path, capsys):
+        recipes_dir = tmp_path / "recipes"
+        self._make_recipe(recipes_dir, "alpha")
+        self._make_recipe(recipes_dir, "beta", deps=["alpha"])
+        self._make_recipe(recipes_dir, "gamma", deps=["beta"])
+
+        ret = main(
+            [
+                "rev-bump",
+                "alpha",
+                "--recipes-dir",
+                str(recipes_dir),
+            ]
+        )
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "alpha" in out
+        assert "beta" in out
+        assert "gamma" in out
+        assert "3 recipe(s) bumped" in out
+
+    def test_bump_nonexistent(self, tmp_path, capsys):
+        recipes_dir = tmp_path / "recipes"
+        self._make_recipe(recipes_dir, "alpha")
+
+        ret = main(
+            [
+                "rev-bump",
+                "nope",
+                "--recipes-dir",
+                str(recipes_dir),
+            ]
+        )
+        assert ret == 1
+
+    def test_bump_updates_yaml(self, tmp_path):
+        recipes_dir = tmp_path / "recipes"
+        self._make_recipe(recipes_dir, "a", revision=3)
+        self._make_recipe(recipes_dir, "b", deps=["a"], revision=7)
+
+        main(
+            [
+                "rev-bump",
+                "a",
+                "--recipes-dir",
+                str(recipes_dir),
+            ]
+        )
+
+        a_yaml = yaml.safe_load((recipes_dir / "a" / "recipe.yaml").read_text())
+        b_yaml = yaml.safe_load((recipes_dir / "b" / "recipe.yaml").read_text())
+        assert a_yaml["recipe"]["cvc_revision"] == 4
+        assert b_yaml["recipe"]["cvc_revision"] == 8

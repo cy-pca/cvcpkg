@@ -2207,6 +2207,55 @@ def verify_sig(archive: str, sig_file: str | None, keys_dir: str | None) -> None
     click.echo(f"Verified: signed by '{ki.label}' ({ki.fingerprint[:16]}…)")
 
 
+# ── rev-bump ────────────────────────────────────────────────────
+
+
+@cli.command("rev-bump")
+@click.argument("recipe_name")
+@_recipes_dir_opt
+@_platform_opt
+@click.option(
+    "--no-cascade",
+    is_flag=True,
+    default=False,
+    help="Only bump the named recipe; do not bump downstream dependents.",
+)
+def rev_bump_cmd(
+    recipe_name: str,
+    recipes_dirs: tuple[str, ...],
+    platform: str,
+    no_cascade: bool,
+) -> None:
+    """Bump the cvc_revision for a recipe and its dependents.
+
+    Increments the cvc_revision field in recipe.yaml for RECIPE_NAME
+    and, by default, for every recipe that transitively depends on it.
+    This ensures that a patched dependency triggers rebuilds of all
+    downstream packages.
+
+    \b
+    Examples:
+      cvcpkg rev-bump openssl
+      cvcpkg rev-bump zlib --no-cascade
+      cvcpkg rev-bump openssl --platform linux
+    """
+    from cvcpkg.builder import find_recipes_dir, rev_bump
+
+    rdirs = [Path(d) for d in recipes_dirs] if recipes_dirs else [find_recipes_dir()]
+    recipes_dir = rdirs[0]
+
+    bumped = rev_bump(
+        recipe_name,
+        recipes_dir,
+        platform=platform or "",
+        cascade=not no_cascade,
+    )
+
+    for name, old_rev, new_rev in bumped:
+        click.echo(f"  {name}: cvc_revision {old_rev} → {new_rev}")
+    click.echo(f"\n{len(bumped)} recipe(s) bumped.")
+
+
 # ── main() wrapper for backward compat with tests ──────────────
 
 
