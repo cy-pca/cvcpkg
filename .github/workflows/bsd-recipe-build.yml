@@ -129,10 +129,12 @@ jobs:
           VM="root@${{ steps.vm.outputs.host }}"
           case "${{ inputs.platform }}" in
             freebsd)
-              ssh ${SSH_OPTS} "${VM}" "pkg install -y py311-cryptography py311-yaml py311-sqlite3"
+              ssh ${SSH_OPTS} "${VM}" "pkg install -y py311-cryptography py311-pyyaml py311-sqlite3"
               ;;
             openbsd)
-              ssh ${SSH_OPTS} "${VM}" "pkg_add py3-cryptography py3-yaml"
+              # pkg_add fails on collisions when packages are already installed;
+              # check first so re-runs don't fail on .pyc checksum mismatches.
+              ssh ${SSH_OPTS} "${VM}" "for p in py3-cryptography py3-yaml; do pkg_info \$p >/dev/null 2>&1 || pkg_add \$p; done"
               ;;
             netbsd)
               ssh ${SSH_OPTS} "${VM}" "pkgin -y install py313-pip py313-cryptography py313-yaml"
