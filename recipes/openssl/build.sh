@@ -11,7 +11,18 @@ case "${CVC_PLATFORM}" in
         TARGET="darwin64-arm64-cc"
         [[ "$(uname -m)" == "x86_64" ]] && TARGET="darwin64-x86_64-cc"
         ;;
-    freebsd|openbsd|netbsd)
+    freebsd)
+        TARGET="BSD-x86_64"
+        [[ "$(uname -m)" == "aarch64" ]] && TARGET="BSD-aarch64"
+        ;;
+    openbsd)
+        # OpenBSD needs its own target — the generic BSD-* target
+        # produces shared objects that don't link libc, which fails
+        # with OpenBSD's default --no-undefined linker behaviour.
+        TARGET="OpenBSD-x86_64"
+        [[ "$(uname -m)" == "aarch64" ]] && TARGET="OpenBSD-aarch64"
+        ;;
+    netbsd)
         TARGET="BSD-x86_64"
         [[ "$(uname -m)" == "aarch64" ]] && TARGET="BSD-aarch64"
         ;;
