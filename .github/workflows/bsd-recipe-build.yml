@@ -127,7 +127,7 @@ jobs:
               ssh ${SSH_OPTS} "${VM}" "pkg_add py3-cryptography py3-yaml"
               ;;
             netbsd)
-              ssh ${SSH_OPTS} "${VM}" "pkgin -y install py313-cryptography py313-yaml"
+              ssh ${SSH_OPTS} "${VM}" "pkgin -y install py313-pip py313-cryptography py313-yaml"
               ;;
           esac
 
