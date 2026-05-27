@@ -38,6 +38,8 @@ cmake -G Ninja \
     -S "${CVC_SOURCE_DIR}" \
     -B "${WASM_BUILD_DIR}" \
     -DCMAKE_INSTALL_PREFIX="${CVC_INSTALL_DIR}" \
+    -DCMAKE_PREFIX_PATH="${CVC_DEPS_PREFIX}" \
+    -DCMAKE_FIND_ROOT_PATH="${CVC_DEPS_PREFIX}" \
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_SHARED_LIBS=OFF \
     -DCMAKE_TOOLCHAIN_FILE="${EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake" \
