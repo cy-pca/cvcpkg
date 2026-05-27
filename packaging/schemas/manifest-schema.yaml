@@ -66,7 +66,7 @@ $defs:
         type: string
       platform:
         type: string
-        enum: [linux, macos, windows]
+        enum: [linux, macos, windows, freebsd, openbsd, netbsd]
       arch:
         type: string
         enum: [x86_64, arm64]
