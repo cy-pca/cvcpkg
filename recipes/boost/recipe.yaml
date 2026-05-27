@@ -61,3 +61,15 @@ package:
 
 abi:
   cxx_std: 17
+
+notes:
+  - title: "Wasm-excluded libraries"
+    platforms: [wasm]
+    description: >-
+      The following Boost libraries are excluded on wasm because they
+      depend on native assembly (x86/ARM context switching) or OS-specific
+      facilities not available in Emscripten: context, coroutine, fiber,
+      stacktrace, asio, cobalt, log, process, and beast.  Additionally,
+      BOOST_HAS_PTHREADS is defined to force Boost.Container to use
+      pthread mutex stubs (which Emscripten provides as no-ops in
+      single-threaded mode) rather than the Windows CriticalSection path.

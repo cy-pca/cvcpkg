@@ -28,7 +28,7 @@ depends:
       platforms: [linux]
     - name: clapack
       version: ">=3.2"
-      platforms: [windows]
+      platforms: [windows, wasm]
     - name: emsdk
       version: ">=5.0"
   host_tools:

@@ -10,7 +10,8 @@ cd "${CVC_SOURCE_DIR}"
 
 ./configure \
     --prefix="${CVC_INSTALL_DIR}" \
-    --disable-nls
+    --disable-nls \
+    --disable-shared
 
 make -j "${CVC_JOBS}"
 make install
