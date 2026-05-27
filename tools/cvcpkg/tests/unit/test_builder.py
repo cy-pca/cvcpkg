@@ -358,8 +358,8 @@ class TestSourceCacheDir:
         monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
         d = _source_cache_dir()
         assert d is not None
-        assert str(d).endswith("cvcpkg/sources")
-        assert ".cache" in str(d)
+        assert d.parts[-2:] == ("cvcpkg", "sources")
+        assert ".cache" in d.parts
 
     def test_xdg_cache_home(self, monkeypatch, tmp_path):
         monkeypatch.delenv("CVCPKG_SOURCE_CACHE_DIR", raising=False)
@@ -444,7 +444,7 @@ class TestSourceCacheFetchTarball:
         source = SourceSpec.from_dict(
             {
                 "type": "tarball",
-                "url": f"file://{tarball}",
+                "url": tarball.as_uri(),
                 "sha256": sha,
             }
         )
@@ -495,7 +495,7 @@ class TestSourceCacheFetchTarball:
         source = SourceSpec.from_dict(
             {
                 "type": "tarball",
-                "url": f"file://{tarball}",
+                "url": tarball.as_uri(),
                 "sha256": sha,
             }
         )
@@ -522,7 +522,7 @@ class TestSourceCacheFetchTarball:
         source = SourceSpec.from_dict(
             {
                 "type": "tarball",
-                "url": f"file://{tarball}",
+                "url": tarball.as_uri(),
                 "sha256": sha,
             }
         )
