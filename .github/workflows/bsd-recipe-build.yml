@@ -134,7 +134,7 @@ jobs:
             openbsd)
               # pkg_add fails on collisions when packages are already installed;
               # check first so re-runs don't fail on .pyc checksum mismatches.
-              ssh ${SSH_OPTS} "${VM}" "for p in bash cmake ninja py3-cryptography py3-yaml; do pkg_info \$p >/dev/null 2>&1 || pkg_add \$p; done"
+              ssh ${SSH_OPTS} "${VM}" "for p in bash cmake ninja m4 py3-cryptography py3-yaml; do pkg_info \$p >/dev/null 2>&1 || pkg_add \$p; done"
               ;;
             netbsd)
               ssh ${SSH_OPTS} "${VM}" "pkgin -y install bash cmake ninja py313-pip py313-cryptography py313-yaml"
@@ -152,6 +152,10 @@ jobs:
           ssh ${SSH_OPTS} "${VM}" "mkdir -p /usr/local/tmp && cd ${remote_dir} && ${INSTALL_CMD}"
 
       # ── Build all recipes on BSD VM ──
+      # BSD ships BSD make (/usr/bin/make) which doesn't support GNU make
+      # syntax (e.g. order-only prerequisites with |).  Most autotools and
+      # cmake-generated Makefiles require GNU make.  Create a PATH override
+      # so that 'make' invocations in build scripts resolve to gmake.
       - name: Build and package all recipes (cvcpkg pack-all)
         shell: bash
         run: |
@@ -166,7 +170,19 @@ jobs:
             --output-dir ${remote_dir}/dist \
             --recipes-dir recipes"
 
-          ssh ${SSH_OPTS} "${VM}" "cd ${remote_dir} && TMPDIR=/usr/local/tmp ${BUILD_CMD}"
+          # Create GNU tool shims so build scripts that call 'make' or 'm4'
+          # use the GNU versions (gmake, gm4) on BSD.
+          SHIM_CMD="mkdir -p /usr/local/libexec/gnucompat && \
+            ln -sf \$(which gmake) /usr/local/libexec/gnucompat/make && \
+            if command -v gm4 >/dev/null; then \
+              ln -sf \$(which gm4) /usr/local/libexec/gnucompat/m4; \
+            fi"
+          ssh ${SSH_OPTS} "${VM}" "${SHIM_CMD}"
+
+          ssh ${SSH_OPTS} "${VM}" "cd ${remote_dir} && \
+            PATH=/usr/local/libexec/gnucompat:\$PATH \
+            TMPDIR=/usr/local/tmp \
+            ${BUILD_CMD}"
 
       # ── Install marker cmake config on BSD VM ──
       - name: Install libcvc-deps marker config
