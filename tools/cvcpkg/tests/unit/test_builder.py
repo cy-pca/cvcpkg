@@ -1207,3 +1207,123 @@ class TestLoadAllRecipes:
         assert names == ["alpha", "beta", "gamma"]
         beta = [r for r in result if r.name == "beta"][0]
         assert beta.cvc_revision == 5
+
+
+# ── build_all keep_going ────────────────────────────────────────
+
+
+class TestBuildAllKeepGoing:
+    """Test that build_all(keep_going=True) continues past failures."""
+
+    def _make_recipe(self, recipes_dir, name, deps=None, version="1.0.0"):
+        rd = recipes_dir / name
+        rd.mkdir(parents=True, exist_ok=True)
+        recipe = {
+            "schema_version": 1,
+            "recipe": {
+                "name": name,
+                "upstream_version": version,
+                "cvc_revision": 1,
+            },
+            "source": {"type": "vendored", "path": "."},
+            "patches": [],
+            "build": {
+                "matrix": [{"platform": "linux", "script": "build.sh"}],
+            },
+            "package": {"files": ["lib/*"], "cmake_packages": []},
+        }
+        if deps:
+            recipe["depends"] = {"build": [{"name": d} for d in deps]}
+        (rd / "recipe.yaml").write_text(yaml.dump(recipe))
+        # Create a dummy vendored source and build script
+        (rd / "build.sh").write_text("#!/bin/sh\ntrue\n")
+
+    @patch("cvcpkg.builder.run_build")
+    @patch("cvcpkg.builder.fetch_source")
+    def test_keep_going_continues_after_failure(self, mock_fetch, mock_build, tmp_path):
+        from cvcpkg.builder import BuildError, BuildFailure, build_all
+
+        recipes_dir = tmp_path / "recipes"
+        self._make_recipe(recipes_dir, "alpha")
+        self._make_recipe(recipes_dir, "beta")
+        self._make_recipe(recipes_dir, "gamma")
+
+        mock_fetch.side_effect = lambda r, w: w / "src"
+
+        def _build_side_effect(ctx):
+            (ctx.source_dir).mkdir(parents=True, exist_ok=True)
+            if ctx.recipe.name == "beta":
+                raise BuildError("beta build failed")
+            ctx.install_dir.mkdir(parents=True, exist_ok=True)
+
+        mock_build.side_effect = _build_side_effect
+
+        contexts = build_all(
+            recipes_dir,
+            platform="linux",
+            prefix=tmp_path / "prefix",
+            keep_going=True,
+        )
+
+        built_names = [c.recipe.name for c in contexts]
+        assert "alpha" in built_names
+        assert "gamma" in built_names
+        assert "beta" not in built_names
+
+        failures = getattr(contexts, "failures", [])
+        assert len(failures) == 1
+        assert failures[0].recipe_name == "beta"
+        assert not failures[0].skipped
+
+    @patch("cvcpkg.builder.run_build")
+    @patch("cvcpkg.builder.fetch_source")
+    def test_keep_going_skips_dependents(self, mock_fetch, mock_build, tmp_path):
+        from cvcpkg.builder import BuildError, build_all
+
+        recipes_dir = tmp_path / "recipes"
+        self._make_recipe(recipes_dir, "alpha")
+        self._make_recipe(recipes_dir, "beta", deps=["alpha"])
+
+        mock_fetch.side_effect = lambda r, w: w / "src"
+
+        def _build_side_effect(ctx):
+            (ctx.source_dir).mkdir(parents=True, exist_ok=True)
+            if ctx.recipe.name == "alpha":
+                raise BuildError("alpha failed")
+            ctx.install_dir.mkdir(parents=True, exist_ok=True)
+
+        mock_build.side_effect = _build_side_effect
+
+        contexts = build_all(
+            recipes_dir,
+            platform="linux",
+            prefix=tmp_path / "prefix",
+            keep_going=True,
+        )
+
+        assert len(contexts) == 0
+        failures = getattr(contexts, "failures", [])
+        assert len(failures) == 2
+        assert failures[0].recipe_name == "alpha"
+        assert not failures[0].skipped
+        assert failures[1].recipe_name == "beta"
+        assert failures[1].skipped
+
+    @patch("cvcpkg.builder.run_build")
+    @patch("cvcpkg.builder.fetch_source")
+    def test_fail_fast_is_default(self, mock_fetch, mock_build, tmp_path):
+        from cvcpkg.builder import BuildError, build_all
+
+        recipes_dir = tmp_path / "recipes"
+        self._make_recipe(recipes_dir, "alpha")
+        self._make_recipe(recipes_dir, "beta")
+
+        mock_fetch.side_effect = lambda r, w: w / "src"
+        mock_build.side_effect = BuildError("alpha failed")
+
+        with pytest.raises(BuildError, match="alpha failed"):
+            build_all(
+                recipes_dir,
+                platform="linux",
+                prefix=tmp_path / "prefix",
+            )
