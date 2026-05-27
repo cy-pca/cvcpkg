@@ -9,6 +9,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_common/env-wasm.sh"
 
+# CLAPACK 3.2.1 is old C (f2c output from 2008); emcc/clang treats
+# implicit function declarations as errors. Suppress them.
 cmake -G Ninja \
     -S "${CVC_SOURCE_DIR}" \
     -B "${CVC_BUILD_DIR}" \
@@ -16,6 +18,7 @@ cmake -G Ninja \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     -DCMAKE_TOOLCHAIN_FILE="${EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake" \
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+    -DCMAKE_C_FLAGS="-Wno-implicit-function-declaration" \
     -DBUILD_TESTING=OFF
 cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 
