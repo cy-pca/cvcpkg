@@ -116,28 +116,28 @@ jobs:
 
           echo "remote_dir=${REMOTE_DIR}" >> "$GITHUB_ENV"
 
-      # ── Install system Python dependencies on BSD VM ──
-      # cryptography requires Rust/maturin to build from source, but maturin
-      # does not support BSD platforms ("Unsupported platform" error).  Even
-      # with Rust installed, maturin segfaults on OpenBSD 7.7 with rustc 1.86.
-      # The workaround is to install cryptography from OS packages (pre-built
-      # with Rust by the ports/packages maintainers).
-      - name: Install system Python packages
+      # ── Install system packages on BSD VM ──
+      # Build tools: bash (required by cvcpkg build scripts), cmake, ninja.
+      # Python packages: cryptography requires Rust/maturin to build from
+      # source, but maturin does not support BSD platforms ("Unsupported
+      # platform" error).  Even with Rust installed, maturin segfaults on
+      # OpenBSD 7.7 with rustc 1.86.  Workaround: install pre-built OS packages.
+      - name: Install system packages
         shell: bash
         run: |
           set -euo pipefail
           VM="root@${{ steps.vm.outputs.host }}"
           case "${{ inputs.platform }}" in
             freebsd)
-              ssh ${SSH_OPTS} "${VM}" "pkg install -y py311-cryptography py311-pyyaml py311-sqlite3"
+              ssh ${SSH_OPTS} "${VM}" "pkg install -y bash cmake ninja py311-cryptography py311-pyyaml py311-sqlite3"
               ;;
             openbsd)
               # pkg_add fails on collisions when packages are already installed;
               # check first so re-runs don't fail on .pyc checksum mismatches.
-              ssh ${SSH_OPTS} "${VM}" "for p in py3-cryptography py3-yaml; do pkg_info \$p >/dev/null 2>&1 || pkg_add \$p; done"
+              ssh ${SSH_OPTS} "${VM}" "for p in bash cmake ninja py3-cryptography py3-yaml; do pkg_info \$p >/dev/null 2>&1 || pkg_add \$p; done"
               ;;
             netbsd)
-              ssh ${SSH_OPTS} "${VM}" "pkgin -y install py313-pip py313-cryptography py313-yaml"
+              ssh ${SSH_OPTS} "${VM}" "pkgin -y install bash cmake ninja py313-pip py313-cryptography py313-yaml"
               ;;
           esac
 
