@@ -94,12 +94,20 @@ jobs:
           esac
 
       # ── Sync repository to BSD VM ──
+      # OpenBSD's root partition (/) is only 1.1 GB so /tmp is unusable for
+      # builds.  Use /usr/local/tmp on OpenBSD where we created a large
+      # partition; /tmp is fine on FreeBSD (ZFS) and NetBSD (tmpfs backed
+      # by ample swap + RAM).
       - name: Sync repository to BSD VM
         shell: bash
         run: |
           set -euo pipefail
           VM="root@${{ steps.vm.outputs.host }}"
-          REMOTE_DIR="/tmp/libcvc-deps-build-$$"
+          case "${{ inputs.platform }}" in
+            openbsd) BASE_DIR="/usr/local/tmp" ;;
+            *)       BASE_DIR="/tmp" ;;
+          esac
+          REMOTE_DIR="${BASE_DIR}/libcvc-deps-build-$$"
 
           ssh ${SSH_OPTS} "${VM}" "mkdir -p ${REMOTE_DIR}"
           tar cf - --exclude='.git' --exclude='build' --exclude='prefix' \
