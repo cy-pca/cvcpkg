@@ -30,6 +30,7 @@ fi
 
 ./Configure "${TARGET}" \
     --prefix="${CVC_INSTALL_DIR}" \
+    --libdir=lib \
     --openssldir="${CVC_INSTALL_DIR}/etc/ssl" \
     "${OPENSSL_OPTS[@]}" \
     no-tests
