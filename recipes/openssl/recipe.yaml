@@ -24,7 +24,6 @@ depends:
     - name: emsdk
       version: ">=5.0"
   host_tools:
-    - cmake
     - perl
     - nasm
 
