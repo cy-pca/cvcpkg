@@ -44,6 +44,10 @@ function Invoke-CvcWasmCMakeBuild {
         [string[]]$ExtraArgs = @(),
         [string]$SourceDir = $env:CVC_SOURCE_DIR
     )
+    $findRootPathArgs = @()
+    if ($env:CVC_DEPS_PREFIX) {
+        $findRootPathArgs += "-DCMAKE_FIND_ROOT_PATH=$env:CVC_DEPS_PREFIX"
+    }
     $allArgs = @(
         '-G', 'Ninja',
         '-S', $SourceDir,
@@ -55,7 +59,7 @@ function Invoke-CvcWasmCMakeBuild {
         '-DCMAKE_CXX_STANDARD=17',
         '-DCMAKE_POLICY_VERSION_MINIMUM=3.5',
         "-DCMAKE_TOOLCHAIN_FILE=$emscriptenToolchain"
-    ) + $ExtraArgs
+    ) + $findRootPathArgs + $ExtraArgs
 
     & cmake @allArgs
     if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }

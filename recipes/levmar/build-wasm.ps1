@@ -9,5 +9,6 @@ $levmarSrc = Join-Path $scriptDir '..\..\third-party\levmar'
 
 Invoke-CvcWasmCMakeBuild -SourceDir $levmarSrc -ExtraArgs @(
     '-DUSE_BLAS=ON',
-    "-DCMAKE_PREFIX_PATH=$env:CVC_DEPS_PREFIX"
+    "-DCMAKE_PREFIX_PATH=$env:CVC_DEPS_PREFIX",
+    "-DCMAKE_FIND_ROOT_PATH=$env:CVC_DEPS_PREFIX"
 )
