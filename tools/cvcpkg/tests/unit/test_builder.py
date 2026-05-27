@@ -19,6 +19,7 @@ from cvcpkg.builder import (
     RecipeError,
     SourceSpec,
     _cache_key,
+    _dep_names,
     _file_list,
     _select_matrix_entry,
     _sha256_file,
@@ -30,6 +31,7 @@ from cvcpkg.builder import (
     generate_manifest,
     list_recipes,
     load_all_recipes,
+    qualified_name,
     resolve_build_order,
     stage_bundle,
 )
@@ -1327,3 +1329,98 @@ class TestBuildAllKeepGoing:
                 platform="linux",
                 prefix=tmp_path / "prefix",
             )
+
+
+# ── qualified_name ──────────────────────────────────────────────
+
+
+class TestQualifiedName:
+    def test_plain_name(self):
+        assert qualified_name("zlib") == "zlib"
+
+    def test_org_qualified(self):
+        assert qualified_name("custom-lib", "myorg") == "myorg/custom-lib"
+
+    def test_empty_org(self):
+        assert qualified_name("zlib", "") == "zlib"
+
+
+# ── _dep_names with org ─────────────────────────────────────────
+
+
+class TestDepNamesOrg:
+    def test_string_org_slash_dep(self, tmp_path):
+        """String deps with 'org/name' format return qualified names."""
+        recipe_dict = {
+            **MINIMAL_RECIPE,
+            "depends": {"build": ["zlib", "myorg/custom-lib"]},
+        }
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        names = _dep_names(r)
+        assert names == ["zlib", "myorg/custom-lib"]
+
+    def test_dict_dep_with_org(self, tmp_path):
+        """Dict deps with 'org' field return qualified names."""
+        recipe_dict = {
+            **MINIMAL_RECIPE,
+            "depends": {
+                "build": [
+                    {"name": "custom-lib", "org": "myorg", "version": ">=1.0"},
+                    {"name": "zlib"},
+                ]
+            },
+        }
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        names = _dep_names(r)
+        assert names == ["myorg/custom-lib", "zlib"]
+
+    def test_cross_org_dep(self, tmp_path):
+        """Deps referencing another org use that org's qualified name."""
+        recipe_dict = {
+            **MINIMAL_RECIPE,
+            "depends": {
+                "build": [
+                    {"name": "their-lib", "org": "otherog"},
+                    "myorg/internal-lib",
+                ]
+            },
+        }
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        names = _dep_names(r)
+        assert names == ["otherog/their-lib", "myorg/internal-lib"]
+
+
+# ── generate_manifest with org deps ─────────────────────────────
+
+
+class TestManifestOrgDeps:
+    def test_manifest_deps_with_org(self, tmp_path):
+        """Manifest dep_list includes 'org' field for org-qualified deps."""
+        recipe_dict = {
+            **MINIMAL_RECIPE,
+            "depends": {
+                "build": [
+                    {"name": "custom-lib", "org": "myorg", "version": ">=1.0"},
+                    "otherog/their-lib",
+                    "zlib",
+                ]
+            },
+        }
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        install_dir = tmp_path / "install"
+        install_dir.mkdir()
+
+        m = generate_manifest(r, install_dir, "linux", "x86_64", "release", "shared")
+        deps = m["depends"]
+        assert len(deps) == 3
+        assert deps[0] == {"name": "custom-lib", "org": "myorg", "version": ">=1.0"}
+        assert deps[1] == {"name": "their-lib", "org": "otherog"}
+        assert deps[2] == {"name": "zlib"}

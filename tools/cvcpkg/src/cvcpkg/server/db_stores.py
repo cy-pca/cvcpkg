@@ -370,6 +370,7 @@ class DbPackageIndex:
                     license=row.license,
                     maintainer=row.maintainer,
                     tags=row.tags,
+                    org=row.org_slug,
                 )
                 for row in result.scalars().all()
             ]

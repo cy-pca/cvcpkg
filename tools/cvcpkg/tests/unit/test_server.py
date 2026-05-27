@@ -1040,3 +1040,110 @@ class TestPublishWithOrg:
         assert resp.status_code == 200
         data = resp.json()
         assert data["name"] == "org-test-pkg"
+
+
+# ── validate_org_slug ───────────────────────────────────────────
+
+
+class TestValidateOrgSlug:
+    """GitHub-style org slug validation."""
+
+    def test_valid_slugs(self):
+        from cvcpkg.server.models import validate_org_slug
+
+        for slug in ["a", "ab", "cvc-lab", "my123", "a1b2c3", "x" * 39]:
+            assert validate_org_slug(slug) is None, f"should accept: {slug}"
+
+    def test_empty(self):
+        from cvcpkg.server.models import validate_org_slug
+
+        assert validate_org_slug("") is not None
+
+    def test_too_long(self):
+        from cvcpkg.server.models import validate_org_slug
+
+        assert validate_org_slug("x" * 40) is not None
+
+    def test_consecutive_hyphens(self):
+        from cvcpkg.server.models import validate_org_slug
+
+        assert validate_org_slug("my--org") is not None
+
+    def test_leading_hyphen(self):
+        from cvcpkg.server.models import validate_org_slug
+
+        assert validate_org_slug("-org") is not None
+
+    def test_trailing_hyphen(self):
+        from cvcpkg.server.models import validate_org_slug
+
+        assert validate_org_slug("org-") is not None
+
+    def test_uppercase_rejected(self):
+        from cvcpkg.server.models import validate_org_slug
+
+        assert validate_org_slug("MyOrg") is not None
+
+    def test_special_chars_rejected(self):
+        from cvcpkg.server.models import validate_org_slug
+
+        for bad in ["my_org", "my.org", "my org", "org@name"]:
+            assert validate_org_slug(bad) is not None, f"should reject: {bad}"
+
+    def test_publish_rejects_invalid_org(self, server_env):
+        """The publish endpoint rejects invalid org slugs."""
+        client, _, pub_tok, _ = server_env
+        archive = b"fake archive content"
+        resp = client.post(
+            "/v1/publish",
+            params={
+                "name": "test-pkg",
+                "version": "1.0",
+                "platform": "linux",
+                "arch": "x86_64",
+                "org": "INVALID--ORG",
+            },
+            files={"file": ("test-pkg.tar.zst", io.BytesIO(archive))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 422
+
+
+# ── PackageInfo.qualified_name ──────────────────────────────────
+
+
+class TestPackageInfoQualifiedName:
+    def test_base_package(self):
+        from cvcpkg.server.models import PackageInfo
+
+        p = PackageInfo(
+            name="zlib",
+            version="1.3.1",
+            platform="linux",
+            arch="x86_64",
+            build_type="release",
+            link="shared",
+            sha256="a" * 64,
+            size_bytes=100,
+            archive_url="/v1/download/zlib.tar.zst",
+            published_at="2024-01-01T00:00:00+00:00",
+        )
+        assert p.qualified_name == "zlib"
+
+    def test_org_package(self):
+        from cvcpkg.server.models import PackageInfo
+
+        p = PackageInfo(
+            name="custom-lib",
+            version="2.0.0",
+            platform="linux",
+            arch="x86_64",
+            build_type="release",
+            link="shared",
+            sha256="b" * 64,
+            size_bytes=200,
+            archive_url="/v1/download/custom-lib.tar.zst",
+            published_at="2024-01-01T00:00:00+00:00",
+            org="cvc-lab",
+        )
+        assert p.qualified_name == "cvc-lab/custom-lib"
