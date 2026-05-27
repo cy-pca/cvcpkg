@@ -9,17 +9,20 @@ recipe:
   description: "CLAPACK — a C translation of the Fortran LAPACK linear algebra package."
   homepage: https://www.netlib.org/clapack/
   license: BSD-3-Clause
-  tags: [math]
+  tags: [math, wasm]
 
 source:
-  type: vcpkg
-  port: clapack
-  triplet: x64-windows
+  type: tarball
+  url: https://www.netlib.org/clapack/clapack-3.2.1-CMAKE.tgz
+  sha256: "0b3f782bc24845d85f36bafbff0f2f1384dc72df730fda4e7924ec1a70baca5a"
+  strip_components: 1
 
 patches: []
 
 depends:
-  build: []
+  build:
+    - name: emsdk
+      version: ">=5.0"
   host_tools:
     - cmake
     - ninja
@@ -29,18 +32,27 @@ build:
     - platform: windows
       script: build.ps1
       vcpkg_port: clapack
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
 
 package:
   files:
     - lib/lapack*
     - lib/blas*
     - lib/f2c*
+    - lib/liblapack*
+    - lib/libblas*
+    - lib/libf2c*
     - lib/cmake/clapack/
     - include/blaswrap.h
     - include/clapack.h
     - include/f2c.h
   cmake_packages:
-    - { name: LAPACK, targets: ["LAPACK::LAPACK"] }
+    - { name: clapack, targets: ["lapack", "blas", "f2c"] }
 
 abi:
   cxx_std: 17
