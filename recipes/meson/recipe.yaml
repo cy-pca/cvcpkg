@@ -1,7 +1,7 @@
 schema_version: 1
 recipe:
   name: meson
-  upstream_version: "1.7.3"
+  upstream_version: "1.7.2"
   cvc_revision: 1
   maintainer: "CyberPC Angel, LLC"
   maintainer_email: "cvcpkg@cyberpcangel.com"
@@ -15,8 +15,8 @@ recipe:
 
 source:
   type: tarball
-  url: https://github.com/mesonbuild/meson/releases/download/1.7.3/meson-1.7.3.tar.gz
-  sha256: "0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5"
+  url: https://github.com/mesonbuild/meson/releases/download/1.7.2/meson-1.7.2.tar.gz
+  sha256: "4d40d63aa748a9c139cc41ab9bffe43edd113c5639d78bde81544ca955aea890"
   strip_components: 1
 
 patches: []
