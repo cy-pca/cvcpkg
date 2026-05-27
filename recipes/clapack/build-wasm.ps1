@@ -16,6 +16,7 @@ $allArgs = @(
     '-DCMAKE_POSITION_INDEPENDENT_CODE=ON',
     '-DCMAKE_POLICY_VERSION_MINIMUM=3.5',
     "-DCMAKE_TOOLCHAIN_FILE=$emscriptenToolchain",
+    '-DCMAKE_C_FLAGS=-Wno-implicit-function-declaration',
     '-DBUILD_TESTING=OFF'
 )
 
