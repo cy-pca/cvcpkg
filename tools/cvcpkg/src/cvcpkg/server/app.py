@@ -29,7 +29,13 @@ from pathlib import Path
 import yaml
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    StreamingResponse,
+)
 
 from cvcpkg import __version__
 from cvcpkg.server.audit import AuditLog
@@ -1442,7 +1448,9 @@ def create_app(
         if not _use_db or _db_orgs is None:
             return OrgListResponse(total=0, organizations=[])
         orgs, total = await _db_orgs.list_orgs(
-            limit=limit, offset=offset, include_private=False,
+            limit=limit,
+            offset=offset,
+            include_private=False,
         )
         return OrgListResponse(total=total, organizations=orgs)
 
@@ -1516,7 +1524,12 @@ def create_app(
             raise HTTPException(
                 400, f"unsupported image type '{ct}'; allowed: {', '.join(sorted(allowed))}"
             )
-        ext_map = {"image/png": ".png", "image/jpeg": ".jpg", "image/svg+xml": ".svg", "image/webp": ".webp"}
+        ext_map = {
+            "image/png": ".png",
+            "image/jpeg": ".jpg",
+            "image/svg+xml": ".svg",
+            "image/webp": ".webp",
+        }
         ext = ext_map.get(ct, ".png")
 
         # Read and validate size (512 KB max)
@@ -1550,7 +1563,12 @@ def create_app(
         logos_dir = _get_state().state_dir / "logos"
         for candidate in logos_dir.glob(f"{slug}.*"):
             if candidate.is_file():
-                ct_map = {".png": "image/png", ".jpg": "image/jpeg", ".svg": "image/svg+xml", ".webp": "image/webp"}
+                ct_map = {
+                    ".png": "image/png",
+                    ".jpg": "image/jpeg",
+                    ".svg": "image/svg+xml",
+                    ".webp": "image/webp",
+                }
                 content_type = ct_map.get(candidate.suffix.lower(), "application/octet-stream")
                 return FileResponse(candidate, media_type=content_type)
         raise HTTPException(404, "no logo found")

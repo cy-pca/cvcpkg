@@ -382,25 +382,31 @@ class TestCacheKey:
     """Test _cache_key() returns a stable hash."""
 
     def test_sha256_key(self):
-        s = SourceSpec.from_dict({
-            "type": "tarball",
-            "url": "https://example.com/pkg.tar.gz",
-            "sha256": "a" * 64,
-        })
+        s = SourceSpec.from_dict(
+            {
+                "type": "tarball",
+                "url": "https://example.com/pkg.tar.gz",
+                "sha256": "a" * 64,
+            }
+        )
         assert _cache_key(s) == "a" * 64
 
     def test_url_fallback_key(self):
-        s = SourceSpec.from_dict({
-            "type": "tarball",
-            "url": "https://example.com/pkg.tar.gz",
-        })
+        s = SourceSpec.from_dict(
+            {
+                "type": "tarball",
+                "url": "https://example.com/pkg.tar.gz",
+            }
+        )
         key = _cache_key(s)
         assert len(key) == 64
         # Same URL should give same key
-        s2 = SourceSpec.from_dict({
-            "type": "tarball",
-            "url": "https://example.com/pkg.tar.gz",
-        })
+        s2 = SourceSpec.from_dict(
+            {
+                "type": "tarball",
+                "url": "https://example.com/pkg.tar.gz",
+            }
+        )
         assert _cache_key(s2) == key
 
     def test_different_url_different_key(self):
@@ -435,14 +441,17 @@ class TestSourceCacheFetchTarball:
 
         tarball, sha, data = self._make_tarball(tmp_path)
 
-        source = SourceSpec.from_dict({
-            "type": "tarball",
-            "url": f"file://{tarball}",
-            "sha256": sha,
-        })
+        source = SourceSpec.from_dict(
+            {
+                "type": "tarball",
+                "url": f"file://{tarball}",
+                "sha256": sha,
+            }
+        )
         dest = tmp_path / "work"
         dest.mkdir()
         from cvcpkg.builder import _fetch_tarball
+
         _fetch_tarball(source, dest)
 
         # Cache should now have the file
@@ -462,14 +471,17 @@ class TestSourceCacheFetchTarball:
         cached = cache_dir / f"{sha}.tar.gz"
         cached.write_bytes(data)
 
-        source = SourceSpec.from_dict({
-            "type": "tarball",
-            "url": "https://unreachable.example.com/pkg.tar.gz",  # Would fail if contacted
-            "sha256": sha,
-        })
+        source = SourceSpec.from_dict(
+            {
+                "type": "tarball",
+                "url": "https://unreachable.example.com/pkg.tar.gz",  # Would fail if contacted
+                "sha256": sha,
+            }
+        )
         dest = tmp_path / "work"
         dest.mkdir()
         from cvcpkg.builder import _fetch_tarball
+
         # Should succeed via cache even though URL is unreachable
         src_dir = _fetch_tarball(source, dest)
         assert src_dir.is_dir()
@@ -480,14 +492,17 @@ class TestSourceCacheFetchTarball:
         monkeypatch.setenv("CVCPKG_SOURCE_CACHE_DIR", "")
 
         tarball, sha, data = self._make_tarball(tmp_path)
-        source = SourceSpec.from_dict({
-            "type": "tarball",
-            "url": f"file://{tarball}",
-            "sha256": sha,
-        })
+        source = SourceSpec.from_dict(
+            {
+                "type": "tarball",
+                "url": f"file://{tarball}",
+                "sha256": sha,
+            }
+        )
         dest = tmp_path / "work"
         dest.mkdir()
         from cvcpkg.builder import _fetch_tarball
+
         _fetch_tarball(source, dest)
         # No cache dir should have been created
         assert not (tmp_path / "cache").exists()
@@ -504,14 +519,17 @@ class TestSourceCacheFetchTarball:
         cached = cache_dir / f"{sha}.tar.gz"
         cached.write_bytes(b"corrupted data")
 
-        source = SourceSpec.from_dict({
-            "type": "tarball",
-            "url": f"file://{tarball}",
-            "sha256": sha,
-        })
+        source = SourceSpec.from_dict(
+            {
+                "type": "tarball",
+                "url": f"file://{tarball}",
+                "sha256": sha,
+            }
+        )
         dest = tmp_path / "work"
         dest.mkdir()
         from cvcpkg.builder import _fetch_tarball
+
         src_dir = _fetch_tarball(source, dest)
         assert src_dir.is_dir()
         # Cache should now be updated with correct data
@@ -647,7 +665,12 @@ class TestGenerateManifest:
         install_dir.mkdir()
 
         m = generate_manifest(
-            r, install_dir, "linux", "x86_64", "release", "shared",
+            r,
+            install_dir,
+            "linux",
+            "x86_64",
+            "release",
+            "shared",
             org_slug="cvc-lab",
         )
         assert m["bundle"]["org"] == "cvc-lab"
@@ -665,7 +688,12 @@ class TestGenerateManifest:
 
         # Also explicit empty string
         m2 = generate_manifest(
-            r, install_dir, "linux", "x86_64", "release", "shared",
+            r,
+            install_dir,
+            "linux",
+            "x86_64",
+            "release",
+            "shared",
             org_slug="",
         )
         assert "org" not in m2["bundle"]
