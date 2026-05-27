@@ -94,6 +94,18 @@ _maintainer_opt = click.option(
 )
 
 
+def _validate_org_slug(ctx: click.Context, param: click.Parameter, value: str) -> str:
+    """Click callback that validates --org using GitHub username rules."""
+    if not value:
+        return value
+    from cvcpkg.server.models import validate_org_slug
+
+    err = validate_org_slug(value)
+    if err:
+        raise click.BadParameter(err)
+    return value
+
+
 # ── Root group ──────────────────────────────────────────────────
 
 
@@ -365,7 +377,9 @@ def install(
     if picked:
         click.echo(f"cvcpkg: resolved {len(picked)} component(s) from catalog:")
         for name in sorted(picked):
-            click.echo(f"  {name} == {picked[name].version}")
+            entry = picked[name]
+            display = entry.qualified_name if hasattr(entry, "qualified_name") else name
+            click.echo(f"  {display} == {entry.version}")
     if source_only:
         click.echo(
             f"cvcpkg: {len(source_only)} component(s) will be built from source: "
@@ -513,7 +527,7 @@ def list_cmd(mode: str | None, prefix: str) -> None:
         else:
             seen: dict[str, list[str]] = {}
             for e in entries:
-                seen.setdefault(e.name, []).append(e.version)
+                seen.setdefault(e.qualified_name, []).append(e.version)
             for name in sorted(seen):
                 versions = sorted(set(seen[name]))
                 click.echo(f"  {name:20s} {', '.join(versions)}")
@@ -542,7 +556,12 @@ def info(component: str) -> None:
 
     cat = fetch_catalog(cache_dir=default_cache_dir())
     entries = catalog_entries(cat)
-    matches = [e for e in entries if e.name == component]
+    # Support both plain "zlib" and org-qualified "myorg/zlib" lookups.
+    if "/" in component:
+        lookup_org, lookup_name = component.split("/", 1)
+        matches = [e for e in entries if e.name == lookup_name and e.org == lookup_org]
+    else:
+        matches = [e for e in entries if e.name == component]
     if not matches:
         raise click.ClickException(f"component '{component}' not found in catalog.")
 
@@ -551,7 +570,7 @@ def info(component: str) -> None:
     matches.sort(key=lambda e: Version.parse(e.version), reverse=True)
     latest = matches[0]
 
-    click.echo(f"Name:             {latest.name}")
+    click.echo(f"Name:             {latest.qualified_name}")
     click.echo(f"Latest version:   {latest.version}")
     click.echo(f"Upstream version: {latest.upstream_version}")
     click.echo(f"Source release:   {latest.source_release}")
@@ -893,6 +912,9 @@ def push(archives: tuple[str, ...], dest: str) -> None:
 @click.option(
     "--org",
     default="",
+    callback=_validate_org_slug,
+    expose_value=True,
+    is_eager=False,
     help="Organization slug to publish packages under.",
 )
 def publish(
@@ -941,12 +963,14 @@ def publish(
         link = bundle.get("link", "shared")
         recipe_version = manifest.get("meta", {}).get("recipe_sha256", "")
         meta = manifest.get("meta", {})
+        manifest_org = bundle.get("org", "")
 
         if not name or not version:
             raise click.ClickException(f"{p.name}: manifest missing name or version")
 
         file_size = p.stat().st_size
-        label = f"{name}=={version} ({plat}/{arch}/{build_type}/{link})"
+        display_name = f"{org or manifest_org}/{name}" if (org or manifest_org) else name
+        label = f"{display_name}=={version} ({plat}/{arch}/{build_type}/{link})"
 
         # Pre-check: skip if this exact variant already exists on the server
         if _variant_exists(base, headers, name, version, plat, arch, build_type, link):
@@ -1787,6 +1811,9 @@ def build_all_cmd(
 @click.option(
     "--org",
     default="",
+    callback=_validate_org_slug,
+    expose_value=True,
+    is_eager=False,
     help="Organization slug to embed in manifests.",
 )
 @click.option(
@@ -1971,7 +1998,8 @@ def recipes(
                 if isinstance(d, str):
                     dep_names.append(d)
                 else:
-                    label = d.get("name", "?")
+                    dep_org = d.get("org", "")
+                    label = f"{dep_org}/{d.get('name', '?')}" if dep_org else d.get("name", "?")
                     plats = d.get("platforms")
                     if plats:
                         label += f" [{','.join(plats)}]"

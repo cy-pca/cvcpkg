@@ -179,6 +179,12 @@ class CatalogEntry:
     mirror_urls: list[str] = field(default_factory=list)  # fallback download URLs
     signature: str = ""  # base64url Ed25519 sig (empty = unsigned)
     key_fingerprint: str = ""  # SHA-256 of signing public key
+    org: str = ""  # organization slug (empty = public/base package)
+
+    @property
+    def qualified_name(self) -> str:
+        """Return ``org/name`` for org packages, plain ``name`` otherwise."""
+        return f"{self.org}/{self.name}" if self.org else self.name
 
 
 # ── Release index (libcvc-deps-<ver>-index.yaml) ────────────────
