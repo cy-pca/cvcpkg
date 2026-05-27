@@ -22,7 +22,9 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - name: curl
+      version: ">=8.0"
   host_tools: []
 
 build:
@@ -37,6 +39,18 @@ build:
       script: build.sh
       env:
         MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
 

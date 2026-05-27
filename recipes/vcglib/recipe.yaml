@@ -1,0 +1,51 @@
+schema_version: 1
+recipe:
+  name: vcglib
+  upstream_version: "2025.07"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  maintainer_email: "cvcpkg@cyberpcangel.com"
+  maintainer_url: "https://cyberpcangel.com"
+  description: "vcglib — header-only C++ mesh processing library from the Visual Computing Lab (ISTI-CNR)."
+  homepage: https://github.com/cnr-isti-vclab/vcglib
+  license: GPL-3.0-or-later
+  tags: [graphics, mesh]
+
+source:
+  type: tarball
+  url: https://github.com/cnr-isti-vclab/vcglib/archive/refs/tags/2025.07.tar.gz
+  sha256: "e49fc9342d5476b3e39a5e1939b965b57c91d7a17b4f97b8c5eaf01228b16cf0"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - include/vcg/
+    - include/wrap/
+    - share/vcglib/
+    - share/cmake/vcglib/
+  cmake_packages:
+    - { name: vcglib, targets: ["vcglib::vcglib"] }
+
+abi:
+  cxx_std: 11

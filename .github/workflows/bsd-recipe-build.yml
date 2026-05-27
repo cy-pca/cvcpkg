@@ -1,0 +1,262 @@
+# BSD recipe-driven build for libcvc-deps.
+#
+# Builds recipes on BSD virtual machines (FreeBSD, OpenBSD, NetBSD)
+# hosted on the Incus cluster.  The workflow runs on self-hosted
+# Linux runners (which ARE the Incus cluster nodes) and executes
+# builds inside the BSD VMs via SSH over the br-uplink LAN bridge.
+#
+# All three BSDs are accessed uniformly via SSH (root, key-based).
+#
+# No GitHub secrets required — the runners already have key-based
+# SSH access to every BSD VM on the 10.66.77.0/24 LAN.
+#
+# Prerequisite: the runner user's SSH key must be authorized on all
+# three BSD VMs (one-time setup via incus exec + authorized_keys).
+#
+# Reusable from release.yml and ci.yml.
+
+name: BSD Recipe Build
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        description: "Target BSD platform (freebsd, openbsd, netbsd)"
+        required: true
+        type: string
+      config:
+        description: "Build config (release, debug)"
+        required: true
+        type: string
+      link:
+        description: "Link mode (shared, static)"
+        required: true
+        type: string
+      sha_suffix:
+        description: "Short SHA for CI builds (empty for tag releases)"
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  SSH_OPTS: '-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o BatchMode=yes'
+
+jobs:
+  build:
+    runs-on: ["self-hosted", "Linux", "X64", "cvcpkg-builder"]
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Compute artifact metadata
+        id: meta
+        shell: bash
+        run: |
+          VERSION=$(awk '/^[[:space:]]*VERSION[[:space:]]+[0-9]/{gsub(/[^0-9.]/,"",$2); print $2; exit}' CMakeLists.txt)
+          BTLC=$(echo "${{ inputs.config }}" | tr '[:upper:]' '[:lower:]')
+          LINKSFX=""
+          [ "${{ inputs.link }}" = "static" ] && LINKSFX="-static"
+          SHASFX=""
+          if [ -n "${{ inputs.sha_suffix }}" ]; then
+            short=$(echo "${{ inputs.sha_suffix }}" | cut -c1-7)
+            SHASFX="-${short}"
+          fi
+          ARCH=x86_64
+          STEM="libcvc-deps-${VERSION}${SHASFX}-${{ inputs.platform }}-${ARCH}-${BTLC}${LINKSFX}"
+          echo "version=$VERSION"   >> "$GITHUB_OUTPUT"
+          echo "arch=$ARCH"         >> "$GITHUB_OUTPUT"
+          echo "btlc=$BTLC"        >> "$GITHUB_OUTPUT"
+          echo "stem=$STEM"         >> "$GITHUB_OUTPUT"
+
+      # ── Resolve VM host IP and python path ──
+      - name: Resolve BSD VM connection
+        id: vm
+        shell: bash
+        run: |
+          case "${{ inputs.platform }}" in
+            freebsd)
+              echo "host=10.66.77.174" >> "$GITHUB_OUTPUT"
+              echo "python=python3.11" >> "$GITHUB_OUTPUT"
+              ;;
+            openbsd)
+              echo "host=10.66.77.197" >> "$GITHUB_OUTPUT"
+              echo "python=python3.12" >> "$GITHUB_OUTPUT"
+              ;;
+            netbsd)
+              echo "host=10.66.77.214" >> "$GITHUB_OUTPUT"
+              echo "python=python3.13" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      # ── Sync repository to BSD VM ──
+      # OpenBSD's root partition (/) is only 1.1 GB so /tmp is unusable for
+      # builds.  Use /usr/local/tmp on OpenBSD where we created a large
+      # partition; /tmp is fine on FreeBSD (ZFS) and NetBSD (tmpfs backed
+      # by ample swap + RAM).
+      - name: Sync repository to BSD VM
+        shell: bash
+        run: |
+          set -euo pipefail
+          VM="root@${{ steps.vm.outputs.host }}"
+          case "${{ inputs.platform }}" in
+            openbsd) BASE_DIR="/usr/local/tmp" ;;
+            *)       BASE_DIR="/tmp" ;;
+          esac
+          REMOTE_DIR="${BASE_DIR}/libcvc-deps-build-$$"
+
+          ssh ${SSH_OPTS} "${VM}" "mkdir -p ${REMOTE_DIR}"
+          tar cf - --exclude='.git' --exclude='build' --exclude='prefix' \
+            --exclude='dist' --exclude='__pycache__' --exclude='*.egg-info' . \
+            | ssh ${SSH_OPTS} "${VM}" "tar xf - -C ${REMOTE_DIR}"
+
+          echo "remote_dir=${REMOTE_DIR}" >> "$GITHUB_ENV"
+
+      # ── Install system packages on BSD VM ──
+      # Build tools: bash (required by cvcpkg build scripts), cmake, ninja.
+      # Python packages: cryptography requires Rust/maturin to build from
+      # source, but maturin does not support BSD platforms ("Unsupported
+      # platform" error).  Even with Rust installed, maturin segfaults on
+      # OpenBSD 7.7 with rustc 1.86.  Workaround: install pre-built OS packages.
+      - name: Install system packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          VM="root@${{ steps.vm.outputs.host }}"
+          case "${{ inputs.platform }}" in
+            freebsd)
+              ssh ${SSH_OPTS} "${VM}" "pkg install -y bash cmake ninja py311-cryptography py311-pyyaml py311-sqlite3"
+              ;;
+            openbsd)
+              # pkg_add fails on collisions when packages are already installed;
+              # check first so re-runs don't fail on .pyc checksum mismatches.
+              ssh ${SSH_OPTS} "${VM}" "for p in bash cmake ninja m4 py3-cryptography py3-yaml; do pkg_info \$p >/dev/null 2>&1 || pkg_add \$p; done"
+              ;;
+            netbsd)
+              ssh ${SSH_OPTS} "${VM}" "pkgin -y install bash cmake ninja py313-pip py313-cryptography py313-yaml"
+              ;;
+          esac
+
+      # ── Install cvcpkg on BSD VM ──
+      - name: Install cvcpkg on BSD VM
+        shell: bash
+        run: |
+          set -euo pipefail
+          VM="root@${{ steps.vm.outputs.host }}"
+          PYTHON="${{ steps.vm.outputs.python }}"
+          INSTALL_CMD="TMPDIR=/usr/local/tmp ${PYTHON} -m pip install --break-system-packages ./tools/cvcpkg || ${PYTHON} -m pip install ./tools/cvcpkg"
+          ssh ${SSH_OPTS} "${VM}" "mkdir -p /usr/local/tmp && cd ${remote_dir} && ${INSTALL_CMD}"
+
+      # ── Build all recipes on BSD VM ──
+      # BSD ships BSD make (/usr/bin/make) which doesn't support GNU make
+      # syntax (e.g. order-only prerequisites with |).  Most autotools and
+      # cmake-generated Makefiles require GNU make.  Create a PATH override
+      # so that 'make' invocations in build scripts resolve to gmake.
+      - name: Build and package all recipes (cvcpkg pack-all)
+        shell: bash
+        run: |
+          set -euo pipefail
+          VM="root@${{ steps.vm.outputs.host }}"
+          PYTHON="${{ steps.vm.outputs.python }}"
+          BUILD_CMD="${PYTHON} -m cvcpkg pack-all \
+            --platform ${{ inputs.platform }} \
+            --config ${{ inputs.config }} \
+            --link ${{ inputs.link }} \
+            --prefix ${remote_dir}/prefix \
+            --output-dir ${remote_dir}/dist \
+            --recipes-dir recipes"
+
+          # Create GNU tool shims so build scripts that call 'make' or 'm4'
+          # use the GNU versions (gmake, gm4) on BSD.
+          SHIM_CMD="mkdir -p /usr/local/libexec/gnucompat && \
+            ln -sf \$(which gmake) /usr/local/libexec/gnucompat/make && \
+            if command -v gm4 >/dev/null; then \
+              ln -sf \$(which gm4) /usr/local/libexec/gnucompat/m4; \
+            fi"
+          ssh ${SSH_OPTS} "${VM}" "${SHIM_CMD}"
+
+          ssh ${SSH_OPTS} "${VM}" "cd ${remote_dir} && \
+            PATH=/usr/local/libexec/gnucompat:\$PATH \
+            TMPDIR=/usr/local/tmp \
+            ${BUILD_CMD}"
+
+      # ── Install marker cmake config on BSD VM ──
+      - name: Install libcvc-deps marker config
+        shell: bash
+        run: |
+          set -euo pipefail
+          VM="root@${{ steps.vm.outputs.host }}"
+          MARKER_CMD="cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ inputs.config == 'release' && 'Release' || 'Debug' }} \
+            -DCMAKE_INSTALL_PREFIX=${remote_dir}/prefix && \
+            cmake --install build"
+
+          ssh ${SSH_OPTS} "${VM}" "cd ${remote_dir} && ${MARKER_CMD}"
+
+      # ── Patch RPATH to $ORIGIN on BSD (shared builds) ──
+      - name: Patch RPATH ($ORIGIN)
+        if: inputs.link == 'shared'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VM="root@${{ steps.vm.outputs.host }}"
+          RPATH_CMD="set -e && \
+            PREFIX='${remote_dir}/prefix' && \
+            if command -v patchelf >/dev/null 2>&1; then \
+              find \"\${PREFIX}/lib\" -name '*.so*' -type f 2>/dev/null | while read -r so; do \
+                patchelf --remove-rpath \"\${so}\" 2>/dev/null || true; \
+                patchelf --set-rpath '\$ORIGIN' \"\${so}\" 2>/dev/null || true; \
+              done; \
+            else \
+              echo 'patchelf not available, relying on build-time RPATH'; \
+            fi"
+
+          ssh ${SSH_OPTS} "${VM}" "${RPATH_CMD}"
+
+      # ── Copy artifacts back from BSD VM ──
+      - name: Retrieve artifacts from BSD VM
+        shell: bash
+        run: |
+          set -euo pipefail
+          VM="root@${{ steps.vm.outputs.host }}"
+          STEM="${{ steps.meta.outputs.stem }}"
+          mkdir -p "${{ github.workspace }}/dist"
+
+          ssh ${SSH_OPTS} "${VM}" \
+            "cd ${remote_dir} && mv prefix '${STEM}' && tar czf '${STEM}.tar.gz' '${STEM}'"
+          scp ${SSH_OPTS} "${VM}:${remote_dir}/${STEM}.tar.gz" \
+            "${{ github.workspace }}/${STEM}.tar.gz"
+          ssh ${SSH_OPTS} "${VM}" \
+            "cd ${remote_dir} && tar cf - dist" \
+            | tar xf - -C "${{ github.workspace }}"
+
+          du -sh "${{ github.workspace }}/${STEM}.tar.gz"
+          ls -la "${{ github.workspace }}/dist/"
+
+      # ── Clean up remote build directory ──
+      - name: Clean up BSD VM
+        if: always()
+        shell: bash
+        run: |
+          VM="root@${{ steps.vm.outputs.host }}"
+          ssh ${SSH_OPTS} "${VM}" "rm -rf ${remote_dir}" || true
+
+      # ── Upload artifacts ──
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.platform }}-${{ steps.meta.outputs.btlc }}-${{ inputs.link }}
+          path: |
+            ${{ steps.meta.outputs.stem }}.tar.gz
+          if-no-files-found: error
+
+      - name: Upload per-component bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: components-${{ inputs.platform }}-${{ steps.meta.outputs.btlc }}-${{ inputs.link }}
+          path: dist/
+          if-no-files-found: error

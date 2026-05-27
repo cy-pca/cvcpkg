@@ -175,7 +175,7 @@ $defs:
         type: array
         items:
           type: string
-          enum: [linux, macos, windows, wasm]
+          enum: [linux, macos, windows, wasm, freebsd, openbsd, netbsd]
         minItems: 1
         description: "Platforms this dependency applies to (omit for all)"
 
@@ -200,10 +200,10 @@ $defs:
     properties:
       platform:
         type: string
-        enum: [linux, macos, windows, wasm]
+        enum: [linux, macos, windows, wasm, freebsd, openbsd, netbsd]
       host_platform:
         type: string
-        enum: [linux, macos, windows]
+        enum: [linux, macos, windows, freebsd, openbsd, netbsd]
         description: "Host platform for cross-compilation (e.g. linux for wasm builds)"
       script:
         type: string
