@@ -59,6 +59,11 @@ class BuildAllResult(list):
         self.failures: list[BuildFailure] = []
 
 
+def qualified_name(name: str, org: str = "") -> str:
+    """Return ``org/name`` for org-scoped packages, plain ``name`` otherwise."""
+    return f"{org}/{name}" if org else name
+
+
 # ── Data model ──────────────────────────────────────────────────
 
 
@@ -601,13 +606,20 @@ def generate_manifest(
     dep_list = []
     for d in depends:
         if isinstance(d, str):
-            dep_list.append({"name": d})
+            # Support "org/name" shorthand in string deps
+            if "/" in d:
+                dep_org, dep_name = d.split("/", 1)
+                dep_list.append({"name": dep_name, "org": dep_org})
+            else:
+                dep_list.append({"name": d})
         else:
             plats = d.get("platforms")
             if plats and platform not in plats:
                 continue
             # Don't write platforms into the manifest — it's platform-specific
-            entry = {"name": d["name"]}
+            entry: dict[str, str] = {"name": d["name"]}
+            if d.get("org"):
+                entry["org"] = d["org"]
             if d.get("version"):
                 entry["version"] = d["version"]
             dep_list.append(entry)
@@ -878,6 +890,20 @@ def pack_recipe(
 # ── Dependency resolution ───────────────────────────────────────
 
 
+def _dep_qualified_name(d: str | dict) -> str:
+    """Return the qualified name for a dependency entry.
+
+    Supports:
+    - Plain string: ``"zlib"``
+    - Org-qualified string: ``"myorg/custom-lib"``
+    - Dict with optional ``org``: ``{"name": "lib", "org": "myorg"}``
+    """
+    if isinstance(d, str):
+        return d  # already plain or "org/name"
+    org = d.get("org", "")
+    return qualified_name(d["name"], org)
+
+
 def _dep_names(recipe: Recipe, platform: str = "") -> list[str]:
     """Extract build-dependency names from a recipe.
 
@@ -887,6 +913,9 @@ def _dep_names(recipe: Recipe, platform: str = "") -> list[str]:
     Both ``depends.build`` and ``depends.host_tools`` entries are
     returned so that host tools (cmake, ninja, etc.) are built before
     recipes that need them.
+
+    Names are returned in qualified form (``org/name``) when the
+    dependency specifies an organization.
     """
     depends = recipe.raw.get("depends", {})
     build_deps = depends.get("build", [])
@@ -899,12 +928,12 @@ def _dep_names(recipe: Recipe, platform: str = "") -> list[str]:
             plats = d.get("platforms")
             if plats and platform and platform not in plats:
                 continue
-            names.append(d["name"])
+            names.append(_dep_qualified_name(d))
     for t in host_tools:
         if isinstance(t, str):
             names.append(t)
         elif isinstance(t, dict):
-            names.append(t["name"])
+            names.append(_dep_qualified_name(t))
     return names
 
 

@@ -516,7 +516,9 @@ def create_app(
                 if isinstance(d, str):
                     names.append(d)
                 elif isinstance(d, dict):
-                    names.append(d["name"])
+                    dep_org = d.get("org", "")
+                    dep_name = d["name"]
+                    names.append(f"{dep_org}/{dep_name}" if dep_org else dep_name)
             forward[r.name] = names
             meta[r.name] = {
                 "description": recipe_block.get("description", ""),
@@ -636,6 +638,7 @@ def create_app(
                 archive_url=b.get("archive_url", ""),
                 published_at=b.get("published_at", "1970-01-01T00:00:00+00:00"),
                 yanked=b.get("yanked", False),
+                org=b.get("org", ""),
             )
             for b in page
         ]
@@ -669,6 +672,7 @@ def create_app(
                 archive_url=b.get("archive_url", ""),
                 published_at=b.get("published_at", "1970-01-01T00:00:00+00:00"),
                 yanked=b.get("yanked", False),
+                org=b.get("org", ""),
             )
             for b in bundles
         ]
@@ -739,6 +743,14 @@ def create_app(
     ):
         _check_rate_limit(request)
         state = _get_state()
+
+        # Validate org slug format
+        if org:
+            from cvcpkg.server.models import validate_org_slug
+
+            err = validate_org_slug(org)
+            if err:
+                raise HTTPException(422, err)
 
         # Validate org membership and storage limit if publishing to an org
         if org and _use_db and _db_orgs is not None:
@@ -874,6 +886,7 @@ def create_app(
                 "key_fingerprint": key_fingerprint,
                 "release_tag": release_tag,
                 "recipe_version": recipe_version,
+                "org": org,
             }
             state.index.setdefault("bundles", []).append(bundle)
             state.save_index()
@@ -1419,6 +1432,14 @@ def create_app(
     ):
         if not _use_db or _db_orgs is None:
             raise HTTPException(501, "organizations require database backend")
+
+        # Pydantic regex validates char set; also reject consecutive hyphens.
+        from cvcpkg.server.models import validate_org_slug
+
+        err = validate_org_slug(body.slug)
+        if err:
+            raise HTTPException(422, err)
+
         try:
             org = await _db_orgs.create(
                 slug=body.slug,

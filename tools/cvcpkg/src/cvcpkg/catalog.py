@@ -141,6 +141,7 @@ def catalog_entries(
                 mirror_urls=b.get("mirror_urls", []),
                 signature=b.get("signature", ""),
                 key_fingerprint=b.get("key_fingerprint", ""),
+                org=b.get("org", ""),
             )
         )
     return entries

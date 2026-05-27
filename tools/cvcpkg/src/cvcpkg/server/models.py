@@ -3,9 +3,41 @@
 from __future__ import annotations
 
 import datetime
+import re
 from enum import Enum
 
 from pydantic import BaseModel, Field
+
+# ── Org slug validation (GitHub username rules) ─────────────────
+
+_ORG_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+_CONSECUTIVE_HYPHENS_RE = re.compile(r"--")
+
+
+def validate_org_slug(slug: str) -> str | None:
+    """Validate an organization slug using GitHub username rules.
+
+    Rules (matching GitHub):
+    - 1–39 characters
+    - Only lowercase alphanumeric characters or hyphens
+    - Cannot start or end with a hyphen
+    - No consecutive hyphens
+
+    Returns ``None`` on success or an error message string on failure.
+    """
+    if not slug:
+        return "organization slug must not be empty"
+    if len(slug) > 39:
+        return f"organization slug must be at most 39 characters (got {len(slug)})"
+    if _CONSECUTIVE_HYPHENS_RE.search(slug):
+        return "organization slug must not contain consecutive hyphens"
+    if not _ORG_SLUG_RE.match(slug):
+        return (
+            "organization slug may only contain lowercase alphanumeric "
+            "characters or hyphens, and cannot start or end with a hyphen"
+        )
+    return None
+
 
 # ── Enums ───────────────────────────────────────────────────────
 
@@ -103,6 +135,17 @@ class PackageInfo(BaseModel):
     license: str = ""
     maintainer: str = ""
     tags: str = ""
+    org: str = Field(
+        default="",
+        description=(
+            "Organization slug that owns the package.  Empty for " "official/public base packages."
+        ),
+    )
+
+    @property
+    def qualified_name(self) -> str:
+        """Return ``org/name`` for org packages, plain ``name`` otherwise."""
+        return f"{self.org}/{self.name}" if self.org else self.name
 
 
 class PublishResponse(BaseModel):
@@ -198,7 +241,16 @@ class OrgMember(BaseModel):
 
 
 class OrgCreateRequest(BaseModel):
-    slug: str = Field(..., min_length=2, max_length=64, pattern=r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
+    slug: str = Field(
+        ...,
+        min_length=1,
+        max_length=39,
+        pattern=r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+        description=(
+            "Organization slug (GitHub username rules): 1–39 chars, "
+            "lowercase alphanumeric or hyphens, no leading/trailing/consecutive hyphens."
+        ),
+    )
     display_name: str = Field(..., min_length=1, max_length=255)
     description: str = ""
     logo_url: str = ""
