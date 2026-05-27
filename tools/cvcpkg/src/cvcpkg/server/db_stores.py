@@ -562,7 +562,11 @@ class DbOrgStore:
             return self._row_to_info(row)
 
     async def list_orgs(
-        self, *, limit: int = 100, offset: int = 0, include_private: bool = False,
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        include_private: bool = False,
     ) -> tuple[list[OrgInfo], int]:
         async with get_session() as session:
             base_filter = (
