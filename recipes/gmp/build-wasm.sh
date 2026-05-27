@@ -8,6 +8,11 @@ source "${SCRIPT_DIR}/../_common/env-wasm.sh"
 
 cd "${CVC_SOURCE_DIR}"
 
+# GMP cross-compilation needs HOST_CC set to a native C compiler
+# (for building host-side tools like gen-fac). emconfigure sets CC=emcc
+# but HOST_CC must be the real host compiler.
+export HOST_CC="${CVC_HOST_CC:-cc}"
+
 # GMP's configure needs the host triplet for cross-compilation.
 emconfigure ./configure \
     --prefix="${CVC_INSTALL_DIR}" \
