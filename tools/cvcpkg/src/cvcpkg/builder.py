@@ -40,6 +40,25 @@ class PackError(CvcpkgError):
     """Packaging stage failed (staging, manifest, or archiving)."""
 
 
+@dataclass
+class BuildFailure:
+    """Record of a recipe that failed during ``build_all``."""
+
+    recipe_name: str
+    error: Exception
+    skipped: bool = False  # True if skipped due to a failed dependency
+
+
+class BuildAllResult(list):
+    """List of ``BuildContext`` with an attached ``failures`` list."""
+
+    failures: list[BuildFailure]
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.failures: list[BuildFailure] = []
+
+
 # ── Data model ──────────────────────────────────────────────────
 
 
@@ -983,6 +1002,7 @@ def build_all(
     per_component: bool = False,
     host_platform: str = "",
     shard: tuple[int, int] | None = None,
+    keep_going: bool = False,
 ) -> list[BuildContext]:
     """Build every recipe in dependency order into a shared *prefix*.
 
@@ -1011,6 +1031,13 @@ def build_all(
     list by name hash.  Only recipes assigned to this shard are
     packaged (returned in contexts), but their dependencies are still
     built so they can link correctly.
+
+    When *keep_going* is ``True``, build failures are caught and
+    recorded instead of aborting immediately.  Recipes whose
+    dependencies failed are skipped.  The returned list contains
+    only successfully-built recipes; failures are collected in a
+    ``failures`` attribute on the returned list (a
+    ``list[BuildFailure]``).
     """
     if isinstance(recipes_dir, list):
         all_recipes = load_all_recipes(recipes_dir)
@@ -1052,56 +1079,90 @@ def build_all(
         prefix = Path(tempfile.mkdtemp(prefix="cvcpkg-all-"))
     prefix = prefix.resolve()
 
-    contexts: list[BuildContext] = []
+    contexts: BuildAllResult = BuildAllResult()
+    failures: list[BuildFailure] = []
+    failed_names: set[str] = set()  # recipes that failed or were skipped
     for recipe in ordered:
+        # Check if any dependency already failed.
+        dep_names = _dep_names(recipe, platform)
+        failed_deps = [d for d in dep_names if d in failed_names]
+        if failed_deps and keep_going:
+            msg = f"skipped (dependency failed: {', '.join(failed_deps)})"
+            print(f"\ncvcpkg: == {recipe.name} ({recipe.full_version}) — {msg} ==")
+            failed_names.add(recipe.name)
+            failures.append(
+                BuildFailure(
+                    recipe_name=recipe.name,
+                    error=BuildError(msg),
+                    skipped=True,
+                )
+            )
+            continue
+
         is_assigned = recipe.name in assigned
         label = "" if is_assigned else " (dep)"
         print(f"\ncvcpkg: == {recipe.name} ({recipe.full_version}){label} ==")
-        if per_component:
-            work_dir = Path(tempfile.mkdtemp(prefix=f"cvcpkg-{recipe.name}-"))
-            install_dir = work_dir / "install"
-            source_dir = fetch_source(recipe, work_dir)
-            if recipe.patches:
-                apply_patches(recipe, source_dir)
-            ctx = BuildContext(
-                recipe=recipe,
-                platform=platform,
-                config=config,
-                link=link,
-                prefix=prefix,
-                source_dir=source_dir,
-                build_dir=work_dir / "build",
-                install_dir=install_dir,
-                work_dir=work_dir,
-                keep_build_dir=keep_build_dir,
-                host_platform=host_platform,
-            )
-            run_build(ctx)
-            if recipe.test_script:
-                run_test(ctx)
-            # Merge this recipe's install into the shared prefix so
-            # subsequent recipes can find it via CVC_DEPS_PREFIX.
-            if install_dir.is_dir():
-                shutil.copytree(install_dir, prefix, dirs_exist_ok=True)
-            if not keep_build_dir:
-                build_dir = work_dir / "build"
-                if build_dir.is_dir():
-                    shutil.rmtree(build_dir, ignore_errors=True)
-        else:
-            ctx = build_recipe(
-                recipe.recipe_dir,
-                platform=platform,
-                config=config,
-                link=link,
-                prefix=prefix,
-                keep_build_dir=keep_build_dir,
-                host_platform=host_platform,
-            )
-        # Only include assigned recipes in contexts (for packaging).
-        if is_assigned:
-            contexts.append(ctx)
+        try:
+            if per_component:
+                work_dir = Path(tempfile.mkdtemp(prefix=f"cvcpkg-{recipe.name}-"))
+                install_dir = work_dir / "install"
+                source_dir = fetch_source(recipe, work_dir)
+                if recipe.patches:
+                    apply_patches(recipe, source_dir)
+                ctx = BuildContext(
+                    recipe=recipe,
+                    platform=platform,
+                    config=config,
+                    link=link,
+                    prefix=prefix,
+                    source_dir=source_dir,
+                    build_dir=work_dir / "build",
+                    install_dir=install_dir,
+                    work_dir=work_dir,
+                    keep_build_dir=keep_build_dir,
+                    host_platform=host_platform,
+                )
+                run_build(ctx)
+                if recipe.test_script:
+                    run_test(ctx)
+                # Merge this recipe's install into the shared prefix so
+                # subsequent recipes can find it via CVC_DEPS_PREFIX.
+                if install_dir.is_dir():
+                    shutil.copytree(install_dir, prefix, dirs_exist_ok=True)
+                if not keep_build_dir:
+                    build_dir = work_dir / "build"
+                    if build_dir.is_dir():
+                        shutil.rmtree(build_dir, ignore_errors=True)
+            else:
+                ctx = build_recipe(
+                    recipe.recipe_dir,
+                    platform=platform,
+                    config=config,
+                    link=link,
+                    prefix=prefix,
+                    keep_build_dir=keep_build_dir,
+                    host_platform=host_platform,
+                )
+            # Only include assigned recipes in contexts (for packaging).
+            if is_assigned:
+                contexts.append(ctx)
+        except (BuildError, RecipeError) as exc:
+            if not keep_going:
+                raise
+            print(f"\ncvcpkg: FAILED {recipe.name}: {exc}")
+            failed_names.add(recipe.name)
+            failures.append(BuildFailure(recipe_name=recipe.name, error=exc))
 
-    print(f"\ncvcpkg: all {len(contexts)} components built into {prefix}")
+    if failures:
+        print(f"\ncvcpkg: {len(contexts)} succeeded, {len(failures)} failed:")
+        for f in failures:
+            status = "SKIPPED (dep)" if f.skipped else "FAILED"
+            print(f"  {status}: {f.recipe_name} — {f.error}")
+    else:
+        print(f"\ncvcpkg: all {len(contexts)} components built into {prefix}")
+
+    # Attach failures to the returned list for callers to inspect.
+    contexts.failures = failures
     return contexts
 
 

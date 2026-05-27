@@ -1700,6 +1700,14 @@ def pack(
     default="",
     help="Host platform for cross-compilation (e.g. linux, macos, windows).",
 )
+@click.option(
+    "--keep-going",
+    is_flag=True,
+    default=False,
+    help="Continue building after a recipe fails.  "
+    "Recipes whose dependencies failed are skipped.  "
+    "A summary of failures is printed at the end.",
+)
 def build_all_cmd(
     platform: str,
     config: str,
@@ -1708,6 +1716,7 @@ def build_all_cmd(
     keep_build_dir: bool,
     recipes_dirs: tuple[str, ...],
     host_platform: str,
+    keep_going: bool,
 ) -> None:
     """Build all recipes in dependency order.
 
@@ -1729,7 +1738,7 @@ def build_all_cmd(
     prefix_path = Path(prefix).resolve() if prefix else None
     rdirs = [Path(d) for d in recipes_dirs] if recipes_dirs else [find_recipes_dir()]
 
-    build_all(
+    contexts = build_all(
         rdirs if len(rdirs) > 1 else rdirs[0],
         platform=plat,
         config=config,
@@ -1737,7 +1746,11 @@ def build_all_cmd(
         prefix=prefix_path,
         keep_build_dir=keep_build_dir,
         host_platform=host_platform,
+        keep_going=keep_going,
     )
+    failures = getattr(contexts, "failures", [])
+    if failures:
+        raise SystemExit(1)
 
 
 # ── pack-all ────────────────────────────────────────────────────
@@ -1776,6 +1789,14 @@ def build_all_cmd(
     default="",
     help="Organization slug to embed in manifests.",
 )
+@click.option(
+    "--keep-going",
+    is_flag=True,
+    default=False,
+    help="Continue building after a recipe fails.  "
+    "Recipes whose dependencies failed are skipped.  "
+    "A summary of failures is printed at the end.",
+)
 def pack_all_cmd(
     platform: str,
     config: str,
@@ -1789,6 +1810,7 @@ def pack_all_cmd(
     host_platform: str,
     shard: str,
     org: str,
+    keep_going: bool,
 ) -> None:
     """Build and archive all recipes.
 
@@ -1855,6 +1877,7 @@ def pack_all_cmd(
         per_component=True,
         host_platform=host_platform,
         shard=shard_tuple,
+        keep_going=keep_going,
     )
 
     output.mkdir(parents=True, exist_ok=True)
@@ -1895,6 +1918,10 @@ def pack_all_cmd(
             sig_path = archive_path.with_suffix(archive_path.suffix + ".sig")
             write_signature(sig, sig_path)
             click.echo(f"  Signed: {sig_path.name} (key: {sig.key_fingerprint[:16]}…)")
+
+    failures = getattr(contexts, "failures", [])
+    if failures:
+        raise SystemExit(1)
 
 
 # ── recipes ─────────────────────────────────────────────────────
