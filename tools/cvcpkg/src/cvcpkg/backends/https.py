@@ -26,10 +26,6 @@ class HttpsBackend(StorageBackend):
                 etag = resp.headers.get("ETag", "")
                 ct = resp.headers.get("Content-Type", "")
                 return ObjectInfo(size=size, etag=etag, content_type=ct)
-        except urllib.error.HTTPError as exc:
-            if exc.code == 405:
-                return ObjectInfo(size=-1, etag="", content_type="")
-            raise OSError(f"HEAD {uri}: {exc}") from exc
         except urllib.error.URLError as exc:
             raise OSError(f"HEAD {uri}: {exc}") from exc
 
