@@ -56,3 +56,17 @@ package:
 
 abi:
   cxx_std: 17
+
+notes: |
+  CLAPACK is used for wasm because:
+  - Reference LAPACK and OpenBLAS are written in Fortran; Emscripten has no
+    Fortran compiler, so they cannot be cross-compiled to wasm directly.
+  - CLAPACK is a complete C translation (via f2c) of Reference LAPACK 3.2.1
+    plus the reference BLAS. It compiles cleanly with emcc.
+  - discere-os/lapack.wasm on GitHub was investigated but is just a fork of
+    Reference-LAPACK with zero actual wasm work (the "wasm" branch only adds
+    a FUNDING.yml; sources are still .f files).
+  - On native platforms (Linux/macOS) we use OpenBLAS; on Windows we use
+    vcpkg's clapack port. On wasm this recipe builds CLAPACK from source.
+  - Provides BLAS + LAPACK symbols needed by levmar, and potentially other
+    packages (F2Dock, etc.) in the future.
