@@ -53,40 +53,41 @@ project(levmar
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 
-# LAPACK is mandatory; see header comment.
+# ── Option: USE_BLAS ─────────────────────────────────────────────
+# When OFF, LAPACK/BLAS are not searched and the constrained solvers
+# (lmlec, lmbc, lmblec, lmbleic, Axb) that require LAPACK are
+# compiled in stub mode (HAVE_LAPACK is not defined). The basic
+# unconstrained Levenberg-Marquardt still works.
+option(USE_BLAS "Link LAPACK/BLAS and enable constrained solvers" ON)
+
+if(USE_BLAS)
+# LAPACK finding logic.
 #
-# On Windows we prefer vcpkg's `clapack` port directly via its
-# CONFIG package, because:
-#   * vcpkg's openblas on MSVC ships only BLAS (LAPACK requires
-#     Fortran, which isn't available in the MSVC build), so the
-#     stock FindLAPACK module fails to locate `cheev_`.
-#   * vcpkg's `clapack` port DOES install a vcpkg-cmake-wrapper
-#     redirecting find_package(LAPACK), but that wrapper was only
-#     added in mid-2026 and runners with an older bundled vcpkg
-#     baseline don't have it — so we cannot rely on
-#     find_package(LAPACK) routing through clapack automatically.
+# First try clapack CONFIG (works on Windows/vcpkg and wasm where we
+# provide the f2c'd CLAPACK from netlib as a cvcpkg recipe).
 #
 # clapack's CONFIG package exports targets `lapack` (the LAPACK
 # library, f2c'd) and `f2c` (the libf2c runtime); it also pulls in
-# its BLAS backend (vcpkg's openblas) internally. We synthesise
-# the `LAPACK::LAPACK` INTERFACE target ourselves so the link
-# command below is platform-uniform.
+# its BLAS backend internally. We synthesise the `LAPACK::LAPACK`
+# INTERFACE target ourselves so the link command below is
+# platform-uniform.
 set(_levmar_have_lapack FALSE)
-if(WIN32)
-  find_package(clapack CONFIG QUIET)
-  if(clapack_FOUND AND TARGET lapack)
-    if(NOT TARGET LAPACK::LAPACK)
-      add_library(LAPACK::LAPACK INTERFACE IMPORTED)
-      set(_levmar_lapack_link lapack)
-      if(TARGET f2c)
-        list(APPEND _levmar_lapack_link f2c)
-      endif()
-      set_property(TARGET LAPACK::LAPACK PROPERTY
-        INTERFACE_LINK_LIBRARIES "${_levmar_lapack_link}")
+find_package(clapack CONFIG QUIET)
+if(clapack_FOUND AND TARGET lapack)
+  if(NOT TARGET LAPACK::LAPACK)
+    add_library(LAPACK::LAPACK INTERFACE IMPORTED)
+    set(_levmar_lapack_link lapack)
+    if(TARGET blas)
+      list(APPEND _levmar_lapack_link blas)
     endif()
-    set(_levmar_have_lapack TRUE)
-    message(STATUS "levmar: using vcpkg clapack CONFIG for LAPACK")
+    if(TARGET f2c)
+      list(APPEND _levmar_lapack_link f2c)
+    endif()
+    set_property(TARGET LAPACK::LAPACK PROPERTY
+      INTERFACE_LINK_LIBRARIES "${_levmar_lapack_link}")
   endif()
+  set(_levmar_have_lapack TRUE)
+  message(STATUS "levmar: using clapack CONFIG for LAPACK")
 endif()
 if(NOT _levmar_have_lapack)
   # On Linux with static OpenBLAS the stock FindBLAS module fails because
@@ -107,6 +108,7 @@ endif()
 if(NOT _levmar_have_lapack)
   find_package(LAPACK REQUIRED)
 endif()
+endif() # USE_BLAS
 
 set(LEVMAR_SRC "${CMAKE_CURRENT_SOURCE_DIR}/upstream")
 
@@ -148,15 +150,17 @@ foreach(_f IN LISTS LEVMAR_SOURCES LEVMAR_AUX_FILES)
   endif()
 endforeach()
 
-# ── Configure levmar.h (HAVE_LAPACK enabled) ────────────────────
+# ── Configure levmar.h ───────────────────────────────────────────
 # Upstream's levmar.h.in has `#cmakedefine` tokens for HAVE_LAPACK,
 # HAVE_PLASMA, LINSOLVERS_RETAIN_MEMORY, LM_DBL_PREC and LM_SNGL_PREC.
-# We enable LAPACK and BOTH precisions (matching the unconditional
-# code paths in the .c files which compile both flavours).
-# The tarball also ships a pre-generated `levmar.h` next to
-# `levmar.h.in`, but we deliberately do NOT vendor that file —
-# our configured copy is the authoritative one.
-set(HAVE_LAPACK 1)
+# We enable BOTH precisions (matching the unconditional code paths
+# in the .c files which compile both flavours).
+# HAVE_LAPACK is only set when USE_BLAS=ON.
+if(USE_BLAS)
+  set(HAVE_LAPACK 1)
+else()
+  message(STATUS "levmar: building WITHOUT LAPACK (constrained solvers disabled)")
+endif()
 set(LM_DBL_PREC 1)
 set(LM_SNGL_PREC 1)
 configure_file(
@@ -189,7 +193,9 @@ target_include_directories(levmar
 
 # Public link to LAPACK so consumers of the static archive don't
 # have to know to pull in LAPACK themselves.
-target_link_libraries(levmar PUBLIC LAPACK::LAPACK)
+if(USE_BLAS)
+  target_link_libraries(levmar PUBLIC LAPACK::LAPACK)
+endif()
 
 if(MSVC)
   target_compile_definitions(levmar PRIVATE _CRT_SECURE_NO_WARNINGS)

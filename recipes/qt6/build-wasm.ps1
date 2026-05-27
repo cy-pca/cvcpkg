@@ -43,6 +43,7 @@ $wasmBuildDir = "$env:CVC_BUILD_DIR\wasm-qt"
     -DCMAKE_BUILD_TYPE=Release `
     -DBUILD_SHARED_LIBS=OFF `
     "-DCMAKE_TOOLCHAIN_FILE=$emscriptenToolchain" `
+    "-DCMAKE_FIND_ROOT_PATH=$env:CVC_DEPS_PREFIX" `
     "-DQT_HOST_PATH=$hostInstallDir" `
     -DFEATURE_thread=OFF `
     -DQT_BUILD_EXAMPLES=OFF `

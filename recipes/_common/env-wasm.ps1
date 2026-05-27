@@ -9,6 +9,13 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 if (-not $env:CVC_EMSDK_DIR) { throw 'CVC_EMSDK_DIR must point to the activated emsdk bundle' }
 
+# Remove MSYS2/Git Bash env vars that confuse emsdk.py into emitting
+# UNIX-format paths (`:` separator, `/c/` prefixes) inside PowerShell.
+# This happens when the cvcpkg workflow step uses `shell: bash` on Windows.
+Remove-Item Env:\MSYSTEM -ErrorAction SilentlyContinue
+Remove-Item Env:\MSYSTEM_PREFIX -ErrorAction SilentlyContinue
+Remove-Item Env:\MSYSTEM_CHOST -ErrorAction SilentlyContinue
+
 # Activate Emscripten.
 $emsdkEnv = Join-Path $env:CVC_EMSDK_DIR 'emsdk_env.ps1'
 if (-not (Test-Path $emsdkEnv)) {
@@ -37,6 +44,10 @@ function Invoke-CvcWasmCMakeBuild {
         [string[]]$ExtraArgs = @(),
         [string]$SourceDir = $env:CVC_SOURCE_DIR
     )
+    $findRootPathArgs = @()
+    if ($env:CVC_DEPS_PREFIX) {
+        $findRootPathArgs += "-DCMAKE_FIND_ROOT_PATH=$env:CVC_DEPS_PREFIX"
+    }
     $allArgs = @(
         '-G', 'Ninja',
         '-S', $SourceDir,
@@ -48,7 +59,7 @@ function Invoke-CvcWasmCMakeBuild {
         '-DCMAKE_CXX_STANDARD=17',
         '-DCMAKE_POLICY_VERSION_MINIMUM=3.5',
         "-DCMAKE_TOOLCHAIN_FILE=$emscriptenToolchain"
-    ) + $ExtraArgs
+    ) + $findRootPathArgs + $ExtraArgs
 
     & cmake @allArgs
     if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }

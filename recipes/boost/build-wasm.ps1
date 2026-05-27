@@ -8,5 +8,7 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Invoke-CvcWasmCMakeBuild @(
     '-DBOOST_ENABLE_CMAKE=ON',
     '-DBUILD_TESTING=OFF',
-    '-DBOOST_INSTALL_LAYOUT=system'
+    '-DBOOST_INSTALL_LAYOUT=system',
+    '-DCMAKE_CXX_FLAGS=-DBOOST_HAS_PTHREADS',
+    '-DBOOST_EXCLUDE_LIBRARIES=context;coroutine;fiber;stacktrace;asio;cobalt;log;process;beast'
 )

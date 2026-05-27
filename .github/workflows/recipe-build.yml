@@ -124,6 +124,9 @@ jobs:
             libxext-dev libxfixes-dev libxrandr-dev libxcb1-dev \
             libx11-dev libx11-xcb-dev libfontconfig1-dev \
             libfreetype-dev libharfbuzz-dev
+          # liblld-18-dev: needed by wasmedge, but only available on
+          # runners with the LLVM 18 apt repo (GitHub-hosted ubuntu-24).
+          sudo -E apt-get install -y --no-install-recommends liblld-18-dev 2>/dev/null || true
 
       # ── System build tools (macOS) ──
       - name: Install system build tools (macOS)
