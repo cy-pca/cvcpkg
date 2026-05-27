@@ -8,12 +8,25 @@ set -euo pipefail
 
 cd "${CVC_SOURCE_DIR}"
 
-# CMake bootstraps itself — no pre-existing cmake required.
-./bootstrap \
-    --prefix="${CVC_INSTALL_DIR}" \
-    --parallel="${CVC_JOBS}" \
-    -- \
-    -DCMAKE_USE_OPENSSL=OFF
+# Build with system curl so cmake's file(DOWNLOAD) supports HTTPS.
+# Our curl recipe is built before cmake (autotools-based, no cmake needed).
+BOOTSTRAP_ARGS=(
+    --prefix="${CVC_INSTALL_DIR}"
+    --parallel="${CVC_JOBS}"
+    --system-curl
+)
+
+CMAKE_FLAGS=(
+    -DCMAKE_USE_OPENSSL=ON
+)
+
+if [[ -n "${CVC_DEPS_PREFIX:-}" ]]; then
+    CMAKE_FLAGS+=(-DCMAKE_PREFIX_PATH="${CVC_DEPS_PREFIX}")
+    export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+    export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+fi
+
+./bootstrap "${BOOTSTRAP_ARGS[@]}" -- "${CMAKE_FLAGS[@]}"
 
 make -j "${CVC_JOBS}"
 make install
