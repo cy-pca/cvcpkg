@@ -8,10 +8,9 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\..\_common\env-wasm.ps1"
 # CLAPACK 3.2.1 unconditionally does add_subdirectory(TESTING) — the test
-# executables can't link under emscripten. Remove the directory so cmake skips it.
-if (Test-Path "$env:CVC_SOURCE_DIR\TESTING") {
-    Remove-Item -Recurse -Force "$env:CVC_SOURCE_DIR\TESTING"
-}
+# executables can't link under emscripten. Patch CMakeLists.txt to skip it.
+$cmakeFile = "$env:CVC_SOURCE_DIR\CMakeLists.txt"
+(Get-Content $cmakeFile) | Where-Object { $_ -notmatch 'add_subdirectory\(TESTING\)' } | Set-Content $cmakeFile
 $allArgs = @(
     '-G', 'Ninja',
     '-S', $env:CVC_SOURCE_DIR,

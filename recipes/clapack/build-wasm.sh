@@ -10,8 +10,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_common/env-wasm.sh"
 
 # CLAPACK 3.2.1 unconditionally does add_subdirectory(TESTING) — the test
-# executables can't link under emscripten. Remove the directory so cmake skips it.
-rm -rf "${CVC_SOURCE_DIR}/TESTING"
+# executables can't link under emscripten. Patch CMakeLists.txt to skip it.
+sed -i '/add_subdirectory(TESTING)/d' "${CVC_SOURCE_DIR}/CMakeLists.txt"
 
 # CLAPACK 3.2.1 is old C (f2c output from 2008); emcc/clang treats
 # implicit function declarations as errors. Suppress them.
