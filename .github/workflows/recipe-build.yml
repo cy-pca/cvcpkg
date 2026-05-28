@@ -123,9 +123,12 @@ jobs:
             libxext-dev libxfixes-dev libxrandr-dev libxcb1-dev \
             libx11-dev libx11-xcb-dev libfontconfig1-dev \
             libfreetype-dev libharfbuzz-dev
-          # liblld-18-dev: needed by wasmedge, but only available on
-          # runners with the LLVM 18 apt repo (GitHub-hosted ubuntu-24).
-          sudo -E apt-get install -y --no-install-recommends liblld-18-dev 2>/dev/null || true
+          # LLVM 18 dev packages: needed by wasmedge AOT.  Ubuntu 24.04
+          # ships Clang/LLVM 18 but the dev packages must be explicitly
+          # installed.  Non-fatal so non-wasmedge builds still succeed.
+          apt_retry sudo -E apt-get install -y --no-install-recommends \
+            llvm-18-dev lld-18 liblld-18-dev 2>/dev/null || \
+            echo "::warning::LLVM 18 dev packages not available — wasmedge AOT will be disabled"
 
       # ── System build tools (macOS) ──
       - name: Install system build tools (macOS)
