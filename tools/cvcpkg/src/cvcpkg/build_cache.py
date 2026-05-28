@@ -204,7 +204,12 @@ class BuildCache:
         """Extract a cached archive into *target_dir*."""
         target_dir.mkdir(parents=True, exist_ok=True)
         with tarfile.open(archive, "r:gz") as tar:
-            tar.extractall(target_dir, filter="data")
+            import sys
+
+            if sys.version_info >= (3, 12):
+                tar.extractall(target_dir, filter="data")
+            else:
+                tar.extractall(target_dir)  # pragma: no cover
 
     # ── evict ───────────────────────────────────────────────────
 
