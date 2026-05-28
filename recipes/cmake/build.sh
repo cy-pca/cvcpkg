@@ -22,6 +22,7 @@ CMAKE_FLAGS=(
 
 if [[ -n "${CVC_DEPS_PREFIX:-}" ]]; then
     CMAKE_FLAGS+=(-DCMAKE_PREFIX_PATH="${CVC_DEPS_PREFIX}")
+    CMAKE_FLAGS+=(-DOPENSSL_ROOT_DIR="${CVC_DEPS_PREFIX}")
     # Embed RPATH so the cmake binary (and any helpers) can find
     # recipe-built shared libs (libcurl, libssl) at build-time AND
     # install-time without relying on LD_LIBRARY_PATH alone.
