@@ -290,40 +290,6 @@ jobs:
             patchelf --set-rpath '$ORIGIN' "$so" 2>/dev/null || true
           done
 
-      # ── Rename prefix directory to the artifact stem ──
-      - name: Rename prefix to artifact stem
-        shell: bash
-        run: |
-          STEM="${{ steps.meta.outputs.stem }}"
-          if [ -d "${{ github.workspace }}/prefix" ] && [ "${{ github.workspace }}/prefix" != "${{ github.workspace }}/${STEM}" ]; then
-            mv "${{ github.workspace }}/prefix" "${{ github.workspace }}/${STEM}"
-          fi
-
-      # ── Archive and upload ──
-      - name: Pack archive (Linux/macOS)
-        if: inputs.platform != 'windows'
-        run: |
-          STEM="${{ steps.meta.outputs.stem }}"
-          tar czf "${STEM}.tar.gz" "$STEM"
-          du -sh "$STEM" "${STEM}.tar.gz"
-
-      - name: Pack archive (Windows)
-        if: inputs.platform == 'windows'
-        shell: pwsh
-        run: |
-          $stem = "${{ steps.meta.outputs.stem }}"
-          Compress-Archive -Path $stem -DestinationPath "${stem}.zip"
-          Get-ChildItem "${stem}.zip" | Select-Object Name, Length
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ inputs.platform }}-${{ steps.meta.outputs.btlc }}-${{ inputs.link }}
-          path: |
-            ${{ steps.meta.outputs.stem }}.tar.gz
-            ${{ steps.meta.outputs.stem }}.zip
-          if-no-files-found: error
-
       # Upload per-component bundles for publishing to cvcpkg-server
       - name: Upload per-component bundles
         uses: actions/upload-artifact@v4
