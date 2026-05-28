@@ -34,7 +34,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pyyaml jsonschema pytest black
+          pip install pyyaml jsonschema pytest 'black==24.10.0'
           pip install -e tools/cvcpkg
 
       - name: Black format check
