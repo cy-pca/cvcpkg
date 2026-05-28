@@ -1147,3 +1147,156 @@ class TestPackageInfoQualifiedName:
             org="cvc-lab",
         )
         assert p.qualified_name == "cvc-lab/custom-lib"
+
+
+# ── RSS Feed ────────────────────────────────────────────────────
+
+
+class TestRSSFeed:
+    def test_rss_empty_feed(self, server_env):
+        """RSS feed returns valid XML with no items when no packages exist."""
+        client, *_ = server_env
+        resp = client.get("/v1/feed.xml")
+        assert resp.status_code == 200
+        assert "application/rss+xml" in resp.headers["content-type"]
+        assert "<?xml version" in resp.text
+        assert "<rss" in resp.text
+        assert "<channel>" in resp.text
+        assert "<item>" not in resp.text
+
+    def test_rss_with_packages(self, server_env):
+        """RSS feed contains items after publishing packages."""
+        client, _, pub_tok, _ = server_env
+        # Publish two packages
+        for name, version in [("zlib", "1.3.1"), ("boost", "1.86.0")]:
+            client.post(
+                "/v1/publish",
+                params={
+                    "name": name,
+                    "version": version,
+                    "platform": "linux",
+                    "arch": "x86_64",
+                },
+                files={"file": (f"{name}.tar.zst", io.BytesIO(b"content"))},
+                headers={"Authorization": f"Bearer {pub_tok}"},
+            )
+        resp = client.get("/v1/feed.xml")
+        assert resp.status_code == 200
+        assert "<item>" in resp.text
+        assert "zlib 1.3.1" in resp.text
+        assert "boost 1.86.0" in resp.text
+        assert "<guid" in resp.text
+        assert "<pubDate>" in resp.text
+
+    def test_rss_limit_parameter(self, server_env):
+        """RSS feed respects limit parameter."""
+        client, _, pub_tok, _ = server_env
+        for i in range(5):
+            client.post(
+                "/v1/publish",
+                params={
+                    "name": f"pkg{i}",
+                    "version": "1.0",
+                    "platform": "linux",
+                    "arch": "x86_64",
+                },
+                files={"file": (f"pkg{i}.tar.zst", io.BytesIO(b"data"))},
+                headers={"Authorization": f"Bearer {pub_tok}"},
+            )
+        resp = client.get("/v1/feed.xml?limit=2")
+        assert resp.status_code == 200
+        # Only 2 items should be in the feed
+        assert resp.text.count("<item>") == 2
+
+    def test_rss_valid_xml(self, server_env):
+        """RSS feed is well-formed XML."""
+        import xml.etree.ElementTree as ET
+
+        client, _, pub_tok, _ = server_env
+        client.post(
+            "/v1/publish",
+            params={
+                "name": "xmltest",
+                "version": "1.0",
+                "platform": "linux",
+                "arch": "x86_64",
+                "description": "Test <special> & chars",
+            },
+            files={"file": ("xmltest.tar.zst", io.BytesIO(b"data"))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        resp = client.get("/v1/feed.xml")
+        assert resp.status_code == 200
+        # Should parse without error (XML-safe escaping)
+        root = ET.fromstring(resp.text)
+        assert root.tag == "rss"
+        items = root.findall(".//item")
+        assert len(items) == 1
+
+
+# ── Download Stats ──────────────────────────────────────────────
+
+
+class TestDownloadStats:
+    def test_download_stats_empty(self, server_env):
+        """Download stats returns empty data when using YAML backend."""
+        client, *_ = server_env
+        resp = client.get("/v1/downloads/stats")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 0
+        assert data["daily"] == []
+        assert "config" in data
+        assert "color" in data["config"]
+        assert "height" in data["config"]
+
+    def test_download_stats_with_name_filter(self, server_env):
+        """Download stats accepts name parameter."""
+        client, *_ = server_env
+        resp = client.get("/v1/downloads/stats?name=zlib")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 0
+
+    def test_download_stats_days_parameter(self, server_env):
+        """Download stats respects days parameter."""
+        client, *_ = server_env
+        resp = client.get("/v1/downloads/stats?days=7")
+        assert resp.status_code == 200
+
+    def test_download_stats_config_values(self, server_env):
+        """Download stats returns configuration values."""
+        client, *_ = server_env
+        resp = client.get("/v1/downloads/stats")
+        data = resp.json()
+        config = data["config"]
+        assert isinstance(config["days"], int)
+        assert isinstance(config["color"], str)
+        assert isinstance(config["fill_color"], str)
+        assert isinstance(config["height"], int)
+
+
+# ── Download tracking ───────────────────────────────────────────
+
+
+class TestDownloadTracking:
+    def test_download_records_event(self, server_env):
+        """Download endpoint still works (event recording is YAML-backend no-op)."""
+        client, _, pub_tok, _ = server_env
+        content = b"real archive bytes" * 10
+        client.post(
+            "/v1/publish",
+            params={
+                "name": "trackpkg",
+                "version": "0.1",
+                "platform": "linux",
+                "arch": "x86_64",
+            },
+            files={"file": ("trackpkg.tar.zst", io.BytesIO(content))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        catalog = client.get("/v1/catalog").json()
+        url = catalog["bundles"][0]["archive_url"]
+        resp = client.get(url)
+        assert resp.status_code == 200
+        assert resp.content == content

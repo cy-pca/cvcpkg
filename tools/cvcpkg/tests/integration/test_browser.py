@@ -448,3 +448,118 @@ class TestOrganizationsPagePrivacy:
             orgs_link.click()
             page.wait_for_url(re.compile(r"/orgs"))
             assert "Organizations" in page.content()
+
+
+# ── RSS Feed ────────────────────────────────────────────────────
+
+
+class TestRSSFeedBrowser:
+    """Tests for the RSS feed endpoint via browser requests."""
+
+    def test_rss_feed_accessible(self, page):
+        """RSS feed endpoint returns XML content."""
+        resp = page.request.get(f"{SERVER_URL}/v1/feed.xml")
+        assert resp.status == 200
+        assert "rss" in resp.headers.get("content-type", "").lower() or "xml" in resp.headers.get(
+            "content-type", ""
+        ).lower()
+        body = resp.text()
+        assert "<rss" in body
+        assert "<channel>" in body
+
+    def test_rss_feed_has_title(self, page):
+        """RSS feed contains a channel title."""
+        resp = page.request.get(f"{SERVER_URL}/v1/feed.xml")
+        body = resp.text()
+        assert "<title>" in body
+
+
+# ── Download Stats ──────────────────────────────────────────────
+
+
+class TestDownloadStatsBrowser:
+    """Tests for the download stats API via browser requests."""
+
+    def test_download_stats_endpoint(self, page):
+        """Download stats endpoint returns JSON with expected structure."""
+        resp = page.request.get(f"{SERVER_URL}/v1/downloads/stats")
+        assert resp.status == 200
+        data = resp.json()
+        assert "total" in data
+        assert "daily" in data
+        assert "config" in data
+
+    def test_download_stats_with_params(self, page):
+        """Download stats accepts query parameters."""
+        resp = page.request.get(f"{SERVER_URL}/v1/downloads/stats?name=zlib&days=7")
+        assert resp.status == 200
+        data = resp.json()
+        assert isinstance(data["total"], int)
+
+
+# ── Mobile Badge Layout ────────────────────────────────────────
+
+
+class TestMobileBadgeLayout:
+    """Tests that badges don't break layout on mobile viewports."""
+
+    @pytest.fixture(autouse=True)
+    def mobile_viewport(self, page):
+        page.set_viewport_size({"width": 375, "height": 812})
+
+    def test_badge_no_line_wrap(self, page):
+        """Badge elements should not wrap to multiple lines on mobile."""
+        page.goto(SERVER_URL)
+        # Wait for packages to load
+        page.wait_for_function(
+            """() => {
+                const el = document.getElementById('stat-packages');
+                return el && el.textContent.trim() !== '—';
+            }""",
+            timeout=10000,
+        )
+        # Check badge CSS properties
+        badges = page.locator(".badge-mainline, .badge-community")
+        if badges.count() > 0:
+            for i in range(min(badges.count(), 3)):
+                badge = badges.nth(i)
+                white_space = badge.evaluate("el => getComputedStyle(el).whiteSpace")
+                assert white_space == "nowrap", f"Badge {i} has white-space: {white_space}"
+                display = badge.evaluate("el => getComputedStyle(el).display")
+                assert "flex" in display, f"Badge {i} has display: {display}"
+
+    def test_source_column_not_overflow(self, page):
+        """The Source column in the package table should not overflow on mobile."""
+        page.goto(SERVER_URL)
+        page.wait_for_function(
+            """() => {
+                const el = document.getElementById('stat-packages');
+                return el && el.textContent.trim() !== '—';
+            }""",
+            timeout=10000,
+        )
+        # The table should still be scrollable and not break the layout
+        table = page.locator(".table-container")
+        assert table.is_visible()
+
+
+# ── Package Detail Download Graph ───────────────────────────────
+
+
+class TestPackageDetailDownloadGraph:
+    """Tests for the download stats graph on package detail pages."""
+
+    def test_download_stats_section_exists(self, page):
+        """Package detail page should have a hidden download stats section."""
+        page.goto(f"{SERVER_URL}/package/test-pkg")
+        page.wait_for_load_state("networkidle")
+        section = page.locator("#download-stats-section")
+        # Section exists in DOM (may be hidden if no data)
+        assert section.count() == 1
+
+    def test_download_chart_canvas_exists(self, page):
+        """Download chart canvas element should be present."""
+        page.goto(f"{SERVER_URL}/package/test-pkg")
+        page.wait_for_load_state("networkidle")
+        canvas = page.locator("#download-chart")
+        assert canvas.count() == 1

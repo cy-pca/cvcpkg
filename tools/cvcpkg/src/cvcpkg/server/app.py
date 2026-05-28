@@ -34,6 +34,7 @@ from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
     PlainTextResponse,
+    Response,
     StreamingResponse,
 )
 
@@ -90,6 +91,14 @@ CORS_ALLOWED_ORIGINS = [
     o.strip() for o in os.environ.get("CVCPKG_CORS_ORIGINS", "").split(",") if o.strip()
 ]
 
+# Download stats graph configuration
+DOWNLOAD_GRAPH_DAYS = int(os.environ.get("CVCPKG_DOWNLOAD_GRAPH_DAYS", "30"))
+DOWNLOAD_GRAPH_COLOR = os.environ.get("CVCPKG_DOWNLOAD_GRAPH_COLOR", "#3273dc")
+DOWNLOAD_GRAPH_FILL_COLOR = os.environ.get(
+    "CVCPKG_DOWNLOAD_GRAPH_FILL_COLOR", "rgba(50,115,220,0.15)"
+)
+DOWNLOAD_GRAPH_HEIGHT = int(os.environ.get("CVCPKG_DOWNLOAD_GRAPH_HEIGHT", "200"))
+
 logger = logging.getLogger("cvcpkg.server")
 
 
@@ -145,6 +154,7 @@ _db_tokens = None  # DbTokenStore when using DB backend
 _db_audit = None  # DbAuditLog when using DB backend
 _db_packages = None  # DbPackageIndex when using DB backend
 _db_orgs = None  # DbOrgStore when using DB backend
+_db_downloads = None  # DbDownloadStore when using DB backend
 
 
 def _get_state() -> ServerState:
@@ -277,7 +287,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        global _state, _START_TIME, _use_db, _db_tokens, _db_audit, _db_packages, _db_orgs
+        global _state, _START_TIME, _use_db, _db_tokens, _db_audit, _db_packages, _db_orgs, _db_downloads
         _START_TIME = time.monotonic()
         sd = state_dir or Path(os.environ.get("CVCPKG_SERVER_STATE_DIR", "/var/lib/cvcpkg-server"))
 
@@ -295,7 +305,7 @@ def create_app(
         db_url = os.environ.get("CVCPKG_DATABASE_URL", "")
         if db_url:
             from cvcpkg.server.db import create_tables, dispose_engine, init_db
-            from cvcpkg.server.db_stores import DbAuditLog, DbOrgStore, DbPackageIndex, DbTokenStore
+            from cvcpkg.server.db_stores import DbAuditLog, DbDownloadStore, DbOrgStore, DbPackageIndex, DbTokenStore
 
             init_db(db_url)
             await create_tables()
@@ -303,6 +313,7 @@ def create_app(
             _db_audit = DbAuditLog()
             _db_packages = DbPackageIndex()
             _db_orgs = DbOrgStore()
+            _db_downloads = DbDownloadStore()
             _use_db = True
             # Still need ServerState for archives dir and storage_uri
             _state = ServerState(
@@ -691,6 +702,27 @@ def create_app(
         archive_path = state.archives_dir() / safe_name
         if not archive_path.is_file():
             raise HTTPException(404, f"archive not found: {safe_name}")
+
+        # Record download event for analytics
+        if _use_db and _db_downloads is not None:
+            # Parse package name/version/platform from filename
+            # Format: {name}-{version}-{platform}-{arch}-{build_type}[-{link}].tar.zst
+            parts = safe_name.rsplit(".", 2)  # strip .tar.zst or similar
+            stem = parts[0] if parts else safe_name
+            # Best-effort extraction — look up in DB for exact match
+            pkg_name = stem.split("-")[0] if "-" in stem else stem
+            pkg_version = ""
+            pkg_platform = ""
+            if _db_packages is not None:
+                # Try to find the package by archive_url for accurate metadata
+                pkgs, _ = await _db_packages.get_bundles(limit=1000)
+                for p in pkgs:
+                    if p.archive_url.endswith(f"/{safe_name}"):
+                        pkg_name = p.name
+                        pkg_version = p.version
+                        pkg_platform = p.platform
+                        break
+            await _db_downloads.record(pkg_name, pkg_version, pkg_platform)
 
         def _stream():
             with open(archive_path, "rb") as f:
@@ -1642,6 +1674,130 @@ def create_app(
             detail=f"member={token_name}",
         )
         return {"message": f"removed '{token_name}' from '{slug}'"}
+
+    # ── RSS Feed ────────────────────────────────────────────
+
+    @app.get("/v1/feed.xml", tags=["feed"], response_class=Response)
+    async def rss_feed(
+        limit: int = Query(50, ge=1, le=200, description="Number of items in the feed"),
+        _auth: None = Depends(optional_reader_auth),
+    ):
+        """RSS 2.0 feed of the latest published packages."""
+        import xml.etree.ElementTree as ET
+
+        if _use_db:
+            packages, _ = await _db_packages.get_bundles(limit=limit, offset=0)
+        else:
+            state = _get_state()
+            bundles = state.index.get("bundles", [])
+            bundles = [b for b in bundles if not b.get("yanked", False)]
+            bundles = sorted(
+                bundles,
+                key=lambda b: b.get("published_at", ""),
+                reverse=True,
+            )[:limit]
+            packages = [
+                PackageInfo(
+                    name=b["name"],
+                    version=b["version"],
+                    platform=b.get("platform", ""),
+                    arch=b.get("arch", ""),
+                    build_type=b.get("build_type", ""),
+                    link=b.get("link", ""),
+                    sha256=b.get("sha256", ""),
+                    size_bytes=b.get("size_bytes", 0),
+                    archive_url=b.get("archive_url", ""),
+                    published_at=b.get("published_at", "1970-01-01T00:00:00+00:00"),
+                    description=b.get("description", ""),
+                    homepage=b.get("homepage", ""),
+                    license=b.get("license", ""),
+                    maintainer=b.get("maintainer", ""),
+                )
+                for b in bundles
+            ]
+
+        # Sort by published_at descending for the feed
+        packages.sort(key=lambda p: p.published_at, reverse=True)
+
+        rss = ET.Element("rss", version="2.0")
+        channel = ET.SubElement(rss, "channel")
+        site_title = os.environ.get("CVCPKG_SITE_TITLE", "cvcpkg")
+        github_url = f"https://github.com/{os.environ.get('CVCPKG_GITHUB_REPO', 'transfix/libcvc-deps')}"
+        ET.SubElement(channel, "title").text = f"{site_title} — Latest Packages"
+        ET.SubElement(channel, "link").text = github_url
+        ET.SubElement(channel, "description").text = (
+            f"Latest packages published to {site_title}"
+        )
+        ET.SubElement(channel, "language").text = "en"
+        if packages:
+            ET.SubElement(channel, "lastBuildDate").text = (
+                packages[0].published_at.strftime("%a, %d %b %Y %H:%M:%S +0000")
+            )
+
+        for pkg in packages:
+            item = ET.SubElement(channel, "item")
+            title_text = f"{pkg.name} {pkg.version}"
+            if pkg.platform:
+                title_text += f" ({pkg.platform})"
+            ET.SubElement(item, "title").text = title_text
+            ET.SubElement(item, "link").text = github_url
+            desc_parts = [f"Package: {pkg.name} v{pkg.version}"]
+            if pkg.platform:
+                desc_parts.append(f"Platform: {pkg.platform}/{pkg.arch}")
+            if pkg.description:
+                desc_parts.append(pkg.description)
+            if pkg.size_bytes:
+                size_mb = pkg.size_bytes / (1024 * 1024)
+                desc_parts.append(f"Size: {size_mb:.1f} MB")
+            ET.SubElement(item, "description").text = " — ".join(desc_parts)
+            ET.SubElement(item, "pubDate").text = pkg.published_at.strftime(
+                "%a, %d %b %Y %H:%M:%S +0000"
+            )
+            ET.SubElement(item, "guid", isPermaLink="false").text = (
+                f"{pkg.name}-{pkg.version}-{pkg.platform}-{pkg.arch}-{pkg.build_type}-{pkg.link}"
+            )
+
+        xml_bytes = ET.tostring(rss, encoding="unicode", xml_declaration=False)
+        xml_out = '<?xml version="1.0" encoding="UTF-8"?>\n' + xml_bytes
+        return Response(content=xml_out, media_type="application/rss+xml; charset=utf-8")
+
+    # ── Download stats ──────────────────────────────────────
+
+    @app.get("/v1/downloads/stats", tags=["analytics"])
+    async def download_stats(
+        name: str = Query("", description="Filter by package name (empty = all packages)"),
+        days: int = Query(
+            DOWNLOAD_GRAPH_DAYS,
+            ge=1,
+            le=365,
+            description="Number of days of history",
+        ),
+        _auth: None = Depends(optional_reader_auth),
+    ):
+        """Get daily download counts for charting."""
+        if not _use_db or _db_downloads is None:
+            return JSONResponse({
+                "total": 0,
+                "daily": [],
+                "config": {
+                    "days": days,
+                    "color": DOWNLOAD_GRAPH_COLOR,
+                    "fill_color": DOWNLOAD_GRAPH_FILL_COLOR,
+                    "height": DOWNLOAD_GRAPH_HEIGHT,
+                },
+            })
+        total = await _db_downloads.get_total_downloads(package_name=name)
+        daily = await _db_downloads.get_daily_downloads(package_name=name, days=days)
+        return JSONResponse({
+            "total": total,
+            "daily": daily,
+            "config": {
+                "days": days,
+                "color": DOWNLOAD_GRAPH_COLOR,
+                "fill_color": DOWNLOAD_GRAPH_FILL_COLOR,
+                "height": DOWNLOAD_GRAPH_HEIGHT,
+            },
+        })
 
     # ── Org HTML pages ──────────────────────────────────────
 

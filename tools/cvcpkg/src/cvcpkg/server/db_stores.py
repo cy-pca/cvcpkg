@@ -18,6 +18,7 @@ from sqlalchemy import or_, select, update
 
 from cvcpkg.server.db import (
     AuditRow,
+    DownloadEventRow,
     OrganizationRow,
     OrgMemberRow,
     PackageRow,
@@ -766,3 +767,68 @@ class DbOrgStore:
             created_at=row.created_at,
             created_by=row.created_by,
         )
+
+
+# ── DB Download Store ───────────────────────────────────────────
+
+
+class DbDownloadStore:
+    """Download event tracking backed by the ``download_events`` table."""
+
+    async def record(self, package_name: str, version: str, platform: str = "") -> None:
+        """Record a download event."""
+        async with get_session() as session:
+            row = DownloadEventRow(
+                package_name=package_name,
+                version=version,
+                platform=platform,
+            )
+            session.add(row)
+
+    async def get_total_downloads(self, package_name: str = "") -> int:
+        """Get total download count, optionally filtered by package name."""
+        async with get_session() as session:
+            q = select(sa_func.count(DownloadEventRow.id))
+            if package_name:
+                q = q.where(DownloadEventRow.package_name == package_name)
+            result = await session.execute(q)
+            return result.scalar() or 0
+
+    async def get_daily_downloads(
+        self,
+        package_name: str = "",
+        days: int = 30,
+    ) -> list[dict]:
+        """Get daily download counts for the last N days.
+
+        Returns list of {"date": "YYYY-MM-DD", "count": N} dicts.
+        """
+        from sqlalchemy import Date, cast
+
+        cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+        async with get_session() as session:
+            q = (
+                select(
+                    cast(DownloadEventRow.downloaded_at, Date).label("day"),
+                    sa_func.count(DownloadEventRow.id).label("count"),
+                )
+                .where(DownloadEventRow.downloaded_at >= cutoff)
+            )
+            if package_name:
+                q = q.where(DownloadEventRow.package_name == package_name)
+            q = q.group_by("day").order_by("day")
+            result = await session.execute(q)
+            rows = result.all()
+
+        # Fill in missing days with zero counts
+        day_counts: dict[str, int] = {}
+        for row in rows:
+            day_str = row.day.isoformat() if hasattr(row.day, 'isoformat') else str(row.day)
+            day_counts[day_str] = row.count
+
+        result_list = []
+        for i in range(days):
+            d = (cutoff + datetime.timedelta(days=i + 1)).date()
+            ds = d.isoformat()
+            result_list.append({"date": ds, "count": day_counts.get(ds, 0)})
+        return result_list

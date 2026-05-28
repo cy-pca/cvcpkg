@@ -194,6 +194,27 @@ class AuditRow(Base):
     prev_sha256: Mapped[str] = mapped_column(String(64), nullable=False, default="")
 
 
+class DownloadEventRow(Base):
+    """Records individual package download events for analytics."""
+
+    __tablename__ = "download_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    package_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    version: Mapped[str] = mapped_column(String(255), nullable=False)
+    platform: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    downloaded_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        index=True,
+    )
+
+    __table_args__ = (
+        Index("ix_download_events_name_date", "package_name", "downloaded_at"),
+    )
+
+
 # ── Engine / session management ─────────────────────────────────
 
 _engine = None
