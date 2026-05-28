@@ -46,19 +46,14 @@ try {
 
     # mingw32-make auto-detects sh.exe on PATH and uses it as SHELL.
     # sh.exe strips backslashes from paths (e.g. util\dofile.pl becomes
-    # utildofile.pl).  Convert ALL path-separator backslashes in the
-    # generated Makefile and configdata.pm to forward slashes.
-    # The regex replaces \ between word/dot/colon chars — safe because
-    # line continuation \ is always at end-of-line (followed by newline).
-    # The colon handles drive letters (C:\src → C:/src).
-    foreach ($f in @(
-        (Join-Path $env:CVC_SOURCE_DIR 'makefile'),
-        (Join-Path $env:CVC_SOURCE_DIR 'configdata.pm')
-    )) {
-        if (Test-Path $f) {
-            (Get-Content $f -Raw) -replace '(?<=[\w.:])\\(?=[\w.])', '/' |
-                Set-Content $f -NoNewline
-        }
+    # utildofile.pl).  Convert path-separator backslashes in the
+    # generated Makefile to forward slashes.  Do NOT modify
+    # configdata.pm — that triggers OpenSSL's Makefile regeneration
+    # which aborts the build.
+    $makefilePath = Join-Path $env:CVC_SOURCE_DIR 'makefile'
+    if (Test-Path $makefilePath) {
+        (Get-Content $makefilePath -Raw) -replace '(?<=[\w.:])\\(?=[\w.])', '/' |
+            Set-Content $makefilePath -NoNewline
     }
 
     # sh.exe (MSYS) has a short ARG_MAX that may cause "command line is
