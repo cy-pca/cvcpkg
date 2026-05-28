@@ -31,7 +31,12 @@ if ($LASTEXITCODE -ne 0) { Write-Warning "embuilder MINIMAL failed (non-fatal)" 
 
 # Stage into install prefix — copy the entire activated tree.
 $excludeDirs = @('.git', '.github')
-Get-ChildItem -Path $emsdkDir -Exclude $excludeDirs |
-    Copy-Item -Destination $env:CVC_INSTALL_DIR -Recurse -Force
+Get-ChildItem -Path $emsdkDir -Exclude $excludeDirs | ForEach-Object {
+    if ($_.PSIsContainer) {
+        Copy-Item -Path $_.FullName -Destination (Join-Path $env:CVC_INSTALL_DIR $_.Name) -Recurse -Force
+    } else {
+        Copy-Item -Path $_.FullName -Destination $env:CVC_INSTALL_DIR -Force
+    }
+}
 
 Write-Host "emsdk $emsdkVer staged to $env:CVC_INSTALL_DIR"
