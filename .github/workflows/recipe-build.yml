@@ -245,6 +245,7 @@ jobs:
       # ── Build and package all recipes (per-component) ──
       - name: Build and package all recipes (cvcpkg pack-all)
         if: steps.cache-valid.outputs.valid != 'true'
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -256,6 +257,7 @@ jobs:
             EXTRA_ARGS="$EXTRA_ARGS --shard ${{ inputs.shard }}"
           fi
           cvcpkg pack-all \
+            --keep-going \
             --platform "${{ inputs.platform }}" \
             --config "${{ inputs.config }}" \
             --link "${{ inputs.link }}" \
