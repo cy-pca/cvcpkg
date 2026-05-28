@@ -19,6 +19,7 @@ from sqlalchemy import or_, select, update
 from cvcpkg.server.db import (
     AuditRow,
     DownloadEventRow,
+    MirrorRow,
     OrganizationRow,
     OrgMemberRow,
     PackageRow,
@@ -28,6 +29,7 @@ from cvcpkg.server.db import (
 from cvcpkg.server.models import (
     AuditAction,
     AuditEntry,
+    MirrorInfo,
     OrgInfo,
     OrgMember,
     OrgRole,
@@ -1019,3 +1021,131 @@ class DbDownloadStore:
             ds = d.isoformat()
             result_list.append({"date": ds, "count": day_counts.get(ds, 0)})
         return result_list
+
+
+# ── Mirror store ────────────────────────────────────────────────
+
+
+class DbMirrorStore:
+    """DB-backed store for registered mirror servers."""
+
+    @staticmethod
+    def _row_to_info(row: MirrorRow) -> MirrorInfo:
+        return MirrorInfo(
+            url=row.url,
+            display_name=row.display_name,
+            contact=row.contact,
+            registered_at=row.registered_at,
+            last_health_check=row.last_health_check,
+            last_healthy_at=row.last_healthy_at,
+            healthy=row.healthy,
+            consecutive_failures=row.consecutive_failures,
+            rejected=row.rejected,
+            rejected_at=row.rejected_at,
+            rejected_by=row.rejected_by,
+            packages_count=row.packages_count,
+        )
+
+    async def register(
+        self,
+        url: str,
+        display_name: str = "",
+        contact: str = "",
+    ) -> MirrorInfo:
+        """Register a new mirror or update an existing one."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            row = (await session.execute(select(MirrorRow).where(MirrorRow.url == url))).scalar()
+            if row is not None:
+                # Re-registration: update metadata, clear rejection if set
+                row.display_name = display_name or row.display_name
+                row.contact = contact or row.contact
+                row.rejected = False
+                row.rejected_at = None
+                row.rejected_by = ""
+                row.healthy = True
+                row.consecutive_failures = 0
+                return self._row_to_info(row)
+            row = MirrorRow(
+                url=url,
+                display_name=display_name,
+                contact=contact,
+                registered_at=now,
+                healthy=True,
+            )
+            session.add(row)
+            await session.flush()
+            return self._row_to_info(row)
+
+    async def list_healthy(self) -> list[MirrorInfo]:
+        """Return all healthy, non-rejected mirrors."""
+        async with get_session() as session:
+            q = (
+                select(MirrorRow)
+                .where(MirrorRow.rejected == False)  # noqa: E712
+                .where(MirrorRow.healthy == True)  # noqa: E712
+                .order_by(MirrorRow.registered_at)
+            )
+            rows = (await session.execute(q)).scalars().all()
+            return [self._row_to_info(r) for r in rows]
+
+    async def list_all(self) -> list[MirrorInfo]:
+        """Return all mirrors including rejected and unhealthy."""
+        async with get_session() as session:
+            rows = (
+                (await session.execute(select(MirrorRow).order_by(MirrorRow.registered_at)))
+                .scalars()
+                .all()
+            )
+            return [self._row_to_info(r) for r in rows]
+
+    async def get(self, url: str) -> MirrorInfo | None:
+        """Get a single mirror by URL."""
+        async with get_session() as session:
+            row = (await session.execute(select(MirrorRow).where(MirrorRow.url == url))).scalar()
+            return self._row_to_info(row) if row else None
+
+    async def reject(self, url: str, actor: str) -> bool:
+        """Mark a mirror as rejected. Returns True if found."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            row = (await session.execute(select(MirrorRow).where(MirrorRow.url == url))).scalar()
+            if row is None:
+                return False
+            row.rejected = True
+            row.rejected_at = now
+            row.rejected_by = actor
+            return True
+
+    async def remove(self, url: str) -> bool:
+        """Delete a mirror entirely. Returns True if found."""
+        from sqlalchemy import delete
+
+        async with get_session() as session:
+            result = await session.execute(delete(MirrorRow).where(MirrorRow.url == url))
+            return result.rowcount > 0
+
+    async def record_health_check(self, url: str, *, healthy: bool) -> MirrorInfo | None:
+        """Record a health check result. Returns updated info or None."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            row = (await session.execute(select(MirrorRow).where(MirrorRow.url == url))).scalar()
+            if row is None:
+                return None
+            row.last_health_check = now
+            if healthy:
+                row.healthy = True
+                row.last_healthy_at = now
+                row.consecutive_failures = 0
+            else:
+                row.consecutive_failures += 1
+                if row.consecutive_failures >= 3:
+                    row.healthy = False
+            return self._row_to_info(row)
+
+    async def update_packages_count(self, url: str, count: int) -> None:
+        """Update the cached package count for a mirror."""
+        async with get_session() as session:
+            row = (await session.execute(select(MirrorRow).where(MirrorRow.url == url))).scalar()
+            if row is not None:
+                row.packages_count = count
