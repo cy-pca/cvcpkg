@@ -83,5 +83,44 @@ function ConvertTo-MsysPath {
     return ($Path -replace '\\','/')
 }
 
+# Locate Git Bash explicitly to avoid Python's CreateProcess finding WSL's
+# bash.exe in C:\Windows\System32 before Git Bash on PATH.
+$script:gitBash = $null
+foreach ($candidate in @(
+    "$env:ProgramFiles\Git\usr\bin\bash.exe",
+    "$env:ProgramFiles\Git\bin\bash.exe",
+    "${env:ProgramFiles(x86)}\Git\usr\bin\bash.exe"
+)) {
+    if (Test-Path $candidate) { $script:gitBash = $candidate; break }
+}
+if (-not $script:gitBash) {
+    $found = Get-Command bash -ErrorAction SilentlyContinue |
+             Where-Object { $_.Source -notmatch 'System32' } |
+             Select-Object -First 1
+    if ($found) { $script:gitBash = $found.Source }
+}
+if (-not $script:gitBash) { throw "Cannot find Git Bash (non-WSL). Install Git for Windows." }
+
+# Add Git's usr/bin to PATH so autotools Makefiles can find Unix utilities
+# (rm, cp, mv, install, etc.) when invoked via emmake/mingw32-make.
+$gitUsrBin = Split-Path $script:gitBash
+if (-not ($env:PATH -split ';' | Where-Object { $_ -eq $gitUsrBin })) {
+    $env:PATH = "$gitUsrBin;$env:PATH"
+}
+
+# Provide MSYS-style paths for Emscripten compiler tools.  emconfigure sets
+# CC/CXX/AR/RANLIB to full Windows paths (C:\...\emcc.bat) but GMP and other
+# autotools projects' custom configure macros pass those values through shell
+# operations that strip the backslashes.  Recipes override CC/CXX etc. inside
+# their bash commands using these MSYS paths (/c/.../emcc.bat) instead.
+$emscriptenDir = Join-Path $env:CVC_EMSDK_DIR 'upstream\emscripten'
+$script:emToolExports = (
+    "export CC='$(ConvertTo-MsysPath (Join-Path $emscriptenDir 'emcc.bat'))'" +
+    " CXX='$(ConvertTo-MsysPath (Join-Path $emscriptenDir 'em++.bat'))'" +
+    " AR='$(ConvertTo-MsysPath (Join-Path $emscriptenDir 'emar.bat'))'" +
+    " RANLIB='$(ConvertTo-MsysPath (Join-Path $emscriptenDir 'emranlib.bat'))'"
+)
+
 Write-Host "-- env-wasm.ps1 loaded --"
 Write-Host "  EMSDK=$env:CVC_EMSDK_DIR  BUILD_TYPE=$cmakeBuildType  LINK=static  JOBS=$env:CVC_JOBS"
+Write-Host "  BASH=$script:gitBash"
