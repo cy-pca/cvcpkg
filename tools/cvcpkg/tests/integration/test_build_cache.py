@@ -429,6 +429,9 @@ class TestServerCacheIntegration:
 
         cache_dir = tmp_path / "cache"
         monkeypatch.setenv("CVCPKG_BUILD_CACHE", str(cache_dir))
+        # Ensure in-process server uses YAML backend (matching TokenStore)
+        # even when CVCPKG_DATABASE_URL is set by the Docker test env.
+        monkeypatch.delenv("CVCPKG_DATABASE_URL", raising=False)
 
         srv_dir = tmp_path / "server"
         srv_dir.mkdir()
@@ -486,6 +489,10 @@ class TestServerCacheIntegration:
         """Publish manually, then verify cache/status returns a hit."""
         from cvcpkg.builder import chain_hash as compute_chain_hash
         from cvcpkg.builder import list_recipes
+
+        # Ensure in-process server uses YAML backend (matching TokenStore)
+        # even when CVCPKG_DATABASE_URL is set by the Docker test env.
+        monkeypatch.delenv("CVCPKG_DATABASE_URL", raising=False)
 
         srv_dir = tmp_path / "server"
         srv_dir.mkdir()
