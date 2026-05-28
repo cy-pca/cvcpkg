@@ -519,6 +519,16 @@ class DbPackageIndex:
             )
             return result.rowcount
 
+    async def total_storage_bytes(self) -> int:
+        """Return the total size_bytes across all non-yanked packages."""
+        async with get_session() as session:
+            result = await session.execute(
+                select(sa_func.coalesce(sa_func.sum(PackageRow.size_bytes), 0)).where(
+                    PackageRow.yanked.is_(False)
+                )
+            )
+            return int(result.scalar_one())
+
 
 # ── DB Organization Store ───────────────────────────────────────
 
@@ -611,6 +621,7 @@ class DbOrgStore:
         logo_url: str | None = None,
         homepage: str | None = None,
         is_private: bool | None = None,
+        storage_limit_bytes: int | None = None,
     ) -> OrgInfo | None:
         async with get_session() as session:
             result = await session.execute(
@@ -629,6 +640,8 @@ class DbOrgStore:
                 row.homepage = homepage
             if is_private is not None:
                 row.is_private = is_private
+            if storage_limit_bytes is not None:
+                row.storage_limit_bytes = storage_limit_bytes
             await session.flush()
             return self._row_to_info(row)
 

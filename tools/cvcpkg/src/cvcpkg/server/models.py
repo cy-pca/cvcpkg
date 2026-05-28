@@ -64,6 +64,7 @@ class AuditAction(str, Enum):
     org_add_member = "org_add_member"
     org_remove_member = "org_remove_member"
     org_update = "org_update"
+    admin_settings_update = "admin_settings_update"
 
 
 # ── Token management ───────────────────────────────────────────
@@ -282,6 +283,11 @@ class OrgUpdateRequest(BaseModel):
     logo_url: str | None = None
     homepage: str | None = None
     is_private: bool | None = None
+    storage_limit_bytes: int | None = Field(
+        None,
+        ge=0,
+        description="Per-org storage cap in bytes (admin-only).",
+    )
 
 
 class OrgDetailResponse(BaseModel):
