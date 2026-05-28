@@ -61,15 +61,29 @@ try {
         }
     }
 
+    # The Makefile generates util wrapper scripts (opensslwrap.sh,
+    # shlib_wrap.sh, wrap.pl) using PERL + shell quoting that cmd.exe
+    # cannot handle.  We don't need them for wasm — neutralise those
+    # recipes by replacing them with simple file-creation commands.
+    $makefilePath = Join-Path $env:CVC_SOURCE_DIR 'makefile'
+    $mf = Get-Content $makefilePath -Raw
+    foreach ($target in @('util/opensslwrap.sh', 'util/shlib_wrap.sh', 'util/wrap.pl')) {
+        # Match the recipe: target line, then all indented (TAB-prefixed) lines.
+        $escaped = [regex]::Escape($target)
+        $mf = $mf -replace "(?m)^${escaped}\s*:.*(?:\r?\n\t.*)*", "${target}:`n`ttype nul > `"`$@`""
+    }
+    Set-Content $makefilePath -Value $mf -NoNewline
+
     # mingw32-make auto-detects sh.exe on PATH and switches to sh-mode.
     # sh.exe has a much shorter command line limit than cmd.exe, causing
     # "The command line is too long" for AR commands with many .o files.
     # Remove sh.exe directories from PATH and provide minimal shims for
-    # utilities that the Makefile needs (touch, rm).
+    # utilities that the Makefile needs (touch, rm, chmod).
     $shimDir = Join-Path $env:CVC_SOURCE_DIR '_shims'
     New-Item -ItemType Directory -Path $shimDir -Force | Out-Null
     Set-Content -Path (Join-Path $shimDir 'touch.bat') -Value '@if not exist %~1 type nul > %~1 2>nul'
     Set-Content -Path (Join-Path $shimDir 'rm.bat') -Value '@del /f /q %~2 %~3 %~4 %~5 %~6 %~7 %~8 %~9 2>nul & exit /b 0'
+    Set-Content -Path (Join-Path $shimDir 'chmod.bat') -Value '@rem no-op on Windows & exit /b 0'
 
     $savedPath = $env:PATH
     $savedShell = $env:SHELL
