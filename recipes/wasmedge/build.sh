@@ -7,12 +7,44 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 
-# Point CMake at the system LLVM if a versioned install exists.
-if [[ -d /usr/lib/llvm-18 ]]; then
-    export LLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
-    export LLD_DIR=/usr/lib/llvm-18/lib/cmake/lld
-elif command -v llvm-config &>/dev/null; then
+# Point CMake at the system LLVM.
+# 1. Linux: check /usr/lib/llvm-{ver} in priority order.
+# 2. macOS: check Homebrew llvm@{ver} prefixes.
+# 3. Fallback: llvm-config on PATH.
+LLVM_FOUND=false
+
+# --- Linux versioned installs ---
+for ver in 18 20 19 17 16 15 14; do
+    llvm_prefix="/usr/lib/llvm-${ver}"
+    if [[ -d "${llvm_prefix}/lib/cmake/llvm" ]]; then
+        export LLVM_DIR="${llvm_prefix}/lib/cmake/llvm"
+        [[ -d "${llvm_prefix}/lib/cmake/lld" ]] && export LLD_DIR="${llvm_prefix}/lib/cmake/lld"
+        LLVM_FOUND=true
+        echo "Using LLVM ${ver} at ${llvm_prefix}"
+        break
+    fi
+done
+
+# --- macOS Homebrew installs ---
+if [[ "$LLVM_FOUND" = false ]] && command -v brew &>/dev/null; then
+    for ver in 18 20 19 17 16 15 14; do
+        brew_prefix="$(brew --prefix llvm@"${ver}" 2>/dev/null || true)"
+        if [[ -n "$brew_prefix" && -d "${brew_prefix}/lib/cmake/llvm" ]]; then
+            export LLVM_DIR="${brew_prefix}/lib/cmake/llvm"
+            [[ -d "${brew_prefix}/lib/cmake/lld" ]] && export LLD_DIR="${brew_prefix}/lib/cmake/lld"
+            LLVM_FOUND=true
+            echo "Using Homebrew LLVM ${ver} at ${brew_prefix}"
+            break
+        fi
+    done
+fi
+
+# --- Fallback: llvm-config on PATH ---
+if [[ "$LLVM_FOUND" = false ]] && command -v llvm-config &>/dev/null; then
     export LLVM_DIR="$(llvm-config --cmakedir)"
+    lld_candidate="$(dirname "$LLVM_DIR")/lld"
+    [[ -d "$lld_candidate" ]] && export LLD_DIR="$lld_candidate"
+    echo "Using LLVM from llvm-config: $LLVM_DIR"
 fi
 
 cvc_cmake_build \
