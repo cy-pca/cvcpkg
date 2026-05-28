@@ -15,7 +15,7 @@ $buildTriplet = $buildTriplet.Trim()
 
 # Run configure via Git Bash (not bare 'bash', which resolves to WSL on Windows
 # due to CreateProcess searching System32 before PATH).
-& emconfigure $gitBash -c "$emToolExports && cd '$msysSourceDir' && ./configure --prefix='$msysPrefix' --host=none-none-none --build='$buildTriplet' --disable-shared --enable-static --with-quantum-depth=16 --enable-hdri --with-magick-plus-plus --without-perl --without-x --without-jpeg --without-png --without-webp --without-jbig --without-raw --without-openjp2 --without-threads --disable-docs"
+& emconfigure $gitBash -c "$emToolExports && cd '$msysSourceDir' && ./configure --prefix='$msysPrefix' --host=none-none-none --build='$buildTriplet' --disable-shared --enable-static --with-quantum-depth=16 --enable-hdri --with-magick-plus-plus --without-perl --without-x --without-jpeg --without-png --without-webp --without-jbig --without-raw --without-openjp2 --without-threads --disable-docs --without-utilities --without-modules"
 if ($LASTEXITCODE -ne 0) {
     $cfgLog = Join-Path $env:CVC_SOURCE_DIR 'config.log'
     if (Test-Path $cfgLog) { Write-Host '--- config.log (last 60 lines) ---'; Get-Content $cfgLog -Tail 60 }
