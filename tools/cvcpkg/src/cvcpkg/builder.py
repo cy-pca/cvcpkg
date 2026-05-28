@@ -771,6 +771,19 @@ def create_archive(
 # ── High-level entry points ────────────────────────────────────
 
 
+def _mkworkdir(prefix: str, root: Path | None = None) -> Path:
+    """Create a temporary work directory.
+
+    When *root* is given the directory is created under *root*
+    (which is created if it doesn't exist).  Otherwise the system
+    temp directory is used.
+    """
+    if root is not None:
+        root.mkdir(parents=True, exist_ok=True)
+        return Path(tempfile.mkdtemp(prefix=prefix, dir=root))
+    return Path(tempfile.mkdtemp(prefix=prefix))
+
+
 def build_recipe(
     recipe_dir: Path,
     *,
@@ -780,13 +793,19 @@ def build_recipe(
     prefix: Path | None = None,
     keep_build_dir: bool = False,
     host_platform: str = "",
+    work_dir_root: Path | None = None,
 ) -> BuildContext:
-    """Build a single recipe. Returns the BuildContext."""
+    """Build a single recipe. Returns the BuildContext.
+
+    *work_dir_root*, when given, is the parent directory in which the
+    temporary work directory is created.  Otherwise the system temp
+    directory (``$TMPDIR`` / ``/tmp``) is used.
+    """
     recipe = Recipe.load(recipe_dir)
     if not platform:
         platform = detect_platform()
 
-    work_dir = Path(tempfile.mkdtemp(prefix=f"cvcpkg-{recipe.name}-"))
+    work_dir = _mkworkdir(f"cvcpkg-{recipe.name}-", work_dir_root)
     install_dir = prefix or (work_dir / "install")
     build_dir = work_dir / "build"
 
@@ -832,6 +851,7 @@ def pack_recipe(
     output_dir: Path | None = None,
     keep_build_dir: bool = False,
     maintainer: str = "",
+    work_dir_root: Path | None = None,
 ) -> tuple[Path, str, int]:
     """Build + package a recipe. Returns (archive_path, sha256, size)."""
     from cvcpkg.platform import detect_arch
@@ -848,6 +868,7 @@ def pack_recipe(
         link=link,
         prefix=prefix,
         keep_build_dir=keep_build_dir,
+        work_dir_root=work_dir_root,
     )
 
     manifest = generate_manifest(
@@ -1218,6 +1239,7 @@ def build_all(
     server_cache_push: bool = False,
     no_server_cache: bool = False,
     server_cache_org: str = "",
+    work_dir_root: Path | None = None,
 ) -> list[BuildContext]:
     """Build every recipe in dependency order into a shared *prefix*.
 
@@ -1273,6 +1295,12 @@ def build_all(
     *no_server_cache* disables server cache entirely (both pull and
     push).  *server_cache_org* scopes cache queries to a specific
     organization.
+
+    *work_dir_root*, when given, is the parent directory in which
+    per-recipe temporary work directories are created.  Otherwise
+    the system temp directory (``$TMPDIR`` / ``/tmp``) is used.
+    This allows developers to point builds at fast dedicated storage
+    instead of the default system temp location.
     """
     if isinstance(recipes_dir, list):
         all_recipes = load_all_recipes(recipes_dir)
@@ -1311,7 +1339,7 @@ def build_all(
         assigned = {r.name for r in ordered}
 
     if prefix is None:
-        prefix = Path(tempfile.mkdtemp(prefix="cvcpkg-all-"))
+        prefix = _mkworkdir("cvcpkg-all-", work_dir_root)
     prefix = prefix.resolve()
 
     # Prepare build cache (unless disabled).
@@ -1427,7 +1455,7 @@ def build_all(
                 if not server_hit:
                     print(f"  ← cache hit ({recipe_chain_hash[:12]}…)")
                 if per_component:
-                    work_dir = Path(tempfile.mkdtemp(prefix=f"cvcpkg-{recipe.name}-"))
+                    work_dir = _mkworkdir(f"cvcpkg-{recipe.name}-", work_dir_root)
                     install_dir = work_dir / "install"
                     cache.restore(cached_archive, install_dir)
                     ctx = BuildContext(
@@ -1461,7 +1489,7 @@ def build_all(
                         host_platform=host_platform,
                     )
             elif per_component:
-                work_dir = Path(tempfile.mkdtemp(prefix=f"cvcpkg-{recipe.name}-"))
+                work_dir = _mkworkdir(f"cvcpkg-{recipe.name}-", work_dir_root)
                 install_dir = work_dir / "install"
                 source_dir = fetch_source(recipe, work_dir)
                 if recipe.patches:
@@ -1535,6 +1563,7 @@ def build_all(
                     prefix=prefix,
                     keep_build_dir=keep_build_dir,
                     host_platform=host_platform,
+                    work_dir_root=work_dir_root,
                 )
             # Only include assigned recipes in contexts (for packaging).
             if is_assigned:
