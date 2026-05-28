@@ -129,6 +129,8 @@ jobs:
   # ────────────────────────── Windows ────────────────────────────
   # Build every recipe from source (or vcpkg for port-based recipes)
   # using cvcpkg build-all, just like Linux and macOS.
+  # Static builds are sharded across 2 runners to stay under the
+  # 6-hour GitHub Actions job time limit.
   windows:
     strategy:
       fail-fast: false
@@ -140,13 +142,22 @@ jobs:
             link: shared
           - config: debug
             link: static
+            shard: '0/2'
+          - config: debug
+            link: static
+            shard: '1/2'
           - config: release
             link: static
+            shard: '0/2'
+          - config: release
+            link: static
+            shard: '1/2'
     uses: ./.github/workflows/recipe-build.yml
     with:
       platform: windows
       config: ${{ matrix.config }}
       link: ${{ matrix.link }}
+      shard: ${{ matrix.shard || '' }}
       sha_suffix: ${{ inputs.sha_suffix || '' }}
 
   # ──────────────────────────── WASM ─────────────────────────────
@@ -292,8 +303,9 @@ jobs:
       - name: Download per-component bundles
         uses: actions/download-artifact@v4
         with:
-          name: components-linux-${{ matrix.config }}-${{ matrix.link }}
+          pattern: components-linux-${{ matrix.config }}-${{ matrix.link }}*
           path: dist/
+          merge-multiple: true
       - name: Publish to cvcpkg-server
         env:
           CVCPKG_SERVER_URL: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
@@ -342,8 +354,9 @@ jobs:
       - name: Download per-component bundles
         uses: actions/download-artifact@v4
         with:
-          name: components-macos-${{ matrix.config }}-${{ matrix.link }}
+          pattern: components-macos-${{ matrix.config }}-${{ matrix.link }}*
           path: dist/
+          merge-multiple: true
       - name: Publish to cvcpkg-server
         env:
           CVCPKG_SERVER_URL: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
@@ -392,8 +405,9 @@ jobs:
       - name: Download per-component bundles
         uses: actions/download-artifact@v4
         with:
-          name: components-windows-${{ matrix.config }}-${{ matrix.link }}
+          pattern: components-windows-${{ matrix.config }}-${{ matrix.link }}*
           path: dist/
+          merge-multiple: true
       - name: Publish to cvcpkg-server
         env:
           CVCPKG_SERVER_URL: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
@@ -438,8 +452,9 @@ jobs:
       - name: Download per-component bundles
         uses: actions/download-artifact@v4
         with:
-          name: components-wasm-${{ matrix.config }}-${{ matrix.link }}
+          pattern: components-wasm-${{ matrix.config }}-${{ matrix.link }}*
           path: dist/
+          merge-multiple: true
       - name: Publish to cvcpkg-server
         env:
           CVCPKG_SERVER_URL: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
@@ -488,8 +503,9 @@ jobs:
       - name: Download per-component bundles
         uses: actions/download-artifact@v4
         with:
-          name: components-freebsd-${{ matrix.config }}-${{ matrix.link }}
+          pattern: components-freebsd-${{ matrix.config }}-${{ matrix.link }}*
           path: dist/
+          merge-multiple: true
       - name: Publish to cvcpkg-server
         env:
           CVCPKG_SERVER_URL: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
@@ -538,8 +554,9 @@ jobs:
       - name: Download per-component bundles
         uses: actions/download-artifact@v4
         with:
-          name: components-openbsd-${{ matrix.config }}-${{ matrix.link }}
+          pattern: components-openbsd-${{ matrix.config }}-${{ matrix.link }}*
           path: dist/
+          merge-multiple: true
       - name: Publish to cvcpkg-server
         env:
           CVCPKG_SERVER_URL: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
@@ -588,8 +605,9 @@ jobs:
       - name: Download per-component bundles
         uses: actions/download-artifact@v4
         with:
-          name: components-netbsd-${{ matrix.config }}-${{ matrix.link }}
+          pattern: components-netbsd-${{ matrix.config }}-${{ matrix.link }}*
           path: dist/
+          merge-multiple: true
       - name: Publish to cvcpkg-server
         env:
           CVCPKG_SERVER_URL: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
