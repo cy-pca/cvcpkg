@@ -697,6 +697,41 @@ cvcpkg download zlib==1.3.1+cvc.1 -o ./dist --config debug
 
 ---
 
+## Troubleshooting
+
+### 502 errors during publish
+
+When many CI runners publish archives concurrently (e.g. a tagged
+release building 4 macOS configs × 16 packages), the cvcpkg-server
+backend can run out of memory and restart, causing the reverse proxy
+to return **502 Bad Gateway**.
+
+**Checklist:**
+
+1. **Container memory limit** — Ensure the backend container has
+   enough memory for concurrent uploads.  In
+   `docker-compose.production.yml`, set `deploy.resources.limits.memory`
+   to at least 4–8 GB for production workloads with many concurrent
+   publishers.
+
+2. **Reverse proxy body limit** — If using Apache, the
+   `LimitRequestBody` directive must be large enough for the biggest
+   archive (e.g. emsdk at ~840 MB).  Set it to at least 1.1 GB:
+   ```
+   LimitRequestBody 1153433600
+   ```
+   For nginx, use `client_max_body_size 1100m;`.
+
+3. **Proxy timeout** — Large chunked uploads can take several minutes.
+   Ensure your proxy timeout is at least 900 s (`ProxyTimeout 900` in
+   Apache, `proxy_read_timeout 900s` in nginx).
+
+**Symptoms:** Container restart count > 0 (`docker inspect <container>
+--format '{{.RestartCount}}'`), 502 responses in the proxy access log
+concentrated in a short time window.
+
+---
+
 ## Development
 
 ```bash
