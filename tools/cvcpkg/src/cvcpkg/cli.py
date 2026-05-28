@@ -2526,6 +2526,11 @@ def cache_remove_cmd(chain_hash_val: str, platform: str, config: str, link: str)
 )
 @click.option("--all", "purge_all", is_flag=True, help="Remove all cache entries.")
 @click.option(
+    "--stale",
+    is_flag=True,
+    help="Remove entries whose chain_hash no longer matches any current recipe.",
+)
+@click.option(
     "--server", envvar="CVCPKG_SERVER_CACHE", default="", help="Purge from remote server (admin)."
 )
 @click.option(
@@ -2535,10 +2540,11 @@ def cache_purge_cmd(
     max_size: str | None,
     max_age_days: int | None,
     purge_all: bool,
+    stale: bool,
     server: str,
     token: str,
 ) -> None:
-    """Evict build cache entries by size or age (local or remote)."""
+    """Evict build cache entries by size, age, or staleness (local or remote)."""
     if server:
         import json
         import urllib.error
@@ -2549,6 +2555,12 @@ def cache_purge_cmd(
             # DELETE /v1/cache with no filters removes everything
             url = f"{server.rstrip('/')}/v1/cache"
             req = urllib.request.Request(url, method="DELETE")
+        elif stale:
+            hashes = _compute_current_chain_hashes()
+            body = json.dumps({"valid_chain_hashes": sorted(hashes)}).encode()
+            url = f"{server.rstrip('/')}/v1/cache/gc"
+            req = urllib.request.Request(url, data=body, method="POST")
+            req.add_header("Content-Type", "application/json")
         elif max_age_days is not None:
             params = {"older_than": f"{max_age_days}d"}
             url = f"{server.rstrip('/')}/v1/cache?{urllib.parse.urlencode(params)}"
@@ -2560,7 +2572,7 @@ def cache_purge_cmd(
             req = urllib.request.Request(url, data=body, method="POST")
             req.add_header("Content-Type", "application/json")
         else:
-            click.echo("Specify --max-size, --max-age-days, or --all.", err=True)
+            click.echo("Specify --max-size, --max-age-days, --stale, or --all.", err=True)
             raise SystemExit(1)
         if token:
             req.add_header("Authorization", f"Bearer {token}")
@@ -2586,8 +2598,13 @@ def cache_purge_cmd(
         removed = bc.purge(max_size_bytes=0)
         click.echo(f"Removed {removed} entries.")
         return
+    if stale:
+        hashes = _compute_current_chain_hashes()
+        removed = bc.purge_stale(hashes)
+        click.echo(f"Removed {removed} stale entries.")
+        return
     if max_size is None and max_age_days is None:
-        click.echo("Specify --max-size, --max-age-days, or --all.", err=True)
+        click.echo("Specify --max-size, --max-age-days, --stale, or --all.", err=True)
         raise SystemExit(1)
 
     size_bytes = _parse_size(max_size) if max_size else None
@@ -2742,6 +2759,35 @@ def _parse_size(s: str) -> int:
         if s.endswith(suffix):
             return int(float(s[: -len(suffix)]) * mult)
     return int(s)
+
+
+def _compute_current_chain_hashes() -> set[str]:
+    """Compute chain_hash for every current recipe on each platform.
+
+    Returns the set of all valid chain hashes so that entries whose
+    chain_hash is *not* in this set can be considered stale.
+    """
+    from cvcpkg.builder import chain_hash, find_recipes_dir, list_recipes
+
+    recipes_dir = find_recipes_dir()
+    recipes = list_recipes(recipes_dir)
+    by_name = {r.name: r for r in recipes}
+
+    # Compute for all platforms referenced by the recipes' build matrices.
+    platforms: set[str] = set()
+    for r in recipes:
+        for me in r.build_matrix:
+            platforms.add(me.platform)
+    if not platforms:
+        platforms = {"linux", "darwin", "windows", "freebsd", "wasm"}
+
+    hashes: set[str] = set()
+    for plat in platforms:
+        for r in recipes:
+            h = chain_hash(r, by_name, plat)
+            if h:
+                hashes.add(h)
+    return hashes
 
 
 # ── main() wrapper for backward compat with tests ──────────────

@@ -340,6 +340,20 @@ class BuildCache:
                     continue
         return result
 
+    def purge_stale(self, valid_chain_hashes: set[str]) -> int:
+        """Remove entries whose chain_hash is not in *valid_chain_hashes*.
+
+        Returns the number of entries removed.
+        """
+        if not self._dir.is_dir():
+            return 0
+        removed = 0
+        for meta, _size, path in self._list_entries_with_size():
+            if meta.chain_hash not in valid_chain_hashes:
+                shutil.rmtree(path, ignore_errors=True)
+                removed += 1
+        return removed
+
 
 # ── Private helpers ─────────────────────────────────────────────
 

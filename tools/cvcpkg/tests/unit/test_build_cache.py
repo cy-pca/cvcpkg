@@ -28,8 +28,8 @@ def _populate_install_dir(install_dir: Path) -> None:
     (install_dir / "include" / "foo.h").write_text("#pragma once")
 
 
-def _fake_chain_hash() -> str:
-    return hashlib.sha256(b"test-recipe-content").hexdigest()
+def _fake_chain_hash(seed: str = "test-recipe-content") -> str:
+    return hashlib.sha256(seed.encode()).hexdigest()
 
 
 # ── cache_key ───────────────────────────────────────────────────
@@ -395,6 +395,53 @@ class TestBuildCachePurge:
     def test_purge_empty_cache(self, tmp_path):
         bc = BuildCache(tmp_path / "cache")
         assert bc.purge(max_size_bytes=0) == 0
+
+
+# ── BuildCache.purge_stale ──────────────────────────────────────
+
+
+class TestBuildCachePurgeStale:
+    def test_removes_stale_entries(self, tmp_path):
+        bc = BuildCache(tmp_path / "cache")
+        install = tmp_path / "install"
+        _populate_install_dir(install)
+        h_current = _fake_chain_hash("current")
+        h_stale = _fake_chain_hash("stale")
+        bc.store(install, "a", "1.0", h_current, "linux", "x86_64", "release", "shared")
+        bc.store(install, "b", "1.0", h_stale, "linux", "x86_64", "release", "shared")
+        assert len(bc.list_entries()) == 2
+
+        removed = bc.purge_stale({h_current})
+        assert removed == 1
+        remaining = bc.list_entries()
+        assert len(remaining) == 1
+        assert remaining[0].chain_hash == h_current
+
+    def test_no_stale(self, tmp_path):
+        bc = BuildCache(tmp_path / "cache")
+        install = tmp_path / "install"
+        _populate_install_dir(install)
+        h = _fake_chain_hash("valid")
+        bc.store(install, "a", "1.0", h, "linux", "x86_64", "release", "shared")
+
+        removed = bc.purge_stale({h})
+        assert removed == 0
+        assert len(bc.list_entries()) == 1
+
+    def test_all_stale(self, tmp_path):
+        bc = BuildCache(tmp_path / "cache")
+        install = tmp_path / "install"
+        _populate_install_dir(install)
+        bc.store(install, "a", "1.0", _fake_chain_hash("x"), "linux", "x86_64", "release", "shared")
+        bc.store(install, "b", "1.0", _fake_chain_hash("y"), "linux", "x86_64", "release", "shared")
+
+        removed = bc.purge_stale(set())
+        assert removed == 2
+        assert len(bc.list_entries()) == 0
+
+    def test_empty_cache(self, tmp_path):
+        bc = BuildCache(tmp_path / "cache")
+        assert bc.purge_stale({"some_hash"}) == 0
 
 
 # ── BuildCache.total_size_bytes ─────────────────────────────────
