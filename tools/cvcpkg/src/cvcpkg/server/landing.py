@@ -74,11 +74,18 @@ a.pkg-link:hover { text-decoration: underline; }
   background: linear-gradient(135deg, #3273dc, #48c774);
   color: #fff; font-size: 0.7em; font-weight: 600;
   padding: 2px 8px; border-radius: 4px; vertical-align: middle;
+  white-space: nowrap; display: inline-flex; align-items: center; gap: 4px;
 }
 .badge-community {
   background-color: rgba(255, 221, 87, 0.15);
   color: #ffdd57; font-size: 0.7em; font-weight: 600;
   padding: 2px 8px; border-radius: 4px; vertical-align: middle;
+  white-space: nowrap; display: inline-flex; align-items: center; gap: 4px;
+}
+@media screen and (max-width: 768px) {
+  .badge-mainline, .badge-community {
+    font-size: 0.6em; padding: 2px 6px;
+  }
 }
 .note-card { border-left: 3px solid #3273dc; padding: 0.75rem 1rem; margin-bottom: 0.75rem; }
 .recipe-viewer { max-height: 500px; overflow-y: auto; }
@@ -915,6 +922,119 @@ function sortBy(key) {
   }
   renderBuilds();
 }
+
+async function loadDownloadStats(name) {
+  try {
+    const resp = await fetch('/v1/downloads/stats?name=' + encodeURIComponent(name));
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (!data.daily || data.daily.length === 0) return;
+
+    const section = document.getElementById('download-stats-section');
+    const totalEl = document.getElementById('download-total');
+    if (!section) return;
+
+    totalEl.textContent = data.total.toLocaleString() + ' total';
+    section.style.display = '';
+
+    const canvas = document.getElementById('download-chart');
+    const cfg = data.config || {};
+    const chartHeight = cfg.height || 200;
+    const lineColor = cfg.color || '#3273dc';
+    const fillColor = cfg.fill_color || 'rgba(50,115,220,0.15)';
+
+    // Draw the chart on canvas
+    const daily = data.daily;
+    const maxCount = Math.max(1, ...daily.map(d => d.count));
+    const dpr = window.devicePixelRatio || 1;
+    const width = canvas.parentElement.clientWidth;
+    canvas.width = width * dpr;
+    canvas.height = chartHeight * dpr;
+    canvas.style.width = width + 'px';
+    canvas.style.height = chartHeight + 'px';
+
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    const pad = { top: 20, right: 20, bottom: 30, left: 50 };
+    const cw = width - pad.left - pad.right;
+    const ch = chartHeight - pad.top - pad.bottom;
+
+    // Grid lines
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.lineWidth = 1;
+    const gridLines = 4;
+    for (let i = 0; i <= gridLines; i++) {
+      const y = pad.top + (ch / gridLines) * i;
+      ctx.beginPath();
+      ctx.moveTo(pad.left, y);
+      ctx.lineTo(pad.left + cw, y);
+      ctx.stroke();
+      // Y-axis labels
+      const val = Math.round(maxCount * (1 - i / gridLines));
+      ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(val.toString(), pad.left - 8, y + 4);
+    }
+
+    // X-axis labels (show ~6 date labels)
+    const labelInterval = Math.max(1, Math.floor(daily.length / 6));
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'center';
+    daily.forEach((d, i) => {
+      if (i % labelInterval === 0 || i === daily.length - 1) {
+        const x = pad.left + (i / (daily.length - 1 || 1)) * cw;
+        const label = d.date.slice(5);  // MM-DD
+        ctx.fillText(label, x, chartHeight - 6);
+      }
+    });
+
+    // Build path
+    const points = daily.map((d, i) => ({
+      x: pad.left + (i / (daily.length - 1 || 1)) * cw,
+      y: pad.top + ch - (d.count / maxCount) * ch,
+    }));
+
+    // Fill area
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, pad.top + ch);
+    points.forEach(p => ctx.lineTo(p.x, p.y));
+    ctx.lineTo(points[points.length - 1].x, pad.top + ch);
+    ctx.closePath();
+    ctx.fillStyle = fillColor;
+    ctx.fill();
+
+    // Draw line
+    ctx.beginPath();
+    points.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+
+    // Dots on data points (only if few enough)
+    if (daily.length <= 31) {
+      points.forEach(p => {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+        ctx.fillStyle = lineColor;
+        ctx.fill();
+      });
+    }
+
+    // Hover tooltip
+    canvas.addEventListener('mousemove', function(e) {
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const idx = Math.round(((mx - pad.left) / cw) * (daily.length - 1));
+      if (idx >= 0 && idx < daily.length) {
+        canvas.title = daily[idx].date + ': ' + daily[idx].count + ' downloads';
+      }
+    });
+  } catch (_) {}
+}
 """
 
 
@@ -1079,6 +1199,17 @@ tar --zstd -xf &lt;package&gt;.tar.zst -C /opt/cvcpkg</pre>
 <!-- Available builds -->
 <section class="section has-background-black-bis">
   <div class="container">
+    <!-- Download Stats Graph -->
+    <div class="box has-background-black-ter mb-5" id="download-stats-section" style="display:none">
+      <h3 class="title is-5 has-text-white">
+        <span class="icon mr-1"><i class="fas fa-chart-area"></i></span> Downloads
+        <span class="tag is-dark is-rounded ml-2" id="download-total">0</span>
+      </h3>
+      <div style="position:relative">
+        <canvas id="download-chart"></canvas>
+      </div>
+    </div>
+
     <h2 class="title is-4 has-text-white mb-4">
       <span class="icon mr-1"><i class="fas fa-box"></i></span> Available Builds
     </h2>
@@ -1123,6 +1254,7 @@ document.addEventListener('DOMContentLoaded', () => {{
     th.addEventListener('click', () => sortBy(th.dataset.key));
   }});
   init({_js_string_literal(name)});
+  loadDownloadStats({_js_string_literal(name)});
 }});
 </script>
 </body>
