@@ -1701,3 +1701,182 @@ class TestCacheGC:
         assert resp.status_code == 200
         # Release-tagged should NOT be deleted.
         assert resp.json()["deleted_count"] == 0
+
+
+# ── Phase 4b: Cache listing & bulk delete ──────────────────────
+
+
+class TestCacheListing:
+    """Tests for ``GET /v1/cache``."""
+
+    @staticmethod
+    def _publish(client, token, name="pkg", version="1.0", size=100):
+        return client.post(
+            "/v1/publish",
+            params={
+                "name": name,
+                "version": version,
+                "platform": "linux",
+                "arch": "x86_64",
+            },
+            files={"file": (f"{name}.tar.zst", io.BytesIO(b"x" * size))},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    def test_list_empty(self, db_server_env):
+        client, admin_tok, _, _ = db_server_env
+        resp = client.get(
+            "/v1/cache",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 0
+        assert resp.json()["packages"] == []
+
+    def test_list_returns_non_release(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        # Publish a cache entry (no release_tag)
+        self._publish(client, pub_tok, name="cached", version="1.0")
+        # Publish a release-tagged package
+        client.post(
+            "/v1/publish",
+            params={
+                "name": "released",
+                "version": "1.0",
+                "platform": "linux",
+                "arch": "x86_64",
+                "release_tag": "v1.0",
+            },
+            files={"file": ("released.tar.zst", io.BytesIO(b"x" * 100))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+
+        resp = client.get(
+            "/v1/cache",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        names = [p["name"] for p in data["packages"]]
+        assert "cached" in names
+        assert "released" not in names
+
+    def test_list_filter_by_name(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        self._publish(client, pub_tok, name="aaa", version="1.0")
+        self._publish(client, pub_tok, name="bbb", version="1.0")
+
+        resp = client.get(
+            "/v1/cache?name=aaa",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        names = [p["name"] for p in resp.json()["packages"]]
+        assert names == ["aaa"]
+
+    def test_list_requires_auth(self, db_server_env):
+        client, *_ = db_server_env
+        resp = client.get("/v1/cache")
+        assert resp.status_code == 401
+
+    def test_list_yaml_fallback(self, server_env):
+        """YAML backend works for cache listing."""
+        client, _, pub_tok, _ = server_env
+        client.post(
+            "/v1/publish",
+            params={"name": "y", "version": "1.0", "platform": "linux", "arch": "x86_64"},
+            files={"file": ("y.tar.zst", io.BytesIO(b"data"))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        resp = client.get(
+            "/v1/cache",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["total"] >= 1
+
+
+class TestCacheBulkDelete:
+    """Tests for ``DELETE /v1/cache``."""
+
+    @staticmethod
+    def _publish(client, token, name="pkg", version="1.0", size=100):
+        return client.post(
+            "/v1/publish",
+            params={
+                "name": name,
+                "version": version,
+                "platform": "linux",
+                "arch": "x86_64",
+            },
+            files={"file": (f"{name}.tar.zst", io.BytesIO(b"x" * size))},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    def test_delete_requires_admin(self, db_server_env):
+        client, _, pub_tok, _ = db_server_env
+        resp = client.delete(
+            "/v1/cache",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 403
+
+    def test_delete_all(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        self._publish(client, pub_tok, name="a", version="1.0")
+        self._publish(client, pub_tok, name="b", version="1.0")
+
+        resp = client.delete(
+            "/v1/cache",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["deleted_count"] == 2
+
+    def test_delete_with_older_than(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        self._publish(client, pub_tok, name="recent", version="1.0")
+
+        # Nothing should be old enough to delete with 1d filter
+        resp = client.delete(
+            "/v1/cache?older_than=1d",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["deleted_count"] == 0
+
+    def test_delete_preserves_releases(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        # Publish a release and a cache entry
+        client.post(
+            "/v1/publish",
+            params={
+                "name": "rel",
+                "version": "1.0",
+                "platform": "linux",
+                "arch": "x86_64",
+                "release_tag": "v1.0",
+            },
+            files={"file": ("rel.tar.zst", io.BytesIO(b"x" * 50))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        self._publish(client, pub_tok, name="tmp", version="1.0")
+
+        resp = client.delete(
+            "/v1/cache",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        # Only the non-release should be deleted
+        deleted_names = [d["name"] for d in resp.json()["deleted"]]
+        assert "tmp" in deleted_names
+        assert "rel" not in deleted_names
+
+    def test_delete_requires_db(self, server_env):
+        """YAML backend returns 501."""
+        client, admin_tok, _, _ = server_env
+        resp = client.delete(
+            "/v1/cache",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 501

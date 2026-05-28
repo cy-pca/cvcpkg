@@ -2381,8 +2381,59 @@ def cache_group() -> None:
 
 
 @cache_group.command("list")
-def cache_list_cmd() -> None:
-    """List all entries in the local build cache."""
+@click.option(
+    "--server", envvar="CVCPKG_SERVER_CACHE", default="", help="List entries from remote server."
+)
+@click.option(
+    "--token", envvar="CVCPKG_SERVER_CACHE_TOKEN", default="", help="Bearer token for server."
+)
+@click.option("--name", default="", help="Filter by component name.")
+@click.option("--platform-filter", "plat_filter", default="", help="Filter by platform.")
+def cache_list_cmd(server: str, token: str, name: str, plat_filter: str) -> None:
+    """List build cache entries (local or remote)."""
+    if server:
+        import json
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+
+        params: dict[str, str] = {"limit": "1000"}
+        if name:
+            params["name"] = name
+        if plat_filter:
+            params["platform"] = plat_filter
+        url = f"{server.rstrip('/')}/v1/cache?{urllib.parse.urlencode(params)}"
+        req = urllib.request.Request(url, method="GET")
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
+                data = json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            click.echo(f"Server error: {e.code} {e.reason}", err=True)
+            raise SystemExit(1)
+        except (urllib.error.URLError, OSError) as e:
+            click.echo(f"Connection error: {e}", err=True)
+            raise SystemExit(1)
+
+        pkgs = data.get("packages", [])
+        if not pkgs:
+            click.echo("Server cache is empty.")
+            return
+        total = data.get("total", len(pkgs))
+        total_bytes = sum(p.get("size_bytes", 0) for p in pkgs)
+        click.echo(f"{total} cached builds ({_human_size(total_bytes)}):\n")
+        for p in pkgs:
+            qname = f"{p.get('org', '')}/{p['name']}" if p.get("org") else p["name"]
+            click.echo(
+                f"  {qname} {p['version']}  "
+                f"{p.get('platform', '')}/{p.get('arch', '')}/"
+                f"{p.get('build_type', '')}/{p.get('link', '')}  "
+                f"{_human_size(p.get('size_bytes', 0))}  "
+                f"recipe={p.get('recipe_version', '')[:12]}…"
+            )
+        return
+
     from cvcpkg.build_cache import BuildCache
 
     bc = BuildCache()
@@ -2474,8 +2525,60 @@ def cache_remove_cmd(chain_hash_val: str, platform: str, config: str, link: str)
     help="Remove entries not used within this many days.",
 )
 @click.option("--all", "purge_all", is_flag=True, help="Remove all cache entries.")
-def cache_purge_cmd(max_size: str | None, max_age_days: int | None, purge_all: bool) -> None:
-    """Evict build cache entries by size or age."""
+@click.option(
+    "--server", envvar="CVCPKG_SERVER_CACHE", default="", help="Purge from remote server (admin)."
+)
+@click.option(
+    "--token", envvar="CVCPKG_SERVER_CACHE_TOKEN", default="", help="Bearer token for server."
+)
+def cache_purge_cmd(
+    max_size: str | None,
+    max_age_days: int | None,
+    purge_all: bool,
+    server: str,
+    token: str,
+) -> None:
+    """Evict build cache entries by size or age (local or remote)."""
+    if server:
+        import json
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+
+        if purge_all:
+            # DELETE /v1/cache with no filters removes everything
+            url = f"{server.rstrip('/')}/v1/cache"
+            req = urllib.request.Request(url, method="DELETE")
+        elif max_age_days is not None:
+            params = {"older_than": f"{max_age_days}d"}
+            url = f"{server.rstrip('/')}/v1/cache?{urllib.parse.urlencode(params)}"
+            req = urllib.request.Request(url, method="DELETE")
+        elif max_size is not None:
+            # Use the GC endpoint for size-based eviction
+            body = json.dumps({"max_storage_bytes": _parse_size(max_size)}).encode()
+            url = f"{server.rstrip('/')}/v1/cache/gc"
+            req = urllib.request.Request(url, data=body, method="POST")
+            req.add_header("Content-Type", "application/json")
+        else:
+            click.echo("Specify --max-size, --max-age-days, or --all.", err=True)
+            raise SystemExit(1)
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:  # noqa: S310
+                data = json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            click.echo(f"Server error: {e.code} {e.reason}", err=True)
+            raise SystemExit(1)
+        except (urllib.error.URLError, OSError) as e:
+            click.echo(f"Connection error: {e}", err=True)
+            raise SystemExit(1)
+        count = data.get("deleted_count", 0)
+        click.echo(f"Removed {count} server cache entries.")
+        for d in data.get("deleted", []):
+            click.echo(f"  {d['name']}=={d['version']} ({d['size_bytes']} bytes)")
+        return
+
     from cvcpkg.build_cache import BuildCache
 
     bc = BuildCache()
