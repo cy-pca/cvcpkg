@@ -374,6 +374,149 @@ reflected by bumping libcvc-deps's own version.
 | zlib | 1.3 (`zlib1g-dev`) | macOS SDK / Homebrew dependency | 1.3.2 (vcpkg `zlib`) |
 | pthreads4w | n/a | n/a | vcpkg `pthreads` |
 
+## Contributing recipes
+
+We welcome pull requests that add, update, or improve component
+recipes. Each recipe lives in its own directory under `recipes/`
+and consists of a `recipe.yaml` descriptor plus one build script
+per platform.
+
+### Recipe directory layout
+
+```
+recipes/<name>/
+  recipe.yaml      # metadata, source, deps, build matrix, packaging globs
+  build.sh         # Linux + macOS build script
+  build.ps1        # Windows build script (PowerShell)
+  test.sh          # (optional) post-build smoke test
+  patches/         # (optional) patch files applied before building
+```
+
+### Creating a new recipe
+
+1. **Copy an existing recipe** — `recipes/zlib/` is the reference
+   recipe for a simple tarball-based component. For vendored source,
+   see `recipes/levmar/`.
+
+2. **Fill out `recipe.yaml`:**
+
+   ```yaml
+   schema_version: 1
+   recipe:
+     name: mylib            # must match the directory name
+     upstream_version: "1.2.3"
+     cvc_revision: 1        # bump when the recipe changes, not the upstream
+     maintainer: "Your Name"
+     homepage: https://...
+     license: MIT
+
+   source:
+     type: tarball           # tarball | vendored | vcpkg | brew | apt
+     url: https://github.com/.../v1.2.3.tar.gz
+     sha256: "abc123..."     # sha256sum of the source archive
+     strip_components: 1
+
+   patches: []               # list of patch files in patches/
+
+   depends:
+     build:
+       - zlib                # other recipes this depends on
+     host_tools:
+       - cmake
+       - ninja
+
+   build:
+     matrix:
+       - platform: linux
+         script: build.sh
+         env:
+           CFLAGS: "-O2 -fPIC"
+       - platform: macos
+         script: build.sh
+         env:
+           MACOSX_DEPLOYMENT_TARGET: "13.0"
+       - platform: windows
+         script: build.ps1
+
+   package:
+     files:
+       - lib/libmylib*       # globs matched against the install prefix
+       - lib/cmake/mylib/
+       - include/mylib/
+     cmake_packages:
+       - { name: mylib, targets: ["mylib::mylib"] }
+
+   abi:
+     cxx_std: 17
+   ```
+
+3. **Write the build script.** Source the common env helper and use
+   the `cvc_cmake_build` function for CMake projects:
+
+   ```bash
+   #!/usr/bin/env bash
+   set -euo pipefail
+   source "$(dirname "$0")/../_common/env-${CVC_PLATFORM}.sh"
+
+   cvc_cmake_build \
+       -DMYLIB_BUILD_TESTS=OFF \
+       -DMYLIB_BUILD_EXAMPLES=OFF
+   ```
+
+   The env helper sets `CVC_SOURCE_DIR`, `CVC_BUILD_DIR`,
+   `CVC_INSTALL_DIR`, `CMAKE_BUILD_TYPE`, `BUILD_SHARED_LIBS`, and
+   other standard variables. See `recipes/_common/env-linux.sh` for
+   the full list.
+
+4. **Validate your recipe:**
+
+   ```sh
+   python3 -m cvcpkg recipes --validate
+   # or validate everything:
+   python3 packaging/validate.py
+   ```
+
+5. **Test locally** (builds from source):
+
+   ```sh
+   python3 -m cvcpkg build mylib --platform linux
+   ```
+
+6. **Add the component to `packaging/components.yaml`** and to
+   `cvc-requirements.yaml` if it should be part of the default set.
+
+7. **Open a PR.** CI runs the recipe schema validation and the
+   cvcpkg test suite automatically on every PR.
+
+### Environment variables available in build scripts
+
+| Variable | Description |
+|---|---|
+| `CVC_PLATFORM` | `linux`, `macos`, or `windows` |
+| `CVC_SOURCE_DIR` | Extracted/vendored source directory |
+| `CVC_BUILD_DIR` | Build directory (out-of-source) |
+| `CVC_INSTALL_DIR` | Install prefix (`cmake --install` target) |
+| `CVC_BUILD_TYPE` | `Release` or `Debug` |
+| `CVC_LINK` | `shared` or `static` |
+| `CVC_JOBS` | Parallelism level (defaults to nproc) |
+| `CVC_DEPS_PREFIX` | Prefix containing already-built dependencies |
+
+### Supported source types
+
+| Type | Description |
+|---|---|
+| `tarball` | Download from `url`, verify `sha256`, extract |
+| `vendored` | Source lives in the repo under `third-party/<name>/` |
+| `vcpkg` | Installed via vcpkg (Windows) |
+| `brew` | Installed via Homebrew (macOS) |
+| `apt` | Installed via apt (Linux) |
+
+### Supported archive formats
+
+Both the CI packaging stage and `cvcpkg install` support:
+`.tar.gz`, `.tgz`, `.tar.bz2`, `.tar.xz`, `.tar.zst`, `.tar`,
+`.zip`, and `.7z`.
+
 ## License
 
 This repository's own files (the workflow, the CMake glue, the
