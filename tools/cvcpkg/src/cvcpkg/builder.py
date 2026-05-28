@@ -430,9 +430,10 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
     # If building for wasm and emsdk was built into the shared prefix,
     # point CVC_EMSDK_DIR there so build scripts can find it.
     if ctx.platform == "wasm" and "CVC_EMSDK_DIR" not in env:
-        emsdk_env = ctx.prefix / "emsdk_env.sh"
-        if emsdk_env.is_file():
-            env["CVC_EMSDK_DIR"] = str(ctx.prefix)
+        for _emsdk_name in ("emsdk_env.sh", "emsdk_env.bat", "emsdk_env.ps1"):
+            if (ctx.prefix / _emsdk_name).is_file():
+                env["CVC_EMSDK_DIR"] = str(ctx.prefix)
+                break
 
     # Ensure host tools built into the prefix (cmake, ninja, protoc,
     # etc.) are found before system versions.
