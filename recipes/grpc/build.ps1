@@ -38,8 +38,9 @@ function Invoke-GrpcFetchArchive {
     if ($Url -like '*.zip') {
         Expand-Archive -Path $archivePath -DestinationPath $extractDir
     } else {
-        # Use forward slashes — GNU tar treats C: as a remote host with backslashes
-        tar xzf ($archivePath -replace '\\','/') -C ($extractDir -replace '\\','/')
+        # GNU tar treats drive-letter prefixes (C:) as remote host references.
+        # Use --force-local to disable this interpretation on Windows.
+        tar --force-local -xzf ($archivePath -replace '\\','/') -C ($extractDir -replace '\\','/')
     }
     $parentDir = Split-Path -Parent $Dest
     if (-not (Test-Path $parentDir)) {
