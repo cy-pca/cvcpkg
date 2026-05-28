@@ -70,12 +70,16 @@ def _create_vendored_recipe(
         recipe["depends"] = {"build": deps}
 
     (recipe_dir / "recipe.yaml").write_text(yaml.dump(recipe, default_flow_style=False))
-    (recipe_dir / "build.sh").write_text(textwrap.dedent(f"""\
+    (recipe_dir / "build.sh").write_text(
+        textwrap.dedent(
+            f"""\
             #!/bin/bash
             set -e
             mkdir -p "$CVC_INSTALL_DIR/lib"
             echo "built-{name}" > "$CVC_INSTALL_DIR/lib/lib{name}.txt"
-        """))
+        """
+        )
+    )
     os.chmod(recipe_dir / "build.sh", 0o755)
     return recipe_dir
 
