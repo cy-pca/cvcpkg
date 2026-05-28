@@ -786,6 +786,11 @@ def build_recipe(
     if not platform:
         platform = detect_platform()
 
+    # Auto-detect host platform for cross-compilation targets (e.g. wasm)
+    # so the correct host-specific build script is selected.
+    if not host_platform and platform == "wasm":
+        host_platform = detect_platform()
+
     work_dir = Path(tempfile.mkdtemp(prefix=f"cvcpkg-{recipe.name}-"))
     install_dir = prefix or (work_dir / "install")
     build_dir = work_dir / "build"
