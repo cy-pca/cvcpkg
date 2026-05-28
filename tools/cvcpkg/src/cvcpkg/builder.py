@@ -937,16 +937,43 @@ def _dep_names(recipe: Recipe, platform: str = "") -> list[str]:
     return names
 
 
+def _detect_arch_for_platform(platform: str) -> str:
+    """Return the architecture string for a given platform."""
+    if platform == "wasm":
+        return "wasm32"
+    from cvcpkg.platform import detect_arch
+
+    return detect_arch()
+
+
+def _common_scripts_hash(recipes_dir: Path) -> str:
+    """Compute a combined SHA-256 of all scripts in ``_common/``.
+
+    Returns an empty string if the directory does not exist.  Files are
+    processed in sorted order for determinism.
+    """
+    common = recipes_dir / "_common"
+    if not common.is_dir():
+        return ""
+    h = hashlib.sha256()
+    for p in sorted(common.iterdir()):
+        if p.is_file():
+            h.update(_sha256_file(p).encode())
+    return h.hexdigest()
+
+
 def chain_hash(
     recipe: Recipe,
     all_recipes: dict[str, Recipe],
     platform: str = "",
     *,
     _seen: set[str] | None = None,
+    _common_hash: str | None = None,
 ) -> str:
     """Compute a transitive dependency chain hash for *recipe*.
 
-    The hash covers the recipe's own ``recipe.yaml`` content plus the
+    The hash covers the recipe's own ``recipe.yaml`` content, build
+    scripts, patches, shared ``_common/`` helper scripts, and the
     ``recipe.yaml`` content of every transitive build dependency.  Two
     builds of the same recipe are binary-identical when their chain
     hashes match.
@@ -958,6 +985,10 @@ def chain_hash(
     if recipe.name in _seen:
         return ""
     _seen.add(recipe.name)
+
+    # Compute _common/ hash once and reuse for all recursive calls.
+    if _common_hash is None:
+        _common_hash = _common_scripts_hash(recipe.recipe_dir.parent)
 
     h = hashlib.sha256()
     # Include this recipe's own YAML content
@@ -972,11 +1003,16 @@ def chain_hash(
         patch_path = recipe.recipe_dir / patch_name
         if patch_path.is_file():
             h.update(_sha256_file(patch_path).encode())
+    # Include shared _common/ scripts
+    if _common_hash:
+        h.update(_common_hash.encode())
     # Recursively include dependency chain hashes (sorted for determinism)
     for dep_name in sorted(_dep_names(recipe, platform)):
         dep = all_recipes.get(dep_name)
         if dep is not None:
-            dep_hash = chain_hash(dep, all_recipes, platform, _seen=_seen)
+            dep_hash = chain_hash(
+                dep, all_recipes, platform, _seen=_seen, _common_hash=_common_hash
+            )
             if dep_hash:
                 h.update(dep_hash.encode())
     return h.hexdigest()
@@ -1020,6 +1056,149 @@ def resolve_build_order(recipes: list[Recipe], platform: str = "") -> list[Recip
     return order
 
 
+# ── Server cache helpers ────────────────────────────────────────
+
+
+def _server_cache_probe(
+    base_url: str,
+    token: str,
+    name: str,
+    chain_hash_val: str,
+    platform: str,
+    arch: str,
+    build_type: str,
+    link: str,
+    org: str,
+) -> dict[str, Any] | None:
+    """Query ``GET /v1/cache/status`` on the remote server.
+
+    Returns the decoded JSON dict on cache hit, ``None`` on miss or
+    any network error.
+    """
+    import json
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    params = urllib.parse.urlencode(
+        {
+            "name": name,
+            "chain_hash": chain_hash_val,
+            "platform": platform,
+            "arch": arch,
+            "build_type": build_type,
+            "link": link,
+            "org": org,
+        }
+    )
+    url = f"{base_url.rstrip('/')}/v1/cache/status?{params}"
+    req = urllib.request.Request(url, method="GET")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
+            data = json.loads(resp.read())
+            if data.get("hit"):
+                return data
+    except (urllib.error.URLError, OSError, json.JSONDecodeError):
+        pass
+    return None
+
+
+def _server_cache_download(
+    archive_url: str,
+    token: str,
+    dest: Path,
+    expected_sha256: str = "",
+) -> Path | None:
+    """Download a cached archive from the server.
+
+    Returns the local path on success, ``None`` on failure.
+    """
+    import urllib.error
+    import urllib.request
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    req = urllib.request.Request(archive_url, method="GET")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp:  # noqa: S310
+            with open(dest, "wb") as f:
+                while chunk := resp.read(1 << 16):
+                    f.write(chunk)
+    except (urllib.error.URLError, OSError):
+        if dest.is_file():
+            dest.unlink(missing_ok=True)
+        return None
+
+    if expected_sha256:
+        actual = _sha256_file(dest)
+        if actual != expected_sha256:
+            dest.unlink(missing_ok=True)
+            return None
+    return dest
+
+
+def _server_cache_push(
+    base_url: str,
+    token: str,
+    archive_path: Path,
+    name: str,
+    version: str,
+    platform: str,
+    arch: str,
+    build_type: str,
+    link: str,
+    recipe_version: str,
+    org: str,
+) -> bool:
+    """Publish an archive to the server cache via ``POST /v1/publish``.
+
+    Returns ``True`` on success, ``False`` on failure.
+    """
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    params = urllib.parse.urlencode(
+        {
+            "name": name,
+            "version": version,
+            "platform": platform,
+            "arch": arch,
+            "build_type": build_type,
+            "link": link,
+            "recipe_version": recipe_version,
+            "org": org,
+        }
+    )
+    url = f"{base_url.rstrip('/')}/v1/publish?{params}"
+
+    # Build multipart form data manually (avoid extra dependencies).
+    boundary = "----cvcpkg-upload-boundary"
+    filename = archive_path.name
+    body_prefix = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        f"Content-Type: application/octet-stream\r\n\r\n"
+    ).encode()
+    body_suffix = f"\r\n--{boundary}--\r\n".encode()
+
+    file_data = archive_path.read_bytes()
+    body = body_prefix + file_data + body_suffix
+
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=600) as resp:  # noqa: S310
+            return resp.status == 200
+    except (urllib.error.URLError, OSError):
+        return False
+
+
 def build_all(
     recipes_dir: Path | list[Path],
     *,
@@ -1032,6 +1211,13 @@ def build_all(
     host_platform: str = "",
     shard: tuple[int, int] | None = None,
     keep_going: bool = False,
+    no_cache: bool = False,
+    force_clean: bool = False,
+    server_cache_url: str = "",
+    server_cache_token: str = "",
+    server_cache_push: bool = False,
+    no_server_cache: bool = False,
+    server_cache_org: str = "",
 ) -> list[BuildContext]:
     """Build every recipe in dependency order into a shared *prefix*.
 
@@ -1067,6 +1253,26 @@ def build_all(
     only successfully-built recipes; failures are collected in a
     ``failures`` attribute on the returned list (a
     ``list[BuildFailure]``).
+
+    When *no_cache* is ``True``, the local build cache is bypassed
+    entirely — no lookups and no stores.
+
+    When *force_clean* is ``True``, cache lookups are skipped (every
+    recipe is rebuilt from source) but results are still stored in
+    the cache for future runs.
+
+    When *server_cache_url* is given, the builder queries the server
+    for cached artifacts before building from source.  On a server
+    cache hit the archive is downloaded, restored locally, and the
+    local cache is populated.  *server_cache_token* provides the
+    bearer token for authenticated servers.
+
+    When *server_cache_push* is ``True``, successful builds are
+    published to the server cache via ``POST /v1/publish``.
+
+    *no_server_cache* disables server cache entirely (both pull and
+    push).  *server_cache_org* scopes cache queries to a specific
+    organization.
     """
     if isinstance(recipes_dir, list):
         all_recipes = load_all_recipes(recipes_dir)
@@ -1108,9 +1314,20 @@ def build_all(
         prefix = Path(tempfile.mkdtemp(prefix="cvcpkg-all-"))
     prefix = prefix.resolve()
 
+    # Prepare build cache (unless disabled).
+    use_cache = not no_cache
+    cache = None
+    if use_cache:
+        from cvcpkg.build_cache import BuildCache
+
+        cache = BuildCache()
+    all_recipe_map = {r.name: r for r in all_recipes}
+    arch = _detect_arch_for_platform(platform)
+
     contexts: BuildAllResult = BuildAllResult()
     failures: list[BuildFailure] = []
     failed_names: set[str] = set()  # recipes that failed or were skipped
+    cache_hits = 0
     for recipe in ordered:
         # Check if any dependency already failed.
         dep_names = _dep_names(recipe, platform)
@@ -1131,8 +1348,119 @@ def build_all(
         is_assigned = recipe.name in assigned
         label = "" if is_assigned else " (dep)"
         print(f"\ncvcpkg: == {recipe.name} ({recipe.full_version}){label} ==")
+
+        # Build cache lookup.
+        recipe_chain_hash = ""
+        cached_archive: Path | None = None
+        if cache is not None:
+            recipe_chain_hash = chain_hash(recipe, all_recipe_map, platform)
+            if not force_clean:
+                cached_archive = cache.lookup(recipe_chain_hash, platform, arch, config, link)
+
+        # Server cache lookup (when local cache misses).
+        server_hit = False
+        use_server = (
+            server_cache_url
+            and not no_server_cache
+            and not force_clean
+            and cached_archive is None
+            and recipe_chain_hash
+        )
+        if use_server:
+            probe = _server_cache_probe(
+                server_cache_url,
+                server_cache_token,
+                recipe.name,
+                recipe_chain_hash,
+                platform,
+                arch,
+                config,
+                link,
+                server_cache_org,
+            )
+            if probe is not None:
+                dl_url = probe.get("archive_url", "")
+                if dl_url:
+                    # Make relative archive_url absolute.
+                    if dl_url.startswith("/"):
+                        dl_url = server_cache_url.rstrip("/") + dl_url
+                    tmp_archive = Path(
+                        tempfile.mktemp(
+                            prefix=f"cvcpkg-srv-{recipe.name}-",
+                            suffix=".tar.gz",
+                        )
+                    )
+                    result = _server_cache_download(
+                        dl_url,
+                        server_cache_token,
+                        tmp_archive,
+                        expected_sha256=probe.get("sha256", ""),
+                    )
+                    if result is not None:
+                        cached_archive = result
+                        server_hit = True
+                        print(f"  ← server cache hit ({recipe_chain_hash[:12]}…)")
+                        # Populate local cache for future runs.
+                        if cache is not None:
+                            import shutil as _shutil_srv
+
+                            srv_restore = Path(tempfile.mkdtemp(prefix=f"cvcpkg-srv-restore-"))
+                            try:
+                                cache.restore(tmp_archive, srv_restore)
+                                cache.store(
+                                    srv_restore,
+                                    recipe.name,
+                                    recipe.full_version,
+                                    recipe_chain_hash,
+                                    platform,
+                                    arch,
+                                    config,
+                                    link,
+                                )
+                            finally:
+                                _shutil_srv.rmtree(srv_restore, ignore_errors=True)
+
         try:
-            if per_component:
+            if cached_archive is not None:
+                # Cache hit — restore artifacts instead of building.
+                cache_hits += 1
+                if not server_hit:
+                    print(f"  ← cache hit ({recipe_chain_hash[:12]}…)")
+                if per_component:
+                    work_dir = Path(tempfile.mkdtemp(prefix=f"cvcpkg-{recipe.name}-"))
+                    install_dir = work_dir / "install"
+                    cache.restore(cached_archive, install_dir)
+                    ctx = BuildContext(
+                        recipe=recipe,
+                        platform=platform,
+                        config=config,
+                        link=link,
+                        prefix=prefix,
+                        source_dir=work_dir / "source",
+                        build_dir=work_dir / "build",
+                        install_dir=install_dir,
+                        work_dir=work_dir,
+                        keep_build_dir=keep_build_dir,
+                        host_platform=host_platform,
+                    )
+                    if install_dir.is_dir():
+                        shutil.copytree(install_dir, prefix, dirs_exist_ok=True)
+                else:
+                    cache.restore(cached_archive, prefix)
+                    ctx = BuildContext(
+                        recipe=recipe,
+                        platform=platform,
+                        config=config,
+                        link=link,
+                        prefix=prefix,
+                        source_dir=prefix,
+                        build_dir=prefix,
+                        install_dir=prefix,
+                        work_dir=prefix,
+                        keep_build_dir=keep_build_dir,
+                        host_platform=host_platform,
+                    )
+            elif per_component:
                 work_dir = Path(tempfile.mkdtemp(prefix=f"cvcpkg-{recipe.name}-"))
                 install_dir = work_dir / "install"
                 source_dir = fetch_source(recipe, work_dir)
@@ -1158,6 +1486,42 @@ def build_all(
                 # subsequent recipes can find it via CVC_DEPS_PREFIX.
                 if install_dir.is_dir():
                     shutil.copytree(install_dir, prefix, dirs_exist_ok=True)
+                # Store in build cache.
+                if cache is not None and recipe_chain_hash and install_dir.is_dir():
+                    cache.store(
+                        install_dir,
+                        recipe.name,
+                        recipe.full_version,
+                        recipe_chain_hash,
+                        platform,
+                        arch,
+                        config,
+                        link,
+                    )
+                    # Push to server cache.
+                    if (
+                        server_cache_push
+                        and server_cache_url
+                        and not no_server_cache
+                        and not server_hit
+                    ):
+                        arc = cache.lookup(recipe_chain_hash, platform, arch, config, link)
+                        if arc is not None:
+                            ok = _server_cache_push(
+                                server_cache_url,
+                                server_cache_token,
+                                arc,
+                                recipe.name,
+                                recipe.full_version,
+                                platform,
+                                arch,
+                                config,
+                                link,
+                                recipe_chain_hash,
+                                server_cache_org,
+                            )
+                            if ok:
+                                print(f"  → pushed to server cache ({recipe_chain_hash[:12]}…)")
                 if not keep_build_dir:
                     build_dir = work_dir / "build"
                     if build_dir.is_dir():
@@ -1181,6 +1545,10 @@ def build_all(
             print(f"\ncvcpkg: FAILED {recipe.name}: {exc}")
             failed_names.add(recipe.name)
             failures.append(BuildFailure(recipe_name=recipe.name, error=exc))
+        finally:
+            # Clean up server-downloaded temp archive.
+            if server_hit and cached_archive is not None and cached_archive.is_file():
+                cached_archive.unlink(missing_ok=True)
 
     if failures:
         print(f"\ncvcpkg: {len(contexts)} succeeded, {len(failures)} failed:")
@@ -1188,7 +1556,8 @@ def build_all(
             status = "SKIPPED (dep)" if f.skipped else "FAILED"
             print(f"  {status}: {f.recipe_name} — {f.error}")
     else:
-        print(f"\ncvcpkg: all {len(contexts)} components built into {prefix}")
+        cache_msg = f" ({cache_hits} cache hits)" if cache_hits else ""
+        print(f"\ncvcpkg: all {len(contexts)} components built into {prefix}{cache_msg}")
 
     # Attach failures to the returned list for callers to inspect.
     contexts.failures = failures

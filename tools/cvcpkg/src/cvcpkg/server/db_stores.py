@@ -303,6 +303,10 @@ class DbPackageIndex:
         include_yanked: bool = False,
         limit: int = 1000,
         offset: int = 0,
+        recipe_version: str = "",
+        arch: str = "",
+        build_type: str = "",
+        link: str = "",
     ) -> tuple[list[PackageInfo], int]:
         async with get_session() as session:
             q = select(PackageRow)
@@ -339,6 +343,18 @@ class DbPackageIndex:
             if org_slug:
                 q = q.where(PackageRow.org_slug == org_slug)
                 count_q = count_q.where(PackageRow.org_slug == org_slug)
+            if recipe_version:
+                q = q.where(PackageRow.recipe_version == recipe_version)
+                count_q = count_q.where(PackageRow.recipe_version == recipe_version)
+            if arch:
+                q = q.where(PackageRow.arch == arch)
+                count_q = count_q.where(PackageRow.arch == arch)
+            if build_type:
+                q = q.where(PackageRow.build_type == build_type)
+                count_q = count_q.where(PackageRow.build_type == build_type)
+            if link:
+                q = q.where(PackageRow.link == link)
+                count_q = count_q.where(PackageRow.link == link)
 
             total_result = await session.execute(count_q)
             total = total_result.scalar() or 0
@@ -504,6 +520,177 @@ class DbPackageIndex:
             )
             return result.rowcount
 
+    async def total_storage_bytes(self) -> int:
+        """Return the total size_bytes across all non-yanked packages."""
+        async with get_session() as session:
+            result = await session.execute(
+                select(sa_func.coalesce(sa_func.sum(PackageRow.size_bytes), 0)).where(
+                    PackageRow.yanked.is_(False)
+                )
+            )
+            return int(result.scalar_one())
+
+    async def cache_stats(self) -> dict:
+        """Return storage statistics: total, per-org, and package count."""
+        async with get_session() as session:
+            # Total non-yanked
+            total_q = await session.execute(
+                select(
+                    sa_func.count(PackageRow.id),
+                    sa_func.coalesce(sa_func.sum(PackageRow.size_bytes), 0),
+                ).where(PackageRow.yanked.is_(False))
+            )
+            total_count, total_bytes = total_q.one()
+
+            # Per-org breakdown
+            org_q = await session.execute(
+                select(
+                    PackageRow.org_slug,
+                    sa_func.count(PackageRow.id),
+                    sa_func.coalesce(sa_func.sum(PackageRow.size_bytes), 0),
+                )
+                .where(PackageRow.yanked.is_(False))
+                .group_by(PackageRow.org_slug)
+            )
+            orgs = {row[0] or "": {"count": row[1], "size_bytes": row[2]} for row in org_q.all()}
+
+            return {
+                "total_packages": int(total_count),
+                "total_size_bytes": int(total_bytes),
+                "orgs": orgs,
+            }
+
+    async def gc_by_age(self, max_age_seconds: float) -> list[dict]:
+        """Delete non-yanked packages older than *max_age_seconds*.
+
+        Returns a list of dicts with ``name``, ``version``, ``size_bytes``,
+        ``org_slug`` for each deleted package.
+        """
+        import datetime as _dt
+
+        from sqlalchemy import delete as sa_delete
+
+        cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=max_age_seconds)
+        async with get_session() as session:
+            # Fetch rows to delete (for the return value).
+            rows = (
+                (
+                    await session.execute(
+                        select(PackageRow).where(
+                            PackageRow.published_at < cutoff,
+                            PackageRow.yanked.is_(False),
+                            PackageRow.release_tag == "",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            deleted = [
+                {
+                    "name": r.name,
+                    "version": r.version,
+                    "size_bytes": r.size_bytes,
+                    "org_slug": r.org_slug,
+                }
+                for r in rows
+            ]
+            if rows:
+                ids = [r.id for r in rows]
+                await session.execute(sa_delete(PackageRow).where(PackageRow.id.in_(ids)))
+            return deleted
+
+    async def gc_by_storage(self, max_bytes: int) -> list[dict]:
+        """Evict oldest non-release packages until total storage <= *max_bytes*.
+
+        Returns list of deleted package info dicts.
+        """
+        from sqlalchemy import delete as sa_delete
+
+        async with get_session() as session:
+            total_q = await session.execute(
+                select(sa_func.coalesce(sa_func.sum(PackageRow.size_bytes), 0)).where(
+                    PackageRow.yanked.is_(False)
+                )
+            )
+            current = int(total_q.scalar_one())
+            if current <= max_bytes:
+                return []
+
+            # Fetch non-release packages ordered by oldest first.
+            candidates = (
+                (
+                    await session.execute(
+                        select(PackageRow)
+                        .where(
+                            PackageRow.yanked.is_(False),
+                            PackageRow.release_tag == "",
+                        )
+                        .order_by(PackageRow.published_at.asc())
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+            to_delete: list[dict] = []
+            ids_to_delete: list[int] = []
+            for row in candidates:
+                if current <= max_bytes:
+                    break
+                current -= row.size_bytes
+                to_delete.append(
+                    {
+                        "name": row.name,
+                        "version": row.version,
+                        "size_bytes": row.size_bytes,
+                        "org_slug": row.org_slug,
+                    }
+                )
+                ids_to_delete.append(row.id)
+
+            if ids_to_delete:
+                await session.execute(sa_delete(PackageRow).where(PackageRow.id.in_(ids_to_delete)))
+            return to_delete
+
+    async def gc_by_staleness(self, valid_chain_hashes: set[str]) -> list[dict]:
+        """Delete non-release packages whose recipe_version is not in *valid_chain_hashes*.
+
+        Returns list of deleted package info dicts.
+        """
+        from sqlalchemy import delete as sa_delete
+
+        async with get_session() as session:
+            # Fetch non-release, non-yanked packages.
+            rows = (
+                (
+                    await session.execute(
+                        select(PackageRow).where(
+                            PackageRow.yanked.is_(False),
+                            PackageRow.release_tag == "",
+                            PackageRow.recipe_version != "",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+            stale = [r for r in rows if r.recipe_version not in valid_chain_hashes]
+            deleted = [
+                {
+                    "name": r.name,
+                    "version": r.version,
+                    "size_bytes": r.size_bytes,
+                    "org_slug": r.org_slug,
+                }
+                for r in stale
+            ]
+            if stale:
+                ids = [r.id for r in stale]
+                await session.execute(sa_delete(PackageRow).where(PackageRow.id.in_(ids)))
+            return deleted
+
 
 # ── DB Organization Store ───────────────────────────────────────
 
@@ -596,6 +783,7 @@ class DbOrgStore:
         logo_url: str | None = None,
         homepage: str | None = None,
         is_private: bool | None = None,
+        storage_limit_bytes: int | None = None,
     ) -> OrgInfo | None:
         async with get_session() as session:
             result = await session.execute(
@@ -614,6 +802,8 @@ class DbOrgStore:
                 row.homepage = homepage
             if is_private is not None:
                 row.is_private = is_private
+            if storage_limit_bytes is not None:
+                row.storage_limit_bytes = storage_limit_bytes
             await session.flush()
             return self._row_to_info(row)
 

@@ -1300,3 +1300,841 @@ class TestDownloadTracking:
         resp = client.get(url)
         assert resp.status_code == 200
         assert resp.content == content
+# ── Cache status endpoint ───────────────────────────────────────
+
+
+class TestCacheStatusEndpoint:
+    """Tests for the ``GET /v1/cache/status`` probe endpoint."""
+
+    def _publish(self, client, pub_tok, **extra):
+        """Publish a minimal package and return the response JSON."""
+        defaults = {
+            "name": "zlib",
+            "version": "1.3.1+cvc.1",
+            "platform": "linux",
+            "arch": "x86_64",
+            "build_type": "release",
+            "link": "shared",
+            "recipe_version": "abc123hash",
+        }
+        defaults.update(extra)
+        resp = client.post(
+            "/v1/publish",
+            params=defaults,
+            files={"file": ("zlib.tar.zst", io.BytesIO(b"fake-archive"))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    def test_cache_miss(self, server_env):
+        client, *_ = server_env
+        resp = client.get(
+            "/v1/cache/status",
+            params={
+                "name": "nonexistent",
+                "chain_hash": "deadbeef",
+                "platform": "linux",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["hit"] is False
+
+    def test_cache_hit(self, server_env):
+        client, _, pub_tok, _ = server_env
+        self._publish(client, pub_tok)
+        resp = client.get(
+            "/v1/cache/status",
+            params={
+                "name": "zlib",
+                "chain_hash": "abc123hash",
+                "platform": "linux",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["hit"] is True
+        assert data["name"] == "zlib"
+        assert data["chain_hash"] == "abc123hash"
+        assert data["platform"] == "linux"
+        assert data["archive_url"].startswith("/v1/download/")
+        assert data["sha256"]
+
+    def test_cache_hit_with_all_filters(self, server_env):
+        client, _, pub_tok, _ = server_env
+        self._publish(
+            client,
+            pub_tok,
+            arch="x86_64",
+            build_type="release",
+            link="shared",
+        )
+        resp = client.get(
+            "/v1/cache/status",
+            params={
+                "name": "zlib",
+                "chain_hash": "abc123hash",
+                "platform": "linux",
+                "arch": "x86_64",
+                "build_type": "release",
+                "link": "shared",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["hit"] is True
+
+    def test_cache_miss_wrong_hash(self, server_env):
+        client, _, pub_tok, _ = server_env
+        self._publish(client, pub_tok)
+        resp = client.get(
+            "/v1/cache/status",
+            params={
+                "name": "zlib",
+                "chain_hash": "wrong_hash",
+                "platform": "linux",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["hit"] is False
+
+    def test_cache_miss_wrong_platform(self, server_env):
+        client, _, pub_tok, _ = server_env
+        self._publish(client, pub_tok)
+        resp = client.get(
+            "/v1/cache/status",
+            params={
+                "name": "zlib",
+                "chain_hash": "abc123hash",
+                "platform": "macos",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["hit"] is False
+
+    def test_cache_miss_wrong_arch(self, server_env):
+        client, _, pub_tok, _ = server_env
+        self._publish(client, pub_tok, arch="x86_64")
+        resp = client.get(
+            "/v1/cache/status",
+            params={
+                "name": "zlib",
+                "chain_hash": "abc123hash",
+                "platform": "linux",
+                "arch": "aarch64",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["hit"] is False
+
+    def test_cache_ignores_yanked(self, server_env):
+        client, admin_tok, pub_tok, _ = server_env
+        self._publish(client, pub_tok)
+        # Yank the package
+        client.post(
+            "/v1/packages/zlib/1.3.1+cvc.1/yank",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        resp = client.get(
+            "/v1/cache/status",
+            params={
+                "name": "zlib",
+                "chain_hash": "abc123hash",
+                "platform": "linux",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["hit"] is False
+
+    def test_cache_requires_name_and_hash(self, server_env):
+        client, *_ = server_env
+        # Missing required params
+        resp = client.get("/v1/cache/status", params={"name": "zlib"})
+        assert resp.status_code == 422
+
+
+# ── Phase 3: Storage limits & admin settings ────────────────────
+
+aiosqlite = pytest.importorskip("aiosqlite", reason="aiosqlite required for DB tests")
+
+
+@pytest.fixture()
+def db_server_env(tmp_path, monkeypatch):
+    """Create a DB-backed test server (SQLite) with admin + pub tokens.
+
+    Tokens are bootstrapped by seeding the DB directly before the
+    TestClient enters the lifespan.
+    """
+    import asyncio
+
+    db_path = tmp_path / "test.db"
+    db_url = f"sqlite+aiosqlite:///{db_path}"
+    monkeypatch.setenv("CVCPKG_DATABASE_URL", db_url)
+
+    # Pre-create tokens in the DB before starting the app.
+    from cvcpkg.server.db import create_tables, dispose_engine, init_db
+    from cvcpkg.server.db_stores import DbTokenStore
+
+    async def _seed():
+        init_db(db_url)
+        await create_tables()
+        store = DbTokenStore(tmp_path)
+        admin_raw = await store.create("test-admin", TokenRole.admin)
+        pub_raw = await store.create("test-publisher", TokenRole.publisher)
+        await dispose_engine()
+        return admin_raw, pub_raw
+
+    admin_token, pub_token = asyncio.run(_seed())
+
+    app = create_app(state_dir=tmp_path)
+    with TestClient(app) as client:
+        yield client, admin_token, pub_token, tmp_path
+
+
+class TestStorageLimits:
+    """Tests for per-org and global cache storage limits (Phase 3)."""
+
+    @staticmethod
+    def _create_org(client, admin_tok, slug="test-org"):
+        resp = client.post(
+            "/v1/orgs",
+            json={"slug": slug, "display_name": f"Test Org {slug}"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    @staticmethod
+    def _add_member(client, admin_tok, slug, member_name):
+        resp = client.post(
+            f"/v1/orgs/{slug}/members",
+            params={"token_name": member_name, "role": "member"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200, resp.text
+
+    @staticmethod
+    def _publish(client, token, name="pkg", version="1.0", org="", size=100):
+        data = b"x" * size
+        params = {
+            "name": name,
+            "version": version,
+            "platform": "linux",
+            "arch": "x86_64",
+        }
+        if org:
+            params["org"] = org
+        return client.post(
+            "/v1/publish",
+            params=params,
+            files={"file": (f"{name}.tar.zst", io.BytesIO(data))},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    def test_org_storage_limit_413(self, db_server_env):
+        """Publishing beyond org storage limit returns 413."""
+        client, admin_tok, pub_tok, _ = db_server_env
+        self._create_org(client, admin_tok, "small-org")
+        self._add_member(client, admin_tok, "small-org", "test-publisher")
+
+        # Set a tiny limit (200 bytes).
+        resp = client.patch(
+            "/v1/orgs/small-org",
+            json={"storage_limit_bytes": 200},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["storage_limit_bytes"] == 200
+
+        # First publish (100 bytes) should succeed.
+        resp = self._publish(client, pub_tok, name="a", version="1.0", org="small-org", size=100)
+        assert resp.status_code == 200
+
+        # Second publish (150 bytes) should exceed limit.
+        resp = self._publish(client, pub_tok, name="b", version="1.0", org="small-org", size=150)
+        assert resp.status_code == 413
+        assert "storage limit" in resp.json()["detail"].lower()
+
+    def test_storage_limit_update_admin_only(self, db_server_env):
+        """Non-admin cannot set storage_limit_bytes via PATCH."""
+        client, admin_tok, pub_tok, _ = db_server_env
+        self._create_org(client, admin_tok, "my-org")
+        # Add publisher as owner so they can access PATCH.
+        self._add_member(client, admin_tok, "my-org", "test-publisher")
+
+        # Publisher tries to set storage_limit_bytes → 403.
+        resp = client.patch(
+            "/v1/orgs/my-org",
+            json={"storage_limit_bytes": 999},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 403
+
+    def test_admin_can_set_org_limit(self, db_server_env):
+        """Admin can set per-org storage_limit_bytes."""
+        client, admin_tok, _, _ = db_server_env
+        self._create_org(client, admin_tok, "lab")
+
+        resp = client.patch(
+            "/v1/orgs/lab",
+            json={"storage_limit_bytes": 5_000_000},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["storage_limit_bytes"] == 5_000_000
+
+    def test_global_cache_limit_413(self, db_server_env, monkeypatch):
+        """Publishing beyond global cache storage limit returns 413."""
+        client, admin_tok, pub_tok, _ = db_server_env
+
+        # Set a very tight global limit via admin settings endpoint.
+        resp = client.patch(
+            "/v1/admin/settings",
+            json={"global_cache_storage_limit_bytes": 200},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+
+        # First publish (100 bytes) should succeed.
+        resp = self._publish(client, pub_tok, name="x", version="1.0", size=100)
+        assert resp.status_code == 200
+
+        # Second publish (150 bytes) should exceed global limit.
+        resp = self._publish(client, pub_tok, name="y", version="1.0", size=150)
+        assert resp.status_code == 413
+        assert "global" in resp.json()["detail"].lower()
+
+
+class TestAdminSettingsEndpoint:
+    """Tests for ``GET/PATCH /v1/admin/settings``."""
+
+    def test_get_settings_requires_admin(self, db_server_env):
+        client, _, pub_tok, _ = db_server_env
+        resp = client.get(
+            "/v1/admin/settings",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 403
+
+    def test_get_settings(self, db_server_env):
+        client, admin_tok, _, _ = db_server_env
+        resp = client.get(
+            "/v1/admin/settings",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "global_cache_storage_limit_bytes" in data
+        assert "org_storage_limit_bytes" in data
+        assert "max_upload_bytes" in data
+        assert "rate_limit_rpm" in data
+
+    def test_patch_settings_requires_admin(self, db_server_env):
+        client, _, pub_tok, _ = db_server_env
+        resp = client.patch(
+            "/v1/admin/settings",
+            json={"global_cache_storage_limit_bytes": 999},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 403
+
+    def test_patch_global_limit(self, db_server_env):
+        client, admin_tok, _, _ = db_server_env
+        resp = client.patch(
+            "/v1/admin/settings",
+            json={"global_cache_storage_limit_bytes": 50_000_000},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["updated"]["global_cache_storage_limit_bytes"] == 50_000_000
+
+        # Verify via GET.
+        resp = client.get(
+            "/v1/admin/settings",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.json()["global_cache_storage_limit_bytes"] == 50_000_000
+
+    def test_patch_org_default_limit(self, db_server_env):
+        client, admin_tok, _, _ = db_server_env
+        resp = client.patch(
+            "/v1/admin/settings",
+            json={"org_storage_limit_bytes": 1_000_000},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["updated"]["org_storage_limit_bytes"] == 1_000_000
+
+    def test_patch_empty_body_422(self, db_server_env):
+        client, admin_tok, _, _ = db_server_env
+        resp = client.patch(
+            "/v1/admin/settings",
+            json={"unknown_key": 1},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 422
+
+    def test_patch_negative_limit_422(self, db_server_env):
+        client, admin_tok, _, _ = db_server_env
+        resp = client.patch(
+            "/v1/admin/settings",
+            json={"global_cache_storage_limit_bytes": -1},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 422
+
+
+# ── Phase 4: Cache stats & GC ──────────────────────────────────
+
+
+class TestCacheStats:
+    """Tests for ``GET /v1/cache/stats``."""
+
+    @staticmethod
+    def _publish(client, token, name="pkg", version="1.0", org="", size=100):
+        params = {
+            "name": name,
+            "version": version,
+            "platform": "linux",
+            "arch": "x86_64",
+        }
+        if org:
+            params["org"] = org
+        return client.post(
+            "/v1/publish",
+            params=params,
+            files={"file": (f"{name}.tar.zst", io.BytesIO(b"x" * size))},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    def test_stats_empty(self, db_server_env):
+        client, admin_tok, _, _ = db_server_env
+        resp = client.get(
+            "/v1/cache/stats",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_packages"] == 0
+        assert data["total_size_bytes"] == 0
+
+    def test_stats_after_publish(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        self._publish(client, pub_tok, name="a", version="1.0", size=200)
+        self._publish(client, pub_tok, name="b", version="1.0", size=300)
+
+        resp = client.get(
+            "/v1/cache/stats",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_packages"] == 2
+        assert data["total_size_bytes"] == 500
+
+    def test_stats_requires_auth(self, db_server_env):
+        client, *_ = db_server_env
+        resp = client.get("/v1/cache/stats")
+        assert resp.status_code == 401
+
+    def test_stats_yaml_fallback(self, server_env):
+        """YAML backend still returns a response (no DB required)."""
+        client, _, pub_tok, _ = server_env
+        # Publish a package first.
+        client.post(
+            "/v1/publish",
+            params={"name": "z", "version": "1.0", "platform": "linux", "arch": "x86_64"},
+            files={"file": ("z.tar.zst", io.BytesIO(b"data"))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        resp = client.get(
+            "/v1/cache/stats",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_packages"] == 1
+
+
+class TestCacheGC:
+    """Tests for ``POST /v1/cache/gc``."""
+
+    @staticmethod
+    def _publish(client, token, name="pkg", version="1.0", size=100):
+        return client.post(
+            "/v1/publish",
+            params={
+                "name": name,
+                "version": version,
+                "platform": "linux",
+                "arch": "x86_64",
+            },
+            files={"file": (f"{name}.tar.zst", io.BytesIO(b"x" * size))},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    def test_gc_requires_admin(self, db_server_env):
+        client, _, pub_tok, _ = db_server_env
+        resp = client.post(
+            "/v1/cache/gc",
+            json={"max_age_seconds": 3600},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 403
+
+    def test_gc_by_storage(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        self._publish(client, pub_tok, name="a", version="1.0", size=100)
+        self._publish(client, pub_tok, name="b", version="1.0", size=200)
+        self._publish(client, pub_tok, name="c", version="1.0", size=300)
+
+        # Evict to fit under 400 bytes — should remove oldest (a + b).
+        resp = client.post(
+            "/v1/cache/gc",
+            json={"max_storage_bytes": 400},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["deleted_count"] >= 1
+
+        # Verify stats after GC.
+        resp = client.get(
+            "/v1/cache/stats",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.json()["total_size_bytes"] <= 400
+
+    def test_gc_no_params_422(self, db_server_env):
+        client, admin_tok, _, _ = db_server_env
+        resp = client.post(
+            "/v1/cache/gc",
+            json={},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 422
+
+    def test_gc_requires_db(self, server_env):
+        """YAML backend returns 501."""
+        client, admin_tok, _, _ = server_env
+        resp = client.post(
+            "/v1/cache/gc",
+            json={"max_age_seconds": 3600},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 501
+
+    def test_gc_preserves_release_tagged(self, db_server_env):
+        """GC should not delete release-tagged packages."""
+        client, admin_tok, pub_tok, _ = db_server_env
+        # Publish a release-tagged package.
+        resp = client.post(
+            "/v1/publish",
+            params={
+                "name": "rel",
+                "version": "1.0",
+                "platform": "linux",
+                "arch": "x86_64",
+                "release_tag": "v1.0",
+            },
+            files={"file": ("rel.tar.zst", io.BytesIO(b"x" * 100))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+
+        # Try to GC everything.
+        resp = client.post(
+            "/v1/cache/gc",
+            json={"max_storage_bytes": 0},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        # Release-tagged should NOT be deleted.
+        assert resp.json()["deleted_count"] == 0
+
+
+# ── Phase 4b: Cache listing & bulk delete ──────────────────────
+
+
+class TestCacheListing:
+    """Tests for ``GET /v1/cache``."""
+
+    @staticmethod
+    def _publish(client, token, name="pkg", version="1.0", size=100):
+        return client.post(
+            "/v1/publish",
+            params={
+                "name": name,
+                "version": version,
+                "platform": "linux",
+                "arch": "x86_64",
+            },
+            files={"file": (f"{name}.tar.zst", io.BytesIO(b"x" * size))},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    def test_list_empty(self, db_server_env):
+        client, admin_tok, _, _ = db_server_env
+        resp = client.get(
+            "/v1/cache",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 0
+        assert resp.json()["packages"] == []
+
+    def test_list_returns_non_release(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        # Publish a cache entry (no release_tag)
+        self._publish(client, pub_tok, name="cached", version="1.0")
+        # Publish a release-tagged package
+        client.post(
+            "/v1/publish",
+            params={
+                "name": "released",
+                "version": "1.0",
+                "platform": "linux",
+                "arch": "x86_64",
+                "release_tag": "v1.0",
+            },
+            files={"file": ("released.tar.zst", io.BytesIO(b"x" * 100))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+
+        resp = client.get(
+            "/v1/cache",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        names = [p["name"] for p in data["packages"]]
+        assert "cached" in names
+        assert "released" not in names
+
+    def test_list_filter_by_name(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        self._publish(client, pub_tok, name="aaa", version="1.0")
+        self._publish(client, pub_tok, name="bbb", version="1.0")
+
+        resp = client.get(
+            "/v1/cache?name=aaa",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        names = [p["name"] for p in resp.json()["packages"]]
+        assert names == ["aaa"]
+
+    def test_list_requires_auth(self, db_server_env):
+        client, *_ = db_server_env
+        resp = client.get("/v1/cache")
+        assert resp.status_code == 401
+
+    def test_list_yaml_fallback(self, server_env):
+        """YAML backend works for cache listing."""
+        client, _, pub_tok, _ = server_env
+        client.post(
+            "/v1/publish",
+            params={"name": "y", "version": "1.0", "platform": "linux", "arch": "x86_64"},
+            files={"file": ("y.tar.zst", io.BytesIO(b"data"))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        resp = client.get(
+            "/v1/cache",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["total"] >= 1
+
+
+class TestCacheBulkDelete:
+    """Tests for ``DELETE /v1/cache``."""
+
+    @staticmethod
+    def _publish(client, token, name="pkg", version="1.0", size=100):
+        return client.post(
+            "/v1/publish",
+            params={
+                "name": name,
+                "version": version,
+                "platform": "linux",
+                "arch": "x86_64",
+            },
+            files={"file": (f"{name}.tar.zst", io.BytesIO(b"x" * size))},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    def test_delete_requires_admin(self, db_server_env):
+        client, _, pub_tok, _ = db_server_env
+        resp = client.delete(
+            "/v1/cache",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 403
+
+    def test_delete_all(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        self._publish(client, pub_tok, name="a", version="1.0")
+        self._publish(client, pub_tok, name="b", version="1.0")
+
+        resp = client.delete(
+            "/v1/cache",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["deleted_count"] == 2
+
+    def test_delete_with_older_than(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        self._publish(client, pub_tok, name="recent", version="1.0")
+
+        # Nothing should be old enough to delete with 1d filter
+        resp = client.delete(
+            "/v1/cache?older_than=1d",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["deleted_count"] == 0
+
+    def test_delete_preserves_releases(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        # Publish a release and a cache entry
+        client.post(
+            "/v1/publish",
+            params={
+                "name": "rel",
+                "version": "1.0",
+                "platform": "linux",
+                "arch": "x86_64",
+                "release_tag": "v1.0",
+            },
+            files={"file": ("rel.tar.zst", io.BytesIO(b"x" * 50))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        self._publish(client, pub_tok, name="tmp", version="1.0")
+
+        resp = client.delete(
+            "/v1/cache",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        # Only the non-release should be deleted
+        deleted_names = [d["name"] for d in resp.json()["deleted"]]
+        assert "tmp" in deleted_names
+        assert "rel" not in deleted_names
+
+    def test_delete_requires_db(self, server_env):
+        """YAML backend returns 501."""
+        client, admin_tok, _, _ = server_env
+        resp = client.delete(
+            "/v1/cache",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 501
+
+
+# ── Staleness GC ───────────────────────────────────────────────
+
+
+class TestCacheStalenessGC:
+    """Tests for ``POST /v1/cache/gc`` with ``valid_chain_hashes``."""
+
+    @staticmethod
+    def _publish(client, token, name="pkg", version="1.0", size=100, recipe_version=""):
+        params = {
+            "name": name,
+            "version": version,
+            "platform": "linux",
+            "arch": "x86_64",
+        }
+        if recipe_version:
+            params["recipe_version"] = recipe_version
+        return client.post(
+            "/v1/publish",
+            params=params,
+            files={"file": (f"{name}.tar.zst", io.BytesIO(b"x" * size))},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    def test_gc_stale_removes_unmatched(self, db_server_env):
+        """Entries with recipe_version not in valid set are deleted."""
+        client, admin_tok, pub_tok, _ = db_server_env
+        self._publish(client, pub_tok, name="a", recipe_version="hash_old")
+        self._publish(client, pub_tok, name="b", recipe_version="hash_current")
+
+        resp = client.post(
+            "/v1/cache/gc",
+            json={"valid_chain_hashes": ["hash_current"]},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["deleted_count"] == 1
+        deleted_names = [d["name"] for d in data["deleted"]]
+        assert "a" in deleted_names
+        assert "b" not in deleted_names
+
+    def test_gc_stale_preserves_releases(self, db_server_env):
+        """Release-tagged packages are never considered stale."""
+        client, admin_tok, pub_tok, _ = db_server_env
+        # Publish a release with an old recipe_version
+        client.post(
+            "/v1/publish",
+            params={
+                "name": "rel",
+                "version": "1.0",
+                "platform": "linux",
+                "arch": "x86_64",
+                "recipe_version": "hash_old",
+                "release_tag": "v1.0",
+            },
+            files={"file": ("rel.tar.zst", io.BytesIO(b"x" * 100))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+
+        resp = client.post(
+            "/v1/cache/gc",
+            json={"valid_chain_hashes": ["hash_new"]},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        # Release should NOT be deleted even though its hash is not in the valid set
+        assert resp.json()["deleted_count"] == 0
+
+    def test_gc_stale_empty_recipe_version_ignored(self, db_server_env):
+        """Entries with empty recipe_version are not considered stale."""
+        client, admin_tok, pub_tok, _ = db_server_env
+        # Publish with no recipe_version (empty string)
+        self._publish(client, pub_tok, name="norv", recipe_version="")
+
+        resp = client.post(
+            "/v1/cache/gc",
+            json={"valid_chain_hashes": ["some_hash"]},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["deleted_count"] == 0
+
+    def test_gc_stale_all_current(self, db_server_env):
+        """No deletions when all hashes are current."""
+        client, admin_tok, pub_tok, _ = db_server_env
+        self._publish(client, pub_tok, name="x", recipe_version="h1")
+        self._publish(client, pub_tok, name="y", recipe_version="h2")
+
+        resp = client.post(
+            "/v1/cache/gc",
+            json={"valid_chain_hashes": ["h1", "h2"]},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["deleted_count"] == 0
+
+    def test_gc_stale_invalid_type_422(self, db_server_env):
+        """Non-list valid_chain_hashes returns 422."""
+        client, admin_tok, _, _ = db_server_env
+        resp = client.post(
+            "/v1/cache/gc",
+            json={"valid_chain_hashes": "not-a-list"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 422
