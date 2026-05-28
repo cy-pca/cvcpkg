@@ -56,21 +56,21 @@ try {
             Set-Content $makefilePath -NoNewline
     }
 
-    # sh.exe (via CreateProcess) has a 32767-char command line limit.
-    # OpenSSL's Makefile has literal .o lists in AR commands that exceed
-    # this for libdefault.a (~160 objects × ~80 chars).  Split long AR
-    # lines into batches.
+    # sh.exe runs .bat files through cmd.exe, which has an 8191-char
+    # command line limit.  OpenSSL's Makefile has literal .o lists in
+    # AR commands that can exceed this.  Split long AR lines into
+    # batches that stay under the limit.
     $lines = Get-Content $makefilePath
     $newLines = [System.Collections.Generic.List[string]]::new($lines.Count + 100)
     foreach ($line in $lines) {
         # Match: <TAB>$(AR) <flags> <archive.a> <obj1.o> <obj2.o> ...
-        if ($line.Length -gt 20000 -and $line -match '^\t(\$\(AR\)\s+\S+\s+\S+\.a)\s+(.+)$') {
+        if ($line.Length -gt 7000 -and $line -match '^\t(\$\(AR\)\s+\S+\s+\S+\.a)\s+(.+)$') {
             $arPrefix = $Matches[1]
             $objects = $Matches[2] -split '\s+'
             $batch = [System.Collections.Generic.List[string]]::new()
             $currentLen = 0
             foreach ($obj in $objects) {
-                if ($currentLen -gt 0 -and ($currentLen + $obj.Length + 1) -gt 15000) {
+                if ($currentLen -gt 0 -and ($currentLen + $obj.Length + 1) -gt 6000) {
                     $newLines.Add("`t$arPrefix $($batch -join ' ')")
                     $batch.Clear()
                     $currentLen = 0
