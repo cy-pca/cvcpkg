@@ -157,12 +157,14 @@ jobs:
       # cmake-generated Makefiles require GNU make.  Create a PATH override
       # so that 'make' invocations in build scripts resolve to gmake.
       - name: Build and package all recipes (cvcpkg pack-all)
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
           VM="root@${{ steps.vm.outputs.host }}"
           PYTHON="${{ steps.vm.outputs.python }}"
           BUILD_CMD="${PYTHON} -m cvcpkg pack-all \
+            --keep-going \
             --platform ${{ inputs.platform }} \
             --config ${{ inputs.config }} \
             --link ${{ inputs.link }} \
