@@ -56,11 +56,36 @@ try {
             Set-Content $makefilePath -NoNewline
     }
 
-    # sh.exe (MSYS) has a short ARG_MAX that may cause "command line is
-    # too long" when AR links hundreds of .o files.  If that happens,
-    # we post-process the Makefile to use $(file ...) response files.
-    # For now, try the build with sh.exe on PATH — OpenSSL Makefile
-    # recipes use shell constructs (if/fi) that require sh.
+    # sh.exe (via CreateProcess) has a 32767-char command line limit.
+    # OpenSSL's Makefile has literal .o lists in AR commands that exceed
+    # this for libdefault.a (~160 objects × ~80 chars = ~12800 chars).
+    # Split long AR lines into batches of ~200 objects each.
+    $lines = Get-Content $makefilePath
+    $newLines = [System.Collections.Generic.List[string]]::new($lines.Count + 100)
+    foreach ($line in $lines) {
+        if ($line -match '^\t\$\(AR\)\s+\$\(ARFLAGS\)\s+(\S+)\s+(.+)$' -and $line.Length -gt 20000) {
+            $archive = $Matches[1]
+            $objects = $Matches[2] -split '\s+'
+            $batch = [System.Collections.Generic.List[string]]::new()
+            $currentLen = 0
+            foreach ($obj in $objects) {
+                if ($currentLen -gt 0 -and ($currentLen + $obj.Length + 1) -gt 15000) {
+                    $newLines.Add("`t`$(AR) `$(ARFLAGS) $archive $($batch -join ' ')")
+                    $batch.Clear()
+                    $currentLen = 0
+                }
+                $batch.Add($obj)
+                $currentLen += $obj.Length + 1
+            }
+            if ($batch.Count -gt 0) {
+                $newLines.Add("`t`$(AR) `$(ARFLAGS) $archive $($batch -join ' ')")
+            }
+        } else {
+            $newLines.Add($line)
+        }
+    }
+    $newLines -join "`n" | Set-Content $makefilePath -NoNewline
+
     & mingw32-make -j $env:CVC_JOBS
     if ($LASTEXITCODE -ne 0) { throw "make failed" }
 
