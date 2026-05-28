@@ -937,16 +937,43 @@ def _dep_names(recipe: Recipe, platform: str = "") -> list[str]:
     return names
 
 
+def _detect_arch_for_platform(platform: str) -> str:
+    """Return the architecture string for a given platform."""
+    if platform == "wasm":
+        return "wasm32"
+    from cvcpkg.platform import detect_arch
+
+    return detect_arch()
+
+
+def _common_scripts_hash(recipes_dir: Path) -> str:
+    """Compute a combined SHA-256 of all scripts in ``_common/``.
+
+    Returns an empty string if the directory does not exist.  Files are
+    processed in sorted order for determinism.
+    """
+    common = recipes_dir / "_common"
+    if not common.is_dir():
+        return ""
+    h = hashlib.sha256()
+    for p in sorted(common.iterdir()):
+        if p.is_file():
+            h.update(_sha256_file(p).encode())
+    return h.hexdigest()
+
+
 def chain_hash(
     recipe: Recipe,
     all_recipes: dict[str, Recipe],
     platform: str = "",
     *,
     _seen: set[str] | None = None,
+    _common_hash: str | None = None,
 ) -> str:
     """Compute a transitive dependency chain hash for *recipe*.
 
-    The hash covers the recipe's own ``recipe.yaml`` content plus the
+    The hash covers the recipe's own ``recipe.yaml`` content, build
+    scripts, patches, shared ``_common/`` helper scripts, and the
     ``recipe.yaml`` content of every transitive build dependency.  Two
     builds of the same recipe are binary-identical when their chain
     hashes match.
@@ -958,6 +985,10 @@ def chain_hash(
     if recipe.name in _seen:
         return ""
     _seen.add(recipe.name)
+
+    # Compute _common/ hash once and reuse for all recursive calls.
+    if _common_hash is None:
+        _common_hash = _common_scripts_hash(recipe.recipe_dir.parent)
 
     h = hashlib.sha256()
     # Include this recipe's own YAML content
@@ -972,11 +1003,16 @@ def chain_hash(
         patch_path = recipe.recipe_dir / patch_name
         if patch_path.is_file():
             h.update(_sha256_file(patch_path).encode())
+    # Include shared _common/ scripts
+    if _common_hash:
+        h.update(_common_hash.encode())
     # Recursively include dependency chain hashes (sorted for determinism)
     for dep_name in sorted(_dep_names(recipe, platform)):
         dep = all_recipes.get(dep_name)
         if dep is not None:
-            dep_hash = chain_hash(dep, all_recipes, platform, _seen=_seen)
+            dep_hash = chain_hash(
+                dep, all_recipes, platform, _seen=_seen, _common_hash=_common_hash
+            )
             if dep_hash:
                 h.update(dep_hash.encode())
     return h.hexdigest()
@@ -1032,6 +1068,8 @@ def build_all(
     host_platform: str = "",
     shard: tuple[int, int] | None = None,
     keep_going: bool = False,
+    no_cache: bool = False,
+    force_clean: bool = False,
 ) -> list[BuildContext]:
     """Build every recipe in dependency order into a shared *prefix*.
 
@@ -1067,6 +1105,13 @@ def build_all(
     only successfully-built recipes; failures are collected in a
     ``failures`` attribute on the returned list (a
     ``list[BuildFailure]``).
+
+    When *no_cache* is ``True``, the local build cache is bypassed
+    entirely — no lookups and no stores.
+
+    When *force_clean* is ``True``, cache lookups are skipped (every
+    recipe is rebuilt from source) but results are still stored in
+    the cache for future runs.
     """
     if isinstance(recipes_dir, list):
         all_recipes = load_all_recipes(recipes_dir)
@@ -1108,9 +1153,20 @@ def build_all(
         prefix = Path(tempfile.mkdtemp(prefix="cvcpkg-all-"))
     prefix = prefix.resolve()
 
+    # Prepare build cache (unless disabled).
+    use_cache = not no_cache
+    cache = None
+    if use_cache:
+        from cvcpkg.build_cache import BuildCache
+
+        cache = BuildCache()
+    all_recipe_map = {r.name: r for r in all_recipes}
+    arch = _detect_arch_for_platform(platform)
+
     contexts: BuildAllResult = BuildAllResult()
     failures: list[BuildFailure] = []
     failed_names: set[str] = set()  # recipes that failed or were skipped
+    cache_hits = 0
     for recipe in ordered:
         # Check if any dependency already failed.
         dep_names = _dep_names(recipe, platform)
@@ -1131,8 +1187,55 @@ def build_all(
         is_assigned = recipe.name in assigned
         label = "" if is_assigned else " (dep)"
         print(f"\ncvcpkg: == {recipe.name} ({recipe.full_version}){label} ==")
+
+        # Build cache lookup.
+        recipe_chain_hash = ""
+        cached_archive: Path | None = None
+        if cache is not None:
+            recipe_chain_hash = chain_hash(recipe, all_recipe_map, platform)
+            if not force_clean:
+                cached_archive = cache.lookup(recipe_chain_hash, platform, arch, config, link)
+
         try:
-            if per_component:
+            if cached_archive is not None:
+                # Cache hit — restore artifacts instead of building.
+                cache_hits += 1
+                print(f"  ← cache hit ({recipe_chain_hash[:12]}…)")
+                if per_component:
+                    work_dir = Path(tempfile.mkdtemp(prefix=f"cvcpkg-{recipe.name}-"))
+                    install_dir = work_dir / "install"
+                    cache.restore(cached_archive, install_dir)
+                    ctx = BuildContext(
+                        recipe=recipe,
+                        platform=platform,
+                        config=config,
+                        link=link,
+                        prefix=prefix,
+                        source_dir=work_dir / "source",
+                        build_dir=work_dir / "build",
+                        install_dir=install_dir,
+                        work_dir=work_dir,
+                        keep_build_dir=keep_build_dir,
+                        host_platform=host_platform,
+                    )
+                    if install_dir.is_dir():
+                        shutil.copytree(install_dir, prefix, dirs_exist_ok=True)
+                else:
+                    cache.restore(cached_archive, prefix)
+                    ctx = BuildContext(
+                        recipe=recipe,
+                        platform=platform,
+                        config=config,
+                        link=link,
+                        prefix=prefix,
+                        source_dir=prefix,
+                        build_dir=prefix,
+                        install_dir=prefix,
+                        work_dir=prefix,
+                        keep_build_dir=keep_build_dir,
+                        host_platform=host_platform,
+                    )
+            elif per_component:
                 work_dir = Path(tempfile.mkdtemp(prefix=f"cvcpkg-{recipe.name}-"))
                 install_dir = work_dir / "install"
                 source_dir = fetch_source(recipe, work_dir)
@@ -1158,6 +1261,18 @@ def build_all(
                 # subsequent recipes can find it via CVC_DEPS_PREFIX.
                 if install_dir.is_dir():
                     shutil.copytree(install_dir, prefix, dirs_exist_ok=True)
+                # Store in build cache.
+                if cache is not None and recipe_chain_hash and install_dir.is_dir():
+                    cache.store(
+                        install_dir,
+                        recipe.name,
+                        recipe.full_version,
+                        recipe_chain_hash,
+                        platform,
+                        arch,
+                        config,
+                        link,
+                    )
                 if not keep_build_dir:
                     build_dir = work_dir / "build"
                     if build_dir.is_dir():
@@ -1188,7 +1303,8 @@ def build_all(
             status = "SKIPPED (dep)" if f.skipped else "FAILED"
             print(f"  {status}: {f.recipe_name} — {f.error}")
     else:
-        print(f"\ncvcpkg: all {len(contexts)} components built into {prefix}")
+        cache_msg = f" ({cache_hits} cache hits)" if cache_hits else ""
+        print(f"\ncvcpkg: all {len(contexts)} components built into {prefix}{cache_msg}")
 
     # Attach failures to the returned list for callers to inspect.
     contexts.failures = failures

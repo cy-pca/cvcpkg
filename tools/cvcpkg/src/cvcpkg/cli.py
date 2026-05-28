@@ -1732,6 +1732,18 @@ def pack(
     "Recipes whose dependencies failed are skipped.  "
     "A summary of failures is printed at the end.",
 )
+@click.option(
+    "--no-cache",
+    is_flag=True,
+    default=False,
+    help="Disable the local build cache entirely (no lookups, no stores).",
+)
+@click.option(
+    "--force-clean",
+    is_flag=True,
+    default=False,
+    help="Skip cache lookups (rebuild from source) but still store results.",
+)
 def build_all_cmd(
     platform: str,
     config: str,
@@ -1741,6 +1753,8 @@ def build_all_cmd(
     recipes_dirs: tuple[str, ...],
     host_platform: str,
     keep_going: bool,
+    no_cache: bool,
+    force_clean: bool,
 ) -> None:
     """Build all recipes in dependency order.
 
@@ -1771,6 +1785,8 @@ def build_all_cmd(
         keep_build_dir=keep_build_dir,
         host_platform=host_platform,
         keep_going=keep_going,
+        no_cache=no_cache,
+        force_clean=force_clean,
     )
     failures = getattr(contexts, "failures", [])
     if failures:
@@ -1824,6 +1840,18 @@ def build_all_cmd(
     "Recipes whose dependencies failed are skipped.  "
     "A summary of failures is printed at the end.",
 )
+@click.option(
+    "--no-cache",
+    is_flag=True,
+    default=False,
+    help="Disable the local build cache entirely (no lookups, no stores).",
+)
+@click.option(
+    "--force-clean",
+    is_flag=True,
+    default=False,
+    help="Skip cache lookups (rebuild from source) but still store results.",
+)
 def pack_all_cmd(
     platform: str,
     config: str,
@@ -1838,6 +1866,8 @@ def pack_all_cmd(
     shard: str,
     org: str,
     keep_going: bool,
+    no_cache: bool,
+    force_clean: bool,
 ) -> None:
     """Build and archive all recipes.
 
@@ -1905,6 +1935,8 @@ def pack_all_cmd(
         host_platform=host_platform,
         shard=shard_tuple,
         keep_going=keep_going,
+        no_cache=no_cache,
+        force_clean=force_clean,
     )
 
     output.mkdir(parents=True, exist_ok=True)
@@ -2254,6 +2286,165 @@ def rev_bump_cmd(
     for name, old_rev, new_rev in bumped:
         click.echo(f"  {name}: cvc_revision {old_rev} → {new_rev}")
     click.echo(f"\n{len(bumped)} recipe(s) bumped.")
+
+
+# ── cache subcommand group ──────────────────────────────────────
+
+
+@cli.group("cache")
+def cache_group() -> None:
+    """Manage the local build cache."""
+
+
+@cache_group.command("list")
+def cache_list_cmd() -> None:
+    """List all entries in the local build cache."""
+    from cvcpkg.build_cache import BuildCache
+
+    bc = BuildCache()
+    entries = bc.list_entries()
+    if not entries:
+        click.echo("Build cache is empty.")
+        return
+    total_size = bc.total_size_bytes()
+    click.echo(f"{len(entries)} cached builds ({_human_size(total_size)}):\n")
+    for e in entries:
+        qname = f"{e.org}/{e.name}" if e.org else e.name
+        click.echo(
+            f"  {qname} {e.version}  "
+            f"{e.platform}/{e.arch}/{e.config}/{e.link}  "
+            f"{_human_size(e.archive_size_bytes)}  "
+            f"{e.chain_hash[:12]}…  "
+            f"stored={e.stored_at[:10]}"
+        )
+
+
+@cache_group.command("info")
+@click.argument("chain_hash_val")
+@_platform_opt
+@_config_opt
+@_link_opt
+def cache_info_cmd(chain_hash_val: str, platform: str, config: str, link: str) -> None:
+    """Show details for a specific cache entry by chain hash prefix."""
+    from cvcpkg.build_cache import BuildCache
+
+    plat = _auto_platform(platform)
+    arch = _auto_arch(plat)
+    bc = BuildCache()
+
+    # Support prefix matching.
+    entry = bc.info(chain_hash_val, plat, arch, config, link)
+    if entry is None:
+        # Try prefix match against all entries.
+        for e in bc.list_entries():
+            if e.chain_hash.startswith(chain_hash_val):
+                entry = e
+                break
+    if entry is None:
+        click.echo(f"No cache entry matching '{chain_hash_val}'.", err=True)
+        raise SystemExit(1)
+    click.echo(f"Name:        {entry.name}")
+    click.echo(f"Version:     {entry.version}")
+    click.echo(f"Chain hash:  {entry.chain_hash}")
+    click.echo(f"Platform:    {entry.platform}")
+    click.echo(f"Arch:        {entry.arch}")
+    click.echo(f"Config:      {entry.config}")
+    click.echo(f"Link:        {entry.link}")
+    click.echo(f"Size:        {_human_size(entry.archive_size_bytes)}")
+    click.echo(f"SHA-256:     {entry.archive_sha256}")
+    click.echo(f"Stored:      {entry.stored_at}")
+    click.echo(f"Last used:   {entry.last_used_at}")
+    if entry.org:
+        click.echo(f"Org:         {entry.org}")
+
+
+@cache_group.command("remove")
+@click.argument("chain_hash_val")
+@_platform_opt
+@_config_opt
+@_link_opt
+def cache_remove_cmd(chain_hash_val: str, platform: str, config: str, link: str) -> None:
+    """Remove a specific cache entry by chain hash."""
+    from cvcpkg.build_cache import BuildCache
+
+    plat = _auto_platform(platform)
+    arch = _auto_arch(plat)
+    bc = BuildCache()
+    if bc.evict(chain_hash_val, plat, arch, config, link):
+        click.echo("Removed.")
+    else:
+        click.echo("Entry not found.", err=True)
+        raise SystemExit(1)
+
+
+@cache_group.command("purge")
+@click.option(
+    "--max-size",
+    default=None,
+    help="Maximum cache size (e.g. 10G, 500M).  Evicts oldest entries first.",
+)
+@click.option(
+    "--max-age-days",
+    default=None,
+    type=int,
+    help="Remove entries not used within this many days.",
+)
+@click.option("--all", "purge_all", is_flag=True, help="Remove all cache entries.")
+def cache_purge_cmd(max_size: str | None, max_age_days: int | None, purge_all: bool) -> None:
+    """Evict build cache entries by size or age."""
+    from cvcpkg.build_cache import BuildCache
+
+    bc = BuildCache()
+    if purge_all:
+        removed = bc.purge(max_size_bytes=0)
+        click.echo(f"Removed {removed} entries.")
+        return
+    if max_size is None and max_age_days is None:
+        click.echo("Specify --max-size, --max-age-days, or --all.", err=True)
+        raise SystemExit(1)
+
+    size_bytes = _parse_size(max_size) if max_size else None
+    age_secs = max_age_days * 86400.0 if max_age_days else None
+    removed = bc.purge(max_size_bytes=size_bytes, max_age_seconds=age_secs)
+    click.echo(f"Removed {removed} entries.")
+
+
+def _auto_arch(platform: str) -> str:
+    """Resolve architecture for a given platform."""
+    if platform == "wasm":
+        return "wasm32"
+    from cvcpkg.platform import detect_arch
+
+    return detect_arch()
+
+
+def _human_size(n: int) -> str:
+    """Format bytes as a human-readable string."""
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if abs(n) < 1024.0:
+            return f"{n:.1f} {unit}"
+        n /= 1024.0  # type: ignore[assignment]
+    return f"{n:.1f} PB"
+
+
+def _parse_size(s: str) -> int:
+    """Parse a human-readable size string (e.g. '10G') to bytes."""
+    s = s.strip().upper()
+    multipliers = {
+        "B": 1,
+        "K": 1024,
+        "KB": 1024,
+        "M": 1024**2,
+        "MB": 1024**2,
+        "G": 1024**3,
+        "GB": 1024**3,
+        "T": 1024**4,
+        "TB": 1024**4,
+    }
+    for suffix, mult in sorted(multipliers.items(), key=lambda x: -len(x[0])):
+        if s.endswith(suffix):
+            return int(float(s[: -len(suffix)]) * mult)
+    return int(s)
 
 
 # ── main() wrapper for backward compat with tests ──────────────
