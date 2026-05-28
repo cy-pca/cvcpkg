@@ -31,11 +31,12 @@ depends:
 toolchain:
   llvm:
     min_version: "14"
+    max_version: "21"
     recommended: "18"
     install:
       apt: "llvm-18-dev lld-18 liblld-18-dev"
       brew: "llvm@18"
-      choco: "llvm --version=18"
+      choco: "llvm"
   gcc:
     min_version: "11"
   clang:
