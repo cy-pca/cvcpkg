@@ -27,6 +27,7 @@ package manager for libcvc-deps.  It provides two main workflows:
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -392,8 +393,22 @@ def install(
     cache_dir = default_cache_dir()
     lock_entries: list[LockEntry] = []
     rdirs = [Path(d) for d in recipes_dirs] if recipes_dirs else None
+
+    # Fetch mirror list for failover downloads.
+    server_url = os.environ.get("CVCPKG_SERVER_URL", "")
+    mirror_urls: list[str] = []
+    if server_url:
+        mirror_urls = _fetch_mirror_urls(server_url, os.environ.get("CVCPKG_TOKEN"))
+
     for name in sorted(picked):
         entry = picked[name]
+        # Inject mirror download URLs as fallbacks.
+        if mirror_urls and entry.archive_url:
+            fname = entry.archive_url.rsplit("/", 1)[-1]
+            for murl in mirror_urls:
+                fallback = f"{murl.rstrip('/')}/v1/mirror/download/{fname}"
+                if fallback not in entry.mirror_urls:
+                    entry.mirror_urls.append(fallback)
         click.echo(f"cvcpkg: installing {name} {entry.version} ...")
         try:
             install_entry(entry, prefix_path, cache_dir, verify_signatures=verify_signatures)
@@ -726,6 +741,12 @@ def sync(prefix: str) -> None:
     cache_dir = default_cache_dir()
     installed = 0
 
+    # Fetch mirror list for failover downloads.
+    server_url = os.environ.get("CVCPKG_SERVER_URL", "")
+    mirror_urls: list[str] = []
+    if server_url:
+        mirror_urls = _fetch_mirror_urls(server_url, os.environ.get("CVCPKG_TOKEN"))
+
     for entry in lock.bundles:
         manifest_path = prefix_path / "share" / "libcvc-deps" / entry.name / "manifest.yaml"
         if manifest_path.exists():
@@ -746,6 +767,13 @@ def sync(prefix: str) -> None:
             archive_url=entry.archive_url,
             source_release=entry.source_release,
         )
+        # Inject mirror download URLs as fallbacks.
+        if mirror_urls and cat_entry.archive_url:
+            fname = cat_entry.archive_url.rsplit("/", 1)[-1]
+            for murl in mirror_urls:
+                fallback = f"{murl.rstrip('/')}/v1/mirror/download/{fname}"
+                if fallback not in cat_entry.mirror_urls:
+                    cat_entry.mirror_urls.append(fallback)
         click.echo(f"cvcpkg: syncing {entry.name} {entry.version} ...")
         install_entry(cat_entry, prefix_path, cache_dir)
         installed += 1
@@ -877,6 +905,176 @@ def push(archives: tuple[str, ...], dest: str) -> None:
         click.echo(f"  done ({p.stat().st_size:,} bytes)")
 
     click.echo(f"cvcpkg: pushed {len(archives)} archive(s).")
+
+
+# ── download ────────────────────────────────────────────────────
+
+
+@cli.command()
+@click.argument("components", nargs=-1, required=True)
+@_platform_opt
+@click.option(
+    "--arch",
+    type=click.Choice(_VALID_ARCHES, case_sensitive=False),
+    default="auto",
+    help="Target architecture.  'auto' detects the current CPU.",
+)
+@_config_opt
+@_link_opt
+@click.option(
+    "--output-dir",
+    "-o",
+    type=click.Path(),
+    default=".",
+    help="Directory to save downloaded archives to.",
+)
+@click.option(
+    "--catalog",
+    default=None,
+    metavar="URL_OR_FILE",
+    help="Catalog URL or local YAML file.",
+)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    default=None,
+    metavar="URL",
+    help="cvcpkg-server URL.  If set, mirrors are fetched and used as fallbacks.",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    default=None,
+    help="Bearer token for the server.  [env: CVCPKG_TOKEN]",
+)
+def download(
+    components: tuple[str, ...],
+    platform: str,
+    arch: str,
+    config: str,
+    link: str,
+    output_dir: str,
+    catalog: str | None,
+    server: str | None,
+    token: str | None,
+) -> None:
+    """Download component archives without extracting them.
+
+    Fetches prebuilt bundle archives from the catalog and saves them
+    into OUTPUT_DIR.  Unlike 'install', archives are not extracted
+    into a prefix — they are kept as-is for redistribution, caching,
+    or manual inspection.
+
+    When --server is provided, the client also queries the server's
+    mirror list and uses healthy mirrors as fallback download sources.
+
+    \b
+    Examples:
+      cvcpkg download zlib boost --output-dir ./archives
+      cvcpkg download zlib==1.3.1+cvc.1 -o ./dist --config debug
+      cvcpkg download zlib --server https://pkg.tx.wtf -o ./dist
+    """
+    from cvcpkg.cache import default_cache_dir
+    from cvcpkg.catalog import catalog_entries, fetch_catalog, load_catalog_from_file
+    from cvcpkg.installer import download_bundle
+    from cvcpkg.manifest import CatalogEntry, ComponentReq
+    from cvcpkg.platform import detect_arch, detect_platform
+
+    import shutil
+
+    plat = platform if platform != "auto" else detect_platform()
+    arc = arch if arch != "auto" else detect_arch()
+    out = Path(output_dir).resolve()
+    out.mkdir(parents=True, exist_ok=True)
+
+    click.echo(f"cvcpkg: resolving for {plat}/{arc}/{config}/{link}")
+
+    # Parse component specs (name or name==version).
+    reqs: list[ComponentReq] = []
+    for c in components:
+        if "==" in c:
+            name, ver = c.split("==", 1)
+            reqs.append(ComponentReq(name=name, version=f"=={ver}"))
+        else:
+            reqs.append(ComponentReq(name=c))
+
+    # Fetch catalog.
+    catalog_url = catalog or ""
+    try:
+        if catalog_url and Path(catalog_url).is_file():
+            cat = load_catalog_from_file(catalog_url)
+        else:
+            cat = fetch_catalog(catalog_url, cache_dir=default_cache_dir())
+    except Exception as exc:
+        raise click.ClickException(f"failed to fetch catalog: {exc}") from exc
+
+    entries = catalog_entries(cat, platform=plat, arch=arc, build_type=config, link=link)
+    candidates: dict[str, list[CatalogEntry]] = {}
+    for e in entries:
+        candidates.setdefault(e.name, []).append(e)
+
+    if not entries:
+        raise click.ClickException("no bundles found in catalog for this platform tuple.")
+
+    from cvcpkg.resolver import resolve
+
+    result = resolve(reqs, candidates)
+    picked = result.picked
+
+    if not picked:
+        raise click.ClickException("resolver found no matching bundles.")
+
+    # Fetch mirror list from server for failover URLs.
+    mirror_urls: list[str] = []
+    if server:
+        mirror_urls = _fetch_mirror_urls(server, token)
+
+    # Download each resolved bundle.
+    cache_dir = default_cache_dir()
+    for name in sorted(picked):
+        entry = picked[name]
+        # Inject mirror download URLs as fallbacks.
+        if mirror_urls and entry.archive_url:
+            filename = entry.archive_url.rsplit("/", 1)[-1]
+            for murl in mirror_urls:
+                fallback = f"{murl.rstrip('/')}/v1/mirror/download/{filename}"
+                if fallback not in entry.mirror_urls:
+                    entry.mirror_urls.append(fallback)
+
+        click.echo(f"cvcpkg: downloading {name} {entry.version} ...")
+        archive = download_bundle(entry, cache_dir)
+        dest = out / archive.name
+        shutil.copy2(archive, dest)
+        click.echo(f"  -> {dest} ({dest.stat().st_size:,} bytes)")
+
+    click.echo(f"cvcpkg: downloaded {len(picked)} archive(s) to {out}")
+
+
+def _fetch_mirror_urls(server: str, token: str | None) -> list[str]:
+    """Fetch the list of healthy mirror URLs from a cvcpkg-server."""
+    import logging
+
+    import urllib.request
+
+    log = logging.getLogger("cvcpkg")
+    base = server.rstrip("/")
+    url = f"{base}/v1/mirrors"
+    req = urllib.request.Request(url)
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        import json
+
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+        mirrors = data.get("mirrors", [])
+        urls = [m["url"] for m in mirrors if m.get("healthy")]
+        if urls:
+            log.debug("fetched %d healthy mirror(s) from %s", len(urls), base)
+        return urls
+    except Exception as exc:
+        log.debug("failed to fetch mirrors from %s: %s", base, exc)
+        return []
 
 
 # ── publish ─────────────────────────────────────────────────────
