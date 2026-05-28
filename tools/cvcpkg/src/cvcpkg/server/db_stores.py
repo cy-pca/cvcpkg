@@ -302,6 +302,10 @@ class DbPackageIndex:
         include_yanked: bool = False,
         limit: int = 1000,
         offset: int = 0,
+        recipe_version: str = "",
+        arch: str = "",
+        build_type: str = "",
+        link: str = "",
     ) -> tuple[list[PackageInfo], int]:
         async with get_session() as session:
             q = select(PackageRow)
@@ -338,6 +342,18 @@ class DbPackageIndex:
             if org_slug:
                 q = q.where(PackageRow.org_slug == org_slug)
                 count_q = count_q.where(PackageRow.org_slug == org_slug)
+            if recipe_version:
+                q = q.where(PackageRow.recipe_version == recipe_version)
+                count_q = count_q.where(PackageRow.recipe_version == recipe_version)
+            if arch:
+                q = q.where(PackageRow.arch == arch)
+                count_q = count_q.where(PackageRow.arch == arch)
+            if build_type:
+                q = q.where(PackageRow.build_type == build_type)
+                count_q = count_q.where(PackageRow.build_type == build_type)
+            if link:
+                q = q.where(PackageRow.link == link)
+                count_q = count_q.where(PackageRow.link == link)
 
             total_result = await session.execute(count_q)
             total = total_result.scalar() or 0

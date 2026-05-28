@@ -586,3 +586,235 @@ class TestCommonScriptsHash:
         h1 = _common_scripts_hash(tmp_path)
         h2 = _common_scripts_hash(tmp_path)
         assert h1 == h2
+
+
+# ── Server cache helpers ────────────────────────────────────────
+
+
+class TestServerCacheProbe:
+    """Tests for ``_server_cache_probe``."""
+
+    def test_returns_dict_on_hit(self, tmp_path):
+        """Simulate a server returning a cache hit."""
+        import json
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        from threading import Thread
+
+        from cvcpkg.builder import _server_cache_probe
+
+        hit_payload = json.dumps(
+            {
+                "hit": True,
+                "name": "zlib",
+                "version": "1.3.1",
+                "chain_hash": "abc123",
+                "platform": "linux",
+                "arch": "x86_64",
+                "archive_url": "/v1/download/zlib.tar.zst",
+                "sha256": "a" * 64,
+            }
+        ).encode()
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(hit_payload)
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        port = server.server_address[1]
+        t = Thread(target=server.handle_request, daemon=True)
+        t.start()
+
+        result = _server_cache_probe(
+            f"http://127.0.0.1:{port}",
+            "",
+            "zlib",
+            "abc123",
+            "linux",
+            "x86_64",
+            "release",
+            "shared",
+            "",
+        )
+        t.join(2)
+        server.server_close()
+        assert result is not None
+        assert result["hit"] is True
+        assert result["name"] == "zlib"
+
+    def test_returns_none_on_miss(self, tmp_path):
+        """Simulate a server returning a cache miss."""
+        import json
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        from threading import Thread
+
+        from cvcpkg.builder import _server_cache_probe
+
+        miss_payload = json.dumps({"hit": False}).encode()
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(miss_payload)
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        port = server.server_address[1]
+        t = Thread(target=server.handle_request, daemon=True)
+        t.start()
+
+        result = _server_cache_probe(
+            f"http://127.0.0.1:{port}",
+            "",
+            "zlib",
+            "abc123",
+            "linux",
+            "x86_64",
+            "release",
+            "shared",
+            "",
+        )
+        t.join(2)
+        server.server_close()
+        assert result is None
+
+    def test_returns_none_on_network_error(self):
+        """Connection refused → graceful None."""
+        from cvcpkg.builder import _server_cache_probe
+
+        result = _server_cache_probe(
+            "http://127.0.0.1:1",
+            "",
+            "zlib",
+            "abc123",
+            "linux",
+            "x86_64",
+            "release",
+            "shared",
+            "",
+        )
+        assert result is None
+
+
+class TestServerCacheDownload:
+    """Tests for ``_server_cache_download``."""
+
+    def test_downloads_file(self, tmp_path):
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        from threading import Thread
+
+        from cvcpkg.builder import _server_cache_download
+
+        content = b"fake-archive-content"
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        port = server.server_address[1]
+        t = Thread(target=server.handle_request, daemon=True)
+        t.start()
+
+        dest = tmp_path / "archive.tar.zst"
+        result = _server_cache_download(
+            f"http://127.0.0.1:{port}/v1/download/archive.tar.zst",
+            "",
+            dest,
+        )
+        t.join(2)
+        server.server_close()
+        assert result is not None
+        assert dest.read_bytes() == content
+
+    def test_sha256_verification(self, tmp_path):
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        from threading import Thread
+
+        from cvcpkg.builder import _server_cache_download
+
+        content = b"verified-content"
+        correct_sha = hashlib.sha256(content).hexdigest()
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(content)
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        port = server.server_address[1]
+        t = Thread(target=server.handle_request, daemon=True)
+        t.start()
+
+        dest = tmp_path / "verified.tar.zst"
+        result = _server_cache_download(
+            f"http://127.0.0.1:{port}/archive",
+            "",
+            dest,
+            expected_sha256=correct_sha,
+        )
+        t.join(2)
+        server.server_close()
+        assert result is not None
+
+    def test_sha256_mismatch_returns_none(self, tmp_path):
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        from threading import Thread
+
+        from cvcpkg.builder import _server_cache_download
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"corrupted")
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        port = server.server_address[1]
+        t = Thread(target=server.handle_request, daemon=True)
+        t.start()
+
+        dest = tmp_path / "bad.tar.zst"
+        result = _server_cache_download(
+            f"http://127.0.0.1:{port}/archive",
+            "",
+            dest,
+            expected_sha256="0" * 64,
+        )
+        t.join(2)
+        server.server_close()
+        assert result is None
+        assert not dest.exists()
+
+    def test_network_error_returns_none(self, tmp_path):
+        from cvcpkg.builder import _server_cache_download
+
+        dest = tmp_path / "fail.tar.zst"
+        result = _server_cache_download(
+            "http://127.0.0.1:1/archive",
+            "",
+            dest,
+        )
+        assert result is None

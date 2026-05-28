@@ -1744,6 +1744,38 @@ def pack(
     default=False,
     help="Skip cache lookups (rebuild from source) but still store results.",
 )
+@click.option(
+    "--server-cache",
+    default="",
+    envvar="CVCPKG_SERVER_CACHE",
+    help="Server cache URL (e.g. http://cache.example.com). "
+    "Enables server-side cache lookups and optional pushes.",
+)
+@click.option(
+    "--server-cache-token",
+    default="",
+    envvar="CVCPKG_SERVER_CACHE_TOKEN",
+    help="Bearer token for authenticated server cache access.",
+)
+@click.option(
+    "--server-cache-push",
+    is_flag=True,
+    default=False,
+    envvar="CVCPKG_SERVER_CACHE_PUSH",
+    help="Push successful builds to the server cache.",
+)
+@click.option(
+    "--no-server-cache",
+    is_flag=True,
+    default=False,
+    help="Disable server cache entirely (both pull and push).",
+)
+@click.option(
+    "--server-cache-org",
+    default="",
+    envvar="CVCPKG_SERVER_CACHE_ORG",
+    help="Organization slug for server cache queries.",
+)
 def build_all_cmd(
     platform: str,
     config: str,
@@ -1755,6 +1787,11 @@ def build_all_cmd(
     keep_going: bool,
     no_cache: bool,
     force_clean: bool,
+    server_cache: str,
+    server_cache_token: str,
+    server_cache_push: bool,
+    no_server_cache: bool,
+    server_cache_org: str,
 ) -> None:
     """Build all recipes in dependency order.
 
@@ -1787,6 +1824,11 @@ def build_all_cmd(
         keep_going=keep_going,
         no_cache=no_cache,
         force_clean=force_clean,
+        server_cache_url=server_cache,
+        server_cache_token=server_cache_token,
+        server_cache_push=server_cache_push,
+        no_server_cache=no_server_cache,
+        server_cache_org=server_cache_org,
     )
     failures = getattr(contexts, "failures", [])
     if failures:
@@ -1852,6 +1894,38 @@ def build_all_cmd(
     default=False,
     help="Skip cache lookups (rebuild from source) but still store results.",
 )
+@click.option(
+    "--server-cache",
+    default="",
+    envvar="CVCPKG_SERVER_CACHE",
+    help="Server cache URL (e.g. http://cache.example.com). "
+    "Enables server-side cache lookups and optional pushes.",
+)
+@click.option(
+    "--server-cache-token",
+    default="",
+    envvar="CVCPKG_SERVER_CACHE_TOKEN",
+    help="Bearer token for authenticated server cache access.",
+)
+@click.option(
+    "--server-cache-push",
+    is_flag=True,
+    default=False,
+    envvar="CVCPKG_SERVER_CACHE_PUSH",
+    help="Push successful builds to the server cache.",
+)
+@click.option(
+    "--no-server-cache",
+    is_flag=True,
+    default=False,
+    help="Disable server cache entirely (both pull and push).",
+)
+@click.option(
+    "--server-cache-org",
+    default="",
+    envvar="CVCPKG_SERVER_CACHE_ORG",
+    help="Organization slug for server cache queries.",
+)
 def pack_all_cmd(
     platform: str,
     config: str,
@@ -1868,6 +1942,11 @@ def pack_all_cmd(
     keep_going: bool,
     no_cache: bool,
     force_clean: bool,
+    server_cache: str,
+    server_cache_token: str,
+    server_cache_push: bool,
+    no_server_cache: bool,
+    server_cache_org: str,
 ) -> None:
     """Build and archive all recipes.
 
@@ -1937,6 +2016,11 @@ def pack_all_cmd(
         keep_going=keep_going,
         no_cache=no_cache,
         force_clean=force_clean,
+        server_cache_url=server_cache,
+        server_cache_token=server_cache_token,
+        server_cache_push=server_cache_push,
+        no_server_cache=no_server_cache,
+        server_cache_org=server_cache_org,
     )
 
     output.mkdir(parents=True, exist_ok=True)

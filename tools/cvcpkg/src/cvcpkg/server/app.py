@@ -43,6 +43,7 @@ from cvcpkg.server.auth import TokenStore
 from cvcpkg.server.models import (
     AuditAction,
     AuditLogResponse,
+    CacheStatusResponse,
     CatalogResponse,
     HealthResponse,
     OrgCreateRequest,
@@ -581,6 +582,13 @@ def create_app(
     async def list_packages(
         name: str = Query("", description="Filter by component name"),
         platform: str = Query("", description="Filter by platform"),
+        arch: str = Query("", description="Filter by architecture"),
+        build_type: str = Query("", description="Filter by build type (release/debug)"),
+        link: str = Query("", description="Filter by link mode (shared/static)"),
+        recipe_version: str = Query(
+            "",
+            description="Filter by recipe version (chain hash).  Enables exact-match cache lookups.",
+        ),
         release: str = Query(
             "",
             description=(
@@ -588,6 +596,7 @@ def create_app(
                 "only packages not yet in any release."
             ),
         ),
+        org: str = Query("", description="Filter by organization slug"),
         search: str = Query("", description="Full-text search across all attributes"),
         include_yanked: bool = Query(False, description="Include yanked packages in results"),
         limit: int = Query(100, ge=1, le=1000),
@@ -605,6 +614,11 @@ def create_app(
                 include_yanked=include_yanked,
                 limit=limit,
                 offset=offset,
+                recipe_version=recipe_version,
+                arch=arch,
+                build_type=build_type,
+                link=link,
+                org_slug=org,
             )
             if release == "live":
                 # get_bundles with release="" returns all — filter to empty tag
@@ -619,6 +633,16 @@ def create_app(
             bundles = [b for b in bundles if b.get("name") == name]
         if platform:
             bundles = [b for b in bundles if b.get("platform") == platform]
+        if arch:
+            bundles = [b for b in bundles if b.get("arch") == arch]
+        if build_type:
+            bundles = [b for b in bundles if b.get("build_type") == build_type]
+        if link:
+            bundles = [b for b in bundles if b.get("link") == link]
+        if recipe_version:
+            bundles = [b for b in bundles if b.get("recipe_version") == recipe_version]
+        if org:
+            bundles = [b for b in bundles if b.get("org") == org]
         if release == "live":
             bundles = [b for b in bundles if not b.get("release_tag")]
         elif release:
@@ -677,6 +701,103 @@ def create_app(
             for b in bundles
         ]
         return PackageListResponse(total=len(packages), packages=packages)
+
+    # ── Cache status probe ──────────────────────────────────
+
+    @app.get(
+        "/v1/cache/status",
+        response_model=CacheStatusResponse,
+        tags=["cache"],
+    )
+    async def cache_status(
+        name: str = Query(..., description="Component name"),
+        chain_hash: str = Query(..., description="Chain hash (recipe version)"),
+        platform: str = Query(..., description="Target platform"),
+        arch: str = Query("", description="Architecture"),
+        build_type: str = Query("", description="Build type (release/debug)"),
+        link: str = Query("", description="Link mode (shared/static)"),
+        org: str = Query("", description="Organization slug"),
+        authorization: str | None = Header(None),
+    ):
+        miss = CacheStatusResponse(hit=False)
+
+        # Private-org ACL: require auth + membership
+        if org and _use_db and _db_orgs is not None:
+            org_info = await _db_orgs.get(org)
+            if org_info is None:
+                return miss
+            if org_info.is_private:
+                actor = await optional_token(authorization)
+                if actor is None or not await _db_orgs.is_member(org, actor.name):
+                    raise HTTPException(403, f"authentication required for private org '{org}'")
+
+        if _use_db:
+            packages, _total = await _db_packages.get_bundles(
+                name=name,
+                platform=platform,
+                recipe_version=chain_hash,
+                arch=arch,
+                build_type=build_type,
+                link=link,
+                org_slug=org,
+                release="",
+                search="",
+                include_yanked=False,
+                limit=1,
+                offset=0,
+            )
+            if packages:
+                p = packages[0]
+                return CacheStatusResponse(
+                    hit=True,
+                    name=p.name,
+                    version=p.version,
+                    chain_hash=chain_hash,
+                    platform=p.platform,
+                    arch=p.arch,
+                    build_type=p.build_type,
+                    link=p.link,
+                    archive_url=p.archive_url,
+                    sha256=p.sha256,
+                    size_bytes=p.size_bytes,
+                    org=p.org,
+                    published_at=p.published_at,
+                )
+            return miss
+
+        # YAML / in-memory path
+        state = _get_state()
+        for b in state.index.get("bundles", []):
+            if b.get("yanked", False):
+                continue
+            if b.get("name") != name or b.get("platform") != platform:
+                continue
+            if b.get("recipe_version") != chain_hash:
+                continue
+            if arch and b.get("arch") != arch:
+                continue
+            if build_type and b.get("build_type") != build_type:
+                continue
+            if link and b.get("link") != link:
+                continue
+            if org and b.get("org") != org:
+                continue
+            return CacheStatusResponse(
+                hit=True,
+                name=b["name"],
+                version=b["version"],
+                chain_hash=chain_hash,
+                platform=b.get("platform", ""),
+                arch=b.get("arch", ""),
+                build_type=b.get("build_type", ""),
+                link=b.get("link", ""),
+                archive_url=b.get("archive_url", ""),
+                sha256=b.get("sha256", ""),
+                size_bytes=b.get("size_bytes", 0),
+                org=b.get("org", ""),
+                published_at=b.get("published_at"),
+            )
+        return miss
 
     # ── Download (read) ─────────────────────────────────────
 
