@@ -807,13 +807,10 @@ class DbDownloadStore:
 
         cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
         async with get_session() as session:
-            q = (
-                select(
-                    cast(DownloadEventRow.downloaded_at, Date).label("day"),
-                    sa_func.count(DownloadEventRow.id).label("count"),
-                )
-                .where(DownloadEventRow.downloaded_at >= cutoff)
-            )
+            q = select(
+                cast(DownloadEventRow.downloaded_at, Date).label("day"),
+                sa_func.count(DownloadEventRow.id).label("count"),
+            ).where(DownloadEventRow.downloaded_at >= cutoff)
             if package_name:
                 q = q.where(DownloadEventRow.package_name == package_name)
             q = q.group_by("day").order_by("day")
@@ -823,7 +820,7 @@ class DbDownloadStore:
         # Fill in missing days with zero counts
         day_counts: dict[str, int] = {}
         for row in rows:
-            day_str = row.day.isoformat() if hasattr(row.day, 'isoformat') else str(row.day)
+            day_str = row.day.isoformat() if hasattr(row.day, "isoformat") else str(row.day)
             day_counts[day_str] = row.count
 
         result_list = []

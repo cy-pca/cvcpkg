@@ -210,9 +210,7 @@ class DownloadEventRow(Base):
         index=True,
     )
 
-    __table_args__ = (
-        Index("ix_download_events_name_date", "package_name", "downloaded_at"),
-    )
+    __table_args__ = (Index("ix_download_events_name_date", "package_name", "downloaded_at"),)
 
 
 # ── Engine / session management ─────────────────────────────────

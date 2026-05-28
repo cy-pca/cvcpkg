@@ -460,9 +460,10 @@ class TestRSSFeedBrowser:
         """RSS feed endpoint returns XML content."""
         resp = page.request.get(f"{SERVER_URL}/v1/feed.xml")
         assert resp.status == 200
-        assert "rss" in resp.headers.get("content-type", "").lower() or "xml" in resp.headers.get(
-            "content-type", ""
-        ).lower()
+        assert (
+            "rss" in resp.headers.get("content-type", "").lower()
+            or "xml" in resp.headers.get("content-type", "").lower()
+        )
         body = resp.text()
         assert "<rss" in body
         assert "<channel>" in body
