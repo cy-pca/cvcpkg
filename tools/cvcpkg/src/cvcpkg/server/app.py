@@ -44,6 +44,7 @@ from cvcpkg.server.auth import TokenStore
 from cvcpkg.server.models import (
     AuditAction,
     AuditLogResponse,
+    CacheStatusResponse,
     CatalogResponse,
     HealthResponse,
     OrgCreateRequest,
@@ -84,6 +85,11 @@ RATE_LIMIT_RPM = int(os.environ.get("CVCPKG_RATE_LIMIT_RPM", "300"))
 # Default storage limit per organization in bytes (default 10 GiB)
 ORG_STORAGE_LIMIT_BYTES = int(
     os.environ.get("CVCPKG_ORG_STORAGE_LIMIT_BYTES", str(10 * 1024 * 1024 * 1024))
+)
+
+# Global cache storage limit in bytes across all namespaces (default 100 GiB, 0 = unlimited)
+GLOBAL_CACHE_STORAGE_LIMIT_BYTES = int(
+    os.environ.get("CVCPKG_GLOBAL_CACHE_STORAGE_LIMIT_BYTES", str(100 * 1024 * 1024 * 1024))
 )
 
 # CORS allowed origins (comma-separated, empty = deny all cross-origin)
@@ -208,6 +214,24 @@ def _purge_expired_sessions() -> None:
         s = _upload_sessions.pop(uid, None)
         if s and s.temp_path.exists():
             s.temp_path.unlink(missing_ok=True)
+
+
+# ── Helpers ─────────────────────────────────────────────────────
+
+import re as _re
+
+_DURATION_RE = _re.compile(r"^(\d+(?:\.\d+)?)\s*([smhd])$", _re.IGNORECASE)
+
+
+def _parse_duration(value: str) -> float:
+    """Parse a duration string like '14d', '2h', '30m' into seconds."""
+    m = _DURATION_RE.match(value.strip())
+    if not m:
+        raise HTTPException(422, f"Invalid duration: {value!r}. Use e.g. '14d', '2h', '30m'.")
+    amount = float(m.group(1))
+    unit = m.group(2).lower()
+    multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    return amount * multipliers[unit]
 
 
 # ── Auth dependency ─────────────────────────────────────────────
@@ -598,6 +622,13 @@ def create_app(
     async def list_packages(
         name: str = Query("", description="Filter by component name"),
         platform: str = Query("", description="Filter by platform"),
+        arch: str = Query("", description="Filter by architecture"),
+        build_type: str = Query("", description="Filter by build type (release/debug)"),
+        link: str = Query("", description="Filter by link mode (shared/static)"),
+        recipe_version: str = Query(
+            "",
+            description="Filter by recipe version (chain hash).  Enables exact-match cache lookups.",
+        ),
         release: str = Query(
             "",
             description=(
@@ -605,6 +636,7 @@ def create_app(
                 "only packages not yet in any release."
             ),
         ),
+        org: str = Query("", description="Filter by organization slug"),
         search: str = Query("", description="Full-text search across all attributes"),
         include_yanked: bool = Query(False, description="Include yanked packages in results"),
         limit: int = Query(100, ge=1, le=1000),
@@ -622,6 +654,11 @@ def create_app(
                 include_yanked=include_yanked,
                 limit=limit,
                 offset=offset,
+                recipe_version=recipe_version,
+                arch=arch,
+                build_type=build_type,
+                link=link,
+                org_slug=org,
             )
             if release == "live":
                 # get_bundles with release="" returns all — filter to empty tag
@@ -636,6 +673,16 @@ def create_app(
             bundles = [b for b in bundles if b.get("name") == name]
         if platform:
             bundles = [b for b in bundles if b.get("platform") == platform]
+        if arch:
+            bundles = [b for b in bundles if b.get("arch") == arch]
+        if build_type:
+            bundles = [b for b in bundles if b.get("build_type") == build_type]
+        if link:
+            bundles = [b for b in bundles if b.get("link") == link]
+        if recipe_version:
+            bundles = [b for b in bundles if b.get("recipe_version") == recipe_version]
+        if org:
+            bundles = [b for b in bundles if b.get("org") == org]
         if release == "live":
             bundles = [b for b in bundles if not b.get("release_tag")]
         elif release:
@@ -694,6 +741,286 @@ def create_app(
             for b in bundles
         ]
         return PackageListResponse(total=len(packages), packages=packages)
+
+    # ── Cache status probe ──────────────────────────────────
+
+    @app.get(
+        "/v1/cache/status",
+        response_model=CacheStatusResponse,
+        tags=["cache"],
+    )
+    async def cache_status(
+        name: str = Query(..., description="Component name"),
+        chain_hash: str = Query(..., description="Chain hash (recipe version)"),
+        platform: str = Query(..., description="Target platform"),
+        arch: str = Query("", description="Architecture"),
+        build_type: str = Query("", description="Build type (release/debug)"),
+        link: str = Query("", description="Link mode (shared/static)"),
+        org: str = Query("", description="Organization slug"),
+        authorization: str | None = Header(None),
+    ):
+        miss = CacheStatusResponse(hit=False)
+
+        # Private-org ACL: require auth + membership
+        if org and _use_db and _db_orgs is not None:
+            org_info = await _db_orgs.get(org)
+            if org_info is None:
+                return miss
+            if org_info.is_private:
+                actor = await optional_token(authorization)
+                if actor is None or not await _db_orgs.is_member(org, actor.name):
+                    raise HTTPException(403, f"authentication required for private org '{org}'")
+
+        if _use_db:
+            packages, _total = await _db_packages.get_bundles(
+                name=name,
+                platform=platform,
+                recipe_version=chain_hash,
+                arch=arch,
+                build_type=build_type,
+                link=link,
+                org_slug=org,
+                release="",
+                search="",
+                include_yanked=False,
+                limit=1,
+                offset=0,
+            )
+            if packages:
+                p = packages[0]
+                return CacheStatusResponse(
+                    hit=True,
+                    name=p.name,
+                    version=p.version,
+                    chain_hash=chain_hash,
+                    platform=p.platform,
+                    arch=p.arch,
+                    build_type=p.build_type,
+                    link=p.link,
+                    archive_url=p.archive_url,
+                    sha256=p.sha256,
+                    size_bytes=p.size_bytes,
+                    org=p.org,
+                    published_at=p.published_at,
+                )
+            return miss
+
+        # YAML / in-memory path
+        state = _get_state()
+        for b in state.index.get("bundles", []):
+            if b.get("yanked", False):
+                continue
+            if b.get("name") != name or b.get("platform") != platform:
+                continue
+            if b.get("recipe_version") != chain_hash:
+                continue
+            if arch and b.get("arch") != arch:
+                continue
+            if build_type and b.get("build_type") != build_type:
+                continue
+            if link and b.get("link") != link:
+                continue
+            if org and b.get("org") != org:
+                continue
+            return CacheStatusResponse(
+                hit=True,
+                name=b["name"],
+                version=b["version"],
+                chain_hash=chain_hash,
+                platform=b.get("platform", ""),
+                arch=b.get("arch", ""),
+                build_type=b.get("build_type", ""),
+                link=b.get("link", ""),
+                archive_url=b.get("archive_url", ""),
+                sha256=b.get("sha256", ""),
+                size_bytes=b.get("size_bytes", 0),
+                org=b.get("org", ""),
+                published_at=b.get("published_at"),
+            )
+        return miss
+
+    # ── Cache listing, stats & GC ──────────────────────────────
+
+    @app.get("/v1/cache", response_model=PackageListResponse, tags=["cache"])
+    async def list_cache_entries(
+        name: str = Query("", description="Filter by component name"),
+        platform: str = Query("", description="Filter by platform"),
+        arch: str = Query("", description="Filter by architecture"),
+        older_than: str = Query(
+            "",
+            description="Age filter, e.g. '14d' for 14 days",
+        ),
+        limit: int = Query(100, ge=1, le=1000),
+        offset: int = Query(0, ge=0),
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """List non-release cache entries (packages with empty release_tag)."""
+        if _use_db:
+            packages, total = await _db_packages.get_bundles(
+                name=name,
+                platform=platform,
+                arch=arch,
+                release="",
+                include_yanked=False,
+                limit=limit,
+                offset=offset,
+            )
+            # get_bundles with release="" returns ALL; filter to empty release_tag
+            packages = [p for p in packages if not p.release_tag]
+            total = len(packages)
+        else:
+            state = _get_state()
+            bundles = state.index.get("bundles", [])
+            bundles = [b for b in bundles if not b.get("yanked") and not b.get("release_tag")]
+            if name:
+                bundles = [b for b in bundles if b.get("name") == name]
+            if platform:
+                bundles = [b for b in bundles if b.get("platform") == platform]
+            if arch:
+                bundles = [b for b in bundles if b.get("arch") == arch]
+            total = len(bundles)
+            page = bundles[offset : offset + limit]
+            packages = [
+                PackageInfo(
+                    name=b["name"],
+                    version=b["version"],
+                    platform=b.get("platform", ""),
+                    arch=b.get("arch", ""),
+                    build_type=b.get("build_type", ""),
+                    link=b.get("link", ""),
+                    sha256=b.get("sha256", ""),
+                    size_bytes=b.get("size_bytes", 0),
+                    archive_url=b.get("archive_url", ""),
+                    published_at=b.get("published_at", "1970-01-01T00:00:00+00:00"),
+                    org=b.get("org", ""),
+                )
+                for b in page
+            ]
+        return PackageListResponse(total=total, packages=packages)
+
+    @app.delete("/v1/cache", tags=["cache"])
+    async def delete_cache_entries(
+        request: Request,
+        older_than: str = Query(
+            "",
+            description="Delete entries older than this duration (e.g. '14d')",
+        ),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Bulk-purge non-release cache entries (admin-only).
+
+        Use ``older_than`` to restrict deletion by age.  Without a filter
+        all non-release packages are removed.
+        """
+        if not _use_db:
+            raise HTTPException(501, "Bulk cache deletion requires database backend")
+
+        deleted: list[dict] = []
+        if older_than:
+            secs = _parse_duration(older_than)
+            deleted = await _db_packages.gc_by_age(secs)
+        else:
+            # Delete all non-release packages (max_storage_bytes=0 evicts
+            # everything down to zero).
+            deleted = await _db_packages.gc_by_storage(0)
+
+        # Update org storage counters.
+        org_deltas: dict[str, int] = {}
+        for d in deleted:
+            slug = d.get("org_slug", "")
+            if slug and _db_orgs is not None:
+                org_deltas[slug] = org_deltas.get(slug, 0) + d["size_bytes"]
+        for slug, delta in org_deltas.items():
+            await _db_orgs.update_storage_used(slug, -delta)
+
+        await _db_audit.record(
+            action=AuditAction.cache_gc,
+            actor=actor.name,
+            target="cache",
+            detail=f"bulk_delete deleted={len(deleted)} older_than={older_than!r}",
+        )
+        return {"deleted_count": len(deleted), "deleted": deleted}
+
+    @app.get("/v1/cache/stats", tags=["cache"])
+    async def cache_stats(
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Return storage statistics: total, per-org, and package counts."""
+        if not _use_db:
+            # YAML backend — simple stats
+            state = _get_state()
+            bundles = [b for b in state.index.get("bundles", []) if not b.get("yanked")]
+            total_bytes = sum(b.get("size_bytes", 0) for b in bundles)
+            return {
+                "total_packages": len(bundles),
+                "total_size_bytes": total_bytes,
+                "orgs": {},
+            }
+        return await _db_packages.cache_stats()
+
+    @app.post("/v1/cache/gc", tags=["cache"])
+    async def cache_gc(
+        request: Request,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Run garbage collection on cached packages (admin-only).
+
+        Accepts a JSON body with one or more of:
+        - ``max_age_seconds``: delete non-release packages older than this
+        - ``max_storage_bytes``: evict oldest non-release packages to fit
+        - ``valid_chain_hashes``: list of current chain hashes; entries
+          whose ``recipe_version`` is not in this set are stale and removed
+        """
+        if not _use_db:
+            raise HTTPException(501, "GC requires database backend")
+
+        body = await request.json()
+        deleted: list[dict] = []
+
+        if "max_age_seconds" in body:
+            age = float(body["max_age_seconds"])
+            if age <= 0:
+                raise HTTPException(422, "max_age_seconds must be > 0")
+            deleted.extend(await _db_packages.gc_by_age(age))
+
+        if "max_storage_bytes" in body:
+            cap = int(body["max_storage_bytes"])
+            if cap < 0:
+                raise HTTPException(422, "max_storage_bytes must be >= 0")
+            deleted.extend(await _db_packages.gc_by_storage(cap))
+
+        if "valid_chain_hashes" in body:
+            hashes = body["valid_chain_hashes"]
+            if not isinstance(hashes, list):
+                raise HTTPException(422, "valid_chain_hashes must be a list of strings")
+            deleted.extend(await _db_packages.gc_by_staleness(set(hashes)))
+
+        if not body or not any(
+            k in body for k in ("max_age_seconds", "max_storage_bytes", "valid_chain_hashes")
+        ):
+            raise HTTPException(
+                422, "specify max_age_seconds, max_storage_bytes, and/or valid_chain_hashes"
+            )
+
+        # Update org storage counters for deleted packages.
+        org_deltas: dict[str, int] = {}
+        for d in deleted:
+            org_slug = d.get("org_slug", "")
+            if org_slug and _db_orgs is not None:
+                org_deltas[org_slug] = org_deltas.get(org_slug, 0) + d["size_bytes"]
+        for org_slug, delta in org_deltas.items():
+            await _db_orgs.update_storage_used(org_slug, -delta)
+
+        await _db_audit.record(
+            action=AuditAction.cache_gc,
+            actor=actor.name,
+            target="cache",
+            detail=f"deleted={len(deleted)} params={body}",
+        )
+        return {
+            "deleted_count": len(deleted),
+            "deleted": deleted,
+        }
 
     # ── Download (read) ─────────────────────────────────────
 
@@ -865,6 +1192,13 @@ def create_app(
         archive_url = f"/v1/download/{safe_filename}"
 
         if _use_db:
+            # Check global cache storage limit
+            if GLOBAL_CACHE_STORAGE_LIMIT_BYTES > 0:
+                total_used = await _db_packages.total_storage_bytes()
+                if total_used + size_bytes > GLOBAL_CACHE_STORAGE_LIMIT_BYTES:
+                    dest.unlink(missing_ok=True)
+                    raise HTTPException(413, "global cache storage limit exceeded")
+
             # Check org storage limit before registering
             if org and _db_orgs is not None:
                 if not await _db_orgs.check_storage_limit(org, size_bytes):
@@ -1544,6 +1878,9 @@ def create_app(
             raise HTTPException(501, "organizations require database backend")
         if not await _db_orgs.is_owner(slug, actor.name) and actor.role != TokenRole.admin:
             raise HTTPException(403, "only org owners or admins can update organization settings")
+        # storage_limit_bytes is admin-only
+        if body.storage_limit_bytes is not None and actor.role != TokenRole.admin:
+            raise HTTPException(403, "only admins can change storage limits")
         updated = await _db_orgs.update(
             slug,
             display_name=body.display_name,
@@ -1551,6 +1888,7 @@ def create_app(
             logo_url=body.logo_url,
             homepage=body.homepage,
             is_private=body.is_private,
+            storage_limit_bytes=body.storage_limit_bytes,
         )
         if updated is None:
             raise HTTPException(404, f"organization '{slug}' not found")
@@ -1808,6 +2146,58 @@ def create_app(
                 },
             }
         )
+
+    # ── Admin settings ──────────────────────────────────────
+
+    @app.get("/v1/admin/settings", tags=["admin"])
+    async def get_admin_settings(
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Return current server-wide settings (admin-only)."""
+        return {
+            "global_cache_storage_limit_bytes": GLOBAL_CACHE_STORAGE_LIMIT_BYTES,
+            "org_storage_limit_bytes": ORG_STORAGE_LIMIT_BYTES,
+            "max_upload_bytes": MAX_UPLOAD_BYTES,
+            "rate_limit_rpm": RATE_LIMIT_RPM,
+        }
+
+    @app.patch("/v1/admin/settings", tags=["admin"])
+    async def update_admin_settings(
+        request: Request,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Update server-wide settings at runtime (admin-only).
+
+        Accepts a JSON body with one or more of:
+        ``global_cache_storage_limit_bytes``, ``org_storage_limit_bytes``.
+        Changes take effect immediately but are **not** persisted across
+        server restarts — use environment variables for permanent config.
+        """
+        global GLOBAL_CACHE_STORAGE_LIMIT_BYTES, ORG_STORAGE_LIMIT_BYTES  # noqa: PLW0603
+
+        body = await request.json()
+        changed: dict[str, int] = {}
+        if "global_cache_storage_limit_bytes" in body:
+            val = int(body["global_cache_storage_limit_bytes"])
+            if val < 0:
+                raise HTTPException(422, "global_cache_storage_limit_bytes must be >= 0")
+            GLOBAL_CACHE_STORAGE_LIMIT_BYTES = val
+            changed["global_cache_storage_limit_bytes"] = val
+        if "org_storage_limit_bytes" in body:
+            val = int(body["org_storage_limit_bytes"])
+            if val < 0:
+                raise HTTPException(422, "org_storage_limit_bytes must be >= 0")
+            ORG_STORAGE_LIMIT_BYTES = val
+            changed["org_storage_limit_bytes"] = val
+        if not changed:
+            raise HTTPException(422, "no recognised settings in request body")
+        await _db_audit.record(
+            action=AuditAction.admin_settings_update,
+            actor=actor.name,
+            target="settings",
+            detail=str(changed),
+        )
+        return {"message": "settings updated", "updated": changed}
 
     # ── Org HTML pages ──────────────────────────────────────
 

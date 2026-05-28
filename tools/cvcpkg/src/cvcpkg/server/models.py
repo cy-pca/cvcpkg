@@ -64,6 +64,8 @@ class AuditAction(str, Enum):
     org_add_member = "org_add_member"
     org_remove_member = "org_remove_member"
     org_update = "org_update"
+    admin_settings_update = "admin_settings_update"
+    cache_gc = "cache_gc"
 
 
 # ── Token management ───────────────────────────────────────────
@@ -167,6 +169,24 @@ class PackageListResponse(BaseModel):
     packages: list[PackageInfo]
 
 
+class CacheStatusResponse(BaseModel):
+    """Response for the ``/v1/cache/status`` probe endpoint."""
+
+    hit: bool
+    name: str = ""
+    version: str = ""
+    chain_hash: str = ""
+    platform: str = ""
+    arch: str = ""
+    build_type: str = ""
+    link: str = ""
+    archive_url: str = ""
+    sha256: str = ""
+    size_bytes: int = 0
+    org: str = ""
+    published_at: datetime.datetime | None = None
+
+
 # ── Audit trail ─────────────────────────────────────────────────
 
 
@@ -264,6 +284,11 @@ class OrgUpdateRequest(BaseModel):
     logo_url: str | None = None
     homepage: str | None = None
     is_private: bool | None = None
+    storage_limit_bytes: int | None = Field(
+        None,
+        ge=0,
+        description="Per-org storage cap in bytes (admin-only).",
+    )
 
 
 class OrgDetailResponse(BaseModel):
