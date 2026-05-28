@@ -206,6 +206,24 @@ def _purge_expired_sessions() -> None:
             s.temp_path.unlink(missing_ok=True)
 
 
+# ── Helpers ─────────────────────────────────────────────────────
+
+import re as _re
+
+_DURATION_RE = _re.compile(r"^(\d+(?:\.\d+)?)\s*([smhd])$", _re.IGNORECASE)
+
+
+def _parse_duration(value: str) -> float:
+    """Parse a duration string like '14d', '2h', '30m' into seconds."""
+    m = _DURATION_RE.match(value.strip())
+    if not m:
+        raise HTTPException(422, f"Invalid duration: {value!r}. Use e.g. '14d', '2h', '30m'.")
+    amount = float(m.group(1))
+    unit = m.group(2).lower()
+    multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    return amount * multipliers[unit]
+
+
 # ── Auth dependency ─────────────────────────────────────────────
 
 
@@ -804,7 +822,107 @@ def create_app(
             )
         return miss
 
-    # ── Cache stats & GC ────────────────────────────────────
+    # ── Cache listing, stats & GC ──────────────────────────────
+
+    @app.get("/v1/cache", response_model=PackageListResponse, tags=["cache"])
+    async def list_cache_entries(
+        name: str = Query("", description="Filter by component name"),
+        platform: str = Query("", description="Filter by platform"),
+        arch: str = Query("", description="Filter by architecture"),
+        older_than: str = Query(
+            "",
+            description="Age filter, e.g. '14d' for 14 days",
+        ),
+        limit: int = Query(100, ge=1, le=1000),
+        offset: int = Query(0, ge=0),
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """List non-release cache entries (packages with empty release_tag)."""
+        if _use_db:
+            packages, total = await _db_packages.get_bundles(
+                name=name,
+                platform=platform,
+                arch=arch,
+                release="",
+                include_yanked=False,
+                limit=limit,
+                offset=offset,
+            )
+            # get_bundles with release="" returns ALL; filter to empty release_tag
+            packages = [p for p in packages if not p.release_tag]
+            total = len(packages)
+        else:
+            state = _get_state()
+            bundles = state.index.get("bundles", [])
+            bundles = [b for b in bundles if not b.get("yanked") and not b.get("release_tag")]
+            if name:
+                bundles = [b for b in bundles if b.get("name") == name]
+            if platform:
+                bundles = [b for b in bundles if b.get("platform") == platform]
+            if arch:
+                bundles = [b for b in bundles if b.get("arch") == arch]
+            total = len(bundles)
+            page = bundles[offset : offset + limit]
+            packages = [
+                PackageInfo(
+                    name=b["name"],
+                    version=b["version"],
+                    platform=b.get("platform", ""),
+                    arch=b.get("arch", ""),
+                    build_type=b.get("build_type", ""),
+                    link=b.get("link", ""),
+                    sha256=b.get("sha256", ""),
+                    size_bytes=b.get("size_bytes", 0),
+                    archive_url=b.get("archive_url", ""),
+                    published_at=b.get("published_at", "1970-01-01T00:00:00+00:00"),
+                    org=b.get("org", ""),
+                )
+                for b in page
+            ]
+        return PackageListResponse(total=total, packages=packages)
+
+    @app.delete("/v1/cache", tags=["cache"])
+    async def delete_cache_entries(
+        request: Request,
+        older_than: str = Query(
+            "",
+            description="Delete entries older than this duration (e.g. '14d')",
+        ),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Bulk-purge non-release cache entries (admin-only).
+
+        Use ``older_than`` to restrict deletion by age.  Without a filter
+        all non-release packages are removed.
+        """
+        if not _use_db:
+            raise HTTPException(501, "Bulk cache deletion requires database backend")
+
+        deleted: list[dict] = []
+        if older_than:
+            secs = _parse_duration(older_than)
+            deleted = await _db_packages.gc_by_age(secs)
+        else:
+            # Delete all non-release packages (max_storage_bytes=0 evicts
+            # everything down to zero).
+            deleted = await _db_packages.gc_by_storage(0)
+
+        # Update org storage counters.
+        org_deltas: dict[str, int] = {}
+        for d in deleted:
+            slug = d.get("org_slug", "")
+            if slug and _db_orgs is not None:
+                org_deltas[slug] = org_deltas.get(slug, 0) + d["size_bytes"]
+        for slug, delta in org_deltas.items():
+            await _db_orgs.update_storage_used(slug, -delta)
+
+        await _db_audit.record(
+            action=AuditAction.cache_gc,
+            actor=actor.name,
+            target="cache",
+            detail=f"bulk_delete deleted={len(deleted)} older_than={older_than!r}",
+        )
+        return {"deleted_count": len(deleted), "deleted": deleted}
 
     @app.get("/v1/cache/stats", tags=["cache"])
     async def cache_stats(
