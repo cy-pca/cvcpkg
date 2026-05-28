@@ -305,7 +305,13 @@ def create_app(
         db_url = os.environ.get("CVCPKG_DATABASE_URL", "")
         if db_url:
             from cvcpkg.server.db import create_tables, dispose_engine, init_db
-            from cvcpkg.server.db_stores import DbAuditLog, DbDownloadStore, DbOrgStore, DbPackageIndex, DbTokenStore
+            from cvcpkg.server.db_stores import (
+                DbAuditLog,
+                DbDownloadStore,
+                DbOrgStore,
+                DbPackageIndex,
+                DbTokenStore,
+            )
 
             init_db(db_url)
             await create_tables()
@@ -1722,16 +1728,16 @@ def create_app(
         rss = ET.Element("rss", version="2.0")
         channel = ET.SubElement(rss, "channel")
         site_title = os.environ.get("CVCPKG_SITE_TITLE", "cvcpkg")
-        github_url = f"https://github.com/{os.environ.get('CVCPKG_GITHUB_REPO', 'transfix/libcvc-deps')}"
+        github_url = (
+            f"https://github.com/{os.environ.get('CVCPKG_GITHUB_REPO', 'transfix/libcvc-deps')}"
+        )
         ET.SubElement(channel, "title").text = f"{site_title} — Latest Packages"
         ET.SubElement(channel, "link").text = github_url
-        ET.SubElement(channel, "description").text = (
-            f"Latest packages published to {site_title}"
-        )
+        ET.SubElement(channel, "description").text = f"Latest packages published to {site_title}"
         ET.SubElement(channel, "language").text = "en"
         if packages:
-            ET.SubElement(channel, "lastBuildDate").text = (
-                packages[0].published_at.strftime("%a, %d %b %Y %H:%M:%S +0000")
+            ET.SubElement(channel, "lastBuildDate").text = packages[0].published_at.strftime(
+                "%a, %d %b %Y %H:%M:%S +0000"
             )
 
         for pkg in packages:
@@ -1776,28 +1782,32 @@ def create_app(
     ):
         """Get daily download counts for charting."""
         if not _use_db or _db_downloads is None:
-            return JSONResponse({
-                "total": 0,
-                "daily": [],
+            return JSONResponse(
+                {
+                    "total": 0,
+                    "daily": [],
+                    "config": {
+                        "days": days,
+                        "color": DOWNLOAD_GRAPH_COLOR,
+                        "fill_color": DOWNLOAD_GRAPH_FILL_COLOR,
+                        "height": DOWNLOAD_GRAPH_HEIGHT,
+                    },
+                }
+            )
+        total = await _db_downloads.get_total_downloads(package_name=name)
+        daily = await _db_downloads.get_daily_downloads(package_name=name, days=days)
+        return JSONResponse(
+            {
+                "total": total,
+                "daily": daily,
                 "config": {
                     "days": days,
                     "color": DOWNLOAD_GRAPH_COLOR,
                     "fill_color": DOWNLOAD_GRAPH_FILL_COLOR,
                     "height": DOWNLOAD_GRAPH_HEIGHT,
                 },
-            })
-        total = await _db_downloads.get_total_downloads(package_name=name)
-        daily = await _db_downloads.get_daily_downloads(package_name=name, days=days)
-        return JSONResponse({
-            "total": total,
-            "daily": daily,
-            "config": {
-                "days": days,
-                "color": DOWNLOAD_GRAPH_COLOR,
-                "fill_color": DOWNLOAD_GRAPH_FILL_COLOR,
-                "height": DOWNLOAD_GRAPH_HEIGHT,
-            },
-        })
+            }
+        )
 
     # ── Org HTML pages ──────────────────────────────────────
 
