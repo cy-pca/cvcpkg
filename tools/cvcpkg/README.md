@@ -602,6 +602,101 @@ When `--work-dir` is not set, the default prefix directory for
 `build-all` (when `--prefix` is also omitted) is likewise placed in the
 system temp directory.
 
+---
+
+## Mirror Support
+
+cvcpkg-server supports **mirror mode**, where a read-only replica
+syncs its catalog from an upstream primary and proxies archive
+downloads on demand.  Clients automatically discover healthy mirrors
+and use them as fallback download sources.
+
+### Setting up a mirror
+
+Start a mirror server pointing at an upstream primary:
+
+```bash
+cvcpkg-server run \
+    --mirror-mode \
+    --mirror-upstream https://pkg.tx.wtf \
+    --mirror-token cvctok_... \
+    --database-url postgresql+asyncpg://user:pass@localhost/mirror_db \
+    --state-dir ./mirror-data \
+    --port 8421
+```
+
+| Flag | Env var | Description |
+|------|---------|-------------|
+| `--mirror-mode` | `CVCPKG_MIRROR_MODE` | Enable read-only mirror mode |
+| `--mirror-upstream` | `CVCPKG_MIRROR_UPSTREAM` | Upstream server URL (required) |
+| `--mirror-token` | `CVCPKG_MIRROR_TOKEN` | Token for upstream auth |
+| `--mirror-sync-interval` | `CVCPKG_MIRROR_SYNC_INTERVAL` | Catalog sync interval in seconds (default: 3600) |
+
+Mirror-mode servers reject publish and upload requests (HTTP 403) and
+periodically sync the catalog from the upstream.  Archive files are
+fetched on first request and cached locally.
+
+### Registering mirrors with the primary
+
+Mirrors register themselves with the primary so clients can discover
+them:
+
+```bash
+curl -X POST https://pkg.tx.wtf/v1/mirrors/register \
+  -H 'Content-Type: application/json' \
+  -d '{"url": "https://eu.pkg.tx.wtf", "display_name": "EU Mirror", "contact": "ops@eu.pkg.tx.wtf"}'
+```
+
+The primary health-checks registered mirrors every 5 minutes.  After
+3 consecutive failures a mirror is marked unhealthy and removed from
+the client mirror list.  Re-registering clears rejection/unhealthy
+state.
+
+### Admin mirror management
+
+```bash
+# List all mirrors (admin-only, includes rejected/unhealthy)
+curl -H "Authorization: Bearer $ADMIN_TOKEN" https://pkg.tx.wtf/v1/mirrors/all
+
+# Reject a mirror
+curl -X POST "https://pkg.tx.wtf/v1/mirrors/reject?url=https://bad.example.com" \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+
+# Permanently remove a mirror
+curl -X DELETE "https://pkg.tx.wtf/v1/mirrors?url=https://old.example.com" \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+### Client mirror failover
+
+When `CVCPKG_SERVER_URL` is set, the `install` and `sync` commands
+automatically fetch the mirror list from the server and inject mirror
+URLs as fallback download sources.  If the primary download fails,
+mirrors are tried in order.
+
+```bash
+export CVCPKG_SERVER_URL=https://pkg.tx.wtf
+cvcpkg install --from cvc-requirements.yaml --prefix ./deps
+```
+
+### Downloading archives without installing
+
+The `download` command fetches archives to a local directory without
+extracting them:
+
+```bash
+# Download specific components
+cvcpkg download zlib boost --output-dir ./archives
+
+# With mirror failover
+cvcpkg download zlib --server https://pkg.tx.wtf -o ./dist
+
+# Pin a version
+cvcpkg download zlib==1.3.1+cvc.1 -o ./dist --config debug
+```
+
+---
+
 ## Development
 
 ```bash

@@ -64,6 +64,31 @@ def server_cli() -> None:
     envvar="CVCPKG_LOG_JSON",
     help="Emit structured JSON log lines.",
 )
+@click.option(
+    "--mirror-mode",
+    is_flag=True,
+    envvar="CVCPKG_MIRROR_MODE",
+    help="Run as a read-only mirror that syncs from an upstream primary.",
+)
+@click.option(
+    "--mirror-upstream",
+    default="",
+    envvar="CVCPKG_MIRROR_UPSTREAM",
+    help="Upstream server URL to mirror from (required with --mirror-mode).",
+)
+@click.option(
+    "--mirror-token",
+    default="",
+    envvar="CVCPKG_MIRROR_TOKEN",
+    help="Bearer token for authenticating with the upstream server.",
+)
+@click.option(
+    "--mirror-sync-interval",
+    default=3600,
+    type=int,
+    envvar="CVCPKG_MIRROR_SYNC_INTERVAL",
+    help="Seconds between catalog syncs from upstream.  [default: 3600]",
+)
 def run(
     state_dir: str,
     host: str,
@@ -73,9 +98,16 @@ def run(
     workers: int,
     database_url: str,
     log_json: bool,
+    mirror_mode: bool,
+    mirror_upstream: str,
+    mirror_token: str,
+    mirror_sync_interval: int,
 ) -> None:
     """Start the cvcpkg package server."""
     import os
+
+    if mirror_mode and not mirror_upstream:
+        raise click.ClickException("--mirror-upstream is required when --mirror-mode is set.")
 
     os.environ["CVCPKG_SERVER_STATE_DIR"] = str(Path(state_dir).resolve())
     if storage:
@@ -84,6 +116,14 @@ def run(
         os.environ["CVCPKG_SERVER_REQUIRE_AUTH_READS"] = "1"
     if database_url:
         os.environ["CVCPKG_DATABASE_URL"] = database_url
+    if mirror_mode:
+        os.environ["CVCPKG_MIRROR_MODE"] = "1"
+    if mirror_upstream:
+        os.environ["CVCPKG_MIRROR_UPSTREAM"] = mirror_upstream
+    if mirror_token:
+        os.environ["CVCPKG_MIRROR_TOKEN"] = mirror_token
+    if mirror_sync_interval != 3600:
+        os.environ["CVCPKG_MIRROR_SYNC_INTERVAL"] = str(mirror_sync_interval)
 
     try:
         import uvicorn
@@ -103,6 +143,8 @@ def run(
         click.echo(f"cvcpkg-server: database: {masked}")
     else:
         click.echo("cvcpkg-server: backend: YAML files")
+    if mirror_mode:
+        click.echo(f"cvcpkg-server: MIRROR MODE — upstream: {mirror_upstream}")
     click.echo(f"cvcpkg-server: docs at http://{host}:{port}/docs")
 
     log_config = None

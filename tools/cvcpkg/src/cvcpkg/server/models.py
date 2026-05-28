@@ -66,6 +66,9 @@ class AuditAction(str, Enum):
     org_update = "org_update"
     admin_settings_update = "admin_settings_update"
     cache_gc = "cache_gc"
+    mirror_register = "mirror_register"
+    mirror_reject = "mirror_reject"
+    mirror_remove = "mirror_remove"
 
 
 # ── Token management ───────────────────────────────────────────
@@ -221,6 +224,7 @@ class HealthResponse(BaseModel):
     storage_scheme: str
     packages_count: int
     uptime_seconds: float
+    mirror_mode: bool = False
 
 
 # ── Organizations ───────────────────────────────────────────────
@@ -300,3 +304,46 @@ class OrgDetailResponse(BaseModel):
 class OrgListResponse(BaseModel):
     total: int
     organizations: list[OrgInfo]
+
+
+# ── Mirrors ─────────────────────────────────────────────────────
+
+
+class MirrorInfo(BaseModel):
+    """A registered mirror server."""
+
+    url: str = Field(description="Base URL of the mirror (e.g. https://mirror.example.com)")
+    display_name: str = ""
+    contact: str = Field(
+        default="",
+        description="Operator contact email or URL.",
+    )
+    registered_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
+    last_health_check: datetime.datetime | None = None
+    last_healthy_at: datetime.datetime | None = None
+    healthy: bool = True
+    consecutive_failures: int = 0
+    rejected: bool = False
+    rejected_at: datetime.datetime | None = None
+    rejected_by: str = ""
+    packages_count: int = 0
+
+
+class MirrorRegisterRequest(BaseModel):
+    """Request body when a mirror registers itself with the primary."""
+
+    url: str = Field(
+        ...,
+        min_length=8,
+        max_length=2048,
+        description="Public base URL of the mirror.",
+    )
+    display_name: str = Field(default="", max_length=255)
+    contact: str = Field(default="", max_length=255)
+
+
+class MirrorListResponse(BaseModel):
+    total: int
+    mirrors: list[MirrorInfo]
