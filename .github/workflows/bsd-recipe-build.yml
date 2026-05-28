@@ -225,18 +225,12 @@ jobs:
         run: |
           set -euo pipefail
           VM="root@${{ steps.vm.outputs.host }}"
-          STEM="${{ steps.meta.outputs.stem }}"
           mkdir -p "${{ github.workspace }}/dist"
 
-          ssh ${SSH_OPTS} "${VM}" \
-            "cd ${remote_dir} && mv prefix '${STEM}' && tar czf '${STEM}.tar.gz' '${STEM}'"
-          scp ${SSH_OPTS} "${VM}:${remote_dir}/${STEM}.tar.gz" \
-            "${{ github.workspace }}/${STEM}.tar.gz"
           ssh ${SSH_OPTS} "${VM}" \
             "cd ${remote_dir} && tar cf - dist" \
             | tar xf - -C "${{ github.workspace }}"
 
-          du -sh "${{ github.workspace }}/${STEM}.tar.gz"
           ls -la "${{ github.workspace }}/dist/"
 
       # ── Clean up remote build directory ──
@@ -247,15 +241,7 @@ jobs:
           VM="root@${{ steps.vm.outputs.host }}"
           ssh ${SSH_OPTS} "${VM}" "rm -rf ${remote_dir}" || true
 
-      # ── Upload artifacts ──
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ inputs.platform }}-${{ steps.meta.outputs.btlc }}-${{ inputs.link }}
-          path: |
-            ${{ steps.meta.outputs.stem }}.tar.gz
-          if-no-files-found: error
-
+      # ── Upload per-component bundles ──
       - name: Upload per-component bundles
         uses: actions/upload-artifact@v4
         with:
