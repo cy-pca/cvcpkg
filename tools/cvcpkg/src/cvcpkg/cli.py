@@ -1720,6 +1720,16 @@ def pack(
 @_keep_build_opt
 @_recipes_dir_opt
 @click.option(
+    "--work-dir",
+    type=click.Path(),
+    default=None,
+    envvar="CVCPKG_WORK_DIR",
+    help="Parent directory for intermediate build trees.  "
+    "Defaults to the system temp directory ($TMPDIR / /tmp).  "
+    "Set this to a fast or large scratch volume when the "
+    "default temp partition is too small or too slow.",
+)
+@click.option(
     "--host-platform",
     default="",
     help="Host platform for cross-compilation (e.g. linux, macos, windows).",
@@ -1783,6 +1793,7 @@ def build_all_cmd(
     prefix: str | None,
     keep_build_dir: bool,
     recipes_dirs: tuple[str, ...],
+    work_dir: str | None,
     host_platform: str,
     keep_going: bool,
     no_cache: bool,
@@ -1811,6 +1822,7 @@ def build_all_cmd(
 
     plat = _auto_platform(platform)
     prefix_path = Path(prefix).resolve() if prefix else None
+    work_dir_root = Path(work_dir).resolve() if work_dir else None
     rdirs = [Path(d) for d in recipes_dirs] if recipes_dirs else [find_recipes_dir()]
 
     contexts = build_all(
@@ -1829,6 +1841,7 @@ def build_all_cmd(
         server_cache_push=server_cache_push,
         no_server_cache=no_server_cache,
         server_cache_org=server_cache_org,
+        work_dir_root=work_dir_root,
     )
     failures = getattr(contexts, "failures", [])
     if failures:
@@ -1852,6 +1865,16 @@ def build_all_cmd(
     type=click.Path(exists=True),
     default=None,
     help="Path to Ed25519 private key to sign archives.",
+)
+@click.option(
+    "--work-dir",
+    type=click.Path(),
+    default=None,
+    envvar="CVCPKG_WORK_DIR",
+    help="Parent directory for intermediate build trees.  "
+    "Defaults to the system temp directory ($TMPDIR / /tmp).  "
+    "Set this to a fast or large scratch volume when the "
+    "default temp partition is too small or too slow.",
 )
 @click.option(
     "--host-platform",
@@ -1936,6 +1959,7 @@ def pack_all_cmd(
     recipes_dirs: tuple[str, ...],
     maintainer: str,
     signing_key: str | None,
+    work_dir: str | None,
     host_platform: str,
     shard: str,
     org: str,
@@ -1978,6 +2002,7 @@ def pack_all_cmd(
     plat = _auto_platform(platform)
     arch = detect_arch()
     prefix_path = Path(prefix).resolve() if prefix else None
+    work_dir_root = Path(work_dir).resolve() if work_dir else None
     output = Path(output_dir).resolve()
     rdirs = [Path(d) for d in recipes_dirs] if recipes_dirs else [find_recipes_dir()]
 
@@ -2021,6 +2046,7 @@ def pack_all_cmd(
         server_cache_push=server_cache_push,
         no_server_cache=no_server_cache,
         server_cache_org=server_cache_org,
+        work_dir_root=work_dir_root,
     )
 
     output.mkdir(parents=True, exist_ok=True)

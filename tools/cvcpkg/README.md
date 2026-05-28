@@ -575,6 +575,33 @@ chain indicates tampering or data corruption.
 
 ---
 
+## Build Directory Configuration
+
+By default, cvcpkg creates intermediate build trees in the system temp
+directory (`$TMPDIR`, `/tmp`, etc.).  For large builds this can exhaust
+space on small temp partitions, or be slow on non-SSD storage.
+
+Use **`--work-dir`** (or the **`CVCPKG_WORK_DIR`** environment variable)
+to redirect build trees to a dedicated volume:
+
+```bash
+# Point builds at a fast NVMe scratch partition:
+cvcpkg build-all --work-dir /mnt/scratch/cvcpkg-builds \
+    --platform linux --config release --link shared
+
+# Or set it globally via environment:
+export CVCPKG_WORK_DIR=/mnt/scratch/cvcpkg-builds
+cvcpkg pack-all --platform linux --config release --link shared
+```
+
+The directory is created automatically if it doesn't exist.  Each recipe
+gets its own sub-directory under `--work-dir` (e.g.
+`/mnt/scratch/cvcpkg-builds/cvcpkg-zlib-XXXXXXXX/`).
+
+When `--work-dir` is not set, the default prefix directory for
+`build-all` (when `--prefix` is also omitted) is likewise placed in the
+system temp directory.
+
 ## Development
 
 ```bash
