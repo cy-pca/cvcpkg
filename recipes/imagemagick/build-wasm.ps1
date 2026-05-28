@@ -8,10 +8,14 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $msysPrefix = ConvertTo-MsysPath $env:CVC_INSTALL_DIR
 $msysSourceDir = ConvertTo-MsysPath $env:CVC_SOURCE_DIR
 
-# Run configure via bash -c with explicit cd so that emconfigure's Python
-# subprocess finds the script regardless of working-directory differences.
-& emconfigure bash -c "cd '$msysSourceDir' && ./configure --prefix='$msysPrefix' --host=none-none-none --disable-shared --enable-static --with-quantum-depth=16 --enable-hdri --with-magick-plus-plus --without-perl --without-x --without-jpeg --without-png --without-webp --without-jbig --without-raw --without-openjp2 --without-threads --disable-docs"
-if ($LASTEXITCODE -ne 0) { throw "configure failed" }
+# Run configure via Git Bash (not bare 'bash', which resolves to WSL on Windows
+# due to CreateProcess searching System32 before PATH).
+& emconfigure $gitBash -c "cd '$msysSourceDir' && ./configure --prefix='$msysPrefix' --host=none-none-none --disable-shared --enable-static --with-quantum-depth=16 --enable-hdri --with-magick-plus-plus --without-perl --without-x --without-jpeg --without-png --without-webp --without-jbig --without-raw --without-openjp2 --without-threads --disable-docs"
+if ($LASTEXITCODE -ne 0) {
+    $cfgLog = Join-Path $env:CVC_SOURCE_DIR 'config.log'
+    if (Test-Path $cfgLog) { Write-Host '--- config.log (last 60 lines) ---'; Get-Content $cfgLog -Tail 60 }
+    throw "configure failed"
+}
 
 Push-Location $env:CVC_SOURCE_DIR
 try {

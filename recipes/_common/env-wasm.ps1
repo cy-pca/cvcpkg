@@ -83,5 +83,24 @@ function ConvertTo-MsysPath {
     return ($Path -replace '\\','/')
 }
 
+# Locate Git Bash explicitly to avoid Python's CreateProcess finding WSL's
+# bash.exe in C:\Windows\System32 before Git Bash on PATH.
+$script:gitBash = $null
+foreach ($candidate in @(
+    "$env:ProgramFiles\Git\usr\bin\bash.exe",
+    "$env:ProgramFiles\Git\bin\bash.exe",
+    "${env:ProgramFiles(x86)}\Git\usr\bin\bash.exe"
+)) {
+    if (Test-Path $candidate) { $script:gitBash = $candidate; break }
+}
+if (-not $script:gitBash) {
+    $found = Get-Command bash -ErrorAction SilentlyContinue |
+             Where-Object { $_.Source -notmatch 'System32' } |
+             Select-Object -First 1
+    if ($found) { $script:gitBash = $found.Source }
+}
+if (-not $script:gitBash) { throw "Cannot find Git Bash (non-WSL). Install Git for Windows." }
+
 Write-Host "-- env-wasm.ps1 loaded --"
 Write-Host "  EMSDK=$env:CVC_EMSDK_DIR  BUILD_TYPE=$cmakeBuildType  LINK=static  JOBS=$env:CVC_JOBS"
+Write-Host "  BASH=$script:gitBash"
