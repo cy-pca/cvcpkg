@@ -1300,6 +1300,8 @@ class TestDownloadTracking:
         resp = client.get(url)
         assert resp.status_code == 200
         assert resp.content == content
+
+
 # ── Cache status endpoint ───────────────────────────────────────
 
 
