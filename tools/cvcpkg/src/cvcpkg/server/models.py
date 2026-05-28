@@ -167,6 +167,24 @@ class PackageListResponse(BaseModel):
     packages: list[PackageInfo]
 
 
+class CacheStatusResponse(BaseModel):
+    """Response for the ``/v1/cache/status`` probe endpoint."""
+
+    hit: bool
+    name: str = ""
+    version: str = ""
+    chain_hash: str = ""
+    platform: str = ""
+    arch: str = ""
+    build_type: str = ""
+    link: str = ""
+    archive_url: str = ""
+    sha256: str = ""
+    size_bytes: int = 0
+    org: str = ""
+    published_at: datetime.datetime | None = None
+
+
 # ── Audit trail ─────────────────────────────────────────────────
 
 

@@ -1147,3 +1147,156 @@ class TestPackageInfoQualifiedName:
             org="cvc-lab",
         )
         assert p.qualified_name == "cvc-lab/custom-lib"
+
+
+# ── Cache status endpoint ───────────────────────────────────────
+
+
+class TestCacheStatusEndpoint:
+    """Tests for the ``GET /v1/cache/status`` probe endpoint."""
+
+    def _publish(self, client, pub_tok, **extra):
+        """Publish a minimal package and return the response JSON."""
+        defaults = {
+            "name": "zlib",
+            "version": "1.3.1+cvc.1",
+            "platform": "linux",
+            "arch": "x86_64",
+            "build_type": "release",
+            "link": "shared",
+            "recipe_version": "abc123hash",
+        }
+        defaults.update(extra)
+        resp = client.post(
+            "/v1/publish",
+            params=defaults,
+            files={"file": ("zlib.tar.zst", io.BytesIO(b"fake-archive"))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    def test_cache_miss(self, server_env):
+        client, *_ = server_env
+        resp = client.get(
+            "/v1/cache/status",
+            params={
+                "name": "nonexistent",
+                "chain_hash": "deadbeef",
+                "platform": "linux",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["hit"] is False
+
+    def test_cache_hit(self, server_env):
+        client, _, pub_tok, _ = server_env
+        self._publish(client, pub_tok)
+        resp = client.get(
+            "/v1/cache/status",
+            params={
+                "name": "zlib",
+                "chain_hash": "abc123hash",
+                "platform": "linux",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["hit"] is True
+        assert data["name"] == "zlib"
+        assert data["chain_hash"] == "abc123hash"
+        assert data["platform"] == "linux"
+        assert data["archive_url"].startswith("/v1/download/")
+        assert data["sha256"]
+
+    def test_cache_hit_with_all_filters(self, server_env):
+        client, _, pub_tok, _ = server_env
+        self._publish(
+            client,
+            pub_tok,
+            arch="x86_64",
+            build_type="release",
+            link="shared",
+        )
+        resp = client.get(
+            "/v1/cache/status",
+            params={
+                "name": "zlib",
+                "chain_hash": "abc123hash",
+                "platform": "linux",
+                "arch": "x86_64",
+                "build_type": "release",
+                "link": "shared",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["hit"] is True
+
+    def test_cache_miss_wrong_hash(self, server_env):
+        client, _, pub_tok, _ = server_env
+        self._publish(client, pub_tok)
+        resp = client.get(
+            "/v1/cache/status",
+            params={
+                "name": "zlib",
+                "chain_hash": "wrong_hash",
+                "platform": "linux",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["hit"] is False
+
+    def test_cache_miss_wrong_platform(self, server_env):
+        client, _, pub_tok, _ = server_env
+        self._publish(client, pub_tok)
+        resp = client.get(
+            "/v1/cache/status",
+            params={
+                "name": "zlib",
+                "chain_hash": "abc123hash",
+                "platform": "macos",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["hit"] is False
+
+    def test_cache_miss_wrong_arch(self, server_env):
+        client, _, pub_tok, _ = server_env
+        self._publish(client, pub_tok, arch="x86_64")
+        resp = client.get(
+            "/v1/cache/status",
+            params={
+                "name": "zlib",
+                "chain_hash": "abc123hash",
+                "platform": "linux",
+                "arch": "aarch64",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["hit"] is False
+
+    def test_cache_ignores_yanked(self, server_env):
+        client, admin_tok, pub_tok, _ = server_env
+        self._publish(client, pub_tok)
+        # Yank the package
+        client.post(
+            "/v1/packages/zlib/1.3.1+cvc.1/yank",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        resp = client.get(
+            "/v1/cache/status",
+            params={
+                "name": "zlib",
+                "chain_hash": "abc123hash",
+                "platform": "linux",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["hit"] is False
+
+    def test_cache_requires_name_and_hash(self, server_env):
+        client, *_ = server_env
+        # Missing required params
+        resp = client.get("/v1/cache/status", params={"name": "zlib"})
+        assert resp.status_code == 422

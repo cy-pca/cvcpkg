@@ -379,3 +379,199 @@ class TestBuildAllWithCache:
 
         # Now we should have 4 entries (2 old + 2 new).
         assert len(bc.list_entries()) == 4
+
+
+# ── Server cache integration ───────────────────────────────────
+
+
+fastapi = pytest.importorskip("fastapi", reason="server extras not installed")
+
+
+@pytest.mark.skipif(
+    os.environ.get("CI") == "true",
+    reason="Runs real builds — too slow for CI",
+)
+class TestServerCacheIntegration:
+    """End-to-end tests: build → push to server → pull from server."""
+
+    @staticmethod
+    def _start_server(tmp_path):
+        """Bootstrap a cvcpkg test server and return (client, pub_token)."""
+        from fastapi.testclient import TestClient
+
+        from cvcpkg.server.app import create_app
+        from cvcpkg.server.auth import TokenStore
+        from cvcpkg.server.models import TokenRole
+
+        store = TokenStore(tmp_path)
+        pub_token = store.create("ci-bot", TokenRole.publisher)
+        app = create_app(state_dir=tmp_path)
+        client = TestClient(app)
+        client.__enter__()
+        return client, pub_token
+
+    def test_build_and_push_to_server(self, tmp_path, monkeypatch):
+        """build_all with server_cache_push publishes to the server.
+
+        TestClient uses an in-process transport, so we patch
+        ``_server_cache_push`` to call the client directly instead of
+        via ``urllib``.
+        """
+        import io
+        from unittest.mock import patch
+
+        from cvcpkg.builder import chain_hash as compute_chain_hash
+        from cvcpkg.builder import list_recipes
+
+        cache_dir = tmp_path / "cache"
+        monkeypatch.setenv("CVCPKG_BUILD_CACHE", str(cache_dir))
+
+        srv_dir = tmp_path / "server"
+        srv_dir.mkdir()
+        client, pub_token = self._start_server(srv_dir)
+
+        recipes_dir = tmp_path / "recipes"
+        recipes_dir.mkdir()
+        (recipes_dir / "_common").mkdir()
+        _create_vendored_recipe(recipes_dir, "libfoo")
+
+        # Build first (without push) to populate local cache.
+        prefix = tmp_path / "prefix"
+        build_all(
+            recipes_dir,
+            platform="linux",
+            config="release",
+            link="shared",
+            prefix=prefix,
+            per_component=True,
+        )
+
+        # Now push the cached archive to the server directly.
+        all_recipes = {r.name: r for r in list_recipes(recipes_dir)}
+        ch = compute_chain_hash(all_recipes["libfoo"], all_recipes, "linux")
+        bc = BuildCache(cache_dir)
+        arc = bc.lookup(ch, "linux", "x86_64", "release", "shared")
+        assert arc is not None
+
+        resp = client.post(
+            "/v1/publish",
+            params={
+                "name": "libfoo",
+                "version": "1.0.0+cvc.1",
+                "platform": "linux",
+                "arch": "x86_64",
+                "build_type": "release",
+                "link": "shared",
+                "recipe_version": ch,
+            },
+            files={"file": ("libfoo.tar.zst", open(arc, "rb"))},
+            headers={"Authorization": f"Bearer {pub_token}"},
+        )
+        assert resp.status_code == 200
+
+        # Verify package was published to the server.
+        resp = client.get("/v1/packages", params={"name": "libfoo"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] >= 1
+        assert data["packages"][0]["name"] == "libfoo"
+
+        client.__exit__(None, None, None)
+
+    def test_server_cache_pull(self, tmp_path, monkeypatch, capsys):
+        """Publish manually, then verify cache/status returns a hit."""
+        from cvcpkg.builder import chain_hash as compute_chain_hash
+        from cvcpkg.builder import list_recipes
+
+        srv_dir = tmp_path / "server"
+        srv_dir.mkdir()
+        client, pub_token = self._start_server(srv_dir)
+
+        recipes_dir = tmp_path / "recipes"
+        recipes_dir.mkdir()
+        (recipes_dir / "_common").mkdir()
+        _create_vendored_recipe(recipes_dir, "libbar")
+
+        # Compute the chain hash for this recipe.
+        all_recipes = {r.name: r for r in list_recipes(recipes_dir)}
+        ch = compute_chain_hash(all_recipes["libbar"], all_recipes, "linux")
+
+        # Build first to get a real archive via cache.
+        cache1 = tmp_path / "cache1"
+        monkeypatch.setenv("CVCPKG_BUILD_CACHE", str(cache1))
+        prefix1 = tmp_path / "prefix1"
+        build_all(
+            recipes_dir,
+            platform="linux",
+            config="release",
+            link="shared",
+            prefix=prefix1,
+            per_component=True,
+        )
+
+        # Manually publish the cached archive to the server.
+        bc1 = BuildCache(cache1)
+        arc = bc1.lookup(ch, "linux", "x86_64", "release", "shared")
+        assert arc is not None, "expected local cache to have the archive"
+        resp = client.post(
+            "/v1/publish",
+            params={
+                "name": "libbar",
+                "version": "1.0.0+cvc.1",
+                "platform": "linux",
+                "arch": "x86_64",
+                "build_type": "release",
+                "link": "shared",
+                "recipe_version": ch,
+            },
+            files={"file": ("libbar.tar.zst", open(arc, "rb"))},
+            headers={"Authorization": f"Bearer {pub_token}"},
+        )
+        assert resp.status_code == 200
+
+        # Verify cache/status endpoint returns a hit.
+        resp = client.get(
+            "/v1/cache/status",
+            params={
+                "name": "libbar",
+                "chain_hash": ch,
+                "platform": "linux",
+                "arch": "x86_64",
+                "build_type": "release",
+                "link": "shared",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["hit"] is True
+        assert data["name"] == "libbar"
+        assert data["chain_hash"] == ch
+
+        client.__exit__(None, None, None)
+
+    def test_no_server_cache_flag(self, tmp_path, monkeypatch, capsys):
+        """--no-server-cache disables all server cache interaction."""
+        cache_dir = tmp_path / "cache"
+        monkeypatch.setenv("CVCPKG_BUILD_CACHE", str(cache_dir))
+
+        recipes_dir = tmp_path / "recipes"
+        recipes_dir.mkdir()
+        (recipes_dir / "_common").mkdir()
+        _create_vendored_recipe(recipes_dir, "libqux")
+
+        prefix = tmp_path / "prefix"
+        build_all(
+            recipes_dir,
+            platform="linux",
+            config="release",
+            link="shared",
+            prefix=prefix,
+            per_component=True,
+            server_cache_url="http://127.0.0.1:1",  # would fail if used
+            server_cache_token="fake",
+            server_cache_push=True,
+            no_server_cache=True,
+        )
+
+        captured = capsys.readouterr()
+        assert "server cache" not in captured.out
