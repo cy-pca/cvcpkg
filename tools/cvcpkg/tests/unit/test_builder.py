@@ -1718,3 +1718,149 @@ class TestRevBump:
 
         r = Recipe.load(recipes_dir / "a")
         assert r.cvc_revision == 3
+
+
+# ── _mkworkdir / work_dir_root ──────────────────────────────────
+
+
+class TestMkworkdir:
+    """Test the _mkworkdir helper."""
+
+    def test_creates_under_root(self, tmp_path):
+        from cvcpkg.builder import _mkworkdir
+
+        root = tmp_path / "scratch"
+        wd = _mkworkdir("cvcpkg-test-", root)
+        assert wd.parent == root
+        assert wd.name.startswith("cvcpkg-test-")
+        assert wd.is_dir()
+
+    def test_creates_root_if_missing(self, tmp_path):
+        from cvcpkg.builder import _mkworkdir
+
+        root = tmp_path / "deep" / "nested" / "scratch"
+        assert not root.exists()
+        wd = _mkworkdir("cvcpkg-test-", root)
+        assert root.is_dir()
+        assert wd.parent == root
+
+    def test_falls_back_to_system_temp(self):
+        import tempfile
+
+        from cvcpkg.builder import _mkworkdir
+
+        wd = _mkworkdir("cvcpkg-test-")
+        try:
+            assert wd.is_dir()
+            assert wd.parent == Path(tempfile.gettempdir())
+        finally:
+            wd.rmdir()
+
+
+class TestWorkDirRoot:
+    """Test that build_recipe and build_all honour work_dir_root."""
+
+    def _make_recipe(self, recipes_dir, name="testpkg", deps=None):
+        rd = recipes_dir / name
+        rd.mkdir(parents=True, exist_ok=True)
+        recipe = {
+            "schema_version": 1,
+            "recipe": {
+                "name": name,
+                "upstream_version": "1.0.0",
+                "cvc_revision": 1,
+            },
+            "source": {"type": "vendored", "path": "."},
+            "patches": [],
+            "build": {
+                "matrix": [{"platform": "linux", "script": "build.sh"}],
+            },
+            "package": {"files": ["lib/*"], "cmake_packages": []},
+        }
+        if deps:
+            recipe["depends"] = {"build": [{"name": d} for d in deps]}
+        (rd / "recipe.yaml").write_text(yaml.dump(recipe))
+        (rd / "build.sh").write_text("#!/bin/sh\ntrue\n")
+        return rd
+
+    @patch("cvcpkg.builder.run_build")
+    @patch("cvcpkg.builder.fetch_source")
+    def test_build_recipe_uses_work_dir_root(self, mock_fetch, mock_build, tmp_path):
+        from cvcpkg.builder import build_recipe
+
+        recipes_dir = tmp_path / "recipes"
+        rd = self._make_recipe(recipes_dir)
+        scratch = tmp_path / "scratch"
+
+        mock_fetch.side_effect = lambda r, w: w / "src"
+        mock_build.side_effect = lambda ctx: ctx.install_dir.mkdir(parents=True, exist_ok=True)
+
+        ctx = build_recipe(
+            rd,
+            platform="linux",
+            work_dir_root=scratch,
+        )
+        assert ctx.work_dir.parent == scratch
+        assert ctx.work_dir.name.startswith("cvcpkg-testpkg-")
+
+    @patch("cvcpkg.builder.run_build")
+    @patch("cvcpkg.builder.fetch_source")
+    def test_build_recipe_default_uses_system_temp(self, mock_fetch, mock_build, tmp_path):
+        import tempfile
+
+        from cvcpkg.builder import build_recipe
+
+        recipes_dir = tmp_path / "recipes"
+        rd = self._make_recipe(recipes_dir)
+
+        mock_fetch.side_effect = lambda r, w: w / "src"
+        mock_build.side_effect = lambda ctx: ctx.install_dir.mkdir(parents=True, exist_ok=True)
+
+        ctx = build_recipe(rd, platform="linux")
+        assert ctx.work_dir.parent == Path(tempfile.gettempdir())
+
+    @patch("cvcpkg.builder.run_build")
+    @patch("cvcpkg.builder.fetch_source")
+    def test_build_all_uses_work_dir_root(self, mock_fetch, mock_build, tmp_path):
+        from cvcpkg.builder import build_all
+
+        recipes_dir = tmp_path / "recipes"
+        self._make_recipe(recipes_dir, "alpha")
+        self._make_recipe(recipes_dir, "beta")
+        scratch = tmp_path / "scratch"
+
+        mock_fetch.side_effect = lambda r, w: w / "src"
+        mock_build.side_effect = lambda ctx: ctx.install_dir.mkdir(parents=True, exist_ok=True)
+
+        contexts = build_all(
+            recipes_dir,
+            platform="linux",
+            prefix=tmp_path / "prefix",
+            per_component=True,
+            work_dir_root=scratch,
+        )
+        assert len(contexts) == 2
+        for ctx in contexts:
+            assert ctx.work_dir.parent == scratch
+
+    @patch("cvcpkg.builder.run_build")
+    @patch("cvcpkg.builder.fetch_source")
+    def test_build_all_default_prefix_uses_work_dir_root(self, mock_fetch, mock_build, tmp_path):
+        from cvcpkg.builder import build_all
+
+        recipes_dir = tmp_path / "recipes"
+        self._make_recipe(recipes_dir, "alpha")
+        scratch = tmp_path / "scratch"
+
+        mock_fetch.side_effect = lambda r, w: w / "src"
+        mock_build.side_effect = lambda ctx: ctx.install_dir.mkdir(parents=True, exist_ok=True)
+
+        contexts = build_all(
+            recipes_dir,
+            platform="linux",
+            work_dir_root=scratch,
+        )
+        assert len(contexts) == 1
+        # When no explicit prefix is given, the auto-created prefix
+        # should also be under work_dir_root.
+        assert contexts[0].prefix.parent == scratch

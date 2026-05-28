@@ -47,6 +47,9 @@ from cvcpkg.server.models import (
     CacheStatusResponse,
     CatalogResponse,
     HealthResponse,
+    MirrorInfo,
+    MirrorListResponse,
+    MirrorRegisterRequest,
     OrgCreateRequest,
     OrgDetailResponse,
     OrgInfo,
@@ -105,6 +108,26 @@ DOWNLOAD_GRAPH_FILL_COLOR = os.environ.get(
 )
 DOWNLOAD_GRAPH_HEIGHT = int(os.environ.get("CVCPKG_DOWNLOAD_GRAPH_HEIGHT", "200"))
 
+# ── Mirror configuration ────────────────────────────────────────
+
+# When True, the server runs as a read-only mirror of an upstream.
+MIRROR_MODE = os.environ.get("CVCPKG_MIRROR_MODE", "").lower() in ("1", "true", "yes")
+
+# Upstream server URL to mirror from (required when MIRROR_MODE is True).
+MIRROR_UPSTREAM = os.environ.get("CVCPKG_MIRROR_UPSTREAM", "")
+
+# Token for accessing private packages on the upstream server.
+MIRROR_TOKEN = os.environ.get("CVCPKG_MIRROR_TOKEN", "")
+
+# Sync interval in seconds (how often the mirror pulls the upstream catalog).
+MIRROR_SYNC_INTERVAL = int(os.environ.get("CVCPKG_MIRROR_SYNC_INTERVAL", "3600"))
+
+# Health check interval for registered mirrors (on the primary).
+MIRROR_HEALTH_CHECK_INTERVAL = int(os.environ.get("CVCPKG_MIRROR_HEALTH_CHECK_INTERVAL", "300"))
+
+# Consecutive health check failures before marking a mirror unhealthy.
+MIRROR_MAX_FAILURES = int(os.environ.get("CVCPKG_MIRROR_MAX_FAILURES", "3"))
+
 logger = logging.getLogger("cvcpkg.server")
 
 
@@ -161,6 +184,7 @@ _db_audit = None  # DbAuditLog when using DB backend
 _db_packages = None  # DbPackageIndex when using DB backend
 _db_orgs = None  # DbOrgStore when using DB backend
 _db_downloads = None  # DbDownloadStore when using DB backend
+_db_mirrors = None  # DbMirrorStore when using DB backend
 
 
 def _get_state() -> ServerState:
@@ -299,6 +323,74 @@ async def optional_token(authorization: str | None = Header(None)) -> TokenRecor
     return state.tokens.verify(raw)
 
 
+# ── Mirror background tasks ─────────────────────────────────────
+
+
+async def _mirror_health_loop() -> None:
+    """Periodically health-check registered mirrors on the primary."""
+    import asyncio
+
+    import httpx
+
+    while True:
+        await asyncio.sleep(MIRROR_HEALTH_CHECK_INTERVAL)
+        if not _use_db or _db_mirrors is None:
+            continue
+        try:
+            mirrors = await _db_mirrors.list_all()
+            for m in mirrors:
+                if m.rejected:
+                    continue
+                try:
+                    async with httpx.AsyncClient(timeout=10) as client:
+                        resp = await client.get(f"{m.url.rstrip('/')}/healthz")
+                    healthy = resp.status_code == 200
+                    if healthy:
+                        try:
+                            data = resp.json()
+                            count = data.get("packages_count", 0)
+                            await _db_mirrors.update_packages_count(m.url, count)
+                        except Exception:
+                            pass
+                except Exception:
+                    healthy = False
+                await _db_mirrors.record_health_check(m.url, healthy=healthy)
+        except Exception:
+            logger.exception("mirror health check loop error")
+
+
+async def _mirror_sync_loop(state_dir: Path) -> None:
+    """Periodically sync the catalog from the upstream server (mirror mode)."""
+    import asyncio
+
+    import httpx
+
+    while True:
+        try:
+            headers: dict[str, str] = {}
+            if MIRROR_TOKEN:
+                headers["Authorization"] = f"Bearer {MIRROR_TOKEN}"
+            upstream = MIRROR_UPSTREAM.rstrip("/")
+            async with httpx.AsyncClient(timeout=60, headers=headers) as client:
+                resp = await client.get(f"{upstream}/v1/catalog")
+                resp.raise_for_status()
+                catalog = resp.json()
+
+            state = _get_state()
+            state.index = catalog
+            state.save_index()
+            bundle_count = len(catalog.get("bundles", []))
+            logger.info(
+                "mirror sync: updated catalog from %s (%d bundles)",
+                upstream,
+                bundle_count,
+            )
+        except Exception:
+            logger.exception("mirror sync failed")
+
+        await asyncio.sleep(MIRROR_SYNC_INTERVAL)
+
+
 # ── App factory ─────────────────────────────────────────────────
 
 
@@ -311,7 +403,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        global _state, _START_TIME, _use_db, _db_tokens, _db_audit, _db_packages, _db_orgs, _db_downloads
+        global _state, _START_TIME, _use_db, _db_tokens, _db_audit, _db_packages, _db_orgs, _db_downloads, _db_mirrors
         _START_TIME = time.monotonic()
         sd = state_dir or Path(os.environ.get("CVCPKG_SERVER_STATE_DIR", "/var/lib/cvcpkg-server"))
 
@@ -332,6 +424,7 @@ def create_app(
             from cvcpkg.server.db_stores import (
                 DbAuditLog,
                 DbDownloadStore,
+                DbMirrorStore,
                 DbOrgStore,
                 DbPackageIndex,
                 DbTokenStore,
@@ -344,6 +437,7 @@ def create_app(
             _db_packages = DbPackageIndex()
             _db_orgs = DbOrgStore()
             _db_downloads = DbDownloadStore()
+            _db_mirrors = DbMirrorStore()
             _use_db = True
             # Still need ServerState for archives dir and storage_uri
             _state = ServerState(
@@ -351,7 +445,27 @@ def create_app(
                 storage_uri=storage_uri,
                 require_auth_for_reads=require_auth_for_reads,
             )
+
+            # Start background tasks
+            import asyncio
+
+            bg_tasks: list[asyncio.Task] = []
+            if _use_db and not MIRROR_MODE:
+                bg_tasks.append(asyncio.create_task(_mirror_health_loop()))
+            if MIRROR_MODE and MIRROR_UPSTREAM:
+                bg_tasks.append(asyncio.create_task(_mirror_sync_loop(sd)))
+
             yield
+
+            # Cancel background tasks
+            for t in bg_tasks:
+                t.cancel()
+            for t in bg_tasks:
+                try:
+                    await t
+                except asyncio.CancelledError:
+                    pass
+
             logger.info("shutting down — disposing database engine")
             await dispose_engine()
             _use_db = False
@@ -466,6 +580,7 @@ def create_app(
             ),
             packages_count=pkg_count,
             uptime_seconds=round(time.monotonic() - _START_TIME, 2),
+            mirror_mode=MIRROR_MODE,
         )
 
     # ── Metrics (Prometheus text format) ────────────────────
@@ -1106,6 +1221,11 @@ def create_app(
         ),
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
+        if MIRROR_MODE:
+            raise HTTPException(
+                403,
+                "this server is running in mirror mode and does not accept publishes",
+            )
         _check_rate_limit(request)
         state = _get_state()
 
@@ -1311,6 +1431,11 @@ def create_app(
         Upload chunks with ``PATCH /v1/upload/{upload_id}``, then
         finalise with ``POST /v1/upload/{upload_id}/complete``.
         """
+        if MIRROR_MODE:
+            raise HTTPException(
+                403,
+                "this server is running in mirror mode and does not accept publishes",
+            )
         _check_rate_limit(request)
         _purge_expired_sessions()
         state = _get_state()
@@ -2212,5 +2337,157 @@ def create_app(
         from cvcpkg.server.landing import org_detail_html
 
         return HTMLResponse(org_detail_html(slug))
+
+    # ── Mirror endpoints ────────────────────────────────────
+
+    @app.post("/v1/mirrors/register", response_model=MirrorInfo, tags=["mirrors"])
+    async def register_mirror(body: MirrorRegisterRequest):
+        """Register a mirror with the primary server.
+
+        Mirrors call this endpoint to announce themselves.  The primary
+        will periodically health-check registered mirrors and include
+        healthy ones in the mirror list served to clients.
+
+        Re-registering an existing URL clears any previous rejection
+        and resets health state.
+        """
+        if MIRROR_MODE:
+            raise HTTPException(403, "mirror servers cannot register other mirrors")
+        if not _use_db or _db_mirrors is None:
+            raise HTTPException(
+                501,
+                "mirror registry requires a database backend " "(set CVCPKG_DATABASE_URL)",
+            )
+        url = body.url.rstrip("/")
+        if not url.startswith(("http://", "https://")):
+            raise HTTPException(422, "mirror URL must start with http:// or https://")
+        info = await _db_mirrors.register(
+            url=url,
+            display_name=body.display_name,
+            contact=body.contact,
+        )
+        await _db_audit.record(
+            action=AuditAction.mirror_register,
+            actor="mirror",
+            target=url,
+            detail=body.display_name or "",
+        )
+        return info
+
+    @app.get("/v1/mirrors", response_model=MirrorListResponse, tags=["mirrors"])
+    async def list_mirrors(
+        _auth: TokenRecord | None = Depends(optional_reader_auth),
+    ):
+        """List healthy mirrors that clients can use for failover.
+
+        This endpoint is public (or reader-auth if configured) so
+        clients can cache the mirror list for use when the primary
+        is unreachable.
+        """
+        if not _use_db or _db_mirrors is None:
+            return MirrorListResponse(total=0, mirrors=[])
+        mirrors = await _db_mirrors.list_healthy()
+        return MirrorListResponse(total=len(mirrors), mirrors=mirrors)
+
+    @app.get("/v1/mirrors/all", response_model=MirrorListResponse, tags=["mirrors"])
+    async def list_all_mirrors(
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """List all mirrors including rejected and unhealthy (admin-only)."""
+        if not _use_db or _db_mirrors is None:
+            return MirrorListResponse(total=0, mirrors=[])
+        mirrors = await _db_mirrors.list_all()
+        return MirrorListResponse(total=len(mirrors), mirrors=mirrors)
+
+    @app.post("/v1/mirrors/reject", tags=["mirrors"])
+    async def reject_mirror(
+        url: str = Query(..., description="URL of the mirror to reject"),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Reject a mirror, removing it from the public mirror list.
+
+        Rejected mirrors are retained in the database for audit purposes
+        but are excluded from the healthy mirror list.  A mirror can
+        re-register to clear its rejection.
+        """
+        if not _use_db or _db_mirrors is None:
+            raise HTTPException(501, "mirror registry requires a database backend")
+        found = await _db_mirrors.reject(url, actor.name)
+        if not found:
+            raise HTTPException(404, f"mirror not found: {url}")
+        await _db_audit.record(
+            action=AuditAction.mirror_reject,
+            actor=actor.name,
+            target=url,
+        )
+        return {"message": "mirror rejected", "url": url}
+
+    @app.delete("/v1/mirrors", tags=["mirrors"])
+    async def remove_mirror(
+        url: str = Query(..., description="URL of the mirror to remove"),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Permanently remove a mirror from the registry (admin-only)."""
+        if not _use_db or _db_mirrors is None:
+            raise HTTPException(501, "mirror registry requires a database backend")
+        found = await _db_mirrors.remove(url)
+        if not found:
+            raise HTTPException(404, f"mirror not found: {url}")
+        await _db_audit.record(
+            action=AuditAction.mirror_remove,
+            actor=actor.name,
+            target=url,
+        )
+        return {"message": "mirror removed", "url": url}
+
+    # ── Mirror-mode download proxy ──────────────────────────
+
+    @app.get("/v1/mirror/download/{filename}", tags=["mirrors"])
+    async def mirror_download_proxy(
+        filename: str,
+        _auth: TokenRecord | None = Depends(optional_reader_auth),
+    ):
+        """Proxy a package download from the upstream server.
+
+        Only available when the server is running in mirror mode.
+        Downloads the archive from the upstream on demand and caches
+        it locally for subsequent requests.
+        """
+        if not MIRROR_MODE:
+            raise HTTPException(404, "this endpoint is only available in mirror mode")
+
+        state = _get_state()
+        archives = state.archives_dir()
+        local = archives / filename
+        if local.is_file():
+            return FileResponse(local, media_type="application/octet-stream")
+
+        # Fetch from upstream
+        import httpx
+
+        upstream = MIRROR_UPSTREAM.rstrip("/")
+        headers: dict[str, str] = {}
+        if MIRROR_TOKEN:
+            headers["Authorization"] = f"Bearer {MIRROR_TOKEN}"
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=300, headers=headers, follow_redirects=True
+            ) as client:
+                resp = await client.get(f"{upstream}/v1/download/{filename}")
+                resp.raise_for_status()
+                archives.mkdir(parents=True, exist_ok=True)
+                tmp = local.with_suffix(".downloading")
+                tmp.write_bytes(resp.content)
+                tmp.rename(local)
+        except httpx.HTTPStatusError as exc:
+            raise HTTPException(
+                exc.response.status_code,
+                f"upstream returned {exc.response.status_code}",
+            )
+        except Exception as exc:
+            raise HTTPException(502, f"failed to fetch from upstream: {exc}")
+
+        return FileResponse(local, media_type="application/octet-stream")
 
     return app

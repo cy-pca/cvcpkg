@@ -213,6 +213,36 @@ class DownloadEventRow(Base):
     __table_args__ = (Index("ix_download_events_name_date", "package_name", "downloaded_at"),)
 
 
+class MirrorRow(Base):
+    """Registered mirror servers tracked by the primary."""
+
+    __tablename__ = "mirrors"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    url: Mapped[str] = mapped_column(String(2048), nullable=False, unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    contact: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    registered_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    last_health_check: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_healthy_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    healthy: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    rejected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    rejected_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    rejected_by: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    packages_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 # ── Engine / session management ─────────────────────────────────
 
 _engine = None
