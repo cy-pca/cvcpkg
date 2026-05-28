@@ -86,6 +86,11 @@ ORG_STORAGE_LIMIT_BYTES = int(
     os.environ.get("CVCPKG_ORG_STORAGE_LIMIT_BYTES", str(10 * 1024 * 1024 * 1024))
 )
 
+# Global cache storage limit in bytes across all namespaces (default 100 GiB, 0 = unlimited)
+GLOBAL_CACHE_STORAGE_LIMIT_BYTES = int(
+    os.environ.get("CVCPKG_GLOBAL_CACHE_STORAGE_LIMIT_BYTES", str(100 * 1024 * 1024 * 1024))
+)
+
 # CORS allowed origins (comma-separated, empty = deny all cross-origin)
 CORS_ALLOWED_ORIGINS = [
     o.strip() for o in os.environ.get("CVCPKG_CORS_ORIGINS", "").split(",") if o.strip()
@@ -948,6 +953,13 @@ def create_app(
         archive_url = f"/v1/download/{safe_filename}"
 
         if _use_db:
+            # Check global cache storage limit
+            if GLOBAL_CACHE_STORAGE_LIMIT_BYTES > 0:
+                total_used = await _db_packages.total_storage_bytes()
+                if total_used + size_bytes > GLOBAL_CACHE_STORAGE_LIMIT_BYTES:
+                    dest.unlink(missing_ok=True)
+                    raise HTTPException(413, "global cache storage limit exceeded")
+
             # Check org storage limit before registering
             if org and _db_orgs is not None:
                 if not await _db_orgs.check_storage_limit(org, size_bytes):
@@ -1627,6 +1639,9 @@ def create_app(
             raise HTTPException(501, "organizations require database backend")
         if not await _db_orgs.is_owner(slug, actor.name) and actor.role != TokenRole.admin:
             raise HTTPException(403, "only org owners or admins can update organization settings")
+        # storage_limit_bytes is admin-only
+        if body.storage_limit_bytes is not None and actor.role != TokenRole.admin:
+            raise HTTPException(403, "only admins can change storage limits")
         updated = await _db_orgs.update(
             slug,
             display_name=body.display_name,
@@ -1634,6 +1649,7 @@ def create_app(
             logo_url=body.logo_url,
             homepage=body.homepage,
             is_private=body.is_private,
+            storage_limit_bytes=body.storage_limit_bytes,
         )
         if updated is None:
             raise HTTPException(404, f"organization '{slug}' not found")
@@ -1763,6 +1779,58 @@ def create_app(
             detail=f"member={token_name}",
         )
         return {"message": f"removed '{token_name}' from '{slug}'"}
+
+    # ── Admin settings ──────────────────────────────────────
+
+    @app.get("/v1/admin/settings", tags=["admin"])
+    async def get_admin_settings(
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Return current server-wide settings (admin-only)."""
+        return {
+            "global_cache_storage_limit_bytes": GLOBAL_CACHE_STORAGE_LIMIT_BYTES,
+            "org_storage_limit_bytes": ORG_STORAGE_LIMIT_BYTES,
+            "max_upload_bytes": MAX_UPLOAD_BYTES,
+            "rate_limit_rpm": RATE_LIMIT_RPM,
+        }
+
+    @app.patch("/v1/admin/settings", tags=["admin"])
+    async def update_admin_settings(
+        request: Request,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Update server-wide settings at runtime (admin-only).
+
+        Accepts a JSON body with one or more of:
+        ``global_cache_storage_limit_bytes``, ``org_storage_limit_bytes``.
+        Changes take effect immediately but are **not** persisted across
+        server restarts — use environment variables for permanent config.
+        """
+        global GLOBAL_CACHE_STORAGE_LIMIT_BYTES, ORG_STORAGE_LIMIT_BYTES  # noqa: PLW0603
+
+        body = await request.json()
+        changed: dict[str, int] = {}
+        if "global_cache_storage_limit_bytes" in body:
+            val = int(body["global_cache_storage_limit_bytes"])
+            if val < 0:
+                raise HTTPException(422, "global_cache_storage_limit_bytes must be >= 0")
+            GLOBAL_CACHE_STORAGE_LIMIT_BYTES = val
+            changed["global_cache_storage_limit_bytes"] = val
+        if "org_storage_limit_bytes" in body:
+            val = int(body["org_storage_limit_bytes"])
+            if val < 0:
+                raise HTTPException(422, "org_storage_limit_bytes must be >= 0")
+            ORG_STORAGE_LIMIT_BYTES = val
+            changed["org_storage_limit_bytes"] = val
+        if not changed:
+            raise HTTPException(422, "no recognised settings in request body")
+        await _db_audit.record(
+            action=AuditAction.admin_settings_update,
+            actor=actor.name,
+            target="settings",
+            detail=str(changed),
+        )
+        return {"message": "settings updated", "updated": changed}
 
     # ── Org HTML pages ──────────────────────────────────────
 

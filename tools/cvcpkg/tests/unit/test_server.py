@@ -1300,3 +1300,235 @@ class TestCacheStatusEndpoint:
         # Missing required params
         resp = client.get("/v1/cache/status", params={"name": "zlib"})
         assert resp.status_code == 422
+
+
+# ── Phase 3: Storage limits & admin settings ────────────────────
+
+aiosqlite = pytest.importorskip("aiosqlite", reason="aiosqlite required for DB tests")
+
+
+@pytest.fixture()
+def db_server_env(tmp_path, monkeypatch):
+    """Create a DB-backed test server (SQLite) with admin + pub tokens.
+
+    Tokens are bootstrapped by seeding the DB directly before the
+    TestClient enters the lifespan.
+    """
+    import asyncio
+
+    db_path = tmp_path / "test.db"
+    db_url = f"sqlite+aiosqlite:///{db_path}"
+    monkeypatch.setenv("CVCPKG_DATABASE_URL", db_url)
+
+    # Pre-create tokens in the DB before starting the app.
+    from cvcpkg.server.db import create_tables, dispose_engine, init_db
+    from cvcpkg.server.db_stores import DbTokenStore
+
+    async def _seed():
+        init_db(db_url)
+        await create_tables()
+        store = DbTokenStore(tmp_path)
+        admin_raw = await store.create("test-admin", TokenRole.admin)
+        pub_raw = await store.create("test-publisher", TokenRole.publisher)
+        await dispose_engine()
+        return admin_raw, pub_raw
+
+    admin_token, pub_token = asyncio.run(_seed())
+
+    app = create_app(state_dir=tmp_path)
+    with TestClient(app) as client:
+        yield client, admin_token, pub_token, tmp_path
+
+
+class TestStorageLimits:
+    """Tests for per-org and global cache storage limits (Phase 3)."""
+
+    @staticmethod
+    def _create_org(client, admin_tok, slug="test-org"):
+        resp = client.post(
+            "/v1/orgs",
+            json={"slug": slug, "display_name": f"Test Org {slug}"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    @staticmethod
+    def _add_member(client, admin_tok, slug, member_name):
+        resp = client.post(
+            f"/v1/orgs/{slug}/members",
+            params={"token_name": member_name, "role": "member"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200, resp.text
+
+    @staticmethod
+    def _publish(client, token, name="pkg", version="1.0", org="", size=100):
+        data = b"x" * size
+        params = {
+            "name": name,
+            "version": version,
+            "platform": "linux",
+            "arch": "x86_64",
+        }
+        if org:
+            params["org"] = org
+        return client.post(
+            "/v1/publish",
+            params=params,
+            files={"file": (f"{name}.tar.zst", io.BytesIO(data))},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    def test_org_storage_limit_413(self, db_server_env):
+        """Publishing beyond org storage limit returns 413."""
+        client, admin_tok, pub_tok, _ = db_server_env
+        self._create_org(client, admin_tok, "small-org")
+        self._add_member(client, admin_tok, "small-org", "test-publisher")
+
+        # Set a tiny limit (200 bytes).
+        resp = client.patch(
+            "/v1/orgs/small-org",
+            json={"storage_limit_bytes": 200},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["storage_limit_bytes"] == 200
+
+        # First publish (100 bytes) should succeed.
+        resp = self._publish(client, pub_tok, name="a", version="1.0", org="small-org", size=100)
+        assert resp.status_code == 200
+
+        # Second publish (150 bytes) should exceed limit.
+        resp = self._publish(client, pub_tok, name="b", version="1.0", org="small-org", size=150)
+        assert resp.status_code == 413
+        assert "storage limit" in resp.json()["detail"].lower()
+
+    def test_storage_limit_update_admin_only(self, db_server_env):
+        """Non-admin cannot set storage_limit_bytes via PATCH."""
+        client, admin_tok, pub_tok, _ = db_server_env
+        self._create_org(client, admin_tok, "my-org")
+        # Add publisher as owner so they can access PATCH.
+        self._add_member(client, admin_tok, "my-org", "test-publisher")
+
+        # Publisher tries to set storage_limit_bytes → 403.
+        resp = client.patch(
+            "/v1/orgs/my-org",
+            json={"storage_limit_bytes": 999},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 403
+
+    def test_admin_can_set_org_limit(self, db_server_env):
+        """Admin can set per-org storage_limit_bytes."""
+        client, admin_tok, _, _ = db_server_env
+        self._create_org(client, admin_tok, "lab")
+
+        resp = client.patch(
+            "/v1/orgs/lab",
+            json={"storage_limit_bytes": 5_000_000},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["storage_limit_bytes"] == 5_000_000
+
+    def test_global_cache_limit_413(self, db_server_env, monkeypatch):
+        """Publishing beyond global cache storage limit returns 413."""
+        client, admin_tok, pub_tok, _ = db_server_env
+
+        # Set a very tight global limit via admin settings endpoint.
+        resp = client.patch(
+            "/v1/admin/settings",
+            json={"global_cache_storage_limit_bytes": 200},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+
+        # First publish (100 bytes) should succeed.
+        resp = self._publish(client, pub_tok, name="x", version="1.0", size=100)
+        assert resp.status_code == 200
+
+        # Second publish (150 bytes) should exceed global limit.
+        resp = self._publish(client, pub_tok, name="y", version="1.0", size=150)
+        assert resp.status_code == 413
+        assert "global" in resp.json()["detail"].lower()
+
+
+class TestAdminSettingsEndpoint:
+    """Tests for ``GET/PATCH /v1/admin/settings``."""
+
+    def test_get_settings_requires_admin(self, db_server_env):
+        client, _, pub_tok, _ = db_server_env
+        resp = client.get(
+            "/v1/admin/settings",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 403
+
+    def test_get_settings(self, db_server_env):
+        client, admin_tok, _, _ = db_server_env
+        resp = client.get(
+            "/v1/admin/settings",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "global_cache_storage_limit_bytes" in data
+        assert "org_storage_limit_bytes" in data
+        assert "max_upload_bytes" in data
+        assert "rate_limit_rpm" in data
+
+    def test_patch_settings_requires_admin(self, db_server_env):
+        client, _, pub_tok, _ = db_server_env
+        resp = client.patch(
+            "/v1/admin/settings",
+            json={"global_cache_storage_limit_bytes": 999},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 403
+
+    def test_patch_global_limit(self, db_server_env):
+        client, admin_tok, _, _ = db_server_env
+        resp = client.patch(
+            "/v1/admin/settings",
+            json={"global_cache_storage_limit_bytes": 50_000_000},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["updated"]["global_cache_storage_limit_bytes"] == 50_000_000
+
+        # Verify via GET.
+        resp = client.get(
+            "/v1/admin/settings",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.json()["global_cache_storage_limit_bytes"] == 50_000_000
+
+    def test_patch_org_default_limit(self, db_server_env):
+        client, admin_tok, _, _ = db_server_env
+        resp = client.patch(
+            "/v1/admin/settings",
+            json={"org_storage_limit_bytes": 1_000_000},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["updated"]["org_storage_limit_bytes"] == 1_000_000
+
+    def test_patch_empty_body_422(self, db_server_env):
+        client, admin_tok, _, _ = db_server_env
+        resp = client.patch(
+            "/v1/admin/settings",
+            json={"unknown_key": 1},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 422
+
+    def test_patch_negative_limit_422(self, db_server_env):
+        client, admin_tok, _, _ = db_server_env
+        resp = client.patch(
+            "/v1/admin/settings",
+            json={"global_cache_storage_limit_bytes": -1},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 422
