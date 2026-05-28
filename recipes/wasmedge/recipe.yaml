@@ -31,11 +31,23 @@ depends:
 toolchain:
   llvm:
     min_version: "14"
+    max_version: "21"
     recommended: "18"
+    notes: >
+      LLVM (with LLD) is required for ahead-of-time (AOT) compilation
+      support (-DWASMEDGE_USE_LLVM=ON).  Without it WasmEdge still
+      builds but can only interpret or JIT-compile Wasm modules.
+      The build scripts auto-detect LLVM on each platform:
+        Linux  — /usr/lib/llvm-{ver} (apt versioned installs)
+        macOS  — $(brew --prefix llvm@{ver}) (Homebrew keg)
+        Windows — C:\Program Files\LLVM (Chocolatey install)
+      Versions 14-21 are scanned in priority order (18 preferred).
+      If no versioned install is found, llvm-config on PATH is used
+      as a final fallback.
     install:
       apt: "llvm-18-dev lld-18 liblld-18-dev"
       brew: "llvm@18"
-      choco: "llvm --version=18"
+      choco: "llvm"
   gcc:
     min_version: "11"
   clang:
