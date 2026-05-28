@@ -1880,3 +1880,110 @@ class TestCacheBulkDelete:
             headers={"Authorization": f"Bearer {admin_tok}"},
         )
         assert resp.status_code == 501
+
+
+# ── Staleness GC ───────────────────────────────────────────────
+
+
+class TestCacheStalenessGC:
+    """Tests for ``POST /v1/cache/gc`` with ``valid_chain_hashes``."""
+
+    @staticmethod
+    def _publish(client, token, name="pkg", version="1.0", size=100, recipe_version=""):
+        params = {
+            "name": name,
+            "version": version,
+            "platform": "linux",
+            "arch": "x86_64",
+        }
+        if recipe_version:
+            params["recipe_version"] = recipe_version
+        return client.post(
+            "/v1/publish",
+            params=params,
+            files={"file": (f"{name}.tar.zst", io.BytesIO(b"x" * size))},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    def test_gc_stale_removes_unmatched(self, db_server_env):
+        """Entries with recipe_version not in valid set are deleted."""
+        client, admin_tok, pub_tok, _ = db_server_env
+        self._publish(client, pub_tok, name="a", recipe_version="hash_old")
+        self._publish(client, pub_tok, name="b", recipe_version="hash_current")
+
+        resp = client.post(
+            "/v1/cache/gc",
+            json={"valid_chain_hashes": ["hash_current"]},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["deleted_count"] == 1
+        deleted_names = [d["name"] for d in data["deleted"]]
+        assert "a" in deleted_names
+        assert "b" not in deleted_names
+
+    def test_gc_stale_preserves_releases(self, db_server_env):
+        """Release-tagged packages are never considered stale."""
+        client, admin_tok, pub_tok, _ = db_server_env
+        # Publish a release with an old recipe_version
+        client.post(
+            "/v1/publish",
+            params={
+                "name": "rel",
+                "version": "1.0",
+                "platform": "linux",
+                "arch": "x86_64",
+                "recipe_version": "hash_old",
+                "release_tag": "v1.0",
+            },
+            files={"file": ("rel.tar.zst", io.BytesIO(b"x" * 100))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+
+        resp = client.post(
+            "/v1/cache/gc",
+            json={"valid_chain_hashes": ["hash_new"]},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        # Release should NOT be deleted even though its hash is not in the valid set
+        assert resp.json()["deleted_count"] == 0
+
+    def test_gc_stale_empty_recipe_version_ignored(self, db_server_env):
+        """Entries with empty recipe_version are not considered stale."""
+        client, admin_tok, pub_tok, _ = db_server_env
+        # Publish with no recipe_version (empty string)
+        self._publish(client, pub_tok, name="norv", recipe_version="")
+
+        resp = client.post(
+            "/v1/cache/gc",
+            json={"valid_chain_hashes": ["some_hash"]},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["deleted_count"] == 0
+
+    def test_gc_stale_all_current(self, db_server_env):
+        """No deletions when all hashes are current."""
+        client, admin_tok, pub_tok, _ = db_server_env
+        self._publish(client, pub_tok, name="x", recipe_version="h1")
+        self._publish(client, pub_tok, name="y", recipe_version="h2")
+
+        resp = client.post(
+            "/v1/cache/gc",
+            json={"valid_chain_hashes": ["h1", "h2"]},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["deleted_count"] == 0
+
+    def test_gc_stale_invalid_type_422(self, db_server_env):
+        """Non-list valid_chain_hashes returns 422."""
+        client, admin_tok, _, _ = db_server_env
+        resp = client.post(
+            "/v1/cache/gc",
+            json={"valid_chain_hashes": "not-a-list"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 422

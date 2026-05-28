@@ -951,6 +951,8 @@ def create_app(
         Accepts a JSON body with one or more of:
         - ``max_age_seconds``: delete non-release packages older than this
         - ``max_storage_bytes``: evict oldest non-release packages to fit
+        - ``valid_chain_hashes``: list of current chain hashes; entries
+          whose ``recipe_version`` is not in this set are stale and removed
         """
         if not _use_db:
             raise HTTPException(501, "GC requires database backend")
@@ -970,8 +972,18 @@ def create_app(
                 raise HTTPException(422, "max_storage_bytes must be >= 0")
             deleted.extend(await _db_packages.gc_by_storage(cap))
 
-        if not body or not any(k in body for k in ("max_age_seconds", "max_storage_bytes")):
-            raise HTTPException(422, "specify max_age_seconds and/or max_storage_bytes")
+        if "valid_chain_hashes" in body:
+            hashes = body["valid_chain_hashes"]
+            if not isinstance(hashes, list):
+                raise HTTPException(422, "valid_chain_hashes must be a list of strings")
+            deleted.extend(await _db_packages.gc_by_staleness(set(hashes)))
+
+        if not body or not any(
+            k in body for k in ("max_age_seconds", "max_storage_bytes", "valid_chain_hashes")
+        ):
+            raise HTTPException(
+                422, "specify max_age_seconds, max_storage_bytes, and/or valid_chain_hashes"
+            )
 
         # Update org storage counters for deleted packages.
         org_deltas: dict[str, int] = {}

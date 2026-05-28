@@ -652,6 +652,44 @@ class DbPackageIndex:
                 await session.execute(sa_delete(PackageRow).where(PackageRow.id.in_(ids_to_delete)))
             return to_delete
 
+    async def gc_by_staleness(self, valid_chain_hashes: set[str]) -> list[dict]:
+        """Delete non-release packages whose recipe_version is not in *valid_chain_hashes*.
+
+        Returns list of deleted package info dicts.
+        """
+        from sqlalchemy import delete as sa_delete
+
+        async with get_session() as session:
+            # Fetch non-release, non-yanked packages.
+            rows = (
+                (
+                    await session.execute(
+                        select(PackageRow).where(
+                            PackageRow.yanked.is_(False),
+                            PackageRow.release_tag == "",
+                            PackageRow.recipe_version != "",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+            stale = [r for r in rows if r.recipe_version not in valid_chain_hashes]
+            deleted = [
+                {
+                    "name": r.name,
+                    "version": r.version,
+                    "size_bytes": r.size_bytes,
+                    "org_slug": r.org_slug,
+                }
+                for r in stale
+            ]
+            if stale:
+                ids = [r.id for r in stale]
+                await session.execute(sa_delete(PackageRow).where(PackageRow.id.in_(ids)))
+            return deleted
+
 
 # ── DB Organization Store ───────────────────────────────────────
 
