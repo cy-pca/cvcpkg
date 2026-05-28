@@ -226,6 +226,43 @@ Environment variables `CVCPKG_SERVER_CACHE=1` and
 `CVCPKG_SERVER_CACHE_PUSH=1` provide non-interactive equivalents for CI
 workflow files.
 
+### 3.5 Server Cache Storage Backend
+
+The server-side build cache must reuse the same pluggable storage
+backend infrastructure already in place for published packages.  This
+means cache archives can live on any backend the server is configured
+to use, not just local disk.
+
+**Supported backends** (same as package storage):
+
+| Backend | URI scheme | Notes |
+|---|---|---|
+| Local filesystem | `file://` | Default.  Cache stored under `<state_dir>/cache/` |
+| Amazon S3 | `s3://bucket/prefix` | Via `S3Backend` or `S3CliBackend` |
+| Azure Blob Storage | `az://container/prefix` | Via `AzureBlobBackend` |
+| SFTP | `sftp://host/path` | Via `SftpBackend` |
+| Rclone | `rclone://remote:path` | Via `RcloneBackend` (supports 40+ providers) |
+
+**Configuration:**
+
+```
+# Default: same backend as packages, under a /cache/ prefix.
+CVCPKG_CACHE_STORAGE_URI=s3://my-bucket/cvcpkg-cache/
+
+# If not set, falls back to the package storage URI with a /cache/
+# subdirectory appended.
+```
+
+**Design principle:** The `StorageBackend` protocol already defines
+`upload()`, `download()`, `delete()`, and `list_objects()` — exactly
+the operations the server-side cache needs.  The cache layer calls
+the same backend instance (or a separate instance pointed at a
+different prefix/bucket) rather than implementing its own I/O.
+
+This ensures cache storage inherits all existing backend features:
+retry logic, streaming uploads, multipart support, authentication,
+and provider-specific optimizations.
+
 ---
 
 ## 4. Cache Management
@@ -539,6 +576,10 @@ considered complete.
 
 - Add `recipe_version` filter to `GET /v1/packages`.
 - Add `GET /v1/cache/status` lightweight probe endpoint.
+- **Storage backend:** Server-side cache uses the same pluggable
+  `StorageBackend` as package storage (filesystem, S3, Azure, SFTP,
+  Rclone).  Default to filesystem under `<state_dir>/cache/`.
+  Configurable via `CVCPKG_CACHE_STORAGE_URI`.
 - Wire `--server-cache` into `build_all()` flow.
 - Download + extract + local cache population from server hits.
 - **Org cache isolation:** Scope all server cache lookups by org_slug.
@@ -546,7 +587,8 @@ considered complete.
 - **Private org ACL:** Gate cache endpoints behind authentication +
   membership check for private orgs.
 - **Unit tests:** mock server cache hit/miss, org-scoped lookup,
-  private org auth/membership checks, cross-org isolation.
+  private org auth/membership checks, cross-org isolation,
+  storage backend integration.
 - **Integration tests:** server cache push/pull, fallback to build,
   private org end-to-end.
 
