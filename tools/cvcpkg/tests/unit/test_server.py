@@ -1532,3 +1532,172 @@ class TestAdminSettingsEndpoint:
             headers={"Authorization": f"Bearer {admin_tok}"},
         )
         assert resp.status_code == 422
+
+
+# ── Phase 4: Cache stats & GC ──────────────────────────────────
+
+
+class TestCacheStats:
+    """Tests for ``GET /v1/cache/stats``."""
+
+    @staticmethod
+    def _publish(client, token, name="pkg", version="1.0", org="", size=100):
+        params = {
+            "name": name,
+            "version": version,
+            "platform": "linux",
+            "arch": "x86_64",
+        }
+        if org:
+            params["org"] = org
+        return client.post(
+            "/v1/publish",
+            params=params,
+            files={"file": (f"{name}.tar.zst", io.BytesIO(b"x" * size))},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    def test_stats_empty(self, db_server_env):
+        client, admin_tok, _, _ = db_server_env
+        resp = client.get(
+            "/v1/cache/stats",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_packages"] == 0
+        assert data["total_size_bytes"] == 0
+
+    def test_stats_after_publish(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        self._publish(client, pub_tok, name="a", version="1.0", size=200)
+        self._publish(client, pub_tok, name="b", version="1.0", size=300)
+
+        resp = client.get(
+            "/v1/cache/stats",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_packages"] == 2
+        assert data["total_size_bytes"] == 500
+
+    def test_stats_requires_auth(self, db_server_env):
+        client, *_ = db_server_env
+        resp = client.get("/v1/cache/stats")
+        assert resp.status_code == 401
+
+    def test_stats_yaml_fallback(self, server_env):
+        """YAML backend still returns a response (no DB required)."""
+        client, _, pub_tok, _ = server_env
+        # Publish a package first.
+        client.post(
+            "/v1/publish",
+            params={"name": "z", "version": "1.0", "platform": "linux", "arch": "x86_64"},
+            files={"file": ("z.tar.zst", io.BytesIO(b"data"))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        resp = client.get(
+            "/v1/cache/stats",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_packages"] == 1
+
+
+class TestCacheGC:
+    """Tests for ``POST /v1/cache/gc``."""
+
+    @staticmethod
+    def _publish(client, token, name="pkg", version="1.0", size=100):
+        return client.post(
+            "/v1/publish",
+            params={
+                "name": name,
+                "version": version,
+                "platform": "linux",
+                "arch": "x86_64",
+            },
+            files={"file": (f"{name}.tar.zst", io.BytesIO(b"x" * size))},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    def test_gc_requires_admin(self, db_server_env):
+        client, _, pub_tok, _ = db_server_env
+        resp = client.post(
+            "/v1/cache/gc",
+            json={"max_age_seconds": 3600},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 403
+
+    def test_gc_by_storage(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        self._publish(client, pub_tok, name="a", version="1.0", size=100)
+        self._publish(client, pub_tok, name="b", version="1.0", size=200)
+        self._publish(client, pub_tok, name="c", version="1.0", size=300)
+
+        # Evict to fit under 400 bytes — should remove oldest (a + b).
+        resp = client.post(
+            "/v1/cache/gc",
+            json={"max_storage_bytes": 400},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["deleted_count"] >= 1
+
+        # Verify stats after GC.
+        resp = client.get(
+            "/v1/cache/stats",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.json()["total_size_bytes"] <= 400
+
+    def test_gc_no_params_422(self, db_server_env):
+        client, admin_tok, _, _ = db_server_env
+        resp = client.post(
+            "/v1/cache/gc",
+            json={},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 422
+
+    def test_gc_requires_db(self, server_env):
+        """YAML backend returns 501."""
+        client, admin_tok, _, _ = server_env
+        resp = client.post(
+            "/v1/cache/gc",
+            json={"max_age_seconds": 3600},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 501
+
+    def test_gc_preserves_release_tagged(self, db_server_env):
+        """GC should not delete release-tagged packages."""
+        client, admin_tok, pub_tok, _ = db_server_env
+        # Publish a release-tagged package.
+        resp = client.post(
+            "/v1/publish",
+            params={
+                "name": "rel",
+                "version": "1.0",
+                "platform": "linux",
+                "arch": "x86_64",
+                "release_tag": "v1.0",
+            },
+            files={"file": ("rel.tar.zst", io.BytesIO(b"x" * 100))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+
+        # Try to GC everything.
+        resp = client.post(
+            "/v1/cache/gc",
+            json={"max_storage_bytes": 0},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        # Release-tagged should NOT be deleted.
+        assert resp.json()["deleted_count"] == 0

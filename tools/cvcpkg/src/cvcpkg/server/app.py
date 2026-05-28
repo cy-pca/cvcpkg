@@ -804,6 +804,77 @@ def create_app(
             )
         return miss
 
+    # ── Cache stats & GC ────────────────────────────────────
+
+    @app.get("/v1/cache/stats", tags=["cache"])
+    async def cache_stats(
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Return storage statistics: total, per-org, and package counts."""
+        if not _use_db:
+            # YAML backend — simple stats
+            state = _get_state()
+            bundles = [b for b in state.index.get("bundles", []) if not b.get("yanked")]
+            total_bytes = sum(b.get("size_bytes", 0) for b in bundles)
+            return {
+                "total_packages": len(bundles),
+                "total_size_bytes": total_bytes,
+                "orgs": {},
+            }
+        return await _db_packages.cache_stats()
+
+    @app.post("/v1/cache/gc", tags=["cache"])
+    async def cache_gc(
+        request: Request,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Run garbage collection on cached packages (admin-only).
+
+        Accepts a JSON body with one or more of:
+        - ``max_age_seconds``: delete non-release packages older than this
+        - ``max_storage_bytes``: evict oldest non-release packages to fit
+        """
+        if not _use_db:
+            raise HTTPException(501, "GC requires database backend")
+
+        body = await request.json()
+        deleted: list[dict] = []
+
+        if "max_age_seconds" in body:
+            age = float(body["max_age_seconds"])
+            if age <= 0:
+                raise HTTPException(422, "max_age_seconds must be > 0")
+            deleted.extend(await _db_packages.gc_by_age(age))
+
+        if "max_storage_bytes" in body:
+            cap = int(body["max_storage_bytes"])
+            if cap < 0:
+                raise HTTPException(422, "max_storage_bytes must be >= 0")
+            deleted.extend(await _db_packages.gc_by_storage(cap))
+
+        if not body or not any(k in body for k in ("max_age_seconds", "max_storage_bytes")):
+            raise HTTPException(422, "specify max_age_seconds and/or max_storage_bytes")
+
+        # Update org storage counters for deleted packages.
+        org_deltas: dict[str, int] = {}
+        for d in deleted:
+            org_slug = d.get("org_slug", "")
+            if org_slug and _db_orgs is not None:
+                org_deltas[org_slug] = org_deltas.get(org_slug, 0) + d["size_bytes"]
+        for org_slug, delta in org_deltas.items():
+            await _db_orgs.update_storage_used(org_slug, -delta)
+
+        await _db_audit.record(
+            action=AuditAction.cache_gc,
+            actor=actor.name,
+            target="cache",
+            detail=f"deleted={len(deleted)} params={body}",
+        )
+        return {
+            "deleted_count": len(deleted),
+            "deleted": deleted,
+        }
+
     # ── Download (read) ─────────────────────────────────────
 
     @app.get("/v1/download/{filename}", tags=["packages"])

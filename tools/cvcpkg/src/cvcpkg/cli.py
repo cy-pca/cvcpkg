@@ -2493,6 +2493,116 @@ def cache_purge_cmd(max_size: str | None, max_age_days: int | None, purge_all: b
     click.echo(f"Removed {removed} entries.")
 
 
+@cache_group.command("server-stats")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_CACHE",
+    required=True,
+    help="Server URL.",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_SERVER_CACHE_TOKEN",
+    default="",
+    help="Bearer token.",
+)
+def cache_server_stats_cmd(server: str, token: str) -> None:
+    """Show storage statistics from the remote cache server."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    url = f"{server.rstrip('/')}/v1/cache/stats"
+    req = urllib.request.Request(url, method="GET")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        click.echo(f"Server error: {e.code} {e.reason}", err=True)
+        raise SystemExit(1)
+    except (urllib.error.URLError, OSError) as e:
+        click.echo(f"Connection error: {e}", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"Total packages: {data['total_packages']}")
+    click.echo(f"Total size:     {_human_size(data['total_size_bytes'])}")
+    orgs = data.get("orgs", {})
+    if orgs:
+        click.echo("\nPer-organization:")
+        for slug, info in sorted(orgs.items()):
+            label = slug or "(no org)"
+            click.echo(f"  {label}: {info['count']} packages, {_human_size(info['size_bytes'])}")
+
+
+@cache_group.command("server-gc")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_CACHE",
+    required=True,
+    help="Server URL.",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_SERVER_CACHE_TOKEN",
+    default="",
+    help="Bearer token (must be admin).",
+)
+@click.option(
+    "--max-age-days",
+    default=None,
+    type=int,
+    help="Delete non-release packages older than this many days.",
+)
+@click.option(
+    "--max-size",
+    default=None,
+    help="Maximum total storage (e.g. 10G). Evicts oldest non-release packages.",
+)
+def cache_server_gc_cmd(
+    server: str,
+    token: str,
+    max_age_days: int | None,
+    max_size: str | None,
+) -> None:
+    """Run garbage collection on the remote cache server (admin-only)."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    if max_age_days is None and max_size is None:
+        click.echo("Specify --max-age-days and/or --max-size.", err=True)
+        raise SystemExit(1)
+
+    body: dict = {}
+    if max_age_days is not None:
+        body["max_age_seconds"] = max_age_days * 86400.0
+    if max_size is not None:
+        body["max_storage_bytes"] = _parse_size(max_size)
+
+    url = f"{server.rstrip('/')}/v1/cache/gc"
+    payload = json.dumps(body).encode()
+    req = urllib.request.Request(url, data=payload, method="POST")
+    req.add_header("Content-Type", "application/json")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:  # noqa: S310
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        click.echo(f"Server error: {e.code} {e.reason}", err=True)
+        raise SystemExit(1)
+    except (urllib.error.URLError, OSError) as e:
+        click.echo(f"Connection error: {e}", err=True)
+        raise SystemExit(1)
+
+    count = data.get("deleted_count", 0)
+    click.echo(f"GC removed {count} package(s).")
+    for d in data.get("deleted", []):
+        click.echo(f"  {d['name']}=={d['version']} ({d['size_bytes']} bytes)")
+
+
 def _auto_arch(platform: str) -> str:
     """Resolve architecture for a given platform."""
     if platform == "wasm":

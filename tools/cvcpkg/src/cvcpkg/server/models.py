@@ -65,6 +65,7 @@ class AuditAction(str, Enum):
     org_remove_member = "org_remove_member"
     org_update = "org_update"
     admin_settings_update = "admin_settings_update"
+    cache_gc = "cache_gc"
 
 
 # ── Token management ───────────────────────────────────────────
