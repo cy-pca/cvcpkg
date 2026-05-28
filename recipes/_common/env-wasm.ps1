@@ -108,6 +108,13 @@ if (-not ($env:PATH -split ';' | Where-Object { $_ -eq $gitUsrBin })) {
     $env:PATH = "$gitUsrBin;$env:PATH"
 }
 
+# Ensure MAKE points to mingw32-make so that autotools' recursive $(MAKE)
+# calls resolve correctly.  Without this, configure detects "make does not
+# set $(MAKE)" and hardcodes MAKE=make in generated Makefiles, but there is
+# no make.exe on Windows — only mingw32-make.exe (from Strawberry Perl).
+$mgm = Get-Command mingw32-make -ErrorAction SilentlyContinue
+if ($mgm) { $env:MAKE = 'mingw32-make' }
+
 # Provide MSYS-style paths for Emscripten compiler tools.  emconfigure sets
 # CC/CXX/AR/RANLIB to full Windows paths (C:\...\emcc.bat) but GMP and other
 # autotools projects' custom configure macros pass those values through shell
