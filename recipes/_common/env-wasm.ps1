@@ -108,6 +108,14 @@ if (-not ($env:PATH -split ';' | Where-Object { $_ -eq $gitUsrBin })) {
     $env:PATH = "$gitUsrBin;$env:PATH"
 }
 
+# mingw32-make auto-detects sh.exe on PATH and overrides the Makefile SHELL
+# variable with the full Windows path.  When that path contains spaces
+# (e.g. "C:/Program Files/Git/usr/bin/sh.exe"), Makefile recipes that use
+# $(SHELL) — such as libtool — break.  Use the 8.3 short path instead.
+$fso = New-Object -ComObject Scripting.FileSystemObject
+$script:shellShortPath = $fso.GetFile($script:gitBash).ShortPath -replace '\\','/'
+$env:SHELL = $script:shellShortPath
+
 # Ensure MAKE points to mingw32-make so that autotools' recursive $(MAKE)
 # calls resolve correctly.  Without this, configure detects "make does not
 # set $(MAKE)" and hardcodes MAKE=make in generated Makefiles, but there is
