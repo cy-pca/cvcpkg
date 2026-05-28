@@ -103,18 +103,16 @@ if (-not $script:gitBash) { throw "Cannot find Git Bash (non-WSL). Install Git f
 
 # Add Git's usr/bin to PATH so autotools Makefiles can find Unix utilities
 # (rm, cp, mv, install, etc.) when invoked via emmake/mingw32-make.
+# Use the 8.3 short path so that mingw32-make's SHELL auto-detection
+# (which scans PATH for sh.exe) produces a space-free path.  Without
+# this, SHELL becomes "C:/Program Files/Git/usr/bin/sh.exe" and any
+# Makefile recipe that uses $(SHELL) — such as libtool — breaks.
 $gitUsrBin = Split-Path $script:gitBash
-if (-not ($env:PATH -split ';' | Where-Object { $_ -eq $gitUsrBin })) {
-    $env:PATH = "$gitUsrBin;$env:PATH"
-}
-
-# mingw32-make auto-detects sh.exe on PATH and overrides the Makefile SHELL
-# variable with the full Windows path.  When that path contains spaces
-# (e.g. "C:/Program Files/Git/usr/bin/sh.exe"), Makefile recipes that use
-# $(SHELL) — such as libtool — break.  Use the 8.3 short path instead.
 $fso = New-Object -ComObject Scripting.FileSystemObject
-$script:shellShortPath = $fso.GetFile($script:gitBash).ShortPath -replace '\\','/'
-$env:SHELL = $script:shellShortPath
+$gitUsrBinShort = $fso.GetFolder($gitUsrBin).ShortPath
+if (-not ($env:PATH -split ';' | Where-Object { $_ -eq $gitUsrBinShort })) {
+    $env:PATH = "$gitUsrBinShort;$env:PATH"
+}
 
 # Ensure MAKE points to mingw32-make so that autotools' recursive $(MAKE)
 # calls resolve correctly.  Without this, configure detects "make does not
