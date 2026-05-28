@@ -125,7 +125,8 @@ $script:emToolExports = (
     "export CC='$(ConvertTo-MsysPath (Join-Path $emscriptenDir 'emcc.bat'))'" +
     " CXX='$(ConvertTo-MsysPath (Join-Path $emscriptenDir 'em++.bat'))'" +
     " AR='$(ConvertTo-MsysPath (Join-Path $emscriptenDir 'emar.bat'))'" +
-    " RANLIB='$(ConvertTo-MsysPath (Join-Path $emscriptenDir 'emranlib.bat'))'"
+    " RANLIB='$(ConvertTo-MsysPath (Join-Path $emscriptenDir 'emranlib.bat'))'" +
+    " CONFIG_SHELL=/usr/bin/sh SHELL=/usr/bin/sh"
 )
 
 Write-Host "-- env-wasm.ps1 loaded --"
