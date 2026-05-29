@@ -1356,6 +1356,10 @@ def create_app(
                 org_slug=org,
             )
 
+            # Auto-create stub tag rows for any new tags
+            if pkg_tags and _db_tags is not None:
+                await _db_tags.ensure_tags(tags_csv=pkg_tags, org_slug=org, created_by=actor.name)
+
             # Track org storage usage
             if org and _db_orgs is not None:
                 await _db_orgs.update_storage_used(org, size_bytes)
@@ -1656,6 +1660,14 @@ def create_app(
                 maintainer=session.maintainer,
                 tags=session.tags,
             )
+            # Auto-create stub tag rows for any new tags
+            if session.tags and _db_tags is not None:
+                await _db_tags.ensure_tags(
+                    tags_csv=session.tags,
+                    org_slug=getattr(session, "org_slug", ""),
+                    created_by=actor.name,
+                )
+
             await _db_audit.record(
                 action=AuditAction.publish,
                 actor=actor.name,
