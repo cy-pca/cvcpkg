@@ -169,8 +169,13 @@ jobs:
             Set-ExecutionPolicy Bypass -Scope Process -Force
             [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
             iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-            # Refresh PATH so choco is found immediately
+            # Refresh PATH from registry, then ensure the choco bin dir is
+            # present even if the installer's setx hasn't propagated yet.
             $env:PATH = [System.Environment]::GetEnvironmentVariable('PATH', 'Machine') + ';' + [System.Environment]::GetEnvironmentVariable('PATH', 'User')
+            $chocoDir = 'C:\ProgramData\chocolatey\bin'
+            if ((Test-Path $chocoDir) -and ($env:PATH -notlike "*$chocoDir*")) {
+              $env:PATH = "$chocoDir;$env:PATH"
+            }
           }
           choco install ninja -y
           choco install cmake --version=3.31.7 --installargs 'ADD_CMAKE_TO_PATH=System' -y
