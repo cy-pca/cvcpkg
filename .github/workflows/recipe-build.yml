@@ -175,17 +175,17 @@ jobs:
           choco install ninja -y
           choco install cmake --version=3.31.7 --installargs 'ADD_CMAKE_TO_PATH=System' -y
           choco install nasm -y
-          # NASM installs to "C:\Program Files\NASM" — add it to PATH
+          # NASM installs to "C:\Program Files\NASM" - add it to PATH
           # so OpenSSL and libjpeg-turbo can find it for optimised assembly.
-          echo "C:\Program Files\NASM" | Out-File -Append $env:GITHUB_PATH
+          echo 'C:\Program Files\NASM' | Out-File -Append $env:GITHUB_PATH
           # vcpkg is pre-installed on windows-latest at C:\vcpkg;
           # on self-hosted runners we bootstrap it if absent.
-          if (-not (Test-Path "C:\vcpkg\vcpkg.exe")) {
-            Write-Host "vcpkg not found – bootstrapping into C:\vcpkg ..."
+          if (-not (Test-Path 'C:\vcpkg\vcpkg.exe')) {
+            Write-Host 'vcpkg not found - bootstrapping into C:\vcpkg ...'
             git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
             & C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
           }
-          echo "C:\vcpkg" | Out-File -Append $env:GITHUB_PATH
+          echo 'C:\vcpkg' | Out-File -Append $env:GITHUB_PATH
           vcpkg version
 
       # ── Activate MSVC environment (Windows) ──
