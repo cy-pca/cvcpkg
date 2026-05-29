@@ -3202,6 +3202,177 @@ def token_revoke(server: str, token: str, name: str):
     click.echo(f"Revoked token '{name}'.")
 
 
+@token_group.command("set-email")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--name", required=True, help="Token name to update.")
+@click.option("--email", required=True, help="New email address.")
+def token_set_email(server: str, token: str, name: str, email: str):
+    """Set the email address on a token.
+
+    Admins can update any token's email.  Non-admin users can only
+    update their own.
+    """
+    _api_request(
+        "patch",
+        f"{server.rstrip('/')}/v1/tokens/{name}/email",
+        token,
+        json={"email": email},
+    )
+    click.echo(f"Email for '{name}' updated to '{email}'.")
+
+
+@token_group.command("requests")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Admin bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option(
+    "--status",
+    type=click.Choice(["pending", "approved", "denied"]),
+    default=None,
+    help="Filter by status (default: all).",
+)
+def token_requests(server: str, token: str, status: str | None):
+    """List token registration requests."""
+    url = f"{server.rstrip('/')}/v1/token-requests"
+    params = {}
+    if status:
+        params["status"] = status
+    data = _api_request("get", url, token, params=params)
+    requests = data.get("requests", [])
+    if not requests:
+        click.echo("No token requests found.")
+        return
+    click.echo(f"{'ID':<6} {'Name':<20} {'Email':<30} {'Role':<12} {'Status':<10}")
+    click.echo("-" * 78)
+    for r in requests:
+        click.echo(
+            f"{r['id']:<6} {r['name']:<20} {r['email']:<30} "
+            f"{r['role']:<12} {r['status']:<10}"
+        )
+
+
+@token_group.command("approve")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Admin bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.argument("request_id", type=int)
+def token_approve(server: str, token: str, request_id: int):
+    """Approve a pending token registration request."""
+    url = f"{server.rstrip('/')}/v1/token-requests/{request_id}/approve"
+    data = _api_request("post", url, token)
+    click.echo(data.get("message", "approved"))
+    raw = data.get("token")
+    if raw:
+        click.echo(f"  Token: {raw}")
+        click.echo("  ⚠ Send this token to the requester — it will not be shown again.")
+
+
+@token_group.command("deny")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Admin bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.argument("request_id", type=int)
+def token_deny(server: str, token: str, request_id: int):
+    """Deny a pending token registration request."""
+    url = f"{server.rstrip('/')}/v1/token-requests/{request_id}/deny"
+    data = _api_request("post", url, token)
+    click.echo(data.get("message", "denied"))
+
+
+# ── self-service registration (client → server API) ────────────
+
+
+@cli.command("register")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option("--name", required=True, help="Desired token name / identity.")
+@click.option("--email", required=True, help="Email address.")
+@click.option(
+    "--role",
+    type=click.Choice(["reader", "publisher"]),
+    default="reader",
+    help="Requested role.  [default: reader]",
+)
+def register_cmd(server: str, name: str, email: str, role: str):
+    """Register for an API token on a cvcpkg-server.
+
+    Depending on the server's registration mode, you will either
+    receive a token immediately (open mode) or your request will be
+    queued for admin approval (admin-gated mode).
+    """
+    import httpx
+
+    url = f"{server.rstrip('/')}/v1/register"
+    body = {"name": name, "email": email, "role": role}
+    with httpx.Client(timeout=30) as client:
+        resp = client.post(url, json=body)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    data = resp.json()
+    click.echo(data.get("message", "done"))
+    token_value = data.get("token")
+    if token_value:
+        click.echo(f"  Token: {token_value}")
+        click.echo("  ⚠ Save this token — it will not be shown again.")
+        click.echo(f"  Configure your client: cvcpkg config set token {token_value}")
+    request_id = data.get("request_id")
+    if request_id:
+        click.echo(f"  Request ID: {request_id}")
+        click.echo("  You will be notified when an admin reviews your request.")
+
+
 # ── remote org member management (client → server API) ─────────
 
 
