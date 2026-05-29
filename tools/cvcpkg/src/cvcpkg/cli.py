@@ -3089,6 +3089,215 @@ def _compute_current_chain_hashes() -> set[str]:
     return hashes
 
 
+# ── remote token management (client → server API) ──────────────
+
+
+def _api_request(method: str, url: str, token: str, **kwargs):
+    """Make an authenticated HTTP request; return parsed JSON or raise."""
+    import httpx
+
+    headers = {"Authorization": f"Bearer {token}"}
+    with httpx.Client(timeout=30) as client:
+        resp = getattr(client, method)(url, headers=headers, **kwargs)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    return resp.json()
+
+
+@cli.group("token")
+def token_group() -> None:
+    """Manage server API tokens (requires admin token).
+
+    These commands talk to the running cvcpkg-server via its REST API,
+    so mutations go through the same code path as normal requests —
+    no direct database access, no race conditions.
+    """
+
+
+@token_group.command("create")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Admin bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--name", required=True, help="Name for the new token.")
+@click.option(
+    "--role",
+    required=True,
+    type=click.Choice(["reader", "publisher", "admin"]),
+    help="Role to assign.",
+)
+@click.option("--expires-in-days", type=int, default=None, help="Optional expiry in days.")
+def token_create(server: str, token: str, name: str, role: str, expires_in_days: int | None):
+    """Create a new API token on the server."""
+    body: dict = {"name": name, "role": role}
+    if expires_in_days is not None:
+        body["expires_in_days"] = expires_in_days
+    data = _api_request("post", f"{server.rstrip('/')}/v1/tokens", token, json=body)
+    click.echo(f"Created token '{data['name']}' (role: {data['role']})")
+    click.echo(f"  Token: {data['token']}")
+    click.echo("  ⚠ Store this token securely — it will not be shown again.")
+    if data.get("expires_at"):
+        click.echo(f"  Expires: {data['expires_at']}")
+
+
+@token_group.command("list")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Admin bearer token.  [env: CVCPKG_TOKEN]",
+)
+def token_list(server: str, token: str):
+    """List all API tokens on the server."""
+    data = _api_request("get", f"{server.rstrip('/')}/v1/tokens", token)
+    tokens = data.get("tokens", [])
+    if not tokens:
+        click.echo("No tokens found.")
+        return
+    for t in tokens:
+        status = " [REVOKED]" if t.get("revoked") else ""
+        expires = f"  expires={t['expires_at']}" if t.get("expires_at") else ""
+        click.echo(f"  {t['name']:<24} role={t['role']:<12}{expires}{status}")
+
+
+@token_group.command("revoke")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Admin bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--name", required=True, help="Name of the token to revoke.")
+def token_revoke(server: str, token: str, name: str):
+    """Revoke an API token on the server."""
+    _api_request("delete", f"{server.rstrip('/')}/v1/tokens/{name}", token)
+    click.echo(f"Revoked token '{name}'.")
+
+
+# ── remote org member management (client → server API) ─────────
+
+
+@cli.group("org")
+def org_group() -> None:
+    """Manage organizations on the server.
+
+    Organization owners can add/remove members to control who can
+    publish to the organization's namespace — without affecting the
+    member's access to anything else.
+    """
+
+
+@org_group.command("members")
+@click.argument("slug")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token (org owner or admin).  [env: CVCPKG_TOKEN]",
+)
+def org_members(slug: str, server: str, token: str):
+    """List members of an organization."""
+    data = _api_request("get", f"{server.rstrip('/')}/v1/orgs/{slug}", token)
+    members = data.get("members", [])
+    if not members:
+        click.echo(f"Organization '{slug}' has no members.")
+        return
+    click.echo(f"Members of '{slug}':")
+    for m in members:
+        click.echo(f"  {m['token_name']:<24} role={m['role']}")
+
+
+@org_group.command("add-member")
+@click.argument("slug")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token (org owner or admin).  [env: CVCPKG_TOKEN]",
+)
+@click.option("--name", required=True, help="Token name to add as member.")
+@click.option(
+    "--role",
+    type=click.Choice(["owner", "member"]),
+    default="member",
+    help="Org-level role (default: member).",
+)
+def org_add_member(slug: str, server: str, token: str, name: str, role: str):
+    """Add a member to an organization."""
+    url = f"{server.rstrip('/')}/v1/orgs/{slug}/members"
+    _api_request("post", url, token, params={"token_name": name, "role": role})
+    click.echo(f"Added '{name}' to '{slug}' as {role}.")
+
+
+@org_group.command("remove-member")
+@click.argument("slug")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token (org owner or admin).  [env: CVCPKG_TOKEN]",
+)
+@click.option("--name", required=True, help="Token name to remove.")
+def org_remove_member(slug: str, server: str, token: str, name: str):
+    """Remove a member from an organization.
+
+    This revokes access to the organization's packages without
+    affecting the member's global token or access to other orgs.
+    """
+    url = f"{server.rstrip('/')}/v1/orgs/{slug}/members/{name}"
+    _api_request("delete", url, token)
+    click.echo(f"Removed '{name}' from '{slug}'.")
+
+
 # ── main() wrapper for backward compat with tests ──────────────
 
 
