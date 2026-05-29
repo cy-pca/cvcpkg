@@ -464,6 +464,32 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
     return env
 
 
+def _patch_linux_rpath(install_dir: Path) -> None:
+    """Set RPATH to $ORIGIN on all shared libraries in *install_dir*.
+
+    This makes Linux shared-library bundles relocatable without
+    requiring LD_LIBRARY_PATH at runtime.  Only runs when patchelf
+    is available; silently skips otherwise.
+    """
+    patchelf = shutil.which("patchelf")
+    if not patchelf:
+        return
+    lib_dir = install_dir / "lib"
+    if not lib_dir.is_dir():
+        return
+    for so in lib_dir.rglob("*.so*"):
+        if not so.is_file() or so.is_symlink():
+            continue
+        subprocess.run(
+            [patchelf, "--remove-rpath", str(so)],
+            capture_output=True,
+        )
+        subprocess.run(
+            [patchelf, "--set-rpath", "$ORIGIN", str(so)],
+            capture_output=True,
+        )
+
+
 def run_build(ctx: BuildContext) -> None:
     """Execute the build script for the given context."""
     matrix = _select_matrix_entry(ctx.recipe, ctx.platform, ctx.host_platform)
@@ -503,6 +529,10 @@ def run_build(ctx: BuildContext) -> None:
     )
     if result.returncode != 0:
         raise BuildError(f"Build script for {ctx.recipe.name} exited with code {result.returncode}")
+
+    # Patch RPATH on Linux shared builds so bundles are relocatable.
+    if ctx.platform == "linux" and ctx.link == "shared":
+        _patch_linux_rpath(ctx.install_dir)
 
 
 # ── Test execution ──────────────────────────────────────────────

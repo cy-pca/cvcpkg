@@ -841,6 +841,71 @@ def catalog(refresh: bool, pin: int | None, show: bool) -> None:
     click.echo("cvcpkg: use 'catalog --show', 'catalog --refresh', or 'catalog --pin REV'.")
 
 
+@cli.command("catalog-generate")
+@click.option(
+    "--indexes-dir",
+    required=True,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Directory containing per-platform *-index.yaml files.",
+)
+@click.option(
+    "--output-dir",
+    required=True,
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Directory to write catalog files to.",
+)
+@click.option(
+    "--release-tag",
+    required=True,
+    help="Release tag (e.g. v1.2.0).",
+)
+@click.option(
+    "--server-url",
+    default="https://pkg.tx.wtf",
+    show_default=True,
+    help="cvcpkg server URL for archive download URLs.",
+)
+@click.option(
+    "--base-revision",
+    default=0,
+    type=int,
+    help="Previous catalog revision number to increment from.",
+)
+def catalog_generate(
+    indexes_dir: Path,
+    output_dir: Path,
+    release_tag: str,
+    server_url: str,
+    base_revision: int,
+) -> None:
+    """Generate a unified catalog from per-platform index files.
+
+    Merges all *-index.yaml files in INDEXES_DIR into a catalog with
+    download URLs pointing to SERVER_URL.  Writes latest.yaml,
+    <revision>.yaml, index.yaml, and <tag>-index.yaml to OUTPUT_DIR.
+
+    \b
+    Examples:
+      cvcpkg catalog-generate \\
+        --indexes-dir ./indexes \\
+        --output-dir ./catalog-output \\
+        --release-tag v1.2.0
+    """
+    from cvcpkg.catalog import generate_catalog
+
+    cat = generate_catalog(
+        indexes_dir,
+        output_dir,
+        release_tag=release_tag,
+        server_url=server_url,
+        base_revision=base_revision,
+    )
+    rev = cat.get("revision", "?")
+    n = len(cat.get("bundles", []))
+    click.echo(f"cvcpkg: catalog revision {rev} generated — {n} bundle(s).")
+    click.echo(f"cvcpkg: output written to {output_dir}/")
+
+
 # ── gc ──────────────────────────────────────────────────────────
 
 

@@ -21,6 +21,10 @@ patches: []
 
 depends:
   build:
+    - name: xz
+    - name: zstd
+    - name: libwebp
+    - name: lerc
     - name: tiff
       version: "^4.6"
     - name: emsdk
