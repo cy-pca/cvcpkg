@@ -41,6 +41,7 @@ from cvcpkg.server.models import (
     TokenRequestRecord,
     TokenRequestStatus,
     TokenRole,
+    UserListResponse,
     UserProfileResponse,
 )
 
@@ -192,14 +193,163 @@ class DbTokenStore:
             row = result.scalars().first()
             if row is None:
                 return None
+            # Count packages published by this user
+            pkg_count_result = await session.execute(
+                select(sa_func.count(PackageRow.id)).where(
+                    PackageRow.published_by == name
+                )
+            )
+            pkg_count = pkg_count_result.scalar() or 0
             return UserProfileResponse(
                 name=row.name,
                 role=row.role,
                 email=row.email,
                 description=row.description,
                 metadata=row.user_metadata,
+                packages_published=pkg_count,
                 created_at=row.created_at,
             )
+
+    async def get_profile_by_email(self, email: str) -> UserProfileResponse | None:
+        """Look up a user by email, returning public profile info."""
+        async with get_session() as session:
+            result = await session.execute(
+                select(TokenRow).where(
+                    TokenRow.email == email,
+                    TokenRow.revoked == False,  # noqa: E712
+                )
+            )
+            row = result.scalars().first()
+            if row is None:
+                return None
+            # Count packages published by this user
+            pkg_count_result = await session.execute(
+                select(sa_func.count(PackageRow.id)).where(
+                    PackageRow.published_by == row.name
+                )
+            )
+            pkg_count = pkg_count_result.scalar() or 0
+            return UserProfileResponse(
+                name=row.name,
+                role=row.role,
+                email=row.email,
+                description=row.description,
+                metadata=row.user_metadata,
+                packages_published=pkg_count,
+                created_at=row.created_at,
+            )
+
+    async def search_users(
+        self,
+        *,
+        name: str = "",
+        email: str = "",
+        role: str = "",
+        org: str = "",
+        has_published: bool | None = None,
+        sort_by: str = "name",
+        sort_order: str = "asc",
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[UserProfileResponse], int]:
+        """Search active users with optional filters and pagination.
+
+        Supports sorting by ``name``, ``email``, or ``packages_published``.
+        """
+        async with get_session() as session:
+            # Subquery: count packages per publisher
+            pkg_count_sq = (
+                select(
+                    PackageRow.published_by,
+                    sa_func.count(PackageRow.id).label("pkg_count"),
+                )
+                .group_by(PackageRow.published_by)
+                .subquery()
+            )
+
+            q = (
+                select(
+                    TokenRow,
+                    sa_func.coalesce(pkg_count_sq.c.pkg_count, 0).label("pkg_count"),
+                )
+                .outerjoin(pkg_count_sq, TokenRow.name == pkg_count_sq.c.published_by)
+                .where(TokenRow.revoked == False)  # noqa: E712
+            )
+            count_q = (
+                select(sa_func.count(TokenRow.id))
+                .outerjoin(pkg_count_sq, TokenRow.name == pkg_count_sq.c.published_by)
+                .where(TokenRow.revoked == False)  # noqa: E712
+            )
+
+            if name:
+                q = q.where(TokenRow.name.ilike(f"%{name}%"))
+                count_q = count_q.where(TokenRow.name.ilike(f"%{name}%"))
+            if email:
+                q = q.where(TokenRow.email.ilike(f"%{email}%"))
+                count_q = count_q.where(TokenRow.email.ilike(f"%{email}%"))
+            if role:
+                q = q.where(TokenRow.role == role)
+                count_q = count_q.where(TokenRow.role == role)
+            if org:
+                org_member_names = (
+                    select(OrgMemberRow.token_name)
+                    .join(OrganizationRow, OrgMemberRow.org_id == OrganizationRow.id)
+                    .where(OrganizationRow.slug == org)
+                )
+                q = q.where(TokenRow.name.in_(org_member_names))
+                count_q = count_q.where(TokenRow.name.in_(org_member_names))
+            if has_published is True:
+                q = q.where(sa_func.coalesce(pkg_count_sq.c.pkg_count, 0) > 0)
+                count_q = count_q.where(sa_func.coalesce(pkg_count_sq.c.pkg_count, 0) > 0)
+            elif has_published is False:
+                q = q.where(sa_func.coalesce(pkg_count_sq.c.pkg_count, 0) == 0)
+                count_q = count_q.where(sa_func.coalesce(pkg_count_sq.c.pkg_count, 0) == 0)
+
+            # Sorting
+            if sort_by == "packages_published":
+                order_col = sa_func.coalesce(pkg_count_sq.c.pkg_count, 0)
+            elif sort_by == "email":
+                order_col = TokenRow.email
+            else:
+                order_col = TokenRow.name
+
+            if sort_order == "desc":
+                q = q.order_by(order_col.desc())
+            else:
+                q = q.order_by(order_col.asc())
+
+            total_result = await session.execute(count_q)
+            total = total_result.scalar() or 0
+
+            q = q.offset(offset).limit(limit)
+            result = await session.execute(q)
+
+            users = []
+            for row_tuple in result.all():
+                token_row = row_tuple[0]
+                pkg_count = row_tuple[1]
+                users.append(
+                    UserProfileResponse(
+                        name=token_row.name,
+                        role=token_row.role,
+                        email=token_row.email,
+                        description=token_row.description,
+                        metadata=token_row.user_metadata,
+                        packages_published=pkg_count,
+                        created_at=token_row.created_at,
+                    )
+                )
+            return users, total
+
+    async def count_packages_by_user(self, name: str) -> int:
+        """Count the number of packages published by a user."""
+        async with get_session() as session:
+            result = await session.execute(
+                select(sa_func.count(PackageRow.id)).where(
+                    PackageRow.published_by == name
+                )
+            )
+            return result.scalar() or 0
 
     async def list_tokens(self) -> list[TokenRecord]:
         async with get_session() as session:
@@ -466,7 +616,9 @@ class DbPackageIndex:
         link: str = "",
     ) -> tuple[list[PackageInfo], int]:
         async with get_session() as session:
-            q = select(PackageRow)
+            q = select(PackageRow, TokenRow.email.label("publisher_email")).outerjoin(
+                TokenRow, PackageRow.published_by == TokenRow.name
+            )
             count_q = select(sa_func.count(PackageRow.id))
             if not include_yanked:
                 q = q.where(PackageRow.yanked == False)  # noqa: E712
@@ -522,33 +674,37 @@ class DbPackageIndex:
                 .limit(limit)
             )
             result = await session.execute(q)
-            packages = [
-                PackageInfo(
-                    name=row.name,
-                    version=row.version,
-                    platform=row.platform,
-                    arch=row.arch,
-                    build_type=row.build_type,
-                    link=row.link,
-                    sha256=row.sha256,
-                    size_bytes=row.size_bytes,
-                    archive_url=row.archive_url,
-                    published_at=row.published_at,
-                    yanked=row.yanked,
-                    signature=row.signature,
-                    key_fingerprint=row.key_fingerprint,
-                    release_tag=row.release_tag,
-                    recipe_version=row.recipe_version,
-                    description=row.description,
-                    homepage=row.homepage,
-                    license=row.license,
-                    maintainer=row.maintainer,
-                    tags=row.tags,
-                    published_by=row.published_by,
-                    org=row.org_slug,
+            packages = []
+            for row_tuple in result.all():
+                row = row_tuple[0]
+                pub_email = row_tuple[1] or ""
+                packages.append(
+                    PackageInfo(
+                        name=row.name,
+                        version=row.version,
+                        platform=row.platform,
+                        arch=row.arch,
+                        build_type=row.build_type,
+                        link=row.link,
+                        sha256=row.sha256,
+                        size_bytes=row.size_bytes,
+                        archive_url=row.archive_url,
+                        published_at=row.published_at,
+                        yanked=row.yanked,
+                        signature=row.signature,
+                        key_fingerprint=row.key_fingerprint,
+                        release_tag=row.release_tag,
+                        recipe_version=row.recipe_version,
+                        description=row.description,
+                        homepage=row.homepage,
+                        license=row.license,
+                        maintainer=row.maintainer,
+                        tags=row.tags,
+                        published_by=row.published_by,
+                        published_by_email=pub_email,
+                        org=row.org_slug,
+                    )
                 )
-                for row in result.scalars().all()
-            ]
             return packages, total
 
     async def get_catalog_dict(

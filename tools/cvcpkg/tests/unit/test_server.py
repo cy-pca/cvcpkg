@@ -179,6 +179,35 @@ class TestHealthEndpoint:
         assert "version" in data
 
 
+class TestAdminShutdown:
+    def test_shutdown_requires_admin(self, server_env):
+        client, admin_tok, pub_tok, _ = server_env
+        # Publisher cannot shut down
+        resp = client.post(
+            "/v1/admin/shutdown",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 403
+
+    def test_shutdown_no_auth(self, server_env):
+        client, *_ = server_env
+        resp = client.post("/v1/admin/shutdown")
+        assert resp.status_code == 401
+
+    def test_shutdown_admin_succeeds(self, server_env):
+        client, admin_tok, *_ = server_env
+        # Prevent the delayed SIGTERM from actually killing the test process
+        from unittest.mock import patch
+
+        with patch("os.kill"):
+            resp = client.post(
+                "/v1/admin/shutdown",
+                headers={"Authorization": f"Bearer {admin_tok}"},
+            )
+        assert resp.status_code == 200
+        assert "shutting down" in resp.json()["message"]
+
+
 class TestCatalogEndpoint:
     def test_empty_catalog(self, server_env):
         client, *_ = server_env
@@ -431,6 +460,33 @@ class TestTokenAPI:
         )
         assert resp.status_code == 403
 
+    def test_create_token_rejects_invalid_identifier(self, server_env):
+        client, admin_tok, *_ = server_env
+        resp = client.post(
+            "/v1/tokens",
+            json={"name": "1invalid", "role": "reader"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 422
+        assert "C identifier" in resp.json()["detail"]
+
+    def test_create_token_duplicate_returns_409(self, server_env):
+        client, admin_tok, *_ = server_env
+        resp = client.post(
+            "/v1/tokens",
+            json={"name": "dup_test", "role": "reader"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        # Same name again
+        resp = client.post(
+            "/v1/tokens",
+            json={"name": "dup_test", "role": "reader"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 409
+        assert "already taken" in resp.json()["detail"]
+
     def test_update_email_admin(self, server_env):
         client, admin_tok, pub_tok, _ = server_env
         # Admin can update any token's email
@@ -515,6 +571,54 @@ class TestRegistrationAPI:
             json={"name": "", "email": "a@b.com", "role": "reader"},
         )
         assert resp.status_code == 422
+
+    def test_register_rejects_invalid_identifier(self, server_env):
+        client, *_ = server_env
+        # Names starting with a digit are invalid
+        resp = client.post(
+            "/v1/register",
+            json={"name": "123bad", "email": "a@b.com", "role": "reader"},
+        )
+        assert resp.status_code == 422
+        assert "C identifier" in resp.json()["detail"]
+
+        # Names with spaces are invalid
+        resp = client.post(
+            "/v1/register",
+            json={"name": "has space", "email": "a@b.com", "role": "reader"},
+        )
+        assert resp.status_code == 422
+
+        # Names with special characters are invalid
+        resp = client.post(
+            "/v1/register",
+            json={"name": "user@name", "email": "a@b.com", "role": "reader"},
+        )
+        assert resp.status_code == 422
+
+    def test_register_accepts_valid_identifiers(self, server_env):
+        client, *_ = server_env
+        for name in ["valid_user", "_private", "ci-bot", "Alice123"]:
+            resp = client.post(
+                "/v1/register",
+                json={"name": name, "email": f"{name}@test.com", "role": "reader"},
+            )
+            assert resp.status_code == 200, f"rejected valid name: {name}"
+
+    def test_register_duplicate_name_returns_409(self, server_env):
+        client, *_ = server_env
+        resp = client.post(
+            "/v1/register",
+            json={"name": "taken_user", "email": "a@b.com", "role": "reader"},
+        )
+        assert resp.status_code == 200
+        # Same name again
+        resp = client.post(
+            "/v1/register",
+            json={"name": "taken_user", "email": "other@b.com", "role": "reader"},
+        )
+        assert resp.status_code == 409
+        assert "already taken" in resp.json()["detail"]
 
 
 class TestAuditAPI:
@@ -1644,3 +1748,323 @@ class TestPublishedBy:
         pkgs = resp.json()["packages"]
         assert len(pkgs) >= 1
         assert pkgs[0]["published_by"] == "test-publisher"
+
+    def test_publish_includes_published_by_email(self, server_env):
+        client, admin_tok, pub_tok, _ = server_env
+        # Set publisher email first
+        client.patch(
+            "/v1/tokens/test-publisher/email",
+            json={"email": "publisher@example.org"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        resp = self._publish(client, pub_tok)
+        assert resp.status_code == 200
+        # Check that package includes the email
+        resp = client.get("/v1/packages", params={"name": "pub-by-pkg"})
+        assert resp.status_code == 200
+        pkgs = resp.json()["packages"]
+        assert pkgs[0]["published_by_email"] == "publisher@example.org"
+
+
+# ── User listing, search, and by-email ─────────────────────────
+
+
+class TestUserListEndpoint:
+    def test_list_users_default(self, server_env):
+        client, admin_tok, pub_tok, _ = server_env
+        resp = client.get("/v1/users")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] >= 2
+        names = {u["name"] for u in data["users"]}
+        assert "test-admin" in names
+        assert "test-publisher" in names
+
+    def test_list_users_filter_by_role(self, server_env):
+        client, *_ = server_env
+        resp = client.get("/v1/users", params={"role": "admin"})
+        assert resp.status_code == 200
+        data = resp.json()
+        for u in data["users"]:
+            assert u["role"] == "admin"
+
+    def test_list_users_filter_by_email(self, server_env):
+        client, admin_tok, pub_tok, _ = server_env
+        # Set emails on users first
+        client.patch(
+            "/v1/tokens/test-publisher/email",
+            json={"email": "dev@example.org"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        resp = client.get("/v1/users", params={"email": "dev@example"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] >= 1
+        assert any(u["name"] == "test-publisher" for u in data["users"])
+
+    def test_list_users_filter_by_name(self, server_env):
+        client, *_ = server_env
+        resp = client.get("/v1/users", params={"name": "publisher"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] >= 1
+        assert all("publisher" in u["name"].lower() for u in data["users"])
+
+    def test_list_users_pagination(self, server_env):
+        client, *_ = server_env
+        resp1 = client.get("/v1/users", params={"limit": 1, "offset": 0})
+        assert resp1.status_code == 200
+        data1 = resp1.json()
+        assert len(data1["users"]) == 1
+        assert data1["total"] >= 2
+
+        resp2 = client.get("/v1/users", params={"limit": 1, "offset": 1})
+        assert resp2.status_code == 200
+        data2 = resp2.json()
+        assert len(data2["users"]) == 1
+        # Different user on second page
+        assert data1["users"][0]["name"] != data2["users"][0]["name"]
+
+    def test_list_users_sort_by_email(self, server_env):
+        client, admin_tok, *_ = server_env
+        client.patch(
+            "/v1/tokens/test-admin/email",
+            json={"email": "aaa@example.com"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        client.patch(
+            "/v1/tokens/test-publisher/email",
+            json={"email": "zzz@example.com"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        resp = client.get("/v1/users", params={"sort": "email", "order": "asc"})
+        assert resp.status_code == 200
+        users = resp.json()["users"]
+        emails = [u["email"] for u in users if u["email"]]
+        assert emails == sorted(emails)
+
+    def test_list_users_sort_by_packages_published(self, server_env):
+        client, admin_tok, pub_tok, _ = server_env
+        # Publish some packages
+        archive = b"sort test data"
+        client.post(
+            "/v1/publish",
+            params={"name": "sort-pkg-1", "version": "1.0", "platform": "linux", "arch": "x86_64"},
+            files={"file": ("pkg.tar.zst", io.BytesIO(archive))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        client.post(
+            "/v1/publish",
+            params={"name": "sort-pkg-2", "version": "1.0", "platform": "linux", "arch": "x86_64"},
+            files={"file": ("pkg2.tar.zst", io.BytesIO(archive))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        resp = client.get("/v1/users", params={"sort": "packages_published", "order": "desc"})
+        assert resp.status_code == 200
+        users = resp.json()["users"]
+        counts = [u["packages_published"] for u in users]
+        assert counts == sorted(counts, reverse=True)
+        # Publisher should have the most
+        assert users[0]["name"] == "test-publisher"
+        assert users[0]["packages_published"] >= 2
+
+    def test_list_users_filter_has_published(self, server_env):
+        client, admin_tok, pub_tok, _ = server_env
+        # Publish a package
+        archive = b"has-pub test data"
+        client.post(
+            "/v1/publish",
+            params={"name": "has-pub-pkg", "version": "1.0", "platform": "linux", "arch": "x86_64"},
+            files={"file": ("pkg.tar.zst", io.BytesIO(archive))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        # Filter to only those who have published
+        resp = client.get("/v1/users", params={"has_published": "true"})
+        assert resp.status_code == 200
+        data = resp.json()
+        for u in data["users"]:
+            assert u["packages_published"] > 0
+        assert any(u["name"] == "test-publisher" for u in data["users"])
+
+    def test_list_users_invalid_sort(self, server_env):
+        client, *_ = server_env
+        resp = client.get("/v1/users", params={"sort": "invalid"})
+        assert resp.status_code == 422
+
+    def test_list_users_includes_packages_published(self, server_env):
+        client, *_ = server_env
+        resp = client.get("/v1/users")
+        assert resp.status_code == 200
+        for u in resp.json()["users"]:
+            assert "packages_published" in u
+
+
+class TestUserByEmail:
+    def test_lookup_by_email(self, server_env):
+        client, admin_tok, pub_tok, _ = server_env
+        # Set email on publisher
+        client.patch(
+            "/v1/tokens/test-publisher/email",
+            json={"email": "lookup@test.com"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        resp = client.get("/v1/users/by-email/lookup@test.com")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["name"] == "test-publisher"
+        assert data["email"] == "lookup@test.com"
+        assert "description" in data
+        assert "metadata" in data
+        assert "packages_published" in data
+
+    def test_lookup_by_email_with_profile(self, server_env):
+        client, admin_tok, pub_tok, _ = server_env
+        # Set email and profile
+        client.patch(
+            "/v1/tokens/test-publisher/email",
+            json={"email": "profiled@test.com"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        client.patch(
+            "/v1/tokens/test-publisher/profile",
+            json={"description": "Profiled user", "metadata": '{"key": "value"}'},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        resp = client.get("/v1/users/by-email/profiled@test.com")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["description"] == "Profiled user"
+        assert data["metadata"] == '{"key": "value"}'
+
+    def test_lookup_by_email_not_found(self, server_env):
+        client, *_ = server_env
+        resp = client.get("/v1/users/by-email/noone@nowhere.com")
+        assert resp.status_code == 404
+
+    def test_lookup_by_email_packages_count(self, server_env):
+        client, admin_tok, pub_tok, _ = server_env
+        client.patch(
+            "/v1/tokens/test-publisher/email",
+            json={"email": "counter@test.com"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        # Publish a package
+        archive = b"counter test data"
+        client.post(
+            "/v1/publish",
+            params={"name": "counter-pkg", "version": "1.0", "platform": "linux", "arch": "x86_64"},
+            files={"file": ("pkg.tar.zst", io.BytesIO(archive))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        resp = client.get("/v1/users/by-email/counter@test.com")
+        assert resp.status_code == 200
+        assert resp.json()["packages_published"] >= 1
+
+
+class TestTokenStoreSearch:
+    def test_search_all(self, tmp_path):
+        store = TokenStore(tmp_path)
+        store.create("alice", TokenRole.reader, email="alice@a.com")
+        store.create("bob", TokenRole.publisher, email="bob@b.com")
+        results, total = store.search_users()
+        assert total == 2
+        assert len(results) == 2
+
+    def test_search_by_email(self, tmp_path):
+        store = TokenStore(tmp_path)
+        store.create("alice", TokenRole.reader, email="alice@a.com")
+        store.create("bob", TokenRole.publisher, email="bob@b.com")
+        results, total = store.search_users(email="alice")
+        assert total == 1
+        assert results[0].name == "alice"
+
+    def test_search_by_name(self, tmp_path):
+        store = TokenStore(tmp_path)
+        store.create("alice-dev", TokenRole.reader, email="alice@a.com")
+        store.create("bob-ops", TokenRole.publisher, email="bob@b.com")
+        results, total = store.search_users(name="alice")
+        assert total == 1
+        assert results[0].name == "alice-dev"
+
+    def test_search_by_role(self, tmp_path):
+        store = TokenStore(tmp_path)
+        store.create("alice", TokenRole.reader, email="alice@a.com")
+        store.create("bob", TokenRole.publisher, email="bob@b.com")
+        results, total = store.search_users(role="publisher")
+        assert total == 1
+        assert results[0].name == "bob"
+
+    def test_search_pagination(self, tmp_path):
+        store = TokenStore(tmp_path)
+        for i in range(5):
+            store.create(f"user-{i}", TokenRole.reader, email=f"u{i}@x.com")
+        results, total = store.search_users(limit=2, offset=0)
+        assert total == 5
+        assert len(results) == 2
+        results2, _ = store.search_users(limit=2, offset=2)
+        assert len(results2) == 2
+        assert results[0].name != results2[0].name
+
+    def test_search_excludes_revoked(self, tmp_path):
+        store = TokenStore(tmp_path)
+        store.create("active", TokenRole.reader, email="a@x.com")
+        store.create("revoked", TokenRole.reader, email="r@x.com")
+        store.revoke("revoked")
+        results, total = store.search_users()
+        assert total == 1
+        assert results[0].name == "active"
+
+    def test_get_profile_by_email(self, tmp_path):
+        store = TokenStore(tmp_path)
+        store.create("alice", TokenRole.reader, email="alice@a.com",
+                      description="Alice's profile")
+        record = store.get_profile_by_email("alice@a.com")
+        assert record is not None
+        assert record.name == "alice"
+        assert record.description == "Alice's profile"
+
+    def test_get_profile_by_email_not_found(self, tmp_path):
+        store = TokenStore(tmp_path)
+        assert store.get_profile_by_email("nope@nope.com") is None
+
+    def test_get_profile_by_email_revoked(self, tmp_path):
+        store = TokenStore(tmp_path)
+        store.create("alice", TokenRole.reader, email="alice@a.com")
+        store.revoke("alice")
+        assert store.get_profile_by_email("alice@a.com") is None
+
+
+class TestPackagesPublishedCount:
+    def test_user_info_includes_packages_published(self, server_env):
+        client, admin_tok, pub_tok, _ = server_env
+        # Before publishing
+        resp = client.get("/v1/users/test-publisher")
+        assert resp.status_code == 200
+        assert resp.json()["packages_published"] == 0
+
+        # Publish
+        archive = b"count test data"
+        client.post(
+            "/v1/publish",
+            params={"name": "count-pkg", "version": "1.0", "platform": "linux", "arch": "x86_64"},
+            files={"file": ("pkg.tar.zst", io.BytesIO(archive))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        # After publishing
+        resp = client.get("/v1/users/test-publisher")
+        assert resp.status_code == 200
+        assert resp.json()["packages_published"] == 1
+
+    def test_admin_publish_counted_separately(self, server_env):
+        client, admin_tok, pub_tok, _ = server_env
+        archive = b"admin publish data"
+        client.post(
+            "/v1/publish",
+            params={"name": "admin-pkg", "version": "1.0", "platform": "linux", "arch": "x86_64"},
+            files={"file": ("pkg.tar.zst", io.BytesIO(archive))},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        resp_admin = client.get("/v1/users/test-admin")
+        assert resp_admin.json()["packages_published"] == 1
+        resp_pub = client.get("/v1/users/test-publisher")
+        assert resp_pub.json()["packages_published"] == 0
