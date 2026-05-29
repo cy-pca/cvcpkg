@@ -2296,10 +2296,10 @@ def pack_all_cmd(
             shard_tuple = (int(idx_s), int(total_s))
             if shard_tuple[0] < 0 or shard_tuple[0] >= shard_tuple[1]:
                 raise ValueError
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as exc:
             raise click.BadParameter(
                 f"Invalid shard format '{shard}'. Expected INDEX/TOTAL (e.g. 0/3)."
-            )
+            ) from exc
 
     contexts = build_all(
         rdirs if len(rdirs) > 1 else rdirs[0],
@@ -2710,10 +2710,10 @@ def cache_list_cmd(server: str, token: str, name: str, plat_filter: str) -> None
                 data = json.loads(resp.read())
         except urllib.error.HTTPError as e:
             click.echo(f"Server error: {e.code} {e.reason}", err=True)
-            raise SystemExit(1)
+            raise SystemExit(1) from e
         except (urllib.error.URLError, OSError) as e:
             click.echo(f"Connection error: {e}", err=True)
-            raise SystemExit(1)
+            raise SystemExit(1) from e
 
         pkgs = data.get("packages", [])
         if not pkgs:
@@ -2880,10 +2880,10 @@ def cache_purge_cmd(
                 data = json.loads(resp.read())
         except urllib.error.HTTPError as e:
             click.echo(f"Server error: {e.code} {e.reason}", err=True)
-            raise SystemExit(1)
+            raise SystemExit(1) from e
         except (urllib.error.URLError, OSError) as e:
             click.echo(f"Connection error: {e}", err=True)
-            raise SystemExit(1)
+            raise SystemExit(1) from e
         count = data.get("deleted_count", 0)
         click.echo(f"Removed {count} server cache entries.")
         for d in data.get("deleted", []):
@@ -2940,10 +2940,10 @@ def cache_server_stats_cmd(server: str, token: str) -> None:
             data = json.loads(resp.read())
     except urllib.error.HTTPError as e:
         click.echo(f"Server error: {e.code} {e.reason}", err=True)
-        raise SystemExit(1)
+        raise SystemExit(1) from e
     except (urllib.error.URLError, OSError) as e:
         click.echo(f"Connection error: {e}", err=True)
-        raise SystemExit(1)
+        raise SystemExit(1) from e
 
     click.echo(f"Total packages: {data['total_packages']}")
     click.echo(f"Total size:     {_human_size(data['total_size_bytes'])}")
@@ -3011,10 +3011,10 @@ def cache_server_gc_cmd(
             data = json.loads(resp.read())
     except urllib.error.HTTPError as e:
         click.echo(f"Server error: {e.code} {e.reason}", err=True)
-        raise SystemExit(1)
+        raise SystemExit(1) from e
     except (urllib.error.URLError, OSError) as e:
         click.echo(f"Connection error: {e}", err=True)
-        raise SystemExit(1)
+        raise SystemExit(1) from e
 
     count = data.get("deleted_count", 0)
     click.echo(f"GC removed {count} package(s).")
@@ -3666,8 +3666,8 @@ def server_status(server: str):
     try:
         with httpx.Client(timeout=10) as client:
             resp = client.get(url)
-    except httpx.ConnectError:
-        raise click.ClickException(f"cannot connect to {server}")
+    except httpx.ConnectError as exc:
+        raise click.ClickException(f"cannot connect to {server}") from exc
     if resp.status_code != 200:
         raise click.ClickException(f"server returned {resp.status_code}")
     data = resp.json()
