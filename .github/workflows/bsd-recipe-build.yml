@@ -74,24 +74,52 @@ jobs:
           echo "stem=$STEM"         >> "$GITHUB_OUTPUT"
 
       # ── Resolve VM host IP and python path ──
+      # IPs are resolved dynamically via `incus list` to survive DHCP lease
+      # changes on the br-uplink LAN bridge.  Hardcoded fallbacks are kept
+      # for resilience if Incus CLI is unavailable.
       - name: Resolve BSD VM connection
         id: vm
         shell: bash
         run: |
+          resolve_vm_ip() {
+            local vm_name="$1" fallback="$2"
+            # Try dynamic resolution via incus (picks the 10.66.77.x address)
+            if command -v incus >/dev/null 2>&1; then
+              local ip
+              ip=$(incus list "$vm_name" --format csv -c 4 2>/dev/null \
+                   | grep -oE '10\.66\.77\.[0-9]+' | head -1)
+              if [ -n "$ip" ]; then
+                echo "$ip"
+                return
+              fi
+            fi
+            echo "$fallback"
+          }
+
           case "${{ inputs.platform }}" in
             freebsd)
-              echo "host=10.66.77.174" >> "$GITHUB_OUTPUT"
+              HOST=$(resolve_vm_ip "freebsd-build" "10.66.77.174")
               echo "python=python3.11" >> "$GITHUB_OUTPUT"
               ;;
             openbsd)
-              echo "host=10.66.77.197" >> "$GITHUB_OUTPUT"
+              HOST=$(resolve_vm_ip "openbsd-build" "10.66.77.197")
               echo "python=python3.12" >> "$GITHUB_OUTPUT"
               ;;
             netbsd)
-              echo "host=10.66.77.214" >> "$GITHUB_OUTPUT"
+              HOST=$(resolve_vm_ip "netbsd-build" "10.66.77.214")
               echo "python=python3.13" >> "$GITHUB_OUTPUT"
               ;;
           esac
+          echo "host=$HOST" >> "$GITHUB_OUTPUT"
+          echo "Resolved ${{ inputs.platform }} VM IP: $HOST"
+
+      - name: Verify SSH connectivity to BSD VM
+        shell: bash
+        run: |
+          set -euo pipefail
+          VM="root@${{ steps.vm.outputs.host }}"
+          echo "Testing SSH to ${VM} ..."
+          ssh ${SSH_OPTS} "${VM}" "uname -sr"
 
       # ── Sync repository to BSD VM ──
       # OpenBSD's root partition (/) is only 1.1 GB so /tmp is unusable for
