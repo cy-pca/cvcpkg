@@ -205,9 +205,14 @@ pip install cvcpkg[server]
 # Start the server:
 cvcpkg-server run --state-dir /var/lib/cvcpkg --host 0.0.0.0 --port 8080
 
-# Create tokens:
-cvcpkg-server token create --name ci-publisher --role publisher
-cvcpkg-server token create --name dev-reader --role reader
+# Bootstrap the first admin token (direct DB, before any token exists):
+cvcpkg-server token create --name admin --role admin
+
+# After that, manage tokens via the client CLI (through the API):
+export CVCPKG_SERVER_URL=https://pkg.tx.wtf
+export CVCPKG_TOKEN="cvctok_<admin-token>"
+cvcpkg token create --name ci-publisher --role publisher
+cvcpkg token create --name dev-reader --role reader
 
 # View audit log:
 cvcpkg-server audit log --last 20
@@ -299,11 +304,13 @@ time.  Only an HMAC-SHA256 hash of the token is persisted on the
 server — the raw secret is never stored.
 
 ```bash
-# Create a publisher token (admin only):
-cvcpkg-server token create --name ci-publisher --role publisher
+# Create a publisher token via the client CLI (talks to the server API):
+export CVCPKG_SERVER_URL=https://pkg.tx.wtf
+export CVCPKG_TOKEN="cvctok_<admin-token>"
+cvcpkg token create --name ci-publisher --role publisher
 
 # Create a reader token with 90-day expiry:
-cvcpkg-server token create --name dev-reader --role reader \
+cvcpkg token create --name dev-reader --role reader \
   --expires-in-days 90
 ```
 
@@ -319,17 +326,57 @@ variable or `Authorization: Bearer <token>` header.
 | `publisher` | All reader permissions plus publish packages, yank versions  |
 | `admin`     | All permissions: publish, yank, unyank, delete, manage tokens, view audit log |
 
-### Revoking tokens
+### Managing tokens (client CLI)
+
+Use the `cvcpkg token` commands to manage tokens remotely via the
+server's REST API.  This is the recommended approach — it goes
+through the same code path as normal requests, records audit entries,
+and avoids race conditions with the running server.
 
 ```bash
-# Revoke immediately (admin only):
-cvcpkg-server token revoke --name ci-publisher
+# Set the server and admin token (or pass --server/--token each time):
+export CVCPKG_SERVER_URL=https://pkg.tx.wtf
+export CVCPKG_TOKEN="cvctok_<admin-token>"
+
+# Create a token:
+cvcpkg token create --name ci-publisher --role publisher
 
 # List all tokens:
-cvcpkg-server token list
+cvcpkg token list
+
+# Revoke a token immediately:
+cvcpkg token revoke --name ci-publisher
 ```
 
 Revoked tokens are rejected on the next API call — no restart needed.
+
+> **Note:** `cvcpkg-server token create/list/revoke` commands also
+> exist for bootstrapping (before any admin token exists), but they
+> bypass the HTTP API and talk directly to the database.  Prefer the
+> client commands (`cvcpkg token ...`) for day-to-day management.
+
+### Organization-level access control
+
+Organizations have their own membership model.  An **org owner** can
+add or remove members to control who can publish to the org's
+namespace — without affecting the member's global token or access to
+anything else.
+
+```bash
+# List members of an org:
+cvcpkg org members my-org
+
+# Add a member (org owners or global admins):
+cvcpkg org add-member my-org --name ci-publisher --role member
+
+# Remove a member (revokes org access only, token stays valid):
+cvcpkg org remove-member my-org --name ci-publisher
+```
+
+| Org role  | Permissions                                              |
+|-----------|----------------------------------------------------------|
+| `member`  | Publish packages to the org's namespace                  |
+| `owner`   | All member permissions plus add/remove members, update org settings |
 
 ### Locking down reads
 
@@ -373,6 +420,9 @@ Clients call `GET /v1/catalog` to receive the full bundle list, then
 | GET    | `/v1/tokens`                           | admin         | List all tokens                    |
 | GET    | `/v1/audit`                            | admin         | Paginated audit log                |
 | GET    | `/v1/audit/verify`                     | admin         | Verify audit chain integrity       |
+| GET    | `/v1/orgs/{slug}`                      | public/member | Organization detail + members      |
+| POST   | `/v1/orgs/{slug}/members`              | org owner     | Add a member to an organization    |
+| DELETE | `/v1/orgs/{slug}/members/{token_name}` | org owner     | Remove a member from an organization |
 
 ### SHA-256 integrity
 
