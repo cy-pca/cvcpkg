@@ -43,7 +43,7 @@ def _get_client():
         import boto3
     except ImportError as exc:
         raise ImportError(
-            "boto3 is required for the S3 backend. " "Install it with: pip install cvcpkg[s3]"
+            "boto3 is required for the S3 backend. Install it with: pip install cvcpkg[s3]"
         ) from exc
 
     kwargs = {}

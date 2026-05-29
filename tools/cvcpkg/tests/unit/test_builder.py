@@ -1123,7 +1123,7 @@ class TestSourceCacheFetchTarball:
         import io
 
         tarball_path = tmp_path / "source.tar.gz"
-        inner_dir = f"pkg-1.0"
+        inner_dir = "pkg-1.0"
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tf:
             info = tarfile.TarInfo(name=f"{inner_dir}/{name}")
@@ -1941,7 +1941,7 @@ class TestBuildAllKeepGoing:
     @patch("cvcpkg.builder.run_build")
     @patch("cvcpkg.builder.fetch_source")
     def test_keep_going_continues_after_failure(self, mock_fetch, mock_build, tmp_path):
-        from cvcpkg.builder import BuildError, BuildFailure, build_all
+        from cvcpkg.builder import BuildError, build_all
 
         recipes_dir = tmp_path / "recipes"
         self._make_recipe(recipes_dir, "alpha")
@@ -2244,9 +2244,7 @@ class TestBumpRevisionInYaml:
         from cvcpkg.builder import _bump_revision_in_yaml
 
         p = tmp_path / "recipe.yaml"
-        p.write_text(
-            "recipe:\n" "  name: foo\n" "  upstream_version: '1.0.0'\n" "  cvc_revision: 1\n"
-        )
+        p.write_text("recipe:\n  name: foo\n  upstream_version: '1.0.0'\n  cvc_revision: 1\n")
         _bump_revision_in_yaml(p, 2)
         text = p.read_text()
         assert "cvc_revision: 2" in text
@@ -2278,9 +2276,7 @@ class TestBumpRevisionInYaml:
         from cvcpkg.builder import _bump_revision_in_yaml
 
         p = tmp_path / "recipe.yaml"
-        p.write_text(
-            "recipe:\n" "  name: baz\n" "  upstream_version: '1.0.0'\n" "  description: 'test'\n"
-        )
+        p.write_text("recipe:\n  name: baz\n  upstream_version: '1.0.0'\n  description: 'test'\n")
         _bump_revision_in_yaml(p, 5)
         text = p.read_text()
         assert "cvc_revision: 5" in text
@@ -2289,9 +2285,7 @@ class TestBumpRevisionInYaml:
         from cvcpkg.builder import _bump_revision_in_yaml
 
         p = tmp_path / "recipe.yaml"
-        p.write_text(
-            "recipe:\n" "  name: multi\n" "  upstream_version: '1.0.0'\n" "  cvc_revision: 99\n"
-        )
+        p.write_text("recipe:\n  name: multi\n  upstream_version: '1.0.0'\n  cvc_revision: 99\n")
         _bump_revision_in_yaml(p, 100)
         text = p.read_text()
         assert "cvc_revision: 100" in text

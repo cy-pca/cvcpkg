@@ -104,7 +104,7 @@ class TestRevBumpYamlRoundTrip:
     def test_bump_preserves_all_fields(self, tmp_path):
         """Ensure bumping doesn't drop or corrupt other recipe fields."""
         rd = _make_recipe(tmp_path / "recipes", "rich", deps=["dep1", "dep2"])
-        original = yaml.safe_load((rd / "recipe.yaml").read_text())
+        _original = yaml.safe_load((rd / "recipe.yaml").read_text())
 
         _bump_revision_in_yaml(rd / "recipe.yaml", 5)
         updated = yaml.safe_load((rd / "recipe.yaml").read_text())
@@ -365,9 +365,9 @@ class TestChainHashAfterBump:
         hashes_after = {n: chain_hash(r, by_name2) for n, r in by_name2.items()}
 
         for name in ["a", "b", "c"]:
-            assert (
-                hashes_before[name] != hashes_after[name]
-            ), f"{name} chain_hash should change after cascade bump"
+            assert hashes_before[name] != hashes_after[name], (
+                f"{name} chain_hash should change after cascade bump"
+            )
 
 
 # ── Integration: build_order after rev-bump ─────────────────────
@@ -513,13 +513,13 @@ class TestRevBumpRealRecipes:
             for dep in dependants:
                 ds = get_downstream(name, recipes)
                 assert dep in ds, (
-                    f"{dep} is a direct dependant of {name} but " f"not in get_downstream({name})"
+                    f"{dep} is a direct dependant of {name} but not in get_downstream({name})"
                 )
 
     def test_all_recipes_loadable_after_hypothetical_bump(self):
         """Verify the recipe set is valid for rev_bump analysis."""
         recipes = list_recipes(RECIPES_DIR)
-        by_name = {r.name: r for r in recipes}
+        _by_name = {r.name: r for r in recipes}
         # Every recipe's deps should be in the set
         for r in recipes:
             for dep in r.raw.get("depends", {}).get("build", []):

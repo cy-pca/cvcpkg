@@ -1582,8 +1582,13 @@ class TestTagAuditActions:
 class TestUserProfile:
     def test_token_store_create_with_description_metadata(self, tmp_path):
         store = TokenStore(tmp_path)
-        raw = store.create("alice", TokenRole.reader, email="a@b.com",
-                           description="Hello world", metadata='{"key": "val"}')
+        raw = store.create(
+            "alice",
+            TokenRole.reader,
+            email="a@b.com",
+            description="Hello world",
+            metadata='{"key": "val"}',
+        )
         record = store.verify(raw)
         assert record is not None
         assert record.description == "Hello world"
@@ -2016,8 +2021,7 @@ class TestTokenStoreSearch:
 
     def test_get_profile_by_email(self, tmp_path):
         store = TokenStore(tmp_path)
-        store.create("alice", TokenRole.reader, email="alice@a.com",
-                      description="Alice's profile")
+        store.create("alice", TokenRole.reader, email="alice@a.com", description="Alice's profile")
         record = store.get_profile_by_email("alice@a.com")
         assert record is not None
         assert record.name == "alice"

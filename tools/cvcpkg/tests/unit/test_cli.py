@@ -935,7 +935,7 @@ class TestPublishOrgFlag:
     def test_publish_org_flag_accepted(self, capsys):
         """--org should be accepted without error (though publish itself
         will fail without a valid server/token — we test parse only)."""
-        ret = main(["publish", "--help"])
+        _ret = main(["publish", "--help"])
         out = capsys.readouterr().out
         assert "--org" in out
         assert "Organization slug" in out or "organization" in out.lower()

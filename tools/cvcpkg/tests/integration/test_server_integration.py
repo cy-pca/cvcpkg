@@ -1237,15 +1237,18 @@ class TestUserProfileLifecycle:
     def test_register_and_lookup_profile(self, env):
         client, admin_tok, pub_tok, reader_tok, tmp_path = env
         # Register a new user with description + metadata
-        resp = client.post("/v1/register", json={
-            "name": "profile-lifecycle",
-            "email": "lifecycle@example.com",
-            "role": "reader",
-            "description": "Integration test user 🚀",
-            "metadata": '{"team": "ci"}',
-        })
+        resp = client.post(
+            "/v1/register",
+            json={
+                "name": "profile-lifecycle",
+                "email": "lifecycle@example.com",
+                "role": "reader",
+                "description": "Integration test user 🚀",
+                "metadata": '{"team": "ci"}',
+            },
+        )
         assert resp.status_code == 200
-        new_tok = resp.json()["token"]
+        _new_tok = resp.json()["token"]
 
         # Look up by name
         resp = client.get("/v1/users/profile-lifecycle")
@@ -1350,9 +1353,13 @@ class TestUserListIntegration:
         _publish(client, pub_tok, "list-sort-pkg-1", "1.0")
         _publish(client, pub_tok, "list-sort-pkg-2", "1.0")
 
-        resp = client.get("/v1/users", params={
-            "sort": "packages_published", "order": "desc",
-        })
+        resp = client.get(
+            "/v1/users",
+            params={
+                "sort": "packages_published",
+                "order": "desc",
+            },
+        )
         assert resp.status_code == 200
         users = resp.json()["users"]
         counts = [u["packages_published"] for u in users]
@@ -1504,9 +1511,13 @@ class TestDbUserProfileIntegration:
                 headers={"Authorization": f"Bearer {pub_tok}"},
             )
 
-        resp = client.get("/v1/users", params={
-            "sort": "packages_published", "order": "desc",
-        })
+        resp = client.get(
+            "/v1/users",
+            params={
+                "sort": "packages_published",
+                "order": "desc",
+            },
+        )
         assert resp.status_code == 200
         users = resp.json()["users"]
         counts = [u["packages_published"] for u in users]
@@ -1575,7 +1586,12 @@ class TestDbUserProfileIntegration:
         archive = b"email count test"
         client.post(
             "/v1/publish",
-            params={"name": "email-cnt-pkg", "version": "1.0", "platform": "linux", "arch": "x86_64"},
+            params={
+                "name": "email-cnt-pkg",
+                "version": "1.0",
+                "platform": "linux",
+                "arch": "x86_64",
+            },
             files={"file": ("f.tar.zst", io.BytesIO(archive))},
             headers={"Authorization": f"Bearer {pub_tok}"},
         )

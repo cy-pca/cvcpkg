@@ -1244,7 +1244,7 @@ def publish(
             click.echo(f"cvcpkg: skipping {label} (already on server)")
             continue
 
-        click.echo(f"cvcpkg: publishing {label} " f"[{file_size / 1024 / 1024:.1f} MB] -> {base}")
+        click.echo(f"cvcpkg: publishing {label} [{file_size / 1024 / 1024:.1f} MB] -> {base}")
 
         params = {
             "name": name,
@@ -3262,8 +3262,7 @@ def token_requests(server: str, token: str, status: str | None):
     click.echo("-" * 78)
     for r in requests:
         click.echo(
-            f"{r['id']:<6} {r['name']:<20} {r['email']:<30} "
-            f"{r['role']:<12} {r['status']:<10}"
+            f"{r['id']:<6} {r['name']:<20} {r['email']:<30} {r['role']:<12} {r['status']:<10}"
         )
 
 
@@ -3438,8 +3437,12 @@ def user_info(server: str, name: str):
     help="Filter by role.",
 )
 @click.option("--org", default="", help="Filter by organization membership.")
-@click.option("--has-published", is_flag=True, default=False,
-              help="Only show users who have published packages.")
+@click.option(
+    "--has-published",
+    is_flag=True,
+    default=False,
+    help="Only show users who have published packages.",
+)
 @click.option(
     "--sort",
     type=click.Choice(["name", "email", "packages_published"]),

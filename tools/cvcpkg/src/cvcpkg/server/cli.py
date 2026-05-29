@@ -153,8 +153,7 @@ def run(
         import uvicorn
     except ImportError:
         raise click.ClickException(
-            "uvicorn is required to run the server. "
-            "Install it with: pip install 'cvcpkg[server]'"
+            "uvicorn is required to run the server. Install it with: pip install 'cvcpkg[server]'"
         ) from None
 
     click.echo(f"cvcpkg-server: starting on {host}:{port}")
@@ -389,8 +388,11 @@ def token() -> None:
     help="Server state directory.",
 )
 def token_create(
-    name: str, role: str, expires_in_days: int | None,
-    email: str, state_dir: str,
+    name: str,
+    role: str,
+    expires_in_days: int | None,
+    email: str,
+    state_dir: str,
 ) -> None:
     """Create a new API token (prints the secret once)."""
     import asyncio
@@ -419,8 +421,10 @@ def token_create(
 
         store = TokenStore(Path(state_dir))
         raw = store.create(
-            name=name, role=TokenRole(role),
-            expires_in_days=expires_in_days, email=email,
+            name=name,
+            role=TokenRole(role),
+            expires_in_days=expires_in_days,
+            email=email,
         )
     click.echo(f"Token created for '{name}' (role={role}):")
     click.echo(f"  {raw}")

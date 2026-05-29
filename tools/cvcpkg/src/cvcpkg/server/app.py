@@ -144,9 +144,7 @@ MIRROR_HEALTH_CHECK_INTERVAL = int(os.environ.get("CVCPKG_MIRROR_HEALTH_CHECK_IN
 MIRROR_MAX_FAILURES = int(os.environ.get("CVCPKG_MIRROR_MAX_FAILURES", "3"))
 
 # Registration mode: "open" (default) or "admin-gated".
-REGISTRATION_MODE = RegistrationMode(
-    os.environ.get("CVCPKG_REGISTRATION_MODE", "open")
-)
+REGISTRATION_MODE = RegistrationMode(os.environ.get("CVCPKG_REGISTRATION_MODE", "open"))
 
 logger = logging.getLogger("cvcpkg.server")
 
@@ -813,8 +811,7 @@ def create_app(
         recipe_version: str = Query(
             "",
             description=(
-                "Filter by recipe version (chain hash).  "
-                "Enables exact-match cache lookups."
+                "Filter by recipe version (chain hash).  Enables exact-match cache lookups."
             ),
         ),
         release: str = Query(
@@ -2116,7 +2113,8 @@ def create_app(
         role: str = Query("", description="Filter by role (reader/publisher/admin)"),
         org: str = Query("", description="Filter by organization membership"),
         has_published: bool | None = Query(
-            None, description="Filter by whether user has published packages",
+            None,
+            description="Filter by whether user has published packages",
         ),
         sort: str = Query("name", description="Sort field: name, email, or packages_published"),
         order: str = Query("asc", description="Sort order: asc or desc"),
@@ -2151,7 +2149,11 @@ def create_app(
         state = _get_state()
         # Get all matching users (no pagination at store level)
         records, _total = state.tokens.search_users(
-            name=name, email=email, role=role, limit=10000, offset=0,
+            name=name,
+            email=email,
+            role=role,
+            limit=10000,
+            offset=0,
         )
         bundles = state.index.get("bundles", [])
         users = []
@@ -2161,15 +2163,17 @@ def create_app(
                 continue
             if has_published is False and pkg_count > 0:
                 continue
-            users.append(UserProfileResponse(
-                name=r.name,
-                role=r.role.value,
-                email=r.email,
-                description=r.description,
-                metadata=r.metadata,
-                packages_published=pkg_count,
-                created_at=r.created_at,
-            ))
+            users.append(
+                UserProfileResponse(
+                    name=r.name,
+                    role=r.role.value,
+                    email=r.email,
+                    description=r.description,
+                    metadata=r.metadata,
+                    packages_published=pkg_count,
+                    created_at=r.created_at,
+                )
+            )
         # Apply sorting for YAML backend
         if sort == "packages_published":
             users.sort(key=lambda u: u.packages_published, reverse=(order == "desc"))
@@ -2275,13 +2279,19 @@ def create_app(
             try:
                 if _use_db:
                     raw = await _db_tokens.create(
-                        name=req.name, role=req.role, email=req.email,
-                        description=req.description, metadata=req.metadata,
+                        name=req.name,
+                        role=req.role,
+                        email=req.email,
+                        description=req.description,
+                        metadata=req.metadata,
                     )
                 else:
                     raw = state.tokens.create(
-                        name=req.name, role=req.role, email=req.email,
-                        description=req.description, metadata=req.metadata,
+                        name=req.name,
+                        role=req.role,
+                        email=req.email,
+                        description=req.description,
+                        metadata=req.metadata,
                     )
             except ValueError:
                 raise HTTPException(
@@ -2357,16 +2367,12 @@ def create_app(
         if tr is None:
             raise HTTPException(404, f"token request {request_id} not found")
         if tr.status != TokenRequestStatus.pending:
-            raise HTTPException(
-                409, f"token request {request_id} already {tr.status.value}"
-            )
+            raise HTTPException(409, f"token request {request_id} already {tr.status.value}")
         if not await _db_token_requests.resolve(
             request_id, TokenRequestStatus.approved, actor.name
         ):
             raise HTTPException(409, "request already resolved")
-        raw = await _db_tokens.create(
-            name=tr.name, role=tr.role, email=tr.email
-        )
+        raw = await _db_tokens.create(name=tr.name, role=tr.role, email=tr.email)
         await _db_audit.record(
             action=AuditAction.registration_approve,
             actor=actor.name,
@@ -2389,12 +2395,8 @@ def create_app(
         if tr is None:
             raise HTTPException(404, f"token request {request_id} not found")
         if tr.status != TokenRequestStatus.pending:
-            raise HTTPException(
-                409, f"token request {request_id} already {tr.status.value}"
-            )
-        if not await _db_token_requests.resolve(
-            request_id, TokenRequestStatus.denied, actor.name
-        ):
+            raise HTTPException(409, f"token request {request_id} already {tr.status.value}")
+        if not await _db_token_requests.resolve(request_id, TokenRequestStatus.denied, actor.name):
             raise HTTPException(409, "request already resolved")
         await _db_audit.record(
             action=AuditAction.registration_deny,
@@ -2742,7 +2744,9 @@ def create_app(
             ET.SubElement(item, "pubDate").text = pkg.published_at.strftime(
                 "%a, %d %b %Y %H:%M:%S +0000"
             )
-            ET.SubElement(item, "guid", isPermaLink="false").text = (
+            ET.SubElement(
+                item, "guid", isPermaLink="false"
+            ).text = (
                 f"{pkg.name}-{pkg.version}-{pkg.platform}-{pkg.arch}-{pkg.build_type}-{pkg.link}"
             )
 
@@ -3045,7 +3049,7 @@ def create_app(
         if not _use_db or _db_mirrors is None:
             raise HTTPException(
                 501,
-                "mirror registry requires a database backend " "(set CVCPKG_DATABASE_URL)",
+                "mirror registry requires a database backend (set CVCPKG_DATABASE_URL)",
             )
         url = body.url.rstrip("/")
         if not url.startswith(("http://", "https://")):

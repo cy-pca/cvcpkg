@@ -13,7 +13,7 @@ aiosqlite = pytest.importorskip("aiosqlite", reason="aiosqlite required for mirr
 from fastapi.testclient import TestClient
 
 from cvcpkg.server.app import create_app
-from cvcpkg.server.models import AuditAction, MirrorInfo, TokenRole
+from cvcpkg.server.models import AuditAction, TokenRole
 
 # ── Fixtures ────────────────────────────────────────────────────
 
