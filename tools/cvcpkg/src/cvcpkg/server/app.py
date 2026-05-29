@@ -74,6 +74,8 @@ from cvcpkg.server.models import (
     TokenRequestStatus,
     TokenRole,
     EmailUpdateRequest,
+    ProfileUpdateRequest,
+    UserProfileResponse,
 )
 
 # ── State ───────────────────────────────────────────────────────
@@ -848,6 +850,7 @@ def create_app(
                 archive_url=b.get("archive_url", ""),
                 published_at=b.get("published_at", "1970-01-01T00:00:00+00:00"),
                 yanked=b.get("yanked", False),
+                published_by=b.get("published_by", ""),
                 org=b.get("org", ""),
             )
             for b in page
@@ -882,6 +885,7 @@ def create_app(
                 archive_url=b.get("archive_url", ""),
                 published_at=b.get("published_at", "1970-01-01T00:00:00+00:00"),
                 yanked=b.get("yanked", False),
+                published_by=b.get("published_by", ""),
                 org=b.get("org", ""),
             )
             for b in bundles
@@ -1381,6 +1385,7 @@ def create_app(
                 maintainer=maintainer,
                 tags=pkg_tags,
                 org_slug=org,
+                published_by=actor.name,
             )
 
             # Track org storage usage
@@ -1414,6 +1419,7 @@ def create_app(
                 "key_fingerprint": key_fingerprint,
                 "release_tag": release_tag,
                 "recipe_version": recipe_version,
+                "published_by": actor.name,
                 "org": org,
             }
             state.index.setdefault("bundles", []).append(bundle)
@@ -1687,6 +1693,7 @@ def create_app(
                 pkg_license=session.pkg_license,
                 maintainer=session.maintainer,
                 tags=session.tags,
+                published_by=actor.name,
             )
 
             await _db_audit.record(
@@ -1715,6 +1722,7 @@ def create_app(
                 "key_fingerprint": session.key_fingerprint,
                 "release_tag": session.release_tag,
                 "recipe_version": session.recipe_version,
+                "published_by": actor.name,
             }
             state.index.setdefault("bundles", []).append(bundle)
             state.save_index()
@@ -1857,6 +1865,8 @@ def create_app(
                 role=req.role,
                 expires_in_days=req.expires_in_days,
                 email=req.email,
+                description=req.description,
+                metadata=req.metadata,
             )
             await _db_audit.record(
                 action=AuditAction.token_create,
@@ -1871,6 +1881,8 @@ def create_app(
                 role=req.role,
                 expires_in_days=req.expires_in_days,
                 email=req.email,
+                description=req.description,
+                metadata=req.metadata,
             )
             state.audit.record(
                 action=AuditAction.token_create,
@@ -1925,6 +1937,8 @@ def create_app(
                     "name": t.name,
                     "role": t.role.value,
                     "email": t.email,
+                    "description": t.description,
+                    "metadata": t.metadata,
                     "created_at": t.created_at.isoformat(),
                     "expires_at": t.expires_at.isoformat() if t.expires_at else None,
                     "revoked": t.revoked,
@@ -1978,6 +1992,87 @@ def create_app(
             )
         return {"message": f"email for '{name}' updated"}
 
+    @app.patch("/v1/tokens/{name}/profile", tags=["tokens"])
+    async def update_token_profile(
+        name: str,
+        req: ProfileUpdateRequest,
+        authorization: str | None = Header(None),
+    ):
+        """Update a token's profile (description and/or metadata).
+
+        Admins can update any token's profile.  Non-admin users can only
+        update their own.
+        """
+        state = _get_state()
+        raw = _extract_token(authorization)
+        if raw is None:
+            raise HTTPException(401, "missing Authorization header")
+        if _use_db:
+            actor = await _db_tokens.verify(raw)
+        else:
+            actor = state.tokens.verify(raw)
+        if actor is None:
+            raise HTTPException(401, "invalid or expired token")
+        if actor.role != TokenRole.admin and actor.name != name:
+            raise HTTPException(403, "you can only update your own profile")
+
+        if _use_db:
+            if not await _db_tokens.update_profile(
+                name, description=req.description, metadata=req.metadata
+            ):
+                raise HTTPException(404, f"token '{name}' not found")
+            await _db_audit.record(
+                action=AuditAction.token_update_profile,
+                actor=actor.name,
+                target=name,
+                detail=f"fields={'description' if req.description is not None else ''}"
+                f"{',metadata' if req.metadata is not None else ''}",
+            )
+        else:
+            if not state.tokens.update_profile(
+                name, description=req.description, metadata=req.metadata
+            ):
+                raise HTTPException(404, f"token '{name}' not found")
+            state.audit.record(
+                action=AuditAction.token_update_profile,
+                actor=actor.name,
+                target=name,
+                detail=f"fields={'description' if req.description is not None else ''}"
+                f"{',metadata' if req.metadata is not None else ''}",
+            )
+        return {"message": f"profile for '{name}' updated"}
+
+    @app.get(
+        "/v1/users/{name}",
+        response_model=UserProfileResponse,
+        tags=["users"],
+    )
+    async def get_user_profile(name: str):
+        """Look up a user's public profile by name.
+
+        Returns their name, role, email, description, metadata, and
+        account creation date.  Does not require authentication.
+        """
+        if _use_db:
+            profile = await _db_tokens.get_public_profile(name)
+        else:
+            state = _get_state()
+            record = state.tokens.get_public_profile(name)
+            if record is not None:
+                profile = UserProfileResponse(
+                    name=record.name,
+                    role=record.role.value,
+                    email=record.email,
+                    description=record.description,
+                    metadata=record.metadata,
+                    created_at=record.created_at,
+                )
+            else:
+                profile = None
+        if profile is None:
+            raise HTTPException(404, f"user '{name}' not found")
+        return profile
+
     # ── Registration (public) ──────────────────────────────
 
     @app.post("/v1/register", response_model=RegistrationResponse, tags=["registration"])
@@ -1997,7 +2092,8 @@ def create_app(
             state = _get_state()
             if _use_db:
                 raw = await _db_tokens.create(
-                    name=req.name, role=req.role, email=req.email
+                    name=req.name, role=req.role, email=req.email,
+                    description=req.description, metadata=req.metadata,
                 )
                 await _db_audit.record(
                     action=AuditAction.registration_request,
@@ -2007,7 +2103,8 @@ def create_app(
                 )
             else:
                 raw = state.tokens.create(
-                    name=req.name, role=req.role, email=req.email
+                    name=req.name, role=req.role, email=req.email,
+                    description=req.description, metadata=req.metadata,
                 )
                 state.audit.record(
                     action=AuditAction.registration_request,

@@ -76,6 +76,7 @@ class AuditAction(str, Enum):
     registration_approve = "registration_approve"
     registration_deny = "registration_deny"
     token_update_email = "token_update_email"
+    token_update_profile = "token_update_profile"
 
 
 # ── Token management ───────────────────────────────────────────
@@ -88,6 +89,8 @@ class TokenRecord(BaseModel):
     role: TokenRole
     token_hash: str = Field(description="HMAC-SHA256 hash of the bearer token")
     email: str = ""
+    description: str = ""
+    metadata: str = ""
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
     )
@@ -100,6 +103,8 @@ class TokenCreateRequest(BaseModel):
     role: TokenRole = TokenRole.publisher
     expires_in_days: int | None = None
     email: str = ""
+    description: str = ""
+    metadata: str = ""
 
 
 class TokenCreateResponse(BaseModel):
@@ -111,6 +116,24 @@ class TokenCreateResponse(BaseModel):
 
 class EmailUpdateRequest(BaseModel):
     email: str
+
+
+class ProfileUpdateRequest(BaseModel):
+    """Update a user's profile fields."""
+
+    description: str | None = Field(None, description="User description (unicode)")
+    metadata: str | None = Field(None, description="Arbitrary JSON or text metadata")
+
+
+class UserProfileResponse(BaseModel):
+    """Public user profile information."""
+
+    name: str
+    role: str
+    email: str = ""
+    description: str = ""
+    metadata: str = ""
+    created_at: datetime.datetime
 
 
 # ── Registration ───────────────────────────────────────────────
@@ -129,6 +152,8 @@ class RegistrationRequest(BaseModel):
     name: str
     email: str
     role: TokenRole = TokenRole.reader
+    description: str = ""
+    metadata: str = ""
 
 
 class RegistrationResponse(BaseModel):
@@ -209,6 +234,10 @@ class PackageInfo(BaseModel):
     license: str = ""
     maintainer: str = ""
     tags: str = ""
+    published_by: str = Field(
+        default="",
+        description="Token name of the user who published this package.",
+    )
     org: str = Field(
         default="",
         description=(

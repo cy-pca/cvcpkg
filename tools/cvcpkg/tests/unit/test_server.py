@@ -1469,3 +1469,178 @@ class TestTagAuditActions:
         assert AuditAction.registration_approve == "registration_approve"
         assert AuditAction.registration_deny == "registration_deny"
         assert AuditAction.token_update_email == "token_update_email"
+        assert AuditAction.token_update_profile == "token_update_profile"
+
+
+# ── User profile / description / metadata ──────────────────────
+
+
+class TestUserProfile:
+    def test_token_store_create_with_description_metadata(self, tmp_path):
+        store = TokenStore(tmp_path)
+        raw = store.create("alice", TokenRole.reader, email="a@b.com",
+                           description="Hello world", metadata='{"key": "val"}')
+        record = store.verify(raw)
+        assert record is not None
+        assert record.description == "Hello world"
+        assert record.metadata == '{"key": "val"}'
+
+    def test_token_store_update_profile(self, tmp_path):
+        store = TokenStore(tmp_path)
+        store.create("bob", TokenRole.reader, email="b@b.com")
+        assert store.update_profile("bob", description="Bob's profile")
+        record = store.get_public_profile("bob")
+        assert record is not None
+        assert record.description == "Bob's profile"
+        assert record.metadata == ""
+
+    def test_token_store_update_profile_metadata(self, tmp_path):
+        store = TokenStore(tmp_path)
+        store.create("charlie", TokenRole.reader)
+        assert store.update_profile("charlie", metadata='{"x": 1}')
+        record = store.get_public_profile("charlie")
+        assert record is not None
+        assert record.metadata == '{"x": 1}'
+
+    def test_token_store_update_profile_not_found(self, tmp_path):
+        store = TokenStore(tmp_path)
+        assert not store.update_profile("ghost", description="nope")
+
+    def test_token_store_get_profile_not_found(self, tmp_path):
+        store = TokenStore(tmp_path)
+        assert store.get_public_profile("nobody") is None
+
+    def test_update_profile_api_self(self, server_env):
+        client, admin_tok, pub_tok, _ = server_env
+        resp = client.patch(
+            "/v1/tokens/test-publisher/profile",
+            json={"description": "I publish things"},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+
+    def test_update_profile_api_admin(self, server_env):
+        client, admin_tok, pub_tok, _ = server_env
+        resp = client.patch(
+            "/v1/tokens/test-publisher/profile",
+            json={"description": "Admin set this", "metadata": '{"admin": true}'},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+
+    def test_update_profile_api_other_forbidden(self, server_env):
+        client, admin_tok, pub_tok, _ = server_env
+        resp = client.patch(
+            "/v1/tokens/test-admin/profile",
+            json={"description": "hacked"},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 403
+
+    def test_update_profile_api_no_auth(self, server_env):
+        client, *_ = server_env
+        resp = client.patch(
+            "/v1/tokens/test-admin/profile",
+            json={"description": "no auth"},
+        )
+        assert resp.status_code == 401
+
+    def test_update_profile_not_found(self, server_env):
+        client, admin_tok, *_ = server_env
+        resp = client.patch(
+            "/v1/tokens/nonexistent/profile",
+            json={"description": "x"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 404
+
+    def test_user_info_endpoint(self, server_env):
+        client, admin_tok, pub_tok, _ = server_env
+        # Set profile first
+        client.patch(
+            "/v1/tokens/test-publisher/profile",
+            json={"description": "pkg maintainer", "metadata": '{"org": "cvc"}'},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        # Look up profile — no auth required
+        resp = client.get("/v1/users/test-publisher")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["name"] == "test-publisher"
+        assert data["role"] == "publisher"
+        assert data["description"] == "pkg maintainer"
+        assert data["metadata"] == '{"org": "cvc"}'
+        assert "created_at" in data
+
+    def test_user_info_not_found(self, server_env):
+        client, *_ = server_env
+        resp = client.get("/v1/users/nobody")
+        assert resp.status_code == 404
+
+    def test_register_with_description_metadata(self, server_env):
+        client, *_ = server_env
+        resp = client.post(
+            "/v1/register",
+            json={
+                "name": "profile-user",
+                "email": "p@u.com",
+                "role": "reader",
+                "description": "I am a researcher 🔬",
+                "metadata": '{"affiliation": "university"}',
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["token"].startswith("cvctok_")
+        # Verify profile was saved
+        resp = client.get("/v1/users/profile-user")
+        assert resp.status_code == 200
+        profile = resp.json()
+        assert profile["description"] == "I am a researcher 🔬"
+        assert profile["metadata"] == '{"affiliation": "university"}'
+
+    def test_list_tokens_includes_profile_fields(self, server_env):
+        client, admin_tok, pub_tok, _ = server_env
+        # Set profile on publisher
+        client.patch(
+            "/v1/tokens/test-publisher/profile",
+            json={"description": "test desc"},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        resp = client.get(
+            "/v1/tokens",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        tokens = {t["name"]: t for t in resp.json()["tokens"]}
+        assert "description" in tokens["test-publisher"]
+        assert tokens["test-publisher"]["description"] == "test desc"
+        assert "metadata" in tokens["test-publisher"]
+
+
+class TestPublishedBy:
+    def _publish(self, client, pub_tok):
+        archive = b"fake archive for published_by test"
+        resp = client.post(
+            "/v1/publish",
+            params={
+                "name": "pub-by-pkg",
+                "version": "1.0",
+                "platform": "linux",
+                "arch": "x86_64",
+            },
+            files={"file": ("pkg.tar.zst", io.BytesIO(archive))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        return resp
+
+    def test_publish_records_published_by(self, server_env):
+        client, admin_tok, pub_tok, _ = server_env
+        resp = self._publish(client, pub_tok)
+        assert resp.status_code == 200
+        # Check package listing
+        resp = client.get("/v1/packages", params={"name": "pub-by-pkg"})
+        assert resp.status_code == 200
+        pkgs = resp.json()["packages"]
+        assert len(pkgs) >= 1
+        assert pkgs[0]["published_by"] == "test-publisher"
