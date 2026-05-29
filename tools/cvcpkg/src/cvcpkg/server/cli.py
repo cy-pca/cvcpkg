@@ -435,6 +435,17 @@ def migrate_downgrade(revision: str) -> None:
     click.echo(f"Downgraded to {revision}.")
 
 
+@migrate.command("stamp")
+@click.argument("revision")
+def migrate_stamp(revision: str) -> None:
+    """Stamp the alembic_version table with REVISION without running migrations."""
+    command = _require_alembic()
+    _require_db_url()
+    alembic_cfg = _alembic_config()
+    command.stamp(alembic_cfg, revision)
+    click.echo(f"Stamped at {revision}.")
+
+
 @migrate.command("current")
 def migrate_current() -> None:
     """Show the current migration revision."""
