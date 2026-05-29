@@ -136,10 +136,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Shared builds — GitHub-hosted (fast, no sharding needed)
           - config: debug
             link: shared
           - config: release
             link: shared
+          # Static builds — sharded on GitHub-hosted runners to stay
+          # under the 6-hour job time limit.
           - config: debug
             link: static
             shard: '0/2'
@@ -152,12 +155,23 @@ jobs:
           - config: release
             link: static
             shard: '1/2'
+          # Static builds — self-hosted Windows runners (sandipaws +
+          # phm-win11).  No sharding needed since self-hosted runners
+          # have no time limit.  Runs in parallel with the sharded
+          # GitHub-hosted builds — whichever finishes first publishes.
+          - config: debug
+            link: static
+            runner: '["self-hosted","Windows","X64"]'
+          - config: release
+            link: static
+            runner: '["self-hosted","Windows","X64"]'
     uses: ./.github/workflows/recipe-build.yml
     with:
       platform: windows
       config: ${{ matrix.config }}
       link: ${{ matrix.link }}
       shard: ${{ matrix.shard || '' }}
+      runner: ${{ matrix.runner || '' }}
       sha_suffix: ${{ inputs.sha_suffix || '' }}
 
   # ──────────────────────────── WASM ─────────────────────────────

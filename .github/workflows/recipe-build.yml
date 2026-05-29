@@ -146,6 +146,16 @@ jobs:
         if: inputs.platform == 'windows'
         shell: pwsh
         run: |
+          # Ensure Chocolatey is available (pre-installed on windows-latest,
+          # may be missing on self-hosted runners).
+          if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+            Write-Host "Installing Chocolatey..."
+            Set-ExecutionPolicy Bypass -Scope Process -Force
+            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+            iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+            # Refresh PATH so choco is found immediately
+            $env:PATH = [System.Environment]::GetEnvironmentVariable('PATH', 'Machine') + ';' + [System.Environment]::GetEnvironmentVariable('PATH', 'User')
+          }
           choco install ninja -y
           choco install cmake --version=3.31.7 --installargs 'ADD_CMAKE_TO_PATH=System' -y
           choco install nasm -y
