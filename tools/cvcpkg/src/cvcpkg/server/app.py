@@ -73,6 +73,7 @@ from cvcpkg.server.models import (
     TokenRequestRecord,
     TokenRequestStatus,
     TokenRole,
+    EmailUpdateRequest,
 )
 
 # ── State ───────────────────────────────────────────────────────
@@ -1931,6 +1932,51 @@ def create_app(
                 for t in tokens
             ]
         }
+
+    @app.patch("/v1/tokens/{name}/email", tags=["tokens"])
+    async def update_token_email(
+        name: str,
+        req: EmailUpdateRequest,
+        authorization: str | None = Header(None),
+    ):
+        """Update a token's email.
+
+        Admins can update any token's email.  Non-admin users can only
+        update their own token's email.
+        """
+        state = _get_state()
+        raw = _extract_token(authorization)
+        if raw is None:
+            raise HTTPException(401, "missing Authorization header")
+        if _use_db:
+            actor = await _db_tokens.verify(raw)
+        else:
+            actor = state.tokens.verify(raw)
+        if actor is None:
+            raise HTTPException(401, "invalid or expired token")
+        # Non-admins can only update their own email
+        if actor.role != TokenRole.admin and actor.name != name:
+            raise HTTPException(403, "you can only update your own token's email")
+
+        if _use_db:
+            if not await _db_tokens.update_email(name, req.email):
+                raise HTTPException(404, f"token '{name}' not found")
+            await _db_audit.record(
+                action=AuditAction.token_update_email,
+                actor=actor.name,
+                target=name,
+                detail=f"email={req.email}",
+            )
+        else:
+            if not state.tokens.update_email(name, req.email):
+                raise HTTPException(404, f"token '{name}' not found")
+            state.audit.record(
+                action=AuditAction.token_update_email,
+                actor=actor.name,
+                target=name,
+                detail=f"email={req.email}",
+            )
+        return {"message": f"email for '{name}' updated"}
 
     # ── Registration (public) ──────────────────────────────
 

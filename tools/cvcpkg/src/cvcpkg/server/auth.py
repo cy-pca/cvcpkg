@@ -126,6 +126,15 @@ class TokenStore:
                 return True
         return False
 
+    def update_email(self, name: str, email: str) -> bool:
+        """Update the email for a token by name.  Returns True if found."""
+        for t in self._tokens:
+            if t.name == name and not t.revoked:
+                t.email = email
+                self._persist()
+                return True
+        return False
+
     def list_tokens(self) -> list[TokenRecord]:
         """Return all token records (without secrets)."""
         return list(self._tokens)
