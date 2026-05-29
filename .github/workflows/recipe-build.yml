@@ -174,18 +174,6 @@ jobs:
         with:
           arch: x64
 
-      # ── Qt6 (Windows — pre-built via aqtinstall) ──
-      - name: Install Qt6 (Windows)
-        if: inputs.platform == 'windows'
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.7.*'
-          host: 'windows'
-          target: 'desktop'
-          arch: 'win64_msvc2019_64'
-          modules: ''
-          cache: true
-
       # ── Install cvcpkg ──
       - name: Install cvcpkg
         shell: bash
@@ -257,6 +245,10 @@ jobs:
         if: steps.cache-valid.outputs.valid != 'true'
         continue-on-error: true
         shell: bash
+        env:
+          CVCPKG_SERVER_CACHE: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
+          CVCPKG_SERVER_CACHE_TOKEN: ${{ secrets.CVCPKG_PUBLISH_TOKEN }}
+          CVCPKG_SERVER_CACHE_PUSH: "1"
         run: |
           set -euo pipefail
           EXTRA_ARGS=""
@@ -285,20 +277,6 @@ jobs:
             -DCMAKE_BUILD_TYPE=${{ inputs.config == 'release' && 'Release' || 'Debug' }} \
             -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/prefix"
           cmake --install build
-
-      # ── Linux: patch RPATH to $ORIGIN ──
-      - name: Patch RPATH ($ORIGIN)
-        if: inputs.platform == 'linux' && inputs.link == 'shared'
-        run: |
-          set -euo pipefail
-          PREFIX="${{ github.workspace }}/prefix"
-          shopt -s globstar nullglob
-          for so in "$PREFIX"/lib/**/*.so* "$PREFIX"/lib/*.so*; do
-            [ -e "$so" ] || continue
-            [ -L "$so" ] && continue
-            patchelf --remove-rpath "$so" 2>/dev/null || true
-            patchelf --set-rpath '$ORIGIN' "$so" 2>/dev/null || true
-          done
 
       # Upload per-component bundles for publishing to cvcpkg-server
       - name: Upload per-component bundles

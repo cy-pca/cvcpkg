@@ -101,6 +101,40 @@ if (-not $script:gitBash) {
 }
 if (-not $script:gitBash) { throw "Cannot find Git Bash (non-WSL). Install Git for Windows." }
 
+# Add Git's usr/bin to PATH so autotools Makefiles can find Unix utilities
+# (rm, cp, mv, install, etc.) when invoked via emmake/mingw32-make.
+# Use the 8.3 short path so that mingw32-make's SHELL auto-detection
+# (which scans PATH for sh.exe) produces a space-free path.  Without
+# this, SHELL becomes "C:/Program Files/Git/usr/bin/sh.exe" and any
+# Makefile recipe that uses $(SHELL) — such as libtool — breaks.
+$gitUsrBin = Split-Path $script:gitBash
+$fso = New-Object -ComObject Scripting.FileSystemObject
+$gitUsrBinShort = $fso.GetFolder($gitUsrBin).ShortPath
+if (-not ($env:PATH -split ';' | Where-Object { $_ -eq $gitUsrBinShort })) {
+    $env:PATH = "$gitUsrBinShort;$env:PATH"
+}
+
+# Ensure MAKE points to mingw32-make so that autotools' recursive $(MAKE)
+# calls resolve correctly.  Without this, configure detects "make does not
+# set $(MAKE)" and hardcodes MAKE=make in generated Makefiles, but there is
+# no make.exe on Windows — only mingw32-make.exe (from Strawberry Perl).
+$mgm = Get-Command mingw32-make -ErrorAction SilentlyContinue
+if ($mgm) { $env:MAKE = 'mingw32-make' }
+
+# Provide MSYS-style paths for Emscripten compiler tools.  emconfigure sets
+# CC/CXX/AR/RANLIB to full Windows paths (C:\...\emcc.bat) but GMP and other
+# autotools projects' custom configure macros pass those values through shell
+# operations that strip the backslashes.  Recipes override CC/CXX etc. inside
+# their bash commands using these MSYS paths (/c/.../emcc.bat) instead.
+$emscriptenDir = Join-Path $env:CVC_EMSDK_DIR 'upstream\emscripten'
+$script:emToolExports = (
+    "export CC='$(ConvertTo-MsysPath (Join-Path $emscriptenDir 'emcc.bat'))'" +
+    " CXX='$(ConvertTo-MsysPath (Join-Path $emscriptenDir 'em++.bat'))'" +
+    " AR='$(ConvertTo-MsysPath (Join-Path $emscriptenDir 'emar.bat'))'" +
+    " RANLIB='$(ConvertTo-MsysPath (Join-Path $emscriptenDir 'emranlib.bat'))'" +
+    " CONFIG_SHELL=/usr/bin/sh SHELL=/usr/bin/sh"
+)
+
 Write-Host "-- env-wasm.ps1 loaded --"
 Write-Host "  EMSDK=$env:CVC_EMSDK_DIR  BUILD_TYPE=$cmakeBuildType  LINK=static  JOBS=$env:CVC_JOBS"
 Write-Host "  BASH=$script:gitBash"

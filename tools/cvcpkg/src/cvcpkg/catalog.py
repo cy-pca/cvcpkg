@@ -1,4 +1,4 @@
-"""Fetch and parse the libcvc-deps bundle catalog."""
+"""Fetch, parse, and generate the libcvc-deps bundle catalog."""
 
 from __future__ import annotations
 
@@ -145,3 +145,80 @@ def catalog_entries(
             )
         )
     return entries
+
+
+# ── Catalog generation ──────────────────────────────────────────
+
+
+def generate_catalog(
+    indexes_dir: Path,
+    output_dir: Path,
+    *,
+    release_tag: str,
+    server_url: str = "https://pkg.tx.wtf",
+    base_revision: int = 0,
+) -> dict:
+    """Merge per-platform index YAMLs into a unified catalog.
+
+    Reads ``*-index.yaml`` files from *indexes_dir*, enriches each
+    bundle with ``source_release`` and ``archive_url``, then writes:
+
+    - ``latest.yaml`` — stable entry point
+    - ``<revision>.yaml`` — immutable snapshot
+    - ``index.yaml`` — revision manifest
+    - ``<release_tag>-index.yaml`` — release-specific index
+
+    Returns the catalog dict.
+    """
+    index_files = sorted(indexes_dir.glob("*-index.yaml"))
+    version = release_tag.lstrip("v")
+
+    all_bundles: list[dict] = []
+    for idx_path in index_files:
+        idx = yaml.safe_load(idx_path.read_text())
+        if not isinstance(idx, dict):
+            continue
+        for bundle in idx.get("bundles", []):
+            bundle["source_release"] = release_tag
+            if "archive" in bundle:
+                if not bundle.get("archive_url"):
+                    bundle["archive_url"] = f"{server_url}/v1/download/{bundle['archive']}"
+                bundle.pop("mirror_urls", None)
+            all_bundles.append(bundle)
+
+    revision = base_revision + 1
+    catalog = {
+        "schema_version": 1,
+        "revision": revision,
+        "bundles": all_bundles,
+    }
+
+    catalog_yaml = yaml.dump(catalog, default_flow_style=False, sort_keys=False)
+    catalog_sha = hashlib.sha256(catalog_yaml.encode()).hexdigest()
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    (output_dir / "latest.yaml").write_text(catalog_yaml)
+    (output_dir / f"{revision}.yaml").write_text(catalog_yaml)
+
+    index_manifest = {
+        "latest_revision": revision,
+        "revisions": [
+            {"revision": revision, "sha256": catalog_sha, "release": release_tag},
+        ],
+    }
+    (output_dir / "index.yaml").write_text(
+        yaml.dump(index_manifest, default_flow_style=False, sort_keys=False)
+    )
+
+    release_index = {
+        "schema_version": 1,
+        "release_version": version,
+        "recommended": {b["name"]: b["version"] for b in all_bundles},
+        "bundles": all_bundles,
+    }
+    (output_dir / f"{release_tag}-index.yaml").write_text(
+        yaml.dump(release_index, default_flow_style=False, sort_keys=False)
+    )
+
+    return catalog
