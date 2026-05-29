@@ -4,8 +4,6 @@ on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+*'
-  # Allow manual one-off builds without tagging (for plumbing
-  # verification on a feature branch).
   workflow_dispatch:
     inputs:
       prerelease:
@@ -13,10 +11,6 @@ on:
         required: false
         type: boolean
         default: true
-  # Reusable from ci.yml so the per-PR build job produces the same
-  # artifact set as a tagged release. ci.yml supplies the SHA-suffix
-  # input; the release publishing job here is gated on a tag ref so
-  # it's a no-op for PR-driven runs.
   workflow_call:
     inputs:
       sha_suffix:
@@ -28,96 +22,77 @@ on:
 permissions:
   contents: write
 
-# ───────────────────────────────────────────────────────────────────
-# libcvc-deps release artifacts
-#
-# Self-contained CMAKE_PREFIX_PATH bundles holding every project-level
-# dependency needed to build libcvc + volrover3. Each archive is one
-# install prefix:
-#
-#   <root>/{bin,lib,include,share,plugins,...}
-#
-# Build flavors per platform: (Debug|Release) × (shared|static).
-#
-#   libcvc-deps-<ver>-linux-<arch>-<config>[-static].tar.gz
-#   libcvc-deps-<ver>-macos-<arch>-<config>[-static].zip
-#   libcvc-deps-<ver>-windows-<arch>-<config>[-static].zip
-#
-# Contents:
-#   - Boost, HDF5 (C+CXX), FFTW3, GSL, log4cplus, libtiff, libyaml,
-#     protobuf, gRPC,
-#     CGAL+GMP+MPFR, ImageMagick (Q16-HDRI)
-#   - Qt 6.7.x (Core, Gui, Widgets, OpenGL, OpenGLWidgets)
-#   - VTK 9.5.0 built against Qt 6 (no QtQuick modules)
-#   - libiimod (IMOD's MRC/TIFF image-file I/O subset, built from
-#     the LabShare-Archive/IMOD upstream at a pinned SHA — see
-#     third-party/libiimod/CMakeLists.txt; linked against the
-#     bundled libtiff so TIFF reads/writes are enabled)
-#   - levmar 2.6 (Lourakis Levenberg-Marquardt nonlinear least-squares,
-#     LAPACK-enabled — see third-party/levmar/CMakeLists.txt)
-#   - LAPACK / BLAS (Linux: liblapack/libblas; macOS: brew lapack +
-#     Accelerate; Windows: vcpkg clapack + openblas)
-#   - pthreads4w on Windows (vcpkg `pthreads`) so the bundle exposes a
-#     standard `find_package(Threads)` / `Threads::Threads` target
-#     across all three platforms.
-#
-# CUDA toolkit is intentionally NOT bundled — consumers install it
-# directly via Jimver/cuda-toolkit on the build host.
-# System libraries (glibc, libstdc++, Windows UCRT) are left to the
-# host.
-# ───────────────────────────────────────────────────────────────────
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
 
-env:
-  VTK_VERSION: '9.5.0'
-  QT_VERSION_LINUX_MACOS: '6'    # apt qt6-base-dev / brew qt@6
-  QT_VERSION_WINDOWS: '6.7.*'    # install-qt-action spec
-  VCGLIB_VERSION: '2025.07'
-  # log4cplus is built from source on Linux so we can ship a static
-  # archive (Ubuntu's liblog4cplus-dev only carries the .so).
-  LOG4CPLUS_VERSION: '2.1.2'
-  VCGLIB_SHA256:  'e49fc9342d5476b3e39a5e1939b965b57c91d7a17b4f97b8c5eaf01228b16cf0'
+# ─────────────────────────────────────────────────────────────────
+# Recipe-driven release pipeline.
+#
+# Every dependency is built from recipes via `cvcpkg pack-all`
+# inside the reusable recipe-build.yml workflow.  No system
+# packages are used for the bundle contents — only minimal build
+# tools (cmake, ninja, compilers) are installed by recipe-build.
+#
+# Per-component archives + index YAMLs are uploaded as artifacts.
+# On a tag push the release job collects them into a GitHub Release.
+# ─────────────────────────────────────────────────────────────────
 
 jobs:
-  # ──────────────────────────── Linux ────────────────────────────
-  # Build every recipe from source in dependency order.
-  # Half the matrix runs on GitHub-hosted ubuntu-latest, half on
-  # self-hosted cvcpkg-builder runners for maximum parallelism.
+  # ─────────────────── Linux ───────────────────────────────────
   linux:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - config: debug
-            link: shared
           - config: release
             link: shared
-            runner: '["self-hosted","Linux","X64","cvcpkg-builder"]'
-          - config: debug
+          - config: release
             link: static
-            runner: '["self-hosted","Linux","X64","cvcpkg-builder"]'
-          - config: release
+          - config: debug
+            link: shared
+          - config: debug
             link: static
     uses: ./.github/workflows/recipe-build.yml
     with:
       platform: linux
       config: ${{ matrix.config }}
       link: ${{ matrix.link }}
-      runner: ${{ matrix.runner || '' }}
       sha_suffix: ${{ inputs.sha_suffix || '' }}
+    secrets: inherit
 
-  # ──────────────────────────── macOS ────────────────────────────
+  linux-selfhosted:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - config: release
+            link: shared
+          - config: debug
+            link: static
+    uses: ./.github/workflows/recipe-build.yml
+    with:
+      platform: linux
+      config: ${{ matrix.config }}
+      link: ${{ matrix.link }}
+      sha_suffix: ${{ inputs.sha_suffix || '' }}
+      runner: '["self-hosted","Linux","X64","cvcpkg-builder"]'
+    secrets: inherit
+
+  # ─────────────────── macOS ───────────────────────────────────
   macos:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - config: debug
-            link: shared
           - config: release
             link: shared
-          - config: debug
+          - config: release
             link: static
-          - config: release
+          - config: debug
+            link: shared
+          - config: debug
             link: static
     uses: ./.github/workflows/recipe-build.yml
     with:
@@ -125,543 +100,166 @@ jobs:
       config: ${{ matrix.config }}
       link: ${{ matrix.link }}
       sha_suffix: ${{ inputs.sha_suffix || '' }}
+    secrets: inherit
 
-  # ────────────────────────── Windows ────────────────────────────
-  # Build every recipe from source (or vcpkg for port-based recipes)
-  # using cvcpkg build-all, just like Linux and macOS.
-  # Static builds are sharded across 2 runners to stay under the
-  # 6-hour GitHub Actions job time limit.
+  # ─────────────────── Windows ─────────────────────────────────
+  # Shared builds run on self-hosted Windows runners (sandipaws +
+  # phm-win11) for faster turnaround; static builds run on
+  # GitHub-hosted windows-latest.
   windows:
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Shared builds — GitHub-hosted (fast, no sharding needed)
-          - config: debug
-            link: shared
+          # Self-hosted: shared builds
           - config: release
             link: shared
-          # Static builds — sharded on GitHub-hosted runners to stay
-          # under the 6-hour job time limit.
-          - config: debug
-            link: static
-            shard: '0/2'
-          - config: debug
-            link: static
-            shard: '1/2'
-          - config: release
-            link: static
-            shard: '0/2'
-          - config: release
-            link: static
-            shard: '1/2'
-          # Static builds — self-hosted Windows runners (sandipaws +
-          # phm-win11).  No sharding needed since self-hosted runners
-          # have no time limit.  Runs in parallel with the sharded
-          # GitHub-hosted builds — whichever finishes first publishes.
-          - config: debug
-            link: static
             runner: '["self-hosted","Windows","X64"]'
+          - config: debug
+            link: shared
+            runner: '["self-hosted","Windows","X64"]'
+          # GitHub-hosted: static builds
           - config: release
             link: static
-            runner: '["self-hosted","Windows","X64"]'
+          - config: debug
+            link: static
     uses: ./.github/workflows/recipe-build.yml
     with:
       platform: windows
       config: ${{ matrix.config }}
       link: ${{ matrix.link }}
-      shard: ${{ matrix.shard || '' }}
       runner: ${{ matrix.runner || '' }}
       sha_suffix: ${{ inputs.sha_suffix || '' }}
+    secrets: inherit
 
-  # ──────────────────────────── WASM ─────────────────────────────
-  # Cross-compile wasm-platform recipes using Emscripten.
-  # Only static linking — wasm does not support shared libraries.
-  # Sharded across Linux, macOS, and Windows hosts for parallelism.
-  wasm:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Debug builds — one shard per host platform
-          - config: debug
-            link: static
-            host_platform: linux
-            shard: '0/3'
-          - config: debug
-            link: static
-            host_platform: macos
-            shard: '1/3'
-          - config: debug
-            link: static
-            host_platform: windows
-            shard: '2/3'
-          # Release builds — sharded the same way
-          - config: release
-            link: static
-            host_platform: linux
-            shard: '0/3'
-            runner: '["self-hosted","Linux","X64","cvcpkg-builder"]'
-          - config: release
-            link: static
-            host_platform: macos
-            shard: '1/3'
-          - config: release
-            link: static
-            host_platform: windows
-            shard: '2/3'
-    uses: ./.github/workflows/recipe-build.yml
-    with:
-      platform: wasm
-      config: ${{ matrix.config }}
-      link: ${{ matrix.link }}
-      host_platform: ${{ matrix.host_platform }}
-      shard: ${{ matrix.shard }}
-      runner: ${{ matrix.runner || '' }}
-      sha_suffix: ${{ inputs.sha_suffix || '' }}
-
-  # ──────────────────────────── FreeBSD ────────────────────────────
-  # Build on FreeBSD VM via Incus on self-hosted runners.
-  # Only shared linking for now — static requires more testing.
+  # ─────────────────── BSD ─────────────────────────────────────
   freebsd:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - config: debug
-            link: shared
           - config: release
             link: shared
-          - config: debug
+          - config: release
             link: static
-          - config: release
+          - config: debug
+            link: shared
+          - config: debug
             link: static
     uses: ./.github/workflows/bsd-recipe-build.yml
     with:
       platform: freebsd
       config: ${{ matrix.config }}
       link: ${{ matrix.link }}
-      sha_suffix: ${{ inputs.sha_suffix || '' }}
 
-  # ──────────────────────────── OpenBSD ────────────────────────────
   openbsd:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - config: debug
-            link: shared
           - config: release
             link: shared
-          - config: debug
+          - config: release
             link: static
-          - config: release
+          - config: debug
+            link: shared
+          - config: debug
             link: static
     uses: ./.github/workflows/bsd-recipe-build.yml
     with:
       platform: openbsd
       config: ${{ matrix.config }}
       link: ${{ matrix.link }}
-      sha_suffix: ${{ inputs.sha_suffix || '' }}
 
-  # ──────────────────────────── NetBSD ────────────────────────────
   netbsd:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - config: debug
-            link: shared
           - config: release
             link: shared
-          - config: debug
+          - config: release
             link: static
-          - config: release
+          - config: debug
+            link: shared
+          - config: debug
             link: static
     uses: ./.github/workflows/bsd-recipe-build.yml
     with:
       platform: netbsd
       config: ${{ matrix.config }}
       link: ${{ matrix.link }}
+
+  # ─────────────────── Wasm ────────────────────────────────────
+  wasm-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - config: release
+            link: static
+          - config: debug
+            link: static
+    uses: ./.github/workflows/recipe-build.yml
+    with:
+      platform: wasm
+      config: ${{ matrix.config }}
+      link: ${{ matrix.link }}
       sha_suffix: ${{ inputs.sha_suffix || '' }}
+      host_platform: linux
+    secrets: inherit
 
-  # ──────────────────────────── Release ────────────────────────────
-  # ────────────────────── Publish per-component packages ──────────
-  # Publish pre-built per-component archives to cvcpkg-server.
-  # Each build job already ran `cvcpkg pack-all` which built each
-  # recipe individually and produced per-component archives.
-
-  publish-linux:
-    needs: [linux]
-    if: always() && needs.linux.result == 'success' && startsWith(github.ref, 'refs/tags/')
+  wasm-macos:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - config: debug
-            link: shared
-          - config: release
-            link: shared
-          - config: debug
-            link: static
           - config: release
             link: static
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install cvcpkg
-        run: pip install ./tools/cvcpkg
-      - name: Download per-component bundles
-        uses: actions/download-artifact@v4
-        with:
-          pattern: components-linux-${{ matrix.config }}-${{ matrix.link }}*
-          path: dist/
-          merge-multiple: true
-      - name: Publish to cvcpkg-server
-        env:
-          CVCPKG_SERVER_URL: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
-          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISH_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${CVCPKG_TOKEN:-}" ]; then
-            echo "::warning::CVCPKG_PUBLISH_TOKEN secret not set — skipping publish"
-            exit 0
-          fi
-          archives=$(find dist \( -name '*.tar.gz' -o -name '*.zip' \) | sort)
-          if [ -z "$archives" ]; then
-            echo "::warning::No component archives to publish"
-            exit 0
-          fi
-          count=$(echo "$archives" | wc -l)
-          echo "Publishing $count archives (linux/${{ matrix.config }}/${{ matrix.link }}) to $CVCPKG_SERVER_URL ..."
-          cvcpkg publish $archives \
-            --server "$CVCPKG_SERVER_URL" \
-            --token "$CVCPKG_TOKEN" \
-            --release-tag "${{ github.ref_name }}"
+          - config: debug
+            link: static
+    uses: ./.github/workflows/recipe-build.yml
+    with:
+      platform: wasm
+      config: ${{ matrix.config }}
+      link: ${{ matrix.link }}
+      sha_suffix: ${{ inputs.sha_suffix || '' }}
+      host_platform: macos
+    secrets: inherit
 
-  publish-macos:
-    needs: [macos]
-    if: always() && needs.macos.result == 'success' && startsWith(github.ref, 'refs/tags/')
+  wasm-windows:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - config: debug
-            link: shared
-          - config: release
-            link: shared
-          - config: debug
-            link: static
           - config: release
             link: static
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install cvcpkg
-        run: pip install ./tools/cvcpkg
-      - name: Download per-component bundles
-        uses: actions/download-artifact@v4
-        with:
-          pattern: components-macos-${{ matrix.config }}-${{ matrix.link }}*
-          path: dist/
-          merge-multiple: true
-      - name: Publish to cvcpkg-server
-        env:
-          CVCPKG_SERVER_URL: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
-          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISH_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${CVCPKG_TOKEN:-}" ]; then
-            echo "::warning::CVCPKG_PUBLISH_TOKEN secret not set — skipping publish"
-            exit 0
-          fi
-          archives=$(find dist \( -name '*.tar.gz' -o -name '*.zip' \) | sort)
-          if [ -z "$archives" ]; then
-            echo "::warning::No component archives to publish"
-            exit 0
-          fi
-          count=$(echo "$archives" | wc -l)
-          echo "Publishing $count archives (macos/${{ matrix.config }}/${{ matrix.link }}) to $CVCPKG_SERVER_URL ..."
-          cvcpkg publish $archives \
-            --server "$CVCPKG_SERVER_URL" \
-            --token "$CVCPKG_TOKEN" \
-            --release-tag "${{ github.ref_name }}"
+          - config: debug
+            link: static
+    uses: ./.github/workflows/recipe-build.yml
+    with:
+      platform: wasm
+      config: ${{ matrix.config }}
+      link: ${{ matrix.link }}
+      sha_suffix: ${{ inputs.sha_suffix || '' }}
+      host_platform: windows
+    secrets: inherit
 
-  publish-windows:
-    needs: [windows]
-    if: always() && needs.windows.result == 'success' && startsWith(github.ref, 'refs/tags/')
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - config: debug
-            link: shared
-          - config: release
-            link: shared
-          - config: debug
-            link: static
-          - config: release
-            link: static
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install cvcpkg
-        run: pip install ./tools/cvcpkg
-      - name: Download per-component bundles
-        uses: actions/download-artifact@v4
-        with:
-          pattern: components-windows-${{ matrix.config }}-${{ matrix.link }}*
-          path: dist/
-          merge-multiple: true
-      - name: Publish to cvcpkg-server
-        env:
-          CVCPKG_SERVER_URL: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
-          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISH_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${CVCPKG_TOKEN:-}" ]; then
-            echo "::warning::CVCPKG_PUBLISH_TOKEN secret not set — skipping publish"
-            exit 0
-          fi
-          archives=$(find dist \( -name '*.tar.gz' -o -name '*.zip' \) | sort)
-          if [ -z "$archives" ]; then
-            echo "::warning::No component archives to publish"
-            exit 0
-          fi
-          count=$(echo "$archives" | wc -l)
-          echo "Publishing $count archives (windows/${{ matrix.config }}/${{ matrix.link }}) to $CVCPKG_SERVER_URL ..."
-          cvcpkg publish $archives \
-            --server "$CVCPKG_SERVER_URL" \
-            --token "$CVCPKG_TOKEN" \
-            --release-tag "${{ github.ref_name }}"
-
-  publish-wasm:
-    needs: [wasm]
-    if: always() && needs.wasm.result == 'success' && startsWith(github.ref, 'refs/tags/')
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - config: debug
-            link: static
-          - config: release
-            link: static
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install cvcpkg
-        run: pip install ./tools/cvcpkg
-      - name: Download per-component bundles
-        uses: actions/download-artifact@v4
-        with:
-          pattern: components-wasm-${{ matrix.config }}-${{ matrix.link }}*
-          path: dist/
-          merge-multiple: true
-      - name: Publish to cvcpkg-server
-        env:
-          CVCPKG_SERVER_URL: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
-          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISH_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${CVCPKG_TOKEN:-}" ]; then
-            echo "::warning::CVCPKG_PUBLISH_TOKEN secret not set — skipping publish"
-            exit 0
-          fi
-          archives=$(find dist \( -name '*.tar.gz' -o -name '*.zip' \) | sort)
-          if [ -z "$archives" ]; then
-            echo "::warning::No component archives to publish"
-            exit 0
-          fi
-          count=$(echo "$archives" | wc -l)
-          echo "Publishing $count archives (wasm/${{ matrix.config }}/${{ matrix.link }}) to $CVCPKG_SERVER_URL ..."
-          cvcpkg publish $archives \
-            --server "$CVCPKG_SERVER_URL" \
-            --token "$CVCPKG_TOKEN" \
-            --release-tag "${{ github.ref_name }}"
-
-  publish-freebsd:
-    needs: [freebsd]
-    if: always() && needs.freebsd.result == 'success' && startsWith(github.ref, 'refs/tags/')
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - config: debug
-            link: shared
-          - config: release
-            link: shared
-          - config: debug
-            link: static
-          - config: release
-            link: static
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install cvcpkg
-        run: pip install ./tools/cvcpkg
-      - name: Download per-component bundles
-        uses: actions/download-artifact@v4
-        with:
-          pattern: components-freebsd-${{ matrix.config }}-${{ matrix.link }}*
-          path: dist/
-          merge-multiple: true
-      - name: Publish to cvcpkg-server
-        env:
-          CVCPKG_SERVER_URL: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
-          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISH_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${CVCPKG_TOKEN:-}" ]; then
-            echo "::warning::CVCPKG_PUBLISH_TOKEN secret not set — skipping publish"
-            exit 0
-          fi
-          archives=$(find dist \( -name '*.tar.gz' -o -name '*.zip' \) | sort)
-          if [ -z "$archives" ]; then
-            echo "::warning::No component archives to publish"
-            exit 0
-          fi
-          count=$(echo "$archives" | wc -l)
-          echo "Publishing $count archives (freebsd/${{ matrix.config }}/${{ matrix.link }}) to $CVCPKG_SERVER_URL ..."
-          cvcpkg publish $archives \
-            --server "$CVCPKG_SERVER_URL" \
-            --token "$CVCPKG_TOKEN" \
-            --release-tag "${{ github.ref_name }}"
-
-  publish-openbsd:
-    needs: [openbsd]
-    if: always() && needs.openbsd.result == 'success' && startsWith(github.ref, 'refs/tags/')
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - config: debug
-            link: shared
-          - config: release
-            link: shared
-          - config: debug
-            link: static
-          - config: release
-            link: static
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install cvcpkg
-        run: pip install ./tools/cvcpkg
-      - name: Download per-component bundles
-        uses: actions/download-artifact@v4
-        with:
-          pattern: components-openbsd-${{ matrix.config }}-${{ matrix.link }}*
-          path: dist/
-          merge-multiple: true
-      - name: Publish to cvcpkg-server
-        env:
-          CVCPKG_SERVER_URL: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
-          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISH_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${CVCPKG_TOKEN:-}" ]; then
-            echo "::warning::CVCPKG_PUBLISH_TOKEN secret not set — skipping publish"
-            exit 0
-          fi
-          archives=$(find dist \( -name '*.tar.gz' -o -name '*.zip' \) | sort)
-          if [ -z "$archives" ]; then
-            echo "::warning::No component archives to publish"
-            exit 0
-          fi
-          count=$(echo "$archives" | wc -l)
-          echo "Publishing $count archives (openbsd/${{ matrix.config }}/${{ matrix.link }}) to $CVCPKG_SERVER_URL ..."
-          cvcpkg publish $archives \
-            --server "$CVCPKG_SERVER_URL" \
-            --token "$CVCPKG_TOKEN" \
-            --release-tag "${{ github.ref_name }}"
-
-  publish-netbsd:
-    needs: [netbsd]
-    if: always() && needs.netbsd.result == 'success' && startsWith(github.ref, 'refs/tags/')
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - config: debug
-            link: shared
-          - config: release
-            link: shared
-          - config: debug
-            link: static
-          - config: release
-            link: static
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install cvcpkg
-        run: pip install ./tools/cvcpkg
-      - name: Download per-component bundles
-        uses: actions/download-artifact@v4
-        with:
-          pattern: components-netbsd-${{ matrix.config }}-${{ matrix.link }}*
-          path: dist/
-          merge-multiple: true
-      - name: Publish to cvcpkg-server
-        env:
-          CVCPKG_SERVER_URL: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
-          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISH_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${CVCPKG_TOKEN:-}" ]; then
-            echo "::warning::CVCPKG_PUBLISH_TOKEN secret not set — skipping publish"
-            exit 0
-          fi
-          archives=$(find dist \( -name '*.tar.gz' -o -name '*.zip' \) | sort)
-          if [ -z "$archives" ]; then
-            echo "::warning::No component archives to publish"
-            exit 0
-          fi
-          count=$(echo "$archives" | wc -l)
-          echo "Publishing $count archives (netbsd/${{ matrix.config }}/${{ matrix.link }}) to $CVCPKG_SERVER_URL ..."
-          cvcpkg publish $archives \
-            --server "$CVCPKG_SERVER_URL" \
-            --token "$CVCPKG_TOKEN" \
-            --release-tag "${{ github.ref_name }}"
-
+  # ─────────────────── GitHub Release ──────────────────────────
   release:
-    needs: [linux, macos, windows, wasm, freebsd, openbsd, netbsd, publish-linux, publish-macos, publish-windows, publish-wasm, publish-freebsd, publish-openbsd, publish-netbsd]
+    needs: [linux, macos, windows, freebsd, openbsd, netbsd, wasm-linux, wasm-macos, wasm-windows]
     runs-on: ubuntu-latest
-    # Skip the release step entirely for manual workflow_dispatch
-    # runs unless the workflow was triggered on a tag. Run even if
-    # some platforms failed, so we still publish the artifacts that
-    # did build (e.g. Linux + macOS when a Windows config times out
-    # on a cold cache). Require at minimum that linux + macos
-    # succeeded — there's no point publishing a release with zero
-    # platforms.
     if: |
       always()
       && !cancelled()
       && startsWith(github.ref, 'refs/tags/')
       && needs.linux.result == 'success'
-      && needs.macos.result == 'success'
     steps:
       - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -672,90 +270,68 @@ jobs:
       - name: List artifacts
         run: find artifacts -type f | sort
 
-      - name: Create GitHub Release
-        id: gh_release
-        continue-on-error: true
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          prerelease: ${{ inputs.prerelease || false }}
-          generate_release_notes: false
-          # Only upload index metadata to GitHub Releases.  Binary
-          # archives are published exclusively to pkg.tx.wtf to avoid
-          # hitting GitHub's abuse-detection limits on large uploads.
-          files: |
-            artifacts/*-index.yaml
-          fail_on_unmatched_files: false
-
-      - name: Verify release exists
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Build recipes tarball
         run: |
-          tag="${{ github.ref_name }}"
-          asset_count=$(gh release view "$tag" --json assets --jq '.assets | length')
-          echo "Release $tag has $asset_count assets"
-          if [ "$asset_count" -eq 0 ]; then
-            echo "::error::Release $tag has no assets — upload failed"
-            exit 1
-          fi
-          if [ "${{ steps.gh_release.outcome }}" = "failure" ]; then
-            echo "::warning::softprops/action-gh-release reported failure (likely GitHub secondary rate limit) but release has $asset_count assets — continuing"
-          fi
+          VERSION="${GITHUB_REF_NAME#v}"
+          tar czf "artifacts/cvcpkg-recipes-${VERSION}.tar.gz" \
+            -C "${{ github.workspace }}" recipes/
 
-  # ──────────────── Verify cvcpkg-server (pkg.tx.wtf) ────────────
-  # Each package-* job publishes its own bundles immediately after
-  # packaging.  This final job re-publishes any stragglers (e.g. if
-  # a per-platform publish step was interrupted) and logs the total
-  # count.  It runs regardless of the release job outcome.
-  publish-to-server:
-    needs: [publish-linux, publish-macos, publish-windows, publish-wasm, publish-freebsd, publish-openbsd, publish-netbsd]
-    runs-on: ubuntu-latest
-    if: |
-      always()
-      && !cancelled()
-      && startsWith(github.ref, 'refs/tags/')
-      && (needs.publish-linux.result == 'success'
-          || needs.publish-macos.result == 'success'
-          || needs.publish-windows.result == 'success'
-          || needs.publish-wasm.result == 'success')
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
+      - name: Build Python wheel
+        run: |
+          pip install build
+          cd tools/cvcpkg
+          # Bundle recipes into the wheel
+          rm -rf src/cvcpkg/recipes/*
+          cp -r "${{ github.workspace }}/recipes/"* src/cvcpkg/recipes/ 2>/dev/null || true
+          rm -f src/cvcpkg/recipes/.gitignore
+          python -m build
+          cp dist/cvcpkg-*.whl "${{ github.workspace }}/artifacts/"
+          cp dist/cvcpkg-*.tar.gz "${{ github.workspace }}/artifacts/cvcpkg-sdist.tar.gz" 2>/dev/null || true
 
       - name: Install cvcpkg
         run: pip install ./tools/cvcpkg
 
-      - name: Download component bundles
-        uses: actions/download-artifact@v4
-        with:
-          pattern: components-*
-          path: dist
-          merge-multiple: true
-
-      - name: Publish stragglers to pkg.tx.wtf
+      - name: Publish bundles to pkg.tx.wtf
         env:
           CVCPKG_SERVER_URL: ${{ vars.CVCPKG_SERVER_URL || 'https://pkg.tx.wtf' }}
           CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISH_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "${CVCPKG_TOKEN:-}" ]; then
-            echo "::warning::CVCPKG_PUBLISH_TOKEN secret not set — skipping server publish"
+            echo "::warning::CVCPKG_PUBLISH_TOKEN not set — skipping bundle publish"
             exit 0
           fi
 
-          archives=$(find dist \( -name '*.tar.gz' -o -name '*.zip' \) | sort)
+          archives=$(find artifacts \( -name '*.tar.gz' -o -name '*.zip' \) \
+            ! -name 'cvcpkg-recipes-*' \
+            ! -name 'cvcpkg-sdist*' \
+            ! -name 'cvcpkg-*.whl' \
+            | sort)
           if [ -z "$archives" ]; then
-            echo "::warning::No archives found in dist/"
+            echo "::warning::No bundle archives to publish"
             exit 0
           fi
 
           count=$(echo "$archives" | wc -l)
-          echo "Re-publishing $count archives to $CVCPKG_SERVER_URL (already-published will be skipped) ..."
+          echo "Publishing $count bundle archive(s) to $CVCPKG_SERVER_URL ..."
           # shellcheck disable=SC2086
           cvcpkg publish $archives \
             --server "$CVCPKG_SERVER_URL" \
             --token "$CVCPKG_TOKEN" \
             --release-tag "${{ github.ref_name }}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          prerelease: ${{ inputs.prerelease || false }}
+          generate_release_notes: false
+          # Index metadata, recipes tarball, and Python wheel.
+          # Binary archives are published to pkg.tx.wtf above.
+          # Standalone cvcpkg binaries are attached by cvcpkg-standalone.yml.
+          files: |
+            artifacts/*-index.yaml
+            artifacts/cvcpkg-recipes-*.tar.gz
+            artifacts/cvcpkg-*.whl
+            artifacts/cvcpkg-sdist.tar.gz
+          fail_on_unmatched_files: false

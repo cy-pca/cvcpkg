@@ -7,5 +7,5 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 Invoke-CvcWasmCMakeBuild @(
     '-DYAML_BUILD_TESTING=OFF',
-    '-DINSTALL_CMAKE_DIR=$env:CVC_INSTALL_DIR\lib\cmake\yaml'
+    "-DINSTALL_CMAKE_DIR=$env:CVC_INSTALL_DIR\lib\cmake\yaml"
 )

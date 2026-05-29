@@ -1,7 +1,7 @@
 """Recipe builder and packager for cvcpkg.
 
 Implements the ``cvcpkg build`` and ``cvcpkg pack`` workflow described
-in §7.4–7.5 of the split-distribution roadmap.
+in §7.4-7.5 of the split-distribution roadmap.
 """
 
 from __future__ import annotations
@@ -232,9 +232,9 @@ def _fetch_tarball(source: SourceSpec, dest: Path) -> Path:
                 if actual == source.sha256:
                     shutil.copy2(str(cached), str(archive_path))
                     cache_hit = True
-                # Mismatched cache entry — re-download
+                # Mismatched cache entry -- re-download
             else:
-                # No SHA-256 to check — trust the cache
+                # No SHA-256 to check -- trust the cache
                 shutil.copy2(str(cached), str(archive_path))
                 cache_hit = True
 
@@ -430,9 +430,10 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
     # If building for wasm and emsdk was built into the shared prefix,
     # point CVC_EMSDK_DIR there so build scripts can find it.
     if ctx.platform == "wasm" and "CVC_EMSDK_DIR" not in env:
-        emsdk_env = ctx.prefix / "emsdk_env.sh"
-        if emsdk_env.is_file():
-            env["CVC_EMSDK_DIR"] = str(ctx.prefix)
+        for _emsdk_name in ("emsdk_env.sh", "emsdk_env.bat", "emsdk_env.ps1"):
+            if (ctx.prefix / _emsdk_name).is_file():
+                env["CVC_EMSDK_DIR"] = str(ctx.prefix)
+                break
 
     # Ensure host tools built into the prefix (cmake, ninja, protoc,
     # etc.) are found before system versions.
@@ -463,6 +464,32 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
     return env
 
 
+def _patch_linux_rpath(install_dir: Path) -> None:
+    """Set RPATH to $ORIGIN on all shared libraries in *install_dir*.
+
+    This makes Linux shared-library bundles relocatable without
+    requiring LD_LIBRARY_PATH at runtime.  Only runs when patchelf
+    is available; silently skips otherwise.
+    """
+    patchelf = shutil.which("patchelf")
+    if not patchelf:
+        return
+    lib_dir = install_dir / "lib"
+    if not lib_dir.is_dir():
+        return
+    for so in lib_dir.rglob("*.so*"):
+        if not so.is_file() or so.is_symlink():
+            continue
+        subprocess.run(
+            [patchelf, "--remove-rpath", str(so)],
+            capture_output=True,
+        )
+        subprocess.run(
+            [patchelf, "--set-rpath", "$ORIGIN", str(so)],
+            capture_output=True,
+        )
+
+
 def run_build(ctx: BuildContext) -> None:
     """Execute the build script for the given context."""
     matrix = _select_matrix_entry(ctx.recipe, ctx.platform, ctx.host_platform)
@@ -480,7 +507,7 @@ def run_build(ctx: BuildContext) -> None:
     elif script.suffix == ".ps1":
         interpreter = shutil.which("pwsh")
         if not interpreter:
-            raise BuildError("pwsh not found on PATH — required for .ps1 build scripts")
+            raise BuildError("pwsh not found on PATH -- required for .ps1 build scripts")
         cmd = [interpreter, "-NoProfile", "-NonInteractive", "-File", str(script)]
     else:
         raise BuildError(f"Unknown script type: {script.suffix}")
@@ -502,6 +529,10 @@ def run_build(ctx: BuildContext) -> None:
     )
     if result.returncode != 0:
         raise BuildError(f"Build script for {ctx.recipe.name} exited with code {result.returncode}")
+
+    # Patch RPATH on Linux shared builds so bundles are relocatable.
+    if ctx.platform == "linux" and ctx.link == "shared":
+        _patch_linux_rpath(ctx.install_dir)
 
 
 # ── Test execution ──────────────────────────────────────────────
@@ -616,7 +647,7 @@ def generate_manifest(
             plats = d.get("platforms")
             if plats and platform not in plats:
                 continue
-            # Don't write platforms into the manifest — it's platform-specific
+            # Don't write platforms into the manifest -- it's platform-specific
             entry: dict[str, str] = {"name": d["name"]}
             if d.get("org"):
                 entry["org"] = d["org"]
@@ -1046,7 +1077,7 @@ def resolve_build_order(recipes: list[Recipe], platform: str = "") -> list[Recip
     platform are considered when building the graph.
 
     Dependencies that are not in the candidate *recipes* list are
-    silently skipped — they are assumed to be pre-installed in the
+    silently skipped -- they are assumed to be pre-installed in the
     prefix (e.g. emsdk built as a linux recipe before building wasm
     recipes).
 
@@ -1063,7 +1094,7 @@ def resolve_build_order(recipes: list[Recipe], platform: str = "") -> list[Recip
         if name in in_stack:
             raise RecipeError(f"Dependency cycle detected involving '{name}'")
         if name not in by_name:
-            # Not in our candidate set — assumed pre-installed.
+            # Not in our candidate set -- assumed pre-installed.
             return
         in_stack.add(name)
         for dep in _dep_names(by_name[name], platform):
@@ -1277,7 +1308,7 @@ def build_all(
     ``list[BuildFailure]``).
 
     When *no_cache* is ``True``, the local build cache is bypassed
-    entirely — no lookups and no stores.
+    entirely -- no lookups and no stores.
 
     When *force_clean* is ``True``, cache lookups are skipped (every
     recipe is rebuilt from source) but results are still stored in
@@ -1362,7 +1393,7 @@ def build_all(
         failed_deps = [d for d in dep_names if d in failed_names]
         if failed_deps and keep_going:
             msg = f"skipped (dependency failed: {', '.join(failed_deps)})"
-            print(f"\ncvcpkg: == {recipe.name} ({recipe.full_version}) — {msg} ==")
+            print(f"\ncvcpkg: == {recipe.name} ({recipe.full_version}) -- {msg} ==")
             failed_names.add(recipe.name)
             failures.append(
                 BuildFailure(
@@ -1427,7 +1458,7 @@ def build_all(
                     if result is not None:
                         cached_archive = result
                         server_hit = True
-                        print(f"  ← server cache hit ({recipe_chain_hash[:12]}…)")
+                        print(f"  <- server cache hit ({recipe_chain_hash[:12]}...)")
                         # Populate local cache for future runs.
                         if cache is not None:
                             import shutil as _shutil_srv
@@ -1450,10 +1481,10 @@ def build_all(
 
         try:
             if cached_archive is not None:
-                # Cache hit — restore artifacts instead of building.
+                # Cache hit -- restore artifacts instead of building.
                 cache_hits += 1
                 if not server_hit:
-                    print(f"  ← cache hit ({recipe_chain_hash[:12]}…)")
+                    print(f"  <- cache hit ({recipe_chain_hash[:12]}...)")
                 if per_component:
                     work_dir = _mkworkdir(f"cvcpkg-{recipe.name}-", work_dir_root)
                     install_dir = work_dir / "install"
@@ -1549,7 +1580,7 @@ def build_all(
                                 server_cache_org,
                             )
                             if ok:
-                                print(f"  → pushed to server cache ({recipe_chain_hash[:12]}…)")
+                                print(f"  -> pushed to server cache ({recipe_chain_hash[:12]}...)")
                 if not keep_build_dir:
                     build_dir = work_dir / "build"
                     if build_dir.is_dir():
@@ -1583,7 +1614,7 @@ def build_all(
         print(f"\ncvcpkg: {len(contexts)} succeeded, {len(failures)} failed:")
         for f in failures:
             status = "SKIPPED (dep)" if f.skipped else "FAILED"
-            print(f"  {status}: {f.recipe_name} — {f.error}")
+            print(f"  {status}: {f.recipe_name} -- {f.error}")
     else:
         cache_msg = f" ({cache_hits} cache hits)" if cache_hits else ""
         print(f"\ncvcpkg: all {len(contexts)} components built into {prefix}{cache_msg}")

@@ -1265,6 +1265,7 @@ class TestBuildAllKeepGoing:
             platform="linux",
             prefix=tmp_path / "prefix",
             keep_going=True,
+            no_cache=True,
         )
 
         built_names = [c.recipe.name for c in contexts]
@@ -1301,6 +1302,7 @@ class TestBuildAllKeepGoing:
             platform="linux",
             prefix=tmp_path / "prefix",
             keep_going=True,
+            no_cache=True,
         )
 
         assert len(contexts) == 0
@@ -1328,6 +1330,7 @@ class TestBuildAllKeepGoing:
                 recipes_dir,
                 platform="linux",
                 prefix=tmp_path / "prefix",
+                no_cache=True,
             )
 
 

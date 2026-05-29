@@ -84,9 +84,9 @@ def generate_keypair(
     Returns a ``KeyInfo`` with the fingerprint and paths.
     Files created::
 
-        <keys_dir>/<label>.key      — private key (PEM, mode 0600)
-        <keys_dir>/<label>.pub      — public key  (PEM)
-        <keys_dir>/<label>.fp       — fingerprint (hex string)
+        <keys_dir>/<label>.key      -- private key (PEM, mode 0600)
+        <keys_dir>/<label>.pub      -- public key  (PEM)
+        <keys_dir>/<label>.fp       -- fingerprint (hex string)
     """
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -378,7 +378,7 @@ def _verify_digest(
                 return ki
             except InvalidSignature:
                 raise SigningError(
-                    f"Signature invalid: key '{ki.label}' ({ki.fingerprint[:16]}…) "
+                    f"Signature invalid: key '{ki.label}' ({ki.fingerprint[:16]}...) "
                     "did not verify"
                 ) from None
 
@@ -395,5 +395,5 @@ def _verify_digest(
             continue
 
     raise SigningError(
-        f"No trusted key verified the signature " f"(fingerprint: {sig.key_fingerprint[:16]}…)"
+        f"No trusted key verified the signature " f"(fingerprint: {sig.key_fingerprint[:16]}...)"
     )

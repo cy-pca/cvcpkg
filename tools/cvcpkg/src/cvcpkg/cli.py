@@ -63,7 +63,7 @@ _link_opt = click.option(
     "--link",
     type=click.Choice(["shared", "static"], case_sensitive=False),
     default="shared",
-    help="Link mode — shared (.so/.dylib/.dll) or static (.a/.lib).",
+    help="Link mode -- shared (.so/.dylib/.dll) or static (.a/.lib).",
 )
 _prefix_opt = click.option(
     "--prefix",
@@ -369,7 +369,7 @@ def install(
         elif fallback_to_source:
             source_only = requested_names
     else:
-        # Catalog was unreachable — all requested components must be
+        # Catalog was unreachable -- all requested components must be
         # built from source (the fallback_to_source flag is already
         # verified above, so this branch is only reachable when the
         # flag is set).
@@ -487,7 +487,7 @@ def install(
     lock_path = prefix_path / "share" / "libcvc-deps" / "lockfile.yaml"
     lock.write(lock_path)
     click.echo(f"cvcpkg: lockfile written to {lock_path}")
-    click.echo(f"cvcpkg: done — {len(picked)} component(s) installed to {prefix_path}")
+    click.echo(f"cvcpkg: done -- {len(picked)} component(s) installed to {prefix_path}")
 
 
 # ── list ────────────────────────────────────────────────────────
@@ -520,7 +520,7 @@ def list_cmd(mode: str | None, prefix: str) -> None:
     if mode == "installed":
         lock_path = prefix_path / "share" / "libcvc-deps" / "lockfile.yaml"
         if not lock_path.exists():
-            raise click.ClickException("no lockfile found — prefix may not be managed by cvcpkg.")
+            raise click.ClickException("no lockfile found -- prefix may not be managed by cvcpkg.")
         from cvcpkg.lockfile import Lockfile
 
         lock = Lockfile.read(lock_path)
@@ -633,7 +633,7 @@ def validate(target: str) -> None:
 
     if not validate_script.exists():
         raise click.ClickException(
-            "cannot find packaging/validate.py — run from the libcvc-deps repo root."
+            "cannot find packaging/validate.py -- run from the libcvc-deps repo root."
         )
 
     spec = importlib.util.spec_from_file_location("validate", validate_script)
@@ -678,7 +678,7 @@ def verify(prefix: str) -> None:
     for entry in lock.bundles:
         manifest_path = prefix_path / "share" / "libcvc-deps" / entry.name / "manifest.yaml"
         if not manifest_path.exists():
-            click.echo(f"  MISSING  {entry.name} — no manifest.yaml")
+            click.echo(f"  MISSING  {entry.name} -- no manifest.yaml")
             ok = False
             continue
         manifest = BundleManifest.from_yaml(str(manifest_path))
@@ -752,7 +752,7 @@ def sync(prefix: str) -> None:
         if manifest_path.exists():
             continue
         if not entry.archive_url:
-            raise click.ClickException(f"cannot sync {entry.name} — no archive_url in lockfile.")
+            raise click.ClickException(f"cannot sync {entry.name} -- no archive_url in lockfile.")
         cat_entry = CatalogEntry(
             name=entry.name,
             version=entry.version,
@@ -815,7 +815,7 @@ def catalog(refresh: bool, pin: int | None, show: bool) -> None:
         cat = fetch_catalog(cache_dir=cache_dir)
         rev = cat.get("revision", "?")
         n = len(cat.get("bundles", []))
-        click.echo(f"cvcpkg: catalog refreshed — revision {rev}, {n} bundle(s).")
+        click.echo(f"cvcpkg: catalog refreshed -- revision {rev}, {n} bundle(s).")
         return
 
     if pin is not None:
@@ -841,6 +841,71 @@ def catalog(refresh: bool, pin: int | None, show: bool) -> None:
     click.echo("cvcpkg: use 'catalog --show', 'catalog --refresh', or 'catalog --pin REV'.")
 
 
+@cli.command("catalog-generate")
+@click.option(
+    "--indexes-dir",
+    required=True,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Directory containing per-platform *-index.yaml files.",
+)
+@click.option(
+    "--output-dir",
+    required=True,
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Directory to write catalog files to.",
+)
+@click.option(
+    "--release-tag",
+    required=True,
+    help="Release tag (e.g. v1.2.0).",
+)
+@click.option(
+    "--server-url",
+    default="https://pkg.tx.wtf",
+    show_default=True,
+    help="cvcpkg server URL for archive download URLs.",
+)
+@click.option(
+    "--base-revision",
+    default=0,
+    type=int,
+    help="Previous catalog revision number to increment from.",
+)
+def catalog_generate(
+    indexes_dir: Path,
+    output_dir: Path,
+    release_tag: str,
+    server_url: str,
+    base_revision: int,
+) -> None:
+    """Generate a unified catalog from per-platform index files.
+
+    Merges all *-index.yaml files in INDEXES_DIR into a catalog with
+    download URLs pointing to SERVER_URL.  Writes latest.yaml,
+    <revision>.yaml, index.yaml, and <tag>-index.yaml to OUTPUT_DIR.
+
+    \b
+    Examples:
+      cvcpkg catalog-generate \\
+        --indexes-dir ./indexes \\
+        --output-dir ./catalog-output \\
+        --release-tag v1.2.0
+    """
+    from cvcpkg.catalog import generate_catalog
+
+    cat = generate_catalog(
+        indexes_dir,
+        output_dir,
+        release_tag=release_tag,
+        server_url=server_url,
+        base_revision=base_revision,
+    )
+    rev = cat.get("revision", "?")
+    n = len(cat.get("bundles", []))
+    click.echo(f"cvcpkg: catalog revision {rev} generated -- {n} bundle(s).")
+    click.echo(f"cvcpkg: output written to {output_dir}/")
+
+
 # ── gc ──────────────────────────────────────────────────────────
 
 
@@ -850,7 +915,7 @@ def gc() -> None:
 
     Removes downloaded archives from ~/.cache/cvcpkg/ that are no
     longer referenced by any installed prefix.  Safe to run at
-    any time — bundles will be re-downloaded if needed.
+    any time -- bundles will be re-downloaded if needed.
     """
     from cvcpkg.cache import default_cache_dir
     from cvcpkg.cache import gc as run_gc
@@ -962,7 +1027,7 @@ def download(
 
     Fetches prebuilt bundle archives from the catalog and saves them
     into OUTPUT_DIR.  Unlike 'install', archives are not extracted
-    into a prefix — they are kept as-is for redistribution, caching,
+    into a prefix -- they are kept as-is for redistribution, caching,
     or manual inspection.
 
     When --server is provided, the client also queries the server's
@@ -1241,7 +1306,7 @@ def _extract_manifest(archive_path: Path) -> dict:
 
     if not manifest:
         raise click.ClickException(
-            f"{archive_path.name}: no manifest.yaml found — is this a cvcpkg archive?"
+            f"{archive_path.name}: no manifest.yaml found -- is this a cvcpkg archive?"
         )
     return manifest
 
@@ -1367,7 +1432,7 @@ def _publish_chunked(
                         )
 
                     if resp.status_code == 409:
-                        # Offset mismatch — check server status and resume
+                        # Offset mismatch -- check server status and resume
                         with httpx.Client(timeout=30) as client:
                             status_resp = client.get(
                                 f"{base}/v1/upload/{upload_id}",
@@ -1411,7 +1476,7 @@ def _publish_chunked(
                         wait = 2**attempt
                         click.echo(
                             f"  chunk upload error (attempt {attempt}/{max_retries}): "
-                            f"{exc} — retrying in {wait}s"
+                            f"{exc} -- retrying in {wait}s"
                         )
                         time.sleep(wait)
                     else:
@@ -1651,7 +1716,7 @@ def world(
         build_recipe(ctx)
         click.echo(f"  {r.name} done.")
 
-    click.echo(f"cvcpkg: world build complete — {len(order)} recipe(s) built to {prefix_path}")
+    click.echo(f"cvcpkg: world build complete -- {len(order)} recipe(s) built to {prefix_path}")
 
 
 # ── Helper: resolve recipe dir ──────────────────────────────────
@@ -1904,7 +1969,7 @@ def pack(
             sig = sign_file(archive, Path(signing_key))
             sig_path = archive.with_suffix(archive.suffix + ".sig")
             write_signature(sig, sig_path)
-            click.echo(f"  Signed: {sig_path.name} (key: {sig.key_fingerprint[:16]}…)")
+            click.echo(f"  Signed: {sig_path.name} (key: {sig.key_fingerprint[:16]}...)")
 
 
 # ── build-all ───────────────────────────────────────────────────
@@ -2284,7 +2349,7 @@ def pack_all_cmd(
             sig = sign_file(archive_path, Path(signing_key))
             sig_path = archive_path.with_suffix(archive_path.suffix + ".sig")
             write_signature(sig, sig_path)
-            click.echo(f"  Signed: {sig_path.name} (key: {sig.key_fingerprint[:16]}…)")
+            click.echo(f"  Signed: {sig_path.name} (key: {sig.key_fingerprint[:16]}...)")
 
     failures = getattr(contexts, "failures", [])
     if failures:
@@ -2432,7 +2497,7 @@ def key_list(keys_dir: str | None) -> None:
         return
     for ki in keys:
         kind = "private+public" if ki.has_private else "public only"
-        click.echo(f"  {ki.label:<20} {ki.fingerprint[:16]}…  ({kind})")
+        click.echo(f"  {ki.label:<20} {ki.fingerprint[:16]}...  ({kind})")
 
 
 @key.command("import")
@@ -2451,7 +2516,7 @@ def key_import(pub_file: str, label: str, keys_dir: str | None) -> None:
     kd = Path(keys_dir) if keys_dir else None
     pub_pem = Path(pub_file).read_text()
     info = import_public_key(pub_pem, label, keys_dir=kd)
-    click.echo(f"Imported '{info.label}' ({info.fingerprint[:16]}…)")
+    click.echo(f"Imported '{info.label}' ({info.fingerprint[:16]}...)")
 
 
 @key.command("export")
@@ -2504,7 +2569,7 @@ def sign(archive: str, signing_key: str, password: str | None) -> None:
     sig = sign_file(archive_path, Path(signing_key), password)
     sig_path = archive_path.with_suffix(archive_path.suffix + ".sig")
     write_signature(sig, sig_path)
-    click.echo(f"Signed: {sig_path.name} (key: {sig.key_fingerprint[:16]}…)")
+    click.echo(f"Signed: {sig_path.name} (key: {sig.key_fingerprint[:16]}...)")
 
 
 # ── verify-sig ──────────────────────────────────────────────────
@@ -2544,7 +2609,7 @@ def verify_sig(archive: str, sig_file: str | None, keys_dir: str | None) -> None
     kd = Path(keys_dir) if keys_dir else None
     sig = read_signature(sp)
     ki = verify_file(archive_path, sig, kd)
-    click.echo(f"Verified: signed by '{ki.label}' ({ki.fingerprint[:16]}…)")
+    click.echo(f"Verified: signed by '{ki.label}' ({ki.fingerprint[:16]}...)")
 
 
 # ── rev-bump ────────────────────────────────────────────────────
@@ -2654,7 +2719,7 @@ def cache_list_cmd(server: str, token: str, name: str, plat_filter: str) -> None
                 f"{p.get('platform', '')}/{p.get('arch', '')}/"
                 f"{p.get('build_type', '')}/{p.get('link', '')}  "
                 f"{_human_size(p.get('size_bytes', 0))}  "
-                f"recipe={p.get('recipe_version', '')[:12]}…"
+                f"recipe={p.get('recipe_version', '')[:12]}..."
             )
         return
 
@@ -2673,7 +2738,7 @@ def cache_list_cmd(server: str, token: str, name: str, plat_filter: str) -> None
             f"  {qname} {e.version}  "
             f"{e.platform}/{e.arch}/{e.config}/{e.link}  "
             f"{_human_size(e.archive_size_bytes)}  "
-            f"{e.chain_hash[:12]}…  "
+            f"{e.chain_hash[:12]}...  "
             f"stored={e.stored_at[:10]}"
         )
 
