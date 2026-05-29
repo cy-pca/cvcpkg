@@ -238,10 +238,26 @@ def run(
                     "handlers": ["default"],
                 },
                 "loggers": {
-                    "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
-                    "uvicorn.error": {"handlers": ["default"], "level": "INFO", "propagate": False},
-                    "uvicorn.access": {"handlers": ["default"], "level": "INFO", "propagate": False},
-                    "cvcpkg.server": {"handlers": ["default"], "level": "INFO", "propagate": False},
+                    "uvicorn": {
+                        "handlers": ["default"],
+                        "level": "INFO",
+                        "propagate": False,
+                    },
+                    "uvicorn.error": {
+                        "handlers": ["default"],
+                        "level": "INFO",
+                        "propagate": False,
+                    },
+                    "uvicorn.access": {
+                        "handlers": ["default"],
+                        "level": "INFO",
+                        "propagate": False,
+                    },
+                    "cvcpkg.server": {
+                        "handlers": ["default"],
+                        "level": "INFO",
+                        "propagate": False,
+                    },
                 },
             }
 
@@ -332,7 +348,7 @@ def bootstrap(name: str, email: str, state_dir: str) -> None:
     click.echo("=" * 60)
     click.echo()
     click.echo(f"  Name:  {name}")
-    click.echo(f"  Role:  admin")
+    click.echo("  Role:  admin")
     click.echo(f"  Token: {raw}")
     click.echo()
     click.echo("  This token will NOT be shown again.")
@@ -372,7 +388,10 @@ def token() -> None:
     default="./cvcpkg-server-data",
     help="Server state directory.",
 )
-def token_create(name: str, role: str, expires_in_days: int | None, email: str, state_dir: str) -> None:
+def token_create(
+    name: str, role: str, expires_in_days: int | None,
+    email: str, state_dir: str,
+) -> None:
     """Create a new API token (prints the secret once)."""
     import asyncio
     import os
@@ -399,7 +418,10 @@ def token_create(name: str, role: str, expires_in_days: int | None, email: str, 
         from cvcpkg.server.auth import TokenStore
 
         store = TokenStore(Path(state_dir))
-        raw = store.create(name=name, role=TokenRole(role), expires_in_days=expires_in_days, email=email)
+        raw = store.create(
+            name=name, role=TokenRole(role),
+            expires_in_days=expires_in_days, email=email,
+        )
     click.echo(f"Token created for '{name}' (role={role}):")
     click.echo(f"  {raw}")
     click.echo("Save this token — it will not be shown again.")

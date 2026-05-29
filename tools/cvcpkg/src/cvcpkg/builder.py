@@ -1408,7 +1408,6 @@ def build_all(
 
         cache = BuildCache()
     all_recipe_map = {r.name: r for r in all_recipes}
-    arch = _detect_arch_for_platform(platform)
 
     contexts: BuildAllResult = BuildAllResult()
     failures: list[BuildFailure] = []
@@ -1497,7 +1496,7 @@ def build_all(
                         if cache is not None:
                             import shutil as _shutil_srv
 
-                            srv_restore = Path(tempfile.mkdtemp(prefix=f"cvcpkg-srv-restore-"))
+                            srv_restore = Path(tempfile.mkdtemp(prefix="cvcpkg-srv-restore-"))
                             try:
                                 cache.restore(tmp_archive, srv_restore)
                                 cache.store(
