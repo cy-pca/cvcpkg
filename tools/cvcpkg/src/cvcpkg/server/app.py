@@ -642,9 +642,16 @@ def create_app(
     # ── Catalog (read) ──────────────────────────────────────
 
     @app.get("/v1/catalog", response_model=CatalogResponse, tags=["catalog"])
-    async def get_catalog(_auth: None = Depends(optional_reader_auth)):
+    async def get_catalog(
+        _auth: TokenRecord | None = Depends(optional_reader_auth),
+        _caller: TokenRecord | None = Depends(optional_token),
+    ):
         if _use_db:
-            cat = await _db_packages.get_catalog_dict()
+            caller = _auth or _caller
+            cat = await _db_packages.get_catalog_dict(
+                caller_token_name=caller.name if caller else "",
+                is_admin=caller is not None and caller.role == TokenRole.admin,
+            )
             return CatalogResponse(
                 revision=cat.get("revision", 0),
                 bundles=cat.get("bundles", []),

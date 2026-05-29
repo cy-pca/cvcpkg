@@ -917,3 +917,34 @@ class TestPublishWithOrgParam:
         )
         assert resp.status_code == 200
         assert resp.json()["name"] == "orgpkg"
+
+
+class TestCatalogOrgVisibility:
+    """Catalog should include org field for every bundle."""
+
+    def test_catalog_bundles_carry_org_field(self, env):
+        client, _, pub_tok, _, _ = env
+        # Publish a base package
+        _publish(client, pub_tok, "basepkg", "1.0")
+        # Publish an org-scoped package
+        archive = _make_tar_archive({
+            "lib/liborg.so": b"\x7fELF" + b"\x00" * 8,
+        })
+        client.post(
+            "/v1/publish",
+            params={
+                "name": "orgpkg",
+                "version": "2.0",
+                "platform": "linux",
+                "arch": "x86_64",
+                "org": "cvc-lab",
+            },
+            files={"file": ("orgpkg.tar.zst", io.BytesIO(archive))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        resp = client.get("/v1/catalog")
+        assert resp.status_code == 200
+        bundles = resp.json()["bundles"]
+        by_name = {b["name"]: b for b in bundles}
+        assert by_name["basepkg"].get("org", "") == ""
+        assert by_name["orgpkg"]["org"] == "cvc-lab"
