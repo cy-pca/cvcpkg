@@ -250,14 +250,9 @@ def install(
     """
     from cvcpkg.cache import default_cache_dir
     from cvcpkg.catalog import (
-        GITHUB_CATALOG_URL,
         catalog_entries,
         fetch_catalog,
         load_catalog_from_file,
-    )
-    from cvcpkg.config import (
-        load_user_config,
-        merge_cli_overrides,
     )
     from cvcpkg.errors import InstallError, IntegrityError
     from cvcpkg.installer import build_from_source_fallback, install_entry
@@ -1049,13 +1044,13 @@ def download(
       cvcpkg download zlib==1.3.1+cvc.1 -o ./dist --config debug
       cvcpkg download zlib --server https://pkg.tx.wtf -o ./dist
     """
+    import shutil
+
     from cvcpkg.cache import default_cache_dir
     from cvcpkg.catalog import catalog_entries, fetch_catalog, load_catalog_from_file
     from cvcpkg.installer import download_bundle
     from cvcpkg.manifest import CatalogEntry, ComponentReq
     from cvcpkg.platform import detect_arch, detect_platform
-
-    import shutil
 
     plat = platform if platform != "auto" else detect_platform()
     arc = arch if arch != "auto" else detect_arch()
@@ -1128,7 +1123,6 @@ def download(
 def _fetch_mirror_urls(server: str, token: str | None) -> list[str]:
     """Fetch the list of healthy mirror URLs from a cvcpkg-server."""
     import logging
-
     import urllib.request
 
     log = logging.getLogger("cvcpkg")

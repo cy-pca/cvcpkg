@@ -13,8 +13,8 @@ import json
 import secrets
 from pathlib import Path
 
-from sqlalchemy import func as sa_func
 from sqlalchemy import distinct, or_, select, update
+from sqlalchemy import func as sa_func
 
 from cvcpkg.server.db import (
     AuditRow,
@@ -41,7 +41,6 @@ from cvcpkg.server.models import (
     TokenRequestRecord,
     TokenRequestStatus,
     TokenRole,
-    UserListResponse,
     UserProfileResponse,
 )
 

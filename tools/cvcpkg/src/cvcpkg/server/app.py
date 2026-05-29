@@ -19,6 +19,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import re as _re
 import secrets
 import signal
 import tempfile
@@ -47,6 +48,7 @@ from cvcpkg.server.models import (
     AuditLogResponse,
     CacheStatusResponse,
     CatalogResponse,
+    EmailUpdateRequest,
     HealthResponse,
     MirrorInfo,
     MirrorListResponse,
@@ -59,6 +61,7 @@ from cvcpkg.server.models import (
     OrgUpdateRequest,
     PackageInfo,
     PackageListResponse,
+    ProfileUpdateRequest,
     PublishResponse,
     RegistrationMode,
     RegistrationRequest,
@@ -71,11 +74,8 @@ from cvcpkg.server.models import (
     TokenCreateResponse,
     TokenRecord,
     TokenRequestListResponse,
-    TokenRequestRecord,
     TokenRequestStatus,
     TokenRole,
-    EmailUpdateRequest,
-    ProfileUpdateRequest,
     UserListResponse,
     UserProfileResponse,
 )
@@ -264,8 +264,6 @@ def _purge_expired_sessions() -> None:
 
 # ── Helpers ─────────────────────────────────────────────────────
 
-import re as _re
-
 _DURATION_RE = _re.compile(r"^(\d+(?:\.\d+)?)\s*([smhd])$", _re.IGNORECASE)
 
 
@@ -414,8 +412,6 @@ async def _mirror_sync_loop(state_dir: Path) -> None:
 
 
 # ── Username validation ─────────────────────────────────────────
-
-import re as _re
 
 _C_IDENTIFIER_RE = _re.compile(r"^[A-Za-z_][A-Za-z0-9_\-]*$")
 
@@ -816,7 +812,10 @@ def create_app(
         link: str = Query("", description="Filter by link mode (shared/static)"),
         recipe_version: str = Query(
             "",
-            description="Filter by recipe version (chain hash).  Enables exact-match cache lookups.",
+            description=(
+                "Filter by recipe version (chain hash).  "
+                "Enables exact-match cache lookups."
+            ),
         ),
         release: str = Query(
             "",
@@ -1911,7 +1910,8 @@ def create_app(
             raise HTTPException(
                 422,
                 f"invalid token name '{req.name}': must be a valid C identifier "
-                "(start with a letter or underscore, followed by letters, digits, underscores, or hyphens)",
+                "(start with a letter or underscore, followed by"
+                " letters, digits, underscores, or hyphens)",
             )
         state = _get_state()
         try:
@@ -2115,7 +2115,9 @@ def create_app(
         email: str = Query("", description="Filter by email (substring match)"),
         role: str = Query("", description="Filter by role (reader/publisher/admin)"),
         org: str = Query("", description="Filter by organization membership"),
-        has_published: bool | None = Query(None, description="Filter by whether user has published packages"),
+        has_published: bool | None = Query(
+            None, description="Filter by whether user has published packages",
+        ),
         sort: str = Query("name", description="Sort field: name, email, or packages_published"),
         order: str = Query("asc", description="Sort order: asc or desc"),
         limit: int = Query(100, ge=1, le=1000),
@@ -2268,7 +2270,7 @@ def create_app(
         if not req.email or not req.email.strip():
             raise HTTPException(422, "email is required for registration")
 
-        if REGISTRATION_MODE == RegistrationMode.open:
+        if RegistrationMode.open == REGISTRATION_MODE:
             state = _get_state()
             try:
                 if _use_db:
@@ -2318,7 +2320,10 @@ def create_app(
                 action=AuditAction.registration_request,
                 actor=req.name,
                 target=req.name,
-                detail=f"role={req.role.value} email={req.email} mode=admin-gated request_id={request_record.id}",
+                detail=(
+                    f"role={req.role.value} email={req.email}"
+                    f" mode=admin-gated request_id={request_record.id}"
+                ),
             )
             return RegistrationResponse(
                 message="Registration request submitted. An admin will review it.",
