@@ -89,6 +89,14 @@ def server_cli() -> None:
     envvar="CVCPKG_MIRROR_SYNC_INTERVAL",
     help="Seconds between catalog syncs from upstream.  [default: 3600]",
 )
+@click.option(
+    "--registration-mode",
+    type=click.Choice(["open", "admin-gated"], case_sensitive=False),
+    default="open",
+    envvar="CVCPKG_REGISTRATION_MODE",
+    help="Registration policy: 'open' (anyone can register) or 'admin-gated' "
+    "(requests require admin approval).  [default: open]",
+)
 def run(
     state_dir: str,
     host: str,
@@ -102,6 +110,7 @@ def run(
     mirror_upstream: str,
     mirror_token: str,
     mirror_sync_interval: int,
+    registration_mode: str,
 ) -> None:
     """Start the cvcpkg package server."""
     import os
@@ -124,6 +133,8 @@ def run(
         os.environ["CVCPKG_MIRROR_TOKEN"] = mirror_token
     if mirror_sync_interval != 3600:
         os.environ["CVCPKG_MIRROR_SYNC_INTERVAL"] = str(mirror_sync_interval)
+    if registration_mode != "open":
+        os.environ["CVCPKG_REGISTRATION_MODE"] = registration_mode
 
     try:
         import uvicorn
@@ -145,6 +156,7 @@ def run(
         click.echo("cvcpkg-server: backend: YAML files")
     if mirror_mode:
         click.echo(f"cvcpkg-server: MIRROR MODE — upstream: {mirror_upstream}")
+    click.echo(f"cvcpkg-server: registration mode: {registration_mode}")
     click.echo(f"cvcpkg-server: docs at http://{host}:{port}/docs")
 
     log_config = None
@@ -187,6 +199,87 @@ def run(
     )
 
 
+# ── bootstrap ───────────────────────────────────────────────────
+
+
+@server_cli.command()
+@click.option(
+    "--name",
+    default="admin",
+    help="Name for the initial admin token.  [default: admin]",
+)
+@click.option(
+    "--email",
+    default="",
+    help="Email address for the initial admin.",
+)
+@click.option(
+    "--state-dir",
+    type=click.Path(),
+    default="./cvcpkg-server-data",
+    help="Server state directory.",
+)
+def bootstrap(name: str, email: str, state_dir: str) -> None:
+    """Create the initial admin token for a fresh server.
+
+    This command will only succeed when no admin tokens exist yet.
+    The generated token is printed exactly once — store it securely.
+    """
+    import asyncio
+    import os
+
+    from cvcpkg.server.models import TokenRole
+
+    db_url = os.environ.get("CVCPKG_DATABASE_URL", "")
+    if db_url:
+        from cvcpkg.server.db import create_tables, dispose_engine, init_db
+        from cvcpkg.server.db_stores import DbTokenStore
+
+        async def _bootstrap():
+            init_db(db_url)
+            await create_tables()
+            store = DbTokenStore(Path(state_dir))
+            tokens = await store.list_tokens()
+            admins = [t for t in tokens if t.role == TokenRole.admin and not t.revoked]
+            if admins:
+                raise click.ClickException(
+                    f"An admin token already exists ('{admins[0].name}'). "
+                    "Bootstrap is only for initial server setup."
+                )
+            raw = await store.create(name=name, role=TokenRole.admin, email=email)
+            await dispose_engine()
+            return raw
+
+        raw = asyncio.run(_bootstrap())
+    else:
+        from cvcpkg.server.auth import TokenStore
+
+        store = TokenStore(Path(state_dir))
+        tokens = store.list_tokens()
+        admins = [t for t in tokens if t.role == TokenRole.admin and not t.revoked]
+        if admins:
+            raise click.ClickException(
+                f"An admin token already exists ('{admins[0].name}'). "
+                "Bootstrap is only for initial server setup."
+            )
+        raw = store.create(name=name, role=TokenRole.admin, email=email)
+
+    click.echo("=" * 60)
+    click.echo("  ADMIN TOKEN CREATED — SAVE THIS NOW!")
+    click.echo("=" * 60)
+    click.echo()
+    click.echo(f"  Name:  {name}")
+    click.echo(f"  Role:  admin")
+    click.echo(f"  Token: {raw}")
+    click.echo()
+    click.echo("  This token will NOT be shown again.")
+    click.echo("  Store it in a password manager or secrets vault.")
+    click.echo()
+    click.echo("  To configure the CLI client:")
+    click.echo(f"    cvcpkg config set token {raw}")
+    click.echo("=" * 60)
+
+
 # ── token ───────────────────────────────────────────────────────
 
 
@@ -209,13 +302,14 @@ def token() -> None:
     default=None,
     help="Token expiry in days (omit for no expiry).",
 )
+@click.option("--email", default="", help="Email address for the token owner.")
 @click.option(
     "--state-dir",
     type=click.Path(),
     default="./cvcpkg-server-data",
     help="Server state directory.",
 )
-def token_create(name: str, role: str, expires_in_days: int | None, state_dir: str) -> None:
+def token_create(name: str, role: str, expires_in_days: int | None, email: str, state_dir: str) -> None:
     """Create a new API token (prints the secret once)."""
     import asyncio
     import os
@@ -232,7 +326,7 @@ def token_create(name: str, role: str, expires_in_days: int | None, state_dir: s
             await create_tables()
             store = DbTokenStore(Path(state_dir))
             raw = await store.create(
-                name=name, role=TokenRole(role), expires_in_days=expires_in_days
+                name=name, role=TokenRole(role), expires_in_days=expires_in_days, email=email
             )
             await dispose_engine()
             return raw
@@ -242,7 +336,7 @@ def token_create(name: str, role: str, expires_in_days: int | None, state_dir: s
         from cvcpkg.server.auth import TokenStore
 
         store = TokenStore(Path(state_dir))
-        raw = store.create(name=name, role=TokenRole(role), expires_in_days=expires_in_days)
+        raw = store.create(name=name, role=TokenRole(role), expires_in_days=expires_in_days, email=email)
     click.echo(f"Token created for '{name}' (role={role}):")
     click.echo(f"  {raw}")
     click.echo("Save this token — it will not be shown again.")
