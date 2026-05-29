@@ -464,32 +464,25 @@ function sortBy(key) {
 function renderTags(tags) {
   const grid = document.getElementById('tag-grid');
   if (!tags || tags.length === 0) {
-    grid.innerHTML = '<div class="column is-12 has-text-centered py-4"><p class="has-text-grey">No tags yet.</p></div>';
+    grid.innerHTML = '<tr><td colspan="4" class="has-text-centered py-4"><p class="has-text-grey">No tags yet.</p></td></tr>';
     return;
   }
   grid.innerHTML = tags.map(t => {
     const qname = t.org_slug ? t.org_slug + '/' + t.name : t.name;
     const href = '/tag/' + encodeURIComponent(t.name) + (t.org_slug ? '?org=' + encodeURIComponent(t.org_slug) : '');
-    const logo = t.logo_url
-      ? '<figure class="image is-48x48 mr-3"><img src="' + esc(t.logo_url) + '" alt="' + esc(t.name) + '" style="border-radius:8px"></figure>'
-      : '<span class="icon is-large has-text-info mr-3"><i class="fas fa-tag fa-lg"></i></span>';
-    const desc = t.description ? '<p class="is-size-7 has-text-grey-lighter mt-1" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(t.description) + '</p>' : '';
-    const orgBadge = t.org_slug ? '<span class="tag is-dark is-small">' + esc(t.org_slug) + '</span> ' : '';
+    const orgBadge = t.org_slug ? '<span class="tag is-dark is-small mr-1">' + esc(t.org_slug) + '</span>' : '';
+    const desc = t.description ? '<span class="is-size-7 has-text-grey-lighter">' + esc(t.description) + '</span>' : '';
     return `
-      <div class="column is-3-desktop is-4-tablet is-6-mobile">
-        <a href="${href}" style="text-decoration:none;color:inherit">
-          <div class="box has-background-black-ter pkg-card" style="height:100%;display:flex;align-items:flex-start;padding:0.75rem">
-            ${logo}
-            <div style="min-width:0;flex:1">
-              <p class="has-text-white has-text-weight-semibold is-size-6">${orgBadge}${esc(t.display_name || t.name)}</p>
-              ${desc}
-              <p class="is-size-7 has-text-grey mt-1">
-                <span class="icon is-small"><i class="fas fa-box"></i></span> ${t.package_count} package${t.package_count === 1 ? '' : 's'}
-              </p>
-            </div>
-          </div>
-        </a>
-      </div>`;
+      <tr class="pkg-card">
+        <td>
+          <a href="${href}" class="has-text-info">
+            <span class="icon is-small mr-1"><i class="fas fa-tag"></i></span>
+            ${orgBadge}<strong>${esc(t.display_name || t.name)}</strong>
+          </a>
+        </td>
+        <td>${desc}</td>
+        <td class="has-text-right"><span class="tag is-dark is-rounded">${t.package_count}</span></td>
+      </tr>`;
   }).join('');
 }
 
@@ -570,10 +563,19 @@ def landing_html() -> str:
     <h2 class="title is-4 has-text-white mb-4">
       <span class="icon mr-1"><i class="fas fa-tags"></i></span> Browse by Tag
     </h2>
-    <div id="tag-grid" class="columns is-multiline">
-      <div class="column is-12 has-text-centered py-4">
-        <span class="icon has-text-link"><i class="fas fa-spinner fa-spin fa-lg"></i></span>
-      </div>
+    <div class="table-container">
+    <table class="table is-fullwidth is-hoverable has-background-black-ter">
+      <thead><tr>
+        <th class="has-text-grey-light">Tag</th>
+        <th class="has-text-grey-light">Description</th>
+        <th class="has-text-grey-light has-text-right">Packages</th>
+      </tr></thead>
+      <tbody id="tag-grid">
+        <tr><td colspan="3" class="has-text-centered py-4">
+          <span class="icon has-text-link"><i class="fas fa-spinner fa-spin fa-lg"></i></span>
+        </td></tr>
+      </tbody>
+    </table>
     </div>
   </div>
 </section>
@@ -1659,12 +1661,21 @@ def tags_listing_html() -> str:
       </div>
     </div>
 
-    <div id="tags-grid" class="columns is-multiline">
-      <div class="column is-12 has-text-centered py-6">
-        <span class="icon is-large has-text-link">
-          <i class="fas fa-spinner fa-spin fa-2x"></i>
-        </span>
-      </div>
+    <div class="table-container">
+    <table class="table is-fullwidth is-hoverable has-background-black-ter">
+      <thead><tr>
+        <th class="has-text-grey-light">Tag</th>
+        <th class="has-text-grey-light">Description</th>
+        <th class="has-text-grey-light has-text-right">Packages</th>
+      </tr></thead>
+      <tbody id="tags-grid">
+        <tr><td colspan="3" class="has-text-centered py-6">
+          <span class="icon is-large has-text-link">
+            <i class="fas fa-spinner fa-spin fa-2x"></i>
+          </span>
+        </td></tr>
+      </tbody>
+    </table>
     </div>
   </div>
 </section>
@@ -1693,46 +1704,36 @@ function render(tags) {{
   const grid = document.getElementById('tags-grid');
   if (tags.length === 0) {{
     grid.innerHTML = `
-      <div class="column is-12 has-text-centered py-6">
+      <tr><td colspan="3" class="has-text-centered py-6">
         <span class="icon is-large has-text-grey-light"><i class="fas fa-tags fa-3x"></i></span>
         <p class="title is-5 has-text-grey-light mt-4">No tags yet</p>
         <p class="subtitle is-6 has-text-grey">
           Tags are automatically discovered from published packages,
           or created by admins via <code>POST /v1/tags</code>.
         </p>
-      </div>`;
+      </td></tr>`;
     return;
   }}
 
   grid.innerHTML = tags.map(t => {{
     const href = '/tag/' + encodeURIComponent(t.name) + (t.org_slug ? '?org=' + encodeURIComponent(t.org_slug) : '');
-    const logo = t.logo_url
-      ? '<figure class="image is-48x48 mr-3"><img src="' + esc(t.logo_url) + '" alt="' + esc(t.name) + '" style="border-radius:8px"></figure>'
-      : '<span class="icon is-large has-text-info mr-3"><i class="fas fa-tag fa-lg"></i></span>';
-    const desc = t.description
-      ? '<p class="is-size-7 has-text-grey-lighter mt-1" style="overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">' + esc(t.description) + '</p>'
-      : '';
     const orgBadge = t.org_slug
       ? '<span class="tag is-dark is-small mr-1">' + esc(t.org_slug) + '</span>'
       : '';
+    const desc = t.description
+      ? '<span class="is-size-7 has-text-grey-lighter">' + esc(t.description) + '</span>'
+      : '';
     return `
-      <div class="column is-3-desktop is-4-tablet is-6-mobile">
-        <a href="${{href}}" style="text-decoration:none;color:inherit">
-          <div class="box has-background-black-ter pkg-card" style="height:100%;display:flex;align-items:flex-start;padding:0.75rem">
-            ${{logo}}
-            <div style="min-width:0;flex:1">
-              <p class="has-text-white has-text-weight-semibold is-size-6">
-                ${{orgBadge}}${{esc(t.display_name || t.name)}}
-              </p>
-              ${{desc}}
-              <p class="is-size-7 has-text-grey mt-2">
-                <span class="icon is-small"><i class="fas fa-box"></i></span>
-                ${{t.package_count}} package${{t.package_count === 1 ? '' : 's'}}
-              </p>
-            </div>
-          </div>
-        </a>
-      </div>`;
+      <tr class="pkg-card">
+        <td>
+          <a href="${{href}}" class="has-text-info">
+            <span class="icon is-small mr-1"><i class="fas fa-tag"></i></span>
+            ${{orgBadge}}<strong>${{esc(t.display_name || t.name)}}</strong>
+          </a>
+        </td>
+        <td>${{desc}}</td>
+        <td class="has-text-right"><span class="tag is-dark is-rounded">${{t.package_count}}</span></td>
+      </tr>`;
   }}).join('');
 }}
 
