@@ -59,15 +59,18 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Self-hosted Windows runners may not have Git's bash on PATH.
-      # GitHub-hosted runners have it pre-configured, but self-hosted
-      # runners running as LocalSystem may not inherit it.
-      - name: Add Git bash to PATH (Windows)
+      # Self-hosted Windows runners may not have Git bash or PowerShell 7
+      # on PATH.  GitHub-hosted runners have them pre-configured, but
+      # self-hosted runners running as LocalSystem may not inherit them.
+      - name: Add Git bash and pwsh to PATH (Windows)
         if: runner.os == 'Windows'
         shell: cmd
         run: |
           if exist "C:\Program Files\Git\bin\bash.exe" (
             echo C:\Program Files\Git\bin>> "%GITHUB_PATH%"
+          )
+          if exist "C:\Program Files\PowerShell\7\pwsh.exe" (
+            echo C:\Program Files\PowerShell\7>> "%GITHUB_PATH%"
           )
 
       - name: Compute artifact metadata
