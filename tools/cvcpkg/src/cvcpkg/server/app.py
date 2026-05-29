@@ -1937,7 +1937,7 @@ def create_app(
             raise HTTPException(
                 409,
                 f"token name '{req.name}' is already taken",
-            )
+            ) from None
         if _use_db:
             await _db_audit.record(
                 action=AuditAction.token_create,
@@ -2285,7 +2285,7 @@ def create_app(
                 raise HTTPException(
                     409,
                     f"username '{req.name}' is already taken",
-                )
+                ) from None
             if _use_db:
                 await _db_audit.record(
                     action=AuditAction.registration_request,
@@ -3168,9 +3168,9 @@ def create_app(
             raise HTTPException(
                 exc.response.status_code,
                 f"upstream returned {exc.response.status_code}",
-            )
+            ) from exc
         except Exception as exc:
-            raise HTTPException(502, f"failed to fetch from upstream: {exc}")
+            raise HTTPException(502, f"failed to fetch from upstream: {exc}") from exc
 
         return FileResponse(local, media_type="application/octet-stream")
 
