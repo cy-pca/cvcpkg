@@ -191,6 +191,7 @@ jobs:
             git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
             & C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
           }
+          $env:PATH = "C:\vcpkg;$env:PATH"
           echo 'C:\vcpkg' | Out-File -Append $env:GITHUB_PATH
           vcpkg version
 
