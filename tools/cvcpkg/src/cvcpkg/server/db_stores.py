@@ -397,11 +397,18 @@ class DbPackageIndex:
             ]
             return packages, total
 
-    async def get_catalog_dict(self) -> dict:
+    async def get_catalog_dict(
+        self,
+        *,
+        caller_token_name: str = "",
+        is_admin: bool = False,
+    ) -> dict:
         """Return the full catalog as a dict (for /v1/catalog YAML response).
 
         Includes base packages (no org) and packages belonging to public
-        organisations.  Packages owned by private orgs are excluded.
+        organisations.  When *caller_token_name* is supplied, packages from
+        private orgs where the caller is a member are also included.
+        Admins (``is_admin=True``) see everything.
         """
         async with get_session() as session:
             # Left-join so base packages (org_slug == "") still appear even
@@ -413,14 +420,36 @@ class DbPackageIndex:
                     PackageRow.org_slug == OrganizationRow.slug,
                 )
                 .where(PackageRow.yanked == False)  # noqa: E712
-                .where(
+            )
+
+            if is_admin:
+                # Admins see all packages.
+                pass
+            elif caller_token_name:
+                # Include private-org packages the caller is a member of.
+                member_slugs_q = (
+                    select(OrganizationRow.slug)
+                    .join(OrgMemberRow, OrgMemberRow.org_id == OrganizationRow.id)
+                    .where(OrgMemberRow.token_name == caller_token_name)
+                    .where(OrganizationRow.is_private == True)  # noqa: E712
+                )
+                q = q.where(
+                    or_(
+                        PackageRow.org_slug == "",
+                        OrganizationRow.is_private == False,  # noqa: E712
+                        PackageRow.org_slug.in_(member_slugs_q),
+                    )
+                )
+            else:
+                # Anonymous: base packages + public orgs only.
+                q = q.where(
                     or_(
                         PackageRow.org_slug == "",
                         OrganizationRow.is_private == False,  # noqa: E712
                     )
                 )
-                .order_by(PackageRow.name)
-            )
+
+            q = q.order_by(PackageRow.name)
             result = await session.execute(q)
             bundles = [
                 {
