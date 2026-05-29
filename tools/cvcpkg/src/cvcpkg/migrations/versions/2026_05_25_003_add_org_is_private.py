@@ -22,10 +22,14 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "organizations",
-        sa.Column("is_private", sa.Boolean(), nullable=False, server_default=sa.text("0")),
-    )
+    conn = op.get_bind()
+    insp = sa.inspect(conn)
+    columns = [c["name"] for c in insp.get_columns("organizations")]
+    if "is_private" not in columns:
+        op.add_column(
+            "organizations",
+            sa.Column("is_private", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+        )
 
 
 def downgrade() -> None:
