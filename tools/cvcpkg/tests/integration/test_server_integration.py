@@ -927,9 +927,11 @@ class TestCatalogOrgVisibility:
         # Publish a base package
         _publish(client, pub_tok, "basepkg", "1.0")
         # Publish an org-scoped package
-        archive = _make_tar_archive({
-            "lib/liborg.so": b"\x7fELF" + b"\x00" * 8,
-        })
+        archive = _make_tar_archive(
+            {
+                "lib/liborg.so": b"\x7fELF" + b"\x00" * 8,
+            }
+        )
         client.post(
             "/v1/publish",
             params={
@@ -948,3 +950,194 @@ class TestCatalogOrgVisibility:
         by_name = {b["name"]: b for b in bundles}
         assert by_name["basepkg"].get("org", "") == ""
         assert by_name["orgpkg"]["org"] == "cvc-lab"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# DB-backed integration tests (SQLite in-memory)
+# ═══════════════════════════════════════════════════════════════════
+
+
+aiosqlite = pytest.importorskip("aiosqlite", reason="aiosqlite required for DB integration tests")
+
+
+@pytest.fixture()
+def db_env(tmp_path, monkeypatch):
+    """DB-backed test server using SQLite in-memory.
+
+    Seeds admin, publisher, and reader tokens directly in the DB, then
+    starts the app with ``CVCPKG_DATABASE_URL`` so all endpoints use
+    the SQL path.  Uses a file-based SQLite DB in ``tmp_path`` so the
+    engine can be safely disposed between seeding and app startup.
+    """
+    import asyncio
+
+    db_path = tmp_path / "test.db"
+    db_url = f"sqlite+aiosqlite:///{db_path}"
+    monkeypatch.setenv("CVCPKG_DATABASE_URL", db_url)
+
+    from cvcpkg.server.db import create_tables, dispose_engine, init_db
+    from cvcpkg.server.db_stores import DbTokenStore
+
+    async def _seed():
+        init_db(db_url)
+        await create_tables()
+        store = DbTokenStore(tmp_path)
+        admin_raw = await store.create("test-admin", TokenRole.admin)
+        pub_raw = await store.create("test-publisher", TokenRole.publisher)
+        reader_raw = await store.create("test-reader", TokenRole.reader)
+        await dispose_engine()
+        return admin_raw, pub_raw, reader_raw
+
+    admin_tok, pub_tok, reader_tok = asyncio.run(_seed())
+
+    app = create_app(state_dir=tmp_path)
+    with TestClient(app) as client:
+        yield client, admin_tok, pub_tok, reader_tok, tmp_path
+
+
+class TestDbCatalogOrgPrivacy:
+    """Catalog filters private-org packages based on caller credentials (DB path)."""
+
+    def _publish_pkg(self, client, token, name, version="1.0", org=""):
+        archive = _make_tar_archive({"lib/lib.so": b"\x7fELF" + b"\x00" * 8})
+        params = {
+            "name": name,
+            "version": version,
+            "platform": "linux",
+            "arch": "x86_64",
+        }
+        if org:
+            params["org"] = org
+        resp = client.post(
+            "/v1/publish",
+            params=params,
+            files={"file": (f"{name}.tar.zst", io.BytesIO(archive))},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    def _create_org(self, client, token, slug, *, is_private=False):
+        resp = client.post(
+            "/v1/orgs",
+            json={
+                "slug": slug,
+                "display_name": slug.title(),
+                "is_private": is_private,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    def _add_member(self, client, token, slug, member_name):
+        resp = client.post(
+            f"/v1/orgs/{slug}/members",
+            params={"token_name": member_name},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, resp.text
+
+    def _get_catalog_names(self, client, token=""):
+        headers = {}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        resp = client.get("/v1/catalog", headers=headers)
+        assert resp.status_code == 200
+        return {b["name"] for b in resp.json()["bundles"]}
+
+    def test_anonymous_sees_base_and_public_org(self, db_env):
+        client, admin_tok, pub_tok, _, _ = db_env
+        # Create public org, add publisher as member, publish packages
+        self._create_org(client, admin_tok, "public-lab")
+        self._add_member(client, admin_tok, "public-lab", "test-publisher")
+        self._publish_pkg(client, pub_tok, "basepkg")
+        self._publish_pkg(client, pub_tok, "pub-pkg", org="public-lab")
+
+        names = self._get_catalog_names(client)
+        assert "basepkg" in names
+        assert "pub-pkg" in names
+
+    def test_anonymous_cannot_see_private_org(self, db_env):
+        client, admin_tok, _, _, _ = db_env
+        self._create_org(client, admin_tok, "secret-lab", is_private=True)
+        # Admin is owner, so can publish directly
+        self._publish_pkg(client, admin_tok, "basepkg")
+        self._publish_pkg(client, admin_tok, "secret-pkg", org="secret-lab")
+
+        names = self._get_catalog_names(client)
+        assert "basepkg" in names
+        assert "secret-pkg" not in names
+
+    def test_member_sees_private_org_packages(self, db_env):
+        client, admin_tok, pub_tok, _, _ = db_env
+        self._create_org(client, admin_tok, "secret-lab", is_private=True)
+        self._add_member(client, admin_tok, "secret-lab", "test-publisher")
+        self._publish_pkg(client, pub_tok, "basepkg")
+        self._publish_pkg(client, pub_tok, "secret-pkg", org="secret-lab")
+
+        # Publisher is a member — should see private org packages
+        names = self._get_catalog_names(client, pub_tok)
+        assert "basepkg" in names
+        assert "secret-pkg" in names
+
+    def test_non_member_cannot_see_private_org(self, db_env):
+        client, admin_tok, _, reader_tok, _ = db_env
+        self._create_org(client, admin_tok, "secret-lab", is_private=True)
+        # Admin publishes (is owner)
+        self._publish_pkg(client, admin_tok, "basepkg")
+        self._publish_pkg(client, admin_tok, "secret-pkg", org="secret-lab")
+
+        # Reader is NOT a member — should not see private org packages
+        names = self._get_catalog_names(client, reader_tok)
+        assert "basepkg" in names
+        assert "secret-pkg" not in names
+
+    def test_admin_sees_all_packages(self, db_env):
+        client, admin_tok, pub_tok, _, _ = db_env
+        self._create_org(client, admin_tok, "secret-lab", is_private=True)
+        self._create_org(client, admin_tok, "public-lab")
+        self._add_member(client, admin_tok, "public-lab", "test-publisher")
+        self._publish_pkg(client, pub_tok, "basepkg")
+        self._publish_pkg(client, pub_tok, "pub-pkg", org="public-lab")
+        self._publish_pkg(client, admin_tok, "secret-pkg", org="secret-lab")
+
+        # Admin sees everything
+        names = self._get_catalog_names(client, admin_tok)
+        assert "basepkg" in names
+        assert "pub-pkg" in names
+        assert "secret-pkg" in names
+
+    def test_catalog_bundles_include_org_field(self, db_env):
+        client, admin_tok, pub_tok, _, _ = db_env
+        self._create_org(client, admin_tok, "cvc-lab")
+        self._add_member(client, admin_tok, "cvc-lab", "test-publisher")
+        self._publish_pkg(client, pub_tok, "basepkg")
+        self._publish_pkg(client, pub_tok, "orgpkg", org="cvc-lab")
+
+        resp = client.get(
+            "/v1/catalog",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        bundles = resp.json()["bundles"]
+        by_name = {b["name"]: b for b in bundles}
+        assert by_name["basepkg"]["org"] == ""
+        assert by_name["orgpkg"]["org"] == "cvc-lab"
+
+    def test_catalog_updates_in_real_time(self, db_env):
+        """Catalog reflects new packages immediately — no caching."""
+        client, admin_tok, pub_tok, _, _ = db_env
+
+        # Empty catalog
+        names = self._get_catalog_names(client, admin_tok)
+        assert len(names) == 0
+
+        # Publish and check immediately
+        self._publish_pkg(client, pub_tok, "pkg1")
+        names = self._get_catalog_names(client, admin_tok)
+        assert "pkg1" in names
+
+        # Publish another and check
+        self._publish_pkg(client, pub_tok, "pkg2")
+        names = self._get_catalog_names(client, admin_tok)
+        assert {"pkg1", "pkg2"} == names

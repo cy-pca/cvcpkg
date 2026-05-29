@@ -37,6 +37,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.pool import StaticPool
 
 
 class Base(DeclarativeBase):
@@ -297,10 +298,21 @@ def init_db(database_url: str) -> None:
     # SQLite doesn't support connection pooling options
     is_sqlite = database_url.startswith("sqlite")
     if is_sqlite:
+        # In-memory SQLite (no path after "://") needs StaticPool so every
+        # connection shares the same database instead of creating a new one.
+        is_memory = database_url.rstrip("/") in (
+            "sqlite+aiosqlite://",
+            "sqlite+aiosqlite:///",
+            "sqlite+aiosqlite:///:memory:",
+        )
+        pool_kwargs: dict = {}
+        if is_memory:
+            pool_kwargs["poolclass"] = StaticPool
         _engine = create_async_engine(
             database_url,
             echo=False,
             connect_args={"check_same_thread": False},
+            **pool_kwargs,
         )
     else:
         _engine = create_async_engine(
