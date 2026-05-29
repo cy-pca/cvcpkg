@@ -279,6 +279,7 @@ let currentSort = { key: 'name', dir: 'asc' };
 let searchTerm = '';
 let platformFilter = '';
 let releaseFilter = '';
+let tagFilter = '';
 
 let recipeMeta = {};
 
@@ -356,6 +357,9 @@ function render() {
       (p.maintainer || '').toLowerCase().includes(q) ||
       (p.release_tag || '').toLowerCase().includes(q)
     );
+  }
+  if (tagFilter) {
+    pkgs = pkgs.filter(p => (p.tags || '').split(',').map(t => t.trim().toLowerCase()).includes(tagFilter.toLowerCase()));
   }
   if (platformFilter) pkgs = pkgs.filter(p => p.platform === platformFilter);
   if (releaseFilter === 'live') pkgs = pkgs.filter(p => !p.release_tag);
@@ -461,40 +465,19 @@ function sortBy(key) {
   render();
 }
 
-function renderTags(tags) {
-  const grid = document.getElementById('tag-grid');
-  if (!tags || tags.length === 0) {
-    grid.innerHTML = '<tr><td colspan="4" class="has-text-centered py-4"><p class="has-text-grey">No tags yet.</p></td></tr>';
-    return;
-  }
-  grid.innerHTML = tags.map(t => {
-    const qname = t.org_slug ? t.org_slug + '/' + t.name : t.name;
-    const href = '/tag/' + encodeURIComponent(t.name) + (t.org_slug ? '?org=' + encodeURIComponent(t.org_slug) : '');
-    const orgBadge = t.org_slug ? '<span class="tag is-dark is-small mr-1">' + esc(t.org_slug) + '</span>' : '';
-    const desc = t.description ? '<span class="is-size-7 has-text-grey-lighter">' + esc(t.description) + '</span>' : '';
-    return `
-      <tr class="pkg-card">
-        <td>
-          <a href="${href}" class="has-text-info">
-            <span class="icon is-small mr-1"><i class="fas fa-tag"></i></span>
-            ${orgBadge}<strong>${esc(t.display_name || t.name)}</strong>
-          </a>
-        </td>
-        <td>${desc}</td>
-        <td class="has-text-right"><span class="tag is-dark is-rounded">${t.package_count}</span></td>
-      </tr>`;
-  }).join('');
-}
-
 async function loadTags() {
   try {
     const resp = await fetch('/v1/tags/all');
     const data = await resp.json();
-    renderTags(data.tags || []);
-  } catch (_) {
-    document.getElementById('tag-grid').innerHTML =
-      '<div class="column is-12"><p class="has-text-grey-light is-size-7">Could not load tags.</p></div>';
-  }
+    const tags = data.tags || [];
+    const sel = document.getElementById('tag-filter');
+    tags.forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t.name;
+      opt.textContent = t.display_name || t.name;
+      sel.appendChild(opt);
+    });
+  } catch (_) {}
 }
 """
 
@@ -557,34 +540,11 @@ def landing_html() -> str:
   </div>
 </section>
 
-<!-- Browse by tag -->
-<section class="section pt-4 pb-4 has-background-black-bis">
-  <div class="container">
-    <h2 class="title is-4 has-text-white mb-4">
-      <span class="icon mr-1"><i class="fas fa-tags"></i></span> Browse by Tag
-    </h2>
-    <div class="table-container">
-    <table class="table is-fullwidth is-hoverable has-background-black-ter">
-      <thead><tr>
-        <th class="has-text-grey-light">Tag</th>
-        <th class="has-text-grey-light">Description</th>
-        <th class="has-text-grey-light has-text-right">Packages</th>
-      </tr></thead>
-      <tbody id="tag-grid">
-        <tr><td colspan="3" class="has-text-centered py-4">
-          <span class="icon has-text-link"><i class="fas fa-spinner fa-spin fa-lg"></i></span>
-        </td></tr>
-      </tbody>
-    </table>
-    </div>
-  </div>
-</section>
-
 <!-- Package index -->
 <section class="section has-background-black-bis">
   <div class="container">
     <div class="columns is-vcentered mb-4">
-      <div class="column is-5">
+      <div class="column is-4">
         <div class="field">
           <div class="control has-icons-left">
             <input class="input is-dark" type="text" id="search"
@@ -593,7 +553,17 @@ def landing_html() -> str:
           </div>
         </div>
       </div>
-      <div class="column is-3">
+      <div class="column is-2">
+        <div class="field">
+          <div class="control has-icons-left">
+            <div class="select is-dark is-fullwidth">
+              <select id="tag-filter"><option value="">All tags</option></select>
+            </div>
+            <span class="icon is-left"><i class="fas fa-tag"></i></span>
+          </div>
+        </div>
+      </div>
+      <div class="column is-2">
         <div class="field">
           <div class="control">
             <div class="select is-dark is-fullwidth">
@@ -660,6 +630,10 @@ document.addEventListener('DOMContentLoaded', () => {{
   }});
   document.getElementById('platform-filter').addEventListener('change', e => {{
     platformFilter = e.target.value;
+    render();
+  }});
+  document.getElementById('tag-filter').addEventListener('change', e => {{
+    tagFilter = e.target.value;
     render();
   }});
   document.getElementById('release-filter').addEventListener('change', e => {{
@@ -1661,21 +1635,12 @@ def tags_listing_html() -> str:
       </div>
     </div>
 
-    <div class="table-container">
-    <table class="table is-fullwidth is-hoverable has-background-black-ter">
-      <thead><tr>
-        <th class="has-text-grey-light">Tag</th>
-        <th class="has-text-grey-light">Description</th>
-        <th class="has-text-grey-light has-text-right">Packages</th>
-      </tr></thead>
-      <tbody id="tags-grid">
-        <tr><td colspan="3" class="has-text-centered py-6">
-          <span class="icon is-large has-text-link">
-            <i class="fas fa-spinner fa-spin fa-2x"></i>
-          </span>
-        </td></tr>
-      </tbody>
-    </table>
+    <div class="columns is-multiline" id="tags-grid">
+      <div class="column is-12 has-text-centered py-6">
+        <span class="icon is-large has-text-link">
+          <i class="fas fa-spinner fa-spin fa-2x"></i>
+        </span>
+      </div>
     </div>
   </div>
 </section>
@@ -1704,36 +1669,27 @@ function render(tags) {{
   const grid = document.getElementById('tags-grid');
   if (tags.length === 0) {{
     grid.innerHTML = `
-      <tr><td colspan="3" class="has-text-centered py-6">
+      <div class="column is-12 has-text-centered py-6">
         <span class="icon is-large has-text-grey-light"><i class="fas fa-tags fa-3x"></i></span>
         <p class="title is-5 has-text-grey-light mt-4">No tags yet</p>
         <p class="subtitle is-6 has-text-grey">
           Tags are automatically discovered from published packages,
           or created by admins via <code>POST /v1/tags</code>.
         </p>
-      </td></tr>`;
+      </div>`;
     return;
   }}
 
   grid.innerHTML = tags.map(t => {{
     const href = '/tag/' + encodeURIComponent(t.name) + (t.org_slug ? '?org=' + encodeURIComponent(t.org_slug) : '');
-    const orgBadge = t.org_slug
-      ? '<span class="tag is-dark is-small mr-1">' + esc(t.org_slug) + '</span>'
-      : '';
-    const desc = t.description
-      ? '<span class="is-size-7 has-text-grey-lighter">' + esc(t.description) + '</span>'
-      : '';
     return `
-      <tr class="pkg-card">
-        <td>
-          <a href="${{href}}" class="has-text-info">
-            <span class="icon is-small mr-1"><i class="fas fa-tag"></i></span>
-            ${{orgBadge}}<strong>${{esc(t.display_name || t.name)}}</strong>
-          </a>
-        </td>
-        <td>${{desc}}</td>
-        <td class="has-text-right"><span class="tag is-dark is-rounded">${{t.package_count}}</span></td>
-      </tr>`;
+      <div class="column is-3">
+        <a href="${{href}}" class="box has-background-black-ter has-text-centered" style="display:block; border:1px solid #363636;">
+          <span class="icon is-medium has-text-info mb-2"><i class="fas fa-tag fa-lg"></i></span>
+          <p class="has-text-white has-text-weight-bold">${{esc(t.display_name || t.name)}}</p>
+          <p class="has-text-grey-light is-size-7 mt-1">${{t.package_count}} ${{t.package_count === 1 ? 'package' : 'packages'}}</p>
+        </a>
+      </div>`;
   }}).join('');
 }}
 
