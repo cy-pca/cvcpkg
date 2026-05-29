@@ -1516,12 +1516,11 @@ class TestTagPages:
 
 
 class TestLandingPageTags:
-    def test_landing_has_tag_section(self, server_env):
+    def test_landing_has_tag_filter(self, server_env):
         client, _, _, _ = server_env
         resp = client.get("/")
         assert resp.status_code == 200
-        assert "Browse by Tag" in resp.text
-        assert "tag-grid" in resp.text
+        assert "tag-filter" in resp.text
 
     def test_navbar_has_tags_link(self, server_env):
         client, _, _, _ = server_env
