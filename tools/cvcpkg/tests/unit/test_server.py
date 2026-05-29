@@ -1147,3 +1147,169 @@ class TestPackageInfoQualifiedName:
             org="cvc-lab",
         )
         assert p.qualified_name == "cvc-lab/custom-lib"
+
+
+# ── Tag models ──────────────────────────────────────────────────
+
+
+class TestTagModels:
+    def test_tag_info_qualified_name_global(self):
+        from cvcpkg.server.models import TagInfo
+
+        t = TagInfo(name="scientific", org_slug="")
+        assert t.qualified_name == "scientific"
+
+    def test_tag_info_qualified_name_org(self):
+        from cvcpkg.server.models import TagInfo
+
+        t = TagInfo(name="internal", org_slug="cvc-lab")
+        assert t.qualified_name == "cvc-lab/internal"
+
+    def test_tag_create_request_validation(self):
+        from cvcpkg.server.models import TagCreateRequest
+
+        req = TagCreateRequest(name="my-tag", description="A tag")
+        assert req.name == "my-tag"
+        assert req.org_slug == ""
+
+    def test_tag_create_request_rejects_invalid_name(self):
+        from cvcpkg.server.models import TagCreateRequest
+
+        with pytest.raises(Exception):
+            TagCreateRequest(name="UPPER CASE!")
+
+    def test_tag_update_request_partial(self):
+        from cvcpkg.server.models import TagUpdateRequest
+
+        req = TagUpdateRequest(description="Updated")
+        assert req.display_name is None
+        assert req.description == "Updated"
+        assert req.logo_url is None
+
+
+# ── Tag API (YAML fallback — no DB) ────────────────────────────
+
+
+class TestTagAPINoDb:
+    """When no database is configured, tag endpoints return empty/501."""
+
+    def test_list_tags_empty(self, server_env):
+        client, admin_token, _, _ = server_env
+        resp = client.get("/v1/tags")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 0
+        assert data["tags"] == []
+
+    def test_list_all_tags_empty(self, server_env):
+        client, admin_token, _, _ = server_env
+        resp = client.get("/v1/tags/all")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["tags"] == []
+
+    def test_create_tag_requires_db(self, server_env):
+        client, admin_token, _, _ = server_env
+        resp = client.post(
+            "/v1/tags",
+            json={"name": "test-tag"},
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert resp.status_code == 501
+
+    def test_update_tag_requires_db(self, server_env):
+        client, admin_token, _, _ = server_env
+        resp = client.put(
+            "/v1/tags/test-tag",
+            json={"description": "updated"},
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert resp.status_code == 501
+
+    def test_delete_tag_requires_db(self, server_env):
+        client, admin_token, _, _ = server_env
+        resp = client.delete(
+            "/v1/tags/test-tag",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert resp.status_code == 501
+
+
+# ── Tag HTML pages ──────────────────────────────────────────────
+
+
+class TestTagPages:
+    def test_tags_listing_page(self, server_env):
+        client, _, _, _ = server_env
+        resp = client.get("/tags")
+        assert resp.status_code == 200
+        assert "Browse Tags" in resp.text
+
+    def test_tag_detail_page(self, server_env):
+        client, _, _, _ = server_env
+        resp = client.get("/tag/scientific")
+        assert resp.status_code == 200
+        assert "scientific" in resp.text
+
+    def test_tag_detail_page_with_org(self, server_env):
+        client, _, _, _ = server_env
+        resp = client.get("/tag/internal?org=cvc-lab")
+        assert resp.status_code == 200
+        assert "cvc-lab" in resp.text
+
+
+# ── Tag landing page integration ────────────────────────────────
+
+
+class TestLandingPageTags:
+    def test_landing_has_tag_section(self, server_env):
+        client, _, _, _ = server_env
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert "Browse by Tag" in resp.text
+        assert "tag-grid" in resp.text
+
+    def test_navbar_has_tags_link(self, server_env):
+        client, _, _, _ = server_env
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert "/tags" in resp.text
+
+
+# ── Tag DB models ───────────────────────────────────────────────
+
+
+class TestTagRow:
+    def test_tag_row_creation(self):
+        from cvcpkg.server.db import TagRow
+
+        row = TagRow(
+            name="scientific",
+            org_slug="",
+            display_name="Scientific Computing",
+            description="Packages for scientific computing",
+        )
+        assert row.name == "scientific"
+        assert row.org_slug == ""
+        assert row.display_name == "Scientific Computing"
+
+    def test_tag_row_org_scoped(self):
+        from cvcpkg.server.db import TagRow
+
+        row = TagRow(
+            name="internal",
+            org_slug="cvc-lab",
+            display_name="Internal Tools",
+        )
+        assert row.name == "internal"
+        assert row.org_slug == "cvc-lab"
+
+
+# ── Audit action enum ──────────────────────────────────────────
+
+
+class TestTagAuditActions:
+    def test_tag_audit_actions_exist(self):
+        assert AuditAction.tag_create == "tag_create"
+        assert AuditAction.tag_update == "tag_update"
+        assert AuditAction.tag_delete == "tag_delete"
