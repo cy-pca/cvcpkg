@@ -158,7 +158,7 @@ jobs:
       # ── System build tools (Windows) ──
       - name: Install system build tools (Windows)
         if: inputs.platform == 'windows'
-        shell: pwsh
+        shell: powershell
         run: |
           # Ensure Chocolatey is available (pre-installed on windows-latest,
           # may be missing on self-hosted runners).
