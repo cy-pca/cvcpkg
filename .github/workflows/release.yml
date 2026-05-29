@@ -103,17 +103,24 @@ jobs:
     secrets: inherit
 
   # ─────────────────── Windows ─────────────────────────────────
+  # Shared builds run on self-hosted Windows runners (sandipaws +
+  # phm-win11) for faster turnaround; static builds run on
+  # GitHub-hosted windows-latest.
   windows:
     strategy:
       fail-fast: false
       matrix:
         include:
+          # Self-hosted: shared builds
           - config: release
             link: shared
-          - config: release
-            link: static
+            runner: '["self-hosted","Windows","X64"]'
           - config: debug
             link: shared
+            runner: '["self-hosted","Windows","X64"]'
+          # GitHub-hosted: static builds
+          - config: release
+            link: static
           - config: debug
             link: static
     uses: ./.github/workflows/recipe-build.yml
@@ -121,6 +128,7 @@ jobs:
       platform: windows
       config: ${{ matrix.config }}
       link: ${{ matrix.link }}
+      runner: ${{ matrix.runner || '' }}
       sha_suffix: ${{ inputs.sha_suffix || '' }}
     secrets: inherit
 
