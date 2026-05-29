@@ -59,6 +59,17 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Self-hosted Windows runners may not have Git's bash on PATH.
+      # GitHub-hosted runners have it pre-configured, but self-hosted
+      # runners running as LocalSystem may not inherit it.
+      - name: Add Git bash to PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          if exist "C:\Program Files\Git\bin\bash.exe" (
+            echo C:\Program Files\Git\bin>> "%GITHUB_PATH%"
+          )
+
       - name: Compute artifact metadata
         id: meta
         shell: bash
