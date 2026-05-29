@@ -24,6 +24,7 @@ from cvcpkg.server.db import (
     OrgMemberRow,
     PackageRow,
     TagRow,
+    TokenRequestRow,
     TokenRow,
     get_session,
 )
@@ -37,6 +38,8 @@ from cvcpkg.server.models import (
     PackageInfo,
     TagInfo,
     TokenRecord,
+    TokenRequestRecord,
+    TokenRequestStatus,
     TokenRole,
 )
 
@@ -75,6 +78,7 @@ class DbTokenStore:
         name: str,
         role: TokenRole = TokenRole.publisher,
         expires_in_days: int | None = None,
+        email: str = "",
     ) -> str:
         async with get_session() as session:
             existing = await session.execute(
@@ -99,6 +103,7 @@ class DbTokenStore:
                 name=name,
                 role=role.value,
                 token_hash=token_hash,
+                email=email,
                 expires_at=expires_at,
             )
             session.add(row)
@@ -122,6 +127,7 @@ class DbTokenStore:
                 name=row.name,
                 role=TokenRole(row.role),
                 token_hash=row.token_hash,
+                email=row.email,
                 created_at=row.created_at,
                 expires_at=row.expires_at,
                 revoked=row.revoked,
@@ -144,12 +150,98 @@ class DbTokenStore:
                     name=row.name,
                     role=TokenRole(row.role),
                     token_hash=row.token_hash,
+                    email=row.email,
                     created_at=row.created_at,
                     expires_at=row.expires_at,
                     revoked=row.revoked,
                 )
                 for row in result.scalars().all()
             ]
+
+
+# ── DB Token Request Store ──────────────────────────────────────
+
+
+class DbTokenRequestStore:
+    """Manage pending token registration requests."""
+
+    async def create(self, name: str, email: str, role: TokenRole) -> TokenRequestRecord:
+        async with get_session() as session:
+            row = TokenRequestRow(
+                name=name,
+                email=email,
+                role=role.value,
+            )
+            session.add(row)
+            await session.flush()
+            record = TokenRequestRecord(
+                id=row.id,
+                name=row.name,
+                email=row.email,
+                role=TokenRole(row.role),
+                status=TokenRequestStatus(row.status),
+                created_at=row.created_at,
+            )
+        return record
+
+    async def list_requests(
+        self, status: TokenRequestStatus | None = None
+    ) -> list[TokenRequestRecord]:
+        async with get_session() as session:
+            stmt = select(TokenRequestRow).order_by(TokenRequestRow.created_at.desc())
+            if status is not None:
+                stmt = stmt.where(TokenRequestRow.status == status.value)
+            result = await session.execute(stmt)
+            return [
+                TokenRequestRecord(
+                    id=row.id,
+                    name=row.name,
+                    email=row.email,
+                    role=TokenRole(row.role),
+                    status=TokenRequestStatus(row.status),
+                    reviewed_by=row.reviewed_by,
+                    created_at=row.created_at,
+                    resolved_at=row.resolved_at,
+                )
+                for row in result.scalars().all()
+            ]
+
+    async def get(self, request_id: int) -> TokenRequestRecord | None:
+        async with get_session() as session:
+            result = await session.execute(
+                select(TokenRequestRow).where(TokenRequestRow.id == request_id)
+            )
+            row = result.scalars().first()
+            if row is None:
+                return None
+            return TokenRequestRecord(
+                id=row.id,
+                name=row.name,
+                email=row.email,
+                role=TokenRole(row.role),
+                status=TokenRequestStatus(row.status),
+                reviewed_by=row.reviewed_by,
+                created_at=row.created_at,
+                resolved_at=row.resolved_at,
+            )
+
+    async def resolve(
+        self, request_id: int, status: TokenRequestStatus, reviewed_by: str
+    ) -> bool:
+        async with get_session() as session:
+            result = await session.execute(
+                update(TokenRequestRow)
+                .where(
+                    TokenRequestRow.id == request_id,
+                    TokenRequestRow.status == TokenRequestStatus.pending.value,
+                )
+                .values(
+                    status=status.value,
+                    reviewed_by=reviewed_by,
+                    resolved_at=datetime.datetime.now(datetime.timezone.utc),
+                )
+            )
+            return result.rowcount > 0
 
 
 # ── DB Audit Log ────────────────────────────────────────────────

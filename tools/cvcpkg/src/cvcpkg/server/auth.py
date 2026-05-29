@@ -78,6 +78,7 @@ class TokenStore:
         name: str,
         role: TokenRole = TokenRole.publisher,
         expires_in_days: int | None = None,
+        email: str = "",
     ) -> str:
         """Create a new token and return the raw secret (shown once)."""
         if any(t.name == name and not t.revoked for t in self._tokens):
@@ -96,6 +97,7 @@ class TokenStore:
             name=name,
             role=role,
             token_hash=token_hash,
+            email=email,
             expires_at=expires_at,
         )
         self._tokens.append(record)

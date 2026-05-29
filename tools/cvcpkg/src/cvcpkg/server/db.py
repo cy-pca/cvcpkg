@@ -168,6 +168,7 @@ class TokenRow(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -177,6 +178,29 @@ class TokenRow(Base):
         DateTime(timezone=True), nullable=True
     )
     revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+class TokenRequestRow(Base):
+    """Pending token registration requests (admin-gated mode)."""
+
+    __tablename__ = "token_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="reader")
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", server_default="pending"
+    )
+    reviewed_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    resolved_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class AuditRow(Base):
