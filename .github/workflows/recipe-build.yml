@@ -156,9 +156,11 @@ jobs:
           pip3 install --break-system-packages "cmake>=3.31,<4"
 
       # ── System build tools (Windows) ──
+      # Use an explicit -ExecutionPolicy Bypass because self-hosted
+      # runners may have restrictive default execution policies.
       - name: Install system build tools (Windows)
         if: inputs.platform == 'windows'
-        shell: powershell
+        shell: powershell -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           # Ensure Chocolatey is available (pre-installed on windows-latest,
           # may be missing on self-hosted runners).
