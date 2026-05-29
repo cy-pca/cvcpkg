@@ -1041,6 +1041,38 @@ class TestPublishWithOrg:
         data = resp.json()
         assert data["name"] == "org-test-pkg"
 
+    def test_catalog_includes_org_field(self, server_env):
+        """Catalog bundles should carry the ``org`` field."""
+        client, _, pub_tok, _ = server_env
+        # Publish a base package (no org)
+        client.post(
+            "/v1/publish",
+            params={"name": "base-pkg", "version": "1.0", "platform": "linux", "arch": "x86_64"},
+            files={"file": ("base-pkg.tar.zst", io.BytesIO(b"base"))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        # Publish an org-scoped package
+        client.post(
+            "/v1/publish",
+            params={
+                "name": "org-pkg",
+                "version": "1.0",
+                "platform": "linux",
+                "arch": "x86_64",
+                "org": "cvc-lab",
+            },
+            files={"file": ("org-pkg.tar.zst", io.BytesIO(b"org"))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        resp = client.get("/v1/catalog")
+        assert resp.status_code == 200
+        bundles = resp.json()["bundles"]
+        by_name = {b["name"]: b for b in bundles}
+        assert "base-pkg" in by_name
+        assert by_name["base-pkg"].get("org", "") == ""
+        assert "org-pkg" in by_name
+        assert by_name["org-pkg"]["org"] == "cvc-lab"
+
 
 # ── validate_org_slug ───────────────────────────────────────────
 

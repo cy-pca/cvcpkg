@@ -398,13 +398,30 @@ class DbPackageIndex:
             return packages, total
 
     async def get_catalog_dict(self) -> dict:
-        """Return the full catalog as a dict (for /v1/catalog YAML response)."""
+        """Return the full catalog as a dict (for /v1/catalog YAML response).
+
+        Includes base packages (no org) and packages belonging to public
+        organisations.  Packages owned by private orgs are excluded.
+        """
         async with get_session() as session:
-            result = await session.execute(
+            # Left-join so base packages (org_slug == "") still appear even
+            # when there is no matching OrganizationRow.
+            q = (
                 select(PackageRow)
+                .outerjoin(
+                    OrganizationRow,
+                    PackageRow.org_slug == OrganizationRow.slug,
+                )
                 .where(PackageRow.yanked == False)  # noqa: E712
+                .where(
+                    or_(
+                        PackageRow.org_slug == "",
+                        OrganizationRow.is_private == False,  # noqa: E712
+                    )
+                )
                 .order_by(PackageRow.name)
             )
+            result = await session.execute(q)
             bundles = [
                 {
                     "name": row.name,
@@ -427,6 +444,7 @@ class DbPackageIndex:
                     "license": row.license,
                     "maintainer": row.maintainer,
                     "tags": row.tags,
+                    "org": row.org_slug,
                 }
                 for row in result.scalars().all()
             ]
