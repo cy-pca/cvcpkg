@@ -79,6 +79,8 @@ class TokenStore:
         role: TokenRole = TokenRole.publisher,
         expires_in_days: int | None = None,
         email: str = "",
+        description: str = "",
+        metadata: str = "",
     ) -> str:
         """Create a new token and return the raw secret (shown once)."""
         if any(t.name == name and not t.revoked for t in self._tokens):
@@ -98,6 +100,8 @@ class TokenStore:
             role=role,
             token_hash=token_hash,
             email=email,
+            description=description,
+            metadata=metadata,
             expires_at=expires_at,
         )
         self._tokens.append(record)
@@ -134,6 +138,60 @@ class TokenStore:
                 self._persist()
                 return True
         return False
+
+    def update_profile(
+        self,
+        name: str,
+        description: str | None = None,
+        metadata: str | None = None,
+    ) -> bool:
+        """Update profile fields for a token by name.  Returns True if found."""
+        for t in self._tokens:
+            if t.name == name and not t.revoked:
+                if description is not None:
+                    t.description = description
+                if metadata is not None:
+                    t.metadata = metadata
+                self._persist()
+                return True
+        return False
+
+    def get_public_profile(self, name: str) -> TokenRecord | None:
+        """Look up a user by name, returning their record (without secret)."""
+        for t in self._tokens:
+            if t.name == name and not t.revoked:
+                return t
+        return None
+
+    def get_profile_by_email(self, email: str) -> TokenRecord | None:
+        """Look up a user by email, returning first matching active record."""
+        for t in self._tokens:
+            if t.email == email and not t.revoked:
+                return t
+        return None
+
+    def search_users(
+        self,
+        *,
+        name: str = "",
+        email: str = "",
+        role: str = "",
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[TokenRecord], int]:
+        """Search active users with optional name/email/role filter.
+
+        Returns (page, total_matching).
+        """
+        results = [t for t in self._tokens if not t.revoked]
+        if name:
+            results = [t for t in results if name.lower() in t.name.lower()]
+        if email:
+            results = [t for t in results if email.lower() in t.email.lower()]
+        if role:
+            results = [t for t in results if t.role.value == role]
+        total = len(results)
+        return results[offset : offset + limit], total
 
     def list_tokens(self) -> list[TokenRecord]:
         """Return all token records (without secrets)."""

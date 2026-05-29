@@ -97,6 +97,17 @@ def server_cli() -> None:
     help="Registration policy: 'open' (anyone can register) or 'admin-gated' "
     "(requests require admin approval).  [default: open]",
 )
+@click.option(
+    "--daemon",
+    is_flag=True,
+    help="Run as a background daemon (fork and detach).",
+)
+@click.option(
+    "--pidfile",
+    type=click.Path(),
+    default="",
+    help="Path to PID file.  [default: <state-dir>/cvcpkg-server.pid]",
+)
 def run(
     state_dir: str,
     host: str,
@@ -111,6 +122,8 @@ def run(
     mirror_token: str,
     mirror_sync_interval: int,
     registration_mode: str,
+    daemon: bool,
+    pidfile: str,
 ) -> None:
     """Start the cvcpkg package server."""
     import os
@@ -159,44 +172,94 @@ def run(
     click.echo(f"cvcpkg-server: registration mode: {registration_mode}")
     click.echo(f"cvcpkg-server: docs at http://{host}:{port}/docs")
 
-    log_config = None
-    if log_json:
-        log_config = {
-            "version": 1,
-            "disable_existing_loggers": False,
-            "formatters": {
-                "json": {
-                    "()": "cvcpkg.server.log_fmt.JsonFormatter",
-                },
-            },
-            "handlers": {
-                "default": {
-                    "class": "logging.StreamHandler",
-                    "formatter": "json",
-                    "stream": "ext://sys.stdout",
-                },
-            },
-            "root": {
-                "level": "INFO",
-                "handlers": ["default"],
-            },
-            "loggers": {
-                "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
-                "uvicorn.error": {"handlers": ["default"], "level": "INFO", "propagate": False},
-                "uvicorn.access": {"handlers": ["default"], "level": "INFO", "propagate": False},
-                "cvcpkg.server": {"handlers": ["default"], "level": "INFO", "propagate": False},
-            },
-        }
+    # Resolve PID file path
+    pid_path = Path(pidfile) if pidfile else Path(state_dir).resolve() / "cvcpkg-server.pid"
 
-    uvicorn.run(
-        "cvcpkg.server.app:create_app",
-        factory=True,
-        host=host,
-        port=port,
-        workers=workers,
-        log_level="info",
-        log_config=log_config,
-    )
+    if daemon:
+        import sys
+
+        click.echo("cvcpkg-server: daemonizing...")
+        # Double-fork to fully detach
+        if os.fork() > 0:
+            raise SystemExit(0)
+        os.setsid()
+        if os.fork() > 0:
+            raise SystemExit(0)
+
+        # Redirect stdio to /dev/null
+        devnull = os.open(os.devnull, os.O_RDWR)
+        os.dup2(devnull, sys.stdin.fileno())
+        os.dup2(devnull, sys.stdout.fileno())
+        os.dup2(devnull, sys.stderr.fileno())
+        os.close(devnull)
+
+    # Write PID file
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text(str(os.getpid()))
+    os.environ["CVCPKG_PIDFILE"] = str(pid_path)
+
+    # Install SIGTERM handler for graceful shutdown with cleanup
+    import signal
+
+    _original_sigterm = signal.getsignal(signal.SIGTERM)
+
+    def _handle_sigterm(signum, frame):
+        """Clean up PID file then let uvicorn handle the rest."""
+        try:
+            pid_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        # Restore original handler and re-raise so uvicorn shuts down gracefully
+        signal.signal(signal.SIGTERM, _original_sigterm)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+
+    try:
+        log_config = None
+        if log_json:
+            log_config = {
+                "version": 1,
+                "disable_existing_loggers": False,
+                "formatters": {
+                    "json": {
+                        "()": "cvcpkg.server.log_fmt.JsonFormatter",
+                    },
+                },
+                "handlers": {
+                    "default": {
+                        "class": "logging.StreamHandler",
+                        "formatter": "json",
+                        "stream": "ext://sys.stdout",
+                    },
+                },
+                "root": {
+                    "level": "INFO",
+                    "handlers": ["default"],
+                },
+                "loggers": {
+                    "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
+                    "uvicorn.error": {"handlers": ["default"], "level": "INFO", "propagate": False},
+                    "uvicorn.access": {"handlers": ["default"], "level": "INFO", "propagate": False},
+                    "cvcpkg.server": {"handlers": ["default"], "level": "INFO", "propagate": False},
+                },
+            }
+
+        uvicorn.run(
+            "cvcpkg.server.app:create_app",
+            factory=True,
+            host=host,
+            port=port,
+            workers=workers,
+            log_level="info",
+            log_config=log_config,
+        )
+    finally:
+        # Clean up PID file on exit
+        try:
+            pid_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 # ── bootstrap ───────────────────────────────────────────────────
@@ -461,6 +524,88 @@ def token_set_email(name: str, email: str, state_dir: str) -> None:
         store = TokenStore(Path(state_dir))
         if store.update_email(name, email):
             click.echo(f"Email for '{name}' set to '{email}'.")
+        else:
+            click.echo(f"Token '{name}' not found or already revoked.")
+
+
+@token.command("set-description")
+@click.option("--name", required=True, help="Name of the token to update.")
+@click.option("--description", required=True, help="New description.")
+@click.option(
+    "--state-dir",
+    type=click.Path(),
+    default="./cvcpkg-server-data",
+    help="Server state directory.",
+)
+def token_set_description(name: str, description: str, state_dir: str) -> None:
+    """Set the description on a token."""
+    import asyncio
+    import os
+
+    db_url = os.environ.get("CVCPKG_DATABASE_URL", "")
+    if db_url:
+        from cvcpkg.server.db import create_tables, dispose_engine, init_db
+        from cvcpkg.server.db_stores import DbTokenStore
+
+        async def _set_desc():
+            init_db(db_url)
+            await create_tables()
+            store = DbTokenStore(Path(state_dir))
+            result = await store.update_profile(name, description=description)
+            await dispose_engine()
+            return result
+
+        if asyncio.run(_set_desc()):
+            click.echo(f"Description for '{name}' updated.")
+        else:
+            click.echo(f"Token '{name}' not found or already revoked.")
+    else:
+        from cvcpkg.server.auth import TokenStore
+
+        store = TokenStore(Path(state_dir))
+        if store.update_profile(name, description=description):
+            click.echo(f"Description for '{name}' updated.")
+        else:
+            click.echo(f"Token '{name}' not found or already revoked.")
+
+
+@token.command("set-metadata")
+@click.option("--name", required=True, help="Name of the token to update.")
+@click.option("--metadata", required=True, help="New metadata (JSON or arbitrary text).")
+@click.option(
+    "--state-dir",
+    type=click.Path(),
+    default="./cvcpkg-server-data",
+    help="Server state directory.",
+)
+def token_set_metadata_cmd(name: str, metadata: str, state_dir: str) -> None:
+    """Set the metadata on a token."""
+    import asyncio
+    import os
+
+    db_url = os.environ.get("CVCPKG_DATABASE_URL", "")
+    if db_url:
+        from cvcpkg.server.db import create_tables, dispose_engine, init_db
+        from cvcpkg.server.db_stores import DbTokenStore
+
+        async def _set_meta():
+            init_db(db_url)
+            await create_tables()
+            store = DbTokenStore(Path(state_dir))
+            result = await store.update_profile(name, metadata=metadata)
+            await dispose_engine()
+            return result
+
+        if asyncio.run(_set_meta()):
+            click.echo(f"Metadata for '{name}' updated.")
+        else:
+            click.echo(f"Token '{name}' not found or already revoked.")
+    else:
+        from cvcpkg.server.auth import TokenStore
+
+        store = TokenStore(Path(state_dir))
+        if store.update_profile(name, metadata=metadata):
+            click.echo(f"Metadata for '{name}' updated.")
         else:
             click.echo(f"Token '{name}' not found or already revoked.")
 
