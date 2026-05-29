@@ -59,6 +59,9 @@ from cvcpkg.server.models import (
     PackageInfo,
     PackageListResponse,
     PublishResponse,
+    RegistrationMode,
+    RegistrationRequest,
+    RegistrationResponse,
     TagCreateRequest,
     TagInfo,
     TagListResponse,
@@ -66,7 +69,11 @@ from cvcpkg.server.models import (
     TokenCreateRequest,
     TokenCreateResponse,
     TokenRecord,
+    TokenRequestListResponse,
+    TokenRequestRecord,
+    TokenRequestStatus,
     TokenRole,
+    EmailUpdateRequest,
 )
 
 # ── State ───────────────────────────────────────────────────────
@@ -132,6 +139,11 @@ MIRROR_HEALTH_CHECK_INTERVAL = int(os.environ.get("CVCPKG_MIRROR_HEALTH_CHECK_IN
 # Consecutive health check failures before marking a mirror unhealthy.
 MIRROR_MAX_FAILURES = int(os.environ.get("CVCPKG_MIRROR_MAX_FAILURES", "3"))
 
+# Registration mode: "open" (default) or "admin-gated".
+REGISTRATION_MODE = RegistrationMode(
+    os.environ.get("CVCPKG_REGISTRATION_MODE", "open")
+)
+
 logger = logging.getLogger("cvcpkg.server")
 
 
@@ -190,6 +202,7 @@ _db_orgs = None  # DbOrgStore when using DB backend
 _db_downloads = None  # DbDownloadStore when using DB backend
 _db_mirrors = None  # DbMirrorStore when using DB backend
 _db_tags = None  # DbTagStore when using DB backend
+_db_token_requests = None  # DbTokenRequestStore when using DB backend
 
 
 def _get_state() -> ServerState:
@@ -410,7 +423,7 @@ def create_app(
     async def lifespan(app: FastAPI):
         global _state, _START_TIME, _use_db
         global _db_tokens, _db_audit, _db_packages, _db_orgs
-        global _db_downloads, _db_mirrors, _db_tags
+        global _db_downloads, _db_mirrors, _db_tags, _db_token_requests
         _START_TIME = time.monotonic()
         sd = state_dir or Path(os.environ.get("CVCPKG_SERVER_STATE_DIR", "/var/lib/cvcpkg-server"))
 
@@ -435,6 +448,7 @@ def create_app(
                 DbOrgStore,
                 DbPackageIndex,
                 DbTagStore,
+                DbTokenRequestStore,
                 DbTokenStore,
             )
 
@@ -447,6 +461,7 @@ def create_app(
             _db_downloads = DbDownloadStore()
             _db_mirrors = DbMirrorStore()
             _db_tags = DbTagStore()
+            _db_token_requests = DbTokenRequestStore()
             _use_db = True
             # Still need ServerState for archives dir and storage_uri
             _state = ServerState(
@@ -1841,6 +1856,7 @@ def create_app(
                 name=req.name,
                 role=req.role,
                 expires_in_days=req.expires_in_days,
+                email=req.email,
             )
             await _db_audit.record(
                 action=AuditAction.token_create,
@@ -1854,6 +1870,7 @@ def create_app(
                 name=req.name,
                 role=req.role,
                 expires_in_days=req.expires_in_days,
+                email=req.email,
             )
             state.audit.record(
                 action=AuditAction.token_create,
@@ -1907,6 +1924,7 @@ def create_app(
                 {
                     "name": t.name,
                     "role": t.role.value,
+                    "email": t.email,
                     "created_at": t.created_at.isoformat(),
                     "expires_at": t.expires_at.isoformat() if t.expires_at else None,
                     "revoked": t.revoked,
@@ -1914,6 +1932,187 @@ def create_app(
                 for t in tokens
             ]
         }
+
+    @app.patch("/v1/tokens/{name}/email", tags=["tokens"])
+    async def update_token_email(
+        name: str,
+        req: EmailUpdateRequest,
+        authorization: str | None = Header(None),
+    ):
+        """Update a token's email.
+
+        Admins can update any token's email.  Non-admin users can only
+        update their own token's email.
+        """
+        state = _get_state()
+        raw = _extract_token(authorization)
+        if raw is None:
+            raise HTTPException(401, "missing Authorization header")
+        if _use_db:
+            actor = await _db_tokens.verify(raw)
+        else:
+            actor = state.tokens.verify(raw)
+        if actor is None:
+            raise HTTPException(401, "invalid or expired token")
+        # Non-admins can only update their own email
+        if actor.role != TokenRole.admin and actor.name != name:
+            raise HTTPException(403, "you can only update your own token's email")
+
+        if _use_db:
+            if not await _db_tokens.update_email(name, req.email):
+                raise HTTPException(404, f"token '{name}' not found")
+            await _db_audit.record(
+                action=AuditAction.token_update_email,
+                actor=actor.name,
+                target=name,
+                detail=f"email={req.email}",
+            )
+        else:
+            if not state.tokens.update_email(name, req.email):
+                raise HTTPException(404, f"token '{name}' not found")
+            state.audit.record(
+                action=AuditAction.token_update_email,
+                actor=actor.name,
+                target=name,
+                detail=f"email={req.email}",
+            )
+        return {"message": f"email for '{name}' updated"}
+
+    # ── Registration (public) ──────────────────────────────
+
+    @app.post("/v1/register", response_model=RegistrationResponse, tags=["registration"])
+    async def register(req: RegistrationRequest):
+        """Self-service token registration.
+
+        In ``open`` mode the token is created immediately and returned.
+        In ``admin-gated`` mode a pending request is recorded for admin
+        approval.
+        """
+        if not req.name or not req.name.strip():
+            raise HTTPException(422, "name is required")
+        if not req.email or not req.email.strip():
+            raise HTTPException(422, "email is required for registration")
+
+        if REGISTRATION_MODE == RegistrationMode.open:
+            state = _get_state()
+            if _use_db:
+                raw = await _db_tokens.create(
+                    name=req.name, role=req.role, email=req.email
+                )
+                await _db_audit.record(
+                    action=AuditAction.registration_request,
+                    actor=req.name,
+                    target=req.name,
+                    detail=f"role={req.role.value} email={req.email} mode=open auto_approved",
+                )
+            else:
+                raw = state.tokens.create(
+                    name=req.name, role=req.role, email=req.email
+                )
+                state.audit.record(
+                    action=AuditAction.registration_request,
+                    actor=req.name,
+                    target=req.name,
+                    detail=f"role={req.role.value} email={req.email} mode=open auto_approved",
+                )
+            return RegistrationResponse(
+                message="Token created. Save it — it will not be shown again.",
+                token=raw,
+            )
+        else:
+            # admin-gated: create a pending request
+            if not _use_db:
+                raise HTTPException(
+                    501,
+                    "admin-gated registration requires a database backend",
+                )
+            request_record = await _db_token_requests.create(
+                name=req.name, email=req.email, role=req.role
+            )
+            await _db_audit.record(
+                action=AuditAction.registration_request,
+                actor=req.name,
+                target=req.name,
+                detail=f"role={req.role.value} email={req.email} mode=admin-gated request_id={request_record.id}",
+            )
+            return RegistrationResponse(
+                message="Registration request submitted. An admin will review it.",
+                request_id=request_record.id,
+            )
+
+    # ── Token request management (admin) ────────────────────
+
+    @app.get(
+        "/v1/token-requests",
+        response_model=TokenRequestListResponse,
+        tags=["registration"],
+    )
+    async def list_token_requests(
+        status: TokenRequestStatus | None = Query(None),
+        _actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        if not _use_db:
+            raise HTTPException(501, "token requests require a database backend")
+        requests = await _db_token_requests.list_requests(status=status)
+        return TokenRequestListResponse(requests=requests, total=len(requests))
+
+    @app.post("/v1/token-requests/{request_id}/approve", tags=["registration"])
+    async def approve_token_request(
+        request_id: int,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        if not _use_db:
+            raise HTTPException(501, "token requests require a database backend")
+        tr = await _db_token_requests.get(request_id)
+        if tr is None:
+            raise HTTPException(404, f"token request {request_id} not found")
+        if tr.status != TokenRequestStatus.pending:
+            raise HTTPException(
+                409, f"token request {request_id} already {tr.status.value}"
+            )
+        if not await _db_token_requests.resolve(
+            request_id, TokenRequestStatus.approved, actor.name
+        ):
+            raise HTTPException(409, "request already resolved")
+        raw = await _db_tokens.create(
+            name=tr.name, role=tr.role, email=tr.email
+        )
+        await _db_audit.record(
+            action=AuditAction.registration_approve,
+            actor=actor.name,
+            target=tr.name,
+            detail=f"request_id={request_id} role={tr.role.value}",
+        )
+        return {
+            "message": f"approved request {request_id} — token created for '{tr.name}'",
+            "token": raw,
+        }
+
+    @app.post("/v1/token-requests/{request_id}/deny", tags=["registration"])
+    async def deny_token_request(
+        request_id: int,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        if not _use_db:
+            raise HTTPException(501, "token requests require a database backend")
+        tr = await _db_token_requests.get(request_id)
+        if tr is None:
+            raise HTTPException(404, f"token request {request_id} not found")
+        if tr.status != TokenRequestStatus.pending:
+            raise HTTPException(
+                409, f"token request {request_id} already {tr.status.value}"
+            )
+        if not await _db_token_requests.resolve(
+            request_id, TokenRequestStatus.denied, actor.name
+        ):
+            raise HTTPException(409, "request already resolved")
+        await _db_audit.record(
+            action=AuditAction.registration_deny,
+            actor=actor.name,
+            target=tr.name,
+            detail=f"request_id={request_id}",
+        )
+        return {"message": f"denied token request {request_id}"}
 
     # ── Audit trail (admin) ─────────────────────────────────
 

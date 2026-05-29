@@ -205,8 +205,8 @@ pip install cvcpkg[server]
 # Start the server:
 cvcpkg-server run --state-dir /var/lib/cvcpkg --host 0.0.0.0 --port 8080
 
-# Bootstrap the first admin token (direct DB, before any token exists):
-cvcpkg-server token create --name admin --role admin
+# Bootstrap the first admin token on a fresh server:
+cvcpkg-server bootstrap --name admin --email admin@example.org
 
 # After that, manage tokens via the client CLI (through the API):
 export CVCPKG_SERVER_URL=https://pkg.tx.wtf
@@ -297,11 +297,72 @@ cvcpkg-server uses a **token-based RBAC** (role-based access control)
 system.  Every mutating API call requires a bearer token; read-only
 endpoints are unauthenticated by default but can be locked down.
 
+### Server bootstrap
+
+When setting up a new server for the first time, use the `bootstrap`
+command to create the initial admin token:
+
+```bash
+cvcpkg-server bootstrap --name admin --email admin@example.org
+```
+
+This only works when no admin tokens exist yet.  The generated token
+is printed exactly once — **store it in a password manager or secrets
+vault** immediately.  Then configure the client:
+
+```bash
+cvcpkg config set server https://pkg.tx.wtf
+cvcpkg config set token cvctok_<your-admin-token>
+```
+
+### Self-service registration
+
+Users can register for an API token without contacting an admin.  The
+server supports two **registration modes**, configured when starting
+the server:
+
+```bash
+# Default: anyone can register and immediately gets a token
+cvcpkg-server run --registration-mode open ...
+
+# Admin-gated: registration requests go to a queue for admin approval
+cvcpkg-server run --registration-mode admin-gated ...
+```
+
+The `CVCPKG_REGISTRATION_MODE` environment variable is also supported.
+
+**Open mode (default):**
+
+```bash
+cvcpkg register --server https://pkg.tx.wtf \
+  --name alice --email alice@example.org --role reader
+# Token is returned immediately
+```
+
+**Admin-gated mode:**
+
+```bash
+# User submits a request:
+cvcpkg register --server https://pkg.tx.wtf \
+  --name bob --email bob@example.org --role publisher
+# → "Registration request submitted. An admin will review it."
+
+# Admin reviews pending requests:
+cvcpkg token requests --status pending
+
+# Approve a request (creates the token):
+cvcpkg token approve 42
+# → prints the token — send it to the requester
+
+# Or deny it:
+cvcpkg token deny 43
+```
+
 ### Token lifecycle
 
-Tokens are issued by an admin and shown **exactly once** at creation
-time.  Only an HMAC-SHA256 hash of the token is persisted on the
-server — the raw secret is never stored.
+Tokens are issued by an admin (or via self-service registration) and
+shown **exactly once** at creation time.  Only an HMAC-SHA256 hash of
+the token is persisted on the server — the raw secret is never stored.
 
 ```bash
 # Create a publisher token via the client CLI (talks to the server API):
@@ -350,10 +411,11 @@ cvcpkg token revoke --name ci-publisher
 
 Revoked tokens are rejected on the next API call — no restart needed.
 
-> **Note:** `cvcpkg-server token create/list/revoke` commands also
-> exist for bootstrapping (before any admin token exists), but they
-> bypass the HTTP API and talk directly to the database.  Prefer the
-> client commands (`cvcpkg token ...`) for day-to-day management.
+> **Note:** `cvcpkg-server token create/list/revoke` commands exist for
+> direct DB access when no server is running.  `cvcpkg-server bootstrap`
+> is the recommended way to create the first admin token.  For all
+> subsequent token management, use the client commands
+> (`cvcpkg token ...`) which go through the HTTP API.
 
 ### Organization-level access control
 

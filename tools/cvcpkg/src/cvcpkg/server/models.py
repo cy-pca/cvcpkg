@@ -72,6 +72,10 @@ class AuditAction(str, Enum):
     mirror_register = "mirror_register"
     mirror_reject = "mirror_reject"
     mirror_remove = "mirror_remove"
+    registration_request = "registration_request"
+    registration_approve = "registration_approve"
+    registration_deny = "registration_deny"
+    token_update_email = "token_update_email"
 
 
 # ── Token management ───────────────────────────────────────────
@@ -83,6 +87,7 @@ class TokenRecord(BaseModel):
     name: str
     role: TokenRole
     token_hash: str = Field(description="HMAC-SHA256 hash of the bearer token")
+    email: str = ""
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
     )
@@ -94,6 +99,7 @@ class TokenCreateRequest(BaseModel):
     name: str
     role: TokenRole = TokenRole.publisher
     expires_in_days: int | None = None
+    email: str = ""
 
 
 class TokenCreateResponse(BaseModel):
@@ -101,6 +107,66 @@ class TokenCreateResponse(BaseModel):
     role: TokenRole
     token: str = Field(description="Bearer token — shown only once")
     expires_at: datetime.datetime | None = None
+
+
+class EmailUpdateRequest(BaseModel):
+    email: str
+
+
+# ── Registration ───────────────────────────────────────────────
+
+
+class RegistrationMode(str, Enum):
+    """Server registration policy."""
+
+    open = "open"
+    admin_gated = "admin-gated"
+
+
+class RegistrationRequest(BaseModel):
+    """Self-service token registration request."""
+
+    name: str
+    email: str
+    role: TokenRole = TokenRole.reader
+
+
+class RegistrationResponse(BaseModel):
+    """Response to a registration request."""
+
+    message: str
+    token: str | None = Field(
+        None, description="Bearer token (only set in open registration mode)"
+    )
+    request_id: int | None = Field(
+        None, description="Pending request ID (only set in admin-gated mode)"
+    )
+
+
+class TokenRequestStatus(str, Enum):
+    pending = "pending"
+    approved = "approved"
+    denied = "denied"
+
+
+class TokenRequestRecord(BaseModel):
+    """A pending or resolved token registration request."""
+
+    id: int
+    name: str
+    email: str
+    role: TokenRole
+    status: TokenRequestStatus = TokenRequestStatus.pending
+    reviewed_by: str = ""
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
+    resolved_at: datetime.datetime | None = None
+
+
+class TokenRequestListResponse(BaseModel):
+    requests: list[TokenRequestRecord]
+    total: int
 
 
 # ── Package / catalog ──────────────────────────────────────────

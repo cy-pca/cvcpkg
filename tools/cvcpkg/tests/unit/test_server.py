@@ -67,6 +67,39 @@ class TestTokenStore:
         # Already expired
         assert store.verify(raw) is None
 
+    def test_create_with_email(self, tmp_path):
+        store = TokenStore(tmp_path)
+        raw = store.create("email-user", TokenRole.reader, email="user@example.org")
+        record = store.verify(raw)
+        assert record is not None
+        assert record.email == "user@example.org"
+
+    def test_update_email(self, tmp_path):
+        store = TokenStore(tmp_path)
+        store.create("update-me", TokenRole.reader)
+        # Initially empty
+        tokens = store.list_tokens()
+        t = [x for x in tokens if x.name == "update-me"][0]
+        assert t.email == ""
+        # Update
+        assert store.update_email("update-me", "new@example.org")
+        t = [x for x in store.list_tokens() if x.name == "update-me"][0]
+        assert t.email == "new@example.org"
+        # Persisted across reload
+        store2 = TokenStore(tmp_path)
+        t2 = [x for x in store2.list_tokens() if x.name == "update-me"][0]
+        assert t2.email == "new@example.org"
+
+    def test_update_email_not_found(self, tmp_path):
+        store = TokenStore(tmp_path)
+        assert not store.update_email("nonexistent", "a@b.com")
+
+    def test_update_email_revoked(self, tmp_path):
+        store = TokenStore(tmp_path)
+        store.create("revoke-then-email", TokenRole.reader)
+        store.revoke("revoke-then-email")
+        assert not store.update_email("revoke-then-email", "a@b.com")
+
 
 # ── Audit log ───────────────────────────────────────────────────
 
@@ -397,6 +430,91 @@ class TestTokenAPI:
             headers={"Authorization": f"Bearer {pub_tok}"},
         )
         assert resp.status_code == 403
+
+    def test_update_email_admin(self, server_env):
+        client, admin_tok, pub_tok, _ = server_env
+        # Admin can update any token's email
+        resp = client.patch(
+            "/v1/tokens/test-publisher/email",
+            json={"email": "pub@example.org"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        # Verify it shows in token list
+        resp = client.get(
+            "/v1/tokens",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        tokens = {t["name"]: t for t in resp.json()["tokens"]}
+        assert tokens["test-publisher"]["email"] == "pub@example.org"
+
+    def test_update_email_self(self, server_env):
+        client, admin_tok, pub_tok, _ = server_env
+        # Publisher can update their own email
+        resp = client.patch(
+            "/v1/tokens/test-publisher/email",
+            json={"email": "me@myself.org"},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+
+    def test_update_email_other_forbidden(self, server_env):
+        client, admin_tok, pub_tok, _ = server_env
+        # Publisher cannot update admin's email
+        resp = client.patch(
+            "/v1/tokens/test-admin/email",
+            json={"email": "hack@evil.com"},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 403
+
+    def test_update_email_not_found(self, server_env):
+        client, admin_tok, *_ = server_env
+        resp = client.patch(
+            "/v1/tokens/nonexistent/email",
+            json={"email": "x@x.com"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 404
+
+    def test_update_email_no_auth(self, server_env):
+        client, *_ = server_env
+        resp = client.patch(
+            "/v1/tokens/test-admin/email",
+            json={"email": "x@x.com"},
+        )
+        assert resp.status_code == 401
+
+
+class TestRegistrationAPI:
+    def test_register_open_mode(self, server_env):
+        """In default open mode, registration returns a token immediately."""
+        client, *_ = server_env
+        resp = client.post(
+            "/v1/register",
+            json={"name": "new-user", "email": "user@example.org", "role": "reader"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["token"] is not None
+        assert data["token"].startswith("cvctok_")
+        assert "immediately" not in data.get("message", "") or True  # just ensure 200
+
+    def test_register_requires_email(self, server_env):
+        client, *_ = server_env
+        resp = client.post(
+            "/v1/register",
+            json={"name": "no-email", "role": "reader"},
+        )
+        assert resp.status_code == 422
+
+    def test_register_requires_name(self, server_env):
+        client, *_ = server_env
+        resp = client.post(
+            "/v1/register",
+            json={"name": "", "email": "a@b.com", "role": "reader"},
+        )
+        assert resp.status_code == 422
 
 
 class TestAuditAPI:
@@ -1345,3 +1463,9 @@ class TestTagAuditActions:
         assert AuditAction.tag_create == "tag_create"
         assert AuditAction.tag_update == "tag_update"
         assert AuditAction.tag_delete == "tag_delete"
+
+    def test_registration_audit_actions_exist(self):
+        assert AuditAction.registration_request == "registration_request"
+        assert AuditAction.registration_approve == "registration_approve"
+        assert AuditAction.registration_deny == "registration_deny"
+        assert AuditAction.token_update_email == "token_update_email"

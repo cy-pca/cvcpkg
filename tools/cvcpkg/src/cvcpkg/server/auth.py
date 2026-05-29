@@ -78,6 +78,7 @@ class TokenStore:
         name: str,
         role: TokenRole = TokenRole.publisher,
         expires_in_days: int | None = None,
+        email: str = "",
     ) -> str:
         """Create a new token and return the raw secret (shown once)."""
         if any(t.name == name and not t.revoked for t in self._tokens):
@@ -96,6 +97,7 @@ class TokenStore:
             name=name,
             role=role,
             token_hash=token_hash,
+            email=email,
             expires_at=expires_at,
         )
         self._tokens.append(record)
@@ -120,6 +122,15 @@ class TokenStore:
         for t in self._tokens:
             if t.name == name and not t.revoked:
                 t.revoked = True
+                self._persist()
+                return True
+        return False
+
+    def update_email(self, name: str, email: str) -> bool:
+        """Update the email for a token by name.  Returns True if found."""
+        for t in self._tokens:
+            if t.name == name and not t.revoked:
+                t.email = email
                 self._persist()
                 return True
         return False
