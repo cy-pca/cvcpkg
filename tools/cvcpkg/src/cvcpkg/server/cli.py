@@ -465,6 +465,88 @@ def token_set_email(name: str, email: str, state_dir: str) -> None:
             click.echo(f"Token '{name}' not found or already revoked.")
 
 
+@token.command("set-description")
+@click.option("--name", required=True, help="Name of the token to update.")
+@click.option("--description", required=True, help="New description.")
+@click.option(
+    "--state-dir",
+    type=click.Path(),
+    default="./cvcpkg-server-data",
+    help="Server state directory.",
+)
+def token_set_description(name: str, description: str, state_dir: str) -> None:
+    """Set the description on a token."""
+    import asyncio
+    import os
+
+    db_url = os.environ.get("CVCPKG_DATABASE_URL", "")
+    if db_url:
+        from cvcpkg.server.db import create_tables, dispose_engine, init_db
+        from cvcpkg.server.db_stores import DbTokenStore
+
+        async def _set_desc():
+            init_db(db_url)
+            await create_tables()
+            store = DbTokenStore(Path(state_dir))
+            result = await store.update_profile(name, description=description)
+            await dispose_engine()
+            return result
+
+        if asyncio.run(_set_desc()):
+            click.echo(f"Description for '{name}' updated.")
+        else:
+            click.echo(f"Token '{name}' not found or already revoked.")
+    else:
+        from cvcpkg.server.auth import TokenStore
+
+        store = TokenStore(Path(state_dir))
+        if store.update_profile(name, description=description):
+            click.echo(f"Description for '{name}' updated.")
+        else:
+            click.echo(f"Token '{name}' not found or already revoked.")
+
+
+@token.command("set-metadata")
+@click.option("--name", required=True, help="Name of the token to update.")
+@click.option("--metadata", required=True, help="New metadata (JSON or arbitrary text).")
+@click.option(
+    "--state-dir",
+    type=click.Path(),
+    default="./cvcpkg-server-data",
+    help="Server state directory.",
+)
+def token_set_metadata_cmd(name: str, metadata: str, state_dir: str) -> None:
+    """Set the metadata on a token."""
+    import asyncio
+    import os
+
+    db_url = os.environ.get("CVCPKG_DATABASE_URL", "")
+    if db_url:
+        from cvcpkg.server.db import create_tables, dispose_engine, init_db
+        from cvcpkg.server.db_stores import DbTokenStore
+
+        async def _set_meta():
+            init_db(db_url)
+            await create_tables()
+            store = DbTokenStore(Path(state_dir))
+            result = await store.update_profile(name, metadata=metadata)
+            await dispose_engine()
+            return result
+
+        if asyncio.run(_set_meta()):
+            click.echo(f"Metadata for '{name}' updated.")
+        else:
+            click.echo(f"Token '{name}' not found or already revoked.")
+    else:
+        from cvcpkg.server.auth import TokenStore
+
+        store = TokenStore(Path(state_dir))
+        if store.update_profile(name, metadata=metadata):
+            click.echo(f"Metadata for '{name}' updated.")
+        else:
+            click.echo(f"Token '{name}' not found or already revoked.")
+
+
 # ── audit ───────────────────────────────────────────────────────
 
 

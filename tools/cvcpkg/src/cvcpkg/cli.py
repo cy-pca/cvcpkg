@@ -3321,6 +3321,111 @@ def token_deny(server: str, token: str, request_id: int):
     click.echo(data.get("message", "denied"))
 
 
+@token_group.command("set-description")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--name", required=True, help="Token name to update.")
+@click.option("--description", required=True, help="New description.")
+def token_set_description(server: str, token: str, name: str, description: str):
+    """Set the description on a token.
+
+    Admins can update any token's description.  Non-admin users can
+    only update their own.
+    """
+    _api_request(
+        "patch",
+        f"{server.rstrip('/')}/v1/tokens/{name}/profile",
+        token,
+        json={"description": description},
+    )
+    click.echo(f"Description for '{name}' updated.")
+
+
+@token_group.command("set-metadata")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--name", required=True, help="Token name to update.")
+@click.option("--metadata", required=True, help="New metadata (JSON or arbitrary text).")
+def token_set_metadata(server: str, token: str, name: str, metadata: str):
+    """Set the metadata on a token.
+
+    Admins can update any token's metadata.  Non-admin users can
+    only update their own.
+    """
+    _api_request(
+        "patch",
+        f"{server.rstrip('/')}/v1/tokens/{name}/profile",
+        token,
+        json={"metadata": metadata},
+    )
+    click.echo(f"Metadata for '{name}' updated.")
+
+
+# ── user profile lookup (client → server API) ──────────────────
+
+
+@cli.group("user")
+def user_group() -> None:
+    """Look up user profiles on the server."""
+
+
+@user_group.command("info")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.argument("name")
+def user_info(server: str, name: str):
+    """Look up a user's public profile by name."""
+    import httpx
+
+    url = f"{server.rstrip('/')}/v1/users/{name}"
+    with httpx.Client(timeout=30) as client:
+        resp = client.get(url)
+    if resp.status_code == 404:
+        raise click.ClickException(f"user '{name}' not found")
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    data = resp.json()
+    click.echo(f"  Name:        {data['name']}")
+    click.echo(f"  Role:        {data['role']}")
+    click.echo(f"  Email:       {data.get('email', '')}")
+    click.echo(f"  Description: {data.get('description', '')}")
+    if data.get("metadata"):
+        click.echo(f"  Metadata:    {data['metadata']}")
+    click.echo(f"  Created:     {data.get('created_at', '')}")
+
+
 # ── self-service registration (client → server API) ────────────
 
 
@@ -3340,7 +3445,9 @@ def token_deny(server: str, token: str, request_id: int):
     default="reader",
     help="Requested role.  [default: reader]",
 )
-def register_cmd(server: str, name: str, email: str, role: str):
+@click.option("--description", default="", help="User description (unicode).")
+@click.option("--metadata", default="", help="Arbitrary JSON or text metadata.")
+def register_cmd(server: str, name: str, email: str, role: str, description: str, metadata: str):
     """Register for an API token on a cvcpkg-server.
 
     Depending on the server's registration mode, you will either
@@ -3350,7 +3457,11 @@ def register_cmd(server: str, name: str, email: str, role: str):
     import httpx
 
     url = f"{server.rstrip('/')}/v1/register"
-    body = {"name": name, "email": email, "role": role}
+    body: dict = {"name": name, "email": email, "role": role}
+    if description:
+        body["description"] = description
+    if metadata:
+        body["metadata"] = metadata
     with httpx.Client(timeout=30) as client:
         resp = client.post(url, json=body)
     if resp.status_code >= 400:

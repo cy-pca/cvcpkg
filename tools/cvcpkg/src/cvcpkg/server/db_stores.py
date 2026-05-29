@@ -41,6 +41,7 @@ from cvcpkg.server.models import (
     TokenRequestRecord,
     TokenRequestStatus,
     TokenRole,
+    UserProfileResponse,
 )
 
 # ── HMAC key management ────────────────────────────────────────
@@ -79,6 +80,8 @@ class DbTokenStore:
         role: TokenRole = TokenRole.publisher,
         expires_in_days: int | None = None,
         email: str = "",
+        description: str = "",
+        metadata: str = "",
     ) -> str:
         async with get_session() as session:
             existing = await session.execute(
@@ -104,6 +107,8 @@ class DbTokenStore:
                 role=role.value,
                 token_hash=token_hash,
                 email=email,
+                description=description,
+                user_metadata=metadata,
                 expires_at=expires_at,
             )
             session.add(row)
@@ -128,6 +133,8 @@ class DbTokenStore:
                 role=TokenRole(row.role),
                 token_hash=row.token_hash,
                 email=row.email,
+                description=row.description,
+                metadata=row.user_metadata,
                 created_at=row.created_at,
                 expires_at=row.expires_at,
                 revoked=row.revoked,
@@ -151,6 +158,49 @@ class DbTokenStore:
             )
             return result.rowcount > 0
 
+    async def update_profile(
+        self,
+        name: str,
+        description: str | None = None,
+        metadata: str | None = None,
+    ) -> bool:
+        """Update profile fields for a token by name."""
+        values: dict = {}
+        if description is not None:
+            values["description"] = description
+        if metadata is not None:
+            values["user_metadata"] = metadata
+        if not values:
+            return True  # nothing to update
+        async with get_session() as session:
+            result = await session.execute(
+                update(TokenRow)
+                .where(TokenRow.name == name, TokenRow.revoked == False)  # noqa: E712
+                .values(**values)
+            )
+            return result.rowcount > 0
+
+    async def get_public_profile(self, name: str) -> UserProfileResponse | None:
+        """Look up a user by name, returning public profile info."""
+        async with get_session() as session:
+            result = await session.execute(
+                select(TokenRow).where(
+                    TokenRow.name == name,
+                    TokenRow.revoked == False,  # noqa: E712
+                )
+            )
+            row = result.scalars().first()
+            if row is None:
+                return None
+            return UserProfileResponse(
+                name=row.name,
+                role=row.role,
+                email=row.email,
+                description=row.description,
+                metadata=row.user_metadata,
+                created_at=row.created_at,
+            )
+
     async def list_tokens(self) -> list[TokenRecord]:
         async with get_session() as session:
             result = await session.execute(select(TokenRow).order_by(TokenRow.created_at))
@@ -160,6 +210,8 @@ class DbTokenStore:
                     role=TokenRole(row.role),
                     token_hash=row.token_hash,
                     email=row.email,
+                    description=row.description,
+                    metadata=row.user_metadata,
                     created_at=row.created_at,
                     expires_at=row.expires_at,
                     revoked=row.revoked,
@@ -492,6 +544,7 @@ class DbPackageIndex:
                     license=row.license,
                     maintainer=row.maintainer,
                     tags=row.tags,
+                    published_by=row.published_by,
                     org=row.org_slug,
                 )
                 for row in result.scalars().all()
@@ -574,6 +627,7 @@ class DbPackageIndex:
                     "license": row.license,
                     "maintainer": row.maintainer,
                     "tags": row.tags,
+                    "published_by": row.published_by,
                     "org": row.org_slug,
                 }
                 for row in result.scalars().all()
@@ -620,6 +674,7 @@ class DbPackageIndex:
         maintainer: str = "",
         tags: str = "",
         org_slug: str = "",
+        published_by: str = "",
     ) -> None:
         async with get_session() as session:
             row = PackageRow(
@@ -642,6 +697,7 @@ class DbPackageIndex:
                 maintainer=maintainer,
                 tags=tags,
                 org_slug=org_slug,
+                published_by=published_by,
             )
             session.add(row)
 
