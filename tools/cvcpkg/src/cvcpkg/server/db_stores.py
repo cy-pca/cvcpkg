@@ -23,6 +23,7 @@ from cvcpkg.server.db import (
     OrganizationRow,
     OrgMemberRow,
     PackageRow,
+    TagRow,
     TokenRow,
     get_session,
 )
@@ -34,6 +35,7 @@ from cvcpkg.server.models import (
     OrgMember,
     OrgRole,
     PackageInfo,
+    TagInfo,
     TokenRecord,
     TokenRole,
 )
@@ -1149,3 +1151,203 @@ class DbMirrorStore:
             row = (await session.execute(select(MirrorRow).where(MirrorRow.url == url))).scalar()
             if row is not None:
                 row.packages_count = count
+
+
+# ── DB Tag Store ────────────────────────────────────────────────
+
+
+class DbTagStore:
+    """CRUD for curated tag metadata backed by the ``tags`` table."""
+
+    @staticmethod
+    def _row_to_info(row: TagRow, package_count: int = 0) -> TagInfo:
+        return TagInfo(
+            name=row.name,
+            org_slug=row.org_slug,
+            display_name=row.display_name,
+            description=row.description,
+            logo_url=row.logo_url,
+            package_count=package_count,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            created_by=row.created_by,
+        )
+
+    async def create(
+        self,
+        *,
+        name: str,
+        org_slug: str = "",
+        display_name: str = "",
+        description: str = "",
+        logo_url: str = "",
+        created_by: str = "",
+    ) -> TagInfo:
+        async with get_session() as session:
+            existing = (
+                await session.execute(
+                    select(TagRow).where(TagRow.name == name, TagRow.org_slug == org_slug)
+                )
+            ).scalar()
+            if existing is not None:
+                raise ValueError(
+                    f"tag '{org_slug}/{name}' already exists"
+                    if org_slug
+                    else f"tag '{name}' already exists"
+                )
+            row = TagRow(
+                name=name,
+                org_slug=org_slug,
+                display_name=display_name or name,
+                description=description,
+                logo_url=logo_url,
+                created_by=created_by,
+            )
+            session.add(row)
+            await session.flush()
+            return self._row_to_info(row)
+
+    async def update(
+        self,
+        *,
+        name: str,
+        org_slug: str = "",
+        display_name: str | None = None,
+        description: str | None = None,
+        logo_url: str | None = None,
+    ) -> TagInfo | None:
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(TagRow).where(TagRow.name == name, TagRow.org_slug == org_slug)
+                )
+            ).scalar()
+            if row is None:
+                return None
+            if display_name is not None:
+                row.display_name = display_name
+            if description is not None:
+                row.description = description
+            if logo_url is not None:
+                row.logo_url = logo_url
+            await session.flush()
+            return self._row_to_info(row)
+
+    async def delete(self, *, name: str, org_slug: str = "") -> bool:
+        from sqlalchemy import delete as sa_delete
+
+        async with get_session() as session:
+            result = await session.execute(
+                sa_delete(TagRow).where(TagRow.name == name, TagRow.org_slug == org_slug)
+            )
+            return result.rowcount > 0
+
+    async def get(self, *, name: str, org_slug: str = "") -> TagInfo | None:
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(TagRow).where(TagRow.name == name, TagRow.org_slug == org_slug)
+                )
+            ).scalar()
+            if row is None:
+                return None
+            count = await self._count_packages(session, name, org_slug)
+            return self._row_to_info(row, package_count=count)
+
+    async def list_tags(
+        self,
+        *,
+        org_slug: str | None = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> tuple[list[TagInfo], int]:
+        async with get_session() as session:
+            q = select(TagRow)
+            count_q = select(sa_func.count(TagRow.id))
+            if org_slug is not None:
+                q = q.where(TagRow.org_slug == org_slug)
+                count_q = count_q.where(TagRow.org_slug == org_slug)
+            total = (await session.execute(count_q)).scalar() or 0
+            rows = (
+                (
+                    await session.execute(
+                        q.order_by(TagRow.org_slug, TagRow.name).offset(offset).limit(limit)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            result: list[TagInfo] = []
+            for row in rows:
+                count = await self._count_packages(session, row.name, row.org_slug)
+                result.append(self._row_to_info(row, package_count=count))
+            return result, total
+
+    async def list_all_tag_names(self) -> list[dict]:
+        """Return lightweight tag summaries including package counts.
+
+        This collects both curated tags from the ``tags`` table *and*
+        ad-hoc tags found in published packages that have no curated
+        row yet, so the front page shows all tags in use.
+        """
+        async with get_session() as session:
+            # 1. Curated tags
+            curated = (
+                (await session.execute(select(TagRow).order_by(TagRow.org_slug, TagRow.name)))
+                .scalars()
+                .all()
+            )
+            result: dict[str, dict] = {}
+            for row in curated:
+                count = await self._count_packages(session, row.name, row.org_slug)
+                key = f"{row.org_slug}/{row.name}" if row.org_slug else row.name
+                result[key] = {
+                    "name": row.name,
+                    "org_slug": row.org_slug,
+                    "display_name": row.display_name,
+                    "description": row.description,
+                    "logo_url": row.logo_url,
+                    "package_count": count,
+                }
+
+            # 2. Ad-hoc tags from packages not yet curated
+            all_tags_rows = (
+                await session.execute(
+                    select(PackageRow.tags, PackageRow.org_slug)
+                    .where(PackageRow.tags != "")
+                    .where(PackageRow.yanked == False)  # noqa: E712
+                )
+            ).all()
+            for tags_str, org in all_tags_rows:
+                for raw_tag in tags_str.split(","):
+                    tag = raw_tag.strip().lower()
+                    if not tag:
+                        continue
+                    key = f"{org}/{tag}" if org else tag
+                    if key not in result:
+                        result[key] = {
+                            "name": tag,
+                            "org_slug": org,
+                            "display_name": tag,
+                            "description": "",
+                            "logo_url": "",
+                            "package_count": 0,
+                        }
+                    if key not in {
+                        f"{r.org_slug}/{r.name}" if r.org_slug else r.name for r in curated
+                    }:
+                        result[key]["package_count"] = result[key].get("package_count", 0) + 1
+
+            return sorted(result.values(), key=lambda t: t["name"])
+
+    @staticmethod
+    async def _count_packages(session, tag_name: str, org_slug: str) -> int:
+        """Count non-yanked packages whose comma-separated tags contain *tag_name*."""
+        like_pat = f"%{tag_name}%"
+        q = select(sa_func.count(PackageRow.id)).where(
+            PackageRow.tags.ilike(like_pat),
+            PackageRow.yanked == False,  # noqa: E712
+        )
+        if org_slug:
+            q = q.where(PackageRow.org_slug == org_slug)
+        return (await session.execute(q)).scalar() or 0

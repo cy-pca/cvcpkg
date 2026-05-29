@@ -186,6 +186,9 @@ def _navbar_html() -> str:
         <a class="navbar-item" href="/orgs">
           <span class="icon"><i class="fas fa-building"></i></span><span>Organizations</span>
         </a>
+        <a class="navbar-item" href="/tags">
+          <span class="icon"><i class="fas fa-tags"></i></span><span>Tags</span>
+        </a>
         <a class="navbar-item" href="/v1/catalog">
           <span class="icon"><i class="fas fa-list"></i></span><span>Catalog</span>
         </a>
@@ -457,6 +460,49 @@ function sortBy(key) {
   }
   render();
 }
+
+function renderTags(tags) {
+  const grid = document.getElementById('tag-grid');
+  if (!tags || tags.length === 0) {
+    grid.innerHTML = '<div class="column is-12 has-text-centered py-4"><p class="has-text-grey">No tags yet.</p></div>';
+    return;
+  }
+  grid.innerHTML = tags.map(t => {
+    const qname = t.org_slug ? t.org_slug + '/' + t.name : t.name;
+    const href = '/tag/' + encodeURIComponent(t.name) + (t.org_slug ? '?org=' + encodeURIComponent(t.org_slug) : '');
+    const logo = t.logo_url
+      ? '<figure class="image is-48x48 mr-3"><img src="' + esc(t.logo_url) + '" alt="' + esc(t.name) + '" style="border-radius:8px"></figure>'
+      : '<span class="icon is-large has-text-info mr-3"><i class="fas fa-tag fa-lg"></i></span>';
+    const desc = t.description ? '<p class="is-size-7 has-text-grey-lighter mt-1" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(t.description) + '</p>' : '';
+    const orgBadge = t.org_slug ? '<span class="tag is-dark is-small">' + esc(t.org_slug) + '</span> ' : '';
+    return `
+      <div class="column is-3-desktop is-4-tablet is-6-mobile">
+        <a href="${href}" style="text-decoration:none;color:inherit">
+          <div class="box has-background-black-ter pkg-card" style="height:100%;display:flex;align-items:flex-start;padding:0.75rem">
+            ${logo}
+            <div style="min-width:0;flex:1">
+              <p class="has-text-white has-text-weight-semibold is-size-6">${orgBadge}${esc(t.display_name || t.name)}</p>
+              ${desc}
+              <p class="is-size-7 has-text-grey mt-1">
+                <span class="icon is-small"><i class="fas fa-box"></i></span> ${t.package_count} package${t.package_count === 1 ? '' : 's'}
+              </p>
+            </div>
+          </div>
+        </a>
+      </div>`;
+  }).join('');
+}
+
+async function loadTags() {
+  try {
+    const resp = await fetch('/v1/tags/all');
+    const data = await resp.json();
+    renderTags(data.tags || []);
+  } catch (_) {
+    document.getElementById('tag-grid').innerHTML =
+      '<div class="column is-12"><p class="has-text-grey-light is-size-7">Could not load tags.</p></div>';
+  }
+}
 """
 
 
@@ -513,6 +559,20 @@ def landing_html() -> str:
           <p class="title is-3 has-text-warning" id="stat-size">&mdash;</p>
           <p class="heading has-text-grey-light">Total Size</p>
         </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Browse by tag -->
+<section class="section pt-4 pb-4 has-background-black-bis">
+  <div class="container">
+    <h2 class="title is-4 has-text-white mb-4">
+      <span class="icon mr-1"><i class="fas fa-tags"></i></span> Browse by Tag
+    </h2>
+    <div id="tag-grid" class="columns is-multiline">
+      <div class="column is-12 has-text-centered py-4">
+        <span class="icon has-text-link"><i class="fas fa-spinner fa-spin fa-lg"></i></span>
       </div>
     </div>
   </div>
@@ -609,6 +669,7 @@ document.addEventListener('DOMContentLoaded', () => {{
   }});
 
   init();
+  loadTags();
 }});
 </script>
 </body>
@@ -1544,6 +1605,318 @@ _GUIDE_CSS = r"""
 .toc a:hover { text-decoration: underline; }
 .toc li { margin-bottom: 0.35rem; }
 """
+
+
+# ── Tag listing page ─────────────────────────────────────────────
+
+
+def tags_listing_html() -> str:
+    """Return the HTML for the tag listing/browse page."""
+    return f"""<!DOCTYPE html>
+<html lang="en" data-theme="dark" class="has-background-black-bis">
+{_head_html("Tags &mdash; cvcpkg")}
+<body class="has-background-black-bis has-text-light">
+
+{_navbar_html()}
+
+<section class="section has-background-black-bis">
+  <div class="container">
+    <h1 class="title is-3 has-text-white">
+      <span class="icon mr-2"><i class="fas fa-tags"></i></span> Browse Tags
+    </h1>
+    <p class="subtitle is-6 has-text-grey-lighter mb-5">
+      Packages are organized by tags.  Click a tag to see its description
+      and the packages it contains.
+    </p>
+
+    <div class="field mb-5">
+      <div class="control has-icons-left">
+        <input class="input is-dark" type="text" id="tag-search"
+               placeholder="Filter tags..." />
+        <span class="icon is-left"><i class="fas fa-search"></i></span>
+      </div>
+    </div>
+
+    <div id="tags-grid" class="columns is-multiline">
+      <div class="column is-12 has-text-centered py-6">
+        <span class="icon is-large has-text-link">
+          <i class="fas fa-spinner fa-spin fa-2x"></i>
+        </span>
+      </div>
+    </div>
+  </div>
+</section>
+
+{_footer_html()}
+
+<script>
+{_HELPERS_JS}
+{_NAVBAR_JS}
+
+let allTags = [];
+
+async function init() {{
+  try {{
+    const resp = await fetch('/v1/tags/all');
+    const data = await resp.json();
+    allTags = data.tags || [];
+    render(allTags);
+  }} catch (err) {{
+    document.getElementById('tags-grid').innerHTML =
+      '<div class="column is-12"><p class="has-text-grey-light">Failed to load tags.</p></div>';
+  }}
+}}
+
+function render(tags) {{
+  const grid = document.getElementById('tags-grid');
+  if (tags.length === 0) {{
+    grid.innerHTML = `
+      <div class="column is-12 has-text-centered py-6">
+        <span class="icon is-large has-text-grey-light"><i class="fas fa-tags fa-3x"></i></span>
+        <p class="title is-5 has-text-grey-light mt-4">No tags yet</p>
+        <p class="subtitle is-6 has-text-grey">
+          Tags are automatically discovered from published packages,
+          or created by admins via <code>POST /v1/tags</code>.
+        </p>
+      </div>`;
+    return;
+  }}
+
+  grid.innerHTML = tags.map(t => {{
+    const href = '/tag/' + encodeURIComponent(t.name) + (t.org_slug ? '?org=' + encodeURIComponent(t.org_slug) : '');
+    const logo = t.logo_url
+      ? '<figure class="image is-48x48 mr-3"><img src="' + esc(t.logo_url) + '" alt="' + esc(t.name) + '" style="border-radius:8px"></figure>'
+      : '<span class="icon is-large has-text-info mr-3"><i class="fas fa-tag fa-lg"></i></span>';
+    const desc = t.description
+      ? '<p class="is-size-7 has-text-grey-lighter mt-1" style="overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">' + esc(t.description) + '</p>'
+      : '';
+    const orgBadge = t.org_slug
+      ? '<span class="tag is-dark is-small mr-1">' + esc(t.org_slug) + '</span>'
+      : '';
+    return `
+      <div class="column is-3-desktop is-4-tablet is-6-mobile">
+        <a href="${{href}}" style="text-decoration:none;color:inherit">
+          <div class="box has-background-black-ter pkg-card" style="height:100%;display:flex;align-items:flex-start;padding:0.75rem">
+            ${{logo}}
+            <div style="min-width:0;flex:1">
+              <p class="has-text-white has-text-weight-semibold is-size-6">
+                ${{orgBadge}}${{esc(t.display_name || t.name)}}
+              </p>
+              ${{desc}}
+              <p class="is-size-7 has-text-grey mt-2">
+                <span class="icon is-small"><i class="fas fa-box"></i></span>
+                ${{t.package_count}} package${{t.package_count === 1 ? '' : 's'}}
+              </p>
+            </div>
+          </div>
+        </a>
+      </div>`;
+  }}).join('');
+}}
+
+document.addEventListener('DOMContentLoaded', () => {{
+  document.getElementById('tag-search').addEventListener('input', e => {{
+    const q = e.target.value.toLowerCase();
+    if (!q) {{ render(allTags); return; }}
+    render(allTags.filter(t =>
+      t.name.toLowerCase().includes(q) ||
+      (t.display_name || '').toLowerCase().includes(q) ||
+      (t.description || '').toLowerCase().includes(q) ||
+      (t.org_slug || '').toLowerCase().includes(q)
+    ));
+  }});
+  init();
+}});
+</script>
+</body>
+</html>"""
+
+
+# ── Tag detail page ──────────────────────────────────────────────
+
+
+def tag_detail_html(tag_name: str, org_slug: str = "") -> str:
+    """Return the HTML for a tag detail page showing description + packages."""
+    import json as _json
+
+    safe_name = _html.escape(tag_name, quote=True)
+    safe_org = _html.escape(org_slug, quote=True)
+    display = f"{safe_org}/{safe_name}" if safe_org else safe_name
+
+    return f"""<!DOCTYPE html>
+<html lang="en" data-theme="dark" class="has-background-black-bis">
+{_head_html(f"{display} &mdash; cvcpkg")}
+<body class="has-background-black-bis has-text-light">
+
+{_navbar_html()}
+
+<section class="section pt-4 pb-2 has-background-black-bis">
+  <div class="container">
+    <nav class="breadcrumb" aria-label="breadcrumbs">
+      <ul>
+        <li><a href="/" class="has-text-grey-light">Home</a></li>
+        <li><a href="/tags" class="has-text-grey-light">Tags</a></li>
+        <li class="is-active"><a href="#" class="has-text-light">{display}</a></li>
+      </ul>
+    </nav>
+  </div>
+</section>
+
+<section class="section pt-2 has-background-black-bis">
+  <div class="container">
+    <div class="columns">
+      <div class="column is-8">
+        <div class="media mb-4">
+          <div class="media-left" id="tag-logo">
+            <span class="icon is-large has-text-info"><i class="fas fa-tag fa-2x"></i></span>
+          </div>
+          <div class="media-content">
+            <h1 class="title is-2 has-text-white" id="tag-title">{display}</h1>
+            <p class="subtitle is-6 has-text-grey-lighter" id="tag-desc"></p>
+          </div>
+        </div>
+      </div>
+      <div class="column is-4">
+        <div class="box has-background-black-ter">
+          <div class="has-text-centered">
+            <p class="title is-3 has-text-info" id="tag-pkg-count">&mdash;</p>
+            <p class="heading has-text-grey-light">Packages</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h3 class="title is-5 has-text-white mt-5 mb-3">
+      <span class="icon mr-1"><i class="fas fa-box"></i></span> Packages
+    </h3>
+    <div class="table-container">
+      <table class="table is-fullwidth is-hoverable is-dark is-striped">
+        <thead>
+          <tr>
+            <th>Package</th>
+            <th>Version</th>
+            <th>Platforms</th>
+            <th>Builds</th>
+            <th>Size</th>
+          </tr>
+        </thead>
+        <tbody id="tag-packages">
+          <tr>
+            <td colspan="5" class="has-text-centered py-6">
+              <span class="icon is-large has-text-link">
+                <i class="fas fa-spinner fa-spin fa-2x"></i>
+              </span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+{_footer_html()}
+
+<script>
+{_HELPERS_JS}
+{_NAVBAR_JS}
+
+const TAG_NAME = {_json.dumps(tag_name)};
+const TAG_ORG = {_json.dumps(org_slug)};
+
+async function init() {{
+  // Load tag metadata (if curated)
+  try {{
+    const qs = TAG_ORG ? '?org=' + encodeURIComponent(TAG_ORG) : '';
+    const resp = await fetch('/v1/tags/all');
+    const data = await resp.json();
+    const tags = data.tags || [];
+    const match = tags.find(t => t.name === TAG_NAME && (t.org_slug || '') === TAG_ORG);
+    if (match) {{
+      if (match.display_name) {{
+        document.getElementById('tag-title').textContent =
+          (TAG_ORG ? TAG_ORG + '/' : '') + match.display_name;
+      }}
+      if (match.description) {{
+        document.getElementById('tag-desc').textContent = match.description;
+      }}
+      if (match.logo_url) {{
+        document.getElementById('tag-logo').innerHTML =
+          '<figure class="image is-64x64"><img src="' + esc(match.logo_url) + '" style="border-radius:8px"></figure>';
+      }}
+    }}
+  }} catch (_) {{}}
+
+  // Load packages with this tag
+  try {{
+    const resp = await fetch('/v1/packages?limit=1000&search=' + encodeURIComponent(TAG_NAME));
+    const data = await resp.json();
+    const pkgs = (data.packages || []).filter(p => {{
+      const tags = (p.tags || '').split(',').map(t => t.trim().toLowerCase());
+      return tags.includes(TAG_NAME.toLowerCase());
+    }});
+    // If org-scoped, also filter by org
+    const filtered = TAG_ORG
+      ? pkgs.filter(p => (p.org || '') === TAG_ORG)
+      : pkgs;
+    renderPackages(filtered);
+  }} catch (err) {{
+    document.getElementById('tag-packages').innerHTML =
+      '<tr><td colspan="5" class="has-text-centered has-text-grey-light">Failed to load packages.</td></tr>';
+  }}
+}}
+
+function renderPackages(pkgs) {{
+  // Group by name
+  const groups = {{}};
+  pkgs.forEach(p => {{
+    if (!groups[p.name]) {{
+      groups[p.name] = {{
+        name: p.name, version: p.version,
+        builds: [], platforms: new Set(), totalSize: 0,
+      }};
+    }}
+    const g = groups[p.name];
+    g.builds.push(p);
+    if (p.platform) g.platforms.add(p.platform);
+    g.totalSize += p.size_bytes || 0;
+  }});
+
+  const sorted = Object.values(groups).sort((a, b) =>
+    a.name.toLowerCase().localeCompare(b.name.toLowerCase())
+  );
+
+  document.getElementById('tag-pkg-count').textContent = sorted.length;
+
+  const tbody = document.getElementById('tag-packages');
+  if (sorted.length === 0) {{
+    tbody.innerHTML = `
+      <tr><td colspan="5">
+        <div class="has-text-centered py-4">
+          <p class="has-text-grey-light">No packages have this tag yet.</p>
+        </div>
+      </td></tr>`;
+    return;
+  }}
+
+  tbody.innerHTML = sorted.map(g => `
+    <tr class="pkg-card">
+      <td>
+        <a class="pkg-link" href="/package/${{encodeURIComponent(g.name)}}">
+          <strong>${{esc(g.name)}}</strong>
+        </a>
+      </td>
+      <td><code>${{esc(g.version)}}</code></td>
+      <td>${{[...g.platforms].sort().map(p => platformTag(p)).join(' ')}}</td>
+      <td><span class="tag is-dark is-rounded">${{g.builds.length}}</span></td>
+      <td><span class="is-family-monospace is-size-7 has-text-grey-light">${{fmtSize(g.totalSize)}}</span></td>
+    </tr>
+  `).join('');
+}}
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>"""
 
 
 def guide_html() -> str:

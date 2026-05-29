@@ -216,6 +216,76 @@ cvcpkg-server audit verify
 
 ---
 
+## Platform `any` (platform-independent packages)
+
+Some packages are not compiled — they contain platform-independent
+content such as HTML/CSS assets, ISO images, media files, data bundles,
+or configuration archives.  cvcpkg supports a special **`any`** platform
+for these recipes.
+
+### Writing an `any` recipe
+
+Set `platform: any` in every `build_matrix` entry.  The builder
+automatically assigns `arch: noarch` and skips the CMake configure
+marker check:
+
+```yaml
+name: my-data-bundle
+upstream_version: "1.0.0"
+cvc_revision: 1
+description: "Platform-independent data files"
+
+recipe:
+  kind: data          # optional — hints: data | media | config | iso
+
+source:
+  url: "https://example.com/data-v1.0.0.tar.gz"
+  sha256: "<sha256>"
+
+build_matrix:
+  - platform: any
+
+build:
+  system: script
+  script: |
+    cp -r "$SRC_DIR"/* "$PREFIX/"
+
+package:
+  files:
+    - "share/**"
+```
+
+### How it works
+
+| Aspect | Behaviour |
+|--------|-----------|
+| **Architecture** | Automatically set to `noarch` — no user override needed |
+| **Build** | Included in *every* platform's `build-all` run so it is always available |
+| **Cache key** | Uses `any/noarch` — the same artifact is shared across all platforms |
+| **Dependencies** | Other recipes can depend on `any` packages; they are included regardless of the consuming platform |
+| **CI workflow** | `recipe-build.yml` maps `platform: any` to `ARCH=noarch` and skips the cmake marker |
+| **Recipe `kind`** | Optional `recipe.kind` field (e.g. `data`, `media`, `config`, `iso`) is emitted as `meta.kind` in the manifest for downstream tooling hints |
+
+### `cvc-requirements.yaml` usage
+
+Consumers do not need to do anything special — `any` packages are
+resolved automatically when listed as dependencies.  If you want to
+pull an `any` package directly:
+
+```yaml
+platform: auto
+components:
+  - my-data-bundle    # resolved regardless of host platform
+```
+
+### Tags and metadata
+
+`any` recipes support the same `tags` list as compiled recipes.  Tags
+are emitted as `meta.tags` in the manifest (comma-joined) and displayed
+on the package server front page.
+
+---
+
 ## Authentication and Authorization
 
 cvcpkg-server uses a **token-based RBAC** (role-based access control)

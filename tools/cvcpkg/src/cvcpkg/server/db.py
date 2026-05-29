@@ -213,6 +213,41 @@ class DownloadEventRow(Base):
     __table_args__ = (Index("ix_download_events_name_date", "package_name", "downloaded_at"),)
 
 
+class TagRow(Base):
+    """Curated tag metadata for the browse-by-tag front page.
+
+    Tags are org-scoped: ``org_slug`` is empty for global tags and set
+    to an organization slug for org-level tags.  The ``(name, org_slug)``
+    pair is unique.
+    """
+
+    __tablename__ = "tags"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    org_slug: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    logo_url: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    created_by: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+
+    __table_args__ = (
+        UniqueConstraint("name", "org_slug", name="uq_tag_name_org"),
+        Index("ix_tags_org_slug", "org_slug"),
+    )
+
+
 class MirrorRow(Base):
     """Registered mirror servers tracked by the primary."""
 
