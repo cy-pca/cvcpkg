@@ -109,6 +109,19 @@ jobs:
           $COMPOSE build --build-arg "CVCPKG_RELEASE=${RELEASE_TAG}" backend
           echo "Ensuring postgres is up..."
           $COMPOSE up -d postgres
+          # Wait for postgres to accept connections
+          for i in $(seq 1 30); do
+            if $COMPOSE exec -T postgres pg_isready -U cvcpkg >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+
+          # Run database migrations before starting the backend
+          echo "Running database migrations..."
+          $COMPOSE run --rm -T backend cvcpkg-server migrate upgrade head
+          echo "Migrations complete."
+
           echo "Restarting backend..."
           $COMPOSE up -d --force-recreate backend
 
