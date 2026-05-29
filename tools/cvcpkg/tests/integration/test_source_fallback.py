@@ -106,9 +106,10 @@ class TestSourceFallback:
             or "source" in result.stdout.lower()
         )
         # zlib should produce include/zlib.h and a library.
-        assert (prefix / "include" / "zlib.h").is_file(), (
-            f"zlib.h not found in {prefix / 'include'}; contents: "
-            + str(list((prefix / "include").iterdir()) if (prefix / "include").is_dir() else "N/A")
+        assert (
+            prefix / "include" / "zlib.h"
+        ).is_file(), f"zlib.h not found in {prefix / 'include'}; contents: " + str(
+            list((prefix / "include").iterdir()) if (prefix / "include").is_dir() else "N/A"
         )
 
     def test_fallback_on_missing_component(self, tmp_path: Path) -> None:

@@ -2744,9 +2744,7 @@ def create_app(
             ET.SubElement(item, "pubDate").text = pkg.published_at.strftime(
                 "%a, %d %b %Y %H:%M:%S +0000"
             )
-            ET.SubElement(
-                item, "guid", isPermaLink="false"
-            ).text = (
+            ET.SubElement(item, "guid", isPermaLink="false").text = (
                 f"{pkg.name}-{pkg.version}-{pkg.platform}-{pkg.arch}-{pkg.build_type}-{pkg.link}"
             )
 
