@@ -130,6 +130,7 @@ class Recipe:
     raw: dict[str, Any]  # full parsed YAML for manifest generation
     recipe_dir: Path
     tags: list[str] = field(default_factory=list)
+    kind: str = ""  # e.g. data, media, config, iso -- for downstream hints
 
     @property
     def full_version(self) -> str:
@@ -163,6 +164,7 @@ class Recipe:
             raw=raw,
             recipe_dir=recipe_dir.resolve(),
             tags=recipe_block.get("tags", []) or [],
+            kind=recipe_block.get("kind", ""),
         )
 
 
@@ -361,17 +363,24 @@ def _select_matrix_entry(recipe: Recipe, platform: str, host_platform: str = "")
 
     Falls back to the first ``platform`` match when no
     ``host_platform`` match is found.
+
+    Platform-independent recipes (``platform: any``) are matched when
+    no exact platform entry exists.
     """
     fallback: MatrixEntry | None = None
+    any_fallback: MatrixEntry | None = None
     for entry in recipe.build_matrix:
-        if entry.platform != platform:
-            continue
-        if host_platform and entry.host_platform == host_platform:
-            return entry
-        if fallback is None:
-            fallback = entry
+        if entry.platform == platform:
+            if host_platform and entry.host_platform == host_platform:
+                return entry
+            if fallback is None:
+                fallback = entry
+        elif entry.platform == "any" and any_fallback is None:
+            any_fallback = entry
     if fallback is not None:
         return fallback
+    if any_fallback is not None:
+        return any_fallback
     raise RecipeError(
         f"No build matrix entry for platform '{platform}' in recipe '{recipe.name}'. "
         f"Available: {[e.platform for e in recipe.build_matrix]}"
@@ -689,6 +698,7 @@ def generate_manifest(
             "homepage": recipe_block.get("homepage", ""),
             "license": recipe_block.get("license", ""),
             "tags": ",".join(recipe.tags) if recipe.tags else "",
+            **({"kind": recipe.kind} if recipe.kind else {}),
         },
         "provenance": {
             "builder_hostname": _platform_module.node(),
@@ -978,7 +988,7 @@ def _dep_names(recipe: Recipe, platform: str = "") -> list[str]:
             names.append(d)
         elif isinstance(d, dict):
             plats = d.get("platforms")
-            if plats and platform and platform not in plats:
+            if plats and platform and platform not in plats and "any" not in plats:
                 continue
             names.append(_dep_qualified_name(d))
     for t in host_tools:
@@ -991,11 +1001,22 @@ def _dep_names(recipe: Recipe, platform: str = "") -> list[str]:
 
 def _detect_arch_for_platform(platform: str) -> str:
     """Return the architecture string for a given platform."""
+    if platform == "any":
+        return "noarch"
     if platform == "wasm":
         return "wasm32"
     from cvcpkg.platform import detect_arch
 
     return detect_arch()
+
+
+def _is_any_recipe(recipe: Recipe) -> bool:
+    """Return True if *recipe* is platform-independent.
+
+    A recipe is platform-independent when all of its build matrix
+    entries use ``platform: any``.
+    """
+    return bool(recipe.build_matrix) and all(m.platform == "any" for m in recipe.build_matrix)
 
 
 def _common_scripts_hash(recipes_dir: Path) -> str:
@@ -1337,10 +1358,16 @@ def build_all(
         all_recipes = load_all_recipes(recipes_dir)
     else:
         all_recipes = list_recipes(recipes_dir)
-    # Filter to recipes that have a matrix entry for this platform
+    # Filter to recipes that have a matrix entry for this platform.
+    # Recipes with platform="any" are included in every target platform
+    # build since they contain platform-independent content.
     if not platform:
         platform = detect_platform()
-    recipes = [r for r in all_recipes if any(m.platform == platform for m in r.build_matrix)]
+    recipes = [
+        r
+        for r in all_recipes
+        if any(m.platform == platform or m.platform == "any" for m in r.build_matrix)
+    ]
     ordered = resolve_build_order(recipes, platform)
 
     # Determine which recipes are assigned to this shard.
@@ -1408,13 +1435,20 @@ def build_all(
         label = "" if is_assigned else " (dep)"
         print(f"\ncvcpkg: == {recipe.name} ({recipe.full_version}){label} ==")
 
+        # For platform-independent recipes, use "any"/"noarch" so
+        # a single cache entry is shared across all target platforms.
+        eff_platform = "any" if _is_any_recipe(recipe) else platform
+        eff_arch = _detect_arch_for_platform(eff_platform)
+
         # Build cache lookup.
         recipe_chain_hash = ""
         cached_archive: Path | None = None
         if cache is not None:
-            recipe_chain_hash = chain_hash(recipe, all_recipe_map, platform)
+            recipe_chain_hash = chain_hash(recipe, all_recipe_map, eff_platform)
             if not force_clean:
-                cached_archive = cache.lookup(recipe_chain_hash, platform, arch, config, link)
+                cached_archive = cache.lookup(
+                    recipe_chain_hash, eff_platform, eff_arch, config, link
+                )
 
         # Server cache lookup (when local cache misses).
         server_hit = False
@@ -1431,8 +1465,8 @@ def build_all(
                 server_cache_token,
                 recipe.name,
                 recipe_chain_hash,
-                platform,
-                arch,
+                eff_platform,
+                eff_arch,
                 config,
                 link,
                 server_cache_org,
@@ -1471,8 +1505,8 @@ def build_all(
                                     recipe.name,
                                     recipe.full_version,
                                     recipe_chain_hash,
-                                    platform,
-                                    arch,
+                                    eff_platform,
+                                    eff_arch,
                                     config,
                                     link,
                                 )
@@ -1552,8 +1586,8 @@ def build_all(
                         recipe.name,
                         recipe.full_version,
                         recipe_chain_hash,
-                        platform,
-                        arch,
+                        eff_platform,
+                        eff_arch,
                         config,
                         link,
                     )
@@ -1564,7 +1598,7 @@ def build_all(
                         and not no_server_cache
                         and not server_hit
                     ):
-                        arc = cache.lookup(recipe_chain_hash, platform, arch, config, link)
+                        arc = cache.lookup(recipe_chain_hash, eff_platform, eff_arch, config, link)
                         if arc is not None:
                             ok = _server_cache_push(
                                 server_cache_url,
@@ -1572,8 +1606,8 @@ def build_all(
                                 arc,
                                 recipe.name,
                                 recipe.full_version,
-                                platform,
-                                arch,
+                                eff_platform,
+                                eff_arch,
                                 config,
                                 link,
                                 recipe_chain_hash,
