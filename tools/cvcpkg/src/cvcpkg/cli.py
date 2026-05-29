@@ -44,7 +44,17 @@ from cvcpkg.errors import CvcpkgError
 # the decorated function.  "auto" sentinels are resolved at runtime
 # by detect_platform() / detect_arch().
 
-_VALID_PLATFORMS = ["auto", "linux", "macos", "windows", "wasm", "freebsd", "openbsd", "netbsd"]
+_VALID_PLATFORMS = [
+    "auto",
+    "any",
+    "linux",
+    "macos",
+    "windows",
+    "wasm",
+    "freebsd",
+    "openbsd",
+    "netbsd",
+]
 _VALID_ARCHES = ["auto", "x86_64", "arm64"]
 
 _platform_opt = click.option(

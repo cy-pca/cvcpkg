@@ -87,6 +87,7 @@ jobs:
             SHASFX="-${short}"
           fi
           case "${{ inputs.platform }}" in
+            any)     ARCH=noarch ;;
             linux)   ARCH=x86_64 ;;
             macos)   ARCH=arm64  ;;
             windows) ARCH=x86_64 ;;
@@ -297,7 +298,7 @@ jobs:
 
       # ── Install marker cmake config ──
       - name: Install libcvc-deps marker config
-        if: inputs.platform != 'wasm'
+        if: inputs.platform != 'wasm' && inputs.platform != 'any'
         shell: bash
         run: |
           cmake -B build -G Ninja \
