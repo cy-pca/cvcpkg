@@ -1254,6 +1254,11 @@ def create_app(
             if not await _db_orgs.is_member(org, actor.name):
                 raise HTTPException(403, f"you are not a member of organization '{org}'")
 
+        # Auto-create stub tag rows before the duplicate check so tags
+        # are populated even when the package already exists.
+        if _use_db and pkg_tags and _db_tags is not None:
+            await _db_tags.ensure_tags(tags_csv=pkg_tags, org_slug=org, created_by=actor.name)
+
         # Check for duplicates
         if _use_db:
             if await _db_packages.check_duplicate(name, version, platform, arch, build_type, link):
@@ -1356,10 +1361,6 @@ def create_app(
                 org_slug=org,
             )
 
-            # Auto-create stub tag rows for any new tags
-            if pkg_tags and _db_tags is not None:
-                await _db_tags.ensure_tags(tags_csv=pkg_tags, org_slug=org, created_by=actor.name)
-
             # Track org storage usage
             if org and _db_orgs is not None:
                 await _db_orgs.update_storage_used(org, size_bytes)
@@ -1457,6 +1458,11 @@ def create_app(
             raise HTTPException(
                 413, f"declared size {total_size} exceeds maximum {MAX_UPLOAD_BYTES} bytes"
             )
+
+        # Auto-create stub tag rows before the duplicate check so tags
+        # are populated even when the package already exists.
+        if _use_db and pkg_tags and _db_tags is not None:
+            await _db_tags.ensure_tags(tags_csv=pkg_tags, org_slug="", created_by=actor.name)
 
         # Check for duplicates
         if _use_db:
@@ -1660,13 +1666,6 @@ def create_app(
                 maintainer=session.maintainer,
                 tags=session.tags,
             )
-            # Auto-create stub tag rows for any new tags
-            if session.tags and _db_tags is not None:
-                await _db_tags.ensure_tags(
-                    tags_csv=session.tags,
-                    org_slug=getattr(session, "org_slug", ""),
-                    created_by=actor.name,
-                )
 
             await _db_audit.record(
                 action=AuditAction.publish,
