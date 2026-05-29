@@ -187,11 +187,14 @@ jobs:
           choco install cmake --version=3.31.7 --installargs 'ADD_CMAKE_TO_PATH=System' -y
           choco install python3 -y
           choco install nasm -y
-          # Refresh PATH to pick up all choco-installed tools.
+          # Refresh PATH to pick up all choco-installed tools, then
+          # propagate every new Machine PATH entry to GITHUB_PATH so
+          # subsequent steps (which use bash) also see them.
           $env:PATH = [System.Environment]::GetEnvironmentVariable('PATH', 'Machine') + ';' + [System.Environment]::GetEnvironmentVariable('PATH', 'User')
-          # NASM installs to "C:\Program Files\NASM" - add it to PATH
-          # so OpenSSL and libjpeg-turbo can find it for optimised assembly.
-          echo 'C:\Program Files\NASM' | Out-File -Append $env:GITHUB_PATH
+          # Write the full refreshed Machine PATH to GITHUB_PATH.
+          foreach ($dir in ([System.Environment]::GetEnvironmentVariable('PATH', 'Machine') -split ';')) {
+            if ($dir) { echo $dir | Out-File -Append $env:GITHUB_PATH }
+          }
           # vcpkg is pre-installed on windows-latest at C:\vcpkg;
           # on self-hosted runners we bootstrap it if absent.
           if (-not (Test-Path 'C:\vcpkg\vcpkg.exe')) {
