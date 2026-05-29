@@ -84,7 +84,7 @@ def _download_from_url(
         info = backend.head(url)
         if info.size >= 0 and info.size > max_bytes:
             raise InstallError(
-                f"archive for {filename} is {info.size} bytes, " f"exceeds {max_bytes} limit"
+                f"archive for {filename} is {info.size} bytes, exceeds {max_bytes} limit"
             )
         # Stream to a temp file instead of loading into memory
         cache_dir.mkdir(parents=True, exist_ok=True)

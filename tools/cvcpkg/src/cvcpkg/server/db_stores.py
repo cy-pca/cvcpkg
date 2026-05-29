@@ -194,9 +194,7 @@ class DbTokenStore:
                 return None
             # Count packages published by this user
             pkg_count_result = await session.execute(
-                select(sa_func.count(PackageRow.id)).where(
-                    PackageRow.published_by == name
-                )
+                select(sa_func.count(PackageRow.id)).where(PackageRow.published_by == name)
             )
             pkg_count = pkg_count_result.scalar() or 0
             return UserProfileResponse(
@@ -223,9 +221,7 @@ class DbTokenStore:
                 return None
             # Count packages published by this user
             pkg_count_result = await session.execute(
-                select(sa_func.count(PackageRow.id)).where(
-                    PackageRow.published_by == row.name
-                )
+                select(sa_func.count(PackageRow.id)).where(PackageRow.published_by == row.name)
             )
             pkg_count = pkg_count_result.scalar() or 0
             return UserProfileResponse(
@@ -344,9 +340,7 @@ class DbTokenStore:
         """Count the number of packages published by a user."""
         async with get_session() as session:
             result = await session.execute(
-                select(sa_func.count(PackageRow.id)).where(
-                    PackageRow.published_by == name
-                )
+                select(sa_func.count(PackageRow.id)).where(PackageRow.published_by == name)
             )
             return result.scalar() or 0
 
@@ -435,9 +429,7 @@ class DbTokenRequestStore:
                 resolved_at=row.resolved_at,
             )
 
-    async def resolve(
-        self, request_id: int, status: TokenRequestStatus, reviewed_by: str
-    ) -> bool:
+    async def resolve(self, request_id: int, status: TokenRequestStatus, reviewed_by: str) -> bool:
         async with get_session() as session:
             result = await session.execute(
                 update(TokenRequestRow)
@@ -1709,9 +1701,7 @@ class DbTagStore:
                 }
 
             # 2. Ad-hoc tags from packages not yet curated
-            curated_keys = {
-                f"{r.org_slug}/{r.name}" if r.org_slug else r.name for r in curated
-            }
+            curated_keys = {f"{r.org_slug}/{r.name}" if r.org_slug else r.name for r in curated}
             all_tags_rows = (
                 await session.execute(
                     select(PackageRow.name, PackageRow.tags, PackageRow.org_slug)

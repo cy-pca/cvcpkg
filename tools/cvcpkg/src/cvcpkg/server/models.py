@@ -168,9 +168,7 @@ class RegistrationResponse(BaseModel):
     """Response to a registration request."""
 
     message: str
-    token: str | None = Field(
-        None, description="Bearer token (only set in open registration mode)"
-    )
+    token: str | None = Field(None, description="Bearer token (only set in open registration mode)")
     request_id: int | None = Field(
         None, description="Pending request ID (only set in admin-gated mode)"
     )
@@ -253,7 +251,7 @@ class PackageInfo(BaseModel):
     org: str = Field(
         default="",
         description=(
-            "Organization slug that owns the package.  Empty for " "official/public base packages."
+            "Organization slug that owns the package.  Empty for official/public base packages."
         ),
     )
 

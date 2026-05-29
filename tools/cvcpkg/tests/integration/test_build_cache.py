@@ -14,11 +14,10 @@ from pathlib import Path
 
 import pytest
 import yaml
-
 from click.testing import CliRunner
 
-from cvcpkg.build_cache import BuildCache, cache_key
-from cvcpkg.builder import Recipe, build_all, chain_hash, list_recipes
+from cvcpkg.build_cache import BuildCache
+from cvcpkg.builder import build_all, chain_hash, list_recipes
 from cvcpkg.cli import cli
 
 # ── Helpers ─────────────────────────────────────────────────────
@@ -421,8 +420,6 @@ class TestServerCacheIntegration:
         ``_server_cache_push`` to call the client directly instead of
         via ``urllib``.
         """
-        import io
-        from unittest.mock import patch
 
         from cvcpkg.builder import chain_hash as compute_chain_hash
         from cvcpkg.builder import list_recipes
@@ -471,7 +468,7 @@ class TestServerCacheIntegration:
                 "link": "shared",
                 "recipe_version": ch,
             },
-            files={"file": ("libfoo.tar.zst", open(arc, "rb"))},
+            files={"file": ("libfoo.tar.zst", open(arc, "rb"))},  # noqa: SIM115
             headers={"Authorization": f"Bearer {pub_token}"},
         )
         assert resp.status_code == 200
@@ -535,7 +532,7 @@ class TestServerCacheIntegration:
                 "link": "shared",
                 "recipe_version": ch,
             },
-            files={"file": ("libbar.tar.zst", open(arc, "rb"))},
+            files={"file": ("libbar.tar.zst", open(arc, "rb"))},  # noqa: SIM115
             headers={"Authorization": f"Bearer {pub_token}"},
         )
         assert resp.status_code == 200

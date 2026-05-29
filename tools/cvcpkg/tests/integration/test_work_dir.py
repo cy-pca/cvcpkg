@@ -8,7 +8,6 @@ work-dir root — not in the system temp directory.
 
 from __future__ import annotations
 
-import os
 import sys
 import tempfile
 from pathlib import Path
@@ -77,7 +76,7 @@ def _all_work_dirs_under(root: Path, contexts) -> None:
     """Assert every context's work_dir is a child of *root*."""
     for ctx in contexts:
         assert ctx.work_dir.parent == root, (
-            f"{ctx.recipe.name}: work_dir {ctx.work_dir} " f"is not under expected root {root}"
+            f"{ctx.recipe.name}: work_dir {ctx.work_dir} is not under expected root {root}"
         )
 
 
@@ -301,9 +300,9 @@ class TestBuildAllWorkDir:
         # In non-per-component mode, build_recipe is called which uses
         # work_dir_root for its work_dir.
         for ctx in contexts:
-            assert str(ctx.work_dir).startswith(
-                str(scratch)
-            ), f"{ctx.recipe.name}: work_dir {ctx.work_dir} not under {scratch}"
+            assert str(ctx.work_dir).startswith(str(scratch)), (
+                f"{ctx.recipe.name}: work_dir {ctx.work_dir} not under {scratch}"
+            )
 
         _no_cvcpkg_dirs_in_system_temp(pre_existing)
 

@@ -378,8 +378,7 @@ def _verify_digest(
                 return ki
             except InvalidSignature:
                 raise SigningError(
-                    f"Signature invalid: key '{ki.label}' ({ki.fingerprint[:16]}...) "
-                    "did not verify"
+                    f"Signature invalid: key '{ki.label}' ({ki.fingerprint[:16]}...) did not verify"
                 ) from None
 
     # If no fingerprint match, try all keys (allows rotation)
@@ -395,5 +394,5 @@ def _verify_digest(
             continue
 
     raise SigningError(
-        f"No trusted key verified the signature " f"(fingerprint: {sig.key_fingerprint[:16]}...)"
+        f"No trusted key verified the signature (fingerprint: {sig.key_fingerprint[:16]}...)"
     )

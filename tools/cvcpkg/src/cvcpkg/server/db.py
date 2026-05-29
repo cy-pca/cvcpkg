@@ -198,7 +198,10 @@ class TokenRequestRow(Base):
         String(32), nullable=False, default="pending", server_default="pending"
     )
     reviewed_by: Mapped[str] = mapped_column(
-        String(255), nullable=False, default="", server_default="",
+        String(255),
+        nullable=False,
+        default="",
+        server_default="",
     )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True),

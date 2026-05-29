@@ -10,7 +10,6 @@ No server or Docker is required.
 
 from __future__ import annotations
 
-import hashlib
 import os
 import textwrap
 from pathlib import Path
@@ -29,7 +28,6 @@ from cvcpkg.builder import (
     resolve_build_order,
     stage_bundle,
 )
-
 
 # ── Helpers ─────────────────────────────────────────────────────
 

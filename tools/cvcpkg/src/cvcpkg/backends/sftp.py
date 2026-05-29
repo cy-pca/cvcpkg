@@ -41,8 +41,7 @@ def _get_transport(host: str, port: int, user: str | None):
         import paramiko
     except ImportError as exc:
         raise ImportError(
-            "paramiko is required for the SFTP backend. "
-            "Install it with: pip install cvcpkg[sftp]"
+            "paramiko is required for the SFTP backend. Install it with: pip install cvcpkg[sftp]"
         ) from exc
 
     transport = paramiko.Transport((host, port))
