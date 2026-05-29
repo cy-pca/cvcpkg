@@ -185,7 +185,10 @@ jobs:
           }
           choco install ninja -y
           choco install cmake --version=3.31.7 --installargs 'ADD_CMAKE_TO_PATH=System' -y
+          choco install python3 -y
           choco install nasm -y
+          # Refresh PATH to pick up all choco-installed tools.
+          $env:PATH = [System.Environment]::GetEnvironmentVariable('PATH', 'Machine') + ';' + [System.Environment]::GetEnvironmentVariable('PATH', 'User')
           # NASM installs to "C:\Program Files\NASM" - add it to PATH
           # so OpenSSL and libjpeg-turbo can find it for optimised assembly.
           echo 'C:\Program Files\NASM' | Out-File -Append $env:GITHUB_PATH
@@ -212,8 +215,10 @@ jobs:
       - name: Install cvcpkg
         shell: bash
         run: |
-          python3 -m pip install --quiet --break-system-packages ./tools/cvcpkg \
-            || python3 -m pip install --quiet ./tools/cvcpkg
+          # On Windows, python3 may not exist; fall back to python.
+          PY=$(command -v python3 2>/dev/null || command -v python 2>/dev/null || echo python3)
+          "$PY" -m pip install --quiet --break-system-packages ./tools/cvcpkg \
+            || "$PY" -m pip install --quiet ./tools/cvcpkg
           # Ensure ~/.local/bin is on PATH (self-hosted runners may not have it)
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
