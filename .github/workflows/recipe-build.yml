@@ -166,6 +166,11 @@ jobs:
           # Ensure Chocolatey is available (pre-installed on windows-latest,
           # may be missing on self-hosted runners).
           if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+            # Remove leftover broken installs that block the installer.
+            if (Test-Path 'C:\ProgramData\chocolatey') {
+              Write-Host "Removing stale Chocolatey directory..."
+              Remove-Item -Recurse -Force 'C:\ProgramData\chocolatey'
+            }
             Write-Host "Installing Chocolatey..."
             Set-ExecutionPolicy Bypass -Scope Process -Force
             [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
