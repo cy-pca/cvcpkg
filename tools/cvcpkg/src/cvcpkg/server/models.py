@@ -133,7 +133,15 @@ class UserProfileResponse(BaseModel):
     email: str = ""
     description: str = ""
     metadata: str = ""
+    packages_published: int = 0
     created_at: datetime.datetime
+
+
+class UserListResponse(BaseModel):
+    """Paginated list of user profiles."""
+
+    users: list[UserProfileResponse]
+    total: int
 
 
 # ── Registration ───────────────────────────────────────────────
@@ -237,6 +245,10 @@ class PackageInfo(BaseModel):
     published_by: str = Field(
         default="",
         description="Token name of the user who published this package.",
+    )
+    published_by_email: str = Field(
+        default="",
+        description="Email of the user who published this package.",
     )
     org: str = Field(
         default="",

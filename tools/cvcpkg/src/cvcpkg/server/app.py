@@ -15,6 +15,7 @@ persistent state; otherwise it falls back to YAML files on disk.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -75,6 +76,7 @@ from cvcpkg.server.models import (
     TokenRole,
     EmailUpdateRequest,
     ProfileUpdateRequest,
+    UserListResponse,
     UserProfileResponse,
 )
 
@@ -411,6 +413,22 @@ async def _mirror_sync_loop(state_dir: Path) -> None:
         await asyncio.sleep(MIRROR_SYNC_INTERVAL)
 
 
+# ── Username validation ─────────────────────────────────────────
+
+import re as _re
+
+_C_IDENTIFIER_RE = _re.compile(r"^[A-Za-z_][A-Za-z0-9_\-]*$")
+
+
+def _is_valid_identifier(name: str) -> bool:
+    """Check that *name* conforms to C-identifier-like rules.
+
+    Must start with a letter or underscore, followed by letters, digits,
+    underscores, or hyphens.
+    """
+    return bool(_C_IDENTIFIER_RE.match(name))
+
+
 # ── App factory ─────────────────────────────────────────────────
 
 
@@ -608,6 +626,29 @@ def create_app(
             uptime_seconds=round(time.monotonic() - _START_TIME, 2),
             mirror_mode=MIRROR_MODE,
         )
+
+    # ── Admin shutdown ──────────────────────────────────────
+
+    @app.post("/v1/admin/shutdown", tags=["admin"])
+    async def admin_shutdown(
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Gracefully shut down the server.  Requires admin role."""
+        if _use_db and _db_audit is not None:
+            await _db_audit.record(
+                action=AuditAction.token_create,  # reuse closest action
+                actor=actor.name,
+                target="server",
+                detail="admin-initiated shutdown",
+            )
+        logger.info("admin shutdown requested by %s", actor.name)
+
+        async def _do_shutdown():
+            await asyncio.sleep(0.5)
+            os.kill(os.getpid(), signal.SIGTERM)
+
+        asyncio.get_event_loop().create_task(_do_shutdown())
+        return {"message": "server shutting down"}
 
     # ── Metrics (Prometheus text format) ────────────────────
 
@@ -837,6 +878,13 @@ def create_app(
             bundles = [b for b in bundles if b.get("release_tag") == release]
         total = len(bundles)
         page = bundles[offset : offset + limit]
+        # Build a lookup for publisher emails
+        _pub_emails: dict[str, str] = {}
+        for b in page:
+            pub = b.get("published_by", "")
+            if pub and pub not in _pub_emails:
+                rec = state.tokens.get_public_profile(pub)
+                _pub_emails[pub] = rec.email if rec else ""
         packages = [
             PackageInfo(
                 name=b["name"],
@@ -851,6 +899,7 @@ def create_app(
                 published_at=b.get("published_at", "1970-01-01T00:00:00+00:00"),
                 yanked=b.get("yanked", False),
                 published_by=b.get("published_by", ""),
+                published_by_email=_pub_emails.get(b.get("published_by", ""), ""),
                 org=b.get("org", ""),
             )
             for b in page
@@ -1858,16 +1907,38 @@ def create_app(
         req: TokenCreateRequest,
         actor: TokenRecord = Depends(require_role(TokenRole.admin)),
     ):
-        state = _get_state()
-        if _use_db:
-            raw = await _db_tokens.create(
-                name=req.name,
-                role=req.role,
-                expires_in_days=req.expires_in_days,
-                email=req.email,
-                description=req.description,
-                metadata=req.metadata,
+        if not _is_valid_identifier(req.name):
+            raise HTTPException(
+                422,
+                f"invalid token name '{req.name}': must be a valid C identifier "
+                "(start with a letter or underscore, followed by letters, digits, underscores, or hyphens)",
             )
+        state = _get_state()
+        try:
+            if _use_db:
+                raw = await _db_tokens.create(
+                    name=req.name,
+                    role=req.role,
+                    expires_in_days=req.expires_in_days,
+                    email=req.email,
+                    description=req.description,
+                    metadata=req.metadata,
+                )
+            else:
+                raw = state.tokens.create(
+                    name=req.name,
+                    role=req.role,
+                    expires_in_days=req.expires_in_days,
+                    email=req.email,
+                    description=req.description,
+                    metadata=req.metadata,
+                )
+        except ValueError:
+            raise HTTPException(
+                409,
+                f"token name '{req.name}' is already taken",
+            )
+        if _use_db:
             await _db_audit.record(
                 action=AuditAction.token_create,
                 actor=actor.name,
@@ -1876,14 +1947,6 @@ def create_app(
             )
             record = await _db_tokens.verify(raw)
         else:
-            raw = state.tokens.create(
-                name=req.name,
-                role=req.role,
-                expires_in_days=req.expires_in_days,
-                email=req.email,
-                description=req.description,
-                metadata=req.metadata,
-            )
             state.audit.record(
                 action=AuditAction.token_create,
                 actor=actor.name,
@@ -2043,6 +2106,114 @@ def create_app(
         return {"message": f"profile for '{name}' updated"}
 
     @app.get(
+        "/v1/users",
+        response_model=UserListResponse,
+        tags=["users"],
+    )
+    async def list_users(
+        name: str = Query("", description="Filter by username (substring match)"),
+        email: str = Query("", description="Filter by email (substring match)"),
+        role: str = Query("", description="Filter by role (reader/publisher/admin)"),
+        org: str = Query("", description="Filter by organization membership"),
+        has_published: bool | None = Query(None, description="Filter by whether user has published packages"),
+        sort: str = Query("name", description="Sort field: name, email, or packages_published"),
+        order: str = Query("asc", description="Sort order: asc or desc"),
+        limit: int = Query(100, ge=1, le=1000),
+        offset: int = Query(0, ge=0),
+    ):
+        """List user profiles with pagination and optional filters.
+
+        Supports filtering by email (substring match), role, organization
+        membership, and whether the user has published packages.
+        Sorting by ``name``, ``email``, or ``packages_published``.
+        Does not require authentication.
+        """
+        if sort not in ("name", "email", "packages_published"):
+            raise HTTPException(422, f"invalid sort field: {sort}")
+        if order not in ("asc", "desc"):
+            raise HTTPException(422, f"invalid sort order: {order}")
+        if _use_db:
+            users, total = await _db_tokens.search_users(
+                name=name,
+                email=email,
+                role=role,
+                org=org,
+                has_published=has_published,
+                sort_by=sort,
+                sort_order=order,
+                limit=limit,
+                offset=offset,
+            )
+            return UserListResponse(users=users, total=total)
+        # YAML backend
+        state = _get_state()
+        # Get all matching users (no pagination at store level)
+        records, _total = state.tokens.search_users(
+            name=name, email=email, role=role, limit=10000, offset=0,
+        )
+        bundles = state.index.get("bundles", [])
+        users = []
+        for r in records:
+            pkg_count = sum(1 for b in bundles if b.get("published_by") == r.name)
+            if has_published is True and pkg_count == 0:
+                continue
+            if has_published is False and pkg_count > 0:
+                continue
+            users.append(UserProfileResponse(
+                name=r.name,
+                role=r.role.value,
+                email=r.email,
+                description=r.description,
+                metadata=r.metadata,
+                packages_published=pkg_count,
+                created_at=r.created_at,
+            ))
+        # Apply sorting for YAML backend
+        if sort == "packages_published":
+            users.sort(key=lambda u: u.packages_published, reverse=(order == "desc"))
+        elif sort == "email":
+            users.sort(key=lambda u: u.email, reverse=(order == "desc"))
+        else:
+            users.sort(key=lambda u: u.name, reverse=(order == "desc"))
+        actual_total = len(users)
+        page = users[offset : offset + limit]
+        return UserListResponse(users=page, total=actual_total)
+
+    @app.get(
+        "/v1/users/by-email/{email:path}",
+        response_model=UserProfileResponse,
+        tags=["users"],
+    )
+    async def get_user_by_email(email: str):
+        """Look up a user's public profile by email address.
+
+        Returns the first active user matching the given email.
+        Does not require authentication.
+        """
+        if _use_db:
+            profile = await _db_tokens.get_profile_by_email(email)
+        else:
+            state = _get_state()
+            record = state.tokens.get_profile_by_email(email)
+            if record is not None:
+                bundles = state.index.get("bundles", [])
+                pkg_count = sum(1 for b in bundles if b.get("published_by") == record.name)
+                profile = UserProfileResponse(
+                    name=record.name,
+                    role=record.role.value,
+                    email=record.email,
+                    description=record.description,
+                    metadata=record.metadata,
+                    packages_published=pkg_count,
+                    created_at=record.created_at,
+                )
+            else:
+                profile = None
+        if profile is None:
+            raise HTTPException(404, f"no user with email '{email}' found")
+        return profile
+
+    @app.get(
         "/v1/users/{name}",
         response_model=UserProfileResponse,
         tags=["users"],
@@ -2059,12 +2230,15 @@ def create_app(
             state = _get_state()
             record = state.tokens.get_public_profile(name)
             if record is not None:
+                bundles = state.index.get("bundles", [])
+                pkg_count = sum(1 for b in bundles if b.get("published_by") == record.name)
                 profile = UserProfileResponse(
                     name=record.name,
                     role=record.role.value,
                     email=record.email,
                     description=record.description,
                     metadata=record.metadata,
+                    packages_published=pkg_count,
                     created_at=record.created_at,
                 )
             else:
@@ -2085,16 +2259,34 @@ def create_app(
         """
         if not req.name or not req.name.strip():
             raise HTTPException(422, "name is required")
+        if not _is_valid_identifier(req.name):
+            raise HTTPException(
+                422,
+                f"invalid username '{req.name}': must be a valid C identifier "
+                "(start with a letter or underscore, followed by letters, digits, or underscores)",
+            )
         if not req.email or not req.email.strip():
             raise HTTPException(422, "email is required for registration")
 
         if REGISTRATION_MODE == RegistrationMode.open:
             state = _get_state()
-            if _use_db:
-                raw = await _db_tokens.create(
-                    name=req.name, role=req.role, email=req.email,
-                    description=req.description, metadata=req.metadata,
+            try:
+                if _use_db:
+                    raw = await _db_tokens.create(
+                        name=req.name, role=req.role, email=req.email,
+                        description=req.description, metadata=req.metadata,
+                    )
+                else:
+                    raw = state.tokens.create(
+                        name=req.name, role=req.role, email=req.email,
+                        description=req.description, metadata=req.metadata,
+                    )
+            except ValueError:
+                raise HTTPException(
+                    409,
+                    f"username '{req.name}' is already taken",
                 )
+            if _use_db:
                 await _db_audit.record(
                     action=AuditAction.registration_request,
                     actor=req.name,
@@ -2102,10 +2294,6 @@ def create_app(
                     detail=f"role={req.role.value} email={req.email} mode=open auto_approved",
                 )
             else:
-                raw = state.tokens.create(
-                    name=req.name, role=req.role, email=req.email,
-                    description=req.description, metadata=req.metadata,
-                )
                 state.audit.record(
                     action=AuditAction.registration_request,
                     actor=req.name,
@@ -2305,14 +2493,18 @@ def create_app(
         org = await _db_orgs.get(slug)
         if org is None:
             raise HTTPException(404, f"organization '{slug}' not found")
+        # Determine caller's access level
+        caller_name = caller.name if caller else None
+        is_admin = caller is not None and caller.role == TokenRole.admin
+        is_member = caller_name is not None and await _db_orgs.is_member(slug, caller_name)
         # Private orgs are only visible to members and admins
-        if org.is_private:
-            caller_name = caller.name if caller else None
-            is_admin = caller is not None and caller.role == TokenRole.admin
-            is_member = caller_name is not None and await _db_orgs.is_member(slug, caller_name)
-            if not is_admin and not is_member:
-                raise HTTPException(404, f"organization '{slug}' not found")
-        members = await _db_orgs.get_members(slug)
+        if org.is_private and not is_admin and not is_member:
+            raise HTTPException(404, f"organization '{slug}' not found")
+        # Only members and admins can see the member list
+        if is_admin or is_member:
+            members = await _db_orgs.get_members(slug)
+        else:
+            members = []
         packages, _ = await _db_packages.get_bundles(org_slug=slug)
         return OrgDetailResponse(org=org, members=members, packages=packages)
 

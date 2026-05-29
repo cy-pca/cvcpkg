@@ -905,6 +905,25 @@ function renderInfo() {
     el.textContent = p.license;
     el.style.display = '';
   }
+  if (p.published_by) {
+    const pubEl = document.getElementById('pkg-publisher');
+    const link = document.createElement('a');
+    link.href = '/package/' + encodeURIComponent(pkgName) + '#';
+    link.className = 'has-text-link';
+    link.textContent = p.published_by;
+    link.href = '/v1/users/' + encodeURIComponent(p.published_by);
+    link.target = '_blank';
+    pubEl.appendChild(link);
+    if (p.published_by_email) {
+      const emailLink = document.createElement('a');
+      emailLink.href = 'mailto:' + p.published_by_email;
+      emailLink.className = 'has-text-link ml-1';
+      emailLink.textContent = '<' + p.published_by_email + '>';
+      pubEl.appendChild(document.createTextNode(' '));
+      pubEl.appendChild(emailLink);
+    }
+    pubEl.parentElement.style.display = '';
+  }
   if (p.maintainer) {
     document.getElementById('pkg-maintainer').textContent = p.maintainer;
     document.getElementById('pkg-maintainer').parentElement.style.display = '';
@@ -1145,6 +1164,9 @@ def package_detail_html(name: str) -> str:
         <div class="content">
           <div style="display:none"><strong class="has-text-grey-light">Homepage:</strong>
             <a id="pkg-homepage" href="#" class="has-text-link" target="_blank" rel="noopener noreferrer"></a>
+          </div>
+          <div style="display:none"><strong class="has-text-grey-light">Published by:</strong>
+            <span id="pkg-publisher"></span>
           </div>
           <div style="display:none"><strong class="has-text-grey-light">Maintainer:</strong>
             <span id="pkg-maintainer"></span>
