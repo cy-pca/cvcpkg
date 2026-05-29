@@ -22,6 +22,10 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    conn = op.get_bind()
+    insp = sa.inspect(conn)
+    if "download_events" in insp.get_table_names():
+        return
     op.create_table(
         "download_events",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
