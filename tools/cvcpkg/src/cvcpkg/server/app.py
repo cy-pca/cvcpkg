@@ -59,6 +59,10 @@ from cvcpkg.server.models import (
     PackageInfo,
     PackageListResponse,
     PublishResponse,
+    TagCreateRequest,
+    TagInfo,
+    TagListResponse,
+    TagUpdateRequest,
     TokenCreateRequest,
     TokenCreateResponse,
     TokenRecord,
@@ -185,6 +189,7 @@ _db_packages = None  # DbPackageIndex when using DB backend
 _db_orgs = None  # DbOrgStore when using DB backend
 _db_downloads = None  # DbDownloadStore when using DB backend
 _db_mirrors = None  # DbMirrorStore when using DB backend
+_db_tags = None  # DbTagStore when using DB backend
 
 
 def _get_state() -> ServerState:
@@ -403,7 +408,9 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        global _state, _START_TIME, _use_db, _db_tokens, _db_audit, _db_packages, _db_orgs, _db_downloads, _db_mirrors
+        global _state, _START_TIME, _use_db
+        global _db_tokens, _db_audit, _db_packages, _db_orgs
+        global _db_downloads, _db_mirrors, _db_tags
         _START_TIME = time.monotonic()
         sd = state_dir or Path(os.environ.get("CVCPKG_SERVER_STATE_DIR", "/var/lib/cvcpkg-server"))
 
@@ -427,6 +434,7 @@ def create_app(
                 DbMirrorStore,
                 DbOrgStore,
                 DbPackageIndex,
+                DbTagStore,
                 DbTokenStore,
             )
 
@@ -438,6 +446,7 @@ def create_app(
             _db_orgs = DbOrgStore()
             _db_downloads = DbDownloadStore()
             _db_mirrors = DbMirrorStore()
+            _db_tags = DbTagStore()
             _use_db = True
             # Still need ServerState for archives dir and storage_uri
             _state = ServerState(
@@ -633,9 +642,16 @@ def create_app(
     # ── Catalog (read) ──────────────────────────────────────
 
     @app.get("/v1/catalog", response_model=CatalogResponse, tags=["catalog"])
-    async def get_catalog(_auth: None = Depends(optional_reader_auth)):
+    async def get_catalog(
+        _auth: TokenRecord | None = Depends(optional_reader_auth),
+        _caller: TokenRecord | None = Depends(optional_token),
+    ):
         if _use_db:
-            cat = await _db_packages.get_catalog_dict()
+            caller = _auth or _caller
+            cat = await _db_packages.get_catalog_dict(
+                caller_token_name=caller.name if caller else "",
+                is_admin=caller is not None and caller.role == TokenRole.admin,
+            )
             return CatalogResponse(
                 revision=cat.get("revision", 0),
                 bundles=cat.get("bundles", []),
@@ -1245,6 +1261,11 @@ def create_app(
             if not await _db_orgs.is_member(org, actor.name):
                 raise HTTPException(403, f"you are not a member of organization '{org}'")
 
+        # Auto-create stub tag rows before the duplicate check so tags
+        # are populated even when the package already exists.
+        if _use_db and pkg_tags and _db_tags is not None:
+            await _db_tags.ensure_tags(tags_csv=pkg_tags, org_slug=org, created_by=actor.name)
+
         # Check for duplicates
         if _use_db:
             if await _db_packages.check_duplicate(name, version, platform, arch, build_type, link):
@@ -1444,6 +1465,11 @@ def create_app(
             raise HTTPException(
                 413, f"declared size {total_size} exceeds maximum {MAX_UPLOAD_BYTES} bytes"
             )
+
+        # Auto-create stub tag rows before the duplicate check so tags
+        # are populated even when the package already exists.
+        if _use_db and pkg_tags and _db_tags is not None:
+            await _db_tags.ensure_tags(tags_csv=pkg_tags, org_slug="", created_by=actor.name)
 
         # Check for duplicates
         if _use_db:
@@ -1647,6 +1673,7 @@ def create_app(
                 maintainer=session.maintainer,
                 tags=session.tags,
             )
+
             await _db_audit.record(
                 action=AuditAction.publish,
                 actor=actor.name,
@@ -2337,6 +2364,175 @@ def create_app(
         from cvcpkg.server.landing import org_detail_html
 
         return HTMLResponse(org_detail_html(slug))
+
+    # ── Tag HTML pages ──────────────────────────────────────
+
+    @app.get("/tags", response_class=HTMLResponse, include_in_schema=False)
+    async def tags_listing_page():
+        from cvcpkg.server.landing import tags_listing_html
+
+        return HTMLResponse(tags_listing_html())
+
+    @app.get("/tag/{tag_name}", response_class=HTMLResponse, include_in_schema=False)
+    async def tag_detail_page(tag_name: str, org: str = ""):
+        from cvcpkg.server.landing import tag_detail_html
+
+        return HTMLResponse(tag_detail_html(tag_name, org))
+
+    # ── Tag API endpoints ───────────────────────────────────
+
+    @app.get("/v1/tags", response_model=TagListResponse, tags=["tags"])
+    async def list_tags(
+        org: str = "",
+        limit: int = 200,
+        offset: int = 0,
+        _auth: TokenRecord | None = Depends(optional_reader_auth),
+    ):
+        """List curated tags with package counts."""
+        if not _use_db or _db_tags is None:
+            return TagListResponse(total=0, tags=[])
+        org_filter: str | None = org if org else None
+        # If the org is private, check access
+        if org and _db_orgs is not None:
+            org_info = await _db_orgs.get(org)
+            if org_info and org_info.is_private:
+                caller = _auth
+                if caller is None or (
+                    caller.role != TokenRole.admin
+                    and not await _db_orgs.is_member(org, caller.name)
+                ):
+                    raise HTTPException(403, "private organization -- access denied")
+        tags, total = await _db_tags.list_tags(org_slug=org_filter, limit=limit, offset=offset)
+        return TagListResponse(total=total, tags=tags)
+
+    @app.get("/v1/tags/all", tags=["tags"])
+    async def list_all_tags(
+        _auth: TokenRecord | None = Depends(optional_reader_auth),
+    ):
+        """Return all tag names (curated + ad-hoc) with package counts.
+
+        Used by the front-page tag browser.
+        """
+        if not _use_db or _db_tags is None:
+            return {"tags": []}
+        all_tags = await _db_tags.list_all_tag_names()
+        # Filter out tags belonging to private orgs for unauthenticated users
+        if _db_orgs is not None:
+            visible: list[dict] = []
+            for t in all_tags:
+                org_slug = t.get("org_slug", "")
+                if org_slug:
+                    org_info = await _db_orgs.get(org_slug)
+                    if org_info and org_info.is_private:
+                        if _auth is None or (
+                            _auth.role != TokenRole.admin
+                            and not await _db_orgs.is_member(org_slug, _auth.name)
+                        ):
+                            continue
+                visible.append(t)
+            return {"tags": visible}
+        return {"tags": all_tags}
+
+    @app.post("/v1/tags", response_model=TagInfo, tags=["tags"])
+    async def create_tag(
+        body: TagCreateRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Create a curated tag (admin or org-owner only)."""
+        if not _use_db or _db_tags is None:
+            raise HTTPException(501, "tags require a database backend")
+        # For org-scoped tags, verify the actor is org owner or global admin
+        if body.org_slug:
+            if actor.role != TokenRole.admin:
+                if _db_orgs is None:
+                    raise HTTPException(501, "org support requires a database backend")
+                if not await _db_orgs.is_owner(body.org_slug, actor.name):
+                    raise HTTPException(
+                        403,
+                        "only org owners or global admins can create org-scoped tags",
+                    )
+        try:
+            tag = await _db_tags.create(
+                name=body.name,
+                org_slug=body.org_slug,
+                display_name=body.display_name,
+                description=body.description,
+                logo_url=body.logo_url,
+                created_by=actor.name,
+            )
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
+        await _db_audit.record(
+            action=AuditAction.tag_create,
+            actor=actor.name,
+            target=tag.qualified_name,
+            detail=f"display_name={tag.display_name}",
+        )
+        return tag
+
+    @app.put("/v1/tags/{tag_name}", response_model=TagInfo, tags=["tags"])
+    async def update_tag(
+        tag_name: str,
+        body: TagUpdateRequest,
+        org: str = "",
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Update a curated tag (admin or org-owner only)."""
+        if not _use_db or _db_tags is None:
+            raise HTTPException(501, "tags require a database backend")
+        if org:
+            if actor.role != TokenRole.admin:
+                if _db_orgs is None:
+                    raise HTTPException(501, "org support requires a database backend")
+                if not await _db_orgs.is_owner(org, actor.name):
+                    raise HTTPException(
+                        403,
+                        "only org owners or global admins can edit org-scoped tags",
+                    )
+        tag = await _db_tags.update(
+            name=tag_name,
+            org_slug=org,
+            display_name=body.display_name,
+            description=body.description,
+            logo_url=body.logo_url,
+        )
+        if tag is None:
+            raise HTTPException(404, "tag not found")
+        await _db_audit.record(
+            action=AuditAction.tag_update,
+            actor=actor.name,
+            target=tag.qualified_name,
+        )
+        return tag
+
+    @app.delete("/v1/tags/{tag_name}", tags=["tags"])
+    async def delete_tag(
+        tag_name: str,
+        org: str = "",
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Delete a curated tag (admin or org-owner only)."""
+        if not _use_db or _db_tags is None:
+            raise HTTPException(501, "tags require a database backend")
+        if org:
+            if actor.role != TokenRole.admin:
+                if _db_orgs is None:
+                    raise HTTPException(501, "org support requires a database backend")
+                if not await _db_orgs.is_owner(org, actor.name):
+                    raise HTTPException(
+                        403,
+                        "only org owners or global admins can delete org-scoped tags",
+                    )
+        deleted = await _db_tags.delete(name=tag_name, org_slug=org)
+        if not deleted:
+            raise HTTPException(404, "tag not found")
+        qualified = f"{org}/{tag_name}" if org else tag_name
+        await _db_audit.record(
+            action=AuditAction.tag_delete,
+            actor=actor.name,
+            target=qualified,
+        )
+        return {"message": f"tag '{qualified}' deleted"}
 
     # ── Mirror endpoints ────────────────────────────────────
 

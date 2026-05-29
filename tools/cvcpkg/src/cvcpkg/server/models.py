@@ -66,6 +66,9 @@ class AuditAction(str, Enum):
     org_update = "org_update"
     admin_settings_update = "admin_settings_update"
     cache_gc = "cache_gc"
+    tag_create = "tag_create"
+    tag_update = "tag_update"
+    tag_delete = "tag_delete"
     mirror_register = "mirror_register"
     mirror_reject = "mirror_reject"
     mirror_remove = "mirror_remove"
@@ -304,6 +307,61 @@ class OrgDetailResponse(BaseModel):
 class OrgListResponse(BaseModel):
     total: int
     organizations: list[OrgInfo]
+
+
+# ── Tags ────────────────────────────────────────────────────────
+
+
+class TagInfo(BaseModel):
+    """Curated tag metadata for the browse-by-tag front page."""
+
+    name: str
+    org_slug: str = ""
+    display_name: str = ""
+    description: str = ""
+    logo_url: str = ""
+    package_count: int = 0
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
+    updated_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
+    created_by: str = ""
+
+    @property
+    def qualified_name(self) -> str:
+        """Return ``org/name`` for org tags, plain ``name`` otherwise."""
+        return f"{self.org_slug}/{self.name}" if self.org_slug else self.name
+
+
+class TagCreateRequest(BaseModel):
+    name: str = Field(
+        ...,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$",
+        description="Tag name (lowercase alphanumeric, dots, hyphens, underscores).",
+    )
+    org_slug: str = Field(
+        default="",
+        max_length=64,
+        description="Organization slug.  Empty for global tags.",
+    )
+    display_name: str = Field(default="", max_length=255)
+    description: str = ""
+    logo_url: str = Field(default="", max_length=512)
+
+
+class TagUpdateRequest(BaseModel):
+    display_name: str | None = None
+    description: str | None = None
+    logo_url: str | None = None
+
+
+class TagListResponse(BaseModel):
+    total: int
+    tags: list[TagInfo]
 
 
 # ── Mirrors ─────────────────────────────────────────────────────
