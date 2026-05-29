@@ -14,7 +14,7 @@ import secrets
 from pathlib import Path
 
 from sqlalchemy import func as sa_func
-from sqlalchemy import or_, select, update
+from sqlalchemy import distinct, or_, select, update
 
 from cvcpkg.server.db import (
     AuditRow,
@@ -1710,14 +1710,19 @@ class DbTagStore:
                 }
 
             # 2. Ad-hoc tags from packages not yet curated
+            curated_keys = {
+                f"{r.org_slug}/{r.name}" if r.org_slug else r.name for r in curated
+            }
             all_tags_rows = (
                 await session.execute(
-                    select(PackageRow.tags, PackageRow.org_slug)
+                    select(PackageRow.name, PackageRow.tags, PackageRow.org_slug)
                     .where(PackageRow.tags != "")
                     .where(PackageRow.yanked == False)  # noqa: E712
                 )
             ).all()
-            for tags_str, org in all_tags_rows:
+            # Track distinct package names per ad-hoc tag
+            adhoc_names: dict[str, set[str]] = {}
+            for pkg_name, tags_str, org in all_tags_rows:
                 for raw_tag in tags_str.split(","):
                     tag = raw_tag.strip().lower()
                     if not tag:
@@ -1732,18 +1737,18 @@ class DbTagStore:
                             "logo_url": "",
                             "package_count": 0,
                         }
-                    if key not in {
-                        f"{r.org_slug}/{r.name}" if r.org_slug else r.name for r in curated
-                    }:
-                        result[key]["package_count"] = result[key].get("package_count", 0) + 1
+                    if key not in curated_keys:
+                        adhoc_names.setdefault(key, set()).add(pkg_name)
+            for key, names in adhoc_names.items():
+                result[key]["package_count"] = len(names)
 
             return sorted(result.values(), key=lambda t: t["name"])
 
     @staticmethod
     async def _count_packages(session, tag_name: str, org_slug: str) -> int:
-        """Count non-yanked packages whose comma-separated tags contain *tag_name*."""
+        """Count distinct non-yanked package *names* whose tags contain *tag_name*."""
         like_pat = f"%{tag_name}%"
-        q = select(sa_func.count(PackageRow.id)).where(
+        q = select(sa_func.count(distinct(PackageRow.name))).where(
             PackageRow.tags.ilike(like_pat),
             PackageRow.yanked == False,  # noqa: E712
         )
