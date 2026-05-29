@@ -131,7 +131,6 @@ Create `recipes/<your-package>/recipe.yaml`:
 
 ```yaml
 name: my-library
-version: "2.1.0-cvc1"
 upstream_version: "2.1.0"
 cvc_revision: 1
 description: "My library for CVC downstream consumers"
@@ -357,6 +356,106 @@ Only admins can **unyank**.
 
 **Deleting** permanently removes the catalog entry.  Use with care —
 consumers that pinned the deleted version will get download errors.
+
+---
+
+## Versioning and Revisions
+
+### Version string format
+
+Every published package has a version string of the form:
+
+```
+<upstream_version>+cvc.<cvc_revision>
+```
+
+For example, `1.86.0+cvc.1` means upstream Boost 1.86.0, CVC recipe
+revision 1.  The `+cvc.N` suffix is SemVer build metadata — it is
+ignored for range comparisons but used as a tiebreaker by the
+resolver when multiple builds of the same upstream version exist.
+
+The `cvc_revision` field in `recipe.yaml` controls the suffix:
+
+```yaml
+name: boost
+upstream_version: "1.86.0"
+cvc_revision: 1      # → published as 1.86.0+cvc.1
+```
+
+### Duplicate detection (publish conflicts)
+
+The server rejects a publish with **HTTP 409 Conflict** if a package
+with the same 6-field key already exists:
+
+```
+(name, version, platform, arch, build_type, link)
+```
+
+The error message is:
+
+> `"{name}=={version} (...) already published.  Yank the existing
+> version first, or use a new revision."`
+
+Because the `version` field includes the `+cvc.N` suffix, bumping
+`cvc_revision` produces a different version string and is **not**
+considered a duplicate.  This is the intended mechanism for
+re-publishing a corrected build of the same upstream version.
+
+Note: yanking alone is **not** sufficient to re-publish — the
+duplicate check does not filter yanked entries.  To re-publish the
+exact same version string, an admin must **delete** the old entry
+first.
+
+### Bumping revisions with `rev-bump`
+
+When a recipe needs a rebuild (patch fix, build script change,
+dependency update), bump its `cvc_revision`:
+
+```bash
+# Bump zlib and all downstream dependents:
+cvcpkg rev-bump zlib
+
+# Output:
+#   zlib: cvc_revision 1 → 2
+#   hdf5: cvc_revision 3 → 4
+#   vtk:  cvc_revision 1 → 2
+```
+
+The `--cascade` flag (default: on) automatically bumps every recipe
+that transitively depends on the target.  This ensures the entire
+dependency chain is rebuilt and re-published against the patched
+version, catching breakage early rather than shipping an inconsistent
+set of binaries.
+
+**Why cascade?**  If a patch to `openssl` fixes a security issue,
+every library linked against it (e.g. `grpc`, `protobuf`, `qt6`)
+must be rebuilt to pick up the fix.  Publishing only the patched
+`openssl` without rebuilding downstream would leave consumers with
+binaries linked against the old, vulnerable version.  The cascade
+ensures that either the full stack builds cleanly or the patch author
+is forced to fix downstream breakage before publishing.
+
+After bumping, the typical workflow is:
+
+```bash
+# 1. Bump revisions (edits recipe.yaml files in-place):
+cvcpkg rev-bump openssl
+
+# 2. Commit the bumped recipes:
+git add recipes/ && git commit -m "rev-bump openssl + downstream"
+
+# 3. Tag and push — CI rebuilds and publishes everything:
+git tag v1.6.1 && git push origin v1.6.1
+```
+
+### Revision vs. version vs. catalog revision
+
+| Term | Scope | Example | Purpose |
+|------|-------|---------|---------|
+| `upstream_version` | Recipe | `1.86.0` | The third-party project's own version |
+| `cvc_revision` | Recipe | `3` | Rebuild counter for CVC-specific patches or build fixes |
+| `version` (full) | Published package | `1.86.0+cvc.3` | Uniquely identifies this build in the catalog |
+| Catalog `revision` | Server index | `42` | Monotonic counter incremented on each publish/yank/delete; used by clients to detect catalog staleness |
 
 ---
 
