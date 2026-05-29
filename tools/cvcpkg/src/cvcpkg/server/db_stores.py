@@ -1233,6 +1233,45 @@ class DbTagStore:
             await session.flush()
             return self._row_to_info(row)
 
+    async def ensure_tags(
+        self,
+        *,
+        tags_csv: str,
+        org_slug: str = "",
+        created_by: str = "",
+    ) -> None:
+        """Create stub tag rows for any tags not already in the table.
+
+        Called during publish so that ad-hoc tags are immediately
+        browsable.  Admins can curate display_name / description /
+        logo later.
+        """
+        if not tags_csv:
+            return
+        names = [t.strip().lower() for t in tags_csv.split(",") if t.strip()]
+        if not names:
+            return
+        async with get_session() as session:
+            for tag_name in names:
+                existing = (
+                    await session.execute(
+                        select(TagRow).where(
+                            TagRow.name == tag_name,
+                            TagRow.org_slug == org_slug,
+                        )
+                    )
+                ).scalar()
+                if existing is None:
+                    session.add(
+                        TagRow(
+                            name=tag_name,
+                            org_slug=org_slug,
+                            display_name=tag_name,
+                            created_by=created_by,
+                        )
+                    )
+            await session.flush()
+
     async def delete(self, *, name: str, org_slug: str = "") -> bool:
         from sqlalchemy import delete as sa_delete
 
