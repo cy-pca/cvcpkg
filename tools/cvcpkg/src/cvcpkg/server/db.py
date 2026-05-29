@@ -90,6 +90,9 @@ class PackageRow(Base):
         String(255), nullable=False, default="", server_default=""
     )
     tags: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    published_by: Mapped[str] = mapped_column(
+        String(255), nullable=False, default="", server_default=""
+    )
 
     org_slug: Mapped[str] = mapped_column(
         String(64),
@@ -169,6 +172,8 @@ class TokenRow(Base):
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     email: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    user_metadata: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

@@ -1141,3 +1141,444 @@ class TestDbCatalogOrgPrivacy:
         self._publish_pkg(client, pub_tok, "pkg2")
         names = self._get_catalog_names(client, admin_tok)
         assert {"pkg1", "pkg2"} == names
+
+
+class TestOrgMemberListACL:
+    """Only org members and admins can see the member list of an org."""
+
+    def _create_org(self, client, token, slug, *, is_private=False):
+        resp = client.post(
+            "/v1/orgs",
+            json={"slug": slug, "display_name": slug.title(), "is_private": is_private},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, resp.text
+
+    def _add_member(self, client, token, slug, member_name):
+        resp = client.post(
+            f"/v1/orgs/{slug}/members",
+            params={"token_name": member_name},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, resp.text
+
+    def test_member_sees_member_list(self, db_env):
+        client, admin_tok, pub_tok, _, _ = db_env
+        self._create_org(client, admin_tok, "acl-org")
+        self._add_member(client, admin_tok, "acl-org", "test-publisher")
+
+        resp = client.get(
+            "/v1/orgs/acl-org",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["members"]) >= 1
+        member_names = [m["token_name"] for m in data["members"]]
+        assert "test-publisher" in member_names
+
+    def test_admin_sees_member_list(self, db_env):
+        client, admin_tok, pub_tok, _, _ = db_env
+        self._create_org(client, admin_tok, "acl-org")
+        self._add_member(client, admin_tok, "acl-org", "test-publisher")
+
+        resp = client.get(
+            "/v1/orgs/acl-org",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["members"]) >= 1
+
+    def test_non_member_cannot_see_member_list(self, db_env):
+        client, admin_tok, _, reader_tok, _ = db_env
+        self._create_org(client, admin_tok, "acl-org")
+        self._add_member(client, admin_tok, "acl-org", "test-publisher")
+
+        # Reader is not a member — should get empty member list
+        resp = client.get(
+            "/v1/orgs/acl-org",
+            headers={"Authorization": f"Bearer {reader_tok}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["members"] == []
+
+    def test_anonymous_cannot_see_member_list(self, db_env):
+        client, admin_tok, _, _, _ = db_env
+        self._create_org(client, admin_tok, "acl-org")
+
+        # No auth — should get empty member list for public org
+        resp = client.get("/v1/orgs/acl-org")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["members"] == []
+
+    def test_private_org_hidden_from_non_member(self, db_env):
+        client, admin_tok, _, reader_tok, _ = db_env
+        self._create_org(client, admin_tok, "private-acl", is_private=True)
+
+        # Reader is not a member — should get 404
+        resp = client.get(
+            "/v1/orgs/private-acl",
+            headers={"Authorization": f"Bearer {reader_tok}"},
+        )
+        assert resp.status_code == 404
+
+
+# ═══════════════════════════════════════════════════════════════════
+# User profiles, listing, search-by-email integration tests
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestUserProfileLifecycle:
+    """End-to-end: register, set profile, look up, update, verify."""
+
+    def test_register_and_lookup_profile(self, env):
+        client, admin_tok, pub_tok, reader_tok, tmp_path = env
+        # Register a new user with description + metadata
+        resp = client.post("/v1/register", json={
+            "name": "profile-lifecycle",
+            "email": "lifecycle@example.com",
+            "role": "reader",
+            "description": "Integration test user 🚀",
+            "metadata": '{"team": "ci"}',
+        })
+        assert resp.status_code == 200
+        new_tok = resp.json()["token"]
+
+        # Look up by name
+        resp = client.get("/v1/users/profile-lifecycle")
+        assert resp.status_code == 200
+        profile = resp.json()
+        assert profile["name"] == "profile-lifecycle"
+        assert profile["email"] == "lifecycle@example.com"
+        assert profile["description"] == "Integration test user 🚀"
+        assert profile["metadata"] == '{"team": "ci"}'
+        assert profile["packages_published"] == 0
+
+        # Look up by email
+        resp = client.get("/v1/users/by-email/lifecycle@example.com")
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "profile-lifecycle"
+
+    def test_update_profile_and_verify(self, env):
+        client, admin_tok, pub_tok, reader_tok, _ = env
+        # Update publisher profile
+        resp = client.patch(
+            "/v1/tokens/ci-publisher/profile",
+            json={"description": "CI pipeline publisher", "metadata": '{"ci": true}'},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+
+        # Verify via user info
+        resp = client.get("/v1/users/ci-publisher")
+        assert resp.status_code == 200
+        assert resp.json()["description"] == "CI pipeline publisher"
+        assert resp.json()["metadata"] == '{"ci": true}'
+
+    def test_published_by_and_count(self, env):
+        client, admin_tok, pub_tok, reader_tok, _ = env
+        # Publish 3 packages
+        for i in range(3):
+            _publish(client, pub_tok, f"profile-pkg-{i}", "1.0")
+
+        # Check published_by on packages
+        resp = client.get("/v1/packages", params={"name": "profile-pkg-0"})
+        assert resp.status_code == 200
+        assert resp.json()["packages"][0]["published_by"] == "ci-publisher"
+
+        # Check count in profile
+        resp = client.get("/v1/users/ci-publisher")
+        assert resp.status_code == 200
+        assert resp.json()["packages_published"] == 3
+
+
+class TestUserListIntegration:
+    """Integration tests for the user listing endpoint."""
+
+    def test_list_all_users(self, env):
+        client, *_ = env
+        resp = client.get("/v1/users")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] >= 3  # admin, publisher, reader
+        names = {u["name"] for u in data["users"]}
+        assert {"admin", "ci-publisher", "readonly"} <= names
+
+    def test_list_filter_by_role(self, env):
+        client, *_ = env
+        resp = client.get("/v1/users", params={"role": "publisher"})
+        assert resp.status_code == 200
+        for u in resp.json()["users"]:
+            assert u["role"] == "publisher"
+
+    def test_list_filter_by_email(self, env):
+        client, admin_tok, *_ = env
+        # Set specific email
+        client.patch(
+            "/v1/tokens/ci-publisher/email",
+            json={"email": "ci-bot@company.io"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        resp = client.get("/v1/users", params={"email": "ci-bot@company"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] >= 1
+        assert any(u["name"] == "ci-publisher" for u in data["users"])
+
+    def test_list_filter_by_name(self, env):
+        client, *_ = env
+        resp = client.get("/v1/users", params={"name": "publisher"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] >= 1
+        assert all("publisher" in u["name"].lower() for u in data["users"])
+
+    def test_list_pagination(self, env):
+        client, *_ = env
+        resp1 = client.get("/v1/users", params={"limit": 1, "offset": 0})
+        resp2 = client.get("/v1/users", params={"limit": 1, "offset": 1})
+        assert resp1.status_code == 200
+        assert resp2.status_code == 200
+        assert resp1.json()["users"][0]["name"] != resp2.json()["users"][0]["name"]
+
+    def test_list_sort_by_packages_published(self, env):
+        client, admin_tok, pub_tok, reader_tok, _ = env
+        # Publish packages with publisher token
+        _publish(client, pub_tok, "list-sort-pkg-1", "1.0")
+        _publish(client, pub_tok, "list-sort-pkg-2", "1.0")
+
+        resp = client.get("/v1/users", params={
+            "sort": "packages_published", "order": "desc",
+        })
+        assert resp.status_code == 200
+        users = resp.json()["users"]
+        counts = [u["packages_published"] for u in users]
+        assert counts == sorted(counts, reverse=True)
+        assert users[0]["packages_published"] >= 2
+
+    def test_list_filter_has_published(self, env):
+        client, admin_tok, pub_tok, *_ = env
+        _publish(client, pub_tok, "has-pub-int-pkg", "1.0")
+
+        resp = client.get("/v1/users", params={"has_published": "true"})
+        assert resp.status_code == 200
+        for u in resp.json()["users"]:
+            assert u["packages_published"] > 0
+
+        resp2 = client.get("/v1/users", params={"has_published": "false"})
+        assert resp2.status_code == 200
+        for u in resp2.json()["users"]:
+            assert u["packages_published"] == 0
+
+
+class TestUserByEmailIntegration:
+    """Integration tests for the by-email lookup endpoint."""
+
+    def test_lookup_by_email(self, env):
+        client, admin_tok, *_ = env
+        client.patch(
+            "/v1/tokens/ci-publisher/email",
+            json={"email": "int-lookup@test.com"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        client.patch(
+            "/v1/tokens/ci-publisher/profile",
+            json={"description": "Test CI user"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        resp = client.get("/v1/users/by-email/int-lookup@test.com")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["name"] == "ci-publisher"
+        assert data["email"] == "int-lookup@test.com"
+        assert data["description"] == "Test CI user"
+        assert "packages_published" in data
+        assert "created_at" in data
+
+    def test_lookup_by_email_not_found(self, env):
+        client, *_ = env
+        resp = client.get("/v1/users/by-email/nope@nowhere.com")
+        assert resp.status_code == 404
+
+
+class TestDbUserProfileIntegration:
+    """DB-backed integration tests for user profiles, listing, and by-email lookup."""
+
+    def test_profile_lifecycle(self, db_env):
+        client, admin_tok, pub_tok, reader_tok, _ = db_env
+
+        # Set profile
+        resp = client.patch(
+            "/v1/tokens/test-publisher/profile",
+            json={"description": "DB test publisher", "metadata": '{"db": true}'},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+
+        # Lookup by name
+        resp = client.get("/v1/users/test-publisher")
+        assert resp.status_code == 200
+        profile = resp.json()
+        assert profile["description"] == "DB test publisher"
+        assert profile["metadata"] == '{"db": true}'
+        assert profile["packages_published"] == 0
+
+    def test_published_by_and_count_db(self, db_env):
+        client, admin_tok, pub_tok, reader_tok, _ = db_env
+        # Publish packages
+        for name in ["db-pkg-a", "db-pkg-b"]:
+            archive = b"db test archive content"
+            resp = client.post(
+                "/v1/publish",
+                params={"name": name, "version": "1.0", "platform": "linux", "arch": "x86_64"},
+                files={"file": (f"{name}.tar.zst", io.BytesIO(archive))},
+                headers={"Authorization": f"Bearer {pub_tok}"},
+            )
+            assert resp.status_code == 200
+
+        # Check published_by
+        resp = client.get("/v1/packages", params={"name": "db-pkg-a"})
+        assert resp.json()["packages"][0]["published_by"] == "test-publisher"
+
+        # Check count
+        resp = client.get("/v1/users/test-publisher")
+        assert resp.json()["packages_published"] == 2
+
+    def test_published_by_email_db(self, db_env):
+        client, admin_tok, pub_tok, _, _ = db_env
+        # Set publisher email
+        client.patch(
+            "/v1/tokens/test-publisher/email",
+            json={"email": "pub-db@example.org"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        # Publish a package
+        archive = b"email test archive"
+        resp = client.post(
+            "/v1/publish",
+            params={"name": "email-pkg", "version": "1.0", "platform": "linux", "arch": "x86_64"},
+            files={"file": ("email-pkg.tar.zst", io.BytesIO(archive))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        # Verify published_by_email in package listing
+        resp = client.get("/v1/packages", params={"name": "email-pkg"})
+        assert resp.status_code == 200
+        pkg = resp.json()["packages"][0]
+        assert pkg["published_by"] == "test-publisher"
+        assert pkg["published_by_email"] == "pub-db@example.org"
+
+    def test_list_users_db(self, db_env):
+        client, *_ = db_env
+        resp = client.get("/v1/users")
+        assert resp.status_code == 200
+        assert resp.json()["total"] >= 3
+
+    def test_list_users_filter_role_db(self, db_env):
+        client, *_ = db_env
+        resp = client.get("/v1/users", params={"role": "admin"})
+        assert resp.status_code == 200
+        for u in resp.json()["users"]:
+            assert u["role"] == "admin"
+
+    def test_list_users_filter_name_db(self, db_env):
+        client, *_ = db_env
+        resp = client.get("/v1/users", params={"name": "publisher"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] >= 1
+        assert all("publisher" in u["name"].lower() for u in data["users"])
+
+    def test_list_users_sort_packages_published_db(self, db_env):
+        client, admin_tok, pub_tok, reader_tok, _ = db_env
+        # Publish packages
+        for name in ["sort-db-1", "sort-db-2", "sort-db-3"]:
+            archive = b"sort db test"
+            client.post(
+                "/v1/publish",
+                params={"name": name, "version": "1.0", "platform": "linux", "arch": "x86_64"},
+                files={"file": (f"{name}.tar.zst", io.BytesIO(archive))},
+                headers={"Authorization": f"Bearer {pub_tok}"},
+            )
+
+        resp = client.get("/v1/users", params={
+            "sort": "packages_published", "order": "desc",
+        })
+        assert resp.status_code == 200
+        users = resp.json()["users"]
+        counts = [u["packages_published"] for u in users]
+        assert counts == sorted(counts, reverse=True)
+
+    def test_by_email_db(self, db_env):
+        client, admin_tok, pub_tok, *_ = db_env
+        client.patch(
+            "/v1/tokens/test-publisher/email",
+            json={"email": "db-lookup@test.com"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        client.patch(
+            "/v1/tokens/test-publisher/profile",
+            json={"description": "DB email lookup", "metadata": '{"x": 1}'},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        resp = client.get("/v1/users/by-email/db-lookup@test.com")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["name"] == "test-publisher"
+        assert data["description"] == "DB email lookup"
+        assert data["metadata"] == '{"x": 1}'
+
+    def test_by_email_not_found_db(self, db_env):
+        client, *_ = db_env
+        resp = client.get("/v1/users/by-email/ghost@example.com")
+        assert resp.status_code == 404
+
+    def test_list_users_filter_has_published_db(self, db_env):
+        client, admin_tok, pub_tok, *_ = db_env
+        archive = b"filter test"
+        client.post(
+            "/v1/publish",
+            params={"name": "filter-pkg", "version": "1.0", "platform": "linux", "arch": "x86_64"},
+            files={"file": ("f.tar.zst", io.BytesIO(archive))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+
+        resp = client.get("/v1/users", params={"has_published": "true"})
+        assert resp.status_code == 200
+        for u in resp.json()["users"]:
+            assert u["packages_published"] > 0
+
+        resp2 = client.get("/v1/users", params={"has_published": "false"})
+        assert resp2.status_code == 200
+        for u in resp2.json()["users"]:
+            assert u["packages_published"] == 0
+
+    def test_list_users_pagination_db(self, db_env):
+        client, *_ = db_env
+        resp1 = client.get("/v1/users", params={"limit": 1, "offset": 0})
+        resp2 = client.get("/v1/users", params={"limit": 1, "offset": 1})
+        assert resp1.status_code == 200
+        assert resp2.status_code == 200
+        assert len(resp1.json()["users"]) == 1
+        assert resp1.json()["users"][0]["name"] != resp2.json()["users"][0]["name"]
+
+    def test_by_email_includes_packages_count_db(self, db_env):
+        client, admin_tok, pub_tok, *_ = db_env
+        client.patch(
+            "/v1/tokens/test-publisher/email",
+            json={"email": "count-email@test.com"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        archive = b"email count test"
+        client.post(
+            "/v1/publish",
+            params={"name": "email-cnt-pkg", "version": "1.0", "platform": "linux", "arch": "x86_64"},
+            files={"file": ("f.tar.zst", io.BytesIO(archive))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        resp = client.get("/v1/users/by-email/count-email@test.com")
+        assert resp.status_code == 200
+        assert resp.json()["packages_published"] >= 1
