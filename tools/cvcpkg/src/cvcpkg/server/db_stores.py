@@ -142,6 +142,15 @@ class DbTokenStore:
             )
             return result.rowcount > 0
 
+    async def update_email(self, name: str, email: str) -> bool:
+        async with get_session() as session:
+            result = await session.execute(
+                update(TokenRow)
+                .where(TokenRow.name == name, TokenRow.revoked == False)  # noqa: E712
+                .values(email=email)
+            )
+            return result.rowcount > 0
+
     async def list_tokens(self) -> list[TokenRecord]:
         async with get_session() as session:
             result = await session.execute(select(TokenRow).order_by(TokenRow.created_at))

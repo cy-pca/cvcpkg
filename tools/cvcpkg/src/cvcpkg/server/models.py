@@ -75,6 +75,7 @@ class AuditAction(str, Enum):
     registration_request = "registration_request"
     registration_approve = "registration_approve"
     registration_deny = "registration_deny"
+    token_update_email = "token_update_email"
 
 
 # ── Token management ───────────────────────────────────────────
@@ -106,6 +107,10 @@ class TokenCreateResponse(BaseModel):
     role: TokenRole
     token: str = Field(description="Bearer token — shown only once")
     expires_at: datetime.datetime | None = None
+
+
+class EmailUpdateRequest(BaseModel):
+    email: str
 
 
 # ── Registration ───────────────────────────────────────────────

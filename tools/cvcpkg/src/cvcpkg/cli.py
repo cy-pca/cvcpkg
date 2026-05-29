@@ -3202,6 +3202,37 @@ def token_revoke(server: str, token: str, name: str):
     click.echo(f"Revoked token '{name}'.")
 
 
+@token_group.command("set-email")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--name", required=True, help="Token name to update.")
+@click.option("--email", required=True, help="New email address.")
+def token_set_email(server: str, token: str, name: str, email: str):
+    """Set the email address on a token.
+
+    Admins can update any token's email.  Non-admin users can only
+    update their own.
+    """
+    _api_request(
+        "patch",
+        f"{server.rstrip('/')}/v1/tokens/{name}/email",
+        token,
+        json={"email": email},
+    )
+    click.echo(f"Email for '{name}' updated to '{email}'.")
+
+
 @token_group.command("requests")
 @click.option(
     "--server",

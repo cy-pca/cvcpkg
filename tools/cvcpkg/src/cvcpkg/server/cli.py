@@ -424,6 +424,47 @@ def token_revoke(name: str, state_dir: str) -> None:
             click.echo(f"Token '{name}' not found or already revoked.")
 
 
+@token.command("set-email")
+@click.option("--name", required=True, help="Name of the token to update.")
+@click.option("--email", required=True, help="New email address.")
+@click.option(
+    "--state-dir",
+    type=click.Path(),
+    default="./cvcpkg-server-data",
+    help="Server state directory.",
+)
+def token_set_email(name: str, email: str, state_dir: str) -> None:
+    """Set the email address on a token."""
+    import asyncio
+    import os
+
+    db_url = os.environ.get("CVCPKG_DATABASE_URL", "")
+    if db_url:
+        from cvcpkg.server.db import create_tables, dispose_engine, init_db
+        from cvcpkg.server.db_stores import DbTokenStore
+
+        async def _set_email():
+            init_db(db_url)
+            await create_tables()
+            store = DbTokenStore(Path(state_dir))
+            result = await store.update_email(name, email)
+            await dispose_engine()
+            return result
+
+        if asyncio.run(_set_email()):
+            click.echo(f"Email for '{name}' set to '{email}'.")
+        else:
+            click.echo(f"Token '{name}' not found or already revoked.")
+    else:
+        from cvcpkg.server.auth import TokenStore
+
+        store = TokenStore(Path(state_dir))
+        if store.update_email(name, email):
+            click.echo(f"Email for '{name}' set to '{email}'.")
+        else:
+            click.echo(f"Token '{name}' not found or already revoked.")
+
+
 # ── audit ───────────────────────────────────────────────────────
 
 
