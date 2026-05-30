@@ -933,6 +933,109 @@ def gc() -> None:
     click.echo(f"cvcpkg: pruned {removed} cached archive(s).")
 
 
+# ── clean ───────────────────────────────────────────────────────
+
+
+@cli.command()
+@click.option(
+    "--work-dir",
+    type=click.Path(exists=True),
+    default=None,
+    envvar="CVCPKG_WORK_DIR",
+    help="Directory to scan for stale work directories.  "
+    "Defaults to the system temp directory ($TMPDIR / /tmp).  "
+    "Pass the same value used with 'build-all --work-dir'.",
+)
+@click.option(
+    "--older-than",
+    default=120,
+    type=int,
+    show_default=True,
+    help="Only remove directories older than this many minutes.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="List stale directories without removing them.",
+)
+@click.option(
+    "--all",
+    "remove_all",
+    is_flag=True,
+    help="Remove all cvcpkg work directories regardless of age.",
+)
+def clean(
+    work_dir: str | None,
+    older_than: int,
+    dry_run: bool,
+    remove_all: bool,
+) -> None:
+    """Remove leftover cvcpkg build work directories.
+
+    Scans the temp directory (or --work-dir) for orphaned cvcpkg-*
+    directories left behind by interrupted or crashed builds and
+    removes them.
+
+    By default only directories older than 120 minutes are removed.
+    Use --all to remove everything, or --older-than to adjust the
+    age threshold.
+
+    \b
+    Examples:
+      cvcpkg clean                          # clean /tmp, dirs >2h old
+      cvcpkg clean --dry-run                # preview what would be removed
+      cvcpkg clean --work-dir /scratch      # clean a custom work dir
+      cvcpkg clean --all                    # remove all cvcpkg work dirs
+      cvcpkg clean --older-than 30          # remove dirs older than 30 min
+    """
+    import shutil
+    import tempfile
+    import time
+
+    scan_dir = Path(work_dir) if work_dir else Path(tempfile.gettempdir())
+
+    if not scan_dir.is_dir():
+        click.echo(f"cvcpkg: directory does not exist: {scan_dir}")
+        return
+
+    now = time.time()
+    cutoff = now + 1 if remove_all else now - older_than * 60
+    removed = 0
+    total_bytes = 0
+
+    candidates = sorted(scan_dir.iterdir())
+    for entry in candidates:
+        if not entry.is_dir() or not entry.name.startswith("cvcpkg-"):
+            continue
+        try:
+            mtime = entry.stat().st_mtime
+        except OSError:
+            continue
+        if mtime > cutoff:
+            continue
+        age_min = int((now - mtime) / 60)
+        try:
+            dir_size = sum(f.stat().st_size for f in entry.rglob("*") if f.is_file())
+        except OSError:
+            dir_size = 0
+        total_bytes += dir_size
+        if dry_run:
+            click.echo(f"  [dry-run] {entry.name}  ({_human_size(dir_size)}, {age_min}m old)")
+        else:
+            shutil.rmtree(entry, ignore_errors=True)
+            click.echo(f"  removed {entry.name}  ({_human_size(dir_size)}, {age_min}m old)")
+        removed += 1
+
+    if removed == 0:
+        click.echo(f"cvcpkg: no stale work directories in {scan_dir}")
+    else:
+        verb = "would remove" if dry_run else "removed"
+        click.echo(
+            f"\ncvcpkg: {verb} {removed} director{'y' if removed == 1 else 'ies'}"
+            f" ({_human_size(total_bytes)})"
+        )
+
+
 # ── push ────────────────────────────────────────────────────────
 
 

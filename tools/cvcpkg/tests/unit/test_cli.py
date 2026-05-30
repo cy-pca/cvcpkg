@@ -54,6 +54,7 @@ def test_validate_components():
         "sync",
         "catalog",
         "gc",
+        "clean",
         "build",
         "pack",
         "publish",
@@ -791,7 +792,7 @@ class TestWorldCommand:
 # ── new subcommand help coverage ────────────────────────────────
 
 
-@pytest.mark.parametrize("subcmd", ["push", "add", "remove", "world"])
+@pytest.mark.parametrize("subcmd", ["push", "add", "remove", "world", "clean"])
 def test_new_subcommand_help(subcmd, capsys):
     ret = main([subcmd, "--help"])
     assert ret == 0
@@ -1056,3 +1057,76 @@ class TestRevBumpCli:
         b_yaml = yaml.safe_load((recipes_dir / "b" / "recipe.yaml").read_text())
         assert a_yaml["recipe"]["cvc_revision"] == 4
         assert b_yaml["recipe"]["cvc_revision"] == 8
+
+
+# ── clean command ───────────────────────────────────────────────
+
+
+class TestCleanCommand:
+    """Tests for 'cvcpkg clean'."""
+
+    def _populate(self, d, names, age_minutes=0):
+        import time
+
+        for name in names:
+            p = d / name
+            p.mkdir()
+            (p / "build").mkdir()
+            (p / "dummy.txt").write_text("x" * 100)
+            if age_minutes:
+                old = time.time() - age_minutes * 60
+                os.utime(p, (old, old))
+
+    def test_clean_empty_dir(self, tmp_path, capsys):
+        ret = main(["clean", "--work-dir", str(tmp_path)])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "no stale" in out
+
+    def test_clean_removes_old_dirs(self, tmp_path, capsys):
+        self._populate(tmp_path, ["cvcpkg-zlib-abc123", "cvcpkg-grpc-def456"], age_minutes=180)
+        # Also create a non-cvcpkg dir that should be untouched
+        (tmp_path / "other-dir").mkdir()
+        ret = main(["clean", "--work-dir", str(tmp_path)])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "removed" in out
+        assert "2 directories" in out
+        assert not (tmp_path / "cvcpkg-zlib-abc123").exists()
+        assert not (tmp_path / "cvcpkg-grpc-def456").exists()
+        assert (tmp_path / "other-dir").exists()
+
+    def test_clean_skips_recent(self, tmp_path, capsys):
+        self._populate(tmp_path, ["cvcpkg-new-xyz"], age_minutes=0)
+        ret = main(["clean", "--work-dir", str(tmp_path)])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "no stale" in out
+        assert (tmp_path / "cvcpkg-new-xyz").exists()
+
+    def test_clean_all_ignores_age(self, tmp_path, capsys):
+        self._populate(tmp_path, ["cvcpkg-fresh-abc"], age_minutes=0)
+        ret = main(["clean", "--work-dir", str(tmp_path), "--all"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "removed" in out
+        assert not (tmp_path / "cvcpkg-fresh-abc").exists()
+
+    def test_clean_dry_run(self, tmp_path, capsys):
+        self._populate(tmp_path, ["cvcpkg-test-111"], age_minutes=180)
+        ret = main(["clean", "--work-dir", str(tmp_path), "--dry-run"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "dry-run" in out
+        assert "would remove" in out
+        # Dir should still exist
+        assert (tmp_path / "cvcpkg-test-111").exists()
+
+    def test_clean_older_than(self, tmp_path, capsys):
+        self._populate(tmp_path, ["cvcpkg-old-aaa"], age_minutes=60)
+        self._populate(tmp_path, ["cvcpkg-older-bbb"], age_minutes=200)
+        ret = main(["clean", "--work-dir", str(tmp_path), "--older-than", "90"])
+        assert ret == 0
+        # Only the 200-minute old one should be removed
+        assert (tmp_path / "cvcpkg-old-aaa").exists()
+        assert not (tmp_path / "cvcpkg-older-bbb").exists()
