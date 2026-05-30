@@ -20,9 +20,7 @@ source:
 patches: []
 
 depends:
-  build:
-    - name: emsdk
-      version: ">=5.0"
+  build: []
   runtime:
     - name: boost
       version: ">=1.82.0"

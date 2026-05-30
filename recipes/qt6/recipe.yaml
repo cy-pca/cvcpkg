@@ -24,9 +24,7 @@ source:
 patches: []
 
 depends:
-  build:
-    - name: emsdk
-      version: ">=5.0"
+  build: []
   runtime:
     - name: openssl
       version: "^3.0"

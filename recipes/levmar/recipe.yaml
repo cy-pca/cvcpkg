@@ -22,9 +22,7 @@ source:
 patches: []
 
 depends:
-  build:
-    - name: emsdk
-      version: ">=5.0"
+  build: []
   runtime:
     - name: openblas
       version: ">=0.3"
