@@ -65,7 +65,7 @@ class StorageBackend(Protocol):
         """Whether the backend supports HTTP-style range requests."""
         ...
 
-    # ── Optional write interface (for ``cvcpkg push``) ──────────
+    # ── Optional write interface (for ``cvcpkg publish --dest``) ──
 
     def put(self, uri: str, data: BinaryIO, size: int = -1) -> None:
         """Upload *data* to *uri*.  Not all backends support this."""

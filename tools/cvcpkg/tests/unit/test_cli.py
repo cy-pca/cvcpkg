@@ -747,30 +747,52 @@ class TestRemoveCommand:
         assert "none of" in out.lower()
 
 
-# ── push command ────────────────────────────────────────────────
+# ── publish --dest (storage backend) ────────────────────────────
 
 
-class TestPushCommand:
-    def test_push_help(self, capsys):
-        ret = main(["push", "--help"])
-        assert ret == 0
-        out = capsys.readouterr().out
-        assert "push" in out.lower() or "upload" in out.lower()
-
-    def test_push_file_backend(self, tmp_path, capsys):
-        """Push an archive to a file:// destination."""
+class TestPublishDest:
+    def test_publish_dest_file_backend(self, tmp_path, capsys):
+        """Publish an archive to a file:// destination."""
         archive = tmp_path / "test-1.0.tar.gz"
         archive.write_bytes(b"fake archive data")
         dest_dir = tmp_path / "dest"
         dest_dir.mkdir()
-        ret = main(["push", str(archive), "--dest", f"file://{dest_dir}"])
+        ret = main(["publish", str(archive), "--dest", f"file://{dest_dir}"])
         assert ret == 0
         assert (dest_dir / "test-1.0.tar.gz").exists()
         assert (dest_dir / "test-1.0.tar.gz").read_bytes() == b"fake archive data"
 
-    def test_push_missing_file(self, tmp_path, capsys):
-        ret = main(["push", str(tmp_path / "nonexistent.tar.gz"), "--dest", f"file://{tmp_path}"])
+    def test_publish_dest_missing_file(self, tmp_path, capsys):
+        ret = main(
+            ["publish", str(tmp_path / "nonexistent.tar.gz"), "--dest", f"file://{tmp_path}"]
+        )
         assert ret == 1
+
+    def test_publish_requires_server_or_dest(self, capsys):
+        """Error when neither --server nor --dest is given."""
+        ret = main(["publish", "zlib"])
+        assert ret != 0
+
+    def test_publish_server_and_dest_exclusive(self, capsys):
+        """Error when both --server and --dest are given."""
+        ret = main(
+            [
+                "publish",
+                "zlib",
+                "--server",
+                "https://fake.example.com",
+                "--token",
+                "tok",
+                "--dest",
+                "file:///tmp",
+            ]
+        )
+        assert ret != 0
+
+    def test_publish_server_requires_token(self, capsys):
+        """Error when --server is given without --token."""
+        ret = main(["publish", "zlib", "--server", "https://fake.example.com"])
+        assert ret != 0
 
 
 # ── world command ───────────────────────────────────────────────
@@ -793,7 +815,7 @@ class TestWorldCommand:
 # ── new subcommand help coverage ────────────────────────────────
 
 
-@pytest.mark.parametrize("subcmd", ["push", "add", "remove", "world", "clean"])
+@pytest.mark.parametrize("subcmd", ["add", "remove", "world", "clean"])
 def test_new_subcommand_help(subcmd, capsys):
     ret = main([subcmd, "--help"])
     assert ret == 0
