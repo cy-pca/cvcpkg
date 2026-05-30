@@ -208,7 +208,7 @@ jobs:
               ssh ${SSH_OPTS} "${VM}" "for p in bash cmake ninja m4 py3-cryptography py3-yaml; do pkg_info \$p >/dev/null 2>&1 || pkg_add \$p; done"
               ;;
             netbsd)
-              ssh ${SSH_OPTS} "${VM}" "pkgin -y update && pkgin -y install bash cmake ninja py313-pip py313-cryptography py313-yaml"
+              ssh ${SSH_OPTS} "${VM}" "pkgin -y update; n=\$(pkgin avail 2>/dev/null | wc -l); [ \$n -gt 100 ] || { echo 'pkgin DB empty after update, retrying...'; pkgin -y update; }; pkgin -y install bash cmake ninja py313-pip py313-cryptography py313-yaml"
               ;;
           esac
 
