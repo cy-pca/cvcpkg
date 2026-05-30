@@ -20,7 +20,8 @@ source:
 patches: []
 
 depends:
-  build:
+  build: []
+  runtime:
     - name: protobuf
       version: ">=27.0"
     - name: abseil

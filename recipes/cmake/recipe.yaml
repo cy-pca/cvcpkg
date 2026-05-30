@@ -22,7 +22,8 @@ source:
 patches: []
 
 depends:
-  build:
+  build: []
+  runtime:
     - name: curl
       version: ">=8.0"
   host_tools: []

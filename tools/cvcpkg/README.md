@@ -179,21 +179,23 @@ cmake_packages:
 cvcpkg build my-library --prefix ./stage \
   --config release --link shared
 
-# Or if you already have a built install tree:
-cvcpkg push ./stage --recipe recipes/my-library \
-  --platform linux --arch x86_64 --config release --link shared
+# Pack into a distributable archive:
+cvcpkg pack my-library --prefix ./stage \
+  --config release --link shared
 ```
 
-### Step 3: Publish to the server
+### Step 3: Publish
 
 ```bash
-# Get a publisher token from your server admin:
+# Publish to a cvcpkg-server (REST API):
 export CVCPKG_TOKEN="cvctok_..."
+export CVCPKG_SERVER_URL="https://pkg.tx.wtf"
+cvcpkg publish my-library --output-dir ./dist
+cvcpkg publish --all --output-dir ./dist
 
-# Push to the cvcpkg server:
-cvcpkg push ./stage --recipe recipes/my-library \
-  --platform linux --arch x86_64 --config release --link shared \
-  --server https://cvcpkg.example.org
+# Or publish to a storage backend (S3, SFTP, local dir):
+cvcpkg publish --all --dest s3://my-bucket/cvcpkg/
+cvcpkg publish --all --dest file:///shared/cvcpkg-repo/
 ```
 
 ### Server administration
@@ -507,11 +509,16 @@ cvcpkg build zlib --prefix ./stage \
 cvcpkg pack zlib --prefix ./stage \
   --config release --link shared
 
-# 3. Publish to server:
+# 3. Publish (to cvcpkg-server):
 export CVCPKG_TOKEN="cvctok_..."
-cvcpkg push ./stage --recipe recipes/zlib \
-  --platform linux --arch x86_64 --config release --link shared \
-  --server https://cvcpkg.example.org
+export CVCPKG_SERVER_URL="https://pkg.tx.wtf"
+cvcpkg publish zlib --output-dir ./dist
+
+# Or publish all archives in dist/:
+cvcpkg publish --all --output-dir ./dist
+
+# Publish to a storage backend instead:
+cvcpkg publish --all --dest s3://my-bucket/cvcpkg/
 ```
 
 ### Signed publishing
@@ -975,6 +982,34 @@ cvcpkg download zlib --server https://pkg.tx.wtf -o ./dist
 # Pin a version
 cvcpkg download zlib==1.3.1+cvc.1 -o ./dist --config debug
 ```
+
+---
+
+## Cleaning Up Work Directories
+
+When builds are interrupted or crash, they can leave behind orphaned
+`cvcpkg-*` temporary directories in the system temp folder.  The
+`clean` command removes them:
+
+```bash
+# Remove work directories older than 2 hours (default):
+cvcpkg clean
+
+# Preview what would be removed:
+cvcpkg clean --dry-run
+
+# Remove directories older than 30 minutes:
+cvcpkg clean --older-than 30
+
+# Remove all cvcpkg work directories regardless of age:
+cvcpkg clean --all
+
+# Target a specific parent directory:
+cvcpkg clean --work-dir /mnt/scratch
+```
+
+The CI workflows run `cvcpkg clean` automatically before and after
+builds to prevent disk-full failures on shared runners.
 
 ---
 

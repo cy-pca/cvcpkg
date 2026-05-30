@@ -12,6 +12,11 @@ recipe:
     This is a build-time host tool — it runs natively on the build host
     and cross-compiles to the "wasm" platform target.
 
+cross_toolchain:
+  target_platforms: [wasm]
+  env:
+    CVC_EMSDK_DIR: "${PREFIX}"
+
 source:
   type: prebuilt
   url: https://github.com/emscripten-core/emsdk.git

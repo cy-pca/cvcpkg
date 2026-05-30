@@ -460,7 +460,7 @@ class TestPlatformAnyManifest:
         install.mkdir()
 
         manifest = generate_manifest(r, install, "any", "noarch", "release", "shared")
-        dep_names = [d["name"] for d in manifest["depends"]]
+        dep_names = [d["name"] for d in manifest["dependencies"]["required"]]
         assert "base-theme" in dep_names
 
 

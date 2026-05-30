@@ -20,10 +20,9 @@ source:
 patches: []
 
 depends:
-  build:
+  build: []
+  runtime:
     - fftw3
-    - name: emsdk
-      version: ">=5.0"
   host_tools:
     - autoconf
     - automake
