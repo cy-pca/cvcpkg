@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from unittest import mock
 
+import click
 import pytest
 import yaml
 
@@ -1130,3 +1131,89 @@ class TestCleanCommand:
         # Only the 200-minute old one should be removed
         assert (tmp_path / "cvcpkg-old-aaa").exists()
         assert not (tmp_path / "cvcpkg-older-bbb").exists()
+
+
+# ── publish by recipe name ──────────────────────────────────────
+
+
+class TestPublishRecipeName:
+    """Tests for recipe-name resolution in the publish command."""
+
+    def _make_archive(self, d, name, version, platform, arch, config, link):
+        """Create a fake archive file with valid naming."""
+        d.mkdir(parents=True, exist_ok=True)
+        fname = f"{name}-{version}-{platform}-{arch}-{config}-{link}.tar.gz"
+        p = d / fname
+        p.write_bytes(b"fake")
+        return p
+
+    def test_publish_help_shows_recipe_name_examples(self, capsys):
+        ret = main(["publish", "--help"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "--output-dir" in out
+        assert "--all" in out
+        assert "recipe name" in out.lower() or "recipe names" in out.lower()
+
+    def test_resolve_by_recipe_name(self, tmp_path):
+        from cvcpkg.cli import _resolve_publish_archives
+
+        self._make_archive(tmp_path, "zlib", "1.3.1+cvc.1", "linux", "x86_64", "release", "shared")
+        result = _resolve_publish_archives(
+            ("zlib",), str(tmp_path), "linux", "x86_64", "release", "shared"
+        )
+        assert len(result) == 1
+        assert "zlib-" in result[0].name
+
+    def test_resolve_file_path_deprecated(self, tmp_path):
+        import warnings
+
+        from cvcpkg.cli import _resolve_publish_archives
+
+        archive = self._make_archive(
+            tmp_path, "zlib", "1.3.1+cvc.1", "linux", "x86_64", "release", "shared"
+        )
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = _resolve_publish_archives(
+                (str(archive),), str(tmp_path), "linux", "x86_64", "release", "shared"
+            )
+            assert len(result) == 1
+            assert result[0] == archive.resolve()
+            assert len(w) == 1
+            assert issubclass(w[0].category, DeprecationWarning)
+            assert "deprecated" in str(w[0].message).lower()
+
+    def test_resolve_recipe_not_found(self, tmp_path):
+        from cvcpkg.cli import _resolve_publish_archives
+
+        tmp_path.mkdir(exist_ok=True)
+        with pytest.raises(click.ClickException, match="no archive found"):
+            _resolve_publish_archives(
+                ("nonexistent",), str(tmp_path), "linux", "x86_64", "release", "shared"
+            )
+
+    def test_resolve_all_archives(self, tmp_path):
+        from cvcpkg.cli import _resolve_all_archives
+
+        self._make_archive(tmp_path, "zlib", "1.3.1+cvc.1", "linux", "x86_64", "release", "shared")
+        self._make_archive(tmp_path, "grpc", "1.60.0+cvc.1", "linux", "x86_64", "release", "shared")
+        # Also create a sig file and a different platform archive — both should be skipped
+        (tmp_path / "zlib-1.3.1+cvc.1-linux-x86_64-release-shared.tar.gz.sig").write_bytes(b"sig")
+        self._make_archive(tmp_path, "zlib", "1.3.1+cvc.1", "macos", "arm64", "release", "shared")
+
+        result = _resolve_all_archives(str(tmp_path), "linux", "x86_64", "release", "shared")
+        assert len(result) == 2
+        names = {r.name for r in result}
+        assert "zlib-1.3.1+cvc.1-linux-x86_64-release-shared.tar.gz" in names
+        assert "grpc-1.60.0+cvc.1-linux-x86_64-release-shared.tar.gz" in names
+
+    def test_resolve_all_empty_dir(self, tmp_path):
+        from cvcpkg.cli import _resolve_all_archives
+
+        result = _resolve_all_archives(str(tmp_path), "linux", "x86_64", "release", "shared")
+        assert result == []
+
+    def test_publish_no_args_no_all_errors(self, capsys):
+        ret = main(["publish", "--server", "https://fake.example.com", "--token", "tok"])
+        assert ret != 0

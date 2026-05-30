@@ -1253,7 +1253,7 @@ def _fetch_mirror_urls(server: str, token: str | None) -> list[str]:
 
 
 @cli.command()
-@click.argument("archives", nargs=-1, required=True)
+@click.argument("packages", nargs=-1, required=False)
 @click.option(
     "--server",
     envvar="CVCPKG_SERVER_URL",
@@ -1287,15 +1287,47 @@ def _fetch_mirror_urls(server: str, token: str | None) -> list[str]:
     is_eager=False,
     help="Organization slug to publish packages under.",
 )
+@click.option(
+    "--output-dir",
+    type=click.Path(),
+    default="./dist",
+    help="Directory containing built archives (used when publishing by recipe name).",
+)
+@_platform_opt
+@_config_opt
+@_link_opt
+@click.option(
+    "--all",
+    "publish_all",
+    is_flag=True,
+    default=False,
+    help="Publish all archives in --output-dir matching the platform tuple.",
+)
 def publish(
-    archives: tuple[str, ...],
+    packages: tuple[str, ...],
     server: str,
     token: str,
     release_tag: str,
     chunked_threshold: int,
     org: str,
+    output_dir: str,
+    platform: str,
+    config: str,
+    link: str,
+    publish_all: bool,
 ) -> None:
     """Publish bundle archive(s) to a cvcpkg-server via its REST API.
+
+    PACKAGES can be recipe names (e.g. ``zlib``, ``grpc``) or paths to
+    archive files.  When a recipe name is given, cvcpkg looks for the
+    matching archive in --output-dir using the current --platform,
+    --config, and --link settings.
+
+    Use --all to publish every archive in --output-dir that matches
+    the platform tuple, without listing recipe names individually.
+
+    Passing archive file paths directly still works but is deprecated
+    and will be removed in a future release.
 
     Reads the embedded manifest.yaml from each archive to extract
     component metadata (name, version, platform, arch, config, link),
@@ -1305,22 +1337,42 @@ def publish(
     via ``POST /v1/publish``.  Larger archives use chunked upload with
     automatic resume on transient failures.
 
-    Archives are produced by ``cvcpkg pack``.
+    Archives are produced by ``cvcpkg pack`` or ``cvcpkg pack-all``.
 
     \b
     Examples:
+      # Publish by recipe name (recommended):
+      cvcpkg publish zlib grpc --output-dir ./dist --server https://pkg.tx.wtf --token cvctok_...
+      # Publish all recipes found in dist/:
+      cvcpkg publish --all --output-dir ./dist --server https://pkg.tx.wtf --token cvctok_...
+      # Legacy (deprecated) — passing archive paths directly:
       cvcpkg publish dist/*.tar.gz --server https://pkg.tx.wtf --token cvctok_...
-      CVCPKG_SERVER_URL=https://pkg.tx.wtf CVCPKG_TOKEN=cvctok_... cvcpkg publish dist/*.tar.gz
     """
+    if not packages and not publish_all:
+        raise click.UsageError("provide recipe names, archive paths, or use --all.")
+
+    from cvcpkg.platform import detect_arch
+
+    plat = _auto_platform(platform)
+    arc = detect_arch()
+
     base = server.rstrip("/")
     headers = {"Authorization": f"Bearer {token}"}
     ok = 0
     failed: list[str] = []
 
-    for archive in archives:
-        p = Path(archive)
-        if not p.is_file():
-            raise click.ClickException(f"file not found: {archive}")
+    # Resolve each package argument to archive file path(s).
+    if publish_all:
+        archive_paths = _resolve_all_archives(output_dir, plat, arc, config, link)
+        if not archive_paths:
+            raise click.ClickException(
+                f"no archives found in {Path(output_dir).resolve()} "
+                f"for {plat}/{arc}/{config}/{link}"
+            )
+    else:
+        archive_paths = _resolve_publish_archives(packages, output_dir, plat, arc, config, link)
+
+    for p in archive_paths:
 
         # Extract manifest from archive
         manifest = _extract_manifest(p)
@@ -1379,12 +1431,85 @@ def publish(
             click.echo(f"  ERROR: {exc.format_message()}", err=True)
             failed.append(label)
 
-    click.echo(f"cvcpkg: published {ok}/{len(archives)} archive(s).")
+    click.echo(f"cvcpkg: published {ok}/{len(archive_paths)} archive(s).")
     if failed:
         click.echo(f"cvcpkg: {len(failed)} archive(s) failed:", err=True)
         for f in failed:
             click.echo(f"  - {f}", err=True)
         raise click.ClickException(f"publish completed with {len(failed)} error(s)")
+
+
+def _resolve_publish_archives(
+    packages: tuple[str, ...],
+    output_dir: str,
+    platform: str,
+    arch: str,
+    config: str,
+    link: str,
+) -> list[Path]:
+    """Resolve package arguments to archive file paths.
+
+    Each argument is either:
+    - A file path to an existing archive (deprecated, emits a warning)
+    - A recipe name, resolved by globbing the output directory for
+      ``{name}-*-{platform}-{arch}-{config}-{link}.*``
+    """
+    import warnings
+
+    dist = Path(output_dir).resolve()
+    result: list[Path] = []
+
+    for pkg in packages:
+        p = Path(pkg)
+        if p.is_file():
+            warnings.warn(
+                f"Passing archive file paths to 'cvcpkg publish' is deprecated. "
+                f"Use recipe names instead (e.g. 'cvcpkg publish {p.stem.split('-')[0]}').",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            result.append(p.resolve())
+            continue
+
+        # Treat as a recipe name — search output_dir for matching archives.
+        if not dist.is_dir():
+            raise click.ClickException(
+                f"output directory does not exist: {dist}\n"
+                f"  Run 'cvcpkg pack-all' first, or pass --output-dir."
+            )
+
+        pattern = f"{pkg}-*-{platform}-{arch}-{config}-{link}.*"
+        matches = sorted(dist.glob(pattern))
+        # Filter out signature files.
+        matches = [m for m in matches if not m.name.endswith(".sig")]
+        if not matches:
+            raise click.ClickException(
+                f"no archive found for recipe '{pkg}' in {dist}\n"
+                f"  Expected pattern: {pattern}\n"
+                f"  Check --output-dir, --platform, --config, --link."
+            )
+        if len(matches) > 1:
+            # Multiple versions — take the latest (last alphabetically).
+            click.echo(f"cvcpkg: multiple archives for '{pkg}', using {matches[-1].name}", err=True)
+        result.append(matches[-1])
+
+    return result
+
+
+def _resolve_all_archives(
+    output_dir: str,
+    platform: str,
+    arch: str,
+    config: str,
+    link: str,
+) -> list[Path]:
+    """Find all archives in *output_dir* matching the platform tuple."""
+    dist = Path(output_dir).resolve()
+    if not dist.is_dir():
+        return []
+    pattern = f"*-{platform}-{arch}-{config}-{link}.*"
+    matches = sorted(dist.glob(pattern))
+    return [m for m in matches if m.is_file() and not m.name.endswith(".sig")]
 
 
 def _extract_manifest(archive_path: Path) -> dict:
