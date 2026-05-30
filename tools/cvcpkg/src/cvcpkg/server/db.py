@@ -102,6 +102,13 @@ class PackageRow(Base):
         index=True,
     )
 
+    required_deps: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="[]",
+        server_default="[]",
+    )
+
     __table_args__ = (
         Index(
             "ix_packages_unique_variant",

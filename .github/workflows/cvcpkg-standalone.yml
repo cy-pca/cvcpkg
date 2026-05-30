@@ -171,14 +171,33 @@ jobs:
             fi
             echo "$fallback"
           }
+          vm_is_reachable() {
+            ssh ${SSH_OPTS} -o ConnectTimeout=5 "root@$1" true >/dev/null 2>&1
+          }
           case "${{ matrix.os }}" in
-            freebsd*)  HOST=$(resolve_vm_ip "freebsd-build" "${{ matrix.host }}") ;;
-            openbsd*)  HOST=$(resolve_vm_ip "openbsd-build" "${{ matrix.host }}") ;;
-            netbsd*)   HOST=$(resolve_vm_ip "netbsd-build" "${{ matrix.host }}") ;;
-            *)         HOST="${{ matrix.host }}" ;;
+            freebsd*)
+              HOST=$(resolve_vm_ip "freebsd-build" "${{ matrix.host }}")
+              FALLBACK=$(resolve_vm_ip "freebsd-build-2" "10.66.77.154")
+              ;;
+            openbsd*)
+              HOST=$(resolve_vm_ip "openbsd-build" "${{ matrix.host }}")
+              FALLBACK=$(resolve_vm_ip "openbsd-build-2" "10.66.77.235")
+              ;;
+            netbsd*)
+              HOST=$(resolve_vm_ip "netbsd-build" "${{ matrix.host }}")
+              FALLBACK=$(resolve_vm_ip "netbsd-build-2" "10.66.77.167")
+              ;;
+            *)
+              HOST="${{ matrix.host }}"
+              FALLBACK=""
+              ;;
           esac
+          if ! vm_is_reachable "$HOST" && [ -n "$FALLBACK" ]; then
+            echo "::warning::Primary VM $HOST unreachable, falling back to $FALLBACK"
+            HOST="$FALLBACK"
+          fi
           echo "host=$HOST" >> "$GITHUB_OUTPUT"
-          echo "Resolved ${{ matrix.os }} VM IP: $HOST"
+          echo "Selected ${{ matrix.os }} VM: $HOST"
 
       - name: Sync repo to BSD VM
         shell: bash

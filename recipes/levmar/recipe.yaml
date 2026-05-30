@@ -22,15 +22,14 @@ source:
 patches: []
 
 depends:
-  build:
+  build: []
+  runtime:
     - name: openblas
       version: ">=0.3"
       platforms: [linux]
     - name: clapack
       version: ">=3.2"
       platforms: [windows, wasm]
-    - name: emsdk
-      version: ">=5.0"
   host_tools:
     - cmake
     - ninja

@@ -94,8 +94,19 @@ class BundleManifest:
             )
 
             contents = d.get("contents", {})
+            # Support both new ("dependencies") and legacy ("depends")
             deps = d.get("dependencies", {})
+            if isinstance(deps, dict):
+                dep_required = deps.get("required", [])
+            else:
+                dep_required = []
+            # Fallback: legacy flat "depends" list
+            if not dep_required:
+                legacy_deps = d.get("depends", [])
+                if isinstance(legacy_deps, list):
+                    dep_required = legacy_deps
             integrity = d.get("integrity", {})
+            meta = d.get("meta", {})
 
             return cls(
                 schema_version=d["schema_version"],
@@ -105,14 +116,14 @@ class BundleManifest:
                 cvc_revision=b["cvc_revision"],
                 platform=b["platform"],
                 arch=b["arch"],
-                build_type=b["build_type"],
+                build_type=b.get("build_type", b.get("config", "release")),
                 link=b["link"],
                 link_actual=b.get("link_actual", b["link"]),
                 triplet=b.get("triplet", ""),
                 abi=abi,
                 introduced_in=b.get("introduced_in", ""),
                 last_seen_in=b.get("last_seen_in", ""),
-                description=contents.get("description", ""),
+                description=contents.get("description", meta.get("description", "")),
                 files=contents.get("files", []),
                 cmake_packages=[
                     CmakePackage(name=p["name"], targets=p["targets"])
@@ -126,7 +137,7 @@ class BundleManifest:
                         version=dep.get("version", ""),
                         reason=dep.get("reason", ""),
                     )
-                    for dep in deps.get("required", [])
+                    for dep in dep_required
                 ],
                 optional_deps=[
                     Dependency(
@@ -134,12 +145,12 @@ class BundleManifest:
                         version=dep.get("version", ""),
                         reason=dep.get("reason", ""),
                     )
-                    for dep in deps.get("optional", [])
+                    for dep in (deps.get("optional", []) if isinstance(deps, dict) else [])
                 ],
                 provides=d.get("provides", []),
                 sha256=integrity.get("sha256", ""),
                 size_bytes=integrity.get("size_bytes", 0),
-                built_at=integrity.get("built_at", ""),
+                built_at=integrity.get("built_at", meta.get("built_at", "")),
             )
         except KeyError as e:
             raise SchemaError(f"manifest missing required field: {e}") from e

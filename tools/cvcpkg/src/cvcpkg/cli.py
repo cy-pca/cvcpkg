@@ -27,6 +27,7 @@ package manager for libcvc-deps.  It provides two main workflows:
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -933,48 +934,107 @@ def gc() -> None:
     click.echo(f"cvcpkg: pruned {removed} cached archive(s).")
 
 
-# ── push ────────────────────────────────────────────────────────
+# ── clean ───────────────────────────────────────────────────────
 
 
 @cli.command()
-@click.argument("archives", nargs=-1, required=True)
 @click.option(
-    "--dest",
-    required=True,
-    metavar="URI",
-    help="Destination URI (e.g. s3://bucket/prefix, sftp://host/path, file:///local).",
+    "--work-dir",
+    type=click.Path(exists=True),
+    default=None,
+    envvar="CVCPKG_WORK_DIR",
+    help="Directory to scan for stale work directories.  "
+    "Defaults to the system temp directory ($TMPDIR / /tmp).  "
+    "Pass the same value used with 'build-all --work-dir'.",
 )
-def push(archives: tuple[str, ...], dest: str) -> None:
-    """Push bundle archive(s) to a storage backend.
+@click.option(
+    "--older-than",
+    default=120,
+    type=int,
+    show_default=True,
+    help="Only remove directories older than this many minutes.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="List stale directories without removing them.",
+)
+@click.option(
+    "--all",
+    "remove_all",
+    is_flag=True,
+    help="Remove all cvcpkg work directories regardless of age.",
+)
+def clean(
+    work_dir: str | None,
+    older_than: int,
+    dry_run: bool,
+    remove_all: bool,
+) -> None:
+    """Remove leftover cvcpkg build work directories.
 
-    Uploads each ARCHIVE file to DEST using the storage backend
-    registered for its URI scheme.
+    Scans the temp directory (or --work-dir) for orphaned cvcpkg-*
+    directories left behind by interrupted or crashed builds and
+    removes them.
+
+    By default only directories older than 120 minutes are removed.
+    Use --all to remove everything, or --older-than to adjust the
+    age threshold.
 
     \b
     Examples:
-      cvcpkg push dist/*.tar.zst --dest s3://my-bucket/cvcpkg/
-      cvcpkg push dist/*.tar.zst --dest sftp://builds.example.com/pub/cvcpkg/
+      cvcpkg clean                          # clean /tmp, dirs >2h old
+      cvcpkg clean --dry-run                # preview what would be removed
+      cvcpkg clean --work-dir /scratch      # clean a custom work dir
+      cvcpkg clean --all                    # remove all cvcpkg work dirs
+      cvcpkg clean --older-than 30          # remove dirs older than 30 min
     """
-    from cvcpkg.storage import get_backend
+    import shutil
+    import tempfile
+    import time
 
-    backend = get_backend(dest)
+    scan_dir = Path(work_dir) if work_dir else Path(tempfile.gettempdir())
 
-    for archive in archives:
-        p = Path(archive)
-        if not p.is_file():
-            raise click.ClickException(f"file not found: {archive}")
-        dest_uri = dest.rstrip("/") + "/" + p.name
-        click.echo(f"cvcpkg: uploading {p.name} -> {dest_uri}")
+    if not scan_dir.is_dir():
+        click.echo(f"cvcpkg: directory does not exist: {scan_dir}")
+        return
+
+    now = time.time()
+    cutoff = now + 1 if remove_all else now - older_than * 60
+    removed = 0
+    total_bytes = 0
+
+    candidates = sorted(scan_dir.iterdir())
+    for entry in candidates:
+        if not entry.is_dir() or not entry.name.startswith("cvcpkg-"):
+            continue
         try:
-            with open(p, "rb") as f:
-                backend.put(dest_uri, f)
-        except NotImplementedError:
-            raise click.ClickException(
-                f"backend for {dest} does not support uploads (put)."
-            ) from None
-        click.echo(f"  done ({p.stat().st_size:,} bytes)")
+            mtime = entry.stat().st_mtime
+        except OSError:
+            continue
+        if mtime > cutoff:
+            continue
+        age_min = int((now - mtime) / 60)
+        try:
+            dir_size = sum(f.stat().st_size for f in entry.rglob("*") if f.is_file())
+        except OSError:
+            dir_size = 0
+        total_bytes += dir_size
+        if dry_run:
+            click.echo(f"  [dry-run] {entry.name}  ({_human_size(dir_size)}, {age_min}m old)")
+        else:
+            shutil.rmtree(entry, ignore_errors=True)
+            click.echo(f"  removed {entry.name}  ({_human_size(dir_size)}, {age_min}m old)")
+        removed += 1
 
-    click.echo(f"cvcpkg: pushed {len(archives)} archive(s).")
+    if removed == 0:
+        click.echo(f"cvcpkg: no stale work directories in {scan_dir}")
+    else:
+        verb = "would remove" if dry_run else "removed"
+        click.echo(
+            f"\ncvcpkg: {verb} {removed} director{'y' if removed == 1 else 'ies'}"
+            f" ({_human_size(total_bytes)})"
+        )
 
 
 # ── download ────────────────────────────────────────────────────
@@ -1150,19 +1210,25 @@ def _fetch_mirror_urls(server: str, token: str | None) -> list[str]:
 
 
 @cli.command()
-@click.argument("archives", nargs=-1, required=True)
+@click.argument("packages", nargs=-1, required=False)
 @click.option(
     "--server",
     envvar="CVCPKG_SERVER_URL",
-    required=True,
+    default="",
     metavar="URL",
     help="cvcpkg-server URL (e.g. https://pkg.tx.wtf).  [env: CVCPKG_SERVER_URL]",
 )
 @click.option(
     "--token",
     envvar="CVCPKG_TOKEN",
-    required=True,
+    default="",
     help="Bearer token with publisher or admin role.  [env: CVCPKG_TOKEN]",
+)
+@click.option(
+    "--dest",
+    default="",
+    metavar="URI",
+    help="Storage backend URI (e.g. s3://bucket/prefix, sftp://host/path, file:///local).",
 )
 @click.option(
     "--release-tag",
@@ -1184,53 +1250,172 @@ def _fetch_mirror_urls(server: str, token: str | None) -> list[str]:
     is_eager=False,
     help="Organization slug to publish packages under.",
 )
+@click.option(
+    "--output-dir",
+    type=click.Path(),
+    default="./dist",
+    help="Directory containing built archives (used when publishing by recipe name).",
+)
+@_platform_opt
+@_config_opt
+@_link_opt
+@click.option(
+    "--all",
+    "publish_all",
+    is_flag=True,
+    default=False,
+    help="Publish all archives in --output-dir matching the platform tuple.",
+)
 def publish(
-    archives: tuple[str, ...],
+    packages: tuple[str, ...],
     server: str,
     token: str,
+    dest: str,
+    release_tag: str,
+    chunked_threshold: int,
+    org: str,
+    output_dir: str,
+    platform: str,
+    config: str,
+    link: str,
+    publish_all: bool,
+) -> None:
+    """Publish bundle archive(s) to a cvcpkg-server or storage backend.
+
+    PACKAGES can be recipe names (e.g. ``zlib``, ``grpc``) or paths to
+    archive files.  When a recipe name is given, cvcpkg looks for the
+    matching archive in --output-dir using the current --platform,
+    --config, and --link settings.
+
+    Use --all to publish every archive in --output-dir that matches
+    the platform tuple, without listing recipe names individually.
+
+    Passing archive file paths directly still works but is deprecated
+    and will be removed in a future release.
+
+    **Server mode** (``--server``): reads the embedded manifest.yaml
+    from each archive to extract component metadata, then uploads to
+    the cvcpkg-server REST API.  Small archives (< 10 MB) upload in
+    a single request; larger archives use chunked upload with resume.
+
+    **Storage-backend mode** (``--dest``): uploads archive files to a
+    storage backend (S3, SFTP, local directory, etc.) using the
+    pluggable storage layer.
+
+    Exactly one of ``--server`` or ``--dest`` must be provided.
+
+    Archives are produced by ``cvcpkg pack`` or ``cvcpkg pack-all``.
+
+    \b
+    Examples:
+      # Publish to cvcpkg-server by recipe name (recommended):
+      cvcpkg publish zlib grpc --server https://pkg.tx.wtf --token cvctok_...
+      # Publish all recipes found in dist/ to the server:
+      cvcpkg publish --all --server https://pkg.tx.wtf --token cvctok_...
+      # Publish to an S3 bucket:
+      cvcpkg publish --all --dest s3://my-bucket/cvcpkg/
+      # Publish to a local directory:
+      cvcpkg publish dist/*.tar.gz --dest file:///shared/repo/
+    """
+    if not server and not dest:
+        raise click.UsageError("provide --server (or set CVCPKG_SERVER_URL) or --dest.")
+    if server and dest:
+        raise click.UsageError("--server and --dest are mutually exclusive.")
+    if server and not token:
+        raise click.UsageError(
+            "--token is required when publishing to a server " "(or set CVCPKG_TOKEN)."
+        )
+    if not packages and not publish_all:
+        raise click.UsageError("provide recipe names, archive paths, or use --all.")
+
+    from cvcpkg.platform import detect_arch
+
+    plat = _auto_platform(platform)
+    arc = detect_arch()
+
+    # Resolve each package argument to archive file path(s).
+    if publish_all:
+        archive_paths = _resolve_all_archives(output_dir, plat, arc, config, link)
+        if not archive_paths:
+            raise click.ClickException(
+                f"no archives found in {Path(output_dir).resolve()} "
+                f"for {plat}/{arc}/{config}/{link}"
+            )
+    else:
+        archive_paths = _resolve_publish_archives(packages, output_dir, plat, arc, config, link)
+
+    if dest:
+        _publish_to_backend(dest, archive_paths)
+    else:
+        _publish_to_server(
+            server,
+            token,
+            archive_paths,
+            release_tag,
+            chunked_threshold,
+            org,
+        )
+
+
+def _publish_to_backend(dest: str, archive_paths: list[Path]) -> None:
+    """Upload archives to a storage backend (S3, SFTP, file, etc.)."""
+    from cvcpkg.storage import get_backend
+
+    backend = get_backend(dest)
+    for p in archive_paths:
+        if not p.is_file():
+            raise click.ClickException(f"file not found: {p}")
+        dest_uri = dest.rstrip("/") + "/" + p.name
+        click.echo(f"cvcpkg: uploading {p.name} -> {dest_uri}")
+        try:
+            with open(p, "rb") as f:
+                backend.put(dest_uri, f)
+        except NotImplementedError:
+            raise click.ClickException(
+                f"backend for {dest} does not support uploads (put)."
+            ) from None
+        click.echo(f"  done ({p.stat().st_size:,} bytes)")
+    click.echo(f"cvcpkg: published {len(archive_paths)} archive(s) to {dest}.")
+
+
+def _publish_to_server(
+    server: str,
+    token: str,
+    archive_paths: list[Path],
     release_tag: str,
     chunked_threshold: int,
     org: str,
 ) -> None:
-    """Publish bundle archive(s) to a cvcpkg-server via its REST API.
-
-    Reads the embedded manifest.yaml from each archive to extract
-    component metadata (name, version, platform, arch, config, link),
-    then uploads the archive to the server.
-
-    Small archives (< 10 MB by default) are uploaded in a single request
-    via ``POST /v1/publish``.  Larger archives use chunked upload with
-    automatic resume on transient failures.
-
-    Archives are produced by ``cvcpkg pack``.
-
-    \b
-    Examples:
-      cvcpkg publish dist/*.tar.gz --server https://pkg.tx.wtf --token cvctok_...
-      CVCPKG_SERVER_URL=https://pkg.tx.wtf CVCPKG_TOKEN=cvctok_... cvcpkg publish dist/*.tar.gz
-    """
+    """Upload archives to a cvcpkg-server via its REST API."""
     base = server.rstrip("/")
     headers = {"Authorization": f"Bearer {token}"}
     ok = 0
     failed: list[str] = []
 
-    for archive in archives:
-        p = Path(archive)
-        if not p.is_file():
-            raise click.ClickException(f"file not found: {archive}")
-
-        # Extract manifest from archive
+    for p in archive_paths:
         manifest = _extract_manifest(p)
         bundle = manifest.get("bundle", {})
         name = bundle.get("name", "")
         version = bundle.get("version", "")
         plat = bundle.get("platform", "")
         arch = bundle.get("arch", "")
-        build_type = bundle.get("config", "release")
+        build_type = bundle.get("build_type", bundle.get("config", "release"))
         link = bundle.get("link", "shared")
         recipe_version = manifest.get("meta", {}).get("recipe_sha256", "")
         meta = manifest.get("meta", {})
         manifest_org = bundle.get("org", "")
+
+        # Extract runtime deps from manifest.
+        deps_block = manifest.get("dependencies", {})
+        if isinstance(deps_block, dict):
+            required_deps = deps_block.get("required", [])
+        else:
+            required_deps = []
+        # Fallback: legacy flat "depends" list.
+        if not required_deps:
+            legacy = manifest.get("depends", [])
+            if isinstance(legacy, list):
+                required_deps = legacy
 
         if not name or not version:
             raise click.ClickException(f"{p.name}: manifest missing name or version")
@@ -1239,7 +1424,6 @@ def publish(
         display_name = f"{org or manifest_org}/{name}" if (org or manifest_org) else name
         label = f"{display_name}=={version} ({plat}/{arch}/{build_type}/{link})"
 
-        # Pre-check: skip if this exact variant already exists on the server
         if _variant_exists(base, headers, name, version, plat, arch, build_type, link):
             click.echo(f"cvcpkg: skipping {label} (already on server)")
             continue
@@ -1261,6 +1445,7 @@ def publish(
             "maintainer": meta.get("maintainer", ""),
             "tags": meta.get("tags", ""),
             "org": org,
+            "required_deps": json.dumps(required_deps),
         }
 
         try:
@@ -1271,17 +1456,89 @@ def publish(
 
             if result == "published":
                 ok += 1
-            # result == "skipped" → already counted
         except click.ClickException as exc:
             click.echo(f"  ERROR: {exc.format_message()}", err=True)
             failed.append(label)
 
-    click.echo(f"cvcpkg: published {ok}/{len(archives)} archive(s).")
+    click.echo(f"cvcpkg: published {ok}/{len(archive_paths)} archive(s).")
     if failed:
         click.echo(f"cvcpkg: {len(failed)} archive(s) failed:", err=True)
         for f in failed:
             click.echo(f"  - {f}", err=True)
         raise click.ClickException(f"publish completed with {len(failed)} error(s)")
+
+
+def _resolve_publish_archives(
+    packages: tuple[str, ...],
+    output_dir: str,
+    platform: str,
+    arch: str,
+    config: str,
+    link: str,
+) -> list[Path]:
+    """Resolve package arguments to archive file paths.
+
+    Each argument is either:
+    - A file path to an existing archive (deprecated, emits a warning)
+    - A recipe name, resolved by globbing the output directory for
+      ``{name}-*-{platform}-{arch}-{config}-{link}.*``
+    """
+    import warnings
+
+    dist = Path(output_dir).resolve()
+    result: list[Path] = []
+
+    for pkg in packages:
+        p = Path(pkg)
+        if p.is_file():
+            warnings.warn(
+                f"Passing archive file paths to 'cvcpkg publish' is deprecated. "
+                f"Use recipe names instead (e.g. 'cvcpkg publish {p.stem.split('-')[0]}').",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            result.append(p.resolve())
+            continue
+
+        # Treat as a recipe name — search output_dir for matching archives.
+        if not dist.is_dir():
+            raise click.ClickException(
+                f"output directory does not exist: {dist}\n"
+                f"  Run 'cvcpkg pack-all' first, or pass --output-dir."
+            )
+
+        pattern = f"{pkg}-*-{platform}-{arch}-{config}-{link}.*"
+        matches = sorted(dist.glob(pattern))
+        # Filter out signature files.
+        matches = [m for m in matches if not m.name.endswith(".sig")]
+        if not matches:
+            raise click.ClickException(
+                f"no archive found for recipe '{pkg}' in {dist}\n"
+                f"  Expected pattern: {pattern}\n"
+                f"  Check --output-dir, --platform, --config, --link."
+            )
+        if len(matches) > 1:
+            # Multiple versions — take the latest (last alphabetically).
+            click.echo(f"cvcpkg: multiple archives for '{pkg}', using {matches[-1].name}", err=True)
+        result.append(matches[-1])
+
+    return result
+
+
+def _resolve_all_archives(
+    output_dir: str,
+    platform: str,
+    arch: str,
+    config: str,
+    link: str,
+) -> list[Path]:
+    """Find all archives in *output_dir* matching the platform tuple."""
+    dist = Path(output_dir).resolve()
+    if not dist.is_dir():
+        return []
+    pattern = f"*-{platform}-{arch}-{config}-{link}.*"
+    matches = sorted(dist.glob(pattern))
+    return [m for m in matches if m.is_file() and not m.name.endswith(".sig")]
 
 
 def _extract_manifest(archive_path: Path) -> dict:
@@ -1819,7 +2076,11 @@ def build(
     if with_deps:
         # Resolve all deps and build in topological order
         rdirs = [Path(d) for d in recipes_dirs] if recipes_dirs else [find_recipes_dir()]
-        from cvcpkg.builder import list_recipes, load_all_recipes
+        from cvcpkg.builder import (
+            _collect_host_tools,
+            list_recipes,
+            load_all_recipes,
+        )
 
         if len(rdirs) > 1:
             all_recipes = load_all_recipes(rdirs)
@@ -1853,19 +2114,15 @@ def build(
         available = [by_name[n] for n in needed if n in by_name]
 
         # Split into target-platform recipes and host-tool recipes.
-        # Host tools are deps that have no matrix entry for the target
-        # platform but do have one for the native host (e.g. emsdk when
-        # cross-compiling to wasm).
         from cvcpkg.platform import detect_platform
 
-        host_plat = detect_platform()
-        target_recipes: list = []
-        host_tool_recipes: list = []
-        for r in available:
-            if any(m.platform == plat for m in r.build_matrix):
-                target_recipes.append(r)
-            elif plat != host_plat and any(m.platform == host_plat for m in r.build_matrix):
-                host_tool_recipes.append(r)
+        host_plat = host_platform or detect_platform()
+        target_recipes = [
+            r
+            for r in available
+            if any(m.platform == plat or m.platform == "any" for m in r.build_matrix)
+        ]
+        host_tool_recipes = _collect_host_tools(target_recipes, all_recipes, plat, host_plat)
 
         # Build host tools first (e.g. emsdk), then target recipes
         if host_tool_recipes:
@@ -1881,6 +2138,11 @@ def build(
                     keep_build_dir=keep_build_dir,
                 )
 
+        # Collect cross-toolchain env from host-tool recipes.
+        merged_toolchain_env: dict[str, str] = {}
+        for r in host_tool_recipes:
+            merged_toolchain_env.update(r.cross_toolchain_env)
+
         ordered = resolve_build_order(target_recipes, plat)
         for r in ordered:
             print(f"\ncvcpkg: ══ {r.name} ({r.full_version}) ══")
@@ -1891,7 +2153,8 @@ def build(
                 link=link,
                 prefix=prefix_path,
                 keep_build_dir=keep_build_dir,
-                host_platform=host_platform,
+                host_platform=host_plat,
+                cross_toolchain_env=merged_toolchain_env,
             )
     else:
         for name in recipe:
@@ -2266,6 +2529,8 @@ def pack_all_cmd(
     )
     from cvcpkg.platform import detect_arch
 
+    import shutil
+
     plat = _auto_platform(platform)
     arch = detect_arch()
     prefix_path = Path(prefix).resolve() if prefix else None
@@ -2314,6 +2579,7 @@ def pack_all_cmd(
         no_server_cache=no_server_cache,
         server_cache_org=server_cache_org,
         work_dir_root=work_dir_root,
+        cleanup_work_dirs=False,
     )
 
     output.mkdir(parents=True, exist_ok=True)
@@ -2354,6 +2620,12 @@ def pack_all_cmd(
             sig_path = archive_path.with_suffix(archive_path.suffix + ".sig")
             write_signature(sig, sig_path)
             click.echo(f"  Signed: {sig_path.name} (key: {sig.key_fingerprint[:16]}...)")
+
+        # Clean up per-component work directory now that the archive
+        # has been created (build_all was called with
+        # cleanup_work_dirs=False so the caller manages lifetime).
+        if not keep_build_dir and ctx.work_dir != ctx.prefix and ctx.work_dir.is_dir():
+            shutil.rmtree(ctx.work_dir, ignore_errors=True)
 
     failures = getattr(contexts, "failures", [])
     if failures:

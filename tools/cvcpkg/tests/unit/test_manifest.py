@@ -157,6 +157,77 @@ class TestBundleManifestFromDict:
         m = BundleManifest.from_yaml(str(p))
         assert m.name == "zlib"
 
+    def test_legacy_depends_key_parsed(self):
+        """Legacy flat 'depends' list is parsed into required_deps."""
+        d = {
+            **self.MINIMAL,
+            "depends": [
+                {"name": "gsl", "version": ">=2.7"},
+                {"name": "fftw3"},
+            ],
+        }
+        m = BundleManifest.from_dict(d)
+        assert len(m.required_deps) == 2
+        assert m.required_deps[0].name == "gsl"
+        assert m.required_deps[0].version == ">=2.7"
+        assert m.required_deps[1].name == "fftw3"
+
+    def test_legacy_config_key_parsed(self):
+        """Legacy 'config' field in bundle is parsed as build_type."""
+        d = {**self.MINIMAL}
+        b = dict(d["bundle"])
+        del b["build_type"]
+        b["config"] = "debug"
+        d["bundle"] = b
+        m = BundleManifest.from_dict(d)
+        assert m.build_type == "debug"
+
+    def test_generate_manifest_roundtrip(self, tmp_path):
+        """Manifest produced by generate_manifest is parsed by BundleManifest."""
+        from cvcpkg.builder import Recipe, generate_manifest
+
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        recipe_dir.mkdir(parents=True)
+        import yaml
+
+        recipe_raw = {
+            "schema_version": 1,
+            "recipe": {"name": "testpkg", "upstream_version": "2.0", "cvc_revision": 1},
+            "source": {"type": "vendored", "path": "."},
+            "depends": {
+                "runtime": [
+                    {"name": "zlib", "version": "^1.3"},
+                    {"name": "boost"},
+                ],
+            },
+            "build": {"matrix": [{"platform": "linux", "script": "build.sh"}]},
+            "package": {"files": ["lib/*"]},
+        }
+        (recipe_dir / "recipe.yaml").write_text(yaml.dump(recipe_raw))
+        (recipe_dir / "build.sh").write_text("#!/bin/sh\ntrue\n")
+
+        r = Recipe.load(recipe_dir)
+        install_dir = tmp_path / "install"
+        install_dir.mkdir()
+        (install_dir / "lib").mkdir()
+        (install_dir / "lib" / "libtest.so").write_text("lib")
+
+        manifest_dict = generate_manifest(r, install_dir, "linux", "x86_64", "release", "shared")
+
+        # Parse through BundleManifest
+        m = BundleManifest.from_dict(manifest_dict)
+        assert m.name == "testpkg"
+        assert m.version == "2.0+cvc.1"
+        assert m.platform == "linux"
+        assert m.build_type == "release"
+        assert len(m.required_deps) == 2
+        assert m.required_deps[0].name == "zlib"
+        assert m.required_deps[0].version == "^1.3"
+        assert m.required_deps[1].name == "boost"
+        assert m.built_at != ""
+        assert m.description == ""
+        assert "lib/libtest.so" in m.files
+
 
 # ── CatalogEntry ────────────────────────────────────────────────
 

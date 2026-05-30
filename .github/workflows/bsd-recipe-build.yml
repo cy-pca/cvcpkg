@@ -73,17 +73,16 @@ jobs:
           echo "btlc=$BTLC"        >> "$GITHUB_OUTPUT"
           echo "stem=$STEM"         >> "$GITHUB_OUTPUT"
 
-      # ── Resolve VM host IP and python path ──
-      # IPs are resolved dynamically via `incus list` to survive DHCP lease
-      # changes on the br-uplink LAN bridge.  Hardcoded fallbacks are kept
-      # for resilience if Incus CLI is unavailable.
+      # ── Resolve VM host IP ──
+      # Each BSD platform has two builder VMs.  We hash the matrix combo
+      # (config + link) to distribute jobs evenly across the pair.
+      # If the chosen VM is unreachable, we fall back to the other one.
       - name: Resolve BSD VM connection
         id: vm
         shell: bash
         run: |
           resolve_vm_ip() {
             local vm_name="$1" fallback="$2"
-            # Try dynamic resolution via incus (picks the 10.66.77.x address)
             if command -v incus >/dev/null 2>&1; then
               local ip
               ip=$(incus list "$vm_name" --format csv -c 4 2>/dev/null \
@@ -96,22 +95,47 @@ jobs:
             echo "$fallback"
           }
 
+          vm_is_reachable() {
+            ssh ${SSH_OPTS} -o ConnectTimeout=5 "root@$1" true >/dev/null 2>&1
+          }
+
+          # Pick VM index (0 or 1) by hashing the matrix combo
+          COMBO="${{ inputs.config }}-${{ inputs.link }}"
+          HASH=$(echo -n "$COMBO" | cksum | awk '{print $1}')
+          IDX=$(( HASH % 2 ))
+
           case "${{ inputs.platform }}" in
             freebsd)
-              HOST=$(resolve_vm_ip "freebsd-build" "10.66.77.174")
+              VMS=("freebsd-build" "freebsd-build-2")
+              FALLBACKS=("10.66.77.174" "10.66.77.154")
               echo "python=python3.11" >> "$GITHUB_OUTPUT"
               ;;
             openbsd)
-              HOST=$(resolve_vm_ip "openbsd-build" "10.66.77.197")
+              VMS=("openbsd-build" "openbsd-build-2")
+              FALLBACKS=("10.66.77.197" "10.66.77.235")
               echo "python=python3.12" >> "$GITHUB_OUTPUT"
               ;;
             netbsd)
-              HOST=$(resolve_vm_ip "netbsd-build" "10.66.77.214")
+              VMS=("netbsd-build" "netbsd-build-2")
+              FALLBACKS=("10.66.77.214" "10.66.77.167")
               echo "python=python3.13" >> "$GITHUB_OUTPUT"
               ;;
           esac
+
+          PRIMARY_IDX=$IDX
+          FALLBACK_IDX=$(( 1 - IDX ))
+
+          HOST=$(resolve_vm_ip "${VMS[$PRIMARY_IDX]}" "${FALLBACKS[$PRIMARY_IDX]}")
+          echo "Primary VM: ${VMS[$PRIMARY_IDX]} ($HOST)"
+
+          if ! vm_is_reachable "$HOST"; then
+            echo "::warning::Primary VM ${VMS[$PRIMARY_IDX]} ($HOST) unreachable, falling back"
+            HOST=$(resolve_vm_ip "${VMS[$FALLBACK_IDX]}" "${FALLBACKS[$FALLBACK_IDX]}")
+            echo "Fallback VM: ${VMS[$FALLBACK_IDX]} ($HOST)"
+          fi
+
           echo "host=$HOST" >> "$GITHUB_OUTPUT"
-          echo "Resolved ${{ inputs.platform }} VM IP: $HOST"
+          echo "Selected ${{ inputs.platform }} VM: $HOST"
 
       - name: Verify SSH connectivity to BSD VM
         shell: bash
@@ -135,6 +159,7 @@ jobs:
           esac
           ssh ${SSH_OPTS} "${VM}" "
             find ${BASE_DIR} -maxdepth 1 -name 'libcvc-deps-build-*' -type d -mmin +120 -exec rm -rf {} + 2>/dev/null
+            find ${BASE_DIR} -maxdepth 1 -name 'cvcpkg-*' -type d -mmin +120 -exec rm -rf {} + 2>/dev/null
             echo \"Disk usage on ${BASE_DIR}:\"
             df -h ${BASE_DIR}
           " || true
@@ -183,7 +208,7 @@ jobs:
               ssh ${SSH_OPTS} "${VM}" "for p in bash cmake ninja m4 py3-cryptography py3-yaml; do pkg_info \$p >/dev/null 2>&1 || pkg_add \$p; done"
               ;;
             netbsd)
-              ssh ${SSH_OPTS} "${VM}" "pkgin -y install bash cmake ninja py313-pip py313-cryptography py313-yaml"
+              ssh ${SSH_OPTS} "${VM}" "pkgin -y update && pkgin -y install bash cmake ninja py313-pip py313-cryptography py313-yaml"
               ;;
           esac
 
@@ -285,7 +310,14 @@ jobs:
         shell: bash
         run: |
           VM="root@${{ steps.vm.outputs.host }}"
-          ssh ${SSH_OPTS} "${VM}" "rm -rf ${remote_dir}" || true
+          case "${{ inputs.platform }}" in
+            openbsd) BASE_DIR="/usr/local/tmp" ;;
+            *)       BASE_DIR="/tmp" ;;
+          esac
+          ssh ${SSH_OPTS} "${VM}" "
+            rm -rf ${remote_dir}
+            find ${BASE_DIR} -maxdepth 1 -name 'cvcpkg-*' -type d -exec rm -rf {} + 2>/dev/null
+          " || true
 
       # ── Upload per-component bundles ──
       - name: Upload per-component bundles

@@ -23,7 +23,8 @@ source:
 patches: []
 
 depends:
-  build:
+  build: []
+  runtime:
     - name: openssl
       version: "^3.0"
     - name: zlib

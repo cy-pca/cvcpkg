@@ -215,7 +215,7 @@ def published_zlib(client, publisher_headers, zlib_build):
             "version": manifest["bundle"]["version"],
             "platform": manifest["bundle"]["platform"],
             "arch": manifest["bundle"]["arch"],
-            "build_type": manifest["bundle"]["config"],
+            "build_type": manifest["bundle"]["build_type"],
             "link": manifest["bundle"]["link"],
             "release_tag": "",
             "recipe_version": manifest["meta"].get("recipe_sha256", ""),
@@ -375,7 +375,7 @@ class TestBuildPackPublish:
                 "version": manifest["bundle"]["version"],
                 "platform": manifest["bundle"]["platform"],
                 "arch": manifest["bundle"]["arch"],
-                "build_type": manifest["bundle"]["config"],
+                "build_type": manifest["bundle"]["build_type"],
                 "link": manifest["bundle"]["link"],
             },
             files={

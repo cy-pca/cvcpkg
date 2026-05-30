@@ -20,11 +20,10 @@ source:
 patches: []
 
 depends:
-  build:
+  build: []
+  runtime:
     - name: abseil
       version: ">=20240722"
-    - name: emsdk
-      version: ">=5.0"
   host_tools:
     - cmake
     - ninja

@@ -20,13 +20,12 @@ source:
 patches: []
 
 depends:
-  build:
+  build: []
+  runtime:
     - name: zlib
       version: "^1.3"
     - name: tiff
       version: "^4.6"
-    - name: emsdk
-      version: ">=5.0"
   host_tools:
     - cmake
     - ninja

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 
 import pytest
 
@@ -359,6 +360,53 @@ class TestYankFlow:
             headers={"Authorization": f"Bearer {pub_tok}"},
         )
         assert resp.status_code == 403
+
+
+class TestPublishDepsFlow:
+    """Verify that required_deps flow through publish → catalog."""
+
+    def test_deps_in_catalog_after_publish(self, server_env):
+        """Published deps appear in the catalog bundles."""
+        client, _, pub_tok, _ = server_env
+        deps = [{"name": "zlib", "version": "^1.3"}, {"name": "boost"}]
+        resp = client.post(
+            "/v1/publish",
+            params={
+                "name": "mylib",
+                "version": "1.0+cvc.1",
+                "platform": "linux",
+                "arch": "x86_64",
+                "required_deps": json.dumps(deps),
+            },
+            files={"file": ("mylib.tar.zst", io.BytesIO(b"data"))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+
+        catalog = client.get("/v1/catalog").json()
+        bundle = catalog["bundles"][0]
+        assert bundle["name"] == "mylib"
+        assert bundle["required_deps"] == deps
+
+    def test_empty_deps_default(self, server_env):
+        """Without required_deps param, catalog shows empty list."""
+        client, _, pub_tok, _ = server_env
+        resp = client.post(
+            "/v1/publish",
+            params={
+                "name": "nodeps",
+                "version": "1.0+cvc.1",
+                "platform": "linux",
+                "arch": "x86_64",
+            },
+            files={"file": ("nodeps.tar.zst", io.BytesIO(b"data"))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+
+        catalog = client.get("/v1/catalog").json()
+        bundle = [b for b in catalog["bundles"] if b["name"] == "nodeps"][0]
+        assert bundle["required_deps"] == []
 
 
 class TestDeleteFlow:
