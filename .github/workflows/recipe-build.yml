@@ -187,6 +187,41 @@ jobs:
           choco install cmake --version=3.31.7 --installargs 'ADD_CMAKE_TO_PATH=System' -y
           choco install python3 -y
           choco install nasm -y
+          # Find a WORKING Python directory and add it to PATH.
+          # Chocolatey may fail (error 1603) leaving python.exe that
+          # cannot import encodings. We verify with --version.
+          # Prefer user-level installs (more likely to be healthy).
+          $pyDir = $null
+          $searchPaths = @(
+            'C:\Users\*\AppData\Local\Programs\Python\Python3*',
+            "$env:LOCALAPPDATA\Programs\Python\Python3*",
+            'C:\Python3*'
+          )
+          foreach ($pattern in $searchPaths) {
+            if ($pyDir) { break }
+            $dirs = Get-ChildItem $pattern -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending
+            foreach ($d in $dirs) {
+              $candidate = "$($d.FullName)\python.exe"
+              if (Test-Path $candidate) {
+                # Verify this Python actually works
+                $rc = (Start-Process -FilePath $candidate -ArgumentList '--version' -NoNewWindow -Wait -PassThru).ExitCode
+                if ($rc -eq 0) {
+                  $pyDir = $d.FullName
+                  break
+                } else {
+                  Write-Host "  Skipping broken Python at: $($d.FullName)"
+                }
+              }
+            }
+          }
+          if ($pyDir) {
+            Write-Host "Found working Python at: $pyDir"
+            $env:PATH = "$pyDir;$pyDir\Scripts;$env:PATH"
+            echo $pyDir | Out-File -Append $env:GITHUB_PATH
+            echo "$pyDir\Scripts" | Out-File -Append $env:GITHUB_PATH
+          } else {
+            Write-Host "WARNING: No working Python directory found"
+          }
           # Refresh PATH to pick up all choco-installed tools, then
           # propagate every new Machine PATH entry to GITHUB_PATH so
           # subsequent steps (which use bash) also see them.
@@ -218,8 +253,38 @@ jobs:
       - name: Install cvcpkg
         shell: bash
         run: |
-          # On Windows, python3 may not exist; fall back to python.
-          PY=$(command -v python3 2>/dev/null || command -v python 2>/dev/null || echo python3)
+          # On Windows the choco-installed Python may only be available as
+          # python.exe (from C:\PythonXYZ) rather than python3.
+          PY=""
+          for candidate in python3 python; do
+            if command -v "$candidate" >/dev/null 2>&1; then
+              # Verify it actually runs (not just a stale shim)
+              if "$candidate" --version >/dev/null 2>&1; then
+                PY="$candidate"
+                break
+              fi
+            fi
+          done
+          # Windows fallback: try the py launcher, then scan common dirs
+          if [ -z "$PY" ] && [ "$RUNNER_OS" = "Windows" ]; then
+            if command -v py >/dev/null 2>&1 && py --version >/dev/null 2>&1; then
+              PY="py"
+            else
+              for d in /c/Python3*/python.exe \
+                       "$LOCALAPPDATA/Programs/Python/Python3"*/python.exe \
+                       /c/Users/*/AppData/Local/Programs/Python/Python3*/python.exe; do
+                if [ -x "$d" ] && "$d" --version >/dev/null 2>&1; then
+                  PY="$d"
+                  break
+                fi
+              done
+            fi
+          fi
+          if [ -z "$PY" ]; then
+            echo "::error::No python interpreter found on PATH"
+            exit 1
+          fi
+          echo "Using Python: $PY ($($PY --version 2>&1))"
           "$PY" -m pip install --quiet --break-system-packages ./tools/cvcpkg \
             || "$PY" -m pip install --quiet ./tools/cvcpkg
           # Ensure ~/.local/bin is on PATH (self-hosted runners may not have it)
