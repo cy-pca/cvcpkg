@@ -27,6 +27,7 @@ package manager for libcvc-deps.  It provides two main workflows:
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -1398,11 +1399,23 @@ def _publish_to_server(
         version = bundle.get("version", "")
         plat = bundle.get("platform", "")
         arch = bundle.get("arch", "")
-        build_type = bundle.get("config", "release")
+        build_type = bundle.get("build_type", bundle.get("config", "release"))
         link = bundle.get("link", "shared")
         recipe_version = manifest.get("meta", {}).get("recipe_sha256", "")
         meta = manifest.get("meta", {})
         manifest_org = bundle.get("org", "")
+
+        # Extract runtime deps from manifest.
+        deps_block = manifest.get("dependencies", {})
+        if isinstance(deps_block, dict):
+            required_deps = deps_block.get("required", [])
+        else:
+            required_deps = []
+        # Fallback: legacy flat "depends" list.
+        if not required_deps:
+            legacy = manifest.get("depends", [])
+            if isinstance(legacy, list):
+                required_deps = legacy
 
         if not name or not version:
             raise click.ClickException(f"{p.name}: manifest missing name or version")
@@ -1432,6 +1445,7 @@ def _publish_to_server(
             "maintainer": meta.get("maintainer", ""),
             "tags": meta.get("tags", ""),
             "org": org,
+            "required_deps": json.dumps(required_deps),
         }
 
         try:
