@@ -679,6 +679,8 @@ def generate_manifest(
             dep_list.append(entry)
 
     recipe_block = recipe.raw.get("recipe", {})
+    description = recipe_block.get("description", "")
+    built_at = datetime.now(timezone.utc).isoformat()
     manifest: dict[str, Any] = {
         "schema_version": 3,
         "bundle": {
@@ -688,16 +690,24 @@ def generate_manifest(
             "cvc_revision": recipe.cvc_revision,
             "platform": platform,
             "arch": arch,
-            "config": config,
+            "build_type": config,
             "link": link,
             "abi": abi,
             **({"org": org_slug} if org_slug else {}),
         },
-        "depends": dep_list,
         "contents": {
+            "description": description,
             "files": files,
             "cmake_packages": cmake_packages,
             "pkg_config": pkg_config,
+        },
+        "dependencies": {
+            "required": dep_list,
+        },
+        "integrity": {
+            "sha256": "",
+            "size_bytes": 0,
+            "built_at": built_at,
         },
         "meta": {
             "recipe_sha256": (
@@ -705,10 +715,10 @@ def generate_manifest(
                 if all_recipes
                 else _sha256_file(recipe.recipe_dir / "recipe.yaml")
             ),
-            "built_at": datetime.now(timezone.utc).isoformat(),
+            "built_at": built_at,
             "maintainer": maintainer or recipe_block.get("maintainer", "Community"),
             "maintainer_email": recipe_block.get("maintainer_email", ""),
-            "description": recipe_block.get("description", ""),
+            "description": description,
             "homepage": recipe_block.get("homepage", ""),
             "license": recipe_block.get("license", ""),
             "tags": ",".join(recipe.tags) if recipe.tags else "",

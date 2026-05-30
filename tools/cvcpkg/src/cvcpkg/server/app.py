@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import re as _re
@@ -238,6 +239,7 @@ class UploadSession:
     pkg_license: str = ""
     maintainer: str = ""
     tags: str = ""
+    required_deps: str = "[]"
     hasher: hashlib._Hash = field(default_factory=lambda: hashlib.sha256())
     bytes_received: int = 0
     total_size: int = 0  # 0 = unknown
@@ -734,9 +736,11 @@ def create_app(
         for r in recipes:
             recipe_block = r.raw.get("recipe", {})
             recipe_names.append(r.name)
-            build_deps = r.raw.get("depends", {}).get("build", [])
+            depends_block = r.raw.get("depends", {})
+            # Prefer runtime deps (consumer-facing); fall back to build.
+            raw_deps = depends_block.get("runtime", depends_block.get("build", []))
             names: list[str] = []
-            for d in build_deps:
+            for d in raw_deps:
                 if isinstance(d, str):
                     names.append(d)
                 elif isinstance(d, dict):
@@ -1299,6 +1303,10 @@ def create_app(
             "",
             description="Organization slug. Empty for official/public packages.",
         ),
+        required_deps: str = Query(
+            "[]",
+            description="JSON-encoded list of runtime dependency dicts [{name, version}, ...]",
+        ),
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
         if MIRROR_MODE:
@@ -1431,6 +1439,7 @@ def create_app(
                 tags=pkg_tags,
                 org_slug=org,
                 published_by=actor.name,
+                required_deps=required_deps,
             )
 
             # Track org storage usage
@@ -1466,6 +1475,7 @@ def create_app(
                 "recipe_version": recipe_version,
                 "published_by": actor.name,
                 "org": org,
+                "required_deps": json.loads(required_deps),
             }
             state.index.setdefault("bundles", []).append(bundle)
             state.save_index()
@@ -1510,6 +1520,7 @@ def create_app(
         pkg_license: str = Query("", alias="license"),
         maintainer: str = Query(""),
         pkg_tags: str = Query("", alias="tags"),
+        required_deps: str = Query("[]", description="JSON-encoded runtime deps"),
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
         """Initialise a chunked upload session.
@@ -1582,6 +1593,7 @@ def create_app(
             pkg_license=pkg_license,
             maintainer=maintainer,
             tags=pkg_tags,
+            required_deps=required_deps,
             actor_name=actor.name,
             temp_path=tmp_path,
             total_size=total_size,
@@ -1739,6 +1751,7 @@ def create_app(
                 maintainer=session.maintainer,
                 tags=session.tags,
                 published_by=actor.name,
+                required_deps=session.required_deps,
             )
 
             await _db_audit.record(
@@ -1768,6 +1781,7 @@ def create_app(
                 "release_tag": session.release_tag,
                 "recipe_version": session.recipe_version,
                 "published_by": actor.name,
+                "required_deps": json.loads(session.required_deps),
             }
             state.index.setdefault("bundles", []).append(bundle)
             state.save_index()

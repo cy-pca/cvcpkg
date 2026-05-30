@@ -1293,7 +1293,7 @@ class TestGenerateManifest:
         assert m["bundle"]["name"] == "testpkg"
         assert m["bundle"]["version"] == "1.0.0+cvc.1"
         assert m["bundle"]["platform"] == "linux"
-        assert m["bundle"]["config"] == "release"
+        assert m["bundle"]["build_type"] == "release"
         assert "lib/libtest.so" in m["contents"]["files"]
         assert "include/test.h" in m["contents"]["files"]
 
@@ -1310,7 +1310,7 @@ class TestGenerateManifest:
         install_dir.mkdir()
 
         m = generate_manifest(r, install_dir, "linux", "x86_64", "release", "shared")
-        deps = m["depends"]
+        deps = m["dependencies"]["required"]
         assert len(deps) == 2
         assert deps[0] == {"name": "zlib", "version": "^1.3"}
         assert deps[1] == {"name": "fftw3"}
@@ -1335,14 +1335,14 @@ class TestGenerateManifest:
         install_dir.mkdir()
 
         m = generate_manifest(r, install_dir, "linux", "x86_64", "release", "shared")
-        deps = m["depends"]
+        deps = m["dependencies"]["required"]
         assert len(deps) == 2
         assert deps[0] == {"name": "openblas", "version": ">=0.3"}
         assert deps[1] == {"name": "zlib", "version": "^1.3"}
 
         # Windows should get clapack, not openblas
         m2 = generate_manifest(r, install_dir, "windows", "x86_64", "release", "static")
-        deps2 = m2["depends"]
+        deps2 = m2["dependencies"]["required"]
         assert len(deps2) == 2
         assert deps2[0] == {"name": "clapack", "version": ">=3.2"}
         assert deps2[1] == {"name": "zlib", "version": "^1.3"}
@@ -2122,7 +2122,7 @@ class TestManifestOrgDeps:
         install_dir.mkdir()
 
         m = generate_manifest(r, install_dir, "linux", "x86_64", "release", "shared")
-        deps = m["depends"]
+        deps = m["dependencies"]["required"]
         assert len(deps) == 3
         assert deps[0] == {"name": "custom-lib", "org": "myorg", "version": ">=1.0"}
         assert deps[1] == {"name": "their-lib", "org": "otherog"}
@@ -2667,8 +2667,8 @@ class TestManifestRuntimeDeps:
         install_dir.mkdir()
 
         m = generate_manifest(r, install_dir, "wasm", "wasm32", "release", "shared")
-        assert len(m["depends"]) == 1
-        assert m["depends"][0] == {"name": "zlib", "version": "^1.3"}
+        assert len(m["dependencies"]["required"]) == 1
+        assert m["dependencies"]["required"][0] == {"name": "zlib", "version": "^1.3"}
 
     def test_manifest_fallback_to_build(self, tmp_path):
         """Without depends.runtime, manifest falls back to depends.build."""
@@ -2685,9 +2685,9 @@ class TestManifestRuntimeDeps:
         install_dir.mkdir()
 
         m = generate_manifest(r, install_dir, "linux", "x86_64", "release", "shared")
-        assert len(m["depends"]) == 2
-        assert m["depends"][0] == {"name": "zlib", "version": "^1.3"}
-        assert m["depends"][1] == {"name": "fftw3"}
+        assert len(m["dependencies"]["required"]) == 2
+        assert m["dependencies"]["required"][0] == {"name": "zlib", "version": "^1.3"}
+        assert m["dependencies"]["required"][1] == {"name": "fftw3"}
 
     def test_manifest_empty_runtime(self, tmp_path):
         """Explicit empty runtime means no deps in manifest."""
@@ -2705,7 +2705,7 @@ class TestManifestRuntimeDeps:
         install_dir.mkdir()
 
         m = generate_manifest(r, install_dir, "wasm", "wasm32", "release", "shared")
-        assert m["depends"] == []
+        assert m["dependencies"]["required"] == []
 
     def test_manifest_runtime_platform_filter(self, tmp_path):
         """Platform-conditional runtime deps are filtered in manifest."""
@@ -2726,7 +2726,7 @@ class TestManifestRuntimeDeps:
         install_dir.mkdir()
 
         m = generate_manifest(r, install_dir, "linux", "x86_64", "release", "shared")
-        dep_names = [d["name"] for d in m["depends"]]
+        dep_names = [d["name"] for d in m["dependencies"]["required"]]
         assert "openblas" in dep_names
         assert "zlib" in dep_names
         assert "clapack" not in dep_names
@@ -2746,7 +2746,9 @@ class TestManifestRuntimeDeps:
         install_dir.mkdir()
 
         m = generate_manifest(r, install_dir, "linux", "x86_64", "release", "shared")
-        assert m["depends"] == [{"name": "custom-lib", "org": "myorg", "version": "1.0"}]
+        assert m["dependencies"]["required"] == [
+            {"name": "custom-lib", "org": "myorg", "version": "1.0"}
+        ]
 
 
 class TestCollectHostTools:

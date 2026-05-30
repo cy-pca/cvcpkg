@@ -776,6 +776,7 @@ class DbPackageIndex:
                     "tags": row.tags,
                     "published_by": row.published_by,
                     "org": row.org_slug,
+                    "required_deps": json.loads(row.required_deps or "[]"),
                 }
                 for row in result.scalars().all()
             ]
@@ -822,6 +823,7 @@ class DbPackageIndex:
         tags: str = "",
         org_slug: str = "",
         published_by: str = "",
+        required_deps: str = "[]",
     ) -> None:
         async with get_session() as session:
             row = PackageRow(
@@ -845,6 +847,7 @@ class DbPackageIndex:
                 tags=tags,
                 org_slug=org_slug,
                 published_by=published_by,
+                required_deps=required_deps,
             )
             session.add(row)
 
