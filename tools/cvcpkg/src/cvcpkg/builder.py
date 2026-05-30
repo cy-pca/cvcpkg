@@ -1512,6 +1512,7 @@ def build_all(
                             finally:
                                 _shutil_srv.rmtree(srv_restore, ignore_errors=True)
 
+        work_dir = prefix  # default; overridden for per_component builds
         try:
             if cached_archive is not None:
                 # Cache hit -- restore artifacts instead of building.
@@ -1614,10 +1615,6 @@ def build_all(
                             )
                             if ok:
                                 print(f"  -> pushed to server cache ({recipe_chain_hash[:12]}...)")
-                if not keep_build_dir:
-                    build_dir = work_dir / "build"
-                    if build_dir.is_dir():
-                        shutil.rmtree(build_dir, ignore_errors=True)
             else:
                 ctx = build_recipe(
                     recipe.recipe_dir,
@@ -1642,6 +1639,9 @@ def build_all(
             # Clean up server-downloaded temp archive.
             if server_hit and cached_archive is not None and cached_archive.is_file():
                 cached_archive.unlink(missing_ok=True)
+            # Clean up per-component work directory (source, install, staging).
+            if per_component and not keep_build_dir and work_dir != prefix and work_dir.is_dir():
+                shutil.rmtree(work_dir, ignore_errors=True)
 
     if failures:
         print(f"\ncvcpkg: {len(contexts)} succeeded, {len(failures)} failed:")

@@ -159,6 +159,7 @@ jobs:
           esac
           ssh ${SSH_OPTS} "${VM}" "
             find ${BASE_DIR} -maxdepth 1 -name 'libcvc-deps-build-*' -type d -mmin +120 -exec rm -rf {} + 2>/dev/null
+            find ${BASE_DIR} -maxdepth 1 -name 'cvcpkg-*' -type d -mmin +120 -exec rm -rf {} + 2>/dev/null
             echo \"Disk usage on ${BASE_DIR}:\"
             df -h ${BASE_DIR}
           " || true
@@ -309,7 +310,14 @@ jobs:
         shell: bash
         run: |
           VM="root@${{ steps.vm.outputs.host }}"
-          ssh ${SSH_OPTS} "${VM}" "rm -rf ${remote_dir}" || true
+          case "${{ inputs.platform }}" in
+            openbsd) BASE_DIR="/usr/local/tmp" ;;
+            *)       BASE_DIR="/tmp" ;;
+          esac
+          ssh ${SSH_OPTS} "${VM}" "
+            rm -rf ${remote_dir}
+            find ${BASE_DIR} -maxdepth 1 -name 'cvcpkg-*' -type d -exec rm -rf {} + 2>/dev/null
+          " || true
 
       # ── Upload per-component bundles ──
       - name: Upload per-component bundles
