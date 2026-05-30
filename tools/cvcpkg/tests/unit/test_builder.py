@@ -466,6 +466,34 @@ class TestPlatformAny:
         result = _detect_arch_for_platform("linux")
         assert result != "noarch"
 
+    def test_detect_arch_known_mappings(self):
+        """detect_arch normalises known machine strings."""
+        from unittest.mock import patch
+
+        from cvcpkg.platform import detect_arch
+
+        cases = {
+            "x86_64": "x86_64",
+            "AMD64": "x86_64",
+            "aarch64": "arm64",
+            "arm64": "arm64",
+            "riscv64": "riscv64",
+            "ppc64le": "ppc64le",
+            "s390x": "s390x",
+        }
+        for machine, expected in cases.items():
+            with patch("cvcpkg.platform.platform.machine", return_value=machine):
+                assert detect_arch() == expected, f"{machine} -> {expected}"
+
+    def test_detect_arch_unknown_falls_through(self):
+        """Unknown arch strings pass through instead of raising."""
+        from unittest.mock import patch
+
+        from cvcpkg.platform import detect_arch
+
+        with patch("cvcpkg.platform.platform.machine", return_value="LoongArch64"):
+            assert detect_arch() == "loongarch64"
+
     def test_is_any_recipe_empty_matrix(self):
         """A recipe with an empty matrix is NOT platform-independent."""
         r = Recipe(

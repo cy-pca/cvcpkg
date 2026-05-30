@@ -26,13 +26,23 @@ def detect_platform() -> str:
 
 
 def detect_arch() -> str:
-    """Return 'x86_64' or 'arm64'."""
+    """Return a normalised architecture name for the current host."""
     machine = platform.machine().lower()
-    if machine in ("x86_64", "amd64"):
-        return "x86_64"
-    if machine in ("arm64", "aarch64"):
-        return "arm64"
-    raise RuntimeError(f"unsupported architecture: {machine}")
+    _ARCH_MAP = {
+        "x86_64": "x86_64",
+        "amd64": "x86_64",
+        "arm64": "arm64",
+        "aarch64": "arm64",
+        "riscv64": "riscv64",
+        "ppc64le": "ppc64le",
+        "ppc64": "ppc64",
+        "s390x": "s390x",
+    }
+    arch = _ARCH_MAP.get(machine)
+    if arch:
+        return arch
+    # Accept any machine string rather than crashing on new architectures.
+    return machine
 
 
 def detect_pointer_size() -> int:

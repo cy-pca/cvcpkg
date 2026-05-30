@@ -56,7 +56,17 @@ _VALID_PLATFORMS = [
     "openbsd",
     "netbsd",
 ]
-_VALID_ARCHES = ["auto", "x86_64", "arm64"]
+_VALID_ARCHES = [
+    "auto",
+    "x86_64",
+    "arm64",
+    "riscv64",
+    "ppc64le",
+    "ppc64",
+    "s390x",
+    "noarch",
+    "wasm32",
+]
 
 _platform_opt = click.option(
     "--platform",
