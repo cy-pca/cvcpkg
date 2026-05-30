@@ -21,10 +21,11 @@ patches: []
 
 depends:
   build:
-    - name: abseil
-      version: ">=20240722"
     - name: emsdk
       version: ">=5.0"
+  runtime:
+    - name: abseil
+      version: ">=20240722"
   host_tools:
     - cmake
     - ninja

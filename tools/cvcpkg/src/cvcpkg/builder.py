@@ -640,7 +640,12 @@ def generate_manifest(
     cmake_packages = recipe.raw.get("package", {}).get("cmake_packages", [])
     pkg_config = recipe.raw.get("package", {}).get("pkg_config", [])
     abi = recipe.raw.get("abi", {})
-    depends = recipe.raw.get("depends", {}).get("build", [])
+
+    # Use ``depends.runtime`` for the manifest (consumer-facing deps).
+    # Falls back to ``depends.build`` for recipes that haven't adopted
+    # the runtime/build split yet.
+    depends_block = recipe.raw.get("depends", {})
+    depends = depends_block.get("runtime", depends_block.get("build", []))
 
     # Normalize dep entries to dicts, filtering by target platform
     dep_list = []
@@ -967,23 +972,24 @@ def _dep_qualified_name(d: str | dict) -> str:
 
 
 def _dep_names(recipe: Recipe, platform: str = "") -> list[str]:
-    """Extract build-dependency names from a recipe.
+    """Extract all dependency names from a recipe for build ordering.
 
     If *platform* is given, dependencies with a ``platforms`` list that
     does not include *platform* are skipped.
 
-    Both ``depends.build`` and ``depends.host_tools`` entries are
-    returned so that host tools (cmake, ninja, etc.) are built before
-    recipes that need them.
+    Collects entries from ``depends.build`` (build-only),
+    ``depends.runtime`` (consumer-facing), and ``depends.host_tools``
+    so that all prerequisites are built before this recipe.
 
     Names are returned in qualified form (``org/name``) when the
     dependency specifies an organization.
     """
     depends = recipe.raw.get("depends", {})
     build_deps = depends.get("build", [])
+    runtime_deps = depends.get("runtime", [])
     host_tools = depends.get("host_tools", [])
     names: list[str] = []
-    for d in build_deps:
+    for d in build_deps + runtime_deps:
         if isinstance(d, str):
             names.append(d)
         elif isinstance(d, dict):
@@ -997,6 +1003,64 @@ def _dep_names(recipe: Recipe, platform: str = "") -> list[str]:
         elif isinstance(t, dict):
             names.append(_dep_qualified_name(t))
     return names
+
+
+def _collect_host_tools(
+    target_recipes: list[Recipe],
+    all_recipes: list[Recipe],
+    target_platform: str,
+    host_platform: str,
+) -> list[Recipe]:
+    """Identify host-tool recipes needed for cross-compilation.
+
+    When cross-compiling (e.g. building for wasm on a linux host),
+    some dependencies of target-platform recipes may not have a build
+    matrix entry for the target platform but *do* have one for the
+    host platform.  These are host tools (e.g. emsdk) that must be
+    built natively before target recipes can use them.
+
+    Returns a list of host-tool recipes (not yet ordered).  The caller
+    should pass the result through ``resolve_build_order`` with the
+    host platform before building.
+    """
+    if target_platform == host_platform:
+        return []
+
+    all_by_name = {r.name: r for r in all_recipes}
+    target_names = {r.name for r in target_recipes}
+
+    # Collect all transitive deps of target recipes.
+    needed_deps: set[str] = set()
+
+    def _collect(name: str) -> None:
+        if name in needed_deps:
+            return
+        needed_deps.add(name)
+        if name not in all_by_name:
+            return
+        for dep in _dep_names(all_by_name[name], target_platform):
+            _collect(dep)
+
+    for r in target_recipes:
+        for dep in _dep_names(r, target_platform):
+            _collect(dep)
+
+    # Host tools = deps not buildable for the target but buildable on the host.
+    host_tools: list[Recipe] = []
+    for dep_name in needed_deps:
+        if dep_name in target_names:
+            continue  # Already in the target set
+        if dep_name not in all_by_name:
+            continue  # Not a known recipe (system tool)
+        dep_recipe = all_by_name[dep_name]
+        has_target = any(
+            m.platform == target_platform or m.platform == "any" for m in dep_recipe.build_matrix
+        )
+        has_host = any(m.platform == host_platform for m in dep_recipe.build_matrix)
+        if not has_target and has_host:
+            host_tools.append(dep_recipe)
+
+    return host_tools
 
 
 def _detect_arch_for_platform(platform: str) -> str:
@@ -1098,9 +1162,9 @@ def resolve_build_order(recipes: list[Recipe], platform: str = "") -> list[Recip
     platform are considered when building the graph.
 
     Dependencies that are not in the candidate *recipes* list are
-    silently skipped -- they are assumed to be pre-installed in the
-    prefix (e.g. emsdk built as a linux recipe before building wasm
-    recipes).
+    silently skipped -- they are assumed to already exist in the
+    prefix (e.g. host tools built automatically by ``build_all``
+    before the target recipes).
 
     Raises ``RecipeError`` on dependency cycles.
     """
@@ -1315,13 +1379,16 @@ def build_all(
     the directories themselves after use.
 
     Only recipes with a matrix entry for *platform* are built.
-    Cross-platform dependencies (e.g. emsdk for wasm builds) are
-    assumed to be pre-installed in the prefix.
+    When cross-compiling (target platform differs from the native
+    host), dependencies that lack a target matrix entry but have a
+    host-platform entry are automatically built as host tools first
+    (e.g. emsdk when building for wasm on linux).
 
-    *host_platform*, when given, is forwarded to
+    *host_platform*, when given, identifies the build host for
+    cross-compilation.  When omitted it is auto-detected via
+    ``detect_platform()``.  It is forwarded to
     ``_select_matrix_entry`` so the correct build script is chosen
-    for the current host OS (relevant for cross-compilation targets
-    like wasm).
+    for the current host OS.
 
     *shard*, when given as ``(index, total)``, partitions the recipe
     list by name hash.  Only recipes assigned to this shard are
@@ -1370,12 +1437,21 @@ def build_all(
     # build since they contain platform-independent content.
     if not platform:
         platform = detect_platform()
+
+    # Auto-detect host platform for cross-compilation support.
+    native_platform = detect_platform()
+    if not host_platform:
+        host_platform = native_platform
+
     recipes = [
         r
         for r in all_recipes
         if any(m.platform == platform or m.platform == "any" for m in r.build_matrix)
     ]
     ordered = resolve_build_order(recipes, platform)
+
+    # Identify host-tool recipes needed for cross-compilation.
+    host_tool_recipes = _collect_host_tools(ordered, all_recipes, platform, host_platform)
 
     # Determine which recipes are assigned to this shard.
     if shard is not None:
@@ -1420,6 +1496,175 @@ def build_all(
     failures: list[BuildFailure] = []
     failed_names: set[str] = set()  # recipes that failed or were skipped
     cache_hits = 0
+
+    # ── Build host tools for cross-compilation ──────────────────
+    # When cross-compiling, host tools (e.g. emsdk for wasm) must be
+    # built natively and installed into the prefix before any target
+    # recipes.  They go through the same cache machinery as target
+    # recipes but use the host platform for keys and build scripts.
+    if host_tool_recipes:
+        host_ordered = resolve_build_order(host_tool_recipes, host_platform)
+        print(
+            f"\ncvcpkg: building {len(host_ordered)} host tool(s) "
+            f"for {platform} cross-compilation"
+        )
+        for ht_recipe in host_ordered:
+            ht_platform = host_platform
+            ht_arch = _detect_arch_for_platform(ht_platform)
+
+            # Cache lookup for the host tool.
+            ht_chain_hash = ""
+            ht_cached: Path | None = None
+            if cache is not None:
+                ht_chain_hash = chain_hash(ht_recipe, all_recipe_map, ht_platform)
+                if not force_clean:
+                    ht_cached = cache.lookup(ht_chain_hash, ht_platform, ht_arch, config, link)
+
+            # Server cache lookup for host tool.
+            ht_server_hit = False
+            if (
+                server_cache_url
+                and not no_server_cache
+                and not force_clean
+                and ht_cached is None
+                and ht_chain_hash
+            ):
+                probe = _server_cache_probe(
+                    server_cache_url,
+                    server_cache_token,
+                    ht_recipe.name,
+                    ht_chain_hash,
+                    ht_platform,
+                    ht_arch,
+                    config,
+                    link,
+                    server_cache_org,
+                )
+                if probe is not None:
+                    dl_url = probe.get("archive_url", "")
+                    if dl_url:
+                        if dl_url.startswith("/"):
+                            dl_url = server_cache_url.rstrip("/") + dl_url
+                        tmp_archive = Path(
+                            tempfile.mktemp(
+                                prefix=f"cvcpkg-srv-{ht_recipe.name}-",
+                                suffix=".tar.gz",
+                            )
+                        )
+                        result = _server_cache_download(
+                            dl_url,
+                            server_cache_token,
+                            tmp_archive,
+                            expected_sha256=probe.get("sha256", ""),
+                        )
+                        if result is not None:
+                            ht_cached = result
+                            ht_server_hit = True
+
+            print(f"\ncvcpkg: == {ht_recipe.name} " f"({ht_recipe.full_version}) [host tool] ==")
+
+            if ht_cached is not None:
+                cache_hits += 1
+                label = "server cache" if ht_server_hit else "cache"
+                print(f"  <- {label} hit ({ht_chain_hash[:12]}...)")
+                cache.restore(ht_cached, prefix)
+                # Populate local cache from server download.
+                if ht_server_hit and cache is not None:
+                    srv_restore = Path(tempfile.mkdtemp(prefix="cvcpkg-srv-restore-"))
+                    try:
+                        cache.restore(ht_cached, srv_restore)
+                        cache.store(
+                            srv_restore,
+                            ht_recipe.name,
+                            ht_recipe.full_version,
+                            ht_chain_hash,
+                            ht_platform,
+                            ht_arch,
+                            config,
+                            link,
+                        )
+                    finally:
+                        shutil.rmtree(srv_restore, ignore_errors=True)
+                if ht_server_hit and ht_cached.is_file():
+                    ht_cached.unlink(missing_ok=True)
+            else:
+                # Build host tool into isolated dir, then merge to prefix.
+                ht_work = _mkworkdir(f"cvcpkg-{ht_recipe.name}-", work_dir_root)
+                try:
+                    ht_install = ht_work / "install"
+                    ht_source = fetch_source(ht_recipe, ht_work)
+                    if ht_recipe.patches:
+                        apply_patches(ht_recipe, ht_source)
+                    ht_ctx = BuildContext(
+                        recipe=ht_recipe,
+                        platform=ht_platform,
+                        config=config,
+                        link=link,
+                        prefix=prefix,
+                        source_dir=ht_source,
+                        build_dir=ht_work / "build",
+                        install_dir=ht_install,
+                        work_dir=ht_work,
+                        keep_build_dir=keep_build_dir,
+                    )
+                    run_build(ht_ctx)
+                    if ht_install.is_dir():
+                        shutil.copytree(ht_install, prefix, dirs_exist_ok=True)
+                    # Store in local cache.
+                    if cache is not None and ht_chain_hash and ht_install.is_dir():
+                        cache.store(
+                            ht_install,
+                            ht_recipe.name,
+                            ht_recipe.full_version,
+                            ht_chain_hash,
+                            ht_platform,
+                            ht_arch,
+                            config,
+                            link,
+                        )
+                    # Push to server cache.
+                    if (
+                        server_cache_push
+                        and server_cache_url
+                        and not no_server_cache
+                        and cache is not None
+                    ):
+                        arc = cache.lookup(ht_chain_hash, ht_platform, ht_arch, config, link)
+                        if arc is not None:
+                            ok = _server_cache_push(
+                                server_cache_url,
+                                server_cache_token,
+                                arc,
+                                ht_recipe.name,
+                                ht_recipe.full_version,
+                                ht_platform,
+                                ht_arch,
+                                config,
+                                link,
+                                ht_chain_hash,
+                                server_cache_org,
+                            )
+                            if ok:
+                                print(f"  -> pushed to server cache " f"({ht_chain_hash[:12]}...)")
+                except (BuildError, RecipeError):
+                    if not keep_going:
+                        raise
+                    # Host tool failure is fatal for target recipes that
+                    # depend on it, but keep-going lets us continue with
+                    # recipes that don't need this tool.
+                    print(f"\ncvcpkg: FAILED host tool " f"{ht_recipe.name}")
+                    failed_names.add(ht_recipe.name)
+                    failures.append(
+                        BuildFailure(
+                            recipe_name=ht_recipe.name,
+                            error=BuildError(f"host tool {ht_recipe.name} failed to build"),
+                        )
+                    )
+                finally:
+                    if not keep_build_dir and ht_work.is_dir():
+                        shutil.rmtree(ht_work, ignore_errors=True)
+
+    # ── Build target-platform recipes ──────────────────────────
     for recipe in ordered:
         # Check if any dependency already failed.
         dep_names = _dep_names(recipe, platform)

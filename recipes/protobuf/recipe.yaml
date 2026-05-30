@@ -20,7 +20,8 @@ source:
 patches: []
 
 depends:
-  build:
+  build: []
+  runtime:
     - name: abseil
       version: ">=20240722,<20260000"
     - name: zlib

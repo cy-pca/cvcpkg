@@ -21,6 +21,9 @@ patches: []
 
 depends:
   build:
+    - name: emsdk
+      version: ">=5.0"
+  runtime:
     - name: zlib
       version: "^1.3"
     - name: libjpeg-turbo
@@ -33,8 +36,6 @@ depends:
       version: "^1.5"
     - name: lerc
       version: "^4.0"
-    - name: emsdk
-      version: ">=5.0"
   host_tools:
     - cmake
     - ninja

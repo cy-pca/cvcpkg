@@ -349,22 +349,9 @@ jobs:
             rm -rf "${{ github.workspace }}/prefix" "${{ github.workspace }}/dist"
           fi
 
-      # ── Pre-build emsdk for wasm cross-compilation ──
-      # Wasm recipes run on a host that has the Emscripten SDK.  The
-      # emsdk recipe is a host-platform build-tool.  Install it into
-      # the prefix first, using the host platform (linux/macos/windows).
-      - name: Pre-build emsdk (wasm)
-        if: inputs.platform == 'wasm' && steps.cache-valid.outputs.valid != 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          HOST_PLAT="${{ inputs.host_platform }}"
-          [ -z "$HOST_PLAT" ] && HOST_PLAT="linux"
-          cvcpkg build emsdk --platform "$HOST_PLAT" --no-deps \
-            --prefix "${{ github.workspace }}/prefix" \
-            --recipes-dir recipes
-
       # ── Build and package all recipes (per-component) ──
+      # Host tools needed for cross-compilation (e.g. emsdk for wasm)
+      # are automatically detected and built by cvcpkg pack-all.
       - name: Build and package all recipes (cvcpkg pack-all)
         if: steps.cache-valid.outputs.valid != 'true'
         continue-on-error: true
