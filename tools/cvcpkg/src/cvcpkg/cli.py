@@ -2124,6 +2124,11 @@ def build(
                     keep_build_dir=keep_build_dir,
                 )
 
+        # Collect cross-toolchain env from host-tool recipes.
+        merged_toolchain_env: dict[str, str] = {}
+        for r in host_tool_recipes:
+            merged_toolchain_env.update(r.cross_toolchain_env)
+
         ordered = resolve_build_order(target_recipes, plat)
         for r in ordered:
             print(f"\ncvcpkg: ══ {r.name} ({r.full_version}) ══")
@@ -2135,6 +2140,7 @@ def build(
                 prefix=prefix_path,
                 keep_build_dir=keep_build_dir,
                 host_platform=host_plat,
+                cross_toolchain_env=merged_toolchain_env,
             )
     else:
         for name in recipe:

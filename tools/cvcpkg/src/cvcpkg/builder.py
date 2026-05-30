@@ -131,6 +131,8 @@ class Recipe:
     recipe_dir: Path
     tags: list[str] = field(default_factory=list)
     kind: str = ""  # e.g. data, media, config, iso -- for downstream hints
+    cross_toolchain_targets: list[str] = field(default_factory=list)
+    cross_toolchain_env: dict[str, str] = field(default_factory=dict)
 
     @property
     def full_version(self) -> str:
@@ -152,6 +154,8 @@ class Recipe:
         package_block = raw.get("package", {})
         test_block = raw.get("test", {})
 
+        ct_block = raw.get("cross_toolchain", {})
+
         return cls(
             name=recipe_block.get("name", recipe_dir.name),
             upstream_version=str(recipe_block.get("upstream_version", "0.0.0")),
@@ -165,6 +169,8 @@ class Recipe:
             recipe_dir=recipe_dir.resolve(),
             tags=recipe_block.get("tags", []) or [],
             kind=recipe_block.get("kind", ""),
+            cross_toolchain_targets=ct_block.get("target_platforms", []) or [],
+            cross_toolchain_env=ct_block.get("env", {}) or {},
         )
 
 
@@ -402,6 +408,7 @@ class BuildContext:
     work_dir: Path
     keep_build_dir: bool = False
     host_platform: str = ""
+    cross_toolchain_env: dict[str, str] = field(default_factory=dict)
 
 
 def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
@@ -436,13 +443,15 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
     if matrix.host_platform:
         env["CVC_HOST_PLATFORM"] = matrix.host_platform
 
-    # If building for wasm and emsdk was built into the shared prefix,
-    # point CVC_EMSDK_DIR there so build scripts can find it.
-    if ctx.platform == "wasm" and "CVC_EMSDK_DIR" not in env:
-        for _emsdk_name in ("emsdk_env.sh", "emsdk_env.bat", "emsdk_env.ps1"):
-            if (ctx.prefix / _emsdk_name).is_file():
-                env["CVC_EMSDK_DIR"] = str(ctx.prefix)
-                break
+    # Apply cross-toolchain environment variables.  Toolchain recipes
+    # (e.g. emsdk) declare ``cross_toolchain.env`` entries that should
+    # be set when building recipes for their target platforms.  The
+    # builder installs toolchains into the prefix before target recipes
+    # are built, so we point these env vars at the prefix.
+    if ctx.cross_toolchain_env:
+        for var, tpl in ctx.cross_toolchain_env.items():
+            if var not in env:
+                env[var] = tpl.replace("${PREFIX}", str(ctx.prefix))
 
     # Ensure host tools built into the prefix (cmake, ninja, protoc,
     # etc.) are found before system versions.
@@ -840,6 +849,7 @@ def build_recipe(
     keep_build_dir: bool = False,
     host_platform: str = "",
     work_dir_root: Path | None = None,
+    cross_toolchain_env: dict[str, str] | None = None,
 ) -> BuildContext:
     """Build a single recipe. Returns the BuildContext.
 
@@ -871,6 +881,7 @@ def build_recipe(
         work_dir=work_dir,
         keep_build_dir=keep_build_dir,
         host_platform=host_platform,
+        cross_toolchain_env=cross_toolchain_env or {},
     )
 
     run_build(ctx)
@@ -1005,6 +1016,39 @@ def _dep_names(recipe: Recipe, platform: str = "") -> list[str]:
     return names
 
 
+def _discover_cross_toolchains(
+    all_recipes: list[Recipe],
+    target_platform: str,
+    host_platform: str,
+) -> list[Recipe]:
+    """Find recipes that provide cross-compilation toolchains.
+
+    Scans all recipes for ``cross_toolchain.target_platforms`` entries
+    that include *target_platform*.  Only recipes that can build on
+    the *host_platform* are returned.
+
+    For example, the emsdk recipe declares
+    ``cross_toolchain.target_platforms: [wasm]`` and has matrix entries
+    for linux/macos/windows.  When building for wasm on linux, emsdk
+    is discovered automatically.
+
+    Returns toolchain recipes (not yet ordered).  The caller should
+    pass the result through ``resolve_build_order`` with the host
+    platform before building.
+    """
+    if target_platform == host_platform:
+        return []
+
+    toolchains: list[Recipe] = []
+    for r in all_recipes:
+        if target_platform not in r.cross_toolchain_targets:
+            continue
+        # Verify the toolchain can build on the host platform.
+        if any(m.platform == host_platform for m in r.build_matrix):
+            toolchains.append(r)
+    return toolchains
+
+
 def _collect_host_tools(
     target_recipes: list[Recipe],
     all_recipes: list[Recipe],
@@ -1013,11 +1057,15 @@ def _collect_host_tools(
 ) -> list[Recipe]:
     """Identify host-tool recipes needed for cross-compilation.
 
-    When cross-compiling (e.g. building for wasm on a linux host),
-    some dependencies of target-platform recipes may not have a build
-    matrix entry for the target platform but *do* have one for the
-    host platform.  These are host tools (e.g. emsdk) that must be
-    built natively before target recipes can use them.
+    Combines two discovery mechanisms:
+
+    1. **Toolchain discovery** — recipes that declare
+       ``cross_toolchain.target_platforms`` matching the target are
+       included automatically (e.g. emsdk for wasm).
+
+    2. **Dependency walking** — transitive dependencies of target
+       recipes that lack a target-platform matrix entry but have a
+       host-platform entry are included as host tools.
 
     Returns a list of host-tool recipes (not yet ordered).  The caller
     should pass the result through ``resolve_build_order`` with the
@@ -1026,10 +1074,14 @@ def _collect_host_tools(
     if target_platform == host_platform:
         return []
 
+    # 1. Toolchain discovery.
+    toolchains = _discover_cross_toolchains(all_recipes, target_platform, host_platform)
+    seen = {r.name for r in toolchains}
+
+    # 2. Dependency-based discovery.
     all_by_name = {r.name: r for r in all_recipes}
     target_names = {r.name for r in target_recipes}
 
-    # Collect all transitive deps of target recipes.
     needed_deps: set[str] = set()
 
     def _collect(name: str) -> None:
@@ -1045,22 +1097,21 @@ def _collect_host_tools(
         for dep in _dep_names(r, target_platform):
             _collect(dep)
 
-    # Host tools = deps not buildable for the target but buildable on the host.
-    host_tools: list[Recipe] = []
     for dep_name in needed_deps:
-        if dep_name in target_names:
-            continue  # Already in the target set
+        if dep_name in target_names or dep_name in seen:
+            continue
         if dep_name not in all_by_name:
-            continue  # Not a known recipe (system tool)
+            continue
         dep_recipe = all_by_name[dep_name]
         has_target = any(
             m.platform == target_platform or m.platform == "any" for m in dep_recipe.build_matrix
         )
         has_host = any(m.platform == host_platform for m in dep_recipe.build_matrix)
         if not has_target and has_host:
-            host_tools.append(dep_recipe)
+            toolchains.append(dep_recipe)
+            seen.add(dep_name)
 
-    return host_tools
+    return toolchains
 
 
 def _detect_arch_for_platform(platform: str) -> str:
@@ -1664,6 +1715,16 @@ def build_all(
                     if not keep_build_dir and ht_work.is_dir():
                         shutil.rmtree(ht_work, ignore_errors=True)
 
+    # ── Collect cross-toolchain env vars ─────────────────────────
+    # Toolchain recipes (e.g. emsdk) declare ``cross_toolchain.env``
+    # entries that should be set when building target-platform recipes.
+    # Merge them all into a single dict that gets passed to every
+    # target BuildContext.
+    merged_toolchain_env: dict[str, str] = {}
+    for ht in host_tool_recipes:
+        for var, tpl in ht.cross_toolchain_env.items():
+            merged_toolchain_env[var] = tpl
+
     # ── Build target-platform recipes ──────────────────────────
     for recipe in ordered:
         # Check if any dependency already failed.
@@ -1787,6 +1848,7 @@ def build_all(
                         work_dir=work_dir,
                         keep_build_dir=keep_build_dir,
                         host_platform=host_platform,
+                        cross_toolchain_env=merged_toolchain_env,
                     )
                     if install_dir.is_dir():
                         shutil.copytree(install_dir, prefix, dirs_exist_ok=True)
@@ -1804,6 +1866,7 @@ def build_all(
                         work_dir=prefix,
                         keep_build_dir=keep_build_dir,
                         host_platform=host_platform,
+                        cross_toolchain_env=merged_toolchain_env,
                     )
             elif per_component:
                 work_dir = _mkworkdir(f"cvcpkg-{recipe.name}-", work_dir_root)
@@ -1823,6 +1886,7 @@ def build_all(
                     work_dir=work_dir,
                     keep_build_dir=keep_build_dir,
                     host_platform=host_platform,
+                    cross_toolchain_env=merged_toolchain_env,
                 )
                 run_build(ctx)
                 if recipe.test_script:
@@ -1877,6 +1941,7 @@ def build_all(
                     keep_build_dir=keep_build_dir,
                     host_platform=host_platform,
                     work_dir_root=work_dir_root,
+                    cross_toolchain_env=merged_toolchain_env,
                 )
             # Only include assigned recipes in contexts (for packaging).
             if is_assigned:

@@ -21,9 +21,7 @@ patches:
   - vtk-fmt-cstdlib-wasm.patch
 
 depends:
-  build:
-    - name: emsdk
-      version: ">=5.0"
+  build: []
   runtime:
     - name: qt6
       version: ">=6.7"

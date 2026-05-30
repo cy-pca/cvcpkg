@@ -22,6 +22,7 @@ from cvcpkg.builder import (
     _collect_host_tools,
     _dep_names,
     _detect_arch_for_platform,
+    _discover_cross_toolchains,
     _file_list,
     _is_any_recipe,
     _select_matrix_entry,
@@ -2755,13 +2756,17 @@ class TestCollectHostTools:
         """Create a set of recipes for cross-compilation testing."""
         recipes_dir = tmp_path / "recipes"
 
-        # emsdk: host tool (linux/macos/windows only)
+        # emsdk: host tool with cross_toolchain declaration
         emsdk_dir = recipes_dir / "emsdk"
         _write_recipe(
             emsdk_dir,
             {
                 "recipe": {"name": "emsdk", "upstream_version": "5.0.7", "cvc_revision": 1},
                 "source": {"type": "prebuilt"},
+                "cross_toolchain": {
+                    "target_platforms": ["wasm"],
+                    "env": {"CVC_EMSDK_DIR": "${PREFIX}"},
+                },
                 "build": {
                     "matrix": [
                         {"platform": "linux", "script": "build.sh"},
@@ -2784,7 +2789,7 @@ class TestCollectHostTools:
                     "sha256": "abc123",
                 },
                 "depends": {
-                    "build": [{"name": "emsdk", "version": ">=5.0"}],
+                    "build": [],
                     "runtime": [],
                 },
                 "build": {
@@ -2808,7 +2813,7 @@ class TestCollectHostTools:
                     "sha256": "def456",
                 },
                 "depends": {
-                    "build": [{"name": "emsdk", "version": ">=5.0"}],
+                    "build": [],
                     "runtime": [{"name": "zlib", "version": "^1.3"}],
                 },
                 "build": {
@@ -2843,7 +2848,7 @@ class TestCollectHostTools:
         return recipes_dir
 
     def test_finds_emsdk_for_wasm(self, tmp_path):
-        """emsdk is identified as a host tool for wasm builds."""
+        """emsdk is discovered via cross_toolchain for wasm builds."""
         recipes_dir = self._make_recipes(tmp_path)
         all_recipes = list_recipes(recipes_dir)
         target_recipes = [
@@ -2961,3 +2966,184 @@ class TestCollectHostTools:
         names = {r.name for r in host_tools}
         assert "cross-sdk" in names
         assert "toolchain-base" in names
+
+
+class TestDiscoverCrossToolchains:
+    """Tests for _discover_cross_toolchains."""
+
+    def test_discovers_emsdk_for_wasm(self, tmp_path):
+        """Recipe with cross_toolchain targeting wasm is discovered."""
+        recipes_dir = tmp_path / "recipes"
+        _write_recipe(
+            recipes_dir / "emsdk",
+            {
+                "recipe": {"name": "emsdk", "upstream_version": "5.0.7", "cvc_revision": 1},
+                "source": {"type": "prebuilt"},
+                "cross_toolchain": {
+                    "target_platforms": ["wasm"],
+                    "env": {"CVC_EMSDK_DIR": "${PREFIX}"},
+                },
+                "build": {
+                    "matrix": [
+                        {"platform": "linux", "script": "build.sh"},
+                    ]
+                },
+            },
+        )
+        all_recipes = list_recipes(recipes_dir)
+        result = _discover_cross_toolchains(all_recipes, "wasm", "linux")
+        assert len(result) == 1
+        assert result[0].name == "emsdk"
+
+    def test_no_toolchains_for_native(self, tmp_path):
+        """No toolchains when target == host."""
+        recipes_dir = tmp_path / "recipes"
+        _write_recipe(
+            recipes_dir / "emsdk",
+            {
+                "recipe": {"name": "emsdk", "upstream_version": "5.0.7", "cvc_revision": 1},
+                "source": {"type": "prebuilt"},
+                "cross_toolchain": {
+                    "target_platforms": ["wasm"],
+                    "env": {"CVC_EMSDK_DIR": "${PREFIX}"},
+                },
+                "build": {"matrix": [{"platform": "linux", "script": "build.sh"}]},
+            },
+        )
+        all_recipes = list_recipes(recipes_dir)
+        result = _discover_cross_toolchains(all_recipes, "linux", "linux")
+        assert result == []
+
+    def test_excludes_incompatible_host(self, tmp_path):
+        """Toolchain not returned if it can't build on the host platform."""
+        recipes_dir = tmp_path / "recipes"
+        _write_recipe(
+            recipes_dir / "emsdk",
+            {
+                "recipe": {"name": "emsdk", "upstream_version": "5.0.7", "cvc_revision": 1},
+                "source": {"type": "prebuilt"},
+                "cross_toolchain": {
+                    "target_platforms": ["wasm"],
+                    "env": {"CVC_EMSDK_DIR": "${PREFIX}"},
+                },
+                "build": {"matrix": [{"platform": "linux", "script": "build.sh"}]},
+            },
+        )
+        all_recipes = list_recipes(recipes_dir)
+        # windows host — emsdk only builds on linux
+        result = _discover_cross_toolchains(all_recipes, "wasm", "windows")
+        assert result == []
+
+    def test_multiple_toolchains(self, tmp_path):
+        """Multiple toolchains for different targets discovered correctly."""
+        recipes_dir = tmp_path / "recipes"
+        _write_recipe(
+            recipes_dir / "emsdk",
+            {
+                "recipe": {"name": "emsdk", "upstream_version": "5.0.7", "cvc_revision": 1},
+                "source": {"type": "prebuilt"},
+                "cross_toolchain": {
+                    "target_platforms": ["wasm"],
+                    "env": {"CVC_EMSDK_DIR": "${PREFIX}"},
+                },
+                "build": {"matrix": [{"platform": "linux", "script": "build.sh"}]},
+            },
+        )
+        _write_recipe(
+            recipes_dir / "android-ndk",
+            {
+                "recipe": {
+                    "name": "android-ndk",
+                    "upstream_version": "26",
+                    "cvc_revision": 1,
+                },
+                "source": {"type": "prebuilt"},
+                "cross_toolchain": {
+                    "target_platforms": ["android"],
+                    "env": {"ANDROID_NDK_HOME": "${PREFIX}"},
+                },
+                "build": {"matrix": [{"platform": "linux", "script": "build.sh"}]},
+            },
+        )
+        all_recipes = list_recipes(recipes_dir)
+        wasm = _discover_cross_toolchains(all_recipes, "wasm", "linux")
+        android = _discover_cross_toolchains(all_recipes, "android", "linux")
+        assert len(wasm) == 1
+        assert wasm[0].name == "emsdk"
+        assert len(android) == 1
+        assert android[0].name == "android-ndk"
+
+
+class TestRecipeCrossToolchain:
+    """Tests for cross_toolchain fields on Recipe."""
+
+    def test_cross_toolchain_fields_parsed(self, tmp_path):
+        """cross_toolchain_targets and cross_toolchain_env are parsed."""
+        recipes_dir = tmp_path / "recipes"
+        _write_recipe(
+            recipes_dir / "emsdk",
+            {
+                "recipe": {"name": "emsdk", "upstream_version": "5.0.7", "cvc_revision": 1},
+                "source": {"type": "prebuilt"},
+                "cross_toolchain": {
+                    "target_platforms": ["wasm"],
+                    "env": {"CVC_EMSDK_DIR": "${PREFIX}"},
+                },
+                "build": {"matrix": [{"platform": "linux", "script": "build.sh"}]},
+            },
+        )
+        recipes = list_recipes(recipes_dir)
+        emsdk = recipes[0]
+        assert emsdk.cross_toolchain_targets == ["wasm"]
+        assert emsdk.cross_toolchain_env == {"CVC_EMSDK_DIR": "${PREFIX}"}
+
+    def test_no_cross_toolchain_defaults_empty(self, tmp_path):
+        """Recipe without cross_toolchain has empty defaults."""
+        recipes_dir = tmp_path / "recipes"
+        _write_recipe(
+            recipes_dir / "zlib",
+            {
+                "recipe": {"name": "zlib", "upstream_version": "1.3.1", "cvc_revision": 1},
+                "source": {
+                    "type": "tarball",
+                    "url": "https://example.com/zlib.tar.gz",
+                    "sha256": "abc",
+                },
+                "build": {"matrix": [{"platform": "linux", "script": "build.sh"}]},
+            },
+        )
+        recipes = list_recipes(recipes_dir)
+        zlib = recipes[0]
+        assert zlib.cross_toolchain_targets == []
+        assert zlib.cross_toolchain_env == {}
+
+    def test_cross_toolchain_env_on_build_context(self):
+        """BuildContext accepts and stores cross_toolchain_env."""
+        ctx = BuildContext(
+            recipe=Recipe(
+                name="test",
+                upstream_version="1.0",
+                cvc_revision=1,
+                source=SourceSpec(type="prebuilt"),
+                patches=[],
+                build_matrix=[],
+                package_files=[],
+                test_script=None,
+                raw={},
+                recipe_dir=Path("/tmp/test"),
+                cross_toolchain_targets=[],
+                cross_toolchain_env={},
+            ),
+            platform="wasm",
+            config="release",
+            link="shared",
+            prefix=Path("/tmp/prefix"),
+            source_dir=Path("/tmp/src"),
+            build_dir=Path("/tmp/build"),
+            install_dir=Path("/tmp/install"),
+            work_dir=Path("/tmp/work"),
+            keep_build_dir=False,
+            host_platform="linux",
+            cross_toolchain_env={"CVC_EMSDK_DIR": "/opt/emsdk"},
+        )
+        assert ctx.cross_toolchain_env == {"CVC_EMSDK_DIR": "/opt/emsdk"}
