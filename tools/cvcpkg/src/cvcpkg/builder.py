@@ -1292,6 +1292,7 @@ def build_all(
     no_server_cache: bool = False,
     server_cache_org: str = "",
     work_dir_root: Path | None = None,
+    cleanup_work_dirs: bool = True,
 ) -> list[BuildContext]:
     """Build every recipe in dependency order into a shared *prefix*.
 
@@ -1306,6 +1307,12 @@ def build_all(
     so subsequent recipes can find the new files.  The returned
     ``BuildContext.install_dir`` points to the isolated per-recipe
     directory (useful for packaging only that recipe's files).
+
+    When *cleanup_work_dirs* is ``False`` (default ``True``),
+    per-component work directories are preserved after a successful
+    build.  Callers that need the ``install_dir`` for subsequent
+    staging (e.g. ``pack-all``) should pass ``False`` and clean up
+    the directories themselves after use.
 
     Only recipes with a matrix entry for *platform* are built.
     Cross-platform dependencies (e.g. emsdk for wasm builds) are
@@ -1640,7 +1647,16 @@ def build_all(
             if server_hit and cached_archive is not None and cached_archive.is_file():
                 cached_archive.unlink(missing_ok=True)
             # Clean up per-component work directory (source, install, staging).
-            if per_component and not keep_build_dir and work_dir != prefix and work_dir.is_dir():
+            # When cleanup_work_dirs is False the caller is responsible for
+            # removing work directories after it is done with them (e.g.
+            # pack-all needs the install_dir for staging).
+            if (
+                cleanup_work_dirs
+                and per_component
+                and not keep_build_dir
+                and work_dir != prefix
+                and work_dir.is_dir()
+            ):
                 shutil.rmtree(work_dir, ignore_errors=True)
 
     if failures:
