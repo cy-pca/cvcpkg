@@ -249,6 +249,23 @@ jobs:
         with:
           arch: x64
 
+      # ilammy/msvc-dev-cmd replaces PATH with the MSVC developer
+      # environment, which can drop pwsh (PowerShell Core).  Recipes
+      # with .ps1 build scripts need it.
+      - name: Ensure pwsh is on PATH (Windows)
+        if: inputs.platform == 'windows'
+        shell: bash
+        run: |
+          if ! command -v pwsh >/dev/null 2>&1; then
+            for d in "/c/Program Files/PowerShell/7" "/c/Program Files/PowerShell/7-preview"; do
+              if [ -x "$d/pwsh.exe" ]; then
+                echo "$d" >> "$GITHUB_PATH"
+                echo "Added $d to PATH for pwsh"
+                break
+              fi
+            done
+          fi
+
       # ── Install cvcpkg ──
       - name: Install cvcpkg
         shell: bash
