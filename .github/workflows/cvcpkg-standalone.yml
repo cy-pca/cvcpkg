@@ -32,6 +32,10 @@ on:
 permissions:
   contents: write   # needed for gh-release uploads
 
+concurrency:
+  group: cvcpkg-standalone-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: Build (${{ matrix.os }})
