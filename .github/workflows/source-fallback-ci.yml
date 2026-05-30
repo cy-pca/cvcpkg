@@ -25,6 +25,10 @@ on:
       - 'tools/cvcpkg/tests/integration/test_source_fallback.py'
       - '.github/workflows/source-fallback-ci.yml'
 
+concurrency:
+  group: source-fallback-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
