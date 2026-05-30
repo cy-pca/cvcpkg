@@ -121,6 +121,24 @@ jobs:
           echo "Testing SSH to ${VM} ..."
           ssh ${SSH_OPTS} "${VM}" "uname -sr"
 
+      # ── Clean up stale build directories ──
+      # Previous runs that were cancelled (e.g. by concurrency groups)
+      # may leave orphaned build dirs filling up /tmp.  Remove any
+      # libcvc-deps-build-* dirs older than 2 hours.
+      - name: Clean up stale build directories
+        shell: bash
+        run: |
+          VM="root@${{ steps.vm.outputs.host }}"
+          case "${{ inputs.platform }}" in
+            openbsd) BASE_DIR="/usr/local/tmp" ;;
+            *)       BASE_DIR="/tmp" ;;
+          esac
+          ssh ${SSH_OPTS} "${VM}" "
+            find ${BASE_DIR} -maxdepth 1 -name 'libcvc-deps-build-*' -type d -mmin +120 -exec rm -rf {} + 2>/dev/null
+            echo \"Disk usage on ${BASE_DIR}:\"
+            df -h ${BASE_DIR}
+          " || true
+
       # ── Sync repository to BSD VM ──
       # OpenBSD's root partition (/) is only 1.1 GB so /tmp is unusable for
       # builds.  Use /usr/local/tmp on OpenBSD where we created a large
