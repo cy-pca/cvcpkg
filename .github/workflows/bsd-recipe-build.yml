@@ -208,7 +208,20 @@ jobs:
               ssh ${SSH_OPTS} "${VM}" "for p in bash cmake ninja m4 py3-cryptography py3-yaml; do pkg_info \$p >/dev/null 2>&1 || pkg_add \$p; done"
               ;;
             netbsd)
-              ssh ${SSH_OPTS} "${VM}" "pkgin -y update; n=\$(pkgin avail 2>/dev/null | wc -l); [ \$n -gt 100 ] || { echo 'pkgin DB empty after update, retrying...'; pkgin -y update; }; pkgin -y install bash cmake ninja py313-pip py313-cryptography py313-yaml"
+              ssh ${SSH_OPTS} "${VM}" "
+                export PATH=/sbin:/usr/sbin:/bin:/usr/bin:/usr/pkg/sbin:/usr/pkg/bin
+                # Serialize pkgin operations to avoid DB corruption from concurrent jobs
+                lockf -t 120 /tmp/.pkgin.lock sh -c '
+                  pkgin -y update 2>&1 || true
+                  n=\$(pkgin avail 2>/dev/null | wc -l)
+                  if [ \$n -lt 100 ]; then
+                    echo \"pkgin DB has only \$n entries, retrying update...\"
+                    rm -f /var/db/pkgin/pkgin.db
+                    pkgin -y update 2>&1
+                  fi
+                  pkgin -y install bash cmake ninja py313-pip py313-cryptography py313-yaml
+                '
+              "
               ;;
           esac
 
