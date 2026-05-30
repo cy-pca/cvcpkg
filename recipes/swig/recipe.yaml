@@ -22,7 +22,8 @@ source:
 patches: []
 
 depends:
-  build:
+  build: []
+  runtime:
     - name: pcre2
       version: ">=10.40"
     - name: bison

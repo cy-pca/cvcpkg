@@ -21,10 +21,11 @@ patches: []
 
 depends:
   build:
-    - name: zlib
-      version: "^1.3"
     - name: emsdk
       version: ">=5.0"
+  runtime:
+    - name: zlib
+      version: "^1.3"
   host_tools:
     - cmake
     - ninja

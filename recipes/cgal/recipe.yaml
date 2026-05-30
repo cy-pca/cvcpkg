@@ -21,14 +21,15 @@ patches: []
 
 depends:
   build:
+    - name: emsdk
+      version: ">=5.0"
+  runtime:
     - name: boost
       version: ">=1.82.0"
     - name: gmp
       version: ">=6.1.0"
     - name: mpfr
       version: ">=4.1.0"
-    - name: emsdk
-      version: ">=5.0"
   host_tools:
     - cmake
     - ninja

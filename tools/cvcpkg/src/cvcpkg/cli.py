@@ -2062,7 +2062,11 @@ def build(
     if with_deps:
         # Resolve all deps and build in topological order
         rdirs = [Path(d) for d in recipes_dirs] if recipes_dirs else [find_recipes_dir()]
-        from cvcpkg.builder import list_recipes, load_all_recipes
+        from cvcpkg.builder import (
+            _collect_host_tools,
+            list_recipes,
+            load_all_recipes,
+        )
 
         if len(rdirs) > 1:
             all_recipes = load_all_recipes(rdirs)
@@ -2096,19 +2100,15 @@ def build(
         available = [by_name[n] for n in needed if n in by_name]
 
         # Split into target-platform recipes and host-tool recipes.
-        # Host tools are deps that have no matrix entry for the target
-        # platform but do have one for the native host (e.g. emsdk when
-        # cross-compiling to wasm).
         from cvcpkg.platform import detect_platform
 
-        host_plat = detect_platform()
-        target_recipes: list = []
-        host_tool_recipes: list = []
-        for r in available:
-            if any(m.platform == plat for m in r.build_matrix):
-                target_recipes.append(r)
-            elif plat != host_plat and any(m.platform == host_plat for m in r.build_matrix):
-                host_tool_recipes.append(r)
+        host_plat = host_platform or detect_platform()
+        target_recipes = [
+            r
+            for r in available
+            if any(m.platform == plat or m.platform == "any" for m in r.build_matrix)
+        ]
+        host_tool_recipes = _collect_host_tools(target_recipes, all_recipes, plat, host_plat)
 
         # Build host tools first (e.g. emsdk), then target recipes
         if host_tool_recipes:
@@ -2134,7 +2134,7 @@ def build(
                 link=link,
                 prefix=prefix_path,
                 keep_build_dir=keep_build_dir,
-                host_platform=host_platform,
+                host_platform=host_plat,
             )
     else:
         for name in recipe:

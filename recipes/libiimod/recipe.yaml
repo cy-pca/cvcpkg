@@ -21,14 +21,15 @@ patches: []
 
 depends:
   build:
+    - name: emsdk
+      version: ">=5.0"
+  runtime:
     - name: xz
     - name: zstd
     - name: libwebp
     - name: lerc
     - name: tiff
       version: "^4.6"
-    - name: emsdk
-      version: ">=5.0"
   host_tools:
     - cmake
     - ninja

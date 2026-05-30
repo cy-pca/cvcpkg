@@ -19,6 +19,7 @@ from cvcpkg.builder import (
     RecipeError,
     SourceSpec,
     _cache_key,
+    _collect_host_tools,
     _dep_names,
     _detect_arch_for_platform,
     _file_list,
@@ -2559,3 +2560,404 @@ class TestWorkDirRoot:
         # When no explicit prefix is given, the auto-created prefix
         # should also be under work_dir_root.
         assert contexts[0].prefix.parent == scratch
+
+
+# ── depends.runtime / _collect_host_tools tests ─────────────────
+
+
+class TestDepNamesRuntime:
+    """Tests for _dep_names with the build/runtime split."""
+
+    def test_runtime_deps_included(self, tmp_path):
+        """_dep_names returns entries from depends.runtime."""
+        recipe_dict = {
+            **MINIMAL_RECIPE,
+            "depends": {
+                "build": [{"name": "emsdk", "version": ">=5.0"}],
+                "runtime": [{"name": "zlib", "version": "^1.3"}],
+            },
+        }
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        names = _dep_names(r, "linux")
+        assert "emsdk" in names
+        assert "zlib" in names
+
+    def test_runtime_only(self, tmp_path):
+        """_dep_names works when only depends.runtime is present."""
+        recipe_dict = {
+            **MINIMAL_RECIPE,
+            "depends": {
+                "build": [],
+                "runtime": ["zlib", "boost"],
+            },
+        }
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        names = _dep_names(r, "linux")
+        assert names == ["zlib", "boost"]
+
+    def test_runtime_platform_filter(self, tmp_path):
+        """Platform-filtered entries in runtime are respected."""
+        recipe_dict = {
+            **MINIMAL_RECIPE,
+            "depends": {
+                "runtime": [
+                    {"name": "openblas", "platforms": ["linux"]},
+                    {"name": "clapack", "platforms": ["windows"]},
+                ],
+            },
+        }
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        assert "openblas" in _dep_names(r, "linux")
+        assert "clapack" not in _dep_names(r, "linux")
+        assert "clapack" in _dep_names(r, "windows")
+        assert "openblas" not in _dep_names(r, "windows")
+
+    def test_no_runtime_section(self, tmp_path):
+        """Recipes without depends.runtime still work (build deps only)."""
+        recipe_dict = {
+            **MINIMAL_RECIPE,
+            "depends": {"build": ["zlib"]},
+        }
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        names = _dep_names(r, "linux")
+        assert names == ["zlib"]
+
+    def test_host_tools_still_included(self, tmp_path):
+        """host_tools are included alongside build + runtime."""
+        recipe_dict = {
+            **MINIMAL_RECIPE,
+            "depends": {
+                "build": ["emsdk"],
+                "runtime": ["zlib"],
+                "host_tools": ["cmake", "ninja"],
+            },
+        }
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        names = _dep_names(r, "linux")
+        assert set(names) == {"emsdk", "zlib", "cmake", "ninja"}
+
+
+class TestManifestRuntimeDeps:
+    """Tests for generate_manifest with the build/runtime split."""
+
+    def test_manifest_uses_runtime_deps(self, tmp_path):
+        """When depends.runtime is present, manifest uses it (not build)."""
+        recipe_dict = {
+            **MINIMAL_RECIPE,
+            "depends": {
+                "build": [{"name": "emsdk", "version": ">=5.0"}],
+                "runtime": [{"name": "zlib", "version": "^1.3"}],
+            },
+        }
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        install_dir = tmp_path / "install"
+        install_dir.mkdir()
+
+        m = generate_manifest(r, install_dir, "wasm", "wasm32", "release", "shared")
+        assert len(m["depends"]) == 1
+        assert m["depends"][0] == {"name": "zlib", "version": "^1.3"}
+
+    def test_manifest_fallback_to_build(self, tmp_path):
+        """Without depends.runtime, manifest falls back to depends.build."""
+        recipe_dict = {
+            **MINIMAL_RECIPE,
+            "depends": {
+                "build": [{"name": "zlib", "version": "^1.3"}, "fftw3"],
+            },
+        }
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        install_dir = tmp_path / "install"
+        install_dir.mkdir()
+
+        m = generate_manifest(r, install_dir, "linux", "x86_64", "release", "shared")
+        assert len(m["depends"]) == 2
+        assert m["depends"][0] == {"name": "zlib", "version": "^1.3"}
+        assert m["depends"][1] == {"name": "fftw3"}
+
+    def test_manifest_empty_runtime(self, tmp_path):
+        """Explicit empty runtime means no deps in manifest."""
+        recipe_dict = {
+            **MINIMAL_RECIPE,
+            "depends": {
+                "build": [{"name": "emsdk", "version": ">=5.0"}],
+                "runtime": [],
+            },
+        }
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        install_dir = tmp_path / "install"
+        install_dir.mkdir()
+
+        m = generate_manifest(r, install_dir, "wasm", "wasm32", "release", "shared")
+        assert m["depends"] == []
+
+    def test_manifest_runtime_platform_filter(self, tmp_path):
+        """Platform-conditional runtime deps are filtered in manifest."""
+        recipe_dict = {
+            **MINIMAL_RECIPE,
+            "depends": {
+                "runtime": [
+                    {"name": "openblas", "version": ">=0.3", "platforms": ["linux"]},
+                    {"name": "clapack", "version": ">=3.2", "platforms": ["windows"]},
+                    {"name": "zlib", "version": "^1.3"},
+                ],
+            },
+        }
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        install_dir = tmp_path / "install"
+        install_dir.mkdir()
+
+        m = generate_manifest(r, install_dir, "linux", "x86_64", "release", "shared")
+        dep_names = [d["name"] for d in m["depends"]]
+        assert "openblas" in dep_names
+        assert "zlib" in dep_names
+        assert "clapack" not in dep_names
+
+    def test_manifest_runtime_org_deps(self, tmp_path):
+        """Org-qualified runtime deps appear in manifest."""
+        recipe_dict = {
+            **MINIMAL_RECIPE,
+            "depends": {
+                "runtime": [{"name": "custom-lib", "org": "myorg", "version": "1.0"}],
+            },
+        }
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        install_dir = tmp_path / "install"
+        install_dir.mkdir()
+
+        m = generate_manifest(r, install_dir, "linux", "x86_64", "release", "shared")
+        assert m["depends"] == [{"name": "custom-lib", "org": "myorg", "version": "1.0"}]
+
+
+class TestCollectHostTools:
+    """Tests for _collect_host_tools."""
+
+    def _make_recipes(self, tmp_path):
+        """Create a set of recipes for cross-compilation testing."""
+        recipes_dir = tmp_path / "recipes"
+
+        # emsdk: host tool (linux/macos/windows only)
+        emsdk_dir = recipes_dir / "emsdk"
+        _write_recipe(
+            emsdk_dir,
+            {
+                "recipe": {"name": "emsdk", "upstream_version": "5.0.7", "cvc_revision": 1},
+                "source": {"type": "prebuilt"},
+                "build": {
+                    "matrix": [
+                        {"platform": "linux", "script": "build.sh"},
+                        {"platform": "macos", "script": "build.sh"},
+                        {"platform": "windows", "script": "build.ps1"},
+                    ]
+                },
+            },
+        )
+
+        # zlib: builds on all platforms including wasm
+        zlib_dir = recipes_dir / "zlib"
+        _write_recipe(
+            zlib_dir,
+            {
+                "recipe": {"name": "zlib", "upstream_version": "1.3.1", "cvc_revision": 1},
+                "source": {
+                    "type": "tarball",
+                    "url": "https://example.com/zlib.tar.gz",
+                    "sha256": "abc123",
+                },
+                "depends": {
+                    "build": [{"name": "emsdk", "version": ">=5.0"}],
+                    "runtime": [],
+                },
+                "build": {
+                    "matrix": [
+                        {"platform": "linux", "script": "build.sh"},
+                        {"platform": "wasm", "script": "build-wasm.sh", "host_platform": "linux"},
+                    ]
+                },
+            },
+        )
+
+        # boost: depends on zlib, builds for wasm
+        boost_dir = recipes_dir / "boost"
+        _write_recipe(
+            boost_dir,
+            {
+                "recipe": {"name": "boost", "upstream_version": "1.86.0", "cvc_revision": 1},
+                "source": {
+                    "type": "tarball",
+                    "url": "https://example.com/boost.tar.gz",
+                    "sha256": "def456",
+                },
+                "depends": {
+                    "build": [{"name": "emsdk", "version": ">=5.0"}],
+                    "runtime": [{"name": "zlib", "version": "^1.3"}],
+                },
+                "build": {
+                    "matrix": [
+                        {"platform": "linux", "script": "build.sh"},
+                        {"platform": "wasm", "script": "build-wasm.sh", "host_platform": "linux"},
+                    ]
+                },
+            },
+        )
+
+        # cmake: linux-only host tool
+        cmake_dir = recipes_dir / "cmake"
+        _write_recipe(
+            cmake_dir,
+            {
+                "recipe": {"name": "cmake", "upstream_version": "3.31.7", "cvc_revision": 1},
+                "source": {
+                    "type": "tarball",
+                    "url": "https://example.com/cmake.tar.gz",
+                    "sha256": "ghi789",
+                },
+                "build": {
+                    "matrix": [
+                        {"platform": "linux", "script": "build.sh"},
+                        {"platform": "macos", "script": "build.sh"},
+                    ]
+                },
+            },
+        )
+
+        return recipes_dir
+
+    def test_finds_emsdk_for_wasm(self, tmp_path):
+        """emsdk is identified as a host tool for wasm builds."""
+        recipes_dir = self._make_recipes(tmp_path)
+        all_recipes = list_recipes(recipes_dir)
+        target_recipes = [
+            r
+            for r in all_recipes
+            if any(m.platform == "wasm" or m.platform == "any" for m in r.build_matrix)
+        ]
+        host_tools = _collect_host_tools(target_recipes, all_recipes, "wasm", "linux")
+        names = {r.name for r in host_tools}
+        assert "emsdk" in names
+
+    def test_no_host_tools_for_native(self, tmp_path):
+        """No host tools needed when target == host platform."""
+        recipes_dir = self._make_recipes(tmp_path)
+        all_recipes = list_recipes(recipes_dir)
+        target_recipes = [
+            r
+            for r in all_recipes
+            if any(m.platform == "linux" or m.platform == "any" for m in r.build_matrix)
+        ]
+        host_tools = _collect_host_tools(target_recipes, all_recipes, "linux", "linux")
+        assert host_tools == []
+
+    def test_excludes_target_platform_recipes(self, tmp_path):
+        """Recipes that build for the target platform are NOT host tools."""
+        recipes_dir = self._make_recipes(tmp_path)
+        all_recipes = list_recipes(recipes_dir)
+        target_recipes = [
+            r
+            for r in all_recipes
+            if any(m.platform == "wasm" or m.platform == "any" for m in r.build_matrix)
+        ]
+        host_tools = _collect_host_tools(target_recipes, all_recipes, "wasm", "linux")
+        names = {r.name for r in host_tools}
+        # zlib and boost build for wasm, so they're NOT host tools
+        assert "zlib" not in names
+        assert "boost" not in names
+
+    def test_excludes_unknown_deps(self, tmp_path):
+        """Dependencies that aren't known recipes are silently skipped."""
+        recipes_dir = self._make_recipes(tmp_path)
+        # Add recipe with dependency on unknown recipe
+        unknown_dep_dir = recipes_dir / "mypkg"
+        _write_recipe(
+            unknown_dep_dir,
+            {
+                "recipe": {"name": "mypkg", "upstream_version": "1.0", "cvc_revision": 1},
+                "source": {"type": "prebuilt"},
+                "depends": {"build": ["unknown-tool"]},
+                "build": {
+                    "matrix": [
+                        {"platform": "wasm", "script": "build.sh", "host_platform": "linux"},
+                    ]
+                },
+            },
+        )
+        all_recipes = list_recipes(recipes_dir)
+        target_recipes = [
+            r
+            for r in all_recipes
+            if any(m.platform == "wasm" or m.platform == "any" for m in r.build_matrix)
+        ]
+        # Should not raise, unknown-tool is silently skipped
+        host_tools = _collect_host_tools(target_recipes, all_recipes, "wasm", "linux")
+        names = {r.name for r in host_tools}
+        assert "unknown-tool" not in names
+
+    def test_transitive_host_tools(self, tmp_path):
+        """Host tools are discovered transitively through deps."""
+        recipes_dir = tmp_path / "recipes"
+
+        # toolchain-base: linux only
+        _write_recipe(
+            recipes_dir / "toolchain-base",
+            {
+                "recipe": {"name": "toolchain-base", "upstream_version": "1.0", "cvc_revision": 1},
+                "source": {"type": "prebuilt"},
+                "build": {"matrix": [{"platform": "linux", "script": "build.sh"}]},
+            },
+        )
+
+        # cross-sdk: linux only, depends on toolchain-base
+        _write_recipe(
+            recipes_dir / "cross-sdk",
+            {
+                "recipe": {"name": "cross-sdk", "upstream_version": "1.0", "cvc_revision": 1},
+                "source": {"type": "prebuilt"},
+                "depends": {"build": ["toolchain-base"]},
+                "build": {"matrix": [{"platform": "linux", "script": "build.sh"}]},
+            },
+        )
+
+        # mylib: wasm target, depends on cross-sdk
+        _write_recipe(
+            recipes_dir / "mylib",
+            {
+                "recipe": {"name": "mylib", "upstream_version": "1.0", "cvc_revision": 1},
+                "source": {"type": "prebuilt"},
+                "depends": {"build": ["cross-sdk"]},
+                "build": {
+                    "matrix": [
+                        {"platform": "wasm", "script": "build.sh", "host_platform": "linux"},
+                    ]
+                },
+            },
+        )
+
+        all_recipes = list_recipes(recipes_dir)
+        target_recipes = [
+            r
+            for r in all_recipes
+            if any(m.platform == "wasm" or m.platform == "any" for m in r.build_matrix)
+        ]
+        host_tools = _collect_host_tools(target_recipes, all_recipes, "wasm", "linux")
+        names = {r.name for r in host_tools}
+        assert "cross-sdk" in names
+        assert "toolchain-base" in names

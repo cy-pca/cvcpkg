@@ -22,10 +22,11 @@ patches: []
 
 depends:
   build:
-    - name: gmp
-      version: ">=6.1.0"
     - name: emsdk
       version: ">=5.0"
+  runtime:
+    - name: gmp
+      version: ">=6.1.0"
   host_tools:
     - make
 
