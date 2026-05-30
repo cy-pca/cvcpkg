@@ -238,6 +238,7 @@ class TestBuildAllWorkDir:
             prefix=prefix,
             per_component=True,
             work_dir_root=scratch,
+            keep_build_dir=True,
             no_cache=True,
         )
 
@@ -325,3 +326,144 @@ class TestBuildAllWorkDir:
         )
 
         assert scratch.is_dir()
+
+
+# ── cleanup_work_dirs parameter ─────────────────────────────────
+
+
+class TestCleanupWorkDirs:
+    """Tests for the cleanup_work_dirs parameter in build_all()."""
+
+    def test_default_cleanup_removes_work_dirs(self, tmp_path):
+        """With cleanup_work_dirs=True (default), per-component work dirs are removed."""
+        from cvcpkg.builder import build_all
+
+        recipes_dir = tmp_path / "recipes"
+        scratch = tmp_path / "scratch"
+
+        _write_recipe(recipes_dir, "alpha")
+        _write_recipe(recipes_dir, "beta", deps=["alpha"])
+
+        contexts = build_all(
+            recipes_dir,
+            platform="linux",
+            prefix=tmp_path / "prefix",
+            per_component=True,
+            work_dir_root=scratch,
+            no_cache=True,
+        )
+
+        assert len(contexts) == 2
+        # Work dirs should have been cleaned up
+        for ctx in contexts:
+            assert (
+                not ctx.work_dir.is_dir()
+            ), f"{ctx.recipe.name}: work_dir {ctx.work_dir} should have been removed"
+        # But artifacts should still be in the prefix
+        assert (tmp_path / "prefix" / "lib" / "libalpha.a").is_file()
+        assert (tmp_path / "prefix" / "lib" / "libbeta.a").is_file()
+
+    def test_no_cleanup_preserves_work_dirs(self, tmp_path):
+        """With cleanup_work_dirs=False, per-component work dirs survive."""
+        from cvcpkg.builder import build_all
+
+        recipes_dir = tmp_path / "recipes"
+        scratch = tmp_path / "scratch"
+
+        _write_recipe(recipes_dir, "alpha")
+        _write_recipe(recipes_dir, "beta", deps=["alpha"])
+
+        contexts = build_all(
+            recipes_dir,
+            platform="linux",
+            prefix=tmp_path / "prefix",
+            per_component=True,
+            work_dir_root=scratch,
+            cleanup_work_dirs=False,
+            no_cache=True,
+        )
+
+        assert len(contexts) == 2
+        # Work dirs should still exist
+        for ctx in contexts:
+            assert (
+                ctx.work_dir.is_dir()
+            ), f"{ctx.recipe.name}: work_dir {ctx.work_dir} should have survived"
+            # install_dir should contain artifacts
+            assert (ctx.install_dir / "lib" / f"lib{ctx.recipe.name}.a").is_file()
+
+    def test_no_cleanup_allows_staging(self, tmp_path):
+        """Simulates the pack-all flow: build with cleanup_work_dirs=False,
+        then create staging dirs inside the preserved work_dirs."""
+        from cvcpkg.builder import build_all
+
+        recipes_dir = tmp_path / "recipes"
+        scratch = tmp_path / "scratch"
+
+        _write_recipe(recipes_dir, "gamma")
+
+        contexts = build_all(
+            recipes_dir,
+            platform="linux",
+            prefix=tmp_path / "prefix",
+            per_component=True,
+            work_dir_root=scratch,
+            cleanup_work_dirs=False,
+            no_cache=True,
+        )
+
+        assert len(contexts) == 1
+        ctx = contexts[0]
+        # This is what pack_all_cmd does — create staging inside work_dir
+        staging = ctx.work_dir / "staging"
+        staging.mkdir(exist_ok=True)
+        assert staging.is_dir()
+        # install_dir is available for stage_bundle
+        assert ctx.install_dir.is_dir()
+
+    def test_keep_build_dir_overrides_cleanup(self, tmp_path):
+        """When keep_build_dir=True, work dirs survive even with cleanup_work_dirs=True."""
+        from cvcpkg.builder import build_all
+
+        recipes_dir = tmp_path / "recipes"
+        scratch = tmp_path / "scratch"
+
+        _write_recipe(recipes_dir, "alpha")
+
+        contexts = build_all(
+            recipes_dir,
+            platform="linux",
+            prefix=tmp_path / "prefix",
+            per_component=True,
+            work_dir_root=scratch,
+            keep_build_dir=True,
+            cleanup_work_dirs=True,
+            no_cache=True,
+        )
+
+        assert len(contexts) == 1
+        # keep_build_dir=True prevents cleanup
+        assert contexts[0].work_dir.is_dir()
+
+    def test_cleanup_non_per_component_noop(self, tmp_path):
+        """cleanup_work_dirs has no effect in non-per-component mode."""
+        from cvcpkg.builder import build_all
+
+        recipes_dir = tmp_path / "recipes"
+        scratch = tmp_path / "scratch"
+
+        _write_recipe(recipes_dir, "alpha")
+
+        contexts = build_all(
+            recipes_dir,
+            platform="linux",
+            prefix=tmp_path / "prefix",
+            per_component=False,
+            work_dir_root=scratch,
+            cleanup_work_dirs=True,
+            no_cache=True,
+        )
+
+        assert len(contexts) == 1
+        # In non-per-component mode, work_dir is the build_recipe's temp
+        # and is managed by build_recipe itself, not by cleanup_work_dirs

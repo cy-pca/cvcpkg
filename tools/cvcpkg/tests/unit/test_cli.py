@@ -1239,3 +1239,753 @@ class TestPublishRecipeName:
     def test_publish_no_args_no_all_errors(self, capsys):
         ret = main(["publish", "--server", "https://fake.example.com", "--token", "tok"])
         assert ret != 0
+
+    def test_resolve_multiple_versions_picks_latest(self, tmp_path):
+        """When multiple archives exist for a recipe, the latest (last sorted) is used."""
+        from cvcpkg.cli import _resolve_publish_archives
+
+        self._make_archive(tmp_path, "zlib", "1.2.0+cvc.1", "linux", "x86_64", "release", "shared")
+        self._make_archive(tmp_path, "zlib", "1.3.1+cvc.1", "linux", "x86_64", "release", "shared")
+        result = _resolve_publish_archives(
+            ("zlib",), str(tmp_path), "linux", "x86_64", "release", "shared"
+        )
+        assert len(result) == 1
+        assert "1.3.1" in result[0].name
+
+    def test_resolve_output_dir_not_exists(self, tmp_path):
+        """Error when output dir does not exist."""
+        from cvcpkg.cli import _resolve_publish_archives
+
+        with pytest.raises(click.ClickException, match="output directory does not exist"):
+            _resolve_publish_archives(
+                ("zlib",), str(tmp_path / "no-such-dir"), "linux", "x86_64", "release", "shared"
+            )
+
+    def test_resolve_mixed_names_and_paths(self, tmp_path):
+        """Mix of recipe names and file paths both resolve correctly."""
+        import warnings
+
+        from cvcpkg.cli import _resolve_publish_archives
+
+        a1 = self._make_archive(
+            tmp_path, "zlib", "1.3.1+cvc.1", "linux", "x86_64", "release", "shared"
+        )
+        a2 = self._make_archive(
+            tmp_path, "grpc", "1.60.0+cvc.1", "linux", "x86_64", "release", "shared"
+        )
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            result = _resolve_publish_archives(
+                ("zlib", str(a2)), str(tmp_path), "linux", "x86_64", "release", "shared"
+            )
+        assert len(result) == 2
+
+    def test_resolve_all_filters_config_and_link(self, tmp_path):
+        """_resolve_all_archives only returns archives matching config/link."""
+        from cvcpkg.cli import _resolve_all_archives
+
+        self._make_archive(tmp_path, "zlib", "1.3.1+cvc.1", "linux", "x86_64", "release", "shared")
+        self._make_archive(tmp_path, "zlib", "1.3.1+cvc.1", "linux", "x86_64", "debug", "shared")
+        self._make_archive(tmp_path, "grpc", "1.60.0+cvc.1", "linux", "x86_64", "release", "static")
+        result = _resolve_all_archives(str(tmp_path), "linux", "x86_64", "release", "shared")
+        assert len(result) == 1
+        assert "zlib-" in result[0].name
+
+    def test_resolve_all_nonexistent_dir(self, tmp_path):
+        """_resolve_all_archives returns [] for a missing directory."""
+        from cvcpkg.cli import _resolve_all_archives
+
+        result = _resolve_all_archives(
+            str(tmp_path / "no-such-dir"), "linux", "x86_64", "release", "shared"
+        )
+        assert result == []
+
+
+# ── manifest extraction ─────────────────────────────────────────
+
+
+class TestExtractManifest:
+    """Tests for _extract_manifest from tar.gz and zip archives."""
+
+    def _make_tar_archive(self, d, name, manifest_data):
+        """Create a .tar.gz archive with a manifest.yaml inside."""
+        import io
+        import tarfile
+
+        d.mkdir(parents=True, exist_ok=True)
+        archive = d / f"{name}.tar.gz"
+        with tarfile.open(archive, "w:gz") as tf:
+            content = yaml.dump(manifest_data).encode()
+            info = tarfile.TarInfo(name="manifest.yaml")
+            info.size = len(content)
+            tf.addfile(info, io.BytesIO(content))
+        return archive
+
+    def _make_zip_archive(self, d, name, manifest_data):
+        """Create a .zip archive with a manifest.yaml inside."""
+        import zipfile
+
+        d.mkdir(parents=True, exist_ok=True)
+        archive = d / f"{name}.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("manifest.yaml", yaml.dump(manifest_data))
+        return archive
+
+    def test_extract_from_tar(self, tmp_path):
+        from cvcpkg.cli import _extract_manifest
+
+        manifest_data = {
+            "bundle": {"name": "zlib", "version": "1.3.1+cvc.1", "platform": "linux"},
+            "meta": {"description": "zlib compression"},
+        }
+        archive = self._make_tar_archive(tmp_path, "zlib", manifest_data)
+        result = _extract_manifest(archive)
+        assert result["bundle"]["name"] == "zlib"
+        assert result["bundle"]["version"] == "1.3.1+cvc.1"
+        assert result["meta"]["description"] == "zlib compression"
+
+    def test_extract_from_zip(self, tmp_path):
+        from cvcpkg.cli import _extract_manifest
+
+        manifest_data = {
+            "bundle": {"name": "boost", "version": "1.85.0+cvc.1", "platform": "windows"},
+        }
+        archive = self._make_zip_archive(tmp_path, "boost", manifest_data)
+        result = _extract_manifest(archive)
+        assert result["bundle"]["name"] == "boost"
+
+    def test_extract_missing_manifest(self, tmp_path):
+        """Archive without manifest.yaml raises ClickException."""
+        import io
+        import tarfile
+
+        archive = tmp_path / "empty.tar.gz"
+        with tarfile.open(archive, "w:gz") as tf:
+            content = b"not a manifest"
+            info = tarfile.TarInfo(name="README.md")
+            info.size = len(content)
+            tf.addfile(info, io.BytesIO(content))
+
+        from cvcpkg.cli import _extract_manifest
+
+        with pytest.raises(click.ClickException, match="no manifest.yaml"):
+            _extract_manifest(archive)
+
+    def test_extract_corrupted_archive(self, tmp_path):
+        """Corrupted archive raises ClickException."""
+        from cvcpkg.cli import _extract_manifest
+
+        archive = tmp_path / "bad.tar.gz"
+        archive.write_bytes(b"this is not a valid archive")
+        with pytest.raises(click.ClickException, match="cannot read archive"):
+            _extract_manifest(archive)
+
+    def test_extract_nested_manifest(self, tmp_path):
+        """manifest.yaml inside a subdirectory in the archive."""
+        import io
+        import tarfile
+
+        from cvcpkg.cli import _extract_manifest
+
+        manifest_data = {"bundle": {"name": "nested", "version": "1.0"}}
+        archive = tmp_path / "nested.tar.gz"
+        with tarfile.open(archive, "w:gz") as tf:
+            content = yaml.dump(manifest_data).encode()
+            info = tarfile.TarInfo(name="nested-1.0/manifest.yaml")
+            info.size = len(content)
+            tf.addfile(info, io.BytesIO(content))
+        result = _extract_manifest(archive)
+        assert result["bundle"]["name"] == "nested"
+
+
+# ── _publish_to_server unit tests ───────────────────────────────
+
+
+class TestPublishToServer:
+    """Tests for _publish_to_server with mocked HTTP."""
+
+    def _make_manifest_archive(self, d, name, version, platform, arch, config, link):
+        """Create an archive with a real embedded manifest.yaml."""
+        import io
+        import tarfile
+
+        d.mkdir(parents=True, exist_ok=True)
+        fname = f"{name}-{version}-{platform}-{arch}-{config}-{link}.tar.gz"
+        archive = d / fname
+        manifest_data = {
+            "bundle": {
+                "name": name,
+                "version": version,
+                "platform": platform,
+                "arch": arch,
+                "config": config,
+                "link": link,
+            },
+            "meta": {
+                "recipe_sha256": "abc123",
+                "description": f"{name} library",
+            },
+        }
+        with tarfile.open(archive, "w:gz") as tf:
+            content = yaml.dump(manifest_data).encode()
+            info = tarfile.TarInfo(name="manifest.yaml")
+            info.size = len(content)
+            tf.addfile(info, io.BytesIO(content))
+        return archive
+
+    def test_publish_simple_success(self, tmp_path):
+        """_publish_to_server uploads small archive via _publish_simple."""
+        from cvcpkg.cli import _publish_to_server
+
+        archive = self._make_manifest_archive(
+            tmp_path, "zlib", "1.3.1+cvc.1", "linux", "x86_64", "release", "shared"
+        )
+
+        with (
+            mock.patch("cvcpkg.cli._variant_exists", return_value=False),
+            mock.patch("cvcpkg.cli._publish_simple", return_value="published") as mock_simple,
+        ):
+            _publish_to_server(
+                "https://pkg.example.com",
+                "cvctok_test",
+                [archive],
+                release_tag="",
+                chunked_threshold=10 * 1024 * 1024,
+                org="",
+            )
+            mock_simple.assert_called_once()
+            args = mock_simple.call_args
+            assert args[0][0] == "https://pkg.example.com"  # base
+            assert args[0][2]["name"] == "zlib"  # params
+
+    def test_publish_skips_existing_variant(self, tmp_path, capsys):
+        """_publish_to_server skips when _variant_exists returns True."""
+        from cvcpkg.cli import _publish_to_server
+
+        archive = self._make_manifest_archive(
+            tmp_path, "zlib", "1.3.1+cvc.1", "linux", "x86_64", "release", "shared"
+        )
+
+        with (
+            mock.patch("cvcpkg.cli._variant_exists", return_value=True),
+            mock.patch("cvcpkg.cli._publish_simple") as mock_simple,
+        ):
+            _publish_to_server(
+                "https://pkg.example.com",
+                "cvctok_test",
+                [archive],
+                release_tag="",
+                chunked_threshold=10 * 1024 * 1024,
+                org="",
+            )
+            mock_simple.assert_not_called()
+        out = capsys.readouterr().out
+        assert "skipping" in out.lower()
+
+    def test_publish_missing_name_raises(self, tmp_path):
+        """_publish_to_server errors when manifest has no name."""
+        import io
+        import tarfile
+
+        from cvcpkg.cli import _publish_to_server
+
+        archive = tmp_path / "bad.tar.gz"
+        manifest_data = {"bundle": {"name": "", "version": ""}, "meta": {}}
+        with tarfile.open(archive, "w:gz") as tf:
+            content = yaml.dump(manifest_data).encode()
+            info = tarfile.TarInfo(name="manifest.yaml")
+            info.size = len(content)
+            tf.addfile(info, io.BytesIO(content))
+
+        with mock.patch("cvcpkg.cli._variant_exists", return_value=False):
+            with pytest.raises(click.ClickException, match="manifest missing name"):
+                _publish_to_server(
+                    "https://pkg.example.com",
+                    "cvctok_test",
+                    [archive],
+                    release_tag="",
+                    chunked_threshold=10 * 1024 * 1024,
+                    org="",
+                )
+
+    def test_publish_with_org(self, tmp_path, capsys):
+        """_publish_to_server passes org to params and display."""
+        from cvcpkg.cli import _publish_to_server
+
+        archive = self._make_manifest_archive(
+            tmp_path, "zlib", "1.3.1+cvc.1", "linux", "x86_64", "release", "shared"
+        )
+
+        with (
+            mock.patch("cvcpkg.cli._variant_exists", return_value=False),
+            mock.patch("cvcpkg.cli._publish_simple", return_value="published") as mock_simple,
+        ):
+            _publish_to_server(
+                "https://pkg.example.com",
+                "cvctok_test",
+                [archive],
+                release_tag="v1.0",
+                chunked_threshold=10 * 1024 * 1024,
+                org="myorg",
+            )
+            params = mock_simple.call_args[0][2]
+            assert params["org"] == "myorg"
+            assert params["release_tag"] == "v1.0"
+        out = capsys.readouterr().out
+        assert "myorg/zlib" in out
+
+    def test_publish_uses_chunked_for_large_files(self, tmp_path):
+        """_publish_to_server calls _publish_chunked when file > threshold."""
+        from cvcpkg.cli import _publish_to_server
+
+        archive = self._make_manifest_archive(
+            tmp_path, "zlib", "1.3.1+cvc.1", "linux", "x86_64", "release", "shared"
+        )
+
+        with (
+            mock.patch("cvcpkg.cli._variant_exists", return_value=False),
+            mock.patch("cvcpkg.cli._publish_chunked", return_value="published") as mock_chunked,
+        ):
+            _publish_to_server(
+                "https://pkg.example.com",
+                "cvctok_test",
+                [archive],
+                release_tag="",
+                chunked_threshold=1,  # tiny threshold to force chunked
+                org="",
+            )
+            mock_chunked.assert_called_once()
+
+    def test_publish_failure_continues_and_reports(self, tmp_path, capsys):
+        """_publish_to_server collects failures and raises at the end."""
+        from cvcpkg.cli import _publish_to_server
+
+        a1 = self._make_manifest_archive(
+            tmp_path, "zlib", "1.3.1+cvc.1", "linux", "x86_64", "release", "shared"
+        )
+        a2 = self._make_manifest_archive(
+            tmp_path, "grpc", "1.60.0+cvc.1", "linux", "x86_64", "release", "shared"
+        )
+
+        with (
+            mock.patch("cvcpkg.cli._variant_exists", return_value=False),
+            mock.patch(
+                "cvcpkg.cli._publish_simple",
+                side_effect=click.ClickException("upload failed"),
+            ),
+        ):
+            with pytest.raises(click.ClickException, match="error"):
+                _publish_to_server(
+                    "https://pkg.example.com",
+                    "cvctok_test",
+                    [a1, a2],
+                    release_tag="",
+                    chunked_threshold=10 * 1024 * 1024,
+                    org="",
+                )
+        err = capsys.readouterr().err
+        assert "ERROR" in err
+
+    def test_publish_multiple_archives_success(self, tmp_path, capsys):
+        """_publish_to_server reports correct count for multiple archives."""
+        from cvcpkg.cli import _publish_to_server
+
+        a1 = self._make_manifest_archive(
+            tmp_path, "zlib", "1.3.1+cvc.1", "linux", "x86_64", "release", "shared"
+        )
+        a2 = self._make_manifest_archive(
+            tmp_path, "grpc", "1.60.0+cvc.1", "linux", "x86_64", "release", "shared"
+        )
+
+        with (
+            mock.patch("cvcpkg.cli._variant_exists", return_value=False),
+            mock.patch("cvcpkg.cli._publish_simple", return_value="published"),
+        ):
+            _publish_to_server(
+                "https://pkg.example.com",
+                "cvctok_test",
+                [a1, a2],
+                release_tag="",
+                chunked_threshold=10 * 1024 * 1024,
+                org="",
+            )
+        out = capsys.readouterr().out
+        assert "2/2" in out
+
+
+# ── _publish_to_backend unit tests ──────────────────────────────
+
+
+class TestPublishToBackend:
+    """Tests for _publish_to_backend with mocked storage."""
+
+    def test_backend_uploads_all_archives(self, tmp_path):
+        """_publish_to_backend calls backend.put for each archive."""
+        from cvcpkg.cli import _publish_to_backend
+
+        a1 = tmp_path / "zlib.tar.gz"
+        a1.write_bytes(b"archive1")
+        a2 = tmp_path / "grpc.tar.gz"
+        a2.write_bytes(b"archive2")
+
+        mock_backend = mock.MagicMock()
+        with mock.patch("cvcpkg.storage.get_backend", return_value=mock_backend) as mock_get:
+            _publish_to_backend("s3://bucket/path", [a1, a2])
+            mock_get.assert_called_once_with("s3://bucket/path")
+            assert mock_backend.put.call_count == 2
+            # Check URIs
+            calls = mock_backend.put.call_args_list
+            assert "zlib.tar.gz" in calls[0][0][0]
+            assert "grpc.tar.gz" in calls[1][0][0]
+
+    def test_backend_missing_file_raises(self, tmp_path):
+        """_publish_to_backend raises ClickException for missing file."""
+        from cvcpkg.cli import _publish_to_backend
+
+        missing = tmp_path / "nonexistent.tar.gz"
+        mock_backend = mock.MagicMock()
+        with mock.patch("cvcpkg.storage.get_backend", return_value=mock_backend):
+            with pytest.raises(click.ClickException, match="file not found"):
+                _publish_to_backend("s3://bucket/path", [missing])
+
+    def test_backend_not_implemented_raises(self, tmp_path):
+        """_publish_to_backend raises when backend doesn't support put."""
+        from cvcpkg.cli import _publish_to_backend
+
+        archive = tmp_path / "test.tar.gz"
+        archive.write_bytes(b"data")
+        mock_backend = mock.MagicMock()
+        mock_backend.put.side_effect = NotImplementedError("read-only")
+        with mock.patch("cvcpkg.storage.get_backend", return_value=mock_backend):
+            with pytest.raises(click.ClickException, match="does not support uploads"):
+                _publish_to_backend("s3://bucket/path", [archive])
+
+
+# ── _variant_exists unit tests ──────────────────────────────────
+
+
+class TestVariantExists:
+    """Tests for _variant_exists with mocked httpx."""
+
+    def test_variant_found(self):
+        from cvcpkg.cli import _variant_exists
+
+        mock_resp = mock.MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "packages": [
+                {
+                    "version": "1.3.1+cvc.1",
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "build_type": "release",
+                    "link": "shared",
+                }
+            ]
+        }
+        mock_client = mock.MagicMock()
+        mock_client.__enter__ = mock.MagicMock(return_value=mock_client)
+        mock_client.__exit__ = mock.MagicMock(return_value=False)
+        mock_client.get.return_value = mock_resp
+
+        with mock.patch("httpx.Client", return_value=mock_client):
+            assert (
+                _variant_exists(
+                    "https://pkg.example.com",
+                    {"Authorization": "Bearer tok"},
+                    "zlib",
+                    "1.3.1+cvc.1",
+                    "linux",
+                    "x86_64",
+                    "release",
+                    "shared",
+                )
+                is True
+            )
+
+    def test_variant_not_found(self):
+        from cvcpkg.cli import _variant_exists
+
+        mock_resp = mock.MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"packages": []}
+        mock_client = mock.MagicMock()
+        mock_client.__enter__ = mock.MagicMock(return_value=mock_client)
+        mock_client.__exit__ = mock.MagicMock(return_value=False)
+        mock_client.get.return_value = mock_resp
+
+        with mock.patch("httpx.Client", return_value=mock_client):
+            assert (
+                _variant_exists(
+                    "https://pkg.example.com",
+                    {"Authorization": "Bearer tok"},
+                    "zlib",
+                    "1.3.1+cvc.1",
+                    "linux",
+                    "x86_64",
+                    "release",
+                    "shared",
+                )
+                is False
+            )
+
+    def test_variant_server_error_returns_false(self):
+        from cvcpkg.cli import _variant_exists
+
+        mock_resp = mock.MagicMock()
+        mock_resp.status_code = 500
+        mock_client = mock.MagicMock()
+        mock_client.__enter__ = mock.MagicMock(return_value=mock_client)
+        mock_client.__exit__ = mock.MagicMock(return_value=False)
+        mock_client.get.return_value = mock_resp
+
+        with mock.patch("httpx.Client", return_value=mock_client):
+            assert (
+                _variant_exists(
+                    "https://pkg.example.com",
+                    {},
+                    "zlib",
+                    "1.3.1+cvc.1",
+                    "linux",
+                    "x86_64",
+                    "release",
+                    "shared",
+                )
+                is False
+            )
+
+    def test_variant_network_error_returns_false(self):
+        from cvcpkg.cli import _variant_exists
+
+        mock_client = mock.MagicMock()
+        mock_client.__enter__ = mock.MagicMock(return_value=mock_client)
+        mock_client.__exit__ = mock.MagicMock(return_value=False)
+        mock_client.get.side_effect = Exception("connection refused")
+
+        with mock.patch("httpx.Client", return_value=mock_client):
+            assert (
+                _variant_exists(
+                    "https://pkg.example.com",
+                    {},
+                    "zlib",
+                    "1.3.1+cvc.1",
+                    "linux",
+                    "x86_64",
+                    "release",
+                    "shared",
+                )
+                is False
+            )
+
+    def test_variant_wrong_platform_not_matched(self):
+        """Variant exists for different platform but not for requested one."""
+        from cvcpkg.cli import _variant_exists
+
+        mock_resp = mock.MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "packages": [
+                {
+                    "version": "1.3.1+cvc.1",
+                    "platform": "macos",
+                    "arch": "arm64",
+                    "build_type": "release",
+                    "link": "shared",
+                }
+            ]
+        }
+        mock_client = mock.MagicMock()
+        mock_client.__enter__ = mock.MagicMock(return_value=mock_client)
+        mock_client.__exit__ = mock.MagicMock(return_value=False)
+        mock_client.get.return_value = mock_resp
+
+        with mock.patch("httpx.Client", return_value=mock_client):
+            assert (
+                _variant_exists(
+                    "https://pkg.example.com",
+                    {},
+                    "zlib",
+                    "1.3.1+cvc.1",
+                    "linux",
+                    "x86_64",
+                    "release",
+                    "shared",
+                )
+                is False
+            )
+
+
+# ── _publish_simple unit tests ──────────────────────────────────
+
+
+class TestPublishSimple:
+    """Tests for _publish_simple with mocked httpx."""
+
+    def _mock_client(self, resp):
+        """Create a mock httpx.Client context manager returning resp."""
+        client = mock.MagicMock()
+        client.__enter__ = mock.MagicMock(return_value=client)
+        client.__exit__ = mock.MagicMock(return_value=False)
+        client.post.return_value = resp
+        return client
+
+    def test_simple_publish_200(self, tmp_path):
+        from cvcpkg.cli import _publish_simple
+
+        archive = tmp_path / "test.tar.gz"
+        archive.write_bytes(b"data")
+        resp = mock.MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {"sha256": "abc123"}
+        with mock.patch("httpx.Client", return_value=self._mock_client(resp)):
+            result = _publish_simple("https://pkg.example.com", {}, {}, archive)
+        assert result == "published"
+
+    def test_simple_publish_409_skipped(self, tmp_path):
+        from cvcpkg.cli import _publish_simple
+
+        archive = tmp_path / "test.tar.gz"
+        archive.write_bytes(b"data")
+        resp = mock.MagicMock()
+        resp.status_code = 409
+        resp.json.return_value = {"detail": "already exists"}
+        with mock.patch("httpx.Client", return_value=self._mock_client(resp)):
+            result = _publish_simple("https://pkg.example.com", {}, {}, archive)
+        assert result == "skipped"
+
+    def test_simple_publish_error_raises(self, tmp_path):
+        from cvcpkg.cli import _publish_simple
+
+        archive = tmp_path / "test.tar.gz"
+        archive.write_bytes(b"data")
+        resp = mock.MagicMock()
+        resp.status_code = 500
+        resp.text = "internal server error"
+        with mock.patch("httpx.Client", return_value=self._mock_client(resp)):
+            with pytest.raises(click.ClickException, match="publish failed"):
+                _publish_simple("https://pkg.example.com", {}, {}, archive)
+
+
+# ── publish CLI integration tests ───────────────────────────────
+
+
+class TestPublishCLIIntegration:
+    """Integration tests for the publish command via CLI with mocked backends."""
+
+    def _make_manifest_archive(self, d, name, version, platform, arch, config, link):
+        """Create an archive with a real embedded manifest.yaml."""
+        import io
+        import tarfile
+
+        d.mkdir(parents=True, exist_ok=True)
+        fname = f"{name}-{version}-{platform}-{arch}-{config}-{link}.tar.gz"
+        archive = d / fname
+        manifest_data = {
+            "bundle": {
+                "name": name,
+                "version": version,
+                "platform": platform,
+                "arch": arch,
+                "config": config,
+                "link": link,
+            },
+            "meta": {"recipe_sha256": "abc"},
+        }
+        with tarfile.open(archive, "w:gz") as tf:
+            content = yaml.dump(manifest_data).encode()
+            info = tarfile.TarInfo(name="manifest.yaml")
+            info.size = len(content)
+            tf.addfile(info, io.BytesIO(content))
+        return archive
+
+    def test_publish_dest_with_recipe_name(self, tmp_path, capsys):
+        """Full CLI: publish recipe-name --dest file:// works end-to-end."""
+        dist = tmp_path / "dist"
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        self._make_manifest_archive(
+            dist, "zlib", "1.3.1+cvc.1", "linux", "x86_64", "release", "shared"
+        )
+        with mock.patch("cvcpkg.platform.detect_arch", return_value="x86_64"):
+            ret = main(
+                [
+                    "publish",
+                    "zlib",
+                    "--dest",
+                    f"file://{dest}",
+                    "--output-dir",
+                    str(dist),
+                    "--platform",
+                    "linux",
+                ]
+            )
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "published" in out.lower()
+        assert any(f.name.startswith("zlib-") for f in dest.iterdir())
+
+    def test_publish_all_dest(self, tmp_path, capsys):
+        """Full CLI: publish --all --dest file:// uploads all matching archives."""
+        dist = tmp_path / "dist"
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        self._make_manifest_archive(
+            dist, "zlib", "1.3.1+cvc.1", "linux", "x86_64", "release", "shared"
+        )
+        self._make_manifest_archive(
+            dist, "grpc", "1.60.0+cvc.1", "linux", "x86_64", "release", "shared"
+        )
+        with mock.patch("cvcpkg.platform.detect_arch", return_value="x86_64"):
+            ret = main(
+                [
+                    "publish",
+                    "--all",
+                    "--dest",
+                    f"file://{dest}",
+                    "--output-dir",
+                    str(dist),
+                    "--platform",
+                    "linux",
+                ]
+            )
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "2 archive(s)" in out
+
+    def test_publish_server_with_recipe_name(self, tmp_path, capsys):
+        """Full CLI: publish recipe-name --server mocked end-to-end."""
+        dist = tmp_path / "dist"
+        self._make_manifest_archive(
+            dist, "zlib", "1.3.1+cvc.1", "linux", "x86_64", "release", "shared"
+        )
+        with (
+            mock.patch("cvcpkg.platform.detect_arch", return_value="x86_64"),
+            mock.patch("cvcpkg.cli._variant_exists", return_value=False),
+            mock.patch("cvcpkg.cli._publish_simple", return_value="published"),
+        ):
+            ret = main(
+                [
+                    "publish",
+                    "zlib",
+                    "--server",
+                    "https://pkg.example.com",
+                    "--token",
+                    "cvctok_test",
+                    "--output-dir",
+                    str(dist),
+                    "--platform",
+                    "linux",
+                ]
+            )
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "1/1" in out
+
+    def test_publish_help_shows_dest(self, capsys):
+        """Help text includes --dest option."""
+        ret = main(["publish", "--help"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "--dest" in out
+        assert "--server" in out
+        assert "storage backend" in out.lower() or "Storage" in out
