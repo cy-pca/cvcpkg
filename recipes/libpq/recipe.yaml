@@ -29,6 +29,16 @@ depends:
       version: "^3.0"
     - name: zlib
       version: "^1.3"
+    - name: zstd
+      version: "^1.5"
+    - name: lz4
+      version: "^1.9"
+    - name: readline
+      version: "^8.0"
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: gettext
+      version: "^1.0"
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
   host_tools:
     - meson
     - ninja

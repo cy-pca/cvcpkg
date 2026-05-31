@@ -18,7 +18,13 @@ _grpc_fetch_archive() {
     echo "cvcpkg: downloading $dest from $url ..."
     curl -fsSL --retry 5 --retry-delay 3 -o "$tmp/archive" "$url"
     local actual
-    actual="$(sha256sum "$tmp/archive" | awk '{print $1}')"
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual="$(sha256sum "$tmp/archive" | awk '{print $1}')"
+    elif command -v sha256 >/dev/null 2>&1; then
+        actual="$(sha256 -q "$tmp/archive")"
+    else
+        actual="$(openssl dgst -sha256 "$tmp/archive" | awk '{print $NF}')"
+    fi
     if [[ "$actual" != "$sha256" ]]; then
         echo "cvcpkg: sha256 mismatch for $url (expected $sha256, got $actual)" >&2
         rm -rf "$tmp"
