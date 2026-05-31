@@ -4164,6 +4164,18 @@ def builder_status(builder_id: int, server: str, token: str):
 @click.option("--org", "org_slug", default="", help="Organization scope.")
 @click.option("--max-jobs", type=int, default=1, help="Max concurrent jobs.")
 @click.option("--label", "labels", multiple=True, help="Labels (repeatable).")
+@click.option(
+    "--work-dir",
+    type=click.Path(),
+    default=None,
+    help="Directory for build work trees (default: system temp).",
+)
+@click.option(
+    "--recipe-cache-dir",
+    type=click.Path(),
+    default=None,
+    help="Directory to cache downloaded recipe bundles.",
+)
 def builder_run(
     server: str,
     token: str,
@@ -4173,30 +4185,56 @@ def builder_run(
     org_slug: str,
     max_jobs: int,
     labels: tuple[str, ...],
+    work_dir: str | None,
+    recipe_cache_dir: str | None,
 ):
-    """Register as a builder and run the heartbeat loop.
+    """Register as a builder, poll for jobs, and execute builds.
 
-    Registers this machine as a remote builder, then sends periodic
-    heartbeats to the server.  Press Ctrl-C to unregister and exit.
+    Registers this machine as a remote builder, then enters a loop
+    that polls the server for dispatched jobs.  For each job the
+    builder:
+
+      1. Claims the job
+      2. Downloads the recipe bundle (cached locally)
+      3. Runs the build via ``pack_recipe()``
+      4. Streams build logs back to the server
+      5. Publishes the resulting archive
+      6. Reports success or failure
+
+    Press Ctrl-C to finish in-flight jobs, unregister, and exit.
     """
+    import shutil
     import signal
+    import tarfile
+    import tempfile
+    import threading
     import time
+    import traceback
 
     import httpx
+
+    from cvcpkg.builder import pack_recipe
+    from cvcpkg.platform import detect_arch
 
     if platform is None:
         import sysconfig
 
         platform = sysconfig.get_platform().split("-")[0]
     if arch is None:
-        import sysconfig
-
-        platform_full = sysconfig.get_platform()
-        parts = platform_full.split("-")
-        arch = parts[-1] if len(parts) > 1 else "unknown"
+        arch = detect_arch()
 
     base = server.rstrip("/")
     headers = {"Authorization": f"Bearer {token}"}
+
+    work_root = Path(work_dir) if work_dir else None
+    cache_dir = (
+        Path(recipe_cache_dir)
+        if recipe_cache_dir
+        else Path(tempfile.gettempdir()) / "cvcpkg-recipe-cache"
+    )
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── Registration ────────────────────────────────────────
     body = {
         "name": name,
         "platform": platform,
@@ -4220,31 +4258,250 @@ def builder_run(
     click.echo(f"Registered builder #{builder_id} ({name}) — {platform}/{arch}")
 
     shutdown = False
+    current_jobs = 0
+    jobs_lock = threading.Lock()
 
     def _handle_signal(signum, frame):
         nonlocal shutdown
         shutdown = True
+        click.echo("\nShutdown requested — finishing in-flight jobs…")
 
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
-    try:
-        while not shutdown:
-            time.sleep(60)
-            if shutdown:
-                break
+    # ── Helpers ─────────────────────────────────────────────
+
+    def _heartbeat():
+        """Send heartbeat to server."""
+        try:
+            with httpx.Client(timeout=30) as client:
+                resp = client.post(
+                    f"{base}/v1/builders/{builder_id}/heartbeat",
+                    headers=headers,
+                    json={"status": "online", "current_jobs": current_jobs},
+                )
+            if resp.status_code >= 400:
+                click.echo(f"  heartbeat failed: {resp.status_code}", err=True)
+        except Exception as exc:
+            click.echo(f"  heartbeat error: {exc}", err=True)
+
+    def _fetch_recipe(recipe_name: str) -> Path:
+        """Download recipe bundle and extract to a local directory.
+
+        Returns the path to the extracted recipe directory.  Bundles
+        are cached in *cache_dir* so repeated builds of the same
+        recipe don't re-download.
+        """
+        bundle_path = cache_dir / f"{recipe_name}.tar.gz"
+
+        # Always re-download (server may have a newer version).
+        # A future optimisation can compare recipe_hash.
+        url = f"{base}/v1/recipes/{recipe_name}"
+        params: dict[str, str] = {}
+        if org_slug:
+            params["org_slug"] = org_slug
+        with httpx.Client(timeout=120) as client:
+            resp = client.get(url, headers=headers, params=params)
+        if resp.status_code >= 400:
+            raise RuntimeError(f"failed to download recipe '{recipe_name}': {resp.status_code}")
+        bundle_path.write_bytes(resp.content)
+
+        # Extract
+        extract_dir = cache_dir / recipe_name
+        if extract_dir.is_dir():
+            shutil.rmtree(extract_dir)
+        extract_dir.mkdir(parents=True)
+        with tarfile.open(bundle_path, "r:gz") as tar:
+            tar.extractall(path=extract_dir)  # noqa: S202
+        return extract_dir
+
+    def _stream_log(job_id: int, text: str):
+        """Append a chunk of build log to the server."""
+        # Truncate to 64 KB per-chunk (server limit)
+        for i in range(0, len(text), 65536):
+            chunk = text[i : i + 65536]
             try:
                 with httpx.Client(timeout=30) as client:
-                    resp = client.post(
-                        f"{base}/v1/builders/{builder_id}/heartbeat",
+                    client.patch(
+                        f"{base}/v1/builds/{job_id}/log",
                         headers=headers,
-                        json={"status": "online", "current_jobs": 0},
+                        json={"data": chunk},
                     )
-                if resp.status_code >= 400:
-                    click.echo(f"heartbeat failed: {resp.status_code}", err=True)
+            except Exception:
+                pass  # best-effort log streaming
+
+    def _execute_job(job: dict) -> None:
+        """Execute a single build job."""
+        nonlocal current_jobs
+        job_id = job["id"]
+        recipe_name = job["recipe_name"]
+        job_platform = job.get("platform", platform)
+        job_arch = job.get("arch", arch)
+        job_config = job.get("config", "release")
+        job_link = job.get("link", "shared")
+
+        click.echo(
+            f"  [{job_id}] Building {recipe_name} "
+            f"({job_platform}/{job_arch}/{job_config}/{job_link})"
+        )
+
+        # 1. Claim the job
+        try:
+            with httpx.Client(timeout=30) as client:
+                resp = client.post(
+                    f"{base}/v1/builds/{job_id}/claim",
+                    headers=headers,
+                    json={"builder_id": builder_id},
+                )
+            if resp.status_code >= 400:
+                click.echo(
+                    f"  [{job_id}] claim failed ({resp.status_code}), skipping",
+                    err=True,
+                )
+                return
+        except Exception as exc:
+            click.echo(f"  [{job_id}] claim error: {exc}", err=True)
+            return
+
+        error_message = ""
+        archive_path: Path | None = None
+        try:
+            # 2. Download recipe
+            _stream_log(job_id, f"Downloading recipe '{recipe_name}'…\n")
+            recipe_dir = _fetch_recipe(recipe_name)
+            _stream_log(job_id, f"Recipe extracted to {recipe_dir}\n")
+
+            # 3. Build + package
+            _stream_log(
+                job_id,
+                f"Starting build: {recipe_name} "
+                f"({job_platform}/{job_arch}/{job_config}/{job_link})\n",
+            )
+
+            output_dir = Path(tempfile.mkdtemp(prefix=f"cvcpkg-out-{recipe_name}-"))
+            try:
+                archive_path, sha256, size = pack_recipe(
+                    recipe_dir,
+                    platform=job_platform,
+                    arch=job_arch,
+                    config=job_config,
+                    link=job_link,
+                    output_dir=output_dir,
+                    work_dir_root=work_root,
+                )
+                _stream_log(
+                    job_id,
+                    f"Build succeeded: {archive_path.name} " f"({size:,} bytes, sha256={sha256})\n",
+                )
             except Exception as exc:
-                click.echo(f"heartbeat error: {exc}", err=True)
+                error_message = f"build failed: {exc}\n{traceback.format_exc()}"
+                _stream_log(job_id, error_message)
+                raise
+
+            # 4. Publish the archive to the server
+            _stream_log(job_id, f"Publishing {archive_path.name}…\n")
+            _publish_to_server(
+                server=base,
+                token=token,
+                archive_paths=[archive_path],
+                release_tag="",
+                chunked_threshold=10 * 1024 * 1024,
+                org=org_slug,
+            )
+            result_url = f"{base}/v1/packages/{recipe_name}"
+            _stream_log(job_id, "Published successfully.\n")
+
+            # 5. Report completion
+            with httpx.Client(timeout=30) as client:
+                client.post(
+                    f"{base}/v1/builds/{job_id}/complete",
+                    headers=headers,
+                    json={"result_archive_url": result_url},
+                )
+            click.echo(f"  [{job_id}] Completed: {recipe_name}")
+
+        except Exception as exc:
+            # Report failure
+            if not error_message:
+                error_message = f"{exc}\n{traceback.format_exc()}"
+            try:
+                with httpx.Client(timeout=30) as client:
+                    client.post(
+                        f"{base}/v1/builds/{job_id}/fail",
+                        headers=headers,
+                        json={"error_message": error_message[:4096]},
+                    )
+            except Exception:
+                pass
+            click.echo(f"  [{job_id}] Failed: {recipe_name} — {exc}", err=True)
+
+        finally:
+            # Clean up output dir
+            if archive_path and archive_path.parent.is_dir():
+                shutil.rmtree(archive_path.parent, ignore_errors=True)
+            with jobs_lock:
+                current_jobs -= 1
+
+    # ── Main loop ───────────────────────────────────────────
+
+    last_heartbeat = 0.0
+    heartbeat_interval = 60.0
+    poll_interval = 5.0  # seconds between next-job polls
+
+    try:
+        while not shutdown:
+            # Heartbeat
+            now = time.time()
+            if now - last_heartbeat >= heartbeat_interval:
+                _heartbeat()
+                last_heartbeat = now
+
+            # Check capacity
+            with jobs_lock:
+                available = max_jobs - current_jobs
+            if available <= 0:
+                time.sleep(poll_interval)
+                continue
+
+            # Poll for next job (short timeout so we stay responsive)
+            try:
+                with httpx.Client(timeout=35) as client:
+                    resp = client.get(
+                        f"{base}/v1/builders/{builder_id}/next-job",
+                        headers=headers,
+                        params={"timeout": "5"},
+                    )
+            except Exception as exc:
+                click.echo(f"  poll error: {exc}", err=True)
+                time.sleep(poll_interval)
+                continue
+
+            if resp.status_code == 204:
+                # No job available
+                continue
+            if resp.status_code >= 400:
+                click.echo(
+                    f"  poll failed: {resp.status_code}",
+                    err=True,
+                )
+                time.sleep(poll_interval)
+                continue
+
+            job = resp.json()
+            with jobs_lock:
+                current_jobs += 1
+
+            # Run in a thread so we can keep heartbeating & polling
+            t = threading.Thread(target=_execute_job, args=(job,), daemon=True)
+            t.start()
+
     finally:
+        # Wait for in-flight jobs
+        deadline = time.time() + 300  # 5 min grace period
+        while current_jobs > 0 and time.time() < deadline:
+            click.echo(f"  Waiting for {current_jobs} in-flight job(s)…")
+            time.sleep(5)
+
         click.echo("Shutting down — unregistering builder…")
         try:
             with httpx.Client(timeout=10) as client:
