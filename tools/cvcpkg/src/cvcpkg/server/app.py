@@ -47,6 +47,11 @@ from cvcpkg.server.auth import TokenStore
 from cvcpkg.server.models import (
     AuditAction,
     AuditLogResponse,
+    BuilderHeartbeatRequest,
+    BuilderInfo,
+    BuilderListResponse,
+    BuilderRegisterRequest,
+    BuilderUpdateRequest,
     CacheStatusResponse,
     CatalogResponse,
     EmailUpdateRequest,
@@ -206,6 +211,7 @@ _db_downloads = None  # DbDownloadStore when using DB backend
 _db_mirrors = None  # DbMirrorStore when using DB backend
 _db_tags = None  # DbTagStore when using DB backend
 _db_token_requests = None  # DbTokenRequestStore when using DB backend
+_db_builders = None  # DbBuilderStore when using DB backend
 
 
 def _get_state() -> ServerState:
@@ -440,6 +446,7 @@ def create_app(
         global _state, _START_TIME, _use_db
         global _db_tokens, _db_audit, _db_packages, _db_orgs
         global _db_downloads, _db_mirrors, _db_tags, _db_token_requests
+        global _db_builders
         _START_TIME = time.monotonic()
         sd = state_dir or Path(os.environ.get("CVCPKG_SERVER_STATE_DIR", "/var/lib/cvcpkg-server"))
 
@@ -459,6 +466,7 @@ def create_app(
             from cvcpkg.server.db import create_tables, dispose_engine, init_db
             from cvcpkg.server.db_stores import (
                 DbAuditLog,
+                DbBuilderStore,
                 DbDownloadStore,
                 DbMirrorStore,
                 DbOrgStore,
@@ -478,6 +486,7 @@ def create_app(
             _db_mirrors = DbMirrorStore()
             _db_tags = DbTagStore()
             _db_token_requests = DbTokenRequestStore()
+            _db_builders = DbBuilderStore()
             _use_db = True
             # Still need ServerState for archives dir and storage_uri
             _state = ServerState(
@@ -3144,6 +3153,128 @@ def create_app(
             target=url,
         )
         return {"message": "mirror removed", "url": url}
+
+    # ── Builders ────────────────────────────────────────────
+
+    def _require_db_builders():
+        if not _use_db or _db_builders is None:
+            raise HTTPException(
+                501, "builder registry requires a database backend (set CVCPKG_DATABASE_URL)"
+            )
+
+    @app.post("/v1/builders/register", response_model=BuilderInfo, tags=["builders"])
+    async def register_builder(
+        body: BuilderRegisterRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Register a new builder or re-register an existing one."""
+        _require_db_builders()
+        info = await _db_builders.register(
+            name=body.name,
+            platform=body.platform,
+            arch=body.arch,
+            registered_by=actor.name,
+            org_slug=body.org_slug,
+            labels=body.labels,
+            capabilities=body.capabilities,
+            max_jobs=body.max_jobs,
+            prefer_affinity=body.prefer_affinity,
+        )
+        await _db_audit.record(
+            action=AuditAction.builder_register,
+            actor=actor.name,
+            target=f"{body.org_slug}/{body.name}" if body.org_slug else body.name,
+            detail=f"{body.platform}/{body.arch}",
+        )
+        return info
+
+    @app.get("/v1/builders", response_model=BuilderListResponse, tags=["builders"])
+    async def list_builders(
+        org_slug: str | None = Query(None, description="Filter by org slug"),
+        platform: str | None = Query(None, description="Filter by platform"),
+        arch: str | None = Query(None, description="Filter by architecture"),
+        status: str | None = Query(None, description="Filter by status"),
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """List registered builders."""
+        _require_db_builders()
+        builders = await _db_builders.list_builders(
+            org_slug=org_slug, platform=platform, arch=arch, status=status
+        )
+        return BuilderListResponse(total=len(builders), builders=builders)
+
+    @app.get("/v1/builders/{builder_id}", response_model=BuilderInfo, tags=["builders"])
+    async def get_builder(
+        builder_id: int,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Get a single builder by ID."""
+        _require_db_builders()
+        info = await _db_builders.get(builder_id)
+        if info is None:
+            raise HTTPException(404, f"builder {builder_id} not found")
+        return info
+
+    @app.patch("/v1/builders/{builder_id}", response_model=BuilderInfo, tags=["builders"])
+    async def update_builder(
+        builder_id: int,
+        body: BuilderUpdateRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Update mutable builder fields."""
+        _require_db_builders()
+        info = await _db_builders.update(
+            builder_id,
+            labels=body.labels,
+            capabilities=body.capabilities,
+            max_jobs=body.max_jobs,
+            prefer_affinity=body.prefer_affinity,
+        )
+        if info is None:
+            raise HTTPException(404, f"builder {builder_id} not found")
+        await _db_audit.record(
+            action=AuditAction.builder_update,
+            actor=actor.name,
+            target=str(builder_id),
+        )
+        return info
+
+    @app.post(
+        "/v1/builders/{builder_id}/heartbeat",
+        response_model=BuilderInfo,
+        tags=["builders"],
+    )
+    async def builder_heartbeat(
+        builder_id: int,
+        body: BuilderHeartbeatRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Record a heartbeat from a running builder."""
+        _require_db_builders()
+        info = await _db_builders.heartbeat(
+            builder_id, status=body.status, current_jobs=body.current_jobs
+        )
+        if info is None:
+            raise HTTPException(404, f"builder {builder_id} not found")
+        return info
+
+    @app.delete("/v1/builders/{builder_id}", tags=["builders"])
+    async def unregister_builder(
+        builder_id: int,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Unregister (delete) a builder. Admin-only."""
+        _require_db_builders()
+        info = await _db_builders.get(builder_id)
+        if info is None:
+            raise HTTPException(404, f"builder {builder_id} not found")
+        await _db_builders.unregister(builder_id)
+        await _db_audit.record(
+            action=AuditAction.builder_unregister,
+            actor=actor.name,
+            target=f"{info.org_slug}/{info.name}" if info.org_slug else info.name,
+        )
+        return {"message": "builder unregistered", "id": builder_id}
 
     # ── Mirror-mode download proxy ──────────────────────────
 

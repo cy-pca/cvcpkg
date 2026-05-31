@@ -18,6 +18,7 @@ from sqlalchemy import func as sa_func
 
 from cvcpkg.server.db import (
     AuditRow,
+    BuilderRow,
     DownloadEventRow,
     MirrorRow,
     OrganizationRow,
@@ -31,6 +32,8 @@ from cvcpkg.server.db import (
 from cvcpkg.server.models import (
     AuditAction,
     AuditEntry,
+    BuilderInfo,
+    BuilderStatus,
     MirrorInfo,
     OrgInfo,
     OrgMember,
@@ -1747,3 +1750,211 @@ class DbTagStore:
         if org_slug:
             q = q.where(PackageRow.org_slug == org_slug)
         return (await session.execute(q)).scalar() or 0
+
+
+# ── DB Builder Store ────────────────────────────────────────────
+
+
+class DbBuilderStore:
+    """DB-backed store for registered remote build agents."""
+
+    @staticmethod
+    def _row_to_info(row: BuilderRow) -> BuilderInfo:
+        labels_raw = row.labels or "[]"
+        caps_raw = row.capabilities or "{}"
+        try:
+            labels = json.loads(labels_raw)
+        except (json.JSONDecodeError, TypeError):
+            labels = []
+        try:
+            capabilities = json.loads(caps_raw)
+        except (json.JSONDecodeError, TypeError):
+            capabilities = {}
+        return BuilderInfo(
+            id=row.id,
+            name=row.name,
+            org_slug=row.org_slug,
+            platform=row.platform,
+            arch=row.arch,
+            labels=labels,
+            capabilities=capabilities,
+            status=row.status,
+            current_jobs=row.current_jobs,
+            max_jobs=row.max_jobs,
+            prefer_affinity=row.prefer_affinity,
+            last_heartbeat=row.last_heartbeat,
+            registered_by=row.registered_by,
+            created_at=row.created_at,
+        )
+
+    async def register(
+        self,
+        name: str,
+        platform: str,
+        arch: str,
+        registered_by: str,
+        *,
+        org_slug: str = "",
+        labels: list[str] | None = None,
+        capabilities: dict | None = None,
+        max_jobs: int = 1,
+        prefer_affinity: bool = False,
+    ) -> BuilderInfo:
+        """Register a new builder or re-register an existing one."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(BuilderRow).where(
+                        BuilderRow.name == name,
+                        BuilderRow.org_slug == org_slug,
+                    )
+                )
+            ).scalar()
+            if row is not None:
+                row.platform = platform
+                row.arch = arch
+                row.labels = json.dumps(labels or [])
+                row.capabilities = json.dumps(capabilities or {})
+                row.max_jobs = max_jobs
+                row.prefer_affinity = prefer_affinity
+                row.status = BuilderStatus.online
+                row.last_heartbeat = now
+                row.registered_by = registered_by
+                return self._row_to_info(row)
+            row = BuilderRow(
+                name=name,
+                org_slug=org_slug,
+                platform=platform,
+                arch=arch,
+                labels=json.dumps(labels or []),
+                capabilities=json.dumps(capabilities or {}),
+                status=BuilderStatus.online,
+                current_jobs=0,
+                max_jobs=max_jobs,
+                prefer_affinity=prefer_affinity,
+                last_heartbeat=now,
+                registered_by=registered_by,
+            )
+            session.add(row)
+            await session.flush()
+            return self._row_to_info(row)
+
+    async def get(self, builder_id: int) -> BuilderInfo | None:
+        """Get a builder by ID."""
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(BuilderRow).where(BuilderRow.id == builder_id)
+                )
+            ).scalar()
+            return self._row_to_info(row) if row else None
+
+    async def list_builders(
+        self,
+        *,
+        org_slug: str | None = None,
+        platform: str | None = None,
+        arch: str | None = None,
+        status: str | None = None,
+    ) -> list[BuilderInfo]:
+        """List builders with optional filters."""
+        async with get_session() as session:
+            q = select(BuilderRow).order_by(BuilderRow.id)
+            if org_slug is not None:
+                q = q.where(BuilderRow.org_slug == org_slug)
+            if platform is not None:
+                q = q.where(BuilderRow.platform == platform)
+            if arch is not None:
+                q = q.where(BuilderRow.arch == arch)
+            if status is not None:
+                q = q.where(BuilderRow.status == status)
+            rows = (await session.execute(q)).scalars().all()
+            return [self._row_to_info(r) for r in rows]
+
+    async def update(
+        self,
+        builder_id: int,
+        *,
+        labels: list[str] | None = None,
+        capabilities: dict | None = None,
+        max_jobs: int | None = None,
+        prefer_affinity: bool | None = None,
+    ) -> BuilderInfo | None:
+        """Update mutable fields. Returns updated info or None if not found."""
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(BuilderRow).where(BuilderRow.id == builder_id)
+                )
+            ).scalar()
+            if row is None:
+                return None
+            if labels is not None:
+                row.labels = json.dumps(labels)
+            if capabilities is not None:
+                row.capabilities = json.dumps(capabilities)
+            if max_jobs is not None:
+                row.max_jobs = max_jobs
+            if prefer_affinity is not None:
+                row.prefer_affinity = prefer_affinity
+            return self._row_to_info(row)
+
+    async def heartbeat(
+        self,
+        builder_id: int,
+        *,
+        status: str = BuilderStatus.online,
+        current_jobs: int = 0,
+    ) -> BuilderInfo | None:
+        """Record a heartbeat from a builder. Returns updated info or None."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(BuilderRow).where(BuilderRow.id == builder_id)
+                )
+            ).scalar()
+            if row is None:
+                return None
+            row.last_heartbeat = now
+            row.status = status
+            row.current_jobs = current_jobs
+            return self._row_to_info(row)
+
+    async def unregister(self, builder_id: int) -> bool:
+        """Remove a builder. Returns True if found and deleted."""
+        from sqlalchemy import delete
+
+        async with get_session() as session:
+            result = await session.execute(
+                delete(BuilderRow).where(BuilderRow.id == builder_id)
+            )
+            return result.rowcount > 0
+
+    async def reap_stale(self, max_age_seconds: int = 180) -> list[BuilderInfo]:
+        """Mark builders as offline if their last heartbeat exceeds max_age_seconds.
+
+        Returns the list of builders that were reaped.
+        """
+        cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+            seconds=max_age_seconds
+        )
+        async with get_session() as session:
+            q = (
+                select(BuilderRow)
+                .where(BuilderRow.status != BuilderStatus.offline)
+                .where(
+                    or_(
+                        BuilderRow.last_heartbeat < cutoff,
+                        BuilderRow.last_heartbeat.is_(None),
+                    )
+                )
+            )
+            rows = (await session.execute(q)).scalars().all()
+            reaped = []
+            for row in rows:
+                row.status = BuilderStatus.offline
+                row.current_jobs = 0
+                reaped.append(self._row_to_info(row))
+            return reaped

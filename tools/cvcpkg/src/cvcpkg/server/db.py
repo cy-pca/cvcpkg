@@ -320,6 +320,40 @@ class MirrorRow(Base):
     packages_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
+class BuilderRow(Base):
+    """Registered remote build agents."""
+
+    __tablename__ = "builders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    org_slug: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    platform: Mapped[str] = mapped_column(String(64), nullable=False)
+    arch: Mapped[str] = mapped_column(String(64), nullable=False)
+    labels: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    capabilities: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="offline")
+    current_jobs: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_jobs: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    prefer_affinity: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    last_heartbeat: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    registered_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("name", "org_slug", name="uq_builder_name_org"),
+        Index("ix_builders_org_slug", "org_slug"),
+        Index("ix_builders_platform_arch", "platform", "arch"),
+        Index("ix_builders_status", "status"),
+    )
+
+
 # ── Engine / session management ─────────────────────────────────
 
 _engine = None
