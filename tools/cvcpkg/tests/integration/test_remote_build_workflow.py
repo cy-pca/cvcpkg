@@ -18,7 +18,9 @@ Exercises the full remote-builder lifecycle end-to-end:
 from __future__ import annotations
 
 import asyncio
+import datetime
 import io
+import sqlite3
 import tarfile
 import textwrap
 
@@ -888,3 +890,490 @@ class TestRemoteBuildWorkflow:
         )
         # Should be 404 or return offline status
         assert resp.status_code in (404, 200)
+
+
+# ── Error‑Recovery Test Class ───────────────────────────────────
+
+
+class TestBuilderRecovery:
+    """Simulate error & recovery scenarios: builder crashes, timeouts, reconnects."""
+
+    # ── helpers (shared with the workflow class) ────────────
+
+    def _push_recipe(self, c, token, name, **kw):
+        bundle = _make_recipe_bundle(name, **kw)
+        params = {"version": kw.get("version", "1.0.0")}
+        resp = c.post(
+            f"/v1/recipes/{name}",
+            headers=_auth(token),
+            params=params,
+            files={"file": (f"{name}.tar.gz", bundle, "application/gzip")},
+        )
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    def _register_builder(self, c, token, name, **kw):
+        resp = c.post(
+            "/v1/builders/register",
+            headers=_auth(token),
+            json={
+                "name": name,
+                "platform": kw.get("platform", "linux"),
+                "arch": kw.get("arch", "x86_64"),
+                "org_slug": kw.get("org", ""),
+                "max_jobs": kw.get("max_jobs", 2),
+                "labels": ["ci"],
+                "capabilities": {},
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    def _submit_job(self, c, token, recipe, **kw):
+        resp = c.post(
+            "/v1/builds",
+            headers=_auth(token),
+            json={
+                "recipe_name": recipe,
+                "platform": kw.get("platform", "linux"),
+                "arch": kw.get("arch", "x86_64"),
+                "config": kw.get("config", "release"),
+                "link": kw.get("link", "shared"),
+                "org_slug": kw.get("org", ""),
+                "timeout_seconds": kw.get("timeout_seconds"),
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    # ── test: builder killed mid-build, job orphaned ────────
+
+    def test_19_builder_killed_mid_build(self, server):
+        """Unregister a builder while it has a running job.
+
+        The job should remain 'running' (orphaned) — the timeout reaper
+        will deal with it later.  Partial logs should still be readable.
+        """
+        c, tok = server["client"], server["admin_token"]
+
+        self._push_recipe(c, tok, "orphan-lib")
+        builder = self._register_builder(c, tok, "doomed-builder")
+        bid = builder["id"]
+        job = self._submit_job(c, tok, "orphan-lib")
+        jid = job["id"]
+
+        # Claim and write partial logs
+        c.post(f"/v1/builds/{jid}/claim", headers=_auth(tok), json={"builder_id": bid})
+        for line in ["Step 1/3: configure\n", "Step 2/3: compile\n"]:
+            c.patch(f"/v1/builds/{jid}/log", headers=_auth(tok), json={"data": line})
+
+        # Simulate crash: unregister the builder
+        resp = c.delete(f"/v1/builders/{bid}", headers=_auth(tok))
+        assert resp.status_code == 200
+
+        # Job is still running (orphaned, no builder to finish it)
+        resp = c.get(f"/v1/builds/{jid}", headers=_auth(tok))
+        assert resp.status_code == 200
+        info = resp.json()
+        assert info["status"] == BuildJobStatus.running
+
+        # Partial logs are still accessible
+        resp = c.get(f"/v1/builds/{jid}/log", headers=_auth(tok))
+        assert resp.status_code == 200
+        assert "Step 2/3: compile" in resp.text
+
+        # Builder is gone
+        resp = c.get(f"/v1/builders/{bid}", headers=_auth(tok))
+        assert resp.status_code in (404, 200)
+
+    # ── DB helpers for time manipulation ─────────────────────
+
+    @staticmethod
+    def _db_path(server):
+        return str(server["tmp_path"] / "test.db")
+
+    def _backdate_job(self, server, job_id, seconds_ago):
+        """Set a job's started_at to *seconds_ago* in the past via raw SQLite."""
+        ts = (
+            datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=seconds_ago)
+        ).strftime("%Y-%m-%d %H:%M:%S.%f+00:00")
+        conn = sqlite3.connect(self._db_path(server))
+        conn.execute("UPDATE build_jobs SET started_at = ? WHERE id = ?", (ts, job_id))
+        conn.commit()
+        conn.close()
+
+    def _backdate_heartbeat(self, server, builder_id, seconds_ago):
+        """Set a builder's last_heartbeat to *seconds_ago* in the past."""
+        ts = (
+            datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=seconds_ago)
+        ).strftime("%Y-%m-%d %H:%M:%S.%f+00:00")
+        conn = sqlite3.connect(self._db_path(server))
+        conn.execute(
+            "UPDATE builders SET last_heartbeat = ? WHERE id = ?",
+            (ts, builder_id),
+        )
+        conn.commit()
+        conn.close()
+
+    def _set_builder_status(self, server, builder_id, status, seconds_ago=600):
+        """Force a builder to a given status via raw SQLite."""
+        ts = (
+            datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=seconds_ago)
+        ).strftime("%Y-%m-%d %H:%M:%S.%f+00:00")
+        conn = sqlite3.connect(self._db_path(server))
+        conn.execute(
+            "UPDATE builders SET status = ?, last_heartbeat = ? WHERE id = ?",
+            (status, ts, builder_id),
+        )
+        conn.commit()
+        conn.close()
+
+    @staticmethod
+    def _run_async(coro):
+        """Run an async coroutine from synchronous test code."""
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    # ── test: job timeout reaper marks orphaned job ─────────
+
+    def test_20_timeout_reaps_orphaned_job(self, server):
+        """Directly invoke the timeout reaper on a job whose started_at
+        is far in the past.  The job should transition to 'timed_out'
+        and its error message should describe the timeout.
+        """
+        c, tok = server["client"], server["admin_token"]
+
+        self._push_recipe(c, tok, "timeout-lib")
+        builder = self._register_builder(c, tok, "timeout-builder")
+        # Submit with a very short timeout (60s is the minimum)
+        job = self._submit_job(c, tok, "timeout-lib", timeout_seconds=60)
+        jid = job["id"]
+
+        # Claim so the job is running
+        c.post(f"/v1/builds/{jid}/claim", headers=_auth(tok), json={"builder_id": builder["id"]})
+
+        # Push started_at 2 minutes into the past so it exceeds the 60s timeout
+        self._backdate_job(server, jid, seconds_ago=120)
+
+        # Invoke the reaper
+        import cvcpkg.server.app as _app
+
+        reaped = self._run_async(_app._db_build_jobs.reap_timed_out(default_timeout=86400))
+        assert len(reaped) >= 1
+        reaped_ids = {j.id for j in reaped}
+        assert jid in reaped_ids
+
+        # Verify via REST
+        resp = c.get(f"/v1/builds/{jid}", headers=_auth(tok))
+        info = resp.json()
+        assert info["status"] == BuildJobStatus.timed_out
+        assert "timeout" in info["error_message"].lower()
+
+    # ── test: stale heartbeat reaper marks builder offline ──
+
+    def test_21_stale_heartbeat_reaps_builder(self, server):
+        """Backdate last_heartbeat so the builder looks stale,
+        then run the stale-builder reaper and verify it goes offline.
+        """
+        c, tok = server["client"], server["admin_token"]
+
+        builder = self._register_builder(c, tok, "stale-builder")
+        bid = builder["id"]
+
+        # Confirm it's online
+        resp = c.get(f"/v1/builders/{bid}", headers=_auth(tok))
+        assert resp.json()["status"] == "online"
+
+        # Backdate last_heartbeat by 5 minutes via raw SQLite
+        self._backdate_heartbeat(server, bid, seconds_ago=300)
+
+        # Run the stale-builder reaper (threshold = 180s)
+        import cvcpkg.server.app as _app
+
+        reaped = self._run_async(_app._db_builders.reap_stale(max_age_seconds=180))
+        reaped_ids = {b.id for b in reaped}
+        assert bid in reaped_ids
+
+        # Verify via REST
+        resp = c.get(f"/v1/builders/{bid}", headers=_auth(tok))
+        assert resp.json()["status"] == "offline"
+
+    # ── test: builder re-registration after crash ───────────
+
+    def test_22_builder_re_registration_after_crash(self, server):
+        """A builder that went offline can re-register with the same name
+        and come back online.
+        """
+        c, tok = server["client"], server["admin_token"]
+
+        b1 = self._register_builder(c, tok, "phoenix-builder")
+        bid = b1["id"]
+
+        # Force it offline via raw SQLite
+        self._set_builder_status(server, bid, "offline")
+
+        resp = c.get(f"/v1/builders/{bid}", headers=_auth(tok))
+        assert resp.json()["status"] == "offline"
+
+        # Re-register with same name — should come back online
+        b2 = self._register_builder(c, tok, "phoenix-builder")
+        assert b2["id"] == bid, "should reuse the same builder row"
+        assert b2["status"] == "online"
+
+        # Heartbeat confirms liveness
+        resp = c.post(
+            f"/v1/builders/{bid}/heartbeat",
+            headers=_auth(tok),
+            json={"status": "online", "current_jobs": 0},
+        )
+        assert resp.status_code == 200
+
+    # ── test: WebSocket disconnect mid-build ────────────────
+
+    def test_23_websocket_disconnect_mid_build(self, server):
+        """Abruptly close a WebSocket while a job is running.
+
+        The job should remain 'running' — the builder can reconnect
+        (or the timeout reaper will eventually clean it up).
+        """
+        c, tok = server["client"], server["admin_token"]
+
+        self._push_recipe(c, tok, "ws-crash-lib")
+        builder = self._register_builder(c, tok, "ws-crash-builder")
+        bid = builder["id"]
+        job = self._submit_job(c, tok, "ws-crash-lib")
+        jid = job["id"]
+
+        # Connect via WebSocket, claim via WS, write log via REST, then drop
+        with c.websocket_connect(f"/v1/builders/{bid}/ws?token={tok}") as ws:
+            ws.send_json({"type": "job.claim", "job_id": jid})
+            ack = ws.receive_json()
+            assert ack["type"] == "job.claim_ack"
+            assert ack["status"] == BuildJobStatus.running
+            # WebSocket closes here (context manager exit)
+
+        # Write log via REST (reliable, synchronous)
+        c.patch(
+            f"/v1/builds/{jid}/log",
+            headers=_auth(tok),
+            json={"data": "compiling before crash…\n"},
+        )
+
+        # Job is still running — not cancelled by disconnect
+        resp = c.get(f"/v1/builds/{jid}", headers=_auth(tok))
+        assert resp.json()["status"] == BuildJobStatus.running
+
+        # Log written before disconnect is preserved
+        resp = c.get(f"/v1/builds/{jid}/log", headers=_auth(tok))
+        assert "compiling before crash" in resp.text
+
+        # A new builder (or same builder reconnecting) can still
+        # complete the job via REST
+        resp = c.post(
+            f"/v1/builds/{jid}/complete",
+            headers=_auth(tok),
+            json={"result_archive_url": "/recovered"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == BuildJobStatus.succeeded
+
+    # ── test: DAG cascading timeout ─────────────────────────
+
+    def test_24_dag_cascading_timeout(self, server):
+        """When the root job of a DAG times out, downstream jobs
+        should be cancelled with an explanatory error message.
+        """
+        c, tok = server["client"], server["admin_token"]
+
+        self._push_recipe(c, tok, "dag-timeout-root")
+        self._push_recipe(c, tok, "dag-timeout-leaf")
+
+        builder = self._register_builder(c, tok, "dag-timeout-builder")
+
+        # Submit a 2-job DAG: leaf depends on root
+        resp = c.post(
+            "/v1/builds/dag",
+            headers=_auth(tok),
+            json={
+                "jobs": [
+                    {
+                        "recipe_name": "dag-timeout-root",
+                        "platform": "linux",
+                        "arch": "x86_64",
+                        "timeout_seconds": 60,
+                    },
+                    {
+                        "recipe_name": "dag-timeout-leaf",
+                        "platform": "linux",
+                        "arch": "x86_64",
+                        "depends_on": [0],
+                    },
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        dag = resp.json()
+        root_id = next(j["id"] for j in dag["jobs"] if j["recipe_name"] == "dag-timeout-root")
+        leaf_id = next(j["id"] for j in dag["jobs"] if j["recipe_name"] == "dag-timeout-leaf")
+
+        # Claim root
+        c.post(
+            f"/v1/builds/{root_id}/claim", headers=_auth(tok), json={"builder_id": builder["id"]}
+        )
+        c.patch(f"/v1/builds/{root_id}/log", headers=_auth(tok), json={"data": "building root…\n"})
+
+        # Backdate started_at to trigger timeout
+        self._backdate_job(server, root_id, seconds_ago=120)
+
+        # Reap + cascade
+        import cvcpkg.server.app as _app
+
+        reaped = self._run_async(_app._db_build_jobs.reap_timed_out(default_timeout=86400))
+        assert any(j.id == root_id for j in reaped)
+
+        # Cancel downstream
+        cancelled = self._run_async(_app._db_build_jobs.cancel_downstream(root_id))
+        assert cancelled >= 1
+
+        # Verify root is timed_out
+        resp = c.get(f"/v1/builds/{root_id}", headers=_auth(tok))
+        assert resp.json()["status"] == BuildJobStatus.timed_out
+        assert "timeout" in resp.json()["error_message"].lower()
+
+        # Verify leaf is cancelled with dependency explanation
+        resp = c.get(f"/v1/builds/{leaf_id}", headers=_auth(tok))
+        leaf = resp.json()
+        assert leaf["status"] == BuildJobStatus.cancelled
+        assert "dependency" in leaf["error_message"].lower()
+
+    # ── test: second builder completes after first fails ────
+
+    def test_25_second_builder_picks_up_after_failure(self, server):
+        """Builder A claims and fails a job.  A new job for the same
+        recipe is submitted and completed by Builder B.
+        """
+        c, tok = server["client"], server["admin_token"]
+
+        self._push_recipe(c, tok, "resilient-lib")
+        b_a = self._register_builder(c, tok, "builder-A")
+        b_b = self._register_builder(c, tok, "builder-B")
+
+        # First attempt — Builder A fails
+        j1 = self._submit_job(c, tok, "resilient-lib")
+        c.post(f"/v1/builds/{j1['id']}/claim", headers=_auth(tok), json={"builder_id": b_a["id"]})
+        c.patch(
+            f"/v1/builds/{j1['id']}/log", headers=_auth(tok), json={"data": "FATAL: disk full\n"}
+        )
+        resp = c.post(
+            f"/v1/builds/{j1['id']}/fail",
+            headers=_auth(tok),
+            json={"error_message": "disk full"},
+        )
+        assert resp.json()["status"] == BuildJobStatus.failed
+
+        # Verify failure is logged
+        resp = c.get(f"/v1/builds/{j1['id']}/log", headers=_auth(tok))
+        assert "disk full" in resp.text.lower()
+
+        # Second attempt — re-submit, Builder B succeeds
+        j2 = self._submit_job(c, tok, "resilient-lib")
+        assert j2["id"] != j1["id"]
+        c.post(f"/v1/builds/{j2['id']}/claim", headers=_auth(tok), json={"builder_id": b_b["id"]})
+        c.patch(
+            f"/v1/builds/{j2['id']}/log",
+            headers=_auth(tok),
+            json={"data": "Build succeeded on Builder B\n"},
+        )
+        resp = c.post(
+            f"/v1/builds/{j2['id']}/complete",
+            headers=_auth(tok),
+            json={"result_archive_url": "/v1/packages/resilient-lib"},
+        )
+        assert resp.json()["status"] == BuildJobStatus.succeeded
+
+        # Both jobs exist — one failed, one succeeded
+        resp = c.get(
+            "/v1/builds",
+            headers=_auth(tok),
+            params={"recipe_name": "resilient-lib"},
+        )
+        statuses = {j["status"] for j in resp.json()["jobs"]}
+        assert BuildJobStatus.failed in statuses
+        assert BuildJobStatus.succeeded in statuses
+
+    # ── test: WS reconnect and complete orphaned job ────────
+
+    def test_26_ws_reconnect_completes_orphaned_job(self, server):
+        """Builder disconnects, reconnects on a fresh WebSocket,
+        and completes the orphaned job.
+        """
+        c, tok = server["client"], server["admin_token"]
+
+        self._push_recipe(c, tok, "reconnect-lib")
+        builder = self._register_builder(c, tok, "reconnect-builder")
+        bid = builder["id"]
+        job = self._submit_job(c, tok, "reconnect-lib")
+        jid = job["id"]
+
+        # First WS session — claim via WS, log via REST, then disconnect
+        with c.websocket_connect(f"/v1/builders/{bid}/ws?token={tok}") as ws:
+            ws.send_json({"type": "job.claim", "job_id": jid})
+            ack = ws.receive_json()
+            assert ack["status"] == BuildJobStatus.running
+            # disconnect
+
+        # Write log via REST (reliable across WS disconnect)
+        c.patch(
+            f"/v1/builds/{jid}/log",
+            headers=_auth(tok),
+            json={"data": "phase 1 done\n"},
+        )
+
+        # Job still running
+        resp = c.get(f"/v1/builds/{jid}", headers=_auth(tok))
+        assert resp.json()["status"] == BuildJobStatus.running
+
+        # Second WS session — pick up where we left off
+        with c.websocket_connect(f"/v1/builders/{bid}/ws?token={tok}") as ws:
+            ws.send_json({"type": "job.log", "job_id": jid, "data": "phase 2 done\n"})
+            ws.send_json(
+                {
+                    "type": "job.complete",
+                    "job_id": jid,
+                    "archive_url": "/v1/packages/reconnect-lib",
+                }
+            )
+            ack = ws.receive_json()
+            assert ack["type"] == "job.complete_ack"
+            assert ack["status"] == BuildJobStatus.succeeded
+
+        # Log contains both phases
+        resp = c.get(f"/v1/builds/{jid}/log", headers=_auth(tok))
+        assert "phase 1 done" in resp.text
+        assert "phase 2 done" in resp.text
+
+    # ── test: cancel running build ──────────────────────────
+
+    def test_27_cancel_running_build_is_rejected(self, server):
+        """Cancel on a running build is a no-op — only pending/dispatched
+        jobs can be cancelled.  The job stays 'running'.
+        """
+        c, tok = server["client"], server["admin_token"]
+
+        self._push_recipe(c, tok, "cancel-running-lib")
+        builder = self._register_builder(c, tok, "cancel-running-builder")
+        job = self._submit_job(c, tok, "cancel-running-lib")
+        jid = job["id"]
+
+        # Claim → running
+        c.post(f"/v1/builds/{jid}/claim", headers=_auth(tok), json={"builder_id": builder["id"]})
+        resp = c.get(f"/v1/builds/{jid}", headers=_auth(tok))
+        assert resp.json()["status"] == BuildJobStatus.running
+
+        # Attempt cancel — should return current status (running), not cancelled
+        resp = c.post(f"/v1/builds/{jid}/cancel", headers=_auth(tok))
+        assert resp.status_code == 200
+        assert resp.json()["status"] == BuildJobStatus.running
