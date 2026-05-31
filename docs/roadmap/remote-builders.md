@@ -571,43 +571,43 @@ cvcpkg-server config set log-retention-days 90
 
 **Scope**: Server-side builder registry, CLI `builder run` skeleton.
 
-- [ ] Alembic migration: `builders` table
-- [ ] `BuilderRow` ORM model, `DbBuilderStore` (CRUD, heartbeat,
+- [x] Alembic migration: `builders` table
+- [x] `BuilderRow` ORM model, `DbBuilderStore` (CRUD, heartbeat,
   status transitions, stale-builder reaper)
-- [ ] Pydantic models: `BuilderInfo`, `BuilderRegisterRequest`,
+- [x] Pydantic models: `BuilderInfo`, `BuilderRegisterRequest`,
   `BuilderListResponse`
-- [ ] API endpoints: register, heartbeat, unregister, list, detail,
+- [x] API endpoints: register, heartbeat, unregister, list, detail,
   update
-- [ ] `cvcpkg builder run` — register, heartbeat loop, graceful
+- [x] `cvcpkg builder run` — register, heartbeat loop, graceful
   shutdown
-- [ ] `cvcpkg builder list` / `status` / `stop`
-- [ ] Unit tests for store, API, CLI
-- [ ] Audit actions: `builder_register`, `builder_unregister`
+- [x] `cvcpkg builder list` / `status` / `stop`
+- [x] Unit tests for store, API, CLI
+- [x] Audit actions: `builder_register`, `builder_unregister`
 
 ### Phase 2: Job Queue & DAG Scheduling
 
 **Scope**: Job submission, DAG resolution, dispatch loop.
 
-- [ ] Alembic migration: `build_jobs`, `build_job_deps` tables
-- [ ] `BuildJobRow`, `BuildJobDepRow` ORM models
-- [ ] `DbBuildJobStore` (create, list, cancel, claim, complete, fail,
+- [x] Alembic migration: `build_jobs`, `build_job_deps` tables
+- [x] `BuildJobRow`, `BuildJobDepRow` ORM models
+- [x] `DbBuildJobStore` (create, list, cancel, claim, complete, fail,
   find-ready-jobs, DAG creation from recipe deps)
-- [ ] Pydantic models: `BuildJobInfo`, `BuildJobSubmitRequest`,
+- [x] Pydantic models: `BuildJobInfo`, `BuildJobSubmitRequest`,
   `BuildJobListResponse`, `DagSubmitRequest`
-- [ ] API endpoints: submit, pack-all, list, detail, cancel, claim,
+- [x] API endpoints: submit, pack-all, list, detail, cancel, claim,
   complete, fail
-- [ ] DAG scheduler: background task that matches ready jobs to
+- [x] DAG scheduler: background task that matches ready jobs to
   available builders (with configurable affinity preference)
-- [ ] Multi-platform DAG support: `--platform X,Y,Z` creates
+- [x] Multi-platform DAG support: `--platform X,Y,Z` creates
   parallel DAGs per platform
-- [ ] Matrix expansion: `--config all` / `--link all` expand to
+- [x] Matrix expansion: `--config all` / `--link all` expand to
   all combinations
-- [ ] Job timeout enforcement: background reaper marks overdue
+- [x] Job timeout enforcement: background reaper marks overdue
   jobs as `timed_out` (default 24h, configurable)
-- [ ] Cache integration: skip jobs with cache hits
-- [ ] `cvcpkg remote-pack` / `remote-pack-all`
-- [ ] `cvcpkg builds list` / `info` / `cancel` / `cancel-all`
-- [ ] Unit and integration tests
+- [x] Cache integration: skip jobs with cache hits
+- [x] `cvcpkg remote-pack` / `remote-pack-all`
+- [x] `cvcpkg builds list` / `info` / `cancel` / `cancel-all`
+- [x] Unit and integration tests
 
 ### Phase 3: Build Execution & Log Streaming
 
@@ -617,57 +617,57 @@ cvcpkg-server config set log-retention-days 90
   log, upload archive, report completion/failure
 - [ ] WebSocket protocol: `job.dispatch`, `job.claim`, `job.log`,
   `job.complete`, `job.fail`, heartbeat
-- [ ] Long-poll fallback: `next-job` endpoint
-- [ ] Log streaming: server buffers + flushes to object storage
-- [ ] `GET /v1/builds/{id}/log` (download) and
+- [x] Long-poll fallback: `next-job` endpoint
+- [x] Log streaming: server buffers + flushes to object storage
+- [x] `GET /v1/builds/{id}/log` (download) and
   `GET /v1/builds/{id}/log/stream` (SSE)
-- [ ] `cvcpkg builds log <id> [--follow]`
-- [ ] Log deletion: `cvcpkg builds log delete <id>`
-- [ ] Configurable parallelism: `--max-jobs N` (default: CPU count)
+- [x] `cvcpkg builds log <id> [--follow]`
+- [x] Log deletion: `cvcpkg builds log delete <id>`
+- [x] Configurable parallelism: `--max-jobs N` (default: CPU count)
 - [ ] Package page "Build Log" link in web UI
 
 ### Phase 4: Recipe Distribution
 
 **Scope**: Server-managed recipe store, push to builders.
 
-- [ ] Recipe storage in object storage (bundle = yaml + scripts +
+- [x] Recipe storage in object storage (bundle = yaml + scripts +
   patches as tar.gz)
-- [ ] `POST /v1/recipes` — upload/update recipe
-- [ ] `GET /v1/recipes` / `GET /v1/recipes/{name}` — list/download
+- [x] `POST /v1/recipes` — upload/update recipe
+- [x] `GET /v1/recipes` / `GET /v1/recipes/{name}` — list/download
 - [ ] WebSocket `recipe.push` message to connected builders
 - [ ] Builder local recipe cache with version tracking
-- [ ] `cvcpkg recipe push <name>` CLI command
-- [ ] ACL: Admin for global recipes, Org admin for org recipes
+- [x] `cvcpkg recipe push <name>` CLI command
+- [x] ACL: Admin for global recipes, Org admin for org recipes
 
 ### Phase 5: Webhooks
 
 **Scope**: Event notification system.
 
-- [ ] Alembic migration: `webhooks` table
-- [ ] `WebhookRow` ORM model, `DbWebhookStore`
-- [ ] Pydantic models: `WebhookInfo`, `WebhookRegisterRequest`,
+- [x] Alembic migration: `webhooks` table
+- [x] `WebhookRow` ORM model, `DbWebhookStore`
+- [x] Pydantic models: `WebhookInfo`, `WebhookRegisterRequest`,
   `WebhookListResponse`
-- [ ] API endpoints: register, list, detail, update, delete, test
-- [ ] Webhook delivery engine: background task with retry logic
+- [x] API endpoints: register, list, detail, update, delete, test
+- [x] Webhook delivery engine: background task with retry logic
   (3 attempts, exponential backoff, HMAC-SHA256 signing)
-- [ ] Event emission points: publish, build state changes, builder
+- [x] Event emission points: publish, build state changes, builder
   state changes
-- [ ] `cvcpkg webhook register` / `list` / `info` / `update` /
+- [x] `cvcpkg webhook register` / `list` / `info` / `update` /
   `delete` / `test`
-- [ ] Auto-disable after consecutive failures
-- [ ] Audit actions: `webhook_register`, `webhook_delete`,
+- [x] Auto-disable after consecutive failures
+- [x] Audit actions: `webhook_register`, `webhook_delete`,
   `webhook_delivery_failed`
 
 ### Phase 6: Retention & Quota Management
 
 **Scope**: Admin controls for log lifecycle.
 
-- [ ] Log retention policy setting (server config)
-- [ ] Background GC task for expired logs
-- [ ] `POST /v1/admin/gc/logs` endpoint
-- [ ] `cvcpkg builds purge` with `--older-than`, `--delete-logs`
-- [ ] Org quota enforcement: warn on approach, track log bytes
-- [ ] Admin settings: `log-retention-days` in runtime config
+- [x] Log retention policy setting (server config)
+- [x] Background GC task for expired logs
+- [x] `POST /v1/admin/gc/logs` endpoint
+- [x] `cvcpkg builds purge` with `--older-than`, `--delete-logs`
+- [x] Org quota enforcement: warn on approach, track log bytes
+- [x] Admin settings: `log-retention-days` in runtime config
 
 ---
 
