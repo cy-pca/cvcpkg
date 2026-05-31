@@ -31,7 +31,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile
+from fastapi import (
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
     FileResponse,
@@ -374,6 +384,14 @@ async def optional_token(authorization: str | None = Header(None)) -> TokenRecor
     return state.tokens.verify(raw)
 
 
+async def _authenticate_token(raw: str) -> TokenRecord | None:
+    """Verify a raw token string and return the record (or None)."""
+    if _use_db:
+        return await _db_tokens.verify(raw)
+    state = _get_state()
+    return state.tokens.verify(raw)
+
+
 # ── Webhook delivery engine ────────────────────────────────────
 
 _WEBHOOK_RETRY_DELAYS = [10, 60, 300]  # seconds between retries
@@ -480,6 +498,37 @@ async def emit_webhook_event(
         )
 
 
+# ── Connected WebSocket builders ───────────────────────────────
+
+# Maps builder_id -> WebSocket for all connected builders.
+_ws_builders: dict[int, WebSocket] = {}
+
+
+async def _ws_send(builder_id: int, msg: dict) -> bool:
+    """Send a JSON message to a connected builder.  Returns True on success."""
+    ws = _ws_builders.get(builder_id)
+    if ws is None:
+        return False
+    try:
+        await ws.send_json(msg)
+        return True
+    except Exception:
+        _ws_builders.pop(builder_id, None)
+        return False
+
+
+async def _ws_broadcast(msg: dict) -> None:
+    """Send a JSON message to all connected builders."""
+    dead: list[int] = []
+    for bid, ws in _ws_builders.items():
+        try:
+            await ws.send_json(msg)
+        except Exception:
+            dead.append(bid)
+    for bid in dead:
+        _ws_builders.pop(bid, None)
+
+
 # ── Build scheduler background task ────────────────────────────
 
 _SCHEDULER_INTERVAL = int(os.environ.get("CVCPKG_SCHEDULER_INTERVAL", "5"))
@@ -548,6 +597,16 @@ async def _build_scheduler_loop() -> None:
                 chosen = affinity[0] if affinity else candidates[0]
 
                 await _db_build_jobs.dispatch(job.id, chosen.id)
+                # Notify builder via WebSocket if connected
+                dispatched = await _db_build_jobs.get(job.id)
+                if dispatched is not None:
+                    await _ws_send(
+                        chosen.id,
+                        {
+                            "type": "job.dispatch",
+                            "job": json.loads(dispatched.model_dump_json()),
+                        },
+                    )
                 # Update builder's current_jobs count
                 await _db_builders.heartbeat(
                     chosen.id,
@@ -3961,6 +4020,143 @@ def create_app(
             await asyncio.sleep(1)
         return Response(status_code=204)
 
+    # ── Builder WebSocket ───────────────────────────────────
+
+    @app.websocket("/v1/builders/{builder_id}/ws")
+    async def builder_ws(websocket: WebSocket, builder_id: int):
+        """Persistent WebSocket for a builder.
+
+        The builder authenticates by passing ``token`` as a query
+        parameter.  Once connected the builder receives
+        ``job.dispatch``, ``job.timeout``, ``recipe.push``, and
+        ``ping`` messages from the server.  The builder sends
+        ``job.claim``, ``job.log``, ``job.complete``, ``job.fail``,
+        ``heartbeat``, and ``pong`` messages.
+        """
+        # Authenticate via query param
+        token_value = websocket.query_params.get("token", "")
+        if not token_value:
+            await websocket.close(code=4001, reason="missing token")
+            return
+        actor = await _authenticate_token(token_value)
+        if actor is None:
+            await websocket.close(code=4001, reason="invalid token")
+            return
+        if actor.role not in (TokenRole.publisher, TokenRole.admin):
+            await websocket.close(code=4003, reason="insufficient role")
+            return
+
+        # Validate builder exists
+        if not _use_db or _db_builders is None:
+            await websocket.close(code=4004, reason="builders not available")
+            return
+        info = await _db_builders.get(builder_id)
+        if info is None:
+            await websocket.close(code=4004, reason="builder not found")
+            return
+
+        await websocket.accept()
+        _ws_builders[builder_id] = websocket
+        logger.info("builder %d connected via WebSocket", builder_id)
+
+        try:
+            while True:
+                data = await websocket.receive_json()
+                msg_type = data.get("type", "")
+
+                if msg_type == "heartbeat":
+                    status = data.get("status", "online")
+                    current_jobs = data.get("current_jobs", 0)
+                    await _db_builders.heartbeat(
+                        builder_id, status=status, current_jobs=current_jobs
+                    )
+                    await websocket.send_json({"type": "heartbeat_ack"})
+
+                elif msg_type == "job.claim":
+                    job_id = data.get("job_id")
+                    if job_id is not None:
+                        result = await _db_build_jobs.claim(job_id, builder_id)
+                        await websocket.send_json(
+                            {
+                                "type": "job.claim_ack",
+                                "job_id": job_id,
+                                "status": result.status if result else "not_found",
+                            }
+                        )
+
+                elif msg_type == "job.log":
+                    job_id = data.get("job_id")
+                    log_data = data.get("data", "")
+                    if job_id is not None and log_data:
+                        state = _get_state()
+                        await _db_build_jobs.append_log(job_id, log_data, logs_dir=state.logs_dir())
+
+                elif msg_type == "job.complete":
+                    job_id = data.get("job_id")
+                    archive_url = data.get("archive_url", "")
+                    if job_id is not None:
+                        result = await _db_build_jobs.complete(
+                            job_id, result_archive_url=archive_url
+                        )
+                        await websocket.send_json(
+                            {
+                                "type": "job.complete_ack",
+                                "job_id": job_id,
+                                "status": result.status if result else "not_found",
+                            }
+                        )
+                        if result:
+                            await emit_webhook_event(
+                                "build.succeeded",
+                                {
+                                    "job_id": job_id,
+                                    "recipe_name": result.recipe_name,
+                                    "platform": result.platform,
+                                    "arch": result.arch,
+                                    "archive_url": archive_url,
+                                },
+                                org_slug=result.org_slug,
+                            )
+
+                elif msg_type == "job.fail":
+                    job_id = data.get("job_id")
+                    error = data.get("error", "")
+                    if job_id is not None:
+                        result = await _db_build_jobs.fail(job_id, error_message=error[:4096])
+                        await websocket.send_json(
+                            {
+                                "type": "job.fail_ack",
+                                "job_id": job_id,
+                                "status": result.status if result else "not_found",
+                            }
+                        )
+                        if result:
+                            await _db_build_jobs.cancel_downstream(job_id)
+                            await emit_webhook_event(
+                                "build.failed",
+                                {
+                                    "job_id": job_id,
+                                    "recipe_name": result.recipe_name,
+                                    "error": error[:256],
+                                },
+                                org_slug=result.org_slug,
+                            )
+
+                elif msg_type == "pong":
+                    pass  # response to server ping
+
+                else:
+                    await websocket.send_json(
+                        {"type": "error", "message": f"unknown type: {msg_type}"}
+                    )
+
+        except WebSocketDisconnect:
+            logger.info("builder %d WebSocket disconnected", builder_id)
+        except Exception:
+            logger.exception("builder %d WebSocket error", builder_id)
+        finally:
+            _ws_builders.pop(builder_id, None)
+
     # ── Recipe distribution endpoints ───────────────────────
 
     def _require_db_recipes():
@@ -4021,6 +4217,20 @@ def create_app(
             actor=actor.name,
             target=name,
             detail=f"version={version} org={org_slug}" if org_slug else f"version={version}",
+        )
+        # Notify connected builders of the new/updated recipe
+        bundle_url = f"/v1/recipes/{name}"
+        if org_slug:
+            bundle_url += f"?org_slug={org_slug}"
+        await _ws_broadcast(
+            {
+                "type": "recipe.push",
+                "recipe": {
+                    "name": name,
+                    "version": version,
+                    "bundle_url": bundle_url,
+                },
+            }
         )
         return info
 

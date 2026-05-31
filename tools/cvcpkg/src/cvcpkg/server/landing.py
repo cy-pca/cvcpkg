@@ -1091,6 +1091,42 @@ async function loadDownloadStats(name) {
     });
   } catch (_) {}
 }
+
+async function loadBuildJobs(name) {
+  const section = document.getElementById('build-jobs-section');
+  if (!section) return;
+  try {
+    const resp = await fetch('/v1/builds?recipe_name=' + encodeURIComponent(name) + '&limit=20',
+      { headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('cvcpkg_token') || '') } });
+    if (resp.status === 401 || resp.status === 403) return;
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const jobs = data.jobs || [];
+    if (jobs.length === 0) return;
+    section.style.display = '';
+    const tbody = document.getElementById('build-jobs-body');
+    tbody.innerHTML = jobs.map(j => {
+      const statusCls = {
+        succeeded: 'is-success', failed: 'is-danger', running: 'is-info',
+        pending: 'is-light', dispatched: 'is-warning', cancelled: 'is-dark',
+        timed_out: 'is-danger'
+      }[j.status] || 'is-light';
+      const logLink = (j.status === 'running' || j.status === 'succeeded' || j.status === 'failed')
+        ? '<a class="button is-small is-outlined" href="/v1/builds/' + j.id + '/log" title="Download Log" target="_blank">' +
+          '<span class="icon is-small"><i class="fas fa-file-alt"></i></span></a>'
+        : '';
+      return '<tr>' +
+        '<td><span class="tag ' + statusCls + ' is-rounded">' + esc(j.status) + '</span></td>' +
+        '<td><span class="is-size-7">' + platformTag(j.platform) + '</span></td>' +
+        '<td><span class="is-size-7">' + esc(j.arch) + '</span></td>' +
+        '<td><span class="is-size-7">' + esc(j.config) + '</span></td>' +
+        '<td><span class="is-size-7">' + esc(j.link) + '</span></td>' +
+        '<td><span class="is-size-7 has-text-grey-light">' + fmtDate(j.submitted_at) + '</span></td>' +
+        '<td>' + logLink + '</td>' +
+        '</tr>';
+    }).join('');
+  } catch (_) {}
+}
 """
 
 
@@ -1273,6 +1309,29 @@ tar --zstd -xf &lt;package&gt;.tar.zst -C /opt/cvcpkg</pre>
       <span class="icon mr-1"><i class="fas fa-box"></i></span> Available Builds
     </h2>
 
+    <!-- Build Jobs (shown if authenticated) -->
+    <div class="box has-background-black-ter mb-5" id="build-jobs-section" style="display:none">
+      <h3 class="title is-5 has-text-white">
+        <span class="icon mr-1"><i class="fas fa-hard-hat"></i></span> Recent Build Jobs
+      </h3>
+      <div class="table-container">
+        <table class="table is-fullwidth is-hoverable is-dark is-striped">
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>Platform</th>
+              <th>Arch</th>
+              <th>Config</th>
+              <th>Link</th>
+              <th>Submitted</th>
+              <th>Log</th>
+            </tr>
+          </thead>
+          <tbody id="build-jobs-body"></tbody>
+        </table>
+      </div>
+    </div>
+
     <div class="table-container" id="builds-table">
       <table class="table is-fullwidth is-hoverable is-dark is-striped">
         <thead>
@@ -1314,6 +1373,7 @@ document.addEventListener('DOMContentLoaded', () => {{
   }});
   init({_js_string_literal(name)});
   loadDownloadStats({_js_string_literal(name)});
+  loadBuildJobs({_js_string_literal(name)});
 }});
 </script>
 </body>

@@ -4176,6 +4176,12 @@ def builder_status(builder_id: int, server: str, token: str):
     default=None,
     help="Directory to cache downloaded recipe bundles.",
 )
+@click.option(
+    "--no-websocket",
+    is_flag=True,
+    default=False,
+    help="Disable WebSocket and use HTTP long-poll only.",
+)
 def builder_run(
     server: str,
     token: str,
@@ -4187,6 +4193,7 @@ def builder_run(
     labels: tuple[str, ...],
     work_dir: str | None,
     recipe_cache_dir: str | None,
+    no_websocket: bool,
 ):
     """Register as a builder, poll for jobs, and execute builds.
 
@@ -4203,6 +4210,7 @@ def builder_run(
 
     Press Ctrl-C to finish in-flight jobs, unregister, and exit.
     """
+    import json
     import shutil
     import signal
     import tarfile
@@ -4442,6 +4450,108 @@ def builder_run(
             with jobs_lock:
                 current_jobs -= 1
 
+    # ── WebSocket helpers ───────────────────────────────────
+
+    def _ws_url() -> str:
+        """Build WebSocket URL from the HTTP base URL."""
+        scheme = "wss" if base.startswith("https") else "ws"
+        rest = base.split("://", 1)[1] if "://" in base else base
+        return f"{scheme}://{rest}/v1/builders/{builder_id}/ws?token={token}"
+
+    def _run_ws_loop():
+        """Run the WebSocket event loop.
+
+        Connects to the server, sends heartbeats, receives
+        dispatched jobs and recipe pushes.  Falls back to HTTP
+        long-poll on any connection failure.
+        """
+        nonlocal shutdown, current_jobs, last_heartbeat
+        try:
+            import websockets.sync.client as ws_sync
+        except ImportError:
+            click.echo("  websockets not installed — using HTTP long-poll", err=True)
+            return False
+
+        click.echo("Connecting via WebSocket…")
+        try:
+            with ws_sync.connect(_ws_url(), close_timeout=5) as ws:
+                click.echo("WebSocket connected.")
+                ws.settimeout(5)  # non-blocking reads with 5s timeout
+                while not shutdown:
+                    # Send heartbeat if due
+                    now = time.time()
+                    if now - last_heartbeat >= heartbeat_interval:
+                        try:
+                            ws.send(
+                                json.dumps(
+                                    {
+                                        "type": "heartbeat",
+                                        "status": "online",
+                                        "current_jobs": current_jobs,
+                                    }
+                                )
+                            )
+                            last_heartbeat = now
+                        except Exception:
+                            break  # connection lost
+
+                    # Try to receive a message
+                    try:
+                        raw = ws.recv(timeout=2)
+                    except TimeoutError:
+                        continue
+                    except Exception:
+                        break  # connection lost
+
+                    try:
+                        msg = json.loads(raw)
+                    except Exception:
+                        continue
+                    msg_type = msg.get("type", "")
+
+                    if msg_type == "job.dispatch":
+                        job = msg.get("job")
+                        if job is None:
+                            continue
+                        with jobs_lock:
+                            if current_jobs >= max_jobs:
+                                continue
+                            current_jobs += 1
+                        t = threading.Thread(target=_execute_job, args=(job,), daemon=True)
+                        t.start()
+
+                    elif msg_type == "recipe.push":
+                        recipe = msg.get("recipe", {})
+                        rname = recipe.get("name", "")
+                        if rname:
+                            click.echo(f"  Recipe updated: {rname}")
+                            try:
+                                _fetch_recipe(rname)
+                            except Exception:
+                                pass
+
+                    elif msg_type == "ping":
+                        try:
+                            ws.send(json.dumps({"type": "pong"}))
+                        except Exception:
+                            break
+
+                    elif msg_type == "job.timeout":
+                        job_id = msg.get("job_id")
+                        click.echo(
+                            f"  [{job_id}] Server timed out job",
+                            err=True,
+                        )
+
+            return True  # ran successfully (normal shutdown)
+
+        except Exception as exc:
+            click.echo(
+                f"  WebSocket connection failed: {exc} — " f"falling back to HTTP long-poll",
+                err=True,
+            )
+            return False
+
     # ── Main loop ───────────────────────────────────────────
 
     last_heartbeat = 0.0
@@ -4449,6 +4559,17 @@ def builder_run(
     poll_interval = 5.0  # seconds between next-job polls
 
     try:
+        # Try WebSocket first (unless disabled)
+        use_ws = not no_websocket
+        if use_ws and not shutdown:
+            ws_ok = _run_ws_loop()
+            if ws_ok:
+                # WebSocket ran until shutdown — skip HTTP loop
+                use_ws = True
+            else:
+                use_ws = False
+
+        # HTTP long-poll fallback
         while not shutdown:
             # Heartbeat
             now = time.time()
