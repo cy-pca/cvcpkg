@@ -50,6 +50,13 @@ if [[ -n "${CVC_DEPS_PREFIX}" && -d "${CVC_DEPS_PREFIX}/include/openssl" ]]; the
     # Embed $ORIGIN RPATH so libcurl finds libssl next to itself in any prefix.
     # The temporary build prefix gets cleaned up, so absolute RPATHs won't work.
     export LDFLAGS="${LDFLAGS:-} -Wl,-rpath,\$ORIGIN"
+    # On BSDs, dlopen() lives in libc (no separate -ldl).  Static OpenSSL
+    # requires -lpthread at link time, but curl's configure probes only add
+    # -lpthread via the "-ldl -lpthread" code path, which never fires on BSD.
+    # Pass -lpthread as a configure variable so the HMAC link tests succeed.
+    case "$(uname)" in
+        *BSD) CONFIGURE_ARGS+=(LIBS="-lpthread") ;;
+    esac
 fi
 
 ./configure "${CONFIGURE_ARGS[@]}"

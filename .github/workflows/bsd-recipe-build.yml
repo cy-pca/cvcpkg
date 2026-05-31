@@ -210,17 +210,15 @@ jobs:
             netbsd)
               ssh ${SSH_OPTS} "${VM}" "
                 export PATH=/sbin:/usr/sbin:/bin:/usr/bin:/usr/pkg/sbin:/usr/pkg/bin
-                # Serialize pkgin operations to avoid DB corruption from concurrent jobs
-                flock /tmp/.pkgin.lock sh -c '
-                  pkgin -y update 2>&1 || true
-                  n=\$(pkgin avail 2>/dev/null | wc -l)
-                  if [ \$n -lt 100 ]; then
-                    echo \"pkgin DB has only \$n entries, retrying update...\"
-                    rm -f /var/db/pkgin/pkgin.db
-                    pkgin -y update 2>&1
-                  fi
-                  pkgin -y install bash cmake ninja py313-pip py313-cryptography py313-yaml
-                '
+                export PKG_PATH=https://cdn.netbsd.org/pub/pkgsrc/packages/NetBSD/\$(uname -m)/10.0/All
+                # Use pkg_add directly — pkgin's SQLite DB is unreliable under
+                # concurrent access and frequently reports 'empty available
+                # packages list' even when the DB exists.
+                for pkg in bash cmake ninja-build py313-pip py313-cryptography py313-yaml; do
+                  pkg_info -qe \"\${pkg}\" 2>/dev/null && continue
+                  echo \"Installing \${pkg} ...\"
+                  pkg_add \"\${pkg}\" 2>&1 || echo \"WARNING: failed to install \${pkg}\"
+                done
               "
               ;;
           esac
@@ -256,18 +254,21 @@ jobs:
             --output-dir ${remote_dir}/dist \
             --recipes-dir recipes"
 
-          # Create GNU tool shims so build scripts that call 'make' or 'm4'
-          # use the GNU versions (gmake, gm4) on BSD.
+          # Create tool shims so build scripts that call 'make', 'm4', or
+          # 'python3' resolve to the correct binaries on BSD.
           SHIM_CMD="mkdir -p /usr/local/libexec/gnucompat && \
             ln -sf \$(which gmake) /usr/local/libexec/gnucompat/make && \
             if command -v gm4 >/dev/null; then \
               ln -sf \$(which gm4) /usr/local/libexec/gnucompat/m4; \
+            fi && \
+            if ! command -v python3 >/dev/null 2>&1; then \
+              ln -sf \$(which ${PYTHON}) /usr/local/libexec/gnucompat/python3; \
             fi"
           ssh ${SSH_OPTS} "${VM}" "${SHIM_CMD}"
 
           ssh ${SSH_OPTS} "${VM}" "cd ${remote_dir} && \
             PATH=/usr/local/libexec/gnucompat:\$PATH \
-            TMPDIR=/usr/local/tmp \
+            TMPDIR=${BASE_DIR} \
             ${BUILD_CMD}"
 
       # ── Install marker cmake config on BSD VM ──
