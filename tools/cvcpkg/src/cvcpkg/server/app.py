@@ -16,6 +16,7 @@ persistent state; otherwise it falls back to YAML files on disk.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import hashlib
 import json
 import logging
@@ -373,6 +374,104 @@ async def optional_token(authorization: str | None = Header(None)) -> TokenRecor
     return state.tokens.verify(raw)
 
 
+# ── Webhook delivery engine ────────────────────────────────────
+
+_WEBHOOK_RETRY_DELAYS = [10, 60, 300]  # seconds between retries
+
+
+async def _deliver_webhook(
+    webhook_id: int,
+    url: str,
+    secret: str,
+    event: str,
+    payload: str,
+) -> bool:
+    """Attempt to deliver a webhook payload.  Returns True on success."""
+    import hashlib as _h
+    import hmac as _hm
+    import uuid
+
+    import httpx
+
+    sig = _hm.new(secret.encode(), payload.encode(), _h.sha256).hexdigest()
+    delivery_id = str(uuid.uuid4())
+    headers = {
+        "Content-Type": "application/json",
+        "X-CvcPkg-Event": event,
+        "X-CvcPkg-Signature": f"sha256={sig}",
+        "X-CvcPkg-Delivery": delivery_id,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(url, content=payload, headers=headers)
+        if resp.status_code < 400:
+            await _db_webhooks.record_delivery(webhook_id)
+            return True
+        logger.warning(
+            "webhook %d delivery to %s returned %d",
+            webhook_id, url, resp.status_code,
+        )
+    except Exception as exc:
+        logger.warning("webhook %d delivery to %s failed: %s", webhook_id, url, exc)
+    await _db_webhooks.record_failure(webhook_id)
+    return False
+
+
+async def _deliver_with_retries(
+    webhook_id: int,
+    url: str,
+    secret: str,
+    event: str,
+    payload: str,
+) -> None:
+    """Deliver a webhook with retries (exponential backoff)."""
+    if await _deliver_webhook(webhook_id, url, secret, event, payload):
+        return
+    for delay in _WEBHOOK_RETRY_DELAYS:
+        await asyncio.sleep(delay)
+        # Re-check that the webhook is still active
+        info = await _db_webhooks.get(webhook_id)
+        if info is None or not info.active:
+            return
+        if await _deliver_webhook(webhook_id, url, secret, event, payload):
+            return
+
+
+async def emit_webhook_event(
+    event: str,
+    data: dict,
+    *,
+    org_slug: str = "",
+) -> None:
+    """Fire a webhook event to all matching active webhooks.
+
+    Deliveries run as background tasks so the caller is not blocked.
+    """
+    if not _use_db or _db_webhooks is None:
+        return
+    try:
+        hooks = await _db_webhooks.list_active_for_event(event, org_slug=org_slug)
+    except Exception:
+        logger.exception("failed to list webhooks for event %s", event)
+        return
+    if not hooks:
+        return
+
+    payload = json.dumps({
+        "event": event,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "data": data,
+    })
+
+    for hook in hooks:
+        secret = await _db_webhooks.get_secret(hook.id)
+        asyncio.create_task(
+            _deliver_with_retries(
+                hook.id, hook.url, secret or "", event, payload,
+            )
+        )
+
+
 # ── Build scheduler background task ────────────────────────────
 
 _SCHEDULER_INTERVAL = int(os.environ.get("CVCPKG_SCHEDULER_INTERVAL", "5"))
@@ -400,6 +499,12 @@ async def _build_scheduler_loop() -> None:
             timed_out = await _db_build_jobs.reap_timed_out(_DEFAULT_BUILD_TIMEOUT)
             for job in timed_out:
                 await _db_build_jobs.cancel_downstream(job.id)
+                await emit_webhook_event("build.timed_out", {
+                    "job_id": job.id,
+                    "recipe_name": job.recipe_name,
+                    "platform": job.platform,
+                    "arch": job.arch,
+                }, org_slug=job.org_slug)
 
             # 3. Find ready jobs and match to builders
             ready_jobs = await _db_build_jobs.find_ready_jobs()
@@ -1631,6 +1736,14 @@ def create_app(
         _metrics["publishes_total"] += 1
         _metrics["bytes_uploaded_total"] += size_bytes
 
+        await emit_webhook_event("package.published", {
+            "name": name,
+            "version": version,
+            "platform": platform,
+            "arch": arch,
+            "org": org or "",
+        }, org_slug=org or "")
+
         return PublishResponse(
             name=name,
             version=version,
@@ -1937,6 +2050,14 @@ def create_app(
         _metrics["publishes_total"] += 1
         _metrics["bytes_uploaded_total"] += size_bytes
         _upload_sessions.pop(upload_id, None)
+
+        await emit_webhook_event("package.published", {
+            "name": session.name,
+            "version": session.version,
+            "platform": session.platform,
+            "arch": session.arch,
+            "org": getattr(session, "org", "") or "",
+        })
 
         return PublishResponse(
             name=session.name,
@@ -3316,6 +3437,12 @@ def create_app(
             target=f"{body.org_slug}/{body.name}" if body.org_slug else body.name,
             detail=f"{body.platform}/{body.arch}",
         )
+        await emit_webhook_event("builder.online", {
+            "builder_name": body.name,
+            "platform": body.platform,
+            "arch": body.arch,
+            "builder_id": info.id,
+        }, org_slug=body.org_slug)
         return info
 
     @app.get("/v1/builders", response_model=BuilderListResponse, tags=["builders"])
@@ -3404,6 +3531,10 @@ def create_app(
             actor=actor.name,
             target=f"{info.org_slug}/{info.name}" if info.org_slug else info.name,
         )
+        await emit_webhook_event("builder.offline", {
+            "builder_name": info.name,
+            "builder_id": builder_id,
+        }, org_slug=info.org_slug)
         return {"message": "builder unregistered", "id": builder_id}
 
     # ── Build Jobs ─────────────────────────────────────────────
@@ -3531,6 +3662,12 @@ def create_app(
             actor=actor.name,
             target=str(job_id),
         )
+        await emit_webhook_event("build.cancelled", {
+            "job_id": job_id,
+            "recipe_name": info.recipe_name,
+            "platform": info.platform,
+            "cancelled_by": actor.name,
+        }, org_slug=info.org_slug)
         return {"message": "job cancelled", "id": job_id, "status": info.status}
 
     @app.post("/v1/builds/dag/{dag_id}/cancel", tags=["builds"])
@@ -3547,6 +3684,11 @@ def create_app(
             target=f"dag:{dag_id}",
             detail=f"{count} jobs cancelled",
         )
+        await emit_webhook_event("build.cancelled", {
+            "dag_id": dag_id,
+            "cancelled": count,
+            "cancelled_by": actor.name,
+        })
         return {"message": "dag cancelled", "dag_id": dag_id, "cancelled": count}
 
     @app.post(
@@ -3570,6 +3712,13 @@ def create_app(
             target=str(job_id),
             detail=f"builder #{body.builder_id}",
         )
+        await emit_webhook_event("build.started", {
+            "job_id": job_id,
+            "recipe_name": info.recipe_name,
+            "platform": info.platform,
+            "arch": info.arch,
+            "builder_id": body.builder_id,
+        }, org_slug=info.org_slug)
         return info
 
     @app.post(
@@ -3594,6 +3743,13 @@ def create_app(
             actor=actor.name,
             target=str(job_id),
         )
+        await emit_webhook_event("build.completed", {
+            "job_id": job_id,
+            "recipe_name": info.recipe_name,
+            "platform": info.platform,
+            "arch": info.arch,
+            "result_archive_url": info.result_archive_url or "",
+        }, org_slug=info.org_slug)
         return info
 
     @app.post(
@@ -3619,6 +3775,13 @@ def create_app(
             target=str(job_id),
             detail=body.error_message[:200] if body.error_message else "",
         )
+        await emit_webhook_event("build.failed", {
+            "job_id": job_id,
+            "recipe_name": info.recipe_name,
+            "platform": info.platform,
+            "arch": info.arch,
+            "error_message": body.error_message or "",
+        }, org_slug=info.org_slug)
         return info
 
     # ── Build log endpoints ─────────────────────────────────
