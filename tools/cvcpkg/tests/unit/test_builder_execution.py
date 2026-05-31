@@ -477,3 +477,224 @@ class TestBuilderExecution:
         assert resp.status_code in (404, 200)
         if resp.status_code == 200:
             assert resp.json()["status"] == "offline"
+
+
+# ── WebSocket protocol tests ──────────────────────────────────
+
+
+class TestBuilderWebSocket:
+    """Test the WebSocket endpoint for builders."""
+
+    def _register_builder(self, client, token):
+        resp = client.post(
+            "/v1/builders/register",
+            headers=_auth(token),
+            json={
+                "name": "ws-builder",
+                "platform": "linux",
+                "arch": "x86_64",
+                "max_jobs": 4,
+                "labels": [],
+                "capabilities": {},
+            },
+        )
+        assert resp.status_code == 200
+        return resp.json()
+
+    def test_ws_connect_and_heartbeat(self, db_server_env):
+        """Builder can connect via WebSocket and send heartbeat."""
+        client, token, tmp_path = db_server_env
+
+        builder = self._register_builder(client, token)
+        builder_id = builder["id"]
+
+        with client.websocket_connect(f"/v1/builders/{builder_id}/ws?token={token}") as ws:
+            ws.send_json({"type": "heartbeat", "status": "online", "current_jobs": 0})
+            resp = ws.receive_json()
+            assert resp["type"] == "heartbeat_ack"
+
+    def test_ws_reject_bad_token(self, db_server_env):
+        """WebSocket rejects invalid token."""
+        client, token, tmp_path = db_server_env
+
+        builder = self._register_builder(client, token)
+        builder_id = builder["id"]
+
+        with pytest.raises(Exception):
+            with client.websocket_connect(f"/v1/builders/{builder_id}/ws?token=bad-token") as ws:
+                ws.receive_json()
+
+    def test_ws_reject_missing_token(self, db_server_env):
+        """WebSocket rejects missing token."""
+        client, token, tmp_path = db_server_env
+
+        builder = self._register_builder(client, token)
+        builder_id = builder["id"]
+
+        with pytest.raises(Exception):
+            with client.websocket_connect(f"/v1/builders/{builder_id}/ws") as ws:
+                ws.receive_json()
+
+    def test_ws_job_claim_ack(self, db_server_env):
+        """Builder can claim a job via WebSocket and get ack."""
+        client, token, tmp_path = db_server_env
+
+        builder = self._register_builder(client, token)
+        builder_id = builder["id"]
+
+        # Push recipe and submit a job
+        bundle = _make_recipe_bundle("wslib")
+        client.post(
+            "/v1/recipes/wslib",
+            headers=_auth(token),
+            params={"version": "1.0.0"},
+            files={"file": ("wslib.tar.gz", bundle, "application/gzip")},
+        )
+        resp = client.post(
+            "/v1/builds",
+            headers=_auth(token),
+            json={
+                "recipe_name": "wslib",
+                "platform": "linux",
+                "arch": "x86_64",
+                "config": "release",
+                "link": "shared",
+            },
+        )
+        assert resp.status_code == 200
+        job_id = resp.json()["id"]
+
+        with client.websocket_connect(f"/v1/builders/{builder_id}/ws?token={token}") as ws:
+            # Send claim via WebSocket
+            ws.send_json({"type": "job.claim", "job_id": job_id})
+            resp_data = ws.receive_json()
+            assert resp_data["type"] == "job.claim_ack"
+            assert resp_data["job_id"] == job_id
+
+    def test_ws_log_and_complete(self, db_server_env):
+        """Builder can stream logs and complete a job via WebSocket."""
+        client, token, tmp_path = db_server_env
+
+        builder = self._register_builder(client, token)
+        builder_id = builder["id"]
+
+        # Push recipe and submit job
+        bundle = _make_recipe_bundle("wslib2")
+        client.post(
+            "/v1/recipes/wslib2",
+            headers=_auth(token),
+            params={"version": "1.0.0"},
+            files={"file": ("wslib2.tar.gz", bundle, "application/gzip")},
+        )
+        resp = client.post(
+            "/v1/builds",
+            headers=_auth(token),
+            json={
+                "recipe_name": "wslib2",
+                "platform": "linux",
+                "arch": "x86_64",
+            },
+        )
+        job_id = resp.json()["id"]
+
+        with client.websocket_connect(f"/v1/builders/{builder_id}/ws?token={token}") as ws:
+            # Claim
+            ws.send_json({"type": "job.claim", "job_id": job_id})
+            ws.receive_json()  # ack
+
+            # Send log
+            ws.send_json({"type": "job.log", "job_id": job_id, "data": "building...\n"})
+
+            # Complete
+            ws.send_json(
+                {
+                    "type": "job.complete",
+                    "job_id": job_id,
+                    "archive_url": "/v1/packages/wslib2",
+                }
+            )
+            ack = ws.receive_json()
+            assert ack["type"] == "job.complete_ack"
+            assert ack["status"] == BuildJobStatus.succeeded
+
+        # Verify job is succeeded
+        resp = client.get(f"/v1/builds/{job_id}", headers=_auth(token))
+        assert resp.status_code == 200
+        assert resp.json()["status"] == BuildJobStatus.succeeded
+
+    def test_ws_fail_job(self, db_server_env):
+        """Builder can fail a job via WebSocket."""
+        client, token, tmp_path = db_server_env
+
+        builder = self._register_builder(client, token)
+        builder_id = builder["id"]
+
+        bundle = _make_recipe_bundle("wslib3")
+        client.post(
+            "/v1/recipes/wslib3",
+            headers=_auth(token),
+            params={"version": "1.0.0"},
+            files={"file": ("wslib3.tar.gz", bundle, "application/gzip")},
+        )
+        resp = client.post(
+            "/v1/builds",
+            headers=_auth(token),
+            json={
+                "recipe_name": "wslib3",
+                "platform": "linux",
+                "arch": "x86_64",
+            },
+        )
+        job_id = resp.json()["id"]
+
+        with client.websocket_connect(f"/v1/builders/{builder_id}/ws?token={token}") as ws:
+            ws.send_json({"type": "job.claim", "job_id": job_id})
+            ws.receive_json()
+
+            ws.send_json(
+                {
+                    "type": "job.fail",
+                    "job_id": job_id,
+                    "error": "compile error: missing header",
+                }
+            )
+            ack = ws.receive_json()
+            assert ack["type"] == "job.fail_ack"
+            assert ack["status"] == BuildJobStatus.failed
+
+        resp = client.get(f"/v1/builds/{job_id}", headers=_auth(token))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == BuildJobStatus.failed
+        assert "compile error" in data.get("error_message", "")
+
+    def test_ws_unknown_message_type(self, db_server_env):
+        """Unknown message types return an error response."""
+        client, token, tmp_path = db_server_env
+
+        builder = self._register_builder(client, token)
+        builder_id = builder["id"]
+
+        with client.websocket_connect(f"/v1/builders/{builder_id}/ws?token={token}") as ws:
+            ws.send_json({"type": "bogus.message"})
+            resp = ws.receive_json()
+            assert resp["type"] == "error"
+            assert "unknown" in resp["message"].lower()
+
+
+# ── Build Log UI tests ────────────────────────────────────────
+
+
+class TestBuildLogUI:
+    """Test the package detail page includes build jobs section."""
+
+    def test_package_detail_has_build_jobs_section(self, db_server_env):
+        """Package detail page HTML contains the build jobs section."""
+        client, token, tmp_path = db_server_env
+
+        resp = client.get("/package/some-pkg")
+        assert resp.status_code == 200
+        html = resp.text
+        assert "build-jobs-section" in html
+        assert "Recent Build Jobs" in html
+        assert "loadBuildJobs" in html

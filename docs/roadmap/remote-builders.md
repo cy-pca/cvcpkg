@@ -616,7 +616,7 @@ cvcpkg-server config set log-retention-days 90
 
 - [x] Builder job execution loop: fetch recipe, run build, stream
   log, upload archive, report completion/failure
-- [ ] WebSocket protocol: `job.dispatch`, `job.claim`, `job.log`,
+- [x] WebSocket protocol: `job.dispatch`, `job.claim`, `job.log`,
   `job.complete`, `job.fail`, heartbeat
 - [x] Long-poll fallback: `next-job` endpoint
 - [x] Log streaming: server buffers + flushes to object storage
@@ -625,7 +625,7 @@ cvcpkg-server config set log-retention-days 90
 - [x] `cvcpkg builds log <id> [--follow]`
 - [x] Log deletion: `cvcpkg builds log delete <id>`
 - [x] Configurable parallelism: `--max-jobs N` (default: CPU count)
-- [ ] Package page "Build Log" link in web UI
+- [x] Package page "Build Log" link in web UI
 
 ### Phase 4: Recipe Distribution
 
@@ -635,7 +635,7 @@ cvcpkg-server config set log-retention-days 90
   patches as tar.gz)
 - [x] `POST /v1/recipes` — upload/update recipe
 - [x] `GET /v1/recipes` / `GET /v1/recipes/{name}` — list/download
-- [ ] WebSocket `recipe.push` message to connected builders
+- [x] WebSocket `recipe.push` message to connected builders
 - [x] Builder local recipe cache with version tracking
 - [x] `cvcpkg recipe push <name>` CLI command
 - [x] ACL: Admin for global recipes, Org admin for org recipes
