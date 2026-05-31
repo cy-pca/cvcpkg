@@ -271,6 +271,218 @@ class TestDbBuilderStore:
 
         self._run(_test())
 
+    def test_json_corruption_resilience(self):
+        """Corrupt JSON in labels/capabilities columns falls back gracefully."""
+        from cvcpkg.server.db_stores import DbBuilderStore
+
+        async def _test():
+            store = DbBuilderStore()
+            info = await store.register(
+                name="corrupt-b", platform="linux", arch="x86_64",
+                registered_by="admin",
+            )
+            # Manually corrupt the JSON columns
+            from cvcpkg.server.db import BuilderRow, get_session
+            from sqlalchemy import select
+
+            async with get_session() as session:
+                row = (await session.execute(
+                    select(BuilderRow).where(BuilderRow.id == info.id)
+                )).scalar()
+                row.labels = "NOT VALID JSON{{"
+                row.capabilities = "also broken["
+
+            fetched = await store.get(info.id)
+            assert fetched.labels == []
+            assert fetched.capabilities == {}
+
+        self._run(_test())
+
+    def test_register_same_name_different_orgs(self):
+        """Same builder name in different orgs creates distinct builders."""
+        from cvcpkg.server.db_stores import DbBuilderStore
+
+        async def _test():
+            store = DbBuilderStore()
+            b1 = await store.register(
+                name="shared-name", platform="linux", arch="x86_64",
+                registered_by="admin", org_slug="orgA",
+            )
+            b2 = await store.register(
+                name="shared-name", platform="linux", arch="x86_64",
+                registered_by="admin", org_slug="orgB",
+            )
+            assert b1.id != b2.id
+            assert b1.org_slug == "orgA"
+            assert b2.org_slug == "orgB"
+
+            all_builders = await store.list_builders()
+            assert len(all_builders) == 2
+
+        self._run(_test())
+
+    def test_list_builders_status_filter(self):
+        from cvcpkg.server.db_stores import DbBuilderStore
+
+        async def _test():
+            store = DbBuilderStore()
+            b1 = await store.register(
+                name="b1", platform="linux", arch="x86_64", registered_by="a",
+            )
+            b2 = await store.register(
+                name="b2", platform="linux", arch="x86_64", registered_by="a",
+            )
+            # b2 goes offline
+            await store.heartbeat(b2.id, status="offline", current_jobs=0)
+
+            online = await store.list_builders(status="online")
+            assert len(online) == 1
+            assert online[0].name == "b1"
+
+            offline = await store.list_builders(status="offline")
+            assert len(offline) == 1
+            assert offline[0].name == "b2"
+
+        self._run(_test())
+
+    def test_list_builders_combined_filters(self):
+        from cvcpkg.server.db_stores import DbBuilderStore
+
+        async def _test():
+            store = DbBuilderStore()
+            await store.register(name="b1", platform="linux", arch="x86_64", registered_by="a")
+            await store.register(name="b2", platform="linux", arch="arm64", registered_by="a")
+            await store.register(name="b3", platform="macos", arch="arm64", registered_by="a")
+
+            result = await store.list_builders(platform="linux", arch="arm64")
+            assert len(result) == 1
+            assert result[0].name == "b2"
+
+        self._run(_test())
+
+    def test_list_builders_empty_store(self):
+        from cvcpkg.server.db_stores import DbBuilderStore
+
+        async def _test():
+            store = DbBuilderStore()
+            result = await store.list_builders()
+            assert result == []
+
+        self._run(_test())
+
+    def test_reap_stale_no_stale_builders(self):
+        from cvcpkg.server.db_stores import DbBuilderStore
+
+        async def _test():
+            store = DbBuilderStore()
+            await store.register(
+                name="fresh", platform="linux", arch="x86_64", registered_by="a",
+            )
+            reaped = await store.reap_stale(max_age_seconds=180)
+            assert reaped == []
+
+        self._run(_test())
+
+    def test_reap_stale_null_heartbeat(self):
+        """Builders with NULL last_heartbeat are reaped."""
+        from cvcpkg.server.db_stores import DbBuilderStore
+
+        async def _test():
+            store = DbBuilderStore()
+            info = await store.register(
+                name="b1", platform="linux", arch="x86_64", registered_by="a",
+            )
+            # Null out the heartbeat
+            from cvcpkg.server.db import BuilderRow, get_session
+            from sqlalchemy import select
+
+            async with get_session() as session:
+                row = (await session.execute(
+                    select(BuilderRow).where(BuilderRow.id == info.id)
+                )).scalar()
+                row.last_heartbeat = None
+
+            reaped = await store.reap_stale(max_age_seconds=180)
+            assert len(reaped) == 1
+            assert reaped[0].status == "offline"
+
+        self._run(_test())
+
+    def test_reap_stale_skips_already_offline(self):
+        from cvcpkg.server.db_stores import DbBuilderStore
+
+        async def _test():
+            store = DbBuilderStore()
+            info = await store.register(
+                name="b1", platform="linux", arch="x86_64", registered_by="a",
+            )
+            await store.heartbeat(info.id, status="offline", current_jobs=0)
+            reaped = await store.reap_stale(max_age_seconds=0)  # 0 = everything is stale
+            assert reaped == []
+
+        self._run(_test())
+
+    def test_update_prefer_affinity(self):
+        from cvcpkg.server.db_stores import DbBuilderStore
+
+        async def _test():
+            store = DbBuilderStore()
+            info = await store.register(
+                name="b1", platform="linux", arch="x86_64",
+                registered_by="a", prefer_affinity=False,
+            )
+            updated = await store.update(info.id, prefer_affinity=True)
+            assert updated.prefer_affinity is True
+
+        self._run(_test())
+
+    def test_update_capabilities(self):
+        from cvcpkg.server.db_stores import DbBuilderStore
+
+        async def _test():
+            store = DbBuilderStore()
+            info = await store.register(
+                name="b1", platform="linux", arch="x86_64", registered_by="a",
+            )
+            updated = await store.update(info.id, capabilities={"cmake": True, "ninja": True})
+            assert updated.capabilities == {"cmake": True, "ninja": True}
+
+        self._run(_test())
+
+    def test_update_no_changes(self):
+        from cvcpkg.server.db_stores import DbBuilderStore
+
+        async def _test():
+            store = DbBuilderStore()
+            info = await store.register(
+                name="b1", platform="linux", arch="x86_64",
+                registered_by="a", max_jobs=2,
+            )
+            updated = await store.update(info.id)  # no kwargs
+            assert updated.max_jobs == 2  # unchanged
+
+        self._run(_test())
+
+    def test_heartbeat_updates_timestamp(self):
+        import time
+
+        from cvcpkg.server.db_stores import DbBuilderStore
+
+        async def _test():
+            store = DbBuilderStore()
+            info = await store.register(
+                name="b1", platform="linux", arch="x86_64", registered_by="a",
+            )
+            first_hb = info.last_heartbeat
+
+            # Small delay, then heartbeat again
+            import asyncio
+            await asyncio.sleep(0.05)
+            updated = await store.heartbeat(info.id, status="online", current_jobs=0)
+            assert updated.last_heartbeat > first_hb
+
+        self._run(_test())
+
 
 # ── API endpoint tests ──────────────────────────────────────────
 
@@ -459,3 +671,74 @@ class TestBuilderEndpoints:
         data = resp.json()
         assert data["total"] == 0
         assert data["builders"] == []
+
+    def test_register_invalid_name_rejected(self, db_server_env):
+        """Builder name starting with '-' should fail validation."""
+        client, admin_tok, pub_tok, _ = db_server_env
+        resp = client.post(
+            "/v1/builders/register",
+            json={"name": "-bad-name", "platform": "linux", "arch": "x86_64"},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 422
+
+    def test_register_empty_name_rejected(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        resp = client.post(
+            "/v1/builders/register",
+            json={"name": "", "platform": "linux", "arch": "x86_64"},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 422
+
+    def test_register_max_jobs_zero_rejected(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        resp = client.post(
+            "/v1/builders/register",
+            json={"name": "b1", "platform": "linux", "arch": "x86_64", "max_jobs": 0},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 422
+
+    def test_register_max_jobs_over_limit_rejected(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        resp = client.post(
+            "/v1/builders/register",
+            json={"name": "b1", "platform": "linux", "arch": "x86_64", "max_jobs": 257},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 422
+
+    def test_heartbeat_negative_jobs_rejected(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        reg = self._register(client, pub_tok)
+        builder_id = reg.json()["id"]
+        resp = client.post(
+            f"/v1/builders/{builder_id}/heartbeat",
+            json={"status": "online", "current_jobs": -1},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 422
+
+    def test_update_not_found(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        resp = client.patch(
+            "/v1/builders/9999",
+            json={"max_jobs": 4},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 404
+
+    def test_list_builders_status_filter_api(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        self._register(client, pub_tok, "b1")
+        self._register(client, pub_tok, "b2")
+        # Unregister b2 to make it offline (via delete + re-register is overkill;
+        # just check that status filter works with "online")
+        resp = client.get(
+            "/v1/builders",
+            params={"status": "online"},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 2  # both are online after registration

@@ -4432,6 +4432,76 @@ def builds_cancel_dag(dag_id: str, server: str, token: str):
     click.echo(f"DAG {dag_id}: {data.get('cancelled', 0)} jobs cancelled")
 
 
+@builds_group.command("log")
+@click.argument("job_id", type=int)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--follow", "-f", is_flag=True, help="Follow log output (SSE stream).")
+def builds_log(job_id: int, server: str, token: str, follow: bool):
+    """View or follow the build log for a job."""
+    import httpx
+
+    base = server.rstrip("/")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    if follow:
+        url = f"{base}/v1/builds/{job_id}/log/stream"
+        with httpx.Client(timeout=None) as client:
+            with client.stream("GET", url, headers=headers) as resp:
+                if resp.status_code >= 400:
+                    raise click.ClickException(
+                        f"server returned {resp.status_code}"
+                    )
+                for line in resp.iter_lines():
+                    if line.startswith("data: "):
+                        click.echo(line[6:])
+                    elif line.startswith("event: done"):
+                        break
+    else:
+        url = f"{base}/v1/builds/{job_id}/log"
+        with httpx.Client(timeout=30) as client:
+            resp = client.get(url, headers=headers)
+        if resp.status_code == 404:
+            raise click.ClickException(f"no log available for build job {job_id}")
+        if resp.status_code >= 400:
+            raise click.ClickException(
+                f"server returned {resp.status_code}: {resp.text}"
+            )
+        click.echo(resp.text, nl=False)
+
+
+@builds_group.command("log-delete")
+@click.argument("job_id", type=int)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+def builds_log_delete(job_id: int, server: str, token: str):
+    """Delete the log for a build job (admin only)."""
+    _api_request("delete", f"{server.rstrip('/')}/v1/builds/{job_id}/log", token)
+    click.echo(f"Log for build #{job_id} deleted.")
+
+
 # ── main() wrapper for backward compat with tests ──────────────
 
 

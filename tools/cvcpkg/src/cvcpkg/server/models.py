@@ -771,3 +771,12 @@ class BuildJobFailRequest(BaseModel):
         default="", max_length=4096,
         description="Failure reason.",
     )
+
+
+class BuildLogAppendRequest(BaseModel):
+    """Append a chunk of log data to a running build job."""
+
+    data: str = Field(
+        ..., min_length=1, max_length=65536,
+        description="Log data chunk (plain text, max 64 KB per append).",
+    )
