@@ -614,7 +614,7 @@ cvcpkg-server config set log-retention-days 90
 
 **Scope**: Builder executes jobs, streams logs, publishes results.
 
-- [ ] Builder job execution loop: fetch recipe, run build, stream
+- [x] Builder job execution loop: fetch recipe, run build, stream
   log, upload archive, report completion/failure
 - [ ] WebSocket protocol: `job.dispatch`, `job.claim`, `job.log`,
   `job.complete`, `job.fail`, heartbeat
@@ -636,7 +636,7 @@ cvcpkg-server config set log-retention-days 90
 - [x] `POST /v1/recipes` — upload/update recipe
 - [x] `GET /v1/recipes` / `GET /v1/recipes/{name}` — list/download
 - [ ] WebSocket `recipe.push` message to connected builders
-- [ ] Builder local recipe cache with version tracking
+- [x] Builder local recipe cache with version tracking
 - [x] `cvcpkg recipe push <name>` CLI command
 - [x] ACL: Admin for global recipes, Org admin for org recipes
 
