@@ -378,6 +378,11 @@ async def optional_token(authorization: str | None = Header(None)) -> TokenRecor
 _SCHEDULER_INTERVAL = int(os.environ.get("CVCPKG_SCHEDULER_INTERVAL", "5"))
 _DEFAULT_BUILD_TIMEOUT = int(os.environ.get("CVCPKG_BUILD_TIMEOUT", "86400"))
 
+# Log retention: 0 means disabled (no automatic GC)
+_LOG_RETENTION_DAYS = int(os.environ.get("CVCPKG_LOG_RETENTION_DAYS", "0"))
+# How often the log retention GC runs (seconds, default 1 hour)
+_LOG_GC_INTERVAL = int(os.environ.get("CVCPKG_LOG_GC_INTERVAL", "3600"))
+
 
 async def _build_scheduler_loop() -> None:
     """Continuously match ready jobs to available builders."""
@@ -439,6 +444,27 @@ async def _build_scheduler_loop() -> None:
 
         except Exception:
             logger.exception("build scheduler loop error")
+
+
+async def _log_retention_gc_loop() -> None:
+    """Periodically delete logs older than the retention policy."""
+    import asyncio
+
+    while True:
+        await asyncio.sleep(_LOG_GC_INTERVAL)
+        if _LOG_RETENTION_DAYS <= 0:
+            continue
+        if not _use_db or _db_build_jobs is None or _state is None:
+            continue
+        try:
+            purged = await _db_build_jobs.purge_old_logs(
+                older_than_days=_LOG_RETENTION_DAYS,
+                logs_dir=_state.logs_dir(),
+            )
+            if purged:
+                logger.info("log retention GC: purged %d old logs", purged)
+        except Exception:
+            logger.exception("log retention GC error")
 
 
 # ── Mirror background tasks ─────────────────────────────────────
@@ -603,6 +629,8 @@ def create_app(
             if _use_db and not MIRROR_MODE:
                 bg_tasks.append(asyncio.create_task(_mirror_health_loop()))
                 bg_tasks.append(asyncio.create_task(_build_scheduler_loop()))
+                if _LOG_RETENTION_DAYS > 0:
+                    bg_tasks.append(asyncio.create_task(_log_retention_gc_loop()))
             if MIRROR_MODE and MIRROR_UPSTREAM:
                 bg_tasks.append(asyncio.create_task(_mirror_sync_loop(sd)))
 
@@ -4028,6 +4056,71 @@ def create_app(
         except Exception as exc:
             await _db_webhooks.record_failure(webhook_id)
             raise HTTPException(502, f"delivery failed: {exc}") from exc
+
+    # ── Retention & Quota endpoints ─────────────────────────
+
+    @app.post(
+        "/v1/admin/gc/logs",
+        tags=["admin"],
+    )
+    async def admin_gc_logs(
+        older_than_days: int = Query(30, ge=1),
+        status: str | None = Query(None),
+        delete_logs: bool = Query(True),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Garbage-collect old build logs (admin only).
+
+        Deletes logs from finished jobs older than *older_than_days*.
+        Optionally filter by job status (e.g. ``failed``, ``cancelled``).
+        """
+        _require_db_build_jobs()
+        state = _get_state()
+        purged = await _db_build_jobs.purge_old_logs(
+            older_than_days=older_than_days,
+            logs_dir=state.logs_dir(),
+            status_filter=status,
+            delete_logs=delete_logs,
+        )
+        return {"ok": True, "purged": purged}
+
+    @app.post(
+        "/v1/admin/purge/builds",
+        tags=["admin"],
+    )
+    async def admin_purge_builds(
+        older_than_days: int = Query(30, ge=1),
+        status: str | None = Query(None),
+        delete_logs: bool = Query(True),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Purge old finished build jobs and their logs (admin only).
+
+        Deletes entire job rows (not just logs) from finished jobs
+        older than *older_than_days*.
+        """
+        _require_db_build_jobs()
+        state = _get_state()
+        purged = await _db_build_jobs.purge_old_jobs(
+            older_than_days=older_than_days,
+            logs_dir=state.logs_dir(),
+            status_filter=status,
+            delete_logs=delete_logs,
+        )
+        return {"ok": True, "purged": purged}
+
+    @app.get(
+        "/v1/admin/quota/logs/{org_slug}",
+        tags=["admin"],
+    )
+    async def admin_org_log_usage(
+        org_slug: str,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Get total log storage usage for an organization (admin only)."""
+        _require_db_build_jobs()
+        usage = await _db_build_jobs.get_org_log_usage(org_slug)
+        return {"org_slug": org_slug, "log_bytes": usage}
 
     # ── Mirror-mode download proxy ──────────────────────────
 

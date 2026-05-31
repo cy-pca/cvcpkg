@@ -2516,6 +2516,97 @@ class DbBuildJobStore:
             dep_ids = await self._load_dep_ids(session, row.id)
             return self._row_to_info(row, dep_ids)
 
+    async def purge_old_logs(
+        self,
+        *,
+        older_than_days: int,
+        logs_dir: Path,
+        status_filter: str | None = None,
+        delete_logs: bool = True,
+    ) -> int:
+        """Delete logs for finished jobs older than *older_than_days*.
+
+        Returns the count of log entries purged.
+        """
+        cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+            days=older_than_days
+        )
+        async with get_session() as session:
+            q = select(BuildJobRow).where(
+                BuildJobRow.log_url.isnot(None),
+                BuildJobRow.finished_at.isnot(None),
+                BuildJobRow.finished_at < cutoff,
+            )
+            if status_filter:
+                q = q.where(BuildJobRow.status == status_filter)
+            rows = (await session.execute(q)).scalars().all()
+            count = 0
+            for row in rows:
+                if delete_logs and row.log_url:
+                    path = logs_dir / row.log_url
+                    if path.is_file():
+                        path.unlink()
+                row.log_url = None
+                row.log_size_bytes = None
+                count += 1
+            return count
+
+    async def get_org_log_usage(self, org_slug: str) -> int:
+        """Return total log bytes for an org."""
+        async with get_session() as session:
+            result = (
+                await session.execute(
+                    select(sa_func.coalesce(sa_func.sum(BuildJobRow.log_size_bytes), 0))
+                    .where(BuildJobRow.org_slug == org_slug)
+                )
+            ).scalar()
+            return int(result or 0)
+
+    async def purge_old_jobs(
+        self,
+        *,
+        older_than_days: int,
+        logs_dir: Path,
+        status_filter: str | None = None,
+        delete_logs: bool = True,
+    ) -> int:
+        """Purge finished build jobs older than *older_than_days*.
+
+        Deletes the job rows entirely (and their log files if
+        *delete_logs* is True).  Returns the count of jobs purged.
+        """
+        cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+            days=older_than_days
+        )
+        async with get_session() as session:
+            q = select(BuildJobRow).where(
+                BuildJobRow.finished_at.isnot(None),
+                BuildJobRow.finished_at < cutoff,
+            )
+            if status_filter:
+                q = q.where(BuildJobRow.status == status_filter)
+            rows = (await session.execute(q)).scalars().all()
+            count = 0
+            for row in rows:
+                if delete_logs and row.log_url:
+                    path = logs_dir / row.log_url
+                    if path.is_file():
+                        path.unlink()
+                # Delete dep rows
+                from sqlalchemy import delete as sa_delete
+
+                await session.execute(
+                    sa_delete(BuildJobDepRow).where(
+                        or_(
+                            BuildJobDepRow.job_id == row.id,
+                            BuildJobDepRow.depends_on_job_id == row.id,
+                        )
+                    )
+                )
+                await session.delete(row)
+                count += 1
+            return count
+
 
 class DbRecipeStore:
     """DB-backed store for server-managed recipe bundles."""

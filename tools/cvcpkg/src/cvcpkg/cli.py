@@ -4502,6 +4502,72 @@ def builds_log_delete(job_id: int, server: str, token: str):
     click.echo(f"Log for build #{job_id} deleted.")
 
 
+@builds_group.command("purge")
+@click.option(
+    "--older-than", "older_than", required=True,
+    help="Age threshold, e.g. '30d' (days).",
+)
+@click.option("--status", default=None, help="Only purge jobs with this status (e.g. 'failed').")
+@click.option("--delete-logs/--keep-logs", default=True, help="Also delete log files (default: yes).")
+@click.option("--delete-jobs/--logs-only", "delete_jobs", default=False,
+              help="Delete entire job rows, not just logs (default: logs only).")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+def builds_purge(
+    older_than: str, status: str | None, delete_logs: bool,
+    delete_jobs: bool, server: str, token: str,
+):
+    """Purge old build logs/jobs (admin only).
+
+    Example: cvcpkg builds purge --older-than 30d --status failed
+    """
+    import re
+    import httpx
+
+    m = re.match(r"^(\d+)d$", older_than)
+    if not m:
+        raise click.ClickException("--older-than must be in the form '<N>d', e.g. '30d'")
+    days = int(m.group(1))
+
+    base = server.rstrip("/")
+    headers = {"Authorization": f"Bearer {token}"}
+    params: dict[str, str | int | bool] = {
+        "older_than_days": days,
+        "delete_logs": delete_logs,
+    }
+    if status:
+        params["status"] = status
+
+    if delete_jobs:
+        endpoint = f"{base}/v1/admin/purge/builds"
+    else:
+        endpoint = f"{base}/v1/admin/gc/logs"
+
+    with httpx.Client(timeout=120) as client:
+        resp = client.post(endpoint, headers=headers, params=params)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    data = resp.json()
+    what = "jobs" if delete_jobs else "logs"
+    click.echo(f"Purged {data.get('purged', 0)} {what} older than {days}d.")
+
+
 # ── Recipe distribution commands ────────────────────────────────
 
 
