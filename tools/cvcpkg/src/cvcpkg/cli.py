@@ -4053,6 +4053,226 @@ def org_remove_member(slug: str, server: str, token: str, name: str):
     click.echo(f"Removed '{name}' from '{slug}'.")
 
 
+# ── Builder commands ────────────────────────────────────────────
+
+
+@cli.group("builder")
+def builder_group() -> None:
+    """Manage remote build agents."""
+
+
+@builder_group.command("list")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--platform", default=None, help="Filter by platform.")
+@click.option("--arch", default=None, help="Filter by architecture.")
+@click.option("--status", default=None, help="Filter by status (online/offline/busy).")
+def builder_list(server: str, token: str, platform: str | None, arch: str | None, status: str | None):
+    """List registered builders."""
+    import httpx
+
+    params: dict[str, str] = {}
+    if platform:
+        params["platform"] = platform
+    if arch:
+        params["arch"] = arch
+    if status:
+        params["status"] = status
+    url = f"{server.rstrip('/')}/v1/builders"
+    with httpx.Client(timeout=30) as client:
+        resp = client.get(url, headers={"Authorization": f"Bearer {token}"}, params=params)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    data = resp.json()
+    builders = data.get("builders", [])
+    if not builders:
+        click.echo("No builders registered.")
+        return
+    click.echo(f"{'ID':>5}  {'Name':<24} {'Platform':<10} {'Arch':<10} {'Status':<8} {'Jobs':>4}")
+    click.echo("-" * 72)
+    for b in builders:
+        click.echo(
+            f"{b['id']:>5}  {b['name']:<24} {b['platform']:<10} {b['arch']:<10} "
+            f"{b['status']:<8} {b['current_jobs']}/{b['max_jobs']:>3}"
+        )
+
+
+@builder_group.command("status")
+@click.argument("builder_id", type=int)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+def builder_status(builder_id: int, server: str, token: str):
+    """Show details for a specific builder."""
+    data = _api_request("get", f"{server.rstrip('/')}/v1/builders/{builder_id}", token)
+    click.echo(f"Builder #{data['id']}: {data['name']}")
+    click.echo(f"  Org:         {data.get('org_slug') or '(global)'}")
+    click.echo(f"  Platform:    {data['platform']}/{data['arch']}")
+    click.echo(f"  Status:      {data['status']}")
+    click.echo(f"  Jobs:        {data['current_jobs']}/{data['max_jobs']}")
+    click.echo(f"  Labels:      {', '.join(data.get('labels', [])) or '(none)'}")
+    click.echo(f"  Affinity:    {'yes' if data.get('prefer_affinity') else 'no'}")
+    click.echo(f"  Last HB:     {data.get('last_heartbeat') or 'never'}")
+    click.echo(f"  Registered:  {data.get('created_at', 'unknown')}")
+
+
+@builder_group.command("run")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--name", required=True, help="Builder name (unique per org).")
+@click.option("--platform", default=None, help="Platform (default: auto-detect).")
+@click.option("--arch", default=None, help="Architecture (default: auto-detect).")
+@click.option("--org", "org_slug", default="", help="Organization scope.")
+@click.option("--max-jobs", type=int, default=1, help="Max concurrent jobs.")
+@click.option("--label", "labels", multiple=True, help="Labels (repeatable).")
+def builder_run(
+    server: str,
+    token: str,
+    name: str,
+    platform: str | None,
+    arch: str | None,
+    org_slug: str,
+    max_jobs: int,
+    labels: tuple[str, ...],
+):
+    """Register as a builder and run the heartbeat loop.
+
+    Registers this machine as a remote builder, then sends periodic
+    heartbeats to the server.  Press Ctrl-C to unregister and exit.
+    """
+    import signal
+    import time
+
+    import httpx
+
+    if platform is None:
+        import sysconfig
+
+        platform = sysconfig.get_platform().split("-")[0]
+    if arch is None:
+        import sysconfig
+
+        platform_full = sysconfig.get_platform()
+        parts = platform_full.split("-")
+        arch = parts[-1] if len(parts) > 1 else "unknown"
+
+    base = server.rstrip("/")
+    headers = {"Authorization": f"Bearer {token}"}
+    body = {
+        "name": name,
+        "platform": platform,
+        "arch": arch,
+        "org_slug": org_slug,
+        "max_jobs": max_jobs,
+        "labels": list(labels),
+        "capabilities": {},
+    }
+    with httpx.Client(timeout=30) as client:
+        resp = client.post(f"{base}/v1/builders/register", headers=headers, json=body)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"registration failed ({resp.status_code}): {detail}")
+    info = resp.json()
+    builder_id = info["id"]
+    click.echo(f"Registered builder #{builder_id} ({name}) — {platform}/{arch}")
+
+    shutdown = False
+
+    def _handle_signal(signum, frame):
+        nonlocal shutdown
+        shutdown = True
+
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+
+    try:
+        while not shutdown:
+            time.sleep(60)
+            if shutdown:
+                break
+            try:
+                with httpx.Client(timeout=30) as client:
+                    resp = client.post(
+                        f"{base}/v1/builders/{builder_id}/heartbeat",
+                        headers=headers,
+                        json={"status": "online", "current_jobs": 0},
+                    )
+                if resp.status_code >= 400:
+                    click.echo(f"heartbeat failed: {resp.status_code}", err=True)
+            except Exception as exc:
+                click.echo(f"heartbeat error: {exc}", err=True)
+    finally:
+        click.echo("Shutting down — unregistering builder…")
+        try:
+            with httpx.Client(timeout=10) as client:
+                client.delete(f"{base}/v1/builders/{builder_id}", headers=headers)
+            click.echo("Builder unregistered.")
+        except Exception:
+            click.echo("Warning: failed to unregister builder.", err=True)
+
+
+@builder_group.command("stop")
+@click.argument("builder_id", type=int)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token (admin).  [env: CVCPKG_TOKEN]",
+)
+def builder_stop(builder_id: int, server: str, token: str):
+    """Unregister a builder by ID (admin-only)."""
+    _api_request("delete", f"{server.rstrip('/')}/v1/builders/{builder_id}", token)
+    click.echo(f"Builder #{builder_id} unregistered.")
+
+
 # ── main() wrapper for backward compat with tests ──────────────
 
 

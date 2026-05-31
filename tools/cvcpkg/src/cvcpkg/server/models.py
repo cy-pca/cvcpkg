@@ -77,6 +77,9 @@ class AuditAction(str, Enum):
     registration_deny = "registration_deny"
     token_update_email = "token_update_email"
     token_update_profile = "token_update_profile"
+    builder_register = "builder_register"
+    builder_unregister = "builder_unregister"
+    builder_update = "builder_update"
 
 
 # ── Token management ───────────────────────────────────────────
@@ -510,3 +513,110 @@ class MirrorRegisterRequest(BaseModel):
 class MirrorListResponse(BaseModel):
     total: int
     mirrors: list[MirrorInfo]
+
+
+# ── Builder (remote build agent) ──────────────────────────────
+
+
+class BuilderStatus(str, Enum):
+    """Runtime status of a registered builder."""
+
+    online = "online"
+    offline = "offline"
+    busy = "busy"
+
+
+class BuilderInfo(BaseModel):
+    """Public representation of a registered builder."""
+
+    id: int
+    name: str
+    org_slug: str = ""
+    platform: str
+    arch: str
+    labels: list[str] = Field(default_factory=list)
+    capabilities: dict = Field(default_factory=dict)
+    status: str = BuilderStatus.offline
+    current_jobs: int = 0
+    max_jobs: int = 1
+    prefer_affinity: bool = False
+    last_heartbeat: datetime.datetime | None = None
+    registered_by: str = ""
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
+
+
+class BuilderRegisterRequest(BaseModel):
+    """Request body for registering a new builder."""
+
+    name: str = Field(
+        ...,
+        min_length=1,
+        max_length=255,
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$",
+        description="Human-readable builder name (unique per org).",
+    )
+    org_slug: str = Field(
+        default="",
+        max_length=255,
+        description="Organization scope (empty = global builder).",
+    )
+    platform: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        description="Builder platform (linux, macos, windows, freebsd, …).",
+    )
+    arch: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        description="Builder architecture (x86_64, arm64, riscv64, …).",
+    )
+    labels: list[str] = Field(
+        default_factory=list,
+        description="Arbitrary labels for builder selection.",
+    )
+    capabilities: dict = Field(
+        default_factory=dict,
+        description="Supported link modes, configs, etc.",
+    )
+    max_jobs: int = Field(
+        default=1,
+        ge=1,
+        le=256,
+        description="Maximum concurrent jobs (default: 1).",
+    )
+    prefer_affinity: bool = Field(
+        default=False,
+        description="Prefer this builder for recipes it has previously built.",
+    )
+
+
+class BuilderUpdateRequest(BaseModel):
+    """Partial update for a builder's mutable fields."""
+
+    labels: list[str] | None = None
+    capabilities: dict | None = None
+    max_jobs: int | None = Field(None, ge=1, le=256)
+    prefer_affinity: bool | None = None
+
+
+class BuilderHeartbeatRequest(BaseModel):
+    """Heartbeat payload from a running builder."""
+
+    status: str = Field(
+        default=BuilderStatus.online,
+        description="Current builder status.",
+    )
+    current_jobs: int = Field(
+        default=0,
+        ge=0,
+        description="Number of jobs currently running.",
+    )
+
+
+class BuilderListResponse(BaseModel):
+    total: int
+    builders: list[BuilderInfo]
