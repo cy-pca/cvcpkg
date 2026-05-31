@@ -30,6 +30,21 @@ if [[ -n "${CVC_DEPS_PREFIX:-}" ]]; then
     CMAKE_FLAGS+=(-DCMAKE_INSTALL_RPATH="${CVC_DEPS_PREFIX}/lib")
     export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
     export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+    # On BSDs with static OpenSSL, cmake's bundled libarchive (cmlibarchive)
+    # uses EVP_MAC_* from libcrypto.  The static archive doesn't propagate
+    # its ADDITIONAL_LIBS to the final executables (cmake, ccmake, cpack,
+    # ctest).  Append the OpenSSL libs + pthread via
+    # CMAKE_CXX_STANDARD_LIBRARIES so they appear at the END of every link
+    # command (LDFLAGS goes at the start, which is too early for the linker's
+    # left-to-right symbol resolution with static archives).
+    case "$(uname)" in
+        *BSD)
+            CMAKE_FLAGS+=(
+                "-DCMAKE_CXX_STANDARD_LIBRARIES=-lssl -lcrypto -lpthread"
+                "-DCMAKE_C_STANDARD_LIBRARIES=-lssl -lcrypto -lpthread"
+            )
+            ;;
+    esac
 fi
 
 ./bootstrap "${BOOTSTRAP_ARGS[@]}" -- "${CMAKE_FLAGS[@]}"
