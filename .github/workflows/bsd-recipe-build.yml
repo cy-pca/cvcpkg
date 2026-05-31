@@ -186,6 +186,7 @@ jobs:
             | ssh ${SSH_OPTS} "${VM}" "tar xf - -C ${REMOTE_DIR}"
 
           echo "remote_dir=${REMOTE_DIR}" >> "$GITHUB_ENV"
+          echo "BASE_DIR=${BASE_DIR}" >> "$GITHUB_ENV"
 
       # ── Install system packages on BSD VM ──
       # Build tools: bash (required by cvcpkg build scripts), cmake, ninja.
@@ -277,7 +278,7 @@ jobs:
         run: |
           set -euo pipefail
           VM="root@${{ steps.vm.outputs.host }}"
-          MARKER_CMD="cmake -B build -G Ninja \
+          MARKER_CMD="cmake -B build -G 'Unix Makefiles' \
             -DCMAKE_BUILD_TYPE=${{ inputs.config == 'release' && 'Release' || 'Debug' }} \
             -DCMAKE_INSTALL_PREFIX=${remote_dir}/prefix && \
             cmake --install build"
