@@ -80,6 +80,11 @@ class AuditAction(str, Enum):
     builder_register = "builder_register"
     builder_unregister = "builder_unregister"
     builder_update = "builder_update"
+    build_submit = "build_submit"
+    build_cancel = "build_cancel"
+    build_claim = "build_claim"
+    build_complete = "build_complete"
+    build_fail = "build_fail"
 
 
 # ── Token management ───────────────────────────────────────────
@@ -620,3 +625,149 @@ class BuilderHeartbeatRequest(BaseModel):
 class BuilderListResponse(BaseModel):
     total: int
     builders: list[BuilderInfo]
+
+
+# ── Build Job models ────────────────────────────────────────────
+
+
+class BuildJobStatus(str, Enum):
+    """Lifecycle status of a build job."""
+
+    pending = "pending"
+    dispatched = "dispatched"
+    running = "running"
+    succeeded = "succeeded"
+    failed = "failed"
+    cancelled = "cancelled"
+    timed_out = "timed_out"
+
+
+class BuildJobInfo(BaseModel):
+    """Public representation of a build job."""
+
+    id: int
+    dag_id: str | None = None
+    org_slug: str = ""
+    recipe_name: str
+    recipe_version: str = ""
+    recipe_hash: str = ""
+    platform: str
+    arch: str
+    config: str = "release"
+    link: str = "shared"
+    builder_id: int | None = None
+    status: str = BuildJobStatus.pending
+    priority: int = 0
+    timeout_seconds: int | None = None
+    submitted_by: str = ""
+    submitted_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
+    started_at: datetime.datetime | None = None
+    finished_at: datetime.datetime | None = None
+    log_url: str | None = None
+    log_size_bytes: int | None = None
+    error_message: str | None = None
+    result_archive_url: str | None = None
+    depends_on: list[int] = Field(default_factory=list)
+
+
+class BuildJobSubmitRequest(BaseModel):
+    """Request body for submitting a single build job."""
+
+    recipe_name: str = Field(
+        ..., min_length=1, max_length=255,
+        description="Recipe to build.",
+    )
+    recipe_version: str = Field(
+        default="", max_length=128,
+        description="Recipe version.",
+    )
+    recipe_hash: str = Field(
+        default="", max_length=128,
+        description="Chain hash for cache dedup.",
+    )
+    platform: str = Field(
+        ..., min_length=1, max_length=64,
+        description="Target platform.",
+    )
+    arch: str = Field(
+        ..., min_length=1, max_length=64,
+        description="Target architecture.",
+    )
+    config: str = Field(
+        default="release",
+        description="Build config (release or debug).",
+    )
+    link: str = Field(
+        default="shared",
+        description="Link mode (shared or static).",
+    )
+    org_slug: str = Field(
+        default="", max_length=255,
+        description="Organization scope.",
+    )
+    priority: int = Field(
+        default=0, ge=0,
+        description="Job priority (higher = runs first).",
+    )
+    timeout_seconds: int | None = Field(
+        default=None, ge=60, le=172800,
+        description="Per-job timeout override (60s–48h).",
+    )
+    depends_on: list[int] = Field(
+        default_factory=list,
+        description="IDs of prerequisite jobs.",
+    )
+
+
+class DagSubmitRequest(BaseModel):
+    """Request body for submitting a DAG of build jobs."""
+
+    jobs: list[BuildJobSubmitRequest] = Field(
+        ..., min_length=1,
+        description="Ordered list of jobs forming the DAG.",
+    )
+    dag_id: str | None = Field(
+        default=None, max_length=64,
+        description="Optional DAG group ID (auto-generated if omitted).",
+    )
+
+
+class DagSubmitResponse(BaseModel):
+    """Response from DAG submission."""
+
+    dag_id: str
+    total: int
+    jobs: list[BuildJobInfo]
+
+
+class BuildJobListResponse(BaseModel):
+    total: int
+    jobs: list[BuildJobInfo]
+
+
+class BuildJobClaimRequest(BaseModel):
+    """Builder claims a dispatched job."""
+
+    builder_id: int = Field(
+        ..., description="ID of the builder claiming the job.",
+    )
+
+
+class BuildJobCompleteRequest(BaseModel):
+    """Builder reports job completion."""
+
+    result_archive_url: str = Field(
+        default="",
+        description="URL of the published archive.",
+    )
+
+
+class BuildJobFailRequest(BaseModel):
+    """Builder reports job failure."""
+
+    error_message: str = Field(
+        default="", max_length=4096,
+        description="Failure reason.",
+    )

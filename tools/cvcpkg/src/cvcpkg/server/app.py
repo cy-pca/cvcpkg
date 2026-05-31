@@ -52,8 +52,16 @@ from cvcpkg.server.models import (
     BuilderListResponse,
     BuilderRegisterRequest,
     BuilderUpdateRequest,
+    BuildJobClaimRequest,
+    BuildJobCompleteRequest,
+    BuildJobFailRequest,
+    BuildJobInfo,
+    BuildJobListResponse,
+    BuildJobSubmitRequest,
     CacheStatusResponse,
     CatalogResponse,
+    DagSubmitRequest,
+    DagSubmitResponse,
     EmailUpdateRequest,
     HealthResponse,
     MirrorInfo,
@@ -212,6 +220,7 @@ _db_mirrors = None  # DbMirrorStore when using DB backend
 _db_tags = None  # DbTagStore when using DB backend
 _db_token_requests = None  # DbTokenRequestStore when using DB backend
 _db_builders = None  # DbBuilderStore when using DB backend
+_db_build_jobs = None  # DbBuildJobStore when using DB backend
 
 
 def _get_state() -> ServerState:
@@ -349,6 +358,74 @@ async def optional_token(authorization: str | None = Header(None)) -> TokenRecor
     return state.tokens.verify(raw)
 
 
+# ── Build scheduler background task ────────────────────────────
+
+_SCHEDULER_INTERVAL = int(os.environ.get("CVCPKG_SCHEDULER_INTERVAL", "5"))
+_DEFAULT_BUILD_TIMEOUT = int(os.environ.get("CVCPKG_BUILD_TIMEOUT", "86400"))
+
+
+async def _build_scheduler_loop() -> None:
+    """Continuously match ready jobs to available builders."""
+    import asyncio
+
+    while True:
+        await asyncio.sleep(_SCHEDULER_INTERVAL)
+        if not _use_db or _db_build_jobs is None or _db_builders is None:
+            continue
+        try:
+            # 1. Reap stale builders (missed heartbeats)
+            await _db_builders.reap_stale(max_age_seconds=180)
+
+            # 2. Reap timed-out jobs
+            timed_out = await _db_build_jobs.reap_timed_out(_DEFAULT_BUILD_TIMEOUT)
+            for job in timed_out:
+                await _db_build_jobs.cancel_downstream(job.id)
+
+            # 3. Find ready jobs and match to builders
+            ready_jobs = await _db_build_jobs.find_ready_jobs()
+            if not ready_jobs:
+                continue
+
+            online_builders = await _db_builders.list_builders(
+                status="online"
+            )
+            # Include "busy" builders that still have capacity
+            busy_builders = await _db_builders.list_builders(
+                status="busy"
+            )
+            available = []
+            for b in online_builders + busy_builders:
+                if b.current_jobs < b.max_jobs:
+                    available.append(b)
+
+            for job in ready_jobs:
+                # Find matching builder (platform + arch)
+                candidates = [
+                    b for b in available
+                    if b.platform == job.platform
+                    and b.arch == job.arch
+                    and b.current_jobs < b.max_jobs
+                ]
+                if not candidates:
+                    continue
+
+                # Prefer affinity builders (soft preference)
+                affinity = [b for b in candidates if b.prefer_affinity]
+                chosen = affinity[0] if affinity else candidates[0]
+
+                await _db_build_jobs.dispatch(job.id, chosen.id)
+                # Update builder's current_jobs count
+                await _db_builders.heartbeat(
+                    chosen.id,
+                    status="busy" if chosen.current_jobs + 1 >= chosen.max_jobs else "online",
+                    current_jobs=chosen.current_jobs + 1,
+                )
+                chosen.current_jobs += 1  # update in-memory for this loop iteration
+
+        except Exception:
+            logger.exception("build scheduler loop error")
+
+
 # ── Mirror background tasks ─────────────────────────────────────
 
 
@@ -447,6 +524,7 @@ def create_app(
         global _db_tokens, _db_audit, _db_packages, _db_orgs
         global _db_downloads, _db_mirrors, _db_tags, _db_token_requests
         global _db_builders
+        global _db_build_jobs
         _START_TIME = time.monotonic()
         sd = state_dir or Path(os.environ.get("CVCPKG_SERVER_STATE_DIR", "/var/lib/cvcpkg-server"))
 
@@ -466,6 +544,7 @@ def create_app(
             from cvcpkg.server.db import create_tables, dispose_engine, init_db
             from cvcpkg.server.db_stores import (
                 DbAuditLog,
+                DbBuildJobStore,
                 DbBuilderStore,
                 DbDownloadStore,
                 DbMirrorStore,
@@ -487,6 +566,7 @@ def create_app(
             _db_tags = DbTagStore()
             _db_token_requests = DbTokenRequestStore()
             _db_builders = DbBuilderStore()
+            _db_build_jobs = DbBuildJobStore()
             _use_db = True
             # Still need ServerState for archives dir and storage_uri
             _state = ServerState(
@@ -501,6 +581,7 @@ def create_app(
             bg_tasks: list[asyncio.Task] = []
             if _use_db and not MIRROR_MODE:
                 bg_tasks.append(asyncio.create_task(_mirror_health_loop()))
+                bg_tasks.append(asyncio.create_task(_build_scheduler_loop()))
             if MIRROR_MODE and MIRROR_UPSTREAM:
                 bg_tasks.append(asyncio.create_task(_mirror_sync_loop(sd)))
 
@@ -3275,6 +3356,221 @@ def create_app(
             target=f"{info.org_slug}/{info.name}" if info.org_slug else info.name,
         )
         return {"message": "builder unregistered", "id": builder_id}
+
+    # ── Build Jobs ─────────────────────────────────────────────
+
+    def _require_db_build_jobs():
+        if not _use_db or _db_build_jobs is None:
+            raise HTTPException(
+                501, "build jobs require a database backend (set CVCPKG_DATABASE_URL)"
+            )
+
+    @app.post("/v1/builds", response_model=BuildJobInfo, tags=["builds"])
+    async def submit_build(
+        body: BuildJobSubmitRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Submit a single build job."""
+        _require_db_build_jobs()
+        info = await _db_build_jobs.create(
+            recipe_name=body.recipe_name,
+            platform=body.platform,
+            arch=body.arch,
+            submitted_by=actor.name,
+            recipe_version=body.recipe_version,
+            recipe_hash=body.recipe_hash,
+            config=body.config,
+            link=body.link,
+            org_slug=body.org_slug,
+            priority=body.priority,
+            timeout_seconds=body.timeout_seconds,
+            depends_on=body.depends_on,
+        )
+        await _db_audit.record(
+            action=AuditAction.build_submit,
+            actor=actor.name,
+            target=f"{body.recipe_name}@{body.platform}/{body.arch}",
+            detail=f"job #{info.id}",
+        )
+        return info
+
+    @app.post("/v1/builds/dag", response_model=DagSubmitResponse, tags=["builds"])
+    async def submit_dag(
+        body: DagSubmitRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Submit a DAG of build jobs.
+
+        The ``depends_on`` fields in each job use 0-based indices into
+        the ``jobs`` array (resolved to real IDs after insertion).
+        """
+        import uuid as _uuid
+
+        _require_db_build_jobs()
+        dag_id = body.dag_id or str(_uuid.uuid4())[:12]
+        jobs_dicts = [
+            {
+                "recipe_name": j.recipe_name,
+                "recipe_version": j.recipe_version,
+                "recipe_hash": j.recipe_hash,
+                "platform": j.platform,
+                "arch": j.arch,
+                "config": j.config,
+                "link": j.link,
+                "org_slug": j.org_slug,
+                "priority": j.priority,
+                "timeout_seconds": j.timeout_seconds,
+                "depends_on": j.depends_on,
+            }
+            for j in body.jobs
+        ]
+        infos = await _db_build_jobs.create_dag(
+            jobs=jobs_dicts, dag_id=dag_id, submitted_by=actor.name
+        )
+        await _db_audit.record(
+            action=AuditAction.build_submit,
+            actor=actor.name,
+            target=f"dag:{dag_id}",
+            detail=f"{len(infos)} jobs",
+        )
+        return DagSubmitResponse(dag_id=dag_id, total=len(infos), jobs=infos)
+
+    @app.get("/v1/builds", response_model=BuildJobListResponse, tags=["builds"])
+    async def list_builds(
+        status: str | None = Query(None, description="Filter by status"),
+        platform: str | None = Query(None, description="Filter by platform"),
+        dag_id: str | None = Query(None, description="Filter by DAG ID"),
+        recipe_name: str | None = Query(None, description="Filter by recipe name"),
+        org_slug: str | None = Query(None, description="Filter by org"),
+        limit: int = Query(100, ge=1, le=1000),
+        offset: int = Query(0, ge=0),
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """List build jobs with optional filters."""
+        _require_db_build_jobs()
+        jobs, total = await _db_build_jobs.list_jobs(
+            status=status, platform=platform, dag_id=dag_id,
+            recipe_name=recipe_name, org_slug=org_slug,
+            limit=limit, offset=offset,
+        )
+        return BuildJobListResponse(total=total, jobs=jobs)
+
+    @app.get("/v1/builds/{job_id}", response_model=BuildJobInfo, tags=["builds"])
+    async def get_build(
+        job_id: int,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Get a single build job by ID."""
+        _require_db_build_jobs()
+        info = await _db_build_jobs.get(job_id)
+        if info is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        return info
+
+    @app.post("/v1/builds/{job_id}/cancel", tags=["builds"])
+    async def cancel_build(
+        job_id: int,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Cancel a pending or dispatched build job."""
+        _require_db_build_jobs()
+        info = await _db_build_jobs.cancel(job_id)
+        if info is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _db_audit.record(
+            action=AuditAction.build_cancel,
+            actor=actor.name,
+            target=str(job_id),
+        )
+        return {"message": "job cancelled", "id": job_id, "status": info.status}
+
+    @app.post("/v1/builds/dag/{dag_id}/cancel", tags=["builds"])
+    async def cancel_dag(
+        dag_id: str,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Cancel all pending/dispatched jobs in a DAG."""
+        _require_db_build_jobs()
+        count = await _db_build_jobs.cancel_dag(dag_id)
+        await _db_audit.record(
+            action=AuditAction.build_cancel,
+            actor=actor.name,
+            target=f"dag:{dag_id}",
+            detail=f"{count} jobs cancelled",
+        )
+        return {"message": "dag cancelled", "dag_id": dag_id, "cancelled": count}
+
+    @app.post(
+        "/v1/builds/{job_id}/claim",
+        response_model=BuildJobInfo,
+        tags=["builds"],
+    )
+    async def claim_build(
+        job_id: int,
+        body: BuildJobClaimRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Builder claims a dispatched job → running."""
+        _require_db_build_jobs()
+        info = await _db_build_jobs.claim(job_id, body.builder_id)
+        if info is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _db_audit.record(
+            action=AuditAction.build_claim,
+            actor=actor.name,
+            target=str(job_id),
+            detail=f"builder #{body.builder_id}",
+        )
+        return info
+
+    @app.post(
+        "/v1/builds/{job_id}/complete",
+        response_model=BuildJobInfo,
+        tags=["builds"],
+    )
+    async def complete_build(
+        job_id: int,
+        body: BuildJobCompleteRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Report a build job as completed successfully."""
+        _require_db_build_jobs()
+        info = await _db_build_jobs.complete(
+            job_id, result_archive_url=body.result_archive_url
+        )
+        if info is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _db_audit.record(
+            action=AuditAction.build_complete,
+            actor=actor.name,
+            target=str(job_id),
+        )
+        return info
+
+    @app.post(
+        "/v1/builds/{job_id}/fail",
+        response_model=BuildJobInfo,
+        tags=["builds"],
+    )
+    async def fail_build(
+        job_id: int,
+        body: BuildJobFailRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Report a build job as failed."""
+        _require_db_build_jobs()
+        info = await _db_build_jobs.fail(
+            job_id, error_message=body.error_message
+        )
+        if info is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _db_audit.record(
+            action=AuditAction.build_fail,
+            actor=actor.name,
+            target=str(job_id),
+            detail=body.error_message[:200] if body.error_message else "",
+        )
+        return info
 
     # ── Mirror-mode download proxy ──────────────────────────
 

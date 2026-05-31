@@ -19,6 +19,8 @@ from sqlalchemy import func as sa_func
 from cvcpkg.server.db import (
     AuditRow,
     BuilderRow,
+    BuildJobDepRow,
+    BuildJobRow,
     DownloadEventRow,
     MirrorRow,
     OrganizationRow,
@@ -34,6 +36,8 @@ from cvcpkg.server.models import (
     AuditEntry,
     BuilderInfo,
     BuilderStatus,
+    BuildJobInfo,
+    BuildJobStatus,
     MirrorInfo,
     OrgInfo,
     OrgMember,
@@ -1958,3 +1962,442 @@ class DbBuilderStore:
                 row.current_jobs = 0
                 reaped.append(self._row_to_info(row))
             return reaped
+
+
+# ── DB Build Job Store ──────────────────────────────────────────
+
+
+class DbBuildJobStore:
+    """DB-backed store for build job queue and DAG scheduling."""
+
+    @staticmethod
+    def _row_to_info(row: BuildJobRow, dep_ids: list[int] | None = None) -> BuildJobInfo:
+        return BuildJobInfo(
+            id=row.id,
+            dag_id=row.dag_id,
+            org_slug=row.org_slug,
+            recipe_name=row.recipe_name,
+            recipe_version=row.recipe_version,
+            recipe_hash=row.recipe_hash,
+            platform=row.platform,
+            arch=row.arch,
+            config=row.config,
+            link=row.link,
+            builder_id=row.builder_id,
+            status=row.status,
+            priority=row.priority,
+            timeout_seconds=row.timeout_seconds,
+            submitted_by=row.submitted_by,
+            submitted_at=row.submitted_at,
+            started_at=row.started_at,
+            finished_at=row.finished_at,
+            log_url=row.log_url,
+            log_size_bytes=row.log_size_bytes,
+            error_message=row.error_message,
+            result_archive_url=row.result_archive_url,
+            depends_on=dep_ids if dep_ids is not None else [],
+        )
+
+    async def _load_dep_ids(self, session, job_id: int) -> list[int]:
+        """Load prerequisite job IDs for a given job."""
+        q = select(BuildJobDepRow.depends_on_job_id).where(
+            BuildJobDepRow.job_id == job_id
+        )
+        rows = (await session.execute(q)).scalars().all()
+        return list(rows)
+
+    async def create(
+        self,
+        recipe_name: str,
+        platform: str,
+        arch: str,
+        submitted_by: str,
+        *,
+        recipe_version: str = "",
+        recipe_hash: str = "",
+        config: str = "release",
+        link: str = "shared",
+        org_slug: str = "",
+        dag_id: str | None = None,
+        priority: int = 0,
+        timeout_seconds: int | None = None,
+        depends_on: list[int] | None = None,
+    ) -> BuildJobInfo:
+        """Create a new build job."""
+        async with get_session() as session:
+            row = BuildJobRow(
+                dag_id=dag_id,
+                org_slug=org_slug,
+                recipe_name=recipe_name,
+                recipe_version=recipe_version,
+                recipe_hash=recipe_hash,
+                platform=platform,
+                arch=arch,
+                config=config,
+                link=link,
+                status=BuildJobStatus.pending,
+                priority=priority,
+                timeout_seconds=timeout_seconds,
+                submitted_by=submitted_by,
+            )
+            session.add(row)
+            await session.flush()
+
+            dep_ids = []
+            if depends_on:
+                for dep_id in depends_on:
+                    dep_row = BuildJobDepRow(
+                        job_id=row.id, depends_on_job_id=dep_id
+                    )
+                    session.add(dep_row)
+                dep_ids = list(depends_on)
+
+            return self._row_to_info(row, dep_ids)
+
+    async def create_dag(
+        self,
+        jobs: list[dict],
+        dag_id: str,
+        submitted_by: str,
+    ) -> list[BuildJobInfo]:
+        """Create multiple jobs as a DAG in a single transaction.
+
+        Each dict in *jobs* should contain keys matching
+        ``BuildJobSubmitRequest`` fields.  ``depends_on`` values are
+        indices (0-based) into the *jobs* list (resolved to real IDs
+        after insertion).
+        """
+        async with get_session() as session:
+            created_rows: list[BuildJobRow] = []
+            idx_deps: list[list[int]] = []  # index-based deps per job
+
+            for job in jobs:
+                row = BuildJobRow(
+                    dag_id=dag_id,
+                    org_slug=job.get("org_slug", ""),
+                    recipe_name=job["recipe_name"],
+                    recipe_version=job.get("recipe_version", ""),
+                    recipe_hash=job.get("recipe_hash", ""),
+                    platform=job["platform"],
+                    arch=job["arch"],
+                    config=job.get("config", "release"),
+                    link=job.get("link", "shared"),
+                    status=BuildJobStatus.pending,
+                    priority=job.get("priority", 0),
+                    timeout_seconds=job.get("timeout_seconds"),
+                    submitted_by=submitted_by,
+                )
+                session.add(row)
+                created_rows.append(row)
+                idx_deps.append(job.get("depends_on", []))
+
+            await session.flush()  # assigns IDs
+
+            # Resolve index-based deps to real IDs and insert edges
+            for i, row in enumerate(created_rows):
+                for dep_idx in idx_deps[i]:
+                    if 0 <= dep_idx < len(created_rows):
+                        dep_row = BuildJobDepRow(
+                            job_id=row.id,
+                            depends_on_job_id=created_rows[dep_idx].id,
+                        )
+                        session.add(dep_row)
+
+            await session.flush()
+
+            # Build results with dep IDs
+            results = []
+            for i, row in enumerate(created_rows):
+                real_dep_ids = [
+                    created_rows[di].id
+                    for di in idx_deps[i]
+                    if 0 <= di < len(created_rows)
+                ]
+                results.append(self._row_to_info(row, real_dep_ids))
+            return results
+
+    async def get(self, job_id: int) -> BuildJobInfo | None:
+        """Get a build job by ID."""
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(BuildJobRow).where(BuildJobRow.id == job_id)
+                )
+            ).scalar()
+            if row is None:
+                return None
+            dep_ids = await self._load_dep_ids(session, job_id)
+            return self._row_to_info(row, dep_ids)
+
+    async def list_jobs(
+        self,
+        *,
+        org_slug: str | None = None,
+        dag_id: str | None = None,
+        status: str | None = None,
+        platform: str | None = None,
+        recipe_name: str | None = None,
+        builder_id: int | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[BuildJobInfo], int]:
+        """List jobs with filters. Returns (jobs, total_count)."""
+        async with get_session() as session:
+            q = select(BuildJobRow)
+            count_q = select(sa_func.count(BuildJobRow.id))
+            if org_slug is not None:
+                q = q.where(BuildJobRow.org_slug == org_slug)
+                count_q = count_q.where(BuildJobRow.org_slug == org_slug)
+            if dag_id is not None:
+                q = q.where(BuildJobRow.dag_id == dag_id)
+                count_q = count_q.where(BuildJobRow.dag_id == dag_id)
+            if status is not None:
+                q = q.where(BuildJobRow.status == status)
+                count_q = count_q.where(BuildJobRow.status == status)
+            if platform is not None:
+                q = q.where(BuildJobRow.platform == platform)
+                count_q = count_q.where(BuildJobRow.platform == platform)
+            if recipe_name is not None:
+                q = q.where(BuildJobRow.recipe_name == recipe_name)
+                count_q = count_q.where(BuildJobRow.recipe_name == recipe_name)
+            if builder_id is not None:
+                q = q.where(BuildJobRow.builder_id == builder_id)
+                count_q = count_q.where(BuildJobRow.builder_id == builder_id)
+
+            total = (await session.execute(count_q)).scalar() or 0
+            q = q.order_by(BuildJobRow.priority.desc(), BuildJobRow.id).limit(limit).offset(offset)
+            rows = (await session.execute(q)).scalars().all()
+            results = []
+            for row in rows:
+                dep_ids = await self._load_dep_ids(session, row.id)
+                results.append(self._row_to_info(row, dep_ids))
+            return results, total
+
+    async def cancel(self, job_id: int) -> BuildJobInfo | None:
+        """Cancel a pending or dispatched job. Returns updated info or None."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(BuildJobRow).where(BuildJobRow.id == job_id)
+                )
+            ).scalar()
+            if row is None:
+                return None
+            if row.status not in (
+                BuildJobStatus.pending,
+                BuildJobStatus.dispatched,
+            ):
+                return self._row_to_info(row)
+            row.status = BuildJobStatus.cancelled
+            row.finished_at = now
+            dep_ids = await self._load_dep_ids(session, job_id)
+            return self._row_to_info(row, dep_ids)
+
+    async def cancel_dag(self, dag_id: str) -> int:
+        """Cancel all pending/dispatched jobs in a DAG. Returns count cancelled."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            q = (
+                select(BuildJobRow)
+                .where(BuildJobRow.dag_id == dag_id)
+                .where(
+                    BuildJobRow.status.in_([
+                        BuildJobStatus.pending,
+                        BuildJobStatus.dispatched,
+                    ])
+                )
+            )
+            rows = (await session.execute(q)).scalars().all()
+            for row in rows:
+                row.status = BuildJobStatus.cancelled
+                row.finished_at = now
+            return len(rows)
+
+    async def claim(
+        self, job_id: int, builder_id: int
+    ) -> BuildJobInfo | None:
+        """Builder claims a dispatched job → running."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(BuildJobRow).where(BuildJobRow.id == job_id)
+                )
+            ).scalar()
+            if row is None:
+                return None
+            if row.status not in (
+                BuildJobStatus.pending,
+                BuildJobStatus.dispatched,
+            ):
+                dep_ids = await self._load_dep_ids(session, job_id)
+                return self._row_to_info(row, dep_ids)
+            row.status = BuildJobStatus.running
+            row.builder_id = builder_id
+            row.started_at = now
+            dep_ids = await self._load_dep_ids(session, job_id)
+            return self._row_to_info(row, dep_ids)
+
+    async def complete(
+        self, job_id: int, *, result_archive_url: str = ""
+    ) -> BuildJobInfo | None:
+        """Mark a job as succeeded."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(BuildJobRow).where(BuildJobRow.id == job_id)
+                )
+            ).scalar()
+            if row is None:
+                return None
+            row.status = BuildJobStatus.succeeded
+            row.finished_at = now
+            if result_archive_url:
+                row.result_archive_url = result_archive_url
+            dep_ids = await self._load_dep_ids(session, job_id)
+            return self._row_to_info(row, dep_ids)
+
+    async def fail(
+        self, job_id: int, *, error_message: str = ""
+    ) -> BuildJobInfo | None:
+        """Mark a job as failed."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(BuildJobRow).where(BuildJobRow.id == job_id)
+                )
+            ).scalar()
+            if row is None:
+                return None
+            row.status = BuildJobStatus.failed
+            row.finished_at = now
+            if error_message:
+                row.error_message = error_message
+            dep_ids = await self._load_dep_ids(session, job_id)
+            return self._row_to_info(row, dep_ids)
+
+    async def find_ready_jobs(self) -> list[BuildJobInfo]:
+        """Find pending jobs whose dependencies are all succeeded.
+
+        Returns jobs ordered by priority (desc) then id (asc).
+        """
+        async with get_session() as session:
+            # Subquery: jobs that have unmet dependencies
+            # A dependency is "unmet" if the depended-on job is not succeeded
+            unmet_sub = (
+                select(BuildJobDepRow.job_id)
+                .join(
+                    BuildJobRow,
+                    BuildJobRow.id == BuildJobDepRow.depends_on_job_id,
+                )
+                .where(BuildJobRow.status != BuildJobStatus.succeeded)
+                .distinct()
+            )
+
+            q = (
+                select(BuildJobRow)
+                .where(BuildJobRow.status == BuildJobStatus.pending)
+                .where(BuildJobRow.id.notin_(unmet_sub))
+                .order_by(BuildJobRow.priority.desc(), BuildJobRow.id)
+            )
+            rows = (await session.execute(q)).scalars().all()
+            results = []
+            for row in rows:
+                dep_ids = await self._load_dep_ids(session, row.id)
+                results.append(self._row_to_info(row, dep_ids))
+            return results
+
+    async def dispatch(self, job_id: int, builder_id: int) -> BuildJobInfo | None:
+        """Mark a pending job as dispatched to a specific builder."""
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(BuildJobRow).where(BuildJobRow.id == job_id)
+                )
+            ).scalar()
+            if row is None:
+                return None
+            if row.status != BuildJobStatus.pending:
+                dep_ids = await self._load_dep_ids(session, job_id)
+                return self._row_to_info(row, dep_ids)
+            row.status = BuildJobStatus.dispatched
+            row.builder_id = builder_id
+            dep_ids = await self._load_dep_ids(session, job_id)
+            return self._row_to_info(row, dep_ids)
+
+    async def reap_timed_out(
+        self, default_timeout: int = 86400
+    ) -> list[BuildJobInfo]:
+        """Mark running jobs that exceed their timeout as timed_out.
+
+        Uses per-job ``timeout_seconds`` if set, otherwise *default_timeout*.
+        """
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            q = select(BuildJobRow).where(
+                BuildJobRow.status == BuildJobStatus.running,
+                BuildJobRow.started_at.isnot(None),
+            )
+            rows = (await session.execute(q)).scalars().all()
+            reaped = []
+            for row in rows:
+                timeout = row.timeout_seconds or default_timeout
+                started = row.started_at
+                # SQLite returns naive datetimes; ensure UTC-aware
+                if started.tzinfo is None:
+                    started = started.replace(tzinfo=datetime.timezone.utc)
+                deadline = started + datetime.timedelta(seconds=timeout)
+                if now > deadline:
+                    row.status = BuildJobStatus.timed_out
+                    row.finished_at = now
+                    row.error_message = f"exceeded {timeout}s timeout"
+                    dep_ids = await self._load_dep_ids(session, row.id)
+                    reaped.append(self._row_to_info(row, dep_ids))
+            return reaped
+
+    async def cancel_downstream(self, failed_job_id: int) -> int:
+        """Cancel all pending/dispatched jobs that depend (transitively) on a failed job.
+
+        Returns count of cancelled jobs.
+        """
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            # BFS to find all downstream jobs
+            to_visit = [failed_job_id]
+            visited: set[int] = set()
+            cancelled = 0
+
+            while to_visit:
+                current_id = to_visit.pop(0)
+                if current_id in visited:
+                    continue
+                visited.add(current_id)
+
+                # Find jobs that depend on current_id
+                q = select(BuildJobDepRow.job_id).where(
+                    BuildJobDepRow.depends_on_job_id == current_id
+                )
+                downstream_ids = (await session.execute(q)).scalars().all()
+
+                for ds_id in downstream_ids:
+                    if ds_id in visited:
+                        continue
+                    row = (
+                        await session.execute(
+                            select(BuildJobRow).where(BuildJobRow.id == ds_id)
+                        )
+                    ).scalar()
+                    if row and row.status in (
+                        BuildJobStatus.pending,
+                        BuildJobStatus.dispatched,
+                    ):
+                        row.status = BuildJobStatus.cancelled
+                        row.finished_at = now
+                        row.error_message = f"cancelled: dependency {failed_job_id} failed"
+                        cancelled += 1
+                    to_visit.append(ds_id)
+
+            return cancelled
