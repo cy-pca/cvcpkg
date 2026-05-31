@@ -354,6 +354,71 @@ class BuilderRow(Base):
     )
 
 
+class BuildJobRow(Base):
+    """Build job queue entries."""
+
+    __tablename__ = "build_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    dag_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    org_slug: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    recipe_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    recipe_version: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    recipe_hash: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    platform: Mapped[str] = mapped_column(String(64), nullable=False)
+    arch: Mapped[str] = mapped_column(String(64), nullable=False)
+    config: Mapped[str] = mapped_column(String(32), nullable=False, default="release")
+    link: Mapped[str] = mapped_column(String(32), nullable=False, default="shared")
+    builder_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("builders.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    timeout_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    submitted_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    submitted_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    started_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    log_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    log_size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result_archive_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_build_jobs_dag_id", "dag_id"),
+        Index("ix_build_jobs_org_slug", "org_slug"),
+        Index("ix_build_jobs_status", "status"),
+        Index("ix_build_jobs_platform_arch", "platform", "arch"),
+        Index("ix_build_jobs_builder_id", "builder_id"),
+        Index("ix_build_jobs_recipe_name", "recipe_name"),
+    )
+
+
+class BuildJobDepRow(Base):
+    """DAG edges between build jobs."""
+
+    __tablename__ = "build_job_deps"
+
+    job_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("build_jobs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    depends_on_job_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("build_jobs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("job_id", "depends_on_job_id", name="uq_build_job_dep"),
+    )
+
+
 # ── Engine / session management ─────────────────────────────────
 
 _engine = None

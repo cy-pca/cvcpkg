@@ -4273,6 +4273,165 @@ def builder_stop(builder_id: int, server: str, token: str):
     click.echo(f"Builder #{builder_id} unregistered.")
 
 
+# ── Build job commands ──────────────────────────────────────────
+
+
+@cli.group("builds")
+def builds_group() -> None:
+    """Manage remote build jobs."""
+
+
+@builds_group.command("list")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--status", default=None, help="Filter by status.")
+@click.option("--platform", default=None, help="Filter by platform.")
+@click.option("--dag-id", default=None, help="Filter by DAG ID.")
+@click.option("--recipe", "recipe_name", default=None, help="Filter by recipe name.")
+@click.option("--limit", type=int, default=50, help="Max results.")
+def builds_list(
+    server: str,
+    token: str,
+    status: str | None,
+    platform: str | None,
+    dag_id: str | None,
+    recipe_name: str | None,
+    limit: int,
+):
+    """List build jobs."""
+    import httpx
+
+    params: dict[str, str | int] = {"limit": limit}
+    if status:
+        params["status"] = status
+    if platform:
+        params["platform"] = platform
+    if dag_id:
+        params["dag_id"] = dag_id
+    if recipe_name:
+        params["recipe_name"] = recipe_name
+    url = f"{server.rstrip('/')}/v1/builds"
+    with httpx.Client(timeout=30) as client:
+        resp = client.get(url, headers={"Authorization": f"Bearer {token}"}, params=params)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    data = resp.json()
+    jobs = data.get("jobs", [])
+    if not jobs:
+        click.echo("No build jobs found.")
+        return
+    click.echo(
+        f"{'ID':>5}  {'Recipe':<20} {'Platform':<10} {'Config':<8} "
+        f"{'Link':<7} {'Status':<10} {'DAG':>8}"
+    )
+    click.echo("-" * 78)
+    for j in jobs:
+        click.echo(
+            f"{j['id']:>5}  {j['recipe_name']:<20} {j['platform']:<10} "
+            f"{j['config']:<8} {j['link']:<7} {j['status']:<10} "
+            f"{(j.get('dag_id') or '-'):>8}"
+        )
+
+
+@builds_group.command("info")
+@click.argument("job_id", type=int)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+def builds_info(job_id: int, server: str, token: str):
+    """Show details for a build job."""
+    data = _api_request("get", f"{server.rstrip('/')}/v1/builds/{job_id}", token)
+    click.echo(f"Build #{data['id']}: {data['recipe_name']}")
+    click.echo(f"  Version:     {data.get('recipe_version') or '-'}")
+    click.echo(f"  Platform:    {data['platform']}/{data['arch']}")
+    click.echo(f"  Config:      {data['config']}")
+    click.echo(f"  Link:        {data['link']}")
+    click.echo(f"  Status:      {data['status']}")
+    click.echo(f"  DAG:         {data.get('dag_id') or '-'}")
+    click.echo(f"  Builder:     {data.get('builder_id') or 'unassigned'}")
+    click.echo(f"  Priority:    {data.get('priority', 0)}")
+    click.echo(f"  Submitted:   {data.get('submitted_at', 'unknown')}")
+    click.echo(f"  Started:     {data.get('started_at') or '-'}")
+    click.echo(f"  Finished:    {data.get('finished_at') or '-'}")
+    if data.get("error_message"):
+        click.echo(f"  Error:       {data['error_message']}")
+    if data.get("result_archive_url"):
+        click.echo(f"  Archive:     {data['result_archive_url']}")
+    deps = data.get("depends_on", [])
+    if deps:
+        click.echo(f"  Depends on:  {', '.join(str(d) for d in deps)}")
+
+
+@builds_group.command("cancel")
+@click.argument("job_id", type=int)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+def builds_cancel(job_id: int, server: str, token: str):
+    """Cancel a build job."""
+    data = _api_request("post", f"{server.rstrip('/')}/v1/builds/{job_id}/cancel", token)
+    click.echo(f"Build #{job_id}: {data.get('status', 'cancelled')}")
+
+
+@builds_group.command("cancel-dag")
+@click.argument("dag_id")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+def builds_cancel_dag(dag_id: str, server: str, token: str):
+    """Cancel all pending/dispatched jobs in a DAG."""
+    data = _api_request(
+        "post", f"{server.rstrip('/')}/v1/builds/dag/{dag_id}/cancel", token
+    )
+    click.echo(f"DAG {dag_id}: {data.get('cancelled', 0)} jobs cancelled")
+
+
 # ── main() wrapper for backward compat with tests ──────────────
 
 
