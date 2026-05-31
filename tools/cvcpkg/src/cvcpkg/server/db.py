@@ -414,11 +414,13 @@ class RecipeRow(Base):
     bundle_size: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     uploaded_by: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False,
+        DateTime(timezone=True),
+        nullable=False,
         default=lambda: datetime.datetime.now(datetime.timezone.utc),
     )
     updated_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False,
+        DateTime(timezone=True),
+        nullable=False,
         default=lambda: datetime.datetime.now(datetime.timezone.utc),
     )
 
@@ -442,14 +444,18 @@ class WebhookRow(Base):
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     registered_by: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False,
+        DateTime(timezone=True),
+        nullable=False,
         default=lambda: datetime.datetime.now(datetime.timezone.utc),
     )
     last_delivery_at: Mapped[datetime.datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True,
+        DateTime(timezone=True),
+        nullable=True,
     )
     consecutive_failures: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0,
+        Integer,
+        nullable=False,
+        default=0,
     )
 
     __table_args__ = (
@@ -464,17 +470,17 @@ class BuildJobDepRow(Base):
     __tablename__ = "build_job_deps"
 
     job_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("build_jobs.id", ondelete="CASCADE"),
+        Integer,
+        ForeignKey("build_jobs.id", ondelete="CASCADE"),
         primary_key=True,
     )
     depends_on_job_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("build_jobs.id", ondelete="CASCADE"),
+        Integer,
+        ForeignKey("build_jobs.id", ondelete="CASCADE"),
         primary_key=True,
     )
 
-    __table_args__ = (
-        UniqueConstraint("job_id", "depends_on_job_id", name="uq_build_job_dep"),
-    )
+    __table_args__ = (UniqueConstraint("job_id", "depends_on_job_id", name="uq_build_job_dep"),)
 
 
 # ── Engine / session management ─────────────────────────────────

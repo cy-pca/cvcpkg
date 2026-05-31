@@ -114,8 +114,11 @@ class TestDeliverWebhook:
 
                     payload = json.dumps({"event": "build.completed", "data": {}})
                     result = await _deliver_webhook(
-                        wh.id, "https://example.com/hook", "test-secret",
-                        "build.completed", payload,
+                        wh.id,
+                        "https://example.com/hook",
+                        "test-secret",
+                        "build.completed",
+                        payload,
                     )
                     assert result is True
 
@@ -130,7 +133,9 @@ class TestDeliverWebhook:
 
                 # Verify HMAC signature is correct
                 expected_sig = hmac.new(
-                    b"test-secret", payload.encode(), hashlib.sha256,
+                    b"test-secret",
+                    payload.encode(),
+                    hashlib.sha256,
                 ).hexdigest()
                 assert headers["X-CvcPkg-Signature"] == f"sha256={expected_sig}"
 
@@ -173,8 +178,11 @@ class TestDeliverWebhook:
                     mock_client_cls.return_value = mock_client
 
                     result = await _deliver_webhook(
-                        wh.id, "https://example.com/hook", "",
-                        "e", "{}",
+                        wh.id,
+                        "https://example.com/hook",
+                        "",
+                        "e",
+                        "{}",
                     )
                     assert result is False
 
@@ -213,8 +221,11 @@ class TestDeliverWebhook:
                     mock_client_cls.return_value = mock_client
 
                     result = await _deliver_webhook(
-                        wh.id, "https://example.com/hook", "",
-                        "e", "{}",
+                        wh.id,
+                        "https://example.com/hook",
+                        "",
+                        "e",
+                        "{}",
                     )
                     assert result is False
 
@@ -257,14 +268,19 @@ class TestDeliverWebhook:
 
                     payload = '{"event": "test"}'
                     result = await _deliver_webhook(
-                        wh.id, "https://example.com/hook", "",
-                        "e", payload,
+                        wh.id,
+                        "https://example.com/hook",
+                        "",
+                        "e",
+                        payload,
                     )
                     assert result is True
 
                     headers = mock_client.post.call_args[1]["headers"]
                     expected_sig = hmac.new(
-                        b"", payload.encode(), hashlib.sha256,
+                        b"",
+                        payload.encode(),
+                        hashlib.sha256,
                     ).hexdigest()
                     assert headers["X-CvcPkg-Signature"] == f"sha256={expected_sig}"
             finally:
@@ -335,7 +351,9 @@ class TestEmitWebhookEvent:
             try:
                 # Register webhook for different event
                 await store.register(
-                    "https://example.com/hook", ["package.published"], "admin",
+                    "https://example.com/hook",
+                    ["package.published"],
+                    "admin",
                 )
 
                 with patch(
@@ -367,13 +385,19 @@ class TestEmitWebhookEvent:
 
             try:
                 await store.register(
-                    "https://a.com/hook", ["build.completed"], "admin",
+                    "https://a.com/hook",
+                    ["build.completed"],
+                    "admin",
                 )
                 await store.register(
-                    "https://b.com/hook", ["build.completed"], "admin",
+                    "https://b.com/hook",
+                    ["build.completed"],
+                    "admin",
                 )
                 await store.register(
-                    "https://c.com/hook", ["package.published"], "admin",
+                    "https://c.com/hook",
+                    ["package.published"],
+                    "admin",
                 )
 
                 with patch(
@@ -408,7 +432,9 @@ class TestEmitWebhookEvent:
 
             try:
                 await store.register(
-                    "https://all.com/hook", ["*"], "admin",
+                    "https://all.com/hook",
+                    ["*"],
+                    "admin",
                 )
 
                 with patch(
@@ -441,10 +467,16 @@ class TestEmitWebhookEvent:
 
             try:
                 await store.register(
-                    "https://a.com/hook", ["e"], "admin", org_slug="org-a",
+                    "https://a.com/hook",
+                    ["e"],
+                    "admin",
+                    org_slug="org-a",
                 )
                 await store.register(
-                    "https://b.com/hook", ["e"], "admin", org_slug="org-b",
+                    "https://b.com/hook",
+                    ["e"],
+                    "admin",
+                    org_slug="org-b",
                 )
 
                 with patch(
@@ -477,7 +509,9 @@ class TestEmitWebhookEvent:
 
             try:
                 await store.register(
-                    "https://example.com/hook", ["e"], "admin",
+                    "https://example.com/hook",
+                    ["e"],
+                    "admin",
                 )
 
                 with patch(

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 
 import pytest
 
@@ -195,7 +194,9 @@ class TestDbWebhookStore:
             store = DbWebhookStore()
             info = await store.register("https://old.com/hook", ["e1"], "u1")
             updated = await store.update(
-                info.id, url="https://new.com/hook", events=["e2", "e3"],
+                info.id,
+                url="https://new.com/hook",
+                events=["e2", "e3"],
             )
             assert updated is not None
             assert updated.url == "https://new.com/hook"
@@ -542,8 +543,16 @@ class TestWebhookEndpoints:
     def test_list_filter_by_org(self, db_server_env):
         client, admin_token, _, _, _ = db_server_env
         hdrs = self._admin_headers(admin_token)
-        client.post("/v1/webhooks", json={"url": "https://a.com/h", "events": ["e"], "org_slug": "org-a"}, headers=hdrs)
-        client.post("/v1/webhooks", json={"url": "https://b.com/h", "events": ["e"], "org_slug": "org-b"}, headers=hdrs)
+        client.post(
+            "/v1/webhooks",
+            json={"url": "https://a.com/h", "events": ["e"], "org_slug": "org-a"},
+            headers=hdrs,
+        )
+        client.post(
+            "/v1/webhooks",
+            json={"url": "https://b.com/h", "events": ["e"], "org_slug": "org-b"},
+            headers=hdrs,
+        )
         resp = client.get("/v1/webhooks", params={"org_slug": "org-a"}, headers=hdrs)
         assert resp.status_code == 200
         data = resp.json()

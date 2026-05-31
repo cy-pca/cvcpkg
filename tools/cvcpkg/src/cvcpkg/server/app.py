@@ -82,10 +82,6 @@ from cvcpkg.server.models import (
     RecipeInfo,
     RecipeListResponse,
     RegistrationMode,
-    WebhookInfo,
-    WebhookListResponse,
-    WebhookRegisterRequest,
-    WebhookUpdateRequest,
     RegistrationRequest,
     RegistrationResponse,
     TagCreateRequest,
@@ -100,6 +96,10 @@ from cvcpkg.server.models import (
     TokenRole,
     UserListResponse,
     UserProfileResponse,
+    WebhookInfo,
+    WebhookListResponse,
+    WebhookRegisterRequest,
+    WebhookUpdateRequest,
 )
 
 # ── State ───────────────────────────────────────────────────────
@@ -409,7 +409,9 @@ async def _deliver_webhook(
             return True
         logger.warning(
             "webhook %d delivery to %s returned %d",
-            webhook_id, url, resp.status_code,
+            webhook_id,
+            url,
+            resp.status_code,
         )
     except Exception as exc:
         logger.warning("webhook %d delivery to %s failed: %s", webhook_id, url, exc)
@@ -457,17 +459,23 @@ async def emit_webhook_event(
     if not hooks:
         return
 
-    payload = json.dumps({
-        "event": event,
-        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "data": data,
-    })
+    payload = json.dumps(
+        {
+            "event": event,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "data": data,
+        }
+    )
 
     for hook in hooks:
         secret = await _db_webhooks.get_secret(hook.id)
         asyncio.create_task(
             _deliver_with_retries(
-                hook.id, hook.url, secret or "", event, payload,
+                hook.id,
+                hook.url,
+                secret or "",
+                event,
+                payload,
             )
         )
 
@@ -499,25 +507,25 @@ async def _build_scheduler_loop() -> None:
             timed_out = await _db_build_jobs.reap_timed_out(_DEFAULT_BUILD_TIMEOUT)
             for job in timed_out:
                 await _db_build_jobs.cancel_downstream(job.id)
-                await emit_webhook_event("build.timed_out", {
-                    "job_id": job.id,
-                    "recipe_name": job.recipe_name,
-                    "platform": job.platform,
-                    "arch": job.arch,
-                }, org_slug=job.org_slug)
+                await emit_webhook_event(
+                    "build.timed_out",
+                    {
+                        "job_id": job.id,
+                        "recipe_name": job.recipe_name,
+                        "platform": job.platform,
+                        "arch": job.arch,
+                    },
+                    org_slug=job.org_slug,
+                )
 
             # 3. Find ready jobs and match to builders
             ready_jobs = await _db_build_jobs.find_ready_jobs()
             if not ready_jobs:
                 continue
 
-            online_builders = await _db_builders.list_builders(
-                status="online"
-            )
+            online_builders = await _db_builders.list_builders(status="online")
             # Include "busy" builders that still have capacity
-            busy_builders = await _db_builders.list_builders(
-                status="busy"
-            )
+            busy_builders = await _db_builders.list_builders(status="busy")
             available = []
             for b in online_builders + busy_builders:
                 if b.current_jobs < b.max_jobs:
@@ -526,7 +534,8 @@ async def _build_scheduler_loop() -> None:
             for job in ready_jobs:
                 # Find matching builder (platform + arch)
                 candidates = [
-                    b for b in available
+                    b
+                    for b in available
                     if b.platform == job.platform
                     and b.arch == job.arch
                     and b.current_jobs < b.max_jobs
@@ -692,17 +701,17 @@ def create_app(
             from cvcpkg.server.db import create_tables, dispose_engine, init_db
             from cvcpkg.server.db_stores import (
                 DbAuditLog,
-                DbBuildJobStore,
                 DbBuilderStore,
+                DbBuildJobStore,
                 DbDownloadStore,
                 DbMirrorStore,
                 DbOrgStore,
                 DbPackageIndex,
                 DbRecipeStore,
                 DbTagStore,
-                DbWebhookStore,
                 DbTokenRequestStore,
                 DbTokenStore,
+                DbWebhookStore,
             )
 
             init_db(db_url)
@@ -1736,13 +1745,17 @@ def create_app(
         _metrics["publishes_total"] += 1
         _metrics["bytes_uploaded_total"] += size_bytes
 
-        await emit_webhook_event("package.published", {
-            "name": name,
-            "version": version,
-            "platform": platform,
-            "arch": arch,
-            "org": org or "",
-        }, org_slug=org or "")
+        await emit_webhook_event(
+            "package.published",
+            {
+                "name": name,
+                "version": version,
+                "platform": platform,
+                "arch": arch,
+                "org": org or "",
+            },
+            org_slug=org or "",
+        )
 
         return PublishResponse(
             name=name,
@@ -2051,13 +2064,16 @@ def create_app(
         _metrics["bytes_uploaded_total"] += size_bytes
         _upload_sessions.pop(upload_id, None)
 
-        await emit_webhook_event("package.published", {
-            "name": session.name,
-            "version": session.version,
-            "platform": session.platform,
-            "arch": session.arch,
-            "org": getattr(session, "org", "") or "",
-        })
+        await emit_webhook_event(
+            "package.published",
+            {
+                "name": session.name,
+                "version": session.version,
+                "platform": session.platform,
+                "arch": session.arch,
+                "org": getattr(session, "org", "") or "",
+            },
+        )
 
         return PublishResponse(
             name=session.name,
@@ -3437,12 +3453,16 @@ def create_app(
             target=f"{body.org_slug}/{body.name}" if body.org_slug else body.name,
             detail=f"{body.platform}/{body.arch}",
         )
-        await emit_webhook_event("builder.online", {
-            "builder_name": body.name,
-            "platform": body.platform,
-            "arch": body.arch,
-            "builder_id": info.id,
-        }, org_slug=body.org_slug)
+        await emit_webhook_event(
+            "builder.online",
+            {
+                "builder_name": body.name,
+                "platform": body.platform,
+                "arch": body.arch,
+                "builder_id": info.id,
+            },
+            org_slug=body.org_slug,
+        )
         return info
 
     @app.get("/v1/builders", response_model=BuilderListResponse, tags=["builders"])
@@ -3531,10 +3551,14 @@ def create_app(
             actor=actor.name,
             target=f"{info.org_slug}/{info.name}" if info.org_slug else info.name,
         )
-        await emit_webhook_event("builder.offline", {
-            "builder_name": info.name,
-            "builder_id": builder_id,
-        }, org_slug=info.org_slug)
+        await emit_webhook_event(
+            "builder.offline",
+            {
+                "builder_name": info.name,
+                "builder_id": builder_id,
+            },
+            org_slug=info.org_slug,
+        )
         return {"message": "builder unregistered", "id": builder_id}
 
     # ── Build Jobs ─────────────────────────────────────────────
@@ -3629,9 +3653,13 @@ def create_app(
         """List build jobs with optional filters."""
         _require_db_build_jobs()
         jobs, total = await _db_build_jobs.list_jobs(
-            status=status, platform=platform, dag_id=dag_id,
-            recipe_name=recipe_name, org_slug=org_slug,
-            limit=limit, offset=offset,
+            status=status,
+            platform=platform,
+            dag_id=dag_id,
+            recipe_name=recipe_name,
+            org_slug=org_slug,
+            limit=limit,
+            offset=offset,
         )
         return BuildJobListResponse(total=total, jobs=jobs)
 
@@ -3662,12 +3690,16 @@ def create_app(
             actor=actor.name,
             target=str(job_id),
         )
-        await emit_webhook_event("build.cancelled", {
-            "job_id": job_id,
-            "recipe_name": info.recipe_name,
-            "platform": info.platform,
-            "cancelled_by": actor.name,
-        }, org_slug=info.org_slug)
+        await emit_webhook_event(
+            "build.cancelled",
+            {
+                "job_id": job_id,
+                "recipe_name": info.recipe_name,
+                "platform": info.platform,
+                "cancelled_by": actor.name,
+            },
+            org_slug=info.org_slug,
+        )
         return {"message": "job cancelled", "id": job_id, "status": info.status}
 
     @app.post("/v1/builds/dag/{dag_id}/cancel", tags=["builds"])
@@ -3684,11 +3716,14 @@ def create_app(
             target=f"dag:{dag_id}",
             detail=f"{count} jobs cancelled",
         )
-        await emit_webhook_event("build.cancelled", {
-            "dag_id": dag_id,
-            "cancelled": count,
-            "cancelled_by": actor.name,
-        })
+        await emit_webhook_event(
+            "build.cancelled",
+            {
+                "dag_id": dag_id,
+                "cancelled": count,
+                "cancelled_by": actor.name,
+            },
+        )
         return {"message": "dag cancelled", "dag_id": dag_id, "cancelled": count}
 
     @app.post(
@@ -3712,13 +3747,17 @@ def create_app(
             target=str(job_id),
             detail=f"builder #{body.builder_id}",
         )
-        await emit_webhook_event("build.started", {
-            "job_id": job_id,
-            "recipe_name": info.recipe_name,
-            "platform": info.platform,
-            "arch": info.arch,
-            "builder_id": body.builder_id,
-        }, org_slug=info.org_slug)
+        await emit_webhook_event(
+            "build.started",
+            {
+                "job_id": job_id,
+                "recipe_name": info.recipe_name,
+                "platform": info.platform,
+                "arch": info.arch,
+                "builder_id": body.builder_id,
+            },
+            org_slug=info.org_slug,
+        )
         return info
 
     @app.post(
@@ -3733,9 +3772,7 @@ def create_app(
     ):
         """Report a build job as completed successfully."""
         _require_db_build_jobs()
-        info = await _db_build_jobs.complete(
-            job_id, result_archive_url=body.result_archive_url
-        )
+        info = await _db_build_jobs.complete(job_id, result_archive_url=body.result_archive_url)
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
         await _db_audit.record(
@@ -3743,13 +3780,17 @@ def create_app(
             actor=actor.name,
             target=str(job_id),
         )
-        await emit_webhook_event("build.completed", {
-            "job_id": job_id,
-            "recipe_name": info.recipe_name,
-            "platform": info.platform,
-            "arch": info.arch,
-            "result_archive_url": info.result_archive_url or "",
-        }, org_slug=info.org_slug)
+        await emit_webhook_event(
+            "build.completed",
+            {
+                "job_id": job_id,
+                "recipe_name": info.recipe_name,
+                "platform": info.platform,
+                "arch": info.arch,
+                "result_archive_url": info.result_archive_url or "",
+            },
+            org_slug=info.org_slug,
+        )
         return info
 
     @app.post(
@@ -3764,9 +3805,7 @@ def create_app(
     ):
         """Report a build job as failed."""
         _require_db_build_jobs()
-        info = await _db_build_jobs.fail(
-            job_id, error_message=body.error_message
-        )
+        info = await _db_build_jobs.fail(job_id, error_message=body.error_message)
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
         await _db_audit.record(
@@ -3775,13 +3814,17 @@ def create_app(
             target=str(job_id),
             detail=body.error_message[:200] if body.error_message else "",
         )
-        await emit_webhook_event("build.failed", {
-            "job_id": job_id,
-            "recipe_name": info.recipe_name,
-            "platform": info.platform,
-            "arch": info.arch,
-            "error_message": body.error_message or "",
-        }, org_slug=info.org_slug)
+        await emit_webhook_event(
+            "build.failed",
+            {
+                "job_id": job_id,
+                "recipe_name": info.recipe_name,
+                "platform": info.platform,
+                "arch": info.arch,
+                "error_message": body.error_message or "",
+            },
+            org_slug=info.org_slug,
+        )
         return info
 
     # ── Build log endpoints ─────────────────────────────────
@@ -3799,9 +3842,7 @@ def create_app(
         """Append a chunk of log data to a build job's log."""
         _require_db_build_jobs()
         state = _get_state()
-        info = await _db_build_jobs.append_log(
-            job_id, body.data, logs_dir=state.logs_dir()
-        )
+        info = await _db_build_jobs.append_log(job_id, body.data, logs_dir=state.logs_dir())
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
         return info
@@ -3817,9 +3858,7 @@ def create_app(
         """Download the full log for a build job."""
         _require_db_build_jobs()
         state = _get_state()
-        path = await _db_build_jobs.get_log_path(
-            job_id, logs_dir=state.logs_dir()
-        )
+        path = await _db_build_jobs.get_log_path(job_id, logs_dir=state.logs_dir())
         if path is None:
             raise HTTPException(404, f"no log available for build job {job_id}")
         return FileResponse(
@@ -3839,9 +3878,7 @@ def create_app(
         """Delete a build job's log (admin only)."""
         _require_db_build_jobs()
         state = _get_state()
-        deleted = await _db_build_jobs.delete_log(
-            job_id, logs_dir=state.logs_dir()
-        )
+        deleted = await _db_build_jobs.delete_log(job_id, logs_dir=state.logs_dir())
         if not deleted:
             raise HTTPException(404, f"build job {job_id} not found")
         return {"ok": True, "job_id": job_id}
@@ -3871,13 +3908,11 @@ def create_app(
                     yield "event: error\ndata: job not found\n\n"
                     return
 
-                path = await _db_build_jobs.get_log_path(
-                    job_id, logs_dir=logs_dir
-                )
+                path = await _db_build_jobs.get_log_path(job_id, logs_dir=logs_dir)
                 if path is not None:
                     size = path.stat().st_size
                     if size > offset:
-                        with open(path, "r") as f:
+                        with open(path) as f:
                             f.seek(offset)
                             chunk = f.read()
                         offset = size
@@ -3887,7 +3922,10 @@ def create_app(
 
                 # Check terminal states
                 if info.status in (
-                    "succeeded", "failed", "cancelled", "timed_out",
+                    "succeeded",
+                    "failed",
+                    "cancelled",
+                    "timed_out",
                 ):
                     yield f"event: done\ndata: {info.status}\n\n"
                     return
@@ -3929,8 +3967,7 @@ def create_app(
         if not _use_db or _db_recipes is None:
             raise HTTPException(
                 501,
-                "recipe distribution requires a database backend "
-                "(set CVCPKG_DATABASE_URL)",
+                "recipe distribution requires a database backend " "(set CVCPKG_DATABASE_URL)",
             )
 
     @app.post(
@@ -4060,8 +4097,7 @@ def create_app(
         if not _use_db or _db_webhooks is None:
             raise HTTPException(
                 501,
-                "webhooks require a database backend "
-                "(set CVCPKG_DATABASE_URL)",
+                "webhooks require a database backend " "(set CVCPKG_DATABASE_URL)",
             )
 
     @app.post(
@@ -4103,7 +4139,9 @@ def create_app(
         """List registered webhooks (admin only)."""
         _require_db_webhooks()
         webhooks, total = await _db_webhooks.list_webhooks(
-            org_slug=org_slug, limit=limit, offset=offset,
+            org_slug=org_slug,
+            limit=limit,
+            offset=offset,
         )
         return WebhookListResponse(total=total, webhooks=webhooks)
 
@@ -4185,16 +4223,20 @@ def create_app(
             raise HTTPException(404, f"webhook {webhook_id} not found")
         secret = await _db_webhooks.get_secret(webhook_id)
         # Build test payload
-        import hmac as _hmac_mod
         import hashlib as _hashlib_mod
+        import hmac as _hmac_mod
 
-        payload = json.dumps({
-            "event": "webhook.test",
-            "webhook_id": webhook_id,
-            "triggered_by": actor.name,
-        })
+        payload = json.dumps(
+            {
+                "event": "webhook.test",
+                "webhook_id": webhook_id,
+                "triggered_by": actor.name,
+            }
+        )
         sig = _hmac_mod.new(
-            (secret or "").encode(), payload.encode(), _hashlib_mod.sha256,
+            (secret or "").encode(),
+            payload.encode(),
+            _hashlib_mod.sha256,
         ).hexdigest()
         # Attempt delivery
         import httpx

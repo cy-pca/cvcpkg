@@ -13,7 +13,7 @@ aiosqlite = pytest.importorskip("aiosqlite", reason="aiosqlite required for rete
 from fastapi.testclient import TestClient
 
 from cvcpkg.server.app import create_app
-from cvcpkg.server.models import BuildJobStatus, TokenRole
+from cvcpkg.server.models import TokenRole
 
 # ── Fixtures ────────────────────────────────────────────────────
 
@@ -75,8 +75,9 @@ class TestRetentionStore:
     def _run(self, coro):
         return asyncio.run(coro)
 
-    async def _create_job(self, store, *, finished_days_ago=None, status="completed",
-                          org_slug="", log_content=None):
+    async def _create_job(
+        self, store, *, finished_days_ago=None, status="completed", org_slug="", log_content=None
+    ):
         """Helper to create a build job and optionally finish it."""
         info = await store.create(
             recipe_name="test-pkg",
@@ -90,17 +91,16 @@ class TestRetentionStore:
             org_slug=org_slug,
         )
         if finished_days_ago is not None:
-            from cvcpkg.server.db import BuildJobRow, get_session
             from sqlalchemy import select
 
-            finished = datetime.datetime.now(
-                datetime.timezone.utc
-            ) - datetime.timedelta(days=finished_days_ago)
+            from cvcpkg.server.db import BuildJobRow, get_session
+
+            finished = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+                days=finished_days_ago
+            )
             async with get_session() as session:
                 row = (
-                    await session.execute(
-                        select(BuildJobRow).where(BuildJobRow.id == info.id)
-                    )
+                    await session.execute(select(BuildJobRow).where(BuildJobRow.id == info.id))
                 ).scalar()
                 row.status = status
                 row.finished_at = finished
@@ -122,14 +122,13 @@ class TestRetentionStore:
             logs_dir.mkdir(parents=True, exist_ok=True)
 
             # Create old finished job with log
-            info = await self._create_job(
-                store, finished_days_ago=60, log_content="old log output"
-            )
+            info = await self._create_job(store, finished_days_ago=60, log_content="old log output")
             log_path = logs_dir / f"job-{info.id}.log"
             assert log_path.is_file()
 
             purged = await store.purge_old_logs(
-                older_than_days=30, logs_dir=logs_dir,
+                older_than_days=30,
+                logs_dir=logs_dir,
             )
             assert purged == 1
             assert not log_path.is_file()
@@ -147,7 +146,8 @@ class TestRetentionStore:
             # Recent job (5 days old)
             await self._create_job(store, finished_days_ago=5, log_content="recent log")
             purged = await store.purge_old_logs(
-                older_than_days=30, logs_dir=logs_dir,
+                older_than_days=30,
+                logs_dir=logs_dir,
             )
             assert purged == 0
 
@@ -163,18 +163,23 @@ class TestRetentionStore:
 
             # Old completed job
             await self._create_job(
-                store, finished_days_ago=60, status="completed",
+                store,
+                finished_days_ago=60,
+                status="completed",
                 log_content="completed log",
             )
             # Old failed job
             await self._create_job(
-                store, finished_days_ago=60, status="failed",
+                store,
+                finished_days_ago=60,
+                status="failed",
                 log_content="failed log",
             )
 
             # Only purge failed
             purged = await store.purge_old_logs(
-                older_than_days=30, logs_dir=logs_dir,
+                older_than_days=30,
+                logs_dir=logs_dir,
                 status_filter="failed",
             )
             assert purged == 1
@@ -189,14 +194,14 @@ class TestRetentionStore:
             logs_dir = self._tmp / "logs"
             logs_dir.mkdir(parents=True, exist_ok=True)
 
-            info = await self._create_job(
-                store, finished_days_ago=60, log_content="keep file"
-            )
+            info = await self._create_job(store, finished_days_ago=60, log_content="keep file")
             log_path = logs_dir / f"job-{info.id}.log"
             assert log_path.is_file()
 
             purged = await store.purge_old_logs(
-                older_than_days=30, logs_dir=logs_dir, delete_logs=False,
+                older_than_days=30,
+                logs_dir=logs_dir,
+                delete_logs=False,
             )
             assert purged == 1
             # File should still exist when delete_logs=False
@@ -210,15 +215,21 @@ class TestRetentionStore:
         async def _test():
             store = DbBuildJobStore()
             await self._create_job(
-                store, finished_days_ago=5, org_slug="org-a",
+                store,
+                finished_days_ago=5,
+                org_slug="org-a",
                 log_content="x" * 100,
             )
             await self._create_job(
-                store, finished_days_ago=5, org_slug="org-a",
+                store,
+                finished_days_ago=5,
+                org_slug="org-a",
                 log_content="y" * 200,
             )
             await self._create_job(
-                store, finished_days_ago=5, org_slug="org-b",
+                store,
+                finished_days_ago=5,
+                org_slug="org-b",
                 log_content="z" * 50,
             )
 
@@ -239,15 +250,14 @@ class TestRetentionStore:
             logs_dir = self._tmp / "logs"
             logs_dir.mkdir(parents=True, exist_ok=True)
 
-            info = await self._create_job(
-                store, finished_days_ago=60, log_content="old job"
-            )
+            info = await self._create_job(store, finished_days_ago=60, log_content="old job")
             # Verify job exists
             job = await store.get(info.id)
             assert job is not None
 
             purged = await store.purge_old_jobs(
-                older_than_days=30, logs_dir=logs_dir,
+                older_than_days=30,
+                logs_dir=logs_dir,
             )
             assert purged == 1
             # Job row should be deleted
@@ -265,7 +275,8 @@ class TestRetentionStore:
 
             info = await self._create_job(store, finished_days_ago=5)
             purged = await store.purge_old_jobs(
-                older_than_days=30, logs_dir=logs_dir,
+                older_than_days=30,
+                logs_dir=logs_dir,
             )
             assert purged == 0
             job = await store.get(info.id)
@@ -303,17 +314,16 @@ class TestRetentionEndpoints:
         import asyncio
 
         async def _age():
-            from cvcpkg.server.db import BuildJobRow, get_session
             from sqlalchemy import select
 
-            finished = datetime.datetime.now(
-                datetime.timezone.utc
-            ) - datetime.timedelta(days=days_ago)
+            from cvcpkg.server.db import BuildJobRow, get_session
+
+            finished = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+                days=days_ago
+            )
             async with get_session() as session:
                 row = (
-                    await session.execute(
-                        select(BuildJobRow).where(BuildJobRow.id == job_id)
-                    )
+                    await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
                 ).scalar()
                 row.status = "completed"
                 row.finished_at = finished
@@ -330,7 +340,7 @@ class TestRetentionEndpoints:
 
     def test_gc_logs(self, db_server_env):
         client, admin_token, _, tmp_path = db_server_env
-        job_id = self._create_old_job(client, admin_token, tmp_path, days_ago=60)
+        self._create_old_job(client, admin_token, tmp_path, days_ago=60)
         resp = client.post(
             "/v1/admin/gc/logs",
             params={"older_than_days": 30},
