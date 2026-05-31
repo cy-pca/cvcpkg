@@ -400,6 +400,64 @@ class BuildJobRow(Base):
     )
 
 
+class RecipeRow(Base):
+    """Server-managed recipe bundles for remote builders."""
+
+    __tablename__ = "recipes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    version: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    recipe_hash: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    org_slug: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    bundle_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    bundle_size: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    uploaded_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("name", "org_slug", name="uq_recipe_name_org"),
+        Index("ix_recipes_name", "name"),
+        Index("ix_recipes_org_slug", "org_slug"),
+    )
+
+
+class WebhookRow(Base):
+    """Webhook endpoint for event notifications."""
+
+    __tablename__ = "webhooks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    events: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    org_slug: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    secret: Mapped[str] = mapped_column(String(255), nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    registered_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+    )
+    last_delivery_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0,
+    )
+
+    __table_args__ = (
+        Index("ix_webhooks_org_slug", "org_slug"),
+        Index("ix_webhooks_active", "active"),
+    )
+
+
 class BuildJobDepRow(Base):
     """DAG edges between build jobs."""
 

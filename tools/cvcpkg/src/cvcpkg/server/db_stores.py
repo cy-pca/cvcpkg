@@ -26,9 +26,11 @@ from cvcpkg.server.db import (
     OrganizationRow,
     OrgMemberRow,
     PackageRow,
+    RecipeRow,
     TagRow,
     TokenRequestRow,
     TokenRow,
+    WebhookRow,
     get_session,
 )
 from cvcpkg.server.models import (
@@ -43,12 +45,14 @@ from cvcpkg.server.models import (
     OrgMember,
     OrgRole,
     PackageInfo,
+    RecipeInfo,
     TagInfo,
     TokenRecord,
     TokenRequestRecord,
     TokenRequestStatus,
     TokenRole,
     UserProfileResponse,
+    WebhookInfo,
 )
 
 # ── HMAC key management ────────────────────────────────────────
@@ -2511,3 +2515,320 @@ class DbBuildJobStore:
                 return None
             dep_ids = await self._load_dep_ids(session, row.id)
             return self._row_to_info(row, dep_ids)
+
+
+class DbRecipeStore:
+    """DB-backed store for server-managed recipe bundles."""
+
+    @staticmethod
+    def _row_to_info(row: RecipeRow) -> RecipeInfo:
+        return RecipeInfo(
+            id=row.id,
+            name=row.name,
+            version=row.version,
+            recipe_hash=row.recipe_hash,
+            org_slug=row.org_slug,
+            bundle_size=row.bundle_size,
+            uploaded_by=row.uploaded_by,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+
+    async def upload(
+        self,
+        name: str,
+        bundle_path: str,
+        bundle_size: int,
+        uploaded_by: str,
+        *,
+        version: str = "",
+        recipe_hash: str = "",
+        org_slug: str = "",
+    ) -> RecipeInfo:
+        """Upload or update a recipe bundle.
+
+        If a recipe with the same ``(name, org_slug)`` already exists,
+        it is updated in place.  Returns the recipe info.
+        """
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            q = select(RecipeRow).where(
+                RecipeRow.name == name,
+                RecipeRow.org_slug == org_slug,
+            )
+            row = (await session.execute(q)).scalar()
+            if row is not None:
+                row.version = version
+                row.recipe_hash = recipe_hash
+                row.bundle_path = bundle_path
+                row.bundle_size = bundle_size
+                row.uploaded_by = uploaded_by
+                row.updated_at = now
+            else:
+                row = RecipeRow(
+                    name=name,
+                    version=version,
+                    recipe_hash=recipe_hash,
+                    org_slug=org_slug,
+                    bundle_path=bundle_path,
+                    bundle_size=bundle_size,
+                    uploaded_by=uploaded_by,
+                    created_at=now,
+                    updated_at=now,
+                )
+                session.add(row)
+                await session.flush()
+            return self._row_to_info(row)
+
+    async def get(self, name: str, *, org_slug: str = "") -> RecipeInfo | None:
+        """Get a recipe by name (and org)."""
+        async with get_session() as session:
+            q = select(RecipeRow).where(
+                RecipeRow.name == name,
+                RecipeRow.org_slug == org_slug,
+            )
+            row = (await session.execute(q)).scalar()
+            if row is None:
+                return None
+            return self._row_to_info(row)
+
+    async def get_bundle_path(self, name: str, *, org_slug: str = "") -> str | None:
+        """Return the bundle_path for a recipe, or None."""
+        async with get_session() as session:
+            q = select(RecipeRow.bundle_path).where(
+                RecipeRow.name == name,
+                RecipeRow.org_slug == org_slug,
+            )
+            result = (await session.execute(q)).scalar()
+            return result
+
+    async def list_recipes(
+        self,
+        *,
+        org_slug: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[RecipeInfo], int]:
+        """List recipes with optional org filter."""
+        async with get_session() as session:
+            q = select(RecipeRow)
+            count_q = select(sa_func.count(RecipeRow.id))
+            if org_slug is not None:
+                q = q.where(RecipeRow.org_slug == org_slug)
+                count_q = count_q.where(RecipeRow.org_slug == org_slug)
+            total = (await session.execute(count_q)).scalar() or 0
+            q = q.order_by(RecipeRow.name.asc()).limit(limit).offset(offset)
+            rows = (await session.execute(q)).scalars().all()
+            return [self._row_to_info(r) for r in rows], total
+
+    async def delete(self, name: str, *, org_slug: str = "") -> bool:
+        """Delete a recipe.  Returns True if a row was deleted."""
+        async with get_session() as session:
+            q = select(RecipeRow).where(
+                RecipeRow.name == name,
+                RecipeRow.org_slug == org_slug,
+            )
+            row = (await session.execute(q)).scalar()
+            if row is None:
+                return False
+            await session.delete(row)
+            return True
+
+
+# ── DB Webhook Store ────────────────────────────────────────────
+
+
+_AUTO_DISABLE_THRESHOLD = 5
+
+
+class DbWebhookStore:
+    """DB-backed store for webhook registrations."""
+
+    @staticmethod
+    def _row_to_info(row: WebhookRow) -> WebhookInfo:
+        events_raw = row.events or "[]"
+        try:
+            events = json.loads(events_raw)
+        except (json.JSONDecodeError, TypeError):
+            events = []
+        return WebhookInfo(
+            id=row.id,
+            url=row.url,
+            events=events,
+            org_slug=row.org_slug,
+            active=row.active,
+            registered_by=row.registered_by,
+            created_at=row.created_at,
+            last_delivery_at=row.last_delivery_at,
+            consecutive_failures=row.consecutive_failures,
+        )
+
+    async def register(
+        self,
+        url: str,
+        events: list[str],
+        registered_by: str,
+        *,
+        org_slug: str = "",
+        secret: str | None = None,
+    ) -> WebhookInfo:
+        """Register a new webhook."""
+        if secret is None:
+            secret = secrets.token_urlsafe(32)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            row = WebhookRow(
+                url=url,
+                events=json.dumps(events),
+                org_slug=org_slug,
+                secret=secret,
+                active=True,
+                registered_by=registered_by,
+                created_at=now,
+                consecutive_failures=0,
+            )
+            session.add(row)
+            await session.flush()
+            return self._row_to_info(row)
+
+    async def get(self, webhook_id: int) -> WebhookInfo | None:
+        """Get a webhook by ID."""
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(WebhookRow).where(WebhookRow.id == webhook_id)
+                )
+            ).scalar()
+            if row is None:
+                return None
+            return self._row_to_info(row)
+
+    async def get_secret(self, webhook_id: int) -> str | None:
+        """Return the secret for a webhook, or None."""
+        async with get_session() as session:
+            result = (
+                await session.execute(
+                    select(WebhookRow.secret).where(WebhookRow.id == webhook_id)
+                )
+            ).scalar()
+            return result
+
+    async def list_webhooks(
+        self,
+        *,
+        org_slug: str | None = None,
+        active_only: bool = False,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[WebhookInfo], int]:
+        """List webhooks with optional filters."""
+        async with get_session() as session:
+            q = select(WebhookRow)
+            count_q = select(sa_func.count(WebhookRow.id))
+            if org_slug is not None:
+                q = q.where(WebhookRow.org_slug == org_slug)
+                count_q = count_q.where(WebhookRow.org_slug == org_slug)
+            if active_only:
+                q = q.where(WebhookRow.active.is_(True))
+                count_q = count_q.where(WebhookRow.active.is_(True))
+            total = (await session.execute(count_q)).scalar() or 0
+            q = q.order_by(WebhookRow.id.asc()).limit(limit).offset(offset)
+            rows = (await session.execute(q)).scalars().all()
+            return [self._row_to_info(r) for r in rows], total
+
+    async def update(
+        self,
+        webhook_id: int,
+        *,
+        url: str | None = None,
+        events: list[str] | None = None,
+        active: bool | None = None,
+    ) -> WebhookInfo | None:
+        """Update a webhook.  Returns updated info or None if not found."""
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(WebhookRow).where(WebhookRow.id == webhook_id)
+                )
+            ).scalar()
+            if row is None:
+                return None
+            if url is not None:
+                row.url = url
+            if events is not None:
+                row.events = json.dumps(events)
+            if active is not None:
+                row.active = active
+            await session.flush()
+            return self._row_to_info(row)
+
+    async def delete(self, webhook_id: int) -> bool:
+        """Delete a webhook.  Returns True if a row was deleted."""
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(WebhookRow).where(WebhookRow.id == webhook_id)
+                )
+            ).scalar()
+            if row is None:
+                return False
+            await session.delete(row)
+            return True
+
+    async def record_delivery(self, webhook_id: int) -> None:
+        """Record a successful delivery — reset consecutive failures."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            await session.execute(
+                update(WebhookRow)
+                .where(WebhookRow.id == webhook_id)
+                .values(
+                    last_delivery_at=now,
+                    consecutive_failures=0,
+                )
+            )
+
+    async def record_failure(self, webhook_id: int) -> bool:
+        """Record a delivery failure.
+
+        Increments ``consecutive_failures``.  If the count reaches
+        ``_AUTO_DISABLE_THRESHOLD`` the webhook is automatically
+        deactivated.
+
+        Returns True if the webhook was auto-disabled.
+        """
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(WebhookRow).where(WebhookRow.id == webhook_id)
+                )
+            ).scalar()
+            if row is None:
+                return False
+            row.consecutive_failures = row.consecutive_failures + 1
+            disabled = row.consecutive_failures >= _AUTO_DISABLE_THRESHOLD
+            if disabled:
+                row.active = False
+            await session.flush()
+            return disabled
+
+    async def list_active_for_event(
+        self, event: str, *, org_slug: str = "",
+    ) -> list[WebhookInfo]:
+        """Return active webhooks subscribed to *event*."""
+        async with get_session() as session:
+            q = select(WebhookRow).where(
+                WebhookRow.active.is_(True),
+                WebhookRow.org_slug == org_slug,
+            )
+            rows = (await session.execute(q)).scalars().all()
+            result: list[WebhookInfo] = []
+            for r in rows:
+                events_raw = r.events or "[]"
+                try:
+                    ev = json.loads(events_raw)
+                except (json.JSONDecodeError, TypeError):
+                    ev = []
+                if event in ev or "*" in ev:
+                    result.append(self._row_to_info(r))
+            return result
