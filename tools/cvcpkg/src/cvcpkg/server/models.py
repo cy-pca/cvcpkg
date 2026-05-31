@@ -90,6 +90,7 @@ class AuditAction(str, Enum):
     webhook_register = "webhook_register"
     webhook_update = "webhook_update"
     webhook_delete = "webhook_delete"
+    webhook_delivery_failed = "webhook_delivery_failed"
 
 
 # ── Token management ───────────────────────────────────────────
@@ -681,23 +682,31 @@ class BuildJobSubmitRequest(BaseModel):
     """Request body for submitting a single build job."""
 
     recipe_name: str = Field(
-        ..., min_length=1, max_length=255,
+        ...,
+        min_length=1,
+        max_length=255,
         description="Recipe to build.",
     )
     recipe_version: str = Field(
-        default="", max_length=128,
+        default="",
+        max_length=128,
         description="Recipe version.",
     )
     recipe_hash: str = Field(
-        default="", max_length=128,
+        default="",
+        max_length=128,
         description="Chain hash for cache dedup.",
     )
     platform: str = Field(
-        ..., min_length=1, max_length=64,
+        ...,
+        min_length=1,
+        max_length=64,
         description="Target platform.",
     )
     arch: str = Field(
-        ..., min_length=1, max_length=64,
+        ...,
+        min_length=1,
+        max_length=64,
         description="Target architecture.",
     )
     config: str = Field(
@@ -709,15 +718,19 @@ class BuildJobSubmitRequest(BaseModel):
         description="Link mode (shared or static).",
     )
     org_slug: str = Field(
-        default="", max_length=255,
+        default="",
+        max_length=255,
         description="Organization scope.",
     )
     priority: int = Field(
-        default=0, ge=0,
+        default=0,
+        ge=0,
         description="Job priority (higher = runs first).",
     )
     timeout_seconds: int | None = Field(
-        default=None, ge=60, le=172800,
+        default=None,
+        ge=60,
+        le=172800,
         description="Per-job timeout override (60s–48h).",
     )
     depends_on: list[int] = Field(
@@ -730,11 +743,13 @@ class DagSubmitRequest(BaseModel):
     """Request body for submitting a DAG of build jobs."""
 
     jobs: list[BuildJobSubmitRequest] = Field(
-        ..., min_length=1,
+        ...,
+        min_length=1,
         description="Ordered list of jobs forming the DAG.",
     )
     dag_id: str | None = Field(
-        default=None, max_length=64,
+        default=None,
+        max_length=64,
         description="Optional DAG group ID (auto-generated if omitted).",
     )
 
@@ -756,7 +771,8 @@ class BuildJobClaimRequest(BaseModel):
     """Builder claims a dispatched job."""
 
     builder_id: int = Field(
-        ..., description="ID of the builder claiming the job.",
+        ...,
+        description="ID of the builder claiming the job.",
     )
 
 
@@ -773,7 +789,8 @@ class BuildJobFailRequest(BaseModel):
     """Builder reports job failure."""
 
     error_message: str = Field(
-        default="", max_length=4096,
+        default="",
+        max_length=4096,
         description="Failure reason.",
     )
 
@@ -782,7 +799,9 @@ class BuildLogAppendRequest(BaseModel):
     """Append a chunk of log data to a running build job."""
 
     data: str = Field(
-        ..., min_length=1, max_length=65536,
+        ...,
+        min_length=1,
+        max_length=65536,
         description="Log data chunk (plain text, max 64 KB per append).",
     )
 
@@ -836,15 +855,19 @@ class WebhookRegisterRequest(BaseModel):
     """Request body for registering a webhook."""
 
     url: str = Field(
-        ..., min_length=1, max_length=2048,
+        ...,
+        min_length=1,
+        max_length=2048,
         description="HTTPS delivery URL.",
     )
     events: list[str] = Field(
-        ..., min_length=1,
+        ...,
+        min_length=1,
         description="Events to subscribe to.",
     )
     org_slug: str = Field(
-        default="", max_length=255,
+        default="",
+        max_length=255,
         description="Organization scope (empty = global).",
     )
 

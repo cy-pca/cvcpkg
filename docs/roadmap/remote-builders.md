@@ -605,7 +605,8 @@ cvcpkg-server config set log-retention-days 90
 - [x] Job timeout enforcement: background reaper marks overdue
   jobs as `timed_out` (default 24h, configurable)
 - [x] Cache integration: skip jobs with cache hits
-- [x] `cvcpkg remote-pack` / `remote-pack-all`
+- [x] `cvcpkg builds submit` / `submit-dag` (originally named
+  `remote-pack` / `remote-pack-all`)
 - [x] `cvcpkg builds list` / `info` / `cancel` / `cancel-all`
 - [x] Unit and integration tests
 
