@@ -4078,7 +4078,9 @@ def builder_group() -> None:
 @click.option("--platform", default=None, help="Filter by platform.")
 @click.option("--arch", default=None, help="Filter by architecture.")
 @click.option("--status", default=None, help="Filter by status (online/offline/busy).")
-def builder_list(server: str, token: str, platform: str | None, arch: str | None, status: str | None):
+def builder_list(
+    server: str, token: str, platform: str | None, arch: str | None, status: str | None
+):
     """List registered builders."""
     import httpx
 
@@ -4426,9 +4428,7 @@ def builds_cancel(job_id: int, server: str, token: str):
 )
 def builds_cancel_dag(dag_id: str, server: str, token: str):
     """Cancel all pending/dispatched jobs in a DAG."""
-    data = _api_request(
-        "post", f"{server.rstrip('/')}/v1/builds/dag/{dag_id}/cancel", token
-    )
+    data = _api_request("post", f"{server.rstrip('/')}/v1/builds/dag/{dag_id}/cancel", token)
     click.echo(f"DAG {dag_id}: {data.get('cancelled', 0)} jobs cancelled")
 
 
@@ -4460,9 +4460,7 @@ def builds_log(job_id: int, server: str, token: str, follow: bool):
         with httpx.Client(timeout=None) as client:
             with client.stream("GET", url, headers=headers) as resp:
                 if resp.status_code >= 400:
-                    raise click.ClickException(
-                        f"server returned {resp.status_code}"
-                    )
+                    raise click.ClickException(f"server returned {resp.status_code}")
                 for line in resp.iter_lines():
                     if line.startswith("data: "):
                         click.echo(line[6:])
@@ -4475,9 +4473,7 @@ def builds_log(job_id: int, server: str, token: str, follow: bool):
         if resp.status_code == 404:
             raise click.ClickException(f"no log available for build job {job_id}")
         if resp.status_code >= 400:
-            raise click.ClickException(
-                f"server returned {resp.status_code}: {resp.text}"
-            )
+            raise click.ClickException(f"server returned {resp.status_code}: {resp.text}")
         click.echo(resp.text, nl=False)
 
 
@@ -4502,15 +4498,164 @@ def builds_log_delete(job_id: int, server: str, token: str):
     click.echo(f"Log for build #{job_id} deleted.")
 
 
+@builds_group.command("submit")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--recipe", "recipe_name", required=True, help="Recipe name to build.")
+@click.option("--platform", required=True, help="Target platform (e.g. linux, macos, windows).")
+@click.option("--arch", required=True, help="Target architecture (e.g. x86_64, aarch64).")
+@click.option("--config", default="release", help="Build config (release or debug).")
+@click.option("--link", default="shared", help="Link mode (shared or static).")
+@click.option("--org", "org_slug", default="", help="Organization scope.")
+@click.option("--priority", type=int, default=0, help="Job priority (higher = sooner).")
+@click.option(
+    "--timeout", "timeout_seconds", type=int, default=None, help="Per-job timeout (seconds)."
+)
+def builds_submit(
+    server: str,
+    token: str,
+    recipe_name: str,
+    platform: str,
+    arch: str,
+    config: str,
+    link: str,
+    org_slug: str,
+    priority: int,
+    timeout_seconds: int | None,
+):
+    """Submit a single remote build job.
+
+    Example: cvcpkg builds submit --recipe zlib --platform linux --arch x86_64
+    """
+    body: dict = {
+        "recipe_name": recipe_name,
+        "platform": platform,
+        "arch": arch,
+        "config": config,
+        "link": link,
+        "org_slug": org_slug,
+        "priority": priority,
+    }
+    if timeout_seconds is not None:
+        body["timeout_seconds"] = timeout_seconds
+
+    data = _api_request(
+        "post",
+        f"{server.rstrip('/')}/v1/builds",
+        token,
+        json=body,
+    )
+    click.echo(f"Submitted build #{data['id']}  {recipe_name} ({platform}/{arch}/{config}/{link})")
+    click.echo(f"  Status: {data.get('status', 'pending')}")
+    if data.get("dag_id"):
+        click.echo(f"  DAG:    {data['dag_id']}")
+
+
+@builds_group.command("submit-dag")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--platform", required=True, help="Target platform(s), comma-separated.")
+@click.option("--arch", required=True, help="Target architecture(s), comma-separated.")
+@click.option("--config", default="release", help="Build config (release, debug, or 'all').")
+@click.option("--link", default="shared", help="Link mode (shared, static, or 'all').")
+@click.option("--org", "org_slug", default="", help="Organization scope.")
+@click.option("--dag-id", default=None, help="Custom DAG ID (auto-generated if omitted).")
+@click.argument("recipe_names", nargs=-1, required=True)
+def builds_submit_dag(
+    server: str,
+    token: str,
+    platform: str,
+    arch: str,
+    config: str,
+    link: str,
+    org_slug: str,
+    dag_id: str | None,
+    recipe_names: tuple[str, ...],
+):
+    """Submit a DAG of remote build jobs.
+
+    Provide one or more recipe names as positional arguments.
+    Use --config all / --link all to expand the build matrix.
+
+    Example:
+
+        cvcpkg builds submit-dag --platform linux --arch x86_64 zlib boost fftw
+    """
+    configs = ["release", "debug"] if config == "all" else [config]
+    links = ["shared", "static"] if link == "all" else [link]
+    platforms = [p.strip() for p in platform.split(",")]
+    arches = [a.strip() for a in arch.split(",")]
+
+    for plat in platforms:
+        for ar in arches:
+            for cfg in configs:
+                for lnk in links:
+                    jobs = [
+                        {
+                            "recipe_name": name,
+                            "platform": plat,
+                            "arch": ar,
+                            "config": cfg,
+                            "link": lnk,
+                            "org_slug": org_slug,
+                            "depends_on": [],
+                        }
+                        for name in recipe_names
+                    ]
+                    body: dict = {"jobs": jobs}
+                    if dag_id:
+                        body["dag_id"] = f"{dag_id}-{plat}-{ar}-{cfg}-{lnk}"
+
+                    data = _api_request(
+                        "post",
+                        f"{server.rstrip('/')}/v1/builds/dag",
+                        token,
+                        json=body,
+                    )
+                    click.echo(
+                        f"DAG {data['dag_id']}: {data['total']} jobs " f"({plat}/{ar}/{cfg}/{lnk})"
+                    )
+
+
 @builds_group.command("purge")
 @click.option(
-    "--older-than", "older_than", required=True,
+    "--older-than",
+    "older_than",
+    required=True,
     help="Age threshold, e.g. '30d' (days).",
 )
 @click.option("--status", default=None, help="Only purge jobs with this status (e.g. 'failed').")
-@click.option("--delete-logs/--keep-logs", default=True, help="Also delete log files (default: yes).")
-@click.option("--delete-jobs/--logs-only", "delete_jobs", default=False,
-              help="Delete entire job rows, not just logs (default: logs only).")
+@click.option(
+    "--delete-logs/--keep-logs", default=True, help="Also delete log files (default: yes)."
+)
+@click.option(
+    "--delete-jobs/--logs-only",
+    "delete_jobs",
+    default=False,
+    help="Delete entire job rows, not just logs (default: logs only).",
+)
 @click.option(
     "--server",
     envvar="CVCPKG_SERVER_URL",
@@ -4525,8 +4670,12 @@ def builds_log_delete(job_id: int, server: str, token: str):
     help="Bearer token.  [env: CVCPKG_TOKEN]",
 )
 def builds_purge(
-    older_than: str, status: str | None, delete_logs: bool,
-    delete_jobs: bool, server: str, token: str,
+    older_than: str,
+    status: str | None,
+    delete_logs: bool,
+    delete_jobs: bool,
+    server: str,
+    token: str,
 ):
     """Purge old build logs/jobs (admin only).
 
@@ -4591,8 +4740,9 @@ def recipe_group() -> None:
     required=True,
     help="Bearer token.  [env: CVCPKG_TOKEN]",
 )
-@click.option("--recipes-dir", type=click.Path(exists=True), default=None,
-              help="Recipe source directory.")
+@click.option(
+    "--recipes-dir", type=click.Path(exists=True), default=None, help="Recipe source directory."
+)
 @click.option("--org", "org_slug", default="", help="Organization scope.")
 def recipe_push(name: str, server: str, token: str, recipes_dir: str | None, org_slug: str):
     """Bundle and push a recipe to the server."""
@@ -4629,6 +4779,7 @@ def recipe_push(name: str, server: str, token: str, recipes_dir: str | None, org
     version = ""
     if recipe_yaml.is_file():
         import yaml
+
         with open(recipe_yaml) as f:
             data = yaml.safe_load(f)
         recipe_info = data.get("recipe", {})
@@ -4639,7 +4790,9 @@ def recipe_push(name: str, server: str, token: str, recipes_dir: str | None, org
     headers = {"Authorization": f"Bearer {token}"}
     with httpx.Client(timeout=60) as client:
         resp = client.post(
-            url, headers=headers, params=params,
+            url,
+            headers=headers,
+            params=params,
             files={"file": (f"{name}.tar.gz", buf, "application/gzip")},
         )
     if resp.status_code >= 400:
@@ -4751,7 +4904,11 @@ def webhook_group() -> None:
 @webhook_group.command("register")
 @click.argument("url")
 @click.option(
-    "--event", "-e", "events", multiple=True, required=True,
+    "--event",
+    "-e",
+    "events",
+    multiple=True,
+    required=True,
     help="Event(s) to subscribe to (can be repeated).",
 )
 @click.option(
@@ -4882,8 +5039,12 @@ def webhook_info(webhook_id: int, server: str, token: str):
     help="Bearer token.  [env: CVCPKG_TOKEN]",
 )
 def webhook_update(
-    webhook_id: int, url: str | None, events: tuple[str, ...],
-    active: bool | None, server: str, token: str,
+    webhook_id: int,
+    url: str | None,
+    events: tuple[str, ...],
+    active: bool | None,
+    server: str,
+    token: str,
 ):
     """Update a webhook."""
     import httpx
