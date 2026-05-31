@@ -211,7 +211,7 @@ jobs:
               ssh ${SSH_OPTS} "${VM}" "
                 export PATH=/sbin:/usr/sbin:/bin:/usr/bin:/usr/pkg/sbin:/usr/pkg/bin
                 # Serialize pkgin operations to avoid DB corruption from concurrent jobs
-                lockf -t 120 /tmp/.pkgin.lock sh -c '
+                flock /tmp/.pkgin.lock sh -c '
                   pkgin -y update 2>&1 || true
                   n=\$(pkgin avail 2>/dev/null | wc -l)
                   if [ \$n -lt 100 ]; then
