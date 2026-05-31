@@ -11,6 +11,14 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 # Put the cvcpkg prefix bin on PATH so bison from our recipe is found.
 export PATH="${CVC_DEPS_PREFIX}/bin:${PATH}"
 
+# Fix Perl module paths for cvcpkg-built automake on BSDs.
+# The aclocal script has hardcoded Perl paths from the build host; PERL5LIB
+# lets Perl find the Automake modules at their actual installed location.
+_am_share=$(find "${CVC_DEPS_PREFIX}/share" -maxdepth 1 -name 'automake-*' -type d 2>/dev/null | head -1)
+if [[ -n "${_am_share}" ]]; then
+    export PERL5LIB="${_am_share}${PERL5LIB:+:$PERL5LIB}"
+fi
+
 cd "${CVC_SOURCE_DIR}"
 
 # SWIG uses autotools; run autogen if configure doesn't exist.

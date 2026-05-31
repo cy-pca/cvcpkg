@@ -27,7 +27,13 @@ fi
 
 # ── Configure & build ──
 cd "${CVC_SOURCE_DIR}"
-./configure \
+
+# NFFT's configure script uses bash-specific syntax (e.g. ${var//pat/rep}).
+# On BSDs where /bin/sh is not bash, CONFIG_SHELL tells autotools to
+# re-exec itself under bash.
+export CONFIG_SHELL="$(command -v bash)"
+
+"$CONFIG_SHELL" ./configure \
     --prefix="${CVC_INSTALL_DIR}" \
     --enable-shared \
     --enable-static \

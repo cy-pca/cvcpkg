@@ -9,10 +9,10 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 LEVMAR_SRC="${CVC_RECIPE_DIR}/../../third-party/levmar"
 
 # Per-platform BLAS/LAPACK strategy:
-#   Linux  — OpenBLAS built from recipe, installed in prefix
-#   macOS  — Apple Accelerate framework (system-provided)
+#   Linux/BSDs — OpenBLAS built from recipe, installed in prefix
+#   macOS      — Apple Accelerate framework (system-provided)
 LEVMAR_CMAKE_EXTRA=()
-if [[ "${CVC_PLATFORM}" == "linux" ]]; then
+if [[ "${CVC_PLATFORM}" == "linux" || "${CVC_PLATFORM}" =~ bsd$ ]]; then
     LEVMAR_CMAKE_EXTRA+=(-DBLA_VENDOR=OpenBLAS)
     LEVMAR_CMAKE_EXTRA+=(-DCMAKE_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib")
     # FindBLAS in CMake ≥3.31 needs OpenBLAS on the linker search path

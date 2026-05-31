@@ -6,6 +6,16 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 # ImageMagick uses autotools. Build with Q16-HDRI (16-bit + high
 # dynamic range) to match the existing bundle configuration.
 cd "${CVC_SOURCE_DIR}"
+
+# On BSDs, "make" is BSD make which can't parse ImageMagick's GNU
+# Makefiles. Use gmake and tell configure/sub-makes about it.
+if command -v gmake >/dev/null 2>&1; then
+    MAKE=gmake
+else
+    MAKE=make
+fi
+export MAKE
+
 ./configure \
     --prefix="${CVC_INSTALL_DIR}" \
     --enable-shared \
@@ -24,5 +34,5 @@ cd "${CVC_SOURCE_DIR}"
     --disable-docs \
     CFLAGS="${CFLAGS:-"-O2 -fPIC"}" \
     CXXFLAGS="${CXXFLAGS:-"-O2 -fPIC -std=c++17"}"
-make -j "${CVC_JOBS}"
-make install
+$MAKE -j "${CVC_JOBS}"
+$MAKE install

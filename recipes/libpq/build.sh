@@ -8,18 +8,26 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 
+# Put the cvcpkg prefix bin on PATH so meson finds ninja from our recipe.
+export PATH="${CVC_DEPS_PREFIX}/bin:${PATH}"
+
+# Meson needs pkg-config to find our dependencies.
+export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+
 cd "${CVC_SOURCE_DIR}"
 
 # Meson-based build.
 meson setup "${CVC_BUILD_DIR}" \
     --prefix="${CVC_INSTALL_DIR}" \
     --buildtype=release \
+    --pkg-config-path="${CVC_DEPS_PREFIX}/lib/pkgconfig" \
     -Dssl=openssl \
     -Dzlib=enabled \
-    -Dreadline=disabled \
-    -Dzstd=disabled \
-    -Dlz4=disabled \
-    -Dnls=disabled
+    -Dreadline=enabled \
+    -Dzstd=enabled \
+    -Dlz4=enabled \
+    -Dnls=enabled
 
 cd "${CVC_BUILD_DIR}"
 # Build only the libpq shared library and install the whole project.
