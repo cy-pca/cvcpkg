@@ -58,6 +58,7 @@ from cvcpkg.server.models import (
     BuildJobInfo,
     BuildJobListResponse,
     BuildJobSubmitRequest,
+    BuildLogAppendRequest,
     CacheStatusResponse,
     CatalogResponse,
     DagSubmitRequest,
@@ -98,6 +99,7 @@ from cvcpkg.server.models import (
 
 _INDEX_FILE = "index.yaml"
 _ARCHIVES_DIR = "archives"
+_LOGS_DIR = "logs"
 _START_TIME = 0.0
 
 # ── Configurable limits ────────────────────────────────────────
@@ -204,6 +206,11 @@ class ServerState:
 
     def archives_dir(self) -> Path:
         d = self.state_dir / _ARCHIVES_DIR
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def logs_dir(self) -> Path:
+        d = self.state_dir / _LOGS_DIR
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -3571,6 +3578,145 @@ def create_app(
             detail=body.error_message[:200] if body.error_message else "",
         )
         return info
+
+    # ── Build log endpoints ─────────────────────────────────
+
+    @app.patch(
+        "/v1/builds/{job_id}/log",
+        response_model=BuildJobInfo,
+        tags=["builds"],
+    )
+    async def append_build_log(
+        job_id: int,
+        body: BuildLogAppendRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Append a chunk of log data to a build job's log."""
+        _require_db_build_jobs()
+        state = _get_state()
+        info = await _db_build_jobs.append_log(
+            job_id, body.data, logs_dir=state.logs_dir()
+        )
+        if info is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        return info
+
+    @app.get(
+        "/v1/builds/{job_id}/log",
+        tags=["builds"],
+    )
+    async def download_build_log(
+        job_id: int,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Download the full log for a build job."""
+        _require_db_build_jobs()
+        state = _get_state()
+        path = await _db_build_jobs.get_log_path(
+            job_id, logs_dir=state.logs_dir()
+        )
+        if path is None:
+            raise HTTPException(404, f"no log available for build job {job_id}")
+        return FileResponse(
+            path,
+            media_type="text/plain",
+            filename=path.name,
+        )
+
+    @app.delete(
+        "/v1/builds/{job_id}/log",
+        tags=["builds"],
+    )
+    async def delete_build_log(
+        job_id: int,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Delete a build job's log (admin only)."""
+        _require_db_build_jobs()
+        state = _get_state()
+        deleted = await _db_build_jobs.delete_log(
+            job_id, logs_dir=state.logs_dir()
+        )
+        if not deleted:
+            raise HTTPException(404, f"build job {job_id} not found")
+        return {"ok": True, "job_id": job_id}
+
+    @app.get(
+        "/v1/builds/{job_id}/log/stream",
+        tags=["builds"],
+    )
+    async def stream_build_log(
+        job_id: int,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Stream a build job's log as Server-Sent Events.
+
+        Reads existing log content and then tails for new data.
+        The stream ends when the job reaches a terminal state.
+        """
+        _require_db_build_jobs()
+        state = _get_state()
+
+        async def _event_generator():
+            logs_dir = state.logs_dir()
+            offset = 0
+            while True:
+                info = await _db_build_jobs.get(job_id)
+                if info is None:
+                    yield "event: error\ndata: job not found\n\n"
+                    return
+
+                path = await _db_build_jobs.get_log_path(
+                    job_id, logs_dir=logs_dir
+                )
+                if path is not None:
+                    size = path.stat().st_size
+                    if size > offset:
+                        with open(path, "r") as f:
+                            f.seek(offset)
+                            chunk = f.read()
+                        offset = size
+                        # Escape newlines for SSE
+                        for line in chunk.splitlines():
+                            yield f"data: {line}\n\n"
+
+                # Check terminal states
+                if info.status in (
+                    "succeeded", "failed", "cancelled", "timed_out",
+                ):
+                    yield f"event: done\ndata: {info.status}\n\n"
+                    return
+                await asyncio.sleep(2)
+
+        return StreamingResponse(
+            _event_generator(),
+            media_type="text/event-stream",
+        )
+
+    # ── Builder next-job (long-poll) ────────────────────────
+
+    @app.get(
+        "/v1/builders/{builder_id}/next-job",
+        tags=["builders"],
+    )
+    async def builder_next_job(
+        builder_id: int,
+        timeout: int = Query(default=30, ge=1, le=60),
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Long-poll for the next dispatched job for a builder.
+
+        Blocks for up to ``timeout`` seconds (default 30, max 60).
+        Returns a job object or 204 No Content.
+        """
+        _require_db_build_jobs()
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            info = await _db_build_jobs.next_job_for_builder(builder_id)
+            if info is not None:
+                return info
+            await asyncio.sleep(1)
+        return Response(status_code=204)
 
     # ── Mirror-mode download proxy ──────────────────────────
 

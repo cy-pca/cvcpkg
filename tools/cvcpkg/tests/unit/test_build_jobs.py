@@ -459,6 +459,603 @@ class TestDbBuildJobStore:
 
         self._run(_test())
 
+    # ── State transition guard tests ────────────────────────────
+
+    def test_cancel_running_job_noop(self):
+        """Cancel on a running job should be a no-op (only pending/dispatched)."""
+        from cvcpkg.server.db_stores import DbBuildJobStore, DbBuilderStore
+
+        async def _test():
+            bstore = DbBuilderStore()
+            builder = await bstore.register(
+                name="b1", platform="linux", arch="x86_64", registered_by="a",
+            )
+            store = DbBuildJobStore()
+            job = await store.create(
+                recipe_name="zlib", platform="linux", arch="x86_64",
+                submitted_by="admin",
+            )
+            await store.claim(job.id, builder.id)
+            result = await store.cancel(job.id)
+            assert result.status == BuildJobStatus.running  # unchanged
+
+        self._run(_test())
+
+    def test_cancel_succeeded_job_noop(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            job = await store.create(
+                recipe_name="zlib", platform="linux", arch="x86_64",
+                submitted_by="admin",
+            )
+            await store.complete(job.id)
+            result = await store.cancel(job.id)
+            assert result.status == BuildJobStatus.succeeded
+
+        self._run(_test())
+
+    def test_cancel_already_cancelled_noop(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            job = await store.create(
+                recipe_name="zlib", platform="linux", arch="x86_64",
+                submitted_by="admin",
+            )
+            await store.cancel(job.id)
+            result = await store.cancel(job.id)
+            assert result.status == BuildJobStatus.cancelled
+
+        self._run(_test())
+
+    def test_claim_running_job_noop(self):
+        """Claiming an already-running job should be a no-op."""
+        from cvcpkg.server.db_stores import DbBuildJobStore, DbBuilderStore
+
+        async def _test():
+            bstore = DbBuilderStore()
+            b1 = await bstore.register(
+                name="b1", platform="linux", arch="x86_64", registered_by="a",
+            )
+            b2 = await bstore.register(
+                name="b2", platform="linux", arch="x86_64", registered_by="a",
+            )
+            store = DbBuildJobStore()
+            job = await store.create(
+                recipe_name="zlib", platform="linux", arch="x86_64",
+                submitted_by="admin",
+            )
+            await store.claim(job.id, b1.id)
+            result = await store.claim(job.id, b2.id)
+            assert result.status == BuildJobStatus.running
+            assert result.builder_id == b1.id  # still b1
+
+        self._run(_test())
+
+    def test_claim_cancelled_job_noop(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore, DbBuilderStore
+
+        async def _test():
+            bstore = DbBuilderStore()
+            builder = await bstore.register(
+                name="b1", platform="linux", arch="x86_64", registered_by="a",
+            )
+            store = DbBuildJobStore()
+            job = await store.create(
+                recipe_name="zlib", platform="linux", arch="x86_64",
+                submitted_by="admin",
+            )
+            await store.cancel(job.id)
+            result = await store.claim(job.id, builder.id)
+            assert result.status == BuildJobStatus.cancelled
+
+        self._run(_test())
+
+    def test_claim_not_found(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            result = await store.claim(9999, 1)
+            assert result is None
+
+        self._run(_test())
+
+    def test_complete_not_found(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            result = await store.complete(9999)
+            assert result is None
+
+        self._run(_test())
+
+    def test_fail_not_found(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            result = await store.fail(9999, error_message="oops")
+            assert result is None
+
+        self._run(_test())
+
+    def test_dispatch_not_found(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            result = await store.dispatch(9999, 1)
+            assert result is None
+
+        self._run(_test())
+
+    def test_dispatch_already_dispatched_noop(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore, DbBuilderStore
+
+        async def _test():
+            bstore = DbBuilderStore()
+            b1 = await bstore.register(
+                name="b1", platform="linux", arch="x86_64", registered_by="a",
+            )
+            b2 = await bstore.register(
+                name="b2", platform="linux", arch="x86_64", registered_by="a",
+            )
+            store = DbBuildJobStore()
+            job = await store.create(
+                recipe_name="zlib", platform="linux", arch="x86_64",
+                submitted_by="admin",
+            )
+            await store.dispatch(job.id, b1.id)
+            result = await store.dispatch(job.id, b2.id)
+            assert result.status == BuildJobStatus.dispatched
+            assert result.builder_id == b1.id
+
+        self._run(_test())
+
+    def test_dispatch_running_noop(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore, DbBuilderStore
+
+        async def _test():
+            bstore = DbBuilderStore()
+            builder = await bstore.register(
+                name="b1", platform="linux", arch="x86_64", registered_by="a",
+            )
+            store = DbBuildJobStore()
+            job = await store.create(
+                recipe_name="zlib", platform="linux", arch="x86_64",
+                submitted_by="admin",
+            )
+            await store.claim(job.id, builder.id)
+            result = await store.dispatch(job.id, builder.id)
+            assert result.status == BuildJobStatus.running
+
+        self._run(_test())
+
+    # ── find_ready_jobs edge cases ──────────────────────────────
+
+    def test_find_ready_jobs_dep_failed_blocks(self):
+        """A job whose dependency failed should NOT appear as ready."""
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            j1 = await store.create(
+                recipe_name="zlib", platform="linux", arch="x86_64",
+                submitted_by="admin",
+            )
+            await store.create(
+                recipe_name="boost", platform="linux", arch="x86_64",
+                submitted_by="admin", depends_on=[j1.id],
+            )
+            await store.fail(j1.id, error_message="error")
+            ready = await store.find_ready_jobs()
+            assert len(ready) == 0
+
+        self._run(_test())
+
+    def test_find_ready_jobs_excludes_dispatched(self):
+        """find_ready_jobs should only return pending jobs."""
+        from cvcpkg.server.db_stores import DbBuildJobStore, DbBuilderStore
+
+        async def _test():
+            bstore = DbBuilderStore()
+            builder = await bstore.register(
+                name="b1", platform="linux", arch="x86_64", registered_by="a",
+            )
+            store = DbBuildJobStore()
+            j1 = await store.create(
+                recipe_name="zlib", platform="linux", arch="x86_64",
+                submitted_by="admin",
+            )
+            await store.dispatch(j1.id, builder.id)
+            ready = await store.find_ready_jobs()
+            assert len(ready) == 0
+
+        self._run(_test())
+
+    def test_find_ready_jobs_mixed_deps(self):
+        """Job with mix of succeeded and pending deps is NOT ready."""
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            j1 = await store.create(
+                recipe_name="zlib", platform="linux", arch="x86_64",
+                submitted_by="admin",
+            )
+            j2 = await store.create(
+                recipe_name="openssl", platform="linux", arch="x86_64",
+                submitted_by="admin",
+            )
+            await store.create(
+                recipe_name="curl", platform="linux", arch="x86_64",
+                submitted_by="admin", depends_on=[j1.id, j2.id],
+            )
+            # Complete only zlib, leave openssl pending
+            await store.complete(j1.id)
+            ready = await store.find_ready_jobs()
+            # curl should NOT be ready; openssl should be
+            names = [j.recipe_name for j in ready]
+            assert "curl" not in names
+            assert "openssl" in names
+
+        self._run(_test())
+
+    # ── DAG edge cases ──────────────────────────────────────────
+
+    def test_create_dag_single_job(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            jobs = [
+                {"recipe_name": "zlib", "platform": "linux", "arch": "x86_64",
+                 "depends_on": []},
+            ]
+            infos = await store.create_dag(jobs, "single-dag", "admin")
+            assert len(infos) == 1
+            assert infos[0].dag_id == "single-dag"
+            assert infos[0].depends_on == []
+
+        self._run(_test())
+
+    def test_create_dag_invalid_dep_indices_dropped(self):
+        """Out-of-range dependency indices should be silently dropped."""
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            jobs = [
+                {"recipe_name": "zlib", "platform": "linux", "arch": "x86_64",
+                 "depends_on": [99]},  # invalid index
+            ]
+            infos = await store.create_dag(jobs, "bad-deps", "admin")
+            assert len(infos) == 1
+            assert infos[0].depends_on == []  # invalid dep dropped
+
+        self._run(_test())
+
+    def test_create_dag_diamond_graph(self):
+        """Diamond: A→{B,C}→D — D depends on both B and C."""
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            jobs = [
+                {"recipe_name": "A", "platform": "linux", "arch": "x86_64",
+                 "depends_on": []},
+                {"recipe_name": "B", "platform": "linux", "arch": "x86_64",
+                 "depends_on": [0]},
+                {"recipe_name": "C", "platform": "linux", "arch": "x86_64",
+                 "depends_on": [0]},
+                {"recipe_name": "D", "platform": "linux", "arch": "x86_64",
+                 "depends_on": [1, 2]},
+            ]
+            infos = await store.create_dag(jobs, "diamond", "admin")
+            assert len(infos) == 4
+            assert infos[0].depends_on == []
+            assert infos[1].depends_on == [infos[0].id]
+            assert infos[2].depends_on == [infos[0].id]
+            assert set(infos[3].depends_on) == {infos[1].id, infos[2].id}
+
+        self._run(_test())
+
+    def test_cancel_dag_nonexistent(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            count = await store.cancel_dag("no-such-dag")
+            assert count == 0
+
+        self._run(_test())
+
+    def test_cancel_dag_mixed_statuses(self):
+        """Only pending/dispatched jobs in DAG should be cancelled."""
+        from cvcpkg.server.db_stores import DbBuildJobStore, DbBuilderStore
+
+        async def _test():
+            bstore = DbBuilderStore()
+            builder = await bstore.register(
+                name="b1", platform="linux", arch="x86_64", registered_by="a",
+            )
+            store = DbBuildJobStore()
+            jobs = [
+                {"recipe_name": "a", "platform": "linux", "arch": "x86_64",
+                 "depends_on": []},
+                {"recipe_name": "b", "platform": "linux", "arch": "x86_64",
+                 "depends_on": [0]},
+                {"recipe_name": "c", "platform": "linux", "arch": "x86_64",
+                 "depends_on": [0]},
+            ]
+            infos = await store.create_dag(jobs, "mixed", "admin")
+            # Claim and complete job a
+            await store.claim(infos[0].id, builder.id)
+            await store.complete(infos[0].id)
+            # Cancel DAG — only b and c should be cancelled
+            count = await store.cancel_dag("mixed")
+            assert count == 2
+            a = await store.get(infos[0].id)
+            assert a.status == BuildJobStatus.succeeded  # unchanged
+
+        self._run(_test())
+
+    # ── cancel_downstream edge cases ────────────────────────────
+
+    def test_cancel_downstream_diamond(self):
+        """Diamond graph: failing A should cancel B, C, and D."""
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            jobs = [
+                {"recipe_name": "A", "platform": "linux", "arch": "x86_64",
+                 "depends_on": []},
+                {"recipe_name": "B", "platform": "linux", "arch": "x86_64",
+                 "depends_on": [0]},
+                {"recipe_name": "C", "platform": "linux", "arch": "x86_64",
+                 "depends_on": [0]},
+                {"recipe_name": "D", "platform": "linux", "arch": "x86_64",
+                 "depends_on": [1, 2]},
+            ]
+            infos = await store.create_dag(jobs, "diamond-ds", "admin")
+            await store.fail(infos[0].id, error_message="fail")
+            count = await store.cancel_downstream(infos[0].id)
+            assert count == 3
+            for i in [1, 2, 3]:
+                j = await store.get(infos[i].id)
+                assert j.status == BuildJobStatus.cancelled
+
+        self._run(_test())
+
+    def test_cancel_downstream_no_dependants(self):
+        """cancel_downstream on a leaf job should cancel 0."""
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            job = await store.create(
+                recipe_name="zlib", platform="linux", arch="x86_64",
+                submitted_by="admin",
+            )
+            count = await store.cancel_downstream(job.id)
+            assert count == 0
+
+        self._run(_test())
+
+    def test_cancel_downstream_skips_running(self):
+        """cancel_downstream should skip already-running jobs."""
+        from cvcpkg.server.db_stores import DbBuildJobStore, DbBuilderStore
+
+        async def _test():
+            bstore = DbBuilderStore()
+            builder = await bstore.register(
+                name="b1", platform="linux", arch="x86_64", registered_by="a",
+            )
+            store = DbBuildJobStore()
+            jobs = [
+                {"recipe_name": "A", "platform": "linux", "arch": "x86_64",
+                 "depends_on": []},
+                {"recipe_name": "B", "platform": "linux", "arch": "x86_64",
+                 "depends_on": [0]},
+            ]
+            infos = await store.create_dag(jobs, "ds-skip", "admin")
+            # Start B running before A fails
+            await store.claim(infos[1].id, builder.id)
+            await store.fail(infos[0].id, error_message="fail")
+            count = await store.cancel_downstream(infos[0].id)
+            assert count == 0  # B is running, not cancelled
+            b = await store.get(infos[1].id)
+            assert b.status == BuildJobStatus.running
+
+        self._run(_test())
+
+    # ── list_jobs filter tests ──────────────────────────────────
+
+    def test_list_jobs_status_filter(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            j1 = await store.create(
+                recipe_name="zlib", platform="linux", arch="x86_64",
+                submitted_by="admin",
+            )
+            await store.create(
+                recipe_name="boost", platform="linux", arch="x86_64",
+                submitted_by="admin",
+            )
+            await store.cancel(j1.id)
+            cancelled, total = await store.list_jobs(status=BuildJobStatus.cancelled)
+            assert total == 1
+            assert cancelled[0].recipe_name == "zlib"
+            pending, total = await store.list_jobs(status=BuildJobStatus.pending)
+            assert total == 1
+            assert pending[0].recipe_name == "boost"
+
+        self._run(_test())
+
+    def test_list_jobs_dag_filter(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            await store.create_dag(
+                [{"recipe_name": "a", "platform": "linux", "arch": "x86_64",
+                  "depends_on": []}],
+                "dag-A", "admin",
+            )
+            await store.create_dag(
+                [{"recipe_name": "b", "platform": "linux", "arch": "x86_64",
+                  "depends_on": []}],
+                "dag-B", "admin",
+            )
+            jobs, total = await store.list_jobs(dag_id="dag-A")
+            assert total == 1
+            assert jobs[0].recipe_name == "a"
+
+        self._run(_test())
+
+    def test_list_jobs_recipe_name_filter(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            await store.create(
+                recipe_name="zlib", platform="linux", arch="x86_64",
+                submitted_by="admin",
+            )
+            await store.create(
+                recipe_name="boost", platform="linux", arch="x86_64",
+                submitted_by="admin",
+            )
+            jobs, total = await store.list_jobs(recipe_name="boost")
+            assert total == 1
+            assert jobs[0].recipe_name == "boost"
+
+        self._run(_test())
+
+    def test_list_jobs_builder_id_filter(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore, DbBuilderStore
+
+        async def _test():
+            bstore = DbBuilderStore()
+            builder = await bstore.register(
+                name="b1", platform="linux", arch="x86_64", registered_by="a",
+            )
+            store = DbBuildJobStore()
+            j1 = await store.create(
+                recipe_name="zlib", platform="linux", arch="x86_64",
+                submitted_by="admin",
+            )
+            await store.create(
+                recipe_name="boost", platform="linux", arch="x86_64",
+                submitted_by="admin",
+            )
+            await store.claim(j1.id, builder.id)
+            jobs, total = await store.list_jobs(builder_id=builder.id)
+            assert total == 1
+            assert jobs[0].recipe_name == "zlib"
+
+        self._run(_test())
+
+    def test_list_jobs_pagination(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            for i in range(5):
+                await store.create(
+                    recipe_name=f"pkg-{i}", platform="linux", arch="x86_64",
+                    submitted_by="admin",
+                )
+            page1, total = await store.list_jobs(limit=2, offset=0)
+            assert total == 5
+            assert len(page1) == 2
+            page2, _ = await store.list_jobs(limit=2, offset=2)
+            assert len(page2) == 2
+            page3, _ = await store.list_jobs(limit=2, offset=4)
+            assert len(page3) == 1
+
+        self._run(_test())
+
+    def test_list_jobs_offset_beyond_total(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            await store.create(
+                recipe_name="zlib", platform="linux", arch="x86_64",
+                submitted_by="admin",
+            )
+            jobs, total = await store.list_jobs(limit=10, offset=100)
+            assert total == 1
+            assert len(jobs) == 0
+
+        self._run(_test())
+
+    # ── reap_timed_out edge cases ───────────────────────────────
+
+    def test_reap_timed_out_custom_vs_default_timeout(self):
+        """Job with custom timeout_seconds should use that, not default."""
+        import datetime
+        from cvcpkg.server.db_stores import DbBuildJobStore, DbBuilderStore
+
+        async def _test():
+            bstore = DbBuilderStore()
+            builder = await bstore.register(
+                name="b1", platform="linux", arch="x86_64", registered_by="a",
+            )
+            store = DbBuildJobStore()
+            # Job with 30-second custom timeout
+            job = await store.create(
+                recipe_name="zlib", platform="linux", arch="x86_64",
+                submitted_by="admin", timeout_seconds=60,
+            )
+            await store.claim(job.id, builder.id)
+
+            # Force started_at to 90 seconds ago (exceeds 60s custom timeout)
+            from cvcpkg.server.db import BuildJobRow, get_session
+            from sqlalchemy import select
+            async with get_session() as session:
+                row = (await session.execute(
+                    select(BuildJobRow).where(BuildJobRow.id == job.id)
+                )).scalar()
+                row.started_at = datetime.datetime.now(
+                    datetime.timezone.utc
+                ) - datetime.timedelta(seconds=90)
+
+            # Default timeout is very large, but custom should trigger
+            reaped = await store.reap_timed_out(default_timeout=86400)
+            assert len(reaped) == 1
+
+        self._run(_test())
+
+    def test_reap_timed_out_none_timed_out(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore, DbBuilderStore
+
+        async def _test():
+            bstore = DbBuilderStore()
+            builder = await bstore.register(
+                name="b1", platform="linux", arch="x86_64", registered_by="a",
+            )
+            store = DbBuildJobStore()
+            job = await store.create(
+                recipe_name="zlib", platform="linux", arch="x86_64",
+                submitted_by="admin",
+            )
+            await store.claim(job.id, builder.id)
+            # Just started, shouldn't be timed out
+            reaped = await store.reap_timed_out(default_timeout=86400)
+            assert len(reaped) == 0
+
+        self._run(_test())
+
 
 # ── API endpoint tests ──────────────────────────────────────────
 
@@ -702,3 +1299,169 @@ class TestBuildJobEndpoints:
         data = resp.json()
         assert data["total"] == 0
         assert data["jobs"] == []
+
+    # ── Validation tests ────────────────────────────────────────
+
+    def test_submit_empty_recipe_name_rejected(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        resp = client.post(
+            "/v1/builds",
+            json={"recipe_name": "", "platform": "linux", "arch": "x86_64"},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 422
+
+    def test_submit_negative_priority_rejected(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        resp = client.post(
+            "/v1/builds",
+            json={
+                "recipe_name": "zlib", "platform": "linux", "arch": "x86_64",
+                "priority": -1,
+            },
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 422
+
+    def test_submit_timeout_too_low_rejected(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        resp = client.post(
+            "/v1/builds",
+            json={
+                "recipe_name": "zlib", "platform": "linux", "arch": "x86_64",
+                "timeout_seconds": 59,
+            },
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 422
+
+    def test_submit_timeout_too_high_rejected(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        resp = client.post(
+            "/v1/builds",
+            json={
+                "recipe_name": "zlib", "platform": "linux", "arch": "x86_64",
+                "timeout_seconds": 172801,
+            },
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 422
+
+    def test_submit_dag_empty_jobs_rejected(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        resp = client.post(
+            "/v1/builds/dag",
+            json={"jobs": []},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 422
+
+    def test_fail_error_message_too_long_rejected(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        # Need a running job first
+        builder_resp = client.post(
+            "/v1/builders/register",
+            json={"name": "b1", "platform": "linux", "arch": "x86_64"},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        builder_id = builder_resp.json()["id"]
+        sub = self._submit(client, pub_tok)
+        job_id = sub.json()["id"]
+        client.post(
+            f"/v1/builds/{job_id}/claim",
+            json={"builder_id": builder_id},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        resp = client.post(
+            f"/v1/builds/{job_id}/fail",
+            json={"error_message": "x" * 4097},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 422
+
+    # ── 404 tests for mutation endpoints ────────────────────────
+
+    def test_claim_not_found_api(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        resp = client.post(
+            "/v1/builds/9999/claim",
+            json={"builder_id": 1},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 404
+
+    def test_complete_not_found_api(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        resp = client.post(
+            "/v1/builds/9999/complete",
+            json={},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 404
+
+    def test_fail_not_found_api(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        resp = client.post(
+            "/v1/builds/9999/fail",
+            json={},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 404
+
+    # ── Filter tests via API ────────────────────────────────────
+
+    def test_list_builds_status_filter(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        sub1 = self._submit(client, pub_tok, "zlib")
+        self._submit(client, pub_tok, "boost")
+        job_id = sub1.json()["id"]
+        client.post(
+            f"/v1/builds/{job_id}/cancel",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        resp = client.get(
+            "/v1/builds",
+            params={"status": "cancelled"},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 1
+
+    def test_list_builds_recipe_name_filter(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        self._submit(client, pub_tok, "zlib")
+        self._submit(client, pub_tok, "boost")
+        resp = client.get(
+            "/v1/builds",
+            params={"recipe_name": "zlib"},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 1
+
+    # ── Cancel idempotency via API ──────────────────────────────
+
+    def test_cancel_already_cancelled_api(self, db_server_env):
+        """Cancelling an already-cancelled job should return 200 with status unchanged."""
+        client, admin_tok, pub_tok, _ = db_server_env
+        sub = self._submit(client, pub_tok)
+        job_id = sub.json()["id"]
+        client.post(
+            f"/v1/builds/{job_id}/cancel",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        resp = client.post(
+            f"/v1/builds/{job_id}/cancel",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "cancelled"
+
+    def test_cancel_dag_nonexistent_api(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        resp = client.post(
+            "/v1/builds/dag/no-such-dag/cancel",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["cancelled"] == 0

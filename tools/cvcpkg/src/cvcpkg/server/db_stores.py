@@ -2401,3 +2401,113 @@ class DbBuildJobStore:
                     to_visit.append(ds_id)
 
             return cancelled
+
+    # ── Log management ──────────────────────────────────────────
+
+    async def append_log(
+        self,
+        job_id: int,
+        data: str,
+        *,
+        logs_dir: Path,
+    ) -> BuildJobInfo | None:
+        """Append a chunk of log data to a job's log file.
+
+        Creates the log file on first append.  Updates ``log_url`` and
+        ``log_size_bytes`` on the DB row.
+        """
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(BuildJobRow).where(BuildJobRow.id == job_id)
+                )
+            ).scalar()
+            if row is None:
+                return None
+
+            # Determine log file path
+            if row.dag_id:
+                log_sub = logs_dir / row.dag_id
+            else:
+                log_sub = logs_dir / "standalone"
+            log_sub.mkdir(parents=True, exist_ok=True)
+            log_path = log_sub / f"{job_id}.log"
+
+            # Append data
+            with open(log_path, "a") as f:
+                f.write(data)
+
+            # Update row metadata
+            size = log_path.stat().st_size
+            row.log_url = str(log_path.relative_to(logs_dir))
+            row.log_size_bytes = size
+
+            dep_ids = await self._load_dep_ids(session, job_id)
+            return self._row_to_info(row, dep_ids)
+
+    async def get_log_path(
+        self,
+        job_id: int,
+        *,
+        logs_dir: Path,
+    ) -> Path | None:
+        """Return the filesystem path for a job's log, or None."""
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(BuildJobRow).where(BuildJobRow.id == job_id)
+                )
+            ).scalar()
+            if row is None or not row.log_url:
+                return None
+            path = logs_dir / row.log_url
+            if not path.is_file():
+                return None
+            return path
+
+    async def delete_log(
+        self,
+        job_id: int,
+        *,
+        logs_dir: Path,
+    ) -> bool:
+        """Delete a job's log file.  Returns True if deleted."""
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(BuildJobRow).where(BuildJobRow.id == job_id)
+                )
+            ).scalar()
+            if row is None:
+                return False
+            if row.log_url:
+                path = logs_dir / row.log_url
+                if path.is_file():
+                    path.unlink()
+            row.log_url = None
+            row.log_size_bytes = None
+            return True
+
+    async def next_job_for_builder(
+        self, builder_id: int
+    ) -> BuildJobInfo | None:
+        """Find the next dispatched or pending job for a builder.
+
+        Returns the first dispatched job assigned to this builder,
+        or None.  Used by the long-poll ``next-job`` endpoint.
+        """
+        async with get_session() as session:
+            q = (
+                select(BuildJobRow)
+                .where(
+                    BuildJobRow.builder_id == builder_id,
+                    BuildJobRow.status == BuildJobStatus.dispatched,
+                )
+                .order_by(BuildJobRow.priority.desc(), BuildJobRow.id.asc())
+                .limit(1)
+            )
+            row = (await session.execute(q)).scalar()
+            if row is None:
+                return None
+            dep_ids = await self._load_dep_ids(session, row.id)
+            return self._row_to_info(row, dep_ids)
