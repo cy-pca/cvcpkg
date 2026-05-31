@@ -2202,6 +2202,52 @@ class DbBuildJobStore:
                 row.finished_at = now
             return len(rows)
 
+    _TERMINAL_STATUSES = frozenset(
+        {
+            BuildJobStatus.succeeded,
+            BuildJobStatus.failed,
+            BuildJobStatus.cancelled,
+            BuildJobStatus.timed_out,
+        }
+    )
+
+    async def is_dag_complete(self, dag_id: str) -> bool | None:
+        """Return True if every job in the DAG is in a terminal state.
+
+        Returns None if the DAG has no jobs.
+        """
+        async with get_session() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(BuildJobRow.status).where(BuildJobRow.dag_id == dag_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if not rows:
+                return None
+            return all(s in self._TERMINAL_STATUSES for s in rows)
+
+    async def dag_summary(self, dag_id: str) -> dict:
+        """Return a status summary dict for a DAG."""
+        async with get_session() as session:
+            rows = (
+                (await session.execute(select(BuildJobRow).where(BuildJobRow.dag_id == dag_id)))
+                .scalars()
+                .all()
+            )
+            total = len(rows)
+            succeeded = sum(1 for r in rows if r.status == BuildJobStatus.succeeded)
+            failed = sum(1 for r in rows if r.status == BuildJobStatus.failed)
+            return {
+                "dag_id": dag_id,
+                "total": total,
+                "succeeded": succeeded,
+                "failed": failed,
+            }
+
     async def claim(self, job_id: int, builder_id: int) -> BuildJobInfo | None:
         """Builder claims a dispatched job → running."""
         now = datetime.datetime.now(datetime.timezone.utc)

@@ -556,6 +556,16 @@ async def _build_scheduler_loop() -> None:
             timed_out = await _db_build_jobs.reap_timed_out(_DEFAULT_BUILD_TIMEOUT)
             for job in timed_out:
                 await _db_build_jobs.cancel_downstream(job.id)
+                # Notify builder via WebSocket
+                if job.builder_id is not None:
+                    await _ws_send(
+                        job.builder_id,
+                        {
+                            "type": "job.timeout",
+                            "job_id": job.id,
+                            "message": f"exceeded {_DEFAULT_BUILD_TIMEOUT}s limit",
+                        },
+                    )
                 await emit_webhook_event(
                     "build.timed_out",
                     {
@@ -3850,6 +3860,16 @@ def create_app(
             },
             org_slug=info.org_slug,
         )
+        # Check if the entire DAG is now complete
+        if info.dag_id:
+            done = await _db_build_jobs.is_dag_complete(info.dag_id)
+            if done:
+                summary = await _db_build_jobs.dag_summary(info.dag_id)
+                await emit_webhook_event(
+                    "build.dag_completed",
+                    summary,
+                    org_slug=info.org_slug,
+                )
         return info
 
     @app.post(
@@ -3884,6 +3904,16 @@ def create_app(
             },
             org_slug=info.org_slug,
         )
+        # Check if the entire DAG is now complete
+        if info.dag_id:
+            done = await _db_build_jobs.is_dag_complete(info.dag_id)
+            if done:
+                summary = await _db_build_jobs.dag_summary(info.dag_id)
+                await emit_webhook_event(
+                    "build.dag_completed",
+                    summary,
+                    org_slug=info.org_slug,
+                )
         return info
 
     # ── Build log endpoints ─────────────────────────────────
@@ -4117,6 +4147,15 @@ def create_app(
                                 },
                                 org_slug=result.org_slug,
                             )
+                            if result.dag_id:
+                                done = await _db_build_jobs.is_dag_complete(result.dag_id)
+                                if done:
+                                    summary = await _db_build_jobs.dag_summary(result.dag_id)
+                                    await emit_webhook_event(
+                                        "build.dag_completed",
+                                        summary,
+                                        org_slug=result.org_slug,
+                                    )
 
                 elif msg_type == "job.fail":
                     job_id = data.get("job_id")
@@ -4141,6 +4180,15 @@ def create_app(
                                 },
                                 org_slug=result.org_slug,
                             )
+                            if result.dag_id:
+                                done = await _db_build_jobs.is_dag_complete(result.dag_id)
+                                if done:
+                                    summary = await _db_build_jobs.dag_summary(result.dag_id)
+                                    await emit_webhook_event(
+                                        "build.dag_completed",
+                                        summary,
+                                        org_slug=result.org_slug,
+                                    )
 
                 elif msg_type == "pong":
                     pass  # response to server ping

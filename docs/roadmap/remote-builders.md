@@ -1,6 +1,6 @@
 # Roadmap: cvcpkg Remote Builders
 
-Status: **Planning** (no implementation started).
+Status: **Complete** — all phases implemented.
 Author: roadmap drafted 2026-05-30.
 Target: libcvc-deps v1.7.0 or v2.0.0 (depending on scope alignment with cvcpkg-2.0 roadmap).
 
