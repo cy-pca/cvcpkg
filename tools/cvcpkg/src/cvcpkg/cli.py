@@ -4502,6 +4502,416 @@ def builds_log_delete(job_id: int, server: str, token: str):
     click.echo(f"Log for build #{job_id} deleted.")
 
 
+# ── Recipe distribution commands ────────────────────────────────
+
+
+@cli.group("recipe")
+def recipe_group() -> None:
+    """Manage server-side recipe bundles."""
+
+
+@recipe_group.command("push")
+@click.argument("name")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--recipes-dir", type=click.Path(exists=True), default=None,
+              help="Recipe source directory.")
+@click.option("--org", "org_slug", default="", help="Organization scope.")
+def recipe_push(name: str, server: str, token: str, recipes_dir: str | None, org_slug: str):
+    """Bundle and push a recipe to the server."""
+    import io
+    import tarfile
+
+    import httpx
+
+    from cvcpkg.builder import RecipeError, find_recipes_dir
+
+    if recipes_dir:
+        rdir = Path(recipes_dir)
+    else:
+        try:
+            rdir = find_recipes_dir()
+        except RecipeError:
+            raise click.ClickException("could not find recipes directory")
+
+    recipe_path = rdir / name
+    if not recipe_path.is_dir():
+        raise click.ClickException(f"recipe directory not found: {recipe_path}")
+
+    # Create tar.gz bundle
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for f in sorted(recipe_path.rglob("*")):
+            if f.is_file():
+                arcname = str(f.relative_to(recipe_path))
+                tar.add(f, arcname=arcname)
+    buf.seek(0)
+
+    # Read recipe.yaml for version info
+    recipe_yaml = recipe_path / "recipe.yaml"
+    version = ""
+    if recipe_yaml.is_file():
+        import yaml
+        with open(recipe_yaml) as f:
+            data = yaml.safe_load(f)
+        recipe_info = data.get("recipe", {})
+        version = recipe_info.get("upstream_version", "")
+
+    url = f"{server.rstrip('/')}/v1/recipes/{name}"
+    params = {"org_slug": org_slug, "version": version}
+    headers = {"Authorization": f"Bearer {token}"}
+    with httpx.Client(timeout=60) as client:
+        resp = client.post(
+            url, headers=headers, params=params,
+            files={"file": (f"{name}.tar.gz", buf, "application/gzip")},
+        )
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    data = resp.json()
+    click.echo(
+        f"Recipe '{data['name']}' uploaded "
+        f"(version={data.get('version', '')}, "
+        f"size={data.get('bundle_size', 0)} bytes)"
+    )
+
+
+@recipe_group.command("list")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--org", "org_slug", default=None, help="Filter by organization.")
+def recipe_list(server: str, token: str, org_slug: str | None):
+    """List recipes available on the server."""
+    import httpx
+
+    params: dict[str, str] = {}
+    if org_slug is not None:
+        params["org_slug"] = org_slug
+    url = f"{server.rstrip('/')}/v1/recipes"
+    headers = {"Authorization": f"Bearer {token}"}
+    with httpx.Client(timeout=30) as client:
+        resp = client.get(url, headers=headers, params=params)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    data = resp.json()
+    recipes = data.get("recipes", [])
+    if not recipes:
+        click.echo("No recipes found.")
+        return
+    click.echo(f"{'Name':<25} {'Version':<15} {'Size':>10}  {'Uploaded':>20}")
+    click.echo("-" * 75)
+    for r in recipes:
+        size_str = f"{r.get('bundle_size', 0):,}"
+        click.echo(
+            f"{r['name']:<25} {r.get('version', ''):<15} "
+            f"{size_str:>10}  {r.get('updated_at', 'unknown'):>20}"
+        )
+
+
+@recipe_group.command("delete")
+@click.argument("name")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--org", "org_slug", default="", help="Organization scope.")
+def recipe_delete(name: str, server: str, token: str, org_slug: str):
+    """Delete a recipe from the server (admin only)."""
+    import httpx
+
+    url = f"{server.rstrip('/')}/v1/recipes/{name}"
+    params = {"org_slug": org_slug}
+    headers = {"Authorization": f"Bearer {token}"}
+    with httpx.Client(timeout=30) as client:
+        resp = client.delete(url, headers=headers, params=params)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    click.echo(f"Recipe '{name}' deleted.")
+
+
+# ── Webhook CLI commands ────────────────────────────────────────
+
+
+@cli.group("webhook")
+def webhook_group() -> None:
+    """Manage server webhooks."""
+
+
+@webhook_group.command("register")
+@click.argument("url")
+@click.option(
+    "--event", "-e", "events", multiple=True, required=True,
+    help="Event(s) to subscribe to (can be repeated).",
+)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--org", "org_slug", default="", help="Organization scope.")
+def webhook_register(url: str, events: tuple[str, ...], server: str, token: str, org_slug: str):
+    """Register a new webhook."""
+    import httpx
+
+    api = f"{server.rstrip('/')}/v1/webhooks"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    body = {"url": url, "events": list(events), "org_slug": org_slug}
+    with httpx.Client(timeout=30) as client:
+        resp = client.post(api, headers=headers, json=body)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    data = resp.json()
+    click.echo(f"Webhook {data['id']} registered for {url}")
+
+
+@webhook_group.command("list")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--org", "org_slug", default=None, help="Filter by organization.")
+def webhook_list(server: str, token: str, org_slug: str | None):
+    """List registered webhooks."""
+    import httpx
+
+    api = f"{server.rstrip('/')}/v1/webhooks"
+    headers = {"Authorization": f"Bearer {token}"}
+    params: dict[str, str] = {}
+    if org_slug is not None:
+        params["org_slug"] = org_slug
+    with httpx.Client(timeout=30) as client:
+        resp = client.get(api, headers=headers, params=params)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    data = resp.json()
+    for wh in data.get("webhooks", []):
+        status = "active" if wh.get("active") else "inactive"
+        click.echo(f"  [{wh['id']}] {wh['url']}  events={wh['events']}  ({status})")
+    click.echo(f"Total: {data.get('total', 0)}")
+
+
+@webhook_group.command("info")
+@click.argument("webhook_id", type=int)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+def webhook_info(webhook_id: int, server: str, token: str):
+    """Get details for a webhook."""
+    import httpx
+
+    api = f"{server.rstrip('/')}/v1/webhooks/{webhook_id}"
+    headers = {"Authorization": f"Bearer {token}"}
+    with httpx.Client(timeout=30) as client:
+        resp = client.get(api, headers=headers)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    data = resp.json()
+    for k, v in data.items():
+        click.echo(f"  {k}: {v}")
+
+
+@webhook_group.command("update")
+@click.argument("webhook_id", type=int)
+@click.option("--url", default=None, help="New delivery URL.")
+@click.option("--event", "-e", "events", multiple=True, help="Replace events list.")
+@click.option("--active/--inactive", default=None, help="Enable or disable.")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+def webhook_update(
+    webhook_id: int, url: str | None, events: tuple[str, ...],
+    active: bool | None, server: str, token: str,
+):
+    """Update a webhook."""
+    import httpx
+
+    api = f"{server.rstrip('/')}/v1/webhooks/{webhook_id}"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    body: dict = {}
+    if url is not None:
+        body["url"] = url
+    if events:
+        body["events"] = list(events)
+    if active is not None:
+        body["active"] = active
+    if not body:
+        raise click.ClickException("nothing to update — supply at least one option")
+    with httpx.Client(timeout=30) as client:
+        resp = client.patch(api, headers=headers, json=body)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    click.echo(f"Webhook {webhook_id} updated.")
+
+
+@webhook_group.command("delete")
+@click.argument("webhook_id", type=int)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+def webhook_delete(webhook_id: int, server: str, token: str):
+    """Delete a webhook (admin only)."""
+    import httpx
+
+    api = f"{server.rstrip('/')}/v1/webhooks/{webhook_id}"
+    headers = {"Authorization": f"Bearer {token}"}
+    with httpx.Client(timeout=30) as client:
+        resp = client.delete(api, headers=headers)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    click.echo(f"Webhook {webhook_id} deleted.")
+
+
+@webhook_group.command("test")
+@click.argument("webhook_id", type=int)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+def webhook_test(webhook_id: int, server: str, token: str):
+    """Send a test payload to a webhook."""
+    import httpx
+
+    api = f"{server.rstrip('/')}/v1/webhooks/{webhook_id}/test"
+    headers = {"Authorization": f"Bearer {token}"}
+    with httpx.Client(timeout=30) as client:
+        resp = client.post(api, headers=headers)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    data = resp.json()
+    click.echo(f"Test delivery: status_code={data.get('status_code', '?')}")
+
+
 # ── main() wrapper for backward compat with tests ──────────────
 
 

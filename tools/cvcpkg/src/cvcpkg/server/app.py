@@ -78,7 +78,13 @@ from cvcpkg.server.models import (
     PackageListResponse,
     ProfileUpdateRequest,
     PublishResponse,
+    RecipeInfo,
+    RecipeListResponse,
     RegistrationMode,
+    WebhookInfo,
+    WebhookListResponse,
+    WebhookRegisterRequest,
+    WebhookUpdateRequest,
     RegistrationRequest,
     RegistrationResponse,
     TagCreateRequest,
@@ -228,6 +234,8 @@ _db_tags = None  # DbTagStore when using DB backend
 _db_token_requests = None  # DbTokenRequestStore when using DB backend
 _db_builders = None  # DbBuilderStore when using DB backend
 _db_build_jobs = None  # DbBuildJobStore when using DB backend
+_db_recipes = None  # DbRecipeStore when using DB backend
+_db_webhooks = None  # DbWebhookStore when using DB backend
 
 
 def _get_state() -> ServerState:
@@ -532,6 +540,8 @@ def create_app(
         global _db_downloads, _db_mirrors, _db_tags, _db_token_requests
         global _db_builders
         global _db_build_jobs
+        global _db_recipes
+        global _db_webhooks
         _START_TIME = time.monotonic()
         sd = state_dir or Path(os.environ.get("CVCPKG_SERVER_STATE_DIR", "/var/lib/cvcpkg-server"))
 
@@ -557,7 +567,9 @@ def create_app(
                 DbMirrorStore,
                 DbOrgStore,
                 DbPackageIndex,
+                DbRecipeStore,
                 DbTagStore,
+                DbWebhookStore,
                 DbTokenRequestStore,
                 DbTokenStore,
             )
@@ -574,6 +586,8 @@ def create_app(
             _db_token_requests = DbTokenRequestStore()
             _db_builders = DbBuilderStore()
             _db_build_jobs = DbBuildJobStore()
+            _db_recipes = DbRecipeStore()
+            _db_webhooks = DbWebhookStore()
             _use_db = True
             # Still need ServerState for archives dir and storage_uri
             _state = ServerState(
@@ -3717,6 +3731,303 @@ def create_app(
                 return info
             await asyncio.sleep(1)
         return Response(status_code=204)
+
+    # ── Recipe distribution endpoints ───────────────────────
+
+    def _require_db_recipes():
+        if not _use_db or _db_recipes is None:
+            raise HTTPException(
+                501,
+                "recipe distribution requires a database backend "
+                "(set CVCPKG_DATABASE_URL)",
+            )
+
+    @app.post(
+        "/v1/recipes/{name}",
+        response_model=RecipeInfo,
+        tags=["recipes"],
+    )
+    async def upload_recipe(
+        name: str,
+        file: UploadFile,
+        org_slug: str = Query("", max_length=255),
+        version: str = Query("", max_length=128),
+        recipe_hash: str = Query("", max_length=128),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Upload or update a recipe bundle (tar.gz).
+
+        Admin only for global recipes.  Overwrites if the same
+        ``(name, org_slug)`` already exists.
+        """
+        import re as _re_mod
+
+        _require_db_recipes()
+        # Validate name
+        if not _re_mod.match(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$", name):
+            raise HTTPException(400, "invalid recipe name")
+
+        state = _get_state()
+        recipes_dir = state.state_dir / "recipe_bundles"
+        if org_slug:
+            recipes_dir = recipes_dir / org_slug
+        recipes_dir.mkdir(parents=True, exist_ok=True)
+
+        dest = recipes_dir / f"{name}.tar.gz"
+        # Write uploaded file
+        content = await file.read()
+        dest.write_bytes(content)
+        bundle_size = len(content)
+
+        info = await _db_recipes.upload(
+            name=name,
+            bundle_path=str(dest),
+            bundle_size=bundle_size,
+            uploaded_by=actor.name,
+            version=version,
+            recipe_hash=recipe_hash,
+            org_slug=org_slug,
+        )
+        await _db_audit.record(
+            action=AuditAction.recipe_upload,
+            actor=actor.name,
+            target=name,
+            detail=f"version={version} org={org_slug}" if org_slug else f"version={version}",
+        )
+        return info
+
+    @app.get(
+        "/v1/recipes",
+        response_model=RecipeListResponse,
+        tags=["recipes"],
+    )
+    async def list_recipes(
+        org_slug: str | None = Query(None),
+        limit: int = Query(100, ge=1, le=1000),
+        offset: int = Query(0, ge=0),
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """List server-managed recipe bundles."""
+        _require_db_recipes()
+        recipes, total = await _db_recipes.list_recipes(
+            org_slug=org_slug, limit=limit, offset=offset
+        )
+        return RecipeListResponse(total=total, recipes=recipes)
+
+    @app.get(
+        "/v1/recipes/{name}",
+        tags=["recipes"],
+    )
+    async def get_recipe_bundle(
+        name: str,
+        org_slug: str = Query(""),
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Download a recipe bundle (tar.gz)."""
+        _require_db_recipes()
+        info = await _db_recipes.get(name, org_slug=org_slug)
+        if info is None:
+            raise HTTPException(404, f"recipe '{name}' not found")
+        bundle_path = await _db_recipes.get_bundle_path(name, org_slug=org_slug)
+        if bundle_path is None or not Path(bundle_path).is_file():
+            raise HTTPException(404, f"recipe bundle for '{name}' not found on disk")
+        return FileResponse(
+            bundle_path,
+            media_type="application/gzip",
+            filename=f"{name}.tar.gz",
+        )
+
+    @app.delete(
+        "/v1/recipes/{name}",
+        tags=["recipes"],
+    )
+    async def delete_recipe(
+        name: str,
+        org_slug: str = Query(""),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Delete a recipe bundle (admin only)."""
+        _require_db_recipes()
+        # Try to remove bundle file
+        bundle_path = await _db_recipes.get_bundle_path(name, org_slug=org_slug)
+        if bundle_path and Path(bundle_path).is_file():
+            Path(bundle_path).unlink()
+
+        deleted = await _db_recipes.delete(name, org_slug=org_slug)
+        if not deleted:
+            raise HTTPException(404, f"recipe '{name}' not found")
+        await _db_audit.record(
+            action=AuditAction.recipe_delete,
+            actor=actor.name,
+            target=name,
+        )
+        return {"ok": True, "name": name}
+
+    # ── Webhook endpoints ──────────────────────────────────
+
+    def _require_db_webhooks():
+        if not _use_db or _db_webhooks is None:
+            raise HTTPException(
+                501,
+                "webhooks require a database backend "
+                "(set CVCPKG_DATABASE_URL)",
+            )
+
+    @app.post(
+        "/v1/webhooks",
+        response_model=WebhookInfo,
+        tags=["webhooks"],
+    )
+    async def register_webhook(
+        body: WebhookRegisterRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Register a new webhook (admin only)."""
+        _require_db_webhooks()
+        info = await _db_webhooks.register(
+            url=body.url,
+            events=body.events,
+            registered_by=actor.name,
+            org_slug=body.org_slug,
+        )
+        await _db_audit.record(
+            action=AuditAction.webhook_register,
+            actor=actor.name,
+            target=str(info.id),
+            detail=f"url={body.url}",
+        )
+        return info
+
+    @app.get(
+        "/v1/webhooks",
+        response_model=WebhookListResponse,
+        tags=["webhooks"],
+    )
+    async def list_webhooks(
+        org_slug: str | None = Query(None),
+        limit: int = Query(100, ge=1, le=1000),
+        offset: int = Query(0, ge=0),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """List registered webhooks (admin only)."""
+        _require_db_webhooks()
+        webhooks, total = await _db_webhooks.list_webhooks(
+            org_slug=org_slug, limit=limit, offset=offset,
+        )
+        return WebhookListResponse(total=total, webhooks=webhooks)
+
+    @app.get(
+        "/v1/webhooks/{webhook_id}",
+        response_model=WebhookInfo,
+        tags=["webhooks"],
+    )
+    async def get_webhook(
+        webhook_id: int,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Get details for a webhook (admin only)."""
+        _require_db_webhooks()
+        info = await _db_webhooks.get(webhook_id)
+        if info is None:
+            raise HTTPException(404, f"webhook {webhook_id} not found")
+        return info
+
+    @app.patch(
+        "/v1/webhooks/{webhook_id}",
+        response_model=WebhookInfo,
+        tags=["webhooks"],
+    )
+    async def update_webhook(
+        webhook_id: int,
+        body: WebhookUpdateRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Update a webhook (admin only)."""
+        _require_db_webhooks()
+        info = await _db_webhooks.update(
+            webhook_id,
+            url=body.url,
+            events=body.events,
+            active=body.active,
+        )
+        if info is None:
+            raise HTTPException(404, f"webhook {webhook_id} not found")
+        await _db_audit.record(
+            action=AuditAction.webhook_update,
+            actor=actor.name,
+            target=str(webhook_id),
+        )
+        return info
+
+    @app.delete(
+        "/v1/webhooks/{webhook_id}",
+        tags=["webhooks"],
+    )
+    async def delete_webhook(
+        webhook_id: int,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Delete a webhook (admin only)."""
+        _require_db_webhooks()
+        deleted = await _db_webhooks.delete(webhook_id)
+        if not deleted:
+            raise HTTPException(404, f"webhook {webhook_id} not found")
+        await _db_audit.record(
+            action=AuditAction.webhook_delete,
+            actor=actor.name,
+            target=str(webhook_id),
+        )
+        return {"ok": True, "id": webhook_id}
+
+    @app.post(
+        "/v1/webhooks/{webhook_id}/test",
+        tags=["webhooks"],
+    )
+    async def test_webhook(
+        webhook_id: int,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Send a test payload to a webhook."""
+        _require_db_webhooks()
+        info = await _db_webhooks.get(webhook_id)
+        if info is None:
+            raise HTTPException(404, f"webhook {webhook_id} not found")
+        secret = await _db_webhooks.get_secret(webhook_id)
+        # Build test payload
+        import hmac as _hmac_mod
+        import hashlib as _hashlib_mod
+
+        payload = json.dumps({
+            "event": "webhook.test",
+            "webhook_id": webhook_id,
+            "triggered_by": actor.name,
+        })
+        sig = _hmac_mod.new(
+            (secret or "").encode(), payload.encode(), _hashlib_mod.sha256,
+        ).hexdigest()
+        # Attempt delivery
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    info.url,
+                    content=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-CvcPkg-Signature": f"sha256={sig}",
+                        "X-CvcPkg-Event": "webhook.test",
+                    },
+                )
+            await _db_webhooks.record_delivery(webhook_id)
+            return {
+                "ok": True,
+                "status_code": resp.status_code,
+                "webhook_id": webhook_id,
+            }
+        except Exception as exc:
+            await _db_webhooks.record_failure(webhook_id)
+            raise HTTPException(502, f"delivery failed: {exc}") from exc
 
     # ── Mirror-mode download proxy ──────────────────────────
 

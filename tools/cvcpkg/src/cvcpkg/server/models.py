@@ -85,6 +85,11 @@ class AuditAction(str, Enum):
     build_claim = "build_claim"
     build_complete = "build_complete"
     build_fail = "build_fail"
+    recipe_upload = "recipe_upload"
+    recipe_delete = "recipe_delete"
+    webhook_register = "webhook_register"
+    webhook_update = "webhook_update"
+    webhook_delete = "webhook_delete"
 
 
 # ── Token management ───────────────────────────────────────────
@@ -780,3 +785,78 @@ class BuildLogAppendRequest(BaseModel):
         ..., min_length=1, max_length=65536,
         description="Log data chunk (plain text, max 64 KB per append).",
     )
+
+
+# ── Recipe distribution models ──────────────────────────────────
+
+
+class RecipeInfo(BaseModel):
+    """Public representation of a server-managed recipe."""
+
+    id: int
+    name: str
+    version: str = ""
+    recipe_hash: str = ""
+    org_slug: str = ""
+    bundle_size: int = 0
+    uploaded_by: str = ""
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
+    updated_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
+
+
+class RecipeListResponse(BaseModel):
+    total: int
+    recipes: list[RecipeInfo]
+
+
+# ── Webhook models ─────────────────────────────────────────
+
+
+class WebhookInfo(BaseModel):
+    """Public representation of a webhook."""
+
+    id: int
+    url: str
+    events: list[str] = Field(default_factory=list)
+    org_slug: str = ""
+    active: bool = True
+    registered_by: str = ""
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
+    last_delivery_at: datetime.datetime | None = None
+    consecutive_failures: int = 0
+
+
+class WebhookRegisterRequest(BaseModel):
+    """Request body for registering a webhook."""
+
+    url: str = Field(
+        ..., min_length=1, max_length=2048,
+        description="HTTPS delivery URL.",
+    )
+    events: list[str] = Field(
+        ..., min_length=1,
+        description="Events to subscribe to.",
+    )
+    org_slug: str = Field(
+        default="", max_length=255,
+        description="Organization scope (empty = global).",
+    )
+
+
+class WebhookUpdateRequest(BaseModel):
+    """Request body for updating a webhook."""
+
+    url: str | None = Field(None, max_length=2048)
+    events: list[str] | None = None
+    active: bool | None = None
+
+
+class WebhookListResponse(BaseModel):
+    total: int
+    webhooks: list[WebhookInfo]
