@@ -12,7 +12,7 @@ aiosqlite = pytest.importorskip("aiosqlite", reason="aiosqlite required for buil
 from fastapi.testclient import TestClient
 
 from cvcpkg.server.app import create_app
-from cvcpkg.server.models import BuildJobStatus, TokenRole
+from cvcpkg.server.models import TokenRole
 
 # ── Fixtures ────────────────────────────────────────────────────
 
@@ -86,12 +86,12 @@ class TestDbBuildJobStoreLog:
         async def _test():
             store = DbBuildJobStore()
             job = await store.create(
-                recipe_name="zlib", platform="linux", arch="x86_64",
+                recipe_name="zlib",
+                platform="linux",
+                arch="x86_64",
                 submitted_by="admin",
             )
-            info = await store.append_log(
-                job.id, "line 1\n", logs_dir=self._logs_dir()
-            )
+            info = await store.append_log(job.id, "line 1\n", logs_dir=self._logs_dir())
             assert info is not None
             assert info.log_url is not None
             assert info.log_size_bytes > 0
@@ -104,7 +104,9 @@ class TestDbBuildJobStoreLog:
         async def _test():
             store = DbBuildJobStore()
             job = await store.create(
-                recipe_name="zlib", platform="linux", arch="x86_64",
+                recipe_name="zlib",
+                platform="linux",
+                arch="x86_64",
                 submitted_by="admin",
             )
             logs = self._logs_dir()
@@ -124,9 +126,7 @@ class TestDbBuildJobStoreLog:
 
         async def _test():
             store = DbBuildJobStore()
-            result = await store.append_log(
-                9999, "data", logs_dir=self._logs_dir()
-            )
+            result = await store.append_log(9999, "data", logs_dir=self._logs_dir())
             assert result is None
 
         self._run(_test())
@@ -138,9 +138,9 @@ class TestDbBuildJobStoreLog:
         async def _test():
             store = DbBuildJobStore()
             jobs = await store.create_dag(
-                [{"recipe_name": "zlib", "platform": "linux", "arch": "x86_64",
-                  "depends_on": []}],
-                "dag-log", "admin",
+                [{"recipe_name": "zlib", "platform": "linux", "arch": "x86_64", "depends_on": []}],
+                "dag-log",
+                "admin",
             )
             logs = self._logs_dir()
             await store.append_log(jobs[0].id, "dag log\n", logs_dir=logs)
@@ -158,7 +158,9 @@ class TestDbBuildJobStoreLog:
         async def _test():
             store = DbBuildJobStore()
             job = await store.create(
-                recipe_name="zlib", platform="linux", arch="x86_64",
+                recipe_name="zlib",
+                platform="linux",
+                arch="x86_64",
                 submitted_by="admin",
             )
             logs = self._logs_dir()
@@ -172,9 +174,7 @@ class TestDbBuildJobStoreLog:
 
         async def _test():
             store = DbBuildJobStore()
-            result = await store.get_log_path(
-                9999, logs_dir=self._logs_dir()
-            )
+            result = await store.get_log_path(9999, logs_dir=self._logs_dir())
             assert result is None
 
         self._run(_test())
@@ -186,12 +186,12 @@ class TestDbBuildJobStoreLog:
         async def _test():
             store = DbBuildJobStore()
             job = await store.create(
-                recipe_name="zlib", platform="linux", arch="x86_64",
+                recipe_name="zlib",
+                platform="linux",
+                arch="x86_64",
                 submitted_by="admin",
             )
-            result = await store.get_log_path(
-                job.id, logs_dir=self._logs_dir()
-            )
+            result = await store.get_log_path(job.id, logs_dir=self._logs_dir())
             assert result is None
 
         self._run(_test())
@@ -202,7 +202,9 @@ class TestDbBuildJobStoreLog:
         async def _test():
             store = DbBuildJobStore()
             job = await store.create(
-                recipe_name="zlib", platform="linux", arch="x86_64",
+                recipe_name="zlib",
+                platform="linux",
+                arch="x86_64",
                 submitted_by="admin",
             )
             logs = self._logs_dir()
@@ -244,7 +246,9 @@ class TestDbBuildJobStoreLog:
         async def _test():
             store = DbBuildJobStore()
             job = await store.create(
-                recipe_name="zlib", platform="linux", arch="x86_64",
+                recipe_name="zlib",
+                platform="linux",
+                arch="x86_64",
                 submitted_by="admin",
             )
             result = await store.delete_log(job.id, logs_dir=self._logs_dir())
@@ -253,16 +257,21 @@ class TestDbBuildJobStoreLog:
         self._run(_test())
 
     def test_next_job_for_builder(self):
-        from cvcpkg.server.db_stores import DbBuildJobStore, DbBuilderStore
+        from cvcpkg.server.db_stores import DbBuilderStore, DbBuildJobStore
 
         async def _test():
             bstore = DbBuilderStore()
             builder = await bstore.register(
-                name="b1", platform="linux", arch="x86_64", registered_by="a",
+                name="b1",
+                platform="linux",
+                arch="x86_64",
+                registered_by="a",
             )
             store = DbBuildJobStore()
             job = await store.create(
-                recipe_name="zlib", platform="linux", arch="x86_64",
+                recipe_name="zlib",
+                platform="linux",
+                arch="x86_64",
                 submitted_by="admin",
             )
             # Dispatch job to builder
@@ -276,12 +285,15 @@ class TestDbBuildJobStoreLog:
         self._run(_test())
 
     def test_next_job_for_builder_none(self):
-        from cvcpkg.server.db_stores import DbBuildJobStore, DbBuilderStore
+        from cvcpkg.server.db_stores import DbBuilderStore, DbBuildJobStore
 
         async def _test():
             bstore = DbBuilderStore()
             builder = await bstore.register(
-                name="b1", platform="linux", arch="x86_64", registered_by="a",
+                name="b1",
+                platform="linux",
+                arch="x86_64",
+                registered_by="a",
             )
             store = DbBuildJobStore()
             # No jobs dispatched
@@ -292,21 +304,30 @@ class TestDbBuildJobStoreLog:
 
     def test_next_job_for_builder_priority(self):
         """Should return highest-priority dispatched job."""
-        from cvcpkg.server.db_stores import DbBuildJobStore, DbBuilderStore
+        from cvcpkg.server.db_stores import DbBuilderStore, DbBuildJobStore
 
         async def _test():
             bstore = DbBuilderStore()
             builder = await bstore.register(
-                name="b1", platform="linux", arch="x86_64", registered_by="a",
+                name="b1",
+                platform="linux",
+                arch="x86_64",
+                registered_by="a",
             )
             store = DbBuildJobStore()
             low = await store.create(
-                recipe_name="low", platform="linux", arch="x86_64",
-                submitted_by="admin", priority=0,
+                recipe_name="low",
+                platform="linux",
+                arch="x86_64",
+                submitted_by="admin",
+                priority=0,
             )
             high = await store.create(
-                recipe_name="high", platform="linux", arch="x86_64",
-                submitted_by="admin", priority=10,
+                recipe_name="high",
+                platform="linux",
+                arch="x86_64",
+                submitted_by="admin",
+                priority=10,
             )
             await store.dispatch(low.id, builder.id)
             await store.dispatch(high.id, builder.id)
@@ -318,16 +339,21 @@ class TestDbBuildJobStoreLog:
 
     def test_next_job_ignores_running(self):
         """next_job_for_builder should not return running jobs."""
-        from cvcpkg.server.db_stores import DbBuildJobStore, DbBuilderStore
+        from cvcpkg.server.db_stores import DbBuilderStore, DbBuildJobStore
 
         async def _test():
             bstore = DbBuilderStore()
             builder = await bstore.register(
-                name="b1", platform="linux", arch="x86_64", registered_by="a",
+                name="b1",
+                platform="linux",
+                arch="x86_64",
+                registered_by="a",
             )
             store = DbBuildJobStore()
             job = await store.create(
-                recipe_name="zlib", platform="linux", arch="x86_64",
+                recipe_name="zlib",
+                platform="linux",
+                arch="x86_64",
                 submitted_by="admin",
             )
             await store.claim(job.id, builder.id)  # running, not dispatched

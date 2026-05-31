@@ -1852,9 +1852,7 @@ class DbBuilderStore:
         """Get a builder by ID."""
         async with get_session() as session:
             row = (
-                await session.execute(
-                    select(BuilderRow).where(BuilderRow.id == builder_id)
-                )
+                await session.execute(select(BuilderRow).where(BuilderRow.id == builder_id))
             ).scalar()
             return self._row_to_info(row) if row else None
 
@@ -1892,9 +1890,7 @@ class DbBuilderStore:
         """Update mutable fields. Returns updated info or None if not found."""
         async with get_session() as session:
             row = (
-                await session.execute(
-                    select(BuilderRow).where(BuilderRow.id == builder_id)
-                )
+                await session.execute(select(BuilderRow).where(BuilderRow.id == builder_id))
             ).scalar()
             if row is None:
                 return None
@@ -1919,9 +1915,7 @@ class DbBuilderStore:
         now = datetime.datetime.now(datetime.timezone.utc)
         async with get_session() as session:
             row = (
-                await session.execute(
-                    select(BuilderRow).where(BuilderRow.id == builder_id)
-                )
+                await session.execute(select(BuilderRow).where(BuilderRow.id == builder_id))
             ).scalar()
             if row is None:
                 return None
@@ -1935,9 +1929,7 @@ class DbBuilderStore:
         from sqlalchemy import delete
 
         async with get_session() as session:
-            result = await session.execute(
-                delete(BuilderRow).where(BuilderRow.id == builder_id)
-            )
+            result = await session.execute(delete(BuilderRow).where(BuilderRow.id == builder_id))
             return result.rowcount > 0
 
     async def reap_stale(self, max_age_seconds: int = 180) -> list[BuilderInfo]:
@@ -2004,9 +1996,7 @@ class DbBuildJobStore:
 
     async def _load_dep_ids(self, session, job_id: int) -> list[int]:
         """Load prerequisite job IDs for a given job."""
-        q = select(BuildJobDepRow.depends_on_job_id).where(
-            BuildJobDepRow.job_id == job_id
-        )
+        q = select(BuildJobDepRow.depends_on_job_id).where(BuildJobDepRow.job_id == job_id)
         rows = (await session.execute(q)).scalars().all()
         return list(rows)
 
@@ -2050,9 +2040,7 @@ class DbBuildJobStore:
             dep_ids = []
             if depends_on:
                 for dep_id in depends_on:
-                    dep_row = BuildJobDepRow(
-                        job_id=row.id, depends_on_job_id=dep_id
-                    )
+                    dep_row = BuildJobDepRow(job_id=row.id, depends_on_job_id=dep_id)
                     session.add(dep_row)
                 dep_ids = list(depends_on)
 
@@ -2113,9 +2101,7 @@ class DbBuildJobStore:
             results = []
             for i, row in enumerate(created_rows):
                 real_dep_ids = [
-                    created_rows[di].id
-                    for di in idx_deps[i]
-                    if 0 <= di < len(created_rows)
+                    created_rows[di].id for di in idx_deps[i] if 0 <= di < len(created_rows)
                 ]
                 results.append(self._row_to_info(row, real_dep_ids))
             return results
@@ -2124,9 +2110,7 @@ class DbBuildJobStore:
         """Get a build job by ID."""
         async with get_session() as session:
             row = (
-                await session.execute(
-                    select(BuildJobRow).where(BuildJobRow.id == job_id)
-                )
+                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
             ).scalar()
             if row is None:
                 return None
@@ -2182,9 +2166,7 @@ class DbBuildJobStore:
         now = datetime.datetime.now(datetime.timezone.utc)
         async with get_session() as session:
             row = (
-                await session.execute(
-                    select(BuildJobRow).where(BuildJobRow.id == job_id)
-                )
+                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
             ).scalar()
             if row is None:
                 return None
@@ -2206,10 +2188,12 @@ class DbBuildJobStore:
                 select(BuildJobRow)
                 .where(BuildJobRow.dag_id == dag_id)
                 .where(
-                    BuildJobRow.status.in_([
-                        BuildJobStatus.pending,
-                        BuildJobStatus.dispatched,
-                    ])
+                    BuildJobRow.status.in_(
+                        [
+                            BuildJobStatus.pending,
+                            BuildJobStatus.dispatched,
+                        ]
+                    )
                 )
             )
             rows = (await session.execute(q)).scalars().all()
@@ -2218,16 +2202,12 @@ class DbBuildJobStore:
                 row.finished_at = now
             return len(rows)
 
-    async def claim(
-        self, job_id: int, builder_id: int
-    ) -> BuildJobInfo | None:
+    async def claim(self, job_id: int, builder_id: int) -> BuildJobInfo | None:
         """Builder claims a dispatched job → running."""
         now = datetime.datetime.now(datetime.timezone.utc)
         async with get_session() as session:
             row = (
-                await session.execute(
-                    select(BuildJobRow).where(BuildJobRow.id == job_id)
-                )
+                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
             ).scalar()
             if row is None:
                 return None
@@ -2243,16 +2223,12 @@ class DbBuildJobStore:
             dep_ids = await self._load_dep_ids(session, job_id)
             return self._row_to_info(row, dep_ids)
 
-    async def complete(
-        self, job_id: int, *, result_archive_url: str = ""
-    ) -> BuildJobInfo | None:
+    async def complete(self, job_id: int, *, result_archive_url: str = "") -> BuildJobInfo | None:
         """Mark a job as succeeded."""
         now = datetime.datetime.now(datetime.timezone.utc)
         async with get_session() as session:
             row = (
-                await session.execute(
-                    select(BuildJobRow).where(BuildJobRow.id == job_id)
-                )
+                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
             ).scalar()
             if row is None:
                 return None
@@ -2263,16 +2239,12 @@ class DbBuildJobStore:
             dep_ids = await self._load_dep_ids(session, job_id)
             return self._row_to_info(row, dep_ids)
 
-    async def fail(
-        self, job_id: int, *, error_message: str = ""
-    ) -> BuildJobInfo | None:
+    async def fail(self, job_id: int, *, error_message: str = "") -> BuildJobInfo | None:
         """Mark a job as failed."""
         now = datetime.datetime.now(datetime.timezone.utc)
         async with get_session() as session:
             row = (
-                await session.execute(
-                    select(BuildJobRow).where(BuildJobRow.id == job_id)
-                )
+                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
             ).scalar()
             if row is None:
                 return None
@@ -2318,9 +2290,7 @@ class DbBuildJobStore:
         """Mark a pending job as dispatched to a specific builder."""
         async with get_session() as session:
             row = (
-                await session.execute(
-                    select(BuildJobRow).where(BuildJobRow.id == job_id)
-                )
+                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
             ).scalar()
             if row is None:
                 return None
@@ -2332,9 +2302,7 @@ class DbBuildJobStore:
             dep_ids = await self._load_dep_ids(session, job_id)
             return self._row_to_info(row, dep_ids)
 
-    async def reap_timed_out(
-        self, default_timeout: int = 86400
-    ) -> list[BuildJobInfo]:
+    async def reap_timed_out(self, default_timeout: int = 86400) -> list[BuildJobInfo]:
         """Mark running jobs that exceed their timeout as timed_out.
 
         Uses per-job ``timeout_seconds`` if set, otherwise *default_timeout*.
@@ -2390,9 +2358,7 @@ class DbBuildJobStore:
                     if ds_id in visited:
                         continue
                     row = (
-                        await session.execute(
-                            select(BuildJobRow).where(BuildJobRow.id == ds_id)
-                        )
+                        await session.execute(select(BuildJobRow).where(BuildJobRow.id == ds_id))
                     ).scalar()
                     if row and row.status in (
                         BuildJobStatus.pending,
@@ -2422,9 +2388,7 @@ class DbBuildJobStore:
         """
         async with get_session() as session:
             row = (
-                await session.execute(
-                    select(BuildJobRow).where(BuildJobRow.id == job_id)
-                )
+                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
             ).scalar()
             if row is None:
                 return None
@@ -2458,9 +2422,7 @@ class DbBuildJobStore:
         """Return the filesystem path for a job's log, or None."""
         async with get_session() as session:
             row = (
-                await session.execute(
-                    select(BuildJobRow).where(BuildJobRow.id == job_id)
-                )
+                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
             ).scalar()
             if row is None or not row.log_url:
                 return None
@@ -2478,9 +2440,7 @@ class DbBuildJobStore:
         """Delete a job's log file.  Returns True if deleted."""
         async with get_session() as session:
             row = (
-                await session.execute(
-                    select(BuildJobRow).where(BuildJobRow.id == job_id)
-                )
+                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
             ).scalar()
             if row is None:
                 return False
@@ -2492,9 +2452,7 @@ class DbBuildJobStore:
             row.log_size_bytes = None
             return True
 
-    async def next_job_for_builder(
-        self, builder_id: int
-    ) -> BuildJobInfo | None:
+    async def next_job_for_builder(self, builder_id: int) -> BuildJobInfo | None:
         """Find the next dispatched or pending job for a builder.
 
         Returns the first dispatched job assigned to this builder,
@@ -2556,8 +2514,9 @@ class DbBuildJobStore:
         async with get_session() as session:
             result = (
                 await session.execute(
-                    select(sa_func.coalesce(sa_func.sum(BuildJobRow.log_size_bytes), 0))
-                    .where(BuildJobRow.org_slug == org_slug)
+                    select(sa_func.coalesce(sa_func.sum(BuildJobRow.log_size_bytes), 0)).where(
+                        BuildJobRow.org_slug == org_slug
+                    )
                 )
             ).scalar()
             return int(result or 0)
@@ -2786,9 +2745,7 @@ class DbWebhookStore:
         """Get a webhook by ID."""
         async with get_session() as session:
             row = (
-                await session.execute(
-                    select(WebhookRow).where(WebhookRow.id == webhook_id)
-                )
+                await session.execute(select(WebhookRow).where(WebhookRow.id == webhook_id))
             ).scalar()
             if row is None:
                 return None
@@ -2798,9 +2755,7 @@ class DbWebhookStore:
         """Return the secret for a webhook, or None."""
         async with get_session() as session:
             result = (
-                await session.execute(
-                    select(WebhookRow.secret).where(WebhookRow.id == webhook_id)
-                )
+                await session.execute(select(WebhookRow.secret).where(WebhookRow.id == webhook_id))
             ).scalar()
             return result
 
@@ -2838,9 +2793,7 @@ class DbWebhookStore:
         """Update a webhook.  Returns updated info or None if not found."""
         async with get_session() as session:
             row = (
-                await session.execute(
-                    select(WebhookRow).where(WebhookRow.id == webhook_id)
-                )
+                await session.execute(select(WebhookRow).where(WebhookRow.id == webhook_id))
             ).scalar()
             if row is None:
                 return None
@@ -2857,9 +2810,7 @@ class DbWebhookStore:
         """Delete a webhook.  Returns True if a row was deleted."""
         async with get_session() as session:
             row = (
-                await session.execute(
-                    select(WebhookRow).where(WebhookRow.id == webhook_id)
-                )
+                await session.execute(select(WebhookRow).where(WebhookRow.id == webhook_id))
             ).scalar()
             if row is None:
                 return False
@@ -2890,9 +2841,7 @@ class DbWebhookStore:
         """
         async with get_session() as session:
             row = (
-                await session.execute(
-                    select(WebhookRow).where(WebhookRow.id == webhook_id)
-                )
+                await session.execute(select(WebhookRow).where(WebhookRow.id == webhook_id))
             ).scalar()
             if row is None:
                 return False
@@ -2904,7 +2853,10 @@ class DbWebhookStore:
             return disabled
 
     async def list_active_for_event(
-        self, event: str, *, org_slug: str = "",
+        self,
+        event: str,
+        *,
+        org_slug: str = "",
     ) -> list[WebhookInfo]:
         """Return active webhooks subscribed to *event*."""
         async with get_session() as session:

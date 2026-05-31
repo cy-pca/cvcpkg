@@ -121,12 +121,18 @@ class TestDbRecipeStore:
         async def _test():
             store = DbRecipeStore()
             info1 = await store.upload(
-                name="zlib", bundle_path="/a.tar.gz", bundle_size=100,
-                uploaded_by="admin1", version="1.0",
+                name="zlib",
+                bundle_path="/a.tar.gz",
+                bundle_size=100,
+                uploaded_by="admin1",
+                version="1.0",
             )
             info2 = await store.upload(
-                name="zlib", bundle_path="/b.tar.gz", bundle_size=200,
-                uploaded_by="admin2", version="2.0",
+                name="zlib",
+                bundle_path="/b.tar.gz",
+                bundle_size=200,
+                uploaded_by="admin2",
+                version="2.0",
             )
             assert info2.id == info1.id
             assert info2.version == "2.0"
@@ -150,12 +156,17 @@ class TestDbRecipeStore:
         async def _test():
             store = DbRecipeStore()
             g = await store.upload(
-                name="zlib", bundle_path="/g.tar.gz", bundle_size=10,
+                name="zlib",
+                bundle_path="/g.tar.gz",
+                bundle_size=10,
                 uploaded_by="admin",
             )
             o = await store.upload(
-                name="zlib", bundle_path="/o.tar.gz", bundle_size=20,
-                uploaded_by="admin", org_slug="myorg",
+                name="zlib",
+                bundle_path="/o.tar.gz",
+                bundle_size=20,
+                uploaded_by="admin",
+                org_slug="myorg",
             )
             assert g.id != o.id
             assert g.org_slug == ""
@@ -169,11 +180,15 @@ class TestDbRecipeStore:
         async def _test():
             store = DbRecipeStore()
             await store.upload(
-                name="boost", bundle_path="/b.tar.gz", bundle_size=100,
+                name="boost",
+                bundle_path="/b.tar.gz",
+                bundle_size=100,
                 uploaded_by="admin",
             )
             await store.upload(
-                name="zlib", bundle_path="/z.tar.gz", bundle_size=50,
+                name="zlib",
+                bundle_path="/z.tar.gz",
+                bundle_size=50,
                 uploaded_by="admin",
             )
             recipes, total = await store.list_recipes()
@@ -191,12 +206,17 @@ class TestDbRecipeStore:
         async def _test():
             store = DbRecipeStore()
             await store.upload(
-                name="zlib", bundle_path="/z.tar.gz", bundle_size=50,
+                name="zlib",
+                bundle_path="/z.tar.gz",
+                bundle_size=50,
                 uploaded_by="admin",
             )
             await store.upload(
-                name="zlib", bundle_path="/zo.tar.gz", bundle_size=60,
-                uploaded_by="admin", org_slug="myorg",
+                name="zlib",
+                bundle_path="/zo.tar.gz",
+                bundle_size=60,
+                uploaded_by="admin",
+                org_slug="myorg",
             )
             recipes, total = await store.list_recipes(org_slug="myorg")
             assert total == 1
@@ -222,7 +242,9 @@ class TestDbRecipeStore:
             store = DbRecipeStore()
             for name in ["a", "b", "c", "d", "e"]:
                 await store.upload(
-                    name=name, bundle_path=f"/{name}.tar.gz", bundle_size=10,
+                    name=name,
+                    bundle_path=f"/{name}.tar.gz",
+                    bundle_size=10,
                     uploaded_by="admin",
                 )
             page1, total = await store.list_recipes(limit=2, offset=0)
@@ -239,7 +261,9 @@ class TestDbRecipeStore:
         async def _test():
             store = DbRecipeStore()
             await store.upload(
-                name="zlib", bundle_path="/z.tar.gz", bundle_size=50,
+                name="zlib",
+                bundle_path="/z.tar.gz",
+                bundle_size=50,
                 uploaded_by="admin",
             )
             deleted = await store.delete("zlib")
@@ -264,7 +288,9 @@ class TestDbRecipeStore:
         async def _test():
             store = DbRecipeStore()
             await store.upload(
-                name="zlib", bundle_path="/data/zlib.tar.gz", bundle_size=50,
+                name="zlib",
+                bundle_path="/data/zlib.tar.gz",
+                bundle_size=50,
                 uploaded_by="admin",
             )
             path = await store.get_bundle_path("zlib")
@@ -288,8 +314,11 @@ class TestDbRecipeStore:
         async def _test():
             store = DbRecipeStore()
             info = await store.upload(
-                name="zlib", bundle_path="/z.tar.gz", bundle_size=50,
-                uploaded_by="admin", recipe_hash="abc123",
+                name="zlib",
+                bundle_path="/z.tar.gz",
+                bundle_size=50,
+                uploaded_by="admin",
+                recipe_hash="abc123",
             )
             assert info.recipe_hash == "abc123"
 

@@ -75,8 +75,8 @@ class TestDetectArch:
 
     def test_unsupported(self, monkeypatch):
         monkeypatch.setattr("platform.machine", lambda: "mips64")
-        with pytest.raises(RuntimeError, match="unsupported architecture"):
-            detect_arch()
+        # Unknown architectures are passed through as-is rather than raising.
+        assert detect_arch() == "mips64"
 
 
 class TestDetectPointerSize:

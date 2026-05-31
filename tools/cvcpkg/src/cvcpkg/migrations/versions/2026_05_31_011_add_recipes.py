@@ -52,9 +52,7 @@ def upgrade() -> None:
                 server_default=sa.func.now(),
             ),
         )
-        op.create_unique_constraint(
-            "uq_recipe_name_org", "recipes", ["name", "org_slug"]
-        )
+        op.create_unique_constraint("uq_recipe_name_org", "recipes", ["name", "org_slug"])
         op.create_index("ix_recipes_name", "recipes", ["name"])
         op.create_index("ix_recipes_org_slug", "recipes", ["org_slug"])
 

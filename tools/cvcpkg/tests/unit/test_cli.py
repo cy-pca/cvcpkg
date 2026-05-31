@@ -1283,9 +1283,7 @@ class TestPublishRecipeName:
 
         from cvcpkg.cli import _resolve_publish_archives
 
-        a1 = self._make_archive(
-            tmp_path, "zlib", "1.3.1+cvc.1", "linux", "x86_64", "release", "shared"
-        )
+        self._make_archive(tmp_path, "zlib", "1.3.1+cvc.1", "linux", "x86_64", "release", "shared")
         a2 = self._make_archive(
             tmp_path, "grpc", "1.60.0+cvc.1", "linux", "x86_64", "release", "shared"
         )

@@ -267,7 +267,9 @@ class TestChunkedUpload:
 
         resp = client.post(
             f"/v1/upload/{upload_id}/complete",
-            params={"expected_sha256": "0000000000000000000000000000000000000000000000000000000000000000"},
+            params={
+                "expected_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+            },
             headers=hdrs,
         )
         assert resp.status_code == 422
@@ -424,7 +426,12 @@ class TestChunkedUpload:
 
         resp = client.post(
             "/v1/upload/init",
-            params={"name": "chunked-pkg", "version": "3.0.0", "platform": "linux", "arch": "x86_64"},
+            params={
+                "name": "chunked-pkg",
+                "version": "3.0.0",
+                "platform": "linux",
+                "arch": "x86_64",
+            },
             headers=hdrs,
         )
         upload_id = resp.json()["upload_id"]

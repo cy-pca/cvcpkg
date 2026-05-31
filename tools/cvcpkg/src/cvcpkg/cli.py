@@ -2529,6 +2529,8 @@ def pack_all_cmd(
       cvcpkg pack-all --platform wasm --shard 1/3 --host-platform macos ...
       cvcpkg pack-all --platform wasm --shard 2/3 --host-platform windows ...
     """
+    import shutil
+
     from cvcpkg.builder import (
         build_all,
         create_archive,
@@ -2538,8 +2540,6 @@ def pack_all_cmd(
         stage_bundle,
     )
     from cvcpkg.platform import detect_arch
-
-    import shutil
 
     plat = _auto_platform(platform)
     arch = detect_arch()
@@ -4682,6 +4682,7 @@ def builds_purge(
     Example: cvcpkg builds purge --older-than 30d --status failed
     """
     import re
+
     import httpx
 
     m = re.match(r"^(\d+)d$", older_than)
@@ -4759,7 +4760,7 @@ def recipe_push(name: str, server: str, token: str, recipes_dir: str | None, org
         try:
             rdir = find_recipes_dir()
         except RecipeError:
-            raise click.ClickException("could not find recipes directory")
+            raise click.ClickException("could not find recipes directory") from None
 
     recipe_path = rdir / name
     if not recipe_path.is_dir():

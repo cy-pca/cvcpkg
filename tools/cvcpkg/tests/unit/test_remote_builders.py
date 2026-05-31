@@ -12,7 +12,7 @@ aiosqlite = pytest.importorskip("aiosqlite", reason="aiosqlite required for buil
 from fastapi.testclient import TestClient
 
 from cvcpkg.server.app import create_app
-from cvcpkg.server.models import AuditAction, BuilderStatus, TokenRole
+from cvcpkg.server.models import BuilderStatus, TokenRole
 
 # ── Fixtures ────────────────────────────────────────────────────
 
@@ -106,12 +106,18 @@ class TestDbBuilderStore:
         async def _test():
             store = DbBuilderStore()
             info1 = await store.register(
-                name="builder-1", platform="linux", arch="x86_64",
-                registered_by="admin-1", labels=["old"],
+                name="builder-1",
+                platform="linux",
+                arch="x86_64",
+                registered_by="admin-1",
+                labels=["old"],
             )
             info2 = await store.register(
-                name="builder-1", platform="linux", arch="arm64",
-                registered_by="admin-2", labels=["new"],
+                name="builder-1",
+                platform="linux",
+                arch="arm64",
+                registered_by="admin-2",
+                labels=["new"],
             )
             assert info2.id == info1.id
             assert info2.arch == "arm64"
@@ -128,8 +134,11 @@ class TestDbBuilderStore:
             await store.register(name="b1", platform="linux", arch="x86_64", registered_by="a")
             await store.register(name="b2", platform="macos", arch="arm64", registered_by="a")
             await store.register(
-                name="b3", platform="linux", arch="arm64",
-                registered_by="a", org_slug="myorg",
+                name="b3",
+                platform="linux",
+                arch="arm64",
+                registered_by="a",
+                org_slug="myorg",
             )
 
             all_builders = await store.list_builders()
@@ -153,8 +162,11 @@ class TestDbBuilderStore:
         async def _test():
             store = DbBuilderStore()
             info = await store.register(
-                name="b1", platform="linux", arch="x86_64",
-                registered_by="a", max_jobs=1,
+                name="b1",
+                platform="linux",
+                arch="x86_64",
+                registered_by="a",
+                max_jobs=1,
             )
 
             updated = await store.update(info.id, max_jobs=4, labels=["updated"])
@@ -183,7 +195,10 @@ class TestDbBuilderStore:
         async def _test():
             store = DbBuilderStore()
             info = await store.register(
-                name="b1", platform="linux", arch="x86_64", registered_by="a",
+                name="b1",
+                platform="linux",
+                arch="x86_64",
+                registered_by="a",
             )
             updated = await store.heartbeat(info.id, status="busy", current_jobs=2)
             assert updated is not None
@@ -209,7 +224,10 @@ class TestDbBuilderStore:
         async def _test():
             store = DbBuilderStore()
             info = await store.register(
-                name="b1", platform="linux", arch="x86_64", registered_by="a",
+                name="b1",
+                platform="linux",
+                arch="x86_64",
+                registered_by="a",
             )
             removed = await store.unregister(info.id)
             assert removed is True
@@ -237,19 +255,21 @@ class TestDbBuilderStore:
         async def _test():
             store = DbBuilderStore()
             info = await store.register(
-                name="b1", platform="linux", arch="x86_64", registered_by="a",
+                name="b1",
+                platform="linux",
+                arch="x86_64",
+                registered_by="a",
             )
             assert info.status == BuilderStatus.online
 
             # Force last_heartbeat to be old
-            from cvcpkg.server.db import BuilderRow, get_session
             from sqlalchemy import select
+
+            from cvcpkg.server.db import BuilderRow, get_session
 
             async with get_session() as session:
                 row = (
-                    await session.execute(
-                        select(BuilderRow).where(BuilderRow.id == info.id)
-                    )
+                    await session.execute(select(BuilderRow).where(BuilderRow.id == info.id))
                 ).scalar()
                 row.last_heartbeat = datetime.datetime.now(
                     datetime.timezone.utc
@@ -278,17 +298,20 @@ class TestDbBuilderStore:
         async def _test():
             store = DbBuilderStore()
             info = await store.register(
-                name="corrupt-b", platform="linux", arch="x86_64",
+                name="corrupt-b",
+                platform="linux",
+                arch="x86_64",
                 registered_by="admin",
             )
             # Manually corrupt the JSON columns
-            from cvcpkg.server.db import BuilderRow, get_session
             from sqlalchemy import select
 
+            from cvcpkg.server.db import BuilderRow, get_session
+
             async with get_session() as session:
-                row = (await session.execute(
-                    select(BuilderRow).where(BuilderRow.id == info.id)
-                )).scalar()
+                row = (
+                    await session.execute(select(BuilderRow).where(BuilderRow.id == info.id))
+                ).scalar()
                 row.labels = "NOT VALID JSON{{"
                 row.capabilities = "also broken["
 
@@ -305,12 +328,18 @@ class TestDbBuilderStore:
         async def _test():
             store = DbBuilderStore()
             b1 = await store.register(
-                name="shared-name", platform="linux", arch="x86_64",
-                registered_by="admin", org_slug="orgA",
+                name="shared-name",
+                platform="linux",
+                arch="x86_64",
+                registered_by="admin",
+                org_slug="orgA",
             )
             b2 = await store.register(
-                name="shared-name", platform="linux", arch="x86_64",
-                registered_by="admin", org_slug="orgB",
+                name="shared-name",
+                platform="linux",
+                arch="x86_64",
+                registered_by="admin",
+                org_slug="orgB",
             )
             assert b1.id != b2.id
             assert b1.org_slug == "orgA"
@@ -326,11 +355,17 @@ class TestDbBuilderStore:
 
         async def _test():
             store = DbBuilderStore()
-            b1 = await store.register(
-                name="b1", platform="linux", arch="x86_64", registered_by="a",
+            await store.register(
+                name="b1",
+                platform="linux",
+                arch="x86_64",
+                registered_by="a",
             )
             b2 = await store.register(
-                name="b2", platform="linux", arch="x86_64", registered_by="a",
+                name="b2",
+                platform="linux",
+                arch="x86_64",
+                registered_by="a",
             )
             # b2 goes offline
             await store.heartbeat(b2.id, status="offline", current_jobs=0)
@@ -376,7 +411,10 @@ class TestDbBuilderStore:
         async def _test():
             store = DbBuilderStore()
             await store.register(
-                name="fresh", platform="linux", arch="x86_64", registered_by="a",
+                name="fresh",
+                platform="linux",
+                arch="x86_64",
+                registered_by="a",
             )
             reaped = await store.reap_stale(max_age_seconds=180)
             assert reaped == []
@@ -390,16 +428,20 @@ class TestDbBuilderStore:
         async def _test():
             store = DbBuilderStore()
             info = await store.register(
-                name="b1", platform="linux", arch="x86_64", registered_by="a",
+                name="b1",
+                platform="linux",
+                arch="x86_64",
+                registered_by="a",
             )
             # Null out the heartbeat
-            from cvcpkg.server.db import BuilderRow, get_session
             from sqlalchemy import select
 
+            from cvcpkg.server.db import BuilderRow, get_session
+
             async with get_session() as session:
-                row = (await session.execute(
-                    select(BuilderRow).where(BuilderRow.id == info.id)
-                )).scalar()
+                row = (
+                    await session.execute(select(BuilderRow).where(BuilderRow.id == info.id))
+                ).scalar()
                 row.last_heartbeat = None
 
             reaped = await store.reap_stale(max_age_seconds=180)
@@ -414,7 +456,10 @@ class TestDbBuilderStore:
         async def _test():
             store = DbBuilderStore()
             info = await store.register(
-                name="b1", platform="linux", arch="x86_64", registered_by="a",
+                name="b1",
+                platform="linux",
+                arch="x86_64",
+                registered_by="a",
             )
             await store.heartbeat(info.id, status="offline", current_jobs=0)
             reaped = await store.reap_stale(max_age_seconds=0)  # 0 = everything is stale
@@ -428,8 +473,11 @@ class TestDbBuilderStore:
         async def _test():
             store = DbBuilderStore()
             info = await store.register(
-                name="b1", platform="linux", arch="x86_64",
-                registered_by="a", prefer_affinity=False,
+                name="b1",
+                platform="linux",
+                arch="x86_64",
+                registered_by="a",
+                prefer_affinity=False,
             )
             updated = await store.update(info.id, prefer_affinity=True)
             assert updated.prefer_affinity is True
@@ -442,7 +490,10 @@ class TestDbBuilderStore:
         async def _test():
             store = DbBuilderStore()
             info = await store.register(
-                name="b1", platform="linux", arch="x86_64", registered_by="a",
+                name="b1",
+                platform="linux",
+                arch="x86_64",
+                registered_by="a",
             )
             updated = await store.update(info.id, capabilities={"cmake": True, "ninja": True})
             assert updated.capabilities == {"cmake": True, "ninja": True}
@@ -455,8 +506,11 @@ class TestDbBuilderStore:
         async def _test():
             store = DbBuilderStore()
             info = await store.register(
-                name="b1", platform="linux", arch="x86_64",
-                registered_by="a", max_jobs=2,
+                name="b1",
+                platform="linux",
+                arch="x86_64",
+                registered_by="a",
+                max_jobs=2,
             )
             updated = await store.update(info.id)  # no kwargs
             assert updated.max_jobs == 2  # unchanged
@@ -464,19 +518,21 @@ class TestDbBuilderStore:
         self._run(_test())
 
     def test_heartbeat_updates_timestamp(self):
-        import time
-
         from cvcpkg.server.db_stores import DbBuilderStore
 
         async def _test():
             store = DbBuilderStore()
             info = await store.register(
-                name="b1", platform="linux", arch="x86_64", registered_by="a",
+                name="b1",
+                platform="linux",
+                arch="x86_64",
+                registered_by="a",
             )
             first_hb = info.last_heartbeat
 
             # Small delay, then heartbeat again
             import asyncio
+
             await asyncio.sleep(0.05)
             updated = await store.heartbeat(info.id, status="online", current_jobs=0)
             assert updated.last_heartbeat > first_hb

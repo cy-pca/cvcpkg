@@ -72,9 +72,7 @@ def upgrade() -> None:
         op.create_index("ix_build_jobs_dag_id", "build_jobs", ["dag_id"])
         op.create_index("ix_build_jobs_org_slug", "build_jobs", ["org_slug"])
         op.create_index("ix_build_jobs_status", "build_jobs", ["status"])
-        op.create_index(
-            "ix_build_jobs_platform_arch", "build_jobs", ["platform", "arch"]
-        )
+        op.create_index("ix_build_jobs_platform_arch", "build_jobs", ["platform", "arch"])
         op.create_index("ix_build_jobs_builder_id", "build_jobs", ["builder_id"])
         op.create_index("ix_build_jobs_recipe_name", "build_jobs", ["recipe_name"])
 
@@ -93,16 +91,10 @@ def upgrade() -> None:
                 sa.ForeignKey("build_jobs.id", ondelete="CASCADE"),
                 nullable=False,
             ),
-            sa.UniqueConstraint(
-                "job_id", "depends_on_job_id", name="uq_build_job_dep"
-            ),
+            sa.UniqueConstraint("job_id", "depends_on_job_id", name="uq_build_job_dep"),
         )
-        op.create_index(
-            "ix_build_job_deps_job_id", "build_job_deps", ["job_id"]
-        )
-        op.create_index(
-            "ix_build_job_deps_depends_on", "build_job_deps", ["depends_on_job_id"]
-        )
+        op.create_index("ix_build_job_deps_job_id", "build_job_deps", ["job_id"])
+        op.create_index("ix_build_job_deps_depends_on", "build_job_deps", ["depends_on_job_id"])
 
 
 def downgrade() -> None:
