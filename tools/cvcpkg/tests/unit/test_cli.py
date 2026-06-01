@@ -2040,13 +2040,17 @@ class TestLocalFlag:
         recipes_dir = tmp_path / "empty_recipes"
         recipes_dir.mkdir()
         prefix = tmp_path / "prefix"
-        ret = main([
-            "install",
-            "nonexistent-pkg-xyz",
-            "--prefix", str(prefix),
-            "--local",
-            "--recipes-dir", str(recipes_dir),
-        ])
+        ret = main(
+            [
+                "install",
+                "nonexistent-pkg-xyz",
+                "--prefix",
+                str(prefix),
+                "--local",
+                "--recipes-dir",
+                str(recipes_dir),
+            ]
+        )
         # With --local, _try_pull_server_recipes should NOT be called
         assert not call_tracker["called"]
 
@@ -2072,18 +2076,24 @@ class TestLocalFlag:
 
         # Use real recipes dir so recipe.yaml loads properly
         from cvcpkg.builder import find_recipes_dir
+
         try:
             real_recipes = str(find_recipes_dir())
         except Exception:
             pytest.skip("no recipes directory found")
 
-        ret = main([
-            "build", "zlib",
-            "--local",
-            "--no-deps",
-            "--recipes-dir", real_recipes,
-            "--prefix", str(tmp_path / "prefix"),
-        ])
+        ret = main(
+            [
+                "build",
+                "zlib",
+                "--local",
+                "--no-deps",
+                "--recipes-dir",
+                real_recipes,
+                "--prefix",
+                str(tmp_path / "prefix"),
+            ]
+        )
         # With --local, _try_pull_server_recipes should NOT be called
         assert not call_tracker["called"]
 
@@ -2117,10 +2127,13 @@ class TestTryPullServerRecipes:
         class FakeClient:
             def __init__(self, **kw):
                 pass
+
             def __enter__(self):
                 return self
+
             def __exit__(self, *a):
                 pass
+
             def get(self, url, **kw):
                 return FakeResponse()
 
@@ -2155,10 +2168,13 @@ class TestTryPullServerRecipes:
         class FakeClient:
             def __init__(self, **kw):
                 pass
+
             def __enter__(self):
                 return self
+
             def __exit__(self, *a):
                 pass
+
             def get(self, url, **kw):
                 return FakeResponse()
 
@@ -2185,10 +2201,13 @@ class TestTryPullServerRecipes:
         class FakeClient:
             def __init__(self, **kw):
                 pass
+
             def __enter__(self):
                 return self
+
             def __exit__(self, *a):
                 pass
+
             def get(self, url, headers=None, **kw):
                 captured_headers.update(headers or {})
                 return FakeResponse()
@@ -2260,19 +2279,21 @@ class TestRecipePublishFunctional:
         zlib = recipes_dir / "zlib"
         zlib.mkdir()
         (zlib / "recipe.yaml").write_text(
-            yaml.dump({
-                "recipe": {
-                    "name": "zlib",
-                    "upstream_version": "1.3.1",
-                    "description": "compression",
-                    "homepage": "https://zlib.net",
-                    "license": "zlib",
-                    "maintainer": "test-user",
-                    "platforms": ["linux"],
-                    "deps": [],
-                },
-                "cvc_revision": 2,
-            })
+            yaml.dump(
+                {
+                    "recipe": {
+                        "name": "zlib",
+                        "upstream_version": "1.3.1",
+                        "description": "compression",
+                        "homepage": "https://zlib.net",
+                        "license": "zlib",
+                        "maintainer": "test-user",
+                        "platforms": ["linux"],
+                        "deps": [],
+                    },
+                    "cvc_revision": 2,
+                }
+            )
         )
         (zlib / "linux.sh").write_text("#!/bin/sh\necho ok\n")
 
@@ -2283,31 +2304,43 @@ class TestRecipePublishFunctional:
                 self.status_code = status_code
                 self.text = '{"ok": true}'
                 self.content = b'{"ok": true}'
+
             def json(self):
                 return {"ok": True, "status": "registered"}
 
         class FakeClient:
             def __init__(self, **kw):
                 pass
+
             def __enter__(self):
                 return self
+
             def __exit__(self, *a):
                 pass
+
             def post(self, url, **kw):
                 requests_made.append(("POST", url, kw))
                 return FakeResponse()
+
             def get(self, url, **kw):
                 requests_made.append(("GET", url, kw))
                 return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
 
-        ret = main([
-            "recipe", "publish", "zlib",
-            "--server", "https://test.example.com",
-            "--token", "cvctok_test",
-            "--recipes-dir", str(recipes_dir),
-        ])
+        ret = main(
+            [
+                "recipe",
+                "publish",
+                "zlib",
+                "--server",
+                "https://test.example.com",
+                "--token",
+                "cvctok_test",
+                "--recipes-dir",
+                str(recipes_dir),
+            ]
+        )
         assert ret == 0
 
         out = capsys.readouterr().out
@@ -2325,12 +2358,19 @@ class TestRecipePublishFunctional:
         recipes_dir = tmp_path / "recipes"
         recipes_dir.mkdir()
 
-        ret = main([
-            "recipe", "publish", "nonexistent",
-            "--server", "https://test.example.com",
-            "--token", "cvctok_test",
-            "--recipes-dir", str(recipes_dir),
-        ])
+        ret = main(
+            [
+                "recipe",
+                "publish",
+                "nonexistent",
+                "--server",
+                "https://test.example.com",
+                "--token",
+                "cvctok_test",
+                "--recipes-dir",
+                str(recipes_dir),
+            ]
+        )
         assert ret != 0
         combined = capsys.readouterr()
         assert "not found" in (combined.out + combined.err).lower()
@@ -2362,26 +2402,36 @@ class TestRecipePullFunctional:
             status_code = 200
             content = bundle_bytes
             text = ""
+
             def json(self):
                 return {}
 
         class FakeClient:
             def __init__(self, **kw):
                 pass
+
             def __enter__(self):
                 return self
+
             def __exit__(self, *a):
                 pass
+
             def get(self, url, **kw):
                 return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
 
-        ret = main([
-            "recipe", "pull", "zlib",
-            "--server", "https://test.example.com",
-            "--output-dir", str(output_dir),
-        ])
+        ret = main(
+            [
+                "recipe",
+                "pull",
+                "zlib",
+                "--server",
+                "https://test.example.com",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
         assert ret == 0
         out = capsys.readouterr().out
         assert "extracted" in out.lower()
@@ -2389,29 +2439,40 @@ class TestRecipePullFunctional:
 
     def test_pull_server_error(self, tmp_path, capsys, monkeypatch):
         """recipe pull should fail gracefully on server error."""
+
         class FakeResponse:
             status_code = 404
             text = "not found"
+
             def json(self):
                 return {"detail": "not found"}
 
         class FakeClient:
             def __init__(self, **kw):
                 pass
+
             def __enter__(self):
                 return self
+
             def __exit__(self, *a):
                 pass
+
             def get(self, url, **kw):
                 return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
 
-        ret = main([
-            "recipe", "pull", "nonexistent",
-            "--server", "https://test.example.com",
-            "--output-dir", str(tmp_path / "out"),
-        ])
+        ret = main(
+            [
+                "recipe",
+                "pull",
+                "nonexistent",
+                "--server",
+                "https://test.example.com",
+                "--output-dir",
+                str(tmp_path / "out"),
+            ]
+        )
         assert ret != 0
 
 
@@ -2442,26 +2503,35 @@ class TestRecipePullAllFunctional:
             status_code = 200
             content = bundle_bytes
             text = ""
+
             def json(self):
                 return {}
 
         class FakeClient:
             def __init__(self, **kw):
                 pass
+
             def __enter__(self):
                 return self
+
             def __exit__(self, *a):
                 pass
+
             def get(self, url, **kw):
                 return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
 
-        ret = main([
-            "recipe", "pull-all",
-            "--server", "https://test.example.com",
-            "--output-dir", str(output_dir),
-        ])
+        ret = main(
+            [
+                "recipe",
+                "pull-all",
+                "--server",
+                "https://test.example.com",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
         assert ret == 0
         out = capsys.readouterr().out
         assert "2 recipes extracted" in out
@@ -2484,15 +2554,17 @@ class TestRecipePushAllFunctional:
             d = recipes_dir / name
             d.mkdir()
             (d / "recipe.yaml").write_text(
-                yaml.dump({
-                    "recipe": {
-                        "name": name,
-                        "upstream_version": "1.0",
-                        "platforms": ["linux"],
-                        "deps": [],
-                    },
-                    "cvc_revision": 1,
-                })
+                yaml.dump(
+                    {
+                        "recipe": {
+                            "name": name,
+                            "upstream_version": "1.0",
+                            "platforms": ["linux"],
+                            "deps": [],
+                        },
+                        "cvc_revision": 1,
+                    }
+                )
             )
 
         # Skip _common and dot-dirs
@@ -2504,16 +2576,20 @@ class TestRecipePushAllFunctional:
         class FakeResponse:
             status_code = 200
             text = '{"ok": true}'
+
             def json(self):
                 return {"ok": True}
 
         class FakeClient:
             def __init__(self, **kw):
                 pass
+
             def __enter__(self):
                 return self
+
             def __exit__(self, *a):
                 pass
+
             def post(self, url, **kw):
                 # Extract recipe name from URL
                 parts = url.rstrip("/").split("/")
@@ -2524,12 +2600,18 @@ class TestRecipePushAllFunctional:
 
         monkeypatch.setattr("httpx.Client", FakeClient)
 
-        ret = main([
-            "recipe", "push-all",
-            "--server", "https://test.example.com",
-            "--token", "cvctok_test",
-            "--recipes-dir", str(recipes_dir),
-        ])
+        ret = main(
+            [
+                "recipe",
+                "push-all",
+                "--server",
+                "https://test.example.com",
+                "--token",
+                "cvctok_test",
+                "--recipes-dir",
+                str(recipes_dir),
+            ]
+        )
         assert ret == 0
         out = capsys.readouterr().out
         assert "boost" in out
@@ -2548,20 +2630,38 @@ class TestRecipeListCLI:
         class FakeResponse:
             status_code = 200
             text = ""
+
             def json(self):
                 return {
                     "total": 2,
                     "recipes": [
-                        {"name": "zlib", "version": "1.3.1", "bundle_size": 4096, "updated_at": "2026-01-01"},
-                        {"name": "boost", "version": "1.85", "bundle_size": 12000, "updated_at": "2026-01-02"},
+                        {
+                            "name": "zlib",
+                            "version": "1.3.1",
+                            "bundle_size": 4096,
+                            "updated_at": "2026-01-01",
+                        },
+                        {
+                            "name": "boost",
+                            "version": "1.85",
+                            "bundle_size": 12000,
+                            "updated_at": "2026-01-02",
+                        },
                     ],
                 }
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def get(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
         ret = main(["recipe", "list", "--server", "https://s.example.com", "--token", "tok"])
@@ -2574,14 +2674,22 @@ class TestRecipeListCLI:
         class FakeResponse:
             status_code = 200
             text = ""
+
             def json(self):
                 return {"total": 0, "recipes": []}
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def get(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
         ret = main(["recipe", "list", "--server", "https://s.example.com", "--token", "tok"])
@@ -2593,14 +2701,22 @@ class TestRecipeListCLI:
         class FakeResponse:
             status_code = 500
             text = "server error"
+
             def json(self):
                 return {"detail": "server error"}
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def get(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
         ret = main(["recipe", "list", "--server", "https://s.example.com", "--token", "tok"])
@@ -2614,20 +2730,35 @@ class TestRecipeDeleteCLI:
         class FakeResponse:
             status_code = 200
             text = '{"ok": true}'
+
             def json(self):
                 return {"ok": True}
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def delete(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def delete(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
-        ret = main([
-            "recipe", "delete", "zlib",
-            "--server", "https://s.example.com", "--token", "tok",
-        ])
+        ret = main(
+            [
+                "recipe",
+                "delete",
+                "zlib",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+            ]
+        )
         assert ret == 0
         out = capsys.readouterr().out
         assert "deleted" in out.lower()
@@ -2636,20 +2767,35 @@ class TestRecipeDeleteCLI:
         class FakeResponse:
             status_code = 404
             text = "not found"
+
             def json(self):
                 return {"detail": "not found"}
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def delete(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def delete(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
-        ret = main([
-            "recipe", "delete", "nonexistent",
-            "--server", "https://s.example.com", "--token", "tok",
-        ])
+        ret = main(
+            [
+                "recipe",
+                "delete",
+                "nonexistent",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+            ]
+        )
         assert ret != 0
 
 
@@ -2682,21 +2828,41 @@ class TestWebhookRegisterCLI:
         class FakeResponse:
             status_code = 200
             text = ""
+
             def json(self):
-                return {"id": 42, "url": "https://hook.example.com/cb", "events": ["build.completed"]}
+                return {
+                    "id": 42,
+                    "url": "https://hook.example.com/cb",
+                    "events": ["build.completed"],
+                }
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def post(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def post(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
-        ret = main([
-            "webhook", "register", "https://hook.example.com/cb",
-            "-e", "build.completed",
-            "--server", "https://s.example.com", "--token", "tok",
-        ])
+        ret = main(
+            [
+                "webhook",
+                "register",
+                "https://hook.example.com/cb",
+                "-e",
+                "build.completed",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+            ]
+        )
         assert ret == 0
         out = capsys.readouterr().out
         assert "42" in out
@@ -2706,21 +2872,37 @@ class TestWebhookRegisterCLI:
         class FakeResponse:
             status_code = 400
             text = "bad request"
+
             def json(self):
                 return {"detail": "bad request"}
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def post(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def post(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
-        ret = main([
-            "webhook", "register", "https://hook.example.com/cb",
-            "-e", "build.completed",
-            "--server", "https://s.example.com", "--token", "tok",
-        ])
+        ret = main(
+            [
+                "webhook",
+                "register",
+                "https://hook.example.com/cb",
+                "-e",
+                "build.completed",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+            ]
+        )
         assert ret != 0
 
 
@@ -2731,19 +2913,32 @@ class TestWebhookListCLI:
         class FakeResponse:
             status_code = 200
             text = ""
+
             def json(self):
                 return {
                     "total": 1,
                     "webhooks": [
-                        {"id": 1, "url": "https://h.example.com", "events": ["build.completed"], "active": True},
+                        {
+                            "id": 1,
+                            "url": "https://h.example.com",
+                            "events": ["build.completed"],
+                            "active": True,
+                        },
                     ],
                 }
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def get(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
         ret = main(["webhook", "list", "--server", "https://s.example.com", "--token", "tok"])
@@ -2756,14 +2951,22 @@ class TestWebhookListCLI:
         class FakeResponse:
             status_code = 200
             text = ""
+
             def json(self):
                 return {"total": 0, "webhooks": []}
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def get(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
         ret = main(["webhook", "list", "--server", "https://s.example.com", "--token", "tok"])
@@ -2779,14 +2982,22 @@ class TestWebhookInfoCLI:
         class FakeResponse:
             status_code = 200
             text = ""
+
             def json(self):
                 return {"id": 5, "url": "https://h.example.com", "events": ["e1"], "active": True}
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def get(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
         ret = main(["webhook", "info", "5", "--server", "https://s.example.com", "--token", "tok"])
@@ -2799,17 +3010,27 @@ class TestWebhookInfoCLI:
         class FakeResponse:
             status_code = 404
             text = "not found"
+
             def json(self):
                 return {"detail": "not found"}
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def get(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
-        ret = main(["webhook", "info", "999", "--server", "https://s.example.com", "--token", "tok"])
+        ret = main(
+            ["webhook", "info", "999", "--server", "https://s.example.com", "--token", "tok"]
+        )
         assert ret != 0
 
 
@@ -2820,30 +3041,54 @@ class TestWebhookUpdateCLI:
         class FakeResponse:
             status_code = 200
             text = ""
+
             def json(self):
                 return {"id": 1, "url": "https://new.example.com"}
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def patch(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def patch(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
-        ret = main([
-            "webhook", "update", "1", "--url", "https://new.example.com",
-            "--server", "https://s.example.com", "--token", "tok",
-        ])
+        ret = main(
+            [
+                "webhook",
+                "update",
+                "1",
+                "--url",
+                "https://new.example.com",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+            ]
+        )
         assert ret == 0
         out = capsys.readouterr().out
         assert "updated" in out.lower()
 
     def test_update_nothing_specified(self, capsys, monkeypatch):
         """update with no options should error."""
-        ret = main([
-            "webhook", "update", "1",
-            "--server", "https://s.example.com", "--token", "tok",
-        ])
+        ret = main(
+            [
+                "webhook",
+                "update",
+                "1",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+            ]
+        )
         assert ret != 0
         combined = capsys.readouterr()
         assert "nothing to update" in (combined.out + combined.err).lower()
@@ -2856,20 +3101,35 @@ class TestWebhookDeleteCLI:
         class FakeResponse:
             status_code = 200
             text = '{"ok": true}'
+
             def json(self):
                 return {"ok": True}
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def delete(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def delete(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
-        ret = main([
-            "webhook", "delete", "7",
-            "--server", "https://s.example.com", "--token", "tok",
-        ])
+        ret = main(
+            [
+                "webhook",
+                "delete",
+                "7",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+            ]
+        )
         assert ret == 0
         out = capsys.readouterr().out
         assert "deleted" in out.lower()
@@ -2878,20 +3138,35 @@ class TestWebhookDeleteCLI:
         class FakeResponse:
             status_code = 404
             text = "not found"
+
             def json(self):
                 return {"detail": "not found"}
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def delete(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def delete(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
-        ret = main([
-            "webhook", "delete", "999",
-            "--server", "https://s.example.com", "--token", "tok",
-        ])
+        ret = main(
+            [
+                "webhook",
+                "delete",
+                "999",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+            ]
+        )
         assert ret != 0
 
 
@@ -2902,20 +3177,35 @@ class TestWebhookTestCLI:
         class FakeResponse:
             status_code = 200
             text = ""
+
             def json(self):
                 return {"ok": True, "status_code": 200, "webhook_id": 3}
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def post(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def post(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
-        ret = main([
-            "webhook", "test", "3",
-            "--server", "https://s.example.com", "--token", "tok",
-        ])
+        ret = main(
+            [
+                "webhook",
+                "test",
+                "3",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+            ]
+        )
         assert ret == 0
         out = capsys.readouterr().out
         assert "200" in out
@@ -2924,20 +3214,35 @@ class TestWebhookTestCLI:
         class FakeResponse:
             status_code = 502
             text = "delivery failed"
+
             def json(self):
                 return {"detail": "delivery failed"}
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def post(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def post(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
-        ret = main([
-            "webhook", "test", "3",
-            "--server", "https://s.example.com", "--token", "tok",
-        ])
+        ret = main(
+            [
+                "webhook",
+                "test",
+                "3",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+            ]
+        )
         assert ret != 0
 
 
@@ -2970,21 +3275,35 @@ class TestBuilderListCLI:
         class FakeResponse:
             status_code = 200
             text = ""
+
             def json(self):
                 return {
                     "total": 1,
-                    "builders": [{
-                        "id": 1, "name": "catx-01", "platform": "linux",
-                        "arch": "x86_64", "status": "online",
-                        "current_jobs": 0, "max_jobs": 4,
-                    }],
+                    "builders": [
+                        {
+                            "id": 1,
+                            "name": "catx-01",
+                            "platform": "linux",
+                            "arch": "x86_64",
+                            "status": "online",
+                            "current_jobs": 0,
+                            "max_jobs": 4,
+                        }
+                    ],
                 }
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def get(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
         ret = main(["builder", "list", "--server", "https://s.example.com", "--token", "tok"])
@@ -2997,14 +3316,22 @@ class TestBuilderListCLI:
         class FakeResponse:
             status_code = 200
             text = ""
+
             def json(self):
                 return {"total": 0, "builders": []}
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def get(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
         ret = main(["builder", "list", "--server", "https://s.example.com", "--token", "tok"])
@@ -3020,23 +3347,40 @@ class TestBuilderStatusCLI:
         class FakeResponse:
             status_code = 200
             text = ""
+
             def json(self):
                 return {
-                    "id": 1, "name": "catx-01", "platform": "linux",
-                    "arch": "x86_64", "status": "online", "org_slug": "",
-                    "current_jobs": 2, "max_jobs": 8,
-                    "labels": ["fast", "gpu"], "prefer_affinity": True,
-                    "last_heartbeat": "2026-06-01T00:00:00", "created_at": "2026-05-31T12:00:00",
+                    "id": 1,
+                    "name": "catx-01",
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "status": "online",
+                    "org_slug": "",
+                    "current_jobs": 2,
+                    "max_jobs": 8,
+                    "labels": ["fast", "gpu"],
+                    "prefer_affinity": True,
+                    "last_heartbeat": "2026-06-01T00:00:00",
+                    "created_at": "2026-05-31T12:00:00",
                 }
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def get(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
-        ret = main(["builder", "status", "1", "--server", "https://s.example.com", "--token", "tok"])
+        ret = main(
+            ["builder", "status", "1", "--server", "https://s.example.com", "--token", "tok"]
+        )
         assert ret == 0
         out = capsys.readouterr().out
         assert "catx-01" in out
@@ -3047,17 +3391,27 @@ class TestBuilderStatusCLI:
         class FakeResponse:
             status_code = 404
             text = "not found"
+
             def json(self):
                 return {"detail": "not found"}
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def get(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
-        ret = main(["builder", "status", "999", "--server", "https://s.example.com", "--token", "tok"])
+        ret = main(
+            ["builder", "status", "999", "--server", "https://s.example.com", "--token", "tok"]
+        )
         assert ret != 0
 
 
@@ -3068,14 +3422,22 @@ class TestBuilderStopCLI:
         class FakeResponse:
             status_code = 200
             text = ""
+
             def json(self):
                 return {"message": "builder unregistered", "id": 5}
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def delete(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def delete(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
         ret = main(["builder", "stop", "5", "--server", "https://s.example.com", "--token", "tok"])
@@ -3090,10 +3452,20 @@ class TestBuilderStopCLI:
 class TestBuildsCLIHelp:
     """Verify builds subcommands appear in help."""
 
-    @pytest.mark.parametrize("subcmd", [
-        "list", "info", "cancel", "cancel-dag", "log", "log-delete",
-        "submit", "submit-dag", "purge",
-    ])
+    @pytest.mark.parametrize(
+        "subcmd",
+        [
+            "list",
+            "info",
+            "cancel",
+            "cancel-dag",
+            "log",
+            "log-delete",
+            "submit",
+            "submit-dag",
+            "purge",
+        ],
+    )
     def test_builds_subcommand_help(self, subcmd, capsys):
         ret = main(["builds", subcmd, "--help"])
         assert ret == 0
@@ -3116,21 +3488,35 @@ class TestBuildsListCLI:
         class FakeResponse:
             status_code = 200
             text = ""
+
             def json(self):
                 return {
                     "total": 1,
-                    "jobs": [{
-                        "id": 10, "recipe_name": "zlib", "platform": "linux",
-                        "config": "release", "link": "shared", "status": "pending",
-                        "dag_id": None,
-                    }],
+                    "jobs": [
+                        {
+                            "id": 10,
+                            "recipe_name": "zlib",
+                            "platform": "linux",
+                            "config": "release",
+                            "link": "shared",
+                            "status": "pending",
+                            "dag_id": None,
+                        }
+                    ],
                 }
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def get(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
         ret = main(["builds", "list", "--server", "https://s.example.com", "--token", "tok"])
@@ -3143,14 +3529,22 @@ class TestBuildsListCLI:
         class FakeResponse:
             status_code = 200
             text = ""
+
             def json(self):
                 return {"total": 0, "jobs": []}
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def get(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
         ret = main(["builds", "list", "--server", "https://s.example.com", "--token", "tok"])
@@ -3166,24 +3560,40 @@ class TestBuildsInfoCLI:
         class FakeResponse:
             status_code = 200
             text = ""
+
             def json(self):
                 return {
-                    "id": 10, "recipe_name": "zlib", "recipe_version": "1.3.1",
-                    "platform": "linux", "arch": "x86_64", "config": "release",
-                    "link": "shared", "status": "succeeded", "dag_id": "d1",
-                    "builder_id": 3, "priority": 5,
+                    "id": 10,
+                    "recipe_name": "zlib",
+                    "recipe_version": "1.3.1",
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "config": "release",
+                    "link": "shared",
+                    "status": "succeeded",
+                    "dag_id": "d1",
+                    "builder_id": 3,
+                    "priority": 5,
                     "submitted_at": "2026-06-01T00:00:00",
                     "started_at": "2026-06-01T00:01:00",
                     "finished_at": "2026-06-01T00:05:00",
-                    "error_message": None, "result_archive_url": "https://s.example.com/v1/download/zlib.tar.gz",
+                    "error_message": None,
+                    "result_archive_url": "https://s.example.com/v1/download/zlib.tar.gz",
                     "depends_on": [8, 9],
                 }
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def get(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
         ret = main(["builds", "info", "10", "--server", "https://s.example.com", "--token", "tok"])
@@ -3201,17 +3611,27 @@ class TestBuildsCancelCLI:
         class FakeResponse:
             status_code = 200
             text = ""
+
             def json(self):
                 return {"message": "job cancelled", "id": 10, "status": "cancelled"}
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def post(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def post(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
-        ret = main(["builds", "cancel", "10", "--server", "https://s.example.com", "--token", "tok"])
+        ret = main(
+            ["builds", "cancel", "10", "--server", "https://s.example.com", "--token", "tok"]
+        )
         assert ret == 0
         out = capsys.readouterr().out
         assert "cancelled" in out.lower()
@@ -3224,17 +3644,27 @@ class TestBuildsCancelDagCLI:
         class FakeResponse:
             status_code = 200
             text = ""
+
             def json(self):
                 return {"message": "dag cancelled", "dag_id": "d1", "cancelled": 3}
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def post(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def post(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
-        ret = main(["builds", "cancel-dag", "d1", "--server", "https://s.example.com", "--token", "tok"])
+        ret = main(
+            ["builds", "cancel-dag", "d1", "--server", "https://s.example.com", "--token", "tok"]
+        )
         assert ret == 0
         out = capsys.readouterr().out
         assert "3" in out
@@ -3248,14 +3678,22 @@ class TestBuildsLogCLI:
         class FakeResponse:
             status_code = 200
             text = "build output line 1\nbuild output line 2\n"
+
             def json(self):
                 return {}
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def get(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
         ret = main(["builds", "log", "10", "--server", "https://s.example.com", "--token", "tok"])
@@ -3267,14 +3705,22 @@ class TestBuildsLogCLI:
         class FakeResponse:
             status_code = 404
             text = "not found"
+
             def json(self):
                 return {"detail": "not found"}
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def get(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
         ret = main(["builds", "log", "999", "--server", "https://s.example.com", "--token", "tok"])
@@ -3288,17 +3734,27 @@ class TestBuildsLogDeleteCLI:
         class FakeResponse:
             status_code = 200
             text = ""
+
             def json(self):
                 return {"ok": True, "job_id": 10}
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def delete(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def delete(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
-        ret = main(["builds", "log-delete", "10", "--server", "https://s.example.com", "--token", "tok"])
+        ret = main(
+            ["builds", "log-delete", "10", "--server", "https://s.example.com", "--token", "tok"]
+        )
         assert ret == 0
         out = capsys.readouterr().out
         assert "deleted" in out.lower()
@@ -3311,25 +3767,49 @@ class TestBuildsSubmitCLI:
         class FakeResponse:
             status_code = 200
             text = ""
+
             def json(self):
                 return {
-                    "id": 42, "recipe_name": "zlib", "status": "pending",
-                    "platform": "linux", "arch": "x86_64",
-                    "config": "release", "link": "shared", "dag_id": None,
+                    "id": 42,
+                    "recipe_name": "zlib",
+                    "status": "pending",
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "config": "release",
+                    "link": "shared",
+                    "dag_id": None,
                 }
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def post(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def post(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
-        ret = main([
-            "builds", "submit",
-            "--recipe", "zlib", "--platform", "linux", "--arch", "x86_64",
-            "--server", "https://s.example.com", "--token", "tok",
-        ])
+        ret = main(
+            [
+                "builds",
+                "submit",
+                "--recipe",
+                "zlib",
+                "--platform",
+                "linux",
+                "--arch",
+                "x86_64",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+            ]
+        )
         assert ret == 0
         out = capsys.readouterr().out
         assert "42" in out
@@ -3344,22 +3824,40 @@ class TestBuildsSubmitDagCLI:
         class FakeResponse:
             status_code = 200
             text = ""
+
             def json(self):
                 return {"dag_id": "dag-001", "total": 2, "jobs": []}
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def post(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def post(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
-        ret = main([
-            "builds", "submit-dag",
-            "--platform", "linux", "--arch", "x86_64",
-            "--server", "https://s.example.com", "--token", "tok",
-            "zlib", "boost",
-        ])
+        ret = main(
+            [
+                "builds",
+                "submit-dag",
+                "--platform",
+                "linux",
+                "--arch",
+                "x86_64",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+                "zlib",
+                "boost",
+            ]
+        )
         assert ret == 0
         out = capsys.readouterr().out
         assert "dag-001" in out.lower() or "2 jobs" in out
@@ -3372,20 +3870,36 @@ class TestBuildsPurgeCLI:
         class FakeResponse:
             status_code = 200
             text = ""
+
             def json(self):
                 return {"ok": True, "purged": 5}
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def post(self, url, **kw): return FakeResponse()
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def post(self, url, **kw):
+                return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
-        ret = main([
-            "builds", "purge", "--older-than", "30d",
-            "--server", "https://s.example.com", "--token", "tok",
-        ])
+        ret = main(
+            [
+                "builds",
+                "purge",
+                "--older-than",
+                "30d",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+            ]
+        )
         assert ret == 0
         out = capsys.readouterr().out
         assert "5" in out
@@ -3393,10 +3907,18 @@ class TestBuildsPurgeCLI:
 
     def test_purge_invalid_format(self, capsys, monkeypatch):
         """--older-than must match '<N>d' format."""
-        ret = main([
-            "builds", "purge", "--older-than", "2w",
-            "--server", "https://s.example.com", "--token", "tok",
-        ])
+        ret = main(
+            [
+                "builds",
+                "purge",
+                "--older-than",
+                "2w",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+            ]
+        )
         assert ret != 0
 
     def test_purge_with_delete_jobs(self, capsys, monkeypatch):
@@ -3406,21 +3928,37 @@ class TestBuildsPurgeCLI:
         class FakeResponse:
             status_code = 200
             text = ""
+
             def json(self):
                 return {"ok": True, "purged": 3}
 
         class FakeClient:
-            def __init__(self, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
             def post(self, url, **kw):
                 urls_called.append(url)
                 return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
-        ret = main([
-            "builds", "purge", "--older-than", "10d", "--delete-jobs",
-            "--server", "https://s.example.com", "--token", "tok",
-        ])
+        ret = main(
+            [
+                "builds",
+                "purge",
+                "--older-than",
+                "10d",
+                "--delete-jobs",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+            ]
+        )
         assert ret == 0
         assert any("purge/builds" in u for u in urls_called)

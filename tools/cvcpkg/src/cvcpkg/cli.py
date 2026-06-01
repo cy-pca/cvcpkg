@@ -297,6 +297,9 @@ def install(
     # --local implies --fallback-to-source and skips the catalog entirely
     if local_mode:
         fallback_to_source = True
+        skip_catalog = True
+    else:
+        skip_catalog = False
 
     # ── Load or build the Requirements object ──
     #
@@ -361,17 +364,21 @@ def install(
     #   github → GitHub Pages only, no fallback
     catalog_url = catalog or ""
     catalog_failed = False
-    try:
-        if catalog_url and Path(catalog_url).is_file():
-            cat = load_catalog_from_file(catalog_url)
-        else:
-            cat = fetch_catalog(catalog_url, cache_dir=default_cache_dir())
-    except Exception as exc:
-        if not fallback_to_source:
-            raise
-        click.echo(f"cvcpkg: catalog unavailable ({exc}), will build from source.")
+    if skip_catalog:
         catalog_failed = True
         cat = {"bundles": []}
+    else:
+        try:
+            if catalog_url and Path(catalog_url).is_file():
+                cat = load_catalog_from_file(catalog_url)
+            else:
+                cat = fetch_catalog(catalog_url, cache_dir=default_cache_dir())
+        except Exception as exc:
+            if not fallback_to_source:
+                raise
+            click.echo(f"cvcpkg: catalog unavailable ({exc}), will build from source.")
+            catalog_failed = True
+            cat = {"bundles": []}
 
     picked: dict[str, CatalogEntry] = {}
     source_only: list[str] = []
@@ -2084,8 +2091,7 @@ def _try_pull_server_recipes() -> tuple[str, ...]:
             return ()
     except Exception as exc:
         click.echo(
-            f"cvcpkg: could not reach {server} ({exc}), "
-            "falling back to local recipes.",
+            f"cvcpkg: could not reach {server} ({exc}), " "falling back to local recipes.",
             err=True,
         )
         return ()
@@ -5669,9 +5675,7 @@ def recipe_pull_all(server: str, token: str, org_slug: str, output_dir: str):
     bundle_path.unlink()
 
     # Count extracted recipes
-    recipe_count = sum(
-        1 for d in output.iterdir() if d.is_dir() and (d / "recipe.yaml").is_file()
-    )
+    recipe_count = sum(1 for d in output.iterdir() if d.is_dir() and (d / "recipe.yaml").is_file())
     click.echo(f"cvcpkg: {recipe_count} recipes extracted to {output}")
 
 
