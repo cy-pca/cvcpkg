@@ -4321,6 +4321,15 @@ def builder_run(
         extract_dir.mkdir(parents=True)
         with tarfile.open(bundle_path, "r:gz") as tar:
             tar.extractall(path=extract_dir)  # noqa: S202
+
+        # recipe_push stores recipe files under ``<name>/`` inside
+        # the tar (with ``_common/`` alongside).  If that nested dir
+        # exists, return it so that ``../_common`` resolves correctly
+        # from build scripts.  Fall back to the flat layout for
+        # bundles created before this convention.
+        nested = extract_dir / recipe_name
+        if nested.is_dir() and (nested / "recipe.yaml").is_file():
+            return nested
         return extract_dir
 
     def _stream_log(job_id: int, text: str):
@@ -5145,12 +5154,24 @@ def recipe_push(name: str, server: str, token: str, recipes_dir: str | None, org
         raise click.ClickException(f"recipe directory not found: {recipe_path}")
 
     # Create tar.gz bundle
+    #
+    # Recipe files are stored under ``<name>/`` so that build scripts
+    # can reference ``${SCRIPT_DIR}/../_common/env-linux.sh`` and resolve
+    # correctly after extraction.  If a ``_common/`` sibling directory
+    # exists in the recipes root, it is included alongside.
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         for f in sorted(recipe_path.rglob("*")):
             if f.is_file():
-                arcname = str(f.relative_to(recipe_path))
+                arcname = f"{name}/{f.relative_to(recipe_path)}"
                 tar.add(f, arcname=arcname)
+        # Include _common/ sibling (shared build helpers)
+        common_dir = rdir / "_common"
+        if common_dir.is_dir():
+            for f in sorted(common_dir.rglob("*")):
+                if f.is_file():
+                    arcname = f"_common/{f.relative_to(common_dir)}"
+                    tar.add(f, arcname=arcname)
     buf.seek(0)
 
     # Read recipe.yaml for version info
