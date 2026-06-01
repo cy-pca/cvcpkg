@@ -21,9 +21,29 @@ import yaml
 
 # ── Defaults ────────────────────────────────────────────────────
 
-DEFAULT_CATALOG_URL = "https://pkg.tx.wtf/v1/catalog"
+DEFAULT_SERVER_URL = "https://pkg.tx.wtf"
+DEFAULT_CATALOG_URL = f"{DEFAULT_SERVER_URL}/v1/catalog"
 GITHUB_CATALOG_URL = "https://transfix.github.io/libcvc-deps/catalog/latest.yaml"
 DEFAULT_CATALOG_FALLBACKS = [GITHUB_CATALOG_URL]
+
+
+def default_server_url() -> str:
+    """Return the server URL from env or compiled-in default."""
+    return os.environ.get("CVCPKG_SERVER_URL", DEFAULT_SERVER_URL)
+
+
+def default_catalog_url() -> str:
+    """Derive the catalog URL from the server URL.
+
+    Resolution order:
+      1. ``CVCPKG_CATALOG_URL`` env var (explicit override)
+      2. ``{CVCPKG_SERVER_URL}/v1/catalog``
+      3. ``{DEFAULT_SERVER_URL}/v1/catalog``
+    """
+    explicit = os.environ.get("CVCPKG_CATALOG_URL")
+    if explicit:
+        return explicit
+    return f"{default_server_url().rstrip('/')}/v1/catalog"
 
 
 # ── Data model ──────────────────────────────────────────────────
@@ -43,8 +63,12 @@ class CvcpkgConfig:
     """Merged configuration from all sources."""
 
     # Catalog
-    catalog_primary: str = DEFAULT_CATALOG_URL
+    catalog_primary: str = ""
     catalog_fallbacks: list[str] = field(default_factory=lambda: list(DEFAULT_CATALOG_FALLBACKS))
+
+    def __post_init__(self):
+        if not self.catalog_primary:
+            self.catalog_primary = default_catalog_url()
 
     # Mirror rewrite rules (tried in order)
     mirrors: list[MirrorRule] = field(default_factory=list)
@@ -104,7 +128,7 @@ def load_user_config(config_dir: Path | None = None) -> CvcpkgConfig:
 
     catalog = d.get("catalog", {})
     return CvcpkgConfig(
-        catalog_primary=catalog.get("primary", DEFAULT_CATALOG_URL),
+        catalog_primary=catalog.get("primary", default_catalog_url()),
         catalog_fallbacks=catalog.get("fallback", list(DEFAULT_CATALOG_FALLBACKS)),
         mirrors=_parse_mirrors(d.get("mirrors", [])),
         backend_options=d.get("backends", {}),

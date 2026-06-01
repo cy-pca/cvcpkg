@@ -4,8 +4,11 @@ import yaml
 
 from cvcpkg.config import (
     DEFAULT_CATALOG_URL,
+    DEFAULT_SERVER_URL,
     CvcpkgConfig,
     MirrorRule,
+    default_catalog_url,
+    default_server_url,
     load_user_config,
     merge_cli_overrides,
     merge_project_config,
@@ -121,3 +124,48 @@ def test_merge_cli_overrides_empty():
     base = CvcpkgConfig(catalog_primary="https://keep.me/")
     result = merge_cli_overrides(base)
     assert result.catalog_primary == "https://keep.me/"
+
+
+def test_default_server_url_compiled_in():
+    """Without env vars, default_server_url() returns the compiled-in default."""
+    import os
+
+    env = os.environ.copy()
+    os.environ.pop("CVCPKG_SERVER_URL", None)
+    try:
+        assert default_server_url() == DEFAULT_SERVER_URL
+    finally:
+        os.environ.update(env)
+
+
+def test_default_server_url_from_env(monkeypatch):
+    monkeypatch.setenv("CVCPKG_SERVER_URL", "https://custom.server.example")
+    assert default_server_url() == "https://custom.server.example"
+
+
+def test_default_catalog_url_derived_from_server(monkeypatch):
+    """Catalog URL is derived from the server URL."""
+    monkeypatch.setenv("CVCPKG_SERVER_URL", "https://my.server.dev")
+    monkeypatch.delenv("CVCPKG_CATALOG_URL", raising=False)
+    assert default_catalog_url() == "https://my.server.dev/v1/catalog"
+
+
+def test_default_catalog_url_explicit_override(monkeypatch):
+    """CVCPKG_CATALOG_URL takes precedence over server-derived URL."""
+    monkeypatch.setenv("CVCPKG_SERVER_URL", "https://my.server.dev")
+    monkeypatch.setenv("CVCPKG_CATALOG_URL", "https://override.example/cat.yaml")
+    assert default_catalog_url() == "https://override.example/cat.yaml"
+
+
+def test_default_catalog_url_strips_trailing_slash(monkeypatch):
+    monkeypatch.setenv("CVCPKG_SERVER_URL", "https://my.server.dev/")
+    monkeypatch.delenv("CVCPKG_CATALOG_URL", raising=False)
+    assert default_catalog_url() == "https://my.server.dev/v1/catalog"
+
+
+def test_cvcpkg_config_defaults_use_server_url(monkeypatch):
+    """CvcpkgConfig picks up CVCPKG_SERVER_URL for catalog_primary."""
+    monkeypatch.setenv("CVCPKG_SERVER_URL", "https://testbox:9000")
+    monkeypatch.delenv("CVCPKG_CATALOG_URL", raising=False)
+    cfg = CvcpkgConfig()
+    assert cfg.catalog_primary == "https://testbox:9000/v1/catalog"
