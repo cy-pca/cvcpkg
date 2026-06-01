@@ -2536,3 +2536,891 @@ class TestRecipePushAllFunctional:
         assert "zlib" in out
         # Should have pushed exactly 2 recipes (not _common or .hidden)
         assert sorted(pushed_names) == ["boost", "zlib"]
+
+
+# ── recipe list / delete CLI tests ─────────────────────────────
+
+
+class TestRecipeListCLI:
+    """Test recipe list command with mocked HTTP."""
+
+    def test_recipe_list_shows_recipes(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {
+                    "total": 2,
+                    "recipes": [
+                        {"name": "zlib", "version": "1.3.1", "bundle_size": 4096, "updated_at": "2026-01-01"},
+                        {"name": "boost", "version": "1.85", "bundle_size": 12000, "updated_at": "2026-01-02"},
+                    ],
+                }
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def get(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(["recipe", "list", "--server", "https://s.example.com", "--token", "tok"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "zlib" in out
+        assert "boost" in out
+
+    def test_recipe_list_empty(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {"total": 0, "recipes": []}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def get(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(["recipe", "list", "--server", "https://s.example.com", "--token", "tok"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "no recipes" in out.lower()
+
+    def test_recipe_list_server_error(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 500
+            text = "server error"
+            def json(self):
+                return {"detail": "server error"}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def get(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(["recipe", "list", "--server", "https://s.example.com", "--token", "tok"])
+        assert ret != 0
+
+
+class TestRecipeDeleteCLI:
+    """Test recipe delete command with mocked HTTP."""
+
+    def test_recipe_delete_success(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = '{"ok": true}'
+            def json(self):
+                return {"ok": True}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def delete(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main([
+            "recipe", "delete", "zlib",
+            "--server", "https://s.example.com", "--token", "tok",
+        ])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "deleted" in out.lower()
+
+    def test_recipe_delete_not_found(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 404
+            text = "not found"
+            def json(self):
+                return {"detail": "not found"}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def delete(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main([
+            "recipe", "delete", "nonexistent",
+            "--server", "https://s.example.com", "--token", "tok",
+        ])
+        assert ret != 0
+
+
+# ── webhook CLI tests ──────────────────────────────────────────
+
+
+class TestWebhookCLIHelp:
+    """Verify webhook subcommands appear in help and accept --help."""
+
+    @pytest.mark.parametrize("subcmd", ["register", "list", "info", "update", "delete", "test"])
+    def test_webhook_subcommand_help(self, subcmd, capsys):
+        ret = main(["webhook", subcmd, "--help"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "--server" in out
+        assert "--token" in out
+
+    def test_webhook_group_lists_subcommands(self, capsys):
+        ret = main(["webhook", "--help"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        for cmd in ("register", "list", "info", "update", "delete", "test"):
+            assert cmd in out
+
+
+class TestWebhookRegisterCLI:
+    """Test webhook register command with mocked HTTP."""
+
+    def test_register_success(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {"id": 42, "url": "https://hook.example.com/cb", "events": ["build.completed"]}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def post(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main([
+            "webhook", "register", "https://hook.example.com/cb",
+            "-e", "build.completed",
+            "--server", "https://s.example.com", "--token", "tok",
+        ])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "42" in out
+        assert "registered" in out.lower()
+
+    def test_register_server_error(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 400
+            text = "bad request"
+            def json(self):
+                return {"detail": "bad request"}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def post(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main([
+            "webhook", "register", "https://hook.example.com/cb",
+            "-e", "build.completed",
+            "--server", "https://s.example.com", "--token", "tok",
+        ])
+        assert ret != 0
+
+
+class TestWebhookListCLI:
+    """Test webhook list command with mocked HTTP."""
+
+    def test_list_shows_webhooks(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {
+                    "total": 1,
+                    "webhooks": [
+                        {"id": 1, "url": "https://h.example.com", "events": ["build.completed"], "active": True},
+                    ],
+                }
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def get(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(["webhook", "list", "--server", "https://s.example.com", "--token", "tok"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "h.example.com" in out
+        assert "Total: 1" in out
+
+    def test_list_empty(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {"total": 0, "webhooks": []}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def get(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(["webhook", "list", "--server", "https://s.example.com", "--token", "tok"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "Total: 0" in out
+
+
+class TestWebhookInfoCLI:
+    """Test webhook info command with mocked HTTP."""
+
+    def test_info_shows_details(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {"id": 5, "url": "https://h.example.com", "events": ["e1"], "active": True}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def get(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(["webhook", "info", "5", "--server", "https://s.example.com", "--token", "tok"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "id: 5" in out
+        assert "h.example.com" in out
+
+    def test_info_not_found(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 404
+            text = "not found"
+            def json(self):
+                return {"detail": "not found"}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def get(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(["webhook", "info", "999", "--server", "https://s.example.com", "--token", "tok"])
+        assert ret != 0
+
+
+class TestWebhookUpdateCLI:
+    """Test webhook update command with mocked HTTP."""
+
+    def test_update_success(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {"id": 1, "url": "https://new.example.com"}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def patch(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main([
+            "webhook", "update", "1", "--url", "https://new.example.com",
+            "--server", "https://s.example.com", "--token", "tok",
+        ])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "updated" in out.lower()
+
+    def test_update_nothing_specified(self, capsys, monkeypatch):
+        """update with no options should error."""
+        ret = main([
+            "webhook", "update", "1",
+            "--server", "https://s.example.com", "--token", "tok",
+        ])
+        assert ret != 0
+        combined = capsys.readouterr()
+        assert "nothing to update" in (combined.out + combined.err).lower()
+
+
+class TestWebhookDeleteCLI:
+    """Test webhook delete command with mocked HTTP."""
+
+    def test_delete_success(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = '{"ok": true}'
+            def json(self):
+                return {"ok": True}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def delete(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main([
+            "webhook", "delete", "7",
+            "--server", "https://s.example.com", "--token", "tok",
+        ])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "deleted" in out.lower()
+
+    def test_delete_not_found(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 404
+            text = "not found"
+            def json(self):
+                return {"detail": "not found"}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def delete(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main([
+            "webhook", "delete", "999",
+            "--server", "https://s.example.com", "--token", "tok",
+        ])
+        assert ret != 0
+
+
+class TestWebhookTestCLI:
+    """Test webhook test command with mocked HTTP."""
+
+    def test_test_success(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {"ok": True, "status_code": 200, "webhook_id": 3}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def post(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main([
+            "webhook", "test", "3",
+            "--server", "https://s.example.com", "--token", "tok",
+        ])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "200" in out
+
+    def test_test_delivery_failure(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 502
+            text = "delivery failed"
+            def json(self):
+                return {"detail": "delivery failed"}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def post(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main([
+            "webhook", "test", "3",
+            "--server", "https://s.example.com", "--token", "tok",
+        ])
+        assert ret != 0
+
+
+# ── builder CLI tests ──────────────────────────────────────────
+
+
+class TestBuilderCLIHelp:
+    """Verify builder subcommands appear in help."""
+
+    @pytest.mark.parametrize("subcmd", ["list", "status", "run", "stop"])
+    def test_builder_subcommand_help(self, subcmd, capsys):
+        ret = main(["builder", subcmd, "--help"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "--server" in out
+        assert "--token" in out
+
+    def test_builder_group_lists_subcommands(self, capsys):
+        ret = main(["builder", "--help"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        for cmd in ("list", "status", "run", "stop"):
+            assert cmd in out
+
+
+class TestBuilderListCLI:
+    """Test builder list command with mocked HTTP."""
+
+    def test_list_shows_builders(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {
+                    "total": 1,
+                    "builders": [{
+                        "id": 1, "name": "catx-01", "platform": "linux",
+                        "arch": "x86_64", "status": "online",
+                        "current_jobs": 0, "max_jobs": 4,
+                    }],
+                }
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def get(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(["builder", "list", "--server", "https://s.example.com", "--token", "tok"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "catx-01" in out
+        assert "linux" in out
+
+    def test_list_empty(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {"total": 0, "builders": []}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def get(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(["builder", "list", "--server", "https://s.example.com", "--token", "tok"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "no builders" in out.lower()
+
+
+class TestBuilderStatusCLI:
+    """Test builder status command with mocked HTTP."""
+
+    def test_status_shows_details(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {
+                    "id": 1, "name": "catx-01", "platform": "linux",
+                    "arch": "x86_64", "status": "online", "org_slug": "",
+                    "current_jobs": 2, "max_jobs": 8,
+                    "labels": ["fast", "gpu"], "prefer_affinity": True,
+                    "last_heartbeat": "2026-06-01T00:00:00", "created_at": "2026-05-31T12:00:00",
+                }
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def get(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(["builder", "status", "1", "--server", "https://s.example.com", "--token", "tok"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "catx-01" in out
+        assert "online" in out
+        assert "fast" in out
+
+    def test_status_not_found(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 404
+            text = "not found"
+            def json(self):
+                return {"detail": "not found"}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def get(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(["builder", "status", "999", "--server", "https://s.example.com", "--token", "tok"])
+        assert ret != 0
+
+
+class TestBuilderStopCLI:
+    """Test builder stop command with mocked HTTP."""
+
+    def test_stop_success(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {"message": "builder unregistered", "id": 5}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def delete(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(["builder", "stop", "5", "--server", "https://s.example.com", "--token", "tok"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "unregistered" in out.lower()
+
+
+# ── builds CLI tests ───────────────────────────────────────────
+
+
+class TestBuildsCLIHelp:
+    """Verify builds subcommands appear in help."""
+
+    @pytest.mark.parametrize("subcmd", [
+        "list", "info", "cancel", "cancel-dag", "log", "log-delete",
+        "submit", "submit-dag", "purge",
+    ])
+    def test_builds_subcommand_help(self, subcmd, capsys):
+        ret = main(["builds", subcmd, "--help"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "--server" in out
+        assert "--token" in out
+
+    def test_builds_group_lists_subcommands(self, capsys):
+        ret = main(["builds", "--help"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        for cmd in ("list", "info", "cancel", "log", "submit", "purge"):
+            assert cmd in out
+
+
+class TestBuildsListCLI:
+    """Test builds list command with mocked HTTP."""
+
+    def test_list_shows_jobs(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {
+                    "total": 1,
+                    "jobs": [{
+                        "id": 10, "recipe_name": "zlib", "platform": "linux",
+                        "config": "release", "link": "shared", "status": "pending",
+                        "dag_id": None,
+                    }],
+                }
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def get(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(["builds", "list", "--server", "https://s.example.com", "--token", "tok"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "zlib" in out
+        assert "pending" in out
+
+    def test_list_empty(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {"total": 0, "jobs": []}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def get(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(["builds", "list", "--server", "https://s.example.com", "--token", "tok"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "no build jobs" in out.lower()
+
+
+class TestBuildsInfoCLI:
+    """Test builds info command with mocked HTTP."""
+
+    def test_info_shows_details(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {
+                    "id": 10, "recipe_name": "zlib", "recipe_version": "1.3.1",
+                    "platform": "linux", "arch": "x86_64", "config": "release",
+                    "link": "shared", "status": "succeeded", "dag_id": "d1",
+                    "builder_id": 3, "priority": 5,
+                    "submitted_at": "2026-06-01T00:00:00",
+                    "started_at": "2026-06-01T00:01:00",
+                    "finished_at": "2026-06-01T00:05:00",
+                    "error_message": None, "result_archive_url": "https://s.example.com/v1/download/zlib.tar.gz",
+                    "depends_on": [8, 9],
+                }
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def get(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(["builds", "info", "10", "--server", "https://s.example.com", "--token", "tok"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "zlib" in out
+        assert "succeeded" in out
+        assert "8, 9" in out
+
+
+class TestBuildsCancelCLI:
+    """Test builds cancel command with mocked HTTP."""
+
+    def test_cancel_success(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {"message": "job cancelled", "id": 10, "status": "cancelled"}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def post(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(["builds", "cancel", "10", "--server", "https://s.example.com", "--token", "tok"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "cancelled" in out.lower()
+
+
+class TestBuildsCancelDagCLI:
+    """Test builds cancel-dag command with mocked HTTP."""
+
+    def test_cancel_dag_success(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {"message": "dag cancelled", "dag_id": "d1", "cancelled": 3}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def post(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(["builds", "cancel-dag", "d1", "--server", "https://s.example.com", "--token", "tok"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "3" in out
+        assert "cancelled" in out.lower()
+
+
+class TestBuildsLogCLI:
+    """Test builds log command with mocked HTTP."""
+
+    def test_log_download(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = "build output line 1\nbuild output line 2\n"
+            def json(self):
+                return {}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def get(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(["builds", "log", "10", "--server", "https://s.example.com", "--token", "tok"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "build output line 1" in out
+
+    def test_log_not_found(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 404
+            text = "not found"
+            def json(self):
+                return {"detail": "not found"}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def get(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(["builds", "log", "999", "--server", "https://s.example.com", "--token", "tok"])
+        assert ret != 0
+
+
+class TestBuildsLogDeleteCLI:
+    """Test builds log-delete command with mocked HTTP."""
+
+    def test_log_delete_success(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {"ok": True, "job_id": 10}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def delete(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(["builds", "log-delete", "10", "--server", "https://s.example.com", "--token", "tok"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "deleted" in out.lower()
+
+
+class TestBuildsSubmitCLI:
+    """Test builds submit command with mocked HTTP."""
+
+    def test_submit_success(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {
+                    "id": 42, "recipe_name": "zlib", "status": "pending",
+                    "platform": "linux", "arch": "x86_64",
+                    "config": "release", "link": "shared", "dag_id": None,
+                }
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def post(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main([
+            "builds", "submit",
+            "--recipe", "zlib", "--platform", "linux", "--arch", "x86_64",
+            "--server", "https://s.example.com", "--token", "tok",
+        ])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "42" in out
+        assert "zlib" in out
+        assert "pending" in out.lower()
+
+
+class TestBuildsSubmitDagCLI:
+    """Test builds submit-dag command with mocked HTTP."""
+
+    def test_submit_dag_success(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {"dag_id": "dag-001", "total": 2, "jobs": []}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def post(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main([
+            "builds", "submit-dag",
+            "--platform", "linux", "--arch", "x86_64",
+            "--server", "https://s.example.com", "--token", "tok",
+            "zlib", "boost",
+        ])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "dag-001" in out.lower() or "2 jobs" in out
+
+
+class TestBuildsPurgeCLI:
+    """Test builds purge command with mocked HTTP."""
+
+    def test_purge_success(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {"ok": True, "purged": 5}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def post(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main([
+            "builds", "purge", "--older-than", "30d",
+            "--server", "https://s.example.com", "--token", "tok",
+        ])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "5" in out
+        assert "purged" in out.lower()
+
+    def test_purge_invalid_format(self, capsys, monkeypatch):
+        """--older-than must match '<N>d' format."""
+        ret = main([
+            "builds", "purge", "--older-than", "2w",
+            "--server", "https://s.example.com", "--token", "tok",
+        ])
+        assert ret != 0
+
+    def test_purge_with_delete_jobs(self, capsys, monkeypatch):
+        """--delete-jobs should use the purge/builds endpoint."""
+        urls_called = []
+
+        class FakeResponse:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {"ok": True, "purged": 3}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def post(self, url, **kw):
+                urls_called.append(url)
+                return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main([
+            "builds", "purge", "--older-than", "10d", "--delete-jobs",
+            "--server", "https://s.example.com", "--token", "tok",
+        ])
+        assert ret == 0
+        assert any("purge/builds" in u for u in urls_called)
