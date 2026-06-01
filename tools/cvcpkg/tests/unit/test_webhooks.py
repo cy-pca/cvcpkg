@@ -558,3 +558,49 @@ class TestWebhookEndpoints:
         data = resp.json()
         assert data["total"] == 1
         assert data["webhooks"][0]["org_slug"] == "org-a"
+
+
+# ── Webhook test-delivery endpoint tests ───────────────────────
+
+
+class TestWebhookTestEndpoint:
+    """Tests for POST /v1/webhooks/{id}/test."""
+
+    @staticmethod
+    def _admin_headers(token: str) -> dict[str, str]:
+        return {"Authorization": f"Bearer {token}"}
+
+    def _create_webhook(self, client, token: str) -> int:
+        resp = client.post(
+            "/v1/webhooks",
+            json={
+                "url": "https://httpbin.org/post",
+                "events": ["webhook.test"],
+            },
+            headers=self._admin_headers(token),
+        )
+        assert resp.status_code == 200
+        return resp.json()["id"]
+
+    def test_test_webhook_not_found(self, db_server_env):
+        client, admin_token, _, _, _ = db_server_env
+        resp = client.post(
+            "/v1/webhooks/9999/test",
+            headers=self._admin_headers(admin_token),
+        )
+        assert resp.status_code == 404
+
+    def test_test_webhook_requires_admin(self, db_server_env):
+        client, admin_token, pub_token, _, _ = db_server_env
+        wh_id = self._create_webhook(client, admin_token)
+        resp = client.post(
+            f"/v1/webhooks/{wh_id}/test",
+            headers=self._admin_headers(pub_token),
+        )
+        assert resp.status_code == 403
+
+    def test_test_webhook_requires_auth(self, db_server_env):
+        client, admin_token, _, _, _ = db_server_env
+        wh_id = self._create_webhook(client, admin_token)
+        resp = client.post(f"/v1/webhooks/{wh_id}/test")
+        assert resp.status_code == 401

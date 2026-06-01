@@ -614,3 +614,60 @@ class TestBuildLogEndpoints:
             headers={"Authorization": f"Bearer {reader_tok}"},
         )
         assert resp.status_code == 403
+
+    # ── Log stream (SSE) endpoint tests ────────────────────────
+
+    def test_log_stream_returns_sse(self, db_server_env):
+        """GET /v1/builds/{id}/log/stream should return SSE data lines."""
+        client, admin_tok, pub_tok, reader_tok, _ = db_server_env
+        sub = self._submit(client, pub_tok)
+        job_id = sub.json()["id"]
+
+        # Append some log data
+        client.patch(
+            f"/v1/builds/{job_id}/log",
+            json={"data": "building zlib...\ndone.\n"},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+
+        # Complete the job so the stream ends
+        # First claim then complete
+        builder_resp = self._register_builder(client, pub_tok)
+        builder_id = builder_resp.json()["id"]
+        client.post(
+            f"/v1/builds/{job_id}/claim",
+            json={"builder_id": builder_id},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        client.post(
+            f"/v1/builds/{job_id}/complete",
+            json={"result_archive_url": ""},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+
+        resp = client.get(
+            f"/v1/builds/{job_id}/log/stream",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers.get("content-type", "")
+        body = resp.text
+        assert "data: " in body
+        assert "building zlib" in body
+        assert "event: done" in body
+
+    def test_log_stream_not_found(self, db_server_env):
+        """Stream for nonexistent job should return error event."""
+        client, admin_tok, pub_tok, reader_tok, _ = db_server_env
+        resp = client.get(
+            "/v1/builds/9999/log/stream",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        assert "event: error" in body
+
+    def test_log_stream_requires_auth(self, db_server_env):
+        client, admin_tok, pub_tok, reader_tok, _ = db_server_env
+        resp = client.get("/v1/builds/1/log/stream")
+        assert resp.status_code == 401
