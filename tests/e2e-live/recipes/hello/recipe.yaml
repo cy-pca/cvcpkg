@@ -1,0 +1,21 @@
+schema_version: 1
+recipe:
+  name: hello
+  upstream_version: "1.0.0"
+  cvc_revision: 1
+  description: "Tiny hello library for E2E testing."
+  license: MIT
+  tags: [test]
+
+source:
+  type: prebuilt
+
+patches: []
+
+depends:
+  build: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh

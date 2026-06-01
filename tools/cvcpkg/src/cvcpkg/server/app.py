@@ -1019,6 +1019,7 @@ def create_app(
 
     @app.get("/v1/catalog", response_model=CatalogResponse, tags=["catalog"])
     async def get_catalog(
+        request: Request,
         _auth: TokenRecord | None = Depends(optional_reader_auth),
         _caller: TokenRecord | None = Depends(optional_token),
     ):
@@ -1028,15 +1029,23 @@ def create_app(
                 caller_token_name=caller.name if caller else "",
                 is_admin=caller is not None and caller.role == TokenRole.admin,
             )
-            return CatalogResponse(
-                revision=cat.get("revision", 0),
-                bundles=cat.get("bundles", []),
-            )
-        state = _get_state()
-        return CatalogResponse(
-            revision=state.index.get("revision", 0),
-            bundles=state.index.get("bundles", []),
-        )
+            revision = cat.get("revision", 0)
+            bundles = cat.get("bundles", [])
+        else:
+            state = _get_state()
+            revision = state.index.get("revision", 0)
+            bundles = list(state.index.get("bundles", []))
+
+        # Resolve relative archive_url paths (e.g. "/v1/download/…")
+        # to absolute URLs so clients can download without knowing
+        # the server origin separately.
+        base = str(request.base_url).rstrip("/")
+        for b in bundles:
+            url = b.get("archive_url", "")
+            if url.startswith("/"):
+                b["archive_url"] = f"{base}{url}"
+
+        return CatalogResponse(revision=revision, bundles=bundles)
 
     # ── Dependency graph (read) ────────────────────────────
 
