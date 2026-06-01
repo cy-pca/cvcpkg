@@ -2280,6 +2280,7 @@ class DbBuildJobStore:
                 return None
             row.status = BuildJobStatus.succeeded
             row.finished_at = now
+            row.error_message = ""
             if result_archive_url:
                 row.result_archive_url = result_archive_url
             dep_ids = await self._load_dep_ids(session, job_id)
