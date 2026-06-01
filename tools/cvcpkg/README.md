@@ -32,6 +32,341 @@ cvcpkg install --from cvc-requirements.yaml --prefix ./deps
 cvcpkg verify --prefix ./deps
 ```
 
+## Build modes
+
+cvcpkg supports two primary modes: **server mode** (default) and
+**local mode**.  The mode determines where recipes and prebuilt
+packages come from.
+
+### Server mode (default)
+
+By default, cvcpkg connects to a package server to fetch prebuilt
+binaries and the latest recipe definitions.  The server is specified
+by the `CVCPKG_SERVER_URL` environment variable or `--server` flag.
+When neither is set, the official server at `https://pkg.tx.wtf` is
+used.
+
+```bash
+# Install prebuilt binaries from the official server:
+cvcpkg install zlib boost --prefix ./deps
+
+# Build from recipes pulled from the server:
+cvcpkg build zlib --prefix ./prefix
+
+# Build all recipes (fetches latest from server):
+cvcpkg build-all --prefix ./prefix --platform linux
+
+# Use a custom server:
+export CVCPKG_SERVER_URL=https://pkg.mycompany.com
+cvcpkg install --from cvc-requirements.yaml --prefix ./deps
+```
+
+### Local mode (`--local`)
+
+Pass `--local` (or set `CVCPKG_LOCAL=1`) to skip all server
+communication and use only bundled/local recipes.  This is useful for
+air-gapped environments, offline development, or when you want to
+build against a specific set of recipes without pulling updates.
+
+```bash
+# Build a recipe from local/bundled recipes:
+cvcpkg build zlib --local --prefix ./prefix
+
+# Build all recipes from local sources:
+cvcpkg build-all --local --prefix ./prefix --platform linux
+
+# Install from source using local recipes (no catalog):
+cvcpkg install --local zlib boost --prefix ./deps
+
+# Combine with --recipes-dir to overlay custom recipes:
+cvcpkg build zlib --local --recipes-dir ./my-recipes --prefix ./prefix
+```
+
+When `--local` is used with `cvcpkg install`, it implies
+`--fallback-to-source` — all components are built from source recipes
+rather than downloaded as prebuilt binaries.
+
+You can also overlay additional recipe directories with `--recipes-dir`
+(may be specified multiple times; later directories win on name
+conflicts).
+
+---
+
+## Recipe management
+
+Recipes define how to build each component from source.  They live in
+`recipes/` directories and contain a `recipe.yaml`, platform-specific
+build scripts, and optional patches.
+
+### Listing recipes
+
+```bash
+# List bundled/local recipes:
+cvcpkg recipes
+
+# List recipes on the server:
+cvcpkg recipe list
+
+# Show details of a specific recipe:
+cvcpkg recipes --show grpc
+
+# Filter by tag:
+cvcpkg recipes --tag math
+```
+
+### Downloading recipes from the server
+
+```bash
+# Download a single recipe:
+cvcpkg recipe pull zlib --output-dir ./recipes
+
+# Download the full base recipe set:
+cvcpkg recipe pull-all --output-dir ./recipes
+
+# Download an organization's recipe set:
+cvcpkg recipe pull-all --org my-org --output-dir ./org-recipes
+```
+
+### Pushing recipes to the server
+
+```bash
+# Push a single recipe (admin):
+cvcpkg recipe push zlib
+
+# Push and register as a placeholder package:
+cvcpkg recipe publish zlib
+
+# Push all recipes at once:
+cvcpkg recipe push-all --recipes-dir ./recipes
+```
+
+`recipe publish` is a convenience command that pushes the recipe
+bundle **and** registers a placeholder entry in the catalog.  The
+placeholder tells consumers "this recipe exists" before any binary
+has been built.  Remote builders or local users can then produce the
+actual binaries.
+
+---
+
+## Remote builders
+
+cvcpkg supports a remote build system where dedicated builder agents
+poll the server for build jobs, execute them, and publish the results.
+This replaces long-running CI workflows (some builds exceed 6 hours)
+with persistent, uncapped build agents.
+
+### Starting a builder
+
+```bash
+export CVCPKG_SERVER_URL=https://pkg.tx.wtf
+export CVCPKG_TOKEN=cvctok_...
+
+# Start a builder agent:
+cvcpkg builder run \
+    --name linux-x64-builder-1 \
+    --platform linux \
+    --arch x86_64 \
+    --max-jobs 4 \
+    --work-dir /mnt/scratch/builder
+
+# Start multiple builders for parallel builds:
+cvcpkg builder run --name builder-2 --platform linux --arch x86_64 &
+cvcpkg builder run --name builder-3 --platform macos --arch arm64 &
+```
+
+Builders register with the server and receive jobs via WebSocket (with
+HTTP long-poll fallback).  Each job downloads the recipe from the
+server, builds it, packages the result, and publishes the archive.
+
+### Submitting builds
+
+```bash
+# Submit a single build job:
+cvcpkg builds submit --recipe zlib --platform linux --arch x86_64
+
+# Submit a dependency graph (DAG) of build jobs:
+cvcpkg builds submit-dag \
+    --recipe zlib --recipe zstd --recipe hdf5 \
+    --platform linux --arch x86_64
+
+# Monitor build progress:
+cvcpkg builds list --status running
+cvcpkg builds log <job-id> -f    # follow log output
+```
+
+### Listing and managing builders
+
+```bash
+# List registered builders:
+cvcpkg builder list
+
+# Check a specific builder:
+cvcpkg builder status --name linux-x64-builder-1
+
+# Unregister a builder:
+cvcpkg builder stop --name linux-x64-builder-1
+```
+
+---
+
+## Using the official server
+
+The official cvcpkg server at `https://pkg.tx.wtf` hosts prebuilt
+binaries for all supported platforms and the canonical recipe set.
+
+**As a consumer** — install prebuilt packages:
+
+```bash
+# No configuration needed — pkg.tx.wtf is the default:
+cvcpkg install --from cvc-requirements.yaml --prefix ./deps
+```
+
+**As a contributor** — register and publish:
+
+```bash
+# Register for an API token:
+cvcpkg register --server https://pkg.tx.wtf \
+    --name alice --email alice@example.org --role publisher
+
+# Set credentials:
+export CVCPKG_SERVER_URL=https://pkg.tx.wtf
+export CVCPKG_TOKEN=cvctok_...
+
+# Publish recipes and packages:
+cvcpkg recipe publish my-library
+cvcpkg publish my-library --output-dir ./dist
+```
+
+---
+
+## Self-hosted server and builder registry
+
+You can run your own cvcpkg server for private packages, custom
+recipes, or air-gapped environments.
+
+### Setting up the server
+
+```bash
+# Install with server + database extras:
+pip install 'cvcpkg[server,db]'
+
+# Start with PostgreSQL:
+export CVCPKG_DATABASE_URL="postgresql+asyncpg://user:pass@localhost/cvcpkg"
+cvcpkg-server run \
+    --state-dir /var/lib/cvcpkg \
+    --host 0.0.0.0 --port 8080
+
+# Bootstrap the first admin token:
+cvcpkg-server bootstrap --name admin --email admin@example.org
+```
+
+### Populating with recipes
+
+```bash
+export CVCPKG_SERVER_URL=https://my-server.example.com
+export CVCPKG_TOKEN=cvctok_<admin-token>
+
+# Push all base recipes to your server:
+cvcpkg recipe push-all --recipes-dir ./recipes
+
+# Or push individual recipes:
+cvcpkg recipe push zlib
+cvcpkg recipe push boost
+```
+
+### Setting up builders
+
+Run builder agents on each target platform:
+
+```bash
+# On a Linux x86_64 build host:
+cvcpkg builder run \
+    --server https://my-server.example.com \
+    --token cvctok_... \
+    --name linux-builder \
+    --platform linux --arch x86_64 \
+    --max-jobs 4 --work-dir /scratch/builder
+
+# On a macOS arm64 build host:
+cvcpkg builder run \
+    --server https://my-server.example.com \
+    --token cvctok_... \
+    --name macos-builder \
+    --platform macos --arch arm64 \
+    --max-jobs 2 --work-dir ~/builder-work
+```
+
+### Building everything
+
+```bash
+# Submit DAG builds for all recipes:
+cvcpkg builds submit-dag \
+    --recipe zlib --recipe boost --recipe hdf5 ... \
+    --platform linux --arch x86_64
+
+# Or build locally and publish:
+cvcpkg pack-all --local --platform linux --output-dir ./dist
+cvcpkg publish --all --output-dir ./dist
+```
+
+### Configuring clients
+
+Point downstream consumers at your server:
+
+```bash
+export CVCPKG_SERVER_URL=https://my-server.example.com
+cvcpkg install --from cvc-requirements.yaml --prefix ./deps
+```
+
+Or configure it in `~/.config/cvcpkg/config.yaml`:
+
+```yaml
+catalog:
+  primary: https://my-server.example.com/v1/catalog
+```
+
+---
+
+## Migrating from GitHub CI builds
+
+GitHub Actions has a 6-hour job time limit that is insufficient for
+large dependency builds (e.g. Qt6, VTK, LLVM).  cvcpkg's remote
+builder system eliminates this constraint:
+
+1. **Set up a server** (see [Self-hosted server](#self-hosted-server-and-builder-registry))
+   or use `https://pkg.tx.wtf`.
+
+2. **Deploy builder agents** on persistent build machines (bare metal,
+   VMs, or containers without time limits).
+
+3. **Push your recipes** to the server:
+   ```bash
+   cvcpkg recipe push-all --recipes-dir ./recipes
+   ```
+
+4. **Submit builds** via the API or CLI:
+   ```bash
+   cvcpkg builds submit-dag --recipe zlib --recipe boost \
+       --platform linux --arch x86_64
+   ```
+
+5. **Simplify CI** to just install prebuilt packages:
+   ```yaml
+   # .github/workflows/build.yml
+   - name: Install dependencies
+     run: |
+       pip install cvcpkg
+       cvcpkg install --from cvc-requirements.yaml --prefix ./deps
+
+   - name: Build project
+     run: cmake -S . -B build -DCMAKE_PREFIX_PATH=$PWD/deps && cmake --build build
+   ```
+
+Builders run on your own infrastructure with no time caps, and CI
+jobs become fast install-only workflows (typically under 2 minutes).
+
+---
+
 ## Integrating your downstream project
 
 ### Step 1: Create `cvc-requirements.yaml`

@@ -114,6 +114,18 @@ _maintainer_opt = click.option(
     default="",
     help="Override the maintainer field in the package manifest.",
 )
+_local_opt = click.option(
+    "--local",
+    "local_mode",
+    is_flag=True,
+    envvar="CVCPKG_LOCAL",
+    help=(
+        "Use local/bundled recipes only — do not contact a package server.  "
+        "Without --local, cvcpkg connects to the server specified by "
+        "CVCPKG_SERVER_URL (default: pkg.tx.wtf) to fetch the latest "
+        "recipes and catalog.  [env: CVCPKG_LOCAL]"
+    ),
+)
 
 
 def _validate_org_slug(ctx: click.Context, param: click.Parameter, value: str) -> str:
@@ -217,6 +229,7 @@ def cli(ctx: click.Context) -> None:
     help="Build from source recipe when no prebuilt binary is available.",
 )
 @_recipes_dir_opt
+@_local_opt
 def install(
     components: tuple[str, ...],
     from_file: str | None,
@@ -233,6 +246,7 @@ def install(
     verify_signatures: bool,
     fallback_to_source: bool,
     recipes_dirs: tuple[str, ...],
+    local_mode: bool,
 ) -> None:
     """Install component bundles into a prefix.
 
@@ -240,6 +254,9 @@ def install(
     libcvc-deps release catalog.  Components can be specified as
     positional arguments or loaded from a cvc-requirements.yaml
     file via --from.
+
+    Use --local to skip the catalog and build everything from local
+    recipes (implies --fallback-to-source).
 
     \b
     Examples:
@@ -251,6 +268,9 @@ def install(
 
       # Install individual components by name
       cvcpkg install zlib boost --prefix ./deps
+
+      # Build from local recipes only (no server)
+      cvcpkg install --local zlib boost --prefix ./deps
 
       # Pin a specific component version
       cvcpkg install zlib==1.3.1+cvc.1 --prefix ./deps
@@ -273,6 +293,10 @@ def install(
 
     ctx = click.get_current_context()
     prefix_path = Path(prefix).resolve()
+
+    # --local implies --fallback-to-source and skips the catalog entirely
+    if local_mode:
+        fallback_to_source = True
 
     # ── Load or build the Requirements object ──
     #
@@ -2030,6 +2054,63 @@ def _auto_platform(platform: str) -> str:
     return platform
 
 
+def _try_pull_server_recipes() -> tuple[str, ...]:
+    """Try to download the recipe set from the server.
+
+    Returns a 1-tuple of the local directory path if successful,
+    or an empty tuple (so the caller falls through to local recipes).
+    """
+    from cvcpkg.config import default_server_url
+
+    server = default_server_url()
+    token = os.environ.get("CVCPKG_TOKEN", "")
+    try:
+        import httpx
+
+        headers: dict[str, str] = {}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        with httpx.Client(timeout=60) as client:
+            resp = client.get(
+                f"{server.rstrip('/')}/v1/recipes/bundle",
+                headers=headers,
+            )
+        if resp.status_code != 200:
+            click.echo(
+                f"cvcpkg: could not fetch recipe set from {server} "
+                f"(HTTP {resp.status_code}), falling back to local recipes.",
+                err=True,
+            )
+            return ()
+    except Exception as exc:
+        click.echo(
+            f"cvcpkg: could not reach {server} ({exc}), "
+            "falling back to local recipes.",
+            err=True,
+        )
+        return ()
+
+    # Extract to a cache dir
+    import tarfile
+    import tempfile
+
+    cache_base = Path(tempfile.gettempdir()) / "cvcpkg-server-recipes"
+    cache_base.mkdir(parents=True, exist_ok=True)
+    # Write bundle
+    bundle_path = cache_base / "server-recipes.tar.gz"
+    bundle_path.write_bytes(resp.content)
+    extract_dir = cache_base / "recipes"
+    if extract_dir.is_dir():
+        import shutil
+
+        shutil.rmtree(extract_dir)
+    extract_dir.mkdir(parents=True)
+    with tarfile.open(bundle_path, "r:gz") as tar:
+        tar.extractall(path=extract_dir)  # noqa: S202
+    click.echo(f"cvcpkg: using recipes from {server}")
+    return (str(extract_dir),)
+
+
 # ── build ───────────────────────────────────────────────────────
 
 
@@ -2041,6 +2122,7 @@ def _auto_platform(platform: str) -> str:
 @click.option("--prefix", type=click.Path(), default=None, help="Install prefix.")
 @_keep_build_opt
 @_recipes_dir_opt
+@_local_opt
 @click.option(
     "--with-deps/--no-deps",
     default=True,
@@ -2059,6 +2141,7 @@ def build(
     prefix: str | None,
     keep_build_dir: bool,
     recipes_dirs: tuple[str, ...],
+    local_mode: bool,
     with_deps: bool,
     host_platform: str,
 ) -> None:
@@ -2068,12 +2151,17 @@ def build(
     patches, and runs the recipe's platform-specific build script.
     Results are installed into --prefix.
 
+    By default, recipes are fetched from the package server (set via
+    CVCPKG_SERVER_URL, default: pkg.tx.wtf).  Use --local to build
+    from bundled/local recipes only.
+
     Dependencies are automatically resolved and built first unless
     --no-deps is specified.
 
     \b
     Examples:
       cvcpkg build zlib --prefix ./prefix
+      cvcpkg build zlib --local --prefix ./prefix
       cvcpkg build grpc protobuf --config debug --link static
       cvcpkg build mypkg --recipes-dir ./my-recipes --recipes-dir recipes
       cvcpkg build vtk --no-deps --prefix ./prefix
@@ -2081,6 +2169,11 @@ def build(
     from cvcpkg.builder import build_recipe, find_recipes_dir, resolve_build_order
 
     plat = _auto_platform(platform)
+
+    # If --local is not set and --recipes-dir is not specified,
+    # try to pull recipes from the server.
+    if not local_mode and not recipes_dirs:
+        recipes_dirs = _try_pull_server_recipes()
     prefix_path = Path(prefix).resolve() if prefix else None
 
     if with_deps:
@@ -2192,6 +2285,7 @@ def build(
 @click.option("--output-dir", type=click.Path(), default="./dist", help="Output directory.")
 @_keep_build_opt
 @_recipes_dir_opt
+@_local_opt
 @_maintainer_opt
 @click.option(
     "--signing-key",
@@ -2208,6 +2302,7 @@ def pack(
     output_dir: str,
     keep_build_dir: bool,
     recipes_dirs: tuple[str, ...],
+    local_mode: bool,
     maintainer: str,
     signing_key: str | None,
 ) -> None:
@@ -2220,10 +2315,15 @@ def pack(
     \b
     Example:
       cvcpkg pack zlib boost --output-dir ./dist
+      cvcpkg pack zlib --local --output-dir ./dist
     """
     from cvcpkg.builder import pack_recipe
 
     plat = _auto_platform(platform)
+
+    if not local_mode and not recipes_dirs:
+        recipes_dirs = _try_pull_server_recipes()
+
     prefix_path = Path(prefix).resolve() if prefix else None
     output = Path(output_dir).resolve()
 
@@ -2259,6 +2359,7 @@ def pack(
 @click.option("--prefix", type=click.Path(), default=None, help="Shared install prefix.")
 @_keep_build_opt
 @_recipes_dir_opt
+@_local_opt
 @click.option(
     "--work-dir",
     type=click.Path(),
@@ -2333,6 +2434,7 @@ def build_all_cmd(
     prefix: str | None,
     keep_build_dir: bool,
     recipes_dirs: tuple[str, ...],
+    local_mode: bool,
     work_dir: str | None,
     host_platform: str,
     keep_going: bool,
@@ -2363,6 +2465,10 @@ def build_all_cmd(
     plat = _auto_platform(platform)
     prefix_path = Path(prefix).resolve() if prefix else None
     work_dir_root = Path(work_dir).resolve() if work_dir else None
+
+    if not local_mode and not recipes_dirs:
+        recipes_dirs = _try_pull_server_recipes()
+
     rdirs = [Path(d) for d in recipes_dirs] if recipes_dirs else [find_recipes_dir()]
 
     contexts = build_all(
@@ -2399,6 +2505,7 @@ def build_all_cmd(
 @click.option("--output-dir", type=click.Path(), default="./dist", help="Output directory.")
 @_keep_build_opt
 @_recipes_dir_opt
+@_local_opt
 @_maintainer_opt
 @click.option(
     "--signing-key",
@@ -2497,6 +2604,7 @@ def pack_all_cmd(
     output_dir: str,
     keep_build_dir: bool,
     recipes_dirs: tuple[str, ...],
+    local_mode: bool,
     maintainer: str,
     signing_key: str | None,
     work_dir: str | None,
@@ -2546,6 +2654,10 @@ def pack_all_cmd(
     prefix_path = Path(prefix).resolve() if prefix else None
     work_dir_root = Path(work_dir).resolve() if work_dir else None
     output = Path(output_dir).resolve()
+
+    if not local_mode and not recipes_dirs:
+        recipes_dirs = _try_pull_server_recipes()
+
     rdirs = [Path(d) for d in recipes_dirs] if recipes_dirs else [find_recipes_dir()]
 
     # Load all recipes for chain_hash computation
@@ -5291,6 +5403,374 @@ def recipe_delete(name: str, server: str, token: str, org_slug: str):
             pass
         raise click.ClickException(f"server returned {resp.status_code}: {detail}")
     click.echo(f"Recipe '{name}' deleted.")
+
+
+@recipe_group.command("publish")
+@click.argument("name")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option(
+    "--recipes-dir", type=click.Path(exists=True), default=None, help="Recipe source directory."
+)
+@click.option("--org", "org_slug", default="", help="Organization scope.")
+def recipe_publish(name: str, server: str, token: str, recipes_dir: str | None, org_slug: str):
+    """Publish a recipe to the server (push recipe + register placeholder package).
+
+    This pushes the recipe bundle to the server and registers a
+    placeholder entry in the catalog so the recipe is discoverable.
+    The placeholder has no build artifacts — it signals that the recipe
+    is available for remote builds or local source builds.
+
+    \b
+    Examples:
+      cvcpkg recipe publish zlib
+      cvcpkg recipe publish my-library --org my-org
+    """
+    import io
+    import tarfile
+
+    import httpx
+
+    from cvcpkg.builder import RecipeError, find_recipes_dir
+
+    base = server.rstrip("/")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    if recipes_dir:
+        rdir = Path(recipes_dir)
+    else:
+        try:
+            rdir = find_recipes_dir()
+        except RecipeError:
+            raise click.ClickException("could not find recipes directory") from None
+
+    recipe_path = rdir / name
+    if not recipe_path.is_dir():
+        raise click.ClickException(f"recipe directory not found: {recipe_path}")
+
+    # Read recipe metadata
+    recipe_yaml = recipe_path / "recipe.yaml"
+    version = ""
+    description = ""
+    homepage = ""
+    pkg_license = ""
+    maintainer_field = ""
+    if recipe_yaml.is_file():
+        recipe_data = yaml.safe_load(recipe_yaml.read_text())
+        recipe_info = recipe_data.get("recipe", {})
+        version = recipe_info.get("upstream_version", "")
+        cvc_rev = recipe_data.get("cvc_revision", recipe_info.get("cvc_revision", 1))
+        full_version = f"{version}+cvc.{cvc_rev}" if version else ""
+        description = recipe_info.get("description", "")
+        homepage = recipe_info.get("homepage", "")
+        pkg_license = recipe_info.get("license", "")
+        maintainer_field = recipe_info.get("maintainer", "")
+    else:
+        full_version = ""
+
+    # 1. Push the recipe bundle (reuse recipe push logic)
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for f in sorted(recipe_path.rglob("*")):
+            if f.is_file():
+                arcname = f"{name}/{f.relative_to(recipe_path)}"
+                tar.add(f, arcname=arcname)
+        common_dir = rdir / "_common"
+        if common_dir.is_dir():
+            for f in sorted(common_dir.rglob("*")):
+                if f.is_file():
+                    arcname = f"_common/{f.relative_to(common_dir)}"
+                    tar.add(f, arcname=arcname)
+    buf.seek(0)
+
+    url = f"{base}/v1/recipes/{name}"
+    params = {"org_slug": org_slug, "version": version}
+    with httpx.Client(timeout=60) as client:
+        resp = client.post(
+            url,
+            headers=headers,
+            params=params,
+            files={"file": (f"{name}.tar.gz", buf, "application/gzip")},
+        )
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"recipe push failed ({resp.status_code}): {detail}")
+    click.echo(f"Recipe '{name}' pushed (version={version})")
+
+    # 2. Register placeholder package entry via POST /v1/recipes/{name}/register
+    with httpx.Client(timeout=30) as client:
+        resp = client.post(
+            f"{base}/v1/recipes/{name}/register",
+            headers=headers,
+            json={
+                "version": full_version,
+                "description": description,
+                "homepage": homepage,
+                "license": pkg_license,
+                "maintainer": maintainer_field,
+                "org_slug": org_slug,
+            },
+        )
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        click.echo(f"cvcpkg: warning: placeholder registration failed: {detail}", err=True)
+    else:
+        click.echo(f"Recipe '{name}' registered in catalog (version={full_version})")
+
+
+@recipe_group.command("pull")
+@click.argument("name")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    default="",
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--org", "org_slug", default="", help="Organization scope.")
+@click.option(
+    "--output-dir",
+    type=click.Path(),
+    default="./recipes",
+    help="Directory to extract the recipe into.",
+)
+def recipe_pull(name: str, server: str, token: str, org_slug: str, output_dir: str):
+    """Download a recipe from the server.
+
+    Downloads the recipe bundle and extracts it to --output-dir/<name>/.
+    This lets you inspect or locally build a recipe from the server.
+
+    \b
+    Examples:
+      cvcpkg recipe pull zlib
+      cvcpkg recipe pull zlib --output-dir ./my-recipes
+    """
+    import tarfile
+
+    import httpx
+
+    base = server.rstrip("/")
+    headers: dict[str, str] = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    params: dict[str, str] = {}
+    if org_slug:
+        params["org_slug"] = org_slug
+
+    with httpx.Client(timeout=120) as client:
+        resp = client.get(f"{base}/v1/recipes/{name}", headers=headers, params=params)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"failed to download recipe '{name}': {detail}")
+
+    output = Path(output_dir).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    bundle_path = output / f"{name}.tar.gz"
+    bundle_path.write_bytes(resp.content)
+
+    with tarfile.open(bundle_path, "r:gz") as tar:
+        tar.extractall(path=output)  # noqa: S202
+    bundle_path.unlink()
+    click.echo(f"Recipe '{name}' extracted to {output / name}")
+
+
+@recipe_group.command("pull-all")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    default="",
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--org", "org_slug", default="", help="Organization scope (empty = base set).")
+@click.option(
+    "--output-dir",
+    type=click.Path(),
+    default="./recipes",
+    help="Directory to extract recipes into.",
+)
+def recipe_pull_all(server: str, token: str, org_slug: str, output_dir: str):
+    """Download the full recipe set from the server.
+
+    Downloads all recipes as a single bundle and extracts them to
+    --output-dir.  Use --org to download an organization's recipe set
+    instead of the base set.
+
+    \b
+    Examples:
+      cvcpkg recipe pull-all
+      cvcpkg recipe pull-all --org my-org --output-dir ./org-recipes
+    """
+    import tarfile
+
+    import httpx
+
+    base = server.rstrip("/")
+    headers: dict[str, str] = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    params: dict[str, str] = {}
+    if org_slug:
+        params["org_slug"] = org_slug
+
+    click.echo(f"cvcpkg: downloading recipe set from {base} ...")
+    with httpx.Client(timeout=300) as client:
+        resp = client.get(f"{base}/v1/recipes/bundle", headers=headers, params=params)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"failed to download recipe set: {detail}")
+
+    output = Path(output_dir).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    bundle_path = output / "recipes-bundle.tar.gz"
+    bundle_path.write_bytes(resp.content)
+
+    with tarfile.open(bundle_path, "r:gz") as tar:
+        tar.extractall(path=output)  # noqa: S202
+    bundle_path.unlink()
+
+    # Count extracted recipes
+    recipe_count = sum(
+        1 for d in output.iterdir() if d.is_dir() and (d / "recipe.yaml").is_file()
+    )
+    click.echo(f"cvcpkg: {recipe_count} recipes extracted to {output}")
+
+
+@recipe_group.command("push-all")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option(
+    "--recipes-dir", type=click.Path(exists=True), default=None, help="Recipe source directory."
+)
+@click.option("--org", "org_slug", default="", help="Organization scope.")
+def recipe_push_all(server: str, token: str, recipes_dir: str | None, org_slug: str):
+    """Push all recipes from a local directory to the server.
+
+    Iterates every recipe in the recipes directory and pushes each
+    one to the server.
+
+    \b
+    Examples:
+      cvcpkg recipe push-all
+      cvcpkg recipe push-all --recipes-dir ./recipes
+    """
+    import io
+    import tarfile
+
+    import httpx
+
+    from cvcpkg.builder import RecipeError, find_recipes_dir
+
+    base = server.rstrip("/")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    if recipes_dir:
+        rdir = Path(recipes_dir)
+    else:
+        try:
+            rdir = find_recipes_dir()
+        except RecipeError:
+            raise click.ClickException("could not find recipes directory") from None
+
+    pushed = 0
+    failed = 0
+    for recipe_path in sorted(rdir.iterdir()):
+        if not recipe_path.is_dir() or recipe_path.name.startswith(("_", ".")):
+            continue
+        if not (recipe_path / "recipe.yaml").is_file():
+            continue
+
+        name = recipe_path.name
+        recipe_yaml = recipe_path / "recipe.yaml"
+        recipe_data = yaml.safe_load(recipe_yaml.read_text())
+        recipe_info = recipe_data.get("recipe", {})
+        version = recipe_info.get("upstream_version", "")
+
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            for f in sorted(recipe_path.rglob("*")):
+                if f.is_file():
+                    arcname = f"{name}/{f.relative_to(recipe_path)}"
+                    tar.add(f, arcname=arcname)
+            common_dir = rdir / "_common"
+            if common_dir.is_dir():
+                for f in sorted(common_dir.rglob("*")):
+                    if f.is_file():
+                        arcname = f"_common/{f.relative_to(common_dir)}"
+                        tar.add(f, arcname=arcname)
+        buf.seek(0)
+
+        url = f"{base}/v1/recipes/{name}"
+        params = {"org_slug": org_slug, "version": version}
+        try:
+            with httpx.Client(timeout=60) as client:
+                resp = client.post(
+                    url,
+                    headers=headers,
+                    params=params,
+                    files={"file": (f"{name}.tar.gz", buf, "application/gzip")},
+                )
+            if resp.status_code >= 400:
+                click.echo(f"  {name}: failed ({resp.status_code})", err=True)
+                failed += 1
+            else:
+                click.echo(f"  {name} (version={version})")
+                pushed += 1
+        except Exception as exc:
+            click.echo(f"  {name}: error ({exc})", err=True)
+            failed += 1
+
+    click.echo(f"cvcpkg: pushed {pushed} recipes ({failed} failed)")
 
 
 # ── Webhook CLI commands ────────────────────────────────────────
