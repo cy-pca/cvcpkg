@@ -498,3 +498,244 @@ class TestRecipeEndpoints:
         client, *_ = db_server_env
         resp = client.get("/v1/recipes")
         assert resp.status_code == 401
+
+
+# ── GET /v1/recipes/bundle ──────────────────────────────────────
+
+
+class TestRecipeBundleEndpoint:
+    """Test the combined recipe bundle download endpoint."""
+
+    def _upload(self, client, token, name, org_slug=""):
+        bundle = _make_tar_gz({
+            f"{name}/recipe.yaml": f"name: {name}\nupstream_version: '1.0'\n",
+            f"{name}/build.sh": f"#!/bin/sh\necho building {name}\n",
+        })
+        params = {"org_slug": org_slug, "version": "1.0"}
+        return client.post(
+            f"/v1/recipes/{name}",
+            files={"file": (f"{name}.tar.gz", bundle, "application/gzip")},
+            params=params,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    def test_bundle_empty_db(self, db_server_env):
+        """Bundle from empty DB returns a valid (empty) tar.gz."""
+        client, admin_tok, pub_tok, reader_tok, _ = db_server_env
+        resp = client.get("/v1/recipes/bundle")
+        assert resp.status_code == 200
+        assert "gzip" in resp.headers.get("content-type", "")
+        # Should be a valid tarball with no members
+        content = resp.content
+        assert len(content) > 0
+        extracted = tarfile.open(fileobj=io.BytesIO(content), mode="r:gz")
+        assert extracted.getnames() == []
+
+    def test_bundle_contains_uploaded_recipes(self, db_server_env):
+        """After uploading recipes, the bundle contains them all."""
+        client, admin_tok, pub_tok, reader_tok, _ = db_server_env
+        self._upload(client, admin_tok, "zlib")
+        self._upload(client, admin_tok, "boost")
+
+        resp = client.get("/v1/recipes/bundle")
+        assert resp.status_code == 200
+        with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz") as tar:
+            names = tar.getnames()
+        # Both recipes should appear in the bundle
+        assert any("zlib" in n for n in names)
+        assert any("boost" in n for n in names)
+
+    def test_bundle_no_auth_required(self, db_server_env):
+        """The bundle endpoint does not require authentication."""
+        client, admin_tok, *_ = db_server_env
+        self._upload(client, admin_tok, "zlib")
+        resp = client.get("/v1/recipes/bundle")
+        assert resp.status_code == 200
+
+    def test_bundle_content_disposition(self, db_server_env):
+        """Response includes a Content-Disposition header."""
+        client, *_ = db_server_env
+        resp = client.get("/v1/recipes/bundle")
+        assert resp.status_code == 200
+        cd = resp.headers.get("content-disposition", "")
+        assert "recipes.tar.gz" in cd
+
+    def test_bundle_org_filter(self, db_server_env):
+        """Bundle with org_slug only includes that org's recipes."""
+        client, admin_tok, pub_tok, reader_tok, _ = db_server_env
+        self._upload(client, admin_tok, "zlib")
+        self._upload(client, admin_tok, "orgpkg", org_slug="myorg")
+
+        resp = client.get("/v1/recipes/bundle", params={"org_slug": "myorg"})
+        assert resp.status_code == 200
+        with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz") as tar:
+            names = tar.getnames()
+        assert any("orgpkg" in n for n in names)
+        # base-set recipe should NOT be here
+        assert not any("zlib" in n for n in names)
+
+    def test_bundle_filesystem_fallback(self, tmp_path, monkeypatch):
+        """Without a DB, the bundle endpoint serves from local recipes dir."""
+        # Ensure CVCPKG_DATABASE_URL is unset
+        monkeypatch.delenv("CVCPKG_DATABASE_URL", raising=False)
+
+        # Create a fake recipes directory
+        recipes_dir = tmp_path / "recipes"
+        recipes_dir.mkdir()
+        zlib_dir = recipes_dir / "zlib"
+        zlib_dir.mkdir()
+        (zlib_dir / "recipe.yaml").write_text("name: zlib\n")
+        (zlib_dir / "build.sh").write_text("echo hi\n")
+
+        # Monkey-patch find_recipes_dir to return our dir
+        monkeypatch.setattr(
+            "cvcpkg.builder.find_recipes_dir", lambda: recipes_dir
+        )
+
+        from cvcpkg.server.app import create_app
+        from cvcpkg.server.auth import TokenStore
+
+        store = TokenStore(tmp_path / "state")
+        admin_tok = store.create("admin", __import__("cvcpkg.server.models", fromlist=["TokenRole"]).TokenRole.admin)
+        app = create_app(state_dir=tmp_path / "state")
+        with TestClient(app) as client:
+            resp = client.get("/v1/recipes/bundle")
+        assert resp.status_code == 200
+        with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz") as tar:
+            names = tar.getnames()
+        assert any("zlib" in n for n in names)
+
+
+# ── POST /v1/recipes/{name}/register ───────────────────────────
+
+
+class TestRecipeRegisterEndpoint:
+    """Test the recipe placeholder registration endpoint."""
+
+    def _upload_recipe(self, client, token, name):
+        bundle = _make_tar_gz({
+            f"{name}/recipe.yaml": f"name: {name}\nupstream_version: '1.0'\n",
+        })
+        return client.post(
+            f"/v1/recipes/{name}",
+            files={"file": (f"{name}.tar.gz", bundle, "application/gzip")},
+            params={"version": "1.0"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    def test_register_placeholder(self, db_server_env):
+        """Registering a recipe creates a placeholder in the catalog."""
+        client, admin_tok, pub_tok, reader_tok, _ = db_server_env
+        self._upload_recipe(client, admin_tok, "zlib")
+
+        resp = client.post(
+            "/v1/recipes/zlib/register",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+            json={
+                "version": "1.3.1+cvc.1",
+                "description": "zlib compression",
+                "homepage": "https://zlib.net",
+                "license": "zlib",
+                "maintainer": "test",
+                "org_slug": "",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["status"] == "registered"
+        assert data["name"] == "zlib"
+
+    def test_register_requires_admin(self, db_server_env):
+        """Only admins can register recipe placeholders."""
+        client, admin_tok, pub_tok, reader_tok, _ = db_server_env
+        resp = client.post(
+            "/v1/recipes/zlib/register",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+            json={"version": "1.0+cvc.1"},
+        )
+        assert resp.status_code == 403
+
+    def test_register_invalid_name(self, db_server_env):
+        """Invalid recipe names are rejected."""
+        client, admin_tok, *_ = db_server_env
+        resp = client.post(
+            "/v1/recipes/-bad/register",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+            json={"version": "1.0+cvc.1"},
+        )
+        assert resp.status_code == 400
+
+    def test_register_no_auth(self, db_server_env):
+        """Unauthenticated requests are rejected."""
+        client, *_ = db_server_env
+        resp = client.post(
+            "/v1/recipes/zlib/register",
+            json={"version": "1.0+cvc.1"},
+        )
+        assert resp.status_code == 401
+
+    def test_register_appears_in_catalog(self, db_server_env):
+        """Registered placeholder should appear in the catalog."""
+        client, admin_tok, pub_tok, reader_tok, _ = db_server_env
+        self._upload_recipe(client, admin_tok, "zlib")
+
+        client.post(
+            "/v1/recipes/zlib/register",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+            json={
+                "version": "1.3.1+cvc.1",
+                "description": "compression library",
+            },
+        )
+
+        # Check catalog for the placeholder
+        resp = client.get("/v1/catalog")
+        assert resp.status_code == 200
+        catalog_text = resp.text
+        assert "zlib" in catalog_text
+
+    def test_register_already_built_noop(self, db_server_env):
+        """If a built package exists, register returns 'already_built'."""
+        client, admin_tok, pub_tok, reader_tok, tmp_path = db_server_env
+        # First, publish a real package with an archive via the publish endpoint
+        archive_data = _make_tar_gz({"manifest.yaml": "name: zlib\n"})
+
+        resp = client.post(
+            "/v1/publish",
+            params={
+                "name": "zlib",
+                "version": "1.0+cvc.1",
+                "platform": "linux",
+                "arch": "x86_64",
+            },
+            files={"file": ("zlib.tar.gz", io.BytesIO(archive_data))},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200, resp.text
+
+        # Now try to register — should see already_built
+        self._upload_recipe(client, admin_tok, "zlib")
+        resp = client.post(
+            "/v1/recipes/zlib/register",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+            json={"version": "1.0+cvc.1"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "already_built"
+
+    def test_register_with_org(self, db_server_env):
+        """Register with org_slug sets org on the placeholder."""
+        client, admin_tok, *_ = db_server_env
+        self._upload_recipe(client, admin_tok, "mypkg")
+
+        resp = client.post(
+            "/v1/recipes/mypkg/register",
+            headers={"Authorization": f"Bearer {admin_tok}"},
+            json={
+                "version": "2.0+cvc.1",
+                "org_slug": "myorg",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "registered"
