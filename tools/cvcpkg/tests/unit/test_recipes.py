@@ -507,10 +507,12 @@ class TestRecipeBundleEndpoint:
     """Test the combined recipe bundle download endpoint."""
 
     def _upload(self, client, token, name, org_slug=""):
-        bundle = _make_tar_gz({
-            f"{name}/recipe.yaml": f"name: {name}\nupstream_version: '1.0'\n",
-            f"{name}/build.sh": f"#!/bin/sh\necho building {name}\n",
-        })
+        bundle = _make_tar_gz(
+            {
+                f"{name}/recipe.yaml": f"name: {name}\nupstream_version: '1.0'\n",
+                f"{name}/build.sh": f"#!/bin/sh\necho building {name}\n",
+            }
+        )
         params = {"org_slug": org_slug, "version": "1.0"}
         return client.post(
             f"/v1/recipes/{name}",
@@ -588,15 +590,15 @@ class TestRecipeBundleEndpoint:
         (zlib_dir / "build.sh").write_text("echo hi\n")
 
         # Monkey-patch find_recipes_dir to return our dir
-        monkeypatch.setattr(
-            "cvcpkg.builder.find_recipes_dir", lambda: recipes_dir
-        )
+        monkeypatch.setattr("cvcpkg.builder.find_recipes_dir", lambda: recipes_dir)
 
         from cvcpkg.server.app import create_app
         from cvcpkg.server.auth import TokenStore
 
         store = TokenStore(tmp_path / "state")
-        admin_tok = store.create("admin", __import__("cvcpkg.server.models", fromlist=["TokenRole"]).TokenRole.admin)
+        admin_tok = store.create(
+            "admin", __import__("cvcpkg.server.models", fromlist=["TokenRole"]).TokenRole.admin
+        )
         app = create_app(state_dir=tmp_path / "state")
         with TestClient(app) as client:
             resp = client.get("/v1/recipes/bundle")
@@ -613,9 +615,11 @@ class TestRecipeRegisterEndpoint:
     """Test the recipe placeholder registration endpoint."""
 
     def _upload_recipe(self, client, token, name):
-        bundle = _make_tar_gz({
-            f"{name}/recipe.yaml": f"name: {name}\nupstream_version: '1.0'\n",
-        })
+        bundle = _make_tar_gz(
+            {
+                f"{name}/recipe.yaml": f"name: {name}\nupstream_version: '1.0'\n",
+            }
+        )
         return client.post(
             f"/v1/recipes/{name}",
             files={"file": (f"{name}.tar.gz", bundle, "application/gzip")},

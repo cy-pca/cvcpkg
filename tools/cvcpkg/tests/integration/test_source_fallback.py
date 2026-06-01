@@ -278,9 +278,8 @@ class TestLocalBuildMode:
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
         # --local implies --fallback-to-source, so zlib should be built
-        assert (prefix / "include" / "zlib.h").is_file(), (
-            f"zlib.h not found; contents: "
-            + str(list((prefix / "include").iterdir()) if (prefix / "include").is_dir() else "N/A")
+        assert (prefix / "include" / "zlib.h").is_file(), f"zlib.h not found; contents: " + str(
+            list((prefix / "include").iterdir()) if (prefix / "include").is_dir() else "N/A"
         )
         # Should NOT have contacted any server
         combined = result.stdout + result.stderr
@@ -291,14 +290,23 @@ class TestLocalBuildMode:
         prefix = tmp_path / "prefix"
         env = {**os.environ, "CVCPKG_LOCAL": "1", "PYTHONPATH": str(_CVCPKG_ROOT / "src")}
         cmd = [
-            sys.executable, "-m", "cvcpkg",
-            "install", "zlib",
-            "--prefix", str(prefix),
-            "--recipes-dir", str(_RECIPES_DIR),
+            sys.executable,
+            "-m",
+            "cvcpkg",
+            "install",
+            "zlib",
+            "--prefix",
+            str(prefix),
+            "--recipes-dir",
+            str(_RECIPES_DIR),
         ]
         result = subprocess.run(
-            cmd, capture_output=True, text=True, check=False,
-            cwd=str(_CVCPKG_ROOT), env=env,
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=str(_CVCPKG_ROOT),
+            env=env,
         )
         assert result.returncode == 0, (
             f"CVCPKG_LOCAL=1 install failed:\n"
@@ -320,8 +328,7 @@ class TestLocalBuildMode:
             check=False,
         )
         assert result.returncode == 0, (
-            f"cvcpkg build --local failed:\n"
-            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            f"cvcpkg build --local failed:\n" f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
         assert (prefix / "include" / "zlib.h").is_file()
         combined = result.stdout + result.stderr

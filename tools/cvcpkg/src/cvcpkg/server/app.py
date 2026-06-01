@@ -4361,9 +4361,7 @@ def create_app(
             )
             with tarfile.open(fileobj=buf, mode="w:gz") as tar:
                 for r in recipes_list:
-                    bundle_path = await _db_recipes.get_bundle_path(
-                        r.name, org_slug=r.org_slug
-                    )
+                    bundle_path = await _db_recipes.get_bundle_path(r.name, org_slug=r.org_slug)
                     if bundle_path and Path(bundle_path).is_file():
                         with tarfile.open(bundle_path, "r:gz") as inner:
                             for member in inner.getmembers():
