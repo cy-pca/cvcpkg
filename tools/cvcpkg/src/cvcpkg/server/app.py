@@ -1017,6 +1017,11 @@ def create_app(
 
     # ── Catalog (read) ──────────────────────────────────────
 
+    @app.head("/v1/catalog", tags=["catalog"])
+    async def head_catalog():
+        """Support HEAD requests (used by storage backends for size check)."""
+        return Response(status_code=200)
+
     @app.get("/v1/catalog", response_model=CatalogResponse, tags=["catalog"])
     async def get_catalog(
         request: Request,
@@ -1553,6 +1558,25 @@ def create_app(
         }
 
     # ── Download (read) ─────────────────────────────────────
+
+    @app.head("/v1/download/{filename}", tags=["packages"])
+    async def head_download_archive(
+        filename: str,
+        _auth: None = Depends(optional_reader_auth),
+    ):
+        """HEAD support so clients can check size before downloading."""
+        state = _get_state()
+        safe_name = Path(filename).name
+        archive_path = state.archives_dir() / safe_name
+        if not archive_path.is_file():
+            raise HTTPException(404, f"archive not found: {safe_name}")
+        return Response(
+            status_code=200,
+            headers={
+                "Content-Length": str(archive_path.stat().st_size),
+                "Content-Type": "application/octet-stream",
+            },
+        )
 
     @app.get("/v1/download/{filename}", tags=["packages"])
     async def download_archive(
