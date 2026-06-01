@@ -4334,6 +4334,78 @@ def create_app(
         return RecipeListResponse(total=total, recipes=recipes)
 
     @app.get(
+        "/v1/recipes/bundle",
+        tags=["recipes"],
+    )
+    async def get_recipe_set_bundle(
+        org_slug: str = Query("", description="Organization scope (empty = base set)"),
+        _auth: TokenRecord | None = Depends(optional_reader_auth),
+        _caller: TokenRecord | None = Depends(optional_token),
+    ):
+        """Download the full recipe set as a single tar.gz bundle.
+
+        Returns all recipes on the server (or all recipes for an org)
+        combined into one tarball.  Used by ``cvcpkg recipe pull-all``
+        and by the ``_try_pull_server_recipes()`` fallback.
+
+        Falls back to bundled/local recipes when no DB is configured.
+        """
+        import io
+        import tarfile
+
+        buf = io.BytesIO()
+
+        if _use_db and _db_recipes is not None:
+            recipes_list, _ = await _db_recipes.list_recipes(
+                org_slug=org_slug or None, limit=10000, offset=0
+            )
+            with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+                for r in recipes_list:
+                    bundle_path = await _db_recipes.get_bundle_path(
+                        r.name, org_slug=r.org_slug
+                    )
+                    if bundle_path and Path(bundle_path).is_file():
+                        with tarfile.open(bundle_path, "r:gz") as inner:
+                            for member in inner.getmembers():
+                                f = inner.extractfile(member) if member.isfile() else None
+                                tar.addfile(member, f)
+        else:
+            from cvcpkg.builder import RecipeError, find_recipes_dir
+
+            try:
+                recipes_dir = find_recipes_dir()
+            except RecipeError:
+                raise HTTPException(404, "no recipes available")
+
+            with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+                for entry in sorted(recipes_dir.iterdir()):
+                    if not entry.is_dir() or entry.name.startswith((".", "__")):
+                        continue
+                    if not (entry / "recipe.yaml").is_file():
+                        continue
+                    for f in sorted(entry.rglob("*")):
+                        if f.is_file():
+                            arcname = str(f.relative_to(recipes_dir))
+                            tar.add(str(f), arcname=arcname)
+                common_dir = recipes_dir / "_common"
+                if common_dir.is_dir():
+                    for f in sorted(common_dir.rglob("*")):
+                        if f.is_file():
+                            arcname = str(f.relative_to(recipes_dir))
+                            tar.add(str(f), arcname=arcname)
+
+        buf.seek(0)
+        label = f"recipes-{org_slug}.tar.gz" if org_slug else "recipes.tar.gz"
+        return StreamingResponse(
+            buf,
+            media_type="application/gzip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{label}"',
+                "Content-Length": str(buf.getbuffer().nbytes),
+            },
+        )
+
+    @app.get(
         "/v1/recipes/{name}",
         tags=["recipes"],
     )
@@ -4381,6 +4453,73 @@ def create_app(
             target=name,
         )
         return {"ok": True, "name": name}
+
+    @app.post(
+        "/v1/recipes/{name}/register",
+        tags=["recipes"],
+    )
+    async def register_recipe_placeholder(
+        name: str,
+        request: Request,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Register a recipe as a placeholder package in the catalog.
+
+        Creates a catalog entry with no build artifacts so the recipe
+        is discoverable.  Remote builders or local users can then
+        build the actual package.  If a built version already exists,
+        this is a no-op.
+        """
+        import re as _re_mod
+
+        _require_db_recipes()
+        if not _re_mod.match(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$", name):
+            raise HTTPException(400, "invalid recipe name")
+
+        body = await request.json()
+        version = body.get("version", "")
+        description = body.get("description", "")
+        homepage = body.get("homepage", "")
+        pkg_license = body.get("license", "")
+        maintainer = body.get("maintainer", "")
+        org_slug = body.get("org_slug", "")
+
+        # Check if a built version already exists — skip if so
+        if _db_packages is not None and version:
+            pkgs, _ = await _db_packages.get_bundles(limit=10)
+            for p in pkgs:
+                if p.name == name and p.version == version and p.archive_url:
+                    return {"ok": True, "name": name, "status": "already_built"}
+
+        # Register as a placeholder — no archive, no sha256
+        if _db_packages is not None and version:
+            import datetime
+
+            await _db_packages.add_package(
+                name=name,
+                version=version,
+                platform="any",
+                arch="noarch",
+                build_type="release",
+                link="shared",
+                sha256="",
+                size_bytes=0,
+                archive_url="",
+                description=description,
+                homepage=homepage,
+                pkg_license=pkg_license,
+                maintainer=maintainer,
+                org_slug=org_slug,
+                published_by=actor.name,
+            )
+            await _db_audit.record(
+                action=AuditAction.publish,
+                actor=actor.name,
+                target=f"{name}=={version}",
+                detail="placeholder (recipe publish, no artifacts)",
+            )
+
+        return {"ok": True, "name": name, "status": "registered"}
 
     # ── Webhook endpoints ──────────────────────────────────
 
