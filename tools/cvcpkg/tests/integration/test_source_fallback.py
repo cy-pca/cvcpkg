@@ -251,3 +251,78 @@ class TestSourceFallback:
         assert len(bundles) == 1
         assert bundles[0]["name"] == "zlib"
         assert bundles[0]["source_release"] == "source-build"
+
+
+# ── Local build mode (--local) ──────────────────────────────────
+
+
+@pytest.mark.skipif(not _has_build_tools(), reason="cmake or C compiler not found")
+class TestLocalBuildMode:
+    """Verify ``--local`` builds from local recipes without server contact."""
+
+    def test_install_local_builds_zlib(self, tmp_path: Path) -> None:
+        """``cvcpkg install --local zlib`` builds from source, no catalog."""
+        prefix = tmp_path / "prefix"
+        result = _run_cvcpkg(
+            "install",
+            "zlib",
+            "--prefix",
+            str(prefix),
+            "--local",
+            "--recipes-dir",
+            str(_RECIPES_DIR),
+            check=False,
+        )
+        assert result.returncode == 0, (
+            f"cvcpkg install --local failed:\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+        # --local implies --fallback-to-source, so zlib should be built
+        assert (prefix / "include" / "zlib.h").is_file(), (
+            f"zlib.h not found; contents: "
+            + str(list((prefix / "include").iterdir()) if (prefix / "include").is_dir() else "N/A")
+        )
+        # Should NOT have contacted any server
+        combined = result.stdout + result.stderr
+        assert "pkg.tx.wtf" not in combined
+
+    def test_install_local_env_var(self, tmp_path: Path) -> None:
+        """``CVCPKG_LOCAL=1`` should behave the same as --local."""
+        prefix = tmp_path / "prefix"
+        env = {**os.environ, "CVCPKG_LOCAL": "1", "PYTHONPATH": str(_CVCPKG_ROOT / "src")}
+        cmd = [
+            sys.executable, "-m", "cvcpkg",
+            "install", "zlib",
+            "--prefix", str(prefix),
+            "--recipes-dir", str(_RECIPES_DIR),
+        ]
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, check=False,
+            cwd=str(_CVCPKG_ROOT), env=env,
+        )
+        assert result.returncode == 0, (
+            f"CVCPKG_LOCAL=1 install failed:\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+        assert (prefix / "include" / "zlib.h").is_file()
+
+    def test_build_local_produces_output(self, tmp_path: Path) -> None:
+        """``cvcpkg build --local zlib`` builds without server contact."""
+        prefix = tmp_path / "prefix"
+        result = _run_cvcpkg(
+            "build",
+            "zlib",
+            "--local",
+            "--prefix",
+            str(prefix),
+            "--recipes-dir",
+            str(_RECIPES_DIR),
+            check=False,
+        )
+        assert result.returncode == 0, (
+            f"cvcpkg build --local failed:\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+        assert (prefix / "include" / "zlib.h").is_file()
+        combined = result.stdout + result.stderr
+        assert "pkg.tx.wtf" not in combined
