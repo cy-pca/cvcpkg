@@ -274,6 +274,34 @@ class TestDbBuildJobStore:
 
         self._run(_test())
 
+    def test_complete_clears_error_message(self):
+        from cvcpkg.server.db_stores import DbBuilderStore, DbBuildJobStore
+
+        async def _test():
+            bstore = DbBuilderStore()
+            builder = await bstore.register(
+                name="b1",
+                platform="linux",
+                arch="x86_64",
+                registered_by="a",
+            )
+            store = DbBuildJobStore()
+            job = await store.create(
+                recipe_name="zlib",
+                platform="linux",
+                arch="x86_64",
+                submitted_by="admin",
+            )
+            await store.claim(job.id, builder.id)
+            await store.fail(job.id, error_message="cmake error")
+            completed = await store.complete(
+                job.id, result_archive_url="/v1/download/zlib.tar.zst"
+            )
+            assert completed.status == BuildJobStatus.succeeded
+            assert completed.error_message == ""
+
+        self._run(_test())
+
     def test_find_ready_jobs_no_deps(self):
         from cvcpkg.server.db_stores import DbBuildJobStore
 
