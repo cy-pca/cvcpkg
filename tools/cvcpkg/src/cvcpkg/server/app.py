@@ -1044,13 +1044,16 @@ def create_app(
         # Resolve relative archive_url paths (e.g. "/v1/download/…")
         # to absolute URLs so clients can download without knowing
         # the server origin separately.
+        # NOTE: copy each dict to avoid mutating in-memory state.
         base = str(request.base_url).rstrip("/")
+        resolved = []
         for b in bundles:
             url = b.get("archive_url", "")
             if url.startswith("/"):
-                b["archive_url"] = f"{base}{url}"
+                b = {**b, "archive_url": f"{base}{url}"}
+            resolved.append(b)
 
-        return CatalogResponse(revision=revision, bundles=bundles)
+        return CatalogResponse(revision=revision, bundles=resolved)
 
     # ── Dependency graph (read) ────────────────────────────
 
