@@ -1,13 +1,15 @@
+# DISABLED — Package building and publishing has migrated to the
+# cvcpkg remote builders system (pkg.tx.wtf).  This workflow is
+# retained for reference but no longer triggered automatically.
+# To re-enable, restore the original `on:` triggers below.
+
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+*'
   workflow_dispatch:
     inputs:
       prerelease:
-        description: 'Mark the GitHub Release as a pre-release.'
+        description: 'DISABLED — use remote builders instead. Mark the GitHub Release as a pre-release.'
         required: false
         type: boolean
         default: true
