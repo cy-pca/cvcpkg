@@ -35,5 +35,5 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         # Only skip tests in files that hit the live server
         module = item.module.__name__ if item.module else ""
-        if "docker_integration" in module or "e2e_lifecycle" in module or "test_browser" in module:
+        if "docker_integration" in module or "e2e_lifecycle" in module or "test_browser" in module or "test_browser_build_ui" in module:
             item.add_marker(skip_marker)

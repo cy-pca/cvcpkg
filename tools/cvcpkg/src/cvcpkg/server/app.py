@@ -3269,6 +3269,40 @@ def create_app(
 
         return HTMLResponse(tag_detail_html(tag_name, org))
 
+    # ── Builder / Build / Recipe HTML pages ─────────────────
+
+    @app.get(
+        "/builders", response_class=HTMLResponse, include_in_schema=False
+    )
+    async def builders_page():
+        from cvcpkg.server.landing import builders_html
+
+        return HTMLResponse(builders_html())
+
+    @app.get(
+        "/builds", response_class=HTMLResponse, include_in_schema=False
+    )
+    async def builds_page():
+        from cvcpkg.server.landing import builds_html
+
+        return HTMLResponse(builds_html())
+
+    @app.get(
+        "/build/{job_id}", response_class=HTMLResponse, include_in_schema=False
+    )
+    async def build_detail_page(job_id: int):
+        from cvcpkg.server.landing import build_detail_html
+
+        return HTMLResponse(build_detail_html(job_id))
+
+    @app.get(
+        "/recipes", response_class=HTMLResponse, include_in_schema=False
+    )
+    async def recipes_page():
+        from cvcpkg.server.landing import recipes_html
+
+        return HTMLResponse(recipes_html())
+
     # ── Tag API endpoints ───────────────────────────────────
 
     @app.get("/v1/tags", response_model=TagListResponse, tags=["tags"])
@@ -3751,6 +3785,7 @@ def create_app(
         dag_id: str | None = Query(None, description="Filter by DAG ID"),
         recipe_name: str | None = Query(None, description="Filter by recipe name"),
         org_slug: str | None = Query(None, description="Filter by org"),
+        builder_id: int | None = Query(None, description="Filter by builder ID"),
         limit: int = Query(100, ge=1, le=1000),
         offset: int = Query(0, ge=0),
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
@@ -3763,6 +3798,7 @@ def create_app(
             dag_id=dag_id,
             recipe_name=recipe_name,
             org_slug=org_slug,
+            builder_id=builder_id,
             limit=limit,
             offset=offset,
         )
@@ -4014,14 +4050,28 @@ def create_app(
     )
     async def stream_build_log(
         job_id: int,
-        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+        token: str | None = Query(None),
+        authorization: str | None = Header(None),
     ):
         """Stream a build job's log as Server-Sent Events.
 
         Reads existing log content and then tails for new data.
         The stream ends when the job reaches a terminal state.
+
+        Accepts authentication via Authorization header or ``?token=``
+        query parameter (needed for ``EventSource`` which cannot send
+        custom headers).
         """
         _require_db_build_jobs()
+        # Accept auth from either header or query param
+        raw = _extract_token(authorization) or token
+        if raw is None:
+            raise HTTPException(401, "missing authentication")
+        record = await _authenticate_token(raw)
+        if record is None:
+            raise HTTPException(401, "invalid or expired token")
+        if record.role not in (TokenRole.publisher, TokenRole.admin):
+            raise HTTPException(403, "insufficient role")
         state = _get_state()
 
         async def _event_generator():
