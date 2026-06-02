@@ -294,9 +294,7 @@ class TestDbBuildJobStore:
             )
             await store.claim(job.id, builder.id)
             await store.fail(job.id, error_message="cmake error")
-            completed = await store.complete(
-                job.id, result_archive_url="/v1/download/zlib.tar.zst"
-            )
+            completed = await store.complete(job.id, result_archive_url="/v1/download/zlib.tar.zst")
             assert completed.status == BuildJobStatus.succeeded
             assert completed.error_message == ""
 

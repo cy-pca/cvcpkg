@@ -3271,33 +3271,25 @@ def create_app(
 
     # ── Builder / Build / Recipe HTML pages ─────────────────
 
-    @app.get(
-        "/builders", response_class=HTMLResponse, include_in_schema=False
-    )
+    @app.get("/builders", response_class=HTMLResponse, include_in_schema=False)
     async def builders_page():
         from cvcpkg.server.landing import builders_html
 
         return HTMLResponse(builders_html())
 
-    @app.get(
-        "/builds", response_class=HTMLResponse, include_in_schema=False
-    )
+    @app.get("/builds", response_class=HTMLResponse, include_in_schema=False)
     async def builds_page():
         from cvcpkg.server.landing import builds_html
 
         return HTMLResponse(builds_html())
 
-    @app.get(
-        "/build/{job_id}", response_class=HTMLResponse, include_in_schema=False
-    )
+    @app.get("/build/{job_id}", response_class=HTMLResponse, include_in_schema=False)
     async def build_detail_page(job_id: int):
         from cvcpkg.server.landing import build_detail_html
 
         return HTMLResponse(build_detail_html(job_id))
 
-    @app.get(
-        "/recipes", response_class=HTMLResponse, include_in_schema=False
-    )
+    @app.get("/recipes", response_class=HTMLResponse, include_in_schema=False)
     async def recipes_page():
         from cvcpkg.server.landing import recipes_html
 
