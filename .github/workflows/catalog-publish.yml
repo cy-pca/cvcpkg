@@ -9,20 +9,29 @@
 # See docs/roadmap/split-distribution.md §3.2 for the catalog
 # schema and §8 for the CI integration design.
 
+# DISABLED — Catalog publishing has migrated to the cvcpkg server
+# (pkg.tx.wtf).  The server now serves its own catalog endpoint
+# directly.  This workflow is retained for reference.
+
 name: Publish catalog
 
+# Disabled: was triggered by Release workflow completion.
+# on:
+#   workflow_run:
+#     workflows: ["Release"]
+#     types: [completed]
+#     branches: [master, main]
+#   workflow_dispatch:
+#     inputs:
+#       release_tag:
+#         description: "Release tag to build catalog from (e.g. v1.2.0)"
+#         required: true
+#         type: string
 on:
-  # Run after the release workflow completes successfully.
-  workflow_run:
-    workflows: ["Release"]
-    types: [completed]
-    branches: [master, main]
-
-  # Allow manual trigger for bootstrapping or fixing.
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release tag to build catalog from (e.g. v1.2.0)"
+        description: "DISABLED — catalog is served by pkg.tx.wtf. Release tag (e.g. v1.2.0)"
         required: true
         type: string
 

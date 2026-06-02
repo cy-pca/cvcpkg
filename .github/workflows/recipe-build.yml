@@ -1,11 +1,11 @@
 # Recipe-driven build for libcvc-deps.
 #
-# Builds every recipe in dependency order using `cvcpkg build-all`,
-# then uploads the prefix as an artifact.  Each recipe builds from
-# its pinned source (tarball, vendored, or vcpkg) so the result is
-# fully reproducible from the recipe files alone.
+# DISABLED — Package building has migrated to the cvcpkg remote
+# builders system (pkg.tx.wtf).  This reusable workflow is retained
+# for reference but is no longer called by any workflow.
 #
-# Reusable from release.yml and ci.yml.
+# Previously built every recipe in dependency order using
+# `cvcpkg build-all`, then uploaded the prefix as an artifact.
 
 name: Recipe Build
 
