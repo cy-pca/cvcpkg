@@ -95,25 +95,9 @@ jobs:
 
   # ────────────────────── Per-commit dep bundle build ─────────────
   #
-  # Delegates to the same matrix release.yml runs on tag pushes. The
-  # short commit SHA is threaded through `sha_suffix` so per-PR
-  # artifacts are uniquely identifiable in the GitHub Actions UI:
+  # DISABLED — Package building has migrated to the cvcpkg remote
+  # builders system (pkg.tx.wtf).  The build job that delegated to
+  # release.yml has been removed.
   #
-  #   libcvc-deps-<ver>-<sha>-<os>-<arch>-<config>[-static].{tar.gz,zip}
-  #
-  # The `release` job inside release.yml is gated on a tag ref, so a
-  # PR-driven build only uploads workflow artifacts — no GitHub
-  # Release is touched.
-  build:
-    name: Build dep bundles
-    if: github.event_name == 'push' || contains(vars.CI_ALLOWED_ACTORS, github.actor)
-    uses: ./.github/workflows/release.yml
-    with:
-      sha_suffix: ${{ github.sha }}
-    # The reusable workflow declares contents:write at its top level
-    # for the (skipped) release job; the calling job must grant at
-    # least that for `uses:` to satisfy GitHub Actions' permission
-    # propagation rules.
-    permissions:
-      contents: write
-    secrets: inherit
+  # Previously this job called release.yml to build dep bundles on
+  # every push/PR.  Remote builders now handle all package builds.

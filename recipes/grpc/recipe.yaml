@@ -3,9 +3,9 @@ recipe:
   name: grpc
   upstream_version: "1.68.2"
   cvc_revision: 1
-  maintainer: "CyberPC Angel, LLC"
-  maintainer_email: "cvcpkg@cyberpcangel.com"
-  maintainer_url: "https://cyberpcangel.com"
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
   description: "gRPC — a high-performance, open-source universal RPC framework."
   homepage: https://grpc.io/
   license: Apache-2.0

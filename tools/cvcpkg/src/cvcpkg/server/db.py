@@ -320,6 +320,169 @@ class MirrorRow(Base):
     packages_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
+class BuilderRow(Base):
+    """Registered remote build agents."""
+
+    __tablename__ = "builders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    org_slug: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    platform: Mapped[str] = mapped_column(String(64), nullable=False)
+    arch: Mapped[str] = mapped_column(String(64), nullable=False)
+    labels: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    capabilities: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="offline")
+    current_jobs: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_jobs: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    prefer_affinity: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    last_heartbeat: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    registered_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("name", "org_slug", name="uq_builder_name_org"),
+        Index("ix_builders_org_slug", "org_slug"),
+        Index("ix_builders_platform_arch", "platform", "arch"),
+        Index("ix_builders_status", "status"),
+    )
+
+
+class BuildJobRow(Base):
+    """Build job queue entries."""
+
+    __tablename__ = "build_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    dag_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    org_slug: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    recipe_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    recipe_version: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    recipe_hash: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    platform: Mapped[str] = mapped_column(String(64), nullable=False)
+    arch: Mapped[str] = mapped_column(String(64), nullable=False)
+    config: Mapped[str] = mapped_column(String(32), nullable=False, default="release")
+    link: Mapped[str] = mapped_column(String(32), nullable=False, default="shared")
+    builder_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("builders.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    timeout_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    submitted_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    submitted_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    started_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    log_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    log_size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result_archive_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_build_jobs_dag_id", "dag_id"),
+        Index("ix_build_jobs_org_slug", "org_slug"),
+        Index("ix_build_jobs_status", "status"),
+        Index("ix_build_jobs_platform_arch", "platform", "arch"),
+        Index("ix_build_jobs_builder_id", "builder_id"),
+        Index("ix_build_jobs_recipe_name", "recipe_name"),
+    )
+
+
+class RecipeRow(Base):
+    """Server-managed recipe bundles for remote builders."""
+
+    __tablename__ = "recipes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    version: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    recipe_hash: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    org_slug: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    bundle_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    bundle_size: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    uploaded_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("name", "org_slug", name="uq_recipe_name_org"),
+        Index("ix_recipes_name", "name"),
+        Index("ix_recipes_org_slug", "org_slug"),
+    )
+
+
+class WebhookRow(Base):
+    """Webhook endpoint for event notifications."""
+
+    __tablename__ = "webhooks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    events: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    org_slug: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    secret: Mapped[str] = mapped_column(String(255), nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    registered_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+    )
+    last_delivery_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
+
+    __table_args__ = (
+        Index("ix_webhooks_org_slug", "org_slug"),
+        Index("ix_webhooks_active", "active"),
+    )
+
+
+class BuildJobDepRow(Base):
+    """DAG edges between build jobs."""
+
+    __tablename__ = "build_job_deps"
+
+    job_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("build_jobs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    depends_on_job_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("build_jobs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+    __table_args__ = (UniqueConstraint("job_id", "depends_on_job_id", name="uq_build_job_dep"),)
+
+
 # ── Engine / session management ─────────────────────────────────
 
 _engine = None

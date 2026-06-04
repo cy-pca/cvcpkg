@@ -28,7 +28,7 @@ def detect_platform() -> str:
 def detect_arch() -> str:
     """Return a normalised architecture name for the current host."""
     machine = platform.machine().lower()
-    _ARCH_MAP = {
+    arch_map = {
         "x86_64": "x86_64",
         "amd64": "x86_64",
         "arm64": "arm64",
@@ -38,7 +38,7 @@ def detect_arch() -> str:
         "ppc64": "ppc64",
         "s390x": "s390x",
     }
-    arch = _ARCH_MAP.get(machine)
+    arch = arch_map.get(machine)
     if arch:
         return arch
     # Accept any machine string rather than crashing on new architectures.

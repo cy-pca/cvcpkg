@@ -168,7 +168,7 @@ class TestPublishAndInstallLifecycle:
         # All bundles have SHA-256 and download URLs
         for b in catalog["bundles"]:
             assert len(b["sha256"]) == 64
-            assert b["archive_url"].startswith("/v1/download/")
+            assert "/v1/download/" in b["archive_url"]
             assert b["size_bytes"] > 0
 
         # ── Step 4: Download archives and verify integrity ──
@@ -283,10 +283,8 @@ class TestClientInstallFromServer:
         assert resp.status_code == 200
         catalog_data = resp.json()
 
-        # Rewrite archive_url to be full server URLs
-        # (in a real setup, these would be absolute URLs)
-        for b in catalog_data["bundles"]:
-            b["archive_url"] = f"http://testserver{b['archive_url']}"
+        # The catalog already returns absolute archive_url values
+        # (resolved against the request base URL by the server).
 
         catalog_file = tmp_path / "server-catalog.yaml"
         catalog_file.write_text(yaml.dump(catalog_data, default_flow_style=False))

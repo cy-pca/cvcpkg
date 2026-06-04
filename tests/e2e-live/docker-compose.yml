@@ -1,0 +1,26 @@
+# Docker Compose — E2E live integration test stack
+#
+# Provides PostgreSQL for the cvcpkg-server.
+# The server itself runs on the host (not in Docker) to simplify
+# builder process management and avoid nested Docker issues.
+
+name: cvcpkg-e2e
+
+services:
+    postgres:
+        image: postgres:16-alpine
+        container_name: cvcpkg-e2e-postgres
+        environment:
+            POSTGRES_USER: cvcpkg_e2e
+            POSTGRES_PASSWORD: e2e_test_pass
+            POSTGRES_DB: cvcpkg_e2e
+        ports:
+            - "127.0.0.1:5434:5432"
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U cvcpkg_e2e -d cvcpkg_e2e"]
+            interval: 3s
+            timeout: 2s
+            retries: 15
+            start_period: 5s
+        tmpfs:
+            - /var/lib/postgresql/data

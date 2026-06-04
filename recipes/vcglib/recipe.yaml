@@ -3,9 +3,9 @@ recipe:
   name: vcglib
   upstream_version: "2025.07"
   cvc_revision: 1
-  maintainer: "CyberPC Angel, LLC"
-  maintainer_email: "cvcpkg@cyberpcangel.com"
-  maintainer_url: "https://cyberpcangel.com"
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
   description: "vcglib — header-only C++ mesh processing library from the Visual Computing Lab (ISTI-CNR)."
   homepage: https://github.com/cnr-isti-vclab/vcglib
   license: GPL-3.0-or-later

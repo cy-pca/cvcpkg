@@ -1,8 +1,8 @@
 [tool.poetry]
 name = "cvcpkg"
-version = "1.6.1"
+version = "2.0.0"
 description = "Component package manager for libcvc-deps prebuilt dependency bundles"
-authors = ["CyberPC Angel, LLC"]
+authors = ["cvcpkg group <info@cvcpkg.org>"]
 license = "MIT"
 readme = "README.md"
 homepage = "https://github.com/transfix/libcvc-deps"

@@ -18,7 +18,7 @@ package manager for libcvc-deps.  It provides two main workflows:
     # Package into per-component archives for the catalog
     cvcpkg pack-all --platform linux --config release --link shared --output-dir ./dist
     # Publish archives to the cvcpkg-server
-    cvcpkg publish dist/*.tar.gz --server https://pkg.tx.wtf --token cvctok_...
+    cvcpkg publish dist/*.tar.gz --server https://cvcpkg.org --token cvctok_...
     # Inspect and validate recipes
     cvcpkg recipes --list
     cvcpkg recipes --show grpc
@@ -114,6 +114,18 @@ _maintainer_opt = click.option(
     default="",
     help="Override the maintainer field in the package manifest.",
 )
+_local_opt = click.option(
+    "--local",
+    "local_mode",
+    is_flag=True,
+    envvar="CVCPKG_LOCAL",
+    help=(
+        "Use local/bundled recipes only — do not contact a package server.  "
+        "Without --local, cvcpkg connects to the server specified by "
+        "CVCPKG_SERVER_URL (default: cvcpkg.org) to fetch the latest "
+        "recipes and catalog.  [env: CVCPKG_LOCAL]"
+    ),
+)
 
 
 def _validate_org_slug(ctx: click.Context, param: click.Parameter, value: str) -> str:
@@ -196,7 +208,7 @@ def cli(ctx: click.Context) -> None:
     type=click.Choice(["auto", "server", "github"], case_sensitive=False),
     default="auto",
     help=(
-        "Catalog source strategy.  'server' uses pkg.tx.wtf only; "
+        "Catalog source strategy.  'server' uses cvcpkg.org only; "
         "'github' uses GitHub Pages/Releases only; 'auto' tries "
         "server first then falls back to GitHub (default)."
     ),
@@ -217,6 +229,7 @@ def cli(ctx: click.Context) -> None:
     help="Build from source recipe when no prebuilt binary is available.",
 )
 @_recipes_dir_opt
+@_local_opt
 def install(
     components: tuple[str, ...],
     from_file: str | None,
@@ -233,6 +246,7 @@ def install(
     verify_signatures: bool,
     fallback_to_source: bool,
     recipes_dirs: tuple[str, ...],
+    local_mode: bool,
 ) -> None:
     """Install component bundles into a prefix.
 
@@ -240,6 +254,9 @@ def install(
     libcvc-deps release catalog.  Components can be specified as
     positional arguments or loaded from a cvc-requirements.yaml
     file via --from.
+
+    Use --local to skip the catalog and build everything from local
+    recipes (implies --fallback-to-source).
 
     \b
     Examples:
@@ -251,6 +268,9 @@ def install(
 
       # Install individual components by name
       cvcpkg install zlib boost --prefix ./deps
+
+      # Build from local recipes only (no server)
+      cvcpkg install --local zlib boost --prefix ./deps
 
       # Pin a specific component version
       cvcpkg install zlib==1.3.1+cvc.1 --prefix ./deps
@@ -273,6 +293,13 @@ def install(
 
     ctx = click.get_current_context()
     prefix_path = Path(prefix).resolve()
+
+    # --local implies --fallback-to-source and skips the catalog entirely
+    if local_mode:
+        fallback_to_source = True
+        skip_catalog = True
+    else:
+        skip_catalog = False
 
     # ── Load or build the Requirements object ──
     #
@@ -332,22 +359,26 @@ def install(
     # pick compatible versions for all requested components.
     #
     # --source controls catalog source strategy:
-    #   auto   → primary (pkg.tx.wtf) with GitHub Pages fallback
-    #   server → pkg.tx.wtf only, no fallback
+    #   auto   → primary (cvcpkg.org) with GitHub Pages fallback
+    #   server → cvcpkg.org only, no fallback
     #   github → GitHub Pages only, no fallback
     catalog_url = catalog or ""
     catalog_failed = False
-    try:
-        if catalog_url and Path(catalog_url).is_file():
-            cat = load_catalog_from_file(catalog_url)
-        else:
-            cat = fetch_catalog(catalog_url, cache_dir=default_cache_dir())
-    except Exception as exc:
-        if not fallback_to_source:
-            raise
-        click.echo(f"cvcpkg: catalog unavailable ({exc}), will build from source.")
+    if skip_catalog:
         catalog_failed = True
         cat = {"bundles": []}
+    else:
+        try:
+            if catalog_url and Path(catalog_url).is_file():
+                cat = load_catalog_from_file(catalog_url)
+            else:
+                cat = fetch_catalog(catalog_url, cache_dir=default_cache_dir())
+        except Exception as exc:
+            if not fallback_to_source:
+                raise
+            click.echo(f"cvcpkg: catalog unavailable ({exc}), will build from source.")
+            catalog_failed = True
+            cat = {"bundles": []}
 
     picked: dict[str, CatalogEntry] = {}
     source_only: list[str] = []
@@ -877,7 +908,7 @@ def catalog(refresh: bool, pin: int | None, show: bool) -> None:
 )
 @click.option(
     "--server-url",
-    default="https://pkg.tx.wtf",
+    default="https://cvcpkg.org",
     show_default=True,
     help="cvcpkg server URL for archive download URLs.",
 )
@@ -1112,7 +1143,7 @@ def download(
     Examples:
       cvcpkg download zlib boost --output-dir ./archives
       cvcpkg download zlib==1.3.1+cvc.1 -o ./dist --config debug
-      cvcpkg download zlib --server https://pkg.tx.wtf -o ./dist
+      cvcpkg download zlib --server https://cvcpkg.org -o ./dist
     """
     import shutil
 
@@ -1226,7 +1257,7 @@ def _fetch_mirror_urls(server: str, token: str | None) -> list[str]:
     envvar="CVCPKG_SERVER_URL",
     default="",
     metavar="URL",
-    help="cvcpkg-server URL (e.g. https://pkg.tx.wtf).  [env: CVCPKG_SERVER_URL]",
+    help="cvcpkg-server URL (e.g. https://cvcpkg.org).  [env: CVCPKG_SERVER_URL]",
 )
 @click.option(
     "--token",
@@ -1319,9 +1350,9 @@ def publish(
     \b
     Examples:
       # Publish to cvcpkg-server by recipe name (recommended):
-      cvcpkg publish zlib grpc --server https://pkg.tx.wtf --token cvctok_...
+      cvcpkg publish zlib grpc --server https://cvcpkg.org --token cvctok_...
       # Publish all recipes found in dist/ to the server:
-      cvcpkg publish --all --server https://pkg.tx.wtf --token cvctok_...
+      cvcpkg publish --all --server https://cvcpkg.org --token cvctok_...
       # Publish to an S3 bucket:
       cvcpkg publish --all --dest s3://my-bucket/cvcpkg/
       # Publish to a local directory:
@@ -2030,6 +2061,62 @@ def _auto_platform(platform: str) -> str:
     return platform
 
 
+def _try_pull_server_recipes() -> tuple[str, ...]:
+    """Try to download the recipe set from the server.
+
+    Returns a 1-tuple of the local directory path if successful,
+    or an empty tuple (so the caller falls through to local recipes).
+    """
+    from cvcpkg.config import default_server_url
+
+    server = default_server_url()
+    token = os.environ.get("CVCPKG_TOKEN", "")
+    try:
+        import httpx
+
+        headers: dict[str, str] = {}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        with httpx.Client(timeout=60) as client:
+            resp = client.get(
+                f"{server.rstrip('/')}/v1/recipes/bundle",
+                headers=headers,
+            )
+        if resp.status_code != 200:
+            click.echo(
+                f"cvcpkg: could not fetch recipe set from {server} "
+                f"(HTTP {resp.status_code}), falling back to local recipes.",
+                err=True,
+            )
+            return ()
+    except Exception as exc:
+        click.echo(
+            f"cvcpkg: could not reach {server} ({exc}), " "falling back to local recipes.",
+            err=True,
+        )
+        return ()
+
+    # Extract to a cache dir
+    import tarfile
+    import tempfile
+
+    cache_base = Path(tempfile.gettempdir()) / "cvcpkg-server-recipes"
+    cache_base.mkdir(parents=True, exist_ok=True)
+    # Write bundle
+    bundle_path = cache_base / "server-recipes.tar.gz"
+    bundle_path.write_bytes(resp.content)
+    extract_dir = cache_base / "recipes"
+    if extract_dir.is_dir():
+        import shutil
+
+        shutil.rmtree(extract_dir)
+    extract_dir.mkdir(parents=True)
+    with tarfile.open(bundle_path, "r:gz") as tar:
+        tar.extractall(path=extract_dir)  # noqa: S202
+    click.echo(f"cvcpkg: using recipes from {server}")
+    return (str(extract_dir),)
+
+
 # ── build ───────────────────────────────────────────────────────
 
 
@@ -2041,6 +2128,7 @@ def _auto_platform(platform: str) -> str:
 @click.option("--prefix", type=click.Path(), default=None, help="Install prefix.")
 @_keep_build_opt
 @_recipes_dir_opt
+@_local_opt
 @click.option(
     "--with-deps/--no-deps",
     default=True,
@@ -2059,6 +2147,7 @@ def build(
     prefix: str | None,
     keep_build_dir: bool,
     recipes_dirs: tuple[str, ...],
+    local_mode: bool,
     with_deps: bool,
     host_platform: str,
 ) -> None:
@@ -2068,12 +2157,17 @@ def build(
     patches, and runs the recipe's platform-specific build script.
     Results are installed into --prefix.
 
+    By default, recipes are fetched from the package server (set via
+    CVCPKG_SERVER_URL, default: cvcpkg.org).  Use --local to build
+    from bundled/local recipes only.
+
     Dependencies are automatically resolved and built first unless
     --no-deps is specified.
 
     \b
     Examples:
       cvcpkg build zlib --prefix ./prefix
+      cvcpkg build zlib --local --prefix ./prefix
       cvcpkg build grpc protobuf --config debug --link static
       cvcpkg build mypkg --recipes-dir ./my-recipes --recipes-dir recipes
       cvcpkg build vtk --no-deps --prefix ./prefix
@@ -2081,6 +2175,11 @@ def build(
     from cvcpkg.builder import build_recipe, find_recipes_dir, resolve_build_order
 
     plat = _auto_platform(platform)
+
+    # If --local is not set and --recipes-dir is not specified,
+    # try to pull recipes from the server.
+    if not local_mode and not recipes_dirs:
+        recipes_dirs = _try_pull_server_recipes()
     prefix_path = Path(prefix).resolve() if prefix else None
 
     if with_deps:
@@ -2192,6 +2291,7 @@ def build(
 @click.option("--output-dir", type=click.Path(), default="./dist", help="Output directory.")
 @_keep_build_opt
 @_recipes_dir_opt
+@_local_opt
 @_maintainer_opt
 @click.option(
     "--signing-key",
@@ -2208,6 +2308,7 @@ def pack(
     output_dir: str,
     keep_build_dir: bool,
     recipes_dirs: tuple[str, ...],
+    local_mode: bool,
     maintainer: str,
     signing_key: str | None,
 ) -> None:
@@ -2220,10 +2321,15 @@ def pack(
     \b
     Example:
       cvcpkg pack zlib boost --output-dir ./dist
+      cvcpkg pack zlib --local --output-dir ./dist
     """
     from cvcpkg.builder import pack_recipe
 
     plat = _auto_platform(platform)
+
+    if not local_mode and not recipes_dirs:
+        recipes_dirs = _try_pull_server_recipes()
+
     prefix_path = Path(prefix).resolve() if prefix else None
     output = Path(output_dir).resolve()
 
@@ -2259,6 +2365,7 @@ def pack(
 @click.option("--prefix", type=click.Path(), default=None, help="Shared install prefix.")
 @_keep_build_opt
 @_recipes_dir_opt
+@_local_opt
 @click.option(
     "--work-dir",
     type=click.Path(),
@@ -2333,6 +2440,7 @@ def build_all_cmd(
     prefix: str | None,
     keep_build_dir: bool,
     recipes_dirs: tuple[str, ...],
+    local_mode: bool,
     work_dir: str | None,
     host_platform: str,
     keep_going: bool,
@@ -2363,6 +2471,10 @@ def build_all_cmd(
     plat = _auto_platform(platform)
     prefix_path = Path(prefix).resolve() if prefix else None
     work_dir_root = Path(work_dir).resolve() if work_dir else None
+
+    if not local_mode and not recipes_dirs:
+        recipes_dirs = _try_pull_server_recipes()
+
     rdirs = [Path(d) for d in recipes_dirs] if recipes_dirs else [find_recipes_dir()]
 
     contexts = build_all(
@@ -2399,6 +2511,7 @@ def build_all_cmd(
 @click.option("--output-dir", type=click.Path(), default="./dist", help="Output directory.")
 @_keep_build_opt
 @_recipes_dir_opt
+@_local_opt
 @_maintainer_opt
 @click.option(
     "--signing-key",
@@ -2497,6 +2610,7 @@ def pack_all_cmd(
     output_dir: str,
     keep_build_dir: bool,
     recipes_dirs: tuple[str, ...],
+    local_mode: bool,
     maintainer: str,
     signing_key: str | None,
     work_dir: str | None,
@@ -2529,6 +2643,8 @@ def pack_all_cmd(
       cvcpkg pack-all --platform wasm --shard 1/3 --host-platform macos ...
       cvcpkg pack-all --platform wasm --shard 2/3 --host-platform windows ...
     """
+    import shutil
+
     from cvcpkg.builder import (
         build_all,
         create_archive,
@@ -2539,13 +2655,15 @@ def pack_all_cmd(
     )
     from cvcpkg.platform import detect_arch
 
-    import shutil
-
     plat = _auto_platform(platform)
     arch = detect_arch()
     prefix_path = Path(prefix).resolve() if prefix else None
     work_dir_root = Path(work_dir).resolve() if work_dir else None
     output = Path(output_dir).resolve()
+
+    if not local_mode and not recipes_dirs:
+        recipes_dirs = _try_pull_server_recipes()
+
     rdirs = [Path(d) for d in recipes_dirs] if recipes_dirs else [find_recipes_dir()]
 
     # Load all recipes for chain_hash computation
@@ -4051,6 +4169,1858 @@ def org_remove_member(slug: str, server: str, token: str, name: str):
     url = f"{server.rstrip('/')}/v1/orgs/{slug}/members/{name}"
     _api_request("delete", url, token)
     click.echo(f"Removed '{name}' from '{slug}'.")
+
+
+# ── Builder commands ────────────────────────────────────────────
+
+
+@cli.group("builder")
+def builder_group() -> None:
+    """Manage remote build agents."""
+
+
+@builder_group.command("list")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--platform", default=None, help="Filter by platform.")
+@click.option("--arch", default=None, help="Filter by architecture.")
+@click.option("--status", default=None, help="Filter by status (online/offline/busy).")
+def builder_list(
+    server: str, token: str, platform: str | None, arch: str | None, status: str | None
+):
+    """List registered builders."""
+    import httpx
+
+    params: dict[str, str] = {}
+    if platform:
+        params["platform"] = platform
+    if arch:
+        params["arch"] = arch
+    if status:
+        params["status"] = status
+    url = f"{server.rstrip('/')}/v1/builders"
+    with httpx.Client(timeout=30) as client:
+        resp = client.get(url, headers={"Authorization": f"Bearer {token}"}, params=params)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    data = resp.json()
+    builders = data.get("builders", [])
+    if not builders:
+        click.echo("No builders registered.")
+        return
+    click.echo(f"{'ID':>5}  {'Name':<24} {'Platform':<10} {'Arch':<10} {'Status':<8} {'Jobs':>4}")
+    click.echo("-" * 72)
+    for b in builders:
+        click.echo(
+            f"{b['id']:>5}  {b['name']:<24} {b['platform']:<10} {b['arch']:<10} "
+            f"{b['status']:<8} {b['current_jobs']}/{b['max_jobs']:>3}"
+        )
+
+
+@builder_group.command("status")
+@click.argument("builder_id", type=int)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+def builder_status(builder_id: int, server: str, token: str):
+    """Show details for a specific builder."""
+    data = _api_request("get", f"{server.rstrip('/')}/v1/builders/{builder_id}", token)
+    click.echo(f"Builder #{data['id']}: {data['name']}")
+    click.echo(f"  Org:         {data.get('org_slug') or '(global)'}")
+    click.echo(f"  Platform:    {data['platform']}/{data['arch']}")
+    click.echo(f"  Status:      {data['status']}")
+    click.echo(f"  Jobs:        {data['current_jobs']}/{data['max_jobs']}")
+    click.echo(f"  Labels:      {', '.join(data.get('labels', [])) or '(none)'}")
+    click.echo(f"  Affinity:    {'yes' if data.get('prefer_affinity') else 'no'}")
+    click.echo(f"  Last HB:     {data.get('last_heartbeat') or 'never'}")
+    click.echo(f"  Registered:  {data.get('created_at', 'unknown')}")
+
+
+@builder_group.command("run")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--name", required=True, help="Builder name (unique per org).")
+@click.option("--platform", default=None, help="Platform (default: auto-detect).")
+@click.option("--arch", default=None, help="Architecture (default: auto-detect).")
+@click.option("--org", "org_slug", default="", help="Organization scope.")
+@click.option("--max-jobs", type=int, default=1, help="Max concurrent jobs.")
+@click.option("--label", "labels", multiple=True, help="Labels (repeatable).")
+@click.option(
+    "--work-dir",
+    type=click.Path(),
+    default=None,
+    help="Directory for build work trees (default: system temp).",
+)
+@click.option(
+    "--recipe-cache-dir",
+    type=click.Path(),
+    default=None,
+    help="Directory to cache downloaded recipe bundles.",
+)
+@click.option(
+    "--no-websocket",
+    is_flag=True,
+    default=False,
+    help="Disable WebSocket and use HTTP long-poll only.",
+)
+def builder_run(
+    server: str,
+    token: str,
+    name: str,
+    platform: str | None,
+    arch: str | None,
+    org_slug: str,
+    max_jobs: int,
+    labels: tuple[str, ...],
+    work_dir: str | None,
+    recipe_cache_dir: str | None,
+    no_websocket: bool,
+):
+    """Register as a builder, poll for jobs, and execute builds.
+
+    Registers this machine as a remote builder, then enters a loop
+    that polls the server for dispatched jobs.  For each job the
+    builder:
+
+      1. Claims the job
+      2. Downloads the recipe bundle (cached locally)
+      3. Runs the build via ``pack_recipe()``
+      4. Streams build logs back to the server
+      5. Publishes the resulting archive
+      6. Reports success or failure
+
+    Press Ctrl-C to finish in-flight jobs, unregister, and exit.
+    """
+    import json
+    import shutil
+    import signal
+    import tarfile
+    import tempfile
+    import threading
+    import time
+    import traceback
+
+    import httpx
+
+    from cvcpkg.builder import pack_recipe
+    from cvcpkg.platform import detect_arch
+
+    if platform is None:
+        import sysconfig
+
+        platform = sysconfig.get_platform().split("-")[0]
+    if arch is None:
+        arch = detect_arch()
+
+    base = server.rstrip("/")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    work_root = Path(work_dir) if work_dir else None
+    cache_dir = (
+        Path(recipe_cache_dir)
+        if recipe_cache_dir
+        else Path(tempfile.gettempdir()) / "cvcpkg-recipe-cache"
+    )
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── Registration ────────────────────────────────────────
+    body = {
+        "name": name,
+        "platform": platform,
+        "arch": arch,
+        "org_slug": org_slug,
+        "max_jobs": max_jobs,
+        "labels": list(labels),
+        "capabilities": {},
+    }
+    with httpx.Client(timeout=30) as client:
+        resp = client.post(f"{base}/v1/builders/register", headers=headers, json=body)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"registration failed ({resp.status_code}): {detail}")
+    info = resp.json()
+    builder_id = info["id"]
+    click.echo(f"Registered builder #{builder_id} ({name}) — {platform}/{arch}")
+
+    shutdown = False
+    current_jobs = 0
+    jobs_lock = threading.Lock()
+
+    def _handle_signal(signum, frame):
+        nonlocal shutdown
+        shutdown = True
+        click.echo("\nShutdown requested — finishing in-flight jobs…")
+
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+
+    # ── Helpers ─────────────────────────────────────────────
+
+    def _heartbeat():
+        """Send heartbeat to server."""
+        try:
+            with httpx.Client(timeout=30) as client:
+                resp = client.post(
+                    f"{base}/v1/builders/{builder_id}/heartbeat",
+                    headers=headers,
+                    json={"status": "online", "current_jobs": current_jobs},
+                )
+            if resp.status_code >= 400:
+                click.echo(f"  heartbeat failed: {resp.status_code}", err=True)
+        except Exception as exc:
+            click.echo(f"  heartbeat error: {exc}", err=True)
+
+    def _fetch_recipe(recipe_name: str) -> Path:
+        """Download recipe bundle and extract to a local directory.
+
+        Returns the path to the extracted recipe directory.  Bundles
+        are cached in *cache_dir* so repeated builds of the same
+        recipe don't re-download.
+        """
+        bundle_path = cache_dir / f"{recipe_name}.tar.gz"
+
+        # Always re-download (server may have a newer version).
+        # A future optimisation can compare recipe_hash.
+        url = f"{base}/v1/recipes/{recipe_name}"
+        params: dict[str, str] = {}
+        if org_slug:
+            params["org_slug"] = org_slug
+        with httpx.Client(timeout=120) as client:
+            resp = client.get(url, headers=headers, params=params)
+        if resp.status_code >= 400:
+            raise RuntimeError(f"failed to download recipe '{recipe_name}': {resp.status_code}")
+        bundle_path.write_bytes(resp.content)
+
+        # Extract
+        extract_dir = cache_dir / recipe_name
+        if extract_dir.is_dir():
+            shutil.rmtree(extract_dir)
+        extract_dir.mkdir(parents=True)
+        with tarfile.open(bundle_path, "r:gz") as tar:
+            tar.extractall(path=extract_dir)  # noqa: S202
+
+        # recipe_push stores recipe files under ``<name>/`` inside
+        # the tar (with ``_common/`` alongside).  If that nested dir
+        # exists, return it so that ``../_common`` resolves correctly
+        # from build scripts.  Fall back to the flat layout for
+        # bundles created before this convention.
+        nested = extract_dir / recipe_name
+        if nested.is_dir() and (nested / "recipe.yaml").is_file():
+            return nested
+        return extract_dir
+
+    def _stream_log(job_id: int, text: str):
+        """Append a chunk of build log to the server."""
+        # Truncate to 64 KB per-chunk (server limit)
+        for i in range(0, len(text), 65536):
+            chunk = text[i : i + 65536]
+            try:
+                with httpx.Client(timeout=30) as client:
+                    client.patch(
+                        f"{base}/v1/builds/{job_id}/log",
+                        headers=headers,
+                        json={"data": chunk},
+                    )
+            except Exception:
+                pass  # best-effort log streaming
+
+    def _execute_job(job: dict) -> None:
+        """Execute a single build job."""
+        nonlocal current_jobs
+        job_id = job["id"]
+        recipe_name = job["recipe_name"]
+        job_platform = job.get("platform", platform)
+        job_arch = job.get("arch", arch)
+        job_config = job.get("config", "release")
+        job_link = job.get("link", "shared")
+
+        click.echo(
+            f"  [{job_id}] Building {recipe_name} "
+            f"({job_platform}/{job_arch}/{job_config}/{job_link})"
+        )
+
+        # 1. Claim the job
+        try:
+            with httpx.Client(timeout=30) as client:
+                resp = client.post(
+                    f"{base}/v1/builds/{job_id}/claim",
+                    headers=headers,
+                    json={"builder_id": builder_id},
+                )
+            if resp.status_code >= 400:
+                click.echo(
+                    f"  [{job_id}] claim failed ({resp.status_code}), skipping",
+                    err=True,
+                )
+                return
+        except Exception as exc:
+            click.echo(f"  [{job_id}] claim error: {exc}", err=True)
+            return
+
+        error_message = ""
+        archive_path: Path | None = None
+        try:
+            # 2. Download recipe
+            _stream_log(job_id, f"Downloading recipe '{recipe_name}'…\n")
+            recipe_dir = _fetch_recipe(recipe_name)
+            _stream_log(job_id, f"Recipe extracted to {recipe_dir}\n")
+
+            # 3. Build + package
+            _stream_log(
+                job_id,
+                f"Starting build: {recipe_name} "
+                f"({job_platform}/{job_arch}/{job_config}/{job_link})\n",
+            )
+
+            output_dir = Path(tempfile.mkdtemp(prefix=f"cvcpkg-out-{recipe_name}-"))
+            try:
+                archive_path, sha256, size = pack_recipe(
+                    recipe_dir,
+                    platform=job_platform,
+                    arch=job_arch,
+                    config=job_config,
+                    link=job_link,
+                    output_dir=output_dir,
+                    work_dir_root=work_root,
+                )
+                _stream_log(
+                    job_id,
+                    f"Build succeeded: {archive_path.name} " f"({size:,} bytes, sha256={sha256})\n",
+                )
+            except Exception as exc:
+                error_message = f"build failed: {exc}\n{traceback.format_exc()}"
+                _stream_log(job_id, error_message)
+                raise
+
+            # 4. Publish the archive to the server
+            _stream_log(job_id, f"Publishing {archive_path.name}…\n")
+            _publish_to_server(
+                server=base,
+                token=token,
+                archive_paths=[archive_path],
+                release_tag="",
+                chunked_threshold=10 * 1024 * 1024,
+                org=org_slug,
+            )
+            result_url = f"{base}/v1/packages/{recipe_name}"
+            _stream_log(job_id, "Published successfully.\n")
+
+            # 5. Report completion
+            with httpx.Client(timeout=30) as client:
+                client.post(
+                    f"{base}/v1/builds/{job_id}/complete",
+                    headers=headers,
+                    json={"result_archive_url": result_url},
+                )
+            click.echo(f"  [{job_id}] Completed: {recipe_name}")
+
+        except Exception as exc:
+            # Report failure
+            if not error_message:
+                error_message = f"{exc}\n{traceback.format_exc()}"
+            try:
+                with httpx.Client(timeout=30) as client:
+                    client.post(
+                        f"{base}/v1/builds/{job_id}/fail",
+                        headers=headers,
+                        json={"error_message": error_message[:4096]},
+                    )
+            except Exception:
+                pass
+            click.echo(f"  [{job_id}] Failed: {recipe_name} — {exc}", err=True)
+
+        finally:
+            # Clean up output dir
+            if archive_path and archive_path.parent.is_dir():
+                shutil.rmtree(archive_path.parent, ignore_errors=True)
+            with jobs_lock:
+                current_jobs -= 1
+
+    # ── WebSocket helpers ───────────────────────────────────
+
+    def _ws_url() -> str:
+        """Build WebSocket URL from the HTTP base URL."""
+        scheme = "wss" if base.startswith("https") else "ws"
+        rest = base.split("://", 1)[1] if "://" in base else base
+        return f"{scheme}://{rest}/v1/builders/{builder_id}/ws?token={token}"
+
+    def _run_ws_loop():
+        """Run the WebSocket event loop.
+
+        Connects to the server, sends heartbeats, receives
+        dispatched jobs and recipe pushes.  Falls back to HTTP
+        long-poll on any connection failure.
+        """
+        nonlocal shutdown, current_jobs, last_heartbeat
+        try:
+            import websockets.sync.client as ws_sync
+        except ImportError:
+            click.echo("  websockets not installed — using HTTP long-poll", err=True)
+            return False
+
+        click.echo("Connecting via WebSocket…")
+        try:
+            with ws_sync.connect(_ws_url(), close_timeout=5) as ws:
+                click.echo("WebSocket connected.")
+                ws.settimeout(5)  # non-blocking reads with 5s timeout
+                while not shutdown:
+                    # Send heartbeat if due
+                    now = time.time()
+                    if now - last_heartbeat >= heartbeat_interval:
+                        try:
+                            ws.send(
+                                json.dumps(
+                                    {
+                                        "type": "heartbeat",
+                                        "status": "online",
+                                        "current_jobs": current_jobs,
+                                    }
+                                )
+                            )
+                            last_heartbeat = now
+                        except Exception:
+                            break  # connection lost
+
+                    # Try to receive a message
+                    try:
+                        raw = ws.recv(timeout=2)
+                    except TimeoutError:
+                        continue
+                    except Exception:
+                        break  # connection lost
+
+                    try:
+                        msg = json.loads(raw)
+                    except Exception:
+                        continue
+                    msg_type = msg.get("type", "")
+
+                    if msg_type == "job.dispatch":
+                        job = msg.get("job")
+                        if job is None:
+                            continue
+                        with jobs_lock:
+                            if current_jobs >= max_jobs:
+                                continue
+                            current_jobs += 1
+                        t = threading.Thread(target=_execute_job, args=(job,), daemon=True)
+                        t.start()
+
+                    elif msg_type == "recipe.push":
+                        recipe = msg.get("recipe", {})
+                        rname = recipe.get("name", "")
+                        if rname:
+                            click.echo(f"  Recipe updated: {rname}")
+                            try:
+                                _fetch_recipe(rname)
+                            except Exception:
+                                pass
+
+                    elif msg_type == "ping":
+                        try:
+                            ws.send(json.dumps({"type": "pong"}))
+                        except Exception:
+                            break
+
+                    elif msg_type == "job.timeout":
+                        job_id = msg.get("job_id")
+                        click.echo(
+                            f"  [{job_id}] Server timed out job",
+                            err=True,
+                        )
+
+            return True  # ran successfully (normal shutdown)
+
+        except Exception as exc:
+            click.echo(
+                f"  WebSocket connection failed: {exc} — " f"falling back to HTTP long-poll",
+                err=True,
+            )
+            return False
+
+    # ── Main loop ───────────────────────────────────────────
+
+    last_heartbeat = 0.0
+    heartbeat_interval = 60.0
+    poll_interval = 5.0  # seconds between next-job polls
+
+    try:
+        # Try WebSocket first (unless disabled)
+        use_ws = not no_websocket
+        if use_ws and not shutdown:
+            ws_ok = _run_ws_loop()
+            if ws_ok:
+                # WebSocket ran until shutdown — skip HTTP loop
+                use_ws = True
+            else:
+                use_ws = False
+
+        # HTTP long-poll fallback
+        while not shutdown:
+            # Heartbeat
+            now = time.time()
+            if now - last_heartbeat >= heartbeat_interval:
+                _heartbeat()
+                last_heartbeat = now
+
+            # Check capacity
+            with jobs_lock:
+                available = max_jobs - current_jobs
+            if available <= 0:
+                time.sleep(poll_interval)
+                continue
+
+            # Poll for next job (short timeout so we stay responsive)
+            try:
+                with httpx.Client(timeout=35) as client:
+                    resp = client.get(
+                        f"{base}/v1/builders/{builder_id}/next-job",
+                        headers=headers,
+                        params={"timeout": "5"},
+                    )
+            except Exception as exc:
+                click.echo(f"  poll error: {exc}", err=True)
+                time.sleep(poll_interval)
+                continue
+
+            if resp.status_code == 204:
+                # No job available
+                continue
+            if resp.status_code >= 400:
+                click.echo(
+                    f"  poll failed: {resp.status_code}",
+                    err=True,
+                )
+                time.sleep(poll_interval)
+                continue
+
+            job = resp.json()
+            with jobs_lock:
+                current_jobs += 1
+
+            # Run in a thread so we can keep heartbeating & polling
+            t = threading.Thread(target=_execute_job, args=(job,), daemon=True)
+            t.start()
+
+    finally:
+        # Wait for in-flight jobs
+        deadline = time.time() + 300  # 5 min grace period
+        while current_jobs > 0 and time.time() < deadline:
+            click.echo(f"  Waiting for {current_jobs} in-flight job(s)…")
+            time.sleep(5)
+
+        click.echo("Shutting down — unregistering builder…")
+        try:
+            with httpx.Client(timeout=10) as client:
+                client.delete(f"{base}/v1/builders/{builder_id}", headers=headers)
+            click.echo("Builder unregistered.")
+        except Exception:
+            click.echo("Warning: failed to unregister builder.", err=True)
+
+
+@builder_group.command("stop")
+@click.argument("builder_id", type=int)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token (admin).  [env: CVCPKG_TOKEN]",
+)
+def builder_stop(builder_id: int, server: str, token: str):
+    """Unregister a builder by ID (admin-only)."""
+    _api_request("delete", f"{server.rstrip('/')}/v1/builders/{builder_id}", token)
+    click.echo(f"Builder #{builder_id} unregistered.")
+
+
+# ── Build job commands ──────────────────────────────────────────
+
+
+@cli.group("builds")
+def builds_group() -> None:
+    """Manage remote build jobs."""
+
+
+@builds_group.command("list")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--status", default=None, help="Filter by status.")
+@click.option("--platform", default=None, help="Filter by platform.")
+@click.option("--dag-id", default=None, help="Filter by DAG ID.")
+@click.option("--recipe", "recipe_name", default=None, help="Filter by recipe name.")
+@click.option("--limit", type=int, default=50, help="Max results.")
+def builds_list(
+    server: str,
+    token: str,
+    status: str | None,
+    platform: str | None,
+    dag_id: str | None,
+    recipe_name: str | None,
+    limit: int,
+):
+    """List build jobs."""
+    import httpx
+
+    params: dict[str, str | int] = {"limit": limit}
+    if status:
+        params["status"] = status
+    if platform:
+        params["platform"] = platform
+    if dag_id:
+        params["dag_id"] = dag_id
+    if recipe_name:
+        params["recipe_name"] = recipe_name
+    url = f"{server.rstrip('/')}/v1/builds"
+    with httpx.Client(timeout=30) as client:
+        resp = client.get(url, headers={"Authorization": f"Bearer {token}"}, params=params)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    data = resp.json()
+    jobs = data.get("jobs", [])
+    if not jobs:
+        click.echo("No build jobs found.")
+        return
+    click.echo(
+        f"{'ID':>5}  {'Recipe':<20} {'Platform':<10} {'Config':<8} "
+        f"{'Link':<7} {'Status':<10} {'DAG':>8}"
+    )
+    click.echo("-" * 78)
+    for j in jobs:
+        click.echo(
+            f"{j['id']:>5}  {j['recipe_name']:<20} {j['platform']:<10} "
+            f"{j['config']:<8} {j['link']:<7} {j['status']:<10} "
+            f"{(j.get('dag_id') or '-'):>8}"
+        )
+
+
+@builds_group.command("info")
+@click.argument("job_id", type=int)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+def builds_info(job_id: int, server: str, token: str):
+    """Show details for a build job."""
+    data = _api_request("get", f"{server.rstrip('/')}/v1/builds/{job_id}", token)
+    click.echo(f"Build #{data['id']}: {data['recipe_name']}")
+    click.echo(f"  Version:     {data.get('recipe_version') or '-'}")
+    click.echo(f"  Platform:    {data['platform']}/{data['arch']}")
+    click.echo(f"  Config:      {data['config']}")
+    click.echo(f"  Link:        {data['link']}")
+    click.echo(f"  Status:      {data['status']}")
+    click.echo(f"  DAG:         {data.get('dag_id') or '-'}")
+    click.echo(f"  Builder:     {data.get('builder_id') or 'unassigned'}")
+    click.echo(f"  Priority:    {data.get('priority', 0)}")
+    click.echo(f"  Submitted:   {data.get('submitted_at', 'unknown')}")
+    click.echo(f"  Started:     {data.get('started_at') or '-'}")
+    click.echo(f"  Finished:    {data.get('finished_at') or '-'}")
+    if data.get("error_message"):
+        click.echo(f"  Error:       {data['error_message']}")
+    if data.get("result_archive_url"):
+        click.echo(f"  Archive:     {data['result_archive_url']}")
+    deps = data.get("depends_on", [])
+    if deps:
+        click.echo(f"  Depends on:  {', '.join(str(d) for d in deps)}")
+
+
+@builds_group.command("cancel")
+@click.argument("job_id", type=int)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+def builds_cancel(job_id: int, server: str, token: str):
+    """Cancel a build job."""
+    data = _api_request("post", f"{server.rstrip('/')}/v1/builds/{job_id}/cancel", token)
+    click.echo(f"Build #{job_id}: {data.get('status', 'cancelled')}")
+
+
+@builds_group.command("cancel-dag")
+@click.argument("dag_id")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+def builds_cancel_dag(dag_id: str, server: str, token: str):
+    """Cancel all pending/dispatched jobs in a DAG."""
+    data = _api_request("post", f"{server.rstrip('/')}/v1/builds/dag/{dag_id}/cancel", token)
+    click.echo(f"DAG {dag_id}: {data.get('cancelled', 0)} jobs cancelled")
+
+
+@builds_group.command("log")
+@click.argument("job_id", type=int)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--follow", "-f", is_flag=True, help="Follow log output (SSE stream).")
+def builds_log(job_id: int, server: str, token: str, follow: bool):
+    """View or follow the build log for a job."""
+    import httpx
+
+    base = server.rstrip("/")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    if follow:
+        url = f"{base}/v1/builds/{job_id}/log/stream"
+        with httpx.Client(timeout=None) as client:
+            with client.stream("GET", url, headers=headers) as resp:
+                if resp.status_code >= 400:
+                    raise click.ClickException(f"server returned {resp.status_code}")
+                for line in resp.iter_lines():
+                    if line.startswith("data: "):
+                        click.echo(line[6:])
+                    elif line.startswith("event: done"):
+                        break
+    else:
+        url = f"{base}/v1/builds/{job_id}/log"
+        with httpx.Client(timeout=30) as client:
+            resp = client.get(url, headers=headers)
+        if resp.status_code == 404:
+            raise click.ClickException(f"no log available for build job {job_id}")
+        if resp.status_code >= 400:
+            raise click.ClickException(f"server returned {resp.status_code}: {resp.text}")
+        click.echo(resp.text, nl=False)
+
+
+@builds_group.command("log-delete")
+@click.argument("job_id", type=int)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+def builds_log_delete(job_id: int, server: str, token: str):
+    """Delete the log for a build job (admin only)."""
+    _api_request("delete", f"{server.rstrip('/')}/v1/builds/{job_id}/log", token)
+    click.echo(f"Log for build #{job_id} deleted.")
+
+
+@builds_group.command("submit")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--recipe", "recipe_name", required=True, help="Recipe name to build.")
+@click.option("--platform", required=True, help="Target platform (e.g. linux, macos, windows).")
+@click.option("--arch", required=True, help="Target architecture (e.g. x86_64, aarch64).")
+@click.option("--config", default="release", help="Build config (release or debug).")
+@click.option("--link", default="shared", help="Link mode (shared or static).")
+@click.option("--org", "org_slug", default="", help="Organization scope.")
+@click.option("--priority", type=int, default=0, help="Job priority (higher = sooner).")
+@click.option(
+    "--timeout", "timeout_seconds", type=int, default=None, help="Per-job timeout (seconds)."
+)
+def builds_submit(
+    server: str,
+    token: str,
+    recipe_name: str,
+    platform: str,
+    arch: str,
+    config: str,
+    link: str,
+    org_slug: str,
+    priority: int,
+    timeout_seconds: int | None,
+):
+    """Submit a single remote build job.
+
+    Example: cvcpkg builds submit --recipe zlib --platform linux --arch x86_64
+    """
+    body: dict = {
+        "recipe_name": recipe_name,
+        "platform": platform,
+        "arch": arch,
+        "config": config,
+        "link": link,
+        "org_slug": org_slug,
+        "priority": priority,
+    }
+    if timeout_seconds is not None:
+        body["timeout_seconds"] = timeout_seconds
+
+    data = _api_request(
+        "post",
+        f"{server.rstrip('/')}/v1/builds",
+        token,
+        json=body,
+    )
+    click.echo(f"Submitted build #{data['id']}  {recipe_name} ({platform}/{arch}/{config}/{link})")
+    click.echo(f"  Status: {data.get('status', 'pending')}")
+    if data.get("dag_id"):
+        click.echo(f"  DAG:    {data['dag_id']}")
+
+
+@builds_group.command("submit-dag")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--platform", required=True, help="Target platform(s), comma-separated.")
+@click.option("--arch", required=True, help="Target architecture(s), comma-separated.")
+@click.option("--config", default="release", help="Build config (release, debug, or 'all').")
+@click.option("--link", default="shared", help="Link mode (shared, static, or 'all').")
+@click.option("--org", "org_slug", default="", help="Organization scope.")
+@click.option("--dag-id", default=None, help="Custom DAG ID (auto-generated if omitted).")
+@click.argument("recipe_names", nargs=-1, required=True)
+def builds_submit_dag(
+    server: str,
+    token: str,
+    platform: str,
+    arch: str,
+    config: str,
+    link: str,
+    org_slug: str,
+    dag_id: str | None,
+    recipe_names: tuple[str, ...],
+):
+    """Submit a DAG of remote build jobs.
+
+    Provide one or more recipe names as positional arguments.
+    Use --config all / --link all to expand the build matrix.
+
+    Example:
+
+        cvcpkg builds submit-dag --platform linux --arch x86_64 zlib boost fftw
+    """
+    configs = ["release", "debug"] if config == "all" else [config]
+    links = ["shared", "static"] if link == "all" else [link]
+    platforms = [p.strip() for p in platform.split(",")]
+    arches = [a.strip() for a in arch.split(",")]
+
+    for plat in platforms:
+        for ar in arches:
+            for cfg in configs:
+                for lnk in links:
+                    jobs = [
+                        {
+                            "recipe_name": name,
+                            "platform": plat,
+                            "arch": ar,
+                            "config": cfg,
+                            "link": lnk,
+                            "org_slug": org_slug,
+                            "depends_on": [],
+                        }
+                        for name in recipe_names
+                    ]
+                    body: dict = {"jobs": jobs}
+                    if dag_id:
+                        body["dag_id"] = f"{dag_id}-{plat}-{ar}-{cfg}-{lnk}"
+
+                    data = _api_request(
+                        "post",
+                        f"{server.rstrip('/')}/v1/builds/dag",
+                        token,
+                        json=body,
+                    )
+                    click.echo(
+                        f"DAG {data['dag_id']}: {data['total']} jobs " f"({plat}/{ar}/{cfg}/{lnk})"
+                    )
+
+
+@builds_group.command("purge")
+@click.option(
+    "--older-than",
+    "older_than",
+    required=True,
+    help="Age threshold, e.g. '30d' (days).",
+)
+@click.option("--status", default=None, help="Only purge jobs with this status (e.g. 'failed').")
+@click.option(
+    "--delete-logs/--keep-logs", default=True, help="Also delete log files (default: yes)."
+)
+@click.option(
+    "--delete-jobs/--logs-only",
+    "delete_jobs",
+    default=False,
+    help="Delete entire job rows, not just logs (default: logs only).",
+)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+def builds_purge(
+    older_than: str,
+    status: str | None,
+    delete_logs: bool,
+    delete_jobs: bool,
+    server: str,
+    token: str,
+):
+    """Purge old build logs/jobs (admin only).
+
+    Example: cvcpkg builds purge --older-than 30d --status failed
+    """
+    import re
+
+    import httpx
+
+    m = re.match(r"^(\d+)d$", older_than)
+    if not m:
+        raise click.ClickException("--older-than must be in the form '<N>d', e.g. '30d'")
+    days = int(m.group(1))
+
+    base = server.rstrip("/")
+    headers = {"Authorization": f"Bearer {token}"}
+    params: dict[str, str | int | bool] = {
+        "older_than_days": days,
+        "delete_logs": delete_logs,
+    }
+    if status:
+        params["status"] = status
+
+    if delete_jobs:
+        endpoint = f"{base}/v1/admin/purge/builds"
+    else:
+        endpoint = f"{base}/v1/admin/gc/logs"
+
+    with httpx.Client(timeout=120) as client:
+        resp = client.post(endpoint, headers=headers, params=params)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    data = resp.json()
+    what = "jobs" if delete_jobs else "logs"
+    click.echo(f"Purged {data.get('purged', 0)} {what} older than {days}d.")
+
+
+# ── Recipe distribution commands ────────────────────────────────
+
+
+@cli.group("recipe")
+def recipe_group() -> None:
+    """Manage server-side recipe bundles."""
+
+
+@recipe_group.command("push")
+@click.argument("name")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option(
+    "--recipes-dir", type=click.Path(exists=True), default=None, help="Recipe source directory."
+)
+@click.option("--org", "org_slug", default="", help="Organization scope.")
+def recipe_push(name: str, server: str, token: str, recipes_dir: str | None, org_slug: str):
+    """Bundle and push a recipe to the server."""
+    import io
+    import tarfile
+
+    import httpx
+
+    from cvcpkg.builder import RecipeError, find_recipes_dir
+
+    if recipes_dir:
+        rdir = Path(recipes_dir)
+    else:
+        try:
+            rdir = find_recipes_dir()
+        except RecipeError:
+            raise click.ClickException("could not find recipes directory") from None
+
+    recipe_path = rdir / name
+    if not recipe_path.is_dir():
+        raise click.ClickException(f"recipe directory not found: {recipe_path}")
+
+    # Create tar.gz bundle
+    #
+    # Recipe files are stored under ``<name>/`` so that build scripts
+    # can reference ``${SCRIPT_DIR}/../_common/env-linux.sh`` and resolve
+    # correctly after extraction.  If a ``_common/`` sibling directory
+    # exists in the recipes root, it is included alongside.
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for f in sorted(recipe_path.rglob("*")):
+            if f.is_file():
+                arcname = f"{name}/{f.relative_to(recipe_path)}"
+                tar.add(f, arcname=arcname)
+        # Include _common/ sibling (shared build helpers)
+        common_dir = rdir / "_common"
+        if common_dir.is_dir():
+            for f in sorted(common_dir.rglob("*")):
+                if f.is_file():
+                    arcname = f"_common/{f.relative_to(common_dir)}"
+                    tar.add(f, arcname=arcname)
+    buf.seek(0)
+
+    # Read recipe.yaml for version info
+    recipe_yaml = recipe_path / "recipe.yaml"
+    version = ""
+    if recipe_yaml.is_file():
+        import yaml
+
+        with open(recipe_yaml) as f:
+            data = yaml.safe_load(f)
+        recipe_info = data.get("recipe", {})
+        version = recipe_info.get("upstream_version", "")
+
+    url = f"{server.rstrip('/')}/v1/recipes/{name}"
+    params = {"org_slug": org_slug, "version": version}
+    headers = {"Authorization": f"Bearer {token}"}
+    with httpx.Client(timeout=60) as client:
+        resp = client.post(
+            url,
+            headers=headers,
+            params=params,
+            files={"file": (f"{name}.tar.gz", buf, "application/gzip")},
+        )
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    data = resp.json()
+    click.echo(
+        f"Recipe '{data['name']}' uploaded "
+        f"(version={data.get('version', '')}, "
+        f"size={data.get('bundle_size', 0)} bytes)"
+    )
+
+
+@recipe_group.command("list")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--org", "org_slug", default=None, help="Filter by organization.")
+def recipe_list(server: str, token: str, org_slug: str | None):
+    """List recipes available on the server."""
+    import httpx
+
+    params: dict[str, str] = {}
+    if org_slug is not None:
+        params["org_slug"] = org_slug
+    url = f"{server.rstrip('/')}/v1/recipes"
+    headers = {"Authorization": f"Bearer {token}"}
+    with httpx.Client(timeout=30) as client:
+        resp = client.get(url, headers=headers, params=params)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    data = resp.json()
+    recipes = data.get("recipes", [])
+    if not recipes:
+        click.echo("No recipes found.")
+        return
+    click.echo(f"{'Name':<25} {'Version':<15} {'Size':>10}  {'Uploaded':>20}")
+    click.echo("-" * 75)
+    for r in recipes:
+        size_str = f"{r.get('bundle_size', 0):,}"
+        click.echo(
+            f"{r['name']:<25} {r.get('version', ''):<15} "
+            f"{size_str:>10}  {r.get('updated_at', 'unknown'):>20}"
+        )
+
+
+@recipe_group.command("delete")
+@click.argument("name")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--org", "org_slug", default="", help="Organization scope.")
+def recipe_delete(name: str, server: str, token: str, org_slug: str):
+    """Delete a recipe from the server (admin only)."""
+    import httpx
+
+    url = f"{server.rstrip('/')}/v1/recipes/{name}"
+    params = {"org_slug": org_slug}
+    headers = {"Authorization": f"Bearer {token}"}
+    with httpx.Client(timeout=30) as client:
+        resp = client.delete(url, headers=headers, params=params)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    click.echo(f"Recipe '{name}' deleted.")
+
+
+@recipe_group.command("publish")
+@click.argument("name")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option(
+    "--recipes-dir", type=click.Path(exists=True), default=None, help="Recipe source directory."
+)
+@click.option("--org", "org_slug", default="", help="Organization scope.")
+def recipe_publish(name: str, server: str, token: str, recipes_dir: str | None, org_slug: str):
+    """Publish a recipe to the server (push recipe + register placeholder package).
+
+    This pushes the recipe bundle to the server and registers a
+    placeholder entry in the catalog so the recipe is discoverable.
+    The placeholder has no build artifacts — it signals that the recipe
+    is available for remote builds or local source builds.
+
+    \b
+    Examples:
+      cvcpkg recipe publish zlib
+      cvcpkg recipe publish my-library --org my-org
+    """
+    import io
+    import tarfile
+
+    import httpx
+
+    from cvcpkg.builder import RecipeError, find_recipes_dir
+
+    base = server.rstrip("/")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    if recipes_dir:
+        rdir = Path(recipes_dir)
+    else:
+        try:
+            rdir = find_recipes_dir()
+        except RecipeError:
+            raise click.ClickException("could not find recipes directory") from None
+
+    recipe_path = rdir / name
+    if not recipe_path.is_dir():
+        raise click.ClickException(f"recipe directory not found: {recipe_path}")
+
+    # Read recipe metadata
+    recipe_yaml = recipe_path / "recipe.yaml"
+    version = ""
+    description = ""
+    homepage = ""
+    pkg_license = ""
+    maintainer_field = ""
+    if recipe_yaml.is_file():
+        recipe_data = yaml.safe_load(recipe_yaml.read_text())
+        recipe_info = recipe_data.get("recipe", {})
+        version = recipe_info.get("upstream_version", "")
+        cvc_rev = recipe_data.get("cvc_revision", recipe_info.get("cvc_revision", 1))
+        full_version = f"{version}+cvc.{cvc_rev}" if version else ""
+        description = recipe_info.get("description", "")
+        homepage = recipe_info.get("homepage", "")
+        pkg_license = recipe_info.get("license", "")
+        maintainer_field = recipe_info.get("maintainer", "")
+    else:
+        full_version = ""
+
+    # 1. Push the recipe bundle (reuse recipe push logic)
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for f in sorted(recipe_path.rglob("*")):
+            if f.is_file():
+                arcname = f"{name}/{f.relative_to(recipe_path)}"
+                tar.add(f, arcname=arcname)
+        common_dir = rdir / "_common"
+        if common_dir.is_dir():
+            for f in sorted(common_dir.rglob("*")):
+                if f.is_file():
+                    arcname = f"_common/{f.relative_to(common_dir)}"
+                    tar.add(f, arcname=arcname)
+    buf.seek(0)
+
+    url = f"{base}/v1/recipes/{name}"
+    params = {"org_slug": org_slug, "version": version}
+    with httpx.Client(timeout=60) as client:
+        resp = client.post(
+            url,
+            headers=headers,
+            params=params,
+            files={"file": (f"{name}.tar.gz", buf, "application/gzip")},
+        )
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"recipe push failed ({resp.status_code}): {detail}")
+    click.echo(f"Recipe '{name}' pushed (version={version})")
+
+    # 2. Register placeholder package entry via POST /v1/recipes/{name}/register
+    with httpx.Client(timeout=30) as client:
+        resp = client.post(
+            f"{base}/v1/recipes/{name}/register",
+            headers=headers,
+            json={
+                "version": full_version,
+                "description": description,
+                "homepage": homepage,
+                "license": pkg_license,
+                "maintainer": maintainer_field,
+                "org_slug": org_slug,
+            },
+        )
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        click.echo(f"cvcpkg: warning: placeholder registration failed: {detail}", err=True)
+    else:
+        click.echo(f"Recipe '{name}' registered in catalog (version={full_version})")
+
+
+@recipe_group.command("pull")
+@click.argument("name")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    default="",
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--org", "org_slug", default="", help="Organization scope.")
+@click.option(
+    "--output-dir",
+    type=click.Path(),
+    default="./recipes",
+    help="Directory to extract the recipe into.",
+)
+def recipe_pull(name: str, server: str, token: str, org_slug: str, output_dir: str):
+    """Download a recipe from the server.
+
+    Downloads the recipe bundle and extracts it to --output-dir/<name>/.
+    This lets you inspect or locally build a recipe from the server.
+
+    \b
+    Examples:
+      cvcpkg recipe pull zlib
+      cvcpkg recipe pull zlib --output-dir ./my-recipes
+    """
+    import tarfile
+
+    import httpx
+
+    base = server.rstrip("/")
+    headers: dict[str, str] = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    params: dict[str, str] = {}
+    if org_slug:
+        params["org_slug"] = org_slug
+
+    with httpx.Client(timeout=120) as client:
+        resp = client.get(f"{base}/v1/recipes/{name}", headers=headers, params=params)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"failed to download recipe '{name}': {detail}")
+
+    output = Path(output_dir).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    bundle_path = output / f"{name}.tar.gz"
+    bundle_path.write_bytes(resp.content)
+
+    with tarfile.open(bundle_path, "r:gz") as tar:
+        tar.extractall(path=output)  # noqa: S202
+    bundle_path.unlink()
+    click.echo(f"Recipe '{name}' extracted to {output / name}")
+
+
+@recipe_group.command("pull-all")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    default="",
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--org", "org_slug", default="", help="Organization scope (empty = base set).")
+@click.option(
+    "--output-dir",
+    type=click.Path(),
+    default="./recipes",
+    help="Directory to extract recipes into.",
+)
+def recipe_pull_all(server: str, token: str, org_slug: str, output_dir: str):
+    """Download the full recipe set from the server.
+
+    Downloads all recipes as a single bundle and extracts them to
+    --output-dir.  Use --org to download an organization's recipe set
+    instead of the base set.
+
+    \b
+    Examples:
+      cvcpkg recipe pull-all
+      cvcpkg recipe pull-all --org my-org --output-dir ./org-recipes
+    """
+    import tarfile
+
+    import httpx
+
+    base = server.rstrip("/")
+    headers: dict[str, str] = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    params: dict[str, str] = {}
+    if org_slug:
+        params["org_slug"] = org_slug
+
+    click.echo(f"cvcpkg: downloading recipe set from {base} ...")
+    with httpx.Client(timeout=300) as client:
+        resp = client.get(f"{base}/v1/recipes/bundle", headers=headers, params=params)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"failed to download recipe set: {detail}")
+
+    output = Path(output_dir).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    bundle_path = output / "recipes-bundle.tar.gz"
+    bundle_path.write_bytes(resp.content)
+
+    with tarfile.open(bundle_path, "r:gz") as tar:
+        tar.extractall(path=output)  # noqa: S202
+    bundle_path.unlink()
+
+    # Count extracted recipes
+    recipe_count = sum(1 for d in output.iterdir() if d.is_dir() and (d / "recipe.yaml").is_file())
+    click.echo(f"cvcpkg: {recipe_count} recipes extracted to {output}")
+
+
+@recipe_group.command("push-all")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option(
+    "--recipes-dir", type=click.Path(exists=True), default=None, help="Recipe source directory."
+)
+@click.option("--org", "org_slug", default="", help="Organization scope.")
+def recipe_push_all(server: str, token: str, recipes_dir: str | None, org_slug: str):
+    """Push all recipes from a local directory to the server.
+
+    Iterates every recipe in the recipes directory and pushes each
+    one to the server.
+
+    \b
+    Examples:
+      cvcpkg recipe push-all
+      cvcpkg recipe push-all --recipes-dir ./recipes
+    """
+    import io
+    import tarfile
+
+    import httpx
+
+    from cvcpkg.builder import RecipeError, find_recipes_dir
+
+    base = server.rstrip("/")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    if recipes_dir:
+        rdir = Path(recipes_dir)
+    else:
+        try:
+            rdir = find_recipes_dir()
+        except RecipeError:
+            raise click.ClickException("could not find recipes directory") from None
+
+    pushed = 0
+    failed = 0
+    for recipe_path in sorted(rdir.iterdir()):
+        if not recipe_path.is_dir() or recipe_path.name.startswith(("_", ".")):
+            continue
+        if not (recipe_path / "recipe.yaml").is_file():
+            continue
+
+        name = recipe_path.name
+        recipe_yaml = recipe_path / "recipe.yaml"
+        recipe_data = yaml.safe_load(recipe_yaml.read_text())
+        recipe_info = recipe_data.get("recipe", {})
+        version = recipe_info.get("upstream_version", "")
+
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            for f in sorted(recipe_path.rglob("*")):
+                if f.is_file():
+                    arcname = f"{name}/{f.relative_to(recipe_path)}"
+                    tar.add(f, arcname=arcname)
+            common_dir = rdir / "_common"
+            if common_dir.is_dir():
+                for f in sorted(common_dir.rglob("*")):
+                    if f.is_file():
+                        arcname = f"_common/{f.relative_to(common_dir)}"
+                        tar.add(f, arcname=arcname)
+        buf.seek(0)
+
+        url = f"{base}/v1/recipes/{name}"
+        params = {"org_slug": org_slug, "version": version}
+        try:
+            with httpx.Client(timeout=60) as client:
+                resp = client.post(
+                    url,
+                    headers=headers,
+                    params=params,
+                    files={"file": (f"{name}.tar.gz", buf, "application/gzip")},
+                )
+            if resp.status_code >= 400:
+                click.echo(f"  {name}: failed ({resp.status_code})", err=True)
+                failed += 1
+            else:
+                click.echo(f"  {name} (version={version})")
+                pushed += 1
+        except Exception as exc:
+            click.echo(f"  {name}: error ({exc})", err=True)
+            failed += 1
+
+    click.echo(f"cvcpkg: pushed {pushed} recipes ({failed} failed)")
+
+
+# ── Webhook CLI commands ────────────────────────────────────────
+
+
+@cli.group("webhook")
+def webhook_group() -> None:
+    """Manage server webhooks."""
+
+
+@webhook_group.command("register")
+@click.argument("url")
+@click.option(
+    "--event",
+    "-e",
+    "events",
+    multiple=True,
+    required=True,
+    help="Event(s) to subscribe to (can be repeated).",
+)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--org", "org_slug", default="", help="Organization scope.")
+def webhook_register(url: str, events: tuple[str, ...], server: str, token: str, org_slug: str):
+    """Register a new webhook."""
+    import httpx
+
+    api = f"{server.rstrip('/')}/v1/webhooks"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    body = {"url": url, "events": list(events), "org_slug": org_slug}
+    with httpx.Client(timeout=30) as client:
+        resp = client.post(api, headers=headers, json=body)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    data = resp.json()
+    click.echo(f"Webhook {data['id']} registered for {url}")
+
+
+@webhook_group.command("list")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option("--org", "org_slug", default=None, help="Filter by organization.")
+def webhook_list(server: str, token: str, org_slug: str | None):
+    """List registered webhooks."""
+    import httpx
+
+    api = f"{server.rstrip('/')}/v1/webhooks"
+    headers = {"Authorization": f"Bearer {token}"}
+    params: dict[str, str] = {}
+    if org_slug is not None:
+        params["org_slug"] = org_slug
+    with httpx.Client(timeout=30) as client:
+        resp = client.get(api, headers=headers, params=params)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    data = resp.json()
+    for wh in data.get("webhooks", []):
+        status = "active" if wh.get("active") else "inactive"
+        click.echo(f"  [{wh['id']}] {wh['url']}  events={wh['events']}  ({status})")
+    click.echo(f"Total: {data.get('total', 0)}")
+
+
+@webhook_group.command("info")
+@click.argument("webhook_id", type=int)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+def webhook_info(webhook_id: int, server: str, token: str):
+    """Get details for a webhook."""
+    import httpx
+
+    api = f"{server.rstrip('/')}/v1/webhooks/{webhook_id}"
+    headers = {"Authorization": f"Bearer {token}"}
+    with httpx.Client(timeout=30) as client:
+        resp = client.get(api, headers=headers)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    data = resp.json()
+    for k, v in data.items():
+        click.echo(f"  {k}: {v}")
+
+
+@webhook_group.command("update")
+@click.argument("webhook_id", type=int)
+@click.option("--url", default=None, help="New delivery URL.")
+@click.option("--event", "-e", "events", multiple=True, help="Replace events list.")
+@click.option("--active/--inactive", default=None, help="Enable or disable.")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+def webhook_update(
+    webhook_id: int,
+    url: str | None,
+    events: tuple[str, ...],
+    active: bool | None,
+    server: str,
+    token: str,
+):
+    """Update a webhook."""
+    import httpx
+
+    api = f"{server.rstrip('/')}/v1/webhooks/{webhook_id}"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    body: dict = {}
+    if url is not None:
+        body["url"] = url
+    if events:
+        body["events"] = list(events)
+    if active is not None:
+        body["active"] = active
+    if not body:
+        raise click.ClickException("nothing to update — supply at least one option")
+    with httpx.Client(timeout=30) as client:
+        resp = client.patch(api, headers=headers, json=body)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    click.echo(f"Webhook {webhook_id} updated.")
+
+
+@webhook_group.command("delete")
+@click.argument("webhook_id", type=int)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+def webhook_delete(webhook_id: int, server: str, token: str):
+    """Delete a webhook (admin only)."""
+    import httpx
+
+    api = f"{server.rstrip('/')}/v1/webhooks/{webhook_id}"
+    headers = {"Authorization": f"Bearer {token}"}
+    with httpx.Client(timeout=30) as client:
+        resp = client.delete(api, headers=headers)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    click.echo(f"Webhook {webhook_id} deleted.")
+
+
+@webhook_group.command("test")
+@click.argument("webhook_id", type=int)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+def webhook_test(webhook_id: int, server: str, token: str):
+    """Send a test payload to a webhook."""
+    import httpx
+
+    api = f"{server.rstrip('/')}/v1/webhooks/{webhook_id}/test"
+    headers = {"Authorization": f"Bearer {token}"}
+    with httpx.Client(timeout=30) as client:
+        resp = client.post(api, headers=headers)
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+    data = resp.json()
+    click.echo(f"Test delivery: status_code={data.get('status_code', '?')}")
 
 
 # ── main() wrapper for backward compat with tests ──────────────

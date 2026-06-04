@@ -1,13 +1,11 @@
 # BSD recipe-driven build for libcvc-deps.
 #
-# Builds recipes on BSD virtual machines (FreeBSD, OpenBSD, NetBSD)
-# hosted on the Incus cluster.  The workflow runs on self-hosted
-# Linux runners (which ARE the Incus cluster nodes) and executes
-# builds inside the BSD VMs via SSH over the br-uplink LAN bridge.
+# DISABLED — Package building has migrated to the cvcpkg remote
+# builders system (pkg.tx.wtf).  This reusable workflow is retained
+# for reference but is no longer called by any workflow.
 #
-# All three BSDs are accessed uniformly via SSH (root, key-based).
-#
-# No GitHub secrets required — the runners already have key-based
+# Previously built recipes on BSD virtual machines (FreeBSD, OpenBSD,
+# NetBSD) hosted on the Incus cluster.
 # SSH access to every BSD VM on the 10.66.77.0/24 LAN.
 #
 # Prerequisite: the runner user's SSH key must be authorized on all

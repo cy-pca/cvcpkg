@@ -18,30 +18,41 @@ from sqlalchemy import func as sa_func
 
 from cvcpkg.server.db import (
     AuditRow,
+    BuilderRow,
+    BuildJobDepRow,
+    BuildJobRow,
     DownloadEventRow,
     MirrorRow,
     OrganizationRow,
     OrgMemberRow,
     PackageRow,
+    RecipeRow,
     TagRow,
     TokenRequestRow,
     TokenRow,
+    WebhookRow,
     get_session,
 )
 from cvcpkg.server.models import (
     AuditAction,
     AuditEntry,
+    BuilderInfo,
+    BuilderStatus,
+    BuildJobInfo,
+    BuildJobStatus,
     MirrorInfo,
     OrgInfo,
     OrgMember,
     OrgRole,
     PackageInfo,
+    RecipeInfo,
     TagInfo,
     TokenRecord,
     TokenRequestRecord,
     TokenRequestStatus,
     TokenRole,
     UserProfileResponse,
+    WebhookInfo,
 )
 
 # ── HMAC key management ────────────────────────────────────────
@@ -1747,3 +1758,1167 @@ class DbTagStore:
         if org_slug:
             q = q.where(PackageRow.org_slug == org_slug)
         return (await session.execute(q)).scalar() or 0
+
+
+# ── DB Builder Store ────────────────────────────────────────────
+
+
+class DbBuilderStore:
+    """DB-backed store for registered remote build agents."""
+
+    @staticmethod
+    def _row_to_info(row: BuilderRow) -> BuilderInfo:
+        labels_raw = row.labels or "[]"
+        caps_raw = row.capabilities or "{}"
+        try:
+            labels = json.loads(labels_raw)
+        except (json.JSONDecodeError, TypeError):
+            labels = []
+        try:
+            capabilities = json.loads(caps_raw)
+        except (json.JSONDecodeError, TypeError):
+            capabilities = {}
+        return BuilderInfo(
+            id=row.id,
+            name=row.name,
+            org_slug=row.org_slug,
+            platform=row.platform,
+            arch=row.arch,
+            labels=labels,
+            capabilities=capabilities,
+            status=row.status,
+            current_jobs=row.current_jobs,
+            max_jobs=row.max_jobs,
+            prefer_affinity=row.prefer_affinity,
+            last_heartbeat=row.last_heartbeat,
+            registered_by=row.registered_by,
+            created_at=row.created_at,
+        )
+
+    async def register(
+        self,
+        name: str,
+        platform: str,
+        arch: str,
+        registered_by: str,
+        *,
+        org_slug: str = "",
+        labels: list[str] | None = None,
+        capabilities: dict | None = None,
+        max_jobs: int = 1,
+        prefer_affinity: bool = False,
+    ) -> BuilderInfo:
+        """Register a new builder or re-register an existing one."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(BuilderRow).where(
+                        BuilderRow.name == name,
+                        BuilderRow.org_slug == org_slug,
+                    )
+                )
+            ).scalar()
+            if row is not None:
+                row.platform = platform
+                row.arch = arch
+                row.labels = json.dumps(labels or [])
+                row.capabilities = json.dumps(capabilities or {})
+                row.max_jobs = max_jobs
+                row.prefer_affinity = prefer_affinity
+                row.status = BuilderStatus.online
+                row.last_heartbeat = now
+                row.registered_by = registered_by
+                return self._row_to_info(row)
+            row = BuilderRow(
+                name=name,
+                org_slug=org_slug,
+                platform=platform,
+                arch=arch,
+                labels=json.dumps(labels or []),
+                capabilities=json.dumps(capabilities or {}),
+                status=BuilderStatus.online,
+                current_jobs=0,
+                max_jobs=max_jobs,
+                prefer_affinity=prefer_affinity,
+                last_heartbeat=now,
+                registered_by=registered_by,
+            )
+            session.add(row)
+            await session.flush()
+            return self._row_to_info(row)
+
+    async def get(self, builder_id: int) -> BuilderInfo | None:
+        """Get a builder by ID."""
+        async with get_session() as session:
+            row = (
+                await session.execute(select(BuilderRow).where(BuilderRow.id == builder_id))
+            ).scalar()
+            return self._row_to_info(row) if row else None
+
+    async def list_builders(
+        self,
+        *,
+        org_slug: str | None = None,
+        platform: str | None = None,
+        arch: str | None = None,
+        status: str | None = None,
+    ) -> list[BuilderInfo]:
+        """List builders with optional filters."""
+        async with get_session() as session:
+            q = select(BuilderRow).order_by(BuilderRow.id)
+            if org_slug is not None:
+                q = q.where(BuilderRow.org_slug == org_slug)
+            if platform is not None:
+                q = q.where(BuilderRow.platform == platform)
+            if arch is not None:
+                q = q.where(BuilderRow.arch == arch)
+            if status is not None:
+                q = q.where(BuilderRow.status == status)
+            rows = (await session.execute(q)).scalars().all()
+            return [self._row_to_info(r) for r in rows]
+
+    async def update(
+        self,
+        builder_id: int,
+        *,
+        labels: list[str] | None = None,
+        capabilities: dict | None = None,
+        max_jobs: int | None = None,
+        prefer_affinity: bool | None = None,
+    ) -> BuilderInfo | None:
+        """Update mutable fields. Returns updated info or None if not found."""
+        async with get_session() as session:
+            row = (
+                await session.execute(select(BuilderRow).where(BuilderRow.id == builder_id))
+            ).scalar()
+            if row is None:
+                return None
+            if labels is not None:
+                row.labels = json.dumps(labels)
+            if capabilities is not None:
+                row.capabilities = json.dumps(capabilities)
+            if max_jobs is not None:
+                row.max_jobs = max_jobs
+            if prefer_affinity is not None:
+                row.prefer_affinity = prefer_affinity
+            return self._row_to_info(row)
+
+    async def heartbeat(
+        self,
+        builder_id: int,
+        *,
+        status: str = BuilderStatus.online,
+        current_jobs: int = 0,
+    ) -> BuilderInfo | None:
+        """Record a heartbeat from a builder. Returns updated info or None."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            row = (
+                await session.execute(select(BuilderRow).where(BuilderRow.id == builder_id))
+            ).scalar()
+            if row is None:
+                return None
+            row.last_heartbeat = now
+            row.status = status
+            row.current_jobs = current_jobs
+            return self._row_to_info(row)
+
+    async def unregister(self, builder_id: int) -> bool:
+        """Remove a builder. Returns True if found and deleted."""
+        from sqlalchemy import delete
+
+        async with get_session() as session:
+            result = await session.execute(delete(BuilderRow).where(BuilderRow.id == builder_id))
+            return result.rowcount > 0
+
+    async def reap_stale(self, max_age_seconds: int = 180) -> list[BuilderInfo]:
+        """Mark builders as offline if their last heartbeat exceeds max_age_seconds.
+
+        Returns the list of builders that were reaped.
+        """
+        cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+            seconds=max_age_seconds
+        )
+        async with get_session() as session:
+            q = (
+                select(BuilderRow)
+                .where(BuilderRow.status != BuilderStatus.offline)
+                .where(
+                    or_(
+                        BuilderRow.last_heartbeat < cutoff,
+                        BuilderRow.last_heartbeat.is_(None),
+                    )
+                )
+            )
+            rows = (await session.execute(q)).scalars().all()
+            reaped = []
+            for row in rows:
+                row.status = BuilderStatus.offline
+                row.current_jobs = 0
+                reaped.append(self._row_to_info(row))
+            return reaped
+
+
+# ── DB Build Job Store ──────────────────────────────────────────
+
+
+class DbBuildJobStore:
+    """DB-backed store for build job queue and DAG scheduling."""
+
+    @staticmethod
+    def _row_to_info(row: BuildJobRow, dep_ids: list[int] | None = None) -> BuildJobInfo:
+        return BuildJobInfo(
+            id=row.id,
+            dag_id=row.dag_id,
+            org_slug=row.org_slug,
+            recipe_name=row.recipe_name,
+            recipe_version=row.recipe_version,
+            recipe_hash=row.recipe_hash,
+            platform=row.platform,
+            arch=row.arch,
+            config=row.config,
+            link=row.link,
+            builder_id=row.builder_id,
+            status=row.status,
+            priority=row.priority,
+            timeout_seconds=row.timeout_seconds,
+            submitted_by=row.submitted_by,
+            submitted_at=row.submitted_at,
+            started_at=row.started_at,
+            finished_at=row.finished_at,
+            log_url=row.log_url,
+            log_size_bytes=row.log_size_bytes,
+            error_message=row.error_message,
+            result_archive_url=row.result_archive_url,
+            depends_on=dep_ids if dep_ids is not None else [],
+        )
+
+    async def _load_dep_ids(self, session, job_id: int) -> list[int]:
+        """Load prerequisite job IDs for a given job."""
+        q = select(BuildJobDepRow.depends_on_job_id).where(BuildJobDepRow.job_id == job_id)
+        rows = (await session.execute(q)).scalars().all()
+        return list(rows)
+
+    async def create(
+        self,
+        recipe_name: str,
+        platform: str,
+        arch: str,
+        submitted_by: str,
+        *,
+        recipe_version: str = "",
+        recipe_hash: str = "",
+        config: str = "release",
+        link: str = "shared",
+        org_slug: str = "",
+        dag_id: str | None = None,
+        priority: int = 0,
+        timeout_seconds: int | None = None,
+        depends_on: list[int] | None = None,
+    ) -> BuildJobInfo:
+        """Create a new build job."""
+        async with get_session() as session:
+            row = BuildJobRow(
+                dag_id=dag_id,
+                org_slug=org_slug,
+                recipe_name=recipe_name,
+                recipe_version=recipe_version,
+                recipe_hash=recipe_hash,
+                platform=platform,
+                arch=arch,
+                config=config,
+                link=link,
+                status=BuildJobStatus.pending,
+                priority=priority,
+                timeout_seconds=timeout_seconds,
+                submitted_by=submitted_by,
+            )
+            session.add(row)
+            await session.flush()
+
+            dep_ids = []
+            if depends_on:
+                for dep_id in depends_on:
+                    dep_row = BuildJobDepRow(job_id=row.id, depends_on_job_id=dep_id)
+                    session.add(dep_row)
+                dep_ids = list(depends_on)
+
+            return self._row_to_info(row, dep_ids)
+
+    async def create_dag(
+        self,
+        jobs: list[dict],
+        dag_id: str,
+        submitted_by: str,
+    ) -> list[BuildJobInfo]:
+        """Create multiple jobs as a DAG in a single transaction.
+
+        Each dict in *jobs* should contain keys matching
+        ``BuildJobSubmitRequest`` fields.  ``depends_on`` values are
+        indices (0-based) into the *jobs* list (resolved to real IDs
+        after insertion).
+        """
+        async with get_session() as session:
+            created_rows: list[BuildJobRow] = []
+            idx_deps: list[list[int]] = []  # index-based deps per job
+
+            for job in jobs:
+                row = BuildJobRow(
+                    dag_id=dag_id,
+                    org_slug=job.get("org_slug", ""),
+                    recipe_name=job["recipe_name"],
+                    recipe_version=job.get("recipe_version", ""),
+                    recipe_hash=job.get("recipe_hash", ""),
+                    platform=job["platform"],
+                    arch=job["arch"],
+                    config=job.get("config", "release"),
+                    link=job.get("link", "shared"),
+                    status=BuildJobStatus.pending,
+                    priority=job.get("priority", 0),
+                    timeout_seconds=job.get("timeout_seconds"),
+                    submitted_by=submitted_by,
+                )
+                session.add(row)
+                created_rows.append(row)
+                idx_deps.append(job.get("depends_on", []))
+
+            await session.flush()  # assigns IDs
+
+            # Resolve index-based deps to real IDs and insert edges
+            for i, row in enumerate(created_rows):
+                for dep_idx in idx_deps[i]:
+                    if 0 <= dep_idx < len(created_rows):
+                        dep_row = BuildJobDepRow(
+                            job_id=row.id,
+                            depends_on_job_id=created_rows[dep_idx].id,
+                        )
+                        session.add(dep_row)
+
+            await session.flush()
+
+            # Build results with dep IDs
+            results = []
+            for i, row in enumerate(created_rows):
+                real_dep_ids = [
+                    created_rows[di].id for di in idx_deps[i] if 0 <= di < len(created_rows)
+                ]
+                results.append(self._row_to_info(row, real_dep_ids))
+            return results
+
+    async def get(self, job_id: int) -> BuildJobInfo | None:
+        """Get a build job by ID."""
+        async with get_session() as session:
+            row = (
+                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
+            ).scalar()
+            if row is None:
+                return None
+            dep_ids = await self._load_dep_ids(session, job_id)
+            return self._row_to_info(row, dep_ids)
+
+    async def list_jobs(
+        self,
+        *,
+        org_slug: str | None = None,
+        dag_id: str | None = None,
+        status: str | None = None,
+        platform: str | None = None,
+        recipe_name: str | None = None,
+        builder_id: int | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[BuildJobInfo], int]:
+        """List jobs with filters. Returns (jobs, total_count)."""
+        async with get_session() as session:
+            q = select(BuildJobRow)
+            count_q = select(sa_func.count(BuildJobRow.id))
+            if org_slug is not None:
+                q = q.where(BuildJobRow.org_slug == org_slug)
+                count_q = count_q.where(BuildJobRow.org_slug == org_slug)
+            if dag_id is not None:
+                q = q.where(BuildJobRow.dag_id == dag_id)
+                count_q = count_q.where(BuildJobRow.dag_id == dag_id)
+            if status is not None:
+                q = q.where(BuildJobRow.status == status)
+                count_q = count_q.where(BuildJobRow.status == status)
+            if platform is not None:
+                q = q.where(BuildJobRow.platform == platform)
+                count_q = count_q.where(BuildJobRow.platform == platform)
+            if recipe_name is not None:
+                q = q.where(BuildJobRow.recipe_name == recipe_name)
+                count_q = count_q.where(BuildJobRow.recipe_name == recipe_name)
+            if builder_id is not None:
+                q = q.where(BuildJobRow.builder_id == builder_id)
+                count_q = count_q.where(BuildJobRow.builder_id == builder_id)
+
+            total = (await session.execute(count_q)).scalar() or 0
+            q = q.order_by(BuildJobRow.priority.desc(), BuildJobRow.id).limit(limit).offset(offset)
+            rows = (await session.execute(q)).scalars().all()
+            results = []
+            for row in rows:
+                dep_ids = await self._load_dep_ids(session, row.id)
+                results.append(self._row_to_info(row, dep_ids))
+            return results, total
+
+    async def cancel(self, job_id: int) -> BuildJobInfo | None:
+        """Cancel a pending or dispatched job. Returns updated info or None."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            row = (
+                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
+            ).scalar()
+            if row is None:
+                return None
+            if row.status not in (
+                BuildJobStatus.pending,
+                BuildJobStatus.dispatched,
+            ):
+                return self._row_to_info(row)
+            row.status = BuildJobStatus.cancelled
+            row.finished_at = now
+            dep_ids = await self._load_dep_ids(session, job_id)
+            return self._row_to_info(row, dep_ids)
+
+    async def cancel_dag(self, dag_id: str) -> int:
+        """Cancel all pending/dispatched jobs in a DAG. Returns count cancelled."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            q = (
+                select(BuildJobRow)
+                .where(BuildJobRow.dag_id == dag_id)
+                .where(
+                    BuildJobRow.status.in_(
+                        [
+                            BuildJobStatus.pending,
+                            BuildJobStatus.dispatched,
+                        ]
+                    )
+                )
+            )
+            rows = (await session.execute(q)).scalars().all()
+            for row in rows:
+                row.status = BuildJobStatus.cancelled
+                row.finished_at = now
+            return len(rows)
+
+    _TERMINAL_STATUSES = frozenset(
+        {
+            BuildJobStatus.succeeded,
+            BuildJobStatus.failed,
+            BuildJobStatus.cancelled,
+            BuildJobStatus.timed_out,
+        }
+    )
+
+    async def is_dag_complete(self, dag_id: str) -> bool | None:
+        """Return True if every job in the DAG is in a terminal state.
+
+        Returns None if the DAG has no jobs.
+        """
+        async with get_session() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(BuildJobRow.status).where(BuildJobRow.dag_id == dag_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if not rows:
+                return None
+            return all(s in self._TERMINAL_STATUSES for s in rows)
+
+    async def dag_summary(self, dag_id: str) -> dict:
+        """Return a status summary dict for a DAG."""
+        async with get_session() as session:
+            rows = (
+                (await session.execute(select(BuildJobRow).where(BuildJobRow.dag_id == dag_id)))
+                .scalars()
+                .all()
+            )
+            total = len(rows)
+            succeeded = sum(1 for r in rows if r.status == BuildJobStatus.succeeded)
+            failed = sum(1 for r in rows if r.status == BuildJobStatus.failed)
+            return {
+                "dag_id": dag_id,
+                "total": total,
+                "succeeded": succeeded,
+                "failed": failed,
+            }
+
+    async def claim(self, job_id: int, builder_id: int) -> BuildJobInfo | None:
+        """Builder claims a dispatched job → running."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            row = (
+                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
+            ).scalar()
+            if row is None:
+                return None
+            if row.status not in (
+                BuildJobStatus.pending,
+                BuildJobStatus.dispatched,
+            ):
+                dep_ids = await self._load_dep_ids(session, job_id)
+                return self._row_to_info(row, dep_ids)
+            row.status = BuildJobStatus.running
+            row.builder_id = builder_id
+            row.started_at = now
+            dep_ids = await self._load_dep_ids(session, job_id)
+            return self._row_to_info(row, dep_ids)
+
+    async def complete(self, job_id: int, *, result_archive_url: str = "") -> BuildJobInfo | None:
+        """Mark a job as succeeded."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            row = (
+                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
+            ).scalar()
+            if row is None:
+                return None
+            row.status = BuildJobStatus.succeeded
+            row.finished_at = now
+            row.error_message = ""
+            if result_archive_url:
+                row.result_archive_url = result_archive_url
+            dep_ids = await self._load_dep_ids(session, job_id)
+            return self._row_to_info(row, dep_ids)
+
+    async def fail(self, job_id: int, *, error_message: str = "") -> BuildJobInfo | None:
+        """Mark a job as failed."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            row = (
+                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
+            ).scalar()
+            if row is None:
+                return None
+            row.status = BuildJobStatus.failed
+            row.finished_at = now
+            if error_message:
+                row.error_message = error_message
+            dep_ids = await self._load_dep_ids(session, job_id)
+            return self._row_to_info(row, dep_ids)
+
+    async def find_ready_jobs(self) -> list[BuildJobInfo]:
+        """Find pending jobs whose dependencies are all succeeded.
+
+        Returns jobs ordered by priority (desc) then id (asc).
+        """
+        async with get_session() as session:
+            # Subquery: jobs that have unmet dependencies
+            # A dependency is "unmet" if the depended-on job is not succeeded
+            unmet_sub = (
+                select(BuildJobDepRow.job_id)
+                .join(
+                    BuildJobRow,
+                    BuildJobRow.id == BuildJobDepRow.depends_on_job_id,
+                )
+                .where(BuildJobRow.status != BuildJobStatus.succeeded)
+                .distinct()
+            )
+
+            q = (
+                select(BuildJobRow)
+                .where(BuildJobRow.status == BuildJobStatus.pending)
+                .where(BuildJobRow.id.notin_(unmet_sub))
+                .order_by(BuildJobRow.priority.desc(), BuildJobRow.id)
+            )
+            rows = (await session.execute(q)).scalars().all()
+            results = []
+            for row in rows:
+                dep_ids = await self._load_dep_ids(session, row.id)
+                results.append(self._row_to_info(row, dep_ids))
+            return results
+
+    async def dispatch(self, job_id: int, builder_id: int) -> BuildJobInfo | None:
+        """Mark a pending job as dispatched to a specific builder."""
+        async with get_session() as session:
+            row = (
+                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
+            ).scalar()
+            if row is None:
+                return None
+            if row.status != BuildJobStatus.pending:
+                dep_ids = await self._load_dep_ids(session, job_id)
+                return self._row_to_info(row, dep_ids)
+            row.status = BuildJobStatus.dispatched
+            row.builder_id = builder_id
+            dep_ids = await self._load_dep_ids(session, job_id)
+            return self._row_to_info(row, dep_ids)
+
+    async def reap_timed_out(self, default_timeout: int = 86400) -> list[BuildJobInfo]:
+        """Mark running jobs that exceed their timeout as timed_out.
+
+        Uses per-job ``timeout_seconds`` if set, otherwise *default_timeout*.
+        """
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            q = select(BuildJobRow).where(
+                BuildJobRow.status == BuildJobStatus.running,
+                BuildJobRow.started_at.isnot(None),
+            )
+            rows = (await session.execute(q)).scalars().all()
+            reaped = []
+            for row in rows:
+                timeout = row.timeout_seconds or default_timeout
+                started = row.started_at
+                # SQLite returns naive datetimes; ensure UTC-aware
+                if started.tzinfo is None:
+                    started = started.replace(tzinfo=datetime.timezone.utc)
+                deadline = started + datetime.timedelta(seconds=timeout)
+                if now > deadline:
+                    row.status = BuildJobStatus.timed_out
+                    row.finished_at = now
+                    row.error_message = f"exceeded {timeout}s timeout"
+                    dep_ids = await self._load_dep_ids(session, row.id)
+                    reaped.append(self._row_to_info(row, dep_ids))
+            return reaped
+
+    async def cancel_downstream(self, failed_job_id: int) -> int:
+        """Cancel all pending/dispatched jobs that depend (transitively) on a failed job.
+
+        Returns count of cancelled jobs.
+        """
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            # BFS to find all downstream jobs
+            to_visit = [failed_job_id]
+            visited: set[int] = set()
+            cancelled = 0
+
+            while to_visit:
+                current_id = to_visit.pop(0)
+                if current_id in visited:
+                    continue
+                visited.add(current_id)
+
+                # Find jobs that depend on current_id
+                q = select(BuildJobDepRow.job_id).where(
+                    BuildJobDepRow.depends_on_job_id == current_id
+                )
+                downstream_ids = (await session.execute(q)).scalars().all()
+
+                for ds_id in downstream_ids:
+                    if ds_id in visited:
+                        continue
+                    row = (
+                        await session.execute(select(BuildJobRow).where(BuildJobRow.id == ds_id))
+                    ).scalar()
+                    if row and row.status in (
+                        BuildJobStatus.pending,
+                        BuildJobStatus.dispatched,
+                    ):
+                        row.status = BuildJobStatus.cancelled
+                        row.finished_at = now
+                        row.error_message = f"cancelled: dependency {failed_job_id} failed"
+                        cancelled += 1
+                    to_visit.append(ds_id)
+
+            return cancelled
+
+    # ── Log management ──────────────────────────────────────────
+
+    async def append_log(
+        self,
+        job_id: int,
+        data: str,
+        *,
+        logs_dir: Path,
+    ) -> BuildJobInfo | None:
+        """Append a chunk of log data to a job's log file.
+
+        Creates the log file on first append.  Updates ``log_url`` and
+        ``log_size_bytes`` on the DB row.
+        """
+        async with get_session() as session:
+            row = (
+                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
+            ).scalar()
+            if row is None:
+                return None
+
+            # Determine log file path
+            if row.dag_id:
+                log_sub = logs_dir / row.dag_id
+            else:
+                log_sub = logs_dir / "standalone"
+            log_sub.mkdir(parents=True, exist_ok=True)
+            log_path = log_sub / f"{job_id}.log"
+
+            # Append data
+            with open(log_path, "a") as f:
+                f.write(data)
+
+            # Update row metadata
+            size = log_path.stat().st_size
+            row.log_url = str(log_path.relative_to(logs_dir))
+            row.log_size_bytes = size
+
+            dep_ids = await self._load_dep_ids(session, job_id)
+            return self._row_to_info(row, dep_ids)
+
+    async def get_log_path(
+        self,
+        job_id: int,
+        *,
+        logs_dir: Path,
+    ) -> Path | None:
+        """Return the filesystem path for a job's log, or None."""
+        async with get_session() as session:
+            row = (
+                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
+            ).scalar()
+            if row is None or not row.log_url:
+                return None
+            path = logs_dir / row.log_url
+            if not path.is_file():
+                return None
+            return path
+
+    async def delete_log(
+        self,
+        job_id: int,
+        *,
+        logs_dir: Path,
+    ) -> bool:
+        """Delete a job's log file.  Returns True if deleted."""
+        async with get_session() as session:
+            row = (
+                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
+            ).scalar()
+            if row is None:
+                return False
+            if row.log_url:
+                path = logs_dir / row.log_url
+                if path.is_file():
+                    path.unlink()
+            row.log_url = None
+            row.log_size_bytes = None
+            return True
+
+    async def next_job_for_builder(self, builder_id: int) -> BuildJobInfo | None:
+        """Find the next dispatched or pending job for a builder.
+
+        Returns the first dispatched job assigned to this builder,
+        or None.  Used by the long-poll ``next-job`` endpoint.
+        """
+        async with get_session() as session:
+            q = (
+                select(BuildJobRow)
+                .where(
+                    BuildJobRow.builder_id == builder_id,
+                    BuildJobRow.status == BuildJobStatus.dispatched,
+                )
+                .order_by(BuildJobRow.priority.desc(), BuildJobRow.id.asc())
+                .limit(1)
+            )
+            row = (await session.execute(q)).scalar()
+            if row is None:
+                return None
+            dep_ids = await self._load_dep_ids(session, row.id)
+            return self._row_to_info(row, dep_ids)
+
+    async def purge_old_logs(
+        self,
+        *,
+        older_than_days: int,
+        logs_dir: Path,
+        status_filter: str | None = None,
+        delete_logs: bool = True,
+    ) -> int:
+        """Delete logs for finished jobs older than *older_than_days*.
+
+        Returns the count of log entries purged.
+        """
+        cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+            days=older_than_days
+        )
+        async with get_session() as session:
+            q = select(BuildJobRow).where(
+                BuildJobRow.log_url.isnot(None),
+                BuildJobRow.finished_at.isnot(None),
+                BuildJobRow.finished_at < cutoff,
+            )
+            if status_filter:
+                q = q.where(BuildJobRow.status == status_filter)
+            rows = (await session.execute(q)).scalars().all()
+            count = 0
+            for row in rows:
+                if delete_logs and row.log_url:
+                    path = logs_dir / row.log_url
+                    if path.is_file():
+                        path.unlink()
+                row.log_url = None
+                row.log_size_bytes = None
+                count += 1
+            return count
+
+    async def get_org_log_usage(self, org_slug: str) -> int:
+        """Return total log bytes for an org."""
+        async with get_session() as session:
+            result = (
+                await session.execute(
+                    select(sa_func.coalesce(sa_func.sum(BuildJobRow.log_size_bytes), 0)).where(
+                        BuildJobRow.org_slug == org_slug
+                    )
+                )
+            ).scalar()
+            return int(result or 0)
+
+    async def purge_old_jobs(
+        self,
+        *,
+        older_than_days: int,
+        logs_dir: Path,
+        status_filter: str | None = None,
+        delete_logs: bool = True,
+    ) -> int:
+        """Purge finished build jobs older than *older_than_days*.
+
+        Deletes the job rows entirely (and their log files if
+        *delete_logs* is True).  Returns the count of jobs purged.
+        """
+        cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+            days=older_than_days
+        )
+        async with get_session() as session:
+            q = select(BuildJobRow).where(
+                BuildJobRow.finished_at.isnot(None),
+                BuildJobRow.finished_at < cutoff,
+            )
+            if status_filter:
+                q = q.where(BuildJobRow.status == status_filter)
+            rows = (await session.execute(q)).scalars().all()
+            count = 0
+            for row in rows:
+                if delete_logs and row.log_url:
+                    path = logs_dir / row.log_url
+                    if path.is_file():
+                        path.unlink()
+                # Delete dep rows
+                from sqlalchemy import delete as sa_delete
+
+                await session.execute(
+                    sa_delete(BuildJobDepRow).where(
+                        or_(
+                            BuildJobDepRow.job_id == row.id,
+                            BuildJobDepRow.depends_on_job_id == row.id,
+                        )
+                    )
+                )
+                await session.delete(row)
+                count += 1
+            return count
+
+
+class DbRecipeStore:
+    """DB-backed store for server-managed recipe bundles."""
+
+    @staticmethod
+    def _row_to_info(row: RecipeRow) -> RecipeInfo:
+        return RecipeInfo(
+            id=row.id,
+            name=row.name,
+            version=row.version,
+            recipe_hash=row.recipe_hash,
+            org_slug=row.org_slug,
+            bundle_size=row.bundle_size,
+            uploaded_by=row.uploaded_by,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+
+    async def upload(
+        self,
+        name: str,
+        bundle_path: str,
+        bundle_size: int,
+        uploaded_by: str,
+        *,
+        version: str = "",
+        recipe_hash: str = "",
+        org_slug: str = "",
+    ) -> RecipeInfo:
+        """Upload or update a recipe bundle.
+
+        If a recipe with the same ``(name, org_slug)`` already exists,
+        it is updated in place.  Returns the recipe info.
+        """
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            q = select(RecipeRow).where(
+                RecipeRow.name == name,
+                RecipeRow.org_slug == org_slug,
+            )
+            row = (await session.execute(q)).scalar()
+            if row is not None:
+                row.version = version
+                row.recipe_hash = recipe_hash
+                row.bundle_path = bundle_path
+                row.bundle_size = bundle_size
+                row.uploaded_by = uploaded_by
+                row.updated_at = now
+            else:
+                row = RecipeRow(
+                    name=name,
+                    version=version,
+                    recipe_hash=recipe_hash,
+                    org_slug=org_slug,
+                    bundle_path=bundle_path,
+                    bundle_size=bundle_size,
+                    uploaded_by=uploaded_by,
+                    created_at=now,
+                    updated_at=now,
+                )
+                session.add(row)
+                await session.flush()
+            return self._row_to_info(row)
+
+    async def get(self, name: str, *, org_slug: str = "") -> RecipeInfo | None:
+        """Get a recipe by name (and org)."""
+        async with get_session() as session:
+            q = select(RecipeRow).where(
+                RecipeRow.name == name,
+                RecipeRow.org_slug == org_slug,
+            )
+            row = (await session.execute(q)).scalar()
+            if row is None:
+                return None
+            return self._row_to_info(row)
+
+    async def get_bundle_path(self, name: str, *, org_slug: str = "") -> str | None:
+        """Return the bundle_path for a recipe, or None."""
+        async with get_session() as session:
+            q = select(RecipeRow.bundle_path).where(
+                RecipeRow.name == name,
+                RecipeRow.org_slug == org_slug,
+            )
+            result = (await session.execute(q)).scalar()
+            return result
+
+    async def list_recipes(
+        self,
+        *,
+        org_slug: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[RecipeInfo], int]:
+        """List recipes with optional org filter."""
+        async with get_session() as session:
+            q = select(RecipeRow)
+            count_q = select(sa_func.count(RecipeRow.id))
+            if org_slug is not None:
+                q = q.where(RecipeRow.org_slug == org_slug)
+                count_q = count_q.where(RecipeRow.org_slug == org_slug)
+            total = (await session.execute(count_q)).scalar() or 0
+            q = q.order_by(RecipeRow.name.asc()).limit(limit).offset(offset)
+            rows = (await session.execute(q)).scalars().all()
+            return [self._row_to_info(r) for r in rows], total
+
+    async def delete(self, name: str, *, org_slug: str = "") -> bool:
+        """Delete a recipe.  Returns True if a row was deleted."""
+        async with get_session() as session:
+            q = select(RecipeRow).where(
+                RecipeRow.name == name,
+                RecipeRow.org_slug == org_slug,
+            )
+            row = (await session.execute(q)).scalar()
+            if row is None:
+                return False
+            await session.delete(row)
+            return True
+
+
+# ── DB Webhook Store ────────────────────────────────────────────
+
+
+_AUTO_DISABLE_THRESHOLD = 5
+
+
+class DbWebhookStore:
+    """DB-backed store for webhook registrations."""
+
+    @staticmethod
+    def _row_to_info(row: WebhookRow) -> WebhookInfo:
+        events_raw = row.events or "[]"
+        try:
+            events = json.loads(events_raw)
+        except (json.JSONDecodeError, TypeError):
+            events = []
+        return WebhookInfo(
+            id=row.id,
+            url=row.url,
+            events=events,
+            org_slug=row.org_slug,
+            active=row.active,
+            registered_by=row.registered_by,
+            created_at=row.created_at,
+            last_delivery_at=row.last_delivery_at,
+            consecutive_failures=row.consecutive_failures,
+        )
+
+    async def register(
+        self,
+        url: str,
+        events: list[str],
+        registered_by: str,
+        *,
+        org_slug: str = "",
+        secret: str | None = None,
+    ) -> WebhookInfo:
+        """Register a new webhook."""
+        if secret is None:
+            secret = secrets.token_urlsafe(32)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            row = WebhookRow(
+                url=url,
+                events=json.dumps(events),
+                org_slug=org_slug,
+                secret=secret,
+                active=True,
+                registered_by=registered_by,
+                created_at=now,
+                consecutive_failures=0,
+            )
+            session.add(row)
+            await session.flush()
+            return self._row_to_info(row)
+
+    async def get(self, webhook_id: int) -> WebhookInfo | None:
+        """Get a webhook by ID."""
+        async with get_session() as session:
+            row = (
+                await session.execute(select(WebhookRow).where(WebhookRow.id == webhook_id))
+            ).scalar()
+            if row is None:
+                return None
+            return self._row_to_info(row)
+
+    async def get_secret(self, webhook_id: int) -> str | None:
+        """Return the secret for a webhook, or None."""
+        async with get_session() as session:
+            result = (
+                await session.execute(select(WebhookRow.secret).where(WebhookRow.id == webhook_id))
+            ).scalar()
+            return result
+
+    async def list_webhooks(
+        self,
+        *,
+        org_slug: str | None = None,
+        active_only: bool = False,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[WebhookInfo], int]:
+        """List webhooks with optional filters."""
+        async with get_session() as session:
+            q = select(WebhookRow)
+            count_q = select(sa_func.count(WebhookRow.id))
+            if org_slug is not None:
+                q = q.where(WebhookRow.org_slug == org_slug)
+                count_q = count_q.where(WebhookRow.org_slug == org_slug)
+            if active_only:
+                q = q.where(WebhookRow.active.is_(True))
+                count_q = count_q.where(WebhookRow.active.is_(True))
+            total = (await session.execute(count_q)).scalar() or 0
+            q = q.order_by(WebhookRow.id.asc()).limit(limit).offset(offset)
+            rows = (await session.execute(q)).scalars().all()
+            return [self._row_to_info(r) for r in rows], total
+
+    async def update(
+        self,
+        webhook_id: int,
+        *,
+        url: str | None = None,
+        events: list[str] | None = None,
+        active: bool | None = None,
+    ) -> WebhookInfo | None:
+        """Update a webhook.  Returns updated info or None if not found."""
+        async with get_session() as session:
+            row = (
+                await session.execute(select(WebhookRow).where(WebhookRow.id == webhook_id))
+            ).scalar()
+            if row is None:
+                return None
+            if url is not None:
+                row.url = url
+            if events is not None:
+                row.events = json.dumps(events)
+            if active is not None:
+                row.active = active
+            await session.flush()
+            return self._row_to_info(row)
+
+    async def delete(self, webhook_id: int) -> bool:
+        """Delete a webhook.  Returns True if a row was deleted."""
+        async with get_session() as session:
+            row = (
+                await session.execute(select(WebhookRow).where(WebhookRow.id == webhook_id))
+            ).scalar()
+            if row is None:
+                return False
+            await session.delete(row)
+            return True
+
+    async def record_delivery(self, webhook_id: int) -> None:
+        """Record a successful delivery — reset consecutive failures."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            await session.execute(
+                update(WebhookRow)
+                .where(WebhookRow.id == webhook_id)
+                .values(
+                    last_delivery_at=now,
+                    consecutive_failures=0,
+                )
+            )
+
+    async def record_failure(self, webhook_id: int) -> bool:
+        """Record a delivery failure.
+
+        Increments ``consecutive_failures``.  If the count reaches
+        ``_AUTO_DISABLE_THRESHOLD`` the webhook is automatically
+        deactivated.
+
+        Returns True if the webhook was auto-disabled.
+        """
+        async with get_session() as session:
+            row = (
+                await session.execute(select(WebhookRow).where(WebhookRow.id == webhook_id))
+            ).scalar()
+            if row is None:
+                return False
+            row.consecutive_failures = row.consecutive_failures + 1
+            disabled = row.consecutive_failures >= _AUTO_DISABLE_THRESHOLD
+            if disabled:
+                row.active = False
+            await session.flush()
+            return disabled
+
+    async def list_active_for_event(
+        self,
+        event: str,
+        *,
+        org_slug: str = "",
+    ) -> list[WebhookInfo]:
+        """Return active webhooks subscribed to *event*."""
+        async with get_session() as session:
+            q = select(WebhookRow).where(
+                WebhookRow.active.is_(True),
+                WebhookRow.org_slug == org_slug,
+            )
+            rows = (await session.execute(q)).scalars().all()
+            result: list[WebhookInfo] = []
+            for r in rows:
+                events_raw = r.events or "[]"
+                try:
+                    ev = json.loads(events_raw)
+                except (json.JSONDecodeError, TypeError):
+                    ev = []
+                if event in ev or "*" in ev:
+                    result.append(self._row_to_info(r))
+            return result

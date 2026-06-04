@@ -3,9 +3,9 @@ recipe:
   name: wasmedge
   upstream_version: "0.17.0"
   cvc_revision: 1
-  maintainer: "CyberPC Angel, LLC"
-  maintainer_email: "cvcpkg@cyberpcangel.com"
-  maintainer_url: "https://cyberpcangel.com"
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
   homepage: https://wasmedge.org/
   license: Apache-2.0
   tags: [wasm, runtime]

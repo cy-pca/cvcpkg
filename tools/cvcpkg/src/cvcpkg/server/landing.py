@@ -21,7 +21,7 @@ _SITE_HERO = os.environ.get(
     "CVCPKG_SITE_HERO",
     "A cross-platform, language-agnostic binary package archive for the"
     " scientific computing community. Pre-built C/C++ libraries for Linux,"
-    " macOS, and Windows &mdash; with curated LTS releases for reproducible"
+    " macOS, and Windows \u2014 with curated LTS releases for reproducible"
     " downstream builds.",
 )
 
@@ -105,6 +105,8 @@ a.pkg-link:hover { text-decoration: underline; }
   color: #3273dc !important;
 }
 .navbar-link::after { border-color: #f5f5f5 !important; }
+.navbar-item.is-active:not(.has-dropdown),
+.navbar-link.is-active { color: #3273dc !important; }
 """
 
 # ── Shared HTML fragments ────────────────────────────────────────
@@ -118,6 +120,7 @@ _NAVBAR_JS = r"""
     burger.addEventListener('click', () => {
       burger.classList.toggle('is-active');
       document.getElementById(burger.dataset.target).classList.toggle('is-active');
+      burger.setAttribute('aria-expanded', burger.classList.contains('is-active'));
     });
   }
   // Dropdown: click-to-toggle for touch devices
@@ -147,6 +150,17 @@ _NAVBAR_JS = r"""
         b.classList.remove('is-active');
         document.getElementById(b.dataset.target).classList.remove('is-active');
       }
+    }
+  });
+  // Active navbar item
+  const path = location.pathname;
+  document.querySelectorAll('#navMenu .navbar-item[href]').forEach(a => {
+    const href = a.getAttribute('href');
+    if (href === path || (href !== '/' && path.startsWith(href))) {
+      a.classList.add('is-active');
+      // If inside a dropdown, also mark the parent
+      const dd = a.closest('.navbar-item.has-dropdown');
+      if (dd) dd.querySelector('.navbar-link').classList.add('is-active');
     }
   });
 })()
@@ -180,6 +194,22 @@ def _navbar_html() -> str:
             </a>
             <a class="navbar-item" href="/docs">
               <span class="icon"><i class="fas fa-code"></i></span><span>API Reference</span>
+            </a>
+          </div>
+        </div>
+        <div class="navbar-item has-dropdown is-hoverable">
+          <a class="navbar-link">
+            <span class="icon"><i class="fas fa-hard-hat"></i></span><span>Build</span>
+          </a>
+          <div class="navbar-dropdown is-right is-boxed">
+            <a class="navbar-item" href="/builders">
+              <span class="icon"><i class="fas fa-server"></i></span><span>Builders</span>
+            </a>
+            <a class="navbar-item" href="/builds">
+              <span class="icon"><i class="fas fa-hammer"></i></span><span>Build Jobs</span>
+            </a>
+            <a class="navbar-item" href="/recipes">
+              <span class="icon"><i class="fas fa-scroll"></i></span><span>Recipes</span>
             </a>
           </div>
         </div>
@@ -234,7 +264,7 @@ function esc(s) {
   if (s == null) return '';
   const div = document.createElement('div');
   div.appendChild(document.createTextNode(String(s)));
-  return div.innerHTML;
+  return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 function platformTag(platform) {
   if (!platform) return '<span class="has-text-grey">&mdash;</span>';
@@ -484,7 +514,7 @@ async function loadTags() {
 
 def landing_html() -> str:
     """Return the complete HTML for the landing page."""
-    page_title = _html.escape(f"{_SITE_TITLE} &mdash; {_SITE_TAGLINE}", quote=False)
+    page_title = _html.escape(f"{_SITE_TITLE} \u2014 {_SITE_TAGLINE}", quote=False)
     hero_title = _html.escape(_SITE_TITLE)
     return f"""<!DOCTYPE html>
 <html lang="en" data-theme="dark" class="has-background-black-bis">
@@ -502,7 +532,7 @@ def landing_html() -> str:
         {hero_title}
       </p>
       <p class="subtitle is-5 has-text-grey-lighter" style="max-width: 740px;">
-        {_SITE_HERO}
+        {_html.escape(_SITE_HERO, quote=False)}
       </p>
     </div>
   </div>
@@ -535,6 +565,29 @@ def landing_html() -> str:
           <p class="title is-3 has-text-warning" id="stat-size">&mdash;</p>
           <p class="heading has-text-grey-light">Total Size</p>
         </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Build system quick links -->
+<section class="section pt-2 pb-4 has-background-black-ter">
+  <div class="container">
+    <div class="columns is-mobile is-multiline is-centered">
+      <div class="column is-narrow">
+        <a href="/builders" class="button is-dark is-outlined">
+          <span class="icon"><i class="fas fa-server"></i></span><span>Builders</span>
+        </a>
+      </div>
+      <div class="column is-narrow">
+        <a href="/builds" class="button is-dark is-outlined">
+          <span class="icon"><i class="fas fa-hammer"></i></span><span>Build Jobs</span>
+        </a>
+      </div>
+      <div class="column is-narrow">
+        <a href="/recipes" class="button is-dark is-outlined">
+          <span class="icon"><i class="fas fa-scroll"></i></span><span>Recipes</span>
+        </a>
       </div>
     </div>
   </div>
@@ -753,28 +806,18 @@ function renderDeps(forward, reverse, meta, recipeNames) {
 
     // Pick best build for first platform available
     const firstBuild = allBuilds[0];
-    const plat = firstBuild.platform;
-    const arch = firstBuild.arch;
-
-    // Group builds by platform
-    const byPlatform = {};
-    allBuilds.forEach(b => {
-      const key = b.platform + '/' + b.arch;
-      if (!byPlatform[key]) byPlatform[key] = [];
-      byPlatform[key].push(b);
-    });
 
     const depNames = [...allDeps].sort();
     let lines = ['mkdir -p /opt/cvcpkg', ''];
     if (depNames.length > 0) {
       lines.push('# Download dependencies first:');
       depNames.forEach(d => {
-        lines.push('# ' + d + ': https://pkg.tx.wtf/package/' + encodeURIComponent(d));
+        lines.push('# ' + d + ': https://cvcpkg.org/package/' + encodeURIComponent(d));
       });
       lines.push('');
     }
     lines.push('# Download and extract ' + pkgName + ':');
-    const url = 'https://pkg.tx.wtf' + firstBuild.archive_url;
+    const url = 'https://cvcpkg.org' + firstBuild.archive_url;
     const fname = firstBuild.archive_url.split('/').pop();
     lines.push('curl -LO ' + url);
     lines.push('tar --zstd -xf ' + fname + ' -C /opt/cvcpkg');
@@ -883,13 +926,10 @@ function renderInfo() {
   }
   if (p.published_by) {
     const pubEl = document.getElementById('pkg-publisher');
-    const link = document.createElement('a');
-    link.href = '/package/' + encodeURIComponent(pkgName) + '#';
-    link.className = 'has-text-link';
-    link.textContent = p.published_by;
-    link.href = '/v1/users/' + encodeURIComponent(p.published_by);
-    link.target = '_blank';
-    pubEl.appendChild(link);
+    const span = document.createElement('span');
+    span.className = 'has-text-white';
+    span.textContent = p.published_by;
+    pubEl.appendChild(span);
     if (p.published_by_email) {
       const emailLink = document.createElement('a');
       emailLink.href = 'mailto:' + p.published_by_email;
@@ -924,6 +964,11 @@ function renderInfo() {
 
 function renderBuilds() {
   let builds = [...allBuilds];
+  if (builds.length === 0) {
+    document.getElementById('builds-body').innerHTML =
+      '<tr><td colspan="8" class="has-text-centered has-text-grey-light py-4">No builds available.</td></tr>';
+    return;
+  }
   builds.sort((a, b) => {
     let va = a[currentSort.key] || '';
     let vb = b[currentSort.key] || '';
@@ -951,7 +996,7 @@ function renderBuilds() {
       <td>${releaseTag(b.release_tag)}</td>
       <td><span class="is-size-7 has-text-grey-light">${fmtDate(b.published_at)}</span></td>
       <td>
-        <a class="button is-small is-link is-outlined" href="${esc(b.archive_url)}" title="Download">
+        <a class="button is-small is-link is-outlined" href="${b.archive_url && b.archive_url.startsWith('/') ? esc(b.archive_url) : '#'}" title="Download">
           <span class="icon is-small"><i class="fas fa-download"></i></span>
         </a>
       </td>
@@ -1089,6 +1134,65 @@ async function loadDownloadStats(name) {
         canvas.title = daily[idx].date + ': ' + daily[idx].count + ' downloads';
       }
     });
+  } catch (_) {}
+}
+
+function fmtDuration(start, end) {
+  if (!start || !end) return '\u2014';
+  const s = (new Date(end) - new Date(start)) / 1000;
+  if (s < 60) return s.toFixed(1) + 's';
+  if (s < 3600) return Math.floor(s/60) + 'm ' + Math.round(s%60) + 's';
+  return Math.floor(s/3600) + 'h ' + Math.round((s%3600)/60) + 'm';
+}
+function statusCls(status) {
+  return {
+    succeeded: 'is-success', failed: 'is-danger', running: 'is-info',
+    pending: 'is-light', dispatched: 'is-warning', cancelled: 'is-dark',
+    timed_out: 'is-danger'
+  }[status] || 'is-light';
+}
+async function loadBuildJobs(name) {
+  const section = document.getElementById('build-jobs-section');
+  if (!section) return;
+  try {
+    const resp = await fetch('/v1/builds?recipe_name=' + encodeURIComponent(name) + '&limit=20',
+      { headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('cvcpkg_token') || '') } });
+    if (resp.status === 401 || resp.status === 403) return;
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const jobs = data.jobs || [];
+    if (jobs.length === 0) return;
+    section.style.display = '';
+    const tbody = document.getElementById('build-jobs-body');
+    tbody.innerHTML = jobs.map(j => {
+      const logLink = (j.status === 'running')
+        ? '<a class="button is-small is-info is-outlined" href="/build/' + j.id + '" title="Live Log">' +
+          '<span class="icon is-small"><i class="fas fa-stream"></i></span></a>'
+        : (j.status === 'succeeded' || j.status === 'failed')
+        ? '<a class="button is-small is-outlined" href="/build/' + j.id + '" title="View Log">' +
+          '<span class="icon is-small"><i class="fas fa-file-alt"></i></span></a>'
+        : '';
+      const dagLink = j.dag_id
+        ? '<a href="/builds?dag_id=' + encodeURIComponent(j.dag_id) + '" class="tag is-dark is-rounded is-small" title="DAG: ' + esc(j.dag_id) + '">' +
+          '<span class="icon is-small"><i class="fas fa-project-diagram"></i></span>&nbsp;' + esc(j.dag_id) + '</a>'
+        : '';
+      const errTip = (j.status === 'failed' && j.error_message)
+        ? ' title="' + esc(j.error_message.substring(0, 200)) + '"'
+        : '';
+      const builderName = j.builder_id ? 'b' + j.builder_id : '\u2014';
+      return '<tr>' +
+        '<td><a href="/build/' + j.id + '"><span class="tag ' + statusCls(j.status) + ' is-rounded"' + errTip + '>' + esc(j.status) + '</span></a></td>' +
+        '<td><span class="is-size-7">' + platformTag(j.platform) + '</span></td>' +
+        '<td><span class="is-size-7">' + esc(j.arch) + '</span></td>' +
+        '<td><span class="is-size-7">' + esc(j.config) + '</span></td>' +
+        '<td><span class="is-size-7">' + esc(j.link) + '</span></td>' +
+        '<td><span class="is-size-7 has-text-grey-light">' + esc(builderName) + '</span></td>' +
+        '<td><span class="is-size-7 has-text-grey-light">' + fmtDuration(j.started_at, j.finished_at) + '</span></td>' +
+        '<td><span class="is-size-7">' + dagLink + '</span></td>' +
+        '<td><span class="is-size-7 has-text-grey-light">' + fmtDate(j.submitted_at) + '</span></td>' +
+        '<td>' + logLink + '</td>' +
+        '</tr>';
+    }).join('');
   } catch (_) {}
 }
 """
@@ -1273,6 +1377,33 @@ tar --zstd -xf &lt;package&gt;.tar.zst -C /opt/cvcpkg</pre>
       <span class="icon mr-1"><i class="fas fa-box"></i></span> Available Builds
     </h2>
 
+    <!-- Build Jobs (shown if authenticated) -->
+    <div class="box has-background-black-ter mb-5" id="build-jobs-section" style="display:none">
+      <h3 class="title is-5 has-text-white">
+        <span class="icon mr-1"><i class="fas fa-hard-hat"></i></span> Recent Build Jobs
+        <a href="/builds" class="is-size-7 has-text-link ml-3">View all &rarr;</a>
+      </h3>
+      <div class="table-container">
+        <table class="table is-fullwidth is-hoverable is-dark is-striped">
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>Platform</th>
+              <th>Arch</th>
+              <th>Config</th>
+              <th>Link</th>
+              <th>Builder</th>
+              <th>Duration</th>
+              <th>DAG</th>
+              <th>Submitted</th>
+              <th>Log</th>
+            </tr>
+          </thead>
+          <tbody id="build-jobs-body"></tbody>
+        </table>
+      </div>
+    </div>
+
     <div class="table-container" id="builds-table">
       <table class="table is-fullwidth is-hoverable is-dark is-striped">
         <thead>
@@ -1314,6 +1445,7 @@ document.addEventListener('DOMContentLoaded', () => {{
   }});
   init({_js_string_literal(name)});
   loadDownloadStats({_js_string_literal(name)});
+  loadBuildJobs({_js_string_literal(name)});
 }});
 </script>
 </body>
@@ -1516,7 +1648,7 @@ function renderOrg(data) {{
   if (o.description) document.getElementById('org-desc').textContent = o.description;
   if (o.logo_url) {{
     document.getElementById('org-logo').innerHTML =
-      '<figure class="image is-64x64"><img src="' + esc(o.logo_url) + '" style="border-radius:8px"></figure>';
+      '<figure class="image is-64x64"><img src="' + esc(o.logo_url) + '" alt="' + esc(o.display_name || o.slug) + '" style="border-radius:8px"></figure>';
   }}
   if (o.homepage) {{
     const el = document.getElementById('org-homepage');
@@ -1562,7 +1694,7 @@ function renderOrg(data) {{
       '</tr></thead><tbody>' +
       Object.entries(groups).sort((a,b) => a[0].localeCompare(b[0])).map(([name, builds]) => {{
         const totalSize = builds.reduce((s, b) => s + (b.size_bytes || 0), 0);
-        return '<tr><td><strong class="has-text-link">' + esc(name) + '</strong></td>' +
+        return '<tr><td><a href="/package/' + encodeURIComponent(name) + '" class="has-text-link"><strong>' + esc(name) + '</strong></a></td>' +
           '<td><code>' + esc(builds[0].version) + '</code></td>' +
           '<td><span class="tag is-dark is-rounded">' + builds.length + '</span></td>' +
           '<td class="is-family-monospace is-size-7 has-text-grey-light">' + fmtSize(totalSize) + '</td></tr>';
@@ -1820,7 +1952,7 @@ async function init() {{
       }}
       if (match.logo_url) {{
         document.getElementById('tag-logo').innerHTML =
-          '<figure class="image is-64x64"><img src="' + esc(match.logo_url) + '" style="border-radius:8px"></figure>';
+          '<figure class="image is-64x64"><img src="' + esc(match.logo_url) + '" alt="' + esc(match.display_name || match.name) + '" style="border-radius:8px"></figure>';
       }}
     }}
   }} catch (_) {{}}
@@ -1898,6 +2030,870 @@ document.addEventListener('DOMContentLoaded', init);
 </html>"""
 
 
+# ── Builders / Builds / Build-detail / Recipes pages ─────────────
+
+_BUILD_HELPERS_JS = r"""
+function fmtDuration(start, end) {
+  if (!start || !end) return '\u2014';
+  const s = (new Date(end) - new Date(start)) / 1000;
+  if (s < 60) return s.toFixed(1) + 's';
+  if (s < 3600) return Math.floor(s/60) + 'm ' + Math.round(s%60) + 's';
+  return Math.floor(s/3600) + 'h ' + Math.round((s%3600)/60) + 'm';
+}
+function fmtRelative(iso) {
+  if (!iso) return 'never';
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (s < 0) return 'just now';
+  if (s < 60) return Math.floor(s) + 's ago';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  if (s < 86400) return Math.floor(s/3600) + 'h ago';
+  return Math.floor(s/86400) + 'd ago';
+}
+function statusCls(status) {
+  return {
+    succeeded: 'is-success', failed: 'is-danger', running: 'is-info',
+    pending: 'is-light', dispatched: 'is-warning', cancelled: 'is-dark',
+    timed_out: 'is-danger'
+  }[status] || 'is-light';
+}
+function authHeaders() {
+  const t = localStorage.getItem('cvcpkg_token') || '';
+  return t ? { 'Authorization': 'Bearer ' + t } : {};
+}
+"""
+
+
+def builders_html() -> str:
+    """Return HTML for the Builders Dashboard page."""
+    return f"""\
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" class="has-background-black-bis">
+{_head_html("Builders &mdash; cvcpkg")}
+<body class="has-background-black-bis has-text-light">
+
+{_navbar_html()}
+
+<section class="section pt-4 pb-2 has-background-black-bis">
+  <div class="container">
+    <nav class="breadcrumb" aria-label="breadcrumbs">
+      <ul>
+        <li><a href="/" class="has-text-grey-light">Home</a></li>
+        <li class="is-active"><a href="#" class="has-text-light">Builders</a></li>
+      </ul>
+    </nav>
+  </div>
+</section>
+
+<section class="section pt-2 has-background-black-bis">
+  <div class="container">
+    <h1 class="title has-text-white">
+      <span class="icon mr-2"><i class="fas fa-server"></i></span> Builders
+    </h1>
+    <p class="subtitle has-text-grey-light" id="builder-summary">Loading&hellip;</p>
+
+    <div class="notification is-dark" id="auth-prompt" style="display:none">
+      <p>Enter your API token to view builders.</p>
+      <div class="field has-addons mt-2">
+        <div class="control is-expanded">
+          <input class="input is-dark" id="token-input" type="password" placeholder="cvctok_&hellip;">
+        </div>
+        <div class="control">
+          <button class="button is-link" onclick="saveToken()">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="builders-grid" class="columns is-multiline"></div>
+  </div>
+</section>
+
+{_footer_html()}
+
+<script>
+{_NAVBAR_JS}
+{_HELPERS_JS}
+{_BUILD_HELPERS_JS}
+
+function saveToken() {{
+  const t = document.getElementById('token-input').value.trim();
+  if (t) {{ localStorage.setItem('cvcpkg_token', t); location.reload(); }}
+}}
+
+async function loadBuilders() {{
+  try {{
+    const resp = await fetch('/v1/builders', {{ headers: authHeaders() }});
+    if (resp.status === 401 || resp.status === 403) {{
+      document.getElementById('auth-prompt').style.display = '';
+      document.getElementById('builder-summary').textContent = 'Authentication required';
+      return;
+    }}
+    if (!resp.ok) {{ document.getElementById('builder-summary').textContent = 'Error loading builders'; return; }}
+    const data = await resp.json();
+    const builders = data.builders || [];
+    document.getElementById('builder-summary').textContent =
+      builders.length + ' builder(s) registered';
+
+    const grid = document.getElementById('builders-grid');
+    if (builders.length === 0) {{
+      grid.innerHTML = '<div class="column"><div class="notification is-dark">No builders registered.</div></div>';
+      return;
+    }}
+
+    grid.innerHTML = builders.map(b => {{
+      const online = b.status === 'online';
+      const statusIcon = online
+        ? '<span class="tag is-success is-rounded"><i class="fas fa-circle mr-1"></i>Online</span>'
+        : '<span class="tag is-danger is-rounded"><i class="fas fa-circle mr-1"></i>' + esc(b.status) + '</span>';
+      const hb = b.last_heartbeat ? fmtRelative(b.last_heartbeat) : 'never';
+      return '<div class="column is-6-tablet is-4-desktop">' +
+        '<div class="box has-background-black-ter">' +
+        '<div class="level mb-2"><div class="level-left"><div class="level-item">' +
+        '<h3 class="title is-5 has-text-white mb-0">' +
+        '<span class="icon mr-1"><i class="fas fa-microchip"></i></span>' + esc(b.name) + '</h3>' +
+        '</div></div><div class="level-right"><div class="level-item">' + statusIcon + '</div></div></div>' +
+        '<div class="content is-small">' +
+        '<p>' + platformTag(b.platform) + ' <span class="has-text-grey-light">' + esc(b.arch) + '</span></p>' +
+        '<p><strong class="has-text-grey-lighter">Jobs:</strong> ' +
+        '<span class="has-text-white">' + b.current_jobs + '</span> / ' + b.max_jobs + '</p>' +
+        '<p><strong class="has-text-grey-lighter">Heartbeat:</strong> ' +
+        '<span class="has-text-grey-light">' + esc(hb) + '</span></p>' +
+        '<p><strong class="has-text-grey-lighter">Registered:</strong> ' +
+        '<span class="has-text-grey-light">' + fmtDate(b.created_at) + '</span></p>' +
+        (b.labels && b.labels.length
+          ? '<p>' + b.labels.map(l => '<span class="tag is-dark is-rounded mr-1">' + esc(l) + '</span>').join('') + '</p>'
+          : '') +
+        '<p class="mt-2"><a href="/builds?builder_id=' + b.id + '" class="button is-small is-dark is-outlined">' +
+        '<span class="icon is-small"><i class="fas fa-list"></i></span><span>View builds</span></a></p>' +
+        '</div></div></div>';
+    }}).join('');
+  }} catch (e) {{
+    document.getElementById('builder-summary').textContent = 'Error: ' + e.message;
+  }}
+}}
+
+async function init() {{
+  await loadBuilders();
+  setInterval(loadBuilders, 30000);
+}}
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>"""
+
+
+def builds_html() -> str:
+    """Return HTML for the Builds Dashboard page."""
+    return f"""\
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" class="has-background-black-bis">
+{_head_html("Build Jobs &mdash; cvcpkg")}
+<body class="has-background-black-bis has-text-light">
+
+{_navbar_html()}
+
+<section class="section pt-4 pb-2 has-background-black-bis">
+  <div class="container">
+    <nav class="breadcrumb" aria-label="breadcrumbs">
+      <ul>
+        <li><a href="/" class="has-text-grey-light">Home</a></li>
+        <li class="is-active"><a href="#" class="has-text-light">Build Jobs</a></li>
+      </ul>
+    </nav>
+  </div>
+</section>
+
+<section class="section pt-2 has-background-black-bis">
+  <div class="container">
+    <h1 class="title has-text-white">
+      <span class="icon mr-2"><i class="fas fa-hammer"></i></span> Build Jobs
+    </h1>
+    <p class="subtitle has-text-grey-light" id="builds-summary">Loading&hellip;</p>
+
+    <div class="notification is-dark" id="auth-prompt" style="display:none">
+      <p>Enter your API token to view build jobs.</p>
+      <div class="field has-addons mt-2">
+        <div class="control is-expanded">
+          <input class="input is-dark" id="token-input" type="password" placeholder="cvctok_&hellip;">
+        </div>
+        <div class="control">
+          <button class="button is-link" onclick="saveToken()">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="columns is-multiline mb-3" id="filters-bar" style="display:none">
+      <div class="column is-narrow">
+        <div class="field"><label class="label has-text-grey-lighter is-small">Status</label>
+        <div class="control"><div class="select is-small is-dark">
+          <select id="filter-status" onchange="loadJobs(true)">
+            <option value="">All</option>
+            <option value="pending">Pending</option>
+            <option value="dispatched">Dispatched</option>
+            <option value="running">Running</option>
+            <option value="succeeded">Succeeded</option>
+            <option value="failed">Failed</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+        </div></div></div>
+      </div>
+      <div class="column is-narrow">
+        <div class="field"><label class="label has-text-grey-lighter is-small">Platform</label>
+        <div class="control"><div class="select is-small is-dark">
+          <select id="filter-platform" onchange="loadJobs(true)">
+            <option value="">All</option>
+            <option value="linux">Linux</option>
+            <option value="darwin">macOS</option>
+            <option value="windows">Windows</option>
+          </select>
+        </div></div></div>
+      </div>
+      <div class="column is-narrow">
+        <div class="field"><label class="label has-text-grey-lighter is-small">Recipe</label>
+        <div class="control">
+          <input class="input is-small is-dark" id="filter-recipe" placeholder="e.g. zlib"
+                 onkeyup="if(event.key==='Enter')loadJobs(true)">
+        </div></div>
+      </div>
+      <div class="column is-narrow">
+        <div class="field"><label class="label has-text-grey-lighter is-small">DAG</label>
+        <div class="control">
+          <input class="input is-small is-dark" id="filter-dag" placeholder="DAG ID"
+                 onkeyup="if(event.key==='Enter')loadJobs(true)">
+        </div></div>
+      </div>
+      <div class="column is-narrow">
+        <div class="field"><label class="label has-text-grey-lighter is-small">Builder</label>
+        <div class="control">
+          <input class="input is-small is-dark" id="filter-builder" placeholder="ID" style="width:5em"
+                 onkeyup="if(event.key==='Enter')loadJobs(true)">
+        </div></div>
+      </div>
+      <div class="column is-narrow pt-5">
+        <button class="button is-small is-link mt-2" onclick="loadJobs(true)">
+          <span class="icon"><i class="fas fa-search"></i></span><span>Filter</span>
+        </button>
+        <button class="button is-small is-dark mt-2 ml-1" onclick="loadJobs()" title="Refresh">
+          <span class="icon"><i class="fas fa-sync-alt"></i></span>
+        </button>
+      </div>
+    </div>
+
+    <!-- DAG progress (shown when filtering by dag_id) -->
+    <div id="dag-section" class="box has-background-black-ter mb-4" style="display:none">
+      <h3 class="title is-6 has-text-white">
+        <span class="icon mr-1"><i class="fas fa-project-diagram"></i></span>
+        DAG: <span id="dag-id-label"></span>
+      </h3>
+      <div id="dag-progress"></div>
+    </div>
+
+    <div class="table-container">
+      <table class="table is-fullwidth is-hoverable is-dark is-striped">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Status</th>
+            <th>Recipe</th>
+            <th>Platform</th>
+            <th>Arch</th>
+            <th>Config</th>
+            <th>Link</th>
+            <th>Builder</th>
+            <th>Duration</th>
+            <th>DAG</th>
+            <th>Submitted</th>
+            <th>Log</th>
+          </tr>
+        </thead>
+        <tbody id="builds-body"></tbody>
+      </table>
+    </div>
+
+    <div class="level" id="pagination" style="display:none">
+      <div class="level-left">
+        <button class="button is-small is-dark" id="btn-prev" onclick="prevPage()">
+          <span class="icon"><i class="fas fa-chevron-left"></i></span><span>Prev</span>
+        </button>
+      </div>
+      <div class="level-item"><span id="page-info" class="has-text-grey-light is-size-7"></span></div>
+      <div class="level-right">
+        <button class="button is-small is-dark" id="btn-next" onclick="nextPage()">
+          <span>Next</span><span class="icon"><i class="fas fa-chevron-right"></i></span>
+        </button>
+      </div>
+    </div>
+  </div>
+</section>
+
+{_footer_html()}
+
+<script>
+{_NAVBAR_JS}
+{_HELPERS_JS}
+{_BUILD_HELPERS_JS}
+
+let currentOffset = 0;
+const PAGE_SIZE = 50;
+let totalJobs = 0;
+let _refreshTimer = null;
+
+function saveToken() {{
+  const t = document.getElementById('token-input').value.trim();
+  if (t) {{ localStorage.setItem('cvcpkg_token', t); location.reload(); }}
+}}
+
+function prevPage() {{ if (currentOffset >= PAGE_SIZE) {{ currentOffset -= PAGE_SIZE; loadJobs(); }} }}
+function nextPage() {{ if (currentOffset + PAGE_SIZE < totalJobs) {{ currentOffset += PAGE_SIZE; loadJobs(); }} }}
+
+async function loadJobs(resetOffset) {{
+  if (resetOffset) currentOffset = 0;
+  const status = document.getElementById('filter-status').value;
+  const platform = document.getElementById('filter-platform').value;
+  const recipe = document.getElementById('filter-recipe').value.trim();
+  const dagId = document.getElementById('filter-dag').value.trim();
+  const builderId = document.getElementById('filter-builder').value.trim();
+
+  // Sync URL query string
+  const qp = new URLSearchParams();
+  if (status) qp.set('status', status);
+  if (platform) qp.set('platform', platform);
+  if (recipe) qp.set('recipe_name', recipe);
+  if (dagId) qp.set('dag_id', dagId);
+  if (builderId) qp.set('builder_id', builderId);
+  const qs = qp.toString();
+  history.replaceState(null, '', qs ? '?' + qs : location.pathname);
+
+  let url = '/v1/builds?limit=' + PAGE_SIZE + '&offset=' + currentOffset;
+  if (status) url += '&status=' + encodeURIComponent(status);
+  if (platform) url += '&platform=' + encodeURIComponent(platform);
+  if (recipe) url += '&recipe_name=' + encodeURIComponent(recipe);
+  if (dagId) url += '&dag_id=' + encodeURIComponent(dagId);
+  if (builderId) url += '&builder_id=' + encodeURIComponent(builderId);
+
+  try {{
+    const resp = await fetch(url, {{ headers: authHeaders() }});
+    if (resp.status === 401 || resp.status === 403) {{
+      document.getElementById('auth-prompt').style.display = '';
+      document.getElementById('builds-summary').textContent = 'Authentication required';
+      return;
+    }}
+    if (!resp.ok) {{ document.getElementById('builds-summary').textContent = 'Error'; return; }}
+    const data = await resp.json();
+    totalJobs = data.total;
+    const jobs = data.jobs || [];
+
+    document.getElementById('builds-summary').textContent =
+      totalJobs + ' job(s)' + (status ? ' (' + status + ')' : '') +
+      (builderId ? ' \u2014 Builder #' + builderId : '');
+    document.getElementById('filters-bar').style.display = '';
+    document.getElementById('pagination').style.display = totalJobs > PAGE_SIZE ? '' : 'none';
+    document.getElementById('page-info').textContent = totalJobs === 0
+      ? 'No results'
+      : 'Showing ' + (currentOffset + 1) + '-' + Math.min(currentOffset + PAGE_SIZE, totalJobs) + ' of ' + totalJobs;
+    document.getElementById('btn-prev').disabled = currentOffset === 0;
+    document.getElementById('btn-next').disabled = currentOffset + PAGE_SIZE >= totalJobs;
+
+    // DAG section
+    const dagSection = document.getElementById('dag-section');
+    if (dagId && jobs.length > 0) {{
+      dagSection.style.display = '';
+      document.getElementById('dag-id-label').textContent = dagId;
+      const counts = {{}};
+      jobs.forEach(j => {{ counts[j.status] = (counts[j.status] || 0) + 1; }});
+      const parts = Object.entries(counts).map(([s, c]) =>
+        '<span class="tag ' + statusCls(s) + ' is-rounded mr-1">' + s + ': ' + c + '</span>'
+      ).join('');
+      const done = jobs.filter(j => j.status === 'succeeded' || j.status === 'failed' || j.status === 'cancelled').length;
+      const pct = totalJobs > 0 ? Math.round(100 * done / totalJobs) : 0;
+      document.getElementById('dag-progress').innerHTML =
+        '<progress class="progress is-info mb-2" value="' + done + '" max="' + totalJobs + '">' + pct + '%</progress>' +
+        '<p class="is-size-7">' + parts + '</p>';
+    }} else {{
+      dagSection.style.display = 'none';
+    }}
+
+    const tbody = document.getElementById('builds-body');
+    if (jobs.length === 0) {{
+      tbody.innerHTML = '<tr><td colspan="12" class="has-text-centered has-text-grey py-4">No build jobs found.</td></tr>';
+    }} else {{
+    tbody.innerHTML = jobs.map(j => {{
+      const logLink = (j.status === 'running')
+        ? '<a class="button is-small is-info is-outlined" href="/build/' + j.id + '" title="Live Log">' +
+          '<span class="icon is-small"><i class="fas fa-stream"></i></span></a>'
+        : (j.status === 'succeeded' || j.status === 'failed')
+        ? '<a class="button is-small is-outlined" href="/build/' + j.id + '" title="View Log">' +
+          '<span class="icon is-small"><i class="fas fa-file-alt"></i></span></a>'
+        : '';
+      const dagLink = j.dag_id
+        ? '<a href="/builds?dag_id=' + encodeURIComponent(j.dag_id) + '" class="tag is-dark is-rounded is-small">' +
+          '<span class="icon is-small"><i class="fas fa-project-diagram"></i></span>&nbsp;' + esc(j.dag_id) + '</a>'
+        : '';
+      const errTip = (j.status === 'failed' && j.error_message)
+        ? ' title="' + esc(j.error_message.substring(0, 200)) + '"'
+        : '';
+      const builderName = j.builder_id ? 'b' + j.builder_id : '\\u2014';
+      return '<tr>' +
+        '<td class="has-text-grey-light">' + j.id + '</td>' +
+        '<td><a href="/build/' + j.id + '"><span class="tag ' + statusCls(j.status) + ' is-rounded"' + errTip + '>' + esc(j.status) + '</span></a></td>' +
+        '<td><a href="/package/' + encodeURIComponent(j.recipe_name) + '" class="has-text-link">' + esc(j.recipe_name) + '</a></td>' +
+        '<td>' + platformTag(j.platform) + '</td>' +
+        '<td class="has-text-grey-light">' + esc(j.arch) + '</td>' +
+        '<td class="has-text-grey-light">' + esc(j.config) + '</td>' +
+        '<td class="has-text-grey-light">' + esc(j.link) + '</td>' +
+        '<td class="has-text-grey-light">' + esc(builderName) + '</td>' +
+        '<td class="has-text-grey-light">' + fmtDuration(j.started_at, j.finished_at) + '</td>' +
+        '<td>' + dagLink + '</td>' +
+        '<td class="has-text-grey-light is-size-7">' + fmtDate(j.submitted_at) + '</td>' +
+        '<td>' + logLink + '</td>' +
+        '</tr>';
+    }}).join('');
+    }} // end else (jobs.length > 0)
+
+    // Auto-refresh when active (running/dispatched/pending) builds exist
+    const hasActive = jobs.some(j => ['running', 'dispatched', 'pending'].includes(j.status));
+    if (hasActive && !_refreshTimer) {{
+      _refreshTimer = setInterval(() => loadJobs(), 15000);
+    }} else if (!hasActive && _refreshTimer) {{
+      clearInterval(_refreshTimer);
+      _refreshTimer = null;
+    }}
+  }} catch (e) {{
+    document.getElementById('builds-summary').textContent = 'Error: ' + e.message;
+  }}
+}}
+
+async function init() {{
+  // Pre-fill dag_id from query string
+  const params = new URLSearchParams(location.search);
+  const dagParam = params.get('dag_id');
+  if (dagParam) document.getElementById('filter-dag').value = dagParam;
+  const statusParam = params.get('status');
+  if (statusParam) document.getElementById('filter-status').value = statusParam;
+  const recipeParam = params.get('recipe_name');
+  if (recipeParam) document.getElementById('filter-recipe').value = recipeParam;
+  const platformParam = params.get('platform');
+  if (platformParam) document.getElementById('filter-platform').value = platformParam;
+  const builderParam = params.get('builder_id');
+  if (builderParam) document.getElementById('filter-builder').value = builderParam;
+  await loadJobs();
+}}
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>"""
+
+
+def build_detail_html(job_id: int) -> str:
+    """Return HTML for a single Build Job detail page with live log streaming."""
+    return f"""\
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" class="has-background-black-bis">
+{_head_html(f"Build #{job_id} &mdash; cvcpkg")}
+<body class="has-background-black-bis has-text-light">
+
+{_navbar_html()}
+
+<section class="section pt-4 pb-2 has-background-black-bis">
+  <div class="container">
+    <nav class="breadcrumb" aria-label="breadcrumbs">
+      <ul>
+        <li><a href="/" class="has-text-grey-light">Home</a></li>
+        <li><a href="/builds" class="has-text-grey-light">Build Jobs</a></li>
+        <li class="is-active"><a href="#" class="has-text-light">#{job_id}</a></li>
+      </ul>
+    </nav>
+  </div>
+</section>
+
+<section class="section pt-2 has-background-black-bis">
+  <div class="container">
+    <div class="level">
+      <div class="level-left">
+        <h1 class="title has-text-white" id="build-title">Build #{job_id}</h1>
+      </div>
+      <div class="level-right">
+        <button id="cancel-btn" class="button is-danger is-outlined mr-3" style="display:none"
+                onclick="cancelBuild()">
+          <span class="icon"><i class="fas fa-times-circle"></i></span><span>Cancel</span>
+        </button>
+        <span id="build-status" class="tag is-light is-medium is-rounded">Loading&hellip;</span>
+      </div>
+    </div>
+
+    <div class="notification is-dark" id="auth-prompt" style="display:none">
+      <p>Enter your API token to view build details.</p>
+      <div class="field has-addons mt-2">
+        <div class="control is-expanded">
+          <input class="input is-dark" id="token-input" type="password" placeholder="cvctok_&hellip;">
+        </div>
+        <div class="control">
+          <button class="button is-link" onclick="saveToken()">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Metadata -->
+    <div class="columns" id="build-meta" style="display:none">
+      <div class="column is-half">
+        <div class="box has-background-black-ter">
+          <div class="table-container">
+          <table class="table is-dark is-fullwidth is-narrow">
+            <tbody>
+              <tr><th class="has-text-grey-lighter" style="width:35%">Recipe</th><td id="meta-recipe"></td></tr>
+              <tr><th class="has-text-grey-lighter">Platform / Arch</th><td id="meta-platform"></td></tr>
+              <tr><th class="has-text-grey-lighter">Config / Link</th><td id="meta-config"></td></tr>
+              <tr><th class="has-text-grey-lighter">Builder</th><td id="meta-builder"></td></tr>
+              <tr><th class="has-text-grey-lighter">DAG</th><td id="meta-dag"></td></tr>
+            </tbody>
+          </table>
+          </div>
+        </div>
+      </div>
+      <div class="column is-half">
+        <div class="box has-background-black-ter">
+          <div class="table-container">
+          <table class="table is-dark is-fullwidth is-narrow">
+            <tbody>
+              <tr><th class="has-text-grey-lighter" style="width:35%">Submitted</th><td id="meta-submitted"></td></tr>
+              <tr><th class="has-text-grey-lighter">Started</th><td id="meta-started"></td></tr>
+              <tr><th class="has-text-grey-lighter">Finished</th><td id="meta-finished"></td></tr>
+              <tr><th class="has-text-grey-lighter">Duration</th><td id="meta-duration"></td></tr>
+              <tr><th class="has-text-grey-lighter">Submitted by</th><td id="meta-submitter"></td></tr>
+            </tbody>
+          </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Error message -->
+    <div id="error-box" class="notification is-danger is-light" style="display:none">
+      <pre id="error-text" style="white-space:pre-wrap;word-break:break-word;color:#333"></pre>
+    </div>
+
+    <!-- Dependencies (if DAG) -->
+    <div id="deps-section" class="box has-background-black-ter mb-4" style="display:none">
+      <h3 class="title is-6 has-text-white">
+        <span class="icon mr-1"><i class="fas fa-project-diagram"></i></span> Dependencies
+      </h3>
+      <div id="deps-list"></div>
+    </div>
+
+    <!-- Log output -->
+    <div class="box has-background-black-ter" id="log-section">
+      <div class="level mb-2">
+        <div class="level-left">
+          <h3 class="title is-6 has-text-white mb-0">
+            <span class="icon mr-1"><i class="fas fa-terminal"></i></span> Build Log
+            <span id="log-live" class="tag is-info is-rounded ml-2" style="display:none">
+              <i class="fas fa-circle mr-1"></i>Live
+            </span>
+          </h3>
+        </div>
+        <div class="level-right">
+          <a id="log-download" class="button is-small is-dark" href="/v1/builds/{job_id}/log"
+             target="_blank" style="display:none">
+            <span class="icon"><i class="fas fa-download"></i></span><span>Download</span>
+          </a>
+        </div>
+      </div>
+      <pre id="log-output" style="background:#1a1a2e;color:#eee;padding:1rem;border-radius:6px;max-height:70vh;overflow-y:auto;font-size:0.85rem;line-height:1.5;white-space:pre-wrap;word-break:break-word"></pre>
+    </div>
+  </div>
+</section>
+
+{_footer_html()}
+
+<script>
+{_NAVBAR_JS}
+{_HELPERS_JS}
+{_BUILD_HELPERS_JS}
+
+const JOB_ID = {job_id};
+
+function saveToken() {{
+  const t = document.getElementById('token-input').value.trim();
+  if (t) {{ localStorage.setItem('cvcpkg_token', t); location.reload(); }}
+}}
+
+async function cancelBuild() {{
+  if (!confirm('Cancel build #' + JOB_ID + '?')) return;
+  const btn = document.getElementById('cancel-btn');
+  btn.disabled = true;
+  btn.classList.add('is-loading');
+  try {{
+    const resp = await fetch('/v1/builds/' + JOB_ID + '/cancel',
+      {{ method: 'POST', headers: authHeaders() }});
+    if (resp.ok) {{
+      await loadMeta();
+    }} else {{
+      alert('Cancel failed: ' + resp.status);
+    }}
+  }} catch (e) {{
+    alert('Cancel failed: ' + e.message);
+  }} finally {{
+    btn.disabled = false;
+    btn.classList.remove('is-loading');
+  }}
+}}
+
+function populateMeta(j) {{
+  document.getElementById('build-meta').style.display = '';
+  document.getElementById('build-status').className = 'tag ' + statusCls(j.status) + ' is-medium is-rounded';
+  document.getElementById('build-status').textContent = j.status;
+  document.getElementById('build-title').innerHTML =
+    'Build #' + j.id + ' &mdash; <a href="/package/' + encodeURIComponent(j.recipe_name) + '" class="has-text-link">' + esc(j.recipe_name) + '</a>';
+  document.getElementById('meta-recipe').innerHTML =
+    '<a href="/package/' + encodeURIComponent(j.recipe_name) + '" class="has-text-link">' + esc(j.recipe_name) + '</a>';
+  document.getElementById('meta-platform').innerHTML = platformTag(j.platform) + ' / ' + esc(j.arch);
+  document.getElementById('meta-config').textContent = j.config + ' / ' + j.link;
+  document.getElementById('meta-builder').textContent = j.builder_id ? 'Builder #' + j.builder_id : '\\u2014';
+  document.getElementById('meta-dag').innerHTML = j.dag_id
+    ? '<a href="/builds?dag_id=' + encodeURIComponent(j.dag_id) + '" class="has-text-link">' + esc(j.dag_id) + '</a>'
+    : '\\u2014';
+  // Show cancel button for cancellable statuses
+  const cancellable = ['pending', 'dispatched', 'running'];
+  document.getElementById('cancel-btn').style.display =
+    cancellable.includes(j.status) ? '' : 'none';
+
+  document.getElementById('meta-submitted').textContent = j.submitted_at ? fmtDate(j.submitted_at) : '\\u2014';
+  document.getElementById('meta-started').textContent = j.started_at ? fmtDate(j.started_at) : '\\u2014';
+  document.getElementById('meta-finished').textContent = j.finished_at ? fmtDate(j.finished_at) : '\\u2014';
+  document.getElementById('meta-duration').textContent = fmtDuration(j.started_at, j.finished_at);
+  document.getElementById('meta-submitter').textContent = j.submitted_by || '\\u2014';
+
+  if (j.error_message) {{
+    document.getElementById('error-box').style.display = '';
+    document.getElementById('error-text').textContent = j.error_message;
+  }}
+
+  if (j.depends_on && j.depends_on.length > 0) {{
+    document.getElementById('deps-section').style.display = '';
+    document.getElementById('deps-list').innerHTML = j.depends_on.map(depId =>
+      '<a href="/build/' + depId + '" class="tag is-dark is-rounded mr-1 mb-1">#' + depId + '</a>'
+    ).join('');
+  }}
+}}
+
+async function loadLog(isLive) {{
+  const output = document.getElementById('log-output');
+  const liveTag = document.getElementById('log-live');
+  const dlBtn = document.getElementById('log-download');
+
+  if (isLive) {{
+    liveTag.style.display = '';
+    try {{
+      const es = new EventSource('/v1/builds/' + JOB_ID + '/log/stream?token=' +
+        encodeURIComponent(localStorage.getItem('cvcpkg_token') || ''));
+      es.onmessage = (e) => {{
+        output.textContent += e.data + '\\n';
+        output.scrollTop = output.scrollHeight;
+      }};
+      es.addEventListener('done', (e) => {{
+        es.close();
+        liveTag.style.display = 'none';
+        dlBtn.style.display = '';
+        // Reload metadata to get final status
+        loadMeta();
+      }});
+      es.onerror = () => {{
+        es.close();
+        liveTag.style.display = 'none';
+        // Fall back to static log
+        loadStaticLog();
+      }};
+    }} catch (_) {{
+      loadStaticLog();
+    }}
+  }} else {{
+    loadStaticLog();
+  }}
+}}
+
+async function loadStaticLog() {{
+  const output = document.getElementById('log-output');
+  const dlBtn = document.getElementById('log-download');
+  try {{
+    const resp = await fetch('/v1/builds/' + JOB_ID + '/log',
+      {{ headers: authHeaders() }});
+    if (resp.ok) {{
+      output.textContent = await resp.text();
+      dlBtn.style.display = '';
+    }} else {{
+      output.textContent = '(no log available)';
+    }}
+  }} catch (_) {{
+    output.textContent = '(failed to load log)';
+  }}
+}}
+
+async function loadMeta() {{
+  try {{
+    const resp = await fetch('/v1/builds/' + JOB_ID, {{ headers: authHeaders() }});
+    if (!resp.ok) return null;
+    const j = await resp.json();
+    populateMeta(j);
+    return j;
+  }} catch (_) {{ return null; }}
+}}
+
+async function init() {{
+  const resp = await fetch('/v1/builds/' + JOB_ID, {{ headers: authHeaders() }});
+  if (resp.status === 401 || resp.status === 403) {{
+    document.getElementById('auth-prompt').style.display = '';
+    document.getElementById('build-status').textContent = 'Auth required';
+    return;
+  }}
+  if (!resp.ok) {{
+    document.getElementById('build-status').textContent = 'Not found';
+    return;
+  }}
+  const job = await resp.json();
+  populateMeta(job);
+
+  const isLive = job.status === 'running' || job.status === 'dispatched';
+  await loadLog(isLive);
+}}
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>"""
+
+
+def recipes_html() -> str:
+    """Return HTML for the Recipes management page."""
+    return f"""\
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" class="has-background-black-bis">
+{_head_html("Recipes &mdash; cvcpkg")}
+<body class="has-background-black-bis has-text-light">
+
+{_navbar_html()}
+
+<section class="section pt-4 pb-2 has-background-black-bis">
+  <div class="container">
+    <nav class="breadcrumb" aria-label="breadcrumbs">
+      <ul>
+        <li><a href="/" class="has-text-grey-light">Home</a></li>
+        <li class="is-active"><a href="#" class="has-text-light">Recipes</a></li>
+      </ul>
+    </nav>
+  </div>
+</section>
+
+<section class="section pt-2 has-background-black-bis">
+  <div class="container">
+    <h1 class="title has-text-white">
+      <span class="icon mr-2"><i class="fas fa-scroll"></i></span> Server Recipes
+    </h1>
+    <p class="subtitle has-text-grey-light" id="recipe-summary">Loading&hellip;</p>
+
+    <div class="notification is-dark" id="auth-prompt" style="display:none">
+      <p>Enter your API token to view recipes.</p>
+      <div class="field has-addons mt-2">
+        <div class="control is-expanded">
+          <input class="input is-dark" id="token-input" type="password" placeholder="cvctok_&hellip;">
+        </div>
+        <div class="control">
+          <button class="button is-link" onclick="saveToken()">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="field mb-4" id="search-box" style="display:none">
+      <div class="control has-icons-left">
+        <input class="input is-dark" id="recipe-search" type="text" placeholder="Search recipes&hellip;"
+               oninput="filterRecipes()">
+        <span class="icon is-left"><i class="fas fa-search"></i></span>
+      </div>
+    </div>
+
+    <div class="table-container">
+      <table class="table is-fullwidth is-hoverable is-dark is-striped">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Version</th>
+            <th>Hash</th>
+            <th>Size</th>
+            <th>Uploaded By</th>
+            <th>Updated</th>
+          </tr>
+        </thead>
+        <tbody id="recipes-body"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+{_footer_html()}
+
+<script>
+{_NAVBAR_JS}
+{_HELPERS_JS}
+{_BUILD_HELPERS_JS}
+
+let allRecipes = [];
+
+function saveToken() {{
+  const t = document.getElementById('token-input').value.trim();
+  if (t) {{ localStorage.setItem('cvcpkg_token', t); location.reload(); }}
+}}
+
+function filterRecipes() {{
+  const q = document.getElementById('recipe-search').value.toLowerCase();
+  const filtered = allRecipes.filter(r => r.name.toLowerCase().includes(q));
+  renderRecipes(filtered);
+}}
+
+function renderRecipes(recipes) {{
+  const tbody = document.getElementById('recipes-body');
+  if (recipes.length === 0) {{
+    tbody.innerHTML = '<tr><td colspan="6" class="has-text-centered has-text-grey">No recipes found</td></tr>';
+    return;
+  }}
+  tbody.innerHTML = recipes.map(r => {{
+    const hash = (r.recipe_hash || '').substring(0, 12);
+    return '<tr>' +
+      '<td><span class="icon is-small mr-1 has-text-info"><i class="fas fa-scroll"></i></span>' +
+      '<a href="/package/' + encodeURIComponent(r.name) + '" class="has-text-link">' + esc(r.name) + '</a></td>' +
+      '<td class="has-text-grey-light">' + esc(r.version || '\\u2014') + '</td>' +
+      '<td><code class="has-text-grey">' + esc(hash || '\\u2014') + '</code></td>' +
+      '<td class="has-text-grey-light">' + fmtSize(r.bundle_size || 0) + '</td>' +
+      '<td class="has-text-grey-light">' + esc(r.uploaded_by || '\\u2014') + '</td>' +
+      '<td class="has-text-grey-light is-size-7">' + fmtDate(r.updated_at || r.created_at) + '</td>' +
+      '</tr>';
+  }}).join('');
+}}
+
+async function init() {{
+  try {{
+    const resp = await fetch('/v1/recipes', {{ headers: authHeaders() }});
+    if (resp.status === 401 || resp.status === 403) {{
+      document.getElementById('auth-prompt').style.display = '';
+      document.getElementById('recipe-summary').textContent = 'Authentication required';
+      return;
+    }}
+    if (!resp.ok) {{
+      document.getElementById('recipe-summary').textContent = 'Error loading recipes';
+      return;
+    }}
+    const data = await resp.json();
+    allRecipes = data.recipes || [];
+    document.getElementById('recipe-summary').textContent = allRecipes.length + ' recipe(s) on server';
+    document.getElementById('search-box').style.display = '';
+    renderRecipes(allRecipes);
+  }} catch (e) {{
+    document.getElementById('recipe-summary').textContent = 'Error: ' + e.message;
+  }}
+}}
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>"""
+
+
 def guide_html() -> str:
     """Return the complete HTML for the Getting Started guide page."""
     repo = _html.escape(_GITHUB_REPO)
@@ -1936,6 +2932,7 @@ def guide_html() -> str:
         <li><a href="#publishing">Publishing Builds</a></li>
         <li><a href="#orgs">Organizations</a></li>
         <li><a href="#server">Self-Hosting</a></li>
+        <li><a href="#remote-builders">Remote Builders</a></li>
         <li><a href="#server-config">Server Configuration</a></li>
         <li><a href="#api">REST API</a></li>
       </ol>
@@ -2172,7 +3169,7 @@ package:
     - lib/libmylib*
     - include/mylib/**
   cmake_packages:
-    - {{{{ name: mylib, targets: [mylib::mylib] }}}}
+    - {{ name: mylib, targets: [mylib::mylib] }}
 
 test:
   script: test.sh</code></pre></div>
@@ -2237,7 +3234,7 @@ ls dist/mylib-*.tar.gz</code></pre></div>
           Publish an archive to a cvcpkg server:
         </p>
         <div class="guide-code"><pre><code>cvcpkg publish dist/mylib-2.1.0-linux-x86_64-release-shared.tar.gz \\
-  --server https://pkg.tx.wtf \\
+  --server https://cvcpkg.org \\
   --token cvctok_...</code></pre></div>
       </div>
       <div class="guide-step">
@@ -2245,7 +3242,7 @@ ls dist/mylib-*.tar.gz</code></pre></div>
           Publish to an organization namespace:
         </p>
         <div class="guide-code"><pre><code>cvcpkg publish dist/mylib-*.tar.gz \\
-  --server https://pkg.tx.wtf \\
+  --server https://cvcpkg.org \\
   --token cvctok_... \\
   --org my-team</code></pre></div>
       </div>
@@ -2254,7 +3251,7 @@ ls dist/mylib-*.tar.gz</code></pre></div>
           Tag a release (optional; untagged builds are "live"):
         </p>
         <div class="guide-code"><pre><code>cvcpkg publish dist/mylib-*.tar.gz \\
-  --server https://pkg.tx.wtf \\
+  --server https://cvcpkg.org \\
   --token cvctok_... \\
   --release-tag v2.1.0</code></pre></div>
       </div>
@@ -2289,29 +3286,29 @@ ls dist/mylib-*.tar.gz</code></pre></div>
         <p class="has-text-grey-lighter mb-2">
           Create an organization:
         </p>
-        <div class="guide-code"><pre><code>curl -X POST https://pkg.tx.wtf/v1/orgs \\
+        <div class="guide-code"><pre><code>curl -X POST https://cvcpkg.org/v1/orgs \\
   -H "Authorization: Bearer cvctok_..." \\
   -H "Content-Type: application/json" \\
-  -d '{{{{"slug": "my-team", "display_name": "My Team"}}}}'</code></pre></div>
+  -d '{{"slug": "my-team", "display_name": "My Team"}}'</code></pre></div>
       </div>
       <div class="guide-step">
         <p class="has-text-grey-lighter mb-2">
           Add members (requires org owner or admin token):
         </p>
-        <div class="guide-code"><pre><code>curl -X POST https://pkg.tx.wtf/v1/orgs/my-team/members \\
+        <div class="guide-code"><pre><code>curl -X POST https://cvcpkg.org/v1/orgs/my-team/members \\
   -H "Authorization: Bearer cvctok_..." \\
   -H "Content-Type: application/json" \\
-  -d '{{{{"token_name": "alice-token", "role": "member"}}}}'</code></pre></div>
+  -d '{{"token_name": "alice-token", "role": "member"}}'</code></pre></div>
       </div>
       <div class="guide-step">
         <p class="has-text-grey-lighter mb-2">
           Update the storage limit (admin only):
         </p>
         <div class="guide-code"><pre><code># Set to 50 GiB
-curl -X PATCH https://pkg.tx.wtf/v1/orgs/my-team \\
+curl -X PATCH https://cvcpkg.org/v1/orgs/my-team \\
   -H "Authorization: Bearer cvctok_..." \\
   -H "Content-Type: application/json" \\
-  -d '{{{{"storage_limit_bytes": 53687091200}}}}'</code></pre></div>
+  -d '{{"storage_limit_bytes": 53687091200}}'</code></pre></div>
       </div>
       <div class="box has-background-black-ter mt-4">
         <p class="has-text-grey-lighter">
@@ -2362,6 +3359,86 @@ cvcpkg-server token create --name ci-bot --role publisher
 cvcpkg publish my-lib-1.0-linux-x86_64-release-shared.tar.zst \\
   --server http://localhost:8420 \\
   --token cvctok_...</code></pre></div>
+      </div>
+    </div>
+
+    <!-- Remote Builders -->
+    <div id="remote-builders" class="guide-section" style="counter-reset: guide-step;">
+      <h2 class="title is-4 has-text-white">
+        <span class="icon mr-1"><i class="fas fa-hard-hat"></i></span>
+        Remote Builders
+      </h2>
+      <p class="has-text-grey-lighter mb-4">
+        Remote builders are worker machines that automatically build
+        packages from recipes. The server dispatches build jobs to
+        registered builders via WebSocket. Results (archives and logs)
+        are streamed back and published to the package index.
+      </p>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          <strong class="has-text-white">Push recipes to the server</strong>
+          &mdash; recipes define how to build a package:
+        </p>
+        <div class="guide-code"><pre><code>\
+cvcpkg recipe push zlib \\
+  --server https://cvcpkg.org --token cvctok_...
+
+# Or push all local recipes at once
+cvcpkg recipe push-all --server https://cvcpkg.org --token cvctok_...</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          <strong class="has-text-white">Register a builder</strong>
+          &mdash; create a builder token and start the worker:
+        </p>
+        <div class="guide-code"><pre><code>\
+# Create a builder token (on the server)
+cvcpkg-server token create --name builder-01 --role builder
+
+# Start the builder worker
+cvcpkg builder run \\
+  --server https://cvcpkg.org \\
+  --token cvctok_... \\
+  --max-jobs 2</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          <strong class="has-text-white">Submit build jobs</strong>
+          &mdash; build a single recipe or a full dependency graph:
+        </p>
+        <div class="guide-code"><pre><code>\
+# Single build
+cvcpkg builds submit zlib --platform linux --arch x86_64 \\
+  --server https://cvcpkg.org --token cvctok_...
+
+# DAG build (resolves dependencies automatically)
+cvcpkg builds submit-dag tiff --platform linux --arch x86_64 \\
+  --server https://cvcpkg.org --token cvctok_...</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          <strong class="has-text-white">Monitor builds</strong>
+          &mdash; use the web UI or CLI to track progress:
+        </p>
+        <div class="guide-code"><pre><code>\
+# List recent builds
+cvcpkg builds list --server https://cvcpkg.org --token cvctok_...
+
+# Or visit the web dashboard:
+#   /builders  &mdash; registered builders and status
+#   /builds    &mdash; all build jobs with filters
+#   /build/42  &mdash; single build with live log</code></pre></div>
+      </div>
+      <div class="box has-background-black-ter mt-4">
+        <p class="has-text-grey-lighter">
+          <span class="icon"><i class="fas fa-info-circle has-text-link"></i></span>
+          <strong class="has-text-white">DAG builds</strong> automatically
+          resolve recipe dependencies and submit them in the correct order.
+          Leaf dependencies build first; the target recipe builds only after
+          all its dependencies succeed. Use the
+          <a href="/builds" class="has-text-link">Build Jobs</a> dashboard
+          to view DAG progress.
+        </p>
       </div>
     </div>
 
