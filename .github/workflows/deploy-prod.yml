@@ -137,13 +137,13 @@ jobs:
           echo "Restarting backend..."
           $COMPOSE up -d --force-recreate backend
 
-          # Health check
+          # Health check (use docker exec so it works regardless of bind address)
           echo "Waiting for health (timeout 120s)..."
           deadline=$(( $(date +%s) + 120 ))
           while (( $(date +%s) < deadline )); do
-            if curl -fsS --max-time 3 http://127.0.0.1:8420/healthz 2>/dev/null | grep -q '"ok"'; then
+            if $COMPOSE exec -T backend curl -fsS --max-time 3 http://localhost:8420/healthz 2>/dev/null | grep -q '"ok"'; then
               echo "cvcpkg.org backend healthy!"
-              curl -s http://127.0.0.1:8420/healthz | python3 -c "
+              $COMPOSE exec -T backend curl -s http://localhost:8420/healthz | python3 -c "
           import json, sys
           d = json.load(sys.stdin)
           print(f'cvcpkg.org deployed: v{d[\"version\"]}, {d[\"packages_count\"]} packages')
@@ -234,9 +234,9 @@ jobs:
           echo "Waiting for health (timeout 120s)..."
           deadline=$(( $(date +%s) + 120 ))
           while (( $(date +%s) < deadline )); do
-            if curl -fsS --max-time 3 http://127.0.0.1:8420/healthz 2>/dev/null | grep -q '"ok"'; then
+            if $COMPOSE exec -T backend curl -fsS --max-time 3 http://localhost:8420/healthz 2>/dev/null | grep -q '"ok"'; then
               echo "pkg.tx.wtf backend healthy!"
-              curl -s http://127.0.0.1:8420/healthz | python3 -c "
+              $COMPOSE exec -T backend curl -s http://localhost:8420/healthz | python3 -c "
           import json, sys
           d = json.load(sys.stdin)
           print(f'pkg.tx.wtf deployed: v{d[\"version\"]}, {d[\"packages_count\"]} packages')

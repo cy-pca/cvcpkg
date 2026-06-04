@@ -72,7 +72,7 @@ services:
             CVCPKG_LOG_JSON: ${CVCPKG_LOG_JSON:-}
             TZ: ${TIMEZONE:-UTC}
         ports:
-            - "127.0.0.1:${BACKEND_PORT:-8420}:8420"
+            - "${BACKEND_BIND_ADDR:-127.0.0.1}:${BACKEND_PORT:-8420}:8420"
         volumes:
             - cvcpkg-prod-data:/app/data
             - cvcpkg-prod-logs:/app/logs
