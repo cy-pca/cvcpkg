@@ -1,0 +1,110 @@
+name: Populate cvcpkg.org
+
+# Pushes all recipes to the server, then submits remote build DAGs
+# for the selected platforms.  Builders pick up jobs automatically.
+#
+# Required repo secrets:
+#   CVCPKG_PUBLISHER_TOKEN  — a publisher-role token for cvcpkg.org
+
+on:
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: "Comma-separated platforms to build (linux,freebsd,netbsd,openbsd,win)"
+        required: true
+        default: "linux,freebsd,netbsd,openbsd,win"
+        type: string
+      arch:
+        description: "Target architecture"
+        required: true
+        default: "x86_64"
+        type: string
+      config:
+        description: "Build config (release, debug, or all)"
+        required: true
+        default: "release"
+        type: choice
+        options:
+          - release
+          - debug
+          - all
+      link:
+        description: "Link mode (shared, static, or all)"
+        required: true
+        default: "shared"
+        type: choice
+        options:
+          - shared
+          - static
+          - all
+      server:
+        description: "cvcpkg server URL"
+        required: true
+        default: "https://cvcpkg.org"
+        type: string
+      skip_push:
+        description: "Skip recipe push (recipes already on server)"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: populate-server
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  populate:
+    name: Push recipes & submit builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install cvcpkg
+        working-directory: tools/cvcpkg
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+
+      - name: Push all recipes
+        if: ${{ !inputs.skip_push }}
+        env:
+          CVCPKG_SERVER_URL: ${{ inputs.server }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISHER_TOKEN }}
+        run: |
+          cvcpkg recipe push-all --recipes-dir recipes
+
+      - name: Submit build DAGs
+        env:
+          CVCPKG_SERVER_URL: ${{ inputs.server }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISHER_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Collect recipe names (skip _common and dirs without recipe.yaml)
+          RECIPES=()
+          for dir in recipes/*/; do
+            name="$(basename "$dir")"
+            [[ "$name" == _* || "$name" == .* ]] && continue
+            [[ -f "$dir/recipe.yaml" ]] || continue
+            RECIPES+=("$name")
+          done
+
+          echo "Submitting ${#RECIPES[@]} recipes for platforms: ${{ inputs.platforms }}"
+          echo "Config: ${{ inputs.config }}, Link: ${{ inputs.link }}, Arch: ${{ inputs.arch }}"
+
+          cvcpkg builds submit-dag \
+            --platform "${{ inputs.platforms }}" \
+            --arch "${{ inputs.arch }}" \
+            --config "${{ inputs.config }}" \
+            --link "${{ inputs.link }}" \
+            --dag-id "populate-$(date +%Y%m%d-%H%M%S)" \
+            "${RECIPES[@]}"
