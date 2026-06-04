@@ -3,9 +3,9 @@ recipe:
   name: nfft3
   upstream_version: "3.5.3"
   cvc_revision: 1
-  maintainer: "CyberPC Angel, LLC"
-  maintainer_email: "cvcpkg@cyberpcangel.com"
-  maintainer_url: "https://cyberpcangel.com"
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
   description: "NFFT — a library for nonequispaced fast Fourier transforms in various dimensions."
   homepage: https://www-user.tu-chemnitz.de/~potts/nfft/
   license: GPL-2.0-or-later

@@ -3,9 +3,9 @@ recipe:
   name: fftw3
   upstream_version: "3.3.10"
   cvc_revision: 1
-  maintainer: "CyberPC Angel, LLC"
-  maintainer_email: "cvcpkg@cyberpcangel.com"
-  maintainer_url: "https://cyberpcangel.com"
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
   description: "FFTW — a library for computing discrete Fourier transforms with high performance."
   homepage: https://fftw.org/
   license: GPL-2.0-or-later

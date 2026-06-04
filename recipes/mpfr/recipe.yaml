@@ -3,9 +3,9 @@ recipe:
   name: mpfr
   upstream_version: "4.2.1"
   cvc_revision: 1
-  maintainer: "CyberPC Angel, LLC"
-  maintainer_email: "cvcpkg@cyberpcangel.com"
-  maintainer_url: "https://cyberpcangel.com"
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
   description: "MPFR — the GNU Multiple Precision Floating-Point Reliable library for correct rounding of arbitrary-precision floating-point computations."
   homepage: https://www.mpfr.org/
   license: LGPL-3.0-or-later
