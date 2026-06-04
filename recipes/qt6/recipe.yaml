@@ -3,9 +3,9 @@ recipe:
   name: qt6
   upstream_version: "6.8.2"
   cvc_revision: 1
-  maintainer: "CyberPC Angel, LLC"
-  maintainer_email: "cvcpkg@cyberpcangel.com"
-  maintainer_url: "https://cyberpcangel.com"
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
   description: "Qt 6 — a cross-platform application framework for GUI development and beyond."
   homepage: https://www.qt.io/
   license: LGPL-3.0-only
