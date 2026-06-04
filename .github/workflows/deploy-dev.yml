@@ -1,0 +1,185 @@
+name: deploy-dev
+
+# Deploys cvcpkg to the dev/test environment on the star incus cluster:
+#   - cvcpkg-server     (incus VM — test cvcpkg-server)
+#   - cvcpkg-builder-01 (incus VM — test builder)
+#   - cvcpkg-builder-02 (incus VM — test builder)
+#
+# The self-hosted runner on star-00/star-01 picks up the job.
+# These machines host the incus cluster directly so they use
+# `incus exec` to update the VMs.
+#
+# Required repo secrets:
+#   (none — the runners are on the incus cluster hosts)
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit SHA to deploy (defaults to dev HEAD)"
+        required: false
+        type: string
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to dev (star incus cluster)
+    runs-on: [self-hosted, Linux, cvcpkg-builder]
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Resolve target SHA
+        id: target
+        run: |
+          if [[ -n "${{ inputs.sha }}" ]]; then
+            sha="${{ inputs.sha }}"
+          else
+            sha="${{ github.sha }}"
+          fi
+          if ! [[ "$sha" =~ ^[0-9a-f]{7,40}$ ]]; then
+            echo "::error::invalid sha: $sha"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Deploying sha: $sha"
+
+      # ── Deploy to cvcpkg-server VM ──────────────────────────
+      - name: Update cvcpkg-server VM
+        run: |
+          set -euo pipefail
+          SHA="${{ steps.target.outputs.sha }}"
+          SHORT_SHA="${SHA:0:7}"
+          RELEASE_TAG="dev-${SHORT_SHA}"
+          DEPLOY_DIR="/opt/libcvc-deps"
+          CVCPKG_DIR="${DEPLOY_DIR}/tools/cvcpkg"
+
+          echo "=== Deploying to cvcpkg-server VM (dev) ==="
+
+          # Use incus exec for the actual deploy
+          incus exec cvcpkg-server -- bash -c "
+            set -euo pipefail
+            cd ${DEPLOY_DIR}
+            git fetch origin
+            git checkout -f ${SHA}
+
+            cd ${CVCPKG_DIR}
+            export CVCPKG_RELEASE='${RELEASE_TAG}'
+
+            # Install CLI update
+            pip install --break-system-packages --quiet . 2>/dev/null || true
+
+            # Check for env file
+            if [[ ! -f .env.production ]]; then
+              echo '::error::.env.production not found'
+              exit 1
+            fi
+
+            DC='docker compose'
+            COMPOSE=\"\$DC -f docker-compose.production.yml --env-file .env.production\"
+
+            # Build and deploy
+            echo 'Building cvcpkg-server:${RELEASE_TAG}...'
+            \$COMPOSE build --build-arg 'CVCPKG_RELEASE=${RELEASE_TAG}' backend
+
+            echo 'Ensuring postgres is up...'
+            \$COMPOSE up -d postgres
+            for i in \$(seq 1 30); do
+              if \$COMPOSE exec -T postgres pg_isready -U cvcpkg >/dev/null 2>&1; then
+                break
+              fi
+              sleep 1
+            done
+
+            # Migrations
+            echo 'Running database migrations...'
+            if ! \$COMPOSE exec -T postgres psql -U cvcpkg -tAc \\
+                 \"SELECT 1 FROM information_schema.tables WHERE table_name='alembic_version'\" \\
+                 2>/dev/null | grep -q 1; then
+              echo 'Stamping database at revision 002...'
+              \$COMPOSE run --rm -T backend cvcpkg-server migrate stamp 002
+            fi
+            \$COMPOSE run --rm -T backend cvcpkg-server migrate upgrade head
+            echo 'Migrations complete.'
+
+            echo 'Restarting backend...'
+            \$COMPOSE up -d --force-recreate backend
+
+            # Health check
+            echo 'Waiting for health...'
+            deadline=\$(( \$(date +%s) + 60 ))
+            while (( \$(date +%s) < deadline )); do
+              if \$COMPOSE exec -T backend curl -fsS --max-time 3 http://localhost:8420/healthz 2>/dev/null | grep -q '\"ok\"'; then
+                echo 'Dev server healthy!'
+                \$COMPOSE exec -T backend curl -s http://localhost:8420/healthz
+                exit 0
+              fi
+              sleep 2
+            done
+
+            echo '::error::Dev server failed health check'
+            \$COMPOSE logs --tail=40 backend || true
+            exit 1
+          "
+
+      # ── Update builder VMs ─────────────────────────────────
+      - name: Update builder VMs
+        run: |
+          set -euo pipefail
+          SHA="${{ steps.target.outputs.sha }}"
+          DEPLOY_DIR="/opt/libcvc-deps"
+          CVCPKG_DIR="${DEPLOY_DIR}/tools/cvcpkg"
+
+          for VM in cvcpkg-builder-01 cvcpkg-builder-02; do
+            echo "=== Updating $VM ==="
+            incus exec "$VM" -- bash -c "
+              set -euo pipefail
+              cd ${DEPLOY_DIR}
+              git fetch origin
+              git checkout -f ${SHA}
+              cd ${CVCPKG_DIR}
+              pip install --break-system-packages --quiet . 2>/dev/null || true
+              echo \"$VM: \$(cvcpkg --version)\"
+            "
+          done
+          echo "All dev builder VMs updated."
+
+      # ── Restart builder agents on dev VMs ───────────────────
+      - name: Restart builder agents
+        run: |
+          set -euo pipefail
+
+          for VM in cvcpkg-builder-01 cvcpkg-builder-02; do
+            echo "=== Restarting builder on $VM ==="
+            incus exec "$VM" -- bash -c "
+              # Kill existing builder process if running
+              pkill -f 'cvcpkg builder run' 2>/dev/null || true
+              sleep 1
+
+              # Check for builder config
+              if [[ -f /etc/cvcpkg-builder.env ]]; then
+                source /etc/cvcpkg-builder.env
+                nohup cvcpkg builder run \\
+                  --server \"\${CVCPKG_SERVER:-http://cvcpkg-server:8420}\" \\
+                  --token \"\${CVCPKG_TOKEN}\" \\
+                  --name \"\${BUILDER_NAME:-$VM}\" \\
+                  --max-jobs \"\${MAX_JOBS:-2}\" \\
+                  --work-dir /tmp/cvcpkg-builder \\
+                  --daemon \\
+                  --pidfile /var/run/cvcpkg-builder.pid \\
+                  2>&1 | tail -1
+                echo 'Builder restarted.'
+              else
+                echo 'No /etc/cvcpkg-builder.env found, skipping builder restart.'
+              fi
+            " || echo "Warning: failed to restart builder on $VM"
+          done
