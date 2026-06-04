@@ -62,6 +62,7 @@ jobs:
           REMOTE="tfx@10.10.10.134"
           DEPLOY_DIR="/home/tfx/libcvc-deps"
           CVCPKG_DIR="${DEPLOY_DIR}/tools/cvcpkg"
+          SSH="ssh -o StrictHostKeyChecking=accept-new"
 
           echo "=== Deploying to cvcpkg.org (cvcpkg-00) ==="
 
@@ -70,12 +71,13 @@ jobs:
           rsync -a --delete \
             --exclude '.env.production' \
             --exclude 'backups/' \
-            -e "ssh -o StrictHostKeyChecking=accept-new" \
+            -e "$SSH" \
             "${GITHUB_WORKSPACE}/" "${REMOTE}:${DEPLOY_DIR}/"
 
-          # Run deploy script on remote host
-          ssh -o StrictHostKeyChecking=accept-new "$REMOTE" bash -s -- \
-            "$RELEASE_TAG" "$SHORT_SHA" "$DEPLOY_DIR" "$CVCPKG_DIR" << 'DEPLOY_SCRIPT'
+          # Write deploy script to remote host (avoids bash -s stdin
+          # issues where docker compose commands steal heredoc lines)
+          $SSH "$REMOTE" "cat > /tmp/cvcpkg-deploy.sh" << 'DEPLOY_SCRIPT'
+          #!/bin/bash
           set -euo pipefail
           RELEASE_TAG="$1"; SHORT_SHA="$2"; DEPLOY_DIR="$3"; CVCPKG_DIR="$4"
           cd "$CVCPKG_DIR"
@@ -157,6 +159,10 @@ jobs:
           $COMPOSE logs --tail=80 backend || true
           exit 1
           DEPLOY_SCRIPT
+
+          # Execute the deploy script on the remote host
+          $SSH "$REMOTE" "bash /tmp/cvcpkg-deploy.sh \
+            '${RELEASE_TAG}' '${SHORT_SHA}' '${DEPLOY_DIR}' '${CVCPKG_DIR}'"
 
       # ── Deploy to pkg.tx.wtf (catx-03, local) ────────────────
       - name: Deploy to pkg.tx.wtf
