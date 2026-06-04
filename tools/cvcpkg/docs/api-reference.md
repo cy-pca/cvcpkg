@@ -1,6 +1,6 @@
 # cvcpkg-server API Reference
 
-Base URL: `https://pkg.tx.wtf` (or your deployment)
+Base URL: `https://cvcpkg.org` (or your deployment)
 
 Interactive docs: `GET /docs` (Swagger UI) or `GET /redoc` (ReDoc)
 

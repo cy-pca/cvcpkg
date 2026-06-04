@@ -146,7 +146,7 @@ New CLI subcommand:
 ```
 cvcpkg cascade-rebuild <component> \
     --platform linux --arch x86_64 --config release --link shared \
-    --server https://pkg.tx.wtf --token $TOK \
+    --server https://cvcpkg.org --token $TOK \
     [--dry-run] [--keep-going]
 ```
 
