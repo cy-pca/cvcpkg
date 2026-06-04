@@ -209,7 +209,7 @@ class TestGenerateCatalog:
         assert cat["bundles"][0]["source_release"] == "v1.0.0"
         assert (
             cat["bundles"][0]["archive_url"]
-            == "https://pkg.tx.wtf/v1/download/zlib-1.3.1-linux-x86_64-release.tar.gz"
+            == "https://cvcpkg.org/v1/download/zlib-1.3.1-linux-x86_64-release.tar.gz"
         )
 
     def test_output_files_created(self, tmp_path):

@@ -90,7 +90,7 @@ standards are promoted into the release manifest.
 
 ```
 ┌────────────────────────────────────────────────────┐
-│                    pkg.tx.wtf                      │
+│                    cvcpkg.org                      │
 │   Apache2 + Let's Encrypt (TLS termination)        │
 │        │                                           │
 │        ▼                                           │
@@ -133,12 +133,12 @@ standards are promoted into the release manifest.
 - [x] Chained-hash tamper-evident audit trail
 - [x] Ed25519 package signing
 - [x] Docker production deployment
-- [x] Apache2/Let's Encrypt TLS on pkg.tx.wtf
+- [x] Apache2/Let's Encrypt TLS on cvcpkg.org
 - [x] Landing page with package index, search, and sorting
 - [x] CI/CD deploy pipeline (prod branch → auto-deploy)
 - [ ] Self-hosted GitHub runner on catx-03
 - [ ] Cross-platform CI build matrix (Linux, macOS, Windows)
-- [ ] Initial set of published packages on pkg.tx.wtf
+- [ ] Initial set of published packages on cvcpkg.org
 
 ### Phase 2 — Analytics & Telemetry
 

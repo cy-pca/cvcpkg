@@ -283,7 +283,7 @@ class TestLocalBuildMode:
         )
         # Should NOT have contacted any server
         combined = result.stdout + result.stderr
-        assert "pkg.tx.wtf" not in combined
+        assert "cvcpkg.org" not in combined
 
     def test_install_local_env_var(self, tmp_path: Path) -> None:
         """``CVCPKG_LOCAL=1`` should behave the same as --local."""
@@ -332,4 +332,4 @@ class TestLocalBuildMode:
         )
         assert (prefix / "include" / "zlib.h").is_file()
         combined = result.stdout + result.stderr
-        assert "pkg.tx.wtf" not in combined
+        assert "cvcpkg.org" not in combined

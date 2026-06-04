@@ -18,7 +18,7 @@ package manager for libcvc-deps.  It provides two main workflows:
     # Package into per-component archives for the catalog
     cvcpkg pack-all --platform linux --config release --link shared --output-dir ./dist
     # Publish archives to the cvcpkg-server
-    cvcpkg publish dist/*.tar.gz --server https://pkg.tx.wtf --token cvctok_...
+    cvcpkg publish dist/*.tar.gz --server https://cvcpkg.org --token cvctok_...
     # Inspect and validate recipes
     cvcpkg recipes --list
     cvcpkg recipes --show grpc
@@ -122,7 +122,7 @@ _local_opt = click.option(
     help=(
         "Use local/bundled recipes only — do not contact a package server.  "
         "Without --local, cvcpkg connects to the server specified by "
-        "CVCPKG_SERVER_URL (default: pkg.tx.wtf) to fetch the latest "
+        "CVCPKG_SERVER_URL (default: cvcpkg.org) to fetch the latest "
         "recipes and catalog.  [env: CVCPKG_LOCAL]"
     ),
 )
@@ -208,7 +208,7 @@ def cli(ctx: click.Context) -> None:
     type=click.Choice(["auto", "server", "github"], case_sensitive=False),
     default="auto",
     help=(
-        "Catalog source strategy.  'server' uses pkg.tx.wtf only; "
+        "Catalog source strategy.  'server' uses cvcpkg.org only; "
         "'github' uses GitHub Pages/Releases only; 'auto' tries "
         "server first then falls back to GitHub (default)."
     ),
@@ -359,8 +359,8 @@ def install(
     # pick compatible versions for all requested components.
     #
     # --source controls catalog source strategy:
-    #   auto   → primary (pkg.tx.wtf) with GitHub Pages fallback
-    #   server → pkg.tx.wtf only, no fallback
+    #   auto   → primary (cvcpkg.org) with GitHub Pages fallback
+    #   server → cvcpkg.org only, no fallback
     #   github → GitHub Pages only, no fallback
     catalog_url = catalog or ""
     catalog_failed = False
@@ -908,7 +908,7 @@ def catalog(refresh: bool, pin: int | None, show: bool) -> None:
 )
 @click.option(
     "--server-url",
-    default="https://pkg.tx.wtf",
+    default="https://cvcpkg.org",
     show_default=True,
     help="cvcpkg server URL for archive download URLs.",
 )
@@ -1143,7 +1143,7 @@ def download(
     Examples:
       cvcpkg download zlib boost --output-dir ./archives
       cvcpkg download zlib==1.3.1+cvc.1 -o ./dist --config debug
-      cvcpkg download zlib --server https://pkg.tx.wtf -o ./dist
+      cvcpkg download zlib --server https://cvcpkg.org -o ./dist
     """
     import shutil
 
@@ -1257,7 +1257,7 @@ def _fetch_mirror_urls(server: str, token: str | None) -> list[str]:
     envvar="CVCPKG_SERVER_URL",
     default="",
     metavar="URL",
-    help="cvcpkg-server URL (e.g. https://pkg.tx.wtf).  [env: CVCPKG_SERVER_URL]",
+    help="cvcpkg-server URL (e.g. https://cvcpkg.org).  [env: CVCPKG_SERVER_URL]",
 )
 @click.option(
     "--token",
@@ -1350,9 +1350,9 @@ def publish(
     \b
     Examples:
       # Publish to cvcpkg-server by recipe name (recommended):
-      cvcpkg publish zlib grpc --server https://pkg.tx.wtf --token cvctok_...
+      cvcpkg publish zlib grpc --server https://cvcpkg.org --token cvctok_...
       # Publish all recipes found in dist/ to the server:
-      cvcpkg publish --all --server https://pkg.tx.wtf --token cvctok_...
+      cvcpkg publish --all --server https://cvcpkg.org --token cvctok_...
       # Publish to an S3 bucket:
       cvcpkg publish --all --dest s3://my-bucket/cvcpkg/
       # Publish to a local directory:
@@ -2158,7 +2158,7 @@ def build(
     Results are installed into --prefix.
 
     By default, recipes are fetched from the package server (set via
-    CVCPKG_SERVER_URL, default: pkg.tx.wtf).  Use --local to build
+    CVCPKG_SERVER_URL, default: cvcpkg.org).  Use --local to build
     from bundled/local recipes only.
 
     Dependencies are automatically resolved and built first unless

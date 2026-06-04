@@ -43,7 +43,7 @@ packages come from.
 By default, cvcpkg connects to a package server to fetch prebuilt
 binaries and the latest recipe definitions.  The server is specified
 by the `CVCPKG_SERVER_URL` environment variable or `--server` flag.
-When neither is set, the official server at `https://pkg.tx.wtf` is
+When neither is set, the official server at `https://cvcpkg.org` is
 used.
 
 ```bash
@@ -158,7 +158,7 @@ with persistent, uncapped build agents.
 ### Starting a builder
 
 ```bash
-export CVCPKG_SERVER_URL=https://pkg.tx.wtf
+export CVCPKG_SERVER_URL=https://cvcpkg.org
 export CVCPKG_TOKEN=cvctok_...
 
 # Start a builder agent:
@@ -211,13 +211,13 @@ cvcpkg builder stop --name linux-x64-builder-1
 
 ## Using the official server
 
-The official cvcpkg server at `https://pkg.tx.wtf` hosts prebuilt
+The official cvcpkg server at `https://cvcpkg.org` hosts prebuilt
 binaries for all supported platforms and the canonical recipe set.
 
 **As a consumer** — install prebuilt packages:
 
 ```bash
-# No configuration needed — pkg.tx.wtf is the default:
+# No configuration needed — cvcpkg.org is the default:
 cvcpkg install --from cvc-requirements.yaml --prefix ./deps
 ```
 
@@ -225,11 +225,11 @@ cvcpkg install --from cvc-requirements.yaml --prefix ./deps
 
 ```bash
 # Register for an API token:
-cvcpkg register --server https://pkg.tx.wtf \
+cvcpkg register --server https://cvcpkg.org \
     --name alice --email alice@example.org --role publisher
 
 # Set credentials:
-export CVCPKG_SERVER_URL=https://pkg.tx.wtf
+export CVCPKG_SERVER_URL=https://cvcpkg.org
 export CVCPKG_TOKEN=cvctok_...
 
 # Publish recipes and packages:
@@ -334,7 +334,7 @@ large dependency builds (e.g. Qt6, VTK, LLVM).  cvcpkg's remote
 builder system eliminates this constraint:
 
 1. **Set up a server** (see [Self-hosted server](#self-hosted-server-and-builder-registry))
-   or use `https://pkg.tx.wtf`.
+   or use `https://cvcpkg.org`.
 
 2. **Deploy builder agents** on persistent build machines (bare metal,
    VMs, or containers without time limits).
@@ -524,7 +524,7 @@ cvcpkg pack my-library --prefix ./stage \
 ```bash
 # Publish to a cvcpkg-server (REST API):
 export CVCPKG_TOKEN="cvctok_..."
-export CVCPKG_SERVER_URL="https://pkg.tx.wtf"
+export CVCPKG_SERVER_URL="https://cvcpkg.org"
 cvcpkg publish my-library --output-dir ./dist
 cvcpkg publish --all --output-dir ./dist
 
@@ -546,7 +546,7 @@ cvcpkg-server run --state-dir /var/lib/cvcpkg --host 0.0.0.0 --port 8080
 cvcpkg-server bootstrap --name admin --email admin@example.org
 
 # After that, manage tokens via the client CLI (through the API):
-export CVCPKG_SERVER_URL=https://pkg.tx.wtf
+export CVCPKG_SERVER_URL=https://cvcpkg.org
 export CVCPKG_TOKEN="cvctok_<admin-token>"
 cvcpkg token create --name ci-publisher --role publisher
 cvcpkg token create --name dev-reader --role reader
@@ -648,7 +648,7 @@ is printed exactly once — **store it in a password manager or secrets
 vault** immediately.  Then configure the client:
 
 ```bash
-cvcpkg config set server https://pkg.tx.wtf
+cvcpkg config set server https://cvcpkg.org
 cvcpkg config set token cvctok_<your-admin-token>
 ```
 
@@ -671,7 +671,7 @@ The `CVCPKG_REGISTRATION_MODE` environment variable is also supported.
 **Open mode (default):**
 
 ```bash
-cvcpkg register --server https://pkg.tx.wtf \
+cvcpkg register --server https://cvcpkg.org \
   --name alice --email alice@example.org --role reader
 # Token is returned immediately
 ```
@@ -680,7 +680,7 @@ cvcpkg register --server https://pkg.tx.wtf \
 
 ```bash
 # User submits a request:
-cvcpkg register --server https://pkg.tx.wtf \
+cvcpkg register --server https://cvcpkg.org \
   --name bob --email bob@example.org --role publisher
 # → "Registration request submitted. An admin will review it."
 
@@ -703,7 +703,7 @@ the token is persisted on the server — the raw secret is never stored.
 
 ```bash
 # Create a publisher token via the client CLI (talks to the server API):
-export CVCPKG_SERVER_URL=https://pkg.tx.wtf
+export CVCPKG_SERVER_URL=https://cvcpkg.org
 export CVCPKG_TOKEN="cvctok_<admin-token>"
 cvcpkg token create --name ci-publisher --role publisher
 
@@ -733,7 +733,7 @@ and avoids race conditions with the running server.
 
 ```bash
 # Set the server and admin token (or pass --server/--token each time):
-export CVCPKG_SERVER_URL=https://pkg.tx.wtf
+export CVCPKG_SERVER_URL=https://cvcpkg.org
 export CVCPKG_TOKEN="cvctok_<admin-token>"
 
 # Create a token:
@@ -846,7 +846,7 @@ cvcpkg pack zlib --prefix ./stage \
 
 # 3. Publish (to cvcpkg-server):
 export CVCPKG_TOKEN="cvctok_..."
-export CVCPKG_SERVER_URL="https://pkg.tx.wtf"
+export CVCPKG_SERVER_URL="https://cvcpkg.org"
 cvcpkg publish zlib --output-dir ./dist
 
 # Or publish all archives in dist/:
@@ -1241,7 +1241,7 @@ Start a mirror server pointing at an upstream primary:
 ```bash
 cvcpkg-server run \
     --mirror-mode \
-    --mirror-upstream https://pkg.tx.wtf \
+    --mirror-upstream https://cvcpkg.org \
     --mirror-token cvctok_... \
     --database-url postgresql+asyncpg://user:pass@localhost/mirror_db \
     --state-dir ./mirror-data \
@@ -1265,9 +1265,9 @@ Mirrors register themselves with the primary so clients can discover
 them:
 
 ```bash
-curl -X POST https://pkg.tx.wtf/v1/mirrors/register \
+curl -X POST https://cvcpkg.org/v1/mirrors/register \
   -H 'Content-Type: application/json' \
-  -d '{"url": "https://eu.pkg.tx.wtf", "display_name": "EU Mirror", "contact": "ops@eu.pkg.tx.wtf"}'
+  -d '{"url": "https://eu.cvcpkg.org", "display_name": "EU Mirror", "contact": "ops@eu.cvcpkg.org"}'
 ```
 
 The primary health-checks registered mirrors every 5 minutes.  After
@@ -1279,14 +1279,14 @@ state.
 
 ```bash
 # List all mirrors (admin-only, includes rejected/unhealthy)
-curl -H "Authorization: Bearer $ADMIN_TOKEN" https://pkg.tx.wtf/v1/mirrors/all
+curl -H "Authorization: Bearer $ADMIN_TOKEN" https://cvcpkg.org/v1/mirrors/all
 
 # Reject a mirror
-curl -X POST "https://pkg.tx.wtf/v1/mirrors/reject?url=https://bad.example.com" \
+curl -X POST "https://cvcpkg.org/v1/mirrors/reject?url=https://bad.example.com" \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 
 # Permanently remove a mirror
-curl -X DELETE "https://pkg.tx.wtf/v1/mirrors?url=https://old.example.com" \
+curl -X DELETE "https://cvcpkg.org/v1/mirrors?url=https://old.example.com" \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
@@ -1298,7 +1298,7 @@ URLs as fallback download sources.  If the primary download fails,
 mirrors are tried in order.
 
 ```bash
-export CVCPKG_SERVER_URL=https://pkg.tx.wtf
+export CVCPKG_SERVER_URL=https://cvcpkg.org
 cvcpkg install --from cvc-requirements.yaml --prefix ./deps
 ```
 
@@ -1312,7 +1312,7 @@ extracting them:
 cvcpkg download zlib boost --output-dir ./archives
 
 # With mirror failover
-cvcpkg download zlib --server https://pkg.tx.wtf -o ./dist
+cvcpkg download zlib --server https://cvcpkg.org -o ./dist
 
 # Pin a version
 cvcpkg download zlib==1.3.1+cvc.1 -o ./dist --config debug

@@ -812,12 +812,12 @@ function renderDeps(forward, reverse, meta, recipeNames) {
     if (depNames.length > 0) {
       lines.push('# Download dependencies first:');
       depNames.forEach(d => {
-        lines.push('# ' + d + ': https://pkg.tx.wtf/package/' + encodeURIComponent(d));
+        lines.push('# ' + d + ': https://cvcpkg.org/package/' + encodeURIComponent(d));
       });
       lines.push('');
     }
     lines.push('# Download and extract ' + pkgName + ':');
-    const url = 'https://pkg.tx.wtf' + firstBuild.archive_url;
+    const url = 'https://cvcpkg.org' + firstBuild.archive_url;
     const fname = firstBuild.archive_url.split('/').pop();
     lines.push('curl -LO ' + url);
     lines.push('tar --zstd -xf ' + fname + ' -C /opt/cvcpkg');
@@ -3234,7 +3234,7 @@ ls dist/mylib-*.tar.gz</code></pre></div>
           Publish an archive to a cvcpkg server:
         </p>
         <div class="guide-code"><pre><code>cvcpkg publish dist/mylib-2.1.0-linux-x86_64-release-shared.tar.gz \\
-  --server https://pkg.tx.wtf \\
+  --server https://cvcpkg.org \\
   --token cvctok_...</code></pre></div>
       </div>
       <div class="guide-step">
@@ -3242,7 +3242,7 @@ ls dist/mylib-*.tar.gz</code></pre></div>
           Publish to an organization namespace:
         </p>
         <div class="guide-code"><pre><code>cvcpkg publish dist/mylib-*.tar.gz \\
-  --server https://pkg.tx.wtf \\
+  --server https://cvcpkg.org \\
   --token cvctok_... \\
   --org my-team</code></pre></div>
       </div>
@@ -3251,7 +3251,7 @@ ls dist/mylib-*.tar.gz</code></pre></div>
           Tag a release (optional; untagged builds are "live"):
         </p>
         <div class="guide-code"><pre><code>cvcpkg publish dist/mylib-*.tar.gz \\
-  --server https://pkg.tx.wtf \\
+  --server https://cvcpkg.org \\
   --token cvctok_... \\
   --release-tag v2.1.0</code></pre></div>
       </div>
@@ -3286,7 +3286,7 @@ ls dist/mylib-*.tar.gz</code></pre></div>
         <p class="has-text-grey-lighter mb-2">
           Create an organization:
         </p>
-        <div class="guide-code"><pre><code>curl -X POST https://pkg.tx.wtf/v1/orgs \\
+        <div class="guide-code"><pre><code>curl -X POST https://cvcpkg.org/v1/orgs \\
   -H "Authorization: Bearer cvctok_..." \\
   -H "Content-Type: application/json" \\
   -d '{{"slug": "my-team", "display_name": "My Team"}}'</code></pre></div>
@@ -3295,7 +3295,7 @@ ls dist/mylib-*.tar.gz</code></pre></div>
         <p class="has-text-grey-lighter mb-2">
           Add members (requires org owner or admin token):
         </p>
-        <div class="guide-code"><pre><code>curl -X POST https://pkg.tx.wtf/v1/orgs/my-team/members \\
+        <div class="guide-code"><pre><code>curl -X POST https://cvcpkg.org/v1/orgs/my-team/members \\
   -H "Authorization: Bearer cvctok_..." \\
   -H "Content-Type: application/json" \\
   -d '{{"token_name": "alice-token", "role": "member"}}'</code></pre></div>
@@ -3305,7 +3305,7 @@ ls dist/mylib-*.tar.gz</code></pre></div>
           Update the storage limit (admin only):
         </p>
         <div class="guide-code"><pre><code># Set to 50 GiB
-curl -X PATCH https://pkg.tx.wtf/v1/orgs/my-team \\
+curl -X PATCH https://cvcpkg.org/v1/orgs/my-team \\
   -H "Authorization: Bearer cvctok_..." \\
   -H "Content-Type: application/json" \\
   -d '{{"storage_limit_bytes": 53687091200}}'</code></pre></div>
@@ -3381,10 +3381,10 @@ cvcpkg publish my-lib-1.0-linux-x86_64-release-shared.tar.zst \\
         </p>
         <div class="guide-code"><pre><code>\
 cvcpkg recipe push zlib \\
-  --server https://pkg.tx.wtf --token cvctok_...
+  --server https://cvcpkg.org --token cvctok_...
 
 # Or push all local recipes at once
-cvcpkg recipe push-all --server https://pkg.tx.wtf --token cvctok_...</code></pre></div>
+cvcpkg recipe push-all --server https://cvcpkg.org --token cvctok_...</code></pre></div>
       </div>
       <div class="guide-step">
         <p class="has-text-grey-lighter mb-2">
@@ -3397,7 +3397,7 @@ cvcpkg-server token create --name builder-01 --role builder
 
 # Start the builder worker
 cvcpkg builder run \\
-  --server https://pkg.tx.wtf \\
+  --server https://cvcpkg.org \\
   --token cvctok_... \\
   --max-jobs 2</code></pre></div>
       </div>
@@ -3409,11 +3409,11 @@ cvcpkg builder run \\
         <div class="guide-code"><pre><code>\
 # Single build
 cvcpkg builds submit zlib --platform linux --arch x86_64 \\
-  --server https://pkg.tx.wtf --token cvctok_...
+  --server https://cvcpkg.org --token cvctok_...
 
 # DAG build (resolves dependencies automatically)
 cvcpkg builds submit-dag tiff --platform linux --arch x86_64 \\
-  --server https://pkg.tx.wtf --token cvctok_...</code></pre></div>
+  --server https://cvcpkg.org --token cvctok_...</code></pre></div>
       </div>
       <div class="guide-step">
         <p class="has-text-grey-lighter mb-2">
@@ -3422,7 +3422,7 @@ cvcpkg builds submit-dag tiff --platform linux --arch x86_64 \\
         </p>
         <div class="guide-code"><pre><code>\
 # List recent builds
-cvcpkg builds list --server https://pkg.tx.wtf --token cvctok_...
+cvcpkg builds list --server https://cvcpkg.org --token cvctok_...
 
 # Or visit the web dashboard:
 #   /builders  &mdash; registered builders and status

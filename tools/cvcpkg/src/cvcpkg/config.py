@@ -21,7 +21,7 @@ import yaml
 
 # ── Defaults ────────────────────────────────────────────────────
 
-DEFAULT_SERVER_URL = "https://pkg.tx.wtf"
+DEFAULT_SERVER_URL = "https://cvcpkg.org"
 DEFAULT_CATALOG_URL = f"{DEFAULT_SERVER_URL}/v1/catalog"
 GITHUB_CATALOG_URL = "https://transfix.github.io/libcvc-deps/catalog/latest.yaml"
 DEFAULT_CATALOG_FALLBACKS = [GITHUB_CATALOG_URL]
