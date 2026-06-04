@@ -3,9 +3,9 @@ recipe:
   name: imagemagick
   upstream_version: "7.1.1"
   cvc_revision: 1
-  maintainer: "CyberPC Angel, LLC"
-  maintainer_email: "cvcpkg@cyberpcangel.com"
-  maintainer_url: "https://cyberpcangel.com"
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
   description: "ImageMagick — a software suite for creating, editing, composing, and converting images."
   homepage: https://imagemagick.org/
   license: Apache-2.0

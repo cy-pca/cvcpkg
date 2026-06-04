@@ -1,13 +1,15 @@
 name: deploy-prod
 
-# Deploys cvcpkg-server to pkg.tx.wtf on every push to the `prod` branch.
+# Deploys cvcpkg-server to both:
+#   - cvcpkg.org  (cvcpkg-00, 10.10.10.134 — primary)
+#   - pkg.tx.wtf  (catx-03, local — legacy, transition period)
 #
-# The self-hosted runner on catx-03.tx.wtf picks up the job and runs
-# the auto-deploy script which rebuilds the Docker image and restarts
-# the production stack.
+# The self-hosted runner on catx-03.tx.wtf picks up the job.
+# catx-03 deploys locally for pkg.tx.wtf and SSHes to cvcpkg-00
+# over the internal LAN for cvcpkg.org.
 #
 # Required repo secrets:
-#   (none — the runner IS the production host)
+#   (none — the runner IS catx-03 and has SSH access to cvcpkg-00)
 
 on:
   push:
@@ -25,9 +27,9 @@ concurrency:
 
 jobs:
   deploy:
-    name: Deploy to pkg.tx.wtf
+    name: Deploy to cvcpkg.org + pkg.tx.wtf
     runs-on: [self-hosted, Linux, cvcpkg-prod]
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -50,29 +52,35 @@ jobs:
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "Deploying sha: $sha"
 
-      - name: Deploy
+      # ── Deploy to cvcpkg.org (cvcpkg-00) via SSH ──────────────
+      - name: Deploy to cvcpkg.org
         run: |
           set -euo pipefail
           SHA="${{ steps.target.outputs.sha }}"
           SHORT_SHA="${SHA:0:7}"
           RELEASE_TAG="prod-${SHORT_SHA}"
-
-          # ── Sync checkout into persistent deploy directory ──────
-          # Running docker compose from a persistent location ensures
-          # containers survive runner workspace cleanup between jobs.
+          REMOTE="tfx@10.10.10.134"
           DEPLOY_DIR="/home/tfx/libcvc-deps"
           CVCPKG_DIR="${DEPLOY_DIR}/tools/cvcpkg"
 
-          echo "Syncing checkout to ${DEPLOY_DIR}..."
+          echo "=== Deploying to cvcpkg.org (cvcpkg-00) ==="
+
+          # Sync checkout to remote host
+          echo "Syncing checkout to ${REMOTE}:${DEPLOY_DIR}..."
           rsync -a --delete \
             --exclude '.env.production' \
             --exclude 'backups/' \
-            "${GITHUB_WORKSPACE}/" "${DEPLOY_DIR}/"
+            -e "ssh -o StrictHostKeyChecking=accept-new" \
+            "${GITHUB_WORKSPACE}/" "${REMOTE}:${DEPLOY_DIR}/"
 
+          # Run deploy script on remote host
+          ssh -o StrictHostKeyChecking=accept-new "$REMOTE" bash -s -- \
+            "$RELEASE_TAG" "$SHORT_SHA" "$DEPLOY_DIR" "$CVCPKG_DIR" << 'DEPLOY_SCRIPT'
+          set -euo pipefail
+          RELEASE_TAG="$1"; SHORT_SHA="$2"; DEPLOY_DIR="$3"; CVCPKG_DIR="$4"
           cd "$CVCPKG_DIR"
 
-          # Bundle recipes into the server package so the Docker image
-          # can serve dependency information without the repo root.
+          # Bundle recipes
           rm -rf src/cvcpkg/recipes
           cp -r "${DEPLOY_DIR}/recipes" src/cvcpkg/recipes
 
@@ -81,7 +89,6 @@ jobs:
             exit 1
           fi
 
-          # Detect docker compose
           if docker compose version &>/dev/null; then
             DC="docker compose"
           elif command -v docker-compose &>/dev/null; then
@@ -94,7 +101,7 @@ jobs:
           COMPOSE="$DC -f docker-compose.production.yml --env-file .env.production"
           export CVCPKG_RELEASE="$RELEASE_TAG"
 
-          # Backup database if postgres is running
+          # Backup database
           if $COMPOSE exec -T postgres pg_isready -U cvcpkg >/dev/null 2>&1; then
             mkdir -p backups
             $COMPOSE exec -T postgres pg_dump -U cvcpkg cvcpkg \
@@ -109,7 +116,6 @@ jobs:
           $COMPOSE build --build-arg "CVCPKG_RELEASE=${RELEASE_TAG}" backend
           echo "Ensuring postgres is up..."
           $COMPOSE up -d postgres
-          # Wait for postgres to accept connections
           for i in $(seq 1 30); do
             if $COMPOSE exec -T postgres pg_isready -U cvcpkg >/dev/null 2>&1; then
               break
@@ -117,10 +123,8 @@ jobs:
             sleep 1
           done
 
-          # Run database migrations before starting the backend
+          # Migrations
           echo "Running database migrations..."
-          # Stamp the DB at the last pre-Alembic revision if alembic_version
-          # table does not exist yet (one-time bootstrap).
           if ! $COMPOSE exec -T postgres psql -U cvcpkg -tAc \
                "SELECT 1 FROM information_schema.tables WHERE table_name='alembic_version'" \
                2>/dev/null | grep -q 1; then
@@ -133,22 +137,115 @@ jobs:
           echo "Restarting backend..."
           $COMPOSE up -d --force-recreate backend
 
-          # Wait for health
+          # Health check
           echo "Waiting for health (timeout 120s)..."
           deadline=$(( $(date +%s) + 120 ))
           while (( $(date +%s) < deadline )); do
             if curl -fsS --max-time 3 http://127.0.0.1:8420/healthz 2>/dev/null | grep -q '"ok"'; then
-              echo "Backend healthy!"
+              echo "cvcpkg.org backend healthy!"
               curl -s http://127.0.0.1:8420/healthz | python3 -c "
           import json, sys
           d = json.load(sys.stdin)
-          print(f'Deployed: v{d[\"version\"]}, {d[\"packages_count\"]} packages')
+          print(f'cvcpkg.org deployed: v{d[\"version\"]}, {d[\"packages_count\"]} packages')
           "
               exit 0
             fi
             sleep 3
           done
 
-          echo "::error::Backend failed health check within 120s"
+          echo "::error::cvcpkg.org backend failed health check within 120s"
+          $COMPOSE logs --tail=80 backend || true
+          exit 1
+          DEPLOY_SCRIPT
+
+      # ── Deploy to pkg.tx.wtf (catx-03, local) ────────────────
+      - name: Deploy to pkg.tx.wtf
+        run: |
+          set -euo pipefail
+          SHA="${{ steps.target.outputs.sha }}"
+          SHORT_SHA="${SHA:0:7}"
+          RELEASE_TAG="prod-${SHORT_SHA}"
+          DEPLOY_DIR="/home/tfx/libcvc-deps"
+          CVCPKG_DIR="${DEPLOY_DIR}/tools/cvcpkg"
+
+          echo "=== Deploying to pkg.tx.wtf (catx-03, local) ==="
+
+          echo "Syncing checkout to ${DEPLOY_DIR}..."
+          rsync -a --delete \
+            --exclude '.env.production' \
+            --exclude 'backups/' \
+            "${GITHUB_WORKSPACE}/" "${DEPLOY_DIR}/"
+
+          cd "$CVCPKG_DIR"
+
+          rm -rf src/cvcpkg/recipes
+          cp -r "${DEPLOY_DIR}/recipes" src/cvcpkg/recipes
+
+          if [[ ! -f .env.production ]]; then
+            echo "::error::.env.production not found at ${CVCPKG_DIR}/"
+            exit 1
+          fi
+
+          if docker compose version &>/dev/null; then
+            DC="docker compose"
+          elif command -v docker-compose &>/dev/null; then
+            DC="docker-compose"
+          else
+            echo "::error::docker compose not available"
+            exit 1
+          fi
+
+          COMPOSE="$DC -f docker-compose.production.yml --env-file .env.production"
+          export CVCPKG_RELEASE="$RELEASE_TAG"
+
+          if $COMPOSE exec -T postgres pg_isready -U cvcpkg >/dev/null 2>&1; then
+            mkdir -p backups
+            $COMPOSE exec -T postgres pg_dump -U cvcpkg cvcpkg \
+              | gzip > "backups/pre-deploy-${SHORT_SHA}.sql.gz"
+            echo "Database backup created"
+          else
+            echo "Postgres not running; skipping backup"
+          fi
+
+          echo "Building cvcpkg-server:${RELEASE_TAG}..."
+          $COMPOSE build --build-arg "CVCPKG_RELEASE=${RELEASE_TAG}" backend
+          echo "Ensuring postgres is up..."
+          $COMPOSE up -d postgres
+          for i in $(seq 1 30); do
+            if $COMPOSE exec -T postgres pg_isready -U cvcpkg >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+
+          echo "Running database migrations..."
+          if ! $COMPOSE exec -T postgres psql -U cvcpkg -tAc \
+               "SELECT 1 FROM information_schema.tables WHERE table_name='alembic_version'" \
+               2>/dev/null | grep -q 1; then
+            echo "Stamping database at revision 002 (pre-Alembic baseline)..."
+            $COMPOSE run --rm -T backend cvcpkg-server migrate stamp 002
+          fi
+          $COMPOSE run --rm -T backend cvcpkg-server migrate upgrade head
+          echo "Migrations complete."
+
+          echo "Restarting backend..."
+          $COMPOSE up -d --force-recreate backend
+
+          echo "Waiting for health (timeout 120s)..."
+          deadline=$(( $(date +%s) + 120 ))
+          while (( $(date +%s) < deadline )); do
+            if curl -fsS --max-time 3 http://127.0.0.1:8420/healthz 2>/dev/null | grep -q '"ok"'; then
+              echo "pkg.tx.wtf backend healthy!"
+              curl -s http://127.0.0.1:8420/healthz | python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)
+          print(f'pkg.tx.wtf deployed: v{d[\"version\"]}, {d[\"packages_count\"]} packages')
+          "
+              exit 0
+            fi
+            sleep 3
+          done
+
+          echo "::error::pkg.tx.wtf backend failed health check within 120s"
           $COMPOSE logs --tail=80 backend || true
           exit 1

@@ -16,6 +16,7 @@ persistent state; otherwise it falls back to YAML files on disk.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import hashlib
 import json
 import logging
@@ -30,7 +31,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile
+from fastapi import (
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
     FileResponse,
@@ -47,8 +58,22 @@ from cvcpkg.server.auth import TokenStore
 from cvcpkg.server.models import (
     AuditAction,
     AuditLogResponse,
+    BuilderHeartbeatRequest,
+    BuilderInfo,
+    BuilderListResponse,
+    BuilderRegisterRequest,
+    BuilderUpdateRequest,
+    BuildJobClaimRequest,
+    BuildJobCompleteRequest,
+    BuildJobFailRequest,
+    BuildJobInfo,
+    BuildJobListResponse,
+    BuildJobSubmitRequest,
+    BuildLogAppendRequest,
     CacheStatusResponse,
     CatalogResponse,
+    DagSubmitRequest,
+    DagSubmitResponse,
     EmailUpdateRequest,
     HealthResponse,
     MirrorInfo,
@@ -64,6 +89,8 @@ from cvcpkg.server.models import (
     PackageListResponse,
     ProfileUpdateRequest,
     PublishResponse,
+    RecipeInfo,
+    RecipeListResponse,
     RegistrationMode,
     RegistrationRequest,
     RegistrationResponse,
@@ -79,12 +106,17 @@ from cvcpkg.server.models import (
     TokenRole,
     UserListResponse,
     UserProfileResponse,
+    WebhookInfo,
+    WebhookListResponse,
+    WebhookRegisterRequest,
+    WebhookUpdateRequest,
 )
 
 # ── State ───────────────────────────────────────────────────────
 
 _INDEX_FILE = "index.yaml"
 _ARCHIVES_DIR = "archives"
+_LOGS_DIR = "logs"
 _START_TIME = 0.0
 
 # ── Configurable limits ────────────────────────────────────────
@@ -194,6 +226,11 @@ class ServerState:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
+    def logs_dir(self) -> Path:
+        d = self.state_dir / _LOGS_DIR
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
 
 # Singleton — set by create_app() or lifespan
 _state: ServerState | None = None
@@ -206,6 +243,10 @@ _db_downloads = None  # DbDownloadStore when using DB backend
 _db_mirrors = None  # DbMirrorStore when using DB backend
 _db_tags = None  # DbTagStore when using DB backend
 _db_token_requests = None  # DbTokenRequestStore when using DB backend
+_db_builders = None  # DbBuilderStore when using DB backend
+_db_build_jobs = None  # DbBuildJobStore when using DB backend
+_db_recipes = None  # DbRecipeStore when using DB backend
+_db_webhooks = None  # DbWebhookStore when using DB backend
 
 
 def _get_state() -> ServerState:
@@ -343,6 +384,272 @@ async def optional_token(authorization: str | None = Header(None)) -> TokenRecor
     return state.tokens.verify(raw)
 
 
+async def _authenticate_token(raw: str) -> TokenRecord | None:
+    """Verify a raw token string and return the record (or None)."""
+    if _use_db:
+        return await _db_tokens.verify(raw)
+    state = _get_state()
+    return state.tokens.verify(raw)
+
+
+# ── Webhook delivery engine ────────────────────────────────────
+
+_WEBHOOK_RETRY_DELAYS = [10, 60, 300]  # seconds between retries
+
+
+async def _deliver_webhook(
+    webhook_id: int,
+    url: str,
+    secret: str,
+    event: str,
+    payload: str,
+) -> bool:
+    """Attempt to deliver a webhook payload.  Returns True on success."""
+    import hashlib as _h
+    import hmac as _hm
+    import uuid
+
+    import httpx
+
+    sig = _hm.new(secret.encode(), payload.encode(), _h.sha256).hexdigest()
+    delivery_id = str(uuid.uuid4())
+    headers = {
+        "Content-Type": "application/json",
+        "X-CvcPkg-Event": event,
+        "X-CvcPkg-Signature": f"sha256={sig}",
+        "X-CvcPkg-Delivery": delivery_id,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(url, content=payload, headers=headers)
+        if resp.status_code < 400:
+            await _db_webhooks.record_delivery(webhook_id)
+            return True
+        logger.warning(
+            "webhook %d delivery to %s returned %d",
+            webhook_id,
+            url,
+            resp.status_code,
+        )
+    except Exception as exc:
+        logger.warning("webhook %d delivery to %s failed: %s", webhook_id, url, exc)
+    await _db_webhooks.record_failure(webhook_id)
+    return False
+
+
+async def _deliver_with_retries(
+    webhook_id: int,
+    url: str,
+    secret: str,
+    event: str,
+    payload: str,
+) -> None:
+    """Deliver a webhook with retries (exponential backoff)."""
+    if await _deliver_webhook(webhook_id, url, secret, event, payload):
+        return
+    for delay in _WEBHOOK_RETRY_DELAYS:
+        await asyncio.sleep(delay)
+        # Re-check that the webhook is still active
+        info = await _db_webhooks.get(webhook_id)
+        if info is None or not info.active:
+            return
+        if await _deliver_webhook(webhook_id, url, secret, event, payload):
+            return
+
+
+async def emit_webhook_event(
+    event: str,
+    data: dict,
+    *,
+    org_slug: str = "",
+) -> None:
+    """Fire a webhook event to all matching active webhooks.
+
+    Deliveries run as background tasks so the caller is not blocked.
+    """
+    if not _use_db or _db_webhooks is None:
+        return
+    try:
+        hooks = await _db_webhooks.list_active_for_event(event, org_slug=org_slug)
+    except Exception:
+        logger.exception("failed to list webhooks for event %s", event)
+        return
+    if not hooks:
+        return
+
+    payload = json.dumps(
+        {
+            "event": event,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "data": data,
+        }
+    )
+
+    for hook in hooks:
+        secret = await _db_webhooks.get_secret(hook.id)
+        asyncio.create_task(
+            _deliver_with_retries(
+                hook.id,
+                hook.url,
+                secret or "",
+                event,
+                payload,
+            )
+        )
+
+
+# ── Connected WebSocket builders ───────────────────────────────
+
+# Maps builder_id -> WebSocket for all connected builders.
+_ws_builders: dict[int, WebSocket] = {}
+
+
+async def _ws_send(builder_id: int, msg: dict) -> bool:
+    """Send a JSON message to a connected builder.  Returns True on success."""
+    ws = _ws_builders.get(builder_id)
+    if ws is None:
+        return False
+    try:
+        await ws.send_json(msg)
+        return True
+    except Exception:
+        _ws_builders.pop(builder_id, None)
+        return False
+
+
+async def _ws_broadcast(msg: dict) -> None:
+    """Send a JSON message to all connected builders."""
+    dead: list[int] = []
+    for bid, ws in _ws_builders.items():
+        try:
+            await ws.send_json(msg)
+        except Exception:
+            dead.append(bid)
+    for bid in dead:
+        _ws_builders.pop(bid, None)
+
+
+# ── Build scheduler background task ────────────────────────────
+
+_SCHEDULER_INTERVAL = int(os.environ.get("CVCPKG_SCHEDULER_INTERVAL", "5"))
+_DEFAULT_BUILD_TIMEOUT = int(os.environ.get("CVCPKG_BUILD_TIMEOUT", "86400"))
+
+# Log retention: 0 means disabled (no automatic GC)
+_LOG_RETENTION_DAYS = int(os.environ.get("CVCPKG_LOG_RETENTION_DAYS", "0"))
+# How often the log retention GC runs (seconds, default 1 hour)
+_LOG_GC_INTERVAL = int(os.environ.get("CVCPKG_LOG_GC_INTERVAL", "3600"))
+
+
+async def _build_scheduler_loop() -> None:
+    """Continuously match ready jobs to available builders."""
+    import asyncio
+
+    while True:
+        await asyncio.sleep(_SCHEDULER_INTERVAL)
+        if not _use_db or _db_build_jobs is None or _db_builders is None:
+            continue
+        try:
+            # 1. Reap stale builders (missed heartbeats)
+            await _db_builders.reap_stale(max_age_seconds=180)
+
+            # 2. Reap timed-out jobs
+            timed_out = await _db_build_jobs.reap_timed_out(_DEFAULT_BUILD_TIMEOUT)
+            for job in timed_out:
+                await _db_build_jobs.cancel_downstream(job.id)
+                # Notify builder via WebSocket
+                if job.builder_id is not None:
+                    await _ws_send(
+                        job.builder_id,
+                        {
+                            "type": "job.timeout",
+                            "job_id": job.id,
+                            "message": f"exceeded {_DEFAULT_BUILD_TIMEOUT}s limit",
+                        },
+                    )
+                await emit_webhook_event(
+                    "build.timed_out",
+                    {
+                        "job_id": job.id,
+                        "recipe_name": job.recipe_name,
+                        "platform": job.platform,
+                        "arch": job.arch,
+                    },
+                    org_slug=job.org_slug,
+                )
+
+            # 3. Find ready jobs and match to builders
+            ready_jobs = await _db_build_jobs.find_ready_jobs()
+            if not ready_jobs:
+                continue
+
+            online_builders = await _db_builders.list_builders(status="online")
+            # Include "busy" builders that still have capacity
+            busy_builders = await _db_builders.list_builders(status="busy")
+            available = []
+            for b in online_builders + busy_builders:
+                if b.current_jobs < b.max_jobs:
+                    available.append(b)
+
+            for job in ready_jobs:
+                # Find matching builder (platform + arch)
+                candidates = [
+                    b
+                    for b in available
+                    if b.platform == job.platform
+                    and b.arch == job.arch
+                    and b.current_jobs < b.max_jobs
+                ]
+                if not candidates:
+                    continue
+
+                # Prefer affinity builders (soft preference)
+                affinity = [b for b in candidates if b.prefer_affinity]
+                chosen = affinity[0] if affinity else candidates[0]
+
+                await _db_build_jobs.dispatch(job.id, chosen.id)
+                # Notify builder via WebSocket if connected
+                dispatched = await _db_build_jobs.get(job.id)
+                if dispatched is not None:
+                    await _ws_send(
+                        chosen.id,
+                        {
+                            "type": "job.dispatch",
+                            "job": json.loads(dispatched.model_dump_json()),
+                        },
+                    )
+                # Update builder's current_jobs count
+                await _db_builders.heartbeat(
+                    chosen.id,
+                    status="busy" if chosen.current_jobs + 1 >= chosen.max_jobs else "online",
+                    current_jobs=chosen.current_jobs + 1,
+                )
+                chosen.current_jobs += 1  # update in-memory for this loop iteration
+
+        except Exception:
+            logger.exception("build scheduler loop error")
+
+
+async def _log_retention_gc_loop() -> None:
+    """Periodically delete logs older than the retention policy."""
+    import asyncio
+
+    while True:
+        await asyncio.sleep(_LOG_GC_INTERVAL)
+        if _LOG_RETENTION_DAYS <= 0:
+            continue
+        if not _use_db or _db_build_jobs is None or _state is None:
+            continue
+        try:
+            purged = await _db_build_jobs.purge_old_logs(
+                older_than_days=_LOG_RETENTION_DAYS,
+                logs_dir=_state.logs_dir(),
+            )
+            if purged:
+                logger.info("log retention GC: purged %d old logs", purged)
+        except Exception:
+            logger.exception("log retention GC error")
+
+
 # ── Mirror background tasks ─────────────────────────────────────
 
 
@@ -440,6 +747,10 @@ def create_app(
         global _state, _START_TIME, _use_db
         global _db_tokens, _db_audit, _db_packages, _db_orgs
         global _db_downloads, _db_mirrors, _db_tags, _db_token_requests
+        global _db_builders
+        global _db_build_jobs
+        global _db_recipes
+        global _db_webhooks
         _START_TIME = time.monotonic()
         sd = state_dir or Path(os.environ.get("CVCPKG_SERVER_STATE_DIR", "/var/lib/cvcpkg-server"))
 
@@ -459,13 +770,17 @@ def create_app(
             from cvcpkg.server.db import create_tables, dispose_engine, init_db
             from cvcpkg.server.db_stores import (
                 DbAuditLog,
+                DbBuilderStore,
+                DbBuildJobStore,
                 DbDownloadStore,
                 DbMirrorStore,
                 DbOrgStore,
                 DbPackageIndex,
+                DbRecipeStore,
                 DbTagStore,
                 DbTokenRequestStore,
                 DbTokenStore,
+                DbWebhookStore,
             )
 
             init_db(db_url)
@@ -478,6 +793,10 @@ def create_app(
             _db_mirrors = DbMirrorStore()
             _db_tags = DbTagStore()
             _db_token_requests = DbTokenRequestStore()
+            _db_builders = DbBuilderStore()
+            _db_build_jobs = DbBuildJobStore()
+            _db_recipes = DbRecipeStore()
+            _db_webhooks = DbWebhookStore()
             _use_db = True
             # Still need ServerState for archives dir and storage_uri
             _state = ServerState(
@@ -492,6 +811,9 @@ def create_app(
             bg_tasks: list[asyncio.Task] = []
             if _use_db and not MIRROR_MODE:
                 bg_tasks.append(asyncio.create_task(_mirror_health_loop()))
+                bg_tasks.append(asyncio.create_task(_build_scheduler_loop()))
+                if _LOG_RETENTION_DAYS > 0:
+                    bg_tasks.append(asyncio.create_task(_log_retention_gc_loop()))
             if MIRROR_MODE and MIRROR_UPSTREAM:
                 bg_tasks.append(asyncio.create_task(_mirror_sync_loop(sd)))
 
@@ -695,8 +1017,14 @@ def create_app(
 
     # ── Catalog (read) ──────────────────────────────────────
 
+    @app.head("/v1/catalog", tags=["catalog"])
+    async def head_catalog():
+        """Support HEAD requests (used by storage backends for size check)."""
+        return Response(status_code=200)
+
     @app.get("/v1/catalog", response_model=CatalogResponse, tags=["catalog"])
     async def get_catalog(
+        request: Request,
         _auth: TokenRecord | None = Depends(optional_reader_auth),
         _caller: TokenRecord | None = Depends(optional_token),
     ):
@@ -706,15 +1034,26 @@ def create_app(
                 caller_token_name=caller.name if caller else "",
                 is_admin=caller is not None and caller.role == TokenRole.admin,
             )
-            return CatalogResponse(
-                revision=cat.get("revision", 0),
-                bundles=cat.get("bundles", []),
-            )
-        state = _get_state()
-        return CatalogResponse(
-            revision=state.index.get("revision", 0),
-            bundles=state.index.get("bundles", []),
-        )
+            revision = cat.get("revision", 0)
+            bundles = cat.get("bundles", [])
+        else:
+            state = _get_state()
+            revision = state.index.get("revision", 0)
+            bundles = list(state.index.get("bundles", []))
+
+        # Resolve relative archive_url paths (e.g. "/v1/download/…")
+        # to absolute URLs so clients can download without knowing
+        # the server origin separately.
+        # NOTE: copy each dict to avoid mutating in-memory state.
+        base = str(request.base_url).rstrip("/")
+        resolved = []
+        for b in bundles:
+            url = b.get("archive_url", "")
+            if url.startswith("/"):
+                b = {**b, "archive_url": f"{base}{url}"}
+            resolved.append(b)
+
+        return CatalogResponse(revision=revision, bundles=resolved)
 
     # ── Dependency graph (read) ────────────────────────────
 
@@ -1223,6 +1562,25 @@ def create_app(
 
     # ── Download (read) ─────────────────────────────────────
 
+    @app.head("/v1/download/{filename}", tags=["packages"])
+    async def head_download_archive(
+        filename: str,
+        _auth: None = Depends(optional_reader_auth),
+    ):
+        """HEAD support so clients can check size before downloading."""
+        state = _get_state()
+        safe_name = Path(filename).name
+        archive_path = state.archives_dir() / safe_name
+        if not archive_path.is_file():
+            raise HTTPException(404, f"archive not found: {safe_name}")
+        return Response(
+            status_code=200,
+            headers={
+                "Content-Length": str(archive_path.stat().st_size),
+                "Content-Type": "application/octet-stream",
+            },
+        )
+
     @app.get("/v1/download/{filename}", tags=["packages"])
     async def download_archive(
         filename: str,
@@ -1491,6 +1849,18 @@ def create_app(
 
         _metrics["publishes_total"] += 1
         _metrics["bytes_uploaded_total"] += size_bytes
+
+        await emit_webhook_event(
+            "package.published",
+            {
+                "name": name,
+                "version": version,
+                "platform": platform,
+                "arch": arch,
+                "org": org or "",
+            },
+            org_slug=org or "",
+        )
 
         return PublishResponse(
             name=name,
@@ -1798,6 +2168,17 @@ def create_app(
         _metrics["publishes_total"] += 1
         _metrics["bytes_uploaded_total"] += size_bytes
         _upload_sessions.pop(upload_id, None)
+
+        await emit_webhook_event(
+            "package.published",
+            {
+                "name": session.name,
+                "version": session.version,
+                "platform": session.platform,
+                "arch": session.arch,
+                "org": getattr(session, "org", "") or "",
+            },
+        )
 
         return PublishResponse(
             name=session.name,
@@ -2888,6 +3269,32 @@ def create_app(
 
         return HTMLResponse(tag_detail_html(tag_name, org))
 
+    # ── Builder / Build / Recipe HTML pages ─────────────────
+
+    @app.get("/builders", response_class=HTMLResponse, include_in_schema=False)
+    async def builders_page():
+        from cvcpkg.server.landing import builders_html
+
+        return HTMLResponse(builders_html())
+
+    @app.get("/builds", response_class=HTMLResponse, include_in_schema=False)
+    async def builds_page():
+        from cvcpkg.server.landing import builds_html
+
+        return HTMLResponse(builds_html())
+
+    @app.get("/build/{job_id}", response_class=HTMLResponse, include_in_schema=False)
+    async def build_detail_page(job_id: int):
+        from cvcpkg.server.landing import build_detail_html
+
+        return HTMLResponse(build_detail_html(job_id))
+
+    @app.get("/recipes", response_class=HTMLResponse, include_in_schema=False)
+    async def recipes_page():
+        from cvcpkg.server.landing import recipes_html
+
+        return HTMLResponse(recipes_html())
+
     # ── Tag API endpoints ───────────────────────────────────
 
     @app.get("/v1/tags", response_model=TagListResponse, tags=["tags"])
@@ -3144,6 +3551,1254 @@ def create_app(
             target=url,
         )
         return {"message": "mirror removed", "url": url}
+
+    # ── Builders ────────────────────────────────────────────
+
+    def _require_db_builders():
+        if not _use_db or _db_builders is None:
+            raise HTTPException(
+                501, "builder registry requires a database backend (set CVCPKG_DATABASE_URL)"
+            )
+
+    @app.post("/v1/builders/register", response_model=BuilderInfo, tags=["builders"])
+    async def register_builder(
+        body: BuilderRegisterRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Register a new builder or re-register an existing one."""
+        _require_db_builders()
+        info = await _db_builders.register(
+            name=body.name,
+            platform=body.platform,
+            arch=body.arch,
+            registered_by=actor.name,
+            org_slug=body.org_slug,
+            labels=body.labels,
+            capabilities=body.capabilities,
+            max_jobs=body.max_jobs,
+            prefer_affinity=body.prefer_affinity,
+        )
+        await _db_audit.record(
+            action=AuditAction.builder_register,
+            actor=actor.name,
+            target=f"{body.org_slug}/{body.name}" if body.org_slug else body.name,
+            detail=f"{body.platform}/{body.arch}",
+        )
+        await emit_webhook_event(
+            "builder.online",
+            {
+                "builder_name": body.name,
+                "platform": body.platform,
+                "arch": body.arch,
+                "builder_id": info.id,
+            },
+            org_slug=body.org_slug,
+        )
+        return info
+
+    @app.get("/v1/builders", response_model=BuilderListResponse, tags=["builders"])
+    async def list_builders(
+        org_slug: str | None = Query(None, description="Filter by org slug"),
+        platform: str | None = Query(None, description="Filter by platform"),
+        arch: str | None = Query(None, description="Filter by architecture"),
+        status: str | None = Query(None, description="Filter by status"),
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """List registered builders."""
+        _require_db_builders()
+        builders = await _db_builders.list_builders(
+            org_slug=org_slug, platform=platform, arch=arch, status=status
+        )
+        return BuilderListResponse(total=len(builders), builders=builders)
+
+    @app.get("/v1/builders/{builder_id}", response_model=BuilderInfo, tags=["builders"])
+    async def get_builder(
+        builder_id: int,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Get a single builder by ID."""
+        _require_db_builders()
+        info = await _db_builders.get(builder_id)
+        if info is None:
+            raise HTTPException(404, f"builder {builder_id} not found")
+        return info
+
+    @app.patch("/v1/builders/{builder_id}", response_model=BuilderInfo, tags=["builders"])
+    async def update_builder(
+        builder_id: int,
+        body: BuilderUpdateRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Update mutable builder fields."""
+        _require_db_builders()
+        info = await _db_builders.update(
+            builder_id,
+            labels=body.labels,
+            capabilities=body.capabilities,
+            max_jobs=body.max_jobs,
+            prefer_affinity=body.prefer_affinity,
+        )
+        if info is None:
+            raise HTTPException(404, f"builder {builder_id} not found")
+        await _db_audit.record(
+            action=AuditAction.builder_update,
+            actor=actor.name,
+            target=str(builder_id),
+        )
+        return info
+
+    @app.post(
+        "/v1/builders/{builder_id}/heartbeat",
+        response_model=BuilderInfo,
+        tags=["builders"],
+    )
+    async def builder_heartbeat(
+        builder_id: int,
+        body: BuilderHeartbeatRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Record a heartbeat from a running builder."""
+        _require_db_builders()
+        info = await _db_builders.heartbeat(
+            builder_id, status=body.status, current_jobs=body.current_jobs
+        )
+        if info is None:
+            raise HTTPException(404, f"builder {builder_id} not found")
+        return info
+
+    @app.delete("/v1/builders/{builder_id}", tags=["builders"])
+    async def unregister_builder(
+        builder_id: int,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Unregister (delete) a builder. Admin-only."""
+        _require_db_builders()
+        info = await _db_builders.get(builder_id)
+        if info is None:
+            raise HTTPException(404, f"builder {builder_id} not found")
+        await _db_builders.unregister(builder_id)
+        await _db_audit.record(
+            action=AuditAction.builder_unregister,
+            actor=actor.name,
+            target=f"{info.org_slug}/{info.name}" if info.org_slug else info.name,
+        )
+        await emit_webhook_event(
+            "builder.offline",
+            {
+                "builder_name": info.name,
+                "builder_id": builder_id,
+            },
+            org_slug=info.org_slug,
+        )
+        return {"message": "builder unregistered", "id": builder_id}
+
+    # ── Build Jobs ─────────────────────────────────────────────
+
+    def _require_db_build_jobs():
+        if not _use_db or _db_build_jobs is None:
+            raise HTTPException(
+                501, "build jobs require a database backend (set CVCPKG_DATABASE_URL)"
+            )
+
+    @app.post("/v1/builds", response_model=BuildJobInfo, tags=["builds"])
+    async def submit_build(
+        body: BuildJobSubmitRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Submit a single build job."""
+        _require_db_build_jobs()
+        info = await _db_build_jobs.create(
+            recipe_name=body.recipe_name,
+            platform=body.platform,
+            arch=body.arch,
+            submitted_by=actor.name,
+            recipe_version=body.recipe_version,
+            recipe_hash=body.recipe_hash,
+            config=body.config,
+            link=body.link,
+            org_slug=body.org_slug,
+            priority=body.priority,
+            timeout_seconds=body.timeout_seconds,
+            depends_on=body.depends_on,
+        )
+        await _db_audit.record(
+            action=AuditAction.build_submit,
+            actor=actor.name,
+            target=f"{body.recipe_name}@{body.platform}/{body.arch}",
+            detail=f"job #{info.id}",
+        )
+        return info
+
+    @app.post("/v1/builds/dag", response_model=DagSubmitResponse, tags=["builds"])
+    async def submit_dag(
+        body: DagSubmitRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Submit a DAG of build jobs.
+
+        The ``depends_on`` fields in each job use 0-based indices into
+        the ``jobs`` array (resolved to real IDs after insertion).
+        """
+        import uuid as _uuid
+
+        _require_db_build_jobs()
+        dag_id = body.dag_id or str(_uuid.uuid4())[:12]
+        jobs_dicts = [
+            {
+                "recipe_name": j.recipe_name,
+                "recipe_version": j.recipe_version,
+                "recipe_hash": j.recipe_hash,
+                "platform": j.platform,
+                "arch": j.arch,
+                "config": j.config,
+                "link": j.link,
+                "org_slug": j.org_slug,
+                "priority": j.priority,
+                "timeout_seconds": j.timeout_seconds,
+                "depends_on": j.depends_on,
+            }
+            for j in body.jobs
+        ]
+        infos = await _db_build_jobs.create_dag(
+            jobs=jobs_dicts, dag_id=dag_id, submitted_by=actor.name
+        )
+        await _db_audit.record(
+            action=AuditAction.build_submit,
+            actor=actor.name,
+            target=f"dag:{dag_id}",
+            detail=f"{len(infos)} jobs",
+        )
+        return DagSubmitResponse(dag_id=dag_id, total=len(infos), jobs=infos)
+
+    @app.get("/v1/builds", response_model=BuildJobListResponse, tags=["builds"])
+    async def list_builds(
+        status: str | None = Query(None, description="Filter by status"),
+        platform: str | None = Query(None, description="Filter by platform"),
+        dag_id: str | None = Query(None, description="Filter by DAG ID"),
+        recipe_name: str | None = Query(None, description="Filter by recipe name"),
+        org_slug: str | None = Query(None, description="Filter by org"),
+        builder_id: int | None = Query(None, description="Filter by builder ID"),
+        limit: int = Query(100, ge=1, le=1000),
+        offset: int = Query(0, ge=0),
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """List build jobs with optional filters."""
+        _require_db_build_jobs()
+        jobs, total = await _db_build_jobs.list_jobs(
+            status=status,
+            platform=platform,
+            dag_id=dag_id,
+            recipe_name=recipe_name,
+            org_slug=org_slug,
+            builder_id=builder_id,
+            limit=limit,
+            offset=offset,
+        )
+        return BuildJobListResponse(total=total, jobs=jobs)
+
+    @app.get("/v1/builds/{job_id}", response_model=BuildJobInfo, tags=["builds"])
+    async def get_build(
+        job_id: int,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Get a single build job by ID."""
+        _require_db_build_jobs()
+        info = await _db_build_jobs.get(job_id)
+        if info is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        return info
+
+    @app.post("/v1/builds/{job_id}/cancel", tags=["builds"])
+    async def cancel_build(
+        job_id: int,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Cancel a pending or dispatched build job."""
+        _require_db_build_jobs()
+        info = await _db_build_jobs.cancel(job_id)
+        if info is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _db_audit.record(
+            action=AuditAction.build_cancel,
+            actor=actor.name,
+            target=str(job_id),
+        )
+        await emit_webhook_event(
+            "build.cancelled",
+            {
+                "job_id": job_id,
+                "recipe_name": info.recipe_name,
+                "platform": info.platform,
+                "cancelled_by": actor.name,
+            },
+            org_slug=info.org_slug,
+        )
+        return {"message": "job cancelled", "id": job_id, "status": info.status}
+
+    @app.post("/v1/builds/dag/{dag_id}/cancel", tags=["builds"])
+    async def cancel_dag(
+        dag_id: str,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Cancel all pending/dispatched jobs in a DAG."""
+        _require_db_build_jobs()
+        count = await _db_build_jobs.cancel_dag(dag_id)
+        await _db_audit.record(
+            action=AuditAction.build_cancel,
+            actor=actor.name,
+            target=f"dag:{dag_id}",
+            detail=f"{count} jobs cancelled",
+        )
+        await emit_webhook_event(
+            "build.cancelled",
+            {
+                "dag_id": dag_id,
+                "cancelled": count,
+                "cancelled_by": actor.name,
+            },
+        )
+        return {"message": "dag cancelled", "dag_id": dag_id, "cancelled": count}
+
+    @app.post(
+        "/v1/builds/{job_id}/claim",
+        response_model=BuildJobInfo,
+        tags=["builds"],
+    )
+    async def claim_build(
+        job_id: int,
+        body: BuildJobClaimRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Builder claims a dispatched job → running."""
+        _require_db_build_jobs()
+        info = await _db_build_jobs.claim(job_id, body.builder_id)
+        if info is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _db_audit.record(
+            action=AuditAction.build_claim,
+            actor=actor.name,
+            target=str(job_id),
+            detail=f"builder #{body.builder_id}",
+        )
+        await emit_webhook_event(
+            "build.started",
+            {
+                "job_id": job_id,
+                "recipe_name": info.recipe_name,
+                "platform": info.platform,
+                "arch": info.arch,
+                "builder_id": body.builder_id,
+            },
+            org_slug=info.org_slug,
+        )
+        return info
+
+    @app.post(
+        "/v1/builds/{job_id}/complete",
+        response_model=BuildJobInfo,
+        tags=["builds"],
+    )
+    async def complete_build(
+        job_id: int,
+        body: BuildJobCompleteRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Report a build job as completed successfully."""
+        _require_db_build_jobs()
+        info = await _db_build_jobs.complete(job_id, result_archive_url=body.result_archive_url)
+        if info is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _db_audit.record(
+            action=AuditAction.build_complete,
+            actor=actor.name,
+            target=str(job_id),
+        )
+        await emit_webhook_event(
+            "build.completed",
+            {
+                "job_id": job_id,
+                "recipe_name": info.recipe_name,
+                "platform": info.platform,
+                "arch": info.arch,
+                "result_archive_url": info.result_archive_url or "",
+            },
+            org_slug=info.org_slug,
+        )
+        # Check if the entire DAG is now complete
+        if info.dag_id:
+            done = await _db_build_jobs.is_dag_complete(info.dag_id)
+            if done:
+                summary = await _db_build_jobs.dag_summary(info.dag_id)
+                await emit_webhook_event(
+                    "build.dag_completed",
+                    summary,
+                    org_slug=info.org_slug,
+                )
+        return info
+
+    @app.post(
+        "/v1/builds/{job_id}/fail",
+        response_model=BuildJobInfo,
+        tags=["builds"],
+    )
+    async def fail_build(
+        job_id: int,
+        body: BuildJobFailRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Report a build job as failed."""
+        _require_db_build_jobs()
+        info = await _db_build_jobs.fail(job_id, error_message=body.error_message)
+        if info is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _db_audit.record(
+            action=AuditAction.build_fail,
+            actor=actor.name,
+            target=str(job_id),
+            detail=body.error_message[:200] if body.error_message else "",
+        )
+        await emit_webhook_event(
+            "build.failed",
+            {
+                "job_id": job_id,
+                "recipe_name": info.recipe_name,
+                "platform": info.platform,
+                "arch": info.arch,
+                "error_message": body.error_message or "",
+            },
+            org_slug=info.org_slug,
+        )
+        # Check if the entire DAG is now complete
+        if info.dag_id:
+            done = await _db_build_jobs.is_dag_complete(info.dag_id)
+            if done:
+                summary = await _db_build_jobs.dag_summary(info.dag_id)
+                await emit_webhook_event(
+                    "build.dag_completed",
+                    summary,
+                    org_slug=info.org_slug,
+                )
+        return info
+
+    # ── Build log endpoints ─────────────────────────────────
+
+    @app.patch(
+        "/v1/builds/{job_id}/log",
+        response_model=BuildJobInfo,
+        tags=["builds"],
+    )
+    async def append_build_log(
+        job_id: int,
+        body: BuildLogAppendRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Append a chunk of log data to a build job's log."""
+        _require_db_build_jobs()
+        state = _get_state()
+        info = await _db_build_jobs.append_log(job_id, body.data, logs_dir=state.logs_dir())
+        if info is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        return info
+
+    @app.get(
+        "/v1/builds/{job_id}/log",
+        tags=["builds"],
+    )
+    async def download_build_log(
+        job_id: int,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Download the full log for a build job."""
+        _require_db_build_jobs()
+        state = _get_state()
+        path = await _db_build_jobs.get_log_path(job_id, logs_dir=state.logs_dir())
+        if path is None:
+            raise HTTPException(404, f"no log available for build job {job_id}")
+        return FileResponse(
+            path,
+            media_type="text/plain",
+            filename=path.name,
+        )
+
+    @app.delete(
+        "/v1/builds/{job_id}/log",
+        tags=["builds"],
+    )
+    async def delete_build_log(
+        job_id: int,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Delete a build job's log (admin only)."""
+        _require_db_build_jobs()
+        state = _get_state()
+        deleted = await _db_build_jobs.delete_log(job_id, logs_dir=state.logs_dir())
+        if not deleted:
+            raise HTTPException(404, f"build job {job_id} not found")
+        return {"ok": True, "job_id": job_id}
+
+    @app.get(
+        "/v1/builds/{job_id}/log/stream",
+        tags=["builds"],
+    )
+    async def stream_build_log(
+        job_id: int,
+        token: str | None = Query(None),
+        authorization: str | None = Header(None),
+    ):
+        """Stream a build job's log as Server-Sent Events.
+
+        Reads existing log content and then tails for new data.
+        The stream ends when the job reaches a terminal state.
+
+        Accepts authentication via Authorization header or ``?token=``
+        query parameter (needed for ``EventSource`` which cannot send
+        custom headers).
+        """
+        _require_db_build_jobs()
+        # Accept auth from either header or query param
+        raw = _extract_token(authorization) or token
+        if raw is None:
+            raise HTTPException(401, "missing authentication")
+        record = await _authenticate_token(raw)
+        if record is None:
+            raise HTTPException(401, "invalid or expired token")
+        if record.role not in (TokenRole.publisher, TokenRole.admin):
+            raise HTTPException(403, "insufficient role")
+        state = _get_state()
+
+        async def _event_generator():
+            logs_dir = state.logs_dir()
+            offset = 0
+            while True:
+                info = await _db_build_jobs.get(job_id)
+                if info is None:
+                    yield "event: error\ndata: job not found\n\n"
+                    return
+
+                path = await _db_build_jobs.get_log_path(job_id, logs_dir=logs_dir)
+                if path is not None:
+                    size = path.stat().st_size
+                    if size > offset:
+                        with open(path) as f:
+                            f.seek(offset)
+                            chunk = f.read()
+                        offset = size
+                        # Escape newlines for SSE
+                        for line in chunk.splitlines():
+                            yield f"data: {line}\n\n"
+
+                # Check terminal states
+                if info.status in (
+                    "succeeded",
+                    "failed",
+                    "cancelled",
+                    "timed_out",
+                ):
+                    yield f"event: done\ndata: {info.status}\n\n"
+                    return
+                await asyncio.sleep(2)
+
+        return StreamingResponse(
+            _event_generator(),
+            media_type="text/event-stream",
+        )
+
+    # ── Builder next-job (long-poll) ────────────────────────
+
+    @app.get(
+        "/v1/builders/{builder_id}/next-job",
+        tags=["builders"],
+    )
+    async def builder_next_job(
+        builder_id: int,
+        timeout: int = Query(default=30, ge=1, le=60),
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Long-poll for the next dispatched job for a builder.
+
+        Blocks for up to ``timeout`` seconds (default 30, max 60).
+        Returns a job object or 204 No Content.
+        """
+        _require_db_build_jobs()
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            info = await _db_build_jobs.next_job_for_builder(builder_id)
+            if info is not None:
+                return info
+            await asyncio.sleep(1)
+        return Response(status_code=204)
+
+    # ── Builder WebSocket ───────────────────────────────────
+
+    @app.websocket("/v1/builders/{builder_id}/ws")
+    async def builder_ws(websocket: WebSocket, builder_id: int):
+        """Persistent WebSocket for a builder.
+
+        The builder authenticates by passing ``token`` as a query
+        parameter.  Once connected the builder receives
+        ``job.dispatch``, ``job.timeout``, ``recipe.push``, and
+        ``ping`` messages from the server.  The builder sends
+        ``job.claim``, ``job.log``, ``job.complete``, ``job.fail``,
+        ``heartbeat``, and ``pong`` messages.
+        """
+        # Authenticate via query param
+        token_value = websocket.query_params.get("token", "")
+        if not token_value:
+            await websocket.close(code=4001, reason="missing token")
+            return
+        actor = await _authenticate_token(token_value)
+        if actor is None:
+            await websocket.close(code=4001, reason="invalid token")
+            return
+        if actor.role not in (TokenRole.publisher, TokenRole.admin):
+            await websocket.close(code=4003, reason="insufficient role")
+            return
+
+        # Validate builder exists
+        if not _use_db or _db_builders is None:
+            await websocket.close(code=4004, reason="builders not available")
+            return
+        info = await _db_builders.get(builder_id)
+        if info is None:
+            await websocket.close(code=4004, reason="builder not found")
+            return
+
+        await websocket.accept()
+        _ws_builders[builder_id] = websocket
+        logger.info("builder %d connected via WebSocket", builder_id)
+
+        try:
+            while True:
+                data = await websocket.receive_json()
+                msg_type = data.get("type", "")
+
+                if msg_type == "heartbeat":
+                    status = data.get("status", "online")
+                    current_jobs = data.get("current_jobs", 0)
+                    await _db_builders.heartbeat(
+                        builder_id, status=status, current_jobs=current_jobs
+                    )
+                    await websocket.send_json({"type": "heartbeat_ack"})
+
+                elif msg_type == "job.claim":
+                    job_id = data.get("job_id")
+                    if job_id is not None:
+                        result = await _db_build_jobs.claim(job_id, builder_id)
+                        await websocket.send_json(
+                            {
+                                "type": "job.claim_ack",
+                                "job_id": job_id,
+                                "status": result.status if result else "not_found",
+                            }
+                        )
+
+                elif msg_type == "job.log":
+                    job_id = data.get("job_id")
+                    log_data = data.get("data", "")
+                    if job_id is not None and log_data:
+                        state = _get_state()
+                        await _db_build_jobs.append_log(job_id, log_data, logs_dir=state.logs_dir())
+
+                elif msg_type == "job.complete":
+                    job_id = data.get("job_id")
+                    archive_url = data.get("archive_url", "")
+                    if job_id is not None:
+                        result = await _db_build_jobs.complete(
+                            job_id, result_archive_url=archive_url
+                        )
+                        await websocket.send_json(
+                            {
+                                "type": "job.complete_ack",
+                                "job_id": job_id,
+                                "status": result.status if result else "not_found",
+                            }
+                        )
+                        if result:
+                            await emit_webhook_event(
+                                "build.succeeded",
+                                {
+                                    "job_id": job_id,
+                                    "recipe_name": result.recipe_name,
+                                    "platform": result.platform,
+                                    "arch": result.arch,
+                                    "archive_url": archive_url,
+                                },
+                                org_slug=result.org_slug,
+                            )
+                            if result.dag_id:
+                                done = await _db_build_jobs.is_dag_complete(result.dag_id)
+                                if done:
+                                    summary = await _db_build_jobs.dag_summary(result.dag_id)
+                                    await emit_webhook_event(
+                                        "build.dag_completed",
+                                        summary,
+                                        org_slug=result.org_slug,
+                                    )
+
+                elif msg_type == "job.fail":
+                    job_id = data.get("job_id")
+                    error = data.get("error", "")
+                    if job_id is not None:
+                        result = await _db_build_jobs.fail(job_id, error_message=error[:4096])
+                        await websocket.send_json(
+                            {
+                                "type": "job.fail_ack",
+                                "job_id": job_id,
+                                "status": result.status if result else "not_found",
+                            }
+                        )
+                        if result:
+                            await _db_build_jobs.cancel_downstream(job_id)
+                            await emit_webhook_event(
+                                "build.failed",
+                                {
+                                    "job_id": job_id,
+                                    "recipe_name": result.recipe_name,
+                                    "error": error[:256],
+                                },
+                                org_slug=result.org_slug,
+                            )
+                            if result.dag_id:
+                                done = await _db_build_jobs.is_dag_complete(result.dag_id)
+                                if done:
+                                    summary = await _db_build_jobs.dag_summary(result.dag_id)
+                                    await emit_webhook_event(
+                                        "build.dag_completed",
+                                        summary,
+                                        org_slug=result.org_slug,
+                                    )
+
+                elif msg_type == "pong":
+                    pass  # response to server ping
+
+                else:
+                    await websocket.send_json(
+                        {"type": "error", "message": f"unknown type: {msg_type}"}
+                    )
+
+        except WebSocketDisconnect:
+            logger.info("builder %d WebSocket disconnected", builder_id)
+        except Exception:
+            logger.exception("builder %d WebSocket error", builder_id)
+        finally:
+            _ws_builders.pop(builder_id, None)
+
+    # ── Recipe distribution endpoints ───────────────────────
+
+    def _require_db_recipes():
+        if not _use_db or _db_recipes is None:
+            raise HTTPException(
+                501,
+                "recipe distribution requires a database backend " "(set CVCPKG_DATABASE_URL)",
+            )
+
+    @app.post(
+        "/v1/recipes/{name}",
+        response_model=RecipeInfo,
+        tags=["recipes"],
+    )
+    async def upload_recipe(
+        name: str,
+        file: UploadFile,
+        org_slug: str = Query("", max_length=255),
+        version: str = Query("", max_length=128),
+        recipe_hash: str = Query("", max_length=128),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Upload or update a recipe bundle (tar.gz).
+
+        Admin only for global recipes.  Overwrites if the same
+        ``(name, org_slug)`` already exists.
+        """
+        import re as _re_mod
+
+        _require_db_recipes()
+        # Validate name
+        if not _re_mod.match(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$", name):
+            raise HTTPException(400, "invalid recipe name")
+
+        state = _get_state()
+        recipes_dir = state.state_dir / "recipe_bundles"
+        if org_slug:
+            recipes_dir = recipes_dir / org_slug
+        recipes_dir.mkdir(parents=True, exist_ok=True)
+
+        dest = recipes_dir / f"{name}.tar.gz"
+        # Write uploaded file
+        content = await file.read()
+        dest.write_bytes(content)
+        bundle_size = len(content)
+
+        info = await _db_recipes.upload(
+            name=name,
+            bundle_path=str(dest),
+            bundle_size=bundle_size,
+            uploaded_by=actor.name,
+            version=version,
+            recipe_hash=recipe_hash,
+            org_slug=org_slug,
+        )
+        await _db_audit.record(
+            action=AuditAction.recipe_upload,
+            actor=actor.name,
+            target=name,
+            detail=f"version={version} org={org_slug}" if org_slug else f"version={version}",
+        )
+        # Notify connected builders of the new/updated recipe
+        bundle_url = f"/v1/recipes/{name}"
+        if org_slug:
+            bundle_url += f"?org_slug={org_slug}"
+        await _ws_broadcast(
+            {
+                "type": "recipe.push",
+                "recipe": {
+                    "name": name,
+                    "version": version,
+                    "bundle_url": bundle_url,
+                },
+            }
+        )
+        return info
+
+    @app.get(
+        "/v1/recipes",
+        response_model=RecipeListResponse,
+        tags=["recipes"],
+    )
+    async def list_recipes(
+        org_slug: str | None = Query(None),
+        limit: int = Query(100, ge=1, le=1000),
+        offset: int = Query(0, ge=0),
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """List server-managed recipe bundles."""
+        _require_db_recipes()
+        recipes, total = await _db_recipes.list_recipes(
+            org_slug=org_slug, limit=limit, offset=offset
+        )
+        return RecipeListResponse(total=total, recipes=recipes)
+
+    @app.get(
+        "/v1/recipes/bundle",
+        tags=["recipes"],
+    )
+    async def get_recipe_set_bundle(
+        org_slug: str = Query("", description="Organization scope (empty = base set)"),
+        _auth: TokenRecord | None = Depends(optional_reader_auth),
+        _caller: TokenRecord | None = Depends(optional_token),
+    ):
+        """Download the full recipe set as a single tar.gz bundle.
+
+        Returns all recipes on the server (or all recipes for an org)
+        combined into one tarball.  Used by ``cvcpkg recipe pull-all``
+        and by the ``_try_pull_server_recipes()`` fallback.
+
+        Falls back to bundled/local recipes when no DB is configured.
+        """
+        import io
+        import tarfile
+
+        buf = io.BytesIO()
+
+        if _use_db and _db_recipes is not None:
+            recipes_list, _ = await _db_recipes.list_recipes(
+                org_slug=org_slug or None, limit=10000, offset=0
+            )
+            with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+                for r in recipes_list:
+                    bundle_path = await _db_recipes.get_bundle_path(r.name, org_slug=r.org_slug)
+                    if bundle_path and Path(bundle_path).is_file():
+                        with tarfile.open(bundle_path, "r:gz") as inner:
+                            for member in inner.getmembers():
+                                f = inner.extractfile(member) if member.isfile() else None
+                                tar.addfile(member, f)
+        else:
+            from cvcpkg.builder import RecipeError, find_recipes_dir
+
+            try:
+                recipes_dir = find_recipes_dir()
+            except RecipeError:
+                raise HTTPException(404, "no recipes available")
+
+            with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+                for entry in sorted(recipes_dir.iterdir()):
+                    if not entry.is_dir() or entry.name.startswith((".", "__")):
+                        continue
+                    if not (entry / "recipe.yaml").is_file():
+                        continue
+                    for f in sorted(entry.rglob("*")):
+                        if f.is_file():
+                            arcname = str(f.relative_to(recipes_dir))
+                            tar.add(str(f), arcname=arcname)
+                common_dir = recipes_dir / "_common"
+                if common_dir.is_dir():
+                    for f in sorted(common_dir.rglob("*")):
+                        if f.is_file():
+                            arcname = str(f.relative_to(recipes_dir))
+                            tar.add(str(f), arcname=arcname)
+
+        buf.seek(0)
+        label = f"recipes-{org_slug}.tar.gz" if org_slug else "recipes.tar.gz"
+        return StreamingResponse(
+            buf,
+            media_type="application/gzip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{label}"',
+                "Content-Length": str(buf.getbuffer().nbytes),
+            },
+        )
+
+    @app.get(
+        "/v1/recipes/{name}",
+        tags=["recipes"],
+    )
+    async def get_recipe_bundle(
+        name: str,
+        org_slug: str = Query(""),
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Download a recipe bundle (tar.gz)."""
+        _require_db_recipes()
+        info = await _db_recipes.get(name, org_slug=org_slug)
+        if info is None:
+            raise HTTPException(404, f"recipe '{name}' not found")
+        bundle_path = await _db_recipes.get_bundle_path(name, org_slug=org_slug)
+        if bundle_path is None or not Path(bundle_path).is_file():
+            raise HTTPException(404, f"recipe bundle for '{name}' not found on disk")
+        return FileResponse(
+            bundle_path,
+            media_type="application/gzip",
+            filename=f"{name}.tar.gz",
+        )
+
+    @app.delete(
+        "/v1/recipes/{name}",
+        tags=["recipes"],
+    )
+    async def delete_recipe(
+        name: str,
+        org_slug: str = Query(""),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Delete a recipe bundle (admin only)."""
+        _require_db_recipes()
+        # Try to remove bundle file
+        bundle_path = await _db_recipes.get_bundle_path(name, org_slug=org_slug)
+        if bundle_path and Path(bundle_path).is_file():
+            Path(bundle_path).unlink()
+
+        deleted = await _db_recipes.delete(name, org_slug=org_slug)
+        if not deleted:
+            raise HTTPException(404, f"recipe '{name}' not found")
+        await _db_audit.record(
+            action=AuditAction.recipe_delete,
+            actor=actor.name,
+            target=name,
+        )
+        return {"ok": True, "name": name}
+
+    @app.post(
+        "/v1/recipes/{name}/register",
+        tags=["recipes"],
+    )
+    async def register_recipe_placeholder(
+        name: str,
+        request: Request,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Register a recipe as a placeholder package in the catalog.
+
+        Creates a catalog entry with no build artifacts so the recipe
+        is discoverable.  Remote builders or local users can then
+        build the actual package.  If a built version already exists,
+        this is a no-op.
+        """
+        import re as _re_mod
+
+        _require_db_recipes()
+        if not _re_mod.match(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$", name):
+            raise HTTPException(400, "invalid recipe name")
+
+        body = await request.json()
+        version = body.get("version", "")
+        description = body.get("description", "")
+        homepage = body.get("homepage", "")
+        pkg_license = body.get("license", "")
+        maintainer = body.get("maintainer", "")
+        org_slug = body.get("org_slug", "")
+
+        # Check if a built version already exists — skip if so
+        if _db_packages is not None and version:
+            pkgs, _ = await _db_packages.get_bundles(limit=10)
+            for p in pkgs:
+                if p.name == name and p.version == version and p.archive_url:
+                    return {"ok": True, "name": name, "status": "already_built"}
+
+        # Register as a placeholder — no archive, no sha256
+        if _db_packages is not None and version:
+            import datetime
+
+            await _db_packages.add_package(
+                name=name,
+                version=version,
+                platform="any",
+                arch="noarch",
+                build_type="release",
+                link="shared",
+                sha256="",
+                size_bytes=0,
+                archive_url="",
+                description=description,
+                homepage=homepage,
+                pkg_license=pkg_license,
+                maintainer=maintainer,
+                org_slug=org_slug,
+                published_by=actor.name,
+            )
+            await _db_audit.record(
+                action=AuditAction.publish,
+                actor=actor.name,
+                target=f"{name}=={version}",
+                detail="placeholder (recipe publish, no artifacts)",
+            )
+
+        return {"ok": True, "name": name, "status": "registered"}
+
+    # ── Webhook endpoints ──────────────────────────────────
+
+    def _require_db_webhooks():
+        if not _use_db or _db_webhooks is None:
+            raise HTTPException(
+                501,
+                "webhooks require a database backend " "(set CVCPKG_DATABASE_URL)",
+            )
+
+    @app.post(
+        "/v1/webhooks",
+        response_model=WebhookInfo,
+        tags=["webhooks"],
+    )
+    async def register_webhook(
+        body: WebhookRegisterRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Register a new webhook (admin only)."""
+        _require_db_webhooks()
+        info = await _db_webhooks.register(
+            url=body.url,
+            events=body.events,
+            registered_by=actor.name,
+            org_slug=body.org_slug,
+        )
+        await _db_audit.record(
+            action=AuditAction.webhook_register,
+            actor=actor.name,
+            target=str(info.id),
+            detail=f"url={body.url}",
+        )
+        return info
+
+    @app.get(
+        "/v1/webhooks",
+        response_model=WebhookListResponse,
+        tags=["webhooks"],
+    )
+    async def list_webhooks(
+        org_slug: str | None = Query(None),
+        limit: int = Query(100, ge=1, le=1000),
+        offset: int = Query(0, ge=0),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """List registered webhooks (admin only)."""
+        _require_db_webhooks()
+        webhooks, total = await _db_webhooks.list_webhooks(
+            org_slug=org_slug,
+            limit=limit,
+            offset=offset,
+        )
+        return WebhookListResponse(total=total, webhooks=webhooks)
+
+    @app.get(
+        "/v1/webhooks/{webhook_id}",
+        response_model=WebhookInfo,
+        tags=["webhooks"],
+    )
+    async def get_webhook(
+        webhook_id: int,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Get details for a webhook (admin only)."""
+        _require_db_webhooks()
+        info = await _db_webhooks.get(webhook_id)
+        if info is None:
+            raise HTTPException(404, f"webhook {webhook_id} not found")
+        return info
+
+    @app.patch(
+        "/v1/webhooks/{webhook_id}",
+        response_model=WebhookInfo,
+        tags=["webhooks"],
+    )
+    async def update_webhook(
+        webhook_id: int,
+        body: WebhookUpdateRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Update a webhook (admin only)."""
+        _require_db_webhooks()
+        info = await _db_webhooks.update(
+            webhook_id,
+            url=body.url,
+            events=body.events,
+            active=body.active,
+        )
+        if info is None:
+            raise HTTPException(404, f"webhook {webhook_id} not found")
+        await _db_audit.record(
+            action=AuditAction.webhook_update,
+            actor=actor.name,
+            target=str(webhook_id),
+        )
+        return info
+
+    @app.delete(
+        "/v1/webhooks/{webhook_id}",
+        tags=["webhooks"],
+    )
+    async def delete_webhook(
+        webhook_id: int,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Delete a webhook (admin only)."""
+        _require_db_webhooks()
+        deleted = await _db_webhooks.delete(webhook_id)
+        if not deleted:
+            raise HTTPException(404, f"webhook {webhook_id} not found")
+        await _db_audit.record(
+            action=AuditAction.webhook_delete,
+            actor=actor.name,
+            target=str(webhook_id),
+        )
+        return {"ok": True, "id": webhook_id}
+
+    @app.post(
+        "/v1/webhooks/{webhook_id}/test",
+        tags=["webhooks"],
+    )
+    async def test_webhook(
+        webhook_id: int,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Send a test payload to a webhook."""
+        _require_db_webhooks()
+        info = await _db_webhooks.get(webhook_id)
+        if info is None:
+            raise HTTPException(404, f"webhook {webhook_id} not found")
+        secret = await _db_webhooks.get_secret(webhook_id)
+        # Build test payload
+        import hashlib as _hashlib_mod
+        import hmac as _hmac_mod
+
+        payload = json.dumps(
+            {
+                "event": "webhook.test",
+                "webhook_id": webhook_id,
+                "triggered_by": actor.name,
+            }
+        )
+        sig = _hmac_mod.new(
+            (secret or "").encode(),
+            payload.encode(),
+            _hashlib_mod.sha256,
+        ).hexdigest()
+        # Attempt delivery
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    info.url,
+                    content=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-CvcPkg-Signature": f"sha256={sig}",
+                        "X-CvcPkg-Event": "webhook.test",
+                    },
+                )
+            await _db_webhooks.record_delivery(webhook_id)
+            return {
+                "ok": True,
+                "status_code": resp.status_code,
+                "webhook_id": webhook_id,
+            }
+        except Exception as exc:
+            await _db_webhooks.record_failure(webhook_id)
+            raise HTTPException(502, f"delivery failed: {exc}") from exc
+
+    # ── Retention & Quota endpoints ─────────────────────────
+
+    @app.post(
+        "/v1/admin/gc/logs",
+        tags=["admin"],
+    )
+    async def admin_gc_logs(
+        older_than_days: int = Query(30, ge=1),
+        status: str | None = Query(None),
+        delete_logs: bool = Query(True),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Garbage-collect old build logs (admin only).
+
+        Deletes logs from finished jobs older than *older_than_days*.
+        Optionally filter by job status (e.g. ``failed``, ``cancelled``).
+        """
+        _require_db_build_jobs()
+        state = _get_state()
+        purged = await _db_build_jobs.purge_old_logs(
+            older_than_days=older_than_days,
+            logs_dir=state.logs_dir(),
+            status_filter=status,
+            delete_logs=delete_logs,
+        )
+        return {"ok": True, "purged": purged}
+
+    @app.post(
+        "/v1/admin/purge/builds",
+        tags=["admin"],
+    )
+    async def admin_purge_builds(
+        older_than_days: int = Query(30, ge=1),
+        status: str | None = Query(None),
+        delete_logs: bool = Query(True),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Purge old finished build jobs and their logs (admin only).
+
+        Deletes entire job rows (not just logs) from finished jobs
+        older than *older_than_days*.
+        """
+        _require_db_build_jobs()
+        state = _get_state()
+        purged = await _db_build_jobs.purge_old_jobs(
+            older_than_days=older_than_days,
+            logs_dir=state.logs_dir(),
+            status_filter=status,
+            delete_logs=delete_logs,
+        )
+        return {"ok": True, "purged": purged}
+
+    @app.get(
+        "/v1/admin/quota/logs/{org_slug}",
+        tags=["admin"],
+    )
+    async def admin_org_log_usage(
+        org_slug: str,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Get total log storage usage for an organization (admin only)."""
+        _require_db_build_jobs()
+        usage = await _db_build_jobs.get_org_log_usage(org_slug)
+        return {"org_slug": org_slug, "log_bytes": usage}
 
     # ── Mirror-mode download proxy ──────────────────────────
 

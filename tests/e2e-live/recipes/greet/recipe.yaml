@@ -1,0 +1,22 @@
+schema_version: 1
+recipe:
+  name: greet
+  upstream_version: "1.0.0"
+  cvc_revision: 1
+  description: "Tiny greet library for E2E testing (depends on hello)."
+  license: MIT
+  tags: [test]
+
+source:
+  type: prebuilt
+
+patches: []
+
+depends:
+  build:
+    - hello
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh

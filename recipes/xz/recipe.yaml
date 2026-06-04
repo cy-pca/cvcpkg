@@ -3,9 +3,9 @@ recipe:
   name: xz
   upstream_version: "5.6.4"
   cvc_revision: 1
-  maintainer: "CyberPC Angel, LLC"
-  maintainer_email: "cvcpkg@cyberpcangel.com"
-  maintainer_url: "https://cyberpcangel.com"
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
   description: "XZ Utils — a general-purpose data compression library implementing the LZMA2 algorithm."
   homepage: https://tukaani.org/xz/
   license: 0BSD AND LGPL-2.1-or-later AND GPL-2.0-or-later

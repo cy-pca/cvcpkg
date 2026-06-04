@@ -11,7 +11,8 @@ import yaml
 from cvcpkg.errors import CatalogError, IntegrityError
 from cvcpkg.manifest import CatalogEntry, Dependency
 
-DEFAULT_CATALOG_URL = "https://pkg.tx.wtf/v1/catalog"
+from cvcpkg.config import default_catalog_url
+
 GITHUB_CATALOG_URL = "https://transfix.github.io/libcvc-deps/catalog/latest.yaml"
 
 
@@ -61,7 +62,7 @@ def fetch_catalog(
     If *cache_dir* is given, cache the raw bytes under
     ``<cache_dir>/catalog/<sha256>.yaml``.
     """
-    url = url or os.environ.get("CVCPKG_CATALOG_URL", DEFAULT_CATALOG_URL)
+    url = url or default_catalog_url()
 
     urls_to_try = [url] + (fallback_urls or [])
     last_error: Exception | None = None
@@ -155,7 +156,7 @@ def generate_catalog(
     output_dir: Path,
     *,
     release_tag: str,
-    server_url: str = "https://pkg.tx.wtf",
+    server_url: str = "",
     base_revision: int = 0,
 ) -> dict:
     """Merge per-platform index YAMLs into a unified catalog.
@@ -172,6 +173,11 @@ def generate_catalog(
     """
     index_files = sorted(indexes_dir.glob("*-index.yaml"))
     version = release_tag.lstrip("v")
+
+    if not server_url:
+        from cvcpkg.config import default_server_url
+
+        server_url = default_server_url()
 
     all_bundles: list[dict] = []
     for idx_path in index_files:

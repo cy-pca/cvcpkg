@@ -16,7 +16,7 @@ with certbot).
 ## Prerequisites
 
 - Docker Engine ≥ 24.0 and Docker Compose v2
-- A domain name with DNS pointing to the host (e.g. `pkg.tx.wtf`)
+- A domain name with DNS pointing to the host (e.g. `cvcpkg.org`)
 - A TLS-terminating reverse proxy (Apache2+LE or Nginx+certbot)
 
 ## Quick Deploy
