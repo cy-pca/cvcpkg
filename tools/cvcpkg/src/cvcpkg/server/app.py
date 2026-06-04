@@ -3602,25 +3602,58 @@ def create_app(
         platform: str | None = Query(None, description="Filter by platform"),
         arch: str | None = Query(None, description="Filter by architecture"),
         status: str | None = Query(None, description="Filter by status"),
-        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+        _auth: TokenRecord | None = Depends(optional_reader_auth),
+        _caller: TokenRecord | None = Depends(optional_token),
     ):
-        """List registered builders."""
+        """List registered builders.
+
+        Public builders (no org or public org) are visible to everyone.
+        Private-org builders require membership or admin role.
+        """
         _require_db_builders()
+        caller = _auth or _caller
         builders = await _db_builders.list_builders(
             org_slug=org_slug, platform=platform, arch=arch, status=status
         )
+        # Filter out private-org builders unless caller is admin or member
+        is_admin = caller is not None and caller.role == TokenRole.admin
+        if not is_admin and _db_orgs is not None:
+            visible = []
+            for b in builders:
+                if not b.org_slug:
+                    visible.append(b)
+                else:
+                    org_info = await _db_orgs.get(b.org_slug)
+                    if org_info is None or not org_info.is_private:
+                        visible.append(b)
+                    elif caller and await _db_orgs.is_member(b.org_slug, caller.name):
+                        visible.append(b)
+            builders = visible
         return BuilderListResponse(total=len(builders), builders=builders)
 
     @app.get("/v1/builders/{builder_id}", response_model=BuilderInfo, tags=["builders"])
     async def get_builder(
         builder_id: int,
-        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+        _auth: TokenRecord | None = Depends(optional_reader_auth),
+        _caller: TokenRecord | None = Depends(optional_token),
     ):
-        """Get a single builder by ID."""
+        """Get a single builder by ID.
+
+        Public builders (no org or public org) are visible to everyone.
+        Private-org builders require membership or admin role.
+        """
         _require_db_builders()
         info = await _db_builders.get(builder_id)
         if info is None:
             raise HTTPException(404, f"builder {builder_id} not found")
+        # Access control: private-org builders need auth
+        caller = _auth or _caller
+        is_admin = caller is not None and caller.role == TokenRole.admin
+        if info.org_slug and not is_admin and _db_orgs is not None:
+            org_info = await _db_orgs.get(info.org_slug)
+            if org_info is not None and org_info.is_private:
+                if caller is None or not await _db_orgs.is_member(info.org_slug, caller.name):
+                    raise HTTPException(404, f"builder {builder_id} not found")
         return info
 
     @app.patch("/v1/builders/{builder_id}", response_model=BuilderInfo, tags=["builders"])
