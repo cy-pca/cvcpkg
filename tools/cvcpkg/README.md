@@ -969,7 +969,7 @@ cvcpkg rev-bump openssl
 git add recipes/ && git commit -m "rev-bump openssl + downstream"
 
 # 3. Tag and push — CI rebuilds and publishes everything:
-git tag v1.6.1 && git push origin v1.6.1
+git tag v2.0.0 && git push origin v2.0.0
 ```
 
 ### Revision vs. version vs. catalog revision
