@@ -5051,6 +5051,125 @@ def builds_log_delete(job_id: int, server: str, token: str):
     click.echo(f"Log for build #{job_id} deleted.")
 
 
+# ── Build-wait helpers ──────────────────────────────────────────────
+
+
+def _wait_for_jobs(server: str, token: str, job_ids: list[int]) -> None:
+    """Poll until all job IDs reach a terminal state, printing updates."""
+    import time
+
+    import httpx
+
+    base = server.rstrip("/")
+    headers = {"Authorization": f"Bearer {token}"}
+    terminal = {"succeeded", "failed", "cancelled", "timed_out"}
+    pending = set(job_ids)
+
+    click.echo(f"\nWaiting for {len(pending)} job(s)...")
+    with httpx.Client(timeout=30) as client:
+        while pending:
+            time.sleep(5)
+            done_this_round = []
+            for jid in list(pending):
+                resp = client.get(f"{base}/v1/builds/{jid}", headers=headers)
+                if resp.status_code >= 400:
+                    continue
+                info = resp.json()
+                status = info.get("status", "unknown")
+                recipe = info.get("recipe_name", "?")
+                plat = info.get("platform", "?")
+                if status in terminal:
+                    icon = "\u2713" if status == "succeeded" else "\u2717"
+                    click.echo(f"  {icon} #{jid} {recipe} ({plat}): {status}")
+                    done_this_round.append(jid)
+            for jid in done_this_round:
+                pending.discard(jid)
+            if pending:
+                click.echo(f"  ... {len(pending)} job(s) still running", err=True)
+
+    failed = []
+    with httpx.Client(timeout=30) as client:
+        for jid in job_ids:
+            resp = client.get(f"{base}/v1/builds/{jid}", headers=headers)
+            if resp.status_code < 400:
+                info = resp.json()
+                if info.get("status") != "succeeded":
+                    failed.append(jid)
+    if failed:
+        raise click.ClickException(f"{len(failed)} job(s) failed: {failed}")
+    click.echo(f"\nAll {len(job_ids)} job(s) succeeded.")
+
+
+def _wait_for_dags(server: str, token: str, dag_ids: list[str]) -> None:
+    """Poll until all jobs in the given DAGs reach terminal state."""
+    import time
+
+    import httpx
+
+    base = server.rstrip("/")
+    headers = {"Authorization": f"Bearer {token}"}
+    terminal = {"succeeded", "failed", "cancelled", "timed_out"}
+
+    click.echo(f"\nWaiting for {len(dag_ids)} DAG(s)...")
+    all_job_ids: set[int] = set()
+    finished: set[int] = set()
+    counts: dict[str, int] = {}
+
+    with httpx.Client(timeout=30) as client:
+        while True:
+            time.sleep(5)
+            still_running = False
+            for did in dag_ids:
+                resp = client.get(
+                    f"{base}/v1/builds",
+                    headers=headers,
+                    params={"dag_id": did, "limit": 1000},
+                )
+                if resp.status_code >= 400:
+                    continue
+                jobs = resp.json().get("jobs", [])
+                for j in jobs:
+                    jid = j["id"]
+                    all_job_ids.add(jid)
+                    status = j.get("status", "unknown")
+                    if status in terminal:
+                        if jid not in finished:
+                            finished.add(jid)
+                            icon = "\u2713" if status == "succeeded" else "\u2717"
+                            click.echo(
+                                f"  {icon} #{jid} {j['recipe_name']} "
+                                f"({j['platform']}/{j.get('arch','?')}): {status}"
+                            )
+                        counts[status] = counts.get(status, 0) + (1 if jid not in finished else 0)
+                    else:
+                        still_running = True
+
+            if not still_running and all_job_ids:
+                break
+            if all_job_ids:
+                click.echo(
+                    f"  ... {len(all_job_ids) - len(finished)}/{len(all_job_ids)} "
+                    f"job(s) remaining",
+                    err=True,
+                )
+
+    n_failed = sum(1 for jid in all_job_ids if jid not in finished) + len(
+        [j for j in all_job_ids if False]  # placeholder
+    )
+    # Re-check final states
+    failed_ids: list[int] = []
+    with httpx.Client(timeout=30) as client:
+        for jid in all_job_ids:
+            resp = client.get(f"{base}/v1/builds/{jid}", headers=headers)
+            if resp.status_code < 400:
+                info = resp.json()
+                if info.get("status") != "succeeded":
+                    failed_ids.append(jid)
+    if failed_ids:
+        raise click.ClickException(f"{len(failed_ids)} job(s) did not succeed: {failed_ids}")
+    click.echo(f"\nAll {len(all_job_ids)} job(s) succeeded.")
+
+
 @builds_group.command("submit")
 @click.option(
     "--server",
@@ -5075,6 +5194,9 @@ def builds_log_delete(job_id: int, server: str, token: str):
 @click.option(
     "--timeout", "timeout_seconds", type=int, default=None, help="Per-job timeout (seconds)."
 )
+@click.option(
+    "--wait", "-w", is_flag=True, help="Wait for the job to finish, printing status updates."
+)
 def builds_submit(
     server: str,
     token: str,
@@ -5086,6 +5208,7 @@ def builds_submit(
     org_slug: str,
     priority: int,
     timeout_seconds: int | None,
+    wait: bool,
 ):
     """Submit a single remote build job.
 
@@ -5114,6 +5237,9 @@ def builds_submit(
     if data.get("dag_id"):
         click.echo(f"  DAG:    {data['dag_id']}")
 
+    if wait:
+        _wait_for_jobs(server, token, [data["id"]])
+
 
 @builds_group.command("submit-dag")
 @click.option(
@@ -5135,6 +5261,9 @@ def builds_submit(
 @click.option("--link", default="shared", help="Link mode (shared, static, or 'all').")
 @click.option("--org", "org_slug", default="", help="Organization scope.")
 @click.option("--dag-id", default=None, help="Custom DAG ID (auto-generated if omitted).")
+@click.option(
+    "--wait", "-w", is_flag=True, help="Wait for all DAG jobs to finish, printing status updates."
+)
 @click.argument("recipe_names", nargs=-1, required=True)
 def builds_submit_dag(
     server: str,
@@ -5145,6 +5274,7 @@ def builds_submit_dag(
     link: str,
     org_slug: str,
     dag_id: str | None,
+    wait: bool,
     recipe_names: tuple[str, ...],
 ):
     """Submit a DAG of remote build jobs.
@@ -5161,6 +5291,7 @@ def builds_submit_dag(
     platforms = [p.strip() for p in platform.split(",")]
     arches = [a.strip() for a in arch.split(",")]
 
+    dag_ids: list[str] = []
     for plat in platforms:
         for ar in arches:
             for cfg in configs:
@@ -5187,9 +5318,13 @@ def builds_submit_dag(
                         token,
                         json=body,
                     )
+                    dag_ids.append(data["dag_id"])
                     click.echo(
                         f"DAG {data['dag_id']}: {data['total']} jobs " f"({plat}/{ar}/{cfg}/{lnk})"
                     )
+
+    if wait:
+        _wait_for_dags(server, token, dag_ids)
 
 
 @builds_group.command("purge")
@@ -5269,6 +5404,156 @@ def builds_purge(
     data = resp.json()
     what = "jobs" if delete_jobs else "logs"
     click.echo(f"Purged {data.get('purged', 0)} {what} older than {days}d.")
+
+
+@builds_group.command("monitor")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option(
+    "--interval",
+    type=float,
+    default=5.0,
+    help="Refresh interval in seconds (default: 5).",
+)
+@click.option("--dag-id", default=None, help="Show only jobs from this DAG.")
+def builds_monitor(server: str, token: str, interval: float, dag_id: str | None):
+    """Live monitor of builders and build jobs (like top).
+
+    Refreshes the terminal with current builder status and active/recent
+    jobs.  Press Ctrl+C to exit.
+
+    \b
+    Example:
+      cvcpkg builds monitor
+      cvcpkg builds monitor --interval 2
+      cvcpkg builds monitor --dag-id populate-20260604-190000
+    """
+    import shutil
+    import time
+
+    import httpx
+
+    base = server.rstrip("/")
+    headers = {"Authorization": f"Bearer {token}"}
+    terminal_states = {"succeeded", "failed", "cancelled", "timed_out"}
+
+    def _fetch_builders(client: httpx.Client) -> list[dict]:
+        resp = client.get(f"{base}/v1/builders", headers=headers)
+        if resp.status_code >= 400:
+            return []
+        return resp.json().get("builders", [])
+
+    def _fetch_jobs(client: httpx.Client) -> list[dict]:
+        params: dict[str, str | int] = {"limit": 200}
+        if dag_id:
+            params["dag_id"] = dag_id
+        resp = client.get(f"{base}/v1/builds", headers=headers, params=params)
+        if resp.status_code >= 400:
+            return []
+        return resp.json().get("jobs", [])
+
+    def _render(builders: list[dict], jobs: list[dict], cols: int) -> str:
+        lines: list[str] = []
+        now_str = time.strftime("%H:%M:%S")
+
+        # Header
+        lines.append(f"cvcpkg builds monitor — {base} — {now_str}")
+        lines.append("")
+
+        # Builder summary
+        online = [b for b in builders if b.get("status") == "online"]
+        offline = [b for b in builders if b.get("status") != "online"]
+        total_cap = sum(b.get("max_jobs", 0) for b in online)
+        total_cur = sum(b.get("current_jobs", 0) for b in online)
+        lines.append(
+            f"Builders: {len(online)} online, {len(offline)} offline  "
+            f"| Capacity: {total_cur}/{total_cap} slots in use"
+        )
+        lines.append("")
+
+        # Builder table
+        hdr = f"  {'Name':<18} {'Platform':<10} {'Arch':<8} {'Jobs':>4}/{'':<4} {'Status':<8}"
+        lines.append(hdr)
+        lines.append("  " + "-" * (len(hdr) - 2))
+        for b in sorted(builders, key=lambda x: x.get("name", "")):
+            status = b.get("status", "?")
+            st_icon = "\u25cf" if status == "online" else "\u25cb"
+            name = b.get("name", "?")[:18]
+            plat = b.get("platform", "?")[:10]
+            arch = b.get("arch", "?")[:8]
+            cur = b.get("current_jobs", 0)
+            mx = b.get("max_jobs", 0)
+            lines.append(f"  {st_icon} {name:<17} {plat:<10} {arch:<8} {cur:>3}/{mx:<3}  {status}")
+        lines.append("")
+
+        # Job summary
+        active = [j for j in jobs if j.get("status") not in terminal_states]
+        done = [j for j in jobs if j.get("status") in terminal_states]
+        succeeded = sum(1 for j in done if j.get("status") == "succeeded")
+        failed = sum(1 for j in done if j.get("status") == "failed")
+        lines.append(
+            f"Jobs: {len(active)} active, {succeeded} succeeded, "
+            f"{failed} failed, {len(jobs)} total"
+        )
+        lines.append("")
+
+        # Active jobs table
+        if active:
+            lines.append(f"  {'ID':>5}  {'Recipe':<18} {'Platform':<10} {'Status':<12} {'Builder'}")
+            lines.append("  " + "-" * 65)
+            for j in active[:30]:
+                jid = j.get("id", "?")
+                recipe = (j.get("recipe_name") or "?")[:18]
+                plat = (j.get("platform") or "?")[:10]
+                st = (j.get("status") or "?")[:12]
+                builder = (j.get("builder_name") or j.get("assigned_builder") or "-")[:15]
+                lines.append(f"  {jid:>5}  {recipe:<18} {plat:<10} {st:<12} {builder}")
+            if len(active) > 30:
+                lines.append(f"  ... and {len(active) - 30} more active jobs")
+        else:
+            lines.append("  No active jobs.")
+
+        # Recent completed
+        if done:
+            lines.append("")
+            lines.append("  Recent completed:")
+            for j in done[:10]:
+                jid = j.get("id", "?")
+                recipe = (j.get("recipe_name") or "?")[:18]
+                st = j.get("status", "?")
+                icon = "\u2713" if st == "succeeded" else "\u2717"
+                lines.append(f"    {icon} #{jid} {recipe}: {st}")
+
+        lines.append("")
+        lines.append("Press Ctrl+C to exit.")
+        return "\n".join(lines)
+
+    click.echo("Starting build monitor... (Ctrl+C to exit)")
+    try:
+        with httpx.Client(timeout=15) as client:
+            while True:
+                builders = _fetch_builders(client)
+                jobs = _fetch_jobs(client)
+                cols = shutil.get_terminal_size((80, 24)).columns
+
+                output = _render(builders, jobs, cols)
+                # Clear screen and redraw
+                click.echo("\033[2J\033[H", nl=False)
+                click.echo(output)
+                time.sleep(interval)
+    except KeyboardInterrupt:
+        click.echo("\nMonitor stopped.")
 
 
 # ── Recipe distribution commands ────────────────────────────────
