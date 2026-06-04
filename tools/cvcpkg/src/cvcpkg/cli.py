@@ -4300,6 +4300,17 @@ def builder_status(builder_id: int, server: str, token: str):
     default=False,
     help="Disable WebSocket and use HTTP long-poll only.",
 )
+@click.option(
+    "--daemon",
+    is_flag=True,
+    help="Run as a background daemon (fork and detach).",
+)
+@click.option(
+    "--pidfile",
+    type=click.Path(),
+    default="",
+    help="Path to PID file.  [default: <work-dir>/cvcpkg-builder.pid]",
+)
 def builder_run(
     server: str,
     token: str,
@@ -4312,6 +4323,8 @@ def builder_run(
     work_dir: str | None,
     recipe_cache_dir: str | None,
     no_websocket: bool,
+    daemon: bool,
+    pidfile: str,
 ):
     """Register as a builder, poll for jobs, and execute builds.
 
@@ -4359,6 +4372,36 @@ def builder_run(
         else Path(tempfile.gettempdir()) / "cvcpkg-recipe-cache"
     )
     cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── Daemonize ───────────────────────────────────────────
+    import os as _os
+
+    pid_path = (
+        Path(pidfile)
+        if pidfile
+        else (work_root or Path(tempfile.gettempdir())) / "cvcpkg-builder.pid"
+    )
+
+    if daemon:
+        import sys as _sys
+
+        if _sys.platform == "win32":
+            raise click.ClickException("--daemon is not supported on Windows.")
+
+        click.echo(f"cvcpkg-builder: daemonizing (pidfile {pid_path})...")
+        if _os.fork() > 0:
+            raise SystemExit(0)
+        _os.setsid()
+        if _os.fork() > 0:
+            raise SystemExit(0)
+        devnull = _os.open(_os.devnull, _os.O_RDWR)
+        _os.dup2(devnull, _sys.stdin.fileno())
+        _os.dup2(devnull, _sys.stdout.fileno())
+        _os.dup2(devnull, _sys.stderr.fileno())
+        _os.close(devnull)
+
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text(str(_os.getpid()))
 
     # ── Registration ────────────────────────────────────────
     body = {
@@ -4757,6 +4800,11 @@ def builder_run(
             click.echo("Builder unregistered.")
         except Exception:
             click.echo("Warning: failed to unregister builder.", err=True)
+        finally:
+            try:
+                pid_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 @builder_group.command("stop")
