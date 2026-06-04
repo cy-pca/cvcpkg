@@ -255,3 +255,54 @@ jobs:
           echo "::error::pkg.tx.wtf backend failed health check within 120s"
           $COMPOSE logs --tail=80 backend || true
           exit 1
+
+      # ── Update builder agents ─────────────────────────────────
+      - name: Update builder agents
+        run: |
+          set -euo pipefail
+          SHA="${{ steps.target.outputs.sha }}"
+          SSH="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
+
+          echo "=== Updating cvcpkg on builder machines ==="
+
+          # Linux builders (via SSH from catx-03)
+          for host in tfx@star-00 tfx@star-01; do
+            echo "--- $host ---"
+            $SSH "$host" "
+              cd ~/libcvc-deps &&
+              git fetch origin &&
+              git checkout -f $SHA &&
+              cd tools/cvcpkg &&
+              pip install --break-system-packages --quiet . 2>/dev/null;
+              pip install --quiet . 2>/dev/null;
+              echo \"\$(hostname): \$(cvcpkg --version)\"
+            " || echo "::warning::Failed to update $host"
+          done
+
+          # BSD builders (root access)
+          for host in root@netbsd-build root@netbsd-build-2 \
+                      root@freebsd-build root@freebsd-build-2 \
+                      root@openbsd-build root@openbsd-build-2; do
+            echo "--- $host ---"
+            $SSH "$host" "
+              cd /root/libcvc-deps 2>/dev/null || cd /usr/local/src/libcvc-deps &&
+              git fetch origin &&
+              git checkout -f $SHA &&
+              cd tools/cvcpkg &&
+              pip install --break-system-packages --quiet . 2>/dev/null;
+              pip install --quiet . 2>/dev/null;
+              echo \"\$(hostname): \$(cvcpkg --version)\"
+            " || echo "::warning::Failed to update $host"
+          done
+
+          # Windows builder (sandipaws)
+          $SSH tfx@sandipaws "
+            cd C:/Users/tfx/libcvc-deps &&
+            git fetch origin &&
+            git checkout -f $SHA &&
+            cd tools/cvcpkg &&
+            pip install --quiet . 2>NUL &&
+            cvcpkg --version
+          " || echo "::warning::Failed to update sandipaws"
+
+          echo "Builder update complete."
