@@ -35,6 +35,7 @@ def server_cli() -> None:
 @click.option(
     "--state-dir",
     type=click.Path(),
+    envvar="CVCPKG_SERVER_STATE_DIR",
     default="./cvcpkg-server-data",
     help="Directory for server state (index, tokens, audit log, archives).",
 )
@@ -294,6 +295,7 @@ def run(
 @click.option(
     "--state-dir",
     type=click.Path(),
+    envvar="CVCPKG_SERVER_STATE_DIR",
     default="./cvcpkg-server-data",
     help="Server state directory.",
 )
@@ -384,6 +386,7 @@ def token() -> None:
 @click.option(
     "--state-dir",
     type=click.Path(),
+    envvar="CVCPKG_SERVER_STATE_DIR",
     default="./cvcpkg-server-data",
     help="Server state directory.",
 )
@@ -435,6 +438,7 @@ def token_create(
 @click.option(
     "--state-dir",
     type=click.Path(),
+    envvar="CVCPKG_SERVER_STATE_DIR",
     default="./cvcpkg-server-data",
     help="Server state directory.",
 )
@@ -478,6 +482,7 @@ def token_list(state_dir: str) -> None:
 @click.option(
     "--state-dir",
     type=click.Path(),
+    envvar="CVCPKG_SERVER_STATE_DIR",
     default="./cvcpkg-server-data",
     help="Server state directory.",
 )
@@ -519,6 +524,7 @@ def token_revoke(name: str, state_dir: str) -> None:
 @click.option(
     "--state-dir",
     type=click.Path(),
+    envvar="CVCPKG_SERVER_STATE_DIR",
     default="./cvcpkg-server-data",
     help="Server state directory.",
 )
@@ -560,6 +566,7 @@ def token_set_email(name: str, email: str, state_dir: str) -> None:
 @click.option(
     "--state-dir",
     type=click.Path(),
+    envvar="CVCPKG_SERVER_STATE_DIR",
     default="./cvcpkg-server-data",
     help="Server state directory.",
 )
@@ -601,6 +608,7 @@ def token_set_description(name: str, description: str, state_dir: str) -> None:
 @click.option(
     "--state-dir",
     type=click.Path(),
+    envvar="CVCPKG_SERVER_STATE_DIR",
     default="./cvcpkg-server-data",
     help="Server state directory.",
 )
@@ -649,6 +657,7 @@ def audit() -> None:
 @click.option(
     "--state-dir",
     type=click.Path(),
+    envvar="CVCPKG_SERVER_STATE_DIR",
     default="./cvcpkg-server-data",
     help="Server state directory.",
 )
@@ -675,6 +684,7 @@ def audit_log(limit: int, state_dir: str) -> None:
 @click.option(
     "--state-dir",
     type=click.Path(),
+    envvar="CVCPKG_SERVER_STATE_DIR",
     default="./cvcpkg-server-data",
     help="Server state directory.",
 )
