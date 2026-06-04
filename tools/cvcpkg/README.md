@@ -327,6 +327,150 @@ catalog:
 
 ---
 
+## Fresh deployment walkthrough
+
+A complete guide to bootstrapping a cvcpkg server, creating API keys,
+registering builders, and kicking off your first remote builds.
+
+### 1. Deploy the server
+
+Using Docker Compose (recommended for production):
+
+```bash
+cd tools/cvcpkg
+cp .env.production.example .env.production
+# Edit .env.production — set POSTGRES_PASSWORD and BACKEND_BIND_ADDR
+
+docker compose -f docker-compose.production.yml \
+    --env-file .env.production up -d
+```
+
+Or run directly for development:
+
+```bash
+pip install 'cvcpkg[server,db]'
+export CVCPKG_DATABASE_URL="postgresql+asyncpg://user:pass@localhost/cvcpkg"
+cvcpkg-server run --state-dir /var/lib/cvcpkg --host 127.0.0.1 --port 8420
+```
+
+### 2. Create the first API keys
+
+On a fresh server there are no tokens.  Use the server CLI (or
+`docker compose exec`) to create them directly against the database:
+
+```bash
+# Create an admin token (full access: manage tokens, delete packages, etc.)
+docker compose -f docker-compose.production.yml \
+    --env-file .env.production exec -T backend \
+    cvcpkg-server token create --name my_admin --role admin --email you@example.org
+
+# Create a publisher token (for builders to push packages)
+docker compose -f docker-compose.production.yml \
+    --env-file .env.production exec -T backend \
+    cvcpkg-server token create --name builder_publisher --role publisher
+
+# Without Docker — if running cvcpkg-server directly:
+cvcpkg-server token create --name my_admin --role admin --email you@example.org
+cvcpkg-server token create --name builder_publisher --role publisher
+```
+
+Save the `cvctok_...` values that are printed — they are shown only
+once and cannot be recovered.
+
+Available roles:
+
+| Role | Permissions |
+|------|-------------|
+| `admin` | Full access: create/revoke tokens, delete packages, manage orgs |
+| `publisher` | Publish packages, push recipes, yank/unyank |
+| `reader` | Browse catalog, download packages |
+
+After you have an admin token, you can also create tokens via the API:
+
+```bash
+export CVCPKG_SERVER_URL=https://cvcpkg.org
+export CVCPKG_TOKEN=cvctok_<admin-token>
+
+cvcpkg token create --name ci_reader --role reader
+cvcpkg token create --name another_publisher --role publisher --expires-in-days 90
+cvcpkg token list
+cvcpkg token revoke --name old_token
+```
+
+### 3. Push recipes to the server
+
+```bash
+export CVCPKG_SERVER_URL=https://cvcpkg.org
+export CVCPKG_TOKEN=cvctok_<admin-token>
+
+# Push all recipes at once:
+cvcpkg recipe push-all --recipes-dir ./recipes
+
+# Or push individual recipes:
+cvcpkg recipe push zlib
+cvcpkg recipe push boost
+```
+
+### 4. Start builder agents
+
+On each build machine, start a builder agent with the publisher token:
+
+```bash
+export CVCPKG_SERVER_URL=https://cvcpkg.org
+export CVCPKG_TOKEN=cvctok_<publisher-token>
+
+# Linux x86_64 builder:
+cvcpkg builder run \
+    --name linux-builder-01 \
+    --platform linux --arch x86_64 \
+    --max-jobs 4 \
+    --work-dir /scratch/builder
+
+# macOS arm64 builder:
+cvcpkg builder run \
+    --name macos-builder-01 \
+    --platform macos --arch arm64 \
+    --max-jobs 2 \
+    --work-dir ~/builder-work
+```
+
+Builders connect via WebSocket (with HTTP long-poll fallback),
+register their platform capabilities, and wait for jobs.
+
+### 5. Submit builds
+
+```bash
+export CVCPKG_SERVER_URL=https://cvcpkg.org
+export CVCPKG_TOKEN=cvctok_<admin-token>
+
+# Submit a single recipe:
+cvcpkg builds submit --recipe zlib --platform linux --arch x86_64
+
+# Submit a DAG of recipes (respects dependency order):
+cvcpkg builds submit-dag \
+    --recipe zlib --recipe boost --recipe hdf5 \
+    --platform linux --arch x86_64
+
+# Monitor progress:
+cvcpkg builds list --status running
+cvcpkg builds log <job-id> -f
+```
+
+### 6. Verify
+
+```bash
+# Check builders are connected:
+cvcpkg builder list
+
+# Check packages were published:
+cvcpkg search --server https://cvcpkg.org
+
+# Install a built package:
+cvcpkg install zlib --prefix ./deps
+```
+
+---
+
 ## Migrating from GitHub CI builds
 
 GitHub Actions has a 6-hour job time limit that is insufficient for
