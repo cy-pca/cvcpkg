@@ -3962,3 +3962,749 @@ class TestBuildsPurgeCLI:
         )
         assert ret == 0
         assert any("purge/builds" in u for u in urls_called)
+
+
+# ── Tests for _wait_for_jobs, _wait_for_dags, builds monitor, --wait ──
+
+
+class TestWaitForJobs:
+    """Test the _wait_for_jobs helper function."""
+
+    def test_all_succeed(self, capsys, monkeypatch):
+        """Jobs that succeed immediately produce success message."""
+        monkeypatch.setattr("time.sleep", lambda _: None)
+        call_count = {"n": 0}
+
+        class FakeResponse:
+            status_code = 200
+
+            def json(self):
+                return {
+                    "id": 1,
+                    "recipe_name": "zlib",
+                    "platform": "linux",
+                    "status": "succeeded",
+                }
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                call_count["n"] += 1
+                return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+
+        from cvcpkg.cli import _wait_for_jobs
+
+        _wait_for_jobs("https://s.example.com", "tok", [1])
+        out = capsys.readouterr().out
+        assert "succeeded" in out
+        assert "All 1 job(s) succeeded" in out
+
+    def test_job_fails_raises(self, capsys, monkeypatch):
+        """A failed job raises ClickException."""
+        monkeypatch.setattr("time.sleep", lambda _: None)
+
+        class FakeResponse:
+            status_code = 200
+
+            def json(self):
+                return {
+                    "id": 5,
+                    "recipe_name": "boost",
+                    "platform": "freebsd",
+                    "status": "failed",
+                }
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+
+        import click as _click
+
+        from cvcpkg.cli import _wait_for_jobs
+
+        with pytest.raises(_click.ClickException, match="failed"):
+            _wait_for_jobs("https://s.example.com", "tok", [5])
+
+    def test_polls_until_terminal(self, capsys, monkeypatch):
+        """Jobs transition from running to succeeded across polls."""
+        monkeypatch.setattr("time.sleep", lambda _: None)
+        poll_count = {"n": 0}
+
+        class FakeResponse:
+            status_code = 200
+
+            def __init__(self):
+                poll_count["n"] += 1
+
+            def json(self):
+                if poll_count["n"] <= 2:
+                    return {
+                        "id": 10,
+                        "recipe_name": "curl",
+                        "platform": "linux",
+                        "status": "running",
+                    }
+                return {
+                    "id": 10,
+                    "recipe_name": "curl",
+                    "platform": "linux",
+                    "status": "succeeded",
+                }
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+
+        from cvcpkg.cli import _wait_for_jobs
+
+        _wait_for_jobs("https://s.example.com", "tok", [10])
+        out = capsys.readouterr().out
+        assert "All 1 job(s) succeeded" in out
+        assert poll_count["n"] > 2
+
+
+class TestWaitForDags:
+    """Test the _wait_for_dags helper function."""
+
+    def test_dag_all_succeed(self, capsys, monkeypatch):
+        """All DAG jobs succeeding produces success message."""
+        monkeypatch.setattr("time.sleep", lambda _: None)
+
+        class FakeListResponse:
+            status_code = 200
+
+            def json(self):
+                return {
+                    "total": 2,
+                    "jobs": [
+                        {
+                            "id": 1,
+                            "recipe_name": "zlib",
+                            "platform": "linux",
+                            "arch": "x86_64",
+                            "status": "succeeded",
+                        },
+                        {
+                            "id": 2,
+                            "recipe_name": "boost",
+                            "platform": "linux",
+                            "arch": "x86_64",
+                            "status": "succeeded",
+                        },
+                    ],
+                }
+
+        class FakeInfoResponse:
+            status_code = 200
+
+            def __init__(self, jid):
+                self._jid = jid
+
+            def json(self):
+                return {"id": self._jid, "status": "succeeded"}
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                if "/v1/builds/" in url and not url.endswith("/builds"):
+                    # Individual job fetch
+                    jid = int(url.rstrip("/").split("/")[-1])
+                    return FakeInfoResponse(jid)
+                return FakeListResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+
+        from cvcpkg.cli import _wait_for_dags
+
+        _wait_for_dags("https://s.example.com", "tok", ["dag-001"])
+        out = capsys.readouterr().out
+        assert "All 2 job(s) succeeded" in out
+
+    def test_dag_with_failure_raises(self, capsys, monkeypatch):
+        """A failed job in the DAG raises ClickException."""
+        monkeypatch.setattr("time.sleep", lambda _: None)
+
+        class FakeListResponse:
+            status_code = 200
+
+            def json(self):
+                return {
+                    "total": 2,
+                    "jobs": [
+                        {
+                            "id": 1,
+                            "recipe_name": "zlib",
+                            "platform": "linux",
+                            "arch": "x86_64",
+                            "status": "succeeded",
+                        },
+                        {
+                            "id": 2,
+                            "recipe_name": "boost",
+                            "platform": "linux",
+                            "arch": "x86_64",
+                            "status": "failed",
+                        },
+                    ],
+                }
+
+        class FakeInfoResponse:
+            status_code = 200
+
+            def __init__(self, jid):
+                self._jid = jid
+
+            def json(self):
+                status = "succeeded" if self._jid == 1 else "failed"
+                return {"id": self._jid, "status": status}
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                if "/v1/builds/" in url and not url.endswith("/builds"):
+                    jid = int(url.rstrip("/").split("/")[-1])
+                    return FakeInfoResponse(jid)
+                return FakeListResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+
+        import click as _click
+
+        from cvcpkg.cli import _wait_for_dags
+
+        with pytest.raises(_click.ClickException, match="did not succeed"):
+            _wait_for_dags("https://s.example.com", "tok", ["dag-fail"])
+
+
+class TestBuildsSubmitWait:
+    """Test builds submit --wait end-to-end via CLI."""
+
+    def test_submit_with_wait_success(self, capsys, monkeypatch):
+        monkeypatch.setattr("time.sleep", lambda _: None)
+        call_count = {"n": 0}
+
+        class FakeResponse:
+            status_code = 200
+
+            def json(self_inner):
+                call_count["n"] += 1
+                # First call is the POST to submit
+                if call_count["n"] == 1:
+                    return {
+                        "id": 99,
+                        "recipe_name": "openssl",
+                        "status": "pending",
+                        "platform": "linux",
+                        "arch": "x86_64",
+                        "config": "release",
+                        "link": "shared",
+                        "dag_id": None,
+                    }
+                # Subsequent GETs for poll
+                return {
+                    "id": 99,
+                    "recipe_name": "openssl",
+                    "platform": "linux",
+                    "status": "succeeded",
+                }
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def post(self, url, **kw):
+                return FakeResponse()
+
+            def get(self, url, **kw):
+                return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(
+            [
+                "builds",
+                "submit",
+                "--recipe",
+                "openssl",
+                "--platform",
+                "linux",
+                "--arch",
+                "x86_64",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+                "--wait",
+            ]
+        )
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "99" in out
+        assert "succeeded" in out
+
+    def test_submit_with_wait_failure(self, capsys, monkeypatch):
+        monkeypatch.setattr("time.sleep", lambda _: None)
+        call_count = {"n": 0}
+
+        class FakeResponse:
+            status_code = 200
+
+            def json(self_inner):
+                call_count["n"] += 1
+                if call_count["n"] == 1:
+                    return {
+                        "id": 100,
+                        "recipe_name": "boost",
+                        "status": "pending",
+                        "platform": "linux",
+                        "arch": "x86_64",
+                        "config": "release",
+                        "link": "shared",
+                        "dag_id": None,
+                    }
+                return {
+                    "id": 100,
+                    "recipe_name": "boost",
+                    "platform": "linux",
+                    "status": "failed",
+                }
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def post(self, url, **kw):
+                return FakeResponse()
+
+            def get(self, url, **kw):
+                return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(
+            [
+                "builds",
+                "submit",
+                "--recipe",
+                "boost",
+                "--platform",
+                "linux",
+                "--arch",
+                "x86_64",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+                "--wait",
+            ]
+        )
+        assert ret == 1
+
+
+class TestBuildsSubmitDagWait:
+    """Test builds submit-dag --wait end-to-end via CLI."""
+
+    def test_submit_dag_with_wait_success(self, capsys, monkeypatch):
+        monkeypatch.setattr("time.sleep", lambda _: None)
+        call_count = {"n": 0}
+
+        class FakeResponse:
+            status_code = 200
+
+            def json(self_inner):
+                call_count["n"] += 1
+                # First call is POST to create DAG
+                if call_count["n"] == 1:
+                    return {"dag_id": "dag-wait-001", "total": 2, "jobs": []}
+                # Subsequent calls are GET to list/check jobs
+                return {
+                    "total": 2,
+                    "jobs": [
+                        {
+                            "id": 1,
+                            "recipe_name": "zlib",
+                            "platform": "linux",
+                            "arch": "x86_64",
+                            "status": "succeeded",
+                        },
+                        {
+                            "id": 2,
+                            "recipe_name": "boost",
+                            "platform": "linux",
+                            "arch": "x86_64",
+                            "status": "succeeded",
+                        },
+                    ],
+                }
+
+        class FakeInfoResponse:
+            status_code = 200
+
+            def __init__(self, jid):
+                self._jid = jid
+
+            def json(self):
+                return {"id": self._jid, "status": "succeeded"}
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def post(self, url, **kw):
+                return FakeResponse()
+
+            def get(self, url, **kw):
+                # If fetching individual job info
+                if "/v1/builds/" in url and not url.rstrip("/").endswith("builds"):
+                    # Extract job ID from URL
+                    try:
+                        jid = int(url.rstrip("/").split("/")[-1])
+                    except ValueError:
+                        jid = 1
+                    return FakeInfoResponse(jid)
+                return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(
+            [
+                "builds",
+                "submit-dag",
+                "--platform",
+                "linux",
+                "--arch",
+                "x86_64",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+                "--wait",
+                "zlib",
+                "boost",
+            ]
+        )
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "dag-wait-001" in out.lower()
+        assert "succeeded" in out
+
+
+class TestBuildsMonitorCLI:
+    """Test builds monitor command with mocked HTTP."""
+
+    def test_monitor_renders_output(self, capsys, monkeypatch):
+        """Monitor fetches data, renders once, then KeyboardInterrupt exits."""
+        monkeypatch.setattr("time.sleep", lambda _: (_ for _ in ()).throw(KeyboardInterrupt))
+        monkeypatch.setattr("shutil.get_terminal_size", lambda *a: os.terminal_size((80, 24)))
+
+        builders_data = {
+            "total": 2,
+            "builders": [
+                {
+                    "id": 1,
+                    "name": "star-00",
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "status": "online",
+                    "current_jobs": 1,
+                    "max_jobs": 4,
+                },
+                {
+                    "id": 2,
+                    "name": "freebsd-build",
+                    "platform": "freebsd",
+                    "arch": "x86_64",
+                    "status": "offline",
+                    "current_jobs": 0,
+                    "max_jobs": 2,
+                },
+            ],
+        }
+        jobs_data = {
+            "total": 3,
+            "jobs": [
+                {
+                    "id": 10,
+                    "recipe_name": "zlib",
+                    "platform": "linux",
+                    "status": "running",
+                    "builder_name": "star-00",
+                },
+                {
+                    "id": 11,
+                    "recipe_name": "boost",
+                    "platform": "linux",
+                    "status": "succeeded",
+                    "builder_name": "star-00",
+                },
+                {
+                    "id": 12,
+                    "recipe_name": "curl",
+                    "platform": "freebsd",
+                    "status": "failed",
+                    "builder_name": "freebsd-build",
+                },
+            ],
+        }
+
+        class FakeResponse:
+            status_code = 200
+
+            def __init__(self, data):
+                self._data = data
+
+            def json(self):
+                return self._data
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                if "/v1/builders" in url:
+                    return FakeResponse(builders_data)
+                return FakeResponse(jobs_data)
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(
+            [
+                "builds",
+                "monitor",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+                "--interval",
+                "1",
+            ]
+        )
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "star-00" in out
+        assert "freebsd-build" in out
+        assert "1 online" in out
+        assert "1 offline" in out
+        assert "zlib" in out
+        assert "Monitor stopped" in out
+
+    def test_monitor_with_dag_filter(self, capsys, monkeypatch):
+        """Monitor passes --dag-id filter to jobs endpoint."""
+        monkeypatch.setattr("time.sleep", lambda _: (_ for _ in ()).throw(KeyboardInterrupt))
+        monkeypatch.setattr("shutil.get_terminal_size", lambda *a: os.terminal_size((80, 24)))
+        captured_params: list[dict] = []
+
+        class FakeResponse:
+            status_code = 200
+
+            def json(self):
+                return {"total": 0, "builders": [], "jobs": []}
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                if "params" in kw:
+                    captured_params.append(kw["params"])
+                return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(
+            [
+                "builds",
+                "monitor",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+                "--dag-id",
+                "my-dag-123",
+            ]
+        )
+        assert ret == 0
+        # Verify dag_id was passed as parameter
+        assert any("my-dag-123" in str(p) for p in captured_params)
+
+    def test_monitor_handles_server_errors(self, capsys, monkeypatch):
+        """Monitor gracefully handles server errors (returns empty data)."""
+        monkeypatch.setattr("time.sleep", lambda _: (_ for _ in ()).throw(KeyboardInterrupt))
+        monkeypatch.setattr("shutil.get_terminal_size", lambda *a: os.terminal_size((80, 24)))
+
+        class FakeResponse:
+            status_code = 500
+            text = "Internal Server Error"
+
+            def json(self):
+                return {}
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(
+            [
+                "builds",
+                "monitor",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+            ]
+        )
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "0 online" in out
+        assert "No active jobs" in out
+
+    def test_monitor_no_active_jobs(self, capsys, monkeypatch):
+        """Monitor shows 'No active jobs' when only completed jobs exist."""
+        monkeypatch.setattr("time.sleep", lambda _: (_ for _ in ()).throw(KeyboardInterrupt))
+        monkeypatch.setattr("shutil.get_terminal_size", lambda *a: os.terminal_size((80, 24)))
+
+        class FakeResponse:
+            status_code = 200
+
+            def __init__(self, url):
+                self._url = url
+
+            def json(self):
+                if "builders" in self._url:
+                    return {
+                        "total": 1,
+                        "builders": [
+                            {
+                                "name": "b1",
+                                "platform": "linux",
+                                "arch": "x86_64",
+                                "status": "online",
+                                "current_jobs": 0,
+                                "max_jobs": 4,
+                            }
+                        ],
+                    }
+                return {
+                    "total": 1,
+                    "jobs": [
+                        {
+                            "id": 1,
+                            "recipe_name": "zlib",
+                            "platform": "linux",
+                            "status": "succeeded",
+                        }
+                    ],
+                }
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                return FakeResponse(url)
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(
+            [
+                "builds",
+                "monitor",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+            ]
+        )
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "No active jobs" in out
+        assert "Recent completed" in out
+        assert "zlib" in out
