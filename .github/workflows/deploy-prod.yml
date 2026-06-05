@@ -306,3 +306,63 @@ jobs:
           " || echo "::warning::Failed to update sandipaws"
 
           echo "Builder update complete."
+
+      # ── Restart builder agents ────────────────────────────────
+      - name: Restart builder agents
+        run: |
+          set -euo pipefail
+          SSH="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
+
+          echo "=== Restarting builder agents ==="
+
+          # Linux builders (systemd) — kill any rogue daemon, use systemd
+          for host in tfx@star-00 tfx@star-01; do
+            echo "--- $host ---"
+            $SSH "$host" "
+              # Kill any manually-started daemon
+              pkill -f 'cvcpkg builder run' 2>/dev/null || true
+              sleep 1
+              # Enable and restart systemd service
+              sudo systemctl enable cvcpkg-builder 2>/dev/null || true
+              sudo systemctl restart cvcpkg-builder
+              sleep 2
+              if systemctl is-active --quiet cvcpkg-builder; then
+                echo \"\$(hostname): builder restarted (systemd)\"
+              else
+                echo \"::warning::\$(hostname): builder failed to start\"
+                journalctl -u cvcpkg-builder --no-pager -n 5
+              fi
+            " || echo "::warning::Failed to restart builder on $host"
+          done
+
+          # BSD builders — kill daemon, re-launch from crontab entry
+          for host in root@netbsd-build root@netbsd-build-2 \
+                      root@freebsd-build root@freebsd-build-2 \
+                      root@openbsd-build root@openbsd-build-2; do
+            echo "--- $host ---"
+            $SSH "$host" "
+              pkill -f 'cvcpkg builder run' 2>/dev/null || true
+              sleep 2
+              # Extract the @reboot command from crontab and re-run it
+              CMD=\$(crontab -l 2>/dev/null | grep '@reboot.*cvcpkg builder run' | sed 's/@reboot //')
+              if [ -n \"\$CMD\" ]; then
+                eval \"\$CMD\"
+                sleep 2
+                if pgrep -f 'cvcpkg builder run' >/dev/null 2>&1; then
+                  echo \"\$(hostname): builder restarted (daemon)\"
+                else
+                  echo \"::warning::\$(hostname): builder failed to start\"
+                fi
+              else
+                echo \"::warning::\$(hostname): no @reboot cvcpkg entry found\"
+              fi
+            " || echo "::warning::Failed to restart builder on $host"
+          done
+
+          # Windows builder (sandipaws) — restart via schtasks
+          $SSH tfx@sandipaws "
+            taskkill /f /im python.exe /fi \"WINDOWTITLE eq cvcpkg*\" 2>NUL
+            schtasks /run /tn cvcpkg-builder 2>NUL && echo sandipaws: builder restarted || echo sandipaws: no scheduled task found
+          " || echo "::warning::Failed to restart builder on sandipaws"
+
+          echo "All builder agents restarted."
