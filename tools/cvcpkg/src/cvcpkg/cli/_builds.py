@@ -755,18 +755,33 @@ def builds_submit_dag(
                     names.append(dep["name"])
         return names
 
+    # Map short platform names to recipe matrix names
+    _PLAT_ALIASES: dict[str, list[str]] = {
+        "win": ["win", "windows"],
+    }
+
     def _has_platform_entry(name: str, plat: str) -> bool:
         """Check if a recipe has a build matrix entry for the platform."""
         data = recipe_data.get(name, {})
         matrix = data.get("build", {}).get("matrix", [])
+        match_names = _PLAT_ALIASES.get(plat, [plat, plat])
         for entry in matrix:
-            if entry.get("platform") in (plat, "any"):
+            if entry.get("platform") in (*match_names, "any"):
                 return True
         return False
+
+    # Valid platform→arch pairings.  wasm32 only pairs with wasm/wasi.
+    _WASM_ARCHES = {"wasm32"}
+    _WASM_PLATFORMS = {"wasm", "wasi"}
 
     dag_ids: list[str] = []
     for plat in platforms:
         for ar in arches:
+            # Skip invalid platform/arch combos
+            if ar in _WASM_ARCHES and plat not in _WASM_PLATFORMS:
+                continue
+            if plat in _WASM_PLATFORMS and ar not in _WASM_ARCHES:
+                continue
             for cfg in configs:
                 for lnk in links:
                     # Filter recipes: skip those with no matrix entry
