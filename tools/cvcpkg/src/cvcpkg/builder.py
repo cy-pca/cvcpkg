@@ -18,7 +18,7 @@ import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
@@ -508,8 +508,17 @@ def _patch_linux_rpath(install_dir: Path) -> None:
         )
 
 
-def run_build(ctx: BuildContext) -> None:
-    """Execute the build script for the given context."""
+def run_build(
+    ctx: BuildContext,
+    log_callback: Callable[[str], None] | None = None,
+) -> None:
+    """Execute the build script for the given context.
+
+    When *log_callback* is provided, subprocess stdout/stderr is
+    captured line-by-line and forwarded to the callback in addition
+    to being printed locally.  This enables remote builders to stream
+    live build output to the server.
+    """
     matrix = _select_matrix_entry(ctx.recipe, ctx.platform, ctx.host_platform)
     script = ctx.recipe.recipe_dir / matrix.script
 
@@ -533,20 +542,52 @@ def run_build(ctx: BuildContext) -> None:
     ctx.build_dir.mkdir(parents=True, exist_ok=True)
     ctx.install_dir.mkdir(parents=True, exist_ok=True)
 
-    print(
+    header = (
         f"cvcpkg: building {ctx.recipe.name} {ctx.recipe.full_version} "
         f"({ctx.platform}/{ctx.config}/{ctx.link})"
     )
+    print(header)
     print(f"cvcpkg: script: {script}")
     print(f"cvcpkg: install dir: {ctx.install_dir}")
+    if log_callback:
+        log_callback(f"{header}\n")
 
-    result = subprocess.run(
-        cmd,
-        cwd=ctx.build_dir.resolve(),
-        env=env,
-    )
-    if result.returncode != 0:
-        raise BuildError(f"Build script for {ctx.recipe.name} exited with code {result.returncode}")
+    if log_callback:
+        # Stream output line-by-line so it reaches the server in real time.
+        proc = subprocess.Popen(
+            cmd,
+            cwd=ctx.build_dir.resolve(),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        _LOG_FLUSH_BYTES = 8192
+        buf: list[str] = []
+        buf_size = 0
+        assert proc.stdout is not None
+        for raw_line in proc.stdout:
+            line = raw_line.decode("utf-8", errors="replace")
+            sys.stdout.write(line)
+            buf.append(line)
+            buf_size += len(line)
+            if buf_size >= _LOG_FLUSH_BYTES:
+                log_callback("".join(buf))
+                buf.clear()
+                buf_size = 0
+        if buf:
+            log_callback("".join(buf))
+        returncode = proc.wait()
+    else:
+        # Local build — let output go straight to terminal.
+        result = subprocess.run(
+            cmd,
+            cwd=ctx.build_dir.resolve(),
+            env=env,
+        )
+        returncode = result.returncode
+
+    if returncode != 0:
+        raise BuildError(f"Build script for {ctx.recipe.name} exited with code {returncode}")
 
     # Patch RPATH on Linux shared builds so bundles are relocatable.
     if ctx.platform == "linux" and ctx.link == "shared":
@@ -860,6 +901,7 @@ def build_recipe(
     host_platform: str = "",
     work_dir_root: Path | None = None,
     cross_toolchain_env: dict[str, str] | None = None,
+    log_callback: Callable[[str], None] | None = None,
 ) -> BuildContext:
     """Build a single recipe. Returns the BuildContext.
 
@@ -894,7 +936,7 @@ def build_recipe(
         cross_toolchain_env=cross_toolchain_env or {},
     )
 
-    run_build(ctx)
+    run_build(ctx, log_callback=log_callback)
 
     if recipe.test_script:
         run_test(ctx)
@@ -919,6 +961,9 @@ def pack_recipe(
     keep_build_dir: bool = False,
     maintainer: str = "",
     work_dir_root: Path | None = None,
+    log_callback: Callable[[str], None] | None = None,
+    host_platform: str = "",
+    cross_toolchain_env: dict[str, str] | None = None,
 ) -> tuple[Path, str, int]:
     """Build + package a recipe. Returns (archive_path, sha256, size)."""
     from cvcpkg.platform import detect_arch
@@ -936,6 +981,9 @@ def pack_recipe(
         prefix=prefix,
         keep_build_dir=keep_build_dir,
         work_dir_root=work_dir_root,
+        log_callback=log_callback,
+        host_platform=host_platform,
+        cross_toolchain_env=cross_toolchain_env,
     )
 
     manifest = generate_manifest(

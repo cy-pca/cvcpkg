@@ -161,6 +161,12 @@ jobs:
           for VM in cvcpkg-builder-01 cvcpkg-builder-02; do
             echo "=== Restarting builder on $VM ==="
             incus exec "$VM" -- bash -c "
+              # Ensure --cross-target wasm is in the systemd unit
+              UNIT=/etc/systemd/system/cvcpkg-builder.service
+              if ! grep -q -- '--cross-target wasm' \"\$UNIT\" 2>/dev/null; then
+                sed -i 's|--work-dir [^ ]*|& --cross-target wasm|' \"\$UNIT\"
+                systemctl daemon-reload
+              fi
               systemctl restart cvcpkg-builder
               sleep 2
               if systemctl is-active --quiet cvcpkg-builder; then
