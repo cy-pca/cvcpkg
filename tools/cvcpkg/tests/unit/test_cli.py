@@ -3460,10 +3460,16 @@ class TestBuildsCLIHelp:
             "info",
             "cancel",
             "cancel-dag",
+            "pause",
+            "resume",
+            "pause-dag",
+            "resume-dag",
             "log",
             "log-delete",
             "submit",
             "submit-dag",
+            "follow-dag",
+            "monitor",
             "purge",
         ],
     )
@@ -3478,7 +3484,7 @@ class TestBuildsCLIHelp:
         ret = main(["builds", "--help"])
         assert ret == 0
         out = capsys.readouterr().out
-        for cmd in ("list", "info", "cancel", "log", "submit", "purge"):
+        for cmd in ("list", "info", "cancel", "pause", "resume", "log", "submit", "follow-dag", "monitor", "purge"):
             assert cmd in out
 
 
@@ -3670,6 +3676,267 @@ class TestBuildsCancelDagCLI:
         out = capsys.readouterr().out
         assert "3" in out
         assert "cancelled" in out.lower()
+
+
+class TestBuildsPauseCLI:
+    """Test builds pause command with mocked HTTP."""
+
+    def test_pause_success(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {"message": "job paused", "id": 10, "status": "paused"}
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def post(self, url, **kw):
+                return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(
+            ["builds", "pause", "10", "--server", "https://s.example.com", "--token", "tok"]
+        )
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "paused" in out.lower()
+
+
+class TestBuildsResumeCLI:
+    """Test builds resume command with mocked HTTP."""
+
+    def test_resume_success(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {"message": "job resumed", "id": 10, "status": "pending"}
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def post(self, url, **kw):
+                return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(
+            ["builds", "resume", "10", "--server", "https://s.example.com", "--token", "tok"]
+        )
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "pending" in out.lower()
+
+
+class TestBuildsPauseDagCLI:
+    """Test builds pause-dag command with mocked HTTP."""
+
+    def test_pause_dag_success(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {"message": "dag paused", "dag_id": "d1", "paused": 3}
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def post(self, url, **kw):
+                return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(
+            ["builds", "pause-dag", "d1", "--server", "https://s.example.com", "--token", "tok"]
+        )
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "3" in out
+        assert "paused" in out.lower()
+
+
+class TestBuildsResumeDagCLI:
+    """Test builds resume-dag command with mocked HTTP."""
+
+    def test_resume_dag_success(self, capsys, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {"message": "dag resumed", "dag_id": "d1", "resumed": 3}
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def post(self, url, **kw):
+                return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(
+            ["builds", "resume-dag", "d1", "--server", "https://s.example.com", "--token", "tok"]
+        )
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "3" in out
+        assert "resumed" in out.lower()
+
+
+class TestBuildsFollowDagCLI:
+    """Test builds follow-dag command with mocked HTTP."""
+
+    def test_follow_dag_all_succeeded(self, capsys, monkeypatch):
+        """follow-dag exits 0 when all jobs succeed."""
+        import itertools
+
+        call_count = itertools.count()
+
+        class FakeResponse:
+            status_code = 200
+
+            def json(self):
+                n = next(call_count)
+                if n == 0:
+                    # First poll: one job running
+                    return {
+                        "jobs": [
+                            {
+                                "id": 1,
+                                "recipe_name": "zlib",
+                                "platform": "linux",
+                                "arch": "x86_64",
+                                "status": "running",
+                                "builder_id": None,
+                            }
+                        ]
+                    }
+                # Second poll: job succeeded
+                return {
+                    "jobs": [
+                        {
+                            "id": 1,
+                            "recipe_name": "zlib",
+                            "platform": "linux",
+                            "arch": "x86_64",
+                            "status": "succeeded",
+                            "builder_id": None,
+                        }
+                    ]
+                }
+
+        class FakeStreamResponse:
+            status_code = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def iter_lines(self):
+                yield "data: building..."
+                yield "event: done"
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                return FakeResponse()
+
+            def stream(self, method, url, **kw):
+                return FakeStreamResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(
+            ["builds", "follow-dag", "dag1", "--server", "https://s.example.com", "--token", "tok"]
+        )
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "1/1 succeeded" in out
+
+    def test_follow_dag_with_failure_exits_1(self, capsys, monkeypatch):
+        """follow-dag exits 1 when any job fails."""
+
+        class FakeResponse:
+            status_code = 200
+
+            def json(self):
+                return {
+                    "jobs": [
+                        {
+                            "id": 1,
+                            "recipe_name": "zlib",
+                            "platform": "linux",
+                            "arch": "x86_64",
+                            "status": "succeeded",
+                            "builder_id": None,
+                        },
+                        {
+                            "id": 2,
+                            "recipe_name": "boost",
+                            "platform": "linux",
+                            "arch": "x86_64",
+                            "status": "failed",
+                            "builder_id": None,
+                        },
+                    ]
+                }
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                return FakeResponse()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(
+            ["builds", "follow-dag", "dag1", "--server", "https://s.example.com", "--token", "tok"]
+        )
+        assert ret == 1
 
 
 class TestBuildsLogCLI:
