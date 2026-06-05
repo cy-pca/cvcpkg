@@ -489,6 +489,105 @@ def builder_run(
                 finally:
                     tmp_archive.unlink(missing_ok=True)
 
+    def _install_cross_toolchains(
+        target_platform: str,
+        host_platform: str,
+        host_arch: str,
+        prefix: Path,
+        log_cb: Callable[[str], None],
+    ) -> dict[str, str]:
+        """Install cross-toolchain packages and return their env vars.
+
+        Queries the server for recipes that provide a cross-toolchain
+        for *target_platform* (e.g. emsdk for wasm, wasi-sdk for wasi).
+        Downloads the pre-built host-platform package and extracts it.
+        Returns a merged ``cross_toolchain_env`` dict with ``${PREFIX}``
+        already resolved to the actual *prefix* path.
+        """
+        import yaml as _yaml
+
+        # Map target platforms → known toolchain recipe names.
+        # The builder fetches the recipe bundle to read cross_toolchain.env
+        # dynamically, but needs to know which recipes to look for.
+        _TOOLCHAIN_MAP: dict[str, list[str]] = {
+            "wasm": ["emsdk"],
+            "wasi": ["wasi-sdk"],
+        }
+        toolchain_names = _TOOLCHAIN_MAP.get(target_platform, [])
+        if not toolchain_names:
+            return {}
+
+        merged_env: dict[str, str] = {}
+        prefix.mkdir(parents=True, exist_ok=True)
+
+        for tc_name in toolchain_names:
+            # 1. Fetch the toolchain recipe bundle to read cross_toolchain.env
+            try:
+                tc_recipe_dir = _fetch_recipe(tc_name)
+            except Exception as exc:
+                log_cb(f"  toolchain {tc_name}: recipe fetch failed ({exc})\n")
+                continue
+
+            tc_yaml_path = tc_recipe_dir / "recipe.yaml"
+            if not tc_yaml_path.is_file():
+                log_cb(f"  toolchain {tc_name}: no recipe.yaml\n")
+                continue
+
+            tc_data = _yaml.safe_load(tc_yaml_path.read_text())
+            ct_block = tc_data.get("cross_toolchain", {})
+            ct_env = ct_block.get("env", {}) or {}
+
+            # 2. Download the pre-built package for the HOST platform
+            with httpx.Client(timeout=120) as client:
+                resp = client.get(
+                    f"{base}/v1/packages/{tc_name}",
+                    headers=headers,
+                )
+                if resp.status_code >= 400:
+                    log_cb(f"  toolchain {tc_name}: not found on server ({resp.status_code})\n")
+                    continue
+
+                pkgs = resp.json().get("packages", [])
+                match = None
+                for p in pkgs:
+                    if (p.get("platform") == host_platform
+                            and p.get("arch") == host_arch):
+                        match = p
+                        break
+                if match is None:
+                    log_cb(f"  toolchain {tc_name}: no {host_platform}/{host_arch} package on server\n")
+                    continue
+
+                archive_url = match.get("archive_url", "")
+                if not archive_url:
+                    log_cb(f"  toolchain {tc_name}: no archive URL\n")
+                    continue
+
+                log_cb(f"  Installing cross-toolchain: {tc_name} ({match.get('version', '')})\n")
+                dl_resp = client.get(archive_url)
+                if dl_resp.status_code >= 400:
+                    log_cb(f"  toolchain {tc_name}: download failed ({dl_resp.status_code})\n")
+                    continue
+
+                tmp_archive = prefix / f"_toolchain_{tc_name}.tar.gz"
+                tmp_archive.write_bytes(dl_resp.content)
+                try:
+                    with tarfile.open(tmp_archive, "r:gz") as tf:
+                        tf.extractall(path=prefix)  # noqa: S202
+                except Exception as exc:
+                    log_cb(f"  toolchain {tc_name}: extract failed ({exc})\n")
+                    continue
+                finally:
+                    tmp_archive.unlink(missing_ok=True)
+
+            # 3. Resolve env templates
+            for var, tpl in ct_env.items():
+                merged_env[var] = tpl.replace("${PREFIX}", str(prefix))
+
+            log_cb(f"  Toolchain {tc_name} installed ({', '.join(f'{k}={v}' for k, v in ct_env.items())})\n")
+
+        return merged_env
+
     def _execute_job(job: dict) -> None:
         """Execute a single build job."""
         nonlocal current_jobs
@@ -555,6 +654,17 @@ def builder_run(
             _install_deps(recipe_dir, dep_prefix, job_platform, job_arch,
                           job_config, job_link, log_cb)
 
+            # 3a-2. Install cross-toolchains (e.g. emsdk for wasm)
+            cross_env: dict[str, str] = {}
+            if host_plat:
+                cross_env = _install_cross_toolchains(
+                    target_platform=job_platform,
+                    host_platform=host_plat,
+                    host_arch=arch,  # builder's native arch
+                    prefix=dep_prefix,
+                    log_cb=log_cb,
+                )
+
             # 3b. Build + package
             output_dir = Path(tempfile.mkdtemp(prefix=f"cvcpkg-out-{recipe_name}-"))
             try:
@@ -569,6 +679,7 @@ def builder_run(
                     work_dir_root=work_root,
                     log_callback=log_cb,
                     host_platform=host_plat,
+                    cross_toolchain_env=cross_env or None,
                 )
                 _stream_log(
                     job_id,

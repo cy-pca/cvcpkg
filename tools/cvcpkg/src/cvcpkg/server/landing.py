@@ -58,6 +58,11 @@ th.is-sorted { color: #3273dc; }
 .platform-tag.linux { background-color: rgba(72, 199, 116, 0.15); color: #48c774; }
 .platform-tag.darwin { background-color: rgba(255, 221, 87, 0.15); color: #ffdd57; }
 .platform-tag.windows { background-color: rgba(50, 115, 220, 0.15); color: #3273dc; }
+.platform-tag.freebsd { background-color: rgba(255, 56, 56, 0.15); color: #ff3838; }
+.platform-tag.netbsd { background-color: rgba(255, 145, 51, 0.15); color: #ff9133; }
+.platform-tag.openbsd { background-color: rgba(241, 196, 15, 0.15); color: #f1c40f; }
+.platform-tag.wasm { background-color: rgba(155, 89, 182, 0.15); color: #9b59b6; }
+.platform-tag.wasi { background-color: rgba(230, 126, 34, 0.15); color: #e67e22; }
 
 .release-tag { font-size: 0.75em; }
 .release-tag.is-release { background-color: rgba(72, 199, 116, 0.15); color: #48c774; }
@@ -273,6 +278,11 @@ function platformTag(platform) {
   if (lp.includes('linux')) cls = 'linux';
   else if (lp.includes('darwin') || lp.includes('macos')) cls = 'darwin';
   else if (lp.includes('win')) cls = 'windows';
+  else if (lp === 'freebsd') cls = 'freebsd';
+  else if (lp === 'netbsd') cls = 'netbsd';
+  else if (lp === 'openbsd') cls = 'openbsd';
+  else if (lp === 'wasm') cls = 'wasm';
+  else if (lp === 'wasi') cls = 'wasi';
   return '<span class="tag is-rounded platform-tag ' + cls + '">' + esc(platform) + '</span>';
 }
 function releaseTag(tag) {
@@ -966,7 +976,7 @@ function renderBuilds() {
   let builds = [...allBuilds];
   if (builds.length === 0) {
     document.getElementById('builds-body').innerHTML =
-      '<tr><td colspan="8" class="has-text-centered has-text-grey-light py-4">No builds available.</td></tr>';
+      '<tr><td colspan="9" class="has-text-centered has-text-grey-light py-4">No builds available.</td></tr>';
     return;
   }
   builds.sort((a, b) => {
@@ -990,6 +1000,7 @@ function renderBuilds() {
     <tr>
       <td>${platformTag(b.platform)}</td>
       <td><span class="is-size-7">${esc(b.arch)}</span></td>
+      <td><code class="is-size-7">${esc(b.version || '')}</code></td>
       <td><span class="is-size-7">${esc(b.build_type)}</span></td>
       <td><span class="is-size-7">${esc(b.link)}</span></td>
       <td><span class="is-family-monospace is-size-7 has-text-grey-light">${fmtSize(b.size_bytes)}</span></td>
@@ -1410,6 +1421,7 @@ tar --zstd -xf &lt;package&gt;.tar.zst -C /opt/cvcpkg</pre>
           <tr>
             <th class="is-sortable" data-key="platform">Platform <span class="sort-arrow"></span></th>
             <th class="is-sortable" data-key="arch">Arch <span class="sort-arrow"></span></th>
+            <th class="is-sortable" data-key="version">Version <span class="sort-arrow"></span></th>
             <th class="is-sortable" data-key="build_type">Config <span class="sort-arrow"></span></th>
             <th class="is-sortable" data-key="link">Link <span class="sort-arrow"></span></th>
             <th class="is-sortable" data-key="size_bytes">Size <span class="sort-arrow"></span></th>
@@ -1420,7 +1432,7 @@ tar --zstd -xf &lt;package&gt;.tar.zst -C /opt/cvcpkg</pre>
         </thead>
         <tbody id="builds-body">
           <tr>
-            <td colspan="8" class="has-text-centered py-6">
+            <td colspan="9" class="has-text-centered py-6">
               <span class="icon is-large has-text-link">
                 <i class="fas fa-spinner fa-spin fa-2x"></i>
               </span>
