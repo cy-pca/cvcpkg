@@ -9,7 +9,7 @@ recipe:
   description: "XZ Utils — a general-purpose data compression library implementing the LZMA2 algorithm."
   homepage: https://tukaani.org/xz/
   license: 0BSD AND LGPL-2.1-or-later AND GPL-2.0-or-later
-  tags: [utils, io, wasm]
+  tags: [wasi, utils, io, wasm]
 
 source:
   type: tarball
@@ -55,6 +55,12 @@ build:
     - platform: wasm
       host_platform: windows
       script: build-wasm.ps1
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: wasi
+      host_platform: windows
+      script: build-wasi.ps1
 
 package:
   files:
