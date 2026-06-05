@@ -161,10 +161,15 @@ jobs:
           for VM in cvcpkg-builder-01 cvcpkg-builder-02; do
             echo "=== Restarting builder on $VM ==="
             incus exec "$VM" -- bash -c "
-              # Ensure --cross-target wasm is in the systemd unit
+              # Ensure --cross-platform wasm is in the systemd unit
               UNIT=/etc/systemd/system/cvcpkg-builder.service
-              if ! grep -q -- '--cross-target wasm' \"\$UNIT\" 2>/dev/null; then
-                sed -i 's|--work-dir [^ ]*|& --cross-target wasm|' \"\$UNIT\"
+              if ! grep -q -- '--cross-platform wasm' \"\$UNIT\" 2>/dev/null; then
+                # Migrate from old --cross-target if present
+                sed -i 's|--cross-target |--cross-platform |g' \"\$UNIT\"
+                # Add if still missing
+                if ! grep -q -- '--cross-platform wasm' \"\$UNIT\" 2>/dev/null; then
+                  sed -i 's|--work-dir [^ ]*|& --cross-platform wasm|' \"\$UNIT\"
+                fi
                 systemctl daemon-reload
               fi
               systemctl restart cvcpkg-builder

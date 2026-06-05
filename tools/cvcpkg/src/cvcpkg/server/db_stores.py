@@ -2202,6 +2202,70 @@ class DbBuildJobStore:
                 row.finished_at = now
             return len(rows)
 
+    async def pause(self, job_id: int) -> BuildJobInfo | None:
+        """Pause a pending or dispatched job. Returns updated info or None."""
+        async with get_session() as session:
+            row = (
+                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
+            ).scalar()
+            if row is None:
+                return None
+            if row.status not in (
+                BuildJobStatus.pending,
+                BuildJobStatus.dispatched,
+            ):
+                return self._row_to_info(row)
+            row.status = BuildJobStatus.paused
+            dep_ids = await self._load_dep_ids(session, job_id)
+            return self._row_to_info(row, dep_ids)
+
+    async def resume(self, job_id: int) -> BuildJobInfo | None:
+        """Resume a paused job back to pending. Returns updated info or None."""
+        async with get_session() as session:
+            row = (
+                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
+            ).scalar()
+            if row is None:
+                return None
+            if row.status != BuildJobStatus.paused:
+                return self._row_to_info(row)
+            row.status = BuildJobStatus.pending
+            dep_ids = await self._load_dep_ids(session, job_id)
+            return self._row_to_info(row, dep_ids)
+
+    async def pause_dag(self, dag_id: str) -> int:
+        """Pause all pending/dispatched jobs in a DAG. Returns count paused."""
+        async with get_session() as session:
+            q = (
+                select(BuildJobRow)
+                .where(BuildJobRow.dag_id == dag_id)
+                .where(
+                    BuildJobRow.status.in_(
+                        [
+                            BuildJobStatus.pending,
+                            BuildJobStatus.dispatched,
+                        ]
+                    )
+                )
+            )
+            rows = (await session.execute(q)).scalars().all()
+            for row in rows:
+                row.status = BuildJobStatus.paused
+            return len(rows)
+
+    async def resume_dag(self, dag_id: str) -> int:
+        """Resume all paused jobs in a DAG back to pending. Returns count resumed."""
+        async with get_session() as session:
+            q = (
+                select(BuildJobRow)
+                .where(BuildJobRow.dag_id == dag_id)
+                .where(BuildJobRow.status == BuildJobStatus.paused)
+            )
+            rows = (await session.execute(q)).scalars().all()
+            for row in rows:
+                row.status = BuildJobStatus.pending
+            return len(rows)
+
     _TERMINAL_STATUSES = frozenset(
         {
             BuildJobStatus.succeeded,

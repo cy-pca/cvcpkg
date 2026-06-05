@@ -54,7 +54,7 @@ cvcpkg install zlib boost --prefix ./deps
 cvcpkg build zlib --prefix ./prefix
 
 # Build all recipes (fetches latest from server):
-cvcpkg build-all --prefix ./prefix --platform linux
+cvcpkg build-all --prefix ./prefix
 
 # Use a custom server:
 export CVCPKG_SERVER_URL=https://pkg.mycompany.com
@@ -73,7 +73,7 @@ build against a specific set of recipes without pulling updates.
 cvcpkg build zlib --local --prefix ./prefix
 
 # Build all recipes from local sources:
-cvcpkg build-all --local --prefix ./prefix --platform linux
+cvcpkg build-all --local --prefix ./prefix
 
 # Install from source using local recipes (no catalog):
 cvcpkg install --local zlib boost --prefix ./deps
@@ -161,35 +161,47 @@ with persistent, uncapped build agents.
 export CVCPKG_SERVER_URL=https://cvcpkg.org
 export CVCPKG_TOKEN=cvctok_...
 
-# Start a builder agent:
+# Start a builder agent (platform and arch are auto-detected):
 cvcpkg builder run \
     --name linux-x64-builder-1 \
-    --platform linux \
-    --arch x86_64 \
     --max-jobs 4 \
     --work-dir /mnt/scratch/builder
 
 # Start with wasm cross-compilation support:
 cvcpkg builder run \
     --name linux-x64-builder-1 \
-    --platform linux \
-    --arch x86_64 \
     --max-jobs 4 \
     --work-dir /mnt/scratch/builder \
-    --cross-target wasm
+    --cross-platform wasm
+
+# Specify a non-default cross-arch:
+cvcpkg builder run \
+    --name linux-riscv-builder \
+    --max-jobs 2 \
+    --work-dir /mnt/scratch/builder \
+    --cross-platform linux --cross-arch riscv64
 
 # Start multiple builders for parallel builds:
-cvcpkg builder run --name builder-2 --platform linux --arch x86_64 &
-cvcpkg builder run --name builder-3 --platform macos --arch arm64 &
+cvcpkg builder run --name builder-2 &
+cvcpkg builder run --name builder-3 &
 ```
 
-Builders that pass `--cross-target wasm` register the target in their
-capabilities.  The scheduler dispatches wasm jobs to any builder
-whose `cross_targets` list includes `"wasm"`, even though the
-builder's native platform is linux or windows.  The builder
-automatically passes `--host-platform` to the build so that the
-correct cross-compilation scripts (e.g. `build-wasm.sh`) and
-toolchains (emsdk) are selected.
+Builders that pass `--cross-platform wasm` register the target in
+their capabilities with a default arch of `wasm32`.  The scheduler
+dispatches jobs to any builder whose `cross_platforms` list includes
+a matching platform/arch pair, even though the builder's native
+platform is linux or windows.  The builder automatically passes
+`--host-platform` to the build so that the correct cross-compilation
+scripts (e.g. `build-wasm.sh`) and toolchains (emsdk) are selected.
+
+`--cross-arch` is paired positionally with `--cross-platform`.  If
+omitted, sane defaults are applied:
+
+| `--cross-platform` | Default `--cross-arch` |
+|--------------------|------------------------|
+| `wasm` | `wasm32` |
+| `wasi` | `wasm32` |
+| *(other)* | host architecture |
 
 Builders register with the server and receive jobs via WebSocket (with
 HTTP long-poll fallback).  Each job downloads the recipe from the
@@ -206,7 +218,7 @@ cvcpkg builds submit-dag \
     --recipe zlib --recipe zstd --recipe hdf5 \
     --platform linux --arch x86_64
 
-# Submit wasm builds (dispatched to linux/windows builders with --cross-target wasm):
+# Submit wasm builds (dispatched to builders with --cross-platform wasm):
 cvcpkg builds submit-dag \
     --recipe zlib --recipe zstd \
     --platform wasm --arch wasm32
@@ -355,20 +367,18 @@ cvcpkg recipe push boost
 Run builder agents on each target platform:
 
 ```bash
-# On a Linux x86_64 build host:
+# On a Linux x86_64 build host (platform auto-detected):
 cvcpkg builder run \
     --server https://my-server.example.com \
     --token cvctok_... \
     --name linux-builder \
-    --platform linux --arch x86_64 \
     --max-jobs 4 --work-dir /scratch/builder
 
-# On a macOS arm64 build host:
+# On a macOS arm64 build host (platform auto-detected):
 cvcpkg builder run \
     --server https://my-server.example.com \
     --token cvctok_... \
     --name macos-builder \
-    --platform macos --arch arm64 \
     --max-jobs 2 --work-dir ~/builder-work
 ```
 
@@ -381,7 +391,7 @@ cvcpkg builds submit-dag \
     --platform linux --arch x86_64
 
 # Or build locally and publish:
-cvcpkg pack-all --local --platform linux --output-dir ./dist
+cvcpkg pack-all --local --output-dir ./dist
 cvcpkg publish --all --output-dir ./dist
 ```
 
@@ -495,17 +505,15 @@ On each build machine, start a builder agent with the publisher token:
 export CVCPKG_SERVER_URL=https://cvcpkg.org
 export CVCPKG_TOKEN=cvctok_<publisher-token>
 
-# Linux x86_64 builder:
+# Linux x86_64 builder (platform auto-detected):
 cvcpkg builder run \
     --name linux-builder-01 \
-    --platform linux --arch x86_64 \
     --max-jobs 4 \
     --work-dir /scratch/builder
 
-# macOS arm64 builder:
+# macOS arm64 builder (platform auto-detected):
 cvcpkg builder run \
     --name macos-builder-01 \
-    --platform macos --arch arm64 \
     --max-jobs 2 \
     --work-dir ~/builder-work
 ```
@@ -535,6 +543,16 @@ cvcpkg builds log <job-id> -f
 
 # Follow all jobs in a DAG (great for CI):
 cvcpkg builds follow-dag <dag-id>
+
+# Pause/resume builds (e.g. to free builder capacity):
+cvcpkg builds pause <job-id>
+cvcpkg builds resume <job-id>
+cvcpkg builds pause-dag <dag-id>
+cvcpkg builds resume-dag <dag-id>
+
+# Cancel builds:
+cvcpkg builds cancel <job-id>
+cvcpkg builds cancel-dag <dag-id>
 ```
 
 ### 6. Verify
@@ -1047,6 +1065,16 @@ Clients call `GET /v1/catalog` to receive the full bundle list, then
 | GET    | `/v1/orgs/{slug}`                      | public/member | Organization detail + members      |
 | POST   | `/v1/orgs/{slug}/members`              | org owner     | Add a member to an organization    |
 | DELETE | `/v1/orgs/{slug}/members/{token_name}` | org owner     | Remove a member from an organization |
+| POST   | `/v1/builds`                           | publisher     | Submit a single build job            |
+| POST   | `/v1/builds/dag`                       | publisher     | Submit a DAG of build jobs           |
+| GET    | `/v1/builds`                           | publisher     | List builds (filterable)             |
+| GET    | `/v1/builds/{job_id}`                  | publisher     | Get build job details                |
+| POST   | `/v1/builds/{job_id}/cancel`           | publisher     | Cancel a pending/dispatched job      |
+| POST   | `/v1/builds/{job_id}/pause`            | publisher     | Pause a pending/dispatched job       |
+| POST   | `/v1/builds/{job_id}/resume`           | publisher     | Resume a paused job                  |
+| POST   | `/v1/builds/dag/{dag_id}/cancel`       | publisher     | Cancel all pending/dispatched in DAG |
+| POST   | `/v1/builds/dag/{dag_id}/pause`        | publisher     | Pause all pending/dispatched in DAG  |
+| POST   | `/v1/builds/dag/{dag_id}/resume`       | publisher     | Resume all paused jobs in DAG        |
 
 ### SHA-256 integrity
 
@@ -1435,11 +1463,11 @@ to redirect build trees to a dedicated volume:
 ```bash
 # Point builds at a fast NVMe scratch partition:
 cvcpkg build-all --work-dir /mnt/scratch/cvcpkg-builds \
-    --platform linux --config release --link shared
+    --config release --link shared
 
 # Or set it globally via environment:
 export CVCPKG_WORK_DIR=/mnt/scratch/cvcpkg-builds
-cvcpkg pack-all --platform linux --config release --link shared
+cvcpkg pack-all --config release --link shared
 ```
 
 The directory is created automatically if it doesn't exist.  Each recipe
