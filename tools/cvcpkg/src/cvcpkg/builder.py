@@ -377,11 +377,16 @@ def _select_matrix_entry(recipe: Recipe, platform: str, host_platform: str = "")
     Platform-independent recipes (``platform: any``) are matched when
     no exact platform entry exists.
     """
+    # Normalize short platform names to recipe matrix names.
+    _PLAT_ALIASES = {"win": "windows"}
+    norm_platform = _PLAT_ALIASES.get(platform, platform)
+    norm_host = _PLAT_ALIASES.get(host_platform, host_platform) if host_platform else ""
+
     fallback: MatrixEntry | None = None
     any_fallback: MatrixEntry | None = None
     for entry in recipe.build_matrix:
-        if entry.platform == platform:
-            if host_platform and entry.host_platform == host_platform:
+        if entry.platform in (platform, norm_platform):
+            if norm_host and entry.host_platform in (host_platform, norm_host):
                 return entry
             if fallback is None:
                 fallback = entry

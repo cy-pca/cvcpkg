@@ -258,10 +258,11 @@ jobs:
           $COMPOSE logs --tail=80 backend || true
           exit 1
 
-      # ── Update BSD + Windows builders via SSH ─────────────────
+      # ── Update BSD builders via SSH ───────────────────────────
       # (star-00 / star-01 are self-hosted runners — updated by
       #  the update-linux-builders job below)
-      - name: Update non-runner builders (BSD + Windows)
+      # (sandipaws is updated by the update-windows-builder job below)
+      - name: Update non-runner builders (BSD)
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -284,18 +285,8 @@ jobs:
             " || echo "::warning::Failed to update $host"
           done
 
-          # Windows builder (sandipaws)
-          $SSH tfx@sandipaws "
-            cd C:/Users/tfx/libcvc-deps &&
-            git fetch origin &&
-            git checkout -f $SHA &&
-            cd tools/cvcpkg &&
-            pip install --quiet . 2>NUL &&
-            cvcpkg --version
-          " || echo "::warning::Failed to update sandipaws"
-
-      # ── Restart BSD + Windows builder agents ──────────────────
-      - name: Restart non-runner builders (BSD + Windows)
+      # ── Restart BSD builder agents ────────────────────────────
+      - name: Restart non-runner builders (BSD)
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -319,12 +310,6 @@ jobs:
               fi
             " || echo "::warning::Failed to restart builder on $host"
           done
-
-          # Windows builder (sandipaws) — restart via schtasks
-          $SSH tfx@sandipaws "
-            taskkill /f /im python.exe /fi \"WINDOWTITLE eq cvcpkg*\" 2>NUL
-            schtasks /run /tn cvcpkg-builder 2>NUL && echo sandipaws: builder restarted || echo sandipaws: no scheduled task found
-          " || echo "::warning::Failed to restart builder on sandipaws"
 
   # ── Update Linux builder runners ───────────────────────────────
   # Each runner has a unique label matching its hostname.
@@ -379,3 +364,34 @@ jobs:
           else
             echo "::warning::$(hostname): no systemd unit at $UNIT — skipping restart"
           fi
+
+  # ── Update Windows builder (sandipaws) ─────────────────────────
+  # sandipaws is reachable via SSH from star-00/star-01.
+  update-windows-builder:
+    name: Update builder (sandipaws)
+    needs: deploy
+    runs-on: [self-hosted, Linux, X64, star-00]
+    timeout-minutes: 10
+
+    steps:
+      - name: Update and restart sandipaws
+        run: |
+          set -euo pipefail
+          SHA="${{ needs.deploy.outputs.sha }}"
+          SSH="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15"
+
+          echo "--- Updating sandipaws ---"
+          $SSH tfx@sandipaws "
+            cd C:/Users/tfx/libcvc-deps &&
+            git fetch origin &&
+            git checkout -f $SHA &&
+            cd tools/cvcpkg &&
+            pip install --quiet . 2>NUL &&
+            cvcpkg --version
+          "
+
+          echo "--- Restarting sandipaws builder ---"
+          $SSH tfx@sandipaws "
+            taskkill /f /im python.exe /fi \"WINDOWTITLE eq cvcpkg*\" 2>NUL
+            schtasks /run /tn cvcpkg-builder 2>NUL && echo sandipaws: builder restarted || echo sandipaws: no scheduled task found
+          "
