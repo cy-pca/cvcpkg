@@ -1,0 +1,73 @@
+schema_version: 1
+recipe:
+  name: wasi-sdk
+  upstream_version: "33.0"
+  cvc_revision: 1
+  maintainer: "WebAssembly Project"
+  homepage: https://github.com/WebAssembly/wasi-sdk
+  license: Apache-2.0
+  tags: [tools, wasi]
+  description: >-
+    The WASI SDK provides a Clang-based C/C++ → wasm32-wasi compiler
+    toolchain.  This is a build-time host tool — it runs natively on
+    the build host and cross-compiles to the "wasi" platform target.
+    Unlike Emscripten (which targets browser environments), WASI targets
+    server-side and standalone WebAssembly runtimes like Wasmtime and
+    Wasmer via the WebAssembly System Interface.
+
+cross_toolchain:
+  target_platforms: [wasi]
+  env:
+    CVC_WASI_SDK_DIR: "${PREFIX}"
+
+source:
+  type: prebuilt
+  base_url: https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-33
+  artifacts:
+    linux-x86_64: wasi-sdk-33.0-x86_64-linux.tar.gz
+    linux-arm64: wasi-sdk-33.0-arm64-linux.tar.gz
+    macos-x86_64: wasi-sdk-33.0-x86_64-macos.tar.gz
+    macos-arm64: wasi-sdk-33.0-arm64-macos.tar.gz
+    windows-x86_64: wasi-sdk-33.0-x86_64-windows.tar.gz
+
+patches: []
+
+depends:
+  build: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+      env: {}
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - bin/
+    - lib/
+    - share/
+  cmake_packages: []
+
+toolchain:
+  note: >-
+    Pre-built binaries — no compiler required at build time.
+    The SDK ships its own Clang, lld, wasm-ld, and wasi-libc sysroot.
+
+notes:
+  - title: "Pre-built SDK release artifacts"
+    platforms: [linux, macos, windows]
+    description: >-
+      Downloads pre-compiled release artifacts from GitHub Releases.
+      The build script extracts the SDK and stages it into the install
+      prefix.  No compilation occurs.
+  - title: "WASI vs Emscripten"
+    platforms: [linux, macos, windows]
+    description: >-
+      WASI targets standalone WebAssembly runtimes (Wasmtime, Wasmer)
+      via the WebAssembly System Interface.  Emscripten (emsdk) targets
+      browser environments and provides its own libc/JS glue.  Use
+      wasi-sdk for server-side or sandboxed wasm workloads.
