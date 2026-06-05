@@ -336,8 +336,8 @@ def builds_follow_dag(dag_id: str, server: str, token: str):
     """Follow live build output for all jobs in a DAG.
 
     Multiplexes SSE log streams from every active job, interleaving
-    lines with a [recipe/platform] prefix.  Useful in CI to get real-time
-    build output from all remote builders.
+    lines with a [builder/recipe/platform/arch] prefix.  Useful in CI
+    to get real-time build output from all remote builders.
 
     Exits with code 0 when all jobs succeed, 1 if any fail.
     """
@@ -353,6 +353,32 @@ def builds_follow_dag(dag_id: str, server: str, token: str):
     print_lock = threading.Lock()
     seen_jobs: set[int] = set()
     final_statuses: dict[int, str] = {}
+    # Cache builder_id → name so we only fetch once
+    builder_names: dict[int, str] = {}
+
+    def _resolve_builder_name(bid: int | None) -> str:
+        if bid is None:
+            return "?"
+        if bid not in builder_names:
+            try:
+                with httpx.Client(timeout=10) as client:
+                    resp = client.get(
+                        f"{base}/v1/builders/{bid}", headers=headers
+                    )
+                if resp.status_code < 400:
+                    builder_names[bid] = resp.json().get("name", f"#{bid}")
+                else:
+                    builder_names[bid] = f"#{bid}"
+            except Exception:
+                builder_names[bid] = f"#{bid}"
+        return builder_names[bid]
+
+    def _make_label(j: dict) -> str:
+        builder = _resolve_builder_name(j.get("builder_id"))
+        recipe = j.get("recipe_name", "?")
+        plat = j.get("platform", "?")
+        arch = j.get("arch", "?")
+        return f"{builder}/{recipe}/{plat}/{arch}"
 
     def _follow_job(job_id: int, label: str):
         """Tail a single job's SSE stream, printing prefixed lines."""
@@ -369,8 +395,6 @@ def builds_follow_dag(dag_id: str, server: str, token: str):
                             with print_lock:
                                 click.echo(f"[{label}] {line[6:]}")
                         elif line.startswith("event: done"):
-                            status = ""
-                            # Next data line has the status
                             break
         except Exception:
             pass  # best-effort
@@ -397,9 +421,7 @@ def builds_follow_dag(dag_id: str, server: str, token: str):
             for j in jobs:
                 jid = j["id"]
                 status = j.get("status", "unknown")
-                recipe = j.get("recipe_name", "?")
-                plat = j.get("platform", "?")
-                label = f"{recipe}/{plat}"
+                label = _make_label(j)
 
                 if status in terminal:
                     if jid not in final_statuses:

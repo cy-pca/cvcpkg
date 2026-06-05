@@ -708,7 +708,7 @@ def builder_run(
                 pass
 
 
-@builder_group.command("stop")
+@builder_group.command("unregister")
 @click.argument("builder_id", type=int)
 @click.option(
     "--server",
@@ -723,7 +723,7 @@ def builder_run(
     required=True,
     help="Bearer token (admin).  [env: CVCPKG_TOKEN]",
 )
-def builder_stop(builder_id: int, server: str, token: str):
+def builder_unregister(builder_id: int, server: str, token: str):
     """Unregister a builder by ID (admin-only)."""
     _api_request("delete", f"{server.rstrip('/')}/v1/builders/{builder_id}", token)
     click.echo(f"Builder #{builder_id} unregistered.")
