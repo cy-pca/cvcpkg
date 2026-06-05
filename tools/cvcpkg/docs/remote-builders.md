@@ -44,10 +44,23 @@ build, streams logs via WebSocket, and publishes the resulting archive.
 
 ## Dev/Test Builders
 
-| Builder | Host | Platform | Notes |
-|---------|------|----------|-------|
-| cvcpkg-builder-01 | incus VM on star cluster | linux | Test only |
-| cvcpkg-builder-02 | incus VM on star cluster | linux | Test only |
+| Builder | Host | IP | Server URL | Persistence |
+|---------|------|----|-----------|-------------|
+| dev-builder-01 | cvcpkg-builder-01 (incus VM) | 10.99.0.222 | http://10.99.0.250:8420 | systemd |
+| dev-builder-02 | cvcpkg-builder-02 (incus VM) | 10.99.0.110 | http://10.66.77.207:8420 | systemd |
+
+**Dev server:** cvcpkg-server incus VM, IPs: 10.99.0.250 (incus net), 10.66.77.207 (bridge).
+Docker binds to 0.0.0.0:8420 (`BACKEND_BIND_ADDR=0.0.0.0` in `.env.production`).
+
+**Note:** builder-02 cannot reach 10.99.0.250 (different incus network segment) so it
+connects via 10.66.77.207 instead.
+
+**Dev tokens** (role: purpose):
+- `dev-admin2` (admin): server management
+- `dev-builder-01b` (publisher): builder-01 registration
+- `dev-builder-02b` (publisher): builder-02 registration
+
+Token raw values are in `/etc/systemd/system/cvcpkg-builder.service` on each VM.
 
 These builders connect to the dev cvcpkg-server VM (not cvcpkg.org).
 
@@ -140,6 +153,11 @@ schtasks /create /tn "cvcpkg-builder" /tr "cvcpkg builder run --server https://c
 | admin | admin | Server administration |
 | builders | publisher | Builder registration + package publishing |
 | ci_publisher | publisher | GitHub Actions CI (recipe push + build submission) |
+
+**Important:** Token hashes are HMAC-keyed using a secret stored at
+`<state_dir>/.hmac_key` (in Docker: `/app/data/.hmac_key`). When creating
+tokens via Python directly (bypassing the API), you **must** pass the same
+`state_dir` the running server uses, otherwise the hashes won't match.
 
 Tokens are created via:
 ```bash
