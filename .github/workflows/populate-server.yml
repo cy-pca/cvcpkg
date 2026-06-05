@@ -10,14 +10,14 @@ on:
   workflow_dispatch:
     inputs:
       platforms:
-        description: "Comma-separated platforms to build (linux,freebsd,netbsd,openbsd,win)"
+        description: "Comma-separated platforms to build"
         required: true
-        default: "linux,freebsd,netbsd,openbsd,win"
+        default: "linux,freebsd,netbsd,openbsd,win,wasm,wasi"
         type: string
       arch:
-        description: "Target architecture"
+        description: "Target architecture(s), comma-separated"
         required: true
-        default: "x86_64"
+        default: "x86_64,wasm32"
         type: string
       config:
         description: "Build config (release, debug, or all)"
@@ -111,6 +111,7 @@ jobs:
             --config "${{ inputs.config }}" \
             --link "${{ inputs.link }}" \
             --dag-id "$DAG_ID" \
+            --recipes-dir recipes \
             "${RECIPES[@]}"
 
       - name: Follow build output
@@ -118,4 +119,7 @@ jobs:
           CVCPKG_SERVER_URL: ${{ inputs.server }}
           CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISHER_TOKEN }}
         run: |
-          cvcpkg builds follow-dag "${{ steps.submit.outputs.dag_id }}"
+          # Follow all DAGs whose IDs start with the generated prefix.
+          # submit-dag creates one DAG per platform/arch/config/link combo.
+          DAG_PREFIX="${{ steps.submit.outputs.dag_id }}"
+          cvcpkg builds follow-dag "$DAG_PREFIX"

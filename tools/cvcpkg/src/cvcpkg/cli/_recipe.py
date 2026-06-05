@@ -15,6 +15,27 @@ from cvcpkg.cli import cli
 # ── Recipe distribution commands ────────────────────────────────
 
 
+def _bundle_vendored_source(tar, recipe_path: Path, rdir: Path) -> None:
+    """If the recipe uses ``source.type: vendored``, bundle the vendored
+    source tree into the tarball under ``_vendored/<path>/``."""
+    recipe_yaml = recipe_path / "recipe.yaml"
+    if not recipe_yaml.is_file():
+        return
+    data = yaml.safe_load(recipe_yaml.read_text())
+    source = data.get("source", {})
+    if source.get("type") != "vendored" or not source.get("path"):
+        return
+    # Resolve the vendored path relative to the repo root (parent of recipes/)
+    repo_root = rdir.parent
+    vendored = (repo_root / source["path"]).resolve()
+    if not vendored.is_dir():
+        return
+    for f in sorted(vendored.rglob("*")):
+        if f.is_file():
+            arcname = f"_vendored/{source['path']}/{f.relative_to(vendored)}"
+            tar.add(f, arcname=arcname)
+
+
 @cli.group("recipe")
 def recipe_group() -> None:
     """Manage server-side recipe bundles."""
@@ -91,6 +112,8 @@ def recipe_push(name: str, server: str, token: str, recipes_dirs: tuple[str, ...
                 if f.is_file():
                     arcname = f"_common/{f.relative_to(common_dir)}"
                     tar.add(f, arcname=arcname)
+        # Include vendored source directory if source.type == "vendored"
+        _bundle_vendored_source(tar, recipe_path, rdir)
     buf.seek(0)
 
     # Read recipe.yaml for version info
@@ -576,6 +599,8 @@ def recipe_push_all(server: str, token: str, recipes_dirs: tuple[str, ...], no_d
                     if f.is_file():
                         arcname = f"_common/{f.relative_to(common_dir)}"
                         tar.add(f, arcname=arcname)
+            # Include vendored source directory if source.type == "vendored"
+            _bundle_vendored_source(tar, recipe_path, rdir)
         buf.seek(0)
 
         url = f"{base}/v1/recipes/{name}"

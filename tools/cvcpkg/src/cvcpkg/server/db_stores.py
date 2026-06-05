@@ -2137,8 +2137,13 @@ class DbBuildJobStore:
                 q = q.where(BuildJobRow.org_slug == org_slug)
                 count_q = count_q.where(BuildJobRow.org_slug == org_slug)
             if dag_id is not None:
-                q = q.where(BuildJobRow.dag_id == dag_id)
-                count_q = count_q.where(BuildJobRow.dag_id == dag_id)
+                if dag_id.endswith("*"):
+                    prefix = dag_id[:-1]
+                    q = q.where(BuildJobRow.dag_id.startswith(prefix))
+                    count_q = count_q.where(BuildJobRow.dag_id.startswith(prefix))
+                else:
+                    q = q.where(BuildJobRow.dag_id == dag_id)
+                    count_q = count_q.where(BuildJobRow.dag_id == dag_id)
             if status is not None:
                 q = q.where(BuildJobRow.status == status)
                 count_q = count_q.where(BuildJobRow.status == status)

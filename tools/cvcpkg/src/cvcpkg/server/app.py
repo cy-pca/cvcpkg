@@ -977,6 +977,30 @@ def create_app(
         asyncio.get_event_loop().create_task(_do_shutdown())
         return {"message": "server shutting down"}
 
+    @app.post("/v1/admin/update-builders", tags=["admin"])
+    async def admin_update_builders(
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Notify all connected builders to self-update.
+
+        Sends a ``builder.update`` WebSocket message to every connected
+        builder, which causes them to pip-install the latest cvcpkg and
+        restart.
+        """
+        from cvcpkg import __version__
+
+        sent = 0
+        for bid in list(_ws_builders):
+            ok = await _ws_send(bid, {
+                "type": "builder.update",
+                "version": __version__,
+            })
+            if ok:
+                sent += 1
+        logger.info("update-builders: notified %d/%d builders (by %s)",
+                     sent, len(_ws_builders), actor.name)
+        return {"message": f"notified {sent} builder(s)", "total_connected": len(_ws_builders)}
+
     # ── Metrics (Prometheus text format) ────────────────────
 
     @app.get("/metrics", tags=["health"], response_class=PlainTextResponse)

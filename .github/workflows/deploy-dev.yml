@@ -184,3 +184,18 @@ jobs:
               fi
             " || echo "Warning: failed to restart builder on $VM"
           done
+
+      # ── Notify builders to self-update via server API ─────────
+      - name: Notify builders to self-update
+        continue-on-error: true
+        env:
+          CVCPKG_ADMIN_TOKEN: ${{ secrets.CVCPKG_ADMIN_TOKEN }}
+        run: |
+          sleep 10
+          SERVER_URL="http://$(incus list cvcpkg-server -c4 -fcsv | head -1 | awk '{print $1}'):8420"
+          if [ -n "${CVCPKG_ADMIN_TOKEN:-}" ]; then
+            echo "Notifying builders via $SERVER_URL to self-update..."
+            curl -fsS -X POST "$SERVER_URL/v1/admin/update-builders" \
+              -H "Authorization: Bearer $CVCPKG_ADMIN_TOKEN" \
+              -H "Content-Type: application/json" || true
+          fi

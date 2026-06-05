@@ -305,7 +305,11 @@ def _resolve_vendored(source: SourceSpec, recipe_dir: Path) -> Path:
     """Locate vendored source tree relative to the repo."""
     if not source.path:
         raise RecipeError("source.type=vendored but no path specified")
-    # Resolve relative to the repo root (parent of recipes/)
+    # First check _vendored/ sibling (used by remote builder recipe bundles)
+    bundled = (recipe_dir.parent / "_vendored" / source.path).resolve()
+    if bundled.is_dir():
+        return bundled
+    # Fall back to repo root (parent of recipes/) for local builds
     repo_root = recipe_dir.parent.parent
     src = (repo_root / source.path).resolve()
     if not src.is_dir():

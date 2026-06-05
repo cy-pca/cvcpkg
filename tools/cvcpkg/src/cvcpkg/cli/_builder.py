@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import click
@@ -398,6 +399,96 @@ def builder_run(
             except Exception:
                 pass  # best-effort log streaming
 
+    def _install_deps(recipe_dir: Path, prefix: Path, job_platform: str,
+                      job_arch: str, job_config: str, job_link: str,
+                      log_cb: Callable[[str], None]) -> None:
+        """Download and install runtime dependencies into *prefix*.
+
+        Queries the server catalog for each runtime dep, downloads the
+        matching archive, and extracts it into the shared prefix so
+        that dependent builds can find headers/libraries.
+        """
+        import yaml as _yaml
+
+        recipe_yaml = recipe_dir / "recipe.yaml"
+        if not recipe_yaml.is_file():
+            return
+        data = _yaml.safe_load(recipe_yaml.read_text())
+        deps_block = data.get("depends", {})
+
+        dep_names: list[str] = []
+        for key in ("runtime", "build"):
+            for dep in deps_block.get(key, []) or []:
+                if isinstance(dep, str):
+                    dep_names.append(dep)
+                elif isinstance(dep, dict):
+                    # Respect platform filter
+                    plats = dep.get("platforms")
+                    if plats and job_platform not in plats:
+                        continue
+                    dep_names.append(dep["name"])
+
+        if not dep_names:
+            return
+
+        prefix.mkdir(parents=True, exist_ok=True)
+        with httpx.Client(timeout=120) as client:
+            for dep_name in dep_names:
+                # Find the package on the server
+                resp = client.get(
+                    f"{base}/v1/packages/{dep_name}",
+                    headers=headers,
+                )
+                if resp.status_code >= 400:
+                    log_cb(f"  dep {dep_name}: not found on server (skipping)\n")
+                    continue
+
+                pkgs = resp.json().get("packages", [])
+                # Find best match for platform/arch/config/link
+                match = None
+                for p in pkgs:
+                    if (p.get("platform") == job_platform
+                            and p.get("arch") == job_arch
+                            and p.get("build_type", "release") == job_config
+                            and p.get("link", "shared") == job_link):
+                        match = p
+                        break
+                # Relax: try just platform/arch
+                if match is None:
+                    for p in pkgs:
+                        if (p.get("platform") == job_platform
+                                and p.get("arch") == job_arch):
+                            match = p
+                            break
+                if match is None:
+                    log_cb(f"  dep {dep_name}: no matching variant for "
+                           f"{job_platform}/{job_arch} (skipping)\n")
+                    continue
+
+                archive_url = match.get("archive_url", "")
+                if not archive_url:
+                    log_cb(f"  dep {dep_name}: no archive URL (skipping)\n")
+                    continue
+
+                # Download the archive
+                log_cb(f"  Installing dep: {dep_name} ({match.get('version','')})\n")
+                dl_resp = client.get(archive_url)
+                if dl_resp.status_code >= 400:
+                    log_cb(f"  dep {dep_name}: download failed ({dl_resp.status_code})\n")
+                    continue
+
+                # Extract into prefix
+                archive_bytes = dl_resp.content
+                tmp_archive = prefix / f"_dep_{dep_name}.tar.gz"
+                tmp_archive.write_bytes(archive_bytes)
+                try:
+                    with tarfile.open(tmp_archive, "r:gz") as tf:
+                        tf.extractall(path=prefix)  # noqa: S202
+                except Exception as exc:
+                    log_cb(f"  dep {dep_name}: extract failed ({exc})\n")
+                finally:
+                    tmp_archive.unlink(missing_ok=True)
+
     def _execute_job(job: dict) -> None:
         """Execute a single build job."""
         nonlocal current_jobs
@@ -433,6 +524,7 @@ def builder_run(
 
         error_message = ""
         archive_path: Path | None = None
+        dep_prefix: Path | None = None
         try:
             # 2. Download recipe
             _stream_log(job_id, f"Downloading recipe '{recipe_name}'…\n")
@@ -456,6 +548,14 @@ def builder_run(
                 f"({job_platform}/{job_arch}/{job_config}/{job_link})\n",
             )
 
+            # 3a. Install runtime dependencies into a shared prefix
+            dep_prefix = Path(tempfile.mkdtemp(prefix=f"cvcpkg-prefix-{recipe_name}-",
+                                                dir=work_root))
+            log_cb = lambda text, _jid=job_id: _stream_log(_jid, text)  # noqa: E731
+            _install_deps(recipe_dir, dep_prefix, job_platform, job_arch,
+                          job_config, job_link, log_cb)
+
+            # 3b. Build + package
             output_dir = Path(tempfile.mkdtemp(prefix=f"cvcpkg-out-{recipe_name}-"))
             try:
                 archive_path, sha256, size = pack_recipe(
@@ -464,9 +564,10 @@ def builder_run(
                     arch=job_arch,
                     config=job_config,
                     link=job_link,
+                    prefix=dep_prefix,
                     output_dir=output_dir,
                     work_dir_root=work_root,
-                    log_callback=lambda text, _jid=job_id: _stream_log(_jid, text),
+                    log_callback=log_cb,
                     host_platform=host_plat,
                 )
                 _stream_log(
@@ -480,16 +581,22 @@ def builder_run(
 
             # 4. Publish the archive to the server
             _stream_log(job_id, f"Publishing {archive_path.name}…\n")
-            _publish_to_server(
-                server=base,
-                token=token,
-                archive_paths=[archive_path],
-                release_tag="",
-                chunked_threshold=10 * 1024 * 1024,
-                org=org_slug,
-            )
+            try:
+                _publish_to_server(
+                    server=base,
+                    token=token,
+                    archive_paths=[archive_path],
+                    release_tag="",
+                    chunked_threshold=10 * 1024 * 1024,
+                    org=org_slug,
+                )
+                _stream_log(job_id, "Published successfully.\n")
+            except click.ClickException as pub_exc:
+                # Publish may raise if variant already exists on server.
+                # The build itself succeeded — log the warning and continue.
+                _stream_log(job_id, f"Publish warning: {pub_exc.format_message()}\n")
+
             result_url = f"{base}/v1/packages/{recipe_name}"
-            _stream_log(job_id, "Published successfully.\n")
 
             # 5. Report completion
             with httpx.Client(timeout=30) as client:
@@ -516,11 +623,68 @@ def builder_run(
             click.echo(f"  [{job_id}] Failed: {recipe_name} — {exc}", err=True)
 
         finally:
-            # Clean up output dir
+            # Clean up output dir and dep prefix
             if archive_path and archive_path.parent.is_dir():
                 shutil.rmtree(archive_path.parent, ignore_errors=True)
+            if dep_prefix and dep_prefix.is_dir():
+                shutil.rmtree(dep_prefix, ignore_errors=True)
             with jobs_lock:
                 current_jobs -= 1
+
+    # ── Self-update helper ─────────────────────────────────
+
+    def _self_update() -> None:
+        """Pip-install the latest cvcpkg from the local git repo and re-exec.
+
+        Looks for a libcvc-deps checkout by walking up from the
+        installed package location.  Falls back to a ``git pull``
+        in known paths.
+        """
+        import subprocess
+
+        # Find the tools/cvcpkg directory
+        pkg_dir = Path(__file__).resolve().parent.parent  # cvcpkg package
+        setup_dir = pkg_dir.parent  # src/
+        # Walk up to find pyproject.toml
+        candidates = [
+            setup_dir.parent,  # tools/cvcpkg
+            Path.home() / "libcvc-deps" / "tools" / "cvcpkg",
+            Path("/root/libcvc-deps/tools/cvcpkg"),
+        ]
+        cvcpkg_dir: Path | None = None
+        for c in candidates:
+            if (c / "pyproject.toml").is_file():
+                cvcpkg_dir = c
+                break
+
+        if cvcpkg_dir is None:
+            click.echo("  self-update: cannot find cvcpkg source dir", err=True)
+            return
+
+        click.echo(f"  self-update: updating from {cvcpkg_dir}")
+        try:
+            # Pull latest code
+            repo_root = cvcpkg_dir.parent.parent  # libcvc-deps root
+            subprocess.run(
+                ["git", "pull", "--ff-only"],
+                cwd=repo_root,
+                check=False,
+                capture_output=True,
+                timeout=60,
+            )
+            # Pip install
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--quiet",
+                 "--break-system-packages", str(cvcpkg_dir)],
+                check=False,
+                capture_output=True,
+                timeout=120,
+            )
+            click.echo("  self-update: installed, restarting…")
+            # Re-exec with the same arguments
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        except Exception as exc:
+            click.echo(f"  self-update failed: {exc}", err=True)
 
     # ── WebSocket helpers ───────────────────────────────────
 
@@ -607,6 +771,16 @@ def builder_run(
                             ws.send(json.dumps({"type": "pong"}))
                         except Exception:
                             break
+
+                    elif msg_type == "builder.update":
+                        server_ver = msg.get("version", "")
+                        from cvcpkg import __version__
+
+                        if server_ver and server_ver != __version__:
+                            click.echo(
+                                f"  Server requests update: {__version__} → {server_ver}"
+                            )
+                            _self_update()
 
                     elif msg_type == "job.timeout":
                         job_id = msg.get("job_id")
