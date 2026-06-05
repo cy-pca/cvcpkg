@@ -1,0 +1,697 @@
+"""CLI commands — auto-extracted from cli.py."""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+import click
+
+from cvcpkg.cli._helpers import (
+    _platform_opt,
+    _config_opt,
+    _link_opt,
+    _prefix_opt,
+    _recipes_dir_opt,
+    _no_default_recipes_opt,
+    _local_opt,
+    _resolve_recipes_dirs,
+    _VALID_ARCHES,
+)
+from cvcpkg.cli import cli
+from cvcpkg.cli._catalog import _fetch_mirror_urls
+
+# ── install ─────────────────────────────────────────────────────
+
+
+@cli.command()
+@click.argument("components", nargs=-1)
+@click.option(
+    "--from",
+    "from_file",
+    type=click.Path(exists=True),
+    help="Path to a cvc-requirements.yaml file listing components to install.",
+)
+@_prefix_opt
+@click.option(
+    "--release",
+    metavar="VER",
+    help="Pin to a specific libcvc-deps release version (e.g. 1.2.0).",
+)
+@_platform_opt
+@click.option(
+    "--arch",
+    type=click.Choice(_VALID_ARCHES, case_sensitive=False),
+    default="auto",
+    help="Target architecture.  'auto' detects the current CPU.",
+)
+@_config_opt
+@_link_opt
+@click.option(
+    "--catalog",
+    metavar="URL",
+    help="Override catalog URL or path to a local catalog YAML file.",
+)
+@click.option(
+    "--catalog-revision",
+    type=int,
+    metavar="REV",
+    help="Pin to a specific catalog revision number.",
+)
+@click.option(
+    "--source",
+    type=click.Choice(["auto", "server", "github"], case_sensitive=False),
+    default="auto",
+    help=(
+        "Catalog source strategy.  'server' uses cvcpkg.org only; "
+        "'github' uses GitHub Pages/Releases only; 'auto' tries "
+        "server first then falls back to GitHub (default)."
+    ),
+)
+@click.option(
+    "--ignore-abi",
+    is_flag=True,
+    help="Skip ABI compatibility checks (C++ standard, runtime, etc.).",
+)
+@click.option(
+    "--verify-signatures/--no-verify-signatures",
+    default=False,
+    help="Verify Ed25519 signatures on downloaded archives.",
+)
+@click.option(
+    "--fallback-to-source/--no-fallback-to-source",
+    default=False,
+    help="Build from source recipe when no prebuilt binary is available.",
+)
+@_recipes_dir_opt
+@_no_default_recipes_opt
+@_local_opt
+def install(
+    components: tuple[str, ...],
+    from_file: str | None,
+    prefix: str,
+    release: str | None,
+    platform: str,
+    arch: str,
+    config: str,
+    link: str,
+    catalog: str | None,
+    catalog_revision: int | None,
+    source: str,
+    ignore_abi: bool,
+    verify_signatures: bool,
+    fallback_to_source: bool,
+    recipes_dirs: tuple[str, ...],
+    no_default_recipes: bool,
+    local_mode: bool,
+) -> None:
+    """Install component bundles into a prefix.
+
+    Downloads and extracts prebuilt component archives from the
+    libcvc-deps release catalog.  Components can be specified as
+    positional arguments or loaded from a cvc-requirements.yaml
+    file via --from.
+
+    Use --local to skip the catalog and build everything from local
+    recipes (implies --fallback-to-source).
+
+    \b
+    Examples:
+      # Install from a requirements file
+      cvcpkg install --from cvc-requirements.yaml --prefix ./deps
+
+      # Override config for a debug build (file says release)
+      cvcpkg install --from cvc-requirements.yaml --config debug
+
+      # Install individual components by name
+      cvcpkg install zlib boost --prefix ./deps
+
+      # Build from local recipes only (no server)
+      cvcpkg install --local zlib boost --prefix ./deps
+
+      # Pin a specific component version
+      cvcpkg install zlib==1.3.1+cvc.1 --prefix ./deps
+
+    When using --from, the CLI flags --platform, --arch, --config,
+    and --link override the corresponding values in the requirements
+    file if explicitly provided on the command line.
+    """
+    from cvcpkg.cache import default_cache_dir
+    from cvcpkg.catalog import (
+        catalog_entries,
+        fetch_catalog,
+        load_catalog_from_file,
+    )
+    from cvcpkg.errors import InstallError, IntegrityError
+    from cvcpkg.installer import build_from_source_fallback, install_entry
+    from cvcpkg.lockfile import LockEntry, Lockfile
+    from cvcpkg.manifest import CatalogEntry, ComponentReq, Requirements
+    from cvcpkg.platform import detect_arch, detect_platform
+
+    ctx = click.get_current_context()
+    prefix_path = Path(prefix).resolve()
+
+    # --local implies --fallback-to-source and skips the catalog entirely
+    if local_mode:
+        fallback_to_source = True
+        skip_catalog = True
+    else:
+        skip_catalog = False
+
+    # ── Load or build the Requirements object ──
+    #
+    # Either parse a cvc-requirements.yaml file (--from) or construct
+    # one from positional COMPONENTS arguments + CLI flags.
+    if from_file:
+        reqs = Requirements.from_yaml(from_file)
+    else:
+        comp_list: list[ComponentReq] = []
+        for c in components:
+            if "==" in c:
+                name, ver = c.split("==", 1)
+                comp_list.append(ComponentReq(name=name, version=f"=={ver}"))
+            else:
+                comp_list.append(ComponentReq(name=c))
+        reqs = Requirements(
+            platform=platform,
+            arch=arch,
+            config=config,
+            link=link,
+            libcvc_deps=release or "",
+            components=comp_list,
+        )
+
+    # ── CLI flag overrides ──
+    #
+    # When --from is used, the requirements file provides defaults for
+    # platform/arch/config/link.  Explicit CLI flags take precedence.
+    # For platform/arch, "auto" is the sentinel (default).  For config
+    # and link, we check Click's ParameterSource to distinguish "user
+    # passed --config debug" from "defaulted to release".
+    if platform != "auto":
+        reqs.platform = platform
+    if arch != "auto":
+        reqs.arch = arch
+    if ctx.get_parameter_source("config") == click.core.ParameterSource.COMMANDLINE:
+        reqs.config = config
+    if ctx.get_parameter_source("link") == click.core.ParameterSource.COMMANDLINE:
+        reqs.link = link
+
+    # Resolve "auto" sentinels to concrete values.
+    plat = reqs.platform if reqs.platform != "auto" else detect_platform()
+    arc = reqs.arch if reqs.arch != "auto" else detect_arch()
+
+    click.echo(f"cvcpkg: resolving for {plat}/{arc}/{reqs.config}/{reqs.link}")
+    click.echo(f"cvcpkg: target prefix: {prefix_path}")
+
+    if not reqs.components:
+        click.echo("cvcpkg: no components requested, nothing to do.")
+        return
+
+    # ── Fetch the catalog and resolve dependencies ──
+    #
+    # The catalog is a YAML index of all published component bundles.
+    # We filter entries by the target platform tuple (platform/arch/
+    # config/link), then run the backtracking SAT-style resolver to
+    # pick compatible versions for all requested components.
+    #
+    # --source controls catalog source strategy:
+    #   auto   → primary (cvcpkg.org) with GitHub Pages fallback
+    #   server → cvcpkg.org only, no fallback
+    #   github → GitHub Pages only, no fallback
+    catalog_url = catalog or ""
+    catalog_failed = False
+    if skip_catalog:
+        catalog_failed = True
+        cat = {"bundles": []}
+    else:
+        try:
+            if catalog_url and Path(catalog_url).is_file():
+                cat = load_catalog_from_file(catalog_url)
+            else:
+                cat = fetch_catalog(catalog_url, cache_dir=default_cache_dir())
+        except Exception as exc:
+            if not fallback_to_source:
+                raise
+            click.echo(f"cvcpkg: catalog unavailable ({exc}), will build from source.")
+            catalog_failed = True
+            cat = {"bundles": []}
+
+    picked: dict[str, CatalogEntry] = {}
+    source_only: list[str] = []
+    requested_names = [c.name for c in reqs.components]
+
+    if not catalog_failed:
+        entries = catalog_entries(
+            cat,
+            platform=plat,
+            arch=arc,
+            build_type=reqs.config,
+            link=reqs.link,
+        )
+
+        # Group candidate entries by component name for the resolver.
+        candidates: dict[str, list] = {}
+        for e in entries:
+            candidates.setdefault(e.name, []).append(e)
+
+        if not entries and not fallback_to_source:
+            raise click.ClickException("no bundles found in catalog for this platform tuple.")
+
+        if entries:
+            from cvcpkg.resolver import resolve
+
+            # Only resolve components that have candidates in the catalog.
+            resolvable = [c for c in reqs.components if c.name in candidates]
+            if resolvable:
+                result = resolve(resolvable, candidates)
+                picked = result.picked
+
+            # Components not in the catalog need source build.
+            if fallback_to_source:
+                source_only = [c.name for c in reqs.components if c.name not in picked]
+        elif fallback_to_source:
+            source_only = requested_names
+    else:
+        # Catalog was unreachable -- all requested components must be
+        # built from source (the fallback_to_source flag is already
+        # verified above, so this branch is only reachable when the
+        # flag is set).
+        source_only = requested_names
+
+    if picked:
+        click.echo(f"cvcpkg: resolved {len(picked)} component(s) from catalog:")
+        for name in sorted(picked):
+            entry = picked[name]
+            display = entry.qualified_name if hasattr(entry, "qualified_name") else name
+            click.echo(f"  {display} == {entry.version}")
+    if source_only:
+        click.echo(
+            f"cvcpkg: {len(source_only)} component(s) will be built from source: "
+            + ", ".join(source_only)
+        )
+    if not picked and not source_only:
+        raise click.ClickException("no bundles found in catalog for this platform tuple.")
+
+    # ── Download and extract each resolved bundle ──
+    cache_dir = default_cache_dir()
+    lock_entries: list[LockEntry] = []
+    rdirs = _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes) if recipes_dirs else None
+
+    # Fetch mirror list for failover downloads.
+    server_url = os.environ.get("CVCPKG_SERVER_URL", "")
+    mirror_urls: list[str] = []
+    if server_url:
+        mirror_urls = _fetch_mirror_urls(server_url, os.environ.get("CVCPKG_TOKEN"))
+
+    for name in sorted(picked):
+        entry = picked[name]
+        # Inject mirror download URLs as fallbacks.
+        if mirror_urls and entry.archive_url:
+            fname = entry.archive_url.rsplit("/", 1)[-1]
+            for murl in mirror_urls:
+                fallback = f"{murl.rstrip('/')}/v1/mirror/download/{fname}"
+                if fallback not in entry.mirror_urls:
+                    entry.mirror_urls.append(fallback)
+        click.echo(f"cvcpkg: installing {name} {entry.version} ...")
+        try:
+            install_entry(entry, prefix_path, cache_dir, verify_signatures=verify_signatures)
+        except (InstallError, IntegrityError) as exc:
+            if not fallback_to_source:
+                raise
+            click.echo(f"cvcpkg: download failed for {name} ({exc}), building from source...")
+            build_from_source_fallback(
+                name,
+                prefix_path,
+                platform=plat,
+                config=reqs.config,
+                link=reqs.link,
+                recipes_dirs=rdirs,
+            )
+            lock_entries.append(
+                LockEntry(
+                    name=entry.name,
+                    version=entry.version,
+                    upstream_version=entry.upstream_version,
+                    source_release="source-build",
+                    sha256="",
+                    size_bytes=0,
+                    archive_url="",
+                )
+            )
+            continue
+        lock_entries.append(
+            LockEntry(
+                name=entry.name,
+                version=entry.version,
+                upstream_version=entry.upstream_version,
+                source_release=entry.source_release,
+                sha256=entry.sha256,
+                size_bytes=entry.size_bytes,
+                archive_url=entry.archive_url,
+            )
+        )
+
+    # ── Build from source for components not in the catalog ──
+    for name in source_only:
+        click.echo(f"cvcpkg: building {name} from source...")
+        build_from_source_fallback(
+            name,
+            prefix_path,
+            platform=plat,
+            config=reqs.config,
+            link=reqs.link,
+            recipes_dirs=rdirs,
+        )
+        lock_entries.append(
+            LockEntry(
+                name=name,
+                version="source",
+                upstream_version="",
+                source_release="source-build",
+                sha256="",
+                size_bytes=0,
+                archive_url="",
+            )
+        )
+
+    # ── Write lockfile ──
+    #
+    # The lockfile records exactly which bundles were installed, their
+    # SHA-256 hashes, and archive URLs.  It enables 'cvcpkg verify'
+    # (integrity check) and 'cvcpkg sync' (re-download missing bundles).
+    lock = Lockfile(
+        platform=plat,
+        arch=arc,
+        config=reqs.config,
+        link=reqs.link,
+        catalog_revision=cat.get("revision", 0),
+        bundles=lock_entries,
+    )
+    lock_path = prefix_path / "share" / "libcvc-deps" / "lockfile.yaml"
+    lock.write(lock_path)
+    click.echo(f"cvcpkg: lockfile written to {lock_path}")
+    click.echo(f"cvcpkg: done -- {len(picked)} component(s) installed to {prefix_path}")
+
+
+
+# ── list ────────────────────────────────────────────────────────
+
+
+@cli.command("list")
+@click.option(
+    "--installed",
+    "mode",
+    flag_value="installed",
+    help="Show bundles installed in the prefix (reads the lockfile).",
+)
+@click.option(
+    "--available",
+    "mode",
+    flag_value="available",
+    help="Show all bundles published in the catalog.",
+)
+@_prefix_opt
+def list_cmd(mode: str | None, prefix: str) -> None:
+    """List installed or available components.
+
+    \b
+    Examples:
+      cvcpkg list --installed --prefix ./deps
+      cvcpkg list --available
+    """
+    prefix_path = Path(prefix).resolve()
+
+    if mode == "installed":
+        lock_path = prefix_path / "share" / "libcvc-deps" / "lockfile.yaml"
+        if not lock_path.exists():
+            raise click.ClickException("no lockfile found -- prefix may not be managed by cvcpkg.")
+        from cvcpkg.lockfile import Lockfile
+
+        lock = Lockfile.read(lock_path)
+        if not lock.bundles:
+            click.echo("cvcpkg: no bundles installed.")
+        else:
+            for e in lock.bundles:
+                click.echo(f"  {e.name:20s} {e.version}")
+        return
+
+    if mode == "available":
+        from cvcpkg.cache import default_cache_dir
+        from cvcpkg.catalog import catalog_entries, fetch_catalog
+
+        cat = fetch_catalog(cache_dir=default_cache_dir())
+        entries = catalog_entries(cat)
+        if not entries:
+            click.echo("cvcpkg: no bundles in catalog.")
+        else:
+            seen: dict[str, list[str]] = {}
+            for e in entries:
+                seen.setdefault(e.qualified_name, []).append(e.version)
+            for name in sorted(seen):
+                versions = sorted(set(seen[name]))
+                click.echo(f"  {name:20s} {', '.join(versions)}")
+        return
+
+    click.echo("cvcpkg: use --installed or --available.")
+
+
+
+# ── info ────────────────────────────────────────────────────────
+
+
+@cli.command()
+@click.argument("component")
+def info(component: str) -> None:
+    """Show component details from the catalog.
+
+    Displays the latest version, upstream version, dependencies, and
+    all available versions for COMPONENT.
+
+    \b
+    Example:
+      cvcpkg info grpc
+    """
+    from cvcpkg.cache import default_cache_dir
+    from cvcpkg.catalog import catalog_entries, fetch_catalog
+
+    cat = fetch_catalog(cache_dir=default_cache_dir())
+    entries = catalog_entries(cat)
+    # Support both plain "zlib" and org-qualified "myorg/zlib" lookups.
+    if "/" in component:
+        lookup_org, lookup_name = component.split("/", 1)
+        matches = [e for e in entries if e.name == lookup_name and e.org == lookup_org]
+    else:
+        matches = [e for e in entries if e.name == component]
+    if not matches:
+        raise click.ClickException(f"component '{component}' not found in catalog.")
+
+    from cvcpkg.semver import Version
+
+    matches.sort(key=lambda e: Version.parse(e.version), reverse=True)
+    latest = matches[0]
+
+    click.echo(f"Name:             {latest.qualified_name}")
+    click.echo(f"Latest version:   {latest.version}")
+    click.echo(f"Upstream version: {latest.upstream_version}")
+    click.echo(f"Source release:   {latest.source_release}")
+    if latest.required_deps:
+        deps = ", ".join(
+            f"{d.name}" + (f" {d.version}" if d.version else "") for d in latest.required_deps
+        )
+        click.echo(f"Dependencies:     {deps}")
+    click.echo(f"Available versions: {', '.join(sorted({e.version for e in matches}))}")
+
+
+
+# ── validate ────────────────────────────────────────────────────
+
+
+@cli.command()
+@click.argument("target", default="all")
+def validate(target: str) -> None:
+    """Validate packaging YAML files against their JSON Schemas.
+
+    Checks recipe.yaml files for schema conformance, verifies that
+    referenced build scripts and patches exist, and validates the
+    dependency graph for cycles or missing dependencies.
+
+    \b
+    TARGET can be:
+      all              Validate everything (default)
+      components       Validate components.yaml only
+      recipes          Validate all recipe.yaml files
+      recipes/<name>   Validate a single recipe
+
+    \b
+    Examples:
+      cvcpkg validate
+      cvcpkg validate recipes/grpc
+    """
+    import importlib.util
+
+    pkg_dir = Path(__file__).resolve().parent
+    for ancestor in pkg_dir.parents:
+        validate_script = ancestor / "packaging" / "validate.py"
+        if validate_script.exists():
+            break
+    else:
+        validate_script = Path.cwd() / "packaging" / "validate.py"
+
+    if not validate_script.exists():
+        raise click.ClickException(
+            "cannot find packaging/validate.py -- run from the libcvc-deps repo root."
+        )
+
+    spec = importlib.util.spec_from_file_location("validate", validate_script)
+    if spec is None or spec.loader is None:
+        raise click.ClickException("cannot load packaging/validate.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.argv = ["cvcpkg-validate", target]
+    spec.loader.exec_module(mod)
+    ret = mod.main()
+    if ret != 0:
+        raise SystemExit(ret)
+
+
+
+# ── verify ──────────────────────────────────────────────────────
+
+
+@cli.command()
+@_prefix_opt
+def verify(prefix: str) -> None:
+    """Verify prefix integrity against the lockfile.
+
+    Checks that every bundle recorded in the lockfile has a matching
+    manifest.yaml in the prefix with the correct version.  Use this
+    after install to confirm nothing is missing or corrupted.
+
+    \b
+    Example:
+      cvcpkg verify --prefix ./deps
+    """
+    prefix_path = Path(prefix).resolve()
+    lock_path = prefix_path / "share" / "libcvc-deps" / "lockfile.yaml"
+    if not lock_path.exists():
+        raise click.ClickException(f"no lockfile at {lock_path}")
+
+    from cvcpkg.lockfile import Lockfile
+    from cvcpkg.manifest import BundleManifest
+
+    lock = Lockfile.read(lock_path)
+    click.echo(f"cvcpkg: verifying prefix {prefix_path} ({len(lock.bundles)} bundle(s)) ...")
+
+    ok = True
+    for entry in lock.bundles:
+        manifest_path = prefix_path / "share" / "libcvc-deps" / entry.name / "manifest.yaml"
+        if not manifest_path.exists():
+            click.echo(f"  MISSING  {entry.name} -- no manifest.yaml")
+            ok = False
+            continue
+        manifest = BundleManifest.from_yaml(str(manifest_path))
+        if manifest.version != entry.version:
+            click.echo(
+                f"  MISMATCH {entry.name}: lockfile says {entry.version}, "
+                f"manifest says {manifest.version}"
+            )
+            ok = False
+        else:
+            click.echo(f"  OK       {entry.name} == {entry.version}")
+
+    if ok:
+        click.echo("cvcpkg: prefix verified.")
+    else:
+        raise click.ClickException("verification found issues.")
+
+
+
+# ── lock ────────────────────────────────────────────────────────
+
+
+@cli.command()
+def lock() -> None:
+    """Write or refresh the lockfile.
+
+    The lockfile is written automatically by 'cvcpkg install'.
+    This command is a convenience reminder.
+    """
+    click.echo("cvcpkg: lockfile is written automatically by 'cvcpkg install'.")
+    click.echo("cvcpkg: to re-lock, run 'cvcpkg install --from <requirements>'.")
+
+
+
+# ── sync ────────────────────────────────────────────────────────
+
+
+@cli.command()
+@_prefix_opt
+def sync(prefix: str) -> None:
+    """Ensure prefix matches lockfile.
+
+    Re-downloads and extracts any bundles that are recorded in the
+    lockfile but missing from the prefix.  Useful after a clean
+    checkout or if the prefix was partially deleted.
+
+    \b
+    Example:
+      cvcpkg sync --prefix ./deps
+    """
+    prefix_path = Path(prefix).resolve()
+    lock_path = prefix_path / "share" / "libcvc-deps" / "lockfile.yaml"
+    if not lock_path.exists():
+        raise click.ClickException(f"no lockfile at {lock_path}")
+
+    from cvcpkg.cache import default_cache_dir
+    from cvcpkg.installer import install_entry
+    from cvcpkg.lockfile import Lockfile
+    from cvcpkg.manifest import CatalogEntry
+
+    lock = Lockfile.read(lock_path)
+    cache_dir = default_cache_dir()
+    installed = 0
+
+    # Fetch mirror list for failover downloads.
+    server_url = os.environ.get("CVCPKG_SERVER_URL", "")
+    mirror_urls: list[str] = []
+    if server_url:
+        mirror_urls = _fetch_mirror_urls(server_url, os.environ.get("CVCPKG_TOKEN"))
+
+    for entry in lock.bundles:
+        manifest_path = prefix_path / "share" / "libcvc-deps" / entry.name / "manifest.yaml"
+        if manifest_path.exists():
+            continue
+        if not entry.archive_url:
+            raise click.ClickException(f"cannot sync {entry.name} -- no archive_url in lockfile.")
+        cat_entry = CatalogEntry(
+            name=entry.name,
+            version=entry.version,
+            upstream_version=entry.upstream_version,
+            cvc_revision=1,
+            platform=lock.platform,
+            arch=lock.arch,
+            build_type=lock.config,
+            link=lock.link,
+            sha256=entry.sha256,
+            size_bytes=entry.size_bytes,
+            archive_url=entry.archive_url,
+            source_release=entry.source_release,
+        )
+        # Inject mirror download URLs as fallbacks.
+        if mirror_urls and cat_entry.archive_url:
+            fname = cat_entry.archive_url.rsplit("/", 1)[-1]
+            for murl in mirror_urls:
+                fallback = f"{murl.rstrip('/')}/v1/mirror/download/{fname}"
+                if fallback not in cat_entry.mirror_urls:
+                    cat_entry.mirror_urls.append(fallback)
+        click.echo(f"cvcpkg: syncing {entry.name} {entry.version} ...")
+        install_entry(cat_entry, prefix_path, cache_dir)
+        installed += 1
+
+    if installed:
+        click.echo(f"cvcpkg: synced {installed} bundle(s).")
+    else:
+        click.echo("cvcpkg: prefix is in sync.")
+
+

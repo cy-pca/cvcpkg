@@ -1456,8 +1456,8 @@ class TestPublishToServer:
         )
 
         with (
-            mock.patch("cvcpkg.cli._variant_exists", return_value=False),
-            mock.patch("cvcpkg.cli._publish_simple", return_value="published") as mock_simple,
+            mock.patch("cvcpkg.cli._publish._variant_exists", return_value=False),
+            mock.patch("cvcpkg.cli._publish._publish_simple", return_value="published") as mock_simple,
         ):
             _publish_to_server(
                 "https://pkg.example.com",
@@ -1481,8 +1481,8 @@ class TestPublishToServer:
         )
 
         with (
-            mock.patch("cvcpkg.cli._variant_exists", return_value=True),
-            mock.patch("cvcpkg.cli._publish_simple") as mock_simple,
+            mock.patch("cvcpkg.cli._publish._variant_exists", return_value=True),
+            mock.patch("cvcpkg.cli._publish._publish_simple") as mock_simple,
         ):
             _publish_to_server(
                 "https://pkg.example.com",
@@ -1511,7 +1511,7 @@ class TestPublishToServer:
             info.size = len(content)
             tf.addfile(info, io.BytesIO(content))
 
-        with mock.patch("cvcpkg.cli._variant_exists", return_value=False):
+        with mock.patch("cvcpkg.cli._publish._variant_exists", return_value=False):
             with pytest.raises(click.ClickException, match="manifest missing name"):
                 _publish_to_server(
                     "https://pkg.example.com",
@@ -1531,8 +1531,8 @@ class TestPublishToServer:
         )
 
         with (
-            mock.patch("cvcpkg.cli._variant_exists", return_value=False),
-            mock.patch("cvcpkg.cli._publish_simple", return_value="published") as mock_simple,
+            mock.patch("cvcpkg.cli._publish._variant_exists", return_value=False),
+            mock.patch("cvcpkg.cli._publish._publish_simple", return_value="published") as mock_simple,
         ):
             _publish_to_server(
                 "https://pkg.example.com",
@@ -1557,8 +1557,8 @@ class TestPublishToServer:
         )
 
         with (
-            mock.patch("cvcpkg.cli._variant_exists", return_value=False),
-            mock.patch("cvcpkg.cli._publish_chunked", return_value="published") as mock_chunked,
+            mock.patch("cvcpkg.cli._publish._variant_exists", return_value=False),
+            mock.patch("cvcpkg.cli._publish._publish_chunked", return_value="published") as mock_chunked,
         ):
             _publish_to_server(
                 "https://pkg.example.com",
@@ -1582,9 +1582,9 @@ class TestPublishToServer:
         )
 
         with (
-            mock.patch("cvcpkg.cli._variant_exists", return_value=False),
+            mock.patch("cvcpkg.cli._publish._variant_exists", return_value=False),
             mock.patch(
-                "cvcpkg.cli._publish_simple",
+                "cvcpkg.cli._publish._publish_simple",
                 side_effect=click.ClickException("upload failed"),
             ),
         ):
@@ -1612,8 +1612,8 @@ class TestPublishToServer:
         )
 
         with (
-            mock.patch("cvcpkg.cli._variant_exists", return_value=False),
-            mock.patch("cvcpkg.cli._publish_simple", return_value="published"),
+            mock.patch("cvcpkg.cli._publish._variant_exists", return_value=False),
+            mock.patch("cvcpkg.cli._publish._publish_simple", return_value="published"),
         ):
             _publish_to_server(
                 "https://pkg.example.com",
@@ -1974,8 +1974,8 @@ class TestPublishCLIIntegration:
         )
         with (
             mock.patch("cvcpkg.platform.detect_arch", return_value="x86_64"),
-            mock.patch("cvcpkg.cli._variant_exists", return_value=False),
-            mock.patch("cvcpkg.cli._publish_simple", return_value="published"),
+            mock.patch("cvcpkg.cli._publish._variant_exists", return_value=False),
+            mock.patch("cvcpkg.cli._publish._publish_simple", return_value="published"),
         ):
             ret = main(
                 [
@@ -2035,7 +2035,7 @@ class TestLocalFlag:
             call_tracker["called"] = True
             return ()
 
-        monkeypatch.setattr("cvcpkg.cli._try_pull_server_recipes", mock_pull)
+        monkeypatch.setattr("cvcpkg.cli._build._try_pull_server_recipes", mock_pull)
 
         recipes_dir = tmp_path / "empty_recipes"
         recipes_dir.mkdir()
@@ -2072,7 +2072,7 @@ class TestLocalFlag:
             call_tracker["called"] = True
             return ()
 
-        monkeypatch.setattr("cvcpkg.cli._try_pull_server_recipes", mock_pull)
+        monkeypatch.setattr("cvcpkg.cli._build._try_pull_server_recipes", mock_pull)
 
         # Use real recipes dir so recipe.yaml loads properly
         from cvcpkg.builder import find_recipes_dir
