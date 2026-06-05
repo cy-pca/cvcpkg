@@ -161,25 +161,13 @@ jobs:
           for VM in cvcpkg-builder-01 cvcpkg-builder-02; do
             echo "=== Restarting builder on $VM ==="
             incus exec "$VM" -- bash -c "
-              # Kill existing builder process if running
-              pkill -f 'cvcpkg builder run' 2>/dev/null || true
-              sleep 1
-
-              # Check for builder config
-              if [[ -f /etc/cvcpkg-builder.env ]]; then
-                source /etc/cvcpkg-builder.env
-                nohup cvcpkg builder run \\
-                  --server \"\${CVCPKG_SERVER:-http://cvcpkg-server:8420}\" \\
-                  --token \"\${CVCPKG_TOKEN}\" \\
-                  --name \"\${BUILDER_NAME:-$VM}\" \\
-                  --max-jobs \"\${MAX_JOBS:-2}\" \\
-                  --work-dir /tmp/cvcpkg-builder \\
-                  --daemon \\
-                  --pidfile /var/run/cvcpkg-builder.pid \\
-                  2>&1 | tail -1
-                echo 'Builder restarted.'
+              systemctl restart cvcpkg-builder
+              sleep 2
+              if systemctl is-active --quiet cvcpkg-builder; then
+                echo 'Builder restarted successfully.'
               else
-                echo 'No /etc/cvcpkg-builder.env found, skipping builder restart.'
+                echo '::warning::Builder failed to start on $VM'
+                journalctl -u cvcpkg-builder --no-pager -n 5
               fi
             " || echo "Warning: failed to restart builder on $VM"
           done
