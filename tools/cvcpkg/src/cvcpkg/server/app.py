@@ -4389,13 +4389,9 @@ def create_app(
         org_slug: str = Query("", max_length=255),
         version: str = Query("", max_length=128),
         recipe_hash: str = Query("", max_length=128),
-        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
-        """Upload or update a recipe bundle (tar.gz).
-
-        Admin only for global recipes.  Overwrites if the same
-        ``(name, org_slug)`` already exists.
-        """
+        """Upload or update a recipe bundle (tar.gz)."""
         import re as _re_mod
 
         _require_db_recipes()
