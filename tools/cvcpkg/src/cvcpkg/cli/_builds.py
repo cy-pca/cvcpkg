@@ -755,18 +755,12 @@ def builds_submit_dag(
                     names.append(dep["name"])
         return names
 
-    # Map short platform names to recipe matrix names
-    _PLAT_ALIASES: dict[str, list[str]] = {
-        "win": ["win", "windows"],
-    }
-
     def _has_platform_entry(name: str, plat: str) -> bool:
         """Check if a recipe has a build matrix entry for the platform."""
         data = recipe_data.get(name, {})
         matrix = data.get("build", {}).get("matrix", [])
-        match_names = _PLAT_ALIASES.get(plat, [plat, plat])
         for entry in matrix:
-            if entry.get("platform") in (*match_names, "any"):
+            if entry.get("platform") in (plat, "any"):
                 return True
         return False
 

@@ -219,12 +219,10 @@ def builder_run(
     import httpx
 
     from cvcpkg.builder import pack_recipe
-    from cvcpkg.platform import detect_arch
+    from cvcpkg.platform import detect_arch, detect_platform
 
     if platform is None:
-        import sysconfig
-
-        platform = sysconfig.get_platform().split("-")[0]
+        platform = detect_platform()
     if arch is None:
         arch = detect_arch()
 

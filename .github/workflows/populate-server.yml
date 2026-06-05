@@ -12,7 +12,7 @@ on:
       platforms:
         description: "Comma-separated platforms to build"
         required: true
-        default: "linux,freebsd,netbsd,openbsd,win,wasm,wasi"
+        default: "linux,freebsd,netbsd,openbsd,windows,wasm,wasi"
         type: string
       arch:
         description: "Target architecture(s), comma-separated"
