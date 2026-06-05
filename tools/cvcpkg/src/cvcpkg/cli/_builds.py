@@ -401,13 +401,16 @@ def builds_follow_dag(dag_id: str, server: str, token: str):
 
     def _poll_and_spawn(executor: concurrent.futures.ThreadPoolExecutor):
         """Poll for new jobs in the DAG and spawn followers."""
+        # Use prefix matching: append '*' so the server returns all
+        # DAGs whose ID starts with the given string.
+        query_dag = dag_id if "-" in dag_id and dag_id.count("-") >= 5 else f"{dag_id}*"
         while True:
             try:
                 with httpx.Client(timeout=30) as client:
                     resp = client.get(
                         f"{base}/v1/builds",
                         headers=headers,
-                        params={"dag_id": dag_id, "limit": 1000},
+                        params={"dag_id": query_dag, "limit": 1000},
                     )
                 if resp.status_code >= 400:
                     time.sleep(5)
@@ -673,6 +676,19 @@ def builds_submit(
 @click.option(
     "--wait", "-w", is_flag=True, help="Wait for all DAG jobs to finish, printing status updates."
 )
+@click.option(
+    "--recipes-dir",
+    "recipes_dirs",
+    type=click.Path(exists=True),
+    multiple=True,
+    help="Extra recipes directory (for dependency resolution).",
+)
+@click.option(
+    "--no-default-recipes",
+    is_flag=True,
+    default=False,
+    help="Ignore the auto-detected default recipes directory.",
+)
 @click.argument("recipe_names", nargs=-1, required=True)
 def builds_submit_dag(
     server: str,
@@ -684,39 +700,111 @@ def builds_submit_dag(
     org_slug: str,
     dag_id: str | None,
     wait: bool,
+    recipes_dirs: tuple[str, ...],
+    no_default_recipes: bool,
     recipe_names: tuple[str, ...],
 ):
     """Submit a DAG of remote build jobs.
 
     Provide one or more recipe names as positional arguments.
     Use --config all / --link all to expand the build matrix.
+    Dependencies are resolved from recipe.yaml files and jobs are
+    ordered so that each recipe builds after its dependencies.
 
     Example:
 
-        cvcpkg builds submit-dag --platform linux --arch x86_64 zlib boost fftw
+        cvcpkg builds submit-dag --platform linux --arch x86_64 \\
+            --recipes-dir recipes zlib boost fftw
     """
+    import yaml as _yaml
+
+    from cvcpkg.cli._helpers import _resolve_recipes_dirs
+
     configs = ["release", "debug"] if config == "all" else [config]
     links = ["shared", "static"] if link == "all" else [link]
     platforms = [p.strip() for p in platform.split(",")]
     arches = [a.strip() for a in arch.split(",")]
+
+    # ── Load recipe metadata for dependency resolution ──────────
+    rdirs = _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes)
+
+    # Build recipe_name → recipe.yaml data mapping (later dirs win)
+    recipe_data: dict[str, dict] = {}
+    recipe_paths: dict[str, Path] = {}
+    for rdir in rdirs:
+        if not rdir.is_dir():
+            continue
+        for rpath in sorted(rdir.iterdir()):
+            if not rpath.is_dir() or rpath.name.startswith(("_", ".")):
+                continue
+            yaml_path = rpath / "recipe.yaml"
+            if yaml_path.is_file():
+                recipe_data[rpath.name] = _yaml.safe_load(yaml_path.read_text())
+                recipe_paths[rpath.name] = rpath
+
+    def _dep_names(name: str) -> list[str]:
+        """Extract runtime + build dependency names from a recipe."""
+        data = recipe_data.get(name, {})
+        deps_block = data.get("depends", {})
+        names: list[str] = []
+        for key in ("runtime", "build"):
+            for dep in deps_block.get(key, []) or []:
+                if isinstance(dep, str):
+                    names.append(dep)
+                elif isinstance(dep, dict):
+                    names.append(dep["name"])
+        return names
+
+    def _has_platform_entry(name: str, plat: str) -> bool:
+        """Check if a recipe has a build matrix entry for the platform."""
+        data = recipe_data.get(name, {})
+        matrix = data.get("build", {}).get("matrix", [])
+        for entry in matrix:
+            if entry.get("platform") in (plat, "any"):
+                return True
+        return False
 
     dag_ids: list[str] = []
     for plat in platforms:
         for ar in arches:
             for cfg in configs:
                 for lnk in links:
-                    jobs = [
-                        {
-                            "recipe_name": name,
-                            "platform": plat,
-                            "arch": ar,
-                            "config": cfg,
-                            "link": lnk,
-                            "org_slug": org_slug,
-                            "depends_on": [],
-                        }
-                        for name in recipe_names
-                    ]
+                    # Filter recipes: skip those with no matrix entry
+                    eligible = [n for n in recipe_names if _has_platform_entry(n, plat)]
+                    skipped = set(recipe_names) - set(eligible)
+                    if skipped:
+                        click.echo(
+                            f"  Skipping {len(skipped)} recipe(s) "
+                            f"with no {plat} matrix: {', '.join(sorted(skipped))}"
+                        )
+
+                    if not eligible:
+                        click.echo(f"  No eligible recipes for {plat}/{ar}/{cfg}/{lnk}")
+                        continue
+
+                    # Build name→index mapping for depends_on resolution
+                    name_to_idx: dict[str, int] = {
+                        name: idx for idx, name in enumerate(eligible)
+                    }
+
+                    jobs = []
+                    for name in eligible:
+                        dep_indices = []
+                        for dep_name in _dep_names(name):
+                            if dep_name in name_to_idx:
+                                dep_indices.append(name_to_idx[dep_name])
+                        jobs.append(
+                            {
+                                "recipe_name": name,
+                                "platform": plat,
+                                "arch": ar,
+                                "config": cfg,
+                                "link": lnk,
+                                "org_slug": org_slug,
+                                "depends_on": dep_indices,
+                            }
+                        )
+
                     body: dict = {"jobs": jobs}
                     if dag_id:
                         body["dag_id"] = f"{dag_id}-{plat}-{ar}-{cfg}-{lnk}"

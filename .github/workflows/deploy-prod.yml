@@ -30,6 +30,8 @@ jobs:
     name: Deploy to cvcpkg.org + pkg.tx.wtf
     runs-on: [self-hosted, Linux, cvcpkg-prod]
     timeout-minutes: 30
+    outputs:
+      sha: ${{ steps.target.outputs.sha }}
 
     steps:
       - name: Checkout
@@ -256,28 +258,15 @@ jobs:
           $COMPOSE logs --tail=80 backend || true
           exit 1
 
-      # ── Update builder agents ─────────────────────────────────
-      - name: Update builder agents
+      # ── Update BSD + Windows builders via SSH ─────────────────
+      # (star-00 / star-01 are self-hosted runners — updated by
+      #  the update-linux-builders job below)
+      - name: Update non-runner builders (BSD + Windows)
+        continue-on-error: true
         run: |
           set -euo pipefail
           SHA="${{ steps.target.outputs.sha }}"
           SSH="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
-
-          echo "=== Updating cvcpkg on builder machines ==="
-
-          # Linux builders (via SSH from catx-03)
-          for host in tfx@star-00 tfx@star-01; do
-            echo "--- $host ---"
-            $SSH "$host" "
-              cd ~/libcvc-deps &&
-              git fetch origin &&
-              git checkout -f $SHA &&
-              cd tools/cvcpkg &&
-              pip install --break-system-packages --quiet . 2>/dev/null;
-              pip install --quiet . 2>/dev/null;
-              echo \"\$(hostname): \$(cvcpkg --version)\"
-            " || echo "::warning::Failed to update $host"
-          done
 
           # BSD builders (root access)
           for host in root@netbsd-build root@netbsd-build-2 \
@@ -305,48 +294,12 @@ jobs:
             cvcpkg --version
           " || echo "::warning::Failed to update sandipaws"
 
-          echo "Builder update complete."
-
-      # ── Restart builder agents ────────────────────────────────
-      - name: Restart builder agents
+      # ── Restart BSD + Windows builder agents ──────────────────
+      - name: Restart non-runner builders (BSD + Windows)
+        continue-on-error: true
         run: |
           set -euo pipefail
           SSH="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
-
-          echo "=== Restarting builder agents ==="
-
-          # Linux builders (systemd) — kill any rogue daemon, use systemd
-          for host in tfx@star-00 tfx@star-01; do
-            echo "--- $host ---"
-            $SSH "$host" "
-              # Kill any manually-started daemon
-              pkill -f 'cvcpkg builder run' 2>/dev/null || true
-              sleep 1
-              # Ensure --cross-platform wasm and wasi are in the systemd unit
-              UNIT=/etc/systemd/system/cvcpkg-builder.service
-              # Migrate from old --cross-target if present
-              sudo sed -i 's|--cross-target |--cross-platform |g' \"\$UNIT\"
-              # Add --cross-platform wasm if missing
-              if ! grep -q -- '--cross-platform wasm' \"\$UNIT\" 2>/dev/null; then
-                sudo sed -i 's|--work-dir [^ ]*|& --cross-platform wasm|' \"\$UNIT\"
-              fi
-              # Add --cross-platform wasi if missing
-              if ! grep -q -- '--cross-platform wasi' \"\$UNIT\" 2>/dev/null; then
-                sudo sed -i 's|--cross-platform wasm|& --cross-platform wasi|' \"\$UNIT\"
-              fi
-              sudo systemctl daemon-reload
-              # Enable and restart systemd service
-              sudo systemctl enable cvcpkg-builder 2>/dev/null || true
-              sudo systemctl restart cvcpkg-builder
-              sleep 2
-              if systemctl is-active --quiet cvcpkg-builder; then
-                echo \"\$(hostname): builder restarted (systemd)\"
-              else
-                echo \"::warning::\$(hostname): builder failed to start\"
-                journalctl -u cvcpkg-builder --no-pager -n 5
-              fi
-            " || echo "::warning::Failed to restart builder on $host"
-          done
 
           # BSD builders — kill daemon, re-launch from crontab entry
           for host in root@netbsd-build root@netbsd-build-2 \
@@ -356,16 +309,11 @@ jobs:
             $SSH "$host" "
               pkill -f 'cvcpkg builder run' 2>/dev/null || true
               sleep 2
-              # Extract the @reboot command from crontab and re-run it
               CMD=\$(crontab -l 2>/dev/null | grep '@reboot.*cvcpkg builder run' | sed 's/@reboot //')
               if [ -n \"\$CMD\" ]; then
                 eval \"\$CMD\"
                 sleep 2
-                if pgrep -f 'cvcpkg builder run' >/dev/null 2>&1; then
-                  echo \"\$(hostname): builder restarted (daemon)\"
-                else
-                  echo \"::warning::\$(hostname): builder failed to start\"
-                fi
+                pgrep -f 'cvcpkg builder run' >/dev/null 2>&1 && echo \"\$(hostname): builder restarted\" || echo \"::warning::\$(hostname): builder failed to start\"
               else
                 echo \"::warning::\$(hostname): no @reboot cvcpkg entry found\"
               fi
@@ -378,4 +326,56 @@ jobs:
             schtasks /run /tn cvcpkg-builder 2>NUL && echo sandipaws: builder restarted || echo sandipaws: no scheduled task found
           " || echo "::warning::Failed to restart builder on sandipaws"
 
-          echo "All builder agents restarted."
+  # ── Update Linux builder runners ───────────────────────────────
+  # Each runner has a unique label matching its hostname.
+  update-linux-builders:
+    name: Update builder (${{ matrix.runner }})
+    needs: deploy
+    runs-on: [self-hosted, Linux, X64, "${{ matrix.runner }}"]
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [star-00, star-01, lat, rebota]
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.deploy.outputs.sha }}
+
+      - name: Install cvcpkg
+        working-directory: tools/cvcpkg
+        run: |
+          pip install --break-system-packages --quiet . 2>/dev/null || \
+          pip install --quiet .
+          echo "$(hostname): $(cvcpkg --version)"
+
+      - name: Restart builder service
+        run: |
+          UNIT=/etc/systemd/system/cvcpkg-builder.service
+          if [ -f "$UNIT" ]; then
+            # Migrate from old --cross-target if present
+            sudo sed -i 's|--cross-target |--cross-platform |g' "$UNIT"
+            # Add --cross-platform wasm if missing
+            if ! grep -q -- '--cross-platform wasm' "$UNIT" 2>/dev/null; then
+              sudo sed -i 's|--work-dir [^ ]*|& --cross-platform wasm|' "$UNIT"
+            fi
+            # Add --cross-platform wasi if missing
+            if ! grep -q -- '--cross-platform wasi' "$UNIT" 2>/dev/null; then
+              sudo sed -i 's|--cross-platform wasm|& --cross-platform wasi|' "$UNIT"
+            fi
+            sudo systemctl daemon-reload
+            sudo systemctl enable cvcpkg-builder 2>/dev/null || true
+            sudo systemctl restart cvcpkg-builder
+            sleep 3
+            if systemctl is-active --quiet cvcpkg-builder; then
+              echo "$(hostname): builder restarted successfully"
+            else
+              echo "::error::$(hostname): builder failed to start"
+              journalctl -u cvcpkg-builder --no-pager -n 10
+              exit 1
+            fi
+          else
+            echo "::warning::$(hostname): no systemd unit at $UNIT — skipping restart"
+          fi

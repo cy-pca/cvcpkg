@@ -1,6 +1,6 @@
 --- a/libs/filesystem/src/directory.cpp
 +++ b/libs/filesystem/src/directory.cpp
-@@ -270,7 +270,12 @@ inline int dir_itr_fd(dir_itr_imp const& imp, system::error_code& ec)
+@@ -270,7 +270,13 @@ inline int dir_itr_fd(dir_itr_imp const& imp, system::error_code& ec)
  // Obtains a file descriptor from the directory iterator
  inline int dir_itr_fd(dir_itr_imp const& imp, system::error_code& ec)
  {
