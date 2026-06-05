@@ -103,10 +103,16 @@ _recipes_dir_opt = click.option(
     type=click.Path(exists=True),
     multiple=True,
     help=(
-        "Path to a recipes/ directory.  May be specified multiple times "
-        "to overlay directories (later directories win on name conflicts).  "
-        "Auto-detected from the repo root if omitted."
+        "Extra recipes/ directory to overlay on top of the default "
+        "(bundled) recipes.  May be specified multiple times; later "
+        "directories win on name conflicts."
     ),
+)
+_no_default_recipes_opt = click.option(
+    "--no-default-recipes",
+    is_flag=True,
+    default=False,
+    help="Ignore the auto-detected default recipes directory; use only explicit --recipes-dir paths.",
 )
 _maintainer_opt = click.option(
     "--maintainer",
@@ -126,6 +132,34 @@ _local_opt = click.option(
         "recipes and catalog.  [env: CVCPKG_LOCAL]"
     ),
 )
+
+
+def _resolve_recipes_dirs(
+    extra: tuple[str, ...] = (),
+    *,
+    no_default: bool = False,
+) -> list[Path]:
+    """Return the canonical list of recipe directories.
+
+    Unless *no_default* is ``True``, starts with the bundled/default
+    recipes from ``find_recipes_dir()`` and appends any extra overlay
+    directories.  Later entries win on name conflicts.
+    """
+    from cvcpkg.builder import RecipeError, find_recipes_dir
+
+    dirs: list[Path] = []
+    if not no_default:
+        try:
+            dirs.append(find_recipes_dir())
+        except RecipeError:
+            pass
+    for d in extra:
+        p = Path(d).resolve()
+        if p not in dirs:
+            dirs.append(p)
+    if not dirs:
+        raise click.ClickException("could not find recipes directory")
+    return dirs
 
 
 def _validate_org_slug(ctx: click.Context, param: click.Parameter, value: str) -> str:
@@ -229,6 +263,7 @@ def cli(ctx: click.Context) -> None:
     help="Build from source recipe when no prebuilt binary is available.",
 )
 @_recipes_dir_opt
+@_no_default_recipes_opt
 @_local_opt
 def install(
     components: tuple[str, ...],
@@ -246,6 +281,7 @@ def install(
     verify_signatures: bool,
     fallback_to_source: bool,
     recipes_dirs: tuple[str, ...],
+    no_default_recipes: bool,
     local_mode: bool,
 ) -> None:
     """Install component bundles into a prefix.
@@ -439,7 +475,7 @@ def install(
     # ── Download and extract each resolved bundle ──
     cache_dir = default_cache_dir()
     lock_entries: list[LockEntry] = []
-    rdirs = [Path(d) for d in recipes_dirs] if recipes_dirs else None
+    rdirs = _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes) if recipes_dirs else None
 
     # Fetch mirror list for failover downloads.
     server_url = os.environ.get("CVCPKG_SERVER_URL", "")
@@ -1931,6 +1967,7 @@ def remove(components: tuple[str, ...], from_file: str) -> None:
 @_prefix_opt
 @_keep_build_opt
 @_recipes_dir_opt
+@_no_default_recipes_opt
 def world(
     from_file: str,
     platform: str,
@@ -1939,6 +1976,7 @@ def world(
     prefix: str,
     keep_build_dir: bool,
     recipes_dirs: tuple[str, ...],
+    no_default_recipes: bool,
 ) -> None:
     """Build all recipes needed by a requirements file.
 
@@ -1954,7 +1992,6 @@ def world(
         BuildContext,
         Recipe,
         build_recipe,
-        find_recipes_dir,
         load_all_recipes,
         resolve_build_order,
     )
@@ -1967,12 +2004,9 @@ def world(
     requested = {c.name for c in reqs.components if not c.exclude}
 
     # Load all recipes.
-    if recipes_dirs:
-        rdirs = [Path(d) for d in recipes_dirs]
-        all_recipes = load_all_recipes(rdirs)
-    else:
-        all_recipes = [
-            Recipe.load(d) for d in find_recipes_dir().iterdir() if (d / "recipe.yaml").is_file()
+    rdirs = _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes)
+    all_recipes = load_all_recipes(rdirs) if len(rdirs) > 1 else [
+        Recipe.load(d) for d in rdirs[0].iterdir() if (d / "recipe.yaml").is_file()
         ]
 
     by_name = {r.name: r for r in all_recipes}
@@ -2024,31 +2058,29 @@ def world(
 # ── Helper: resolve recipe dir ──────────────────────────────────
 
 
-def _resolve_recipe_dir(name: str, recipes_dirs: tuple[str, ...] = ()) -> Path:
+def _resolve_recipe_dir(
+    name: str,
+    recipes_dirs: tuple[str, ...] = (),
+    *,
+    no_default: bool = False,
+) -> Path:
     """Resolve a recipe name or path to its directory.
 
     Accepts either a path to a directory containing recipe.yaml, or
     a bare recipe name (e.g. "grpc") which is looked up in the
-    provided *recipes_dirs* (later dirs take precedence) or the
-    auto-detected recipes/ directory.
+    canonical recipe directories (bundled + any extra overlays).
+    Later directories take precedence.
     """
     p = Path(name)
     if p.is_dir() and (p / "recipe.yaml").is_file():
         return p.resolve()
 
-    # Search provided dirs in reverse order (later = higher priority).
-    for rdir in reversed(recipes_dirs):
-        candidate = Path(rdir) / name
+    # Search resolved dirs in reverse order (later = higher priority).
+    for rdir in reversed(_resolve_recipes_dirs(recipes_dirs, no_default=no_default)):
+        candidate = rdir / name
         if candidate.is_dir() and (candidate / "recipe.yaml").is_file():
             return candidate.resolve()
 
-    # Fallback to auto-detected dir.
-    from cvcpkg.builder import find_recipes_dir
-
-    recipes_dir = find_recipes_dir()
-    candidate = recipes_dir / name
-    if candidate.is_dir() and (candidate / "recipe.yaml").is_file():
-        return candidate.resolve()
     raise click.ClickException(f"Recipe not found: {name}")
 
 
@@ -2128,6 +2160,7 @@ def _try_pull_server_recipes() -> tuple[str, ...]:
 @click.option("--prefix", type=click.Path(), default=None, help="Install prefix.")
 @_keep_build_opt
 @_recipes_dir_opt
+@_no_default_recipes_opt
 @_local_opt
 @click.option(
     "--with-deps/--no-deps",
@@ -2147,6 +2180,7 @@ def build(
     prefix: str | None,
     keep_build_dir: bool,
     recipes_dirs: tuple[str, ...],
+    no_default_recipes: bool,
     local_mode: bool,
     with_deps: bool,
     host_platform: str,
@@ -2172,7 +2206,7 @@ def build(
       cvcpkg build mypkg --recipes-dir ./my-recipes --recipes-dir recipes
       cvcpkg build vtk --no-deps --prefix ./prefix
     """
-    from cvcpkg.builder import build_recipe, find_recipes_dir, resolve_build_order
+    from cvcpkg.builder import build_recipe, resolve_build_order
 
     plat = _auto_platform(platform)
 
@@ -2184,7 +2218,7 @@ def build(
 
     if with_deps:
         # Resolve all deps and build in topological order
-        rdirs = [Path(d) for d in recipes_dirs] if recipes_dirs else [find_recipes_dir()]
+        rdirs = _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes)
         from cvcpkg.builder import (
             _collect_host_tools,
             list_recipes,
@@ -2267,7 +2301,7 @@ def build(
             )
     else:
         for name in recipe:
-            recipe_dir = _resolve_recipe_dir(name, recipes_dirs)
+            recipe_dir = _resolve_recipe_dir(name, recipes_dirs, no_default=no_default_recipes)
             build_recipe(
                 recipe_dir,
                 platform=plat,
@@ -2291,6 +2325,7 @@ def build(
 @click.option("--output-dir", type=click.Path(), default="./dist", help="Output directory.")
 @_keep_build_opt
 @_recipes_dir_opt
+@_no_default_recipes_opt
 @_local_opt
 @_maintainer_opt
 @click.option(
@@ -2308,6 +2343,7 @@ def pack(
     output_dir: str,
     keep_build_dir: bool,
     recipes_dirs: tuple[str, ...],
+    no_default_recipes: bool,
     local_mode: bool,
     maintainer: str,
     signing_key: str | None,
@@ -2334,7 +2370,7 @@ def pack(
     output = Path(output_dir).resolve()
 
     for name in recipe:
-        recipe_dir = _resolve_recipe_dir(name, recipes_dirs)
+        recipe_dir = _resolve_recipe_dir(name, recipes_dirs, no_default=no_default_recipes)
         archive, sha, size = pack_recipe(
             recipe_dir,
             platform=plat,
@@ -2365,6 +2401,7 @@ def pack(
 @click.option("--prefix", type=click.Path(), default=None, help="Shared install prefix.")
 @_keep_build_opt
 @_recipes_dir_opt
+@_no_default_recipes_opt
 @_local_opt
 @click.option(
     "--work-dir",
@@ -2440,6 +2477,7 @@ def build_all_cmd(
     prefix: str | None,
     keep_build_dir: bool,
     recipes_dirs: tuple[str, ...],
+    no_default_recipes: bool,
     local_mode: bool,
     work_dir: str | None,
     host_platform: str,
@@ -2466,7 +2504,7 @@ def build_all_cmd(
       cvcpkg build-all --platform linux --config release --link shared \\
           --prefix ./prefix --recipes-dir recipes
     """
-    from cvcpkg.builder import build_all, find_recipes_dir
+    from cvcpkg.builder import build_all
 
     plat = _auto_platform(platform)
     prefix_path = Path(prefix).resolve() if prefix else None
@@ -2475,7 +2513,7 @@ def build_all_cmd(
     if not local_mode and not recipes_dirs:
         recipes_dirs = _try_pull_server_recipes()
 
-    rdirs = [Path(d) for d in recipes_dirs] if recipes_dirs else [find_recipes_dir()]
+    rdirs = _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes)
 
     contexts = build_all(
         rdirs if len(rdirs) > 1 else rdirs[0],
@@ -2511,6 +2549,7 @@ def build_all_cmd(
 @click.option("--output-dir", type=click.Path(), default="./dist", help="Output directory.")
 @_keep_build_opt
 @_recipes_dir_opt
+@_no_default_recipes_opt
 @_local_opt
 @_maintainer_opt
 @click.option(
@@ -2610,6 +2649,7 @@ def pack_all_cmd(
     output_dir: str,
     keep_build_dir: bool,
     recipes_dirs: tuple[str, ...],
+    no_default_recipes: bool,
     local_mode: bool,
     maintainer: str,
     signing_key: str | None,
@@ -2648,7 +2688,6 @@ def pack_all_cmd(
     from cvcpkg.builder import (
         build_all,
         create_archive,
-        find_recipes_dir,
         generate_manifest,
         list_recipes,
         stage_bundle,
@@ -2664,7 +2703,7 @@ def pack_all_cmd(
     if not local_mode and not recipes_dirs:
         recipes_dirs = _try_pull_server_recipes()
 
-    rdirs = [Path(d) for d in recipes_dirs] if recipes_dirs else [find_recipes_dir()]
+    rdirs = _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes)
 
     # Load all recipes for chain_hash computation
     if len(rdirs) > 1:
@@ -2773,8 +2812,10 @@ def pack_all_cmd(
     help="Filter recipe list to those with this tag (e.g. math, graphics).",
 )
 @_recipes_dir_opt
+@_no_default_recipes_opt
 def recipes(
-    mode: str, show_name: str | None, tag: str | None, recipes_dirs: tuple[str, ...]
+    mode: str, show_name: str | None, tag: str | None, recipes_dirs: tuple[str, ...],
+    no_default_recipes: bool,
 ) -> None:
     """List or inspect recipes.
 
@@ -2789,7 +2830,7 @@ def recipes(
     from cvcpkg.builder import Recipe, list_recipes, load_all_recipes
 
     if show_name:
-        recipe_dir = _resolve_recipe_dir(show_name, recipes_dirs)
+        recipe_dir = _resolve_recipe_dir(show_name, recipes_dirs, no_default=no_default_recipes)
         recipe = Recipe.load(recipe_dir)
         click.echo(f"Name:     {recipe.name}")
         click.echo(f"Version:  {recipe.full_version}")
@@ -2822,11 +2863,8 @@ def recipes(
         return
 
     # Default: list
-    if recipes_dirs:
-        rdirs = [Path(d) for d in recipes_dirs]
-        all_recipes = load_all_recipes(rdirs)
-    else:
-        all_recipes = list_recipes()
+    rdirs = _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes)
+    all_recipes = load_all_recipes(rdirs) if len(rdirs) > 1 else list_recipes(rdirs[0])
 
     # Apply tag filter if requested.
     if tag:
@@ -3016,12 +3054,13 @@ def verify_sig(archive: str, sig_file: str | None, keys_dir: str | None) -> None
     click.echo(f"Verified: signed by '{ki.label}' ({ki.fingerprint[:16]}...)")
 
 
-# ── rev-bump ────────────────────────────────────────────────────
+# ── rev-bump ──────────────────────────────────────────────────────────
 
 
 @cli.command("rev-bump")
 @click.argument("recipe_name")
 @_recipes_dir_opt
+@_no_default_recipes_opt
 @_platform_opt
 @click.option(
     "--no-cascade",
@@ -3032,6 +3071,7 @@ def verify_sig(archive: str, sig_file: str | None, keys_dir: str | None) -> None
 def rev_bump_cmd(
     recipe_name: str,
     recipes_dirs: tuple[str, ...],
+    no_default_recipes: bool,
     platform: str,
     no_cascade: bool,
 ) -> None:
@@ -3048,10 +3088,14 @@ def rev_bump_cmd(
       cvcpkg rev-bump zlib --no-cascade
       cvcpkg rev-bump openssl --platform linux
     """
-    from cvcpkg.builder import find_recipes_dir, rev_bump
+    from cvcpkg.builder import rev_bump
 
-    rdirs = [Path(d) for d in recipes_dirs] if recipes_dirs else [find_recipes_dir()]
+    rdirs = _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes)
+    # Use last dir containing the recipe (overlay wins).
     recipes_dir = rdirs[0]
+    for rd in rdirs:
+        if (rd / recipe_name).is_dir():
+            recipes_dir = rd
 
     bumped = rev_bump(
         recipe_name,
@@ -3061,7 +3105,7 @@ def rev_bump_cmd(
     )
 
     for name, old_rev, new_rev in bumped:
-        click.echo(f"  {name}: cvc_revision {old_rev} → {new_rev}")
+        click.echo(f"  {name}: cvc_revision {old_rev} \u2192 {new_rev}")
     click.echo(f"\n{len(bumped)} recipe(s) bumped.")
 
 
@@ -5827,6 +5871,7 @@ def recipe_group() -> None:
     """Manage server-side recipe bundles."""
 
 
+
 @recipe_group.command("push")
 @click.argument("name")
 @click.option(
@@ -5843,25 +5888,36 @@ def recipe_group() -> None:
     help="Bearer token.  [env: CVCPKG_TOKEN]",
 )
 @click.option(
-    "--recipes-dir", type=click.Path(exists=True), default=None, help="Recipe source directory."
+    "--recipes-dir",
+    "recipes_dirs",
+    type=click.Path(exists=True),
+    multiple=True,
+    help="Extra recipes directory to overlay on the default.",
+)
+@click.option(
+    "--no-default-recipes",
+    is_flag=True,
+    default=False,
+    help="Ignore the auto-detected default recipes directory.",
 )
 @click.option("--org", "org_slug", default="", help="Organization scope.")
-def recipe_push(name: str, server: str, token: str, recipes_dir: str | None, org_slug: str):
+def recipe_push(name: str, server: str, token: str, recipes_dirs: tuple[str, ...], no_default_recipes: bool, org_slug: str):
     """Bundle and push a recipe to the server."""
     import io
     import tarfile
 
     import httpx
 
-    from cvcpkg.builder import RecipeError, find_recipes_dir
+    rdirs = _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes)
 
-    if recipes_dir:
-        rdir = Path(recipes_dir)
-    else:
-        try:
-            rdir = find_recipes_dir()
-        except RecipeError:
-            raise click.ClickException("could not find recipes directory") from None
+    # Search for the recipe in reverse order (later = higher priority)
+    rdir = None
+    for d in reversed(rdirs):
+        if (d / name).is_dir() and (d / name / "recipe.yaml").is_file():
+            rdir = d
+            break
+    if rdir is None:
+        rdir = rdirs[0]
 
     recipe_path = rdir / name
     if not recipe_path.is_dir():
@@ -6023,10 +6079,20 @@ def recipe_delete(name: str, server: str, token: str, org_slug: str):
     help="Bearer token.  [env: CVCPKG_TOKEN]",
 )
 @click.option(
-    "--recipes-dir", type=click.Path(exists=True), default=None, help="Recipe source directory."
+    "--recipes-dir",
+    "recipes_dirs",
+    type=click.Path(exists=True),
+    multiple=True,
+    help="Extra recipes directory to overlay on the default.",
+)
+@click.option(
+    "--no-default-recipes",
+    is_flag=True,
+    default=False,
+    help="Ignore the auto-detected default recipes directory.",
 )
 @click.option("--org", "org_slug", default="", help="Organization scope.")
-def recipe_publish(name: str, server: str, token: str, recipes_dir: str | None, org_slug: str):
+def recipe_publish(name: str, server: str, token: str, recipes_dirs: tuple[str, ...], no_default_recipes: bool, org_slug: str):
     """Publish a recipe to the server (push recipe + register placeholder package).
 
     This pushes the recipe bundle to the server and registers a
@@ -6044,18 +6110,19 @@ def recipe_publish(name: str, server: str, token: str, recipes_dir: str | None, 
 
     import httpx
 
-    from cvcpkg.builder import RecipeError, find_recipes_dir
-
     base = server.rstrip("/")
     headers = {"Authorization": f"Bearer {token}"}
 
-    if recipes_dir:
-        rdir = Path(recipes_dir)
-    else:
-        try:
-            rdir = find_recipes_dir()
-        except RecipeError:
-            raise click.ClickException("could not find recipes directory") from None
+    rdirs = _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes)
+
+    # Search for the recipe in reverse order (later = higher priority)
+    rdir = None
+    for d in reversed(rdirs):
+        if (d / name).is_dir() and (d / name / "recipe.yaml").is_file():
+            rdir = d
+            break
+    if rdir is None:
+        rdir = rdirs[0]
 
     recipe_path = rdir / name
     if not recipe_path.is_dir():
@@ -6137,7 +6204,6 @@ def recipe_publish(name: str, server: str, token: str, recipes_dir: str | None, 
         click.echo(f"cvcpkg: warning: placeholder registration failed: {detail}", err=True)
     else:
         click.echo(f"Recipe '{name}' registered in catalog (version={full_version})")
-
 
 @recipe_group.command("pull")
 @click.argument("name")
@@ -6275,6 +6341,7 @@ def recipe_pull_all(server: str, token: str, org_slug: str, output_dir: str):
     click.echo(f"cvcpkg: {recipe_count} recipes extracted to {output}")
 
 
+
 @recipe_group.command("push-all")
 @click.option(
     "--server",
@@ -6290,47 +6357,59 @@ def recipe_pull_all(server: str, token: str, org_slug: str, output_dir: str):
     help="Bearer token.  [env: CVCPKG_TOKEN]",
 )
 @click.option(
-    "--recipes-dir", type=click.Path(exists=True), default=None, help="Recipe source directory."
+    "--recipes-dir",
+    "recipes_dirs",
+    type=click.Path(exists=True),
+    multiple=True,
+    help="Extra recipes directory to overlay on the default.",
+)
+@click.option(
+    "--no-default-recipes",
+    is_flag=True,
+    default=False,
+    help="Ignore the auto-detected default recipes directory.",
 )
 @click.option("--org", "org_slug", default="", help="Organization scope.")
-def recipe_push_all(server: str, token: str, recipes_dir: str | None, org_slug: str):
-    """Push all recipes from a local directory to the server.
+def recipe_push_all(server: str, token: str, recipes_dirs: tuple[str, ...], no_default_recipes: bool, org_slug: str):
+    """Push all recipes from the default + overlay directories to the server.
 
-    Iterates every recipe in the recipes directory and pushes each
-    one to the server.
+    Iterates every recipe in the bundled recipes directory (and any
+    extra ``--recipes-dir`` overlays) and pushes each one to the
+    server.  Later directories win on name conflicts.
 
     \b
     Examples:
       cvcpkg recipe push-all
-      cvcpkg recipe push-all --recipes-dir ./recipes
+      cvcpkg recipe push-all --recipes-dir ./my-extra-recipes
     """
     import io
     import tarfile
 
     import httpx
 
-    from cvcpkg.builder import RecipeError, find_recipes_dir
-
     base = server.rstrip("/")
     headers = {"Authorization": f"Bearer {token}"}
 
-    if recipes_dir:
-        rdir = Path(recipes_dir)
-    else:
-        try:
-            rdir = find_recipes_dir()
-        except RecipeError:
-            raise click.ClickException("could not find recipes directory") from None
+    rdirs = _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes)
+
+    # Merge recipes from all dirs (later dirs win on name conflicts).
+    # For each recipe we track which rdir it came from so we can
+    # bundle the correct _common/ sibling.
+    recipe_map: dict[str, tuple[Path, Path]] = {}  # name -> (recipe_path, rdir)
+    for rdir in rdirs:
+        if not rdir.is_dir():
+            continue
+        for recipe_path in sorted(rdir.iterdir()):
+            if not recipe_path.is_dir() or recipe_path.name.startswith(("_", ".")):
+                continue
+            if not (recipe_path / "recipe.yaml").is_file():
+                continue
+            recipe_map[recipe_path.name] = (recipe_path, rdir)
 
     pushed = 0
     failed = 0
-    for recipe_path in sorted(rdir.iterdir()):
-        if not recipe_path.is_dir() or recipe_path.name.startswith(("_", ".")):
-            continue
-        if not (recipe_path / "recipe.yaml").is_file():
-            continue
-
-        name = recipe_path.name
+    for name in sorted(recipe_map):
+        recipe_path, rdir = recipe_map[name]
         recipe_yaml = recipe_path / "recipe.yaml"
         recipe_data = yaml.safe_load(recipe_yaml.read_text())
         recipe_info = recipe_data.get("recipe", {})
