@@ -9,7 +9,7 @@ recipe:
   description: "libyaml — a fast YAML 1.1 parser and emitter library written in C."
   homepage: https://pyyaml.org/wiki/LibYAML
   license: MIT
-  tags: [utils, wasm]
+  tags: [wasi, utils, wasm]
 
 source:
   type: tarball
@@ -56,6 +56,12 @@ build:
     - platform: wasm
       host_platform: windows
       script: build-wasm.ps1
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: wasi
+      host_platform: windows
+      script: build-wasi.ps1
 
 package:
   files:

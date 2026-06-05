@@ -9,7 +9,7 @@ recipe:
   description: "libjpeg-turbo — a JPEG image codec that uses SIMD instructions for accelerated encoding and decoding."
   homepage: https://libjpeg-turbo.org/
   license: IJG AND BSD-3-Clause AND Zlib
-  tags: [graphics, io, wasm]
+  tags: [wasi, graphics, io, wasm]
 
 source:
   type: tarball
@@ -56,6 +56,12 @@ build:
     - platform: wasm
       host_platform: windows
       script: build-wasm.ps1
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: wasi
+      host_platform: windows
+      script: build-wasi.ps1
 
 package:
   files:

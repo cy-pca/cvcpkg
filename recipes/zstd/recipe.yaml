@@ -9,7 +9,7 @@ recipe:
   description: "Zstandard — a fast, lossless compression algorithm targeting real-time compression scenarios."
   homepage: https://facebook.github.io/zstd/
   license: BSD-3-Clause AND GPL-2.0-only
-  tags: [utils, io, wasm]
+  tags: [wasi, utils, io, wasm]
 
 source:
   type: tarball
@@ -55,6 +55,12 @@ build:
     - platform: wasm
       host_platform: windows
       script: build-wasm.ps1
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: wasi
+      host_platform: windows
+      script: build-wasi.ps1
 
 package:
   files:
