@@ -2608,6 +2608,7 @@ class TestRecipePushAllFunctional:
                 "https://test.example.com",
                 "--token",
                 "cvctok_test",
+                "--no-default-recipes",
                 "--recipes-dir",
                 str(recipes_dir),
             ]
