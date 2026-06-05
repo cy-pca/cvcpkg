@@ -169,10 +169,27 @@ cvcpkg builder run \
     --max-jobs 4 \
     --work-dir /mnt/scratch/builder
 
+# Start with wasm cross-compilation support:
+cvcpkg builder run \
+    --name linux-x64-builder-1 \
+    --platform linux \
+    --arch x86_64 \
+    --max-jobs 4 \
+    --work-dir /mnt/scratch/builder \
+    --cross-target wasm
+
 # Start multiple builders for parallel builds:
 cvcpkg builder run --name builder-2 --platform linux --arch x86_64 &
 cvcpkg builder run --name builder-3 --platform macos --arch arm64 &
 ```
+
+Builders that pass `--cross-target wasm` register the target in their
+capabilities.  The scheduler dispatches wasm jobs to any builder
+whose `cross_targets` list includes `"wasm"`, even though the
+builder's native platform is linux or windows.  The builder
+automatically passes `--host-platform` to the build so that the
+correct cross-compilation scripts (e.g. `build-wasm.sh`) and
+toolchains (emsdk) are selected.
 
 Builders register with the server and receive jobs via WebSocket (with
 HTTP long-poll fallback).  Each job downloads the recipe from the
@@ -189,9 +206,68 @@ cvcpkg builds submit-dag \
     --recipe zlib --recipe zstd --recipe hdf5 \
     --platform linux --arch x86_64
 
+# Submit wasm builds (dispatched to linux/windows builders with --cross-target wasm):
+cvcpkg builds submit-dag \
+    --recipe zlib --recipe zstd \
+    --platform wasm --arch wasm32
+
+# Wait for builds to finish (exits non-zero on failure):
+cvcpkg builds submit-dag --wait \
+    --recipe zlib --recipe boost \
+    --platform linux --arch x86_64
+
 # Monitor build progress:
 cvcpkg builds list --status running
-cvcpkg builds log <job-id> -f    # follow log output
+cvcpkg builds monitor           # top-like live dashboard
+```
+
+### Build log streaming
+
+Remote builders capture full build output (cmake, make, gcc, etc.)
+and stream it to the server in real time.  You can tail any job's
+log or follow an entire DAG:
+
+```bash
+# View the full log for a completed job:
+cvcpkg builds log <job-id>
+
+# Follow a single job's output in real time (SSE stream):
+cvcpkg builds log <job-id> --follow
+
+# Follow ALL jobs in a DAG — multiplexed output with [recipe/platform] prefixes:
+cvcpkg builds follow-dag <dag-id>
+```
+
+#### `builds log -f` vs `builds follow-dag`
+
+| | `builds log <id> -f` | `builds follow-dag <dag-id>` |
+|---|---|---|
+| **Scope** | Single job (you supply the job ID) | All jobs in a DAG (discovered automatically) |
+| **Output** | Raw build output, no prefix | Lines prefixed with `[recipe/platform]` |
+| **Job discovery** | None — you must know the ID | Polls for new jobs as dependencies finish and they get dispatched |
+| **Concurrency** | One stream | One thread per active job, interleaved |
+| **Exit code** | 0 when stream ends | 0 if all succeed, 1 if any fail |
+| **Best for** | Debugging a single build | CI pipelines, bulk build monitoring |
+
+`follow-dag` is designed for CI pipelines where you need live output
+from all builders at once.  It spawns a thread per active job, prints
+prefixed lines as they arrive, and exits with code 0 if all jobs
+succeed or code 1 if any fail.
+
+The `populate-server.yml` GitHub Actions workflow uses this pattern:
+
+```yaml
+- name: Submit build DAGs
+  id: submit
+  run: |
+    DAG_ID="populate-$(date +%Y%m%d-%H%M%S)"
+    echo "dag_id=$DAG_ID" >> "$GITHUB_OUTPUT"
+    cvcpkg builds submit-dag --dag-id "$DAG_ID" \
+        --platform linux,freebsd --arch x86_64 \
+        zlib boost hdf5
+
+- name: Follow build output
+  run: cvcpkg builds follow-dag "${{ steps.submit.outputs.dag_id }}"
 ```
 
 ### Listing and managing builders
@@ -451,9 +527,14 @@ cvcpkg builds submit-dag \
     --recipe zlib --recipe boost --recipe hdf5 \
     --platform linux --arch x86_64
 
-# Monitor progress:
-cvcpkg builds list --status running
+# Monitor progress (top-like dashboard):
+cvcpkg builds monitor
+
+# Follow a single job's build output in real time:
 cvcpkg builds log <job-id> -f
+
+# Follow all jobs in a DAG (great for CI):
+cvcpkg builds follow-dag <dag-id>
 ```
 
 ### 6. Verify

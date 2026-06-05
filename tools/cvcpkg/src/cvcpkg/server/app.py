@@ -591,14 +591,15 @@ async def _build_scheduler_loop() -> None:
                     available.append(b)
 
             for job in ready_jobs:
-                # Find matching builder (platform + arch)
-                candidates = [
-                    b
-                    for b in available
-                    if b.platform == job.platform
-                    and b.arch == job.arch
-                    and b.current_jobs < b.max_jobs
-                ]
+                # Find matching builder (platform + arch, or cross-target)
+                candidates = []
+                for b in available:
+                    if b.current_jobs >= b.max_jobs:
+                        continue
+                    if b.platform == job.platform and b.arch == job.arch:
+                        candidates.append(b)
+                    elif job.platform in b.capabilities.get("cross_targets", []):
+                        candidates.append(b)
                 if not candidates:
                     continue
 

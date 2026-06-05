@@ -322,6 +322,12 @@ jobs:
               # Kill any manually-started daemon
               pkill -f 'cvcpkg builder run' 2>/dev/null || true
               sleep 1
+              # Ensure --cross-target wasm is in the systemd unit
+              UNIT=/etc/systemd/system/cvcpkg-builder.service
+              if ! grep -q -- '--cross-target wasm' \"\$UNIT\" 2>/dev/null; then
+                sudo sed -i 's|--work-dir [^ ]*|& --cross-target wasm|' \"\$UNIT\"
+                sudo systemctl daemon-reload
+              fi
               # Enable and restart systemd service
               sudo systemctl enable cvcpkg-builder 2>/dev/null || true
               sudo systemctl restart cvcpkg-builder

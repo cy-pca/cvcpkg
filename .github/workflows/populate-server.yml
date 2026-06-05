@@ -83,6 +83,7 @@ jobs:
           cvcpkg recipe push-all --recipes-dir recipes
 
       - name: Submit build DAGs
+        id: submit
         env:
           CVCPKG_SERVER_URL: ${{ inputs.server }}
           CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISHER_TOKEN }}
@@ -101,10 +102,20 @@ jobs:
           echo "Submitting ${#RECIPES[@]} recipes for platforms: ${{ inputs.platforms }}"
           echo "Config: ${{ inputs.config }}, Link: ${{ inputs.link }}, Arch: ${{ inputs.arch }}"
 
+          DAG_ID="populate-$(date +%Y%m%d-%H%M%S)"
+          echo "dag_id=$DAG_ID" >> "$GITHUB_OUTPUT"
+
           cvcpkg builds submit-dag \
             --platform "${{ inputs.platforms }}" \
             --arch "${{ inputs.arch }}" \
             --config "${{ inputs.config }}" \
             --link "${{ inputs.link }}" \
-            --dag-id "populate-$(date +%Y%m%d-%H%M%S)" \
+            --dag-id "$DAG_ID" \
             "${RECIPES[@]}"
+
+      - name: Follow build output
+        env:
+          CVCPKG_SERVER_URL: ${{ inputs.server }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISHER_TOKEN }}
+        run: |
+          cvcpkg builds follow-dag "${{ steps.submit.outputs.dag_id }}"

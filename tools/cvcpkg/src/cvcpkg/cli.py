@@ -4257,6 +4257,9 @@ def builder_status(builder_id: int, server: str, token: str):
     click.echo(f"  Status:      {data['status']}")
     click.echo(f"  Jobs:        {data['current_jobs']}/{data['max_jobs']}")
     click.echo(f"  Labels:      {', '.join(data.get('labels', [])) or '(none)'}")
+    cross = data.get("capabilities", {}).get("cross_targets", [])
+    if cross:
+        click.echo(f"  Cross:       {', '.join(cross)}")
     click.echo(f"  Affinity:    {'yes' if data.get('prefer_affinity') else 'no'}")
     click.echo(f"  Last HB:     {data.get('last_heartbeat') or 'never'}")
     click.echo(f"  Registered:  {data.get('created_at', 'unknown')}")
@@ -4311,6 +4314,12 @@ def builder_status(builder_id: int, server: str, token: str):
     default="",
     help="Path to PID file.  [default: <work-dir>/cvcpkg-builder.pid]",
 )
+@click.option(
+    "--cross-target",
+    "cross_targets",
+    multiple=True,
+    help="Cross-compilation target platform (repeatable, e.g. --cross-target wasm).",
+)
 def builder_run(
     server: str,
     token: str,
@@ -4325,6 +4334,7 @@ def builder_run(
     no_websocket: bool,
     daemon: bool,
     pidfile: str,
+    cross_targets: tuple[str, ...],
 ):
     """Register as a builder, poll for jobs, and execute builds.
 
@@ -4404,6 +4414,9 @@ def builder_run(
     pid_path.write_text(str(_os.getpid()))
 
     # ── Registration ────────────────────────────────────────
+    caps: dict = {}
+    if cross_targets:
+        caps["cross_targets"] = list(cross_targets)
     body = {
         "name": name,
         "platform": platform,
@@ -4411,7 +4424,7 @@ def builder_run(
         "org_slug": org_slug,
         "max_jobs": max_jobs,
         "labels": list(labels),
-        "capabilities": {},
+        "capabilities": caps,
     }
     with httpx.Client(timeout=30) as client:
         resp = client.post(f"{base}/v1/builders/register", headers=headers, json=body)
@@ -4424,7 +4437,8 @@ def builder_run(
         raise click.ClickException(f"registration failed ({resp.status_code}): {detail}")
     info = resp.json()
     builder_id = info["id"]
-    click.echo(f"Registered builder #{builder_id} ({name}) — {platform}/{arch}")
+    cross_msg = f" [cross: {', '.join(cross_targets)}]" if cross_targets else ""
+    click.echo(f"Registered builder #{builder_id} ({name}) — {platform}/{arch}{cross_msg}")
 
     shutdown = False
     current_jobs = 0
@@ -4493,18 +4507,21 @@ def builder_run(
             return nested
         return extract_dir
 
+    # Shared HTTP client for log streaming (created once, avoids
+    # connection overhead on every chunk).
+    _log_client = httpx.Client(timeout=30)
+
     def _stream_log(job_id: int, text: str):
         """Append a chunk of build log to the server."""
         # Truncate to 64 KB per-chunk (server limit)
         for i in range(0, len(text), 65536):
             chunk = text[i : i + 65536]
             try:
-                with httpx.Client(timeout=30) as client:
-                    client.patch(
-                        f"{base}/v1/builds/{job_id}/log",
-                        headers=headers,
-                        json={"data": chunk},
-                    )
+                _log_client.patch(
+                    f"{base}/v1/builds/{job_id}/log",
+                    headers=headers,
+                    json={"data": chunk},
+                )
             except Exception:
                 pass  # best-effort log streaming
 
@@ -4550,6 +4567,16 @@ def builder_run(
             _stream_log(job_id, f"Recipe extracted to {recipe_dir}\n")
 
             # 3. Build + package
+            # Detect cross-compilation: job targets a different platform
+            # than the builder's native platform (e.g. wasm on linux).
+            host_plat = ""
+            if job_platform != platform:
+                host_plat = platform
+                _stream_log(
+                    job_id,
+                    f"Cross-compiling: target={job_platform}, host={host_plat}\n",
+                )
+
             _stream_log(
                 job_id,
                 f"Starting build: {recipe_name} "
@@ -4566,6 +4593,8 @@ def builder_run(
                     link=job_link,
                     output_dir=output_dir,
                     work_dir_root=work_root,
+                    log_callback=lambda text, _jid=job_id: _stream_log(_jid, text),
+                    host_platform=host_plat,
                 )
                 _stream_log(
                     job_id,
@@ -5049,6 +5078,126 @@ def builds_log_delete(job_id: int, server: str, token: str):
     """Delete the log for a build job (admin only)."""
     _api_request("delete", f"{server.rstrip('/')}/v1/builds/{job_id}/log", token)
     click.echo(f"Log for build #{job_id} deleted.")
+
+
+@builds_group.command("follow-dag")
+@click.argument("dag_id")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+def builds_follow_dag(dag_id: str, server: str, token: str):
+    """Follow live build output for all jobs in a DAG.
+
+    Multiplexes SSE log streams from every active job, interleaving
+    lines with a [recipe/platform] prefix.  Useful in CI to get real-time
+    build output from all remote builders.
+
+    Exits with code 0 when all jobs succeed, 1 if any fail.
+    """
+    import concurrent.futures
+    import threading
+    import time
+
+    import httpx
+
+    base = server.rstrip("/")
+    headers = {"Authorization": f"Bearer {token}"}
+    terminal = {"succeeded", "failed", "cancelled", "timed_out"}
+    print_lock = threading.Lock()
+    seen_jobs: set[int] = set()
+    final_statuses: dict[int, str] = {}
+
+    def _follow_job(job_id: int, label: str):
+        """Tail a single job's SSE stream, printing prefixed lines."""
+        url = f"{base}/v1/builds/{job_id}/log/stream"
+        try:
+            with httpx.Client(timeout=None) as client:
+                with client.stream("GET", url, headers=headers) as resp:
+                    if resp.status_code >= 400:
+                        with print_lock:
+                            click.echo(f"  [{label}] log stream unavailable ({resp.status_code})")
+                        return
+                    for line in resp.iter_lines():
+                        if line.startswith("data: "):
+                            with print_lock:
+                                click.echo(f"[{label}] {line[6:]}")
+                        elif line.startswith("event: done"):
+                            status = ""
+                            # Next data line has the status
+                            break
+        except Exception:
+            pass  # best-effort
+
+    def _poll_and_spawn(executor: concurrent.futures.ThreadPoolExecutor):
+        """Poll for new jobs in the DAG and spawn followers."""
+        while True:
+            try:
+                with httpx.Client(timeout=30) as client:
+                    resp = client.get(
+                        f"{base}/v1/builds",
+                        headers=headers,
+                        params={"dag_id": dag_id, "limit": 1000},
+                    )
+                if resp.status_code >= 400:
+                    time.sleep(5)
+                    continue
+                jobs = resp.json().get("jobs", [])
+            except Exception:
+                time.sleep(5)
+                continue
+
+            all_terminal = True
+            for j in jobs:
+                jid = j["id"]
+                status = j.get("status", "unknown")
+                recipe = j.get("recipe_name", "?")
+                plat = j.get("platform", "?")
+                label = f"{recipe}/{plat}"
+
+                if status in terminal:
+                    if jid not in final_statuses:
+                        final_statuses[jid] = status
+                        icon = "\u2713" if status == "succeeded" else "\u2717"
+                        with print_lock:
+                            click.echo(f"  {icon} #{jid} {label}: {status}")
+                else:
+                    all_terminal = False
+
+                # Start following active (non-pending) jobs we haven't seen
+                if jid not in seen_jobs and status not in ("pending", *terminal):
+                    seen_jobs.add(jid)
+                    with print_lock:
+                        click.echo(f"  \u25b6 #{jid} {label}: streaming log...")
+                    executor.submit(_follow_job, jid, label)
+
+            if all_terminal and jobs:
+                break
+            time.sleep(5)
+
+    click.echo(f"Following DAG: {dag_id}")
+    click.echo("Waiting for jobs to appear...")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=32) as executor:
+        _poll_and_spawn(executor)
+
+    # Summary
+    succeeded = sum(1 for s in final_statuses.values() if s == "succeeded")
+    failed = sum(1 for s in final_statuses.values() if s != "succeeded")
+    total = len(final_statuses)
+    click.echo(f"\nDAG {dag_id}: {succeeded}/{total} succeeded, {failed} failed")
+
+    if failed:
+        raise SystemExit(1)
 
 
 # ── Build-wait helpers ──────────────────────────────────────────────
