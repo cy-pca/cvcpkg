@@ -3253,7 +3253,7 @@ class TestWebhookTestCLI:
 class TestBuilderCLIHelp:
     """Verify builder subcommands appear in help."""
 
-    @pytest.mark.parametrize("subcmd", ["list", "status", "run", "stop"])
+    @pytest.mark.parametrize("subcmd", ["list", "status", "run", "unregister"])
     def test_builder_subcommand_help(self, subcmd, capsys):
         ret = main(["builder", subcmd, "--help"])
         assert ret == 0
@@ -3265,7 +3265,7 @@ class TestBuilderCLIHelp:
         ret = main(["builder", "--help"])
         assert ret == 0
         out = capsys.readouterr().out
-        for cmd in ("list", "status", "run", "stop"):
+        for cmd in ("list", "status", "run", "unregister"):
             assert cmd in out
 
 
@@ -3416,10 +3416,10 @@ class TestBuilderStatusCLI:
         assert ret != 0
 
 
-class TestBuilderStopCLI:
-    """Test builder stop command with mocked HTTP."""
+class TestBuilderUnregisterCLI:
+    """Test builder unregister command with mocked HTTP."""
 
-    def test_stop_success(self, capsys, monkeypatch):
+    def test_unregister_success(self, capsys, monkeypatch):
         class FakeResponse:
             status_code = 200
             text = ""
@@ -3441,7 +3441,7 @@ class TestBuilderStopCLI:
                 return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
-        ret = main(["builder", "stop", "5", "--server", "https://s.example.com", "--token", "tok"])
+        ret = main(["builder", "unregister", "5", "--server", "https://s.example.com", "--token", "tok"])
         assert ret == 0
         out = capsys.readouterr().out
         assert "unregistered" in out.lower()

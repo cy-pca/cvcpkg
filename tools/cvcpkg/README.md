@@ -246,7 +246,7 @@ cvcpkg builds log <job-id>
 # Follow a single job's output in real time (SSE stream):
 cvcpkg builds log <job-id> --follow
 
-# Follow ALL jobs in a DAG — multiplexed output with [recipe/platform] prefixes:
+# Follow ALL jobs in a DAG — multiplexed output with [builder/recipe/platform/arch] prefixes:
 cvcpkg builds follow-dag <dag-id>
 ```
 
@@ -255,7 +255,7 @@ cvcpkg builds follow-dag <dag-id>
 | | `builds log <id> -f` | `builds follow-dag <dag-id>` |
 |---|---|---|
 | **Scope** | Single job (you supply the job ID) | All jobs in a DAG (discovered automatically) |
-| **Output** | Raw build output, no prefix | Lines prefixed with `[recipe/platform]` |
+| **Output** | Raw build output, no prefix | Lines prefixed with `[builder/recipe/platform/arch]` |
 | **Job discovery** | None — you must know the ID | Polls for new jobs as dependencies finish and they get dispatched |
 | **Concurrency** | One stream | One thread per active job, interleaved |
 | **Exit code** | 0 when stream ends | 0 if all succeed, 1 if any fail |
@@ -292,7 +292,7 @@ cvcpkg builder list
 cvcpkg builder status --name linux-x64-builder-1
 
 # Unregister a builder:
-cvcpkg builder stop --name linux-x64-builder-1
+cvcpkg builder unregister <builder-id>
 ```
 
 ---
