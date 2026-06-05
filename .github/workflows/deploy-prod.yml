@@ -322,10 +322,15 @@ jobs:
               # Kill any manually-started daemon
               pkill -f 'cvcpkg builder run' 2>/dev/null || true
               sleep 1
-              # Ensure --cross-target wasm is in the systemd unit
+              # Ensure --cross-platform wasm is in the systemd unit
               UNIT=/etc/systemd/system/cvcpkg-builder.service
-              if ! grep -q -- '--cross-target wasm' \"\$UNIT\" 2>/dev/null; then
-                sudo sed -i 's|--work-dir [^ ]*|& --cross-target wasm|' \"\$UNIT\"
+              if ! grep -q -- '--cross-platform wasm' \"\$UNIT\" 2>/dev/null; then
+                # Migrate from old --cross-target if present
+                sudo sed -i 's|--cross-target |--cross-platform |g' \"\$UNIT\"
+                # Add if still missing
+                if ! grep -q -- '--cross-platform wasm' \"\$UNIT\" 2>/dev/null; then
+                  sudo sed -i 's|--work-dir [^ ]*|& --cross-platform wasm|' \"\$UNIT\"
+                fi
                 sudo systemctl daemon-reload
               fi
               # Enable and restart systemd service

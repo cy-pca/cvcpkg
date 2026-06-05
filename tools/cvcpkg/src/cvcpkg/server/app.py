@@ -591,15 +591,23 @@ async def _build_scheduler_loop() -> None:
                     available.append(b)
 
             for job in ready_jobs:
-                # Find matching builder (platform + arch, or cross-target)
+                # Find matching builder (platform + arch, or cross-platform)
                 candidates = []
                 for b in available:
                     if b.current_jobs >= b.max_jobs:
                         continue
                     if b.platform == job.platform and b.arch == job.arch:
                         candidates.append(b)
-                    elif job.platform in b.capabilities.get("cross_targets", []):
-                        candidates.append(b)
+                    else:
+                        for cp in b.capabilities.get("cross_platforms", []):
+                            if isinstance(cp, dict):
+                                if cp["platform"] == job.platform and cp["arch"] == job.arch:
+                                    candidates.append(b)
+                                    break
+                            elif cp == job.platform:
+                                # Legacy cross_targets compat (platform-only)
+                                candidates.append(b)
+                                break
                 if not candidates:
                     continue
 
@@ -3892,6 +3900,50 @@ def create_app(
             },
         )
         return {"message": "dag cancelled", "dag_id": dag_id, "cancelled": count}
+
+    @app.post("/v1/builds/{job_id}/pause", tags=["builds"])
+    async def pause_build(
+        job_id: int,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Pause a pending or dispatched build job."""
+        _require_db_build_jobs()
+        info = await _db_build_jobs.pause(job_id)
+        if info is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        return {"message": "job paused", "id": job_id, "status": info.status}
+
+    @app.post("/v1/builds/{job_id}/resume", tags=["builds"])
+    async def resume_build(
+        job_id: int,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Resume a paused build job back to pending."""
+        _require_db_build_jobs()
+        info = await _db_build_jobs.resume(job_id)
+        if info is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        return {"message": "job resumed", "id": job_id, "status": info.status}
+
+    @app.post("/v1/builds/dag/{dag_id}/pause", tags=["builds"])
+    async def pause_dag(
+        dag_id: str,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Pause all pending/dispatched jobs in a DAG."""
+        _require_db_build_jobs()
+        count = await _db_build_jobs.pause_dag(dag_id)
+        return {"message": "dag paused", "dag_id": dag_id, "paused": count}
+
+    @app.post("/v1/builds/dag/{dag_id}/resume", tags=["builds"])
+    async def resume_dag(
+        dag_id: str,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Resume all paused jobs in a DAG back to pending."""
+        _require_db_build_jobs()
+        count = await _db_build_jobs.resume_dag(dag_id)
+        return {"message": "dag resumed", "dag_id": dag_id, "resumed": count}
 
     @app.post(
         "/v1/builds/{job_id}/claim",

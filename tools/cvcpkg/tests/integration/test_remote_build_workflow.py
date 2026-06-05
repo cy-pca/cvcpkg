@@ -211,6 +211,7 @@ class TestRemoteBuildWorkflow:
         arch="x86_64",
         org="",
         max_jobs=2,
+        capabilities=None,
     ):
         resp = c.post(
             "/v1/builders/register",
@@ -222,7 +223,7 @@ class TestRemoteBuildWorkflow:
                 "org_slug": org,
                 "max_jobs": max_jobs,
                 "labels": ["ci"],
-                "capabilities": {},
+                "capabilities": capabilities or {},
             },
         )
         assert resp.status_code == 200, resp.text
@@ -923,7 +924,7 @@ class TestBuilderRecovery:
                 "org_slug": kw.get("org", ""),
                 "max_jobs": kw.get("max_jobs", 2),
                 "labels": ["ci"],
-                "capabilities": {},
+                "capabilities": kw.get("capabilities", {}),
             },
         )
         assert resp.status_code == 200, resp.text
@@ -1377,3 +1378,312 @@ class TestBuilderRecovery:
         resp = c.post(f"/v1/builds/{jid}/cancel", headers=_auth(tok))
         assert resp.status_code == 200
         assert resp.json()["status"] == BuildJobStatus.running
+
+    # ── test: cross-compilation via cross_platforms ──────────
+
+    def test_28_cross_compile_wasm_dispatched_to_linux_builder(self, server):
+        """A wasm job should be claimable by a linux builder registered
+        with cross_platforms: [{"platform": "wasm", "arch": "wasm32"}].
+        """
+        c, tok = server["client"], server["admin_token"]
+
+        self._push_recipe(c, tok, "wasm-lib")
+
+        # Register linux builder with cross_platforms capability
+        builder = self._register_builder(
+            c,
+            tok,
+            "linux-wasm-builder",
+            platform="linux",
+            arch="x86_64",
+            capabilities={"cross_platforms": [{"platform": "wasm", "arch": "wasm32"}]},
+        )
+
+        # Submit a wasm build
+        job = self._submit_job(c, tok, "wasm-lib", platform="wasm", arch="wasm32")
+        assert job["platform"] == "wasm"
+        assert job["arch"] == "wasm32"
+
+        # The linux builder should be able to claim this job
+        resp = c.post(
+            f"/v1/builds/{job['id']}/claim",
+            headers=_auth(tok),
+            json={"builder_id": builder["id"]},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == BuildJobStatus.running
+
+        # Complete the build
+        resp = c.post(
+            f"/v1/builds/{job['id']}/complete",
+            headers=_auth(tok),
+            json={"result_archive_url": "/v1/packages/wasm-lib"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == BuildJobStatus.succeeded
+        assert resp.json()["platform"] == "wasm"
+        assert resp.json()["arch"] == "wasm32"
+
+    def test_29_cross_compile_dag_wasm_on_linux(self, server):
+        """Submit a wasm DAG and complete via linux builder with cross_platforms."""
+        c, tok = server["client"], server["admin_token"]
+
+        self._push_recipe(c, tok, "wasm-base")
+        self._push_recipe(c, tok, "wasm-app", deps=["wasm-base"])
+
+        builder = self._register_builder(
+            c,
+            tok,
+            "linux-wasm-dag-builder",
+            platform="linux",
+            arch="x86_64",
+            capabilities={"cross_platforms": [{"platform": "wasm", "arch": "wasm32"}]},
+        )
+
+        # Submit 2-job DAG targeting wasm
+        resp = c.post(
+            "/v1/builds/dag",
+            headers=_auth(tok),
+            json={
+                "dag_id": "wasm-dag-1",
+                "jobs": [
+                    {
+                        "recipe_name": "wasm-base",
+                        "platform": "wasm",
+                        "arch": "wasm32",
+                        "depends_on": [],
+                    },
+                    {
+                        "recipe_name": "wasm-app",
+                        "platform": "wasm",
+                        "arch": "wasm32",
+                        "depends_on": [0],
+                    },
+                ],
+            },
+        )
+        assert resp.status_code == 200
+        dag = resp.json()
+        assert dag["total"] == 2
+        job_ids = [j["id"] for j in dag["jobs"]]
+
+        # Complete in dependency order
+        for jid in job_ids:
+            c.post(
+                f"/v1/builds/{jid}/claim",
+                headers=_auth(tok),
+                json={"builder_id": builder["id"]},
+            )
+            resp = c.post(
+                f"/v1/builds/{jid}/complete",
+                headers=_auth(tok),
+                json={"result_archive_url": ""},
+            )
+            assert resp.status_code == 200
+
+        # All jobs succeeded
+        resp = c.get(
+            "/v1/builds",
+            headers=_auth(tok),
+            params={"dag_id": "wasm-dag-1"},
+        )
+        statuses = {j["status"] for j in resp.json()["jobs"]}
+        assert statuses == {BuildJobStatus.succeeded}
+
+    def test_30_cross_platforms_in_builder_capabilities(self, server):
+        """Verify cross_platforms are stored and returned in builder info."""
+        c, tok = server["client"], server["admin_token"]
+
+        cross = [
+            {"platform": "wasm", "arch": "wasm32"},
+            {"platform": "wasi", "arch": "wasm32"},
+        ]
+        builder = self._register_builder(
+            c,
+            tok,
+            "cross-caps-builder",
+            platform="linux",
+            arch="x86_64",
+            capabilities={"cross_platforms": cross},
+        )
+        assert builder["capabilities"]["cross_platforms"] == cross
+
+        # Verify via GET
+        resp = c.get(f"/v1/builders/{builder['id']}", headers=_auth(tok))
+        assert resp.json()["capabilities"]["cross_platforms"] == cross
+
+    # ── test: pause / resume single build ───────────────────
+
+    def test_31_pause_and_resume_pending_build(self, server):
+        """Pause a pending build, verify it's paused, resume it, verify pending."""
+        c, tok = server["client"], server["admin_token"]
+
+        self._push_recipe(c, tok, "pause-lib")
+        self._register_builder(c, tok, "pause-builder")
+        job = self._submit_job(c, tok, "pause-lib")
+        jid = job["id"]
+
+        # Pause
+        resp = c.post(f"/v1/builds/{jid}/pause", headers=_auth(tok))
+        assert resp.status_code == 200
+        assert resp.json()["status"] == BuildJobStatus.paused
+
+        # Verify via GET
+        resp = c.get(f"/v1/builds/{jid}", headers=_auth(tok))
+        assert resp.json()["status"] == BuildJobStatus.paused
+
+        # Resume
+        resp = c.post(f"/v1/builds/{jid}/resume", headers=_auth(tok))
+        assert resp.status_code == 200
+        assert resp.json()["status"] == BuildJobStatus.pending
+
+        # Verify via GET
+        resp = c.get(f"/v1/builds/{jid}", headers=_auth(tok))
+        assert resp.json()["status"] == BuildJobStatus.pending
+
+    def test_32_pause_running_build_is_noop(self, server):
+        """Pause on a running build should be a no-op."""
+        c, tok = server["client"], server["admin_token"]
+
+        self._push_recipe(c, tok, "pause-running-lib")
+        builder = self._register_builder(c, tok, "pause-running-builder")
+        job = self._submit_job(c, tok, "pause-running-lib")
+        jid = job["id"]
+
+        # Claim → running
+        c.post(
+            f"/v1/builds/{jid}/claim",
+            headers=_auth(tok),
+            json={"builder_id": builder["id"]},
+        )
+
+        # Attempt pause — should be no-op
+        resp = c.post(f"/v1/builds/{jid}/pause", headers=_auth(tok))
+        assert resp.status_code == 200
+        assert resp.json()["status"] == BuildJobStatus.running
+
+    # ── test: pause / resume DAG ────────────────────────────
+
+    def test_33_pause_and_resume_dag(self, server):
+        """Pause all pending jobs in a DAG, resume them, then complete."""
+        c, tok = server["client"], server["admin_token"]
+
+        self._push_recipe(c, tok, "dag-pause-a")
+        self._push_recipe(c, tok, "dag-pause-b", deps=["dag-pause-a"])
+        builder = self._register_builder(c, tok, "dag-pause-builder")
+
+        resp = c.post(
+            "/v1/builds/dag",
+            headers=_auth(tok),
+            json={
+                "dag_id": "pause-resume-dag",
+                "jobs": [
+                    {
+                        "recipe_name": "dag-pause-a",
+                        "platform": "linux",
+                        "arch": "x86_64",
+                        "depends_on": [],
+                    },
+                    {
+                        "recipe_name": "dag-pause-b",
+                        "platform": "linux",
+                        "arch": "x86_64",
+                        "depends_on": [0],
+                    },
+                ],
+            },
+        )
+        assert resp.status_code == 200
+        job_ids = [j["id"] for j in resp.json()["jobs"]]
+
+        # Pause DAG
+        resp = c.post("/v1/builds/dag/pause-resume-dag/pause", headers=_auth(tok))
+        assert resp.status_code == 200
+        assert resp.json()["paused"] == 2
+
+        # Verify both are paused
+        for jid in job_ids:
+            resp = c.get(f"/v1/builds/{jid}", headers=_auth(tok))
+            assert resp.json()["status"] == BuildJobStatus.paused
+
+        # Resume DAG
+        resp = c.post("/v1/builds/dag/pause-resume-dag/resume", headers=_auth(tok))
+        assert resp.status_code == 200
+        assert resp.json()["resumed"] == 2
+
+        # Verify both are pending again
+        for jid in job_ids:
+            resp = c.get(f"/v1/builds/{jid}", headers=_auth(tok))
+            assert resp.json()["status"] == BuildJobStatus.pending
+
+        # Complete the DAG normally
+        for jid in job_ids:
+            c.post(
+                f"/v1/builds/{jid}/claim",
+                headers=_auth(tok),
+                json={"builder_id": builder["id"]},
+            )
+            c.post(
+                f"/v1/builds/{jid}/complete",
+                headers=_auth(tok),
+                json={"result_archive_url": ""},
+            )
+
+        # All succeeded
+        resp = c.get(
+            "/v1/builds",
+            headers=_auth(tok),
+            params={"dag_id": "pause-resume-dag"},
+        )
+        statuses = {j["status"] for j in resp.json()["jobs"]}
+        assert statuses == {BuildJobStatus.succeeded}
+
+    def test_34_pause_dag_skips_running_jobs(self, server):
+        """Pausing a DAG should only affect pending/dispatched jobs, not running ones."""
+        c, tok = server["client"], server["admin_token"]
+
+        self._push_recipe(c, tok, "dag-skip-a")
+        self._push_recipe(c, tok, "dag-skip-b", deps=["dag-skip-a"])
+        builder = self._register_builder(c, tok, "dag-skip-builder")
+
+        resp = c.post(
+            "/v1/builds/dag",
+            headers=_auth(tok),
+            json={
+                "dag_id": "partial-pause-dag",
+                "jobs": [
+                    {
+                        "recipe_name": "dag-skip-a",
+                        "platform": "linux",
+                        "arch": "x86_64",
+                        "depends_on": [],
+                    },
+                    {
+                        "recipe_name": "dag-skip-b",
+                        "platform": "linux",
+                        "arch": "x86_64",
+                        "depends_on": [0],
+                    },
+                ],
+            },
+        )
+        job_ids = [j["id"] for j in resp.json()["jobs"]]
+
+        # Claim first job → running
+        c.post(
+            f"/v1/builds/{job_ids[0]}/claim",
+            headers=_auth(tok),
+            json={"builder_id": builder["id"]},
+        )
+
+        # Pause DAG — should only pause the second job (first is running)
+        resp = c.post("/v1/builds/dag/partial-pause-dag/pause", headers=_auth(tok))
+        assert resp.json()["paused"] == 1
+
+        # First job still running
+        resp = c.get(f"/v1/builds/{job_ids[0]}", headers=_auth(tok))
+        assert resp.json()["status"] == BuildJobStatus.running
+
+        # Second job paused
+        resp = c.get(f"/v1/builds/{job_ids[1]}", headers=_auth(tok))
+        assert resp.json()["status"] == BuildJobStatus.paused

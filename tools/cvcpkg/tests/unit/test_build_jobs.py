@@ -448,6 +448,136 @@ class TestDbBuildJobStore:
 
         self._run(_test())
 
+    def test_pause_pending_job(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            job = await store.create(
+                recipe_name="zlib",
+                platform="linux",
+                arch="x86_64",
+                submitted_by="admin",
+            )
+            result = await store.pause(job.id)
+            assert result.status == BuildJobStatus.paused
+
+        self._run(_test())
+
+    def test_resume_paused_job(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            job = await store.create(
+                recipe_name="zlib",
+                platform="linux",
+                arch="x86_64",
+                submitted_by="admin",
+            )
+            await store.pause(job.id)
+            result = await store.resume(job.id)
+            assert result.status == BuildJobStatus.pending
+
+        self._run(_test())
+
+    def test_pause_running_job_noop(self):
+        from cvcpkg.server.db_stores import DbBuilderStore, DbBuildJobStore
+
+        async def _test():
+            bstore = DbBuilderStore()
+            builder = await bstore.register(
+                name="b1",
+                platform="linux",
+                arch="x86_64",
+                registered_by="a",
+            )
+            store = DbBuildJobStore()
+            job = await store.create(
+                recipe_name="zlib",
+                platform="linux",
+                arch="x86_64",
+                submitted_by="admin",
+            )
+            await store.claim(job.id, builder.id)
+            result = await store.pause(job.id)
+            assert result.status == BuildJobStatus.running
+
+        self._run(_test())
+
+    def test_resume_non_paused_job_noop(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            job = await store.create(
+                recipe_name="zlib",
+                platform="linux",
+                arch="x86_64",
+                submitted_by="admin",
+            )
+            result = await store.resume(job.id)
+            assert result.status == BuildJobStatus.pending
+
+        self._run(_test())
+
+    def test_pause_dag(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            jobs = [
+                {"recipe_name": "a", "platform": "linux", "arch": "x86_64", "depends_on": []},
+                {"recipe_name": "b", "platform": "linux", "arch": "x86_64", "depends_on": [0]},
+            ]
+            infos = await store.create_dag(jobs, "dag-pause", "admin")
+            count = await store.pause_dag("dag-pause")
+            assert count == 2
+
+            for info in infos:
+                fetched = await store.get(info.id)
+                assert fetched.status == BuildJobStatus.paused
+
+        self._run(_test())
+
+    def test_resume_dag(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            jobs = [
+                {"recipe_name": "a", "platform": "linux", "arch": "x86_64", "depends_on": []},
+                {"recipe_name": "b", "platform": "linux", "arch": "x86_64", "depends_on": [0]},
+            ]
+            infos = await store.create_dag(jobs, "dag-resume", "admin")
+            await store.pause_dag("dag-resume")
+            count = await store.resume_dag("dag-resume")
+            assert count == 2
+
+            for info in infos:
+                fetched = await store.get(info.id)
+                assert fetched.status == BuildJobStatus.pending
+
+        self._run(_test())
+
+    def test_paused_job_not_in_find_ready(self):
+        """Paused jobs should not be returned by find_ready_jobs."""
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            job = await store.create(
+                recipe_name="zlib",
+                platform="linux",
+                arch="x86_64",
+                submitted_by="admin",
+            )
+            await store.pause(job.id)
+            ready = await store.find_ready_jobs()
+            assert all(r.id != job.id for r in ready)
+
+        self._run(_test())
+
     def test_dispatch(self):
         from cvcpkg.server.db_stores import DbBuilderStore, DbBuildJobStore
 
@@ -1642,3 +1772,135 @@ class TestBuildJobEndpoints:
         )
         assert resp.status_code == 200
         assert resp.json()["cancelled"] == 0
+
+    # ── Pause / resume API tests ─────────────────────────────
+
+    def test_pause_pending_job_api(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        sub = self._submit(client, pub_tok)
+        job_id = sub.json()["id"]
+        resp = client.post(
+            f"/v1/builds/{job_id}/pause",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "paused"
+
+    def test_resume_paused_job_api(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        sub = self._submit(client, pub_tok)
+        job_id = sub.json()["id"]
+        client.post(
+            f"/v1/builds/{job_id}/pause",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        resp = client.post(
+            f"/v1/builds/{job_id}/resume",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "pending"
+
+    def test_pause_running_job_noop_api(self, db_server_env):
+        """Pausing a running job should be a no-op."""
+        client, admin_tok, pub_tok, _ = db_server_env
+        sub = self._submit(client, pub_tok)
+        job_id = sub.json()["id"]
+        # Register builder and claim
+        br = client.post(
+            "/v1/builders/register",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+            json={
+                "name": "pause-test-builder",
+                "platform": "linux",
+                "arch": "x86_64",
+                "max_jobs": 1,
+            },
+        )
+        client.post(
+            f"/v1/builds/{job_id}/claim",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+            json={"builder_id": br.json()["id"]},
+        )
+        resp = client.post(
+            f"/v1/builds/{job_id}/pause",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "running"
+
+    def test_resume_non_paused_job_noop_api(self, db_server_env):
+        """Resuming a non-paused job should be a no-op."""
+        client, admin_tok, pub_tok, _ = db_server_env
+        sub = self._submit(client, pub_tok)
+        job_id = sub.json()["id"]
+        resp = client.post(
+            f"/v1/builds/{job_id}/resume",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "pending"
+
+    def test_pause_dag_api(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        jobs = [
+            {
+                "recipe_name": "a",
+                "platform": "linux",
+                "arch": "x86_64",
+                "depends_on": [],
+            },
+            {
+                "recipe_name": "b",
+                "platform": "linux",
+                "arch": "x86_64",
+                "depends_on": [0],
+            },
+        ]
+        resp = client.post(
+            "/v1/builds/dag",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+            json={"jobs": jobs, "dag_id": "pause-dag-1"},
+        )
+        assert resp.status_code == 200
+        resp = client.post(
+            "/v1/builds/dag/pause-dag-1/pause",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["paused"] == 2
+
+    def test_resume_dag_api(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        jobs = [
+            {
+                "recipe_name": "a",
+                "platform": "linux",
+                "arch": "x86_64",
+                "depends_on": [],
+            },
+            {
+                "recipe_name": "b",
+                "platform": "linux",
+                "arch": "x86_64",
+                "depends_on": [0],
+            },
+        ]
+        resp = client.post(
+            "/v1/builds/dag",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+            json={"jobs": jobs, "dag_id": "resume-dag-1"},
+        )
+        assert resp.status_code == 200
+        # Pause first
+        client.post(
+            "/v1/builds/dag/resume-dag-1/pause",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        # Resume
+        resp = client.post(
+            "/v1/builds/dag/resume-dag-1/resume",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["resumed"] == 2

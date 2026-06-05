@@ -4257,9 +4257,13 @@ def builder_status(builder_id: int, server: str, token: str):
     click.echo(f"  Status:      {data['status']}")
     click.echo(f"  Jobs:        {data['current_jobs']}/{data['max_jobs']}")
     click.echo(f"  Labels:      {', '.join(data.get('labels', [])) or '(none)'}")
-    cross = data.get("capabilities", {}).get("cross_targets", [])
+    cross = data.get("capabilities", {}).get("cross_platforms", [])
     if cross:
-        click.echo(f"  Cross:       {', '.join(cross)}")
+        if cross and isinstance(cross[0], dict):
+            cross_strs = [f"{e['platform']}/{e['arch']}" for e in cross]
+        else:
+            cross_strs = cross
+        click.echo(f"  Cross:       {', '.join(cross_strs)}")
     click.echo(f"  Affinity:    {'yes' if data.get('prefer_affinity') else 'no'}")
     click.echo(f"  Last HB:     {data.get('last_heartbeat') or 'never'}")
     click.echo(f"  Registered:  {data.get('created_at', 'unknown')}")
@@ -4315,10 +4319,17 @@ def builder_status(builder_id: int, server: str, token: str):
     help="Path to PID file.  [default: <work-dir>/cvcpkg-builder.pid]",
 )
 @click.option(
-    "--cross-target",
-    "cross_targets",
+    "--cross-platform",
+    "cross_platforms",
     multiple=True,
-    help="Cross-compilation target platform (repeatable, e.g. --cross-target wasm).",
+    help="Cross-compilation target platform (repeatable, e.g. --cross-platform wasm).",
+)
+@click.option(
+    "--cross-arch",
+    "cross_archs",
+    multiple=True,
+    help="Architecture for each --cross-platform (positional pairing). "
+    "Defaults: wasm→wasm32, wasi→wasm32, others→host arch.",
 )
 def builder_run(
     server: str,
@@ -4334,7 +4345,8 @@ def builder_run(
     no_websocket: bool,
     daemon: bool,
     pidfile: str,
-    cross_targets: tuple[str, ...],
+    cross_platforms: tuple[str, ...],
+    cross_archs: tuple[str, ...],
 ):
     """Register as a builder, poll for jobs, and execute builds.
 
@@ -4413,10 +4425,23 @@ def builder_run(
     pid_path.parent.mkdir(parents=True, exist_ok=True)
     pid_path.write_text(str(_os.getpid()))
 
+    # ── Build cross-platform/arch pairs ─────────────────────
+    _CROSS_ARCH_DEFAULTS = {
+        "wasm": "wasm32",
+        "wasi": "wasm32",
+    }
+    cross_entries: list[dict[str, str]] = []
+    for i, cp in enumerate(cross_platforms):
+        if i < len(cross_archs):
+            ca = cross_archs[i]
+        else:
+            ca = _CROSS_ARCH_DEFAULTS.get(cp, arch or "x86_64")
+        cross_entries.append({"platform": cp, "arch": ca})
+
     # ── Registration ────────────────────────────────────────
     caps: dict = {}
-    if cross_targets:
-        caps["cross_targets"] = list(cross_targets)
+    if cross_entries:
+        caps["cross_platforms"] = cross_entries
     body = {
         "name": name,
         "platform": platform,
@@ -4437,7 +4462,12 @@ def builder_run(
         raise click.ClickException(f"registration failed ({resp.status_code}): {detail}")
     info = resp.json()
     builder_id = info["id"]
-    cross_msg = f" [cross: {', '.join(cross_targets)}]" if cross_targets else ""
+    if cross_entries:
+        cross_msg = " [cross: {}]".format(
+            ", ".join(f"{e['platform']}/{e['arch']}" for e in cross_entries)
+        )
+    else:
+        cross_msg = ""
     click.echo(f"Registered builder #{builder_id} ({name}) — {platform}/{arch}{cross_msg}")
 
     shutdown = False
@@ -5012,6 +5042,90 @@ def builds_cancel_dag(dag_id: str, server: str, token: str):
     """Cancel all pending/dispatched jobs in a DAG."""
     data = _api_request("post", f"{server.rstrip('/')}/v1/builds/dag/{dag_id}/cancel", token)
     click.echo(f"DAG {dag_id}: {data.get('cancelled', 0)} jobs cancelled")
+
+
+@builds_group.command("pause")
+@click.argument("job_id", type=int)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+def builds_pause(job_id: int, server: str, token: str):
+    """Pause a pending or dispatched build job."""
+    data = _api_request("post", f"{server.rstrip('/')}/v1/builds/{job_id}/pause", token)
+    click.echo(f"Build #{job_id}: {data.get('status', 'paused')}")
+
+
+@builds_group.command("resume")
+@click.argument("job_id", type=int)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+def builds_resume(job_id: int, server: str, token: str):
+    """Resume a paused build job back to pending."""
+    data = _api_request("post", f"{server.rstrip('/')}/v1/builds/{job_id}/resume", token)
+    click.echo(f"Build #{job_id}: {data.get('status', 'pending')}")
+
+
+@builds_group.command("pause-dag")
+@click.argument("dag_id")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+def builds_pause_dag(dag_id: str, server: str, token: str):
+    """Pause all pending/dispatched jobs in a DAG."""
+    data = _api_request("post", f"{server.rstrip('/')}/v1/builds/dag/{dag_id}/pause", token)
+    click.echo(f"DAG {dag_id}: {data.get('paused', 0)} jobs paused")
+
+
+@builds_group.command("resume-dag")
+@click.argument("dag_id")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+def builds_resume_dag(dag_id: str, server: str, token: str):
+    """Resume all paused jobs in a DAG back to pending."""
+    data = _api_request("post", f"{server.rstrip('/')}/v1/builds/dag/{dag_id}/resume", token)
+    click.echo(f"DAG {dag_id}: {data.get('resumed', 0)} jobs resumed")
 
 
 @builds_group.command("log")
