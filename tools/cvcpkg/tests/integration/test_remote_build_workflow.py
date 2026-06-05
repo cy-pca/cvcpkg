@@ -1687,3 +1687,235 @@ class TestBuilderRecovery:
         # Second job paused
         resp = c.get(f"/v1/builds/{job_ids[1]}", headers=_auth(tok))
         assert resp.json()["status"] == BuildJobStatus.paused
+
+
+# ── CLI integration tests ───────────────────────────────────────
+
+
+class TestCLIBuildCommands:
+    """Exercise CLI commands through main() against an in-process server.
+
+    Uses monkeypatch to route httpx through the TestClient transport so
+    that CLI commands hit the real server code path without HTTP overhead.
+    """
+
+    def _push_recipe(self, c, token, name, **kw):
+        bundle = _make_recipe_bundle(name, **kw)
+        params = {"version": kw.get("version", "1.0.0")}
+        resp = c.post(
+            f"/v1/recipes/{name}",
+            headers=_auth(token),
+            params=params,
+            files={"file": (f"{name}.tar.gz", bundle, "application/gzip")},
+        )
+        assert resp.status_code == 200, resp.text
+
+    def _register_builder(self, c, token, name, **kw):
+        resp = c.post(
+            "/v1/builders/register",
+            headers=_auth(token),
+            json={
+                "name": name,
+                "platform": kw.get("platform", "linux"),
+                "arch": kw.get("arch", "x86_64"),
+                "max_jobs": kw.get("max_jobs", 2),
+                "labels": ["ci"],
+                "capabilities": kw.get("capabilities", {}),
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    def _cli(self, server, args):
+        """Run a CLI command via main(), injecting server URL and token."""
+        from cvcpkg.cli import main
+
+        base_url = str(server["client"].base_url).rstrip("/")
+        tok = server["admin_token"]
+        full_args = args + ["--server", base_url, "--token", tok]
+        return main(full_args)
+
+    def _make_httpx_use_testclient(self, monkeypatch, server):
+        """Monkeypatch httpx.Client to use the TestClient's transport."""
+        import httpx
+
+        tc = server["client"]
+        base_url = str(tc.base_url)
+
+        class PatchedClient(httpx.Client):
+            def __init__(self, **kw):
+                kw.setdefault("transport", tc._transport)
+                kw.setdefault("base_url", base_url)
+                super().__init__(**kw)
+
+        monkeypatch.setattr("httpx.Client", PatchedClient)
+
+    # ── builds submit → info → pause → resume → cancel ─────
+
+    def test_35_cli_builds_submit_info_pause_resume_cancel(self, server, monkeypatch, capsys):
+        """Full CLI lifecycle: submit → info → pause → resume → cancel."""
+        c, tok = server["client"], server["admin_token"]
+
+        self._push_recipe(c, tok, "cli-lifecycle-lib")
+        self._register_builder(c, tok, "cli-builder")
+        self._make_httpx_use_testclient(monkeypatch, server)
+
+        # Submit a job via API (CLI submit needs recipe hash etc.)
+        resp = c.post(
+            "/v1/builds",
+            headers=_auth(tok),
+            json={
+                "recipe_name": "cli-lifecycle-lib",
+                "platform": "linux",
+                "arch": "x86_64",
+            },
+        )
+        job_id = resp.json()["id"]
+
+        # CLI: builds info
+        ret = self._cli(server, ["builds", "info", str(job_id)])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "cli-lifecycle-lib" in out
+        assert "pending" in out.lower()
+
+        # CLI: builds pause
+        ret = self._cli(server, ["builds", "pause", str(job_id)])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "paused" in out.lower()
+
+        # Verify via API
+        resp = c.get(f"/v1/builds/{job_id}", headers=_auth(tok))
+        assert resp.json()["status"] == BuildJobStatus.paused
+
+        # CLI: builds resume
+        ret = self._cli(server, ["builds", "resume", str(job_id)])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "pending" in out.lower()
+
+        # CLI: builds cancel
+        ret = self._cli(server, ["builds", "cancel", str(job_id)])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "cancelled" in out.lower()
+
+        # Verify via API
+        resp = c.get(f"/v1/builds/{job_id}", headers=_auth(tok))
+        assert resp.json()["status"] == BuildJobStatus.cancelled
+
+    # ── DAG pause / resume / cancel via CLI ─────────────────
+
+    def test_36_cli_dag_pause_resume_cancel(self, server, monkeypatch, capsys):
+        """CLI: submit DAG → pause-dag → resume-dag → cancel-dag."""
+        c, tok = server["client"], server["admin_token"]
+
+        self._push_recipe(c, tok, "cli-dag-a")
+        self._push_recipe(c, tok, "cli-dag-b", deps=["cli-dag-a"])
+        self._register_builder(c, tok, "cli-dag-builder")
+        self._make_httpx_use_testclient(monkeypatch, server)
+
+        # Submit DAG via API
+        resp = c.post(
+            "/v1/builds/dag",
+            headers=_auth(tok),
+            json={
+                "dag_id": "cli-dag-test",
+                "jobs": [
+                    {"recipe_name": "cli-dag-a", "platform": "linux", "arch": "x86_64"},
+                    {"recipe_name": "cli-dag-b", "platform": "linux", "arch": "x86_64", "depends_on": [0]},
+                ],
+            },
+        )
+
+        # CLI: builds pause-dag
+        ret = self._cli(server, ["builds", "pause-dag", "cli-dag-test"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "paused" in out.lower()
+
+        # CLI: builds resume-dag
+        ret = self._cli(server, ["builds", "resume-dag", "cli-dag-test"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "resumed" in out.lower()
+
+        # CLI: builds cancel-dag
+        ret = self._cli(server, ["builds", "cancel-dag", "cli-dag-test"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "cancelled" in out.lower()
+
+    # ── builder list / status / unregister via CLI ──────────
+
+    def test_37_cli_builder_list_status_unregister(self, server, monkeypatch, capsys):
+        """CLI: builder list → status → unregister."""
+        c, tok = server["client"], server["admin_token"]
+        builder = self._register_builder(c, tok, "cli-mgmt-builder")
+        self._make_httpx_use_testclient(monkeypatch, server)
+
+        # CLI: builder list
+        ret = self._cli(server, ["builder", "list"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "cli-mgmt-builder" in out
+
+        # CLI: builder status
+        ret = self._cli(server, ["builder", "status", str(builder["id"])])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "cli-mgmt-builder" in out
+
+        # CLI: builder unregister
+        ret = self._cli(server, ["builder", "unregister", str(builder["id"])])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "unregistered" in out.lower()
+
+    # ── builds list with filters ────────────────────────────
+
+    def test_38_cli_builds_list(self, server, monkeypatch, capsys):
+        """CLI: builds list shows submitted jobs."""
+        c, tok = server["client"], server["admin_token"]
+        self._push_recipe(c, tok, "cli-list-lib")
+        self._register_builder(c, tok, "cli-list-builder")
+        self._make_httpx_use_testclient(monkeypatch, server)
+
+        # Submit a job
+        c.post(
+            "/v1/builds",
+            headers=_auth(tok),
+            json={"recipe_name": "cli-list-lib", "platform": "linux", "arch": "x86_64"},
+        )
+
+        # CLI: builds list
+        ret = self._cli(server, ["builds", "list"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "cli-list-lib" in out
+
+    # ── builds log-delete ───────────────────────────────────
+
+    def test_39_cli_builds_log_delete(self, server, monkeypatch, capsys):
+        """CLI: builds log-delete removes the log for a job."""
+        c, tok = server["client"], server["admin_token"]
+        self._push_recipe(c, tok, "cli-logdel-lib")
+        self._register_builder(c, tok, "cli-logdel-builder")
+        self._make_httpx_use_testclient(monkeypatch, server)
+
+        # Submit + claim + append log + complete
+        resp = c.post(
+            "/v1/builds",
+            headers=_auth(tok),
+            json={"recipe_name": "cli-logdel-lib", "platform": "linux", "arch": "x86_64"},
+        )
+        jid = resp.json()["id"]
+        builder = c.get("/v1/builders", headers=_auth(tok)).json()["builders"][-1]
+        c.post(f"/v1/builds/{jid}/claim", headers=_auth(tok), json={"builder_id": builder["id"]})
+        c.post(f"/v1/builds/{jid}/log", headers=_auth(tok), content="build output\n")
+        c.post(f"/v1/builds/{jid}/complete", headers=_auth(tok))
+
+        # CLI: builds log-delete
+        ret = self._cli(server, ["builds", "log-delete", str(jid)])
+        assert ret == 0
