@@ -740,11 +740,16 @@ def builder_run(
             click.echo(f"  [{job_id}] Failed: {recipe_name} — {exc}", err=True)
 
         finally:
-            # Clean up output dir and dep prefix
+            # Clean up output dir, dep prefix, and any leaked work dirs
             if archive_path and archive_path.parent.is_dir():
                 shutil.rmtree(archive_path.parent, ignore_errors=True)
             if dep_prefix and dep_prefix.is_dir():
                 shutil.rmtree(dep_prefix, ignore_errors=True)
+            # build_recipe creates cvcpkg-{name}-* work dirs that leak on failure
+            cleanup_root = work_root or Path(tempfile.gettempdir())
+            for stale in cleanup_root.glob(f"cvcpkg-{recipe_name}-*"):
+                if stale.is_dir():
+                    shutil.rmtree(stale, ignore_errors=True)
             with jobs_lock:
                 current_jobs -= 1
 
