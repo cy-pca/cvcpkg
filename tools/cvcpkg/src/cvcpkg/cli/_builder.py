@@ -468,6 +468,10 @@ def builder_run(
                     log_cb(f"  dep {dep_name}: no archive URL (skipping)\n")
                     continue
 
+                # Ensure absolute URL (archive_url is a relative path like /v1/download/...)
+                if archive_url.startswith("/"):
+                    archive_url = f"{base}{archive_url}"
+
                 # Download the archive
                 log_cb(f"  Installing dep: {dep_name} ({match.get('version','')})\n")
                 dl_resp = client.get(archive_url)
@@ -560,6 +564,10 @@ def builder_run(
                 if not archive_url:
                     log_cb(f"  toolchain {tc_name}: no archive URL\n")
                     continue
+
+                # Ensure absolute URL
+                if archive_url.startswith("/"):
+                    archive_url = f"{base}{archive_url}"
 
                 log_cb(f"  Installing cross-toolchain: {tc_name} ({match.get('version', '')})\n")
                 dl_resp = client.get(archive_url)
