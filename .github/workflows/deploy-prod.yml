@@ -262,6 +262,24 @@ jobs:
       # (star-00 / star-01 are self-hosted runners — updated by
       #  the update-linux-builders job below)
       # (sandipaws is updated by the update-windows-builder job below)
+      - name: Clean up BSD builder disk space
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          SSH="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
+          for host in root@netbsd-build root@netbsd-build-2 \
+                      root@freebsd-build root@freebsd-build-2 \
+                      root@openbsd-build root@openbsd-build-2; do
+            echo "--- $host ---"
+            $SSH "$host" "
+              # Remove leaked work dirs from failed builds
+              find /tmp -maxdepth 1 -name 'cvcpkg-*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null
+              # Clean pip cache
+              pip cache purge 2>/dev/null || true
+              echo \"\$(hostname): \$(df -h / | awk 'NR==2{print \$4}') free\"
+            " || echo "::warning::$host: cleanup failed"
+          done
+
       - name: Update non-runner builders (BSD)
         continue-on-error: true
         run: |
@@ -336,6 +354,14 @@ jobs:
           pip install --quiet .
           echo "$(hostname): $(cvcpkg --version)"
 
+      - name: Clean up stale build artifacts
+        run: |
+          # Remove leaked work dirs from failed builds
+          find /tmp -maxdepth 1 -name 'cvcpkg-*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true
+          # Clean pip cache
+          pip cache purge 2>/dev/null || true
+          echo "$(hostname): disk $(df -h / | awk 'NR==2{print $4}') free"
+
       - name: Restart builder service
         run: |
           UNIT=/etc/systemd/system/cvcpkg-builder.service
@@ -379,6 +405,12 @@ jobs:
           set -euo pipefail
           SHA="${{ needs.deploy.outputs.sha }}"
           SSH="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15"
+
+          echo "--- Configuring Windows Defender exclusions ---"
+          $SSH tfx@sandipaws "powershell -Command \"Add-MpPreference -ExclusionPath 'C:\Users\tfx\cvcpkg-builder' -ErrorAction SilentlyContinue; Add-MpPreference -ExclusionPath \$env:TEMP -ErrorAction SilentlyContinue; Add-MpPreference -ExclusionProcess 'pwsh.exe' -ErrorAction SilentlyContinue; Add-MpPreference -ExclusionProcess 'bash.exe' -ErrorAction SilentlyContinue; Write-Host 'Defender exclusions set'\"" || true
+
+          echo "--- Cleaning up stale build artifacts ---"
+          $SSH tfx@sandipaws "powershell -Command \"Get-ChildItem C:\Users\tfx\cvcpkg-builder -Directory | Where-Object { \$_.Name -match '^cvcpkg-' -and \$_.LastWriteTime -lt (Get-Date).AddHours(-1) } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue; Write-Host 'Cleanup done'\"" || true
 
           echo "--- Stopping sandipaws builder ---"
           # Kill any running cvcpkg builder so pip can overwrite the exe
