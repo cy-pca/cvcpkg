@@ -2158,7 +2158,7 @@ class DbBuildJobStore:
                 count_q = count_q.where(BuildJobRow.builder_id == builder_id)
 
             total = (await session.execute(count_q)).scalar() or 0
-            q = q.order_by(BuildJobRow.priority.desc(), BuildJobRow.id).limit(limit).offset(offset)
+            q = q.order_by(BuildJobRow.submitted_at.desc(), BuildJobRow.id.desc()).limit(limit).offset(offset)
             rows = (await session.execute(q)).scalars().all()
             results = []
             for row in rows:

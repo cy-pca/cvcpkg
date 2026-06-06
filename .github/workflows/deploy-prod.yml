@@ -68,6 +68,38 @@ jobs:
 
           echo "=== Deploying to cvcpkg.org (cvcpkg-00) ==="
 
+          # ── Pre-deploy disk cleanup ──
+          echo "Checking disk space on cvcpkg-00..."
+          $SSH "$REMOTE" bash -s <<'CLEANUP'
+          set -euo pipefail
+          echo "Before cleanup: $(df -h / | tail -1)"
+
+          # Prune unused Docker images, build cache, and stopped containers
+          sudo docker system prune -af --volumes 2>/dev/null || true
+
+          # Remove stale cvcpkg build temp dirs
+          sudo find /tmp -maxdepth 1 -name 'cvcpkg-*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true
+
+          # Clean old database backups (keep last 5)
+          BKDIR="/home/tfx/libcvc-deps/tools/cvcpkg/backups"
+          if [ -d "$BKDIR" ]; then
+            ls -1t "$BKDIR"/pre-deploy-*.sql.gz 2>/dev/null | tail -n +6 | xargs rm -f 2>/dev/null || true
+          fi
+
+          # Clean old git objects
+          if [ -d /home/tfx/libcvc-deps/.git ]; then
+            cd /home/tfx/libcvc-deps && git gc --auto 2>/dev/null || true
+          fi
+
+          # Clean apt caches
+          sudo apt-get clean 2>/dev/null || true
+
+          # Clean old logs
+          sudo journalctl --vacuum-size=50M 2>/dev/null || true
+
+          echo "After cleanup:  $(df -h / | tail -1)"
+          CLEANUP
+
           # Sync checkout to remote host
           echo "Syncing checkout to ${REMOTE}:${DEPLOY_DIR}..."
           rsync -a --delete \
