@@ -380,18 +380,21 @@ jobs:
           SHA="${{ needs.deploy.outputs.sha }}"
           SSH="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15"
 
+          echo "--- Stopping sandipaws builder ---"
+          # Kill any running cvcpkg builder so pip can overwrite the exe
+          $SSH tfx@sandipaws "taskkill /f /im cvcpkg.exe 2>NUL & taskkill /f /im python.exe 2>NUL & echo stopped" || true
+          sleep 5
+
           echo "--- Updating sandipaws ---"
           $SSH tfx@sandipaws "
-            cd C:/Users/tfx/libcvc-deps &&
+            cd C:/Users/tfx/src/cvc/libcvc-deps &&
             git fetch origin &&
             git checkout -f $SHA &&
             cd tools/cvcpkg &&
             pip install --quiet . 2>NUL &&
+            set PYTHONIOENCODING=utf-8 &&
             cvcpkg --version
           "
 
           echo "--- Restarting sandipaws builder ---"
-          $SSH tfx@sandipaws "
-            taskkill /f /im python.exe /fi \"WINDOWTITLE eq cvcpkg*\" 2>NUL
-            schtasks /run /tn cvcpkg-builder 2>NUL && echo sandipaws: builder restarted || echo sandipaws: no scheduled task found
-          "
+          $SSH tfx@sandipaws "schtasks /run /tn cvcpkg-builder 2>NUL && echo sandipaws: builder restarted || echo sandipaws: no scheduled task found"
