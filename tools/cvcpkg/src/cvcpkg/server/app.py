@@ -532,7 +532,7 @@ async def _ws_broadcast(msg: dict) -> None:
 # ── Build scheduler background task ────────────────────────────
 
 _SCHEDULER_INTERVAL = int(os.environ.get("CVCPKG_SCHEDULER_INTERVAL", "5"))
-_DEFAULT_BUILD_TIMEOUT = int(os.environ.get("CVCPKG_BUILD_TIMEOUT", "86400"))
+_DEFAULT_BUILD_TIMEOUT = int(os.environ.get("CVCPKG_BUILD_TIMEOUT", "7200"))
 
 # Log retention: 0 means disabled (no automatic GC)
 _LOG_RETENTION_DAYS = int(os.environ.get("CVCPKG_LOG_RETENTION_DAYS", "0"))

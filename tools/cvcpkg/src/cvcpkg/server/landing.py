@@ -306,7 +306,8 @@ function fmtSizeLarge(bytes) {
 function fmtDate(iso) {
   if (!iso) return '&mdash;';
   const d = new Date(iso);
-  return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+  return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+    + ' ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 """
 
