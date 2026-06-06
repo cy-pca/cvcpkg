@@ -315,8 +315,13 @@ def build(
             if name not in by_name:
                 return
             r = by_name[name]
-            deps = r.raw.get("depends", {}).get("build", [])
-            for d in deps:
+            deps_block = r.raw.get("depends", {})
+            # Collect both build and runtime deps so that libraries
+            # needed at link time (listed under runtime) are available.
+            all_deps: list = []
+            for key in ("build", "runtime"):
+                all_deps.extend(deps_block.get(key, []) or [])
+            for d in all_deps:
                 dep_name = d if isinstance(d, str) else d.get("name", "")
                 plats = d.get("platforms") if isinstance(d, dict) else None
                 if plats and plat not in plats:
