@@ -364,9 +364,9 @@ def builder_run(
 
         # Extract
         extract_dir = cache_dir / recipe_name
-        if extract_dir.is_dir():
-            shutil.rmtree(extract_dir)
-        extract_dir.mkdir(parents=True)
+        if extract_dir.exists():
+            shutil.rmtree(extract_dir, ignore_errors=True)
+        extract_dir.mkdir(parents=True, exist_ok=True)
         with tarfile.open(bundle_path, "r:gz") as tar:
             tar.extractall(path=extract_dir)  # noqa: S202
 
