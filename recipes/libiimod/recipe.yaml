@@ -22,6 +22,7 @@ patches: []
 depends:
   build: []
   runtime:
+    - name: libjpeg-turbo
     - name: xz
     - name: zstd
     - name: libwebp
