@@ -946,7 +946,7 @@ def build_recipe(
         link = "static"
 
     work_dir = _mkworkdir(f"cvcpkg-{recipe.name}-", work_dir_root)
-    install_dir = prefix or (work_dir / "install")
+    install_dir = work_dir / "install"
     build_dir = work_dir / "build"
 
     source_dir = fetch_source(recipe, work_dir)
@@ -958,7 +958,7 @@ def build_recipe(
         platform=platform,
         config=config,
         link=link,
-        prefix=install_dir,
+        prefix=prefix or install_dir,
         source_dir=source_dir,
         build_dir=build_dir,
         install_dir=install_dir,
