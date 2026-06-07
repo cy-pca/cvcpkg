@@ -4,7 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 
-LIBIIMOD_SRC="${CVC_RECIPE_DIR}/../../third-party/libiimod"
+# CVC_SOURCE_DIR is set by the build system to the resolved
+# vendored source tree (works for both local and remote builds).
+LIBIIMOD_SRC="${CVC_SOURCE_DIR}"
 
 cmake -G Ninja \
     -S "${LIBIIMOD_SRC}" \
