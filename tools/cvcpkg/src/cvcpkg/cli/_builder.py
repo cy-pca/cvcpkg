@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from collections.abc import Callable
@@ -490,6 +491,25 @@ def builder_run(
                     log_cb(f"  dep {dep_name}: extract failed ({exc})\n")
                 finally:
                     tmp_archive.unlink(missing_ok=True)
+
+                # Fix up pkg-config .pc files: replace hardcoded build-time
+                # prefix with the actual install prefix so that downstream
+                # configure / cmake find_package calls work correctly.
+                pc_dir = prefix / "lib" / "pkgconfig"
+                if pc_dir.is_dir():
+                    prefix_str = str(prefix.resolve())
+                    for pc_file in pc_dir.glob("*.pc"):
+                        text = pc_file.read_text()
+                        # Replace lines like  prefix=/tmp/cvcpkg-builder/.../install
+                        fixed = re.sub(
+                            r"^prefix=.*$",
+                            f"prefix={prefix_str}",
+                            text,
+                            count=1,
+                            flags=_re.MULTILINE,
+                        )
+                        if fixed != text:
+                            pc_file.write_text(fixed)
 
     def _install_cross_toolchains(
         target_platform: str,

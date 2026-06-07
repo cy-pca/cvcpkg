@@ -385,7 +385,7 @@ jobs:
             wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
             echo 'deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-18 main' | sudo tee /etc/apt/sources.list.d/llvm-18.list
             sudo apt-get update -qq
-            sudo NEEDRESTART_MODE=a apt-get install -y -qq llvm-18-dev lld-18
+            sudo NEEDRESTART_MODE=a apt-get install -y -qq llvm-18-dev lld-18 liblld-18-dev
           fi
           echo "$(hostname): LLVM $(llvm-config-18 --version 2>/dev/null || echo 'not found')"
 
