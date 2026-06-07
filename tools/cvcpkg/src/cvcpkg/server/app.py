@@ -2324,6 +2324,43 @@ def create_app(
         )
         return {"message": f"deleted {name}=={version}", "removed": before - after}
 
+    @app.delete("/v1/packages/by-link/{platform}/{link}", tags=["publish"])
+    async def delete_packages_by_link(
+        platform: str,
+        link: str,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Delete all bundles matching a platform and link mode (admin only)."""
+        if _use_db:
+            removed = await _db_packages.delete_by_link(platform, link)
+            if removed == 0:
+                raise HTTPException(404, f"no {platform}/{link} bundles found")
+            await _db_audit.record(
+                action=AuditAction.delete,
+                actor=actor.name,
+                target=f"platform={platform}/link={link}",
+                detail=f"{removed} bundles",
+            )
+            return {"message": f"deleted {platform}/{link} bundles", "removed": removed}
+        # File-based backend
+        state = _get_state()
+        before = len(state.index.get("bundles", []))
+        state.index["bundles"] = [
+            b for b in state.index.get("bundles", [])
+            if not (b.get("platform") == platform and b.get("link") == link)
+        ]
+        after = len(state.index["bundles"])
+        if before == after:
+            raise HTTPException(404, f"no {platform}/{link} bundles found")
+        state.save_index()
+        state.audit.record(
+            action=AuditAction.delete,
+            actor=actor.name,
+            target=f"platform={platform}/link={link}",
+            detail=f"{before - after} bundles",
+        )
+        return {"message": f"deleted {platform}/{link} bundles", "removed": before - after}
+
     # ── Token management (admin) ────────────────────────────
 
     @app.post("/v1/tokens", response_model=TokenCreateResponse, tags=["tokens"])
