@@ -889,6 +889,21 @@ class DbPackageIndex:
             )
             return result.rowcount
 
+    async def delete_by_link(
+        self, platform: str, link: str
+    ) -> int:
+        """Delete all bundles matching a platform and link mode."""
+        from sqlalchemy import delete as sa_delete
+
+        async with get_session() as session:
+            result = await session.execute(
+                sa_delete(PackageRow).where(
+                    PackageRow.platform == platform,
+                    PackageRow.link == link,
+                )
+            )
+            return result.rowcount
+
     async def total_storage_bytes(self) -> int:
         """Return the total size_bytes across all non-yanked packages."""
         async with get_session() as session:
