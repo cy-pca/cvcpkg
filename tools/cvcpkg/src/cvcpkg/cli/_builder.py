@@ -506,7 +506,7 @@ def builder_run(
                             f"prefix={prefix_str}",
                             text,
                             count=1,
-                            flags=_re.MULTILINE,
+                            flags=re.MULTILINE,
                         )
                         if fixed != text:
                             pc_file.write_text(fixed)
