@@ -379,6 +379,16 @@ jobs:
         with:
           ref: ${{ needs.deploy.outputs.sha }}
 
+      - name: Ensure LLVM 18 dev packages
+        run: |
+          if ! dpkg -s llvm-18-dev >/dev/null 2>&1; then
+            wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
+            echo 'deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-18 main' | sudo tee /etc/apt/sources.list.d/llvm-18.list
+            sudo apt-get update -qq
+            sudo NEEDRESTART_MODE=a apt-get install -y -qq llvm-18-dev lld-18
+          fi
+          echo "$(hostname): LLVM $(llvm-config-18 --version 2>/dev/null || echo 'not found')"
+
       - name: Install cvcpkg
         working-directory: tools/cvcpkg
         run: |
