@@ -4,9 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 
-# levmar is built from the vendored third-party/levmar/ CMakeLists.txt
-# rather than a downloaded tarball.
-LEVMAR_SRC="${CVC_RECIPE_DIR}/../../third-party/levmar"
+# CVC_SOURCE_DIR is set by the build system to the resolved
+# vendored source tree (works for both local and remote builds).
+LEVMAR_SRC="${CVC_SOURCE_DIR}"
 
 # Per-platform BLAS/LAPACK strategy:
 #   Linux/BSDs — OpenBLAS built from recipe, installed in prefix

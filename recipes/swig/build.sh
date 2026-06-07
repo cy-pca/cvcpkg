@@ -11,6 +11,10 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 # Put the cvcpkg prefix bin on PATH so bison from our recipe is found.
 export PATH="${CVC_DEPS_PREFIX}/bin:${PATH}"
 
+# Bison's compiled-in PKGDATADIR points to the original build host.
+# Override it so bison finds its m4sugar data in the deps prefix.
+export BISON_PKGDATADIR="${CVC_DEPS_PREFIX}/share/bison"
+
 # Fix Perl module paths for cvcpkg-built automake on BSDs.
 # The aclocal script has hardcoded Perl paths from the build host; PERL5LIB
 # lets Perl find the Automake modules at their actual installed location.
