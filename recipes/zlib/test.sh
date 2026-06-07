@@ -7,6 +7,12 @@ set -euo pipefail
 
 : "${CVC_INSTALL_DIR:?CVC_INSTALL_DIR must be set}"
 
+# Skip test for cross-compiled wasm/wasi targets
+if [[ "${CVC_PLATFORM:-}" == "wasm" || "${CVC_PLATFORM:-}" == "wasi" ]]; then
+    echo "-- zlib smoke test SKIPPED (cross-compiled ${CVC_PLATFORM}) --"
+    exit 0
+fi
+
 echo "-- zlib smoke test --"
 
 # 1. Check that the header exists.
