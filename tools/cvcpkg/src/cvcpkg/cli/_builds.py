@@ -626,6 +626,11 @@ def builds_submit(
 
     Example: cvcpkg builds submit --recipe zlib --platform linux --arch x86_64
     """
+    # wasm/wasi only support static linking.
+    if platform in ("wasm", "wasi") and link != "static":
+        link = "static"
+        click.echo(f"  Note: forcing --link=static for {platform} (shared not supported)")
+
     body: dict = {
         "recipe_name": recipe_name,
         "platform": platform,
@@ -778,6 +783,9 @@ def builds_submit_dag(
                 continue
             for cfg in configs:
                 for lnk in links:
+                    # wasm/wasi only support static linking.
+                    if plat in _WASM_PLATFORMS and lnk != "static":
+                        continue
                     # Filter recipes: skip those with no matrix entry
                     eligible = [n for n in recipe_names if _has_platform_entry(n, plat)]
                     skipped = set(recipe_names) - set(eligible)

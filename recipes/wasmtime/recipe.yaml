@@ -46,6 +46,7 @@ build:
 
 package:
   files:
+    - bin/wasmtime
     - lib/libwasmtime*
     - lib/wasmtime*
     - lib/cmake/wasmtime/

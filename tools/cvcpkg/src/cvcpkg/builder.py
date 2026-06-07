@@ -636,6 +636,23 @@ def run_test(ctx: BuildContext) -> None:
     env["CVC_DEPS_PREFIX"] = ctx.prefix.as_posix()
     env["CVC_PLATFORM"] = ctx.platform
 
+    # Propagate cross-toolchain env vars (CVC_EMSDK_DIR, CVC_WASI_SDK_DIR,
+    # etc.) so test scripts can use emcc/node/wasmtime to compile and run
+    # cross-compiled test programs.
+    if ctx.cross_toolchain_env:
+        for var, tpl in ctx.cross_toolchain_env.items():
+            if var not in env:
+                env[var] = tpl.replace("${PREFIX}", str(ctx.prefix))
+
+    # Ensure host tools built into the prefix (including cross-toolchain
+    # binaries) are on PATH — mirrors _build_env() behaviour.
+    bin_dirs = [
+        (ctx.prefix / "bin").as_posix(),
+        (ctx.install_dir / "bin").as_posix(),
+    ]
+    existing_path = env.get("PATH", "")
+    env["PATH"] = os.pathsep.join(bin_dirs + ([existing_path] if existing_path else []))
+
     # Ensure shared-library dependencies (e.g. abseil for protoc) are
     # discoverable at test time.  Include both the component's own lib
     # dir and the shared prefix where dependencies were installed.
@@ -922,6 +939,11 @@ def build_recipe(
     recipe = Recipe.load(recipe_dir)
     if not platform:
         platform = detect_platform()
+
+    # wasm/wasi only support static linking — shared libraries are
+    # impossible in these environments.
+    if platform in ("wasm", "wasi"):
+        link = "static"
 
     work_dir = _mkworkdir(f"cvcpkg-{recipe.name}-", work_dir_root)
     install_dir = prefix or (work_dir / "install")
