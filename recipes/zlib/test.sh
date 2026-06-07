@@ -7,13 +7,12 @@ set -euo pipefail
 
 : "${CVC_INSTALL_DIR:?CVC_INSTALL_DIR must be set}"
 
-# Skip test for cross-compiled wasm/wasi targets
-if [[ "${CVC_PLATFORM:-}" == "wasm" || "${CVC_PLATFORM:-}" == "wasi" ]]; then
-    echo "-- zlib smoke test SKIPPED (cross-compiled ${CVC_PLATFORM}) --"
-    exit 0
-fi
+# Load cross-compilation test helpers (provides cvc_wasm_cc / cvc_wasm_run).
+_COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../_common" && pwd)"
+# shellcheck disable=SC1091
+source "${_COMMON_DIR}/cvc_wasm_run.sh"
 
-echo "-- zlib smoke test --"
+echo "-- zlib smoke test (${CVC_PLATFORM:-native}) --"
 
 # 1. Check that the header exists.
 test -f "${CVC_INSTALL_DIR}/include/zlib.h" \
@@ -38,11 +37,10 @@ else
     echo "  WARN: No CMake config package (may be OK if upstream zlib version predates it)"
 fi
 
-# 4. Compile a trivial program that links against zlib.
-if command -v cc >/dev/null 2>&1; then
-    TMPDIR=$(mktemp -d)
-    trap 'rm -rf "${TMPDIR}"' EXIT
-    cat > "${TMPDIR}/test_zlib.c" <<'EOF'
+# 4. Compile a trivial program that links against zlib and run it.
+TMPDIR=$(mktemp -d)
+trap 'rm -rf "${TMPDIR}"' EXIT
+cat > "${TMPDIR}/test_zlib.c" <<'EOF'
 #include <zlib.h>
 #include <stdio.h>
 int main(void) {
@@ -50,6 +48,28 @@ int main(void) {
     return 0;
 }
 EOF
+
+if [[ "${CVC_PLATFORM:-}" == "wasm" ]]; then
+    if [[ "${CVC_WASM_RUNNER}" == "skip" ]]; then
+        echo "  WARN: wasm runtime unavailable, skipping compile+run test"
+    else
+        cvc_wasm_cc "${TMPDIR}/test_zlib.js" "${TMPDIR}/test_zlib.c" -lz \
+        && {
+            cvc_wasm_run "${TMPDIR}/test_zlib.js"
+            echo "  OK: emcc compile + node run OK"
+        } || { echo "FAIL: wasm compile+run test failed"; exit 1; }
+    fi
+elif [[ "${CVC_PLATFORM:-}" == "wasi" ]]; then
+    if [[ "${CVC_WASM_RUNNER}" == "skip" ]]; then
+        echo "  WARN: wasi runtime unavailable, skipping compile+run test"
+    else
+        cvc_wasm_cc "${TMPDIR}/test_zlib.wasm" "${TMPDIR}/test_zlib.c" -lz \
+        && {
+            cvc_wasm_run "${TMPDIR}/test_zlib.wasm"
+            echo "  OK: wasi-sdk compile + ${CVC_WASM_RUNNER} run OK"
+        } || { echo "FAIL: wasi compile+run test failed"; exit 1; }
+    fi
+elif command -v cc >/dev/null 2>&1; then
     cc -o "${TMPDIR}/test_zlib" "${TMPDIR}/test_zlib.c" \
         -I"${CVC_INSTALL_DIR}/include" \
         -L"${CVC_INSTALL_DIR}/lib" -lz 2>/dev/null \
