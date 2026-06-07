@@ -5,7 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_common/env-wasm.sh"
 
-LIBIIMOD_SRC="${CVC_RECIPE_DIR}/../../third-party/libiimod"
+LIBIIMOD_SRC="${CVC_SOURCE_DIR}"
 
 cmake -G Ninja \
     -S "${LIBIIMOD_SRC}" \

@@ -6,7 +6,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_common/env-wasm.sh"
 
-LEVMAR_SRC="${CVC_RECIPE_DIR}/../../third-party/levmar"
+LEVMAR_SRC="${CVC_SOURCE_DIR}"
 
 cmake -G Ninja \
     -S "${LEVMAR_SRC}" \
