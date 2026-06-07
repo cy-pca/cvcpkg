@@ -880,13 +880,25 @@ class DbPackageIndex:
             )
             return result.rowcount
 
-    async def delete(self, name: str, version: str) -> int:
+    async def delete(
+        self,
+        name: str,
+        version: str,
+        *,
+        platform: str | None = None,
+        link: str | None = None,
+    ) -> int:
         from sqlalchemy import delete as sa_delete
 
         async with get_session() as session:
-            result = await session.execute(
-                sa_delete(PackageRow).where(PackageRow.name == name, PackageRow.version == version)
+            stmt = sa_delete(PackageRow).where(
+                PackageRow.name == name, PackageRow.version == version
             )
+            if platform is not None:
+                stmt = stmt.where(PackageRow.platform == platform)
+            if link is not None:
+                stmt = stmt.where(PackageRow.link == link)
+            result = await session.execute(stmt)
             return result.rowcount
 
     async def delete_by_link(
