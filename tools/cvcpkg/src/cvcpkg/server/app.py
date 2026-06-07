@@ -2294,24 +2294,35 @@ def create_app(
     async def delete_package(
         name: str,
         version: str,
+        platform: str | None = Query(None, description="Only delete bundles for this platform"),
+        link: str | None = Query(None, description="Only delete bundles with this link mode"),
         actor: TokenRecord = Depends(require_role(TokenRole.admin)),
     ):
         if _use_db:
-            removed = await _db_packages.delete(name, version)
+            removed = await _db_packages.delete(name, version, platform=platform, link=link)
             if removed == 0:
                 raise HTTPException(404, f"{name}=={version} not found")
             await _db_audit.record(
                 action=AuditAction.delete,
                 actor=actor.name,
                 target=f"{name}=={version}",
+                detail=f"platform={platform} link={link}" if platform or link else "",
             )
             return {"message": f"deleted {name}=={version}", "removed": removed}
         state = _get_state()
         before = len(state.index.get("bundles", []))
+
+        def _matches(b: dict) -> bool:
+            if b["name"] != name or b["version"] != version:
+                return False
+            if platform and b.get("platform") != platform:
+                return False
+            if link and b.get("link") != link:
+                return False
+            return True
+
         state.index["bundles"] = [
-            b
-            for b in state.index.get("bundles", [])
-            if not (b["name"] == name and b["version"] == version)
+            b for b in state.index.get("bundles", []) if not _matches(b)
         ]
         after = len(state.index["bundles"])
         if before == after:
