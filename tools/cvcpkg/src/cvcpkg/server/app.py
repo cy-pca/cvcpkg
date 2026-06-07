@@ -2328,7 +2328,7 @@ def create_app(
     async def delete_packages_by_link(
         platform: str,
         link: str,
-        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
         """Delete all bundles matching a platform and link mode (admin only)."""
         if _use_db:
