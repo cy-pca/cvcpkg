@@ -3723,10 +3723,17 @@ def create_app(
         body: BuilderHeartbeatRequest,
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
-        """Record a heartbeat from a running builder."""
+        """Record a heartbeat from a running builder.
+
+        The builder's ``current_jobs`` is always reconciled from actual
+        dispatched/running jobs in the database, ignoring the
+        client-reported value.  This prevents drift after builder
+        restarts or lost heartbeats.
+        """
         _require_db_builders()
         info = await _db_builders.heartbeat(
-            builder_id, status=body.status, current_jobs=body.current_jobs
+            builder_id, status=body.status, current_jobs=body.current_jobs,
+            reconcile=True,
         )
         if info is None:
             raise HTTPException(404, f"builder {builder_id} not found")
@@ -4286,7 +4293,8 @@ def create_app(
                     status = data.get("status", "online")
                     current_jobs = data.get("current_jobs", 0)
                     await _db_builders.heartbeat(
-                        builder_id, status=status, current_jobs=current_jobs
+                        builder_id, status=status, current_jobs=current_jobs,
+                        reconcile=True,
                     )
                     await websocket.send_json({"type": "heartbeat_ack"})
 
