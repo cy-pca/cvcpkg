@@ -2,6 +2,12 @@
 # recipes/pcre2/test.sh — smoke-test PCRE2 installation.
 set -euo pipefail
 
+# Skip runtime tests for cross-compiled (wasm/wasi) builds.
+if [[ "${CVC_PLATFORM:-}" == wasm || "${CVC_PLATFORM:-}" == wasi ]]; then
+    echo 'pcre2 test skipped (cross-compiled target).'
+    exit 0
+fi
+
 echo 'Testing pcre2-config...'
 "${CVC_INSTALL_DIR}/bin/pcre2-config" --version
 

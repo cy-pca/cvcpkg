@@ -634,6 +634,7 @@ def run_test(ctx: BuildContext) -> None:
     env["CVC_PREFIX"] = ctx.install_dir.as_posix()
     env["CVC_INSTALL_DIR"] = ctx.install_dir.as_posix()
     env["CVC_DEPS_PREFIX"] = ctx.prefix.as_posix()
+    env["CVC_PLATFORM"] = ctx.platform
 
     # Ensure shared-library dependencies (e.g. abseil for protoc) are
     # discoverable at test time.  Include both the component's own lib
