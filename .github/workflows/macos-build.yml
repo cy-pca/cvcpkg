@@ -1,0 +1,163 @@
+# Build and publish all macOS recipes to cvcpkg.org.
+#
+# Since macOS has no persistent builder service (GitHub-hosted runners
+# are ephemeral), this workflow builds the full recipe DAG locally and
+# publishes each package directly to the server.
+#
+# Triggered manually via workflow_dispatch, or by the populate-server
+# workflow when 'macos' is in the platforms list.
+#
+# Required repo secrets:
+#   CVCPKG_PUBLISHER_TOKEN  — a publisher-role token for cvcpkg.org
+
+name: macOS Package Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      config:
+        description: "Build config"
+        required: true
+        default: "release"
+        type: choice
+        options:
+          - release
+          - debug
+      link:
+        description: "Link mode"
+        required: true
+        default: "shared"
+        type: choice
+        options:
+          - shared
+          - static
+      server:
+        description: "cvcpkg server URL"
+        required: true
+        default: "https://cvcpkg.org"
+        type: string
+      recipes:
+        description: "Space-separated recipe names (empty = all macOS recipes)"
+        required: false
+        default: ""
+        type: string
+  workflow_call:
+    inputs:
+      config:
+        required: true
+        type: string
+      link:
+        required: true
+        type: string
+      server:
+        required: true
+        type: string
+      recipes:
+        required: false
+        type: string
+        default: ""
+
+concurrency:
+  group: macos-build-${{ inputs.config }}-${{ inputs.link }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-publish:
+    name: Build macOS (${{ inputs.config }}/${{ inputs.link }})
+    runs-on: macos-latest
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install system build tools
+        run: |
+          brew install ninja autoconf automake libtool pkg-config libomp meson flex bison
+          brew install llvm@18 2>/dev/null || true
+          # Pin cmake to 3.x — Boost 1.86 cmake files are incompatible with cmake 4.x
+          pip3 install --break-system-packages "cmake>=3.31,<4"
+
+      - name: Install cvcpkg
+        run: |
+          pip3 install --break-system-packages ./tools/cvcpkg
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$(python3 -m site --user-base)/bin" >> "$GITHUB_PATH"
+
+      - name: Determine recipes to build
+        id: recipes
+        run: |
+          if [ -n "${{ inputs.recipes }}" ]; then
+            echo "list=${{ inputs.recipes }}" >> "$GITHUB_OUTPUT"
+            echo "filter=--recipes ${{ inputs.recipes }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "list=" >> "$GITHUB_OUTPUT"
+            echo "filter=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build all macOS recipes (pack-all)
+        env:
+          CVCPKG_SERVER_URL: ${{ inputs.server }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISHER_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${{ github.workspace }}/prefix"
+          mkdir -p "${{ github.workspace }}/dist"
+
+          cvcpkg pack-all \
+            --keep-going \
+            --platform macos \
+            --config "${{ inputs.config }}" \
+            --link "${{ inputs.link }}" \
+            --prefix "${{ github.workspace }}/prefix" \
+            --output-dir "${{ github.workspace }}/dist" \
+            --recipes-dir recipes \
+            --server-cache "$CVCPKG_SERVER_URL" \
+            --server-cache-token "$CVCPKG_TOKEN" \
+            --server-cache-push
+
+      - name: List built packages
+        run: |
+          echo "Built packages:"
+          ls -lh "${{ github.workspace }}/dist/" || echo "(no packages)"
+          echo ""
+          echo "Count: $(ls "${{ github.workspace }}/dist/"*.tar.zst 2>/dev/null | wc -l) archives"
+
+      - name: Publish to cvcpkg.org
+        env:
+          CVCPKG_SERVER_URL: ${{ inputs.server }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISHER_TOKEN }}
+        run: |
+          set -euo pipefail
+          DIST="${{ github.workspace }}/dist"
+
+          # Count archives
+          ARCHIVES=($(ls "$DIST"/*.tar.zst 2>/dev/null || true))
+          if [ ${#ARCHIVES[@]} -eq 0 ]; then
+            echo "::warning::No archives found in dist/ — nothing to publish"
+            exit 0
+          fi
+
+          echo "Publishing ${#ARCHIVES[@]} packages to $CVCPKG_SERVER_URL"
+          cvcpkg publish --all \
+            --server "$CVCPKG_SERVER_URL" \
+            --token "$CVCPKG_TOKEN" \
+            --output-dir "$DIST" \
+            --platform macos \
+            --config "${{ inputs.config }}" \
+            --link "${{ inputs.link }}"
+
+      - name: Upload dist artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-packages-${{ inputs.config }}-${{ inputs.link }}
+          path: dist/
+          if-no-files-found: warn
+          retention-days: 7
