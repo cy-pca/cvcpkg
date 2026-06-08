@@ -376,7 +376,6 @@ def _auto_arch(platform: str) -> str:
     return detect_arch()
 
 
-
 def _parse_size(s: str) -> int:
     """Parse a human-readable size string (e.g. '10G') to bytes."""
     s = s.strip().upper()
@@ -424,5 +423,3 @@ def _compute_current_chain_hashes() -> set[str]:
             if h:
                 hashes.add(h)
     return hashes
-
-

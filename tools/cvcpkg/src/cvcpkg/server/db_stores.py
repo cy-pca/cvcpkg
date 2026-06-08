@@ -901,9 +901,7 @@ class DbPackageIndex:
             result = await session.execute(stmt)
             return result.rowcount
 
-    async def delete_by_link(
-        self, platform: str, link: str
-    ) -> int:
+    async def delete_by_link(self, platform: str, link: str) -> int:
         """Delete all bundles matching a platform and link mode."""
         from sqlalchemy import delete as sa_delete
 
@@ -2207,7 +2205,11 @@ class DbBuildJobStore:
                 count_q = count_q.where(BuildJobRow.builder_id == builder_id)
 
             total = (await session.execute(count_q)).scalar() or 0
-            q = q.order_by(BuildJobRow.submitted_at.desc(), BuildJobRow.id.desc()).limit(limit).offset(offset)
+            q = (
+                q.order_by(BuildJobRow.submitted_at.desc(), BuildJobRow.id.desc())
+                .limit(limit)
+                .offset(offset)
+            )
             rows = (await session.execute(q)).scalars().all()
             results = []
             for row in rows:
@@ -2417,9 +2419,7 @@ class DbBuildJobStore:
                     )
                 ).scalar() or 0
                 builder_row = (
-                    await session.execute(
-                        select(BuilderRow).where(BuilderRow.id == builder_id)
-                    )
+                    await session.execute(select(BuilderRow).where(BuilderRow.id == builder_id))
                 ).scalar()
                 if builder_row is not None:
                     builder_row.current_jobs = active
@@ -2455,9 +2455,7 @@ class DbBuildJobStore:
                     )
                 ).scalar() or 0
                 builder_row = (
-                    await session.execute(
-                        select(BuilderRow).where(BuilderRow.id == builder_id)
-                    )
+                    await session.execute(select(BuilderRow).where(BuilderRow.id == builder_id))
                 ).scalar()
                 if builder_row is not None:
                     builder_row.current_jobs = active

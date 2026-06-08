@@ -41,7 +41,6 @@ def recipe_group() -> None:
     """Manage server-side recipe bundles."""
 
 
-
 @recipe_group.command("push")
 @click.argument("name")
 @click.option(
@@ -71,7 +70,14 @@ def recipe_group() -> None:
     help="Ignore the auto-detected default recipes directory.",
 )
 @click.option("--org", "org_slug", default="", help="Organization scope.")
-def recipe_push(name: str, server: str, token: str, recipes_dirs: tuple[str, ...], no_default_recipes: bool, org_slug: str):
+def recipe_push(
+    name: str,
+    server: str,
+    token: str,
+    recipes_dirs: tuple[str, ...],
+    no_default_recipes: bool,
+    org_slug: str,
+):
     """Bundle and push a recipe to the server."""
     import io
     import tarfile
@@ -264,7 +270,14 @@ def recipe_delete(name: str, server: str, token: str, org_slug: str):
     help="Ignore the auto-detected default recipes directory.",
 )
 @click.option("--org", "org_slug", default="", help="Organization scope.")
-def recipe_publish(name: str, server: str, token: str, recipes_dirs: tuple[str, ...], no_default_recipes: bool, org_slug: str):
+def recipe_publish(
+    name: str,
+    server: str,
+    token: str,
+    recipes_dirs: tuple[str, ...],
+    no_default_recipes: bool,
+    org_slug: str,
+):
     """Publish a recipe to the server (push recipe + register placeholder package).
 
     This pushes the recipe bundle to the server and registers a
@@ -376,6 +389,7 @@ def recipe_publish(name: str, server: str, token: str, recipes_dirs: tuple[str, 
         click.echo(f"cvcpkg: warning: placeholder registration failed: {detail}", err=True)
     else:
         click.echo(f"Recipe '{name}' registered in catalog (version={full_version})")
+
 
 @recipe_group.command("pull")
 @click.argument("name")
@@ -513,7 +527,6 @@ def recipe_pull_all(server: str, token: str, org_slug: str, output_dir: str):
     click.echo(f"cvcpkg: {recipe_count} recipes extracted to {output}")
 
 
-
 @recipe_group.command("push-all")
 @click.option(
     "--server",
@@ -542,7 +555,9 @@ def recipe_pull_all(server: str, token: str, org_slug: str, output_dir: str):
     help="Ignore the auto-detected default recipes directory.",
 )
 @click.option("--org", "org_slug", default="", help="Organization scope.")
-def recipe_push_all(server: str, token: str, recipes_dirs: tuple[str, ...], no_default_recipes: bool, org_slug: str):
+def recipe_push_all(
+    server: str, token: str, recipes_dirs: tuple[str, ...], no_default_recipes: bool, org_slug: str
+):
     """Push all recipes from the default + overlay directories to the server.
 
     Iterates every recipe in the bundled recipes directory (and any
@@ -624,5 +639,3 @@ def recipe_push_all(server: str, token: str, recipes_dirs: tuple[str, ...], no_d
             failed += 1
 
     click.echo(f"cvcpkg: pushed {pushed} recipes ({failed} failed)")
-
-

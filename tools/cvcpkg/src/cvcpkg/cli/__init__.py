@@ -54,8 +54,6 @@ def cli(ctx: click.Context) -> None:
         click.echo(ctx.get_help())
 
 
-
-
 # ── Import submodules to register commands on the cli group ─────
 # Order does not matter — each submodule decorates functions with
 # @cli.command() or creates subgroups.

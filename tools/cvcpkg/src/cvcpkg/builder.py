@@ -936,7 +936,7 @@ def _rewrite_pc_prefixes(target_dir: Path) -> None:
         rewritten = False
         for i, line in enumerate(lines):
             if line.startswith("prefix="):
-                old_val = line[len("prefix="):].strip()
+                old_val = line[len("prefix=") :].strip()
                 if old_val != target_str:
                     lines[i] = f"prefix={target_str}\n"
                     rewritten = True

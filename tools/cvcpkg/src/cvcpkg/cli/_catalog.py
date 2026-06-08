@@ -139,7 +139,6 @@ def catalog_generate(
     click.echo(f"cvcpkg: output written to {output_dir}/")
 
 
-
 # ── gc ──────────────────────────────────────────────────────────
 
 
@@ -160,7 +159,6 @@ def gc() -> None:
         return
     removed = run_gc(cache_dir, set())
     click.echo(f"cvcpkg: pruned {removed} cached archive(s).")
-
 
 
 # ── clean ───────────────────────────────────────────────────────
@@ -264,7 +262,6 @@ def clean(
             f"\ncvcpkg: {verb} {removed} director{'y' if removed == 1 else 'ies'}"
             f" ({_human_size(total_bytes)})"
         )
-
 
 
 # ── download ────────────────────────────────────────────────────
@@ -434,5 +431,3 @@ def _fetch_mirror_urls(server: str, token: str | None) -> list[str]:
     except Exception as exc:
         log.debug("failed to fetch mirrors from %s: %s", base, exc)
         return []
-
-
