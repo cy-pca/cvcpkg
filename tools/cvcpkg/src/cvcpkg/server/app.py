@@ -991,14 +991,18 @@ def create_app(
 
         sent = 0
         for bid in list(_ws_builders):
-            ok = await _ws_send(bid, {
-                "type": "builder.update",
-                "version": __version__,
-            })
+            ok = await _ws_send(
+                bid,
+                {
+                    "type": "builder.update",
+                    "version": __version__,
+                },
+            )
             if ok:
                 sent += 1
-        logger.info("update-builders: notified %d/%d builders (by %s)",
-                     sent, len(_ws_builders), actor.name)
+        logger.info(
+            "update-builders: notified %d/%d builders (by %s)", sent, len(_ws_builders), actor.name
+        )
         return {"message": f"notified {sent} builder(s)", "total_connected": len(_ws_builders)}
 
     # ── Metrics (Prometheus text format) ────────────────────
@@ -2321,9 +2325,7 @@ def create_app(
                 return False
             return True
 
-        state.index["bundles"] = [
-            b for b in state.index.get("bundles", []) if not _matches(b)
-        ]
+        state.index["bundles"] = [b for b in state.index.get("bundles", []) if not _matches(b)]
         after = len(state.index["bundles"])
         if before == after:
             raise HTTPException(404, f"{name}=={version} not found")
@@ -2357,7 +2359,8 @@ def create_app(
         state = _get_state()
         before = len(state.index.get("bundles", []))
         state.index["bundles"] = [
-            b for b in state.index.get("bundles", [])
+            b
+            for b in state.index.get("bundles", [])
             if not (b.get("platform") == platform and b.get("link") == link)
         ]
         after = len(state.index["bundles"])
@@ -3780,7 +3783,9 @@ def create_app(
         """
         _require_db_builders()
         info = await _db_builders.heartbeat(
-            builder_id, status=body.status, current_jobs=body.current_jobs,
+            builder_id,
+            status=body.status,
+            current_jobs=body.current_jobs,
             reconcile=True,
         )
         if info is None:
@@ -4346,7 +4351,9 @@ def create_app(
                     status = data.get("status", "online")
                     current_jobs = data.get("current_jobs", 0)
                     await _db_builders.heartbeat(
-                        builder_id, status=status, current_jobs=current_jobs,
+                        builder_id,
+                        status=status,
+                        current_jobs=current_jobs,
                         reconcile=True,
                     )
                     await websocket.send_json({"type": "heartbeat_ack"})

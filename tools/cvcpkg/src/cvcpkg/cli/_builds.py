@@ -362,9 +362,7 @@ def builds_follow_dag(dag_id: str, server: str, token: str):
         if bid not in builder_names:
             try:
                 with httpx.Client(timeout=10) as client:
-                    resp = client.get(
-                        f"{base}/v1/builders/{bid}", headers=headers
-                    )
+                    resp = client.get(f"{base}/v1/builders/{bid}", headers=headers)
                 if resp.status_code < 400:
                     builder_names[bid] = resp.json().get("name", f"#{bid}")
                 else:
@@ -460,7 +458,6 @@ def builds_follow_dag(dag_id: str, server: str, token: str):
 
     if failed:
         raise SystemExit(1)
-
 
 
 # ── Build-wait helpers ──────────────────────────────────────────────
@@ -800,9 +797,7 @@ def builds_submit_dag(
                         continue
 
                     # Build name→index mapping for depends_on resolution
-                    name_to_idx: dict[str, int] = {
-                        name: idx for idx, name in enumerate(eligible)
-                    }
+                    name_to_idx: dict[str, int] = {name: idx for idx, name in enumerate(eligible)}
 
                     jobs = []
                     for name in eligible:
@@ -1068,5 +1063,3 @@ def builds_monitor(server: str, token: str, interval: float, dag_id: str | None)
                 time.sleep(interval)
     except KeyboardInterrupt:
         click.echo("\nMonitor stopped.")
-
-

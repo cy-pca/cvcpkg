@@ -369,6 +369,7 @@ def builder_run(
         if extract_dir.exists():
             # rmtree left remnants — force remove
             import subprocess
+
             subprocess.run(["rm", "-rf", str(extract_dir)], check=False)
         extract_dir.mkdir(parents=True, exist_ok=True)
         with tarfile.open(bundle_path, "r:gz") as tar:
@@ -402,9 +403,15 @@ def builder_run(
             except Exception:
                 pass  # best-effort log streaming
 
-    def _install_deps(recipe_dir: Path, prefix: Path, job_platform: str,
-                      job_arch: str, job_config: str, job_link: str,
-                      log_cb: Callable[[str], None]) -> None:
+    def _install_deps(
+        recipe_dir: Path,
+        prefix: Path,
+        job_platform: str,
+        job_arch: str,
+        job_config: str,
+        job_link: str,
+        log_cb: Callable[[str], None],
+    ) -> None:
         """Download and install runtime dependencies into *prefix*.
 
         Queries the server catalog for each runtime dep, downloads the
@@ -450,22 +457,25 @@ def builder_run(
                 # Find best match for platform/arch/config/link
                 match = None
                 for p in pkgs:
-                    if (p.get("platform") == job_platform
-                            and p.get("arch") == job_arch
-                            and p.get("build_type", "release") == job_config
-                            and p.get("link", "shared") == job_link):
+                    if (
+                        p.get("platform") == job_platform
+                        and p.get("arch") == job_arch
+                        and p.get("build_type", "release") == job_config
+                        and p.get("link", "shared") == job_link
+                    ):
                         match = p
                         break
                 # Relax: try just platform/arch
                 if match is None:
                     for p in pkgs:
-                        if (p.get("platform") == job_platform
-                                and p.get("arch") == job_arch):
+                        if p.get("platform") == job_platform and p.get("arch") == job_arch:
                             match = p
                             break
                 if match is None:
-                    log_cb(f"  dep {dep_name}: no matching variant for "
-                           f"{job_platform}/{job_arch} (skipping)\n")
+                    log_cb(
+                        f"  dep {dep_name}: no matching variant for "
+                        f"{job_platform}/{job_arch} (skipping)\n"
+                    )
                     continue
 
                 archive_url = match.get("archive_url", "")
@@ -576,12 +586,13 @@ def builder_run(
                 pkgs = resp.json().get("packages", [])
                 match = None
                 for p in pkgs:
-                    if (p.get("platform") == host_platform
-                            and p.get("arch") == host_arch):
+                    if p.get("platform") == host_platform and p.get("arch") == host_arch:
                         match = p
                         break
                 if match is None:
-                    log_cb(f"  toolchain {tc_name}: no {host_platform}/{host_arch} package on server\n")
+                    log_cb(
+                        f"  toolchain {tc_name}: no {host_platform}/{host_arch} package on server\n"
+                    )
                     continue
 
                 archive_url = match.get("archive_url", "")
@@ -614,7 +625,9 @@ def builder_run(
             for var, tpl in ct_env.items():
                 merged_env[var] = tpl.replace("${PREFIX}", str(prefix))
 
-            log_cb(f"  Toolchain {tc_name} installed ({', '.join(f'{k}={v}' for k, v in ct_env.items())})\n")
+            log_cb(
+                f"  Toolchain {tc_name} installed ({', '.join(f'{k}={v}' for k, v in ct_env.items())})\n"
+            )
 
         return merged_env
 
@@ -678,11 +691,13 @@ def builder_run(
             )
 
             # 3a. Install runtime dependencies into a shared prefix
-            dep_prefix = Path(tempfile.mkdtemp(prefix=f"cvcpkg-prefix-{recipe_name}-",
-                                                dir=work_root))
+            dep_prefix = Path(
+                tempfile.mkdtemp(prefix=f"cvcpkg-prefix-{recipe_name}-", dir=work_root)
+            )
             log_cb = lambda text, _jid=job_id: _stream_log(_jid, text)  # noqa: E731
-            _install_deps(recipe_dir, dep_prefix, job_platform, job_arch,
-                          job_config, job_link, log_cb)
+            _install_deps(
+                recipe_dir, dep_prefix, job_platform, job_arch, job_config, job_link, log_cb
+            )
 
             # 3a-2. Install cross-toolchains (e.g. emsdk for wasm)
             cross_env: dict[str, str] = {}
@@ -820,8 +835,15 @@ def builder_run(
             )
             # Pip install
             subprocess.run(
-                [sys.executable, "-m", "pip", "install", "--quiet",
-                 "--break-system-packages", str(cvcpkg_dir)],
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "--quiet",
+                    "--break-system-packages",
+                    str(cvcpkg_dir),
+                ],
                 check=False,
                 capture_output=True,
                 timeout=120,
@@ -923,9 +945,7 @@ def builder_run(
                         from cvcpkg import __version__
 
                         if server_ver and server_ver != __version__:
-                            click.echo(
-                                f"  Server requests update: {__version__} → {server_ver}"
-                            )
+                            click.echo(f"  Server requests update: {__version__} → {server_ver}")
                             _self_update()
 
                     elif msg_type == "job.timeout":
@@ -1048,5 +1068,3 @@ def builder_unregister(builder_id: int, server: str, token: str):
     """Unregister a builder by ID (admin-only)."""
     _api_request("delete", f"{server.rstrip('/')}/v1/builders/{builder_id}", token)
     click.echo(f"Builder #{builder_id} unregistered.")
-
-

@@ -144,8 +144,6 @@ def _validate_org_slug(ctx: click.Context, param: click.Parameter, value: str) -
     return value
 
 
-
-
 def _human_size(n: int) -> str:
     """Format bytes as a human-readable string."""
     for unit in ("B", "KB", "MB", "GB", "TB"):
