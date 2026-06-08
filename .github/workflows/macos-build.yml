@@ -1,8 +1,8 @@
 # Build and publish all macOS recipes to cvcpkg.org.
 #
 # Since macOS has no persistent builder service (GitHub-hosted runners
-# are ephemeral), this workflow builds the full recipe DAG locally and
-# publishes each package directly to the server.
+# are ephemeral), this workflow builds the full recipe DAG locally in
+# parallel shards and publishes each package directly to the server.
 #
 # Triggered manually via workflow_dispatch, or by the populate-server
 # workflow when 'macos' is in the platforms list.
@@ -36,11 +36,17 @@ on:
         required: true
         default: "https://cvcpkg.org"
         type: string
-      recipes:
-        description: "Space-separated recipe names (empty = all macOS recipes)"
-        required: false
-        default: ""
-        type: string
+      shards:
+        description: "Number of parallel shards"
+        required: true
+        default: "4"
+        type: choice
+        options:
+          - "2"
+          - "3"
+          - "4"
+          - "5"
+          - "6"
   workflow_call:
     inputs:
       config:
@@ -52,26 +58,43 @@ on:
       server:
         required: true
         type: string
-      recipes:
+      shards:
         required: false
         type: string
-        default: ""
-
-concurrency:
-  group: macos-build-${{ inputs.config }}-${{ inputs.link }}
-  cancel-in-progress: false
+        default: "4"
 
 permissions:
   contents: read
 
 jobs:
-  build-and-publish:
-    name: Build macOS (${{ inputs.config }}/${{ inputs.link }})
+  # Generate the shard matrix dynamically based on inputs.shards
+  setup:
+    name: Setup matrix
+    runs-on: ubuntu-latest
+    outputs:
+      shards: ${{ steps.gen.outputs.shards }}
+    steps:
+      - id: gen
+        run: |
+          TOTAL="${{ inputs.shards || '4' }}"
+          # Generate JSON array [0, 1, ..., TOTAL-1]
+          SHARDS=$(python3 -c "import json; print(json.dumps(list(range(int('$TOTAL')))))")
+          echo "shards=$SHARDS" >> "$GITHUB_OUTPUT"
+
+  build-shard:
+    name: macOS shard ${{ matrix.shard }}/${{ inputs.shards || '4' }} (${{ inputs.config }}/${{ inputs.link }})
+    needs: setup
     runs-on: macos-latest
-    timeout-minutes: 360
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.setup.outputs.shards) }}
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: prod
 
       - uses: actions/setup-python@v5
         with:
@@ -90,23 +113,13 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           echo "$(python3 -m site --user-base)/bin" >> "$GITHUB_PATH"
 
-      - name: Determine recipes to build
-        id: recipes
-        run: |
-          if [ -n "${{ inputs.recipes }}" ]; then
-            echo "list=${{ inputs.recipes }}" >> "$GITHUB_OUTPUT"
-            echo "filter=--recipes ${{ inputs.recipes }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "list=" >> "$GITHUB_OUTPUT"
-            echo "filter=" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Build all macOS recipes (pack-all)
+      - name: Build shard ${{ matrix.shard }} (pack-all)
         env:
           CVCPKG_SERVER_URL: ${{ inputs.server }}
           CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISHER_TOKEN }}
         run: |
           set -euo pipefail
+          SHARDS="${{ inputs.shards || '4' }}"
           mkdir -p "${{ github.workspace }}/prefix"
           mkdir -p "${{ github.workspace }}/dist"
 
@@ -118,16 +131,19 @@ jobs:
             --prefix "${{ github.workspace }}/prefix" \
             --output-dir "${{ github.workspace }}/dist" \
             --recipes-dir recipes \
+            --shard "${{ matrix.shard }}/${SHARDS}" \
             --server-cache "$CVCPKG_SERVER_URL" \
             --server-cache-token "$CVCPKG_TOKEN" \
             --server-cache-push
 
       - name: List built packages
+        if: always()
         run: |
-          echo "Built packages:"
-          ls -lh "${{ github.workspace }}/dist/" || echo "(no packages)"
+          echo "Built packages (shard ${{ matrix.shard }}):"
+          ls -lh "${{ github.workspace }}/dist/" 2>/dev/null || echo "(no packages)"
           echo ""
-          echo "Count: $(ls "${{ github.workspace }}/dist/"*.tar.zst 2>/dev/null | wc -l) archives"
+          COUNT=$(ls "${{ github.workspace }}/dist/"*.tar.zst 2>/dev/null | wc -l || echo 0)
+          echo "Count: $COUNT archives"
 
       - name: Publish to cvcpkg.org
         env:
@@ -157,7 +173,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: macos-packages-${{ inputs.config }}-${{ inputs.link }}
+          name: macos-packages-shard${{ matrix.shard }}-${{ inputs.config }}-${{ inputs.link }}
           path: dist/
           if-no-files-found: warn
           retention-days: 7
