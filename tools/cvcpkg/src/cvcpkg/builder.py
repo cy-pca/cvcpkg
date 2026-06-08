@@ -917,6 +917,34 @@ def _mkworkdir(prefix: str, root: Path | None = None) -> Path:
     return Path(tempfile.mkdtemp(prefix=prefix))
 
 
+def _rewrite_pc_prefixes(target_dir: Path) -> None:
+    """Rewrite ``prefix=`` lines in pkg-config ``.pc`` files under *target_dir*.
+
+    When recipes are built into isolated per-component directories and
+    then merged into a shared prefix, the ``.pc`` files retain the old
+    ``prefix=`` path pointing at the (now deleted) temp directory.
+    This helper rewrites the ``prefix=`` line to point at *target_dir*
+    so that subsequent recipes find valid paths via ``pkg-config``.
+    """
+    target_str = str(target_dir)
+    for pc_file in target_dir.rglob("*.pc"):
+        try:
+            text = pc_file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        lines = text.splitlines(keepends=True)
+        rewritten = False
+        for i, line in enumerate(lines):
+            if line.startswith("prefix="):
+                old_val = line[len("prefix="):].strip()
+                if old_val != target_str:
+                    lines[i] = f"prefix={target_str}\n"
+                    rewritten = True
+                break  # only the first prefix= line matters
+        if rewritten:
+            pc_file.write_text("".join(lines), encoding="utf-8")
+
+
 def build_recipe(
     recipe_dir: Path,
     *,
@@ -1709,6 +1737,7 @@ def build_all(
                 label = "server cache" if ht_server_hit else "cache"
                 print(f"  <- {label} hit ({ht_chain_hash[:12]}...)")
                 cache.restore(ht_cached, prefix)
+                _rewrite_pc_prefixes(prefix)
                 # Populate local cache from server download.
                 if ht_server_hit and cache is not None:
                     srv_restore = Path(tempfile.mkdtemp(prefix="cvcpkg-srv-restore-"))
@@ -1751,6 +1780,7 @@ def build_all(
                     run_build(ht_ctx)
                     if ht_install.is_dir():
                         shutil.copytree(ht_install, prefix, dirs_exist_ok=True)
+                        _rewrite_pc_prefixes(prefix)
                     # Store in local cache.
                     if cache is not None and ht_chain_hash and ht_install.is_dir():
                         cache.store(
@@ -1942,8 +1972,10 @@ def build_all(
                     )
                     if install_dir.is_dir():
                         shutil.copytree(install_dir, prefix, dirs_exist_ok=True)
+                        _rewrite_pc_prefixes(prefix)
                 else:
                     cache.restore(cached_archive, prefix)
+                    _rewrite_pc_prefixes(prefix)
                     ctx = BuildContext(
                         recipe=recipe,
                         platform=platform,
@@ -1985,6 +2017,7 @@ def build_all(
                 # subsequent recipes can find it via CVC_DEPS_PREFIX.
                 if install_dir.is_dir():
                     shutil.copytree(install_dir, prefix, dirs_exist_ok=True)
+                    _rewrite_pc_prefixes(prefix)
                 # Store in build cache.
                 if cache is not None and recipe_chain_hash and install_dir.is_dir():
                     cache.store(
