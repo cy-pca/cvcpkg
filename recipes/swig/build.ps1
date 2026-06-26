@@ -11,12 +11,24 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $swigVer = '4.4.1'
 
 # Download the prebuilt Windows distribution.
-$swigUrl = "https://sourceforge.net/projects/swig/files/swigwin/swigwin-${swigVer}/swigwin-${swigVer}.zip/download"
+# Use curl.exe (built into Windows 10+) instead of Invoke-WebRequest because
+# SourceForge returns an HTML mirror-picker page (not the actual zip) unless
+# the client follows multiple redirects to a CDN mirror.  curl with -L handles
+# this; Invoke-WebRequest with -UseBasicParsing does not (it stops at the
+# first 200 response which is the HTML page).
+$swigUrl = "https://downloads.sourceforge.net/project/swig/swigwin/swigwin-${swigVer}/swigwin-${swigVer}.zip"
 $swigZip = Join-Path $env:CVC_BUILD_DIR "swigwin-${swigVer}.zip"
 $swigDir = Join-Path $env:CVC_BUILD_DIR "swigwin-${swigVer}"
 
 Write-Host "Downloading swigwin-${swigVer}..."
-Invoke-WebRequest -Uri $swigUrl -OutFile $swigZip -UseBasicParsing
+& curl.exe -sSL -o $swigZip $swigUrl
+if ($LASTEXITCODE -ne 0) {
+    throw "curl failed with exit code $LASTEXITCODE downloading $swigUrl"
+}
+$zipSize = (Get-Item $swigZip).Length
+if ($zipSize -lt 1MB) {
+    throw "swigwin zip is suspiciously small ($zipSize bytes) — likely an HTML mirror page rather than the archive"
+}
 Expand-Archive -Path $swigZip -DestinationPath $env:CVC_BUILD_DIR -Force
 
 # Stage into install prefix.
