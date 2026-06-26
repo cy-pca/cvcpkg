@@ -1,11 +1,12 @@
-From: cvcpkg <cvcpkg@cyberpcangel.com>
-Subject: Disable -Werror for GCC 13+ compatibility
+Disable -Werror for GCC 13+ compatibility
 
 WasmEdge 0.17.0 hardcodes -Werror in cmake/Helper.cmake which causes
 build failures with GCC 13 due to new warnings (-Warray-bounds,
 -Wmaybe-uninitialized) in legitimate code paths. Replace -Werror with
--Wno-error to allow the build to complete.
+-Wno-error to allow the build to complete. Also a no-op on MSVC, which
+silently ignores GCC-style -Werror flags.
 
+diff --git a/cmake/Helper.cmake b/cmake/Helper.cmake
 --- a/cmake/Helper.cmake
 +++ b/cmake/Helper.cmake
 @@ -42,7 +42,7 @@
@@ -17,3 +18,4 @@ build failures with GCC 13 due to new warnings (-Warray-bounds,
        -Wno-error=pedantic
      )
    endif()
+
