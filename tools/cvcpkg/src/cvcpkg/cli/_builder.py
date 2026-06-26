@@ -495,21 +495,38 @@ def builder_run(
                     log_cb(f"  dep {dep_name}: download failed ({dl_resp.status_code})\n")
                     continue
 
-                # Extract into prefix.  Archive may be either tar.gz
-                # (POSIX builders) or .zip (Windows builder); pick based
-                # on the URL suffix.
+                # Extract into prefix.  The catalog's archive_url suffix
+                # (typically .tar.zst) is purely cosmetic — the server
+                # serves whatever the builder produced (Linux/BSD/macOS:
+                # gzip; Windows: zip).  Sniff the magic bytes instead.
                 archive_bytes = dl_resp.content
-                is_zip = archive_url.lower().endswith(".zip")
-                suffix = ".zip" if is_zip else ".tar.gz"
+                head = archive_bytes[:4]
+                if head[:2] == b"PK":
+                    suffix, kind = ".zip", "zip"
+                elif head[:2] == b"\x1f\x8b":
+                    suffix, kind = ".tar.gz", "gz"
+                elif head == b"\x28\xb5\x2f\xfd":
+                    suffix, kind = ".tar.zst", "zst"
+                else:
+                    suffix, kind = ".bin", "unknown"
                 tmp_archive = prefix / f"_dep_{dep_name}{suffix}"
                 tmp_archive.write_bytes(archive_bytes)
                 try:
-                    if is_zip:
+                    if kind == "zip":
                         with zipfile.ZipFile(tmp_archive) as zf:
                             zf.extractall(path=prefix)  # noqa: S202
-                    else:
+                    elif kind == "gz":
                         with tarfile.open(tmp_archive, "r:gz") as tf:
                             tf.extractall(path=prefix)  # noqa: S202
+                    elif kind == "zst":
+                        import zstandard  # type: ignore[import-untyped]
+                        with open(tmp_archive, "rb") as f_in:
+                            dctx = zstandard.ZstdDecompressor()
+                            with dctx.stream_reader(f_in) as reader:
+                                with tarfile.open(fileobj=reader, mode="r|") as tf:
+                                    tf.extractall(path=prefix)  # noqa: S202
+                    else:
+                        raise ValueError(f"unknown archive format (magic={head!r})")
                 except Exception as exc:
                     log_cb(f"  dep {dep_name}: extract failed ({exc})\n")
                 finally:
@@ -619,17 +636,34 @@ def builder_run(
                     log_cb(f"  toolchain {tc_name}: download failed ({dl_resp.status_code})\n")
                     continue
 
-                is_zip = archive_url.lower().endswith(".zip")
-                suffix = ".zip" if is_zip else ".tar.gz"
+                tc_bytes = dl_resp.content
+                head = tc_bytes[:4]
+                if head[:2] == b"PK":
+                    suffix, kind = ".zip", "zip"
+                elif head[:2] == b"\x1f\x8b":
+                    suffix, kind = ".tar.gz", "gz"
+                elif head == b"\x28\xb5\x2f\xfd":
+                    suffix, kind = ".tar.zst", "zst"
+                else:
+                    suffix, kind = ".bin", "unknown"
                 tmp_archive = prefix / f"_toolchain_{tc_name}{suffix}"
-                tmp_archive.write_bytes(dl_resp.content)
+                tmp_archive.write_bytes(tc_bytes)
                 try:
-                    if is_zip:
+                    if kind == "zip":
                         with zipfile.ZipFile(tmp_archive) as zf:
                             zf.extractall(path=prefix)  # noqa: S202
-                    else:
+                    elif kind == "gz":
                         with tarfile.open(tmp_archive, "r:gz") as tf:
                             tf.extractall(path=prefix)  # noqa: S202
+                    elif kind == "zst":
+                        import zstandard  # type: ignore[import-untyped]
+                        with open(tmp_archive, "rb") as f_in:
+                            dctx = zstandard.ZstdDecompressor()
+                            with dctx.stream_reader(f_in) as reader:
+                                with tarfile.open(fileobj=reader, mode="r|") as tf:
+                                    tf.extractall(path=prefix)  # noqa: S202
+                    else:
+                        raise ValueError(f"unknown archive format (magic={head!r})")
                 except Exception as exc:
                     log_cb(f"  toolchain {tc_name}: extract failed ({exc})\n")
                     continue
