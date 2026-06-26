@@ -271,17 +271,18 @@ of bare hosts and incus VMs hosted across `star-00` and `star-01`.
 
 | Registered | Host | Backing VM/host | cvcpkg | Status |
 |---|---|---|---|---|
-| `star-00` (linux, 4/4) | star-00 | bare host, user `tfx` | v2.0.0 (Jun 8) | online — running gapfill |
-| `star-01` (linux, 2) | star-01 | bare host | (assumed current) | online |
-| `lat` (linux, 4) | lat | bare host | (assumed current) | online |
-| `rebota` (linux, 4) | rebota | bare host | (assumed current) | online |
-| `freebsd-build` (2) | star-01 | incus VM (running) | n/a — VM agent not registered with cvcpkg | offline in cvcpkg |
+| `star-00` (linux, 4) | star-00 | bare host, user `tfx` | v2.0.0 (Jun 8) | online |
+| `star-01` (linux, 2) | star-01 | bare host | current | online |
+| `lat` (linux, 4) | lat | bare host | current | online |
+| `rebota` (linux, 4) | rebota | bare host | current | online |
+| `freebsd-build` (2) | star-01 | incus VM | current | online (since 2026-06-26 after star-01 FORWARD fix) |
 | `freebsd-build-2` (2) | star-00 | incus VM | current | online |
-| `netbsd-build` (2) | star-01 | incus VM | n/a — VM agent missing | offline in cvcpkg |
+| `netbsd-build` (2) | star-01 | incus VM | current | online (after crontab path fix) |
 | `netbsd-build-2` (2) | star-00 | incus VM | current | online |
 | `openbsd-build` (2) | star-00 | incus VM | current | online |
-| `openbsd-build-2` (2) | star-01 | incus VM | n/a — VM agent missing | offline in cvcpkg |
+| `openbsd-build-2` (2) | star-01 | incus VM | current | online (after star-01 FORWARD fix) |
 | `sandipaws` (windows, 2) | (off-net) | physical | unknown | **offline** |
+| `phm-win11` (windows, 1) | prettyhatemachine | incus VM (Windows 11 Pro) | v2.0.0 | online (since 2026-06-26) |
 
 The ENOSPC issue from job `#1503` was on the *bare* star-00 host's
 `/tmp` (now showing 707G free), not on the cvcpkg-builder-{01,02}
@@ -316,13 +317,40 @@ bring `sandipaws` (and/or the local `win11` incus VM at
 
 **Open operator tasks** (still require host access):
 
-- [ ] **Bring `sandipaws` back online** (or, as a substitute,
-      register the local `win11` incus VM as a builder). Per commit
-      `db49e24` sandipaws is managed via SSH from `star-00`. Once
-      online, the workflow above can be retired.
-- [ ] **Restart cvcpkg daemons on `freebsd-build`, `netbsd-build`,
-      `openbsd-build-2`** — their VMs are running on incus but
-      the daemon hasn't checked in. Doubles BSD throughput.
+- [ ] **Bring `sandipaws` back online**. Now that `phm-win11`
+      (the local win11 incus VM at `10.65.122.140`) is registered
+      as builder #12, sandipaws is no longer on the critical
+      path for Windows throughput — but a second windows builder
+      restores capacity and survives phm-win11 host reboots.
+- [x] **Restart cvcpkg daemons on `freebsd-build`, `netbsd-build`,
+      `openbsd-build-2`** — done 2026-06-26. See progress log.
+
+### 2026-06-26 (cont.) — builder fleet restored, phm-win11 registered
+
+- All four linux builders online (star-00, star-01, lat, rebota).
+- All six BSD builders online (`netbsd-build`, `netbsd-build-2`,
+  `freebsd-build`, `freebsd-build-2`, `openbsd-build`,
+  `openbsd-build-2`). Two issues found and fixed along the way:
+  - `star-01` had `iptables FORWARD policy=drop` (Docker default),
+    blocking incusbr0 → br-uplink NAT for its BSD VMs. Fixed with
+    `sudo iptables -P FORWARD ACCEPT` and persisted via
+    `/etc/systemd/system/incus-forward-accept.service` (oneshot,
+    `RemainAfterExit=yes`).
+  - `netbsd-build` crontab still referenced `/usr/local/bin/cvcpkg`
+    but the binary now lives at `/usr/pkg/bin/cvcpkg`. Patched in
+    place with `crontab -l | sed -e '...' | crontab -`.
+- **`phm-win11` registered as builder #12** (windows/x86_64, online,
+  max-jobs=1, work-dir `C:\Users\trans\cvcpkg-builder`). SSH via
+  `trans@10.65.122.140` (passwordless ed25519, per
+  [vm-provisioning/windows/WINDOWS-SETUP.md](../../../vm-provisioning/windows/WINDOWS-SETUP.md#L61)).
+  The daemon runs via Windows scheduled task `cvcpkg-builder`
+  (`/SC ONSTART /RU SYSTEM /RL HIGHEST`) which launches
+  `C:\Users\trans\cvcpkg-builder\run-builder.bat`. Windows Defender
+  exclusions added for the work-dir, `%TEMP%`, `pwsh.exe`,
+  `bash.exe`, and `cvcpkg.exe`. WebSocket transport falls back to
+  HTTP long-poll (server returns 404 for the WS upgrade route).
+- Builder fleet token (from `creds.txt`):
+  `cvctok_z2-N1_Km6dzn-1TFNtQ-QDi4pEp7r1j2rHgBY3R5W2A`.
 
 After the linux/freebsd gapfill DAGs finish and the Windows
 workflow completes, re-run the gap script at the bottom of this
