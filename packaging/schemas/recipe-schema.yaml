@@ -185,7 +185,7 @@ $defs:
         type: array
         items:
           type: string
-          enum: [linux, macos, windows, wasm, freebsd, openbsd, netbsd]
+          enum: [linux, macos, windows, wasm, wasi, freebsd, openbsd, netbsd]
         minItems: 1
         description: "Platforms this dependency applies to (omit for all)"
 
@@ -210,7 +210,7 @@ $defs:
     properties:
       platform:
         type: string
-        enum: [linux, macos, windows, wasm, freebsd, openbsd, netbsd]
+        enum: [linux, macos, windows, wasm, wasi, freebsd, openbsd, netbsd]
       host_platform:
         type: string
         enum: [linux, macos, windows, freebsd, openbsd, netbsd]
@@ -268,7 +268,7 @@ $defs:
         type: array
         items:
           type: string
-          enum: [linux, macos, windows, wasm, freebsd, openbsd, netbsd]
+          enum: [linux, macos, windows, wasm, wasi, freebsd, openbsd, netbsd]
         minItems: 1
         description: "Target platforms this toolchain can cross-compile for"
       env:

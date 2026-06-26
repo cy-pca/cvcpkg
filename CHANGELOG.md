@@ -18,6 +18,228 @@ platform's package manager and therefore drift between releases.
 The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+Starting with v1.3.0 the focus shifts from monolithic per-platform
+bundles to **per-component archives served by `cvcpkg`** (the
+`cvcpkg.org` registry).  The "Full component manifest" tables in the
+older v1.0.x / v1.1.0 entries describe the legacy monolithic-zip
+shape; from v1.3.0 onward consumers should consume individual
+component bundles through the `cvcpkg` CLI, with upstream pins
+documented per-recipe in `recipes/<name>/recipe.yaml`.
+
+---
+
+## v2.0.0 (2026-06-06)
+
+Major release: production daemon with database backend, the
+`cvcpkg.org` registry, distributed build infrastructure, and wasi
+support.  The `cvcpkg` 2.0 line is the first to drive the public
+catalog at <https://cvcpkg.org> from a SQLModel/Alembic-managed
+database (Phase 1 of the [cvcpkg 2.0 roadmap](docs/roadmap/cvcpkg-2.0.md))
+instead of YAML state files.
+
+### Highlights
+
+- **Distributed builder fleet.**  Builders run as long-lived agents
+  (`cvcpkg builder run`) that pull jobs from the server, register
+  per-platform capabilities, and publish artifacts back via the
+  authenticated API.  Includes builder pause/resume/cancel, log
+  streaming (`builds follow-dag`), `--wait` flag on submit, and a
+  public read endpoint for builder info.
+- **DAG-based build submission.**  `builds submit-dag` schedules a
+  full dependency graph across builders, with correct platform/arch
+  pairing and automatic cross-platform fan-out.
+- **wasi platform support.**  New `wasi-sdk` recipe (cross-toolchain)
+  and wasi/wasm32 builds of zlib, zstd, libjpeg-turbo, yaml, xz, lerc.
+  `--cross-platform wasi` is recognized by the builder.
+- **CLI restructure.**  The 6,700-line `cli.py` is split into a
+  `cli/` package (`_build`, `_publish`, `_install`, `_catalog`,
+  `_server`, `_builder`, `_builds`, `_signing`, `_recipe`,
+  `_webhook`, `_cache`, `_helpers`).  Default `recipes-dir` resolved
+  automatically with a `--no-default-recipes` opt-out.
+- **Recipe schema gains `runtime` deps and `cross_toolchain`.**
+  `emsdk` advertises wasm tooling; the builder auto-installs host
+  tools for cross-compilation and splits build vs. runtime deps.
+- **Server URL fix.**  `_install_deps` / `_install_cross_toolchains`
+  now prepend the configured server base URL to relative
+  `/v1/download/...` paths (fixed 27 build failures from
+  `UnsupportedProtocol`).
+- **Dev/prod deploy workflows.**  Builder restart + auto-update in
+  `deploy-dev` and `deploy-prod`; `sandipaws` Windows builder
+  registered and updated via SSH from `star-00`.
+- **Recipe push permissions.**  `publisher` role can now push
+  recipes; populate workflow timeout raised to 2h.
+
+No new upstream component pins are introduced; v2.0.0 is purely an
+infrastructure release.  The catalog at `https://cvcpkg.org/v1/catalog`
+serves the recipes pinned at recipe commit `6631d06`.
+
+---
+
+## v1.6.1 (2026-05-31)
+
+BSD-focused bug-fix release.
+
+- **NetBSD port complete.**  Port 7 failing recipes to NetBSD; add
+  `lz4`, `readline`, `gettext` recipes.  Use `pkg_add`, fix static
+  OpenSSL linking, ship a `python3` shim.
+- **NetBSD CI hardening.**  Serialize `pkgin` with `flock` (lockf
+  is FreeBSD-only) to prevent concurrent DB corruption, retry
+  `pkgin update` if the DB is empty after the first attempt.
+- **BSD post-build fixes.**  Export `BASE_DIR` to `GITHUB_ENV` so
+  it's visible across steps under `set -u`; use `-G 'Unix Makefiles'`
+  instead of `-G Ninja` for the marker cmake step because
+  `/usr/pkg/bin/ninja` on NetBSD is the IRC client.
+
+---
+
+## v1.6.0 (2026-05-29)
+
+Windows self-hosted runners, recipe schema upgrades, and the
+`platform: any` recipe class.
+
+- **Self-hosted Windows runners for static builds.**  Bypass GitHub
+  runner timeouts on heavy Windows static jobs.  Bootstrap `vcpkg`
+  if missing; add Git bash, PowerShell 7, Chocolatey bin, and the
+  full Machine PATH to `GITHUB_PATH` so bash steps see choco-installed
+  Python/NASM/etc.
+- **`platform: any`.**  Recipes that produce platform-independent
+  artifacts (header-only, scripts) declare `platform: any` and are
+  built once and reused everywhere (#72).
+- **Recipe schema: runtime deps + cross_toolchain.**  Build vs.
+  runtime deps split; auto-build host tools for cross-compilation;
+  cross-toolchain discovery so a single submit can pull in `wasi-sdk`,
+  `emsdk`, etc.
+- **Build log streaming.**  `cvcpkg builds follow-dag` tails live
+  build logs over the server API.
+- **wasm32 cross-compilation hardening.**  Multiple OpenSSL wasm
+  fixes (AR line splitting under cmd.exe's 8191-char limit, keep
+  `sh.exe` on PATH, only post-process `Makefile` not
+  `configdata.pm`).
+- **Server cache backend.**  Modernized release pipeline, server-side
+  build cache, Qt6 built from source on all platforms.
+- **Daemon mode + graceful shutdown + org ACL.**  Server runs as a
+  proper daemon; identifier validation tightened.
+- **riscv64 + other architecture support.**  Architecture is now a
+  free-form string throughout cvcpkg (`riscv64`, `ppc64le`, `armv7l`,
+  …) so new targets land without schema changes.
+- **Landing page redesign.**  Tags as filter dropdown + grid view
+  (#78); mobile burger menu fixes (#73); configurable branding;
+  guide page; package detail pages show install `--prefix`; package
+  count is distinct names.
+- **Publish workflow.**  Merge `push` into `publish`; `publish`
+  accepts recipe names instead of archive paths; `pack-all`
+  cleanup; `clean` command for orphaned work dirs.
+- **Infra.**  Backend container memory raised from 1G to 8G.
+
+---
+
+## v1.5.0 (2026-05-26)
+
+WASM as a first-class platform.
+
+- **WASM build matrix.**  26 recipes gain WASM build-matrix entries
+  with host-platform sharding: Linux, macOS, and Windows hosts can
+  all produce wasm32 artifacts.  `qt6-wasm` is unified into the
+  main `qt6` recipe.
+- **Self-hosted Linux/wasm runners.**  Both GitHub-hosted and
+  self-hosted runners participate in Linux/wasm builds for capacity.
+- **New host tooling recipes.**  `cmake`, `ninja`, `meson`, `flex`
+  are now first-class recipes so cross-compilation hosts can pin
+  reproducible toolchains.
+- **Yanked-package handling.**  Yanked packages are hidden from the
+  catalog API and are no longer uploaded to GitHub Releases.
+- **Multi-backend DB tests.**  MySQL multi-backend tests run with
+  `spawn` instead of `fork` to avoid the aiomysql greenlet bug
+  (xfailed where the bug is unresolvable upstream); shared HMAC key
+  volume between backend and test containers.
+- **Docker integration tests.**  Stop shelling out to `docker exec`;
+  force-rebuild of the test image in CI.
+
+---
+
+## v1.4.1 (2026-05-25)
+
+Incremental-publish + upload-resilience point release.
+
+- **Incremental per-platform publish.**  Each `package-*` matrix job
+  publishes its bundles immediately after packaging instead of
+  waiting for the whole matrix.  If one platform fails, the others
+  still ship.  A final `publish-to-server` job sweeps up any
+  stragglers.
+- **Chunked / resumable uploads + stream-to-disk** at `/v1/publish`
+  for large artifacts.
+- **Production tuning.**  Workers reduced to 1 in prod to fix
+  chunked-upload session loss; rate limit raised to 300 RPM; max
+  upload raised to 1 GiB.
+- **GitHub Releases.**  Strip top-level directory from zip archives
+  during packaging; tolerate GitHub rate-limit errors in the release
+  job; continue publishing remaining archives on individual failures.
+- **CLI.**  Wire config/fallback into `install`, add `--source` flag;
+  read `__version__` from package metadata instead of a hardcoded
+  string.
+
+---
+
+## v1.4.0 (2026-05-25)
+
+Production-deployment release.  The cvcpkg server moves from a
+single-node lab process to a Docker + PostgreSQL deployment with a
+public landing page at `pkg.tx.wtf` (later `cvcpkg.org`).
+
+- **Docker + PostgreSQL production stack.**  CI-driven `deploy-prod`
+  workflow on `prod` branch push; inline docker deploy; `.env.production`
+  fetched from the host into the checkout workspace.
+- **Production hardening.**  CORS, rate limiting, upload size limits,
+  graceful shutdown, structured logging, DB pool improvements.
+- **Landing page.**  Bulma-based landing page with package index,
+  search, and release-channel tracking.
+- **`cvcpkg publish` command + E2E lifecycle tests.**  First-class
+  CLI publish flow with end-to-end test coverage.
+- **Source-build fallback.**  When a prebuilt binary is unavailable,
+  the client falls back to building from source.
+- **Multi-backend DB tests.**  SQLite + PostgreSQL + MySQL fixture
+  refactor; convenience scripts.
+- **CI gating.**  PR-triggered jobs gated to `transfix` actor via
+  `CI_ALLOWED_ACTORS` repo variable.
+- **GitHub repo references parameterized** throughout the recipes
+  and server so forks can deploy their own catalog.
+- **Alembic migrations, metrics, and docs.**  All remaining
+  production gaps closed for the v1.x line.
+
+---
+
+## v1.3.0 (2026-05-24)
+
+**Split-distribution release.**  The first release built around
+per-component archives rather than monolithic per-platform zips.
+Establishes the recipe-driven architecture that the rest of the 1.x
+and 2.x line builds on.
+
+- **Per-recipe split packaging.**  25+ independent component bundles
+  per platform/config/link combo, published as individual archives
+  with their own metadata.  Consumers pull only what they need.
+- **Ed25519 package signing and verification** (#38).  Optional
+  signature + key fingerprint fields in manifests; signing pipeline
+  scaffolding in `cvcpkg signing`.
+- **Windows builds fully working.**  vcpkg used for GSL, OpenBLAS,
+  and ImageMagick (replacing source/CMake builds); gRPC and its
+  ecosystem (protobuf, abseil, re2) built as static libs with MSVC
+  CRT alignment (`/MD`); NASM assembler installed; Strawberry/Git
+  PATH entries removed so they don't shadow MSVC `link.exe`; OpenSSL
+  Perl path fixed; abseil CRT mismatch fixed.
+- **Release pipeline fixed** to upload per-component bundles + their
+  indexes to the GitHub Release alongside the monolithic zips.
+- **cvcpkg 2.0 roadmap.**  `docs/roadmap/cvcpkg-2.0.md` (#36) lays
+  out the daemon-centric registry design with trust, identity, and
+  multi-platform expansion.
+- **BSD VM provisioning tools.**  Self-contained scripts to provision
+  FreeBSD, OpenBSD, and NetBSD build VMs on the Incus cluster
+  (`star-01`/`star-00`); README with lessons learned.
+- **New recipes.**  JPEG, LZMA, WebP, zstd, LERC added so libtiff
+  can re-enable its full codec set.
+- **macOS Qt6.**  Resolve symlinks in Qt6 build dir; resolve symlinks
+  in builder paths so Qt6 macOS builds succeed.
+
 ---
 
 ## v1.1.0 (2026-05-19)

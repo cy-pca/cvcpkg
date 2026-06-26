@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import os
 import platform as _platform_module
+import re
 import shutil
 import subprocess
 import sys
@@ -162,7 +163,9 @@ class Recipe:
             cvc_revision=int(recipe_block.get("cvc_revision", 1)),
             source=SourceSpec.from_dict(source_block),
             patches=raw.get("patches", []) or [],
-            build_matrix=[MatrixEntry.from_dict(m) for m in build_block.get("matrix", [])],
+            build_matrix=[
+                MatrixEntry.from_dict(m) for m in build_block.get("matrix", [])
+            ],
             package_files=package_block.get("files", []),
             test_script=test_block.get("script") if test_block else None,
             raw=raw,
@@ -265,7 +268,9 @@ def _fetch_tarball(source: SourceSpec, dest: Path) -> Path:
     if source.sha256:
         actual = _sha256_file(archive_path)
         if actual != source.sha256:
-            raise RecipeError(f"SHA-256 mismatch: expected {source.sha256}, got {actual}")
+            raise RecipeError(
+                f"SHA-256 mismatch: expected {source.sha256}, got {actual}"
+            )
 
     # Populate cache after successful verification
     if not cache_hit and cache_dir is not None:
@@ -363,7 +368,9 @@ def apply_patches(recipe: Recipe, source_dir: Path) -> None:
 # ── Build execution ────────────────────────────────────────────
 
 
-def _select_matrix_entry(recipe: Recipe, platform: str, host_platform: str = "") -> MatrixEntry:
+def _select_matrix_entry(
+    recipe: Recipe, platform: str, host_platform: str = ""
+) -> MatrixEntry:
     """Pick the matrix entry matching the target platform.
 
     When *host_platform* is given (e.g. ``"linux"``, ``"windows"``),
@@ -543,7 +550,9 @@ def run_build(
     elif script.suffix == ".ps1":
         interpreter = shutil.which("pwsh")
         if not interpreter:
-            raise BuildError("pwsh not found on PATH -- required for .ps1 build scripts")
+            raise BuildError(
+                "pwsh not found on PATH -- required for .ps1 build scripts"
+            )
         cmd = [interpreter, "-NoProfile", "-NonInteractive", "-File", str(script)]
     else:
         raise BuildError(f"Unknown script type: {script.suffix}")
@@ -596,7 +605,9 @@ def run_build(
         returncode = result.returncode
 
     if returncode != 0:
-        raise BuildError(f"Build script for {ctx.recipe.name} exited with code {returncode}")
+        raise BuildError(
+            f"Build script for {ctx.recipe.name} exited with code {returncode}"
+        )
 
     # Patch RPATH on Linux shared builds so bundles are relocatable.
     if ctx.platform == "linux" and ctx.link == "shared":
@@ -612,7 +623,10 @@ def _find_bash() -> str:
         # On Windows, shutil.which("bash") may return WSL bash which fails
         # if no distro is installed.  Prefer Git-for-Windows bash.
         git_bash = (
-            Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git" / "bin" / "bash.exe"
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+            / "Git"
+            / "bin"
+            / "bash.exe"
         )
         if git_bash.is_file():
             return str(git_bash)
@@ -676,7 +690,9 @@ def run_test(ctx: BuildContext) -> None:
         env=env,
     )
     if result.returncode != 0:
-        raise BuildError(f"Test for {ctx.recipe.name} failed with code {result.returncode}")
+        raise BuildError(
+            f"Test for {ctx.recipe.name} failed with code {result.returncode}"
+        )
 
 
 # ── Manifest generation ────────────────────────────────────────
@@ -943,6 +959,46 @@ def _rewrite_pc_prefixes(target_dir: Path) -> None:
                 break  # only the first prefix= line matters
         if rewritten:
             pc_file.write_text("".join(lines), encoding="utf-8")
+
+
+# Regex matching a cvcpkg per-component temp install directory, e.g.
+#   /tmp/cvcpkg-automake-ab12cd34/install
+#   /var/folders/xx/.../cvcpkg-openssl-7f8g9h0i/install
+#   /home/joe/cvcpkg-builder/cvcpkg-prefix-zstd-tl1ob1i9
+# The key pattern is a directory component starting with "cvcpkg-".
+_TEMP_PREFIX_RE = re.compile(
+    r"(?:/[^\s'\",:;)}\]]+)?/cvcpkg-[A-Za-z0-9_-]+-[A-Za-z0-9_]+/install"
+)
+
+
+def _rewrite_script_prefixes(target_dir: Path) -> None:
+    """Rewrite hardcoded temp-install paths in scripts under *target_dir*/bin.
+
+    Autotools utilities (``aclocal``, ``automake``, ``libtoolize``, etc.)
+    embed absolute ``--prefix`` paths at ``configure`` time.  When
+    recipes are built into isolated temp directories and then merged to
+    a shared prefix, these embedded paths become stale.
+
+    This helper scans text files in ``bin/`` for paths that look like
+    cvcpkg temp install directories and replaces them with *target_dir*.
+    """
+    bin_dir = target_dir / "bin"
+    if not bin_dir.is_dir():
+        return
+    target_str = str(target_dir)
+    for script in bin_dir.iterdir():
+        if not script.is_file():
+            continue
+        try:
+            text = script.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        # Quick check: skip binary files and files without temp paths.
+        if "\x00" in text[:512]:
+            continue
+        new_text = _TEMP_PREFIX_RE.sub(target_str, text)
+        if new_text != text:
+            script.write_text(new_text, encoding="utf-8")
 
 
 def build_recipe(
@@ -1222,7 +1278,8 @@ def _collect_host_tools(
             continue
         dep_recipe = all_by_name[dep_name]
         has_target = any(
-            m.platform == target_platform or m.platform == "any" for m in dep_recipe.build_matrix
+            m.platform == target_platform or m.platform == "any"
+            for m in dep_recipe.build_matrix
         )
         has_host = any(m.platform == host_platform for m in dep_recipe.build_matrix)
         if not has_target and has_host:
@@ -1249,7 +1306,9 @@ def _is_any_recipe(recipe: Recipe) -> bool:
     A recipe is platform-independent when all of its build matrix
     entries use ``platform: any``.
     """
-    return bool(recipe.build_matrix) and all(m.platform == "any" for m in recipe.build_matrix)
+    return bool(recipe.build_matrix) and all(
+        m.platform == "any" for m in recipe.build_matrix
+    )
 
 
 def _common_scripts_hash(recipes_dir: Path) -> str:
@@ -1620,7 +1679,9 @@ def build_all(
     ordered = resolve_build_order(recipes, platform)
 
     # Identify host-tool recipes needed for cross-compilation.
-    host_tool_recipes = _collect_host_tools(ordered, all_recipes, platform, host_platform)
+    host_tool_recipes = _collect_host_tools(
+        ordered, all_recipes, platform, host_platform
+    )
 
     # Determine which recipes are assigned to this shard.
     if shard is not None:
@@ -1687,7 +1748,9 @@ def build_all(
             if cache is not None:
                 ht_chain_hash = chain_hash(ht_recipe, all_recipe_map, ht_platform)
                 if not force_clean:
-                    ht_cached = cache.lookup(ht_chain_hash, ht_platform, ht_arch, config, link)
+                    ht_cached = cache.lookup(
+                        ht_chain_hash, ht_platform, ht_arch, config, link
+                    )
 
             # Server cache lookup for host tool.
             ht_server_hit = False
@@ -1730,7 +1793,10 @@ def build_all(
                             ht_cached = result
                             ht_server_hit = True
 
-            print(f"\ncvcpkg: == {ht_recipe.name} " f"({ht_recipe.full_version}) [host tool] ==")
+            print(
+                f"\ncvcpkg: == {ht_recipe.name} "
+                f"({ht_recipe.full_version}) [host tool] =="
+            )
 
             if ht_cached is not None:
                 cache_hits += 1
@@ -1738,6 +1804,7 @@ def build_all(
                 print(f"  <- {label} hit ({ht_chain_hash[:12]}...)")
                 cache.restore(ht_cached, prefix)
                 _rewrite_pc_prefixes(prefix)
+                _rewrite_script_prefixes(prefix)
                 # Populate local cache from server download.
                 if ht_server_hit and cache is not None:
                     srv_restore = Path(tempfile.mkdtemp(prefix="cvcpkg-srv-restore-"))
@@ -1781,6 +1848,7 @@ def build_all(
                     if ht_install.is_dir():
                         shutil.copytree(ht_install, prefix, dirs_exist_ok=True)
                         _rewrite_pc_prefixes(prefix)
+                        _rewrite_script_prefixes(prefix)
                     # Store in local cache.
                     if cache is not None and ht_chain_hash and ht_install.is_dir():
                         cache.store(
@@ -1800,7 +1868,9 @@ def build_all(
                         and not no_server_cache
                         and cache is not None
                     ):
-                        arc = cache.lookup(ht_chain_hash, ht_platform, ht_arch, config, link)
+                        arc = cache.lookup(
+                            ht_chain_hash, ht_platform, ht_arch, config, link
+                        )
                         if arc is not None:
                             ok = _server_cache_push(
                                 server_cache_url,
@@ -1816,7 +1886,10 @@ def build_all(
                                 server_cache_org,
                             )
                             if ok:
-                                print(f"  -> pushed to server cache " f"({ht_chain_hash[:12]}...)")
+                                print(
+                                    f"  -> pushed to server cache "
+                                    f"({ht_chain_hash[:12]}...)"
+                                )
                 except (BuildError, RecipeError):
                     if not keep_going:
                         raise
@@ -1828,7 +1901,9 @@ def build_all(
                     failures.append(
                         BuildFailure(
                             recipe_name=ht_recipe.name,
-                            error=BuildError(f"host tool {ht_recipe.name} failed to build"),
+                            error=BuildError(
+                                f"host tool {ht_recipe.name} failed to build"
+                            ),
                         )
                     )
                 finally:
@@ -1929,7 +2004,9 @@ def build_all(
                         if cache is not None:
                             import shutil as _shutil_srv
 
-                            srv_restore = Path(tempfile.mkdtemp(prefix="cvcpkg-srv-restore-"))
+                            srv_restore = Path(
+                                tempfile.mkdtemp(prefix="cvcpkg-srv-restore-")
+                            )
                             try:
                                 cache.restore(tmp_archive, srv_restore)
                                 cache.store(
@@ -1973,9 +2050,11 @@ def build_all(
                     if install_dir.is_dir():
                         shutil.copytree(install_dir, prefix, dirs_exist_ok=True)
                         _rewrite_pc_prefixes(prefix)
+                        _rewrite_script_prefixes(prefix)
                 else:
                     cache.restore(cached_archive, prefix)
                     _rewrite_pc_prefixes(prefix)
+                    _rewrite_script_prefixes(prefix)
                     ctx = BuildContext(
                         recipe=recipe,
                         platform=platform,
@@ -2018,6 +2097,7 @@ def build_all(
                 if install_dir.is_dir():
                     shutil.copytree(install_dir, prefix, dirs_exist_ok=True)
                     _rewrite_pc_prefixes(prefix)
+                    _rewrite_script_prefixes(prefix)
                 # Store in build cache.
                 if cache is not None and recipe_chain_hash and install_dir.is_dir():
                     cache.store(
@@ -2037,7 +2117,9 @@ def build_all(
                         and not no_server_cache
                         and not server_hit
                     ):
-                        arc = cache.lookup(recipe_chain_hash, eff_platform, eff_arch, config, link)
+                        arc = cache.lookup(
+                            recipe_chain_hash, eff_platform, eff_arch, config, link
+                        )
                         if arc is not None:
                             ok = _server_cache_push(
                                 server_cache_url,
@@ -2053,7 +2135,9 @@ def build_all(
                                 server_cache_org,
                             )
                             if ok:
-                                print(f"  -> pushed to server cache ({recipe_chain_hash[:12]}...)")
+                                print(
+                                    f"  -> pushed to server cache ({recipe_chain_hash[:12]}...)"
+                                )
             else:
                 ctx = build_recipe(
                     recipe.recipe_dir,
@@ -2099,7 +2183,9 @@ def build_all(
             print(f"  {status}: {f.recipe_name} -- {f.error}")
     else:
         cache_msg = f" ({cache_hits} cache hits)" if cache_hits else ""
-        print(f"\ncvcpkg: all {len(contexts)} components built into {prefix}{cache_msg}")
+        print(
+            f"\ncvcpkg: all {len(contexts)} components built into {prefix}{cache_msg}"
+        )
 
     # Attach failures to the returned list for callers to inspect.
     contexts.failures = failures
