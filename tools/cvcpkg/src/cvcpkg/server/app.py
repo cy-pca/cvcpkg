@@ -991,14 +991,18 @@ def create_app(
 
         sent = 0
         for bid in list(_ws_builders):
-            ok = await _ws_send(bid, {
-                "type": "builder.update",
-                "version": __version__,
-            })
+            ok = await _ws_send(
+                bid,
+                {
+                    "type": "builder.update",
+                    "version": __version__,
+                },
+            )
             if ok:
                 sent += 1
-        logger.info("update-builders: notified %d/%d builders (by %s)",
-                     sent, len(_ws_builders), actor.name)
+        logger.info(
+            "update-builders: notified %d/%d builders (by %s)", sent, len(_ws_builders), actor.name
+        )
         return {"message": f"notified {sent} builder(s)", "total_connected": len(_ws_builders)}
 
     # ── Metrics (Prometheus text format) ────────────────────
@@ -2294,25 +2298,34 @@ def create_app(
     async def delete_package(
         name: str,
         version: str,
+        platform: str | None = Query(None, description="Only delete bundles for this platform"),
+        link: str | None = Query(None, description="Only delete bundles with this link mode"),
         actor: TokenRecord = Depends(require_role(TokenRole.admin)),
     ):
         if _use_db:
-            removed = await _db_packages.delete(name, version)
+            removed = await _db_packages.delete(name, version, platform=platform, link=link)
             if removed == 0:
                 raise HTTPException(404, f"{name}=={version} not found")
             await _db_audit.record(
                 action=AuditAction.delete,
                 actor=actor.name,
                 target=f"{name}=={version}",
+                detail=f"platform={platform} link={link}" if platform or link else "",
             )
             return {"message": f"deleted {name}=={version}", "removed": removed}
         state = _get_state()
         before = len(state.index.get("bundles", []))
-        state.index["bundles"] = [
-            b
-            for b in state.index.get("bundles", [])
-            if not (b["name"] == name and b["version"] == version)
-        ]
+
+        def _matches(b: dict) -> bool:
+            if b["name"] != name or b["version"] != version:
+                return False
+            if platform and b.get("platform") != platform:
+                return False
+            if link and b.get("link") != link:
+                return False
+            return True
+
+        state.index["bundles"] = [b for b in state.index.get("bundles", []) if not _matches(b)]
         after = len(state.index["bundles"])
         if before == after:
             raise HTTPException(404, f"{name}=={version} not found")
@@ -2323,6 +2336,44 @@ def create_app(
             target=f"{name}=={version}",
         )
         return {"message": f"deleted {name}=={version}", "removed": before - after}
+
+    @app.delete("/v1/packages/by-link/{platform}/{link}", tags=["publish"])
+    async def delete_packages_by_link(
+        platform: str,
+        link: str,
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Delete all bundles matching a platform and link mode (admin only)."""
+        if _use_db:
+            removed = await _db_packages.delete_by_link(platform, link)
+            if removed == 0:
+                raise HTTPException(404, f"no {platform}/{link} bundles found")
+            await _db_audit.record(
+                action=AuditAction.delete,
+                actor=actor.name,
+                target=f"platform={platform}/link={link}",
+                detail=f"{removed} bundles",
+            )
+            return {"message": f"deleted {platform}/{link} bundles", "removed": removed}
+        # File-based backend
+        state = _get_state()
+        before = len(state.index.get("bundles", []))
+        state.index["bundles"] = [
+            b
+            for b in state.index.get("bundles", [])
+            if not (b.get("platform") == platform and b.get("link") == link)
+        ]
+        after = len(state.index["bundles"])
+        if before == after:
+            raise HTTPException(404, f"no {platform}/{link} bundles found")
+        state.save_index()
+        state.audit.record(
+            action=AuditAction.delete,
+            actor=actor.name,
+            target=f"platform={platform}/link={link}",
+            detail=f"{before - after} bundles",
+        )
+        return {"message": f"deleted {platform}/{link} bundles", "removed": before - after}
 
     # ── Token management (admin) ────────────────────────────
 
@@ -3723,10 +3774,19 @@ def create_app(
         body: BuilderHeartbeatRequest,
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
-        """Record a heartbeat from a running builder."""
+        """Record a heartbeat from a running builder.
+
+        The builder's ``current_jobs`` is always reconciled from actual
+        dispatched/running jobs in the database, ignoring the
+        client-reported value.  This prevents drift after builder
+        restarts or lost heartbeats.
+        """
         _require_db_builders()
         info = await _db_builders.heartbeat(
-            builder_id, status=body.status, current_jobs=body.current_jobs
+            builder_id,
+            status=body.status,
+            current_jobs=body.current_jobs,
+            reconcile=True,
         )
         if info is None:
             raise HTTPException(404, f"builder {builder_id} not found")
@@ -3773,6 +3833,10 @@ def create_app(
     ):
         """Submit a single build job."""
         _require_db_build_jobs()
+        # wasm/wasi only support static linking — enforce server-side.
+        link = body.link
+        if body.platform in ("wasm", "wasi") and link != "static":
+            link = "static"
         info = await _db_build_jobs.create(
             recipe_name=body.recipe_name,
             platform=body.platform,
@@ -3781,7 +3845,7 @@ def create_app(
             recipe_version=body.recipe_version,
             recipe_hash=body.recipe_hash,
             config=body.config,
-            link=body.link,
+            link=link,
             org_slug=body.org_slug,
             priority=body.priority,
             timeout_seconds=body.timeout_seconds,
@@ -3817,7 +3881,8 @@ def create_app(
                 "platform": j.platform,
                 "arch": j.arch,
                 "config": j.config,
-                "link": j.link,
+                # wasm/wasi only support static linking — enforce server-side.
+                "link": "static" if j.platform in ("wasm", "wasi") else j.link,
                 "org_slug": j.org_slug,
                 "priority": j.priority,
                 "timeout_seconds": j.timeout_seconds,
@@ -4286,7 +4351,10 @@ def create_app(
                     status = data.get("status", "online")
                     current_jobs = data.get("current_jobs", 0)
                     await _db_builders.heartbeat(
-                        builder_id, status=status, current_jobs=current_jobs
+                        builder_id,
+                        status=status,
+                        current_jobs=current_jobs,
+                        reconcile=True,
                     )
                     await websocket.send_json({"type": "heartbeat_ack"})
 

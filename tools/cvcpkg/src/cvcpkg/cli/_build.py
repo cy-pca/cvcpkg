@@ -77,9 +77,11 @@ def world(
 
     # Load all recipes.
     rdirs = _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes)
-    all_recipes = load_all_recipes(rdirs) if len(rdirs) > 1 else [
-        Recipe.load(d) for d in rdirs[0].iterdir() if (d / "recipe.yaml").is_file()
-        ]
+    all_recipes = (
+        load_all_recipes(rdirs)
+        if len(rdirs) > 1
+        else [Recipe.load(d) for d in rdirs[0].iterdir() if (d / "recipe.yaml").is_file()]
+    )
 
     by_name = {r.name: r for r in all_recipes}
 
@@ -125,7 +127,6 @@ def world(
         click.echo(f"  {r.name} done.")
 
     click.echo(f"cvcpkg: world build complete -- {len(order)} recipe(s) built to {prefix_path}")
-
 
 
 # ── Helper: resolve recipe dir ──────────────────────────────────
@@ -220,7 +221,6 @@ def _try_pull_server_recipes() -> tuple[str, ...]:
         tar.extractall(path=extract_dir)  # noqa: S202
     click.echo(f"cvcpkg: using recipes from {server}")
     return (str(extract_dir),)
-
 
 
 # ── build ───────────────────────────────────────────────────────
@@ -392,7 +392,6 @@ def build(
             )
 
 
-
 # ── pack ────────────────────────────────────────────────────────
 
 
@@ -469,7 +468,6 @@ def pack(
             sig_path = archive.with_suffix(archive.suffix + ".sig")
             write_signature(sig, sig_path)
             click.echo(f"  Signed: {sig_path.name} (key: {sig.key_fingerprint[:16]}...)")
-
 
 
 # ── build-all ───────────────────────────────────────────────────
@@ -617,7 +615,6 @@ def build_all_cmd(
     failures = getattr(contexts, "failures", [])
     if failures:
         raise SystemExit(1)
-
 
 
 # ── pack-all ────────────────────────────────────────────────────
@@ -881,7 +878,6 @@ def pack_all_cmd(
         raise SystemExit(1)
 
 
-
 # ── recipes ─────────────────────────────────────────────────────
 
 
@@ -897,7 +893,10 @@ def pack_all_cmd(
 @_recipes_dir_opt
 @_no_default_recipes_opt
 def recipes(
-    mode: str, show_name: str | None, tag: str | None, recipes_dirs: tuple[str, ...],
+    mode: str,
+    show_name: str | None,
+    tag: str | None,
+    recipes_dirs: tuple[str, ...],
     no_default_recipes: bool,
 ) -> None:
     """List or inspect recipes.
@@ -964,7 +963,6 @@ def recipes(
         click.echo(f"{r.name:<20} {r.full_version:<18} {tags_str:<20} {platforms}")
 
 
-
 # ── rev-bump ──────────────────────────────────────────────────────────
 
 
@@ -1018,5 +1016,3 @@ def rev_bump_cmd(
     for name, old_rev, new_rev in bumped:
         click.echo(f"  {name}: cvc_revision {old_rev} \u2192 {new_rev}")
     click.echo(f"\n{len(bumped)} recipe(s) bumped.")
-
-

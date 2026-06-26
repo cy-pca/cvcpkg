@@ -252,5 +252,3 @@ def webhook_test(webhook_id: int, server: str, token: str):
         raise click.ClickException(f"server returned {resp.status_code}: {detail}")
     data = resp.json()
     click.echo(f"Test delivery: status_code={data.get('status_code', '?')}")
-
-

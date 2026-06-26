@@ -82,3 +82,25 @@ endif()
 EOF
 
 echo "Wasmtime ${WASMTIME_VER} C API staged to ${CVC_INSTALL_DIR}"
+
+# ── Also fetch the CLI binary so that wasi tests can run ──
+case "${CVC_PLATFORM}" in
+    linux)
+        CLI_ARTIFACT="wasmtime-v${WASMTIME_VER}-${ARCH}-linux.tar.xz"
+        ;;
+    macos)
+        CLI_ARTIFACT="wasmtime-v${WASMTIME_VER}-${ARCH}-macos.tar.xz"
+        ;;
+esac
+
+CLI_URL="https://github.com/bytecodealliance/wasmtime/releases/download/v${WASMTIME_VER}/${CLI_ARTIFACT}"
+echo "Downloading ${CLI_ARTIFACT} (CLI)..."
+curl -fSL -o "${DOWNLOAD_DIR}/${CLI_ARTIFACT}" "${CLI_URL}"
+
+mkdir -p "${DOWNLOAD_DIR}/wasmtime-cli-extracted"
+tar xf "${DOWNLOAD_DIR}/${CLI_ARTIFACT}" -C "${DOWNLOAD_DIR}/wasmtime-cli-extracted" --strip-components=1
+
+mkdir -p "${CVC_INSTALL_DIR}/bin"
+cp "${DOWNLOAD_DIR}/wasmtime-cli-extracted/wasmtime" "${CVC_INSTALL_DIR}/bin/wasmtime"
+chmod +x "${CVC_INSTALL_DIR}/bin/wasmtime"
+echo "Wasmtime CLI staged to ${CVC_INSTALL_DIR}/bin/wasmtime"

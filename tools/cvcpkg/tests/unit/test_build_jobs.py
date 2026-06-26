@@ -1357,6 +1357,143 @@ class TestDbBuildJobStore:
 
         self._run(_test())
 
+    def test_complete_reconciles_builder_job_count(self):
+        """complete() should update the builder's current_jobs from actual DB state."""
+        from cvcpkg.server.db_stores import DbBuilderStore, DbBuildJobStore
+
+        async def _test():
+            bstore = DbBuilderStore()
+            builder = await bstore.register(
+                name="b1",
+                platform="linux",
+                arch="x86_64",
+                registered_by="a",
+            )
+            store = DbBuildJobStore()
+
+            # Create 3 jobs and dispatch them all to the builder
+            jobs = []
+            for name in ("zlib", "boost", "gmp"):
+                j = await store.create(
+                    recipe_name=name,
+                    platform="linux",
+                    arch="x86_64",
+                    submitted_by="admin",
+                )
+                await store.dispatch(j.id, builder.id)
+                await store.claim(j.id, builder.id)
+                jobs.append(j)
+
+            # Simulate server thinking builder has 3 jobs
+            await bstore.heartbeat(builder.id, current_jobs=3)
+            b = await bstore.get(builder.id)
+            assert b.current_jobs == 3
+
+            # Complete one job — builder count should reconcile to 2
+            await store.complete(jobs[0].id)
+            b = await bstore.get(builder.id)
+            assert b.current_jobs == 2
+
+            # Complete second job — count should reconcile to 1
+            await store.complete(jobs[1].id)
+            b = await bstore.get(builder.id)
+            assert b.current_jobs == 1
+
+            # Complete last job — count should be 0
+            await store.complete(jobs[2].id)
+            b = await bstore.get(builder.id)
+            assert b.current_jobs == 0
+
+        self._run(_test())
+
+    def test_fail_reconciles_builder_job_count(self):
+        """fail() should update the builder's current_jobs from actual DB state."""
+        from cvcpkg.server.db_stores import DbBuilderStore, DbBuildJobStore
+
+        async def _test():
+            bstore = DbBuilderStore()
+            builder = await bstore.register(
+                name="b1",
+                platform="linux",
+                arch="x86_64",
+                registered_by="a",
+            )
+            store = DbBuildJobStore()
+
+            j1 = await store.create(
+                recipe_name="zlib",
+                platform="linux",
+                arch="x86_64",
+                submitted_by="admin",
+            )
+            j2 = await store.create(
+                recipe_name="boost",
+                platform="linux",
+                arch="x86_64",
+                submitted_by="admin",
+            )
+            await store.dispatch(j1.id, builder.id)
+            await store.claim(j1.id, builder.id)
+            await store.dispatch(j2.id, builder.id)
+            await store.claim(j2.id, builder.id)
+
+            # Simulate stale count (e.g., heartbeat set it to 5 by mistake)
+            await bstore.heartbeat(builder.id, current_jobs=5)
+            b = await bstore.get(builder.id)
+            assert b.current_jobs == 5
+
+            # Fail one job — should reconcile to 1
+            await store.fail(j1.id, error_message="build error")
+            b = await bstore.get(builder.id)
+            assert b.current_jobs == 1
+
+        self._run(_test())
+
+    def test_heartbeat_reconcile_overrides_client_value(self):
+        """heartbeat(reconcile=True) uses DB count, not client-reported value."""
+        from cvcpkg.server.db_stores import DbBuilderStore, DbBuildJobStore
+
+        async def _test():
+            bstore = DbBuilderStore()
+            builder = await bstore.register(
+                name="b1",
+                platform="linux",
+                arch="x86_64",
+                registered_by="a",
+            )
+            store = DbBuildJobStore()
+
+            # Create and dispatch 2 jobs
+            j1 = await store.create(
+                recipe_name="zlib",
+                platform="linux",
+                arch="x86_64",
+                submitted_by="admin",
+            )
+            j2 = await store.create(
+                recipe_name="boost",
+                platform="linux",
+                arch="x86_64",
+                submitted_by="admin",
+            )
+            await store.dispatch(j1.id, builder.id)
+            await store.claim(j1.id, builder.id)
+            await store.dispatch(j2.id, builder.id)
+
+            # Builder reports 0 (e.g., after restart) but DB has 2 active
+            info = await bstore.heartbeat(
+                builder.id, current_jobs=0, reconcile=True
+            )
+            assert info.current_jobs == 2  # reconciled from DB, not client
+
+            # Without reconcile, trusts the client
+            info = await bstore.heartbeat(
+                builder.id, current_jobs=0, reconcile=False
+            )
+            assert info.current_jobs == 0  # client value used
+
+        self._run(_test())
+
 
 # ── API endpoint tests ──────────────────────────────────────────
 
