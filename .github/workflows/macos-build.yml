@@ -146,6 +146,7 @@ jobs:
           echo "Count: $COUNT archives"
 
       - name: Publish to cvcpkg.org
+        if: always()
         env:
           CVCPKG_SERVER_URL: ${{ inputs.server }}
           CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISHER_TOKEN }}
