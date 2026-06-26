@@ -74,7 +74,15 @@ else
     echo "hello world" | "${CVC_INSTALL_DIR}/bin/pcre2grep" "hello"
 
     echo 'Testing pkg-config...'
-    PKG_CONFIG_PATH="${CVC_INSTALL_DIR}/lib/pkgconfig" pkg-config --modversion libpcre2-8
+    # Strawberry's pkg-config is a Perl script that uses Perl's $Config{path_sep}
+    # to split PKG_CONFIG_PATH.  When bash's msys Perl (path_sep=':') runs the
+    # script, paths like "C:/foo" are misparsed as "C" and "/foo".  Convert to
+    # msys-style "/c/foo" on Windows so the colon disappears.
+    _pc_path="${CVC_INSTALL_DIR}/lib/pkgconfig"
+    if [[ "${CVC_PLATFORM:-}" == "windows" ]] && command -v cygpath >/dev/null 2>&1; then
+        _pc_path="$(cygpath -u "${_pc_path}")"
+    fi
+    PKG_CONFIG_PATH="${_pc_path}" pkg-config --modversion libpcre2-8
 fi
 
 echo '-- pcre2 smoke test passed --'

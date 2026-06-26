@@ -21,5 +21,29 @@ else
 fi
 
 ./configure "${CONFIGURE_ARGS[@]}"
-make -j "${CVC_JOBS}"
+
+# Ensure libreadline.so links against the curses/termcap library that
+# provides tgetent/tgoto/tputs/etc.  Without this, downstream consumers
+# (e.g. libpq's psql) fail to link against our libreadline.so with
+# "undefined reference to `tgetent'" errors.  On modern Linux these
+# symbols live in libtinfo (split out from ncurses); BSD/macOS keep
+# them in libncurses itself.
+SHLIB_LIBS=""
+if command -v pkg-config >/dev/null 2>&1; then
+    if pkg-config --exists tinfo 2>/dev/null; then
+        SHLIB_LIBS="$(pkg-config --libs tinfo)"
+    elif pkg-config --exists ncursesw 2>/dev/null; then
+        SHLIB_LIBS="$(pkg-config --libs ncursesw)"
+    elif pkg-config --exists ncurses 2>/dev/null; then
+        SHLIB_LIBS="$(pkg-config --libs ncurses)"
+    fi
+fi
+if [[ -z "${SHLIB_LIBS}" ]]; then
+    case "$(uname)" in
+        Linux)  SHLIB_LIBS="-ltinfo" ;;
+        *)      SHLIB_LIBS="-lncurses" ;;
+    esac
+fi
+
+make -j "${CVC_JOBS}" SHLIB_LIBS="${SHLIB_LIBS}"
 make install
