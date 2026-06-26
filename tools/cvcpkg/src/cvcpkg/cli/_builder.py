@@ -540,10 +540,12 @@ def builder_run(
                     prefix_str = str(prefix.resolve())
                     for pc_file in pc_dir.glob("*.pc"):
                         text = pc_file.read_text()
-                        # Replace lines like  prefix=/tmp/cvcpkg-builder/.../install
+                        # Use a lambda for the replacement so that backslashes
+                        # in Windows paths (e.g. C:\Users\...) are not treated
+                        # as regex group references / unknown escapes.
                         fixed = re.sub(
                             r"^prefix=.*$",
-                            f"prefix={prefix_str}",
+                            lambda _m, p=prefix_str: f"prefix={p}",
                             text,
                             count=1,
                             flags=re.MULTILINE,
