@@ -314,3 +314,103 @@ docker compose -f docker-compose.production.yml exec backend \
 - [ ] Review and revoke unused publisher tokens
 - [ ] Test backup restore procedure on a staging instance
 - [ ] Update Docker base images (`docker compose build --pull`)
+
+---
+
+## 11. Publishing `cvcpkg` to PyPI
+
+The `cvcpkg` Python CLI is published to PyPI by the
+[`.github/workflows/cvcpkg-publish.yml`](../../.github/workflows/cvcpkg-publish.yml)
+workflow, which fires on tags matching `cvcpkg-v*` and uses **trusted
+publishing (OIDC)** — no API tokens stored in the repo.
+
+### 11.1. One-time setup
+
+Both PyPI and TestPyPI must have the project pre-registered with a
+**pending publisher** that matches the workflow exactly, otherwise
+the first push will fail with `404 Not Found` (project unknown) or
+`403 Forbidden` (trusted publisher not configured).
+
+For each of PyPI (<https://pypi.org>) and TestPyPI
+(<https://test.pypi.org>), as an account with permission to claim
+the `cvcpkg` name:
+
+1. Log in.
+2. **Your account → Publishing** (or, while the project does not yet
+   exist, **Your projects → Publishing → Add a new pending
+   publisher**).
+3. Fill in the form:
+   - **PyPI Project Name:** `cvcpkg`
+   - **Owner:** `transfix`
+   - **Repository name:** `libcvc-deps`
+   - **Workflow name:** `cvcpkg-publish.yml`
+   - **Environment name:** `pypi` (for PyPI) or `testpypi` (for
+     TestPyPI). These must match the `environment:` keys in the
+     workflow.
+4. Save.
+
+Then in the GitHub repo (Settings → Environments) create two
+environments with the same names — `pypi` and `testpypi`. They do
+**not** need secrets; OIDC handles auth. Optionally add a required
+reviewer to the `pypi` environment to force a human approval before
+the real PyPI push.
+
+References:
+- <https://docs.pypi.org/trusted-publishers/adding-a-publisher/>
+- <https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/>
+
+### 11.2. Cutting a release
+
+1. Update `tools/cvcpkg/pyproject.toml` `version`.
+2. Add a top section to [`CHANGELOG.md`](../../CHANGELOG.md) for the
+   new version.
+3. Commit on `prod` (or merge a release PR into `prod`).
+4. Tag and push:
+   ```bash
+   git tag cvcpkg-v<MAJOR>.<MINOR>.<PATCH>
+   git push origin cvcpkg-v<MAJOR>.<MINOR>.<PATCH>
+   ```
+5. Watch the workflow:
+   - `test` → matrix tests on Python 3.10–3.13.
+   - `build` → sdist + wheel, `twine check`, sanity install.
+   - `live-smoke` → installs the wheel on Linux/macOS/Windows and
+     drives it against the live `https://cvcpkg.org` (list, info,
+     install `zlib`, verify).
+   - `publish-testpypi` → trusted-publish to TestPyPI
+     (`skip-existing: true`).
+   - `publish-pypi` → trusted-publish to PyPI. **Skipped** on any
+     pre-release tag (e.g. `cvcpkg-v2.0.0rc1`,
+     `cvcpkg-v2.0.0a1`, `cvcpkg-v2.0.0b1`, `cvcpkg-v2.0.0.dev1`).
+
+### 11.3. Pre-release flow (recommended for any version bump)
+
+To exercise the full pipeline without burning a PyPI version number:
+
+```bash
+git tag cvcpkg-v2.0.1rc1
+git push origin cvcpkg-v2.0.1rc1
+```
+
+`publish-pypi` is skipped automatically; the wheel still lands on
+TestPyPI so you can `pip install -i https://test.pypi.org/simple/
+cvcpkg==2.0.1rc1` from anywhere and verify it works against the
+live registry.
+
+### 11.4. Verifying a published release
+
+```bash
+pip install --upgrade cvcpkg
+cvcpkg --version
+cvcpkg list --available | head
+cvcpkg install --prefix /tmp/cvcpkg-smoke zlib
+cvcpkg verify --prefix /tmp/cvcpkg-smoke
+```
+
+### 11.5. Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `403 Forbidden` on publish | Pending publisher not configured for that environment | Re-check the project's *Publishing* settings on PyPI/TestPyPI. Owner/repo/workflow/environment must all match. |
+| `400 File already exists` | Re-running the workflow for a tag that was already published | Bump to the next patch version and re-tag. `skip-existing: true` already handles common cases; this fires when the wheel bytes differ. |
+| `live-smoke` install fails on Windows | A heavy Windows package (qt6, vtk, …) was added to the smoke set without Windows coverage | Keep the smoke set to packages that are known-published on all three platforms (currently zlib is the canary). |
+| `publish-pypi` is skipped on a stable-looking tag | Tag includes `a`, `b`, `rc`, `dev`, or `post` | Use a strict `cvcpkg-vMAJOR.MINOR.PATCH` tag with no suffix. |

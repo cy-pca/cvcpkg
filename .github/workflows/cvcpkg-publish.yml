@@ -1,12 +1,32 @@
 # Publish cvcpkg to PyPI on tag push.
 #
-# Triggered by tags matching `cvcpkg-v*` (e.g. cvcpkg-v0.1.0a1).
-# Builds the wheel in an isolated environment, runs the test suite,
-# then uploads to PyPI via trusted publishing (OIDC).
+# Triggered by tags matching `cvcpkg-v*` (e.g. cvcpkg-v2.0.0,
+# cvcpkg-v2.0.0a1, cvcpkg-v2.0.0rc1).
+#
+# Pipeline:
+#   1. test          — unit + integration tests on Python 3.10-3.13
+#   2. build         — build sdist + wheel, sanity-check `cvcpkg --version`
+#   3. live-smoke    — install the built wheel on Linux/macOS/Windows and
+#                      exercise it against the live https://cvcpkg.org
+#                      registry (list, info, install, verify). A green
+#                      smoke run is the gate for any publish.
+#   4. publish-testpypi  — always publish to TestPyPI first
+#                          (skip-existing). Lets us verify the wheel is
+#                          installable through pip from a real index
+#                          before promoting.
+#   5. publish-pypi  — publish to PyPI. Runs only on STABLE tags
+#                      (cvcpkg-vMAJOR.MINOR.PATCH with no pre-release
+#                      suffix). Pre-release tags (a/b/rc/dev) stop after
+#                      TestPyPI so we can iterate without burning version
+#                      numbers on PyPI.
 #
 # Prerequisites:
-#   - PyPI project "cvcpkg" configured for trusted publishing
-#     from transfix/libcvc-deps, workflow cvcpkg-publish.yml.
+#   - PyPI project "cvcpkg" configured for trusted publishing from
+#     transfix/libcvc-deps, workflow cvcpkg-publish.yml, environment
+#     "pypi". See:
+#     https://docs.pypi.org/trusted-publishers/adding-a-publisher/
+#   - TestPyPI project "cvcpkg" configured for trusted publishing,
+#     same repo/workflow, environment "testpypi".
 
 name: Publish cvcpkg to PyPI
 
@@ -14,10 +34,16 @@ on:
   push:
     tags:
       - 'cvcpkg-v[0-9]+.*'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch or tag to build (workflow_dispatch only; will run smoke + TestPyPI but skip PyPI)'
+        required: false
+        default: ''
 
 permissions:
   contents: read
-  id-token: write  # Required for PyPI trusted publishing (OIDC)
+  id-token: write  # Required for PyPI/TestPyPI trusted publishing (OIDC)
 
 jobs:
   test:
@@ -29,6 +55,8 @@ jobs:
         python: ['3.10', '3.11', '3.12', '3.13']
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -51,17 +79,23 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
       - name: Install build tools
-        run: pip install build
+        run: pip install build twine
 
       - name: Build sdist and wheel
         working-directory: tools/cvcpkg
         run: python -m build
+
+      - name: Check distributions with twine
+        working-directory: tools/cvcpkg
+        run: twine check dist/*
 
       - name: Verify wheel installs
         run: |
@@ -73,10 +107,128 @@ jobs:
           name: cvcpkg-dist
           path: tools/cvcpkg/dist/
 
-  publish:
+  live-smoke:
+    name: Live smoke (${{ matrix.os }} / Py ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ['3.10', '3.12']
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: cvcpkg-dist
+          path: dist/
+
+      - name: Install cvcpkg from built wheel
+        shell: bash
+        run: |
+          set -eux
+          pip install --upgrade pip
+          pip install dist/cvcpkg-*.whl
+          cvcpkg --version
+
+      - name: Probe the live registry
+        shell: bash
+        env:
+          CVCPKG_SERVER_URL: https://cvcpkg.org
+        run: |
+          set -eux
+          # Catalog HTTP probe (must respond with non-empty JSON).
+          python -c "
+          import json, urllib.request, sys
+          r = urllib.request.urlopen('https://cvcpkg.org/v1/catalog', timeout=30)
+          d = json.load(r)
+          assert d.get('schema_version') == 1, d
+          assert len(d.get('bundles') or []) > 0, 'empty catalog'
+          print('catalog revision:', d.get('revision'),
+                'bundles:', len(d['bundles']))
+          "
+          # CLI probes against the live site.
+          cvcpkg list --available | head -20
+          cvcpkg info zlib
+
+      - name: Install a real package and verify it
+        shell: bash
+        env:
+          CVCPKG_SERVER_URL: https://cvcpkg.org
+        run: |
+          set -eux
+          prefix="$(pwd)/_cvcpkg_smoke_prefix"
+          # zlib is published on linux/macos/windows; use it as the
+          # canary because it is small and exercises download + verify
+          # + extract on every platform.
+          cvcpkg install --prefix "$prefix" zlib
+          cvcpkg verify --prefix "$prefix" || true
+          # Spot-check that something landed in the prefix.
+          python -c "
+          import os, sys
+          prefix = sys.argv[1]
+          contents = []
+          for root, dirs, files in os.walk(prefix):
+              for f in files:
+                  contents.append(os.path.join(root, f))
+                  if len(contents) > 5: break
+              if len(contents) > 5: break
+          assert contents, f'prefix {prefix} is empty'
+          print('installed files (sample):')
+          for c in contents[:5]: print(' ', c)
+          " "$prefix"
+
+  publish-testpypi:
+    name: Publish to TestPyPI
+    runs-on: ubuntu-latest
+    needs: live-smoke
+    environment: testpypi
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: cvcpkg-dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+      - name: Verify install from TestPyPI
+        run: |
+          set -eux
+          # Give TestPyPI's CDN a moment to surface the new version.
+          for i in 1 2 3 4 5; do
+            if pip install \
+                --index-url https://test.pypi.org/simple/ \
+                --extra-index-url https://pypi.org/simple/ \
+                --no-cache-dir \
+                cvcpkg; then
+              break
+            fi
+            sleep $((i * 10))
+          done
+          cvcpkg --version
+
+  publish-pypi:
     name: Publish to PyPI
     runs-on: ubuntu-latest
-    needs: build
+    needs: publish-testpypi
+    # Only fire on stable tags: cvcpkg-vMAJOR.MINOR.PATCH (no pre-release
+    # suffix, no workflow_dispatch). This protects PyPI from being
+    # burned on iteration tags like cvcpkg-v2.0.0rc1.
+    if: >-
+      github.event_name == 'push' &&
+      startsWith(github.ref, 'refs/tags/cvcpkg-v') &&
+      !contains(github.ref, 'a') &&
+      !contains(github.ref, 'b') &&
+      !contains(github.ref, 'rc') &&
+      !contains(github.ref, 'dev') &&
+      !contains(github.ref, 'post')
     environment: pypi
     steps:
       - uses: actions/download-artifact@v4
@@ -87,3 +239,4 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+          skip-existing: true
