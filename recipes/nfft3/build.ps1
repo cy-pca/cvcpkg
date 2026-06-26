@@ -76,13 +76,20 @@ if ($LASTEXITCODE -ne 0) { throw "MSYS2 NFFT3 build failed ($LASTEXITCODE)" }
 $src = Join-Path $work "install"
 New-Item -ItemType Directory -Force -Path "$Prefix/bin","$Prefix/lib","$Prefix/include","$Prefix/lib/pkgconfig" | Out-Null
 
-# DLLs
+# DLLs.  MSYS2/mingw64 libtool emits them as cygnfft3-N.dll / cygnfft3_threads-N.dll
+# (mingw32 host detection still uses the "cyg" prefix).  Rename to libnfft3-*
+# on the way into $Prefix/bin so downstream consumers and recipe.yaml file
+# globs see the conventional names.
 $nfftDlls = Get-ChildItem "$src/bin" -Filter '*.dll' -ErrorAction SilentlyContinue
 if (-not $nfftDlls) {
     $nfftDlls = Get-ChildItem "$src/lib" -Filter '*.dll' -ErrorAction SilentlyContinue
 }
 if (-not $nfftDlls) { throw "No NFFT DLLs found under $src" }
-foreach ($f in $nfftDlls) { Copy-Item $f.FullName "$Prefix/bin/" -Force }
+foreach ($f in $nfftDlls) {
+    $name = $f.Name
+    if ($name -match '^cyg(nfft3.*)$') { $name = 'lib' + $Matches[1] }
+    Copy-Item $f.FullName (Join-Path "$Prefix/bin" $name) -Force
+}
 
 # Stage mingw runtime DLLs
 $mingwBin = 'C:\msys64\mingw64\bin'

@@ -4,6 +4,16 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\..\\_common\\env-windows.ps1"
 
+# In-place fix-up of cmake/Helper.cmake: relax -Werror -> -Wno-error so
+# the build doesn't fail on warnings emitted by newer compilers.  Done
+# here instead of via a patch file because Strawberry Perl's bundled
+# patch.exe 2.5.9 (year 2003) asserts out on any modern unified diff.
+$helperCmake = Join-Path (Get-Location) 'cmake\Helper.cmake'
+if (Test-Path $helperCmake) {
+    (Get-Content $helperCmake -Raw) -replace '(?m)^(\s*)-Werror\s*$', '$1-Wno-error' |
+        Set-Content -Encoding ASCII $helperCmake
+}
+
 # Locate LLVM installation for AOT support.
 # GitHub runners install LLVM via Chocolatey at "C:\Program Files\LLVM".
 $llvmArgs = @()

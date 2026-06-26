@@ -216,6 +216,7 @@ def builder_run(
     import threading
     import time
     import traceback
+    import zipfile
 
     import httpx
 
@@ -494,13 +495,21 @@ def builder_run(
                     log_cb(f"  dep {dep_name}: download failed ({dl_resp.status_code})\n")
                     continue
 
-                # Extract into prefix
+                # Extract into prefix.  Archive may be either tar.gz
+                # (POSIX builders) or .zip (Windows builder); pick based
+                # on the URL suffix.
                 archive_bytes = dl_resp.content
-                tmp_archive = prefix / f"_dep_{dep_name}.tar.gz"
+                is_zip = archive_url.lower().endswith(".zip")
+                suffix = ".zip" if is_zip else ".tar.gz"
+                tmp_archive = prefix / f"_dep_{dep_name}{suffix}"
                 tmp_archive.write_bytes(archive_bytes)
                 try:
-                    with tarfile.open(tmp_archive, "r:gz") as tf:
-                        tf.extractall(path=prefix)  # noqa: S202
+                    if is_zip:
+                        with zipfile.ZipFile(tmp_archive) as zf:
+                            zf.extractall(path=prefix)  # noqa: S202
+                    else:
+                        with tarfile.open(tmp_archive, "r:gz") as tf:
+                            tf.extractall(path=prefix)  # noqa: S202
                 except Exception as exc:
                     log_cb(f"  dep {dep_name}: extract failed ({exc})\n")
                 finally:
@@ -610,11 +619,17 @@ def builder_run(
                     log_cb(f"  toolchain {tc_name}: download failed ({dl_resp.status_code})\n")
                     continue
 
-                tmp_archive = prefix / f"_toolchain_{tc_name}.tar.gz"
+                is_zip = archive_url.lower().endswith(".zip")
+                suffix = ".zip" if is_zip else ".tar.gz"
+                tmp_archive = prefix / f"_toolchain_{tc_name}{suffix}"
                 tmp_archive.write_bytes(dl_resp.content)
                 try:
-                    with tarfile.open(tmp_archive, "r:gz") as tf:
-                        tf.extractall(path=prefix)  # noqa: S202
+                    if is_zip:
+                        with zipfile.ZipFile(tmp_archive) as zf:
+                            zf.extractall(path=prefix)  # noqa: S202
+                    else:
+                        with tarfile.open(tmp_archive, "r:gz") as tf:
+                            tf.extractall(path=prefix)  # noqa: S202
                 except Exception as exc:
                     log_cb(f"  toolchain {tc_name}: extract failed ({exc})\n")
                     continue
