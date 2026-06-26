@@ -184,6 +184,7 @@ jobs:
           echo "Count: $COUNT archives"
 
       - name: Publish to cvcpkg.org
+        if: always()
         shell: bash
         env:
           CVCPKG_SERVER_URL: ${{ inputs.server }}
