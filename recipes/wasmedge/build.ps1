@@ -33,10 +33,28 @@ if ((Test-Path $llvmCmake) -and (Test-Path $lldCmake)) {
     $llvmArgs = @('-DWASMEDGE_USE_LLVM=OFF')
 }
 
+# Link-aware build args.  WasmEdge 0.17.0's split shared library on
+# Windows is broken upstream: the per-target DLLs reference internal
+# symbols (WasmEdge::MMap, WasmEdge::Allocator) that aren't exported,
+# producing LNK2019.  For shared builds we therefore still ship a
+# DLL but produce it from the bundled static archive (one monolithic
+# wasmedge.dll instead of a fan of split DLLs).  For static builds
+# we just disable the shared lib.
+$linkArgs = if ($env:CVC_LINK -eq 'static') {
+    @(
+        '-DWASMEDGE_BUILD_SHARED_LIB=OFF',
+        '-DWASMEDGE_BUILD_STATIC_LIB=ON',
+        '-DWASMEDGE_LINK_LLVM_STATIC=ON'
+    )
+} else {
+    @(
+        '-DWASMEDGE_BUILD_SHARED_LIB=ON',
+        '-DWASMEDGE_BUILD_STATIC_LIB=OFF'
+    )
+}
+
 Invoke-CvcCMakeBuild (@(
     '-DWASMEDGE_BUILD_TESTS=OFF',
     '-DWASMEDGE_BUILD_TOOLS=ON',
-    '-DWASMEDGE_BUILD_PLUGINS=OFF',
-    '-DWASMEDGE_BUILD_SHARED_LIB=ON',
-    '-DWASMEDGE_BUILD_STATIC_LIB=ON'
-) + $llvmArgs)
+    '-DWASMEDGE_BUILD_PLUGINS=OFF'
+) + $linkArgs + $llvmArgs)
