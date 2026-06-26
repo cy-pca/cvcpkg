@@ -18,6 +18,8 @@ if (Test-Path "$winPlatform\CMakeLists.txt") {
     -B $env:CVC_BUILD_DIR `
     "-DCMAKE_INSTALL_PREFIX=$env:CVC_INSTALL_DIR" `
     "-DCMAKE_BUILD_TYPE=$cmakeBuildType" `
+    '-DCMAKE_C_COMPILER=cl' `
+    '-DCMAKE_CXX_COMPILER=cl' `
     '-DWAMR_BUILD_INTERP=1' `
     '-DWAMR_BUILD_FAST_INTERP=1' `
     '-DWAMR_BUILD_AOT=1' `
