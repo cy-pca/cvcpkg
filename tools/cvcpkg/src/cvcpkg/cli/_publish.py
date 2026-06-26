@@ -574,7 +574,6 @@ def _publish_chunked(
         raise click.ClickException(f"upload complete failed ({resp.status_code}): {resp.text}")
 
 
-
 # ── add ─────────────────────────────────────────────────────────
 
 
@@ -633,7 +632,6 @@ def add(components: tuple[str, ...], from_file: str) -> None:
     click.echo(f"cvcpkg: added {', '.join(added)} to {from_file}")
 
 
-
 # ── remove ──────────────────────────────────────────────────────
 
 
@@ -685,5 +683,3 @@ def remove(components: tuple[str, ...], from_file: str) -> None:
     with open(path, "w") as f:
         yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
     click.echo(f"cvcpkg: removed {', '.join(removed)} from {from_file}")
-
-

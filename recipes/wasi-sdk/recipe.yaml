@@ -34,7 +34,8 @@ patches: []
 
 depends:
   build: []
-  host_tools: []
+  host_tools:
+    - wasmtime
 
 build:
   build_type_independent: true

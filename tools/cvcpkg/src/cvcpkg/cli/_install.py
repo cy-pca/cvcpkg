@@ -297,7 +297,9 @@ def install(
     # ── Download and extract each resolved bundle ──
     cache_dir = default_cache_dir()
     lock_entries: list[LockEntry] = []
-    rdirs = _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes) if recipes_dirs else None
+    rdirs = (
+        _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes) if recipes_dirs else None
+    )
 
     # Fetch mirror list for failover downloads.
     server_url = os.environ.get("CVCPKG_SERVER_URL", "")
@@ -395,7 +397,6 @@ def install(
     click.echo(f"cvcpkg: done -- {len(picked)} component(s) installed to {prefix_path}")
 
 
-
 # ── list ────────────────────────────────────────────────────────
 
 
@@ -457,7 +458,6 @@ def list_cmd(mode: str | None, prefix: str) -> None:
     click.echo("cvcpkg: use --installed or --available.")
 
 
-
 # ── info ────────────────────────────────────────────────────────
 
 
@@ -502,7 +502,6 @@ def info(component: str) -> None:
         )
         click.echo(f"Dependencies:     {deps}")
     click.echo(f"Available versions: {', '.join(sorted({e.version for e in matches}))}")
-
 
 
 # ── validate ────────────────────────────────────────────────────
@@ -555,7 +554,6 @@ def validate(target: str) -> None:
         raise SystemExit(ret)
 
 
-
 # ── verify ──────────────────────────────────────────────────────
 
 
@@ -606,7 +604,6 @@ def verify(prefix: str) -> None:
         raise click.ClickException("verification found issues.")
 
 
-
 # ── lock ────────────────────────────────────────────────────────
 
 
@@ -619,7 +616,6 @@ def lock() -> None:
     """
     click.echo("cvcpkg: lockfile is written automatically by 'cvcpkg install'.")
     click.echo("cvcpkg: to re-lock, run 'cvcpkg install --from <requirements>'.")
-
 
 
 # ── sync ────────────────────────────────────────────────────────
@@ -693,5 +689,3 @@ def sync(prefix: str) -> None:
         click.echo(f"cvcpkg: synced {installed} bundle(s).")
     else:
         click.echo("cvcpkg: prefix is in sync.")
-
-

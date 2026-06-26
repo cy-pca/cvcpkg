@@ -301,7 +301,6 @@ def token_set_metadata(server: str, token: str, name: str, metadata: str):
     click.echo(f"Metadata for '{name}' updated.")
 
 
-
 # ── user profile lookup (client → server API) ──────────────────
 
 
@@ -472,7 +471,6 @@ def user_by_email(server: str, email: str):
     click.echo(f"  Created:     {data.get('created_at', '')}")
 
 
-
 # ── self-service registration (client → server API) ────────────
 
 
@@ -529,7 +527,6 @@ def register_cmd(server: str, name: str, email: str, role: str, description: str
     if request_id:
         click.echo(f"  Request ID: {request_id}")
         click.echo("  You will be notified when an admin reviews your request.")
-
 
 
 # ── remote server management (client → server API) ─────────────
@@ -601,7 +598,6 @@ def server_status(server: str):
     click.echo(f"  Packages:   {data.get('packages_count', '?')}")
     click.echo(f"  Uptime:     {data.get('uptime_seconds', '?')}s")
     click.echo(f"  Mirror:     {data.get('mirror_mode', False)}")
-
 
 
 # ── remote org member management (client → server API) ─────────
@@ -698,5 +694,3 @@ def org_remove_member(slug: str, server: str, token: str, name: str):
     url = f"{server.rstrip('/')}/v1/orgs/{slug}/members/{name}"
     _api_request("delete", url, token)
     click.echo(f"Removed '{name}' from '{slug}'.")
-
-

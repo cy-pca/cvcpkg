@@ -880,12 +880,37 @@ class DbPackageIndex:
             )
             return result.rowcount
 
-    async def delete(self, name: str, version: str) -> int:
+    async def delete(
+        self,
+        name: str,
+        version: str,
+        *,
+        platform: str | None = None,
+        link: str | None = None,
+    ) -> int:
+        from sqlalchemy import delete as sa_delete
+
+        async with get_session() as session:
+            stmt = sa_delete(PackageRow).where(
+                PackageRow.name == name, PackageRow.version == version
+            )
+            if platform is not None:
+                stmt = stmt.where(PackageRow.platform == platform)
+            if link is not None:
+                stmt = stmt.where(PackageRow.link == link)
+            result = await session.execute(stmt)
+            return result.rowcount
+
+    async def delete_by_link(self, platform: str, link: str) -> int:
+        """Delete all bundles matching a platform and link mode."""
         from sqlalchemy import delete as sa_delete
 
         async with get_session() as session:
             result = await session.execute(
-                sa_delete(PackageRow).where(PackageRow.name == name, PackageRow.version == version)
+                sa_delete(PackageRow).where(
+                    PackageRow.platform == platform,
+                    PackageRow.link == link,
+                )
             )
             return result.rowcount
 
@@ -1910,8 +1935,15 @@ class DbBuilderStore:
         *,
         status: str = BuilderStatus.online,
         current_jobs: int = 0,
+        reconcile: bool = False,
     ) -> BuilderInfo | None:
-        """Record a heartbeat from a builder. Returns updated info or None."""
+        """Record a heartbeat from a builder. Returns updated info or None.
+
+        When *reconcile* is True, ``current_jobs`` is computed from the
+        actual number of dispatched/running jobs in the database rather
+        than trusting the client-reported value.  This prevents the
+        counter from drifting after builder restarts or lost heartbeats.
+        """
         now = datetime.datetime.now(datetime.timezone.utc)
         async with get_session() as session:
             row = (
@@ -1921,7 +1953,22 @@ class DbBuilderStore:
                 return None
             row.last_heartbeat = now
             row.status = status
-            row.current_jobs = current_jobs
+            if reconcile:
+                db_count = (
+                    await session.execute(
+                        select(sa_func.count())
+                        .select_from(BuildJobRow)
+                        .where(BuildJobRow.builder_id == builder_id)
+                        .where(
+                            BuildJobRow.status.in_(
+                                [BuildJobStatus.dispatched, BuildJobStatus.running]
+                            )
+                        )
+                    )
+                ).scalar() or 0
+                row.current_jobs = db_count
+            else:
+                row.current_jobs = current_jobs
             return self._row_to_info(row)
 
     async def unregister(self, builder_id: int) -> bool:
@@ -2158,7 +2205,11 @@ class DbBuildJobStore:
                 count_q = count_q.where(BuildJobRow.builder_id == builder_id)
 
             total = (await session.execute(count_q)).scalar() or 0
-            q = q.order_by(BuildJobRow.submitted_at.desc(), BuildJobRow.id.desc()).limit(limit).offset(offset)
+            q = (
+                q.order_by(BuildJobRow.submitted_at.desc(), BuildJobRow.id.desc())
+                .limit(limit)
+                .offset(offset)
+            )
             rows = (await session.execute(q)).scalars().all()
             results = []
             for row in rows:
@@ -2339,7 +2390,7 @@ class DbBuildJobStore:
             return self._row_to_info(row, dep_ids)
 
     async def complete(self, job_id: int, *, result_archive_url: str = "") -> BuildJobInfo | None:
-        """Mark a job as succeeded."""
+        """Mark a job as succeeded and reconcile builder job count."""
         now = datetime.datetime.now(datetime.timezone.utc)
         async with get_session() as session:
             row = (
@@ -2347,16 +2398,36 @@ class DbBuildJobStore:
             ).scalar()
             if row is None:
                 return None
+            builder_id = row.builder_id
             row.status = BuildJobStatus.succeeded
             row.finished_at = now
             row.error_message = ""
             if result_archive_url:
                 row.result_archive_url = result_archive_url
+            # Reconcile builder's current_jobs from actual DB state
+            if builder_id is not None:
+                active = (
+                    await session.execute(
+                        select(sa_func.count())
+                        .select_from(BuildJobRow)
+                        .where(BuildJobRow.builder_id == builder_id)
+                        .where(
+                            BuildJobRow.status.in_(
+                                [BuildJobStatus.dispatched, BuildJobStatus.running]
+                            )
+                        )
+                    )
+                ).scalar() or 0
+                builder_row = (
+                    await session.execute(select(BuilderRow).where(BuilderRow.id == builder_id))
+                ).scalar()
+                if builder_row is not None:
+                    builder_row.current_jobs = active
             dep_ids = await self._load_dep_ids(session, job_id)
             return self._row_to_info(row, dep_ids)
 
     async def fail(self, job_id: int, *, error_message: str = "") -> BuildJobInfo | None:
-        """Mark a job as failed."""
+        """Mark a job as failed and reconcile builder job count."""
         now = datetime.datetime.now(datetime.timezone.utc)
         async with get_session() as session:
             row = (
@@ -2364,10 +2435,30 @@ class DbBuildJobStore:
             ).scalar()
             if row is None:
                 return None
+            builder_id = row.builder_id
             row.status = BuildJobStatus.failed
             row.finished_at = now
             if error_message:
                 row.error_message = error_message
+            # Reconcile builder's current_jobs from actual DB state
+            if builder_id is not None:
+                active = (
+                    await session.execute(
+                        select(sa_func.count())
+                        .select_from(BuildJobRow)
+                        .where(BuildJobRow.builder_id == builder_id)
+                        .where(
+                            BuildJobRow.status.in_(
+                                [BuildJobStatus.dispatched, BuildJobStatus.running]
+                            )
+                        )
+                    )
+                ).scalar() or 0
+                builder_row = (
+                    await session.execute(select(BuilderRow).where(BuilderRow.id == builder_id))
+                ).scalar()
+                if builder_row is not None:
+                    builder_row.current_jobs = active
             dep_ids = await self._load_dep_ids(session, job_id)
             return self._row_to_info(row, dep_ids)
 

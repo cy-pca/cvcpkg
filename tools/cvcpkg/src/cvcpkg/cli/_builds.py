@@ -362,9 +362,7 @@ def builds_follow_dag(dag_id: str, server: str, token: str):
         if bid not in builder_names:
             try:
                 with httpx.Client(timeout=10) as client:
-                    resp = client.get(
-                        f"{base}/v1/builders/{bid}", headers=headers
-                    )
+                    resp = client.get(f"{base}/v1/builders/{bid}", headers=headers)
                 if resp.status_code < 400:
                     builder_names[bid] = resp.json().get("name", f"#{bid}")
                 else:
@@ -460,7 +458,6 @@ def builds_follow_dag(dag_id: str, server: str, token: str):
 
     if failed:
         raise SystemExit(1)
-
 
 
 # ── Build-wait helpers ──────────────────────────────────────────────
@@ -626,6 +623,11 @@ def builds_submit(
 
     Example: cvcpkg builds submit --recipe zlib --platform linux --arch x86_64
     """
+    # wasm/wasi only support static linking.
+    if platform in ("wasm", "wasi") and link != "static":
+        link = "static"
+        click.echo(f"  Note: forcing --link=static for {platform} (shared not supported)")
+
     body: dict = {
         "recipe_name": recipe_name,
         "platform": platform,
@@ -778,6 +780,9 @@ def builds_submit_dag(
                 continue
             for cfg in configs:
                 for lnk in links:
+                    # wasm/wasi only support static linking.
+                    if plat in _WASM_PLATFORMS and lnk != "static":
+                        continue
                     # Filter recipes: skip those with no matrix entry
                     eligible = [n for n in recipe_names if _has_platform_entry(n, plat)]
                     skipped = set(recipe_names) - set(eligible)
@@ -792,9 +797,7 @@ def builds_submit_dag(
                         continue
 
                     # Build name→index mapping for depends_on resolution
-                    name_to_idx: dict[str, int] = {
-                        name: idx for idx, name in enumerate(eligible)
-                    }
+                    name_to_idx: dict[str, int] = {name: idx for idx, name in enumerate(eligible)}
 
                     jobs = []
                     for name in eligible:
@@ -1060,5 +1063,3 @@ def builds_monitor(server: str, token: str, interval: float, dag_id: str | None)
                 time.sleep(interval)
     except KeyboardInterrupt:
         click.echo("\nMonitor stopped.")
-
-

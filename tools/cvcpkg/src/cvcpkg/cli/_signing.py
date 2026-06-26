@@ -109,7 +109,6 @@ def key_export(label: str, keys_dir: str | None) -> None:
     raise click.ClickException(f"Key '{label}' not found")
 
 
-
 # ── sign ────────────────────────────────────────────────────────
 
 
@@ -140,7 +139,6 @@ def sign(archive: str, signing_key: str, password: str | None) -> None:
     sig_path = archive_path.with_suffix(archive_path.suffix + ".sig")
     write_signature(sig, sig_path)
     click.echo(f"Signed: {sig_path.name} (key: {sig.key_fingerprint[:16]}...)")
-
 
 
 # ── verify-sig ──────────────────────────────────────────────────
@@ -181,5 +179,3 @@ def verify_sig(archive: str, sig_file: str | None, keys_dir: str | None) -> None
     sig = read_signature(sp)
     ki = verify_file(archive_path, sig, kd)
     click.echo(f"Verified: signed by '{ki.label}' ({ki.fingerprint[:16]}...)")
-
-
