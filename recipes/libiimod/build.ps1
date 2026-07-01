@@ -3,7 +3,10 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\..\\_common\\env-windows.ps1"
 
-$libiimodSrc = Join-Path $scriptDir "..\..\third-party\libiimod"
+# CVC_SOURCE_DIR is set by the builder to the vendored source tree
+# (bundled under _vendored/third-party/libiimod/ when running on a
+# remote builder, or resolved from the repo root when building locally).
+$libiimodSrc = $env:CVC_SOURCE_DIR
 
 & cmake -G Ninja `
     -S $libiimodSrc `
