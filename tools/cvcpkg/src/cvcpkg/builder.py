@@ -344,7 +344,15 @@ def fetch_source(recipe: Recipe, work_dir: Path) -> Path:
 
 
 def apply_patches(recipe: Recipe, source_dir: Path) -> None:
-    """Apply patches listed in the recipe."""
+    """Apply patches listed in the recipe.
+
+    Tries ``git apply`` first (widely available, tolerant of modern
+    unified diffs) and falls back to ``patch -p1`` when git isn't on
+    PATH or rejects the diff.  This ordering matters on Windows,
+    where Strawberry Perl ships an ancient ``patch.exe`` (2.5.9,
+    year 2003) that asserts out on any diff with git-mailbox headers
+    or new-style hunk markers.
+    """
     for patch_file in recipe.patches:
         patch_path = (recipe.recipe_dir / patch_file).resolve()
         # Security: ensure patch file doesn't escape the recipe directory
@@ -352,16 +360,30 @@ def apply_patches(recipe: Recipe, source_dir: Path) -> None:
             raise RecipeError(f"Patch path escapes recipe directory: {patch_file}")
         if not patch_path.is_file():
             raise RecipeError(f"Patch file not found: {patch_path}")
-        result = subprocess.run(
-            ["patch", "-p1", "-i", str(patch_path)],
-            cwd=source_dir,
-            check=False,
-            capture_output=True,
-        )
-        if result.returncode != 0:
+
+        attempts: list[list[str]] = []
+        if shutil.which("git") is not None:
+            attempts.append(
+                ["git", "apply", "-p1", "--whitespace=nowarn", str(patch_path)]
+            )
+        attempts.append(["patch", "-p1", "-i", str(patch_path)])
+
+        last_err = ""
+        applied = False
+        for cmd in attempts:
+            result = subprocess.run(
+                cmd,
+                cwd=source_dir,
+                check=False,
+                capture_output=True,
+            )
+            if result.returncode == 0:
+                applied = True
+                break
+            last_err = result.stderr.decode(errors="replace").strip() or last_err
+        if not applied:
             raise RecipeError(
-                f"Failed to apply patch {patch_file}: "
-                f"{result.stderr.decode(errors='replace').strip()}"
+                f"Failed to apply patch {patch_file}: {last_err}"
             )
 
 
