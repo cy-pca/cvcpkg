@@ -4,30 +4,57 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\..\\_common\\env-windows.ps1"
 
-# PostgreSQL 18+ uses Meson.  Bootstrap it via pip if the builder image
-# does not already ship a meson launcher on PATH.
+# PostgreSQL 18+ uses Meson.  Locate a Python interpreter (via the
+# Windows 'py' launcher, then 'python3'/'python' on PATH), then use
+# it to install meson if the launcher isn't already on PATH.  The
+# cvcpkg builder daemon does not always inherit Python on PATH
+# under the SYSTEM account, so 'python' by itself may not resolve.
+function Get-CvcPythonInvocation {
+    foreach ($candidate in @('py', 'python3', 'python')) {
+        $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
+        if ($cmd) {
+            if ($candidate -eq 'py') { return @($cmd.Source, '-3') }
+            return @($cmd.Source)
+        }
+    }
+    throw "No Python interpreter found on PATH (tried: py, python3, python)"
+}
+
 $mesonCmd = Get-Command meson -ErrorAction SilentlyContinue
 if (-not $mesonCmd) {
     Write-Host "cvcpkg: meson not found on PATH; installing via pip ..."
-    & python -m pip install --disable-pip-version-check --quiet meson
+    $pyInvoke = Get-CvcPythonInvocation
+    & $pyInvoke[0] @($pyInvoke[1..($pyInvoke.Length - 1)] + @(
+        '-m', 'pip', 'install', '--disable-pip-version-check', '--quiet', 'meson'
+    ))
     if ($LASTEXITCODE -ne 0) { throw "pip install meson failed" }
     $mesonCmd = Get-Command meson -ErrorAction SilentlyContinue
 }
-$mesonExe = if ($mesonCmd) { $mesonCmd.Source } else { 'python -m mesonbuild.mesonmain' }
+
+if ($mesonCmd) {
+    $mesonExe  = $mesonCmd.Source
+    $mesonArgs = @()
+} else {
+    $pyInvoke  = Get-CvcPythonInvocation
+    $mesonExe  = $pyInvoke[0]
+    $mesonArgs = @($pyInvoke[1..($pyInvoke.Length - 1)] + @('-m', 'mesonbuild.mesonmain'))
+}
 
 Set-Location $env:CVC_SOURCE_DIR
 
 # Meson-based build for libpq only.
-& $mesonExe setup $env:CVC_BUILD_DIR `
-    "--prefix=$env:CVC_INSTALL_DIR" `
-    '--buildtype=release' `
-    '-Dlibpq=true' `
-    '-Dssl=openssl' `
-    '-Dzlib=enabled' `
-    '-Dreadline=disabled' `
-    '-Dzstd=disabled' `
-    '-Dlz4=disabled' `
+& $mesonExe @($mesonArgs + @(
+    'setup', $env:CVC_BUILD_DIR,
+    "--prefix=$env:CVC_INSTALL_DIR",
+    '--buildtype=release',
+    '-Dlibpq=true',
+    '-Dssl=openssl',
+    '-Dzlib=enabled',
+    '-Dreadline=disabled',
+    '-Dzstd=disabled',
+    '-Dlz4=disabled',
     '-Dnls=disabled'
+))
 if ($LASTEXITCODE -ne 0) { throw "meson setup failed" }
 
 Set-Location $env:CVC_BUILD_DIR
