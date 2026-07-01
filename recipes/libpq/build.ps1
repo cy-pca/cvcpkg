@@ -4,10 +4,21 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\..\\_common\\env-windows.ps1"
 
+# PostgreSQL 18+ uses Meson.  Bootstrap it via pip if the builder image
+# does not already ship a meson launcher on PATH.
+$mesonCmd = Get-Command meson -ErrorAction SilentlyContinue
+if (-not $mesonCmd) {
+    Write-Host "cvcpkg: meson not found on PATH; installing via pip ..."
+    & python -m pip install --disable-pip-version-check --quiet meson
+    if ($LASTEXITCODE -ne 0) { throw "pip install meson failed" }
+    $mesonCmd = Get-Command meson -ErrorAction SilentlyContinue
+}
+$mesonExe = if ($mesonCmd) { $mesonCmd.Source } else { 'python -m mesonbuild.mesonmain' }
+
 Set-Location $env:CVC_SOURCE_DIR
 
 # Meson-based build for libpq only.
-& meson setup $env:CVC_BUILD_DIR `
+& $mesonExe setup $env:CVC_BUILD_DIR `
     "--prefix=$env:CVC_INSTALL_DIR" `
     '--buildtype=release' `
     '-Dlibpq=true' `
