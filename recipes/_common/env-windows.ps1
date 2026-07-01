@@ -88,7 +88,35 @@ function Invoke-CvcVcpkgInstall {
     }
 
     Write-Host "cvcpkg: vcpkg install $spec"
-    $vcpkgArgs = @('install', $spec, "--x-install-root=$env:CVC_BUILD_DIR/vcpkg-installed")
+
+    # Newer vcpkg distributions (e.g. the one bootstrapped on phm-win11)
+    # ship without a "classic mode" instance and refuse
+    #   vcpkg install <port>[:triplet]
+    # with 'Could not locate a manifest (vcpkg.json) above the current
+    # working directory'.  Generate an ephemeral manifest and drive vcpkg
+    # in manifest mode instead — that works in both classic-capable and
+    # manifest-only distributions.
+    $manifestDir = Join-Path $env:CVC_BUILD_DIR ("vcpkg-manifest-" + $Port)
+    New-Item -ItemType Directory -Force -Path $manifestDir | Out-Null
+    $depEntry = if ($Features.Count -gt 0) {
+        @{ name = $Port; features = @($Features) }
+    } else {
+        $Port
+    }
+    $manifest = @{
+        name             = "cvcpkg-$($Port.ToLower())-stage"
+        'version-string' = '0.0.0'
+        dependencies     = @($depEntry)
+    }
+    $manifestPath = Join-Path $manifestDir 'vcpkg.json'
+    ($manifest | ConvertTo-Json -Depth 6) | Set-Content -Encoding UTF8 $manifestPath
+
+    $vcpkgArgs = @(
+        'install',
+        "--x-manifest-root=$manifestDir",
+        "--x-install-root=$env:CVC_BUILD_DIR/vcpkg-installed",
+        "--triplet=$Triplet"
+    )
     if ($OverlayPorts) {
         $vcpkgArgs += "--overlay-ports=$OverlayPorts"
     }
