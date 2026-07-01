@@ -38,9 +38,10 @@ function Invoke-GrpcFetchArchive {
     if ($Url -like '*.zip') {
         Expand-Archive -Path $archivePath -DestinationPath $extractDir
     } else {
-        # GNU tar treats drive-letter prefixes (C:) as remote host references.
-        # Use --force-local to disable this interpretation on Windows.
-        tar --force-local -xzf ($archivePath -replace '\\','/') -C ($extractDir -replace '\\','/')
+        # Windows ships bsdtar (libarchive) as tar.exe; it does not accept the
+        # GNU-only --force-local flag but already handles drive-letter paths
+        # correctly when they are passed with forward slashes.
+        tar -xzf ($archivePath -replace '\\','/') -C ($extractDir -replace '\\','/')
     }
     $parentDir = Split-Path -Parent $Dest
     if (-not (Test-Path $parentDir)) {
