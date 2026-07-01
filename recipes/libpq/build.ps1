@@ -5,19 +5,45 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\..\\_common\\env-windows.ps1"
 
 # PostgreSQL 18+ uses Meson.  Locate a Python interpreter (via the
-# Windows 'py' launcher, then 'python3'/'python' on PATH), then use
-# it to install meson if the launcher isn't already on PATH.  The
-# cvcpkg builder daemon does not always inherit Python on PATH
-# under the SYSTEM account, so 'python' by itself may not resolve.
+# Windows 'py' launcher, then 'python3'/'python' on PATH, then a
+# filesystem scan of well-known install roots).  The cvcpkg builder
+# daemon on phm-win11 runs as SYSTEM and inherits a PATH that does
+# not include the per-user Python install directory, and 'py -3'
+# reports "No installed Python found!" because PEP 397's registry
+# lookup only sees HKCU entries — SYSTEM has its own HKCU with no
+# Python.  Scan the filesystem as a fallback so this recipe works
+# with a per-user Python install too.
 function Get-CvcPythonInvocation {
+    # Prefer named commands, but verify each one actually runs.
     foreach ($candidate in @('py', 'python3', 'python')) {
         $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
-        if ($cmd) {
-            if ($candidate -eq 'py') { return @($cmd.Source, '-3') }
-            return @($cmd.Source)
+        if (-not $cmd) { continue }
+        $args = if ($candidate -eq 'py') { @('-3', '--version') } else { @('--version') }
+        try {
+            $null = & $cmd.Source @args 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                if ($candidate -eq 'py') { return @($cmd.Source, '-3') }
+                return @($cmd.Source)
+            }
+        } catch { }
+    }
+    # Fallback: scan filesystem for python.exe. Newest version wins.
+    $roots = @(
+        'C:\Program Files\Python313', 'C:\Program Files\Python312',
+        'C:\Program Files\Python311', 'C:\Program Files\Python310',
+        'C:\Python313', 'C:\Python312', 'C:\Python311', 'C:\Python310'
+    )
+    # Enumerate per-user Python installs under any user profile.
+    Get-ChildItem 'C:\Users\*\AppData\Local\Programs\Python\Python3*' -Directory -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending | ForEach-Object { $roots += $_.FullName }
+    foreach ($root in $roots) {
+        $exe = Join-Path $root 'python.exe'
+        if (Test-Path $exe) {
+            Write-Host "cvcpkg: using Python at $exe (filesystem fallback)"
+            return @($exe)
         }
     }
-    throw "No Python interpreter found on PATH (tried: py, python3, python)"
+    throw "No Python interpreter found (tried: py, python3, python; scanned Program Files, C:\Python*, and per-user AppData installs)"
 }
 
 $mesonCmd = Get-Command meson -ErrorAction SilentlyContinue
