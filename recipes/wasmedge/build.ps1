@@ -53,8 +53,48 @@ $linkArgs = if ($env:CVC_LINK -eq 'static') {
     )
 }
 
-Invoke-CvcCMakeBuild (@(
+$commonArgs = @(
     '-DWASMEDGE_BUILD_TESTS=OFF',
     '-DWASMEDGE_BUILD_TOOLS=ON',
     '-DWASMEDGE_BUILD_PLUGINS=OFF'
-) + $linkArgs + $llvmArgs)
+) + $linkArgs + $llvmArgs
+
+# For static builds we need a post-configure patch: WasmEdge's
+# combine-static-libraries custom command creates one working
+# directory per input library named 'objs/<target>'.  When it
+# encounters CMake ALIAS targets like fmt::fmt the ':' in the
+# directory name is rejected by Windows filesystem ("Error creating
+# directory objs/fmt::fmt").  Rewrite the generated .bat files to
+# use '__' in place of '::' before invoking the build step.
+if ($env:CVC_LINK -eq 'static') {
+    # Configure only.
+    $configureArgs = @(
+        '-G', 'Ninja',
+        '-S', $env:CVC_SOURCE_DIR,
+        '-B', $env:CVC_BUILD_DIR,
+        "-DCMAKE_INSTALL_PREFIX=$env:CVC_INSTALL_DIR",
+        "-DCMAKE_BUILD_TYPE=$cmakeBuildType",
+        "-DBUILD_SHARED_LIBS=$buildSharedLibs",
+        "-DCMAKE_MSVC_RUNTIME_LIBRARY=$msvcRuntime",
+        "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
+    ) + $commonArgs
+    & cmake @configureArgs
+    if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
+
+    # Rewrite '::' → '__' in any combine-static-libs helper batch file.
+    Get-ChildItem -Path $env:CVC_BUILD_DIR -Recurse -Filter '*.bat' |
+        Where-Object { (Get-Content $_.FullName -Raw) -match '::' } |
+        ForEach-Object {
+            $fixed = (Get-Content $_.FullName -Raw) -replace '::', '__'
+            Set-Content -Encoding ASCII -Path $_.FullName -Value $fixed
+            Write-Host "cvcpkg: sanitised colons in $($_.FullName)"
+        }
+
+    & cmake --build $env:CVC_BUILD_DIR -j $env:CVC_JOBS
+    if ($LASTEXITCODE -ne 0) { throw "cmake build failed" }
+
+    & cmake --install $env:CVC_BUILD_DIR
+    if ($LASTEXITCODE -ne 0) { throw "cmake install failed" }
+} else {
+    Invoke-CvcCMakeBuild $commonArgs
+}
