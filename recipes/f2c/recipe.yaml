@@ -1,0 +1,62 @@
+schema_version: 1
+recipe:
+  name: f2c
+  upstream_version: "20240504"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "f2c — the classic Fortran 77 to C source translator from netlib. Reads .f source and emits equivalent .c that links against libf2c (bundled in the clapack recipe)."
+  homepage: https://www.netlib.org/f2c/
+  # AT&T/Lucent/Bellcore permissive notice — closest SPDX match is HPND
+  # (Historical Permission Notice and Disclaimer).  See src/Notice.
+  license: HPND
+  tags: [tools]
+
+source:
+  type: tarball
+  url: https://www.netlib.org/f2c/src.tgz
+  sha256: "b2824a6f7b75ffe0193ce9ba55463191a7af7c2ffe10e371e372451e2b527e09"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - bin/f2c*
+    - include/f2c.h
+    - share/man/man1/f2c.1
+
+abi:
+  cxx_std: 17
+
+notes: |
+  f2c is a translator, not a library — the packaged artefacts are the
+  `f2c` executable, the `f2c.h` header (shared by the generated C sources
+  and libf2c), and the man page.  The runtime library (`libf2c`) is
+  intentionally NOT part of this recipe: the CLAPACK recipe already
+  bundles a lightly-forked libf2c that provides the same symbols and
+  works for both LAPACK-derived code and hand-translated Fortran, so
+  duplicating it here would just create two conflicting installs.  If a
+  downstream project needs to run f2c and then compile the result, add
+  both `f2c` (build tool) and `clapack` (link-time libf2c) to its
+  dependency list.
