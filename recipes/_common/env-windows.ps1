@@ -65,139 +65,119 @@ function Invoke-CvcCMakeBuild {
     if ($LASTEXITCODE -ne 0) { throw "cmake install failed" }
 }
 
-function Invoke-CvcVcpkgInstall {
+# ── MSYS2 / MinGW autotools helper ──────────────────────────────────
+#
+# A handful of dependencies (gmp, mpfr, gsl) have no working native
+# MSVC build (upstream autotools is Unix-only, no CMake, GNU-only
+# assembly).  For those we build via MinGW-w64 gcc + GNU make driven
+# through Git Bash — this produces cdecl-C DLLs that MSVC downstream
+# consumers can link against through the mingw-generated import
+# library.  When CVC_LINK=static we use the mingw static archive
+# directly; it links cleanly from MSVC for pure-C libraries with no
+# libgcc/libstdc++ dependencies (which is the case for gmp/mpfr/gsl).
+#
+# The builder is expected to have Git Bash on PATH (as env-wasm.ps1
+# already assumes) plus MSYS2 mingw-w64 gcc + make + m4 + libtool.
+# See vm-provisioning docs for the required MSYS2 packages.
+
+function Get-CvcGitBash {
+    foreach ($candidate in @(
+        "$env:ProgramFiles\Git\usr\bin\bash.exe",
+        "$env:ProgramFiles\Git\bin\bash.exe",
+        "${env:ProgramFiles(x86)}\Git\usr\bin\bash.exe"
+    )) {
+        if (Test-Path $candidate) { return $candidate }
+    }
+    $found = Get-Command bash -ErrorAction SilentlyContinue |
+             Where-Object { $_.Source -notmatch 'System32' } |
+             Select-Object -First 1
+    if ($found) { return $found.Source }
+    throw 'Git Bash (bash.exe) not found on PATH'
+}
+
+function ConvertTo-CvcMsysPath {
+    # Convert C:\foo\bar → /c/foo/bar for autotools scripts.
+    param([string]$Path)
+    if ($Path -match '^([A-Za-z]):(.*)$') {
+        $drive = $Matches[1].ToLower()
+        $rest  = $Matches[2] -replace '\\','/'
+        return "/$drive$rest"
+    }
+    return ($Path -replace '\\','/')
+}
+
+function Invoke-CvcMsysAutotoolsBuild {
     <#
     .SYNOPSIS
-      Install a vcpkg port and stage its files into the cvcpkg prefix.
-    .PARAMETER Port
-      The vcpkg port name (e.g. "clapack", "pthreads").
-    .PARAMETER Triplet
-      vcpkg triplet. Defaults to x64-windows or x64-windows-static based on CVC_LINK.
-    .PARAMETER Features
-      Optional feature list (e.g. @("cpp")).
-    .PARAMETER OverlayPorts
-      Optional path to an overlay-ports directory (passed as --overlay-ports to vcpkg).
+      Configure + make + make install via Git Bash + MinGW gcc.
+    .PARAMETER ConfigureArgs
+      Extra arguments to pass to ./configure (beyond --prefix + --host).
+    .PARAMETER Host
+      Cross-compilation host triple.  Defaults to x86_64-w64-mingw32
+      (native MinGW-w64 on Windows).
     #>
     param(
-        [Parameter(Mandatory)][string]$Port,
-        [string]$Triplet = '',
-        [string[]]$Features = @(),
-        [string]$OverlayPorts = ''
+        [string[]]$ConfigureArgs = @(),
+        [string]$HostTriple = 'x86_64-w64-mingw32'
     )
 
-    if (-not $Triplet) {
-        $Triplet = if ($env:CVC_LINK -eq 'static') { 'x64-windows-static' } else { 'x64-windows' }
-    }
+    $bash        = Get-CvcGitBash
+    $msysPrefix  = ConvertTo-CvcMsysPath $env:CVC_INSTALL_DIR
+    $msysSource  = ConvertTo-CvcMsysPath $env:CVC_SOURCE_DIR
+    $msysDeps    = if ($env:CVC_DEPS_PREFIX) { ConvertTo-CvcMsysPath $env:CVC_DEPS_PREFIX } else { '' }
 
-    if (-not (Get-Command vcpkg -ErrorAction SilentlyContinue)) {
-        throw "vcpkg not found on PATH — required for port '$Port'"
-    }
-
-    $spec = if ($Features.Count -gt 0) {
-        "${Port}[$($Features -join ',')]:${Triplet}"
+    $sharedFlags = if ($env:CVC_LINK -eq 'static') {
+        '--enable-static --disable-shared'
     } else {
-        "${Port}:${Triplet}"
+        '--enable-shared --enable-static'
     }
 
-    Write-Host "cvcpkg: vcpkg install $spec"
-
-    # vcpkg defaults its download / tool cache to %LOCALAPPDATA%\vcpkg.
-    # When the builder runs as the LocalSystem account, that resolves
-    # to C:\Windows\System32\config\systemprofile\AppData\Local\vcpkg,
-    # where the bundled 7zr.exe intermittently fails with
-    # 'The system cannot find the path specified' while extracting
-    # 7z2501.7z (long-path / SYSTEM-profile weirdness).  Redirect the
-    # caches to a plain path under the builder's work dir and wipe any
-    # partial 7z extraction so a fresh redownload is triggered.
-    $vcpkgCache = Join-Path $env:CVC_BUILD_DIR 'vcpkg-cache'
-    $env:VCPKG_DOWNLOADS       = Join-Path $vcpkgCache 'downloads'
-    $env:VCPKG_DEFAULT_BINARY_CACHE = Join-Path $vcpkgCache 'archives'
-    New-Item -ItemType Directory -Force -Path $env:VCPKG_DOWNLOADS       | Out-Null
-    New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
-    foreach ($stale in @(
-        (Join-Path $env:LOCALAPPDATA 'vcpkg\downloads\7z2501.7z'),
-        (Join-Path $env:LOCALAPPDATA 'vcpkg\downloads\tools\7zr-25.01-windows')
-    )) {
-        if ($stale -and (Test-Path $stale)) {
-            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $stale
+    # Build one big command line for bash; the caller-provided extras
+    # win over defaults because they come last.
+    $extras   = ($ConfigureArgs -join ' ')
+    $depsFlag = if ($msysDeps) { "PATH='$msysDeps/bin:'`$PATH" } else { '' }
+    $cmd = "$depsFlag cd '$msysSource' && ./configure --prefix='$msysPrefix' --host='$HostTriple' $sharedFlags $extras"
+    Write-Host "cvcpkg: bash -c `"$cmd`""
+    & $bash -lc $cmd
+    if ($LASTEXITCODE -ne 0) {
+        $cfgLog = Join-Path $env:CVC_SOURCE_DIR 'config.log'
+        if (Test-Path $cfgLog) {
+            Write-Host '--- config.log (last 80 lines) ---'
+            Get-Content $cfgLog -Tail 80
         }
+        throw "configure failed"
     }
 
-    # Newer vcpkg distributions (e.g. the one bootstrapped on phm-win11)
-    # ship without a "classic mode" instance and refuse
-    #   vcpkg install <port>[:triplet]
-    # with 'Could not locate a manifest (vcpkg.json) above the current
-    # working directory'.  Generate an ephemeral manifest and drive vcpkg
-    # in manifest mode instead — that works in both classic-capable and
-    # manifest-only distributions.
-    $manifestDir = Join-Path $env:CVC_BUILD_DIR ("vcpkg-manifest-" + $Port)
-    New-Item -ItemType Directory -Force -Path $manifestDir | Out-Null
-    $depEntry = if ($Features.Count -gt 0) {
-        @{ name = $Port; features = @($Features) }
-    } else {
-        $Port
-    }
-    $manifest = @{
-        name             = "cvcpkg-$($Port.ToLower())-stage"
-        'version-string' = '0.0.0'
-        dependencies     = @($depEntry)
-    }
-    # Newer vcpkg refuses manifest-mode operations without a
-    # 'builtin-baseline' pinning the default registry to a git SHA
-    # (error: "this vcpkg instance requires a manifest with a specified
-    # baseline in order to interact with ports").  Try to derive the
-    # baseline from the vcpkg checkout the vcpkg.exe on PATH belongs to.
-    $vcpkgRoot = $env:VCPKG_ROOT
-    if (-not $vcpkgRoot) {
-        $vcpkgCmd = Get-Command vcpkg -ErrorAction SilentlyContinue
-        if ($vcpkgCmd) {
-            $vcpkgRoot = Split-Path -Parent $vcpkgCmd.Source
+    & $bash -lc "cd '$msysSource' && make -j $env:CVC_JOBS"
+    if ($LASTEXITCODE -ne 0) { throw "make failed" }
+
+    & $bash -lc "cd '$msysSource' && make install"
+    if ($LASTEXITCODE -ne 0) { throw "make install failed" }
+
+    # Post-process installed libraries so MSVC downstream can link:
+    #   libfoo.dll.a  → foo.lib      (import library for shared)
+    #   libfoo.a      → foo.lib      (static archive; only used when
+    #                                 CVC_LINK=static — safe for
+    #                                 pure-C libs without libgcc deps)
+    # Copies rather than renames so both mingw-style names and
+    # MSVC-style names are present, and downstream find_library() can
+    # locate whichever it looks for.
+    $installLib = Join-Path $env:CVC_INSTALL_DIR 'lib'
+    if (Test-Path $installLib) {
+        foreach ($f in Get-ChildItem -Path $installLib -File -Filter 'lib*.dll.a' -ErrorAction SilentlyContinue) {
+            $stem = $f.Name.Substring(3, $f.Name.Length - 3 - 6)   # strip "lib" prefix + ".dll.a" suffix
+            $dest = Join-Path $installLib ($stem + '.lib')
+            if (-not (Test-Path $dest)) { Copy-Item -Force $f.FullName $dest }
         }
-    }
-    if ($vcpkgRoot -and (Test-Path (Join-Path $vcpkgRoot '.git'))) {
-        try {
-            $baseline = (& git -C $vcpkgRoot rev-parse HEAD 2>$null)
-            if ($baseline) {
-                $manifest['builtin-baseline'] = $baseline.Trim()
-            }
-        } catch { }
-    }
-    $manifestPath = Join-Path $manifestDir 'vcpkg.json'
-    ($manifest | ConvertTo-Json -Depth 6) | Set-Content -Encoding UTF8 $manifestPath
-
-    $vcpkgArgs = @(
-        'install',
-        "--x-manifest-root=$manifestDir",
-        "--x-install-root=$env:CVC_BUILD_DIR/vcpkg-installed",
-        "--triplet=$Triplet"
-    )
-    if ($OverlayPorts) {
-        $vcpkgArgs += "--overlay-ports=$OverlayPorts"
-    }
-    & vcpkg @vcpkgArgs
-    if ($LASTEXITCODE -ne 0) { throw "vcpkg install $spec failed" }
-
-    $installed = Join-Path $env:CVC_BUILD_DIR "vcpkg-installed/$Triplet"
-    foreach ($sub in @('include','lib','bin','share','tools')) {
-        $src = Join-Path $installed $sub
-        if (Test-Path $src) {
-            Copy-Item -Recurse -Force $src $env:CVC_INSTALL_DIR
-        }
-    }
-    # Always stage debug/ subdirectory — vcpkg cmake targets reference both
-    # release and debug lib paths (e.g. ${_IMPORT_PREFIX}/debug/lib/foo.lib).
-    $debugDir = Join-Path $installed "debug"
-    if (Test-Path $debugDir) {
-        $destDebug = Join-Path $env:CVC_INSTALL_DIR "debug"
-        if (-not (Test-Path $destDebug)) { New-Item -ItemType Directory -Path $destDebug | Out-Null }
-        foreach ($sub in @('lib','bin')) {
-            $src = Join-Path $debugDir $sub
-            if (Test-Path $src) {
-                Copy-Item -Recurse -Force $src $destDebug
+        if ($env:CVC_LINK -eq 'static') {
+            foreach ($f in Get-ChildItem -Path $installLib -File -Filter 'lib*.a' -ErrorAction SilentlyContinue) {
+                if ($f.Name -like '*.dll.a') { continue }
+                $stem = $f.Name.Substring(3, $f.Name.Length - 3 - 2)  # strip "lib" prefix + ".a" suffix
+                $dest = Join-Path $installLib ($stem + '.lib')
+                if (-not (Test-Path $dest)) { Copy-Item -Force $f.FullName $dest }
             }
         }
     }
-    Write-Host "cvcpkg: $Port staged to $env:CVC_INSTALL_DIR"
 }
 
 Write-Host "-- env-windows.ps1 loaded --"

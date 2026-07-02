@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: clapack
   upstream_version: "3.2.1"
-  cvc_revision: 1
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -29,7 +29,6 @@ build:
   matrix:
     - platform: windows
       script: build.ps1
-      vcpkg_port: clapack
     - platform: wasm
       host_platform: linux
       script: build-wasm.sh
@@ -46,6 +45,9 @@ package:
     - lib/libblas*
     - lib/libf2c*
     - lib/cmake/clapack/
+    - bin/lapack*
+    - bin/blas*
+    - bin/f2c*
     - include/blaswrap.h
     - include/clapack.h
     - include/f2c.h
@@ -64,7 +66,8 @@ notes: |
   - discere-os/lapack.wasm on GitHub was investigated but is just a fork of
     Reference-LAPACK with zero actual wasm work (the "wasm" branch only adds
     a FUNDING.yml; sources are still .f files).
-  - On native platforms (Linux/macOS) we use OpenBLAS; on Windows we use
-    vcpkg's clapack port. On wasm this recipe builds CLAPACK from source.
+  - On native platforms (Linux/macOS) we use OpenBLAS; on Windows and wasm
+    this recipe builds CLAPACK from the netlib -CMAKE tarball directly (no
+    vcpkg).
   - Provides BLAS + LAPACK symbols needed by levmar, and potentially other
     packages (F2Dock, etc.) in the future.

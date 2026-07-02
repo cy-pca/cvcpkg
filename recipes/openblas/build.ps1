@@ -1,10 +1,20 @@
-# recipes/openblas/build.ps1 — OpenBLAS on Windows via vcpkg.
+# recipes/openblas/build.ps1 — build OpenBLAS on Windows with MSVC.
 #
-# Building from source requires gfortran (MinGW) for LAPACK Fortran code,
-# which produces object files incompatible with MSVC's linker. Use the
-# vcpkg port which handles this correctly.
+# OpenBLAS has first-class CMake support and builds cleanly with
+# MSVC + Ninja.  We disable the built-in test executables (they
+# require a Fortran compiler and getopt.h) and only build BLAS + LAPACK
+# using the bundled f2c'd sources.
 $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-. "$scriptDir\..\\_common\\env-windows.ps1"
+. "$scriptDir\..\_common\env-windows.ps1"
 
-Invoke-CvcVcpkgInstall -Port 'openblas'
+Invoke-CvcCMakeBuild @(
+    '-DNOFORTRAN=1',
+    '-DBUILD_WITHOUT_LAPACK=OFF',
+    '-DC_LAPACK=ON',
+    '-DBUILD_TESTING=OFF',
+    '-DUSE_THREAD=1',
+    '-DDYNAMIC_ARCH=OFF',
+    '-DTARGET=GENERIC',
+    '-DCMAKE_C_FLAGS=/wd4013 /wd4133 /wd4244 /wd4267 /wd4996 /D_CRT_SECURE_NO_WARNINGS'
+)

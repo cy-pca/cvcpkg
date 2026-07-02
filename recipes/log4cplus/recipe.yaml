@@ -50,7 +50,6 @@ build:
         CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
-      vcpkg_port: log4cplus
     - platform: wasm
       host_platform: linux
       script: build-wasm.sh

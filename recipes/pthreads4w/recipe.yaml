@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: pthreads4w
   upstream_version: "3.0.0"
-  cvc_revision: 1
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -12,33 +12,34 @@ recipe:
   tags: [concurrency]
 
 source:
-  type: vcpkg
-  port: pthreads
-  triplet: x64-windows
+  # Upstream pthreads4w is only distributed as a .zip on SourceForge and
+  # the project has been effectively unmaintained since 2018 (v3.0.0).
+  # We vendor the pruned source tree here so builds are reproducible and
+  # do not depend on SourceForge availability or on zip extractor support
+  # in the cvcpkg fetcher.
+  type: vendored
+  path: third-party/pthreads4w
 
 patches: []
 
 depends:
   build: []
-  host_tools:
-    - cmake
-    - ninja
+  host_tools: []
 
 build:
   matrix:
     - platform: windows
       script: build.ps1
-      vcpkg_port: pthreads
 
 package:
   files:
-    - lib/pthreadV*
-    - lib/pthread*
-    - lib/cmake/pthreads/
+    - lib/pthreadV*.lib
+    - lib/libpthreadV*.lib
+    - bin/pthreadV*.dll
     - include/pthread.h
     - include/sched.h
     - include/semaphore.h
-    - bin/pthread*
+    - include/_ptw32.h
   cmake_packages:
     - { name: Threads, targets: ["Threads::Threads"] }
 
