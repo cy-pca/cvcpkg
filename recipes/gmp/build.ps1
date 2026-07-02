@@ -34,7 +34,15 @@ if (Test-Path $configureFile) {
     }
 }
 
-Invoke-CvcMsysAutotoolsBuild @(
-    '--enable-cxx',
-    '--disable-assembly'
-)
+# GMP rejects `--enable-shared --enable-static` together with
+# "configure: error: cannot build both static and DLL, since gmp.h
+# is different for each." — pick exactly one based on CVC_LINK.
+# Extras win over the helper's defaults because they come last on
+# the configure command line.
+$linkMode = if ($env:CVC_LINK -eq 'static') {
+    @('--enable-static', '--disable-shared')
+} else {
+    @('--enable-shared', '--disable-static')
+}
+
+Invoke-CvcMsysAutotoolsBuild (@('--enable-cxx', '--disable-assembly') + $linkMode)
