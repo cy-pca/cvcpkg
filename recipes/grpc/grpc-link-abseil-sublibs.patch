@@ -1,0 +1,67 @@
+--- a/cmake/abseil-cpp.cmake
++++ b/cmake/abseil-cpp.cmake
+@@ -38,3 +38,64 @@ elseif(gRPC_ABSL_PROVIDER STREQUAL "package")
+   find_package(absl REQUIRED CONFIG)
+ endif()
+ set(_gRPC_FIND_ABSL "if(NOT TARGET absl::strings)\n  find_package(absl CONFIG)\nendif()")
++
++# cvcpkg patch: when abseil is provided as a package and both abseil and
++# protobuf are built as static .lib on Windows, the transitive
++# INTERFACE_LINK_LIBRARIES chain from protobuf::libprotobuf does not
++# always propagate every absl sub-target that protobuf's own .obj files
++# reference (raw_hash_set, hash, city, log_internal_*, raw_logging_internal,
++# etc.), which causes ~100 unresolved externals when linking
++# grpc_cpp_plugin.exe.  Force-link the full set of absl targets on every
++# grpc target so that any downstream executable picks them up.
++if(TARGET absl::hash)
++  list(APPEND _gRPC_ALLTARGETS_LIBRARIES
++    absl::hash
++    absl::city
++    absl::low_level_hash
++    absl::hash_function_defaults
++    absl::raw_hash_set
++    absl::flat_hash_map
++    absl::flat_hash_set
++    absl::node_hash_map
++    absl::node_hash_set
++    absl::btree
++    absl::log
++    absl::log_internal_check_op
++    absl::log_internal_message
++    absl::log_internal_nullguard
++    absl::log_internal_nullstream
++    absl::log_internal_globals
++    absl::log_internal_format
++    absl::log_internal_log_sink_set
++    absl::log_internal_proto
++    absl::log_globals
++    absl::log_severity
++    absl::log_initialize
++    absl::log_entry
++    absl::log_sink
++    absl::check
++    absl::die_if_null
++    absl::raw_logging_internal
++    absl::cord
++    absl::cord_internal
++    absl::str_format
++    absl::str_format_internal
++    absl::strings
++    absl::strings_internal
++    absl::string_view
++    absl::status
++    absl::statusor
++    absl::synchronization
++    absl::time
++    absl::base
++    absl::memory
++    absl::optional
++    absl::variant
++    absl::any_invocable
++    absl::function_ref
++    absl::span
++    absl::debugging
++    absl::stacktrace
++    absl::symbolize
++  )
++endif()
