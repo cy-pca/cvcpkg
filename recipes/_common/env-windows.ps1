@@ -81,7 +81,17 @@ function Invoke-CvcCMakeBuild {
 # See vm-provisioning docs for the required MSYS2 packages.
 
 function Get-CvcGitBash {
+    # Return a bash.exe that has (or can find) mingw-w64 gcc + make +
+    # autotools on its PATH.  MSYS2's own bash under C:\msys64 is
+    # preferred because it is the environment where our MinGW packages
+    # (mingw-w64-x86_64-gcc, make, m4, libtool, autoconf, automake)
+    # are installed.  Git Bash is used as a fallback for platforms
+    # (e.g. wasm) where no native compilation is needed — those
+    # recipes drive emcc/emmake and don't rely on gcc/make being
+    # present in the shell.
     foreach ($candidate in @(
+        'C:\msys64\usr\bin\bash.exe',
+        'C:\tools\msys64\usr\bin\bash.exe',
         "$env:ProgramFiles\Git\usr\bin\bash.exe",
         "$env:ProgramFiles\Git\bin\bash.exe",
         "${env:ProgramFiles(x86)}\Git\usr\bin\bash.exe"
@@ -92,7 +102,7 @@ function Get-CvcGitBash {
              Where-Object { $_.Source -notmatch 'System32' } |
              Select-Object -First 1
     if ($found) { return $found.Source }
-    throw 'Git Bash (bash.exe) not found on PATH'
+    throw 'bash.exe not found (looked under C:\msys64\usr\bin\, Git\usr\bin\, and PATH)'
 }
 
 function ConvertTo-CvcMsysPath {
@@ -126,6 +136,16 @@ function Invoke-CvcMsysAutotoolsBuild {
     $msysSource  = ConvertTo-CvcMsysPath $env:CVC_SOURCE_DIR
     $msysDeps    = if ($env:CVC_DEPS_PREFIX) { ConvertTo-CvcMsysPath $env:CVC_DEPS_PREFIX } else { '' }
 
+    # Force the MinGW-w64 64-bit subsystem so that /mingw64/bin
+    # (gcc, make, libtool, autoconf, m4, ...) is on the shell PATH.
+    # Without MSYSTEM set, MSYS2's bash defaults to the plain msys
+    # environment where gcc is not present.  MSYS_NO_PATHCONV=1
+    # prevents MSYS from mangling Windows-style arguments passed to
+    # non-MSYS binaries invoked from configure/libtool.
+    $env:MSYSTEM         = 'MINGW64'
+    $env:MSYS_NO_PATHCONV = '1'
+    $env:CHERE_INVOKING  = '1'
+
     $sharedFlags = if ($env:CVC_LINK -eq 'static') {
         '--enable-static --disable-shared'
     } else {
@@ -137,7 +157,7 @@ function Invoke-CvcMsysAutotoolsBuild {
     $extras   = ($ConfigureArgs -join ' ')
     $depsFlag = if ($msysDeps) { "PATH='$msysDeps/bin:'`$PATH" } else { '' }
     $cmd = "$depsFlag cd '$msysSource' && ./configure --prefix='$msysPrefix' --host='$HostTriple' $sharedFlags $extras"
-    Write-Host "cvcpkg: bash -c `"$cmd`""
+    Write-Host "cvcpkg: bash -lc `"$cmd`""
     & $bash -lc $cmd
     if ($LASTEXITCODE -ne 0) {
         $cfgLog = Join-Path $env:CVC_SOURCE_DIR 'config.log'
