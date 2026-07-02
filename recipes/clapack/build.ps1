@@ -53,17 +53,22 @@ foreach ($d in @($installLib, $installInclude, $installCmake)) {
 # Libraries — MSVC + Ninja single-config drops .lib files at the
 # source-dir-mirrored paths under the build tree.  Because we force
 # BUILD_SHARED_LIBS=OFF above, every target is a static .lib and
-# there are no DLLs to stage.
+# there are no DLLs to stage.  Note that CMake keeps target names
+# verbatim on Windows (no lib-prefix stripping), so the f2c target
+# defined as `libf2c` produces `libf2c.lib` — we rename it to
+# `f2c.lib` in the staged install layout so downstream find_package
+# picks it up under the imported target name `f2c`.
 foreach ($libInfo in @(
-    @{ Target = 'f2c';    Src = 'F2CLIBS\libf2c' },
-    @{ Target = 'blas';   Src = 'BLAS\SRC' },
-    @{ Target = 'lapack'; Src = 'SRC' }
+    @{ Target = 'f2c';    Src = 'F2CLIBS\libf2c'; CmakeName = 'libf2c' },
+    @{ Target = 'blas';   Src = 'BLAS\SRC';       CmakeName = 'blas' },
+    @{ Target = 'lapack'; Src = 'SRC';            CmakeName = 'lapack' }
 )) {
-    $srcLib = Join-Path $env:CVC_BUILD_DIR ("$($libInfo.Src)\$($libInfo.Target).lib")
+    $srcLib = Join-Path $env:CVC_BUILD_DIR ("$($libInfo.Src)\$($libInfo.CmakeName).lib")
     if (-not (Test-Path $srcLib)) {
         throw "expected library not found: $srcLib"
     }
-    Copy-Item -Force $srcLib $installLib
+    $dstLib = Join-Path $installLib ("$($libInfo.Target).lib")
+    Copy-Item -Force $srcLib $dstLib
 }
 
 # Headers.
