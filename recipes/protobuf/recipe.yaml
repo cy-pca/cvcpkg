@@ -54,7 +54,6 @@ build:
         CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
-      vcpkg_port: protobuf
       vcpkg_features: ["libprotoc"]
 
 package:

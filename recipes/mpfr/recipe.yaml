@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: mpfr
   upstream_version: "4.2.1"
-  cvc_revision: 2
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -50,6 +50,8 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
     - platform: wasm
       host_platform: linux
       script: build-wasm.sh

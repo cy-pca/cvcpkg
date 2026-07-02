@@ -53,7 +53,6 @@ build:
         CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
-      vcpkg_port: hdf5
       vcpkg_features: ["cpp"]
     - platform: wasm
       host_platform: linux

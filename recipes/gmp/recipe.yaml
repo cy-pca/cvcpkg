@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: gmp
   upstream_version: "6.3.0"
-  cvc_revision: 1
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -49,7 +49,6 @@ build:
         CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
-      vcpkg_port: gmp
     - platform: wasm
       host_platform: linux
       script: build-wasm.sh

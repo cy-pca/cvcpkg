@@ -214,20 +214,28 @@ def _cache_key(source: SourceSpec) -> str:
 
 
 def _fetch_tarball(source: SourceSpec, dest: Path) -> Path:
-    """Download a tarball, verify SHA-256, and extract.
+    """Download an archive (tar.gz/.tar.xz/.tar.bz2/.zip), verify SHA-256, and extract.
 
     If a source cache directory is configured (default
-    ``~/.cache/cvcpkg/sources``), verified tarballs are stored there
+    ``~/.cache/cvcpkg/sources``), verified archives are stored there
     keyed by SHA-256.  Subsequent builds skip the download entirely
     when the cached file is present and matches.
     """
     import urllib.error
     import urllib.request
 
-    archive_path = dest / "source.tar.gz"
     urls = [u for u in (source.url, source.mirror) if u]
     if not urls:
         raise RecipeError("source.type=tarball but no URL specified")
+
+    # Detect archive kind from the primary URL so we know how to extract.
+    # We keep the on-disk name suffix aligned with the URL suffix — the
+    # sha256 cache key is content-addressed so the cached filename does
+    # not need to reflect the format.
+    _primary = urls[0].lower()
+    _is_zip = _primary.endswith(".zip")
+    _suffix = ".zip" if _is_zip else ".tar.gz"
+    archive_path = dest / f"source{_suffix}"
 
     cache_dir = _source_cache_dir()
     cache_hit = False
@@ -235,7 +243,7 @@ def _fetch_tarball(source: SourceSpec, dest: Path) -> Path:
     # Try the cache first
     if cache_dir is not None:
         key = _cache_key(source)
-        cached = cache_dir / f"{key}.tar.gz"
+        cached = cache_dir / f"{key}{_suffix}"
         if cached.is_file():
             # Verify integrity when SHA-256 is known
             if source.sha256:
@@ -276,22 +284,31 @@ def _fetch_tarball(source: SourceSpec, dest: Path) -> Path:
     if not cache_hit and cache_dir is not None:
         key = _cache_key(source)
         cache_dir.mkdir(parents=True, exist_ok=True)
-        cached = cache_dir / f"{key}.tar.gz"
+        cached = cache_dir / f"{key}{_suffix}"
         shutil.copy2(str(archive_path), str(cached))
 
     # Extract
     source_dir = dest / "src"
     source_dir.mkdir()
-    with tarfile.open(archive_path) as tf:
-        # Security: reject paths that escape the target directory
-        for member in tf.getmembers():
-            resolved = (source_dir / member.name).resolve()
-            if not str(resolved).startswith(str(source_dir.resolve())):
-                raise RecipeError(f"Tarball member escapes target: {member.name}")
-        if sys.version_info >= (3, 12):
-            tf.extractall(source_dir, filter="data")
-        else:
-            tf.extractall(source_dir)
+    if _is_zip:
+        with zipfile.ZipFile(archive_path) as zf:
+            # Security: reject paths that escape the target directory
+            for name in zf.namelist():
+                resolved = (source_dir / name).resolve()
+                if not str(resolved).startswith(str(source_dir.resolve())):
+                    raise RecipeError(f"Zip member escapes target: {name}")
+            zf.extractall(source_dir)
+    else:
+        with tarfile.open(archive_path) as tf:
+            # Security: reject paths that escape the target directory
+            for member in tf.getmembers():
+                resolved = (source_dir / member.name).resolve()
+                if not str(resolved).startswith(str(source_dir.resolve())):
+                    raise RecipeError(f"Tarball member escapes target: {member.name}")
+            if sys.version_info >= (3, 12):
+                tf.extractall(source_dir, filter="data")
+            else:
+                tf.extractall(source_dir)
 
     # If strip_components>0, move the inner directory up
     if source.strip_components > 0:
