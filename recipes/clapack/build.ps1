@@ -27,8 +27,18 @@ if (Test-Path $cmakeLists) {
 # as warnings by default (level 4), but /WX-clean is not the goal —
 # suppress the common noise and disable the auto-generated /W3 warning
 # flood that would balloon the log.
+#
+# BUILD_SHARED_LIBS=OFF is forced regardless of CVC_LINK because
+# F2CLIBS/libf2c/main.c unconditionally references MAIN__ (the user's
+# Fortran main), which is undefined in libf2c itself.  For static
+# archives the unresolved reference is harmless; for DLLs the linker
+# fails with LNK2019.  vcpkg's clapack port takes the same approach
+# (ONLY_STATIC_LIBRARY) — see microsoft/vcpkg PR #50727.  Downstream
+# shared-library consumers link the static f2c/blas/lapack into
+# themselves.
 Invoke-CvcCMakeBuild @(
     '-DBUILD_TESTING=OFF',
+    '-DBUILD_SHARED_LIBS=OFF',
     '-DCMAKE_C_FLAGS=/wd4013 /wd4133 /wd4244 /wd4267 /wd4996 /D_CRT_SECURE_NO_WARNINGS'
 )
 
@@ -41,8 +51,9 @@ foreach ($d in @($installLib, $installInclude, $installCmake)) {
 }
 
 # Libraries — MSVC + Ninja single-config drops .lib files at the
-# source-dir-mirrored paths under the build tree.
-$libSuffix = if ($env:CVC_LINK -eq 'static') { 'lib' } else { 'dll' }
+# source-dir-mirrored paths under the build tree.  Because we force
+# BUILD_SHARED_LIBS=OFF above, every target is a static .lib and
+# there are no DLLs to stage.
 foreach ($libInfo in @(
     @{ Target = 'f2c';    Src = 'F2CLIBS\libf2c' },
     @{ Target = 'blas';   Src = 'BLAS\SRC' },
@@ -53,15 +64,6 @@ foreach ($libInfo in @(
         throw "expected library not found: $srcLib"
     }
     Copy-Item -Force $srcLib $installLib
-    # Shared: also grab the .dll (goes to bin/ on Windows).
-    if ($env:CVC_LINK -ne 'static') {
-        $srcDll = Join-Path $env:CVC_BUILD_DIR ("$($libInfo.Src)\$($libInfo.Target).dll")
-        if (Test-Path $srcDll) {
-            $installBin = Join-Path $env:CVC_INSTALL_DIR 'bin'
-            New-Item -ItemType Directory -Force -Path $installBin | Out-Null
-            Copy-Item -Force $srcDll $installBin
-        }
-    }
 }
 
 # Headers.
@@ -73,12 +75,12 @@ foreach ($h in @('blaswrap.h','clapack.h','f2c.h')) {
 }
 
 # CMake config package so find_package(clapack CONFIG) works.
-$libtype = if ($env:CVC_LINK -eq 'static') { 'STATIC' } else { 'SHARED' }
+# We always import as STATIC (see BUILD_SHARED_LIBS=OFF above).
 $configContent = @"
 get_filename_component(_clapack_prefix "`${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
 
 if(NOT TARGET f2c)
-  add_library(f2c $libtype IMPORTED)
+  add_library(f2c STATIC IMPORTED)
   set_target_properties(f2c PROPERTIES
     IMPORTED_LOCATION "`${_clapack_prefix}/lib/f2c.lib"
     INTERFACE_INCLUDE_DIRECTORIES "`${_clapack_prefix}/include"
@@ -86,7 +88,7 @@ if(NOT TARGET f2c)
 endif()
 
 if(NOT TARGET blas)
-  add_library(blas $libtype IMPORTED)
+  add_library(blas STATIC IMPORTED)
   set_target_properties(blas PROPERTIES
     IMPORTED_LOCATION "`${_clapack_prefix}/lib/blas.lib"
     INTERFACE_LINK_LIBRARIES "f2c"
@@ -94,7 +96,7 @@ if(NOT TARGET blas)
 endif()
 
 if(NOT TARGET lapack)
-  add_library(lapack $libtype IMPORTED)
+  add_library(lapack STATIC IMPORTED)
   set_target_properties(lapack PROPERTIES
     IMPORTED_LOCATION "`${_clapack_prefix}/lib/lapack.lib"
     INTERFACE_INCLUDE_DIRECTORIES "`${_clapack_prefix}/include"
