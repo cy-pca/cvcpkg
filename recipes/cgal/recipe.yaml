@@ -28,6 +28,7 @@ depends:
       version: ">=6.1.0"
     - name: mpfr
       version: ">=4.1.0"
+      platforms: [linux, macos, freebsd, openbsd, netbsd, wasm]
   host_tools:
     - cmake
     - ninja
