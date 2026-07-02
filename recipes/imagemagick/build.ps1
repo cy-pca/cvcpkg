@@ -51,7 +51,7 @@ function Get-CvcRemoteFile {
     if ($Sha256) {
         $actual = (Get-FileHash -Algorithm SHA256 $OutFile).Hash.ToLower()
         if ($actual -ne $Sha256.ToLower()) {
-            throw "sha256 mismatch for $OutFile: expected $Sha256, got $actual"
+            throw "sha256 mismatch for ${OutFile}: expected ${Sha256}, got ${actual}"
         }
     }
 }
