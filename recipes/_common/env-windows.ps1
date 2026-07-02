@@ -101,6 +101,28 @@ function Invoke-CvcVcpkgInstall {
 
     Write-Host "cvcpkg: vcpkg install $spec"
 
+    # vcpkg defaults its download / tool cache to %LOCALAPPDATA%\vcpkg.
+    # When the builder runs as the LocalSystem account, that resolves
+    # to C:\Windows\System32\config\systemprofile\AppData\Local\vcpkg,
+    # where the bundled 7zr.exe intermittently fails with
+    # 'The system cannot find the path specified' while extracting
+    # 7z2501.7z (long-path / SYSTEM-profile weirdness).  Redirect the
+    # caches to a plain path under the builder's work dir and wipe any
+    # partial 7z extraction so a fresh redownload is triggered.
+    $vcpkgCache = Join-Path $env:CVC_BUILD_DIR 'vcpkg-cache'
+    $env:VCPKG_DOWNLOADS       = Join-Path $vcpkgCache 'downloads'
+    $env:VCPKG_DEFAULT_BINARY_CACHE = Join-Path $vcpkgCache 'archives'
+    New-Item -ItemType Directory -Force -Path $env:VCPKG_DOWNLOADS       | Out-Null
+    New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+    foreach ($stale in @(
+        (Join-Path $env:LOCALAPPDATA 'vcpkg\downloads\7z2501.7z'),
+        (Join-Path $env:LOCALAPPDATA 'vcpkg\downloads\tools\7zr-25.01-windows')
+    )) {
+        if ($stale -and (Test-Path $stale)) {
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $stale
+        }
+    }
+
     # Newer vcpkg distributions (e.g. the one bootstrapped on phm-win11)
     # ship without a "classic mode" instance and refuse
     #   vcpkg install <port>[:triplet]

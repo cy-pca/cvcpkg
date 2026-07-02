@@ -14,16 +14,21 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 # Python.  Scan the filesystem as a fallback so this recipe works
 # with a per-user Python install too.
 function Get-CvcPythonInvocation {
-    # Prefer named commands, but verify each one actually runs.
+    # Returns a hashtable @{Exe='...python.exe'; Args=@('-3')} (or Args=@()).
+    # Using a hashtable rather than an array avoids PowerShell's
+    # single-element array unwrapping (a bare `@($exe)` return degrades
+    # into the string, then `$pyInvoke[0]` indexes character 'C').
     foreach ($candidate in @('py', 'python3', 'python')) {
         $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
         if (-not $cmd) { continue }
-        $args = if ($candidate -eq 'py') { @('-3', '--version') } else { @('--version') }
+        $verifyArgs = if ($candidate -eq 'py') { @('-3', '--version') } else { @('--version') }
         try {
-            $null = & $cmd.Source @args 2>&1
+            $null = & $cmd.Source @verifyArgs 2>&1
             if ($LASTEXITCODE -eq 0) {
-                if ($candidate -eq 'py') { return @($cmd.Source, '-3') }
-                return @($cmd.Source)
+                if ($candidate -eq 'py') {
+                    return @{ Exe = $cmd.Source; Args = @('-3') }
+                }
+                return @{ Exe = $cmd.Source; Args = @() }
             }
         } catch { }
     }
@@ -33,14 +38,13 @@ function Get-CvcPythonInvocation {
         'C:\Program Files\Python311', 'C:\Program Files\Python310',
         'C:\Python313', 'C:\Python312', 'C:\Python311', 'C:\Python310'
     )
-    # Enumerate per-user Python installs under any user profile.
     Get-ChildItem 'C:\Users\*\AppData\Local\Programs\Python\Python3*' -Directory -ErrorAction SilentlyContinue |
         Sort-Object Name -Descending | ForEach-Object { $roots += $_.FullName }
     foreach ($root in $roots) {
         $exe = Join-Path $root 'python.exe'
         if (Test-Path $exe) {
             Write-Host "cvcpkg: using Python at $exe (filesystem fallback)"
-            return @($exe)
+            return @{ Exe = $exe; Args = @() }
         }
     }
     throw "No Python interpreter found (tried: py, python3, python; scanned Program Files, C:\Python*, and per-user AppData installs)"
@@ -49,8 +53,8 @@ function Get-CvcPythonInvocation {
 $mesonCmd = Get-Command meson -ErrorAction SilentlyContinue
 if (-not $mesonCmd) {
     Write-Host "cvcpkg: meson not found on PATH; installing via pip ..."
-    $pyInvoke = Get-CvcPythonInvocation
-    & $pyInvoke[0] @($pyInvoke[1..($pyInvoke.Length - 1)] + @(
+    $py = Get-CvcPythonInvocation
+    & $py.Exe @($py.Args + @(
         '-m', 'pip', 'install', '--disable-pip-version-check', '--quiet', 'meson'
     ))
     if ($LASTEXITCODE -ne 0) { throw "pip install meson failed" }
@@ -61,9 +65,9 @@ if ($mesonCmd) {
     $mesonExe  = $mesonCmd.Source
     $mesonArgs = @()
 } else {
-    $pyInvoke  = Get-CvcPythonInvocation
-    $mesonExe  = $pyInvoke[0]
-    $mesonArgs = @($pyInvoke[1..($pyInvoke.Length - 1)] + @('-m', 'mesonbuild.mesonmain'))
+    $py        = Get-CvcPythonInvocation
+    $mesonExe  = $py.Exe
+    $mesonArgs = @($py.Args + @('-m', 'mesonbuild.mesonmain'))
 }
 
 Set-Location $env:CVC_SOURCE_DIR

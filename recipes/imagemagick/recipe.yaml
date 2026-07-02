@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: imagemagick
   upstream_version: "7.1.1"
-  cvc_revision: 3
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -55,7 +55,6 @@ build:
         CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
-      vcpkg_port: imagemagick
     - platform: wasm
       host_platform: linux
       script: build-wasm.sh
@@ -67,6 +66,10 @@ package:
   files:
     - lib/libMagick*
     - lib/ImageMagick*
+    - lib/CORE_RL_*.lib
+    - lib/Magick++.lib
+    - lib/MagickCore.lib
+    - lib/MagickWand.lib
     - lib/cmake/ImageMagick/
     - lib/pkgconfig/Magick*
     - lib/pkgconfig/ImageMagick*
@@ -77,7 +80,12 @@ package:
     - include/ImageMagick*/
     - bin/magick*
     - bin/Magick*
+    - bin/convert.exe
+    - bin/CORE_RL_*.dll
+    - bin/IM_MOD_RL_*.dll
+    - bin/FILTER_*.dll
     - share/ImageMagick*/
+    - share/imagemagick/
   cmake_packages:
     - { name: ImageMagick, targets: ["ImageMagick::Magick++"] }
 
