@@ -10,23 +10,27 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\..\_common\env-windows.ps1"
 
-# GMP 6.3.0's compiler-picker probe (acinclude.m4 "long long reliability
-# test 1") contains pre-C23 empty-parameter-list definitions
-# (`void g(){}` / `void h(){}`) that are then called with arguments.
-# Under gcc 14+ this is a hard error rather than a warning, so every
-# compiler candidate is rejected and configure aborts with "could not
-# find a working compiler".  We rewrite the two definitions to
-# `void g(void){}` / `void h(void){}` in the generated configure
-# script; the probe still exercises the original 64-bit-arithmetic
-# regression it was designed to catch.
+# GMP 6.3.0's compiler-picker probes ("long long reliability test 1",
+# "double negation", ...) contain K&R-style function definitions such
+# as `void g(){}` that are then called with arguments.  This was legal
+# under `-std=gnu17` and older where empty parens meant "unspecified
+# parameter list", but under gcc 14+ (default `-std=gnu23`) empty
+# parens mean `(void)` and the argument-passing call sites become hard
+# errors.  Every probe therefore fails and configure aborts with
+# "could not find a working compiler".
+#
+# Fix: pin gcc's C standard to gnu17 for the probes by injecting
+# `-std=gnu17` into the two gcc CFLAGS defaults in the generated
+# configure script.  The probes still exercise their original
+# regression checks; only the language mode is walked back.
 $configureFile = Join-Path $env:CVC_SOURCE_DIR 'configure'
 if (Test-Path $configureFile) {
     $content = Get-Content -Raw -LiteralPath $configureFile
-    $patched = $content -replace 'void g\(\)\{\}', 'void g(void){}' `
-                        -replace 'void h\(\)\{\}', 'void h(void){}'
+    $patched = $content -replace 'gcc_cflags="-O2 -pedantic"',    'gcc_cflags="-O2 -std=gnu17 -pedantic"' `
+                        -replace 'gcc_64_cflags="-O2 -pedantic"', 'gcc_64_cflags="-O2 -std=gnu17 -pedantic"'
     if ($patched -ne $content) {
         Set-Content -LiteralPath $configureFile -Value $patched -NoNewline
-        Write-Host "cvcpkg: patched gmp configure for gcc-15 C23 compatibility"
+        Write-Host "cvcpkg: patched gmp configure to pin gcc CFLAGS to -std=gnu17 (gcc-15 C23 compat)"
     }
 }
 
