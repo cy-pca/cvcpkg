@@ -142,6 +142,26 @@ function Invoke-CvcVcpkgInstall {
         'version-string' = '0.0.0'
         dependencies     = @($depEntry)
     }
+    # Newer vcpkg refuses manifest-mode operations without a
+    # 'builtin-baseline' pinning the default registry to a git SHA
+    # (error: "this vcpkg instance requires a manifest with a specified
+    # baseline in order to interact with ports").  Try to derive the
+    # baseline from the vcpkg checkout the vcpkg.exe on PATH belongs to.
+    $vcpkgRoot = $env:VCPKG_ROOT
+    if (-not $vcpkgRoot) {
+        $vcpkgCmd = Get-Command vcpkg -ErrorAction SilentlyContinue
+        if ($vcpkgCmd) {
+            $vcpkgRoot = Split-Path -Parent $vcpkgCmd.Source
+        }
+    }
+    if ($vcpkgRoot -and (Test-Path (Join-Path $vcpkgRoot '.git'))) {
+        try {
+            $baseline = (& git -C $vcpkgRoot rev-parse HEAD 2>$null)
+            if ($baseline) {
+                $manifest['builtin-baseline'] = $baseline.Trim()
+            }
+        } catch { }
+    }
     $manifestPath = Join-Path $manifestDir 'vcpkg.json'
     ($manifest | ConvertTo-Json -Depth 6) | Set-Content -Encoding UTF8 $manifestPath
 
