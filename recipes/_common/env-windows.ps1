@@ -30,6 +30,16 @@ if ($env:CVC_DEPS_PREFIX) {
     $env:CMAKE_PREFIX_PATH = $env:CVC_DEPS_PREFIX
 }
 
+# On Windows we ALWAYS build with MSVC (cl.exe).  A prior builder image
+# happened to have Strawberry Perl's g++ ahead of cl on PATH, and the
+# Ninja generator silently picked it, producing GNU-ar '.a' archives
+# with Itanium-mangled symbols that MSVC-mangled downstream consumers
+# (protobuf, grpc, etc.) cannot resolve — 100+ "unresolved external"
+# link errors.  Force cl.exe here so the mangling and archive format
+# stay consistent across the whole dep set.
+$env:CC  = 'cl'
+$env:CXX = 'cl'
+
 function Invoke-CvcCMakeBuild {
     param([string[]]$ExtraArgs = @())
     $allArgs = @(
@@ -40,7 +50,9 @@ function Invoke-CvcCMakeBuild {
         "-DCMAKE_BUILD_TYPE=$cmakeBuildType",
         "-DBUILD_SHARED_LIBS=$buildSharedLibs",
         "-DCMAKE_MSVC_RUNTIME_LIBRARY=$msvcRuntime",
-        "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
+        "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
+        '-DCMAKE_C_COMPILER=cl',
+        '-DCMAKE_CXX_COMPILER=cl'
     ) + $ExtraArgs
 
     & cmake @allArgs

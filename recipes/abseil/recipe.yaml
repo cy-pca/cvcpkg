@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: abseil
   upstream_version: "20240722.0"
-  cvc_revision: 1
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
