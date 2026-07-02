@@ -36,11 +36,16 @@ try {
         }
     }
 
-    # Libraries
-    Get-ChildItem -File -Path . -Include 'pthreadV*.lib','libpthreadV*.lib' `
-        | ForEach-Object { Copy-Item -Force $_.FullName $installLib }
+    # Libraries.  Get-ChildItem's -Include only applies when the
+    # -Path ends in a wildcard, so use -Filter (single pattern) with
+    # two calls instead of trying to combine both prefixes in one
+    # -Include list against '.'.
+    $staticLibs = @()
+    $staticLibs += Get-ChildItem -File -Filter 'pthreadV*.lib'    -ErrorAction SilentlyContinue
+    $staticLibs += Get-ChildItem -File -Filter 'libpthreadV*.lib' -ErrorAction SilentlyContinue
+    foreach ($f in $staticLibs) { Copy-Item -Force $f.FullName $installLib }
     if ($env:CVC_LINK -ne 'static') {
-        Get-ChildItem -File -Path . -Include 'pthreadV*.dll' `
+        Get-ChildItem -File -Filter 'pthreadV*.dll' `
             | ForEach-Object { Copy-Item -Force $_.FullName $installBin }
     }
 

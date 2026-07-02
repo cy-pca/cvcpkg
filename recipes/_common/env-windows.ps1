@@ -42,27 +42,45 @@ $env:CXX = 'cl'
 
 function Invoke-CvcCMakeBuild {
     param([string[]]$ExtraArgs = @())
-    $allArgs = @(
-        '-G', 'Ninja',
-        '-S', $env:CVC_SOURCE_DIR,
-        '-B', $env:CVC_BUILD_DIR,
-        "-DCMAKE_INSTALL_PREFIX=$env:CVC_INSTALL_DIR",
-        "-DCMAKE_BUILD_TYPE=$cmakeBuildType",
-        "-DBUILD_SHARED_LIBS=$buildSharedLibs",
-        "-DCMAKE_MSVC_RUNTIME_LIBRARY=$msvcRuntime",
-        "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
-        '-DCMAKE_C_COMPILER=cl',
-        '-DCMAKE_CXX_COMPILER=cl'
-    ) + $ExtraArgs
 
-    & cmake @allArgs
-    if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
+    # Strip MinGW/MSYS2 dirs from PATH for the duration of the MSVC
+    # cmake build.  CMake's find_path()/find_library() default search
+    # includes "for each dir in PATH, look in ../include and ../lib" —
+    # which means if C:\msys64\mingw64\bin is on Machine PATH the
+    # MinGW-w64 headers (stdio.h with __asm__, __builtin_va_list, etc.)
+    # get picked up by cl.exe.  Those headers are gcc-only and produce
+    # thousands of parse errors under MSVC.  MSVC builds have zero use
+    # for anything under C:\msys64\, so drop them entirely here.
+    $origPath = $env:PATH
+    $filteredPath = ($env:PATH -split ';' |
+        Where-Object { $_ -notmatch '(?i)\\msys64\\' -and $_ -notmatch '(?i)\\msys32\\' }) -join ';'
+    $env:PATH = $filteredPath
 
-    & cmake --build $env:CVC_BUILD_DIR -j $env:CVC_JOBS
-    if ($LASTEXITCODE -ne 0) { throw "cmake build failed" }
+    try {
+        $allArgs = @(
+            '-G', 'Ninja',
+            '-S', $env:CVC_SOURCE_DIR,
+            '-B', $env:CVC_BUILD_DIR,
+            "-DCMAKE_INSTALL_PREFIX=$env:CVC_INSTALL_DIR",
+            "-DCMAKE_BUILD_TYPE=$cmakeBuildType",
+            "-DBUILD_SHARED_LIBS=$buildSharedLibs",
+            "-DCMAKE_MSVC_RUNTIME_LIBRARY=$msvcRuntime",
+            "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
+            '-DCMAKE_C_COMPILER=cl',
+            '-DCMAKE_CXX_COMPILER=cl'
+        ) + $ExtraArgs
 
-    & cmake --install $env:CVC_BUILD_DIR
-    if ($LASTEXITCODE -ne 0) { throw "cmake install failed" }
+        & cmake @allArgs
+        if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
+
+        & cmake --build $env:CVC_BUILD_DIR -j $env:CVC_JOBS
+        if ($LASTEXITCODE -ne 0) { throw "cmake build failed" }
+
+        & cmake --install $env:CVC_BUILD_DIR
+        if ($LASTEXITCODE -ne 0) { throw "cmake install failed" }
+    } finally {
+        $env:PATH = $origPath
+    }
 }
 
 # ── MSYS2 / MinGW autotools helper ──────────────────────────────────
@@ -145,6 +163,23 @@ function Invoke-CvcMsysAutotoolsBuild {
     $env:MSYSTEM         = 'MINGW64'
     $env:MSYS_NO_PATHCONV = '1'
     $env:CHERE_INVOKING  = '1'
+
+    # Clear MSVC compiler env inherited from the outer PowerShell
+    # session — env-windows.ps1 sets CC=cl / CXX=cl for Invoke-CvcCMakeBuild,
+    # but for the autotools path we need bash's PATH to select the
+    # MinGW-w64 gcc from /mingw64/bin.  Autoconf's ./configure would
+    # otherwise take CC=cl at face value, produce nonsense build-system
+    # detection, and choke on the first Unix-only linker flag (e.g.
+    # -lm  →  LINK: cannot open input file 'm.lib').
+    Remove-Item Env:CC  -ErrorAction SilentlyContinue
+    Remove-Item Env:CXX -ErrorAction SilentlyContinue
+    Remove-Item Env:LD  -ErrorAction SilentlyContinue
+    Remove-Item Env:AR  -ErrorAction SilentlyContinue
+    Remove-Item Env:NM  -ErrorAction SilentlyContinue
+    Remove-Item Env:RANLIB -ErrorAction SilentlyContinue
+    Remove-Item Env:CFLAGS  -ErrorAction SilentlyContinue
+    Remove-Item Env:CXXFLAGS -ErrorAction SilentlyContinue
+    Remove-Item Env:LDFLAGS -ErrorAction SilentlyContinue
 
     $sharedFlags = if ($env:CVC_LINK -eq 'static') {
         '--enable-static --disable-shared'
