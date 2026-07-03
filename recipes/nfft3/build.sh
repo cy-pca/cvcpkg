@@ -20,10 +20,26 @@ fi
 # ── Platform-specific configure flags ──
 CONFIGURE_CC=""
 OPENMP_FLAG="--enable-openmp"
-if [[ "${CVC_PLATFORM}" == "macos" ]]; then
-    CONFIGURE_CC="CC=clang"
-    OPENMP_FLAG="--disable-openmp"
-fi
+case "${CVC_PLATFORM}" in
+    macos)
+        CONFIGURE_CC="CC=clang"
+        OPENMP_FLAG="--disable-openmp"
+        ;;
+    freebsd|openbsd|netbsd)
+        # clang on the BSDs doesn't ship libomp by default; disable.
+        OPENMP_FLAG="--disable-openmp"
+        ;;
+esac
+
+# On the BSDs, autoconf's AC_SEARCH_LIBS(fftw_execute) needs an -rpath
+# hint to find libfftw3 at link-check time when FFTW3 lives outside the
+# default /usr/local/lib search path.
+BSD_LDFLAGS=""
+case "${CVC_PLATFORM}" in
+    freebsd|openbsd|netbsd)
+        BSD_LDFLAGS="-L${FFTW_PREFIX}/lib -Wl,-rpath,${FFTW_PREFIX}/lib"
+        ;;
+esac
 
 # ── Configure & build ──
 cd "${CVC_SOURCE_DIR}"
@@ -44,6 +60,7 @@ export CONFIG_SHELL="$(command -v bash)"
     --with-fftw3-includedir="${FFTW_PREFIX}/include" \
     --with-fftw3-libdir="${FFTW_PREFIX}/lib" \
     CFLAGS="-O3 -ffast-math" \
+    ${BSD_LDFLAGS:+LDFLAGS="${BSD_LDFLAGS}"} \
     ${CONFIGURE_CC}
 
 make -j"$JOBS"

@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: bison
   upstream_version: "3.8.2"
-  cvc_revision: 1
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

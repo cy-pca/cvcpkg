@@ -41,8 +41,17 @@ export CFLAGS="${CFLAGS:-} -I/usr/pkg/include"
 export CXXFLAGS="${CXXFLAGS:-} -I/usr/pkg/include"
 export LDFLAGS="${LDFLAGS:-} -L/usr/pkg/lib -Wl,-R/usr/pkg/lib"
 
-# Ensure pkgsrc tools are on PATH.
-export PATH="/usr/pkg/bin:/usr/pkg/sbin:${PATH}"
+# Ensure pkgsrc tools are on PATH, but AFTER our own deps prefix so that
+# cvcpkg-built host tools (ninja, cmake, ...) win over pkgsrc versions.
+# The pkgsrc ninja on NetBSD has been observed to crash when invoked via
+# subprocess with an empty environment, which broke every cmake+ninja recipe.
+export PATH="${PATH}:/usr/pkg/bin:/usr/pkg/sbin"
+
+# Prefer our own ninja from the deps prefix when present.
+_CVC_NINJA=""
+if [[ -n "${CVC_DEPS_PREFIX:-}" && -x "${CVC_DEPS_PREFIX}/bin/ninja" ]]; then
+    _CVC_NINJA="${CVC_DEPS_PREFIX}/bin/ninja"
+fi
 
 cvc_cmake_build() {
     cmake -G Ninja \
@@ -56,6 +65,7 @@ cvc_cmake_build() {
         -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
         -DCMAKE_INSTALL_RPATH=\$ORIGIN \
         -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+        ${_CVC_NINJA:+-DCMAKE_MAKE_PROGRAM="${_CVC_NINJA}"} \
         "$@"
     cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
     cmake --install "${CVC_BUILD_DIR}"

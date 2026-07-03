@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: xz
   upstream_version: "5.6.4"
-  cvc_revision: 1
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
