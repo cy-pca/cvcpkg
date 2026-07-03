@@ -140,14 +140,21 @@ function Invoke-CvcMsysAutotoolsBuild {
       Configure + make + make install via Git Bash + MinGW gcc.
     .PARAMETER ConfigureArgs
       Extra arguments to pass to ./configure (beyond --prefix + --host).
-    .PARAMETER Host
+    .PARAMETER HostTriple
       Cross-compilation host triple.  Defaults to x86_64-w64-mingw32
       (native MinGW-w64 on Windows).
+    .PARAMETER Jobs
+      Override make -j parallelism.  Defaults to $env:CVC_JOBS.
+      Set to 1 for fork-heavy libtool builds that deadlock MSYS2 under
+      the SYSTEM account (gmp, mpfr, ...).
     #>
     param(
         [string[]]$ConfigureArgs = @(),
-        [string]$HostTriple = 'x86_64-w64-mingw32'
+        [string]$HostTriple = 'x86_64-w64-mingw32',
+        [int]$Jobs = 0
     )
+    if ($Jobs -le 0) { $Jobs = [int]$env:CVC_JOBS }
+    if ($Jobs -le 0) { $Jobs = 1 }
 
     $bash        = Get-CvcGitBash
     $msysPrefix  = ConvertTo-CvcMsysPath $env:CVC_INSTALL_DIR
@@ -203,7 +210,7 @@ function Invoke-CvcMsysAutotoolsBuild {
         throw "configure failed"
     }
 
-    & $bash -lc "cd '$msysSource' && make -j $env:CVC_JOBS"
+    & $bash -lc "cd '$msysSource' && make -j $Jobs"
     if ($LASTEXITCODE -ne 0) { throw "make failed" }
 
     & $bash -lc "cd '$msysSource' && make install"

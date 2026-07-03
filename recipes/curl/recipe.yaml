@@ -50,14 +50,18 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
     - lib/libcurl*
+    - lib/curl*.lib
     - lib/pkgconfig/libcurl*
     - lib/cmake/CURL/
     - include/curl/
     - bin/curl*
+    - bin/libcurl*.dll
   cmake_packages:
     - { name: CURL, targets: ["CURL::libcurl"] }
 
