@@ -67,7 +67,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install poetry
-          poetry install --with dev
+          poetry install --with dev --extras "server db-sqlite"
 
       - name: Run tests
         working-directory: tools/cvcpkg
