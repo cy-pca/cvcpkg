@@ -40,6 +40,54 @@ if ($env:CVC_DEPS_PREFIX) {
 $env:CC  = 'cl'
 $env:CXX = 'cl'
 
+# ── Auto-import MSVC developer environment ──────────────────────────
+#
+# When the builder daemon is launched as a service (or from a plain
+# PowerShell prompt) cl.exe / link.exe / rc.exe are NOT on PATH.
+# GitHub Actions runs ilammy/msvc-dev-cmd before invoking us; the
+# self-hosted builder does not, so do it ourselves here if needed.
+function Import-CvcMsvcEnv {
+    if (Get-Command cl.exe -ErrorAction SilentlyContinue) { return }
+
+    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    if (-not (Test-Path $vswhere)) {
+        $vswhere = "$env:ProgramFiles\Microsoft Visual Studio\Installer\vswhere.exe"
+    }
+    if (-not (Test-Path $vswhere)) {
+        throw "cl.exe not on PATH and vswhere.exe not found — install Visual Studio Build Tools or run from a Developer PowerShell."
+    }
+
+    $vsRoot = & $vswhere -latest -products '*' `
+        -requires 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64' `
+        -property installationPath 2>$null | Select-Object -First 1
+    if (-not $vsRoot) {
+        throw "vswhere.exe found no Visual Studio install with the C++ workload."
+    }
+
+    $vcvars = Join-Path $vsRoot 'VC\Auxiliary\Build\vcvars64.bat'
+    if (-not (Test-Path $vcvars)) {
+        throw "vcvars64.bat not found under $vsRoot"
+    }
+
+    # Run vcvars64.bat in a subshell, dump the resulting environment,
+    # and import the diff back into our own process.
+    $dump = & cmd /c "`"$vcvars`" >nul 2>&1 && set"
+    foreach ($line in $dump) {
+        if ($line -match '^([^=]+)=(.*)$') {
+            $name = $matches[1]
+            $val  = $matches[2]
+            # Skip a few obviously-per-process env vars we don't want
+            # to clobber.
+            if ($name -in @('_', 'PROMPT')) { continue }
+            [Environment]::SetEnvironmentVariable($name, $val, 'Process')
+        }
+    }
+    if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
+        throw "Import-CvcMsvcEnv ran but cl.exe still not on PATH — vcvars64.bat likely failed silently."
+    }
+}
+Import-CvcMsvcEnv
+
 function Invoke-CvcCMakeBuild {
     param([string[]]$ExtraArgs = @())
 
