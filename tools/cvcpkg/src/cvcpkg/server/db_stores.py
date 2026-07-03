@@ -862,22 +862,58 @@ class DbPackageIndex:
             )
             session.add(row)
 
-    async def yank(self, name: str, version: str) -> int:
+    async def yank(
+        self,
+        name: str,
+        version: str,
+        *,
+        platform: str | None = None,
+        arch: str | None = None,
+        link: str | None = None,
+        build_type: str | None = None,
+    ) -> int:
         async with get_session() as session:
-            result = await session.execute(
+            stmt = (
                 update(PackageRow)
                 .where(PackageRow.name == name, PackageRow.version == version)
                 .values(yanked=True)
             )
+            if platform is not None:
+                stmt = stmt.where(PackageRow.platform == platform)
+            if arch is not None:
+                stmt = stmt.where(PackageRow.arch == arch)
+            if link is not None:
+                stmt = stmt.where(PackageRow.link == link)
+            if build_type is not None:
+                stmt = stmt.where(PackageRow.build_type == build_type)
+            result = await session.execute(stmt)
             return result.rowcount
 
-    async def unyank(self, name: str, version: str) -> int:
+    async def unyank(
+        self,
+        name: str,
+        version: str,
+        *,
+        platform: str | None = None,
+        arch: str | None = None,
+        link: str | None = None,
+        build_type: str | None = None,
+    ) -> int:
         async with get_session() as session:
-            result = await session.execute(
+            stmt = (
                 update(PackageRow)
                 .where(PackageRow.name == name, PackageRow.version == version)
                 .values(yanked=False)
             )
+            if platform is not None:
+                stmt = stmt.where(PackageRow.platform == platform)
+            if arch is not None:
+                stmt = stmt.where(PackageRow.arch == arch)
+            if link is not None:
+                stmt = stmt.where(PackageRow.link == link)
+            if build_type is not None:
+                stmt = stmt.where(PackageRow.build_type == build_type)
+            result = await session.execute(stmt)
             return result.rowcount
 
     async def delete(

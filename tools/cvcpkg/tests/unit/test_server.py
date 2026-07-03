@@ -361,6 +361,60 @@ class TestYankFlow:
         )
         assert resp.status_code == 403
 
+    def test_yank_scoped_by_platform(self, server_env):
+        """Yank with ?platform=X only marks bundles for that platform."""
+        client, _, pub_tok, _ = server_env
+        for plat in ("linux", "macos", "windows"):
+            client.post(
+                "/v1/publish",
+                params={
+                    "name": "boost",
+                    "version": "1.86.0+cvc.1",
+                    "platform": plat,
+                    "arch": "x86_64",
+                },
+                files={"file": (f"b-{plat}.tar.zst", io.BytesIO(b"boost data " + plat.encode()))},
+                headers={"Authorization": f"Bearer {pub_tok}"},
+            )
+
+        resp = client.post(
+            "/v1/packages/boost/1.86.0+cvc.1/yank?platform=linux",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body.get("count") == 1
+
+        pkgs = client.get("/v1/packages/boost?include_yanked=true").json()
+        by_plat = {p["platform"]: p["yanked"] for p in pkgs["packages"]}
+        assert by_plat == {"linux": True, "macos": False, "windows": False}
+
+    def test_yank_no_filter_hits_all_platforms(self, server_env):
+        """Yank without filters still marks every matching bundle (back-compat)."""
+        client, _, pub_tok, _ = server_env
+        for plat in ("linux", "macos"):
+            client.post(
+                "/v1/publish",
+                params={
+                    "name": "boost",
+                    "version": "1.86.0+cvc.1",
+                    "platform": plat,
+                    "arch": "x86_64",
+                },
+                files={"file": (f"b-{plat}.tar.zst", io.BytesIO(b"boost data " + plat.encode()))},
+                headers={"Authorization": f"Bearer {pub_tok}"},
+            )
+
+        resp = client.post(
+            "/v1/packages/boost/1.86.0+cvc.1/yank",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json().get("count") == 2
+
+        pkgs = client.get("/v1/packages/boost?include_yanked=true").json()
+        assert all(p["yanked"] for p in pkgs["packages"])
+
 
 class TestPublishDepsFlow:
     """Verify that required_deps flow through publish → catalog."""
