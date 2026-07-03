@@ -296,6 +296,40 @@ jobs:
           $COMPOSE logs --tail=80 backend || true
           exit 1
 
+      # ── Push recipes to the primary server DB ─────────────────
+      # The deploy above bundles recipes into the backend image, but
+      # the DB-backed /v1/recipes/* store (used by builders to fetch
+      # recipes at build time) is not refreshed automatically.  Push
+      # every recipe from the checkout so builders always see the
+      # deployed revision.
+      - name: Push recipes to cvcpkg.org
+        env:
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISHER_TOKEN }}
+        run: |
+          set -euo pipefail
+          export CVCPKG_SERVER_URL=https://cvcpkg.org
+          if [[ -z "${CVCPKG_TOKEN:-}" ]]; then
+            echo "::warning::CVCPKG_PUBLISHER_TOKEN not set — skipping recipe push"
+            exit 0
+          fi
+          python3 -m pip install --quiet --user ./tools/cvcpkg || true
+          # Prefer the freshly-checked-out package script over any installed copy.
+          CVCPKG="python3 -m cvcpkg"
+          ok=0
+          fail=0
+          for d in recipes/*/; do
+            name=$(basename "$d")
+            [[ "$name" == "_common" ]] && continue
+            [[ -f "$d/recipe.yaml" ]] || continue
+            if $CVCPKG recipe push "$name" >/dev/null 2>&1; then
+              ok=$((ok+1))
+            else
+              echo "::warning::recipe push failed: $name"
+              fail=$((fail+1))
+            fi
+          done
+          echo "Recipes: $ok ok, $fail failed"
+
       # ── Update BSD builders via SSH ───────────────────────────
       # (star-00 / star-01 are self-hosted runners — updated by
       #  the update-linux-builders job below)
@@ -305,15 +339,19 @@ jobs:
         run: |
           set -euo pipefail
           SSH="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
-          for host in root@netbsd-build root@netbsd-build-2 \
-                      root@freebsd-build root@freebsd-build-2 \
-                      root@openbsd-build root@openbsd-build-2; do
+          # BSD builders reachable only by LAN IP from the cvcpkg-prod
+          # runner (no DNS for the *-build hostnames).
+          for host in root@10.66.77.214 root@10.66.77.167 \
+                      root@10.66.77.174 root@10.66.77.154 \
+                      root@10.66.77.197 root@10.66.77.235; do
             echo "--- $host ---"
             $SSH "$host" "
               # Remove leaked work dirs from failed builds
               find /tmp -maxdepth 1 -name 'cvcpkg-*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null
               # Clean pip cache
               pip cache purge 2>/dev/null || true
+              # Reclaim cvcpkg client cache if it landed on the root fs
+              rm -rf /root/.cache/cvcpkg 2>/dev/null || true
               echo \"\$(hostname): \$(df -h / | awk 'NR==2{print \$4}') free\"
             " || echo "::warning::$host: cleanup failed"
           done
@@ -325,10 +363,10 @@ jobs:
           SHA="${{ steps.target.outputs.sha }}"
           SSH="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
 
-          # BSD builders (root access)
-          for host in root@netbsd-build root@netbsd-build-2 \
-                      root@freebsd-build root@freebsd-build-2 \
-                      root@openbsd-build root@openbsd-build-2; do
+          # BSD builders reachable only by LAN IP from the cvcpkg-prod runner.
+          for host in root@10.66.77.214 root@10.66.77.167 \
+                      root@10.66.77.174 root@10.66.77.154 \
+                      root@10.66.77.197 root@10.66.77.235; do
             echo "--- $host ---"
             $SSH "$host" "
               cd /root/libcvc-deps 2>/dev/null || cd /usr/local/src/libcvc-deps &&
@@ -348,10 +386,11 @@ jobs:
           set -euo pipefail
           SSH="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
 
-          # BSD builders — kill daemon, re-launch from crontab entry
-          for host in root@netbsd-build root@netbsd-build-2 \
-                      root@freebsd-build root@freebsd-build-2 \
-                      root@openbsd-build root@openbsd-build-2; do
+          # BSD builders reachable only by LAN IP from the cvcpkg-prod runner.
+          # Kill the running daemon, re-launch from its @reboot crontab entry.
+          for host in root@10.66.77.214 root@10.66.77.167 \
+                      root@10.66.77.174 root@10.66.77.154 \
+                      root@10.66.77.197 root@10.66.77.235; do
             echo "--- $host ---"
             $SSH "$host" "
               pkill -f 'cvcpkg builder run' 2>/dev/null || true
