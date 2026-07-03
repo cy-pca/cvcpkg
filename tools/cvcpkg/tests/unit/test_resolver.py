@@ -46,6 +46,42 @@ class TestResolverBasic:
         result = resolve(reqs, candidates)
         assert result.picked["zlib"].version == "1.3.1+cvc.1"
 
+    def test_picks_highest_cvc_revision_when_versions_tie(self):
+        # Regression: Version.__lt__ ignores +cvc.N build metadata (SemVer),
+        # so a naive descending sort was broken by input list order,
+        # letting an older/broken cvc.1 bundle win over a fixed cvc.2.
+        reqs = [ComponentReq(name="fftw3")]
+        candidates = {
+            "fftw3": [
+                _entry("fftw3", "3.3.10+cvc.1"),
+                _entry("fftw3", "3.3.10+cvc.2"),
+            ]
+        }
+        result = resolve(reqs, candidates)
+        assert result.picked["fftw3"].version == "3.3.10+cvc.2"
+
+        # Order-independent
+        candidates = {
+            "fftw3": [
+                _entry("fftw3", "3.3.10+cvc.2"),
+                _entry("fftw3", "3.3.10+cvc.1"),
+            ]
+        }
+        result = resolve(reqs, candidates)
+        assert result.picked["fftw3"].version == "3.3.10+cvc.2"
+
+    def test_picks_highest_cvc_revision_under_version_constraint(self):
+        reqs = [ComponentReq(name="fftw3", version="==3.3.10")]
+        candidates = {
+            "fftw3": [
+                _entry("fftw3", "3.3.10+cvc.1"),
+                _entry("fftw3", "3.3.10+cvc.3"),
+                _entry("fftw3", "3.3.10+cvc.2"),
+            ]
+        }
+        result = resolve(reqs, candidates)
+        assert result.picked["fftw3"].version == "3.3.10+cvc.3"
+
     def test_version_constraint(self):
         reqs = [ComponentReq(name="zlib", version="==1.3.0")]
         candidates = {
