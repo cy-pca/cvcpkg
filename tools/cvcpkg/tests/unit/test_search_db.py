@@ -111,9 +111,7 @@ class TestSearchEndpointDb:
     def test_query_and_filter_combined(self, db_server_env):
         client, _, pub_tok, _ = db_server_env
         _seed(client, pub_tok)
-        data = client.get(
-            "/v1/search", params={"q": "boost", "platform": "darwin"}
-        ).json()
+        data = client.get("/v1/search", params={"q": "boost", "platform": "darwin"}).json()
         assert data["total"] == 1
         assert data["packages"][0]["name"] == "boost"
         assert data["packages"][0]["platform"] == "darwin"
@@ -152,8 +150,16 @@ class TestSearchEndpointDb:
         client, _, pub_tok, _ = db_server_env
         _seed(client, pub_tok)
         data = client.get("/v1/search", params={"facets": "false"}).json()
-        for key in ("platforms", "archs", "build_types", "links",
-                    "releases", "orgs", "tags", "licenses"):
+        for key in (
+            "platforms",
+            "archs",
+            "build_types",
+            "links",
+            "releases",
+            "orgs",
+            "tags",
+            "licenses",
+        ):
             assert data["facets"][key] == []
         # Still returns totals and packages
         assert data["total"] == 5
@@ -162,9 +168,7 @@ class TestSearchEndpointDb:
     def test_search_sql_injection_safe(self, db_server_env):
         client, _, pub_tok, _ = db_server_env
         _seed(client, pub_tok)
-        resp = client.get(
-            "/v1/search", params={"q": "'; DROP TABLE packages; --"}
-        )
+        resp = client.get("/v1/search", params={"q": "'; DROP TABLE packages; --"})
         assert resp.status_code == 200
         assert resp.json()["total"] == 0
         # Table still exists
