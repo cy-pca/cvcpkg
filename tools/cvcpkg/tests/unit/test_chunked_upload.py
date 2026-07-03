@@ -456,3 +456,87 @@ class TestChunkedUpload:
         pkgs = resp.json()
         names = [p["name"] for p in pkgs.get("packages", pkgs.get("bundles", []))]
         assert "chunked-pkg" in names
+
+    def test_complete_does_not_clobber_existing_archive(self, db_server_env):
+        """Regression: /v1/upload/{id}/complete must not clobber an on-disk
+        archive when another publish races in between init and complete.
+
+        Reproduces the drift bug that left 16 production bundles with an
+        on-disk sha256/size that disagreed with the DB metadata. Sequence:
+
+          1. Client A calls /v1/upload/init for (name, version, plat, arch).
+             The dup check passes because no row exists yet.
+          2. Client B publishes the same NVR via /v1/publish. A row +
+             archive with sha=B are now present.
+          3. Client A finishes chunking and calls /v1/upload/{id}/complete
+             with different content (sha=A).
+
+        Before the fix, step 3 renamed the temp file over B's archive
+        (clobber) and then failed on the unique index in add_package,
+        leaving DB.sha=B but disk.sha=A. Now step 3 must reject with 409
+        and leave B's archive on disk unchanged.
+        """
+        client, _, pub_token, _, _ = db_server_env
+        hdrs = self._admin_headers(pub_token)
+        params = {
+            "name": "raced",
+            "version": "1.0.0",
+            "platform": "linux",
+            "arch": "x86_64",
+        }
+
+        # Step 1: init chunked upload — no dup yet, so this succeeds.
+        resp = client.post("/v1/upload/init", params=params, headers=hdrs)
+        assert resp.status_code == 201
+        upload_id = resp.json()["upload_id"]
+
+        # Step 2: another publisher wins the race via /v1/publish.
+        winner_content = b"winner archive content - should stay on disk"
+        winner_sha = hashlib.sha256(winner_content).hexdigest()
+        resp = client.post(
+            "/v1/publish",
+            params=params,
+            files={"file": ("raced.tar.zst", io.BytesIO(winner_content))},
+            headers=hdrs,
+        )
+        assert resp.status_code in (200, 201), resp.text
+
+        # Step 3: client A finishes chunking with *different* content and
+        # tries to complete. This must be rejected as a duplicate rather
+        # than clobbering the winner's archive.
+        loser_content = b"loser archive content - MUST NOT overwrite winner"
+        loser_sha = hashlib.sha256(loser_content).hexdigest()
+        assert loser_sha != winner_sha
+        resp = client.patch(
+            f"/v1/upload/{upload_id}",
+            content=loser_content,
+            headers={**hdrs, "Content-Type": "application/octet-stream"},
+        )
+        assert resp.status_code == 200
+
+        resp = client.post(
+            f"/v1/upload/{upload_id}/complete",
+            params={"expected_sha256": loser_sha},
+            headers=hdrs,
+        )
+        assert resp.status_code == 409, resp.text
+
+        # On-disk archive must still be the winner's content, and the
+        # catalog sha256 must still match what's on disk (no drift).
+        resp = client.get("/v1/packages", headers=hdrs)
+        assert resp.status_code == 200
+        pkgs_payload = resp.json()
+        rows = pkgs_payload.get("packages", pkgs_payload.get("bundles", []))
+        row = next(p for p in rows if p["name"] == "raced" and p["version"] == "1.0.0")
+        assert (
+            row["sha256"] == winner_sha
+        ), f"catalog sha256 drifted: DB={row['sha256']} winner={winner_sha}"
+
+        archive_url = row.get("archive_url") or f"/v1/download/{row.get('filename', '')}"
+        resp = client.get(archive_url, headers=hdrs)
+        assert resp.status_code == 200
+        on_disk_sha = hashlib.sha256(resp.content).hexdigest()
+        assert on_disk_sha == winner_sha, (
+            f"on-disk archive was clobbered: got sha={on_disk_sha}, "
+            f"expected winner sha={winner_sha}"
+        )

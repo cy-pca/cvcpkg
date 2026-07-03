@@ -2159,6 +2159,39 @@ def create_app(
 
         state = _get_state()
 
+        # Re-check for duplicates: another publish may have raced with this
+        # session between /v1/upload/init and /v1/upload/{id}/complete. Without
+        # this guard the temp→dest rename below silently clobbers the existing
+        # archive on disk while the subsequent add_package() fails on the
+        # unique index, leaving the DB sha256/size out of sync with disk.
+        if _use_db:
+            dup = await _db_packages.check_duplicate(
+                session.name,
+                session.version,
+                session.platform,
+                session.arch,
+                session.build_type,
+                session.link,
+            )
+        else:
+            dup = any(
+                b["name"] == session.name
+                and b["version"] == session.version
+                and b.get("platform") == session.platform
+                and b.get("arch") == session.arch
+                and b.get("build_type") == session.build_type
+                and b.get("link") == session.link
+                for b in state.index.get("bundles", [])
+            )
+        if dup:
+            session.temp_path.unlink(missing_ok=True)
+            _upload_sessions.pop(upload_id, None)
+            raise HTTPException(
+                409,
+                f"{session.name}=={session.version} ({session.platform}/{session.arch}"
+                f"/{session.build_type}/{session.link}) already published.",
+            )
+
         # Build safe filename and move temp → final
         safe_filename = (
             f"{session.name}-{session.version}-{session.platform}-{session.arch}"
