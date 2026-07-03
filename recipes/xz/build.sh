@@ -3,5 +3,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 
+# On OpenBSD, xz's tuklib_cpucores.c includes <sys/sysctl.h> without
+# first pulling in <sys/types.h>, so u_int32_t / u_int64_t are undefined.
+# Force-include <sys/types.h> to work around it.
+if [[ "${CVC_PLATFORM}" == "openbsd" ]]; then
+    export CFLAGS="${CFLAGS:-} -include sys/types.h"
+fi
+
 cvc_cmake_build \
     -DBUILD_TESTING=OFF

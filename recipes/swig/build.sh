@@ -42,8 +42,17 @@ fi
     --prefix="${CVC_INSTALL_DIR}" \
     --with-pcre2-prefix="${CVC_DEPS_PREFIX}"
 
-make -j "${CVC_JOBS}"
-make install
+# SWIG's Makefile uses GNU make features (ifeq, filter, ...).  Use gmake
+# on the BSDs where /usr/bin/make is BSD make.
+MAKE=make
+case "$(uname -s)" in
+    FreeBSD|OpenBSD|NetBSD|DragonFly)
+        if command -v gmake >/dev/null 2>&1; then MAKE=gmake; fi
+        ;;
+esac
+
+"${MAKE}" -j "${CVC_JOBS}"
+"${MAKE}" install
 
 # Generate a CMake config file so find_package(SWIG) works inside bundles.
 SWIG_VER=$("${CVC_INSTALL_DIR}/bin/swig" -version | sed -n 's/.*SWIG Version \([0-9.]*\).*/\1/p')

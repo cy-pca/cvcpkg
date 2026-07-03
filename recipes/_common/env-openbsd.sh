@@ -35,6 +35,12 @@ export CFLAGS="${CFLAGS:-} -I/usr/local/include"
 export CXXFLAGS="${CXXFLAGS:-} -I/usr/local/include"
 export LDFLAGS="${LDFLAGS:-} -L/usr/local/lib"
 
+# Prefer our own ninja from the deps prefix when present.
+_CVC_NINJA=""
+if [[ -n "${CVC_DEPS_PREFIX:-}" && -x "${CVC_DEPS_PREFIX}/bin/ninja" ]]; then
+    _CVC_NINJA="${CVC_DEPS_PREFIX}/bin/ninja"
+fi
+
 cvc_cmake_build() {
     cmake -G Ninja \
         -S "${CVC_SOURCE_DIR}" \
@@ -47,6 +53,7 @@ cvc_cmake_build() {
         -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
         -DCMAKE_INSTALL_RPATH=\$ORIGIN \
         -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+        ${_CVC_NINJA:+-DCMAKE_MAKE_PROGRAM="${_CVC_NINJA}"} \
         "$@"
     cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
     cmake --install "${CVC_BUILD_DIR}"

@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: boost
   upstream_version: "1.86.0"
-  cvc_revision: 2
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -19,6 +19,7 @@ source:
 
 patches:
   - netbsd-dirfd-macro.patch
+  - netbsd-exit-code-constexpr.patch
 
 depends:
   build: []

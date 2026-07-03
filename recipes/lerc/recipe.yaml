@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: lerc
   upstream_version: "4.0.0"
-  cvc_revision: 1
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -17,7 +17,8 @@ source:
   sha256: "91431c2b16d0e3de6cbaea188603359f87caed08259a645fd5a3805784ee30a0"
   strip_components: 1
 
-patches: []
+patches:
+  - bsd-assert-macro-collision.patch
 
 depends:
   build: []
