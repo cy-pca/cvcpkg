@@ -8,19 +8,19 @@ from pathlib import Path
 
 import click
 
-from cvcpkg.cli._helpers import (
-    _platform_opt,
-    _config_opt,
-    _link_opt,
-    _prefix_opt,
-    _recipes_dir_opt,
-    _no_default_recipes_opt,
-    _local_opt,
-    _resolve_recipes_dirs,
-    _VALID_ARCHES,
-)
 from cvcpkg.cli import cli
 from cvcpkg.cli._catalog import _fetch_mirror_urls
+from cvcpkg.cli._helpers import (
+    _VALID_ARCHES,
+    _config_opt,
+    _link_opt,
+    _local_opt,
+    _no_default_recipes_opt,
+    _platform_opt,
+    _prefix_opt,
+    _recipes_dir_opt,
+    _resolve_recipes_dirs,
+)
 
 # ── install ─────────────────────────────────────────────────────
 
@@ -394,7 +394,32 @@ def install(
     lock_path = prefix_path / "share" / "libcvc-deps" / "lockfile.yaml"
     lock.write(lock_path)
     click.echo(f"cvcpkg: lockfile written to {lock_path}")
+
+    # ── Write activation scripts ──
+    #
+    # Users can `source <prefix>/bin/activate` (POSIX) or
+    # `. <prefix>\Scripts\Activate.ps1` (Windows) to put the prefix on
+    # PATH / CMAKE_PREFIX_PATH / PKG_CONFIG_PATH / *LIBRARY_PATH.
+    try:
+        from cvcpkg.activate import write_activate_scripts
+
+        written = write_activate_scripts(prefix_path, platform=plat)
+        if written:
+            click.echo(f"cvcpkg: activation scripts written ({len(written)} files)")
+            hint = _activation_hint(plat, prefix_path)
+            if hint:
+                click.echo(f"cvcpkg: activate with: {hint}")
+    except OSError as exc:
+        click.echo(f"cvcpkg: warning — could not write activate scripts: {exc}", err=True)
+
     click.echo(f"cvcpkg: done -- {len(picked)} component(s) installed to {prefix_path}")
+
+
+def _activation_hint(plat: str, prefix: Path) -> str:
+    """Return a copy-pasteable activate command for the user."""
+    if plat == "windows":
+        return f". {prefix}\\Scripts\\Activate.ps1"
+    return f"source {prefix}/bin/activate"
 
 
 # ── list ────────────────────────────────────────────────────────

@@ -92,6 +92,50 @@ conflicts).
 
 ---
 
+## Activating a prefix
+
+`cvcpkg install` writes shell activation scripts into the prefix in
+the style of Python's `venv`.  Sourcing one of them prepends the
+prefix to `PATH`, `CMAKE_PREFIX_PATH`, `PKG_CONFIG_PATH`, and the
+platform's dynamic-linker variable (`LD_LIBRARY_PATH` on
+Linux/BSD/WASI, `DYLD_LIBRARY_PATH` on macOS).  A matching
+`cvcpkg_deactivate` function restores the previous environment.
+
+| Shell                        | Command                                        |
+|------------------------------|------------------------------------------------|
+| bash / zsh / dash / sh       | `source ./deps/bin/activate`                   |
+| fish                         | `source ./deps/bin/activate.fish`              |
+| csh / tcsh                   | `source ./deps/bin/activate.csh`               |
+| PowerShell (any OS)          | `. ./deps/Scripts/Activate.ps1`                |
+| cmd.exe (Windows)            | `.\deps\Scripts\activate.bat`                  |
+
+Deactivate:
+
+```bash
+cvcpkg_deactivate           # bash / zsh / fish / csh / PowerShell
+.\deps\Scripts\cvcpkg_deactivate.bat   # cmd.exe
+```
+
+Environment variables exported after activation:
+
+* `CVCPKG_ACTIVE_PREFIX` — the absolute prefix path (also used to
+  detect a stale activation on re-source).
+* `PATH` — prepended with `<prefix>/bin` (POSIX) or
+  `<prefix>/Scripts` + `<prefix>/bin` (Windows).
+* `CMAKE_PREFIX_PATH` — prepended with `<prefix>`.
+* `PKG_CONFIG_PATH` — prepended with `<prefix>/{lib,lib64,share}/pkgconfig`
+  for whichever of those directories exist.
+* `LD_LIBRARY_PATH` / `DYLD_LIBRARY_PATH` — prepended with
+  `<prefix>/lib` and `<prefix>/lib64` if present.
+
+Set `CVCPKG_ACTIVATE_NO_PROMPT=1` before sourcing to skip the
+`(<prefix-name>)` shell-prompt annotation.
+
+The scripts are self-contained and safe to copy along with the prefix;
+they do not require `cvcpkg` at activation time.
+
+---
+
 ## Recipe management
 
 Recipes define how to build each component from source.  They live in
