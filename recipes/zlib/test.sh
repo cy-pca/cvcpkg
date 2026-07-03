@@ -20,7 +20,7 @@ test -f "${CVC_INSTALL_DIR}/include/zlib.h" \
 
 # 2. Check that at least one library file exists.
 found_lib=0
-for pat in lib/libz.so* lib/libz.dylib* lib/libz.a lib/z.lib lib/zlib*.lib; do
+for pat in lib/libz.so* lib/libz.dylib* lib/libz.a lib/libzlibstatic.a lib/z.lib lib/zlib*.lib; do
     # shellcheck disable=SC2086
     if compgen -G "${CVC_INSTALL_DIR}/${pat}" >/dev/null 2>&1; then
         found_lib=1
