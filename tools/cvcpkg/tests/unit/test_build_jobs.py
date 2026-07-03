@@ -738,6 +738,101 @@ class TestDbBuildJobStore:
 
         self._run(_test())
 
+    def test_force_cancel_running(self):
+        """force=True on a running job transitions to cancelled and reconciles builder count."""
+        from cvcpkg.server.db_stores import DbBuilderStore, DbBuildJobStore
+
+        async def _test():
+            bstore = DbBuilderStore()
+            builder = await bstore.register(
+                name="b1",
+                platform="linux",
+                arch="x86_64",
+                registered_by="a",
+            )
+            store = DbBuildJobStore()
+            job = await store.create(
+                recipe_name="zlib",
+                platform="linux",
+                arch="x86_64",
+                submitted_by="admin",
+            )
+            await store.claim(job.id, builder.id)
+            # Fake the builder having claimed 1 job
+            await bstore.heartbeat(builder.id, current_jobs=1)
+
+            result = await store.cancel(job.id, force=True)
+            assert result.status == BuildJobStatus.cancelled
+            assert result.finished_at is not None
+
+            builder_after = await bstore.get(builder.id)
+            assert builder_after.current_jobs == 0
+
+        self._run(_test())
+
+    def test_force_cancel_no_op_on_terminal(self):
+        """force=True still doesn't resurrect a succeeded/failed/cancelled job."""
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            job = await store.create(
+                recipe_name="zlib",
+                platform="linux",
+                arch="x86_64",
+                submitted_by="admin",
+            )
+            await store.complete(job.id)
+            result = await store.cancel(job.id, force=True)
+            assert result.status == BuildJobStatus.succeeded
+
+        self._run(_test())
+
+    def test_list_active_by_builder(self):
+        """list_active_by_builder returns only running/dispatched jobs for a builder."""
+        from cvcpkg.server.db_stores import DbBuilderStore, DbBuildJobStore
+
+        async def _test():
+            bstore = DbBuilderStore()
+            b1 = await bstore.register(
+                name="b1",
+                platform="linux",
+                arch="x86_64",
+                registered_by="a",
+            )
+            b2 = await bstore.register(
+                name="b2",
+                platform="linux",
+                arch="x86_64",
+                registered_by="a",
+            )
+            store = DbBuildJobStore()
+            # b1: one dispatched, one running, one succeeded
+            j_disp = await store.create(
+                recipe_name="a", platform="linux", arch="x86_64", submitted_by="admin"
+            )
+            await store.dispatch(j_disp.id, b1.id)
+            j_run = await store.create(
+                recipe_name="b", platform="linux", arch="x86_64", submitted_by="admin"
+            )
+            await store.claim(j_run.id, b1.id)
+            j_done = await store.create(
+                recipe_name="c", platform="linux", arch="x86_64", submitted_by="admin"
+            )
+            await store.claim(j_done.id, b1.id)
+            await store.complete(j_done.id)
+            # b2: one running
+            j_other = await store.create(
+                recipe_name="d", platform="linux", arch="x86_64", submitted_by="admin"
+            )
+            await store.claim(j_other.id, b2.id)
+
+            active = await store.list_active_by_builder(b1.id)
+            ids = sorted(j.id for j in active)
+            assert ids == sorted([j_disp.id, j_run.id])
+
+        self._run(_test())
+
     def test_claim_running_job_noop(self):
         """Claiming an already-running job should be a no-op."""
         from cvcpkg.server.db_stores import DbBuilderStore, DbBuildJobStore
@@ -1481,15 +1576,11 @@ class TestDbBuildJobStore:
             await store.dispatch(j2.id, builder.id)
 
             # Builder reports 0 (e.g., after restart) but DB has 2 active
-            info = await bstore.heartbeat(
-                builder.id, current_jobs=0, reconcile=True
-            )
+            info = await bstore.heartbeat(builder.id, current_jobs=0, reconcile=True)
             assert info.current_jobs == 2  # reconciled from DB, not client
 
             # Without reconcile, trusts the client
-            info = await bstore.heartbeat(
-                builder.id, current_jobs=0, reconcile=False
-            )
+            info = await bstore.heartbeat(builder.id, current_jobs=0, reconcile=False)
             assert info.current_jobs == 0  # client value used
 
         self._run(_test())
@@ -2041,3 +2132,110 @@ class TestBuildJobEndpoints:
         )
         assert resp.status_code == 200
         assert resp.json()["resumed"] == 2
+
+    # ── Force-cancel + cascade tests ────────────────────────────
+
+    def test_cancel_running_no_force_noop_api(self, db_server_env):
+        """POST /cancel on a running job without ?force= is a no-op returning status=running."""
+        client, admin_tok, pub_tok, _ = db_server_env
+        # Submit + register a builder + claim to running
+        sub = self._submit(client, pub_tok)
+        job_id = sub.json()["id"]
+        breg = client.post(
+            "/v1/builders/register",
+            json={"name": "b", "platform": "linux", "arch": "x86_64"},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert breg.status_code == 200, breg.text
+        bid = breg.json()["id"]
+        claim = client.post(
+            f"/v1/builds/{job_id}/claim",
+            json={"builder_id": bid},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert claim.status_code == 200, claim.text
+        assert claim.json()["status"] == "running"
+
+        resp = client.post(
+            f"/v1/builds/{job_id}/cancel",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "running"
+        assert body["message"] == "no-op"
+
+    def test_cancel_running_with_force_cascades(self, db_server_env):
+        """POST /cancel?force=true on a running job cancels it AND cancels downstream."""
+        client, admin_tok, pub_tok, _ = db_server_env
+        # DAG: a -> b -> c
+        resp = client.post(
+            "/v1/builds/dag",
+            json={
+                "dag_id": "force-cancel-dag",
+                "jobs": [
+                    {"recipe_name": "a", "platform": "linux", "arch": "x86_64", "depends_on": []},
+                    {"recipe_name": "b", "platform": "linux", "arch": "x86_64", "depends_on": [0]},
+                    {"recipe_name": "c", "platform": "linux", "arch": "x86_64", "depends_on": [1]},
+                ],
+            },
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        job_a = resp.json()["jobs"][0]["id"]
+
+        breg = client.post(
+            "/v1/builders/register",
+            json={"name": "b1", "platform": "linux", "arch": "x86_64"},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        bid = breg.json()["id"]
+        client.post(
+            f"/v1/builds/{job_a}/claim",
+            json={"builder_id": bid},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+
+        resp = client.post(
+            f"/v1/builds/{job_a}/cancel",
+            params={"force": "true"},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["status"] == "cancelled"
+        assert body["cascaded"] == 2  # b and c
+
+    def test_fail_cascades_downstream(self, db_server_env):
+        """POST /fail cancels downstream dependents (parity with WS path)."""
+        client, admin_tok, pub_tok, _ = db_server_env
+        resp = client.post(
+            "/v1/builds/dag",
+            json={
+                "dag_id": "fail-cascade-dag",
+                "jobs": [
+                    {"recipe_name": "a", "platform": "linux", "arch": "x86_64", "depends_on": []},
+                    {"recipe_name": "b", "platform": "linux", "arch": "x86_64", "depends_on": [0]},
+                    {"recipe_name": "c", "platform": "linux", "arch": "x86_64", "depends_on": [1]},
+                ],
+            },
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        jobs = resp.json()["jobs"]
+        job_a = jobs[0]["id"]
+
+        resp = client.post(
+            f"/v1/builds/{job_a}/fail",
+            json={"error_message": "boom"},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200, resp.text
+
+        # Verify b and c are now cancelled
+        for j in jobs[1:]:
+            info = client.get(
+                f"/v1/builds/{j['id']}",
+                headers={"Authorization": f"Bearer {pub_tok}"},
+            ).json()
+            assert info["status"] == "cancelled", info

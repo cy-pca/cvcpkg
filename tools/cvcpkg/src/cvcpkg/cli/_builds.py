@@ -128,6 +128,15 @@ def builds_info(job_id: int, server: str, token: str):
 @builds_group.command("cancel")
 @click.argument("job_id", type=int)
 @click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help=(
+        "Also cancel a running or dispatched job (recovery from a "
+        "stuck builder). Cascades to downstream dependents."
+    ),
+)
+@click.option(
     "--server",
     envvar="CVCPKG_SERVER_URL",
     required=True,
@@ -140,10 +149,18 @@ def builds_info(job_id: int, server: str, token: str):
     required=True,
     help="Bearer token.  [env: CVCPKG_TOKEN]",
 )
-def builds_cancel(job_id: int, server: str, token: str):
+def builds_cancel(job_id: int, force: bool, server: str, token: str):
     """Cancel a build job."""
-    data = _api_request("post", f"{server.rstrip('/')}/v1/builds/{job_id}/cancel", token)
-    click.echo(f"Build #{job_id}: {data.get('status', 'cancelled')}")
+    url = f"{server.rstrip('/')}/v1/builds/{job_id}/cancel"
+    if force:
+        url += "?force=true"
+    data = _api_request("post", url, token)
+    status = data.get("status", "cancelled")
+    cascaded = data.get("cascaded", 0)
+    if cascaded:
+        click.echo(f"Build #{job_id}: {status} (+{cascaded} downstream cancelled)")
+    else:
+        click.echo(f"Build #{job_id}: {status}")
 
 
 @builds_group.command("cancel-dag")

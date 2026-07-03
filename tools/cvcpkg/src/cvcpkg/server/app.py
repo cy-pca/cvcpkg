@@ -68,6 +68,7 @@ from cvcpkg.server.models import (
     BuildJobFailRequest,
     BuildJobInfo,
     BuildJobListResponse,
+    BuildJobStatus,
     BuildJobSubmitRequest,
     BuildLogAppendRequest,
     CacheStatusResponse,
@@ -549,8 +550,35 @@ async def _build_scheduler_loop() -> None:
         if not _use_db or _db_build_jobs is None or _db_builders is None:
             continue
         try:
-            # 1. Reap stale builders (missed heartbeats)
-            await _db_builders.reap_stale(max_age_seconds=180)
+            # 1. Reap stale builders (missed heartbeats), then fail any
+            #    jobs that were still assigned to them — otherwise the
+            #    jobs stay in "running" forever and the scheduler slot
+            #    on any other builder that inherited the DAG is blocked
+            #    until the (long) build timeout kicks in.
+            reaped_builders = await _db_builders.reap_stale(max_age_seconds=180)
+            for builder in reaped_builders:
+                orphaned = await _db_build_jobs.list_active_by_builder(builder.id)
+                for job in orphaned:
+                    err = (
+                        f"builder #{builder.id} ({builder.name}) went offline "
+                        f"(no heartbeat for >180s) while job was {job.status}"
+                    )
+                    failed = await _db_build_jobs.fail(job.id, error_message=err)
+                    if failed is None:
+                        continue
+                    await _db_build_jobs.cancel_downstream(job.id)
+                    await emit_webhook_event(
+                        "build.failed",
+                        {
+                            "job_id": job.id,
+                            "recipe_name": job.recipe_name,
+                            "platform": job.platform,
+                            "arch": job.arch,
+                            "error_message": err,
+                            "reason": "builder_reaped",
+                        },
+                        org_slug=job.org_slug,
+                    )
 
             # 2. Reap timed-out jobs
             timed_out = await _db_build_jobs.reap_timed_out(_DEFAULT_BUILD_TIMEOUT)
@@ -3942,18 +3970,49 @@ def create_app(
     @app.post("/v1/builds/{job_id}/cancel", tags=["builds"])
     async def cancel_build(
         job_id: int,
+        force: bool = Query(
+            False,
+            description=(
+                "Also cancel a running or dispatched job. Use this to "
+                "recover from stuck jobs whose builder has died. "
+                "Cascades to downstream dependents."
+            ),
+        ),
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
-        """Cancel a pending or dispatched build job."""
+        """Cancel a build job.
+
+        Without ``force``, only pending/dispatched jobs are cancelled
+        (running jobs are left untouched so the API can't race with a
+        live builder). With ``force=true``, dispatched/running jobs are
+        also transitioned to cancelled and downstream dependents are
+        cascade-cancelled, and the builder is notified via WebSocket.
+        """
         _require_db_build_jobs()
-        info = await _db_build_jobs.cancel(job_id)
+        info = await _db_build_jobs.cancel(job_id, force=force)
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
+        if info.status != BuildJobStatus.cancelled:
+            # The store no-op'd (e.g. running without force, or already terminal)
+            return {"message": "no-op", "id": job_id, "status": info.status}
         await _db_audit.record(
             action=AuditAction.build_cancel,
             actor=actor.name,
             target=str(job_id),
+            detail="force" if force else "",
         )
+        cascaded = 0
+        if force:
+            cascaded = await _db_build_jobs.cancel_downstream(job_id)
+            if info.builder_id is not None:
+                await _ws_send(
+                    info.builder_id,
+                    {
+                        "type": "job.cancel",
+                        "job_id": job_id,
+                        "message": f"force-cancelled by {actor.name}",
+                    },
+                )
         await emit_webhook_event(
             "build.cancelled",
             {
@@ -3961,10 +4020,17 @@ def create_app(
                 "recipe_name": info.recipe_name,
                 "platform": info.platform,
                 "cancelled_by": actor.name,
+                "forced": force,
+                "cascaded": cascaded,
             },
             org_slug=info.org_slug,
         )
-        return {"message": "job cancelled", "id": job_id, "status": info.status}
+        return {
+            "message": "job cancelled",
+            "id": job_id,
+            "status": info.status,
+            "cascaded": cascaded,
+        }
 
     @app.post("/v1/builds/dag/{dag_id}/cancel", tags=["builds"])
     async def cancel_dag(
@@ -4126,6 +4192,8 @@ def create_app(
         info = await _db_build_jobs.fail(job_id, error_message=body.error_message)
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
+        # Cascade-cancel downstream dependents (parity with the WS job.fail path).
+        cascaded = await _db_build_jobs.cancel_downstream(job_id)
         await _db_audit.record(
             action=AuditAction.build_fail,
             actor=actor.name,
@@ -4140,6 +4208,7 @@ def create_app(
                 "platform": info.platform,
                 "arch": info.arch,
                 "error_message": body.error_message or "",
+                "cascaded": cascaded,
             },
             org_slug=info.org_slug,
         )
