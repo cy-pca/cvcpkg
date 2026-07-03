@@ -45,4 +45,6 @@ $linkMode = if ($env:CVC_LINK -eq 'static') {
     @('--enable-shared', '--disable-static')
 }
 
-Invoke-CvcMsysAutotoolsBuild (@('--enable-cxx', '--disable-assembly') + $linkMode)
+# -j 1: parallel make deadlocks MSYS2's fork emulation for GMP's
+# libtool + mpn/*.c compiles when the builder runs as the SYSTEM user.
+Invoke-CvcMsysAutotoolsBuild -Jobs 1 -ConfigureArgs (@('--enable-cxx', '--disable-assembly') + $linkMode)
