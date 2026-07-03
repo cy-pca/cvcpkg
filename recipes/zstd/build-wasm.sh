@@ -22,3 +22,6 @@ cmake -G Ninja \
     -DZSTD_BUILD_SHARED=OFF
 cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 cmake --install "${CVC_BUILD_DIR}"
+
+# Ensure installed .pc/.cmake files are relocatable.
+cvc_rewrite_install_paths

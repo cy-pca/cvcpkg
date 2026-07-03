@@ -75,3 +75,6 @@ foreach ($tool in @('moc.exe', 'rcc.exe', 'uic.exe', 'qmake6.exe')) {
 }
 
 Write-Host "Qt 6 wasm_singlethread installed to $env:CVC_INSTALL_DIR"
+
+# Ensure installed .pc/.cmake files are relocatable.
+Invoke-CvcRewriteInstallPaths

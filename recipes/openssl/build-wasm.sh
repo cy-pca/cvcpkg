@@ -26,3 +26,6 @@ CC=emcc CXX=em++ AR=emar RANLIB=emranlib perl Configure \
 
 emmake make -j "${CVC_JOBS}"
 emmake make install_sw
+
+# Ensure installed .pc/.cmake files are relocatable.
+cvc_rewrite_install_paths

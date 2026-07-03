@@ -150,3 +150,6 @@ foreach ($licName in @('License.txt','LICENSE.txt','NOTICE.txt')) {
 }
 
 Write-Host "cvcpkg: imagemagick staged to $env:CVC_INSTALL_DIR"
+
+# Ensure installed .pc/.cmake files are relocatable.
+Invoke-CvcRewriteInstallPaths

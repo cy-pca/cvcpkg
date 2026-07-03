@@ -50,3 +50,6 @@ if ($LASTEXITCODE -ne 0) { throw "cmake configure (float) failed" }
 if ($LASTEXITCODE -ne 0) { throw "cmake build (float) failed" }
 & cmake --install $floatDir
 if ($LASTEXITCODE -ne 0) { throw "cmake install (float) failed" }
+
+# Ensure installed .pc/.cmake files are relocatable.
+Invoke-CvcRewriteInstallPaths

@@ -29,3 +29,6 @@ if ($LASTEXITCODE -ne 0) { throw "cmake build failed" }
 
 & cmake --install $env:CVC_BUILD_DIR
 if ($LASTEXITCODE -ne 0) { throw "cmake install failed" }
+
+# Ensure installed .pc/.cmake files are relocatable.
+Invoke-CvcRewriteInstallPaths

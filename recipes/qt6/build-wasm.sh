@@ -71,3 +71,6 @@ for tool in moc rcc uic qmake6; do
 done
 
 echo "Qt 6 wasm_singlethread installed to ${CVC_INSTALL_DIR}"
+
+# Ensure installed .pc/.cmake files are relocatable.
+cvc_rewrite_install_paths

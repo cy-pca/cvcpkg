@@ -35,17 +35,6 @@ cmake -G Ninja \
 cmake --build "${CVC_BUILD_DIR}/float" -j "${CVC_JOBS}"
 cmake --install "${CVC_BUILD_DIR}/float"
 
-# ── Rewrite pkg-config files for relocatability ──
-# FFTW3's CMake install bakes CVC_INSTALL_DIR (a /tmp/cvcpkg-builder/... path
-# on the builder) into prefix=/exec_prefix=/libdir=/includedir=.  Rewrite them
-# to be relative to ${pcfiledir} so downstream consumers work in any prefix.
-for pc in "${CVC_INSTALL_DIR}"/lib/pkgconfig/fftw3*.pc; do
-    [ -f "$pc" ] || continue
-    sed -i.bak \
-        -e 's|^prefix=.*|prefix=${pcfiledir}/../..|' \
-        -e 's|^exec_prefix=.*|exec_prefix=${prefix}|' \
-        -e 's|^libdir=.*|libdir=${prefix}/lib|' \
-        -e 's|^includedir=.*|includedir=${prefix}/include|' \
-        "$pc"
-    rm -f "${pc}.bak"
-done
+# Normalize .pc / .cmake to use ${pcfiledir} / ${CMAKE_CURRENT_LIST_DIR}
+# so downstream consumers work in any prefix.
+cvc_rewrite_install_paths

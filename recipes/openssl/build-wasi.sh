@@ -36,3 +36,6 @@ perl Configure \
 
 make -j "${CVC_JOBS}"
 make install_sw
+
+# Ensure installed .pc/.cmake files are relocatable.
+cvc_rewrite_install_paths

@@ -33,3 +33,6 @@ cmake -G Ninja \
     "${COMMON_ARGS[@]}"
 cmake --build "${CVC_BUILD_DIR}/static" -j "${CVC_JOBS}"
 cmake --install "${CVC_BUILD_DIR}/static"
+
+# Ensure installed .pc/.cmake files are relocatable.
+cvc_rewrite_install_paths

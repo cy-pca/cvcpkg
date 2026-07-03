@@ -7,3 +7,6 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $env:CC_FOR_BUILD = 'gcc'
 
 Invoke-CvcWasiAutotoolsBuild
+
+# Ensure installed .pc/.cmake files are relocatable.
+Invoke-CvcRewriteInstallPaths

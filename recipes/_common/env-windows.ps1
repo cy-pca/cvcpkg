@@ -129,6 +129,60 @@ function Invoke-CvcCMakeBuild {
     } finally {
         $env:PATH = $origPath
     }
+
+    Invoke-CvcRewriteInstallPaths
+}
+
+# ── Relocatability helper ───────────────────────────────────────────
+#
+# Rewrite absolute $env:CVC_INSTALL_DIR paths inside installed .pc and
+# .cmake files so downstream consumers keep working when the package is
+# unpacked at a different prefix.  .pc files anchor at ${pcfiledir}
+# and .cmake files at ${CMAKE_CURRENT_LIST_DIR}; the ../ suffix is
+# computed per-file from its depth under $env:CVC_INSTALL_DIR.  CMake
+# on Windows writes paths with forward slashes into generated files,
+# but MSVC/PowerShell APIs return backslash form, so we search for
+# both variants.  Idempotent.
+
+function Invoke-CvcRewriteInstallPaths {
+    $root = $env:CVC_INSTALL_DIR
+    if (-not $root) { return }
+    $root = $root.TrimEnd('\','/')
+    if (-not (Test-Path -LiteralPath $root)) { return }
+
+    $rootBack = $root
+    $rootFwd  = $root -replace '\\','/'
+    $forms = @($rootBack, $rootFwd) | Sort-Object -Unique
+
+    $files = Get-ChildItem -Path $root -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -eq '.pc' -or $_.Extension -eq '.cmake' }
+    $count = 0
+    foreach ($f in $files) {
+        $text = Get-Content -Raw -LiteralPath $f.FullName -ErrorAction SilentlyContinue
+        if (-not $text) { continue }
+        $needsRewrite = $false
+        foreach ($form in $forms) {
+            if ($text.Contains($form)) { $needsRewrite = $true; break }
+        }
+        if (-not $needsRewrite) { continue }
+
+        $dirNorm = ($f.DirectoryName -replace '\\','/')
+        $rootFwdTrim = $rootFwd
+        $remainder = $dirNorm.Substring($rootFwdTrim.Length).TrimStart('/')
+        $depth = if ($remainder) { ($remainder -split '/').Length } else { 0 }
+        $rel = if ($depth -gt 0) { (('../' * $depth)).TrimEnd('/') } else { '.' }
+        $anchor = if ($f.Extension -eq '.pc') { '${pcfiledir}' } else { '${CMAKE_CURRENT_LIST_DIR}' }
+        $prefix = "$anchor/$rel"
+
+        foreach ($form in $forms) {
+            $text = $text -replace [regex]::Escape($form), $prefix.Replace('$','$$')
+        }
+        Set-Content -LiteralPath $f.FullName -Value $text -NoNewline
+        $count++
+    }
+    if ($count -gt 0) {
+        Write-Host "── Invoke-CvcRewriteInstallPaths: normalized $count file(s) under $root ──"
+    }
 }
 
 # ── MSYS2 / MinGW autotools helper ──────────────────────────────────

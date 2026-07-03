@@ -11,3 +11,6 @@ Invoke-CvcWasiCMakeBuild -SourceDir "$env:CVC_SOURCE_DIR\build\cmake" -ExtraArgs
     '-DZSTD_BUILD_STATIC=ON',
     '-DZSTD_BUILD_SHARED=OFF'
 )
+
+# Ensure installed .pc/.cmake files are relocatable.
+Invoke-CvcRewriteInstallPaths
