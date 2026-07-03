@@ -2316,53 +2316,115 @@ def create_app(
     async def yank(
         name: str,
         version: str,
+        platform: str | None = Query(None, description="Only yank bundles for this platform"),
+        arch: str | None = Query(None, description="Only yank bundles for this arch"),
+        link: str | None = Query(None, description="Only yank bundles for this link mode (shared/static)"),
+        build_type: str | None = Query(None, description="Only yank bundles for this build type (release/debug)"),
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
+        scope_parts = [
+            f"{k}={v}"
+            for k, v in (
+                ("platform", platform),
+                ("arch", arch),
+                ("link", link),
+                ("build_type", build_type),
+            )
+            if v is not None
+        ]
+        scope_detail = ",".join(scope_parts) if scope_parts else None
+        target = f"{name}=={version}"
+        if scope_detail:
+            target = f"{target} [{scope_detail}]"
         if _use_db:
-            await _db_packages.yank(name, version)
+            n = await _db_packages.yank(
+                name, version, platform=platform, arch=arch, link=link, build_type=build_type
+            )
             await _db_audit.record(
                 action=AuditAction.yank,
                 actor=actor.name,
-                target=f"{name}=={version}",
+                target=target,
             )
         else:
             state = _get_state()
+            n = 0
             for b in state.index.get("bundles", []):
-                if b["name"] == name and b["version"] == version:
-                    b["yanked"] = True
+                if b["name"] != name or b["version"] != version:
+                    continue
+                if platform is not None and b.get("platform") != platform:
+                    continue
+                if arch is not None and b.get("arch") != arch:
+                    continue
+                if link is not None and b.get("link") != link:
+                    continue
+                if build_type is not None and b.get("build_type") != build_type:
+                    continue
+                b["yanked"] = True
+                n += 1
             state.save_index()
             state.audit.record(
                 action=AuditAction.yank,
                 actor=actor.name,
-                target=f"{name}=={version}",
+                target=target,
             )
-        return {"message": f"yanked {name}=={version}"}
+        return {"message": f"yanked {target}", "count": n}
 
     @app.post("/v1/packages/{name}/{version}/unyank", tags=["publish"])
     async def unyank(
         name: str,
         version: str,
+        platform: str | None = Query(None),
+        arch: str | None = Query(None),
+        link: str | None = Query(None),
+        build_type: str | None = Query(None),
         actor: TokenRecord = Depends(require_role(TokenRole.admin)),
     ):
+        scope_parts = [
+            f"{k}={v}"
+            for k, v in (
+                ("platform", platform),
+                ("arch", arch),
+                ("link", link),
+                ("build_type", build_type),
+            )
+            if v is not None
+        ]
+        scope_detail = ",".join(scope_parts) if scope_parts else None
+        target = f"{name}=={version}"
+        if scope_detail:
+            target = f"{target} [{scope_detail}]"
         if _use_db:
-            await _db_packages.unyank(name, version)
+            n = await _db_packages.unyank(
+                name, version, platform=platform, arch=arch, link=link, build_type=build_type
+            )
             await _db_audit.record(
                 action=AuditAction.unyank,
                 actor=actor.name,
-                target=f"{name}=={version}",
+                target=target,
             )
         else:
             state = _get_state()
+            n = 0
             for b in state.index.get("bundles", []):
-                if b["name"] == name and b["version"] == version:
-                    b["yanked"] = False
+                if b["name"] != name or b["version"] != version:
+                    continue
+                if platform is not None and b.get("platform") != platform:
+                    continue
+                if arch is not None and b.get("arch") != arch:
+                    continue
+                if link is not None and b.get("link") != link:
+                    continue
+                if build_type is not None and b.get("build_type") != build_type:
+                    continue
+                b["yanked"] = False
+                n += 1
             state.save_index()
             state.audit.record(
                 action=AuditAction.unyank,
                 actor=actor.name,
-                target=f"{name}=={version}",
+                target=target,
             )
-        return {"message": f"unyanked {name}=={version}"}
+        return {"message": f"unyanked {target}", "count": n}
 
     # ── Delete (admin only) ─────────────────────────────────
 
