@@ -9,7 +9,7 @@ recipe:
   description: "log4cplus — a simple-to-use C++ logging library modeled after Java's log4j."
   homepage: https://log4cplus.sourceforge.io/
   license: Apache-2.0
-  tags: [utils, wasm]
+  tags: [utils, wasm, wasi]
 
 source:
   type: tarball
@@ -56,6 +56,12 @@ build:
     - platform: wasm
       host_platform: windows
       script: build-wasm.ps1
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: wasi
+      host_platform: windows
+      script: build-wasi.ps1
 
 package:
   files:

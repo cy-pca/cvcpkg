@@ -61,6 +61,12 @@ build:
     - platform: wasm
       host_platform: windows
       script: build-wasm.ps1
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: wasi
+      host_platform: windows
+      script: build-wasi.ps1
 
 package:
   files:

@@ -9,7 +9,7 @@ recipe:
   description: "c-ares — an asynchronous DNS resolver library for C applications."
   homepage: https://c-ares.org/
   license: MIT
-  tags: [networking, wasm]
+  tags: [networking, wasm, wasi]
 
 source:
   type: tarball
@@ -55,6 +55,12 @@ build:
     - platform: wasm
       host_platform: windows
       script: build-wasm.ps1
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: wasi
+      host_platform: windows
+      script: build-wasi.ps1
 
 package:
   files:

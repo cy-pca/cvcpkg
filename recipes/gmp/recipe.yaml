@@ -9,7 +9,7 @@ recipe:
   description: "GMP — the GNU Multiple Precision Arithmetic Library for arbitrary precision integer, rational, and floating-point arithmetic."
   homepage: https://gmplib.org/
   license: LGPL-3.0-or-later
-  tags: [math, wasm]
+  tags: [math, wasm, wasi]
 
 source:
   type: tarball
@@ -55,6 +55,12 @@ build:
     - platform: wasm
       host_platform: windows
       script: build-wasm.ps1
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: wasi
+      host_platform: windows
+      script: build-wasi.ps1
 
 package:
   files:

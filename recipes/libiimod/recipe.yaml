@@ -9,7 +9,7 @@ recipe:
   description: "IMOD image I/O library — low-level routines for reading and writing MRC, TIFF, and other microscopy image formats."
   homepage: https://github.com/LabShare-Archive/IMOD
   license: GPL-2.0-or-later
-  tags: [bio, io, wasm]
+  tags: [bio, io, wasm, wasi]
 
 source:
   # Vendored in third-party/libiimod/ — curated subset of IMOD's
@@ -63,6 +63,12 @@ build:
     - platform: wasm
       host_platform: windows
       script: build-wasm.ps1
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: wasi
+      host_platform: windows
+      script: build-wasi.ps1
 
 package:
   files:

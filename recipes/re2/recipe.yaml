@@ -9,7 +9,7 @@ recipe:
   description: "RE2 — a fast, safe, thread-friendly regular expression library from Google."
   homepage: https://github.com/google/re2
   license: BSD-3-Clause
-  tags: [utils, wasm]
+  tags: [utils, wasm, wasi]
 
 source:
   type: tarball
@@ -59,6 +59,12 @@ build:
     - platform: wasm
       host_platform: windows
       script: build-wasm.ps1
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: wasi
+      host_platform: windows
+      script: build-wasi.ps1
 
 package:
   files:
