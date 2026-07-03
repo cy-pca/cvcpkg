@@ -70,6 +70,14 @@ services:
             CVCPKG_RATE_LIMIT_RPM: ${CVCPKG_RATE_LIMIT_RPM:-300}
             CVCPKG_CORS_ORIGINS: ${CVCPKG_CORS_ORIGINS:-}
             CVCPKG_LOG_JSON: ${CVCPKG_LOG_JSON:-}
+            # ── Mirror mode (optional) ─────────────────────────
+            # Set CVCPKG_MIRROR_MODE=1 + CVCPKG_MIRROR_UPSTREAM=<url>
+            # in .env.production to run this instance as a read-only
+            # mirror of an upstream cvcpkg-server.
+            CVCPKG_MIRROR_MODE: ${CVCPKG_MIRROR_MODE:-}
+            CVCPKG_MIRROR_UPSTREAM: ${CVCPKG_MIRROR_UPSTREAM:-}
+            CVCPKG_MIRROR_TOKEN: ${CVCPKG_MIRROR_TOKEN:-}
+            CVCPKG_MIRROR_SYNC_INTERVAL: ${CVCPKG_MIRROR_SYNC_INTERVAL:-3600}
             TZ: ${TIMEZONE:-UTC}
         ports:
             - "${BACKEND_BIND_ADDR:-127.0.0.1}:${BACKEND_PORT:-8420}:8420"

@@ -1,12 +1,18 @@
 name: deploy-prod
 
 # Deploys cvcpkg-server to both:
-#   - cvcpkg.org  (cvcpkg-00, 10.10.10.134 — primary)
-#   - pkg.tx.wtf  (catx-03, local — legacy, transition period)
+#   - cvcpkg.org  (cvcpkg-00, 10.10.10.134 — primary/authoritative)
+#   - pkg.tx.wtf  (catx-03, local — read-only mirror of cvcpkg.org)
 #
 # The self-hosted runner on catx-03.tx.wtf picks up the job.
 # catx-03 deploys locally for pkg.tx.wtf and SSHes to cvcpkg-00
 # over the internal LAN for cvcpkg.org.
+#
+# Mirror config lives in catx-03:/home/tfx/libcvc-deps/tools/cvcpkg/
+# .env.production (CVCPKG_MIRROR_MODE=1, CVCPKG_MIRROR_UPSTREAM=
+# https://cvcpkg.org).  The mirror sync loop runs inside the backend
+# container and pulls the upstream catalog every hour; downloads are
+# proxied on demand and cached to the local archives volume.
 #
 # Required repo secrets:
 #   (none — the runner IS catx-03 and has SSH access to cvcpkg-00)
