@@ -8,7 +8,7 @@ recipe:
   maintainer_url: "https://cvcpkg.org"
   homepage: https://www.pcre.org/
   license: BSD-3-Clause
-  tags: [utils, wasm]
+  tags: [utils, wasm, wasi]
   description: >-
     PCRE2 — Perl Compatible Regular Expressions library.
     Used as a dependency of SWIG.
@@ -57,6 +57,12 @@ build:
     - platform: wasm
       host_platform: windows
       script: build-wasm.ps1
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: wasi
+      host_platform: windows
+      script: build-wasi.ps1
 
 package:
   files:

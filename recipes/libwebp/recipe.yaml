@@ -9,7 +9,7 @@ recipe:
   description: "libwebp — a library to encode and decode images in the WebP format."
   homepage: https://developers.google.com/speed/webp/
   license: BSD-3-Clause
-  tags: [graphics, io, wasm]
+  tags: [graphics, io, wasm, wasi]
 
 source:
   type: tarball
@@ -55,6 +55,12 @@ build:
     - platform: wasm
       host_platform: windows
       script: build-wasm.ps1
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: wasi
+      host_platform: windows
+      script: build-wasi.ps1
 
 package:
   files:

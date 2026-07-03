@@ -9,7 +9,7 @@ recipe:
   description: "LZ4 — extremely fast lossless compression algorithm."
   homepage: https://lz4.org/
   license: BSD-2-Clause AND GPL-2.0-only
-  tags: [utils, io]
+  tags: [utils, io, wasm, wasi]
 
 source:
   type: tarball
@@ -49,6 +49,18 @@ build:
         CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: wasi
+      host_platform: windows
+      script: build-wasi.ps1
 
 package:
   files:

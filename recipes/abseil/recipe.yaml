@@ -9,7 +9,7 @@ recipe:
   description: "Abseil C++ Common Libraries — a collection of open-source C++ code designed to augment the standard library."
   homepage: https://abseil.io/
   license: Apache-2.0
-  tags: [utils, wasm]
+  tags: [utils, wasm, wasi]
 
 source:
   type: tarball
@@ -55,6 +55,12 @@ build:
     - platform: wasm
       host_platform: windows
       script: build-wasm.ps1
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: wasi
+      host_platform: windows
+      script: build-wasi.ps1
 
 package:
   files:
