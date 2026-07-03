@@ -42,6 +42,7 @@ cvc_cmake_build() {
         "$@"
     cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
     cmake --install "${CVC_BUILD_DIR}"
+    cvc_rewrite_install_paths
 }
 
 echo "── env-wasm.sh loaded (host=${_host}) ──"

@@ -18,3 +18,6 @@ Invoke-CvcWasiAutotoolsBuild -Jobs 1 -ConfigureArgs @(
     '--enable-cxx',
     '--disable-assembly'
 )
+
+# Ensure installed .pc/.cmake files are relocatable.
+Invoke-CvcRewriteInstallPaths

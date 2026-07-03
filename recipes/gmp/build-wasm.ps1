@@ -35,3 +35,6 @@ try {
 finally {
     Pop-Location
 }
+
+# Ensure installed .pc/.cmake files are relocatable.
+Invoke-CvcRewriteInstallPaths

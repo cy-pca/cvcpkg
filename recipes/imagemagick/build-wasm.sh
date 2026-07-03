@@ -29,3 +29,6 @@ emconfigure ./configure \
 
 emmake make -j "${CVC_JOBS}"
 emmake make install
+
+# Ensure installed .pc/.cmake files are relocatable.
+cvc_rewrite_install_paths

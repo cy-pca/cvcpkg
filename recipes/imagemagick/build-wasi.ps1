@@ -22,3 +22,6 @@ Invoke-CvcWasiAutotoolsBuild -ConfigureArgs @(
     '--without-modules',
     '--disable-docs'
 )
+
+# Ensure installed .pc/.cmake files are relocatable.
+Invoke-CvcRewriteInstallPaths

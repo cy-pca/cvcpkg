@@ -49,3 +49,6 @@ if ($LASTEXITCODE -ne 0) { throw 'openssl make failed' }
 
 & $bash -lc "cd '$msysSource' && make install_sw"
 if ($LASTEXITCODE -ne 0) { throw 'openssl make install_sw failed' }
+
+# Ensure installed .pc/.cmake files are relocatable.
+Invoke-CvcRewriteInstallPaths

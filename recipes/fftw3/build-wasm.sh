@@ -49,3 +49,6 @@ for pc in "${CVC_INSTALL_DIR}"/lib/pkgconfig/fftw3*.pc; do
         "$pc"
     rm -f "${pc}.bak"
 done
+
+# Ensure installed .pc/.cmake files are relocatable.
+cvc_rewrite_install_paths

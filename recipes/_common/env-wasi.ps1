@@ -71,6 +71,8 @@ function Invoke-CvcWasiCMakeBuild {
 
     & cmake --install $env:CVC_BUILD_DIR
     if ($LASTEXITCODE -ne 0) { throw "cmake install failed" }
+
+    Invoke-CvcRewriteInstallPaths
 }
 
 function Invoke-CvcWasiAutotoolsBuild {

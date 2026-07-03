@@ -10,3 +10,6 @@ Invoke-CvcWasmCMakeBuild @(
     '-DLOG4CPLUS_BUILD_LOGGINGSERVER=OFF',
     '-DWITH_UNIT_TESTS=OFF'
 )
+
+# Ensure installed .pc/.cmake files are relocatable.
+Invoke-CvcRewriteInstallPaths

@@ -22,3 +22,6 @@ fi
 
 make -j "${CVC_JOBS}"
 make install
+
+# Ensure installed .pc/.cmake files are relocatable.
+cvc_rewrite_install_paths

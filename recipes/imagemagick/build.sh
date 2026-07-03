@@ -36,3 +36,6 @@ export MAKE
     CXXFLAGS="${CXXFLAGS:-"-O2 -fPIC -std=c++17"}"
 $MAKE -j "${CVC_JOBS}"
 $MAKE install
+
+# Ensure installed .pc/.cmake files are relocatable.
+cvc_rewrite_install_paths

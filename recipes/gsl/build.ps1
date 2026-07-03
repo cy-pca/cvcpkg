@@ -11,3 +11,6 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Invoke-CvcMsysAutotoolsBuild @(
     '--with-pic'
 )
+
+# Ensure installed .pc/.cmake files are relocatable.
+Invoke-CvcRewriteInstallPaths

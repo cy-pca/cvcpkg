@@ -2,6 +2,10 @@
 # recipes/_common/env-openbsd.sh — shared environment for OpenBSD recipe builds.
 set -euo pipefail
 
+_COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "${_COMMON_DIR}/rewrite-install-paths.sh"
+
 : "${CVC_BUILD_TYPE:=Release}"
 : "${CVC_LINK:=shared}"
 : "${CVC_JOBS:=$(sysctl -n hw.ncpuonline 2>/dev/null || echo 4)}"
@@ -57,6 +61,7 @@ cvc_cmake_build() {
         "$@"
     cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
     cmake --install "${CVC_BUILD_DIR}"
+    cvc_rewrite_install_paths
 }
 
 echo "── env-openbsd.sh loaded ──"
