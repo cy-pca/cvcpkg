@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: gsl
   upstream_version: "2.8"
-  cvc_revision: 3
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
