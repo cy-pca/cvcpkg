@@ -966,7 +966,10 @@ def create_app(
     @app.get("/healthz", response_model=HealthResponse, tags=["health"])
     async def healthz():
         state = _get_state()
-        if _use_db:
+        if MIRROR_MODE:
+            # Mirror sync populates state.index; DB isn't used for catalog rows.
+            pkg_count = len(state.index.get("bundles", []))
+        elif _use_db:
             pkgs, _ = await _db_packages.get_bundles(limit=0, offset=0)
             cat = await _db_packages.get_catalog_dict()
             pkg_count = len(cat.get("bundles", []))
@@ -1038,7 +1041,9 @@ def create_app(
     @app.get("/metrics", tags=["health"], response_class=PlainTextResponse)
     async def prometheus_metrics():
         state = _get_state()
-        if _use_db:
+        if MIRROR_MODE:
+            pkg_count = len(state.index.get("bundles", []))
+        elif _use_db:
             cat = await _db_packages.get_catalog_dict()
             pkg_count = len(cat.get("bundles", []))
         else:
@@ -1093,7 +1098,13 @@ def create_app(
         _auth: TokenRecord | None = Depends(optional_reader_auth),
         _caller: TokenRecord | None = Depends(optional_token),
     ):
-        if _use_db:
+        if MIRROR_MODE:
+            # Mirror sync loop writes the upstream catalog into state.index;
+            # bypass the (empty) DB read path so /v1/catalog serves the mirror.
+            state = _get_state()
+            revision = state.index.get("revision", 0)
+            bundles = list(state.index.get("bundles", []))
+        elif _use_db:
             caller = _auth or _caller
             cat = await _db_packages.get_catalog_dict(
                 caller_token_name=caller.name if caller else "",
