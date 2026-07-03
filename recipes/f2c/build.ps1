@@ -13,6 +13,17 @@ Copy-Item -Recurse -Force "$env:CVC_SOURCE_DIR\*" $env:CVC_BUILD_DIR
 Push-Location $env:CVC_BUILD_DIR
 try {
     Copy-Item -Force makefile.vc makefile
+
+    # makefile.vc omits the tokdefs.h rule that makefile.u provides via
+    # `grep -n . <tokens | sed ...`. Generate it here so nmake can find
+    # it as an input to lex.obj / proc.obj.
+    $lineNo = 0
+    $defs = foreach ($line in Get-Content tokens) {
+        $lineNo++
+        if ($line.Trim().Length -gt 0) { "#define $line $lineNo" }
+    }
+    Set-Content -Path tokdefs.h -Value $defs -Encoding ascii
+
     Write-Host "cvcpkg: f2c -> nmake -f makefile.vc"
     & nmake /nologo -f makefile f2c.exe
     if ($LASTEXITCODE -ne 0) { throw "nmake failed" }
