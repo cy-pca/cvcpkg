@@ -36,6 +36,7 @@ from cvcpkg.builder import (
     generate_manifest,
     list_recipes,
     load_all_recipes,
+    pack_from_prefix,
     qualified_name,
     resolve_build_order,
     stage_bundle,
@@ -3191,3 +3192,158 @@ class TestRecipeCrossToolchain:
             cross_toolchain_env={"CVC_EMSDK_DIR": "/opt/emsdk"},
         )
         assert ctx.cross_toolchain_env == {"CVC_EMSDK_DIR": "/opt/emsdk"}
+
+
+# ── pack_from_prefix ────────────────────────────────────────────
+
+
+class TestPackFromPrefix:
+    """Tests for pack_from_prefix — packaging an already-built install tree."""
+
+    def _write_prefix(self, prefix: Path) -> None:
+        """Populate a minimal install tree so stage_bundle has real bytes."""
+        (prefix / "lib").mkdir(parents=True)
+        (prefix / "include" / "testpkg").mkdir(parents=True)
+        (prefix / "lib" / "libtestpkg.a").write_bytes(b"fake static lib")
+        (prefix / "include" / "testpkg" / "testpkg.h").write_text(
+            "#pragma once\nint testpkg_answer(void);\n"
+        )
+
+    def test_packages_prefix_without_build(self, tmp_path):
+        """pack_from_prefix skips the build step and archives the prefix."""
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, MINIMAL_RECIPE)
+        prefix = tmp_path / "stage"
+        self._write_prefix(prefix)
+        out = tmp_path / "dist"
+
+        archive, sha, size = pack_from_prefix(
+            recipe_dir,
+            prefix,
+            platform="linux",
+            arch="x86_64",
+            output_dir=out,
+        )
+
+        assert archive.is_file()
+        assert size > 0
+        assert len(sha) == 64
+        # Recipe metadata drives the archive stem
+        assert archive.name.startswith("testpkg-1.0.0+cvc.1-linux-x86_64-release-shared")
+        # sha in report matches actual file
+        actual = hashlib.sha256(archive.read_bytes()).hexdigest()
+        assert actual == sha
+
+    def test_manifest_reflects_prefix_contents_and_recipe_metadata(self, tmp_path):
+        """Emitted manifest.yaml lists real prefix files with recipe metadata."""
+        recipe = dict(MINIMAL_RECIPE)
+        recipe["recipe"] = dict(MINIMAL_RECIPE["recipe"])
+        recipe["package"] = dict(MINIMAL_RECIPE["package"])
+        recipe["package"]["cmake_packages"] = ["testpkg"]
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe)
+        prefix = tmp_path / "stage"
+        self._write_prefix(prefix)
+        out = tmp_path / "dist"
+
+        archive, _, _ = pack_from_prefix(
+            recipe_dir,
+            prefix,
+            platform="linux",
+            arch="x86_64",
+            output_dir=out,
+        )
+
+        with tarfile.open(archive, "r:*") as tf:
+            entries = [m for m in tf.getmembers() if m.name.endswith("manifest.yaml")]
+            assert len(entries) == 1
+            fobj = tf.extractfile(entries[0])
+            assert fobj is not None
+            manifest = yaml.safe_load(fobj.read())
+
+        assert manifest["bundle"]["name"] == "testpkg"
+        assert manifest["bundle"]["version"] == "1.0.0+cvc.1"
+        assert manifest["bundle"]["platform"] == "linux"
+        assert manifest["bundle"]["arch"] == "x86_64"
+        assert manifest["contents"]["cmake_packages"] == ["testpkg"]
+        files = manifest["contents"]["files"]
+        assert any("libtestpkg.a" in f for f in files)
+        assert any("testpkg.h" in f for f in files)
+
+    def test_version_override_replaces_upstream_version(self, tmp_path):
+        """--version-override supplies a new upstream_version while keeping +cvc.<rev>."""
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, MINIMAL_RECIPE)
+        prefix = tmp_path / "stage"
+        self._write_prefix(prefix)
+        out = tmp_path / "dist"
+
+        archive, _, _ = pack_from_prefix(
+            recipe_dir,
+            prefix,
+            platform="linux",
+            arch="x86_64",
+            version_override="2.5.7",
+            output_dir=out,
+        )
+
+        # The cvc_revision (+cvc.1) from the recipe must be preserved.
+        assert archive.name.startswith("testpkg-2.5.7+cvc.1-linux-x86_64-release-shared")
+        with tarfile.open(archive, "r:*") as tf:
+            manifest_entry = next(m for m in tf.getmembers() if m.name.endswith("manifest.yaml"))
+            fobj = tf.extractfile(manifest_entry)
+            assert fobj is not None
+            manifest = yaml.safe_load(fobj.read())
+        assert manifest["bundle"]["version"] == "2.5.7+cvc.1"
+        assert manifest["bundle"]["upstream_version"] == "2.5.7"
+
+    def test_missing_prefix_raises(self, tmp_path):
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, MINIMAL_RECIPE)
+        with pytest.raises(RecipeError, match="prefix directory does not exist"):
+            pack_from_prefix(
+                recipe_dir,
+                tmp_path / "nonexistent",
+                platform="linux",
+                arch="x86_64",
+                output_dir=tmp_path / "dist",
+            )
+
+    def test_wasm_forces_static_link(self, tmp_path):
+        """wasm/wasi packages are always static regardless of --link."""
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, MINIMAL_RECIPE)
+        prefix = tmp_path / "stage"
+        self._write_prefix(prefix)
+        out = tmp_path / "dist"
+
+        archive, _, _ = pack_from_prefix(
+            recipe_dir,
+            prefix,
+            platform="wasm",
+            arch="wasm32",
+            link="shared",  # requested — should be overridden
+            output_dir=out,
+        )
+        assert "-static" in archive.name
+        assert "-shared" not in archive.name
+
+    def test_archive_contents_match_prefix_bytes(self, tmp_path):
+        """Files inside the archive have the same bytes as the source prefix."""
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, MINIMAL_RECIPE)
+        prefix = tmp_path / "stage"
+        self._write_prefix(prefix)
+        payload = b"payload-bytes-that-should-round-trip"
+        (prefix / "lib" / "libtestpkg.a").write_bytes(payload)
+        out = tmp_path / "dist"
+
+        archive, _, _ = pack_from_prefix(
+            recipe_dir, prefix, platform="linux", arch="x86_64", output_dir=out
+        )
+
+        with tarfile.open(archive, "r:*") as tf:
+            member = next(m for m in tf.getmembers() if m.name.endswith("libtestpkg.a"))
+            fobj = tf.extractfile(member)
+            assert fobj is not None
+            assert fobj.read() == payload

@@ -16,7 +16,7 @@ import sys
 import tarfile
 import tempfile
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -1159,6 +1159,108 @@ def pack_recipe(
     # Cleanup
     if not keep_build_dir and ctx.work_dir.is_dir():
         shutil.rmtree(ctx.work_dir, ignore_errors=True)
+
+    return archive_path, sha256, size
+
+
+def pack_from_prefix(
+    recipe_dir: Path,
+    prefix: Path,
+    *,
+    platform: str = "",
+    arch: str = "",
+    config: str = "release",
+    link: str = "shared",
+    version_override: str = "",
+    output_dir: Path | None = None,
+    maintainer: str = "",
+    org_slug: str = "",
+) -> tuple[Path, str, int]:
+    """Package an already-installed prefix as if built by :func:`pack_recipe`.
+
+    Downstream projects that build with their own toolchain (e.g. libcvc's
+    CMake superbuild) can stage their install tree, then hand it to
+    cvcpkg for archive layout, manifest generation, and sha256/size
+    accounting — the same code path :func:`pack_recipe` and the server
+    already trust. This avoids duplicating manifest schema knowledge in
+    every downstream CI script.
+
+    Args:
+        recipe_dir: Directory containing ``recipe.yaml`` with the
+            metadata (name, deps, cmake_packages, tags, …).
+        prefix: Directory containing the already-installed tree
+            (``prefix/bin``, ``prefix/lib``, ``prefix/include``, …).
+        platform / arch: Auto-detected when empty. Downstream typically
+            passes these explicitly to match the built binaries.
+        config: Build config tag (``release`` / ``debug`` / …).
+        link: ``shared`` or ``static``.
+        version_override: If set, replaces ``recipe.upstream_version``
+            in the emitted manifest and archive filename. Downstream
+            projects that derive their version from git/CMake pass this
+            so they don't need to edit the recipe on every release.
+            The ``+cvc.<rev>`` suffix from the recipe is preserved.
+        output_dir: Where to write the archive. Defaults to ``./dist``.
+        maintainer: Overrides ``recipe.maintainer`` in the manifest.
+        org_slug: Organisation slug recorded in the manifest.
+
+    Returns:
+        ``(archive_path, sha256, size_bytes)`` — same shape as
+        :func:`pack_recipe`.
+    """
+    from cvcpkg.platform import detect_arch
+
+    if not prefix.is_dir():
+        raise RecipeError(f"prefix directory does not exist: {prefix}")
+
+    recipe = Recipe.load(recipe_dir)
+
+    if version_override:
+        # Preserve the recipe's ``+cvc.<rev>`` cvc_revision suffix so the
+        # archive name and manifest stay consistent with the rest of the
+        # ecosystem.
+        recipe = replace(recipe, upstream_version=str(version_override))
+
+    if not platform:
+        platform = detect_platform()
+    if not arch:
+        arch = detect_arch()
+
+    # wasm/wasi never link shared; keep the invariant used by build_recipe.
+    if platform in ("wasm", "wasi"):
+        link = "static"
+
+    if output_dir is None:
+        output_dir = Path.cwd() / "dist"
+
+    manifest = generate_manifest(
+        recipe,
+        prefix,
+        platform,
+        arch,
+        config,
+        link,
+        maintainer=maintainer,
+        org_slug=org_slug,
+    )
+
+    staging = Path(tempfile.mkdtemp(prefix=f"cvcpkg-pack-{recipe.name}-"))
+    try:
+        stage_bundle(prefix, manifest, staging, recipe_dir=recipe.recipe_dir)
+        archive_path, sha256, size = create_archive(
+            staging,
+            output_dir,
+            recipe.name,
+            recipe.full_version,
+            platform,
+            arch,
+            config,
+            link,
+        )
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+    print(f"cvcpkg: packed {archive_path.name} ({size:,} bytes)")
+    print(f"cvcpkg: sha256: {sha256}")
 
     return archive_path, sha256, size
 

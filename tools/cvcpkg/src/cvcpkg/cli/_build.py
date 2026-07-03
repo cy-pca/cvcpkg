@@ -140,12 +140,14 @@ def _resolve_recipe_dir(
 ) -> Path:
     """Resolve a recipe name or path to its directory.
 
-    Accepts either a path to a directory containing recipe.yaml, or
-    a bare recipe name (e.g. "grpc") which is looked up in the
-    canonical recipe directories (bundled + any extra overlays).
-    Later directories take precedence.
+    Accepts either a path to a directory containing recipe.yaml, a
+    direct path to a recipe.yaml file, or a bare recipe name (e.g.
+    "grpc") which is looked up in the canonical recipe directories
+    (bundled + any extra overlays). Later directories take precedence.
     """
     p = Path(name)
+    if p.is_file() and p.name == "recipe.yaml":
+        return p.parent.resolve()
     if p.is_dir() and (p / "recipe.yaml").is_file():
         return p.resolve()
 
@@ -413,6 +415,29 @@ def build(
     default=None,
     help="Path to Ed25519 private key to sign archives.",
 )
+@click.option(
+    "--from-prefix",
+    "from_prefix",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True),
+    default=None,
+    help=(
+        "Skip the build and package an already-installed prefix directory. "
+        "Downstream projects that build with their own toolchain can stage "
+        "their install tree, then use the recipe purely for metadata "
+        "(deps, cmake_packages, tags). Requires exactly one RECIPE arg."
+    ),
+)
+@click.option(
+    "--version-override",
+    "version_override",
+    default="",
+    help=(
+        "Replace the recipe's upstream_version in the manifest and archive "
+        "filename. The '+cvc.<rev>' cvc_revision suffix is preserved. "
+        "Useful with --from-prefix when downstream computes its version "
+        "from git or CMake at build time."
+    ),
+)
 def pack(
     recipe: tuple[str, ...],
     platform: str,
@@ -426,6 +451,8 @@ def pack(
     local_mode: bool,
     maintainer: str,
     signing_key: str | None,
+    from_prefix: str | None,
+    version_override: str,
 ) -> None:
     """Build and archive one or more recipes.
 
@@ -433,14 +460,31 @@ def pack(
     for each recipe containing the installed files, manifest.yaml,
     and SHA-256 checksum.  Archives are written to --output-dir.
 
+    With --from-prefix DIR the build step is skipped and DIR is packaged
+    directly. The recipe is used only for metadata (name, deps,
+    cmake_packages, tags). Exactly one RECIPE must be supplied in this
+    mode; the RECIPE arg may also be a filesystem path to a directory
+    containing recipe.yaml.
+
     \b
     Example:
       cvcpkg pack zlib boost --output-dir ./dist
       cvcpkg pack zlib --local --output-dir ./dist
+      cvcpkg pack ./cvcpkg/recipe.yaml --from-prefix ./stage \\
+          --version-override 2.0.0 --output-dir ./dist
     """
-    from cvcpkg.builder import pack_recipe
+    from cvcpkg.builder import pack_from_prefix, pack_recipe
 
     plat = _auto_platform(platform)
+
+    if from_prefix:
+        if len(recipe) != 1:
+            raise click.UsageError("--from-prefix requires exactly one RECIPE argument.")
+        if prefix:
+            raise click.UsageError(
+                "--prefix and --from-prefix are mutually exclusive. "
+                "--from-prefix is the already-installed tree to package."
+            )
 
     if not local_mode and not recipes_dirs:
         recipes_dirs = _try_pull_server_recipes()
@@ -450,16 +494,28 @@ def pack(
 
     for name in recipe:
         recipe_dir = _resolve_recipe_dir(name, recipes_dirs, no_default=no_default_recipes)
-        archive, sha, size = pack_recipe(
-            recipe_dir,
-            platform=plat,
-            config=config,
-            link=link,
-            prefix=prefix_path,
-            output_dir=output,
-            keep_build_dir=keep_build_dir,
-            maintainer=maintainer,
-        )
+        if from_prefix:
+            archive, sha, size = pack_from_prefix(
+                recipe_dir,
+                Path(from_prefix).resolve(),
+                platform=plat,
+                config=config,
+                link=link,
+                version_override=version_override,
+                output_dir=output,
+                maintainer=maintainer,
+            )
+        else:
+            archive, sha, size = pack_recipe(
+                recipe_dir,
+                platform=plat,
+                config=config,
+                link=link,
+                prefix=prefix_path,
+                output_dir=output,
+                keep_build_dir=keep_build_dir,
+                maintainer=maintainer,
+            )
         click.echo(f"  {archive} ({size:,} bytes, sha256={sha})")
         if signing_key:
             from cvcpkg.signing import sign_file, write_signature
