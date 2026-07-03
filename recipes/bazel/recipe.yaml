@@ -1,0 +1,71 @@
+schema_version: 1
+recipe:
+  name: bazel
+  upstream_version: "7.4.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    Bazel build tool, installed via the Bazelisk launcher.
+    Bazelisk is a small Go binary that transparently downloads
+    the correct Bazel release on demand, letting recipes pin
+    their own required Bazel version through a .bazelversion
+    file.  This recipe stages Bazelisk into <prefix>/bin as both
+    "bazel" and "bazelisk" so downstream recipes can invoke
+    "bazel" and get the pinned version automatically.
+  homepage: https://bazel.build/
+  license: Apache-2.0
+  tags: [tools]
+
+cross_toolchain:
+  target_platforms: [linux, macos, windows]
+  env:
+    CVC_BAZEL_BIN: "${PREFIX}/bin/bazel"
+
+source:
+  type: prebuilt
+  base_url: https://github.com/bazelbuild/bazelisk/releases/download/v1.22.1
+  artifacts:
+    linux-x86_64: bazelisk-linux-amd64
+    linux-arm64: bazelisk-linux-arm64
+    macos-x86_64: bazelisk-darwin-amd64
+    macos-arm64: bazelisk-darwin-arm64
+    windows-x86_64: bazelisk-windows-amd64.exe
+
+patches: []
+
+depends:
+  build: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - bin/
+  cmake_packages: []
+
+toolchain:
+  note: >-
+    Bazelisk is a pre-built single binary.  No compilation occurs;
+    the recipe downloads the release artifact for the host platform
+    and installs it into <prefix>/bin.
+
+notes:
+  - title: "Bazelisk vs bazel"
+    platforms: [linux, macos, windows]
+    description: >-
+      This recipe installs Bazelisk (a version-selecting wrapper)
+      rather than a specific Bazel release.  Downstream projects
+      pin their required Bazel version via .bazelversion and
+      Bazelisk downloads it on first invocation into
+      ~/.cache/bazelisk.

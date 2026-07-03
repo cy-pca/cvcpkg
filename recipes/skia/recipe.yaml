@@ -1,0 +1,100 @@
+schema_version: 1
+recipe:
+  name: skia
+  upstream_version: "137.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    Skia — Google's 2D graphics library used by Chrome, Android, Flutter
+    and Firefox.  Provides high-performance CPU and GPU rendering with
+    backends for OpenGL, Vulkan, Metal and (via Emscripten) WebGL.
+    Ships as CanvasKit on the wasm target for browser-hosted rendering.
+  homepage: https://skia.org/
+  license: BSD-3-Clause
+  tags: [graphics, wasm]
+
+source:
+  # Skia uses its own git-sync-deps + GN build system.  The build
+  # script clones the release branch of the upstream repo, runs
+  # tools/git-sync-deps to fetch third-party DEPS, then invokes GN.
+  type: prebuilt
+  url: https://skia.googlesource.com/skia.git
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools:
+    - python3
+    - ninja
+    - emsdk
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+      env: {}
+    - platform: wasm
+      host_platform: macos
+      script: build-wasm.sh
+      env: {}
+
+package:
+  files:
+    - lib/libskia.*
+    - lib/libskshaper.*
+    - lib/libskparagraph.*
+    - lib/libskunicode.*
+    - lib/cmake/Skia/
+    - include/skia/
+    - share/skia/
+    - bin/canvaskit.js
+    - bin/canvaskit.wasm
+  cmake_packages:
+    - { name: Skia, targets: ["Skia::skia", "Skia::skshaper", "Skia::skparagraph"] }
+  pkg_config:
+    - skia
+
+abi:
+  cxx_std: 17
+  link: static
+
+notes:
+  - title: "Depot tools not required"
+    platforms: [linux, macos, windows, wasm]
+    description: >-
+      Skia's tools/git-sync-deps script pulls DEPS directly with git;
+      no depot_tools checkout is needed.  The script's own copy of GN
+      lives under bin/gn after the initial sync.
+  - title: "CanvasKit for wasm"
+    platforms: [wasm]
+    description: >-
+      The wasm build produces CanvasKit — a subset of Skia exposed to
+      JS as canvaskit.js + canvaskit.wasm.  Emscripten from the emsdk
+      bundle is required (CVC_EMSDK_DIR).
+  - title: "Long compile times"
+    platforms: [linux, macos, windows, wasm]
+    description: >-
+      A full Skia build takes 20-40 minutes with 8 jobs and produces
+      a ~200 MB static library.  Configure --link=static (default)
+      to avoid shared-library ABI headaches with Skia's C++ APIs.
+  - title: "Experimental / initial recipe"
+    platforms: [linux, macos, windows, wasm]
+    description: >-
+      Initial scaffold.  Only the Linux + wasm variants have been
+      exercised locally; macOS/Windows scripts follow the same GN
+      recipe but have not been end-to-end validated in CI.
