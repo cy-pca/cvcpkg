@@ -2217,24 +2217,71 @@ class DbBuildJobStore:
                 results.append(self._row_to_info(row, dep_ids))
             return results, total
 
-    async def cancel(self, job_id: int) -> BuildJobInfo | None:
-        """Cancel a pending or dispatched job. Returns updated info or None."""
+    async def cancel(self, job_id: int, *, force: bool = False) -> BuildJobInfo | None:
+        """Cancel a job. Returns updated info or None.
+
+        Without *force*, only pending/dispatched jobs transition to
+        cancelled (running jobs are left untouched — this is the safe
+        default that avoids racing with an in-flight builder).
+
+        With *force=True*, dispatched/running jobs are also cancelled
+        (and ``finished_at`` set). This is the recovery path when a
+        builder has died or is stuck and no completion is coming.
+        Callers using force=True should typically also invoke
+        :meth:`cancel_downstream` to propagate the cancellation.
+        """
         now = datetime.datetime.now(datetime.timezone.utc)
+        allowed = {BuildJobStatus.pending, BuildJobStatus.dispatched}
+        if force:
+            allowed = allowed | {BuildJobStatus.running}
         async with get_session() as session:
             row = (
                 await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
             ).scalar()
             if row is None:
                 return None
-            if row.status not in (
-                BuildJobStatus.pending,
-                BuildJobStatus.dispatched,
-            ):
+            if row.status not in allowed:
                 return self._row_to_info(row)
+            builder_id = row.builder_id
             row.status = BuildJobStatus.cancelled
             row.finished_at = now
+            if force and builder_id is not None:
+                # Reconcile builder's current_jobs from actual DB state
+                active = (
+                    await session.execute(
+                        select(sa_func.count())
+                        .select_from(BuildJobRow)
+                        .where(BuildJobRow.builder_id == builder_id)
+                        .where(BuildJobRow.id != job_id)
+                        .where(
+                            BuildJobRow.status.in_(
+                                [BuildJobStatus.dispatched, BuildJobStatus.running]
+                            )
+                        )
+                    )
+                ).scalar() or 0
+                builder_row = (
+                    await session.execute(select(BuilderRow).where(BuilderRow.id == builder_id))
+                ).scalar()
+                if builder_row is not None:
+                    builder_row.current_jobs = active
             dep_ids = await self._load_dep_ids(session, job_id)
             return self._row_to_info(row, dep_ids)
+
+    async def list_active_by_builder(self, builder_id: int) -> list[BuildJobInfo]:
+        """Return jobs currently assigned to a builder in dispatched or running state."""
+        async with get_session() as session:
+            q = (
+                select(BuildJobRow)
+                .where(BuildJobRow.builder_id == builder_id)
+                .where(BuildJobRow.status.in_([BuildJobStatus.dispatched, BuildJobStatus.running]))
+            )
+            rows = (await session.execute(q)).scalars().all()
+            results = []
+            for row in rows:
+                dep_ids = await self._load_dep_ids(session, row.id)
+                results.append(self._row_to_info(row, dep_ids))
+            return results
 
     async def cancel_dag(self, dag_id: str) -> int:
         """Cancel all pending/dispatched jobs in a DAG. Returns count cancelled."""
