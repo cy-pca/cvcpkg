@@ -1457,7 +1457,9 @@ class TestPublishToServer:
 
         with (
             mock.patch("cvcpkg.cli._publish._variant_exists", return_value=False),
-            mock.patch("cvcpkg.cli._publish._publish_simple", return_value="published") as mock_simple,
+            mock.patch(
+                "cvcpkg.cli._publish._publish_simple", return_value="published"
+            ) as mock_simple,
         ):
             _publish_to_server(
                 "https://pkg.example.com",
@@ -1532,7 +1534,9 @@ class TestPublishToServer:
 
         with (
             mock.patch("cvcpkg.cli._publish._variant_exists", return_value=False),
-            mock.patch("cvcpkg.cli._publish._publish_simple", return_value="published") as mock_simple,
+            mock.patch(
+                "cvcpkg.cli._publish._publish_simple", return_value="published"
+            ) as mock_simple,
         ):
             _publish_to_server(
                 "https://pkg.example.com",
@@ -1558,7 +1562,9 @@ class TestPublishToServer:
 
         with (
             mock.patch("cvcpkg.cli._publish._variant_exists", return_value=False),
-            mock.patch("cvcpkg.cli._publish._publish_chunked", return_value="published") as mock_chunked,
+            mock.patch(
+                "cvcpkg.cli._publish._publish_chunked", return_value="published"
+            ) as mock_chunked,
         ):
             _publish_to_server(
                 "https://pkg.example.com",
@@ -3441,7 +3447,9 @@ class TestBuilderUnregisterCLI:
                 return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
-        ret = main(["builder", "unregister", "5", "--server", "https://s.example.com", "--token", "tok"])
+        ret = main(
+            ["builder", "unregister", "5", "--server", "https://s.example.com", "--token", "tok"]
+        )
         assert ret == 0
         out = capsys.readouterr().out
         assert "unregistered" in out.lower()
@@ -3484,7 +3492,18 @@ class TestBuildsCLIHelp:
         ret = main(["builds", "--help"])
         assert ret == 0
         out = capsys.readouterr().out
-        for cmd in ("list", "info", "cancel", "pause", "resume", "log", "submit", "follow-dag", "monitor", "purge"):
+        for cmd in (
+            "list",
+            "info",
+            "cancel",
+            "pause",
+            "resume",
+            "log",
+            "submit",
+            "follow-dag",
+            "monitor",
+            "purge",
+        ):
             assert cmd in out
 
 
@@ -3703,9 +3722,7 @@ class TestBuildsPauseCLI:
                 return FakeResponse()
 
         monkeypatch.setattr("httpx.Client", FakeClient)
-        ret = main(
-            ["builds", "pause", "10", "--server", "https://s.example.com", "--token", "tok"]
-        )
+        ret = main(["builds", "pause", "10", "--server", "https://s.example.com", "--token", "tok"])
         assert ret == 0
         out = capsys.readouterr().out
         assert "paused" in out.lower()
@@ -4726,7 +4743,7 @@ class TestBuildsMonitorCLI:
     def test_monitor_renders_output(self, capsys, monkeypatch):
         """Monitor fetches data, renders once, then KeyboardInterrupt exits."""
         monkeypatch.setattr("time.sleep", lambda _: (_ for _ in ()).throw(KeyboardInterrupt))
-        monkeypatch.setattr("shutil.get_terminal_size", lambda *a: os.terminal_size((80, 24)))
+        monkeypatch.setattr("shutil.get_terminal_size", lambda *a, **k: os.terminal_size((80, 24)))
 
         builders_data = {
             "total": 2,
@@ -4827,7 +4844,7 @@ class TestBuildsMonitorCLI:
     def test_monitor_with_dag_filter(self, capsys, monkeypatch):
         """Monitor passes --dag-id filter to jobs endpoint."""
         monkeypatch.setattr("time.sleep", lambda _: (_ for _ in ()).throw(KeyboardInterrupt))
-        monkeypatch.setattr("shutil.get_terminal_size", lambda *a: os.terminal_size((80, 24)))
+        monkeypatch.setattr("shutil.get_terminal_size", lambda *a, **k: os.terminal_size((80, 24)))
         captured_params: list[dict] = []
 
         class FakeResponse:
@@ -4871,7 +4888,7 @@ class TestBuildsMonitorCLI:
     def test_monitor_handles_server_errors(self, capsys, monkeypatch):
         """Monitor gracefully handles server errors (returns empty data)."""
         monkeypatch.setattr("time.sleep", lambda _: (_ for _ in ()).throw(KeyboardInterrupt))
-        monkeypatch.setattr("shutil.get_terminal_size", lambda *a: os.terminal_size((80, 24)))
+        monkeypatch.setattr("shutil.get_terminal_size", lambda *a, **k: os.terminal_size((80, 24)))
 
         class FakeResponse:
             status_code = 500
@@ -4912,7 +4929,7 @@ class TestBuildsMonitorCLI:
     def test_monitor_no_active_jobs(self, capsys, monkeypatch):
         """Monitor shows 'No active jobs' when only completed jobs exist."""
         monkeypatch.setattr("time.sleep", lambda _: (_ for _ in ()).throw(KeyboardInterrupt))
-        monkeypatch.setattr("shutil.get_terminal_size", lambda *a: os.terminal_size((80, 24)))
+        monkeypatch.setattr("shutil.get_terminal_size", lambda *a, **k: os.terminal_size((80, 24)))
 
         class FakeResponse:
             status_code = 200

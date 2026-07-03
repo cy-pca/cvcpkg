@@ -438,7 +438,9 @@ class TestPlatformAny:
             patch("cvcpkg.builder.fetch_source") as mock_fetch,
         ):
             mock_fetch.side_effect = lambda r, w: w / "src"
-            mock_build.side_effect = lambda ctx, **kw: ctx.install_dir.mkdir(parents=True, exist_ok=True)
+            mock_build.side_effect = lambda ctx, **kw: ctx.install_dir.mkdir(
+                parents=True, exist_ok=True
+            )
             contexts = build_all(recipes_dir, platform="linux", no_cache=True)
         built_names = {c.recipe.name for c in contexts}
         assert "web-assets" in built_names
@@ -691,7 +693,9 @@ class TestPlatformAny:
         (win_dir / "build.ps1").write_text("Write-Output 'ok'\n")
 
         mock_fetch.side_effect = lambda r, w: w / "src"
-        mock_build.side_effect = lambda ctx, **kw: ctx.install_dir.mkdir(parents=True, exist_ok=True)
+        mock_build.side_effect = lambda ctx, **kw: ctx.install_dir.mkdir(
+            parents=True, exist_ok=True
+        )
         contexts = build_all(recipes_dir, platform="windows", no_cache=True)
         built_names = {c.recipe.name for c in contexts}
         assert "web-assets" in built_names
@@ -730,7 +734,9 @@ class TestPlatformAny:
         (linux_dir / "build.sh").write_text("#!/bin/bash\ntrue\n")
 
         mock_fetch.side_effect = lambda r, w: w / "src"
-        mock_build.side_effect = lambda ctx, **kw: ctx.install_dir.mkdir(parents=True, exist_ok=True)
+        mock_build.side_effect = lambda ctx, **kw: ctx.install_dir.mkdir(
+            parents=True, exist_ok=True
+        )
         contexts = build_all(recipes_dir, platform="macos", no_cache=True)
         built_names = {c.recipe.name for c in contexts}
         assert "shared-config" in built_names
@@ -2518,7 +2524,9 @@ class TestWorkDirRoot:
         scratch = tmp_path / "scratch"
 
         mock_fetch.side_effect = lambda r, w: w / "src"
-        mock_build.side_effect = lambda ctx, **kw: ctx.install_dir.mkdir(parents=True, exist_ok=True)
+        mock_build.side_effect = lambda ctx, **kw: ctx.install_dir.mkdir(
+            parents=True, exist_ok=True
+        )
 
         ctx = build_recipe(
             rd,
@@ -2539,7 +2547,9 @@ class TestWorkDirRoot:
         rd = self._make_recipe(recipes_dir)
 
         mock_fetch.side_effect = lambda r, w: w / "src"
-        mock_build.side_effect = lambda ctx, **kw: ctx.install_dir.mkdir(parents=True, exist_ok=True)
+        mock_build.side_effect = lambda ctx, **kw: ctx.install_dir.mkdir(
+            parents=True, exist_ok=True
+        )
 
         ctx = build_recipe(rd, platform="linux")
         assert ctx.work_dir.parent == Path(tempfile.gettempdir())
@@ -2555,7 +2565,9 @@ class TestWorkDirRoot:
         scratch = tmp_path / "scratch"
 
         mock_fetch.side_effect = lambda r, w: w / "src"
-        mock_build.side_effect = lambda ctx, **kw: ctx.install_dir.mkdir(parents=True, exist_ok=True)
+        mock_build.side_effect = lambda ctx, **kw: ctx.install_dir.mkdir(
+            parents=True, exist_ok=True
+        )
 
         contexts = build_all(
             recipes_dir,
@@ -2578,7 +2590,9 @@ class TestWorkDirRoot:
         scratch = tmp_path / "scratch"
 
         mock_fetch.side_effect = lambda r, w: w / "src"
-        mock_build.side_effect = lambda ctx, **kw: ctx.install_dir.mkdir(parents=True, exist_ok=True)
+        mock_build.side_effect = lambda ctx, **kw: ctx.install_dir.mkdir(
+            parents=True, exist_ok=True
+        )
 
         contexts = build_all(
             recipes_dir,

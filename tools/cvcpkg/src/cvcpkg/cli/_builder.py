@@ -520,6 +520,7 @@ def builder_run(
                             tf.extractall(path=prefix)  # noqa: S202
                     elif kind == "zst":
                         import zstandard  # type: ignore[import-untyped]
+
                         with open(tmp_archive, "rb") as f_in:
                             dctx = zstandard.ZstdDecompressor()
                             with dctx.stream_reader(f_in) as reader:
@@ -659,6 +660,7 @@ def builder_run(
                             tf.extractall(path=prefix)  # noqa: S202
                     elif kind == "zst":
                         import zstandard  # type: ignore[import-untyped]
+
                         with open(tmp_archive, "rb") as f_in:
                             dctx = zstandard.ZstdDecompressor()
                             with dctx.stream_reader(f_in) as reader:

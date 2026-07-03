@@ -1824,7 +1824,12 @@ class TestCLIBuildCommands:
                 "dag_id": "cli-dag-test",
                 "jobs": [
                     {"recipe_name": "cli-dag-a", "platform": "linux", "arch": "x86_64"},
-                    {"recipe_name": "cli-dag-b", "platform": "linux", "arch": "x86_64", "depends_on": [0]},
+                    {
+                        "recipe_name": "cli-dag-b",
+                        "platform": "linux",
+                        "arch": "x86_64",
+                        "depends_on": [0],
+                    },
                 ],
             },
         )
