@@ -431,7 +431,11 @@ def builder_run(
         deps_block = data.get("depends", {})
 
         dep_names: list[str] = []
-        for key in ("runtime", "build"):
+        # host_tools are recipe prerequisites that must be on the host
+        # PATH at build time (e.g. cmake, ninja, meson).  Fetch them the
+        # same way as runtime/build deps so recipes that declare
+        # host_tools do not silently fall back to system versions.
+        for key in ("runtime", "build", "host_tools"):
             for dep in deps_block.get(key, []) or []:
                 if isinstance(dep, str):
                     dep_names.append(dep)

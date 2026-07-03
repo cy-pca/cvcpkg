@@ -762,11 +762,13 @@ def builds_submit_dag(
                 recipe_paths[rpath.name] = rpath
 
     def _dep_names(name: str) -> list[str]:
-        """Extract runtime + build dependency names from a recipe."""
+        """Extract runtime + build + host_tools dependency names from a recipe."""
         data = recipe_data.get(name, {})
         deps_block = data.get("depends", {})
         names: list[str] = []
-        for key in ("runtime", "build"):
+        # Include host_tools so the DAG scheduler orders host prerequisites
+        # (cmake, ninja, meson, ...) before recipes that depend on them.
+        for key in ("runtime", "build", "host_tools"):
             for dep in deps_block.get(key, []) or []:
                 if isinstance(dep, str):
                     names.append(dep)
