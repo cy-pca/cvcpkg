@@ -194,6 +194,20 @@ function Invoke-CvcMsysAutotoolsBuild {
         '--enable-shared --enable-static'
     }
 
+    # Pre-flight: some Windows builders were provisioned with only the
+    # MinGW-w64 gcc packages and are missing the autotools bootstrap
+    # chain (m4, autoconf, automake, libtool, make).  Symptom: gmp's
+    # configure aborts with "No usable m4 in $PATH".  Rather than gate
+    # each recipe on a manual reprovision, self-heal by asking pacman
+    # to install the --needed set — a no-op when everything is present,
+    # a one-time ~20s install otherwise.
+    $probe = & $bash -lc 'command -v m4 >/dev/null && command -v libtool >/dev/null && command -v autoconf >/dev/null && command -v automake >/dev/null && command -v make >/dev/null && echo OK'
+    if ($probe -notmatch 'OK') {
+        Write-Host 'cvcpkg: MSYS2 autotools tools missing on this builder; installing via pacman...'
+        & $bash -lc 'pacman -S --noconfirm --needed autoconf automake libtool m4 make patch diffutils'
+        if ($LASTEXITCODE -ne 0) { throw 'pacman install of autotools failed' }
+    }
+
     # Build one big command line for bash; the caller-provided extras
     # win over defaults because they come last.
     $extras   = ($ConfigureArgs -join ' ')
