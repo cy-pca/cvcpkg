@@ -23,13 +23,23 @@ def _fetch_url(url: str, *, max_bytes: int = _MAX_CATALOG_BYTES) -> bytes:
     """Fetch a URL and return the raw bytes.
 
     Raises :class:`CatalogError` if the response exceeds *max_bytes*.
+
+    The HEAD probe is treated as an optional size hint — some HTTPS
+    servers, CDNs, and API gateways answer HEAD with 403/405/501 even
+    when GET works.  If HEAD fails or is refused, we skip the pre-check
+    and rely on the streaming byte cap below.
     """
     from cvcpkg.storage import get_backend
 
     try:
         backend = get_backend(url)
-        info = backend.head(url)
-        if info.size >= 0 and info.size > max_bytes:
+        try:
+            info = backend.head(url)
+        except Exception:
+            # HEAD refused / unsupported — fall through to GET and let
+            # the streaming cap enforce the size limit.
+            info = None
+        if info is not None and info.size >= 0 and info.size > max_bytes:
             raise CatalogError(f"catalog at {url} is {info.size} bytes, exceeds {max_bytes} limit")
         chunks: list[bytes] = []
         total = 0
