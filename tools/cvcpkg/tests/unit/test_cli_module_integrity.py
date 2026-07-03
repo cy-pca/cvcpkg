@@ -45,6 +45,7 @@ EXPECTED_SUBMODULES = [
 
 # Python builtins — use the builtins module for reliability
 import builtins as _builtins_mod
+
 _BUILTINS = set(dir(_builtins_mod))
 
 
@@ -177,7 +178,7 @@ class TestCrossModuleReferences:
         """Every bare function call in each CLI submodule must be defined,
         imported, or a builtin — not relying on __init__.py namespace."""
         source_path = CLI_DIR / f"{submodule}.py"
-        source = source_path.read_text()
+        source = source_path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(source_path))
 
         # Collect ALL names defined anywhere in the module (handles closures)
@@ -188,16 +189,12 @@ class TestCrossModuleReferences:
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             for call_name, lineno in _find_bare_name_calls(node):
-                if (
-                    call_name not in all_names
-                    and call_name not in _BUILTINS
-                ):
+                if call_name not in all_names and call_name not in _BUILTINS:
                     unresolved.append(f"{submodule}.py:{lineno} — {call_name}()")
 
         assert not unresolved, (
             f"Unresolved function calls in {submodule}.py "
-            f"(not imported or defined locally):\n"
-            + "\n".join(f"  {u}" for u in unresolved)
+            f"(not imported or defined locally):\n" + "\n".join(f"  {u}" for u in unresolved)
         )
 
 
@@ -220,13 +217,13 @@ class TestBuilderPublishImport:
         """_builder module must have _api_request in its own namespace."""
         from cvcpkg.cli import _builder
 
-        assert hasattr(_builder, "_api_request"), (
-            "_builder.py does not have _api_request in its namespace."
-        )
+        assert hasattr(
+            _builder, "_api_request"
+        ), "_builder.py does not have _api_request in its namespace."
 
     def test_builder_cross_imports_match_source(self):
         """Verify _builder.py's import statements include all cross-module refs."""
-        source = (CLI_DIR / "_builder.py").read_text()
+        source = (CLI_DIR / "_builder.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
 
         # Collect all ImportFrom that reference sibling modules
@@ -238,9 +235,9 @@ class TestBuilderPublishImport:
 
         # _publish_to_server must be imported from _publish
         assert "_publish" in cross_imports, "_builder.py missing import from _publish"
-        assert "_publish_to_server" in cross_imports["_publish"], (
-            "_builder.py does not import _publish_to_server from _publish"
-        )
+        assert (
+            "_publish_to_server" in cross_imports["_publish"]
+        ), "_builder.py does not import _publish_to_server from _publish"
 
 
 # ── 4. __init__.py re-exports coverage ──────────────────────────
@@ -256,7 +253,7 @@ class TestInitReexports:
         via ``from cvcpkg.cli._helpers import ...`` rather than as a
         bare submodule import.
         """
-        source = (CLI_DIR / "__init__.py").read_text()
+        source = (CLI_DIR / "__init__.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
 
         imported_modules: set[str] = set()
