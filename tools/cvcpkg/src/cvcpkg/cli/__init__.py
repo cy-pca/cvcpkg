@@ -69,6 +69,7 @@ from cvcpkg.cli import (  # noqa: E402, F401
     _builder,
     _builds,
     _recipe,
+    _search,
     _webhook,
 )
 

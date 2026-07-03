@@ -709,6 +709,131 @@ class DbPackageIndex:
                 )
             return packages, total
 
+    async def get_search_facets(
+        self,
+        *,
+        name: str = "",
+        platform: str = "",
+        release: str = "",
+        search: str = "",
+        org_slug: str = "",
+        include_yanked: bool = False,
+        recipe_version: str = "",
+        arch: str = "",
+        build_type: str = "",
+        link: str = "",
+        max_buckets: int = 50,
+    ) -> tuple[dict[str, list[tuple[str, int]]], int, int, int]:
+        """Return facet buckets for the same filter set as ``get_bundles``.
+
+        Returns ``(facets, total_bundles, distinct_package_names,
+        total_size_bytes)`` where ``facets`` maps the facet field name to a
+        list of ``(value, count)`` tuples ordered by descending count.
+        ``max_buckets`` caps the per-facet list length.
+        """
+        base_filters = []
+        if not include_yanked:
+            base_filters.append(PackageRow.yanked == False)  # noqa: E712
+        if name:
+            base_filters.append(PackageRow.name == name)
+        if platform:
+            base_filters.append(PackageRow.platform == platform)
+        if release:
+            base_filters.append(PackageRow.release_tag == release)
+        if search:
+            like_pat = f"%{search}%"
+            base_filters.append(
+                or_(
+                    PackageRow.name.ilike(like_pat),
+                    PackageRow.version.ilike(like_pat),
+                    PackageRow.platform.ilike(like_pat),
+                    PackageRow.arch.ilike(like_pat),
+                    PackageRow.build_type.ilike(like_pat),
+                    PackageRow.link.ilike(like_pat),
+                    PackageRow.description.ilike(like_pat),
+                    PackageRow.tags.ilike(like_pat),
+                    PackageRow.maintainer.ilike(like_pat),
+                    PackageRow.license.ilike(like_pat),
+                    PackageRow.release_tag.ilike(like_pat),
+                )
+            )
+        if org_slug:
+            base_filters.append(PackageRow.org_slug == org_slug)
+        if recipe_version:
+            base_filters.append(PackageRow.recipe_version == recipe_version)
+        if arch:
+            base_filters.append(PackageRow.arch == arch)
+        if build_type:
+            base_filters.append(PackageRow.build_type == build_type)
+        if link:
+            base_filters.append(PackageRow.link == link)
+
+        facet_cols = {
+            "platforms": PackageRow.platform,
+            "archs": PackageRow.arch,
+            "build_types": PackageRow.build_type,
+            "links": PackageRow.link,
+            "releases": PackageRow.release_tag,
+            "orgs": PackageRow.org_slug,
+            "licenses": PackageRow.license,
+        }
+
+        async with get_session() as session:
+            total_q = select(sa_func.count(PackageRow.id))
+            for f in base_filters:
+                total_q = total_q.where(f)
+            total_res = await session.execute(total_q)
+            total_bundles = int(total_res.scalar() or 0)
+
+            distinct_names_q = select(sa_func.count(distinct(PackageRow.name)))
+            for f in base_filters:
+                distinct_names_q = distinct_names_q.where(f)
+            distinct_res = await session.execute(distinct_names_q)
+            distinct_names = int(distinct_res.scalar() or 0)
+
+            size_q = select(sa_func.coalesce(sa_func.sum(PackageRow.size_bytes), 0))
+            for f in base_filters:
+                size_q = size_q.where(f)
+            size_res = await session.execute(size_q)
+            total_size = int(size_res.scalar() or 0)
+
+            facets: dict[str, list[tuple[str, int]]] = {}
+            for key, col in facet_cols.items():
+                q = select(col, sa_func.count(PackageRow.id))
+                for f in base_filters:
+                    q = q.where(f)
+                q = (
+                    q.group_by(col)
+                    .order_by(sa_func.count(PackageRow.id).desc(), col.asc())
+                    .limit(max_buckets)
+                )
+                rows = await session.execute(q)
+                facets[key] = [
+                    (str(val or ""), int(cnt))
+                    for val, cnt in rows.all()
+                    if (val or "") != ""
+                ]
+
+            # Tags is a comma-separated string column; aggregate in Python
+            tag_q = select(PackageRow.tags)
+            for f in base_filters:
+                tag_q = tag_q.where(f)
+            tag_rows = await session.execute(tag_q)
+            tag_counts: dict[str, int] = {}
+            for (raw,) in tag_rows.all():
+                if not raw:
+                    continue
+                for tag in raw.split(","):
+                    t = tag.strip()
+                    if not t:
+                        continue
+                    tag_counts[t] = tag_counts.get(t, 0) + 1
+            facets["tags"] = sorted(
+                tag_counts.items(), key=lambda kv: (-kv[1], kv[0])
+            )[:max_buckets]
+
+            return facets, total_bundles, distinct_names, total_size
+
     async def get_catalog_dict(
         self,
         *,

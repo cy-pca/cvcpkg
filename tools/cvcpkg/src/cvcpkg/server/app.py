@@ -88,6 +88,9 @@ from cvcpkg.server.models import (
     OrgUpdateRequest,
     PackageInfo,
     PackageListResponse,
+    FacetBucket,
+    SearchFacets,
+    SearchResponse,
     ProfileUpdateRequest,
     PublishResponse,
     RecipeInfo,
@@ -318,6 +321,72 @@ def _parse_duration(value: str) -> float:
     unit = m.group(2).lower()
     multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
     return amount * multipliers[unit]
+
+
+_SEARCH_FIELDS = (
+    "name",
+    "version",
+    "platform",
+    "arch",
+    "build_type",
+    "link",
+    "description",
+    "tags",
+    "maintainer",
+    "license",
+    "release_tag",
+)
+
+
+def _local_search_filter(bundles: list[dict], search: str) -> list[dict]:
+    """Case-insensitive substring match across ``_SEARCH_FIELDS`` on local bundles."""
+    if not search:
+        return list(bundles)
+    q = search.lower()
+    out = []
+    for b in bundles:
+        for f in _SEARCH_FIELDS:
+            val = b.get(f)
+            if val and q in str(val).lower():
+                out.append(b)
+                break
+    return out
+
+
+def _local_compute_facets(
+    bundles: list[dict], *, max_buckets: int = 50
+) -> dict[str, list[tuple[str, int]]]:
+    """Compute facet buckets from a filtered list of local bundle dicts."""
+    facet_keys = {
+        "platforms": "platform",
+        "archs": "arch",
+        "build_types": "build_type",
+        "links": "link",
+        "releases": "release_tag",
+        "orgs": "org",
+        "licenses": "license",
+    }
+    counts: dict[str, dict[str, int]] = {k: {} for k in facet_keys}
+    tag_counts: dict[str, int] = {}
+    for b in bundles:
+        for facet_name, field in facet_keys.items():
+            val = str(b.get(field) or "").strip()
+            if not val:
+                continue
+            counts[facet_name][val] = counts[facet_name].get(val, 0) + 1
+        raw_tags = b.get("tags") or ""
+        for t in str(raw_tags).split(","):
+            t = t.strip()
+            if not t:
+                continue
+            tag_counts[t] = tag_counts.get(t, 0) + 1
+
+    def _sort_bucket(d: dict[str, int]) -> list[tuple[str, int]]:
+        return sorted(d.items(), key=lambda kv: (-kv[1], kv[0]))[:max_buckets]
+
+    result = {name: _sort_bucket(d) for name, d in counts.items()}
+    result["tags"] = _sort_bucket(tag_counts)
+    return result
 
 
 # ── Auth dependency ─────────────────────────────────────────────
@@ -1291,6 +1360,8 @@ def create_app(
             bundles = [b for b in bundles if not b.get("release_tag")]
         elif release:
             bundles = [b for b in bundles if b.get("release_tag") == release]
+        if search:
+            bundles = _local_search_filter(bundles, search)
         total = len(bundles)
         page = bundles[offset : offset + limit]
         # Build a lookup for publisher emails
@@ -1320,6 +1391,232 @@ def create_app(
             for b in page
         ]
         return PackageListResponse(total=total, packages=packages)
+
+    @app.get("/v1/search", response_model=SearchResponse, tags=["packages"])
+    async def search_packages(
+        q: str = Query("", description="Full-text substring search across name/tags/etc."),
+        platform: str = Query("", description="Filter by platform"),
+        arch: str = Query("", description="Filter by architecture"),
+        build_type: str = Query("", description="Filter by build type (release/debug)"),
+        link: str = Query("", description="Filter by link mode (shared/static)"),
+        release: str = Query(
+            "",
+            description="Filter by release tag ('live' for unreleased builds).",
+        ),
+        org: str = Query("", description="Filter by organization slug"),
+        tag: str = Query("", description="Filter by a single tag name"),
+        recipe_version: str = Query("", description="Filter by recipe version"),
+        include_yanked: bool = Query(False),
+        limit: int = Query(50, ge=0, le=200),
+        offset: int = Query(0, ge=0),
+        include_facets: bool = Query(
+            True,
+            alias="facets",
+            description="Compute facet buckets over the filtered result set.",
+        ),
+        _auth: None = Depends(optional_reader_auth),
+    ):
+        """Search the package catalog with optional facets.
+
+        Designed to back the landing-page search box: server-side text
+        matching + filters + pagination + aggregated facet buckets so the
+        client never needs to hold the full catalog in memory.
+        """
+        db_release = "" if release == "live" else release
+
+        def _apply_tag_filter(pkgs: list[PackageInfo]) -> list[PackageInfo]:
+            if not tag:
+                return pkgs
+            needle = tag.strip().lower()
+            return [
+                p
+                for p in pkgs
+                if needle
+                in {t.strip().lower() for t in (p.tags or "").split(",") if t.strip()}
+            ]
+
+        if _use_db:
+            packages, total = await _db_packages.get_bundles(
+                platform=platform,
+                release=db_release,
+                search=q,
+                include_yanked=include_yanked,
+                limit=limit,
+                offset=offset,
+                recipe_version=recipe_version,
+                arch=arch,
+                build_type=build_type,
+                link=link,
+                org_slug=org,
+            )
+            if release == "live":
+                packages = [p for p in packages if not p.release_tag]
+                total = len(packages)
+            # Tag filter is applied post-fetch; we cannot filter at the SQL
+            # level without pulling tags into a separate table, so we cap by
+            # a slightly larger scan when a tag filter is present.
+            if tag:
+                # Re-query without pagination for tag filtering to be exact
+                more, _ = await _db_packages.get_bundles(
+                    platform=platform,
+                    release=db_release,
+                    search=q,
+                    include_yanked=include_yanked,
+                    limit=10_000,
+                    offset=0,
+                    recipe_version=recipe_version,
+                    arch=arch,
+                    build_type=build_type,
+                    link=link,
+                    org_slug=org,
+                )
+                more = _apply_tag_filter(more)
+                total = len(more)
+                packages = more[offset : offset + limit]
+
+            facets_model = SearchFacets()
+            package_count = 0
+            total_size_bytes = 0
+            if include_facets:
+                raw_facets, total_bundles, distinct_names, total_size = (
+                    await _db_packages.get_search_facets(
+                        platform=platform,
+                        release=db_release,
+                        search=q,
+                        include_yanked=include_yanked,
+                        recipe_version=recipe_version,
+                        arch=arch,
+                        build_type=build_type,
+                        link=link,
+                        org_slug=org,
+                    )
+                )
+                if release == "live" or tag:
+                    # Facets from get_search_facets don't know about 'live'
+                    # or the tag post-filter; skip counts and rely on total
+                    # from the tag-filtered path above.
+                    package_count = len({p.name for p in packages})
+                    total_size_bytes = sum(p.size_bytes for p in packages)
+                else:
+                    package_count = distinct_names
+                    total = total_bundles
+                    total_size_bytes = total_size
+                facets_model = SearchFacets(
+                    platforms=[FacetBucket(value=v, count=c) for v, c in raw_facets["platforms"]],
+                    archs=[FacetBucket(value=v, count=c) for v, c in raw_facets["archs"]],
+                    build_types=[
+                        FacetBucket(value=v, count=c) for v, c in raw_facets["build_types"]
+                    ],
+                    links=[FacetBucket(value=v, count=c) for v, c in raw_facets["links"]],
+                    releases=[FacetBucket(value=v, count=c) for v, c in raw_facets["releases"]],
+                    orgs=[FacetBucket(value=v, count=c) for v, c in raw_facets["orgs"]],
+                    tags=[FacetBucket(value=v, count=c) for v, c in raw_facets["tags"]],
+                    licenses=[FacetBucket(value=v, count=c) for v, c in raw_facets["licenses"]],
+                )
+            else:
+                package_count = len({p.name for p in packages})
+                total_size_bytes = sum(p.size_bytes for p in packages)
+
+            return SearchResponse(
+                total=total,
+                package_count=package_count,
+                total_size_bytes=total_size_bytes,
+                packages=packages,
+                limit=limit,
+                offset=offset,
+                query=q,
+                facets=facets_model,
+            )
+
+        # ── Local / non-DB path (mirror or file-catalog mode) ──────────
+        state = _get_state()
+        bundles = list(state.index.get("bundles", []))
+        if not include_yanked:
+            bundles = [b for b in bundles if not b.get("yanked", False)]
+        if platform:
+            bundles = [b for b in bundles if b.get("platform") == platform]
+        if arch:
+            bundles = [b for b in bundles if b.get("arch") == arch]
+        if build_type:
+            bundles = [b for b in bundles if b.get("build_type") == build_type]
+        if link:
+            bundles = [b for b in bundles if b.get("link") == link]
+        if recipe_version:
+            bundles = [b for b in bundles if b.get("recipe_version") == recipe_version]
+        if org:
+            bundles = [b for b in bundles if b.get("org") == org]
+        if release == "live":
+            bundles = [b for b in bundles if not b.get("release_tag")]
+        elif release:
+            bundles = [b for b in bundles if b.get("release_tag") == release]
+        if tag:
+            needle = tag.strip().lower()
+            bundles = [
+                b
+                for b in bundles
+                if needle
+                in {t.strip().lower() for t in (b.get("tags") or "").split(",") if t.strip()}
+            ]
+        if q:
+            bundles = _local_search_filter(bundles, q)
+
+        total = len(bundles)
+        package_count = len({b.get("name", "") for b in bundles})
+        total_size_bytes = sum(int(b.get("size_bytes") or 0) for b in bundles)
+        page = bundles[offset : offset + limit] if limit else []
+        packages = [
+            PackageInfo(
+                name=b["name"],
+                version=b["version"],
+                platform=b.get("platform", ""),
+                arch=b.get("arch", ""),
+                build_type=b.get("build_type", ""),
+                link=b.get("link", ""),
+                sha256=b.get("sha256", ""),
+                size_bytes=b.get("size_bytes", 0),
+                archive_url=b.get("archive_url", ""),
+                published_at=b.get("published_at", "1970-01-01T00:00:00+00:00"),
+                yanked=b.get("yanked", False),
+                published_by=b.get("published_by", ""),
+                published_by_email=b.get("published_by_email", ""),
+                org=b.get("org", ""),
+                release_tag=b.get("release_tag", ""),
+                recipe_version=b.get("recipe_version", ""),
+                description=b.get("description", ""),
+                homepage=b.get("homepage", ""),
+                license=b.get("license", ""),
+                maintainer=b.get("maintainer", ""),
+                tags=b.get("tags", ""),
+                signature=b.get("signature", ""),
+                key_fingerprint=b.get("key_fingerprint", ""),
+            )
+            for b in page
+        ]
+
+        facets_model = SearchFacets()
+        if include_facets:
+            raw_facets = _local_compute_facets(bundles)
+            facets_model = SearchFacets(
+                platforms=[FacetBucket(value=v, count=c) for v, c in raw_facets["platforms"]],
+                archs=[FacetBucket(value=v, count=c) for v, c in raw_facets["archs"]],
+                build_types=[FacetBucket(value=v, count=c) for v, c in raw_facets["build_types"]],
+                links=[FacetBucket(value=v, count=c) for v, c in raw_facets["links"]],
+                releases=[FacetBucket(value=v, count=c) for v, c in raw_facets["releases"]],
+                orgs=[FacetBucket(value=v, count=c) for v, c in raw_facets["orgs"]],
+                tags=[FacetBucket(value=v, count=c) for v, c in raw_facets["tags"]],
+                licenses=[FacetBucket(value=v, count=c) for v, c in raw_facets["licenses"]],
+            )
+
+        return SearchResponse(
+            total=total,
+            package_count=package_count,
+            total_size_bytes=total_size_bytes,
+            packages=packages,
+            limit=limit,
+            offset=offset,
+            query=q,
+            facets=facets_model,
+        )
 
     @app.get("/v1/packages/{name}", response_model=PackageListResponse, tags=["packages"])
     async def get_package(
