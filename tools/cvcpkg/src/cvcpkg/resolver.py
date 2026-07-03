@@ -89,19 +89,29 @@ def _sort_candidates(entries: list[CatalogEntry], recommended_ver: str) -> list[
     recommended_entry: CatalogEntry | None = None
     rest: list[CatalogEntry] = []
 
+    # Parse once; drop entries whose version can't be understood so a
+    # single malformed bundle in the catalog doesn't sink resolution
+    # for unrelated components. Bad entries are still unusable — any
+    # request that actually needs them will fail in _backtrack.
+    parsed: list[tuple[CatalogEntry, Version]] = []
+    for e in entries:
+        try:
+            parsed.append((e, Version.parse(e.version)))
+        except ValueError:
+            continue
+
     if recommended_ver:
         try:
-            rv = Version.parse(recommended_ver)
+            rv: Version | None = Version.parse(recommended_ver)
         except ValueError:
             rv = None
-        for e in entries:
-            v = Version.parse(e.version)
+        for e, v in parsed:
             if rv is not None and v == rv and recommended_entry is None:
                 recommended_entry = e
             else:
                 rest.append(e)
     else:
-        rest = list(entries)
+        rest = [e for e, _ in parsed]
 
     rest.sort(key=lambda e: Version.parse(e.version), reverse=True)
 

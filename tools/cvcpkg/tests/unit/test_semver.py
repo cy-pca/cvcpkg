@@ -33,6 +33,15 @@ class TestVersionParse:
         v = Version.parse("1.14")
         assert v == Version(1, 14, 0, "", "")
 
+    def test_date_style_leading_zero_minor(self):
+        # Date-tagged upstream releases like vcglib "2025.07" must parse.
+        v = Version.parse("2025.07+cvc.1")
+        assert v == Version(2025, 7, 0, "", "cvc.1")
+
+    def test_leading_zero_patch(self):
+        v = Version.parse("1.2.03")
+        assert v == Version(1, 2, 3, "", "")
+
 
 class TestVersionOrdering:
     def test_ascending(self):

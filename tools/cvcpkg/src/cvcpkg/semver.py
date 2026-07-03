@@ -13,10 +13,13 @@ import re
 from dataclasses import dataclass
 from functools import total_ordering
 
+# Numeric components accept leading zeros so date-tagged upstreams
+# (e.g. vcglib "2025.07") parse without repackaging. Converted to int
+# below, so "07" collapses to 7 for comparison.
 _VER_RE = re.compile(
-    r"^(?P<major>0|[1-9]\d*)"
-    r"(?:\.(?P<minor>0|[1-9]\d*))?"
-    r"(?:\.(?P<patch>0|[1-9]\d*))?"
+    r"^(?P<major>\d+)"
+    r"(?:\.(?P<minor>\d+))?"
+    r"(?:\.(?P<patch>\d+))?"
     r"(?:-(?P<pre>[0-9A-Za-z.-]+))?"
     r"(?:\+(?P<build>[0-9A-Za-z.-]+))?$"
 )

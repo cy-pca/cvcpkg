@@ -136,3 +136,14 @@ class TestResolverDeps:
         }
         result = resolve(reqs, candidates, recommended={"zlib": "1.3.0+cvc.1"})
         assert result.picked["zlib"].version == "1.3.0+cvc.1"
+
+    def test_unparseable_candidate_ignored_for_unrelated_component(self):
+        # A malformed version on an unrequested bundle must not sink
+        # resolution for components the user actually asked for.
+        reqs = [ComponentReq(name="zlib")]
+        candidates = {
+            "zlib": [_entry("zlib", "1.3.1+cvc.1")],
+            "weirdo": [_entry("weirdo", "not-a-version")],
+        }
+        result = resolve(reqs, candidates)
+        assert result.picked["zlib"].version == "1.3.1+cvc.1"
