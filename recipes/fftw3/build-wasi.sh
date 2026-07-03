@@ -55,3 +55,15 @@ cmake -G Ninja \
     "${COMMON_ARGS[@]}"
 cmake --build "${CVC_BUILD_DIR}/float" -j "${CVC_JOBS}"
 cmake --install "${CVC_BUILD_DIR}/float"
+
+# Rewrite .pc files so prefix/libdir/includedir are relative to ${pcfiledir}.
+for pc in "${CVC_INSTALL_DIR}"/lib/pkgconfig/fftw3*.pc; do
+    [ -f "$pc" ] || continue
+    sed -i.bak \
+        -e 's|^prefix=.*|prefix=${pcfiledir}/../..|' \
+        -e 's|^exec_prefix=.*|exec_prefix=${prefix}|' \
+        -e 's|^libdir=.*|libdir=${prefix}/lib|' \
+        -e 's|^includedir=.*|includedir=${prefix}/include|' \
+        "$pc"
+    rm -f "${pc}.bak"
+done
