@@ -361,6 +361,9 @@ def builder_run(
             resp = client.get(url, headers=headers, params=params)
         if resp.status_code >= 400:
             raise RuntimeError(f"failed to download recipe '{recipe_name}': {resp.status_code}")
+        # cache_dir may have been reaped (e.g. OpenBSD /tmp cleanup) between
+        # builder startup and this call; recreate before writing.
+        bundle_path.parent.mkdir(parents=True, exist_ok=True)
         bundle_path.write_bytes(resp.content)
 
         # Extract
@@ -601,6 +604,7 @@ def builder_run(
             tc_data = _yaml.safe_load(tc_yaml_path.read_text())
             ct_block = tc_data.get("cross_toolchain", {})
             ct_env = ct_block.get("env", {}) or {}
+            ct_host_tools = (tc_data.get("depends", {}) or {}).get("host_tools", []) or []
 
             # 2. Download the pre-built package for the HOST platform
             with httpx.Client(timeout=120) as client:
@@ -682,7 +686,95 @@ def builder_run(
                 f"  Toolchain {tc_name} installed ({', '.join(f'{k}={v}' for k, v in ct_env.items())})\n"
             )
 
+            # 4. Install host_tools declared by the toolchain recipe
+            # (e.g. wasmtime for wasi-sdk so test scripts can execute
+            # wasm32-wasi binaries).  These are fetched as host_platform
+            # packages and extracted into the same prefix.
+            for tool_name in ct_host_tools:
+                if isinstance(tool_name, dict):
+                    tool_name = tool_name.get("name", "")
+                if not tool_name:
+                    continue
+                try:
+                    _install_host_package(tool_name, host_platform, host_arch, prefix, log_cb)
+                except Exception as exc:
+                    log_cb(f"  host_tool {tool_name}: install failed ({exc})\n")
+
         return merged_env
+
+    def _install_host_package(
+        pkg_name: str,
+        host_platform: str,
+        host_arch: str,
+        prefix: Path,
+        log_cb: Callable[[str], None],
+    ) -> None:
+        """Fetch a pre-built package for the host platform and extract to *prefix*.
+
+        Used to install cross-toolchain companion tools like wasmtime
+        alongside wasi-sdk.  Best-effort: logs and returns on any failure
+        so the build can proceed without the tool.
+        """
+        with httpx.Client(timeout=120) as client:
+            resp = client.get(f"{base}/v1/packages/{pkg_name}", headers=headers)
+            if resp.status_code >= 400:
+                log_cb(f"  host_tool {pkg_name}: not found on server ({resp.status_code})\n")
+                return
+            pkgs = resp.json().get("packages", [])
+            match = None
+            for p in pkgs:
+                if p.get("platform") == host_platform and p.get("arch") == host_arch:
+                    match = p
+                    break
+            if match is None:
+                log_cb(
+                    f"  host_tool {pkg_name}: no {host_platform}/{host_arch} package on server\n"
+                )
+                return
+
+            archive_url = match.get("archive_url", "")
+            if not archive_url:
+                log_cb(f"  host_tool {pkg_name}: no archive URL\n")
+                return
+            if archive_url.startswith("/"):
+                archive_url = f"{base}{archive_url}"
+
+            log_cb(f"  Installing host tool: {pkg_name} ({match.get('version', '')})\n")
+            dl_resp = client.get(archive_url)
+            if dl_resp.status_code >= 400:
+                log_cb(f"  host_tool {pkg_name}: download failed ({dl_resp.status_code})\n")
+                return
+
+            data = dl_resp.content
+            head = data[:4]
+            if head[:2] == b"PK":
+                suffix, kind = ".zip", "zip"
+            elif head[:2] == b"\x1f\x8b":
+                suffix, kind = ".tar.gz", "gz"
+            elif head == b"\x28\xb5\x2f\xfd":
+                suffix, kind = ".tar.zst", "zst"
+            else:
+                log_cb(f"  host_tool {pkg_name}: unknown archive format\n")
+                return
+            tmp_archive = prefix / f"_hosttool_{pkg_name}{suffix}"
+            tmp_archive.write_bytes(data)
+            try:
+                if kind == "zip":
+                    with zipfile.ZipFile(tmp_archive) as zf:
+                        zf.extractall(path=prefix)  # noqa: S202
+                elif kind == "gz":
+                    with tarfile.open(tmp_archive, "r:gz") as tf:
+                        tf.extractall(path=prefix)  # noqa: S202
+                elif kind == "zst":
+                    import zstandard  # type: ignore[import-untyped]
+
+                    with open(tmp_archive, "rb") as f_in:
+                        dctx = zstandard.ZstdDecompressor()
+                        with dctx.stream_reader(f_in) as reader:
+                            with tarfile.open(fileobj=reader, mode="r|") as tf:
+                                tf.extractall(path=prefix)  # noqa: S202
+            finally:
+                tmp_archive.unlink(missing_ok=True)
 
     def _execute_job(job: dict) -> None:
         """Execute a single build job."""

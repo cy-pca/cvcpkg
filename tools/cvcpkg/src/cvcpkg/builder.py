@@ -658,7 +658,11 @@ def _find_bash() -> str:
     raise BuildError("bash not found on PATH")
 
 
-def run_test(ctx: BuildContext) -> None:
+def run_test(
+    ctx: BuildContext,
+    *,
+    log_callback: Callable[[str], None] | None = None,
+) -> None:
     """Run the recipe's test script if one exists."""
     if not ctx.recipe.test_script:
         return
@@ -704,15 +708,43 @@ def run_test(ctx: BuildContext) -> None:
         env["LD_LIBRARY_PATH"] = ":".join(lib_dirs + ([existing] if existing else []))
 
     bash = _find_bash()
-    print(f"cvcpkg: running test for {ctx.recipe.name}")
+    header = f"cvcpkg: running test for {ctx.recipe.name}"
+    print(header)
+    if log_callback:
+        log_callback(f"{header}\n")
 
-    result = subprocess.run(
-        [bash, str(test_path)],
-        cwd=ctx.install_dir,
-        env=env,
-    )
-    if result.returncode != 0:
-        raise BuildError(f"Test for {ctx.recipe.name} failed with code {result.returncode}")
+    if log_callback:
+        proc = subprocess.Popen(
+            [bash, str(test_path)],
+            cwd=ctx.install_dir,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        _LOG_FLUSH_BYTES = 8192
+        buf: list[str] = []
+        buf_size = 0
+        assert proc.stdout is not None
+        for raw_line in proc.stdout:
+            line = raw_line.decode("utf-8", errors="replace")
+            sys.stdout.write(line)
+            buf.append(line)
+            buf_size += len(line)
+            if buf_size >= _LOG_FLUSH_BYTES:
+                log_callback("".join(buf))
+                buf.clear()
+                buf_size = 0
+        if buf:
+            log_callback("".join(buf))
+        returncode = proc.wait()
+    else:
+        returncode = subprocess.run(
+            [bash, str(test_path)],
+            cwd=ctx.install_dir,
+            env=env,
+        ).returncode
+    if returncode != 0:
+        raise BuildError(f"Test for {ctx.recipe.name} failed with code {returncode}")
 
 
 # ── Manifest generation ────────────────────────────────────────
@@ -1073,7 +1105,7 @@ def build_recipe(
     run_build(ctx, log_callback=log_callback)
 
     if recipe.test_script:
-        run_test(ctx)
+        run_test(ctx, log_callback=log_callback)
 
     # If the caller supplied an explicit --prefix that differs from the
     # per-recipe isolated install_dir, mirror install_dir into it so the
