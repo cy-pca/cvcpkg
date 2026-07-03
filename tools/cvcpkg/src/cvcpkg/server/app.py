@@ -1431,8 +1431,7 @@ def create_app(
             return [
                 p
                 for p in pkgs
-                if needle
-                in {t.strip().lower() for t in (p.tags or "").split(",") if t.strip()}
+                if needle in {t.strip().lower() for t in (p.tags or "").split(",") if t.strip()}
             ]
 
         if _use_db:
@@ -2615,8 +2614,12 @@ def create_app(
         version: str,
         platform: str | None = Query(None, description="Only yank bundles for this platform"),
         arch: str | None = Query(None, description="Only yank bundles for this arch"),
-        link: str | None = Query(None, description="Only yank bundles for this link mode (shared/static)"),
-        build_type: str | None = Query(None, description="Only yank bundles for this build type (release/debug)"),
+        link: str | None = Query(
+            None, description="Only yank bundles for this link mode (shared/static)"
+        ),
+        build_type: str | None = Query(
+            None, description="Only yank bundles for this build type (release/debug)"
+        ),
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
         scope_parts = [

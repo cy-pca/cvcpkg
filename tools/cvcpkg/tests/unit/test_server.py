@@ -451,8 +451,16 @@ class TestSearchEndpoint:
         client, _, pub_tok, _ = server_env
         self._seed(client, pub_tok)
         data = client.get("/v1/search", params={"facets": "false"}).json()
-        for key in ("platforms", "archs", "build_types", "links",
-                    "releases", "orgs", "tags", "licenses"):
+        for key in (
+            "platforms",
+            "archs",
+            "build_types",
+            "links",
+            "releases",
+            "orgs",
+            "tags",
+            "licenses",
+        ):
             assert data["facets"][key] == []
 
     def test_no_match(self, server_env):

@@ -809,9 +809,7 @@ class DbPackageIndex:
                 )
                 rows = await session.execute(q)
                 facets[key] = [
-                    (str(val or ""), int(cnt))
-                    for val, cnt in rows.all()
-                    if (val or "") != ""
+                    (str(val or ""), int(cnt)) for val, cnt in rows.all() if (val or "") != ""
                 ]
 
             # Tags is a comma-separated string column; aggregate in Python
@@ -828,9 +826,9 @@ class DbPackageIndex:
                     if not t:
                         continue
                     tag_counts[t] = tag_counts.get(t, 0) + 1
-            facets["tags"] = sorted(
-                tag_counts.items(), key=lambda kv: (-kv[1], kv[0])
-            )[:max_buckets]
+            facets["tags"] = sorted(tag_counts.items(), key=lambda kv: (-kv[1], kv[0]))[
+                :max_buckets
+            ]
 
             return facets, total_bundles, distinct_names, total_size
 

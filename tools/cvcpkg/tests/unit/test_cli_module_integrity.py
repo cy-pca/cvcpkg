@@ -38,6 +38,7 @@ EXPECTED_SUBMODULES = [
     "_install",
     "_publish",
     "_recipe",
+    "_search",
     "_server",
     "_signing",
     "_webhook",

@@ -117,11 +117,7 @@ def _sort_candidates(entries: list[CatalogEntry], recommended_ver: str) -> list[
         # Prefer an exact match on cvc_revision when the recommendation
         # carries one; otherwise fall back to base-version equality.
         for e, v in parsed:
-            is_match = (
-                rv is not None
-                and v == rv
-                and (rv_rev == 0 or v.cvc_revision == rv_rev)
-            )
+            is_match = rv is not None and v == rv and (rv_rev == 0 or v.cvc_revision == rv_rev)
             if is_match and recommended_entry is None:
                 recommended_entry = e
             else:
