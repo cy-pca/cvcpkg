@@ -294,6 +294,45 @@ class PackageListResponse(BaseModel):
     packages: list[PackageInfo]
 
 
+class FacetBucket(BaseModel):
+    """One value + document count for a search facet."""
+
+    value: str
+    count: int
+
+
+class SearchFacets(BaseModel):
+    """Aggregated facets over the search-matching (but unpaginated) result set."""
+
+    platforms: list[FacetBucket] = Field(default_factory=list)
+    archs: list[FacetBucket] = Field(default_factory=list)
+    build_types: list[FacetBucket] = Field(default_factory=list)
+    links: list[FacetBucket] = Field(default_factory=list)
+    releases: list[FacetBucket] = Field(default_factory=list)
+    orgs: list[FacetBucket] = Field(default_factory=list)
+    tags: list[FacetBucket] = Field(default_factory=list)
+    licenses: list[FacetBucket] = Field(default_factory=list)
+
+
+class SearchResponse(BaseModel):
+    """Response for the ``/v1/search`` endpoint."""
+
+    total: int = Field(description="Total number of matching bundle rows.")
+    package_count: int = Field(
+        default=0,
+        description="Total number of distinct package names matching the query.",
+    )
+    total_size_bytes: int = Field(
+        default=0,
+        description="Sum of size_bytes across the entire matching result set.",
+    )
+    packages: list[PackageInfo]
+    limit: int = 0
+    offset: int = 0
+    query: str = ""
+    facets: SearchFacets = Field(default_factory=SearchFacets)
+
+
 class CacheStatusResponse(BaseModel):
     """Response for the ``/v1/cache/status`` probe endpoint."""
 

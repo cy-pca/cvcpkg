@@ -314,99 +314,153 @@ function fmtDate(iso) {
 # ── Landing page JS ─────────────────────────────────────────────
 
 _LANDING_JS = r"""
-let allPackages = [];
+// Server-driven search. The full package list may reach 10s of thousands of
+// entries, so we never load it into memory — every filter change fires a
+// debounced request to /v1/search and re-renders from the response.
+
+const PAGE_SIZE = 100;
+
 let recipeNames = [];
-let currentSort = { key: 'name', dir: 'asc' };
-let searchTerm = '';
-let platformFilter = '';
-let releaseFilter = '';
-let tagFilter = '';
-
 let recipeMeta = {};
+let currentSort = { key: 'name', dir: 'asc' };
 
-async function init() {
+// Filter/search state — kept in sync with URL for shareable links.
+let state = {
+  q: '',
+  platform: '',
+  release: '',
+  tag: '',
+  arch: '',
+  link: '',
+  build_type: '',
+  offset: 0,
+};
+
+// Accumulated pages so "Load more" appends rather than replaces.
+let loadedPackages = [];
+let lastResponse = null;
+let searchSeq = 0;      // race guard for out-of-order responses
+let searchTimer = null; // debounce handle
+
+function _debounce(fn, ms) {
+  return function() {
+    const args = arguments;
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => fn.apply(null, args), ms);
+  };
+}
+
+function _buildSearchQuery(overrides) {
+  const s = Object.assign({}, state, overrides || {});
+  const params = new URLSearchParams();
+  if (s.q) params.set('q', s.q);
+  if (s.platform) params.set('platform', s.platform);
+  if (s.arch) params.set('arch', s.arch);
+  if (s.link) params.set('link', s.link);
+  if (s.build_type) params.set('build_type', s.build_type);
+  if (s.release) params.set('release', s.release);
+  if (s.tag) params.set('tag', s.tag);
+  params.set('limit', String(PAGE_SIZE));
+  params.set('offset', String(s.offset || 0));
+  params.set('facets', 'true');
+  return params.toString();
+}
+
+async function runSearch(opts) {
+  opts = opts || {};
+  const append = !!opts.append;
+  if (!append) {
+    state.offset = 0;
+    loadedPackages = [];
+  }
+  const seq = ++searchSeq;
+  const url = '/v1/search?' + _buildSearchQuery();
+  const tbody = document.getElementById('pkg-body');
+  if (!append) {
+    tbody.innerHTML = `
+      <tr><td colspan="6" class="has-text-centered py-6">
+        <span class="icon is-large has-text-link">
+          <i class="fas fa-spinner fa-spin fa-2x"></i>
+        </span>
+      </td></tr>`;
+  }
+  let data;
   try {
-    const resp = await fetch('/v1/packages?limit=1000');
-    const data = await resp.json();
-    allPackages = data.packages || [];
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    data = await resp.json();
   } catch (err) {
-    document.getElementById('pkg-body').innerHTML =
-      '<tr><td colspan="6" class="has-text-centered has-text-grey-light">Failed to load packages.</td></tr>';
+    if (seq !== searchSeq) return; // stale
+    tbody.innerHTML =
+      '<tr><td colspan="6" class="has-text-centered has-text-grey-light">'
+      + 'Search failed: ' + esc(err.message || String(err)) + '</td></tr>';
     return;
   }
-  // Fetch recipe metadata for license/description fallback and mainline badge
-  try {
-    const dresp = await fetch('/v1/deps');
-    const ddata = await dresp.json();
-    recipeMeta = ddata.meta || {};
-    recipeNames = ddata.recipe_names || [];
-    // Enrich packages with recipe metadata when DB fields are empty
-    allPackages.forEach(p => {
-      const m = recipeMeta[p.name];
-      if (!m) return;
-      if (!p.license && m.license) p.license = m.license;
-      if (!p.description && m.description) p.description = m.description;
-    });
-  } catch (_) {}
-  updateStats();
-  render();
+  if (seq !== searchSeq) return; // a newer request already fired
+  lastResponse = data;
+  const pkgs = data.packages || [];
+  // Enrich with recipe metadata (license/description fallback).
+  pkgs.forEach(p => {
+    const m = recipeMeta[p.name];
+    if (!m) return;
+    if (!p.license && m.license) p.license = m.license;
+    if (!p.description && m.description) p.description = m.description;
+  });
+  loadedPackages = loadedPackages.concat(pkgs);
+  updateStatsFromResponse(data);
+  updateFilterOptions(data.facets || {});
+  renderResults(data);
 }
 
-function updateStats() {
-  const names = new Set(allPackages.map(p => p.name));
-  const platforms = new Set(allPackages.map(p => p.platform).filter(Boolean));
-  const totalSize = allPackages.reduce((s, p) => s + (p.size_bytes || 0), 0);
-
-  document.getElementById('stat-packages').textContent = names.size;
-  document.getElementById('stat-builds').textContent = allPackages.length;
-  document.getElementById('stat-platforms').textContent = platforms.size;
-  document.getElementById('stat-size').textContent = fmtSizeLarge(totalSize);
-
-  const sel = document.getElementById('platform-filter');
-  const existing = new Set(Array.from(sel.options).map(o => o.value));
-  [...platforms].sort().forEach(p => {
-    if (!existing.has(p)) {
-      const opt = document.createElement('option');
-      opt.value = p; opt.textContent = p; sel.appendChild(opt);
-    }
-  });
-
-  const releases = new Set(allPackages.map(p => p.release_tag).filter(Boolean));
-  const relSel = document.getElementById('release-filter');
-  const existingRel = new Set(Array.from(relSel.options).map(o => o.value));
-  [...releases].sort().reverse().forEach(r => {
-    if (!existingRel.has(r)) {
-      const opt = document.createElement('option');
-      opt.value = r; opt.textContent = r; relSel.appendChild(opt);
-    }
-  });
+function updateStatsFromResponse(data) {
+  const facets = data.facets || {};
+  const packages = (data.package_count || 0);
+  const builds = (data.total || 0);
+  const platforms = (facets.platforms || []).length;
+  const size = data.total_size_bytes || 0;
+  document.getElementById('stat-packages').textContent = packages;
+  document.getElementById('stat-builds').textContent = builds;
+  document.getElementById('stat-platforms').textContent = platforms;
+  document.getElementById('stat-size').textContent = fmtSizeLarge(size);
 }
 
-function render() {
-  let pkgs = [...allPackages];
-
-  if (searchTerm) {
-    const q = searchTerm.toLowerCase();
-    pkgs = pkgs.filter(p =>
-      p.name.toLowerCase().includes(q) ||
-      p.version.toLowerCase().includes(q) ||
-      (p.platform || '').toLowerCase().includes(q) ||
-      (p.arch || '').toLowerCase().includes(q) ||
-      (p.build_type || '').toLowerCase().includes(q) ||
-      (p.link || '').toLowerCase().includes(q) ||
-      (p.tags || '').toLowerCase().includes(q) ||
-      (p.maintainer || '').toLowerCase().includes(q) ||
-      (p.release_tag || '').toLowerCase().includes(q)
-    );
+function _syncSelect(id, buckets, keepValue) {
+  const sel = document.getElementById(id);
+  if (!sel) return;
+  const current = keepValue != null ? keepValue : sel.value;
+  // Preserve the first placeholder option (the "All ..." entry) and any
+  // static options declared in HTML (identified by data-static="true").
+  const preserved = [];
+  Array.from(sel.options).forEach(o => {
+    if (o.value === '' || o.dataset.static === 'true') preserved.push(o);
+  });
+  sel.innerHTML = '';
+  preserved.forEach(o => sel.appendChild(o));
+  const seen = new Set(preserved.map(o => o.value));
+  (buckets || []).forEach(b => {
+    if (seen.has(b.value)) return;
+    const opt = document.createElement('option');
+    opt.value = b.value;
+    opt.textContent = b.count ? (b.value + ' (' + b.count + ')') : b.value;
+    sel.appendChild(opt);
+    seen.add(b.value);
+  });
+  // Restore previous selection when still present, otherwise fall back to
+  // the empty "All ..." placeholder so we don't silently mutate state.
+  if (seen.has(current)) {
+    sel.value = current;
+  } else {
+    sel.value = '';
   }
-  if (tagFilter) {
-    pkgs = pkgs.filter(p => (p.tags || '').split(',').map(t => t.trim().toLowerCase()).includes(tagFilter.toLowerCase()));
-  }
-  if (platformFilter) pkgs = pkgs.filter(p => p.platform === platformFilter);
-  if (releaseFilter === 'live') pkgs = pkgs.filter(p => !p.release_tag);
-  else if (releaseFilter) pkgs = pkgs.filter(p => p.release_tag === releaseFilter);
+}
 
-  // Group by package name
+function updateFilterOptions(facets) {
+  _syncSelect('platform-filter', facets.platforms || [], state.platform);
+  _syncSelect('release-filter', facets.releases || [], state.release);
+  _syncSelect('tag-filter', facets.tags || [], state.tag);
+}
+
+function groupBundlesByName(pkgs) {
   const groups = {};
   pkgs.forEach(p => {
     if (!groups[p.name]) {
@@ -423,9 +477,12 @@ function render() {
     if (p.platform) g.platforms.add(p.platform);
     g.totalSize += p.size_bytes || 0;
   });
+  return Object.values(groups);
+}
 
-  let sorted = Object.values(groups);
-  sorted.sort((a, b) => {
+function renderResults(data) {
+  const grouped = groupBundlesByName(loadedPackages);
+  grouped.sort((a, b) => {
     let va, vb;
     if (currentSort.key === 'builds') {
       va = a.builds.length; vb = b.builds.length;
@@ -442,13 +499,25 @@ function render() {
     return 0;
   });
 
-  document.getElementById('pkg-count').textContent =
-    sorted.length + (sorted.length === 1 ? ' package' : ' packages') +
-    ' (' + pkgs.length + (pkgs.length === 1 ? ' build' : ' builds') + ')';
+  const totalBuilds = data.total || 0;
+  const totalPackages = data.package_count || 0;
+  const shownBuilds = loadedPackages.length;
+  const countEl = document.getElementById('pkg-count');
+  if (shownBuilds < totalBuilds) {
+    countEl.textContent =
+      'Showing ' + grouped.length + ' of ' + totalPackages
+      + (totalPackages === 1 ? ' package' : ' packages')
+      + ' (' + shownBuilds + ' / ' + totalBuilds + ' builds)';
+  } else {
+    countEl.textContent =
+      totalPackages + (totalPackages === 1 ? ' package' : ' packages')
+      + ' (' + totalBuilds + (totalBuilds === 1 ? ' build' : ' builds') + ')';
+  }
 
   const tbody = document.getElementById('pkg-body');
-  if (sorted.length === 0) {
-    const hasFilter = searchTerm || platformFilter || releaseFilter;
+  if (grouped.length === 0) {
+    const hasFilter = state.q || state.platform || state.release || state.tag
+                      || state.arch || state.link || state.build_type;
     tbody.innerHTML = `
       <tr><td colspan="6">
         <div class="empty-hero has-text-centered">
@@ -462,28 +531,27 @@ function render() {
           </p>
         </div>
       </td></tr>`;
-    return;
+  } else {
+    tbody.innerHTML = grouped.map(g => {
+      const isMainline = recipeNames.includes(g.name);
+      const badge = isMainline
+        ? '<span class="badge-mainline" title="Official cvcpkg recipe"><i class="fas fa-check-circle"></i> cvcpkg</span>'
+        : '<span class="badge-community" title="Community upload"><i class="fas fa-users"></i> community</span>';
+      return `
+      <tr class="pkg-card">
+        <td>
+          <a class="pkg-link" href="/package/${encodeURIComponent(g.name)}">
+            <strong>${esc(g.name)}</strong>
+          </a>
+        </td>
+        <td><code>${esc(g.version)}</code></td>
+        <td>${[...g.platforms].sort().map(p => platformTag(p)).join(' ')}</td>
+        <td><span class="tag is-dark is-rounded">${g.builds.length}</span></td>
+        <td><span class="is-family-monospace is-size-7 has-text-grey-light">${fmtSize(g.totalSize)}</span></td>
+        <td>${badge}</td>
+      </tr>
+    `}).join('');
   }
-
-  tbody.innerHTML = sorted.map(g => {
-    const isMainline = recipeNames.includes(g.name);
-    const badge = isMainline
-      ? '<span class="badge-mainline" title="Official cvcpkg recipe"><i class="fas fa-check-circle"></i> cvcpkg</span>'
-      : '<span class="badge-community" title="Community upload"><i class="fas fa-users"></i> community</span>';
-    return `
-    <tr class="pkg-card">
-      <td>
-        <a class="pkg-link" href="/package/${encodeURIComponent(g.name)}">
-          <strong>${esc(g.name)}</strong>
-        </a>
-      </td>
-      <td><code>${esc(g.version)}</code></td>
-      <td>${[...g.platforms].sort().map(p => platformTag(p)).join(' ')}</td>
-      <td><span class="tag is-dark is-rounded">${g.builds.length}</span></td>
-      <td><span class="is-family-monospace is-size-7 has-text-grey-light">${fmtSize(g.totalSize)}</span></td>
-      <td>${badge}</td>
-    </tr>
-  `}).join('');
 
   document.querySelectorAll('th.is-sortable').forEach(th => {
     const arrow = th.querySelector('.sort-arrow');
@@ -495,6 +563,18 @@ function render() {
       arrow.textContent = '';
     }
   });
+
+  // "Load more" button.
+  const more = document.getElementById('load-more');
+  if (more) {
+    if (shownBuilds < totalBuilds) {
+      more.style.display = '';
+      more.disabled = false;
+      more.textContent = 'Load more (' + (totalBuilds - shownBuilds) + ' remaining)';
+    } else {
+      more.style.display = 'none';
+    }
+  }
 }
 
 function sortBy(key) {
@@ -503,22 +583,29 @@ function sortBy(key) {
   } else {
     currentSort = { key, dir: 'asc' };
   }
-  render();
+  // Sort locally over already-loaded pages — no refetch.
+  if (lastResponse) renderResults(lastResponse);
 }
 
-async function loadTags() {
+const debouncedSearch = _debounce(runSearch, 250);
+
+async function init() {
+  // Fetch recipe metadata once; used for license/description fallback and
+  // the "mainline vs community" badge.
   try {
-    const resp = await fetch('/v1/tags/all');
-    const data = await resp.json();
-    const tags = data.tags || [];
-    const sel = document.getElementById('tag-filter');
-    tags.forEach(t => {
-      const opt = document.createElement('option');
-      opt.value = t.name;
-      opt.textContent = t.display_name || t.name;
-      sel.appendChild(opt);
-    });
+    const dresp = await fetch('/v1/deps');
+    const ddata = await dresp.json();
+    recipeMeta = ddata.meta || {};
+    recipeNames = ddata.recipe_names || [];
   } catch (_) {}
+  await runSearch();
+}
+
+function loadMore() {
+  const btn = document.getElementById('load-more');
+  if (btn) btn.disabled = true;
+  state.offset = loadedPackages.length;
+  runSearch({ append: true });
 }
 """
 
@@ -642,7 +729,7 @@ def landing_html() -> str:
             <div class="select is-dark is-fullwidth">
               <select id="release-filter">
                 <option value="">All channels</option>
-                <option value="live">Live only</option>
+                <option value="live" data-static="true">Live only</option>
               </select>
             </div>
           </div>
@@ -676,6 +763,12 @@ def landing_html() -> str:
         </tbody>
       </table>
     </div>
+
+    <div class="has-text-centered mt-4">
+      <button id="load-more" class="button is-dark is-outlined" style="display:none;">
+        Load more
+      </button>
+    </div>
   </div>
 </section>
 
@@ -689,27 +782,28 @@ document.addEventListener('DOMContentLoaded', () => {{
   {_NAVBAR_JS}
 
   document.getElementById('search').addEventListener('input', e => {{
-    searchTerm = e.target.value;
-    render();
+    state.q = e.target.value;
+    debouncedSearch();
   }});
   document.getElementById('platform-filter').addEventListener('change', e => {{
-    platformFilter = e.target.value;
-    render();
+    state.platform = e.target.value;
+    runSearch();
   }});
   document.getElementById('tag-filter').addEventListener('change', e => {{
-    tagFilter = e.target.value;
-    render();
+    state.tag = e.target.value;
+    runSearch();
   }});
   document.getElementById('release-filter').addEventListener('change', e => {{
-    releaseFilter = e.target.value;
-    render();
+    state.release = e.target.value;
+    runSearch();
   }});
   document.querySelectorAll('th.is-sortable').forEach(th => {{
     th.addEventListener('click', () => sortBy(th.dataset.key));
   }});
+  const moreBtn = document.getElementById('load-more');
+  if (moreBtn) moreBtn.addEventListener('click', loadMore);
 
   init();
-  loadTags();
 }});
 </script>
 </body>

@@ -309,6 +309,168 @@ class TestPublishFlow:
         assert resp.status_code == 404
 
 
+class TestSearchEndpoint:
+    """Exercises ``/v1/search`` in local (non-DB) mode used by the test client."""
+
+    def _publish(
+        self,
+        client,
+        pub_tok,
+        *,
+        name,
+        version="1.0",
+        platform="linux",
+        arch="x86_64",
+        build_type="release",
+        link="shared",
+    ):
+        resp = client.post(
+            "/v1/publish",
+            params={
+                "name": name,
+                "version": version,
+                "platform": platform,
+                "arch": arch,
+                "build_type": build_type,
+                "link": link,
+            },
+            files={"file": (f"{name}-{version}.tar.zst", io.BytesIO(b"data-" + name.encode()))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200, resp.text
+
+    def _seed(self, client, pub_tok):
+        self._publish(client, pub_tok, name="boost", version="1.86", platform="linux")
+        self._publish(
+            client, pub_tok, name="boost", version="1.86", platform="darwin", link="static"
+        )
+        self._publish(
+            client, pub_tok, name="fftw3", version="3.3.10", platform="linux", link="static"
+        )
+        self._publish(client, pub_tok, name="fftw3", version="3.3.10", platform="windows")
+        self._publish(client, pub_tok, name="zlib", version="1.3.1", platform="linux")
+
+    def test_empty_query_returns_all(self, server_env):
+        client, _, pub_tok, _ = server_env
+        self._seed(client, pub_tok)
+        resp = client.get("/v1/search")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 5
+        assert data["package_count"] == 3
+        assert data["total_size_bytes"] > 0
+        assert data["limit"] == 50
+        assert data["offset"] == 0
+        assert len(data["packages"]) == 5
+
+    def test_query_matches_name(self, server_env):
+        client, _, pub_tok, _ = server_env
+        self._seed(client, pub_tok)
+        resp = client.get("/v1/search", params={"q": "boost"})
+        data = resp.json()
+        assert data["total"] == 2
+        assert data["package_count"] == 1
+        for p in data["packages"]:
+            assert p["name"] == "boost"
+
+    def test_query_case_insensitive(self, server_env):
+        client, _, pub_tok, _ = server_env
+        self._seed(client, pub_tok)
+        resp = client.get("/v1/search", params={"q": "FFTW"})
+        assert resp.json()["total"] == 2
+
+    def test_query_matches_platform(self, server_env):
+        client, _, pub_tok, _ = server_env
+        self._seed(client, pub_tok)
+        resp = client.get("/v1/search", params={"q": "darwin"})
+        assert resp.json()["total"] == 1
+
+    def test_filter_platform(self, server_env):
+        client, _, pub_tok, _ = server_env
+        self._seed(client, pub_tok)
+        resp = client.get("/v1/search", params={"platform": "linux"})
+        data = resp.json()
+        assert data["total"] == 3
+        assert data["package_count"] == 3
+        assert {p["platform"] for p in data["packages"]} == {"linux"}
+
+    def test_filter_link_static(self, server_env):
+        client, _, pub_tok, _ = server_env
+        self._seed(client, pub_tok)
+        resp = client.get("/v1/search", params={"link": "static"})
+        assert resp.json()["total"] == 2
+
+    def test_query_and_filter_combined(self, server_env):
+        client, _, pub_tok, _ = server_env
+        self._seed(client, pub_tok)
+        resp = client.get("/v1/search", params={"q": "boost", "platform": "darwin"})
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["packages"][0]["name"] == "boost"
+        assert data["packages"][0]["platform"] == "darwin"
+
+    def test_pagination(self, server_env):
+        client, _, pub_tok, _ = server_env
+        self._seed(client, pub_tok)
+        page1 = client.get("/v1/search", params={"limit": 2, "offset": 0}).json()
+        page2 = client.get("/v1/search", params={"limit": 2, "offset": 2}).json()
+        assert page1["total"] == 5
+        assert page2["total"] == 5
+        assert len(page1["packages"]) == 2
+        assert len(page2["packages"]) == 2
+        # Distinct rows across pages
+        ids1 = {(p["name"], p["platform"], p["link"]) for p in page1["packages"]}
+        ids2 = {(p["name"], p["platform"], p["link"]) for p in page2["packages"]}
+        assert ids1.isdisjoint(ids2)
+
+    def test_limit_clamped(self, server_env):
+        client, _, pub_tok, _ = server_env
+        self._seed(client, pub_tok)
+        resp = client.get("/v1/search", params={"limit": 999})
+        # Request validation caps at 200
+        assert resp.status_code == 422
+
+    def test_facets_populated(self, server_env):
+        client, _, pub_tok, _ = server_env
+        self._seed(client, pub_tok)
+        data = client.get("/v1/search").json()
+        f = data["facets"]
+        platforms = {b["value"]: b["count"] for b in f["platforms"]}
+        assert platforms == {"linux": 3, "darwin": 1, "windows": 1}
+        links = {b["value"]: b["count"] for b in f["links"]}
+        assert links == {"shared": 3, "static": 2}
+
+    def test_facets_reflect_filters(self, server_env):
+        client, _, pub_tok, _ = server_env
+        self._seed(client, pub_tok)
+        data = client.get("/v1/search", params={"platform": "linux"}).json()
+        platforms = {b["value"]: b["count"] for b in data["facets"]["platforms"]}
+        assert platforms == {"linux": 3}
+
+    def test_facets_off(self, server_env):
+        client, _, pub_tok, _ = server_env
+        self._seed(client, pub_tok)
+        data = client.get("/v1/search", params={"facets": "false"}).json()
+        for key in ("platforms", "archs", "build_types", "links",
+                    "releases", "orgs", "tags", "licenses"):
+            assert data["facets"][key] == []
+
+    def test_no_match(self, server_env):
+        client, _, pub_tok, _ = server_env
+        self._seed(client, pub_tok)
+        data = client.get("/v1/search", params={"q": "no-such-package-xyz"}).json()
+        assert data["total"] == 0
+        assert data["package_count"] == 0
+        assert data["packages"] == []
+
+    def test_search_sql_injection_safe(self, server_env):
+        client, _, pub_tok, _ = server_env
+        self._seed(client, pub_tok)
+        resp = client.get("/v1/search", params={"q": "'; DROP TABLE packages; --"})
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 0
+
+
 class TestYankFlow:
     def _publish(self, client, pub_tok):
         client.post(
