@@ -26,3 +26,10 @@ _sed_i 's/target_link_libraries(minigzip64 zlib)/target_link_libraries(minigzip6
 cvc_cmake_build \
     -DZLIB_BUILD_EXAMPLES=OFF \
     -DINSTALL_PKGCONFIG_DIR="${CVC_INSTALL_DIR}/lib/pkgconfig"
+
+# WASI-only quirk: upstream installs `libzlibstatic.a` on wasi-static builds
+# instead of `libz.a`, breaking `-lz` link. Copy for compatibility.
+if [[ -f "${CVC_INSTALL_DIR}/lib/libzlibstatic.a" ]]; then
+    cp -f "${CVC_INSTALL_DIR}/lib/libzlibstatic.a" "${CVC_INSTALL_DIR}/lib/libz.a"
+    echo "cvcpkg: aliased libzlibstatic.a -> libz.a for wasi"
+fi
