@@ -100,20 +100,36 @@ def _sort_candidates(entries: list[CatalogEntry], recommended_ver: str) -> list[
         except ValueError:
             continue
 
+    def _sort_key(e: CatalogEntry) -> tuple[Version, int]:
+        # Tiebreak on cvc_revision so a newer +cvc.N rebuild of the same
+        # upstream version wins over an older, possibly-broken bundle.
+        # Version.__lt__ intentionally ignores build metadata (SemVer),
+        # so without this the tie was broken by input list order.
+        v = Version.parse(e.version)
+        return (v, v.cvc_revision)
+
     if recommended_ver:
         try:
             rv: Version | None = Version.parse(recommended_ver)
         except ValueError:
             rv = None
+        rv_rev = rv.cvc_revision if rv is not None else 0
+        # Prefer an exact match on cvc_revision when the recommendation
+        # carries one; otherwise fall back to base-version equality.
         for e, v in parsed:
-            if rv is not None and v == rv and recommended_entry is None:
+            is_match = (
+                rv is not None
+                and v == rv
+                and (rv_rev == 0 or v.cvc_revision == rv_rev)
+            )
+            if is_match and recommended_entry is None:
                 recommended_entry = e
             else:
                 rest.append(e)
     else:
         rest = [e for e, _ in parsed]
 
-    rest.sort(key=lambda e: Version.parse(e.version), reverse=True)
+    rest.sort(key=_sort_key, reverse=True)
 
     if recommended_entry is not None:
         return [recommended_entry] + rest
