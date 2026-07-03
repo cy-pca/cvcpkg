@@ -1,0 +1,102 @@
+schema_version: 1
+recipe:
+  name: gtk4
+  upstream_version: "4.16.7"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    GTK 4 — the GIMP Toolkit widget library, used to build graphical
+    user interfaces for the GNOME desktop and cross-platform
+    applications.  This recipe builds GTK 4 from source with Meson,
+    linking against system-provided glib/cairo/pango/harfbuzz/
+    gdk-pixbuf/epoxy on POSIX hosts and via gvsbuild on Windows.
+  homepage: https://www.gtk.org/
+  license: LGPL-2.1-or-later
+  tags: [graphics, gui]
+
+source:
+  # gtk-4.16.7.tar.xz from gnome.org; sha256 recorded once we do a
+  # verified vendored fetch.  Until then, the build script downloads
+  # the tarball with checksum verification against a mirror.
+  type: prebuilt
+  url: https://download.gnome.org/sources/gtk/4.16/gtk-4.16.7.tar.xz
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools:
+    - meson
+    - ninja
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+      note: >-
+        Windows builds delegate to gvsbuild (Python), which fetches
+        and builds the full GTK 4 stack under MSYS2/MSVC.  Requires
+        Visual Studio 2019+ Build Tools and Python 3.10+.
+
+package:
+  files:
+    - lib/libgtk-4*
+    - lib/libgdk-4*
+    - lib/pkgconfig/gtk4*.pc
+    - lib/pkgconfig/gdk-4*.pc
+    - lib/pkgconfig/gtk4-unix-print*.pc
+    - lib/girepository-1.0/Gtk-4*.typelib
+    - lib/girepository-1.0/Gdk-4*.typelib
+    - include/gtk-4.0/
+    - share/gtk-4.0/
+    - share/glib-2.0/schemas/org.gtk.*.xml
+    - share/gir-1.0/Gtk-4*.gir
+    - share/gir-1.0/Gdk-4*.gir
+    - bin/gtk4-*
+  cmake_packages: []
+  pkg_config:
+    - gtk4
+    - gtk4-unix-print
+    - gtk4-wayland
+    - gtk4-x11
+
+abi:
+  cxx_std: 17
+  link: shared
+
+notes:
+  - title: "System dependencies required (POSIX)"
+    platforms: [linux, macos]
+    description: >-
+      GTK 4 depends on glib, cairo, pango, harfbuzz, gdk-pixbuf, and
+      libepoxy.  On Linux install libglib2.0-dev, libcairo2-dev,
+      libpango1.0-dev, libharfbuzz-dev, libgdk-pixbuf-2.0-dev,
+      libepoxy-dev via apt (or the equivalent RPM group).
+      On macOS: `brew install glib cairo pango harfbuzz gdk-pixbuf
+      libepoxy`.  These are picked up via pkg-config.
+  - title: "Windows via gvsbuild"
+    platforms: [windows]
+    description: >-
+      The Windows build uses gvsbuild
+      (https://github.com/wingtk/gvsbuild) to build the entire GTK 4
+      stack under MSVC.  gvsbuild is installed via pipx if missing
+      and the resulting binaries are staged into <prefix>.  Expect a
+      1-2 hour build the first time.
+  - title: "Experimental / initial recipe"
+    platforms: [linux, macos, windows]
+    description: >-
+      This recipe is an initial scaffold and has not yet passed the
+      full BSD/wasm build matrix.  Downstream projects should treat
+      the GTK 4 API as available on linux/macos/windows only.

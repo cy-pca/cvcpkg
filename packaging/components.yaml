@@ -216,6 +216,36 @@ components:
       - { name: tiff, version: "^4.6" }
       - { name: zlib, version: "^1.3" }
 
+  gtk4:
+    description: "GTK 4 widget toolkit (experimental)"
+    upstream_packages: [gtk4]
+    platforms: [linux, macos, windows]
+    cmake_packages: []
+    dependencies: []
+
+  skia:
+    description: "Skia 2D graphics library (experimental; also builds for wasm)"
+    upstream_packages: [skia]
+    platforms: [linux, macos, windows]
+    cmake_packages:
+      - { name: Skia, targets: ["Skia::skia"] }
+    dependencies: []
+
+  slint:
+    description: "Slint declarative GUI toolkit (experimental; also builds for wasm)"
+    upstream_packages: [slint]
+    platforms: [linux, macos, windows]
+    cmake_packages:
+      - { name: Slint, targets: ["Slint::Slint"] }
+    dependencies: []
+
+  bazel:
+    description: "Bazel build tool (via Bazelisk) — host tool"
+    upstream_packages: [bazel]
+    platforms: [linux, macos, windows]
+    cmake_packages: []
+    dependencies: []
+
   # ── platform-specific ──────────────────────────────────────────
   pthreads4w:
     description: "pthreads4w (POSIX threads for Windows)"

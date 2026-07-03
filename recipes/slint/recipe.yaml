@@ -1,0 +1,91 @@
+schema_version: 1
+recipe:
+  name: slint
+  upstream_version: "1.13.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    Slint — a declarative GUI toolkit for Rust, C++ and JavaScript.
+    Slint compiles .slint UI descriptions to native code and renders
+    with a software or GPU backend on Linux/macOS/Windows, and via
+    WebGL/WebGPU on wasm.  This recipe builds the C++ bindings so
+    downstream C++ CMake projects can `find_package(Slint)`.
+  homepage: https://slint.dev/
+  license: (GPL-3.0-only OR LicenseRef-Slint-commercial OR LicenseRef-Slint-Royalty-free-1.2)
+  tags: [graphics, gui, wasm]
+
+source:
+  type: prebuilt
+  url: https://github.com/slint-ui/slint/archive/refs/tags/v1.13.0.tar.gz
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools:
+    - cmake
+    - ninja
+    - rust
+    - emsdk  # only referenced by the wasm entry, ignored otherwise
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: macos
+      script: build-wasm.sh
+
+package:
+  files:
+    - lib/libslint_cpp*
+    - lib/slint_cpp.*
+    - lib/cmake/Slint/
+    - include/slint/
+    - bin/slint-viewer*
+    - bin/slint-compiler*
+    - share/slint/
+  cmake_packages:
+    - { name: Slint, targets: ["Slint::Slint"] }
+
+abi:
+  cxx_std: 20
+
+notes:
+  - title: "Requires Rust toolchain"
+    platforms: [linux, macos, windows, wasm]
+    description: >-
+      Slint's C++ bindings are a thin C++ shim over a Rust core;
+      building requires a working cargo/rustc.  If the `rust`
+      host-tool recipe is not available, the build script falls
+      back to rustup-init and installs a per-prefix toolchain.
+  - title: "Wasm target"
+    platforms: [wasm]
+    description: >-
+      The wasm variant builds the Rust core with target
+      wasm32-unknown-emscripten and emits a slint_cpp.wasm/js pair
+      plus C++ headers for the CanvasKit-free renderer.
+  - title: "License selection"
+    platforms: [linux, macos, windows, wasm]
+    description: >-
+      Slint is triple-licensed (GPLv3, commercial, royalty-free).
+      The recipe does not select a license on the user's behalf —
+      downstream projects must ensure they comply with the license
+      that applies to their use case.
+  - title: "Experimental / initial recipe"
+    platforms: [linux, macos, windows, wasm]
+    description: >-
+      Initial scaffold; only the linux/wasm variants have been
+      exercised locally.
