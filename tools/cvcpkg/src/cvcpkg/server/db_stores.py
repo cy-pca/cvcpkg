@@ -798,34 +798,36 @@ class DbPackageIndex:
             total_size = int(size_res.scalar() or 0)
 
             facets: dict[str, list[tuple[str, int]]] = {}
+            # Facet counts are number of distinct package names per bucket, not
+            # bundle counts — a package built for many arch/link/build_type
+            # combos should still count as one within a platform bucket.
+            name_count = sa_func.count(distinct(PackageRow.name))
             for key, col in facet_cols.items():
-                q = select(col, sa_func.count(PackageRow.id))
+                q = select(col, name_count)
                 for f in base_filters:
                     q = q.where(f)
-                q = (
-                    q.group_by(col)
-                    .order_by(sa_func.count(PackageRow.id).desc(), col.asc())
-                    .limit(max_buckets)
-                )
+                q = q.group_by(col).order_by(name_count.desc(), col.asc()).limit(max_buckets)
                 rows = await session.execute(q)
                 facets[key] = [
                     (str(val or ""), int(cnt)) for val, cnt in rows.all() if (val or "") != ""
                 ]
 
-            # Tags is a comma-separated string column; aggregate in Python
-            tag_q = select(PackageRow.tags)
+            # Tags is a comma-separated string column; aggregate in Python.
+            # Count distinct package names per tag, not bundle rows.
+            tag_q = select(PackageRow.name, PackageRow.tags)
             for f in base_filters:
                 tag_q = tag_q.where(f)
             tag_rows = await session.execute(tag_q)
-            tag_counts: dict[str, int] = {}
-            for (raw,) in tag_rows.all():
+            tag_names: dict[str, set[str]] = {}
+            for pkg_name, raw in tag_rows.all():
                 if not raw:
                     continue
                 for tag in raw.split(","):
                     t = tag.strip()
                     if not t:
                         continue
-                    tag_counts[t] = tag_counts.get(t, 0) + 1
+                    tag_names.setdefault(t, set()).add(pkg_name)
+            tag_counts = {t: len(names) for t, names in tag_names.items()}
             facets["tags"] = sorted(tag_counts.items(), key=lambda kv: (-kv[1], kv[0]))[
                 :max_buckets
             ]
