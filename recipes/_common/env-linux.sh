@@ -51,7 +51,7 @@ cvc_cmake_build() {
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DCMAKE_CXX_STANDARD=17 \
         -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-        -DCMAKE_INSTALL_RPATH=\$ORIGIN \
+        -DCMAKE_INSTALL_RPATH="\$ORIGIN;\$ORIGIN/../lib" \
         -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
         "$@"
     cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"

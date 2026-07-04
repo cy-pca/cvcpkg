@@ -46,6 +46,8 @@ cvc_cmake_build() {
         -DCMAKE_CXX_STANDARD=17 \
         -DCMAKE_OSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET}" \
         -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+        -DCMAKE_INSTALL_RPATH="@loader_path;@loader_path/../lib" \
+        -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
         "$@"
     cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
     cmake --install "${CVC_BUILD_DIR}"
