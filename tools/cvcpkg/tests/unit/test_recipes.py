@@ -350,10 +350,16 @@ class TestRecipeEndpoints:
         assert data["version"] == "1.0"
         assert data["bundle_size"] > 0
 
-    def test_upload_requires_admin(self, db_server_env):
+    def test_upload_forbidden_for_reader(self, db_server_env):
+        # Upload requires publisher or admin; reader is rejected.
+        client, admin_tok, pub_tok, reader_tok, _ = db_server_env
+        resp = self._upload(client, reader_tok)
+        assert resp.status_code == 403
+
+    def test_upload_allowed_for_publisher(self, db_server_env):
         client, admin_tok, pub_tok, reader_tok, _ = db_server_env
         resp = self._upload(client, pub_tok)
-        assert resp.status_code == 403
+        assert resp.status_code == 200, resp.text
 
     def test_upload_invalid_name(self, db_server_env):
         client, admin_tok, pub_tok, reader_tok, _ = db_server_env

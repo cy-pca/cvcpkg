@@ -655,7 +655,9 @@ class TestBuilderEndpoints:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "busy"
-        assert data["current_jobs"] == 1
+        # current_jobs is always reconciled from the DB (ignoring the
+        # client-reported value); with no dispatched jobs it is 0.
+        assert data["current_jobs"] == 0
 
     def test_heartbeat_not_found(self, db_server_env):
         client, admin_tok, pub_tok, _ = db_server_env
