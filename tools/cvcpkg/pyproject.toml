@@ -27,6 +27,7 @@ classifiers = [
 packages = [{ include = "cvcpkg", from = "src" }]
 include = [
     { path = "src/cvcpkg/recipes", format = ["sdist", "wheel"] },
+    { path = "backend.py", format = "sdist" },
 ]
 
 [tool.poetry.dependencies]
