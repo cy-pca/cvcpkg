@@ -139,6 +139,20 @@ class TestExtractBundle:
         extract_bundle(archive, prefix)
         assert (prefix / "lib" / "libz.so").exists()
 
+    def test_sniff_zip_under_tar_zst_name(self, tmp_path):
+        """Zip stored under a .tar.zst filename must still extract (magic sniff)."""
+        archive = self._make_zip(tmp_path, name="bundle.tar.zst")
+        prefix = tmp_path / "prefix"
+        extract_bundle(archive, prefix)
+        assert (prefix / "lib" / "libz.so").exists()
+
+    def test_sniff_gzip_under_tar_zst_name(self, tmp_path):
+        """Gzip tarball stored under a .tar.zst filename must still extract."""
+        archive = self._make_tar_gz(tmp_path, name="bundle.tar.zst")
+        prefix = tmp_path / "prefix"
+        extract_bundle(archive, prefix)
+        assert (prefix / "lib" / "libz.so").exists()
+
 
 # ── _archive_filename ──────────────────────────────────────────
 

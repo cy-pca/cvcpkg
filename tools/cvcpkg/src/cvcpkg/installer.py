@@ -172,13 +172,46 @@ _EXTRACTORS: list[tuple[tuple[str, ...], callable]] = [
 ]
 
 
+def _sniff_extractor(archive: Path):
+    """Sniff *archive*'s magic bytes and return the matching extractor.
+
+    Preferred over filename-extension dispatch because some publishers
+    upload archives with a mismatched suffix (e.g. a Windows zip stored
+    under a .tar.zst name).
+    """
+    try:
+        with open(archive, "rb") as fh:
+            head = fh.read(8)
+    except OSError:
+        return None
+    if head[:2] == b"\x1f\x8b":
+        return _extract_tar  # gzip (tarfile handles it)
+    if head[:3] == b"BZh":
+        return _extract_tar  # bzip2
+    if head[:6] == b"\xfd7zXZ\x00":
+        return _extract_tar  # xz
+    if head[:4] == b"\x50\x4b\x03\x04" or head[:4] == b"\x50\x4b\x05\x06":
+        return _extract_zip  # zip (also handles empty-zip end marker)
+    if head[:6] == b"\x37\x7a\xbc\xaf\x27\x1c":
+        return _extract_7z
+    # Plain ustar has "ustar" at offset 257; too deep to sniff from 8B.
+    return None
+
+
 def extract_bundle(archive: Path, prefix: Path) -> None:
     """Extract *archive* into *prefix*, merging into the existing tree.
 
     Supported formats: .tar.gz, .tgz, .tar.bz2, .tar.xz, .tar.zst,
     .tar, .zip, .7z.  New formats can be added to ``_EXTRACTORS``.
+
+    Dispatch prefers magic-byte sniffing over the filename suffix so
+    that archives stored under a mislabeled extension still install.
     """
     prefix.mkdir(parents=True, exist_ok=True)
+    sniffed = _sniff_extractor(archive)
+    if sniffed is not None:
+        sniffed(archive, prefix)
+        return
     name = archive.name.lower()
     for suffixes, extractor in _EXTRACTORS:
         if any(name.endswith(s) for s in suffixes):
