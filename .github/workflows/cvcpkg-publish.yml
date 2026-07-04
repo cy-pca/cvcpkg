@@ -150,8 +150,11 @@ jobs:
           print('catalog revision:', d.get('revision'),
                 'bundles:', len(d['bundles']))
           "
-          # CLI probes against the live site.
-          cvcpkg list --available | head -20
+          # CLI probes against the live site.  Capture full output first
+          # so a SIGPIPE from `head` closing early does not fail cvcpkg
+          # under `set -o pipefail`.
+          cvcpkg list --available > cvcpkg-list.txt
+          head -20 cvcpkg-list.txt
           cvcpkg info zlib
 
       - name: Install a real package and verify it
