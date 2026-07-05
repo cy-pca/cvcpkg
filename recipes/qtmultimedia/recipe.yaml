@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: qtmultimedia
   upstream_version: "6.8.2"
-  cvc_revision: 4
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -20,9 +20,10 @@ source:
 patches: []
 
 depends:
-  build:
-    - qt6
-    - qtshadertools
+  build: []
+  runtime:
+    - {name: qt6, version: ">=6.8"}
+    - {name: qtshadertools, version: ">=6.8"}
     # FFmpeg is Qt Multimedia's default backend on Qt 6.8 (all desktop
     # platforms).  PipeWire and GStreamer are additional Linux backends.
     - name: ffmpeg
@@ -35,7 +36,6 @@ depends:
     # unlocks the FFmpeg media backend there (Qt gates it on PulseAudio).
     - name: libpulse
       platforms: [linux]
-  runtime: []
   host_tools:
     - cmake
     - ninja
