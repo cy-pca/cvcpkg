@@ -603,6 +603,10 @@ async def _ws_broadcast(msg: dict) -> None:
 
 _SCHEDULER_INTERVAL = int(os.environ.get("CVCPKG_SCHEDULER_INTERVAL", "5"))
 _DEFAULT_BUILD_TIMEOUT = int(os.environ.get("CVCPKG_BUILD_TIMEOUT", "7200"))
+# How long a pending job may wait with no registered builder able to serve
+# its platform/arch before it is reaped as "unschedulable".  Gives an
+# ephemeral / just-restarted builder time to register after submission.
+_UNSCHEDULABLE_TTL = int(os.environ.get("CVCPKG_UNSCHEDULABLE_TTL", "1800"))
 
 # Log retention: 0 means disabled (no automatic GC)
 _LOG_RETENTION_DAYS = int(os.environ.get("CVCPKG_LOG_RETENTION_DAYS", "0"))
@@ -670,6 +674,44 @@ async def _build_scheduler_loop() -> None:
                         "recipe_name": job.recipe_name,
                         "platform": job.platform,
                         "arch": job.arch,
+                    },
+                    org_slug=job.org_slug,
+                )
+
+            # 2b. Reap jobs that no registered builder can ever serve.
+            #     A job whose platform/arch is covered by no registered
+            #     builder (online or offline, including cross-build
+            #     targets) would sit "pending" forever, so after a grace
+            #     period we mark it "unschedulable" and cancel its
+            #     dependents.  This is derived purely from builders
+            #     registered with this server — the server has no other
+            #     notion of what can be built.
+            all_builders = await _db_builders.list_builders()
+            schedulable_targets: set[tuple[str, str]] = set()
+            schedulable_platforms: set[str] = set()
+            for b in all_builders:
+                schedulable_targets.add((b.platform, b.arch))
+                for cp in b.capabilities.get("cross_platforms", []) or []:
+                    if isinstance(cp, dict):
+                        schedulable_targets.add((cp["platform"], cp["arch"]))
+                    elif isinstance(cp, str):
+                        schedulable_platforms.add(cp)
+            unschedulable = await _db_build_jobs.reap_unschedulable(
+                schedulable_targets,
+                schedulable_platforms,
+                min_age_seconds=_UNSCHEDULABLE_TTL,
+            )
+            for job in unschedulable:
+                await _db_build_jobs.cancel_downstream(job.id)
+                await emit_webhook_event(
+                    "build.unschedulable",
+                    {
+                        "job_id": job.id,
+                        "recipe_name": job.recipe_name,
+                        "platform": job.platform,
+                        "arch": job.arch,
+                        "error_message": f"no registered builder for {job.platform}/{job.arch}",
+                        "reason": "no_registered_builder",
                     },
                     org_slug=job.org_slug,
                 )

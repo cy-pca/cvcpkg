@@ -1,0 +1,76 @@
+schema_version: 1
+recipe:
+  name: qtmultimedia
+  upstream_version: "6.8.2"
+  cvc_revision: 4
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "Qt 6 Multimedia — multimedia playback and capture support."
+  homepage: https://www.qt.io/
+  license: LGPL-3.0-only
+  tags: [multimedia]
+
+source:
+  type: tarball
+  url: https://download.qt.io/archive/qt/6.8/6.8.2/submodules/qtmultimedia-everywhere-src-6.8.2.tar.xz
+  sha256: "34f561fdc07b158bcc4ad040b596fc6086c48908060e854b473b557e4feb1569"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - qt6
+    - qtshadertools
+    # FFmpeg is Qt Multimedia's default backend on Qt 6.8 (all desktop
+    # platforms).  PipeWire and GStreamer are additional Linux backends.
+    - name: ffmpeg
+      platforms: [linux, macos]
+    - name: pipewire
+      platforms: [linux]
+    - name: gstreamer
+      platforms: [linux, macos]
+    # libpulse gives Qt a low-level audio backend on Linux, which is what
+    # unlocks the FFmpeg media backend there (Qt gates it on PulseAudio).
+    - name: libpulse
+      platforms: [linux]
+  runtime: []
+  host_tools:
+    - cmake
+    - ninja
+    - perl
+    - python3
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libQt6Multimedia*
+    - lib/Qt6Multimedia*
+    - lib/cmake/Qt6Multimedia*/
+    - lib/pkgconfig/Qt6Multimedia*
+    - include/QtMultimedia/
+    - include/QtMultimediaWidgets/
+    - plugins/multimedia/
+    - plugins/mediaservice/
+    - plugins/audio/
+  cmake_packages:
+    - {
+        name: Qt6Multimedia,
+        targets: ["Qt6::Multimedia", "Qt6::MultimediaWidgets"],
+      }
+
+abi:
+  cxx_std: 17

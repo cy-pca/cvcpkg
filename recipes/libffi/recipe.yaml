@@ -1,0 +1,62 @@
+schema_version: 1
+recipe:
+  name: libffi
+  upstream_version: "3.4.6"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://sourceware.org/libffi/
+  license: MIT
+  tags: [libraries]
+  description: >-
+    libffi — a portable foreign function interface library.  Lets code
+    call functions whose signatures are only known at runtime.  Required
+    by GLib (and therefore GStreamer).
+
+source:
+  type: tarball
+  url: https://github.com/libffi/libffi/releases/download/v3.4.6/libffi-3.4.6.tar.gz
+  sha256: "b0dea9df23c863a7a50e825440f3ebffabd65df1497108e5d437747843895a4e"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libffi*
+    - lib/pkgconfig/libffi*
+    - include/ffi*.h
+  pkg_config:
+    - libffi
+
+abi:
+  cxx_std: 17

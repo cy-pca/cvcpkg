@@ -1,0 +1,68 @@
+schema_version: 1
+recipe:
+  name: libsndfile
+  upstream_version: "1.2.2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://libsndfile.github.io/libsndfile/
+  license: LGPL-2.1-or-later
+  tags: [multimedia, libraries]
+  description: >-
+    libsndfile — a C library for reading and writing sampled-sound files
+    (WAV, AIFF, AU, etc.).  Built lean (no external FLAC/Ogg/Vorbis/Opus
+    codecs) as a required dependency of PulseAudio's client library.
+
+source:
+  type: tarball
+  url: https://github.com/libsndfile/libsndfile/releases/download/1.2.2/libsndfile-1.2.2.tar.xz
+  sha256: "3799ca9924d3125038880367bf1468e53a1b7e3686a934f098b7e1d286cdb80e"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libsndfile*
+    - lib/pkgconfig/sndfile*
+    - lib/cmake/SndFile/
+    - include/sndfile.h
+    - include/sndfile.hh
+  cmake_packages:
+    - { name: SndFile, targets: ["SndFile::sndfile"] }
+  pkg_config:
+    - sndfile
+
+abi:
+  cxx_std: 17

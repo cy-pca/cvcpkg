@@ -1,0 +1,58 @@
+schema_version: 1
+recipe:
+  name: pipewire
+  upstream_version: "1.2.7"
+  cvc_revision: 2
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pipewire.org/
+  license: MIT
+  tags: [multimedia]
+  description: >-
+    PipeWire — a server and user-space API to handle multimedia pipelines
+    on Linux (audio/video capture and playback).  Built as a lean core
+    (libpipewire-0.3 + SPA) with the heavy optional backends
+    (ALSA/JACK/BlueZ/systemd/GStreamer) disabled, providing the
+    libpipewire client library Qt Multimedia can target on Linux.
+
+source:
+  type: tarball
+  url: https://gitlab.freedesktop.org/pipewire/pipewire/-/archive/1.2.7/pipewire-1.2.7.tar.gz
+  sha256: "e75568ed18bcbe75e9779af57cb9cc256fd7ebfaadc12bb347a0717055d1d3a9"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools:
+    - meson
+    - ninja
+    - pkg-config
+    - python3
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libpipewire-0.3*
+    - lib/libspa-0.2*
+    - lib/pipewire-0.3/
+    - lib/spa-0.2/
+    - lib/pkgconfig/libpipewire*
+    - lib/pkgconfig/libspa*
+    - include/pipewire-0.3/
+    - include/spa-0.2/
+  pkg_config:
+    - libpipewire-0.3
+    - libspa-0.2
+
+abi:
+  cxx_std: 17

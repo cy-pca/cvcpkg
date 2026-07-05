@@ -686,6 +686,7 @@ class BuildJobStatus(str, Enum):
     cancelled = "cancelled"
     timed_out = "timed_out"
     paused = "paused"
+    unschedulable = "unschedulable"
 
 
 class BuildJobInfo(BaseModel):

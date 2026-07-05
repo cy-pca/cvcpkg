@@ -2536,6 +2536,7 @@ class DbBuildJobStore:
             BuildJobStatus.failed,
             BuildJobStatus.cancelled,
             BuildJobStatus.timed_out,
+            BuildJobStatus.unschedulable,
         }
     )
 
@@ -2569,11 +2570,13 @@ class DbBuildJobStore:
             total = len(rows)
             succeeded = sum(1 for r in rows if r.status == BuildJobStatus.succeeded)
             failed = sum(1 for r in rows if r.status == BuildJobStatus.failed)
+            unschedulable = sum(1 for r in rows if r.status == BuildJobStatus.unschedulable)
             return {
                 "dag_id": dag_id,
                 "total": total,
                 "succeeded": succeeded,
                 "failed": failed,
+                "unschedulable": unschedulable,
             }
 
     async def claim(self, job_id: int, builder_id: int) -> BuildJobInfo | None:
@@ -2743,6 +2746,58 @@ class DbBuildJobStore:
                     row.error_message = f"exceeded {timeout}s timeout"
                     dep_ids = await self._load_dep_ids(session, row.id)
                     reaped.append(self._row_to_info(row, dep_ids))
+            return reaped
+
+    async def reap_unschedulable(
+        self,
+        schedulable_targets: set[tuple[str, str]],
+        schedulable_platforms: set[str],
+        *,
+        min_age_seconds: int,
+    ) -> list[BuildJobInfo]:
+        """Mark long-pending jobs that no registered builder can serve.
+
+        A job is *unschedulable* when its (platform, arch) is covered by no
+        registered builder — neither by an exact ``platform``/``arch`` match
+        nor by a platform-only cross-build capability — and it has been
+        pending for at least *min_age_seconds*.  Such jobs would otherwise
+        sit in ``pending`` forever, since no builder will ever claim them.
+
+        ``schedulable_targets`` is the set of exact ``(platform, arch)``
+        pairs a registered builder advertises; ``schedulable_platforms`` is
+        the set of platforms advertised by legacy platform-only cross-build
+        targets (any arch).  Both are derived purely from builders
+        registered with this server — the server has no other notion of
+        what can be built.
+
+        Returns the jobs that were reaped so the caller can cancel their
+        downstream dependents and emit events.
+        """
+        now = datetime.datetime.now(datetime.timezone.utc)
+        cutoff = now - datetime.timedelta(seconds=min_age_seconds)
+        async with get_session() as session:
+            q = select(BuildJobRow).where(
+                BuildJobRow.status == BuildJobStatus.pending,
+                BuildJobRow.submitted_at.isnot(None),
+            )
+            rows = (await session.execute(q)).scalars().all()
+            reaped: list[BuildJobInfo] = []
+            for row in rows:
+                submitted = row.submitted_at
+                # SQLite returns naive datetimes; ensure UTC-aware
+                if submitted.tzinfo is None:
+                    submitted = submitted.replace(tzinfo=datetime.timezone.utc)
+                if submitted > cutoff:
+                    continue  # still within the grace period
+                if (row.platform, row.arch) in schedulable_targets:
+                    continue
+                if row.platform in schedulable_platforms:
+                    continue
+                row.status = BuildJobStatus.unschedulable
+                row.finished_at = now
+                row.error_message = f"no registered builder for {row.platform}/{row.arch}"
+                dep_ids = await self._load_dep_ids(session, row.id)
+                reaped.append(self._row_to_info(row, dep_ids))
             return reaped
 
     async def cancel_downstream(self, failed_job_id: int) -> int:

@@ -98,6 +98,78 @@ class TestDbBuildJobStore:
 
         self._run(_test())
 
+    def test_reap_unschedulable_marks_orphans(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            # No builder serves wasm/wasm32; one does serve linux/x86_64.
+            orphan = await store.create(
+                recipe_name="zlib",
+                platform="wasm",
+                arch="wasm32",
+                submitted_by="test-admin",
+                recipe_version="1.3.1",
+            )
+            served = await store.create(
+                recipe_name="zlib",
+                platform="linux",
+                arch="x86_64",
+                submitted_by="test-admin",
+                recipe_version="1.3.1",
+            )
+            # min_age_seconds=0 → every pending job is past the grace period.
+            reaped = await store.reap_unschedulable({("linux", "x86_64")}, set(), min_age_seconds=0)
+            reaped_ids = {j.id for j in reaped}
+            assert orphan.id in reaped_ids
+            assert served.id not in reaped_ids
+
+            o = await store.get(orphan.id)
+            s = await store.get(served.id)
+            assert o.status == BuildJobStatus.unschedulable
+            assert "no registered builder" in (o.error_message or "")
+            assert s.status == BuildJobStatus.pending
+
+        self._run(_test())
+
+    def test_reap_unschedulable_respects_grace_period(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            orphan = await store.create(
+                recipe_name="zlib",
+                platform="wasm",
+                arch="wasm32",
+                submitted_by="test-admin",
+                recipe_version="1.3.1",
+            )
+            # Just-submitted job is still within a long grace period.
+            reaped = await store.reap_unschedulable(set(), set(), min_age_seconds=3600)
+            assert reaped == []
+            assert (await store.get(orphan.id)).status == BuildJobStatus.pending
+
+        self._run(_test())
+
+    def test_reap_unschedulable_platform_wildcard(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            orphan = await store.create(
+                recipe_name="zlib",
+                platform="wasm",
+                arch="wasm32",
+                submitted_by="test-admin",
+                recipe_version="1.3.1",
+            )
+            # A legacy platform-only cross target covers wasm for any arch.
+            reaped = await store.reap_unschedulable(set(), {"wasm"}, min_age_seconds=0)
+            assert reaped == []
+            assert (await store.get(orphan.id)).status == BuildJobStatus.pending
+
+        self._run(_test())
+
     def test_get_not_found(self):
         from cvcpkg.server.db_stores import DbBuildJobStore
 

@@ -1,0 +1,60 @@
+schema_version: 1
+recipe:
+  name: nasm
+  upstream_version: "2.16.03"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.nasm.us/
+  license: BSD-2-Clause
+  tags: [tools, build-system]
+  description: >-
+    NASM — the Netwide Assembler, an 80x86 and x86-64 assembler.
+    Required as a host tool to build FFmpeg's hand-written x86 assembly
+    optimizations (libavcodec/libswscale SIMD kernels).
+
+source:
+  type: tarball
+  url: https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/nasm-2.16.03.tar.xz
+  sha256: "1412a1c760bbd05db026b6c0d1657affd6631cd0a63cddb6f73cc6d4aa616148"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2"
+
+package:
+  files:
+    - bin/nasm*
+    - bin/ndisasm*
+
+abi:
+  cxx_std: 17

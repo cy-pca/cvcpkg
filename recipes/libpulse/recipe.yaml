@@ -1,0 +1,57 @@
+schema_version: 1
+recipe:
+  name: libpulse
+  upstream_version: "17.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.freedesktop.org/wiki/Software/PulseAudio/
+  license: LGPL-2.1-or-later
+  tags: [multimedia]
+  description: >-
+    libpulse — the PulseAudio client library.  Built from PulseAudio with
+    the daemon and all server-side modules disabled (client only), so it
+    provides just libpulse / libpulse-simple.  Enables Qt Multimedia's
+    low-level PulseAudio audio backend on Linux, which in turn unlocks the
+    Qt FFmpeg media backend there.
+
+source:
+  type: tarball
+  url: https://www.freedesktop.org/software/pulseaudio/releases/pulseaudio-17.0.tar.xz
+  sha256: "053794d6671a3e397d849e478a80b82a63cb9d8ca296bd35b73317bb5ceb87b5"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: libsndfile
+      version: "^1.2"
+  host_tools:
+    - meson
+    - ninja
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libpulse.so*
+    - lib/libpulse-simple.so*
+    - lib/pulseaudio/
+    - lib/pkgconfig/libpulse*
+    - lib/cmake/PulseAudio/
+    - include/pulse/
+  pkg_config:
+    - libpulse
+    - libpulse-simple
+
+abi:
+  cxx_std: 17

@@ -4147,6 +4147,118 @@ class TestBuildsSubmitDagCLI:
         out = capsys.readouterr().out
         assert "dag-001" in out.lower() or "2 jobs" in out
 
+    def test_submit_dag_skips_unschedulable_combos(self, capsys, monkeypatch):
+        """Combos no registered builder can serve are skipped, not submitted."""
+        posted: list[str] = []
+
+        class FakeResp:
+            status_code = 200
+            text = ""
+
+            def __init__(self, payload):
+                self._payload = payload
+
+            def json(self):
+                return self._payload
+
+            def raise_for_status(self):
+                pass
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                # Builder registry advertises only linux/x86_64.
+                return FakeResp(
+                    {"builders": [{"platform": "linux", "arch": "x86_64", "capabilities": {}}]}
+                )
+
+            def post(self, url, **kw):
+                posted.append(url)
+                return FakeResp({"dag_id": "dag-x", "total": 1, "jobs": []})
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(
+            [
+                "builds",
+                "submit-dag",
+                "--platform",
+                "freebsd,netbsd",
+                "--arch",
+                "arm64",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+                "nasm",
+            ]
+        )
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "Skipping freebsd/arm64" in out
+        assert "Skipping netbsd/arm64" in out
+        # No builder can serve any combo → nothing is submitted.
+        assert posted == []
+
+    def test_submit_dag_allow_unschedulable_skips_builder_check(self, capsys, monkeypatch):
+        """--allow-unschedulable bypasses the builder registry lookup."""
+        calls = {"get": 0}
+
+        class FakeResp:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {"dag_id": "dag-y", "total": 0, "jobs": []}
+
+            def raise_for_status(self):
+                pass
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                calls["get"] += 1
+                return FakeResp()
+
+            def post(self, url, **kw):
+                return FakeResp()
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(
+            [
+                "builds",
+                "submit-dag",
+                "--platform",
+                "freebsd",
+                "--arch",
+                "arm64",
+                "--allow-unschedulable",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+                "nasm",
+            ]
+        )
+        assert ret == 0
+        # Gate disabled → builder registry is never consulted.
+        assert calls["get"] == 0
+
 
 class TestBuildsPurgeCLI:
     """Test builds purge command with mocked HTTP."""

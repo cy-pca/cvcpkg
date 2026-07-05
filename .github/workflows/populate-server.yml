@@ -106,7 +106,7 @@ jobs:
           echo "dag_id=$DAG_ID" >> "$GITHUB_OUTPUT"
 
           cvcpkg builds submit-dag \
-            --platform "${{ inputs.platforms }}" \
+            --platform "$(echo '${{ inputs.platforms }}' | tr ',' '\n' | grep -vx macos | paste -sd, || true)" \
             --arch "${{ inputs.arch }}" \
             --config "${{ inputs.config }}" \
             --link "${{ inputs.link }}" \
