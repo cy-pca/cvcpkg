@@ -239,6 +239,17 @@ def builder_run(
     )
     cache_dir.mkdir(parents=True, exist_ok=True)
 
+    # Per-recipe locks serialize concurrent _fetch_recipe() calls on the same
+    # name.  Without this, the main job thread and the recipe.push websocket
+    # handler thread can both rmtree + mkdir + extractall the same directory,
+    # producing "recipe.yaml not found" mid-extraction.
+    _recipe_fetch_locks: dict[str, threading.Lock] = {}
+    _recipe_fetch_locks_guard = threading.Lock()
+
+    def _get_recipe_lock(name: str) -> threading.Lock:
+        with _recipe_fetch_locks_guard:
+            return _recipe_fetch_locks.setdefault(name, threading.Lock())
+
     # ── Daemonize ───────────────────────────────────────────
     import os as _os
 
@@ -349,45 +360,50 @@ def builder_run(
         are cached in *cache_dir* so repeated builds of the same
         recipe don't re-download.
         """
-        bundle_path = cache_dir / f"{recipe_name}.tar.gz"
+        # Serialize per recipe name — the job-execution thread and the
+        # recipe.push websocket handler thread can otherwise concurrently
+        # rmtree+mkdir+extractall the same directory, and Recipe.load()
+        # then observes a mid-extraction state ("recipe.yaml not found").
+        with _get_recipe_lock(recipe_name):
+            bundle_path = cache_dir / f"{recipe_name}.tar.gz"
 
-        # Always re-download (server may have a newer version).
-        # A future optimisation can compare recipe_hash.
-        url = f"{base}/v1/recipes/{recipe_name}"
-        params: dict[str, str] = {}
-        if org_slug:
-            params["org_slug"] = org_slug
-        with httpx.Client(timeout=120) as client:
-            resp = client.get(url, headers=headers, params=params)
-        if resp.status_code >= 400:
-            raise RuntimeError(f"failed to download recipe '{recipe_name}': {resp.status_code}")
-        # cache_dir may have been reaped (e.g. OpenBSD /tmp cleanup) between
-        # builder startup and this call; recreate before writing.
-        bundle_path.parent.mkdir(parents=True, exist_ok=True)
-        bundle_path.write_bytes(resp.content)
+            # Always re-download (server may have a newer version).
+            # A future optimisation can compare recipe_hash.
+            url = f"{base}/v1/recipes/{recipe_name}"
+            params: dict[str, str] = {}
+            if org_slug:
+                params["org_slug"] = org_slug
+            with httpx.Client(timeout=120) as client:
+                resp = client.get(url, headers=headers, params=params)
+            if resp.status_code >= 400:
+                raise RuntimeError(f"failed to download recipe '{recipe_name}': {resp.status_code}")
+            # cache_dir may have been reaped (e.g. OpenBSD /tmp cleanup) between
+            # builder startup and this call; recreate before writing.
+            bundle_path.parent.mkdir(parents=True, exist_ok=True)
+            bundle_path.write_bytes(resp.content)
 
-        # Extract
-        extract_dir = cache_dir / recipe_name
-        if extract_dir.exists():
-            shutil.rmtree(extract_dir, ignore_errors=True)
-        if extract_dir.exists():
-            # rmtree left remnants — force remove
-            import subprocess
+            # Extract
+            extract_dir = cache_dir / recipe_name
+            if extract_dir.exists():
+                shutil.rmtree(extract_dir, ignore_errors=True)
+            if extract_dir.exists():
+                # rmtree left remnants — force remove
+                import subprocess
 
-            subprocess.run(["rm", "-rf", str(extract_dir)], check=False)
-        extract_dir.mkdir(parents=True, exist_ok=True)
-        with tarfile.open(bundle_path, "r:gz") as tar:
-            tar.extractall(path=extract_dir)  # noqa: S202
+                subprocess.run(["rm", "-rf", str(extract_dir)], check=False)
+            extract_dir.mkdir(parents=True, exist_ok=True)
+            with tarfile.open(bundle_path, "r:gz") as tar:
+                tar.extractall(path=extract_dir)  # noqa: S202
 
-        # recipe_push stores recipe files under ``<name>/`` inside
-        # the tar (with ``_common/`` alongside).  If that nested dir
-        # exists, return it so that ``../_common`` resolves correctly
-        # from build scripts.  Fall back to the flat layout for
-        # bundles created before this convention.
-        nested = extract_dir / recipe_name
-        if nested.is_dir() and (nested / "recipe.yaml").is_file():
-            return nested
-        return extract_dir
+            # recipe_push stores recipe files under ``<name>/`` inside
+            # the tar (with ``_common/`` alongside).  If that nested dir
+            # exists, return it so that ``../_common`` resolves correctly
+            # from build scripts.  Fall back to the flat layout for
+            # bundles created before this convention.
+            nested = extract_dir / recipe_name
+            if nested.is_dir() and (nested / "recipe.yaml").is_file():
+                return nested
+            return extract_dir
 
     # Shared HTTP client for log streaming (created once, avoids
     # connection overhead on every chunk).
