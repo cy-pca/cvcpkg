@@ -123,3 +123,21 @@ jobs:
           # submit-dag creates one DAG per platform/arch/config/link combo.
           DAG_PREFIX="${{ steps.submit.outputs.dag_id }}"
           cvcpkg builds follow-dag "$DAG_PREFIX"
+
+  # macOS has no persistent remote-builder service, so its bundles are
+  # built via the macos-build.yml workflow on ephemeral GitHub-hosted
+  # macOS runners.  Kick it off automatically when 'macos' appears in
+  # the platforms input, so 'populate-server' actually populates macOS
+  # (previously users had to remember to dispatch macos-build.yml by
+  # hand — the platforms input silently dropped 'macos' otherwise).
+  populate-macos:
+    name: Build & publish macOS packages
+    needs: populate
+    if: contains(inputs.platforms, 'macos') && contains(fromJSON('["release","debug"]'), inputs.config) && contains(fromJSON('["shared","static"]'), inputs.link)
+    uses: ./.github/workflows/macos-build.yml
+    with:
+      config: ${{ inputs.config }}
+      link: ${{ inputs.link }}
+      server: ${{ inputs.server }}
+      shards: "4"
+    secrets: inherit
