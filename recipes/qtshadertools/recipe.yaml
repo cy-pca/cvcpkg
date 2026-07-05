@@ -1,0 +1,56 @@
+schema_version: 1
+recipe:
+  name: qtshadertools
+  upstream_version: "6.8.2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "Qt 6 ShaderTools — GLSL and SPIR-V shader processing utilities."
+  homepage: https://www.qt.io/
+  license: LGPL-3.0-only
+  tags: [graphics]
+
+source:
+  type: tarball
+  url: https://download.qt.io/archive/qt/6.8/6.8.2/submodules/qtshadertools-everywhere-src-6.8.2.tar.xz
+  sha256: "d1d5f90e8885fc70d63ac55a4ce4d9a2688562033a000bc4aff9320f5f551871"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - qt6
+  runtime: []
+  host_tools:
+    - cmake
+    - ninja
+    - perl
+    - python3
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libQt6ShaderTools*
+    - lib/Qt6ShaderTools*
+    - lib/cmake/Qt6ShaderTools*/
+    - lib/pkgconfig/Qt6ShaderTools*
+    - include/QtShaderTools/
+  cmake_packages:
+    - { name: Qt6ShaderTools, targets: ["Qt6::ShaderTools"] }
+
+abi:
+  cxx_std: 17

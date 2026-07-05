@@ -1,0 +1,86 @@
+schema_version: 1
+recipe:
+  name: ffmpeg
+  upstream_version: "7.1.2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://ffmpeg.org/
+  license: LGPL-2.1-or-later
+  tags: [multimedia]
+  description: >-
+    FFmpeg — a complete, cross-platform solution to record, convert and
+    stream audio and video.  Ships the libavformat, libavcodec,
+    libavutil, libavfilter, libswscale and libswresample shared
+    libraries that back Qt Multimedia's default FFmpeg backend.  Built
+    as LGPL (no --enable-gpl / --enable-nonfree) with only FFmpeg's
+    built-in native codecs, so it carries no external codec dependencies.
+
+source:
+  type: tarball
+  url: https://ffmpeg.org/releases/ffmpeg-7.1.2.tar.xz
+  sha256: "089bc60fb59d6aecc5d994ff530fd0dcb3ee39aa55867849a2bbc4e555f9c304"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: nasm
+      platforms: [linux, freebsd, openbsd, netbsd]
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libavformat*
+    - lib/libavcodec*
+    - lib/libavutil*
+    - lib/libavfilter*
+    - lib/libavdevice*
+    - lib/libswscale*
+    - lib/libswresample*
+    - lib/pkgconfig/libav*
+    - lib/pkgconfig/libsw*
+    - include/libavformat/
+    - include/libavcodec/
+    - include/libavutil/
+    - include/libavfilter/
+    - include/libavdevice/
+    - include/libswscale/
+    - include/libswresample/
+  pkg_config:
+    - libavformat
+    - libavcodec
+    - libavutil
+    - libavfilter
+    - libavdevice
+    - libswscale
+    - libswresample
+
+abi:
+  cxx_std: 17

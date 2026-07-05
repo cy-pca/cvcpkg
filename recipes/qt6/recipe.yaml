@@ -54,6 +54,11 @@ build:
       env:
         CXXFLAGS: "-O2 -std=c++17"
     - platform: wasm
+      host_platform: macos
+      script: build-wasm.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: wasm
       host_platform: windows
       script: build-wasm.ps1
 
@@ -74,16 +79,35 @@ package:
     - share/qt6/
     - mkspecs/wasm-emscripten/
   cmake_packages:
-    - { name: Qt6, targets: ["Qt6::Core", "Qt6::Gui", "Qt6::Widgets", "Qt6::OpenGL", "Qt6::OpenGLWidgets"] }
+    - {
+        name: Qt6,
+        targets:
+          [
+            "Qt6::Core",
+            "Qt6::Gui",
+            "Qt6::Widgets",
+            "Qt6::OpenGL",
+            "Qt6::OpenGLWidgets",
+          ],
+      }
 
 abi:
   cxx_std: 17
+
+toolchain:
+  emscripten:
+    min_version: "3.1.50"
+    recommended: "5.0"
+    description: "Emscripten SDK for C++ → WASM cross-compilation (provided by emsdk recipe)"
+  cc:
+    min_version: "any"
+    description: "Native C/C++17 compiler needed for host tools (moc, rcc, uic)"
 
 notes:
   - title: "WASM cross-compilation"
     platforms: [wasm]
     description: >-
-      The wasm platform entry cross-compiles Qt 6 for
+      The wasm platform entries cross-compile Qt 6 for
       wasm_singlethread using Emscripten.  A native host Qt is built
       first (for moc/rcc/uic), then the wasm target is built with
       threads disabled.  Output is static .a libraries only.
@@ -92,3 +116,14 @@ notes:
     description: >-
       The emsdk build dependency is only needed for wasm builds.
       Native platform builds (linux, macos, windows) ignore it.
+  - title: "Static-only build"
+    platforms: [wasm]
+    description: >-
+      WASM builds are always static.  The resulting .a libraries are linked
+      into the final .wasm binary by emcc at application link time.
+  - title: "Very long build time"
+    platforms: [wasm]
+    description: >-
+      A full Qt6 cross-compilation for WASM can take 30-60 minutes on a
+      fast machine.  The recipe builds only qtbase (Core, Gui, Widgets,
+      Network).

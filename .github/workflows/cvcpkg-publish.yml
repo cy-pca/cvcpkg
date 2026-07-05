@@ -10,40 +10,34 @@
 #                      exercise it against the live https://cvcpkg.org
 #                      registry (list, info, install, verify). A green
 #                      smoke run is the gate for any publish.
-#   4. publish-testpypi  — always publish to TestPyPI first
-#                          (skip-existing). Lets us verify the wheel is
-#                          installable through pip from a real index
-#                          before promoting.
-#   5. publish-pypi  — publish to PyPI. Runs only on STABLE tags
+#   4. publish-pypi  — publish to PyPI. Runs only on STABLE tags
 #                      (cvcpkg-vMAJOR.MINOR.PATCH with no pre-release
 #                      suffix). Pre-release tags (a/b/rc/dev) stop after
-#                      TestPyPI so we can iterate without burning version
-#                      numbers on PyPI.
+#                      the live smoke so we can iterate without burning
+#                      version numbers on PyPI.
 #
 # Prerequisites:
 #   - PyPI project "cvcpkg" configured for trusted publishing from
 #     transfix/libcvc-deps, workflow cvcpkg-publish.yml, environment
 #     "pypi". See:
 #     https://docs.pypi.org/trusted-publishers/adding-a-publisher/
-#   - TestPyPI project "cvcpkg" configured for trusted publishing,
-#     same repo/workflow, environment "testpypi".
 
 name: Publish cvcpkg to PyPI
 
 on:
   push:
     tags:
-      - 'cvcpkg-v[0-9]+.*'
+      - "cvcpkg-v[0-9]+.*"
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Branch or tag to build (workflow_dispatch only; will run smoke + TestPyPI but skip PyPI)'
+        description: "Branch or tag to build (workflow_dispatch only; runs smoke + PyPI for stable tags)"
         required: false
-        default: ''
+        default: ""
 
 permissions:
   contents: read
-  id-token: write  # Required for PyPI/TestPyPI trusted publishing (OIDC)
+  id-token: write # Required for PyPI trusted publishing (OIDC)
 
 jobs:
   test:
@@ -52,7 +46,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ['3.10', '3.11', '3.12', '3.13']
+        python: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v5
         with:
@@ -84,7 +78,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Install build tools
         run: pip install build twine
@@ -115,7 +109,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python: ['3.10', '3.12']
+        python: ["3.10", "3.12"]
     steps:
       - uses: actions/setup-python@v5
         with:
@@ -183,39 +177,6 @@ jobs:
           print('installed files (sample):')
           for c in contents[:5]: print(' ', c)
           " "$prefix"
-
-  publish-testpypi:
-    name: Publish to TestPyPI
-    runs-on: ubuntu-latest
-    needs: live-smoke
-    environment: testpypi
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: cvcpkg-dist
-          path: dist/
-
-      - uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: dist/
-          repository-url: https://test.pypi.org/legacy/
-          skip-existing: true
-
-      - name: Verify install from TestPyPI
-        run: |
-          set -eux
-          # Give TestPyPI's CDN a moment to surface the new version.
-          for i in 1 2 3 4 5; do
-            if pip install \
-                --index-url https://test.pypi.org/simple/ \
-                --extra-index-url https://pypi.org/simple/ \
-                --no-cache-dir \
-                cvcpkg; then
-              break
-            fi
-            sleep $((i * 10))
-          done
-          cvcpkg --version
 
   publish-pypi:
     name: Publish to PyPI

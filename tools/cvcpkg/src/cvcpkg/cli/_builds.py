@@ -708,6 +708,16 @@ def builds_submit(
     default=False,
     help="Ignore the auto-detected default recipes directory.",
 )
+@click.option(
+    "--allow-unschedulable",
+    is_flag=True,
+    default=False,
+    help=(
+        "Submit jobs even for platform/arch combos no registered builder "
+        "can serve.  By default such combos are skipped (the server would "
+        "otherwise only reap them as unschedulable)."
+    ),
+)
 @click.argument("recipe_names", nargs=-1, required=True)
 def builds_submit_dag(
     server: str,
@@ -721,6 +731,7 @@ def builds_submit_dag(
     wait: bool,
     recipes_dirs: tuple[str, ...],
     no_default_recipes: bool,
+    allow_unschedulable: bool,
     recipe_names: tuple[str, ...],
 ):
     """Submit a DAG of remote build jobs.
@@ -789,6 +800,46 @@ def builds_submit_dag(
     _WASM_ARCHES = {"wasm32"}
     _WASM_PLATFORMS = {"wasm", "wasi"}
 
+    # ── Drop combos no registered builder can serve ──────────────
+    # The server dispatches a job only to a builder whose platform+arch
+    # matches directly or via a cross-build capability.  Query the
+    # server's builder registry up front and skip combos nothing can
+    # ever claim (e.g. an arm64 arch on a platform that only has x86_64
+    # builders), so we don't create jobs that would only sit pending
+    # until the server reaps them.  Fail open: if the registry can't be
+    # read we submit everything and let the server's reaper clean up.
+    _supported_targets: set[tuple[str, str]] = set()
+    _supported_platforms: set[str] = set()  # legacy platform-only cross targets
+    _builder_check = not allow_unschedulable
+    if _builder_check:
+        import httpx as _httpx
+
+        try:
+            with _httpx.Client(timeout=30) as _c:
+                _resp = _c.get(
+                    f"{server.rstrip('/')}/v1/builders",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+            _resp.raise_for_status()
+            for _b in _resp.json().get("builders", []):
+                _bp, _ba = _b.get("platform"), _b.get("arch")
+                if _bp and _ba:
+                    _supported_targets.add((_bp, _ba))
+                for _cp in (_b.get("capabilities") or {}).get("cross_platforms", []) or []:
+                    if isinstance(_cp, dict) and _cp.get("platform") and _cp.get("arch"):
+                        _supported_targets.add((_cp["platform"], _cp["arch"]))
+                    elif isinstance(_cp, str):
+                        _supported_platforms.add(_cp)
+        except Exception as _e:  # noqa: BLE001 — best-effort, must not block submit
+            click.echo(
+                f"  Warning: could not read builder registry ({_e}); submitting all "
+                "combos (server will reap any unschedulable jobs)."
+            )
+            _builder_check = False
+
+    def _has_builder(plat: str, ar: str) -> bool:
+        return (plat, ar) in _supported_targets or plat in _supported_platforms
+
     dag_ids: list[str] = []
     for plat in platforms:
         for ar in arches:
@@ -796,6 +847,10 @@ def builds_submit_dag(
             if ar in _WASM_ARCHES and plat not in _WASM_PLATFORMS:
                 continue
             if plat in _WASM_PLATFORMS and ar not in _WASM_ARCHES:
+                continue
+            # Skip combos no registered builder can serve.
+            if _builder_check and not _has_builder(plat, ar):
+                click.echo(f"  Skipping {plat}/{ar}: no registered builder can serve it")
                 continue
             for cfg in configs:
                 for lnk in links:

@@ -1,0 +1,74 @@
+schema_version: 1
+recipe:
+  name: gstreamer
+  upstream_version: "1.24.13"
+  cvc_revision: 2
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://gstreamer.freedesktop.org/
+  license: LGPL-2.1-or-later
+  tags: [multimedia]
+  description: >-
+    GStreamer — a pipeline-based multimedia framework.  Built from the
+    upstream mono-repository as core + gst-plugins-base + gst-plugins-good
+    + gst-plugins-bad (LGPL; ugly/libav and all GPL-encumbered plugins
+    disabled), providing the gstreamer-1.0 / gstreamer-app / gstreamer-audio /
+    gstreamer-video / gstreamer-pbutils / gstreamer-play libraries Qt
+    Multimedia's GStreamer backend links against on Linux and macOS.
+
+source:
+  type: tarball
+  url: https://gitlab.freedesktop.org/gstreamer/gstreamer/-/archive/1.24.13/gstreamer-1.24.13.tar.gz
+  sha256: "0ba48169ca2edb2101ad6204cae3f9f8b69764ffe2f6f592a160603604a48dc4"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: nasm
+      platforms: [linux, freebsd, openbsd, netbsd]
+  runtime:
+    - name: glib
+      version: "^2.80"
+  host_tools:
+    - meson
+    - ninja
+    - pkg-config
+    - python3
+    - bison
+    - flex
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+package:
+  files:
+    - lib/libgst*
+    - lib/gstreamer-1.0/
+    - lib/pkgconfig/gstreamer*
+    - include/gstreamer-1.0/
+    - bin/gst-inspect*
+    - bin/gst-launch*
+    - bin/gst-discoverer*
+  pkg_config:
+    - gstreamer-1.0
+    - gstreamer-base-1.0
+    - gstreamer-app-1.0
+    - gstreamer-audio-1.0
+    - gstreamer-video-1.0
+    - gstreamer-pbutils-1.0
+    - gstreamer-allocators-1.0
+    - gstreamer-play-1.0
+
+abi:
+  cxx_std: 17
