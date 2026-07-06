@@ -64,6 +64,7 @@ mypy = "^1.10"
 black = "^24.0"
 httpx = ">=0.24"
 pytest-asyncio = ">=0.21"
+jsonschema = ">=4.0"
 
 [tool.poetry.scripts]
 cvcpkg = "cvcpkg.cli:cli"
