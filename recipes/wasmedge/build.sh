@@ -47,10 +47,20 @@ if [[ "$LLVM_FOUND" = false ]] && command -v llvm-config &>/dev/null; then
     echo "Using LLVM from llvm-config: $LLVM_DIR"
 fi
 
+# WasmEdge plugins are built as separate dylibs that reference core WasmEdge
+# symbols (WasmEdge::Loader::SharedLibrary, PluginDescriptor, ...).  On macOS
+# the two-level namespace linker rejects those undefined references at build
+# time (arm64 "symbol(s) not found").  Downstream only consumes the C API
+# shared library (libwasmedge), so disable plugins on macOS.
+WASMEDGE_PLUGINS=ON
+if [[ "${CVC_PLATFORM}" == "macos" ]]; then
+    WASMEDGE_PLUGINS=OFF
+fi
+
 cvc_cmake_build \
     -DWASMEDGE_USE_LLVM=ON \
     -DWASMEDGE_BUILD_TESTS=OFF \
     -DWASMEDGE_BUILD_TOOLS=OFF \
-    -DWASMEDGE_BUILD_PLUGINS=ON \
+    -DWASMEDGE_BUILD_PLUGINS="${WASMEDGE_PLUGINS}" \
     -DWASMEDGE_BUILD_SHARED_LIB=ON \
     -DWASMEDGE_BUILD_STATIC_LIB=OFF

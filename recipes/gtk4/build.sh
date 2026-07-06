@@ -43,8 +43,13 @@ MESON_OPTS=(
     -Dintrospection=disabled
     -Ddocumentation=false
     -Dman-pages=false
-    -Dprint-backends=file
 )
+
+# GTK 4.16 removed the combined `-Dprint-backends` string option in favour of
+# individual feature options.  The built-in "file" print backend is always
+# compiled, so we simply disable the optional CUPS/CPDB backends to keep the
+# build lean and dependency-free across platforms.
+MESON_OPTS+=( -Dprint-cups=disabled -Dprint-cpdb=disabled )
 
 case "${CVC_PLATFORM}" in
     linux)

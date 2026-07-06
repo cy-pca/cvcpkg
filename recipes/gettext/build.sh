@@ -8,6 +8,18 @@ set -euo pipefail
 
 cd "${CVC_SOURCE_DIR}"
 
+# On macOS, build only the gettext-runtime sub-package (libintl).  The full
+# gettext build also compiles libtextstyle, whose iconv-ostream module
+# references iconv_ostream_create but never gets compiled because gnulib's
+# "working iconv" test fails against macOS's (non-GNU) system iconv -> an
+# arm64 "undefined symbol _iconv_ostream_create" link error.  Downstream
+# consumers only need libintl, which gettext-runtime provides; the message
+# tools (msgfmt/xgettext) come from the host toolchain (Homebrew) at build
+# time.  linux/BSD build the full tree as before.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    cd gettext-runtime
+fi
+
 CONFIGURE_ARGS=(
     --prefix="${CVC_INSTALL_DIR}"
     --disable-java
@@ -17,14 +29,6 @@ CONFIGURE_ARGS=(
     --without-bzip2
     --without-xz
 )
-
-# macOS ships libiconv separately; tell configure where to find it
-# so libtextstyle's iconv-ostream support compiles correctly.
-case "$(uname -s)" in
-    Darwin)
-        CONFIGURE_ARGS+=(--with-libiconv-prefix=/usr)
-        ;;
-esac
 
 # Respect static/shared link mode.
 if [[ "${CVC_LINK:-shared}" == "static" ]]; then
