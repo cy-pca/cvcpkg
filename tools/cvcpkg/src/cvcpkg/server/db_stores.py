@@ -648,6 +648,7 @@ class DbPackageIndex:
                     PackageRow.maintainer.ilike(like_pat),
                     PackageRow.license.ilike(like_pat),
                     PackageRow.release_tag.ilike(like_pat),
+                    PackageRow.org_slug.ilike(like_pat),
                 )
                 q = q.where(search_filter)
                 count_q = count_q.where(search_filter)
@@ -755,6 +756,7 @@ class DbPackageIndex:
                     PackageRow.maintainer.ilike(like_pat),
                     PackageRow.license.ilike(like_pat),
                     PackageRow.release_tag.ilike(like_pat),
+                    PackageRow.org_slug.ilike(like_pat),
                 )
             )
         if org_slug:

@@ -87,8 +87,14 @@ a.pkg-link:hover { text-decoration: underline; }
   padding: 2px 8px; border-radius: 4px; vertical-align: middle;
   white-space: nowrap; display: inline-flex; align-items: center; gap: 4px;
 }
+.badge-org {
+  background: linear-gradient(135deg, #7957d5, #b86bff);
+  color: #fff; font-size: 0.7em; font-weight: 600;
+  padding: 2px 8px; border-radius: 4px; vertical-align: middle;
+  white-space: nowrap; display: inline-flex; align-items: center; gap: 4px;
+}
 @media screen and (max-width: 768px) {
-  .badge-mainline, .badge-community {
+  .badge-mainline, .badge-community, .badge-org {
     font-size: 0.6em; padding: 2px 6px;
   }
 }
@@ -464,9 +470,12 @@ function updateFilterOptions(facets) {
 function groupBundlesByName(pkgs) {
   const groups = {};
   pkgs.forEach(p => {
-    if (!groups[p.name]) {
-      groups[p.name] = {
+    const key = p.org ? p.org + '/' + p.name : p.name;
+    if (!groups[key]) {
+      groups[key] = {
         name: p.name,
+        org: p.org || '',
+        displayName: key,
         version: p.version,
         builds: [],
         platforms: new Set(),
@@ -474,7 +483,7 @@ function groupBundlesByName(pkgs) {
         totalSize: 0,
       };
     }
-    const g = groups[p.name];
+    const g = groups[key];
     g.builds.push(p);
     if (p.platform) g.platforms.add(p.platform);
     if (p.arch) g.archs.add(p.arch);
@@ -538,15 +547,23 @@ function renderResults(data) {
   } else {
     tbody.innerHTML = grouped.map(g => {
       const isMainline = recipeNames.includes(g.name);
-      const badge = isMainline
-        ? '<span class="badge-mainline" title="Official cvcpkg recipe"><i class="fas fa-check-circle"></i> cvcpkg</span>'
-        : '<span class="badge-community" title="Community upload"><i class="fas fa-users"></i> community</span>';
+      const isOrg = !!g.org;
+      const badge = isOrg
+        ? '<span class="badge-org" title="Organization package"><i class="fas fa-building"></i> ' + esc(g.org) + '</span>'
+        : isMainline
+          ? '<span class="badge-mainline" title="Official cvcpkg recipe"><i class="fas fa-check-circle"></i> cvcpkg</span>'
+          : '<span class="badge-community" title="Community upload"><i class="fas fa-users"></i> community</span>';
+      const pkgUrl = isOrg
+        ? '/package/' + encodeURIComponent(g.name) + '?org=' + encodeURIComponent(g.org)
+        : '/package/' + encodeURIComponent(g.name);
       return `
       <tr class="pkg-card">
         <td>
-          <a class="pkg-link" href="/package/${encodeURIComponent(g.name)}">
+          <a class="pkg-link" href="${pkgUrl}">
+            ${isOrg ? '<span class="has-text-grey-light">' + esc(g.org) + '/</span>' : ''}
             <strong>${esc(g.name)}</strong>
           </a>
+          ${badge}
         </td>
         <td><code>${esc(g.version)}</code></td>
         <td>${[...g.platforms].sort().map(p => platformTag(p)).join(' ')}</td>
@@ -831,13 +848,16 @@ document.addEventListener('DOMContentLoaded', () => {{
 
 _DETAIL_JS = r"""
 let pkgName = '';
+let pkgOrg = '';
 let allBuilds = [];
 let currentSort = { key: 'platform', dir: 'asc' };
 
-async function init(name) {
+async function init(name, org) {
   pkgName = name;
+  pkgOrg = org || '';
   try {
-    const resp = await fetch('/v1/packages/' + encodeURIComponent(name));
+    const orgParam = pkgOrg ? '?org=' + encodeURIComponent(pkgOrg) : '';
+    const resp = await fetch('/v1/packages/' + encodeURIComponent(name) + orgParam);
     const data = await resp.json();
     allBuilds = data.packages || [];
     renderInfo();
@@ -1326,13 +1346,15 @@ def _js_string_literal(s: str) -> str:
     return _json.dumps(s)
 
 
-def package_detail_html(name: str) -> str:
+def package_detail_html(name: str, *, org: str = "") -> str:
     """Return the HTML for a package detail page."""
     safe_name = _html.escape(name, quote=True)
+    safe_org = _html.escape(org, quote=True) if org else ""
+    display_title = f"{safe_org}/{safe_name}" if safe_org else safe_name
 
     return f"""<!DOCTYPE html>
 <html lang="en" data-theme="dark" class="has-background-black-bis">
-{_head_html(f"{safe_name} &mdash; cvcpkg")}
+{_head_html(f"{display_title} &mdash; cvcpkg")}
 <body class="has-background-black-bis has-text-light">
 
 {_navbar_html()}
@@ -1343,6 +1365,7 @@ def package_detail_html(name: str) -> str:
     <nav class="breadcrumb" aria-label="breadcrumbs">
       <ul>
         <li><a href="/" class="has-text-grey-light">Packages</a></li>
+        {f'<li><a href="/org/{safe_org}" class="has-text-grey-light">{safe_org}</a></li>' if safe_org else ''}
         <li class="is-active"><a href="#" class="has-text-light">{safe_name}</a></li>
       </ul>
     </nav>
@@ -1357,6 +1380,7 @@ def package_detail_html(name: str) -> str:
       <div class="column is-8">
         <h1 class="title is-2 has-text-white">
           <span class="icon mr-2"><i class="fas fa-cube"></i></span>
+          {f'<a href="/org/{safe_org}" class="has-text-link">{safe_org}</a><span class="has-text-grey mx-1">/</span>' if safe_org else ''}
           <span id="pkg-title">{safe_name}</span>
           <span class="tag is-link is-rounded is-medium ml-3" id="pkg-version">&hellip;</span>
           <span class="tag is-warning is-rounded is-medium ml-2" id="pkg-license" style="display:none"></span>
@@ -1417,10 +1441,10 @@ def package_detail_html(name: str) -> str:
       </h3>
       <div class="content">
         <p class="has-text-grey-lighter">Install the pre-built binary:</p>
-        <pre class="has-background-dark has-text-success p-3" style="border-radius:6px;">cvcpkg install {safe_name} --prefix /path/to/prefix</pre>
+        <pre class="has-background-dark has-text-success p-3" style="border-radius:6px;">cvcpkg install {display_title} --prefix /path/to/prefix</pre>
 
         <p class="has-text-grey-lighter mt-4">Or build from source using the recipe:</p>
-        <pre class="has-background-dark has-text-success p-3" style="border-radius:6px;">cvcpkg build {safe_name} --prefix /path/to/prefix</pre>
+        <pre class="has-background-dark has-text-success p-3" style="border-radius:6px;">cvcpkg build {display_title} --prefix /path/to/prefix</pre>
 
         <p class="has-text-grey-lighter mt-4">Use in a downstream CMake project:</p>
         <pre class="has-background-dark has-text-success p-3" style="border-radius:6px;">cmake -DCMAKE_PREFIX_PATH=/path/to/prefix ..</pre>
@@ -1567,7 +1591,7 @@ document.addEventListener('DOMContentLoaded', () => {{
   document.querySelectorAll('#builds-table th.is-sortable').forEach(th => {{
     th.addEventListener('click', () => sortBy(th.dataset.key));
   }});
-  init({_js_string_literal(name)});
+  init({_js_string_literal(name)}, {_js_string_literal(org)});
   loadDownloadStats({_js_string_literal(name)});
   loadBuildJobs({_js_string_literal(name)});
 }});
@@ -1818,7 +1842,8 @@ function renderOrg(data) {{
       '</tr></thead><tbody>' +
       Object.entries(groups).sort((a,b) => a[0].localeCompare(b[0])).map(([name, builds]) => {{
         const totalSize = builds.reduce((s, b) => s + (b.size_bytes || 0), 0);
-        return '<tr><td><a href="/package/' + encodeURIComponent(name) + '" class="has-text-link"><strong>' + esc(name) + '</strong></a></td>' +
+        const orgParam = builds[0].org ? '?org=' + encodeURIComponent(builds[0].org) : '';
+        return '<tr><td><a href="/package/' + encodeURIComponent(name) + orgParam + '" class="has-text-link"><strong>' + esc(name) + '</strong></a></td>' +
           '<td><code>' + esc(builds[0].version) + '</code></td>' +
           '<td><span class="tag is-dark is-rounded">' + builds.length + '</span></td>' +
           '<td class="is-family-monospace is-size-7 has-text-grey-light">' + fmtSize(totalSize) + '</td></tr>';
