@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: qtmultimedia
   upstream_version: "6.8.2"
-  cvc_revision: 5
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -54,6 +54,19 @@ build:
         MACOSX_DEPLOYMENT_TARGET: "13.0"
     - platform: windows
       script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+      env:
+        CXXFLAGS: "-O2 -std=c++17"
+    - platform: wasm
+      host_platform: macos
+      script: build-wasm.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
 
 package:
   files:

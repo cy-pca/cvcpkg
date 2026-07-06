@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: qt6
   upstream_version: "6.8.2"
-  cvc_revision: 2
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -21,7 +21,8 @@ source:
   sha256: "012043ce6d411e6e8a91fdc4e05e6bedcfa10fcb1347d3c33908f7fdd10dfe05"
   strip_components: 1
 
-patches: []
+patches:
+  - qyieldcpu-arm-acle-include.patch
 
 depends:
   build: []
@@ -78,6 +79,10 @@ package:
     - plugins/
     - share/qt6/
     - mkspecs/wasm-emscripten/
+    # Full host-native Qt install shipped only in wasm bundles so
+    # downstream submodule wasm builds have a QT_HOST_PATH.  On native
+    # platforms this directory does not exist, so the glob is a no-op.
+    - host-qt/
   cmake_packages:
     - {
         name: Qt6,
