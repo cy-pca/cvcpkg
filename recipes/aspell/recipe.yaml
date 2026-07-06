@@ -1,0 +1,71 @@
+schema_version: 1
+recipe:
+  name: aspell
+  upstream_version: "0.60.8"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "GNU Aspell — spell-checker library and command-line tool."
+  homepage: http://aspell.net/
+  license: LGPL-2.1-or-later
+  tags: [libraries, i18n]
+
+source:
+  type: tarball
+  url: https://ftp.gnu.org/gnu/aspell/aspell-0.60.8.tar.gz
+  sha256: "f9b77e515334a751b2e60daab5db23499e26c9209f5e7b7443b05235ad0226f2"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
+
+package:
+  files:
+    - lib/libaspell*
+    - lib/libpspell*
+    - lib/pkgconfig/aspell.pc
+    - lib/aspell-0.60/
+    - include/aspell.h
+    - include/pspell/
+    - bin/aspell*
+    - bin/precat*
+    - bin/preunzip*
+    - bin/prezip*
+    - bin/word-list-compress*
+    - share/aspell/
+  cmake_packages: []
+
+abi:
+  cxx_std: 17

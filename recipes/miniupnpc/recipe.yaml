@@ -1,0 +1,67 @@
+schema_version: 1
+recipe:
+  name: miniupnpc
+  upstream_version: "2.2.8"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "MiniUPnPc — client library for UPnP Internet Gateway Device port mapping."
+  homepage: https://miniupnp.tuxfamily.org/
+  license: BSD-3-Clause
+  tags: [networking, libraries]
+
+source:
+  type: tarball
+  url: https://miniupnp.tuxfamily.org/files/miniupnpc-2.2.8.tar.gz
+  sha256: "05b929679091b9921b6b6c1f25e39e4c8d1f4d46c8feb55a412aa697aee03a93"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libminiupnpc*
+    - lib/miniupnpc*
+    - lib/cmake/miniupnpc/
+    - lib/pkgconfig/miniupnpc.pc
+    - include/miniupnpc/
+    - bin/upnpc*
+    - bin/external-ip*
+  cmake_packages:
+    - { name: miniupnpc, targets: ["miniupnpc::miniupnpc"] }
+
+abi:
+  cxx_std: 17

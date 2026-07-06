@@ -1,0 +1,61 @@
+schema_version: 1
+recipe:
+  name: iconv
+  upstream_version: "1.17"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "GNU libiconv — character-set conversion library for platforms without a system iconv."
+  homepage: https://www.gnu.org/software/libiconv/
+  license: LGPL-2.1-or-later
+  tags: [libraries, i18n]
+
+source:
+  type: tarball
+  url: https://ftp.gnu.org/gnu/libiconv/libiconv-1.17.tar.gz
+  sha256: "8f74213b56238c85a50a5329f77e06198771e70dd9a739779f4c02f65d971313"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libiconv*
+    - lib/libcharset*
+    - include/iconv.h
+    - include/libcharset.h
+    - include/localcharset.h
+    - bin/iconv*
+  cmake_packages: []
+
+abi:
+  cxx_std: 17

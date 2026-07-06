@@ -1,0 +1,64 @@
+schema_version: 1
+recipe:
+  name: idn2
+  upstream_version: "2.3.7"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "GNU libidn2 — Internationalized Domain Names (IDNA2008) conversion library."
+  homepage: https://www.gnu.org/software/libidn/#libidn2
+  license: LGPL-3.0-or-later OR GPL-2.0-or-later
+  tags: [libraries, i18n, networking]
+
+source:
+  type: tarball
+  url: https://ftp.gnu.org/gnu/libidn/libidn2-2.3.7.tar.gz
+  sha256: "4c21a791b610b9519b9d0e12b8097bf2f359b12f8dd92647611a929e6bfd7d64"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: libunistring
+      version: ">=1.0"
+    - name: iconv
+      version: ">=1.17"
+      platforms: [freebsd, netbsd, openbsd, macos]
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libidn2*
+    - lib/pkgconfig/libidn2.pc
+    - include/idn2.h
+    - bin/idn2*
+  cmake_packages: []
+
+abi:
+  cxx_std: 17

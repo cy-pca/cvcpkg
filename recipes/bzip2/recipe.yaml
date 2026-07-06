@@ -1,0 +1,67 @@
+schema_version: 1
+recipe:
+  name: bzip2
+  upstream_version: "1.0.8"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "bzip2 — high-quality data compression library (Burrows-Wheeler)."
+  homepage: https://sourceware.org/bzip2/
+  license: bzip2-1.0.6
+  tags: [libraries, io]
+
+source:
+  type: tarball
+  url: https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz
+  sha256: "ab5a03176ee106d3f0fa90e381da478ddae405918153cca248e682cd0c4a2269"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libbz2*
+    - lib/bz2*
+    - lib/pkgconfig/bzip2.pc
+    - include/bzlib.h
+    - bin/bzip2*
+    - bin/bunzip2*
+    - bin/bzcat*
+    - bin/bzdiff*
+    - bin/bzgrep*
+    - bin/bzmore*
+  cmake_packages: []
+
+abi:
+  cxx_std: 17
