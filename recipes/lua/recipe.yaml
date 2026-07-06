@@ -1,0 +1,68 @@
+schema_version: 1
+recipe:
+  name: lua
+  upstream_version: "5.4.7"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "Lua — a powerful, efficient, lightweight, embeddable scripting language."
+  homepage: https://www.lua.org/
+  license: MIT
+  tags: [scripting, libraries]
+
+source:
+  type: tarball
+  url: https://www.lua.org/ftp/lua-5.4.7.tar.gz
+  sha256: "9fbf5e28ef86c69858f6d3d34eccc32e911c1a28b4120ff3e84aaa70cfbf1e30"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: readline
+      version: ">=8.0"
+      platforms: [linux, macos, freebsd, netbsd, openbsd]
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/liblua*
+    - lib/pkgconfig/lua*.pc
+    - include/lua.h
+    - include/luaconf.h
+    - include/lualib.h
+    - include/lauxlib.h
+    - include/lua.hpp
+    - bin/lua*
+  cmake_packages: []
+
+abi:
+  cxx_std: 17
