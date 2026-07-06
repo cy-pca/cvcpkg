@@ -4309,9 +4309,9 @@ def create_app(
     ):
         """Submit a single build job."""
         _require_db_build_jobs()
-        # wasm/wasi only support static linking — enforce server-side.
+        # wasm/wasi/cosmo only support static linking — enforce server-side.
         link = body.link
-        if body.platform in ("wasm", "wasi") and link != "static":
+        if body.platform in ("wasm", "wasi", "cosmo") and link != "static":
             link = "static"
         info = await _db_build_jobs.create(
             recipe_name=body.recipe_name,
@@ -4357,8 +4357,8 @@ def create_app(
                 "platform": j.platform,
                 "arch": j.arch,
                 "config": j.config,
-                # wasm/wasi only support static linking — enforce server-side.
-                "link": "static" if j.platform in ("wasm", "wasi") else j.link,
+                # wasm/wasi/cosmo only support static linking — enforce server-side.
+                "link": "static" if j.platform in ("wasm", "wasi", "cosmo") else j.link,
                 "org_slug": j.org_slug,
                 "priority": j.priority,
                 "timeout_seconds": j.timeout_seconds,

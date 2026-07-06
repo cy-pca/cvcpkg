@@ -39,15 +39,24 @@ else
     OPENSSL_OPTS+=(shared)
 fi
 
+# --openssldir must point to the HOST system's CA certificate tree, not the
+# install prefix.  If it pointed into $CVC_INSTALL_DIR/etc/ssl, any process
+# that loads our libssl via LD_LIBRARY_PATH (e.g. Python, curl) would look
+# for CA certs at that path — which ships no certs — and TLS verification
+# would fail.  All POSIX platforms agree on /etc/ssl as the default CA root.
+# Windows uses the OS certificate store so its path is handled separately.
 ./Configure "${TARGET}" \
     --prefix="${CVC_INSTALL_DIR}" \
     --libdir=lib \
-    --openssldir="${CVC_INSTALL_DIR}/etc/ssl" \
+    --openssldir=/etc/ssl \
     "${OPENSSL_OPTS[@]}" \
     no-tests
 
 make -j "${CVC_JOBS}"
-make install_sw install_ssldirs
+# install_sw = libraries, headers, binaries only; no ssl dirs / no cert stubs.
+# We deliberately omit install_ssldirs: we are not providing CA certificates
+# and do not want to create or own /etc/ssl entries.
+make install_sw
 
 # Ensure installed .pc/.cmake files are relocatable.
 cvc_rewrite_install_paths

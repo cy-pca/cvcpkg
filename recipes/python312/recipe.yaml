@@ -1,0 +1,142 @@
+schema_version: 1
+recipe:
+  name: python312
+  upstream_version: "3.12.10"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.python.org/
+  license: PSF-2.0
+  tags: [language, runtime, scripting]
+  description: >-
+    CPython 3.12 — the reference Python implementation.  Ships libpython3.12,
+    the python3.12 interpreter, and the full standard library including ssl,
+    sqlite3, ctypes, bz2, lzma, readline, and curses modules.
+    Active-support branch; the recommended default for new projects in 2024-25.
+
+source:
+  type: tarball
+  url: https://www.python.org/ftp/python/3.12.10/Python-3.12.10.tar.xz
+  sha256: "07ab697474595e06f06647417d3c7fa97ded07afc1a7e4454c5639919b46eaea"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: openssl
+      version: "^3.0"
+    - name: zlib
+      version: "^1.3"
+    - name: libffi
+      version: "^3.0"
+    - name: bzip2
+      version: "^1.0"
+    - name: xz
+      version: "^5.0"
+    - name: readline
+      version: "^8.0"
+    - name: sqlite
+      version: "^3.0"
+    - name: ncurses
+      version: "^6.0"
+  runtime:
+    - name: openssl
+      version: "^3.0"
+    - name: zlib
+      version: "^1.3"
+    - name: libffi
+      version: "^3.0"
+    - name: bzip2
+      version: "^1.0"
+    - name: xz
+      version: "^5.0"
+    - name: readline
+      version: "^8.0"
+    - name: sqlite
+      version: "^3.0"
+    - name: ncurses
+      version: "^6.0"
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+      env:
+        CFLAGS: "-O2"
+    - platform: wasm
+      host_platform: macos
+      script: build-wasm.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+      env:
+        CFLAGS: "-O2"
+    - platform: cosmo
+      host_platform: linux
+      script: build-cosmo.sh
+      env:
+        CFLAGS: "-O2"
+
+package:
+  files:
+    - bin/python3.12*
+    - bin/python3
+    - bin/python
+    - bin/pip3.12*
+    - bin/pip3
+    - bin/pip
+    - bin/idle3.12*
+    - bin/pydoc3.12*
+    - lib/libpython3.12*
+    - lib/python3.12/
+    - lib/pkgconfig/python-3.12*.pc
+    - include/python3.12/
+  cmake_packages:
+    - { name: Python3, targets: ["Python3::Python", "Python3::Interpreter"] }
+
+abi:
+  cxx_std: 17
+
+notes:
+  - title: "Multiple Python versions coexist"
+    platforms:
+      [linux, macos, freebsd, openbsd, netbsd, windows, wasm, wasi, cosmo]
+    description: >-
+      python311, python312, and python313 install to versioned paths
+      (bin/python3.12, lib/python3.12/, libpython3.12.so) and can be
+      installed into the same prefix simultaneously without conflict.
+  - title: "Static builds on wasm/wasi/cosmo"
+    platforms: [wasm, wasi, cosmo]
+    description: >-
+      Cross-compilation targets build libpython as a static archive
+      (--disable-shared) since extension modules (.so) are uncommon.
+      Readline is disabled (--with-readline=tkinter) because the
+      ncurses/readline ecosystem is not available on these platforms.

@@ -456,6 +456,7 @@ function _syncSelect(id, buckets, keepValue) {
 
 function updateFilterOptions(facets) {
   _syncSelect('platform-filter', facets.platforms || [], state.platform);
+  _syncSelect('arch-filter', facets.archs || [], state.arch);
   _syncSelect('release-filter', facets.releases || [], state.release);
   _syncSelect('tag-filter', facets.tags || [], state.tag);
 }
@@ -469,12 +470,14 @@ function groupBundlesByName(pkgs) {
         version: p.version,
         builds: [],
         platforms: new Set(),
+        archs: new Set(),
         totalSize: 0,
       };
     }
     const g = groups[p.name];
     g.builds.push(p);
     if (p.platform) g.platforms.add(p.platform);
+    if (p.arch) g.archs.add(p.arch);
     g.totalSize += p.size_bytes || 0;
   });
   return Object.values(groups);
@@ -502,10 +505,11 @@ function renderResults(data) {
   const totalBuilds = data.total || 0;
   const totalPackages = data.package_count || 0;
   const shownBuilds = loadedPackages.length;
+  const shownPackages = grouped.length;
   const countEl = document.getElementById('pkg-count');
-  if (shownBuilds < totalBuilds) {
+  if (shownPackages < totalPackages) {
     countEl.textContent =
-      'Showing ' + grouped.length + ' of ' + totalPackages
+      'Showing ' + shownPackages + ' of ' + totalPackages
       + (totalPackages === 1 ? ' package' : ' packages')
       + ' (' + shownBuilds + ' / ' + totalBuilds + ' builds)';
   } else {
@@ -546,9 +550,9 @@ function renderResults(data) {
         </td>
         <td><code>${esc(g.version)}</code></td>
         <td>${[...g.platforms].sort().map(p => platformTag(p)).join(' ')}</td>
+        <td>${[...g.archs].sort().map(a => '<span class="tag is-small is-dark is-rounded ml-1">' + esc(a) + '</span>').join(' ')}</td>
         <td><span class="tag is-dark is-rounded">${g.builds.length}</span></td>
         <td><span class="is-family-monospace is-size-7 has-text-grey-light">${fmtSize(g.totalSize)}</span></td>
-        <td>${badge}</td>
       </tr>
     `}).join('');
   }
@@ -567,10 +571,10 @@ function renderResults(data) {
   // "Load more" button.
   const more = document.getElementById('load-more');
   if (more) {
-    if (shownBuilds < totalBuilds) {
+    if (shownPackages < totalPackages) {
       more.style.display = '';
       more.disabled = false;
-      more.textContent = 'Load more (' + (totalBuilds - shownBuilds) + ' remaining)';
+      more.textContent = 'Load more (' + (totalPackages - shownPackages) + ' packages remaining)';
     } else {
       more.style.display = 'none';
     }
@@ -727,6 +731,15 @@ def landing_html() -> str:
         <div class="field">
           <div class="control">
             <div class="select is-dark is-fullwidth">
+              <select id="arch-filter"><option value="">All architectures</option></select>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="column is-2">
+        <div class="field">
+          <div class="control">
+            <div class="select is-dark is-fullwidth">
               <select id="release-filter">
                 <option value="">All channels</option>
                 <option value="live" data-static="true">Live only</option>
@@ -747,9 +760,9 @@ def landing_html() -> str:
             <th class="is-sortable" data-key="name">Package <span class="sort-arrow"></span></th>
             <th class="is-sortable" data-key="version">Version <span class="sort-arrow"></span></th>
             <th>Platforms</th>
+            <th>Architectures</th>
             <th class="is-sortable" data-key="builds">Builds <span class="sort-arrow"></span></th>
             <th class="is-sortable" data-key="totalSize">Size <span class="sort-arrow"></span></th>
-            <th>Source</th>
           </tr>
         </thead>
         <tbody id="pkg-body">
@@ -787,6 +800,10 @@ document.addEventListener('DOMContentLoaded', () => {{
   }});
   document.getElementById('platform-filter').addEventListener('change', e => {{
     state.platform = e.target.value;
+    runSearch();
+  }});
+  document.getElementById('arch-filter').addEventListener('change', e => {{
+    state.arch = e.target.value;
     runSearch();
   }});
   document.getElementById('tag-filter').addEventListener('change', e => {{

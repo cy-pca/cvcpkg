@@ -1,0 +1,79 @@
+schema_version: 1
+recipe:
+  name: ncurses
+  upstream_version: "6.5"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://invisible-island.net/ncurses/
+  license: MIT
+  tags: [libraries, tui]
+  description: >-
+    ncurses — terminal-independent text UI library.  Provides libncurses,
+    libncursesw (wide-character), libtinfo, and the terminfo database.
+    Required by CPython's curses and readline modules and by many CLI tools.
+
+source:
+  type: tarball
+  url: https://ftp.gnu.org/gnu/ncurses/ncurses-6.5.tar.gz
+  sha256: "136d91bc269a9a5785e5f9e980bc76ab57428f604ce3e5a5a90cebc767971cc6"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libncurses*
+    - lib/libncursesw*
+    - lib/libtinfo*
+    - lib/libform*
+    - lib/libmenu*
+    - lib/libpanel*
+    - lib/pkgconfig/ncurses*.pc
+    - lib/pkgconfig/form*.pc
+    - lib/pkgconfig/menu*.pc
+    - lib/pkgconfig/panel*.pc
+    - include/ncurses/
+    - include/ncursesw/
+    - include/curses.h
+    - include/ncurses.h
+    - include/term.h
+    - include/termcap.h
+    - share/terminfo/
+    - bin/infocmp*
+    - bin/tic*
+    - bin/tput*
+    - bin/tset*
+  cmake_packages: []
+
+abi:
+  cxx_std: 17

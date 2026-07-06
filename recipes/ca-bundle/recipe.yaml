@@ -1,0 +1,78 @@
+schema_version: 1
+recipe:
+  name: ca-bundle
+  upstream_version: "2026.05.14"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://curl.se/docs/caextract.html
+  license: MPL-2.0
+  tags: [networking, crypto, security]
+  description: >-
+    Mozilla CA certificate bundle — the same root CA set used by Firefox,
+    extracted from Mozilla's NSS certdata.txt and maintained by the curl
+    project.  Installs cert.pem and a certs/ directory into etc/ssl/ inside
+    the cvcpkg prefix so that tools loading cvcpkg OpenSSL via
+    LD_LIBRARY_PATH in minimal/container environments (no system /etc/ssl)
+    can verify TLS certificates by setting SSL_CERT_FILE.
+    Updated per Mozilla's CA schedule (~4-6 times per year).
+
+source:
+  # Build script handles the download; prebuilt means cvcpkg does not
+  # attempt to extract this URL as a tarball.
+  type: prebuilt
+  url: https://curl.se/ca/cacert-2026-05-14.pem
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - etc/ssl/cert.pem
+    - etc/ssl/certs/
+    - share/ca-bundle/
+
+abi:
+  cxx_std: 17
+
+notes:
+  - title: "Usage: hermetic / container environments"
+    platforms: [linux, macos, freebsd, openbsd, netbsd]
+    description: >-
+      After installing ca-bundle into your cvcpkg prefix, point OpenSSL
+      (and tools like curl, Python, git) at the bundled certs by exporting:
+
+        export SSL_CERT_FILE="${CVC_DEPS_PREFIX}/etc/ssl/cert.pem"
+        export SSL_CERT_DIR="${CVC_DEPS_PREFIX}/etc/ssl/certs"
+
+      These environment variables override OpenSSL's compiled-in openssldir
+      path (/etc/ssl) at runtime — no recompilation needed.
+      A convenience env hook is installed at
+      share/ca-bundle/env.sh that you can source directly.
+  - title: "Update cadence"
+    platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    description: >-
+      Mozilla updates its CA set approximately 4-6 times per year.
+      When a new cacert.pem is published at https://curl.se/ca/cacert.pem
+      bump upstream_version (YYYY.MM.DD), update the URL and sha256 in
+      build.sh/build.ps1, and publish a new cvc_revision.

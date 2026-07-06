@@ -18,7 +18,8 @@ cmake -G Ninja \
     -DQT_BUILD_BENCHMARKS=OFF \
     -DFEATURE_icu=OFF \
     -DFEATURE_sql_mysql=OFF \
-    -DFEATURE_sql_psql=OFF
+    -DFEATURE_sql_psql=OFF \
+    -DFEATURE_system_pcre2=ON
 cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 cmake --install "${CVC_BUILD_DIR}"
 

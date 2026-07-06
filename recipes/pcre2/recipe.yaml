@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: pcre2
   upstream_version: "10.44"
-  cvc_revision: 2
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -66,15 +66,17 @@ build:
 
 package:
   files:
-    - lib/libpcre2*
-    - lib/pcre2*
+    - lib/libpcre2-8*
+    - lib/libpcre2-16*
+    - lib/libpcre2-32*
+    - lib/libpcre2posix*
     - lib/cmake/pcre2/
     - lib/pkgconfig/libpcre2*
     - include/pcre2.h
     - include/pcre2posix.h
     - bin/pcre2*
   cmake_packages:
-    - { name: pcre2, targets: ["pcre2::pcre2-8", "pcre2::pcre2-posix"] }
+    - { name: pcre2, targets: ["pcre2::pcre2-8", "pcre2::pcre2-16", "pcre2::pcre2-posix"] }
 
 test:
   script: test.sh
