@@ -335,6 +335,7 @@ _SEARCH_FIELDS = (
     "maintainer",
     "license",
     "release_tag",
+    "org",
 )
 
 
@@ -1061,10 +1062,13 @@ def create_app(
         return HTMLResponse(landing_html())
 
     @app.get("/package/{name}", response_class=HTMLResponse, include_in_schema=False)
-    async def package_detail_page(name: str):
+    async def package_detail_page(
+        name: str,
+        org: str = Query("", description="Organization slug for scoped packages"),
+    ):
         from cvcpkg.server.landing import package_detail_html
 
-        return HTMLResponse(package_detail_html(name))
+        return HTMLResponse(package_detail_html(name, org=org))
 
     @app.get("/guide", response_class=HTMLResponse, include_in_schema=False)
     async def guide_page():
@@ -1662,12 +1666,13 @@ def create_app(
     @app.get("/v1/packages/{name}", response_model=PackageListResponse, tags=["packages"])
     async def get_package(
         name: str,
+        org: str = Query("", description="Filter by organization slug"),
         include_yanked: bool = Query(False, description="Include yanked packages in results"),
         _auth: None = Depends(optional_reader_auth),
     ):
         if _use_db:
             packages, total = await _db_packages.get_bundles(
-                name=name, include_yanked=include_yanked
+                name=name, org_slug=org, include_yanked=include_yanked
             )
             return PackageListResponse(total=total, packages=packages)
         state = _get_state()

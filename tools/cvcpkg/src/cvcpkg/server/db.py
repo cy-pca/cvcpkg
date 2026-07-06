@@ -118,6 +118,7 @@ class PackageRow(Base):
             "arch",
             "build_type",
             "link",
+            "org_slug",
             unique=True,
         ),
     )
