@@ -22,6 +22,7 @@ $hostInstallDir = "$env:CVC_BUILD_DIR\host-qt-install"
     "-DCMAKE_INSTALL_PREFIX=$hostInstallDir" `
     -DCMAKE_BUILD_TYPE=Release `
     -DBUILD_SHARED_LIBS=OFF `
+    -DFEATURE_icu=OFF `
     -DQT_BUILD_EXAMPLES=OFF `
     -DQT_BUILD_TESTS=OFF `
     -DQT_BUILD_BENCHMARKS=OFF
@@ -46,6 +47,7 @@ $wasmBuildDir = "$env:CVC_BUILD_DIR\wasm-qt"
     "-DCMAKE_FIND_ROOT_PATH=$env:CVC_DEPS_PREFIX" `
     "-DQT_HOST_PATH=$hostInstallDir" `
     -DFEATURE_thread=OFF `
+    -DFEATURE_icu=OFF `
     -DQT_BUILD_EXAMPLES=OFF `
     -DQT_BUILD_TESTS=OFF `
     -DQT_BUILD_BENCHMARKS=OFF `
@@ -73,6 +75,15 @@ foreach ($tool in @('moc.exe', 'rcc.exe', 'uic.exe', 'qmake6.exe')) {
         }
     }
 }
+
+# Preserve the full host-native Qt install tree alongside the wasm output
+# so downstream Qt submodules (qtshadertools, qtmultimedia, …) can
+# cross-compile against this bundle: their build passes QT_HOST_PATH to
+# this tree.  Qt's cross-build needs the mkspecs, cmake config files,
+# libexec host tools, and internal headers — not just the four binaries
+# copied above.
+$hostQtDest = Join-Path $env:CVC_INSTALL_DIR 'host-qt'
+Copy-Item -Recurse -Force $hostInstallDir $hostQtDest
 
 Write-Host "Qt 6 wasm_singlethread installed to $env:CVC_INSTALL_DIR"
 

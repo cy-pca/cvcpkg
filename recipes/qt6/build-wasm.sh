@@ -26,6 +26,7 @@ CMAKE_PREFIX_PATH="" cmake -G Ninja \
     -DCMAKE_INSTALL_PREFIX="${CVC_BUILD_DIR}/host-qt-install" \
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_SHARED_LIBS=OFF \
+    -DFEATURE_icu=OFF \
     -DQT_BUILD_EXAMPLES=OFF \
     -DQT_BUILD_TESTS=OFF \
     -DQT_BUILD_BENCHMARKS=OFF
@@ -48,6 +49,7 @@ cmake -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="${EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake" \
     -DQT_HOST_PATH="${CVC_BUILD_DIR}/host-qt-install" \
     -DFEATURE_thread=OFF \
+    -DFEATURE_icu=OFF \
     -DQT_BUILD_EXAMPLES=OFF \
     -DQT_BUILD_TESTS=OFF \
     -DQT_BUILD_BENCHMARKS=OFF \
@@ -69,6 +71,14 @@ for tool in moc rcc uic qmake6; do
         fi
     done
 done
+
+# Preserve the full host-native Qt install tree alongside the wasm output
+# so downstream Qt submodules (qtshadertools, qtmultimedia, …) can
+# cross-compile against this bundle: their build passes QT_HOST_PATH to
+# this tree.  Qt's cross-build needs the mkspecs, cmake config files,
+# libexec host tools, and internal headers — not just the four binaries
+# copied above.
+cp -a "${CVC_BUILD_DIR}/host-qt-install" "${CVC_INSTALL_DIR}/host-qt"
 
 echo "Qt 6 wasm_singlethread installed to ${CVC_INSTALL_DIR}"
 

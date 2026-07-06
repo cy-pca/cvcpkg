@@ -1,0 +1,32 @@
+Backport of an upstream Qt fix (in Qt 6.9) for qyieldcpu.h on
+aarch64 macOS.  Apple Clang recognises __has_builtin(__yield)
+as true on aarch64, but calling __yield() without <arm_acle.h>
+is an implicit-function-declaration warning that Qt promotes to
+an error with -Werror.  Include the ARM ACLE header when it's
+available so the __yield() intrinsic has a declaration in scope.
+
+Fixes qt6 macos/arm64 build failure:
+
+    src/corelib/thread/qyieldcpu.h:35:5: error: implicitly declaring
+      library function '__yield' with type 'void ()'
+      [-Werror,-Wimplicit-function-declaration]
+    note: include the header <arm_acle.h> or explicitly provide a
+      declaration for '__yield'
+
+--- a/src/corelib/thread/qyieldcpu.h
++++ b/src/corelib/thread/qyieldcpu.h
+@@ -9,6 +9,14 @@
+ #include <QtCore/qprocessordetection.h>
+ #include <QtCore/qtconfigmacros.h>
+ 
++// ARM ACLE header declares __yield().  On Apple/aarch64 Clang
++// __has_builtin(__yield) is true, but calling __yield() without this
++// header is an implicit-function-declaration warning that becomes an
++// error under -Werror.  Backport of an upstream fix (Qt 6.9).
++#if __has_include(<arm_acle.h>)
++#  include <arm_acle.h>
++#endif
++
+ #ifdef Q_CC_MSVC_ONLY
+ // MSVC defines _YIELD_PROCESSOR() in <xatomic.h>, but as that is a private
+ // header, we include the public ones

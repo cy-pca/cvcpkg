@@ -16,6 +16,7 @@ cmake -G Ninja \
     -DQT_BUILD_EXAMPLES=OFF \
     -DQT_BUILD_TESTS=OFF \
     -DQT_BUILD_BENCHMARKS=OFF \
+    -DFEATURE_icu=OFF \
     -DFEATURE_sql_mysql=OFF \
     -DFEATURE_sql_psql=OFF
 cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
