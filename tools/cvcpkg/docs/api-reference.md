@@ -298,6 +298,183 @@ If tampering is detected: `409 Conflict` with `"ok": false`.
 
 ---
 
+## Organizations
+
+### `POST /v1/orgs`
+
+Create an organization. Auth: `publisher` or `admin`.
+
+**Body**:
+
+```json
+{
+  "slug": "my-team",
+  "display_name": "My Team",
+  "description": "optional description",
+  "homepage": "https://example.com",
+  "is_private": false
+}
+```
+
+**Response** `201 Created`:
+
+```json
+{
+  "slug": "my-team",
+  "display_name": "My Team",
+  "description": "optional description",
+  "logo_url": "",
+  "homepage": "https://example.com",
+  "is_private": false,
+  "storage_limit_bytes": 10737418240,
+  "storage_used_bytes": 0,
+  "created_at": "2026-05-25T12:00:00+00:00",
+  "created_by": "alice"
+}
+```
+
+The creator is automatically added as an **owner**.
+
+**Errors**: `409` duplicate slug, `422` invalid slug format.
+
+### `GET /v1/orgs`
+
+List public organizations. No auth required.
+
+**Query Parameters**:
+
+| Param | Type | Default | Description |
+|---|---|---|---|
+| `limit` | int | `100` | Page size (1–1000) |
+| `offset` | int | `0` | Offset for pagination |
+
+**Response** `200 OK`:
+
+```json
+{
+  "total": 3,
+  "organizations": [ OrgInfo, ... ]
+}
+```
+
+Private organizations are excluded unless the caller is a member or admin.
+
+### `GET /v1/orgs/{slug}`
+
+Get organization details, members, and packages. No auth required for
+public orgs; private orgs return `404` to non-members.
+
+**Response** `200 OK`:
+
+```json
+{
+  "org": { OrgInfo },
+  "members": [
+    {
+      "token_name": "alice",
+      "role": "owner",
+      "added_at": "2026-05-25T12:00:00+00:00"
+    }
+  ],
+  "packages": [ PackageInfo, ... ]
+}
+```
+
+### `PATCH /v1/orgs/{slug}`
+
+Update organization settings. Auth: org owner or `admin`.
+
+**Body** (all fields optional):
+
+```json
+{
+  "display_name": "New Name",
+  "description": "updated",
+  "homepage": "https://example.com",
+  "is_private": true,
+  "storage_limit_bytes": 21474836480
+}
+```
+
+Only admins can change `storage_limit_bytes`.
+
+**Response** `200 OK`: Updated `OrgInfo`.
+
+### `POST /v1/orgs/{slug}/logo`
+
+Upload an organization logo. Auth: org owner or `admin`.
+
+**Body**: `multipart/form-data` with a `file` field.
+
+Accepted types: `image/png`, `image/jpeg`, `image/svg+xml`, `image/webp`.
+Max size: 512 KB.
+
+**Response** `200 OK`:
+
+```json
+{
+  "message": "logo uploaded",
+  "logo_url": "/v1/orgs/my-team/logo"
+}
+```
+
+### `GET /v1/orgs/{slug}/logo`
+
+Serve the organization logo. No auth required.
+
+**Response**: `200 OK` with the image content and appropriate `Content-Type`.
+`404` if no logo has been uploaded.
+
+### `POST /v1/orgs/{slug}/members`
+
+Add a member to the organization. Auth: org owner or `admin`.
+
+**Query Parameters**:
+
+| Param | Type | Default | Description |
+|---|---|---|---|
+| `token_name` | string | — | **(required)** Token name of the user to add |
+| `role` | string | `member` | `member` or `owner` |
+
+**Response** `200 OK`:
+
+```json
+{
+  "message": "added 'alice' to 'my-team' as member"
+}
+```
+
+**Errors**: `403` not an owner, `404` org or token not found, `409` already
+a member.
+
+### `DELETE /v1/orgs/{slug}/members/{token_name}`
+
+Remove a member from the organization. Auth: org owner or `admin`.
+
+**Response** `200 OK`:
+
+```json
+{
+  "message": "removed 'alice' from 'my-team'"
+}
+```
+
+**Errors**: `403` not an owner, `404` member not found.
+
+### Publishing to an Organization
+
+Pass `org` as a query parameter when publishing:
+
+```
+POST /v1/publish?name=my-lib&version=1.0.0&org=my-team
+```
+
+The server validates org membership and storage limits before accepting the
+upload. Returns `403` if the publisher is not a member, or `413` if the
+upload would exceed the org's storage limit.
+
+---
+
 ## Error Format
 
 All errors return JSON:
