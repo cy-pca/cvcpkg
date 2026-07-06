@@ -300,6 +300,18 @@ def _resolve_publish_archives(
     dist = Path(output_dir).resolve()
     result: list[Path] = []
 
+    archive_like_exts = {
+        ".zip",
+        ".tar",
+        ".gz",
+        ".bz2",
+        ".xz",
+        ".zst",
+        ".tgz",
+        ".tbz2",
+        ".txz",
+    }
+
     for pkg in packages:
         p = Path(pkg)
         if p.is_file():
@@ -311,6 +323,15 @@ def _resolve_publish_archives(
             )
             result.append(p.resolve())
             continue
+
+        # If the argument looks like a file path (contains separators, is
+        # absolute, or has an archive-like extension), report a clear missing
+        # file error instead of treating it as a recipe name glob.
+        looks_like_path = (
+            p.is_absolute() or p.parent != Path(".") or p.suffix.lower() in archive_like_exts
+        )
+        if looks_like_path:
+            raise click.ClickException(f"archive file not found: {p}")
 
         # Treat as a recipe name — search output_dir for matching archives.
         if not dist.is_dir():

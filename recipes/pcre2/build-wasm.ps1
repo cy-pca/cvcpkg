@@ -7,7 +7,7 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 Invoke-CvcWasmCMakeBuild @(
     '-DPCRE2_BUILD_PCRE2_8=ON',
-    '-DPCRE2_BUILD_PCRE2_16=OFF',
+    '-DPCRE2_BUILD_PCRE2_16=ON',
     '-DPCRE2_BUILD_PCRE2_32=OFF',
     '-DPCRE2_SUPPORT_UNICODE=ON',
     '-DPCRE2_BUILD_PCRE2GREP=OFF',

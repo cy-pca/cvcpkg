@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: openssl
   upstream_version: "3.4.1"
-  cvc_revision: 2
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -66,8 +66,8 @@ package:
   files:
     - lib/libssl*
     - lib/libcrypto*
-    - lib/ssl*
-    - lib/crypto*
+    - lib/engines-3/
+    - lib/ossl-modules/
     - lib/cmake/OpenSSL/
     - lib/pkgconfig/openssl*
     - lib/pkgconfig/libssl*

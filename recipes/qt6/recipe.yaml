@@ -25,12 +25,16 @@ patches:
   - qyieldcpu-arm-acle-include.patch
 
 depends:
-  build: []
+  build:
+    - name: pcre2
+      version: "^10.0"
   runtime:
     - name: openssl
       version: "^3.0"
     - name: zlib
       version: "^1.3"
+    - name: pcre2
+      version: "^10.0"
   host_tools:
     - cmake
     - ninja

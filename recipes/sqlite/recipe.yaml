@@ -1,0 +1,65 @@
+schema_version: 1
+recipe:
+  name: sqlite
+  upstream_version: "3.49.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.sqlite.org/
+  license: blessing
+  tags: [database, libraries]
+  description: >-
+    SQLite — a self-contained, serverless, zero-configuration SQL database
+    engine.  Ships libsqlite3 and the sqlite3 CLI tool.  Required by
+    CPython's sqlite3 standard-library module.
+
+source:
+  type: tarball
+  url: https://www.sqlite.org/2025/sqlite-autoconf-3490100.tar.gz
+  sha256: "106642d8ccb36c5f7323b64e4152e9b719f7c0215acf5bfeac3d5e7f97b59254"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libsqlite3*
+    - lib/pkgconfig/sqlite3.pc
+    - include/sqlite3.h
+    - include/sqlite3ext.h
+    - bin/sqlite3*
+  cmake_packages: []
+
+abi:
+  cxx_std: 17

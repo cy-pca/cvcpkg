@@ -1074,9 +1074,10 @@ def build_recipe(
     if not platform:
         platform = detect_platform()
 
-    # wasm/wasi only support static linking — shared libraries are
-    # impossible in these environments.
-    if platform in ("wasm", "wasi"):
+    # wasm/wasi/cosmo only support static linking — shared libraries are
+    # impossible in these environments.  Cosmopolitan produces one-file
+    # Actually Portable Executables that statically link everything.
+    if platform in ("wasm", "wasi", "cosmo"):
         link = "static"
 
     work_dir = _mkworkdir(f"cvcpkg-{recipe.name}-", work_dir_root)
@@ -1257,8 +1258,8 @@ def pack_from_prefix(
     if not arch:
         arch = detect_arch()
 
-    # wasm/wasi never link shared; keep the invariant used by build_recipe.
-    if platform in ("wasm", "wasi"):
+    # wasm/wasi/cosmo never link shared; keep the invariant used by build_recipe.
+    if platform in ("wasm", "wasi", "cosmo"):
         link = "static"
 
     if output_dir is None:

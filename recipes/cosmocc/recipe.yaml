@@ -1,0 +1,85 @@
+schema_version: 1
+recipe:
+  name: cosmocc
+  upstream_version: "4.0.2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    Cosmopolitan Toolchain — cross-compiler that produces Actually
+    Portable Executables (APE): single binaries that run natively on
+    Linux, macOS, Windows, FreeBSD, OpenBSD, and NetBSD across x86_64
+    and aarch64.  This bundle installs cosmocc into the deps prefix so
+    per-recipe build-cosmo.sh scripts can point CC/CXX at it.
+  homepage: https://github.com/jart/cosmopolitan
+  license: ISC
+  tags: [toolchain, cosmo]
+
+# Register cosmocc as the toolchain provider for the "cosmo" target
+# platform.  cvcpkg's _discover_cross_toolchains() reads this block to
+# auto-install cosmocc as a host tool whenever a recipe with a
+# `platform: cosmo` matrix entry is built.  Consumers using
+# `cvcpkg install --platform cosmo` get the toolchain pulled in the
+# same way emsdk is pulled for wasm and wasi-sdk for wasi.
+cross_toolchain:
+  target_platforms: [cosmo]
+  env:
+    CVC_COSMOCC_DIR: "${PREFIX}/cosmocc"
+
+source:
+  type: tarball
+  url: https://cosmo.zip/pub/cosmocc/cosmocc.zip
+  sha256: "85b8c37a406d862e656ad4ec14be9f6ce474c1b436b9615e91a55208aced3f44"
+  # cosmocc.zip has no top-level directory; extract into a subdir
+  # we create ourselves so files land under $CVC_SOURCE_DIR/cosmocc/.
+  strip_components: 0
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    # cosmocc.zip is host-agnostic — the same binaries run on Linux,
+    # macOS, Windows, and BSDs — but we still publish per-host bundles
+    # so consumers on each platform get a native install path picked
+    # up cleanly by `cvcpkg install`.
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    # Ship the entire toolchain tree under cosmocc/ in the prefix.
+    - cosmocc/
+  cmake_packages: []
+
+abi:
+  cxx_std: 17
+
+notes:
+  - title: "Toolchain, not a library"
+    platforms: [linux]
+    description: >-
+      This recipe installs the cosmocc cross-compiler into
+      $CVC_DEPS_PREFIX/cosmocc/.  Downstream recipes that opt into the
+      cosmo platform declare cosmocc as a host_tool and read
+      $CVC_COSMOCC_DIR (set by env-cosmo.sh from CVC_DEPS_PREFIX).
+  - title: "Size"
+    platforms: [linux]
+    description: >-
+      The bundle is ~400 MB (cosmocc ships GCC 14, Clang 19,
+      Cosmopolitan Libc, LLVM libcxx, LLVM compiler-rt, and OpenMP for
+      both x86_64 and aarch64 targets).
