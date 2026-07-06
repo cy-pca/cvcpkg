@@ -1,0 +1,74 @@
+schema_version: 1
+recipe:
+  name: freetype
+  upstream_version: "2.13.3"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://freetype.org/
+  license: FTL
+  tags: [libraries]
+  description: >-
+    FreeType — a freely available software library to render fonts.
+    Provides a uniform interface to access font files of many formats.
+    Required by HarfBuzz, Fontconfig, Cairo, and Pango.
+
+source:
+  type: tarball
+  url: https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.xz
+  sha256: "0550350666d427c74daeb85d5ac7bb353acba5f76956395995311a9c6f063289"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: zlib
+      version: "^1.3"
+    - name: libpng
+      version: "^1.6"
+    - name: bzip2
+      version: "^1.0"
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libfreetype*
+    - lib/pkgconfig/freetype2.pc
+    - lib/cmake/freetype/
+    - include/freetype2/
+    - bin/freetype-config
+  cmake_packages:
+    - { name: Freetype, targets: ["Freetype::Freetype"] }
+  pkg_config:
+    - freetype2
+
+abi:
+  cxx_std: 17

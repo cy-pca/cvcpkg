@@ -1,0 +1,70 @@
+schema_version: 1
+recipe:
+  name: graphene
+  upstream_version: "1.10.8"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://ebassi.github.io/graphene/
+  license: MIT
+  tags: [libraries]
+  description: >-
+    Graphene — a thin layer of graphic data types for use with GLib
+    and GTK.  Provides SIMD-accelerated vector, matrix, and
+    geometric types.  Required by GTK 4.
+
+source:
+  type: tarball
+  url: https://download.gnome.org/sources/graphene/1.10/graphene-1.10.8.tar.xz
+  sha256: "a37bb0e78a419dcbeaa9c7027bcff52f5ec2367c25ec859da31dfde2928f279a"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: glib
+      version: "^2.80"
+  host_tools:
+    - meson
+    - ninja
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libgraphene-1.0*
+    - lib/graphene-1.0/
+    - lib/pkgconfig/graphene-1.0.pc
+    - lib/pkgconfig/graphene-gobject-1.0.pc
+    - include/graphene-1.0/
+  pkg_config:
+    - graphene-1.0
+    - graphene-gobject-1.0
+
+abi:
+  cxx_std: 17

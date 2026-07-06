@@ -1,0 +1,66 @@
+schema_version: 1
+recipe:
+  name: fribidi
+  upstream_version: "1.0.16"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/fribidi/fribidi
+  license: LGPL-2.1-or-later
+  tags: [libraries]
+  description: >-
+    GNU FriBidi — an implementation of the Unicode Bidirectional
+    Algorithm (bidi).  Required by Pango for correct rendering of
+    right-to-left scripts.
+
+source:
+  type: tarball
+  url: https://github.com/fribidi/fribidi/releases/download/v1.0.16/fribidi-1.0.16.tar.xz
+  sha256: "1b1cde5b235d40479e91be2f0e88a309e3214c8ab470ec8a2744d82a5a9ea05c"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools:
+    - meson
+    - ninja
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libfribidi*
+    - lib/pkgconfig/fribidi.pc
+    - include/fribidi/
+    - bin/fribidi
+  pkg_config:
+    - fribidi
+
+abi:
+  cxx_std: 17

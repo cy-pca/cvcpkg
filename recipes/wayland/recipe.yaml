@@ -1,0 +1,73 @@
+schema_version: 1
+recipe:
+  name: wayland
+  upstream_version: "1.23.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://wayland.freedesktop.org/
+  license: MIT
+  tags: [libraries]
+  description: >-
+    Wayland — the reference implementation of the Wayland display
+    server protocol.  Provides libwayland-client, libwayland-server,
+    and libwayland-cursor.  Required by GTK 4 on Linux.
+
+source:
+  type: tarball
+  url: https://gitlab.freedesktop.org/wayland/wayland/-/releases/1.23.1/downloads/wayland-1.23.1.tar.xz
+  sha256: "864fb2a8399e2d0ec39d56e9d9b753c093775beadc6022ce81f441929a81e5ed"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: libffi
+      version: "^3.4"
+    - name: expat
+      version: "^2.6"
+  host_tools:
+    - meson
+    - ninja
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libwayland-client*
+    - lib/libwayland-server*
+    - lib/libwayland-cursor*
+    - lib/libwayland-egl*
+    - lib/pkgconfig/wayland-*.pc
+    - include/wayland-*.h
+    - bin/wayland-scanner
+    - share/wayland/
+  pkg_config:
+    - wayland-client
+    - wayland-server
+    - wayland-cursor
+    - wayland-egl
+    - wayland-scanner
+
+abi:
+  cxx_std: 17
+
+notes:
+  - title: "Linux and FreeBSD only"
+    platforms: [linux, freebsd]
+    description: >-
+      Wayland is a Linux/FreeBSD-specific display protocol.
+      macOS and Windows use their native display servers.

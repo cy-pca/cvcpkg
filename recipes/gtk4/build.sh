@@ -1,22 +1,17 @@
 #!/usr/bin/env bash
 # recipes/gtk4/build.sh — build GTK 4 from source with Meson on POSIX.
 #
-# Requires the following system packages (via pkg-config):
-#   glib-2.0, cairo, cairo-gobject, pango, pangocairo, harfbuzz,
-#   gdk-pixbuf-2.0, epoxy, wayland-client (Linux), fribidi
-#
-# On Debian/Ubuntu:
-#   apt install libglib2.0-dev libcairo2-dev libpango1.0-dev \
-#               libharfbuzz-dev libgdk-pixbuf-2.0-dev libepoxy-dev \
-#               libfribidi-dev libwayland-dev wayland-protocols \
-#               libxkbcommon-dev
-# On macOS:
-#   brew install glib cairo pango harfbuzz gdk-pixbuf libepoxy \
-#                fribidi pkg-config
+# All dependencies (glib, cairo, pango, harfbuzz, gdk-pixbuf, epoxy,
+# fribidi, graphene, wayland, xkbcommon) are resolved from the cvcpkg
+# dependency prefix via PKG_CONFIG_PATH.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
+
+export PATH="${CVC_DEPS_PREFIX}/bin:${PATH}"
+export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
 GTK_VERSION="4.16.7"
 GTK_TARBALL="gtk-${GTK_VERSION}.tar.xz"
@@ -31,11 +26,20 @@ if [[ ! -f "${SRC}/meson.build" ]]; then
     tar xf "${CVC_BUILD_DIR}/${GTK_TARBALL}" -C "${SRC}" --strip-components=1
 fi
 
-# Meson build.  Wayland-only on Linux keeps the surface small; add
-# -Dx11-backend=true for X11 support.
+if [[ "${CVC_PLATFORM}" == "macos" ]]; then
+    _rpath_flags="-Wl,-rpath,@loader_path"
+else
+    _rpath_flags="-Wl,-rpath,\$ORIGIN"
+fi
+
+# Meson build.  Wayland + X11 on Linux; macOS native backend.
 MESON_OPTS=(
     --prefix="${CVC_INSTALL_DIR}"
     --buildtype=release
+    --libdir=lib
+    --pkg-config-path="${CVC_DEPS_PREFIX}/lib/pkgconfig"
+    -Dc_link_args="${_rpath_flags}"
+    -Dcpp_link_args="${_rpath_flags}"
     -Dbuild-tests=false
     -Dbuild-examples=false
     -Dbuild-demos=false
@@ -63,5 +67,7 @@ esac
 meson setup "${CVC_BUILD_DIR}/meson" "${SRC}" "${MESON_OPTS[@]}"
 meson compile -C "${CVC_BUILD_DIR}/meson" -j "${CVC_JOBS}"
 meson install -C "${CVC_BUILD_DIR}/meson"
+
+cvc_rewrite_install_paths
 
 echo "gtk4 ${GTK_VERSION} installed to ${CVC_INSTALL_DIR}"

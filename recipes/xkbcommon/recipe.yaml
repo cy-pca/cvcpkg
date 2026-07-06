@@ -1,0 +1,68 @@
+schema_version: 1
+recipe:
+  name: xkbcommon
+  upstream_version: "1.7.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://xkbcommon.org/
+  license: MIT
+  tags: [libraries]
+  description: >-
+    libxkbcommon — a keymap handling library for toolkits and window
+    systems.  Provides keyboard input handling for Wayland
+    compositors and clients.  Required by GTK 4 on Linux.
+
+source:
+  type: tarball
+  url: https://xkbcommon.org/download/libxkbcommon-1.7.0.tar.xz
+  sha256: "65782f0a10a4b455af9c6baab7040e2f537520caa2ec2092805cdfd36863b247"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: wayland
+      version: "^1.23"
+      platforms: [linux, freebsd]
+    - name: wayland-protocols
+      version: "^1.38"
+      platforms: [linux, freebsd]
+  host_tools:
+    - meson
+    - ninja
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libxkbcommon*
+    - lib/pkgconfig/xkbcommon*.pc
+    - include/xkbcommon/
+    - libexec/xkbcommon/
+  pkg_config:
+    - xkbcommon
+    - xkbcommon-x11
+
+abi:
+  cxx_std: 17
+
+notes:
+  - title: "Linux and FreeBSD only"
+    platforms: [linux, freebsd]
+    description: >-
+      xkbcommon is primarily used on Linux/FreeBSD with Wayland or X11.
+      macOS and Windows use their native keyboard input mechanisms.

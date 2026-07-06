@@ -1,0 +1,75 @@
+schema_version: 1
+recipe:
+  name: libpng
+  upstream_version: "1.6.44"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: http://www.libpng.org/pub/png/libpng.html
+  license: Libpng
+  tags: [libraries]
+  description: >-
+    libpng — the official reference library for reading, creating, and
+    manipulating PNG image files.  Required by FreeType, Cairo, and
+    GDK-Pixbuf.
+
+source:
+  type: tarball
+  url: https://download.sourceforge.net/libpng/libpng-1.6.44.tar.xz
+  sha256: "60c4da1d5b7f0aa8d158da48e8f8afa9773c1c8baa5d21974df61f1886b8ce8e"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: zlib
+      version: "^1.3"
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libpng16*
+    - lib/libpng*
+    - lib/pkgconfig/libpng*.pc
+    - lib/cmake/PNG/
+    - include/png*.h
+    - include/libpng16/
+    - bin/libpng*-config
+    - bin/png-fix-itxt
+    - bin/pngfix
+  cmake_packages:
+    - { name: PNG, targets: ["PNG::PNG"] }
+  pkg_config:
+    - libpng
+    - libpng16
+
+abi:
+  cxx_std: 17

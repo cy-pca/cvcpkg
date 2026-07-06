@@ -1,0 +1,67 @@
+schema_version: 1
+recipe:
+  name: expat
+  upstream_version: "2.6.4"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://libexpat.github.io/
+  license: MIT
+  tags: [libraries]
+  description: >-
+    Expat — a stream-oriented XML parser library written in C.
+    Required by Fontconfig.
+
+source:
+  type: tarball
+  url: https://github.com/libexpat/libexpat/releases/download/R_2_6_4/expat-2.6.4.tar.xz
+  sha256: "a695629dae047055b37d50a0ff4776d1d45d0a4c842cf4ccee158441f55ff7ee"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libexpat*
+    - lib/pkgconfig/expat.pc
+    - lib/cmake/expat-*/
+    - include/expat*.h
+    - bin/xmlwf
+  cmake_packages:
+    - { name: EXPAT, targets: ["expat::expat"] }
+  pkg_config:
+    - expat
+
+abi:
+  cxx_std: 17
