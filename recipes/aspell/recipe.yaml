@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: aspell
   upstream_version: "0.60.8"
-  cvc_revision: 1
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -50,6 +50,8 @@ build:
       env:
         CFLAGS: "-O2 -fPIC"
         CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
