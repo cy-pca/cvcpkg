@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: gtk4
   upstream_version: "4.16.7"
-  cvc_revision: 1
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -10,7 +10,7 @@ recipe:
     GTK 4 — the GIMP Toolkit widget library, used to build graphical
     user interfaces for the GNOME desktop and cross-platform
     applications.  This recipe builds GTK 4 from source with Meson,
-    linking against system-provided glib/cairo/pango/harfbuzz/
+    linking against cvcpkg-provided glib/cairo/pango/harfbuzz/
     gdk-pixbuf/epoxy on POSIX hosts and via gvsbuild on Windows.
   homepage: https://www.gtk.org/
   license: LGPL-2.1-or-later
@@ -27,7 +27,32 @@ patches: []
 
 depends:
   build: []
-  runtime: []
+  runtime:
+    - name: glib
+      version: "^2.80"
+    - name: cairo
+      version: "^1.18"
+    - name: pango
+      version: "^1.54"
+    - name: harfbuzz
+      version: "^10.0"
+    - name: gdk-pixbuf
+      version: "^2.42"
+    - name: libepoxy
+      version: "^1.5"
+    - name: fribidi
+      version: "^1.0"
+    - name: graphene
+      version: "^1.10"
+    - name: wayland
+      version: "^1.23"
+      platforms: [linux, freebsd]
+    - name: wayland-protocols
+      version: "^1.38"
+      platforms: [linux, freebsd]
+    - name: xkbcommon
+      version: "^1.7"
+      platforms: [linux, freebsd]
   host_tools:
     - meson
     - ninja
@@ -77,15 +102,13 @@ abi:
   link: shared
 
 notes:
-  - title: "System dependencies required (POSIX)"
+  - title: "All dependencies provided by cvcpkg"
     platforms: [linux, macos]
     description: >-
-      GTK 4 depends on glib, cairo, pango, harfbuzz, gdk-pixbuf, and
-      libepoxy.  On Linux install libglib2.0-dev, libcairo2-dev,
-      libpango1.0-dev, libharfbuzz-dev, libgdk-pixbuf-2.0-dev,
-      libepoxy-dev via apt (or the equivalent RPM group).
-      On macOS: `brew install glib cairo pango harfbuzz gdk-pixbuf
-      libepoxy`.  These are picked up via pkg-config.
+      GTK 4's runtime dependencies (glib, cairo, pango, harfbuzz,
+      gdk-pixbuf, libepoxy, fribidi, graphene, wayland,
+      wayland-protocols, xkbcommon) are all provided as cvcpkg
+      recipes and resolved automatically during the build.
   - title: "Windows via gvsbuild"
     platforms: [windows]
     description: >-

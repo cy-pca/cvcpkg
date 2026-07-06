@@ -1,0 +1,72 @@
+schema_version: 1
+recipe:
+  name: fontconfig
+  upstream_version: "2.15.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.freedesktop.org/wiki/Software/fontconfig/
+  license: MIT
+  tags: [libraries]
+  description: >-
+    Fontconfig — a library for configuring and customising font access.
+    Required by Pango and Cairo for font discovery on Linux and macOS.
+
+source:
+  type: tarball
+  url: https://www.freedesktop.org/software/fontconfig/release/fontconfig-2.15.0.tar.xz
+  sha256: "63a0658d0e06e0fa886106452b58ef04f21f58202ea02a94c39de0d3335d7c0e"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: freetype
+      version: "^2.13"
+    - name: expat
+      version: "^2.6"
+  host_tools:
+    - meson
+    - ninja
+    - pkg-config
+    - python3
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libfontconfig*
+    - lib/pkgconfig/fontconfig.pc
+    - include/fontconfig/
+    - bin/fc-*
+    - etc/fonts/
+    - share/fontconfig/
+  pkg_config:
+    - fontconfig
+
+abi:
+  cxx_std: 17

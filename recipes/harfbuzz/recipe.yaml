@@ -1,0 +1,72 @@
+schema_version: 1
+recipe:
+  name: harfbuzz
+  upstream_version: "10.2.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://harfbuzz.github.io/
+  license: MIT
+  tags: [libraries]
+  description: >-
+    HarfBuzz — an OpenType text shaping engine.  Required by Pango
+    and Cairo for complex text layout and font shaping.
+
+source:
+  type: tarball
+  url: https://github.com/harfbuzz/harfbuzz/releases/download/10.2.0/harfbuzz-10.2.0.tar.xz
+  sha256: "620e3468faec2ea8685d32c46a58469b850ef63040b3565cde05959825b48227"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: glib
+      version: "^2.80"
+    - name: freetype
+      version: "^2.13"
+  host_tools:
+    - meson
+    - ninja
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libharfbuzz*
+    - lib/pkgconfig/harfbuzz*.pc
+    - lib/cmake/harfbuzz/
+    - include/harfbuzz/
+  cmake_packages:
+    - { name: harfbuzz, targets: ["harfbuzz::harfbuzz"] }
+  pkg_config:
+    - harfbuzz
+    - harfbuzz-gobject
+
+abi:
+  cxx_std: 17

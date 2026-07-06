@@ -1,0 +1,65 @@
+schema_version: 1
+recipe:
+  name: pixman
+  upstream_version: "0.44.2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pixman.org/
+  license: MIT
+  tags: [libraries]
+  description: >-
+    Pixman — a low-level software library for pixel manipulation,
+    providing optimised image compositing and rasterisation primitives.
+    Required by Cairo.
+
+source:
+  type: tarball
+  url: https://cairographics.org/releases/pixman-0.44.2.tar.gz
+  sha256: "6349061ce1a338ab6952b92194d1b0377472244208d47ff25bef86fc71973466"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools:
+    - meson
+    - ninja
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libpixman-1*
+    - lib/pkgconfig/pixman-1*
+    - include/pixman-1/
+  pkg_config:
+    - pixman-1
+
+abi:
+  cxx_std: 17

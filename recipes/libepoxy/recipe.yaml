@@ -1,0 +1,66 @@
+schema_version: 1
+recipe:
+  name: libepoxy
+  upstream_version: "1.5.10"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/anholt/libepoxy
+  license: MIT
+  tags: [libraries]
+  description: >-
+    libepoxy — a library for handling OpenGL function pointer
+    management.  Provides a dispatch mechanism that allows linking
+    against GL, GLES, EGL, GLX, and WGL without compile-time
+    dependencies.  Required by GTK 4.
+
+source:
+  type: tarball
+  url: https://download.gnome.org/sources/libepoxy/1.5/libepoxy-1.5.10.tar.xz
+  sha256: "072cda4b59dd098bba8c2363a6247299db1fa89411dc221c8b81b8ee8192e623"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools:
+    - meson
+    - ninja
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libepoxy*
+    - lib/pkgconfig/epoxy.pc
+    - include/epoxy/
+  pkg_config:
+    - epoxy
+
+abi:
+  cxx_std: 17

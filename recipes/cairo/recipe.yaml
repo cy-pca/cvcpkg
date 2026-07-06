@@ -1,0 +1,80 @@
+schema_version: 1
+recipe:
+  name: cairo
+  upstream_version: "1.18.2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://cairographics.org/
+  license: LGPL-2.1-only
+  tags: [libraries]
+  description: >-
+    Cairo — a 2D graphics library with support for multiple output
+    devices (X Window, Win32, image buffers, PDF, SVG).  Required
+    by Pango and GTK 4.
+
+source:
+  type: tarball
+  url: https://cairographics.org/releases/cairo-1.18.2.tar.xz
+  sha256: "a62b9bb42425e844cc3d6ddde043ff39dbabedd1542eba57a2eb79f85889d45a"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: pixman
+      version: "^0.44"
+    - name: freetype
+      version: "^2.13"
+    - name: fontconfig
+      version: "^2.15"
+    - name: glib
+      version: "^2.80"
+    - name: libpng
+      version: "^1.6"
+  host_tools:
+    - meson
+    - ninja
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libcairo*
+    - lib/pkgconfig/cairo*.pc
+    - include/cairo/
+  pkg_config:
+    - cairo
+    - cairo-gobject
+    - cairo-png
+    - cairo-ft
+    - cairo-pdf
+    - cairo-svg
+
+abi:
+  cxx_std: 17

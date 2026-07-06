@@ -1,0 +1,80 @@
+schema_version: 1
+recipe:
+  name: pango
+  upstream_version: "1.54.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pango.gnome.org/
+  license: LGPL-2.1-or-later
+  tags: [libraries]
+  description: >-
+    Pango — a library for laying out and rendering text, with an
+    emphasis on internationalisation.  Required by GTK 4.
+
+source:
+  type: tarball
+  url: https://download.gnome.org/sources/pango/1.54/pango-1.54.0.tar.xz
+  sha256: "8a9eed75021ee734d7fc0fdf3a65c3bba51dfefe4ae51a9b414a60c70b2d1ed8"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: glib
+      version: "^2.80"
+    - name: cairo
+      version: "^1.18"
+    - name: harfbuzz
+      version: "^10.0"
+    - name: fribidi
+      version: "^1.0"
+    - name: fontconfig
+      version: "^2.15"
+    - name: freetype
+      version: "^2.13"
+  host_tools:
+    - meson
+    - ninja
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libpango-1.0*
+    - lib/libpangocairo-1.0*
+    - lib/libpangoft2-1.0*
+    - lib/pkgconfig/pango*.pc
+    - include/pango-1.0/
+  pkg_config:
+    - pango
+    - pangocairo
+    - pangoft2
+
+abi:
+  cxx_std: 17

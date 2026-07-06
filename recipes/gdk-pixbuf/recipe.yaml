@@ -1,0 +1,75 @@
+schema_version: 1
+recipe:
+  name: gdk-pixbuf
+  upstream_version: "2.42.12"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://gitlab.gnome.org/GNOME/gdk-pixbuf
+  license: LGPL-2.1-or-later
+  tags: [libraries]
+  description: >-
+    GDK-Pixbuf — an image loading library for GTK and GNOME.
+    Supports JPEG, PNG, TIFF, and other formats.  Required by GTK 4.
+
+source:
+  type: tarball
+  url: https://download.gnome.org/sources/gdk-pixbuf/2.42/gdk-pixbuf-2.42.12.tar.xz
+  sha256: "b9505b3445b9a7e48ced34760c3bcb73e966df3ac94c95a148cb669ab748e3c7"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: glib
+      version: "^2.80"
+    - name: libjpeg-turbo
+      version: "^3.0"
+    - name: libpng
+      version: "^1.6"
+    - name: tiff
+      version: "^4.6"
+  host_tools:
+    - meson
+    - ninja
+    - pkg-config
+    - python3
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libgdk_pixbuf-2.0*
+    - lib/pkgconfig/gdk-pixbuf-2.0.pc
+    - lib/gdk-pixbuf-2.0/
+    - include/gdk-pixbuf-2.0/
+    - bin/gdk-pixbuf-*
+  pkg_config:
+    - gdk-pixbuf-2.0
+
+abi:
+  cxx_std: 17
