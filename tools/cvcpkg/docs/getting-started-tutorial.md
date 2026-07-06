@@ -215,6 +215,31 @@ cvcpkg recipes push my-library
 
 This uploads the recipe definition to the server so builders can fetch it and consumers can reference it in dependency declarations.
 
+## Publishing to an Organization (Optional)
+
+If you are part of an organization, you can publish packages under the org
+namespace by adding `--org`:
+
+```bash
+cvcpkg publish my-library --org my-team
+cvcpkg recipes push my-library --org my-team
+```
+
+This requires your token to belong to a member of the org. The package will
+appear in the catalog under `my-team/my-library`.
+
+To install an org-scoped package:
+
+```bash
+cvcpkg install my-library --org my-team --prefix ./deps
+```
+
+Private org packages require authentication — set `CVCPKG_TOKEN` before
+installing.
+
+See the [Organizations guide](organizations.md) for full details on creating
+orgs, managing members, and private organizations.
+
 ## Troubleshooting
 
 | Error | Cause | Fix |
