@@ -18,14 +18,14 @@ mkdir -p "${dest}"
 cd "${CVC_SOURCE_DIR}"
 
 # Python's zipfile.extractall() does not preserve Unix executable bits.
-# Restore them on all ELF/APE binaries in bin/ and libexec/ before copying.
-chmod +x bin/* libexec/*/* 2>/dev/null || true
+# Restore them recursively on all files in bin/ and libexec/.
+find bin libexec -type f -exec chmod +x {} +
 
 # Python's zipfile.extractall() also does not preserve symlinks — they
 # are extracted as small regular files whose content is the link target.
-# Scan bin/ and libexec/ for such files and recreate them as proper
-# symlinks so that multicall binaries (cosmocross, cosmocc) are
-# invoked with the correct argv[0].
+# Scan directories for such files and recreate them as proper symlinks
+# so that multicall binaries (cosmocross, cosmocc) are invoked with
+# the correct argv[0].
 _fix_broken_symlinks() {
     local dir="$1"
     for f in "$dir"/*; do
@@ -37,7 +37,7 @@ _fix_broken_symlinks() {
             local target
             target=$(cat "$f")
             # Sanity: target must be a single token (no whitespace/slashes)
-            if [[ "$target" =~ ^[a-zA-Z0-9._+-]+$ ]] && [[ -e "$dir/$target" || -e "$dir/$(echo "$target" | head -1)" ]]; then
+            if [[ "$target" =~ ^[a-zA-Z0-9._+-]+$ ]] && [[ -e "$dir/$target" ]]; then
                 rm "$f"
                 ln -s "$target" "$f"
             fi
@@ -45,10 +45,10 @@ _fix_broken_symlinks() {
     done
 }
 _fix_broken_symlinks bin
-# libexec has subdirectories (gcc/x86_64-linux-cosmo/14.1.0/ etc.)
-for subdir in libexec/*/*; do
-    [[ -d "$subdir" ]] && _fix_broken_symlinks "$subdir"
-done
+# libexec has deep subdirectories (gcc/x86_64-linux-cosmo/14.1.0/ etc.)
+while IFS= read -r subdir; do
+    _fix_broken_symlinks "$subdir"
+done < <(find libexec -type d)
 
 cp -a bin include lib libexec x86_64-linux-cosmo aarch64-linux-cosmo "${dest}/"
 # Preserve top-level metadata files if present.

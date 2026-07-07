@@ -882,9 +882,9 @@ def stage_bundle(
     recipe_dir: Path | None = None,
 ) -> None:
     """Copy the installed tree, manifest, and recipe into a staging directory."""
-    # Copy entire install tree
+    # Copy entire install tree (preserve symlinks for toolchains like cosmocc)
     if install_dir.is_dir():
-        shutil.copytree(install_dir, staging_dir, dirs_exist_ok=True)
+        shutil.copytree(install_dir, staging_dir, symlinks=True, dirs_exist_ok=True)
 
     # Write manifest
     meta_dir = staging_dir / "share" / "libcvc-deps"
