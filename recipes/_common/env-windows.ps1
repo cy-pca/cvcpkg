@@ -203,12 +203,16 @@ function Invoke-CvcRewriteInstallPaths {
 function Get-CvcGitBash {
     # Return a bash.exe that has (or can find) mingw-w64 gcc + make +
     # autotools on its PATH.  Priority order:
-    #   1. CVC_MSYS2_DIR env var (set by the msys2 recipe via cross_toolchain.env)
-    #   2. Well-known MSYS2 system paths (C:\msys64, C:\tools\msys64)
-    #   3. Git Bash fallback (no MinGW — usable only for wasm/non-compile scripts)
+    #   1. CVC_MSYS2_DIR env var (manual override)
+    #   2. CVC_DEPS_PREFIX\msys2 (installed by the msys2 cvcpkg recipe)
+    #   3. Well-known MSYS2 system paths (C:\msys64, C:\tools\msys64)
+    #   4. Git Bash fallback (no MinGW — usable only for non-compile scripts)
     $candidates = [System.Collections.Generic.List[string]]@()
     if ($env:CVC_MSYS2_DIR) {
         $candidates.Add((Join-Path $env:CVC_MSYS2_DIR 'usr\bin\bash.exe'))
+    }
+    if ($env:CVC_DEPS_PREFIX) {
+        $candidates.Add((Join-Path $env:CVC_DEPS_PREFIX 'msys2\usr\bin\bash.exe'))
     }
     $candidates.AddRange([string[]]@(
         'C:\msys64\usr\bin\bash.exe',
@@ -224,7 +228,7 @@ function Get-CvcGitBash {
              Where-Object { $_.Source -notmatch 'System32' } |
              Select-Object -First 1
     if ($found) { return $found.Source }
-    throw 'bash.exe not found (looked under CVC_MSYS2_DIR, C:\msys64\usr\bin\, Git\usr\bin\, and PATH)'
+    throw 'bash.exe not found (looked under CVC_MSYS2_DIR, CVC_DEPS_PREFIX\msys2\usr\bin\, C:\msys64\usr\bin\, Git\usr\bin\, and PATH)'
 }
 
 function ConvertTo-CvcMsysPath {
@@ -264,6 +268,7 @@ function Invoke-CvcMsysAutotoolsBuild {
     $msysPrefix  = ConvertTo-CvcMsysPath $env:CVC_INSTALL_DIR
     $msysSource  = ConvertTo-CvcMsysPath $env:CVC_SOURCE_DIR
     $msysDeps    = if ($env:CVC_DEPS_PREFIX) { ConvertTo-CvcMsysPath $env:CVC_DEPS_PREFIX } else { '' }
+    $depsFlag    = if ($msysDeps) { "PATH='$msysDeps/bin:'`$PATH" } else { '' }
 
     # Force the MinGW-w64 64-bit subsystem so that /mingw64/bin
     # (gcc, make, libtool, autoconf, m4, ...) is on the shell PATH.
@@ -298,24 +303,19 @@ function Invoke-CvcMsysAutotoolsBuild {
         '--enable-shared --enable-static'
     }
 
-    # Pre-flight: some Windows builders were provisioned with only the
-    # MinGW-w64 gcc packages and are missing the autotools bootstrap
-    # chain (m4, autoconf, automake, libtool, make).  Symptom: gmp's
-    # configure aborts with "No usable m4 in $PATH".  Rather than gate
-    # each recipe on a manual reprovision, self-heal by asking pacman
-    # to install the --needed set — a no-op when everything is present,
-    # a one-time ~20s install otherwise.
-    $probe = & $bash -lc 'command -v m4 >/dev/null && command -v libtool >/dev/null && command -v autoconf >/dev/null && command -v automake >/dev/null && command -v make >/dev/null && echo OK'
+    # Pre-flight: verify that required MSYS2/MinGW tools are available.
+    # These should be provided by their own cvcpkg recipes (m4, autoconf,
+    # automake, libtool) declared as host_tools in the calling recipe.
+    # The $depsFlag prepends CVC_DEPS_PREFIX/bin so shim wrappers installed
+    # by those recipes are found before any system copies.
+    $probe = & $bash -lc "$depsFlag command -v m4 >/dev/null && command -v libtool >/dev/null && command -v autoconf >/dev/null && command -v automake >/dev/null && command -v make >/dev/null && echo OK"
     if ($probe -notmatch 'OK') {
-        Write-Host 'cvcpkg: MSYS2 autotools tools missing on this builder; installing via pacman...'
-        & $bash -lc 'pacman -S --noconfirm --needed autoconf automake libtool m4 make patch diffutils'
-        if ($LASTEXITCODE -ne 0) { throw 'pacman install of autotools failed' }
+        throw 'MSYS2 autotools tools (m4, autoconf, automake, libtool, make) not found. Declare them as host_tools in recipe.yaml.'
     }
 
     # Build one big command line for bash; the caller-provided extras
     # win over defaults because they come last.
     $extras   = ($ConfigureArgs -join ' ')
-    $depsFlag = if ($msysDeps) { "PATH='$msysDeps/bin:'`$PATH" } else { '' }
     $cmd = "$depsFlag cd '$msysSource' && ./configure --prefix='$msysPrefix' --host='$HostTriple' $sharedFlags $extras"
     Write-Host "cvcpkg: bash -lc `"$cmd`""
     & $bash -lc $cmd
@@ -366,7 +366,9 @@ function Invoke-CvcMsysAutotoolsBuild {
 # produces proper Windows .dll/.lib files (MSVC ABI, not MinGW ABI) so
 # consumers built with cl.exe can link directly.
 #
-# Meson is expected on PATH or will be installed via pip automatically.
+# Meson and Ninja must be on PATH.  Declare them as host_tools in the
+# calling recipe.yaml (depends.host_tools: [meson, ninja]).  The PATH
+# check below will throw a clear error if they are missing.
 # MinGW/MSYS2 directories are stripped from PATH for the duration of
 # the build to prevent gcc headers from contaminating the MSVC build.
 #
@@ -375,16 +377,13 @@ function Invoke-CvcMsysAutotoolsBuild {
 function Invoke-CvcMesonBuild {
     param([string[]]$MesonArgs = @())
 
-    # Ensure meson is available; install via pip if missing.
+    # Verify meson and ninja are available; they must come from their
+    # own cvcpkg recipes declared as host_tools — do NOT install here.
     if (-not (Get-Command meson -ErrorAction SilentlyContinue)) {
-        Write-Host 'cvcpkg: meson not found on PATH, installing via pip...'
-        & python -m pip install --quiet meson
-        if ($LASTEXITCODE -ne 0) { throw 'pip install meson failed' }
+        throw 'meson not found on PATH. Declare "meson" as a host_tool in recipe.yaml.'
     }
     if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
-        Write-Host 'cvcpkg: ninja not found on PATH, installing via pip...'
-        & python -m pip install --quiet ninja
-        if ($LASTEXITCODE -ne 0) { throw 'pip install ninja failed' }
+        throw 'ninja not found on PATH. Declare "ninja" as a host_tool in recipe.yaml.'
     }
 
     # Strip MinGW/MSYS2 from PATH so meson selects cl.exe, not gcc.
