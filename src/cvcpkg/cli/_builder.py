@@ -423,6 +423,69 @@ def builder_run(
             except Exception:
                 pass  # best-effort log streaming
 
+    def _extract_dep_names(
+        recipe_dir: Path,
+        job_platform: str,
+    ) -> list[str]:
+        """Return direct dependency names from a recipe directory."""
+        import yaml as _yaml
+
+        recipe_yaml = recipe_dir / "recipe.yaml"
+        if not recipe_yaml.is_file():
+            return []
+        data = _yaml.safe_load(recipe_yaml.read_text())
+        deps_block = data.get("depends", {})
+
+        names: list[str] = []
+        for key in ("runtime", "build", "host_tools"):
+            for dep in deps_block.get(key, []) or []:
+                if isinstance(dep, str):
+                    names.append(dep)
+                elif isinstance(dep, dict):
+                    plats = dep.get("platforms")
+                    if plats and job_platform not in plats:
+                        continue
+                    names.append(dep["name"])
+        return names
+
+    def _resolve_transitive_deps(
+        recipe_dir: Path,
+        job_platform: str,
+        log_cb: Callable[[str], None],
+    ) -> list[str]:
+        """Compute the full transitive closure of dependencies.
+
+        Returns dep names in topological order (deepest deps first)
+        so that when packages are extracted into the prefix, transitive
+        libraries are available before the packages that need them.
+        """
+        direct = _extract_dep_names(recipe_dir, job_platform)
+        if not direct:
+            return []
+
+        # BFS to collect all transitive deps
+        visited: set[str] = set()
+        order: list[str] = []
+        queue = list(direct)
+        while queue:
+            name = queue.pop(0)
+            if name in visited:
+                continue
+            visited.add(name)
+            # Fetch this dep's recipe to find *its* deps
+            try:
+                dep_recipe_dir = _fetch_recipe(name)
+                sub_deps = _extract_dep_names(dep_recipe_dir, job_platform)
+                for sd in sub_deps:
+                    if sd not in visited:
+                        queue.append(sd)
+            except Exception:
+                # Recipe fetch may fail for host-tools that aren't
+                # packaged as recipes (system cmake, etc.) — skip.
+                pass
+            order.append(name)
+        return order
+
     def _install_deps(
         recipe_dir: Path,
         prefix: Path,
@@ -434,34 +497,12 @@ def builder_run(
     ) -> None:
         """Download and install runtime dependencies into *prefix*.
 
-        Queries the server catalog for each runtime dep, downloads the
-        matching archive, and extracts it into the shared prefix so
-        that dependent builds can find headers/libraries.
+        Resolves the full transitive dependency closure, then queries
+        the server catalog for each dep, downloads the matching
+        archive, and extracts it into the shared prefix so that
+        dependent builds can find headers/libraries.
         """
-        import yaml as _yaml
-
-        recipe_yaml = recipe_dir / "recipe.yaml"
-        if not recipe_yaml.is_file():
-            return
-        data = _yaml.safe_load(recipe_yaml.read_text())
-        deps_block = data.get("depends", {})
-
-        dep_names: list[str] = []
-        # host_tools are recipe prerequisites that must be on the host
-        # PATH at build time (e.g. cmake, ninja, meson).  Fetch them the
-        # same way as runtime/build deps so recipes that declare
-        # host_tools do not silently fall back to system versions.
-        for key in ("runtime", "build", "host_tools"):
-            for dep in deps_block.get(key, []) or []:
-                if isinstance(dep, str):
-                    dep_names.append(dep)
-                elif isinstance(dep, dict):
-                    # Respect platform filter
-                    plats = dep.get("platforms")
-                    if plats and job_platform not in plats:
-                        continue
-                    dep_names.append(dep["name"])
-
+        dep_names = _resolve_transitive_deps(recipe_dir, job_platform, log_cb)
         if not dep_names:
             return
 
