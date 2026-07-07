@@ -1,0 +1,68 @@
+schema_version: 1
+recipe:
+  name: dav1d
+  upstream_version: "1.4.3"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://code.videolan.org/videolan/dav1d
+  license: BSD-2-Clause
+  tags: [libraries, multimedia, video]
+  description: >-
+    dav1d — a fast, small AV1 decoder written in C and assembly.
+    Enables AV1 video decoding in FFmpeg (--enable-libdav1d) and is
+    the reference decoder used by web browsers.  Assembly
+    optimisations require nasm on x86 platforms.
+
+source:
+  type: tarball
+  url: https://github.com/videolan/dav1d/archive/refs/tags/1.4.3.tar.gz
+  sha256: "88a023e58d955e0886faf49c72940e0e90914a948a8e60c1326ce3e09e7a6099"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: nasm
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+  runtime: []
+  host_tools:
+    - meson
+    - ninja
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libdav1d*
+    - lib/pkgconfig/dav1d.pc
+    - include/dav1d/
+    - bin/dav1d-*.dll
+  pkg_config:
+    - dav1d
