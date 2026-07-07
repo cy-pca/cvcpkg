@@ -7,10 +7,10 @@ from pathlib import Path
 import click
 import yaml
 
+from cvcpkg.cli import cli
 from cvcpkg.cli._helpers import (
     _resolve_recipes_dirs,
 )
-from cvcpkg.cli import cli
 
 # ── Recipe distribution commands ────────────────────────────────
 

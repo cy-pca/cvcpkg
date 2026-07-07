@@ -2046,7 +2046,7 @@ class TestLocalFlag:
         recipes_dir = tmp_path / "empty_recipes"
         recipes_dir.mkdir()
         prefix = tmp_path / "prefix"
-        ret = main(
+        main(
             [
                 "install",
                 "nonexistent-pkg-xyz",
@@ -2088,7 +2088,7 @@ class TestLocalFlag:
         except Exception:
             pytest.skip("no recipes directory found")
 
-        ret = main(
+        main(
             [
                 "build",
                 "zlib",
@@ -2122,7 +2122,6 @@ class TestTryPullServerRecipes:
 
     def test_returns_empty_on_http_error(self, monkeypatch, capsys):
         """When server returns non-200, returns empty tuple."""
-        import httpx
 
         monkeypatch.setenv("CVCPKG_SERVER_URL", "https://example.com")
 
@@ -4631,7 +4630,7 @@ class TestBuildsSubmitWait:
         class FakeResponse:
             status_code = 200
 
-            def json(self_inner):
+            def json(self):
                 call_count["n"] += 1
                 # First call is the POST to submit
                 if call_count["n"] == 1:
@@ -4699,7 +4698,7 @@ class TestBuildsSubmitWait:
         class FakeResponse:
             status_code = 200
 
-            def json(self_inner):
+            def json(self):
                 call_count["n"] += 1
                 if call_count["n"] == 1:
                     return {
@@ -4766,7 +4765,7 @@ class TestBuildsSubmitDagWait:
         class FakeResponse:
             status_code = 200
 
-            def json(self_inner):
+            def json(self):
                 call_count["n"] += 1
                 # First call is POST to create DAG
                 if call_count["n"] == 1:

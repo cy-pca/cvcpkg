@@ -3,20 +3,19 @@
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
 
 import click
 import yaml
 
-from cvcpkg.cli._helpers import (
-    _platform_opt,
-    _config_opt,
-    _link_opt,
-    _validate_org_slug,
-)
 from cvcpkg.cli import cli
 from cvcpkg.cli._build import _auto_platform
+from cvcpkg.cli._helpers import (
+    _config_opt,
+    _link_opt,
+    _platform_opt,
+    _validate_org_slug,
+)
 
 # ── publish ─────────────────────────────────────────────────────
 
@@ -135,7 +134,7 @@ def publish(
         raise click.UsageError("--server and --dest are mutually exclusive.")
     if server and not token:
         raise click.UsageError(
-            "--token is required when publishing to a server " "(or set CVCPKG_TOKEN)."
+            "--token is required when publishing to a server (or set CVCPKG_TOKEN)."
         )
     if not packages and not publish_all:
         raise click.UsageError("provide recipe names, archive paths, or use --all.")

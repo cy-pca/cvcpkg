@@ -8,10 +8,8 @@ Tests:
 
 from __future__ import annotations
 
-import hashlib
 import io
 import subprocess
-import sys
 import tarfile
 from pathlib import Path
 
@@ -23,7 +21,7 @@ pydantic = pytest.importorskip("pydantic", reason="server extras not installed")
 
 from fastapi.testclient import TestClient
 
-from cvcpkg.builder import Recipe, list_recipes, resolve_build_order
+from cvcpkg.builder import Recipe, resolve_build_order
 from cvcpkg.manifest import Requirements
 from cvcpkg.server.app import create_app
 from cvcpkg.server.auth import TokenStore
@@ -148,10 +146,9 @@ class TestRequirementsInstall:
         published_names = {e.name for e in entries}
 
         for comp in reqs.components:
-            assert comp.name in published_names, (
-                f"Component '{comp.name}' from cvc-requirements.yaml "
-                f"not found in server catalog"
-            )
+            assert (
+                comp.name in published_names
+            ), f"Component '{comp.name}' from cvc-requirements.yaml not found in server catalog"
 
     def test_requirements_install_cli(self, server_env, tmp_path):
         """Full CLI install from a requirements file."""

@@ -208,13 +208,11 @@ def builder_run(
 
     Press Ctrl-C to finish in-flight jobs, unregister, and exit.
     """
-    import json
     import shutil
     import signal
     import tarfile
     import tempfile
     import threading
-    import time
     import traceback
     import zipfile
 
@@ -281,7 +279,7 @@ def builder_run(
     pid_path.write_text(str(_os.getpid()))
 
     # ── Build cross-platform/arch pairs ─────────────────────
-    _CROSS_ARCH_DEFAULTS = {
+    _cross_arch_defaults = {
         "wasm": "wasm32",
         "wasi": "wasm32",
     }
@@ -290,7 +288,7 @@ def builder_run(
         if i < len(cross_archs):
             ca = cross_archs[i]
         else:
-            ca = _CROSS_ARCH_DEFAULTS.get(cp, arch or "x86_64")
+            ca = _cross_arch_defaults.get(cp, arch or "x86_64")
         cross_entries.append({"platform": cp, "arch": ca})
 
     # ── Registration ────────────────────────────────────────
@@ -553,7 +551,7 @@ def builder_run(
                     archive_url = f"{base}{archive_url}"
 
                 # Download the archive
-                log_cb(f"  Installing dep: {dep_name} ({match.get('version','')})\n")
+                log_cb(f"  Installing dep: {dep_name} ({match.get('version', '')})\n")
                 dl_resp = client.get(archive_url)
                 if dl_resp.status_code >= 400:
                     log_cb(f"  dep {dep_name}: download failed ({dl_resp.status_code})\n")
@@ -643,12 +641,12 @@ def builder_run(
         # Map target platforms → known toolchain recipe names.
         # The builder fetches the recipe bundle to read cross_toolchain.env
         # dynamically, but needs to know which recipes to look for.
-        _TOOLCHAIN_MAP: dict[str, list[str]] = {
+        _toolchain_map: dict[str, list[str]] = {
             "wasm": ["emsdk"],
             "wasi": ["wasi-sdk"],
             "cosmo": ["cosmocc"],
         }
-        toolchain_names = _TOOLCHAIN_MAP.get(target_platform, [])
+        toolchain_names = _toolchain_map.get(target_platform, [])
         if not toolchain_names:
             return {}
 
@@ -719,8 +717,7 @@ def builder_run(
                     tc_cache_path = tc_cache_root / f"{tc_name}-{tc_version}"
                     if tc_cache_path.is_dir() and any(tc_cache_path.iterdir()):
                         log_cb(
-                            f"  Toolchain {tc_name} ({tc_version}) cached, "
-                            f"symlinking into prefix\n"
+                            f"  Toolchain {tc_name} ({tc_version}) cached, symlinking into prefix\n"
                         )
                         # Symlink cached contents into the build prefix
                         for child in tc_cache_path.iterdir():
@@ -807,7 +804,8 @@ def builder_run(
                 merged_env[var] = tpl.replace("${PREFIX}", str(prefix))
 
             log_cb(
-                f"  Toolchain {tc_name} installed ({', '.join(f'{k}={v}' for k, v in ct_env.items())})\n"
+                f"  Toolchain {tc_name} installed "
+                f"({', '.join(f'{k}={v}' for k, v in ct_env.items())})\n"
             )
 
             # 4. Install host_tools declared by the toolchain recipe
@@ -998,7 +996,7 @@ def builder_run(
                 )
                 _stream_log(
                     job_id,
-                    f"Build succeeded: {archive_path.name} " f"({size:,} bytes, sha256={sha256})\n",
+                    f"Build succeeded: {archive_path.name} ({size:,} bytes, sha256={sha256})\n",
                 )
             except Exception as exc:
                 error_message = f"build failed: {exc}\n{traceback.format_exc()}"
@@ -1229,7 +1227,7 @@ def builder_run(
 
         except Exception as exc:
             click.echo(
-                f"  WebSocket connection failed: {exc} — " f"falling back to HTTP long-poll",
+                f"  WebSocket connection failed: {exc} — falling back to HTTP long-poll",
                 err=True,
             )
             return False
