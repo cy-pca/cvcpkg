@@ -1,0 +1,53 @@
+schema_version: 1
+recipe:
+  name: lame
+  upstream_version: "3.100"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://lame.sourceforge.net/
+  license: LGPL-2.0-or-later
+  tags: [tools, multimedia, audio]
+  description: >-
+    lame — the LAME MP3 encoder command-line tool.  Built from the
+    same source tarball as the libmp3lame recipe; only the lame
+    frontend binary is installed.  Requires libmp3lame at both build
+    and runtime.
+
+source:
+  type: tarball
+  url: https://sourceforge.net/projects/lame/files/lame/3.100/lame-3.100.tar.gz/download
+  sha256: "ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: libmp3lame
+  runtime:
+    - name: libmp3lame
+  host_tools:
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - bin/lame*
