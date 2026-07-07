@@ -63,6 +63,9 @@ build:
     - platform: wasi
       host_platform: windows
       script: build-wasi.ps1
+    - platform: cosmo
+      host_platform: linux
+      script: build-cosmo.sh
 
 package:
   files:
