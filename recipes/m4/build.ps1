@@ -1,30 +1,30 @@
-# recipes/m4/build.ps1 — provide GNU m4 on Windows via MSYS2/MinGW.
+# recipes/m4/build.ps1 — build GNU m4 from source inside MSYS2.
 #
-# m4 is a build-time host tool only; no Windows library is produced.
-# The recipe ensures the MSYS2 m4 package is installed and creates
-# shim wrappers in $CVC_INSTALL_DIR\bin so the cvcpkg dependency
-# graph resolves correctly.
+# m4 is a build-time host tool only (no Windows library produced).
+# It is built inside the MSYS subsystem (not MinGW64) so the resulting
+# binary runs in MSYS2's bash environment, where autoconf/automake
+# expect to find it.  The install prefix is CVC_INSTALL_DIR which
+# the builder adds to PATH for downstream host_tools consumers.
 $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\..\_common\env-windows.ps1"
 
-$bash = Get-CvcGitBash
-$env:MSYSTEM = 'MINGW64'
+$bash        = Get-CvcGitBash
+$msysPrefix  = ConvertTo-CvcMsysPath $env:CVC_INSTALL_DIR
+$msysSource  = ConvertTo-CvcMsysPath $env:CVC_SOURCE_DIR
+$jobs        = if ($env:CVC_JOBS) { [int]$env:CVC_JOBS } else { 4 }
+if ($jobs -le 0) { $jobs = 4 }
 
-# Ensure the package is installed (pacman is a no-op if already present).
-& $bash -lc 'pacman --noconfirm -S --needed m4'
-if ($LASTEXITCODE -ne 0) { throw 'pacman install of m4 failed' }
+# Use MSYS subsystem so configure produces MSYS-native binaries that
+# bash can exec.  MSYS_NO_PATHCONV prevents mangling of Windows paths
+# passed in env vars.
+$env:MSYSTEM          = 'MSYS'
+$env:MSYS_NO_PATHCONV = '1'
+$env:CHERE_INVOKING   = '1'
 
-# Create a shim so other recipes find m4 via $CVC_DEPS_PREFIX/bin/m4.
-$binDir  = Join-Path $env:CVC_INSTALL_DIR 'bin'
-if (-not (Test-Path $binDir)) { New-Item -ItemType Directory -Path $binDir | Out-Null }
+$cmd = "cd '$msysSource' && ./configure --prefix='$msysPrefix' --disable-nls && make -j $jobs && make install"
+Write-Host "cvcpkg: bash -lc `"$cmd`""
+& $bash -lc $cmd
+if ($LASTEXITCODE -ne 0) { throw 'm4 build failed' }
 
-# Locate the actual m4 binary inside MSYS2.
-$m4Path = & $bash -lc 'command -v m4'
-if ($m4Path) { $m4Path = $m4Path.Trim() }
-
-$shimContent = "@echo off`r`n`"$bash`" -lc `"m4 %*`"`r`n"
-Set-Content -Path (Join-Path $binDir 'm4.cmd') -Value $shimContent -NoNewline
-Write-Host "m4 shim written to $binDir\m4.cmd"
-
-& $bash -lc 'm4 --version' | Select-Object -First 1
+& $bash -lc "$msysPrefix/bin/m4 --version" | Select-Object -First 1
