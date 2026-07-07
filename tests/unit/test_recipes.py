@@ -536,8 +536,8 @@ class TestRecipeBundleEndpoint:
         # Should be a valid tarball with no members
         content = resp.content
         assert len(content) > 0
-        extracted = tarfile.open(fileobj=io.BytesIO(content), mode="r:gz")
-        assert extracted.getnames() == []
+        with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as extracted:
+            assert extracted.getnames() == []
 
     def test_bundle_contains_uploaded_recipes(self, db_server_env):
         """After uploading recipes, the bundle contains them all."""
@@ -602,7 +602,7 @@ class TestRecipeBundleEndpoint:
         from cvcpkg.server.auth import TokenStore
 
         store = TokenStore(tmp_path / "state")
-        admin_tok = store.create(
+        _ = store.create(
             "admin", __import__("cvcpkg.server.models", fromlist=["TokenRole"]).TokenRole.admin
         )
         app = create_app(state_dir=tmp_path / "state")

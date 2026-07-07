@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
 
 import click
 
-from cvcpkg.cli._helpers import (
-    _platform_opt,
-    _config_opt,
-    _link_opt,
-    _VALID_ARCHES,
-    _human_size,
-)
 from cvcpkg.cli import cli
+from cvcpkg.cli._helpers import (
+    _VALID_ARCHES,
+    _config_opt,
+    _human_size,
+    _link_opt,
+    _platform_opt,
+)
 
 # ── catalog ─────────────────────────────────────────────────────
 
@@ -218,7 +217,6 @@ def clean(
     """
     import shutil
     import tempfile
-    import time
 
     scan_dir = Path(work_dir) if work_dir else Path(tempfile.gettempdir())
 

@@ -22,7 +22,7 @@ from cvcpkg.cli._helpers import _human_size
     "--token",
     envvar="CVCPKG_TOKEN",
     default=None,
-    help="Bearer token (only required if the server enforces read auth).  " "[env: CVCPKG_TOKEN]",
+    help="Bearer token (only required if the server enforces read auth).  [env: CVCPKG_TOKEN]",
 )
 @click.option("--platform", default="", help="Filter by platform.")
 @click.option("--arch", default="", help="Filter by architecture.")
@@ -145,6 +145,4 @@ def search(
     remaining = total - (offset + len(packages))
     if remaining > 0:
         click.echo()
-        click.echo(
-            f"{remaining} more result(s) available " f"— rerun with --offset {offset + limit}"
-        )
+        click.echo(f"{remaining} more result(s) available — rerun with --offset {offset + limit}")

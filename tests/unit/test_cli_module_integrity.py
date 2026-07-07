@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import ast
 import importlib
-import pkgutil
 import sys
 import types
 from pathlib import Path
@@ -268,7 +267,6 @@ class TestInitReexports:
                     imported_modules.add(node.module.split(".")[-1])
 
         for submodule in EXPECTED_SUBMODULES:
-            assert submodule in imported_modules, (
-                f"__init__.py does not import {submodule} — "
-                f"its CLI commands won't be registered"
-            )
+            assert (
+                submodule in imported_modules
+            ), f"__init__.py does not import {submodule} — its CLI commands won't be registered"

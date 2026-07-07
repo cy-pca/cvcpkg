@@ -1817,7 +1817,7 @@ class TestCLIBuildCommands:
         self._make_httpx_use_testclient(monkeypatch, server)
 
         # Submit DAG via API
-        resp = c.post(
+        c.post(
             "/v1/builds/dag",
             headers=_auth(tok),
             json={

@@ -16,10 +16,11 @@ import sys
 import tarfile
 import tempfile
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import yaml
 
@@ -414,9 +415,9 @@ def _select_matrix_entry(recipe: Recipe, platform: str, host_platform: str = "")
     no exact platform entry exists.
     """
     # Normalize short platform names to recipe matrix names.
-    _PLAT_ALIASES = {"win": "windows"}
-    norm_platform = _PLAT_ALIASES.get(platform, platform)
-    norm_host = _PLAT_ALIASES.get(host_platform, host_platform) if host_platform else ""
+    _plat_aliases = {"win": "windows"}
+    norm_platform = _plat_aliases.get(platform, platform)
+    norm_host = _plat_aliases.get(host_platform, host_platform) if host_platform else ""
 
     fallback: MatrixEntry | None = None
     any_fallback: MatrixEntry | None = None
@@ -608,7 +609,7 @@ def run_build(
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
-        _LOG_FLUSH_BYTES = 8192
+        _log_flush_bytes = 8192
         buf: list[str] = []
         buf_size = 0
         assert proc.stdout is not None
@@ -617,7 +618,7 @@ def run_build(
             sys.stdout.write(line)
             buf.append(line)
             buf_size += len(line)
-            if buf_size >= _LOG_FLUSH_BYTES:
+            if buf_size >= _log_flush_bytes:
                 log_callback("".join(buf))
                 buf.clear()
                 buf_size = 0
@@ -722,7 +723,7 @@ def run_test(
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
-        _LOG_FLUSH_BYTES = 8192
+        _log_flush_bytes = 8192
         buf: list[str] = []
         buf_size = 0
         assert proc.stdout is not None
@@ -731,7 +732,7 @@ def run_test(
             sys.stdout.write(line)
             buf.append(line)
             buf_size += len(line)
-            if buf_size >= _LOG_FLUSH_BYTES:
+            if buf_size >= _log_flush_bytes:
                 log_callback("".join(buf))
                 buf.clear()
                 buf_size = 0
@@ -1892,8 +1893,7 @@ def build_all(
     if host_tool_recipes:
         host_ordered = resolve_build_order(host_tool_recipes, host_platform)
         print(
-            f"\ncvcpkg: building {len(host_ordered)} host tool(s) "
-            f"for {platform} cross-compilation"
+            f"\ncvcpkg: building {len(host_ordered)} host tool(s) for {platform} cross-compilation"
         )
         for ht_recipe in host_ordered:
             ht_platform = host_platform
@@ -1948,7 +1948,7 @@ def build_all(
                             ht_cached = result
                             ht_server_hit = True
 
-            print(f"\ncvcpkg: == {ht_recipe.name} " f"({ht_recipe.full_version}) [host tool] ==")
+            print(f"\ncvcpkg: == {ht_recipe.name} ({ht_recipe.full_version}) [host tool] ==")
 
             if ht_cached is not None:
                 cache_hits += 1
@@ -2036,14 +2036,14 @@ def build_all(
                                 server_cache_org,
                             )
                             if ok:
-                                print(f"  -> pushed to server cache " f"({ht_chain_hash[:12]}...)")
+                                print(f"  -> pushed to server cache ({ht_chain_hash[:12]}...)")
                 except (BuildError, RecipeError):
                     if not keep_going:
                         raise
                     # Host tool failure is fatal for target recipes that
                     # depend on it, but keep-going lets us continue with
                     # recipes that don't need this tool.
-                    print(f"\ncvcpkg: FAILED host tool " f"{ht_recipe.name}")
+                    print(f"\ncvcpkg: FAILED host tool {ht_recipe.name}")
                     failed_names.add(ht_recipe.name)
                     failures.append(
                         BuildFailure(
