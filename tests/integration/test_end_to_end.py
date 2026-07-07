@@ -25,7 +25,7 @@ from cvcpkg.manifest import BundleManifest, Requirements
 
 # Real recipes dir (skip if not running from repo)
 try:
-    REPO_ROOT = Path(__file__).resolve().parents[4]
+    REPO_ROOT = Path(__file__).resolve().parents[2]
 except IndexError:
     REPO_ROOT = Path("/nonexistent")
 RECIPES_DIR = REPO_ROOT / "recipes"

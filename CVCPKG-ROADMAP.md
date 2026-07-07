@@ -3,7 +3,7 @@
 > A cross-platform, language-agnostic binary package archive
 > for the scientific computing community.
 
-*Last updated: 2026-05-25*
+*Last updated: 2026-07-06*
 
 ---
 
@@ -112,33 +112,142 @@ standards are promoted into the release manifest.
 
 ### Deployment
 
-- **Host:** catx-03.tx.wtf (Ubuntu 22.04, x86_64)
+- **Primary host:** cvcpkg.org (cvcpkg-00, 10.10.10.134)
+- **Mirror host:** pkg.tx.wtf (catx-03, local read-only mirror)
 - **Containerization:** Docker Compose (postgres + backend)
 - **CI/CD:** GitHub Actions → `prod` branch push → self-hosted runner →
   auto-deploy script → zero-downtime restart
 - **TLS:** Let's Encrypt via certbot, auto-renewal
+- **Builders:** 13 builder agents across 7 platforms:
+  - Linux x86_64: star-00, star-01, lat, rebota (self-hosted runners)
+  - FreeBSD x86_64: freebsd-build, freebsd-build-2 (Incus containers)
+  - NetBSD x86_64: netbsd-build, netbsd-build-2 (Incus containers)
+  - OpenBSD x86_64: openbsd-build, openbsd-build-2 (Incus containers)
+  - Windows x86_64: sandipaws, stablefarm-win11 (self-hosted)
+  - macOS (x86_64 + arm64): GitHub-hosted runners via workflow_dispatch
 
 ---
 
 ## Roadmap Phases
 
-### Phase 1 — Foundation (Current)
+### Phase 1 — Foundation
 
-**Status: In Progress**
+**Status: Complete (v2.0.0)**
 
-- [x] Recipe-based build system with 30 component recipes
-- [x] `cvcpkg` CLI (build, install, publish, verify)
-- [x] FastAPI server with YAML + PostgreSQL dual backend
+- [x] Recipe-based build system with 99 component recipes
+- [x] `cvcpkg` CLI (build, install, publish, verify, validate)
+- [x] FastAPI server with PostgreSQL backend + Alembic migrations
 - [x] HMAC-SHA256 token authentication with role-based access
 - [x] Chained-hash tamper-evident audit trail
 - [x] Ed25519 package signing
-- [x] Docker production deployment
+- [x] Docker production deployment (cvcpkg.org + pkg.tx.wtf mirror)
 - [x] Apache2/Let's Encrypt TLS on cvcpkg.org
-- [x] Landing page with package index, search, and sorting
-- [x] CI/CD deploy pipeline (prod branch → auto-deploy)
-- [ ] Self-hosted GitHub runner on catx-03
-- [ ] Cross-platform CI build matrix (Linux, macOS, Windows)
-- [ ] Initial set of published packages on cvcpkg.org
+- [x] Landing page with package index, search, sorting, and org scoping
+- [x] CI/CD deploy pipeline (prod branch → auto-deploy to both hosts)
+- [x] Self-hosted GitHub runners (catx-03, star-00, star-01, lat, rebota)
+- [x] 13 builder agents across Linux, FreeBSD, NetBSD, OpenBSD, Windows, macOS
+- [x] Cross-platform CI build matrix (Linux, macOS, Windows, 3 BSDs)
+- [x] 650+ published packages on cvcpkg.org
+- [x] Organization namespaces with member management
+- [x] Remote builder orchestration (submit-dag, follow-dag, monitor)
+- [x] `cvcpkg install --from cvc-requirements.yaml` workflow
+- [x] Activation scripts (bash, zsh, fish, PowerShell) setting CMAKE_PREFIX_PATH
+- [x] CMake integration (cvcpkgConfig.cmake, libcvc-deps compat, toolchain file)
+- [x] cvcpkg promoted to repo root (pyproject.toml at root)
+- [x] Cosmopolitan (cosmo) cross-compilation platform support
+- [x] WASM/WASI build platform support
+- [x] GTK4 dependency stack (pixman → cairo → pango → gdk-pixbuf → gtk4)
+- [x] Recipe validation (JSON schema, dependency graph, CI checks)
+- [x] Source-fallback builds (build from source when no binary available)
+- [x] Build caching (server-cache for CI and builders)
+- [x] Mirror protocol (pkg.tx.wtf mirrors cvcpkg.org with sync loop)
+
+### Phase 1.5 — PyPI Release Readiness
+
+**Status: In Progress**
+
+Items required before `pip install cvcpkg` goes live on PyPI.
+
+#### Packaging & Distribution
+
+- [x] pyproject.toml at repo root with poetry-core backend
+- [x] `cvcpkg` and `cvcpkg-server` entry points
+- [x] Recipes bundled into wheel via CI publish workflow
+- [ ] Test `pip install cvcpkg` from TestPyPI
+- [ ] Publish v2.0.0 to PyPI
+- [ ] Verify `cvcpkg --version` and `cvcpkg-server --version` after pip install
+
+#### Admin CLI Completeness
+
+- [x] `cvcpkg token` — create, list, revoke, approve/deny requests
+- [x] `cvcpkg builder` — list, status, run, unregister
+- [x] `cvcpkg builds` — submit, submit-dag, list, cancel, pause, resume, follow-dag, monitor
+- [x] `cvcpkg server` — stop, status
+- [x] `cvcpkg org` — members, add-member, remove-member
+- [x] `cvcpkg recipe` — push (sync recipes to server DB)
+- [ ] `cvcpkg server stats` — show server resource usage, DB size, active connections
+- [ ] `cvcpkg server backup` — trigger a database backup from CLI
+- [ ] `cvcpkg builder logs` — view recent builder activity without full monitor
+
+#### Testing & Quality
+
+- [x] 927 unit tests passing
+- [x] 16 integration test modules (server, browser UI, build cache, e2e lifecycle, etc.)
+- [x] Integration tests for cvc-requirements.yaml install workflow
+- [x] Integration tests for dummy recipe build lifecycle
+- [x] CMake integration tests (configure, install, downstream find_package)
+- [x] E2E live test (Docker Compose + real server + builder + compile consumer)
+- [x] Recipe validation via JSON schema in CI
+- [x] Source-fallback integration tests (Linux, macOS)
+- [ ] Windows CI integration tests
+- [ ] Automated upgrade/migration test (v1.x → v2.0.0)
+- [ ] Performance benchmarks for install/resolve with large catalogs
+
+#### CMake Integration
+
+- [x] `cvcpkgConfig.cmake` — sets CMAKE_PREFIX_PATH + PKG_CONFIG_PATH
+- [x] `libcvc-depsConfig.cmake` — backward-compat wrapper
+- [x] `cvcpkg-toolchain.cmake` — for `-DCMAKE_TOOLCHAIN_FILE=` usage
+- [x] Activation scripts set CMAKE_PREFIX_PATH on `source activate`
+- [ ] Document CMake integration in README and docs/
+- [ ] `cvcpkg install` writes cvcpkgConfig.cmake into the prefix automatically
+
+#### Documentation
+
+- [x] README.md (quick start, install, build, publish)
+- [x] docs/api-reference.md
+- [x] docs/ci-cd-pipeline.md
+- [x] docs/deployment-guide.md
+- [x] docs/organizations.md
+- [ ] docs/cmake-integration.md — CMake usage guide for downstream projects
+- [ ] docs/recipe-authoring.md — how to create new recipes
+- [ ] docs/pypi-install.md — pip install guide and extras reference
+- [ ] CHANGELOG.md — release notes for v2.0.0
+
+#### Gap Analysis
+
+The following items have been identified as potential gaps before the
+PyPI release:
+
+1. **No CHANGELOG.md** — users need to see what changed since v1.x.
+2. **No `cvcpkg doctor` command** — a diagnostic tool that checks the
+   local environment (Python version, pip, cmake, compiler) and reports
+   readiness for building/installing packages.
+3. **No `cvcpkg init` command** — recipe scaffolding from templates
+   (CMake, Meson, Autotools) is mentioned in Phase 4 but would be
+   valuable for the initial release.
+4. **No `cvcpkg upgrade` command** — users need a way to upgrade
+   installed packages to newer versions without reinstalling everything.
+5. **No offline mode documentation** — cvcpkg supports source-fallback
+   and local catalog files, but there's no guide for air-gapped usage.
+6. **Recipe test coverage** — not all 99 recipes have been built and
+   tested on all 7 platforms.  GTK4 stack is being built now.
+7. **Signature verification not enforced** — `cvcpkg verify-sig` exists
+   but `cvcpkg install` doesn't enforce signature checks by default.
+   Consider `--require-signatures` flag.
+8. **No dependency version constraints** — recipes declare dependencies
+   by name only, not by version range.  This hasn't been a problem yet
+   but will be as the catalog grows.
 
 ### Phase 2 — Analytics & Telemetry
 
@@ -264,9 +373,11 @@ deliberately language-agnostic.  Future expansion:
 #### Interoperability
 
 - **CMake `find_package` integration** — `cvcpkg install` generates
-  `<Package>Config.cmake` files so downstream CMake projects can
-  `find_package(Boost)` transparently.
+  `cvcpkgConfig.cmake` so downstream CMake projects can
+  `find_package(cvcpkg)` and then `find_package(Boost)` transparently.
+  *(Partially done — config files exist, auto-install into prefix pending.)*
 - **pkg-config support** — generate `.pc` files for each installed package.
+  *(Partially done — toolchain sets PKG_CONFIG_PATH, recipes generate .pc files.)*
 - **Spack compatibility layer** — import/export recipes from Spack specs.
 - **Conan compatibility layer** — consume Conan recipes as cvcpkg recipes.
 - **vcpkg manifest mode** — read `vcpkg.json` and resolve packages from the
@@ -295,11 +406,11 @@ scaling and federation:
 
 ### Phase 6 — Community & Governance
 
-**Status: Future**
+**Status: Partially Done**
 
-- **Organization namespaces** — `@org/package` scoping for institutional
-  publishers.
-- **Package ownership model** — maintainers, co-maintainers, transfer
+- [x] **Organization namespaces** — `@org/package` scoping for institutional
+  publishers, with member management CLI and API.
+- [ ] **Package ownership model** — maintainers, co-maintainers, transfer
   process.
 - **Review workflow** — community recipe PRs go through automated CI +
   manual review before being merged.
@@ -313,39 +424,27 @@ scaling and federation:
 
 ## Package Recipes
 
-### Current Recipes (v1.3.0)
+### Current Recipes (v2.0.0) — 99 recipes
 
-| Recipe | Category | Description |
-|---|---|---|
-| abseil | Core | Google's C++ common libraries |
-| boost | Core | Boost C++ libraries |
-| c-ares | Network | Async DNS resolver |
-| cgal | Geometry | Computational Geometry Algorithms Library |
-| clapack | Math | LAPACK in C |
-| fftw3 | Math | Fast Fourier Transform |
-| grpc | Network | Google RPC framework |
-| gsl | Math | GNU Scientific Library |
-| hdf5 | Data | Hierarchical Data Format |
-| imagemagick | Imaging | Image manipulation toolkit |
-| lerc | Data | Limited Error Raster Compression |
-| levmar | Math | Levenberg-Marquardt optimization |
-| libiimod | Imaging | IMOD image library |
-| libjpeg-turbo | Imaging | JPEG codec |
-| libwebp | Imaging | WebP codec |
-| log4cplus | Core | Logging framework |
-| nfft3 | Math | Non-equispaced FFT |
-| openblas | Math | Optimized BLAS |
-| openssl | Security | TLS/crypto toolkit |
-| protobuf | Data | Protocol Buffers |
-| pthreads4w | Core | POSIX threads for Windows |
-| qt6 | GUI | Qt 6 framework |
-| re2 | Core | Regular expression engine |
-| tiff | Imaging | TIFF codec |
-| vtk | Visualization | Visualization Toolkit |
-| xz | Compression | XZ/LZMA compression |
-| yaml | Data | YAML parser |
-| zlib | Compression | Deflate compression |
-| zstd | Compression | Zstandard compression |
+| Category | Recipes |
+|---|---|
+| **Core** | abseil, boost, log4cplus, pthreads4w, re2, readline |
+| **Math** | clapack, fftw3, gsl, levmar, mpfr, nfft3, openblas |
+| **Imaging** | imagemagick, lerc, libjpeg-turbo, libpng, libwebp, tiff |
+| **Data** | hdf5, protobuf, yaml |
+| **Compression** | bzip2, lz4, xz, zlib, zstd |
+| **Network** | c-ares, curl, grpc, libpq, miniupnpc, openssl |
+| **Geometry** | cgal, vcglib |
+| **Visualization** | vtk |
+| **GUI / Graphics** | cairo, fontconfig, freetype, fribidi, gdk-pixbuf, graphene, gtk4, harfbuzz, libepoxy, pango, pixman, qt6, qtmultimedia, qtshadertools, skia, slint, wayland, wayland-protocols, xkbcommon |
+| **Audio** | ffmpeg, gstreamer, libpulse, libsndfile, pipewire |
+| **Build tools** | autoconf, automake, bazel, bison, cmake, cosmocc, emsdk, flex, libtool, m4, meson, nasm, ninja, swig |
+| **Python** | python311, python312, python313 |
+| **Databases** | mariadb-connector-c, sqlite |
+| **Runtime / Interop** | libffi, libunistring, iconv, idn2, pcre2, wamr, wasi-sdk, wasmedge, wasmer, wasmtime |
+| **Security** | ca-bundle |
+| **Text** | aspell, gettext, glib, lua |
+| **Misc** | f2c, gmp, libiimod |
 
 ### Recipe Categories
 
@@ -354,14 +453,19 @@ browsable and to help users discover related packages:
 
 - **Core** — fundamental libraries (Boost, abseil, logging, threading)
 - **Math** — numerical computing (BLAS, LAPACK, FFT, optimization)
-- **Imaging** — image codecs and manipulation (JPEG, TIFF, WebP, ImageMagick)
+- **Imaging** — image codecs and manipulation (JPEG, PNG, TIFF, WebP, ImageMagick)
 - **Data** — serialization and data formats (HDF5, Protocol Buffers, YAML)
-- **Compression** — archive and compression (zlib, zstd, xz)
-- **Network** — networking and RPC (gRPC, c-ares, OpenSSL)
-- **Geometry** — computational geometry (CGAL)
+- **Compression** — archive and compression (zlib, zstd, xz, lz4, bzip2)
+- **Network** — networking and RPC (gRPC, c-ares, OpenSSL, curl)
+- **Geometry** — computational geometry (CGAL, vcglib)
 - **Visualization** — 3D rendering and visualization (VTK)
-- **GUI** — graphical user interface frameworks (Qt6)
-- **Security** — cryptography and TLS (OpenSSL)
+- **GUI / Graphics** — graphical user interface frameworks (Qt6, GTK4, Slint, Skia)
+- **Audio** — audio/video processing (FFmpeg, GStreamer, PipeWire)
+- **Build tools** — compilers and build systems (CMake, Meson, Ninja, Autotools)
+- **Python** — Python interpreters (3.11, 3.12, 3.13)
+- **Databases** — database clients and embedded databases (MariaDB, SQLite)
+- **Runtime / Interop** — FFI, WASM runtimes, text/encoding utilities
+- **Security** — CA certificates, TLS
 
 ---
 
@@ -394,19 +498,19 @@ browsable and to help users discover related packages:
 
 ---
 
-## Naming
+## Naming & Repo Identity
 
-The project is currently named **libcvc-deps** for historical reasons.  It
-will be renamed to **cvcpkg** in a future release.  This rename will:
+The project has been restructured for the **cvcpkg** identity:
 
-- Update the GitHub repository name
-- Update all CLI entry points
-- Update package metadata and documentation
-- Maintain backward compatibility for existing URLs and configurations
-  through redirects
-
-The rename is deferred to avoid breaking existing CI pipelines and
-downstream references during the active stabilization period.
+- [x] `cvcpkg` CLI entry point and Python package name
+- [x] pyproject.toml at repo root (promoted from tools/cvcpkg/)
+- [x] `cvcpkgConfig.cmake` installed alongside backward-compat `libcvc-depsConfig.cmake`
+- [x] README.md and docs reflect cvcpkg branding
+- [ ] **Repo rename** — `transfix/libcvc-deps` → `transfix/cvcpkg` (deferred
+  until PyPI release to avoid breaking CI in downstream repos; GitHub will
+  redirect git URLs but `uses:` directives in libcvc and TexMol workflows
+  must be updated simultaneously)
+- [ ] **PyPI publication** — `pip install cvcpkg` (pending final QA)
 
 ---
 
@@ -414,10 +518,19 @@ downstream references during the active stabilization period.
 
 See the [GitHub repository](https://github.com/transfix/libcvc-deps) for:
 
-- Recipe authoring guide
-- Server development setup
-- CI/CD pipeline documentation
-- Pull request process
+- Recipe authoring guide (see `recipes/zlib/` as a reference template)
+- Server development setup (`pip install -e ".[production]"`)
+- CI/CD pipeline documentation (`docs/ci-cd-pipeline.md`)
+- Pull request process (squash-merge via admin review)
+
+Quick start for recipe contributors:
+
+```bash
+pip install -e .
+cvcpkg validate                     # validate all recipes
+cvcpkg build zlib --prefix ./prefix # build a single recipe
+cvcpkg pack zlib --output-dir dist  # build + archive
+```
 
 ---
 

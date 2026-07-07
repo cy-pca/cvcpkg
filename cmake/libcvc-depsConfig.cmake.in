@@ -1,34 +1,35 @@
 @PACKAGE_INIT@
 
-# libcvc-depsConfig.cmake — marker config for a libcvc-deps install.
+# libcvc-depsConfig.cmake — backward-compatibility wrapper.
 #
-# Including this config does NOT call find_package() on any of the
-# bundled dependencies. That is intentional: downstream projects
-# (libcvc, volrover3, F2Dock, MolSurf, …) already drive their own
-# find_package() calls with the components they care about; this
-# config just lets them assert that they have been pointed at a
-# known dep distribution.
-#
-# Usage in a downstream CMakeLists.txt:
+# This file exists so that downstream projects using:
 #
 #     find_package(libcvc-deps CONFIG REQUIRED)
-#     find_package(Boost REQUIRED COMPONENTS thread filesystem system)
-#     find_package(HDF5  REQUIRED COMPONENTS C CXX)
-#     find_package(Qt6   REQUIRED COMPONENTS Core Gui Widgets)
-#     find_package(VTK   REQUIRED)
 #
-# All of the find_package() calls above resolve against this same
-# install prefix as long as CMAKE_PREFIX_PATH contains the extracted
-# libcvc-deps directory.
+# continue to work after the rename to cvcpkg.  It simply loads
+# the cvcpkgConfig.cmake from the same prefix.
+#
+# New projects should use:
+#
+#     find_package(cvcpkg CONFIG REQUIRED)
 
-set(LIBCVC_DEPS_VERSION   "@PROJECT_VERSION@")
-set(LIBCVC_DEPS_ROOT_DIR  "${PACKAGE_PREFIX_DIR}")
+# Find the real config in the same prefix.
+find_package(cvcpkg CONFIG QUIET
+  PATHS "${PACKAGE_PREFIX_DIR}"
+  NO_DEFAULT_PATH)
 
-# Convenience: prepend our root to CMAKE_PREFIX_PATH so subsequent
-# find_package() calls in the same configure step automatically
-# search here too. Harmless if the caller already passed it.
-if(NOT "${LIBCVC_DEPS_ROOT_DIR}" IN_LIST CMAKE_PREFIX_PATH)
-  list(PREPEND CMAKE_PREFIX_PATH "${LIBCVC_DEPS_ROOT_DIR}")
+if(cvcpkg_FOUND)
+  set(LIBCVC_DEPS_VERSION   "${CVCPKG_VERSION}")
+  set(LIBCVC_DEPS_ROOT_DIR  "${CVCPKG_ROOT_DIR}")
+  set(libcvc-deps_FOUND     TRUE)
+else()
+  # Fallback: set the variables directly (standalone install)
+  set(LIBCVC_DEPS_VERSION   "@PROJECT_VERSION@")
+  set(LIBCVC_DEPS_ROOT_DIR  "${PACKAGE_PREFIX_DIR}")
+
+  if(NOT "${LIBCVC_DEPS_ROOT_DIR}" IN_LIST CMAKE_PREFIX_PATH)
+    list(PREPEND CMAKE_PREFIX_PATH "${LIBCVC_DEPS_ROOT_DIR}")
+  endif()
+
+  set(libcvc-deps_FOUND TRUE)
 endif()
-
-set(libcvc-deps_FOUND TRUE)

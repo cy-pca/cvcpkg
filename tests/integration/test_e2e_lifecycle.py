@@ -48,7 +48,7 @@ SERVER_URL = os.environ.get("CVCPKG_TEST_SERVER_URL", "http://127.0.0.1:8421")
 # When running outside Docker (local dev), fall back to the repo tree.
 _CONTAINER_RECIPES = Path("/repo/recipes")
 try:
-    _LOCAL_RECIPES = Path(__file__).resolve().parents[4] / "recipes"
+    _LOCAL_RECIPES = Path(__file__).resolve().parents[2] / "recipes"
 except IndexError:
     _LOCAL_RECIPES = Path("/nonexistent")
 RECIPES_DIR = _CONTAINER_RECIPES if _CONTAINER_RECIPES.is_dir() else _LOCAL_RECIPES
