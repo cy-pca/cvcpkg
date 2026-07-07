@@ -106,6 +106,16 @@ jobs:
           echo "After cleanup:  $(df -h / | tail -1)"
           CLEANUP
 
+          # Migrate .env.production from old tools/cvcpkg/ location before rsync
+          $SSH "$REMOTE" "
+            cd ${DEPLOY_DIR}
+            if [[ ! -f .env.production && -f tools/cvcpkg/.env.production ]]; then
+              echo 'Migrating .env.production from tools/cvcpkg/ to repo root...'
+              mv tools/cvcpkg/.env.production .env.production
+            fi
+            rm -rf tools/cvcpkg tools 2>/dev/null || true
+          "
+
           # Sync checkout to remote host
           echo "Syncing checkout to ${REMOTE}:${DEPLOY_DIR}..."
           rsync -a --delete \
@@ -125,6 +135,13 @@ jobs:
           # Bundle recipes
           rm -rf src/cvcpkg/recipes
           cp -r "${DEPLOY_DIR}/recipes" src/cvcpkg/recipes
+
+          # Migration: move .env.production from old tools/cvcpkg/ location
+          if [[ ! -f .env.production && -f tools/cvcpkg/.env.production ]]; then
+            echo "Migrating .env.production from tools/cvcpkg/ to repo root..."
+            mv tools/cvcpkg/.env.production .env.production
+            rm -rf tools/cvcpkg tools
+          fi
 
           if [[ ! -f .env.production ]]; then
             echo "::error::.env.production not found at ${CVCPKG_DIR}/"
@@ -216,6 +233,13 @@ jobs:
 
           echo "=== Deploying to pkg.tx.wtf (catx-03, local) ==="
 
+          # Migrate .env.production from old tools/cvcpkg/ location before rsync
+          if [[ ! -f "${DEPLOY_DIR}/.env.production" && -f "${DEPLOY_DIR}/tools/cvcpkg/.env.production" ]]; then
+            echo "Migrating .env.production from tools/cvcpkg/ to repo root..."
+            mv "${DEPLOY_DIR}/tools/cvcpkg/.env.production" "${DEPLOY_DIR}/.env.production"
+          fi
+          rm -rf "${DEPLOY_DIR}/tools/cvcpkg" "${DEPLOY_DIR}/tools" 2>/dev/null || true
+
           echo "Syncing checkout to ${DEPLOY_DIR}..."
           rsync -a --delete \
             --exclude '.env.production' \
@@ -226,6 +250,13 @@ jobs:
 
           rm -rf src/cvcpkg/recipes
           cp -r "${DEPLOY_DIR}/recipes" src/cvcpkg/recipes
+
+          # Migration: move .env.production from old tools/cvcpkg/ location
+          if [[ ! -f .env.production && -f tools/cvcpkg/.env.production ]]; then
+            echo "Migrating .env.production from tools/cvcpkg/ to repo root..."
+            mv tools/cvcpkg/.env.production .env.production
+            rm -rf tools/cvcpkg tools
+          fi
 
           if [[ ! -f .env.production ]]; then
             echo "::error::.env.production not found at ${CVCPKG_DIR}/"
