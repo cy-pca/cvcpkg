@@ -47,12 +47,15 @@ $depsFlag mkdir -p '$msysBuild' && cd '$msysBuild' && \
     --target-os=mingw32 \
     --arch=x86_64 \
     --cross-prefix=x86_64-w64-mingw32- \
+    --enable-gpl \
     --enable-pic \
     --enable-version3 \
     $sharedFlags \
     --disable-programs \
     --disable-doc \
     --disable-debug \
+    --enable-libx264 \
+    --enable-libx265 \
     --enable-libopus \
     --enable-libmp3lame \
     --enable-libvorbis \
