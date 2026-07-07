@@ -25,6 +25,20 @@ if command -v gmake >/dev/null 2>&1; then
     MAKE=gmake
 fi
 
+# --- Detect cross-compile targets ---
+# wasm / wasi / cosmo: static builds with a cross host triple.
+# Native platforms (linux, macos, freebsd, openbsd, netbsd, windows) use
+# the native toolchain with shared libraries.
+# NOTE: must be declared before the RPATH/flags section below which
+# gates LDFLAGS on IS_CROSS — set -u would error if IS_CROSS were unset.
+IS_CROSS=false
+CROSS_HOST=""
+case "${CVC_PLATFORM}" in
+    wasm)   IS_CROSS=true; CROSS_HOST="wasm32-emscripten" ;;
+    wasi)   IS_CROSS=true; CROSS_HOST="wasm32-wasi" ;;
+    cosmo)  IS_CROSS=true; CROSS_HOST="x86_64-cosmo" ;;
+esac
+
 # --- RPATH ---
 # Embed $ORIGIN/../lib so the installed python3.X binary finds:
 #   • libpython3.X.so  (installed alongside it in lib/)
@@ -50,18 +64,6 @@ fi
 if [[ "${CVC_PLATFORM}" == "macos" ]]; then
     export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-13.0}"
 fi
-
-# --- Detect cross-compile targets ---
-# wasm / wasi / cosmo: static builds with a cross host triple.
-# Native platforms (linux, macos, freebsd, openbsd, netbsd, windows) use
-# the native toolchain with shared libraries.
-IS_CROSS=false
-CROSS_HOST=""
-case "${CVC_PLATFORM}" in
-    wasm)   IS_CROSS=true; CROSS_HOST="wasm32-emscripten" ;;
-    wasi)   IS_CROSS=true; CROSS_HOST="wasm32-wasi" ;;
-    cosmo)  IS_CROSS=true; CROSS_HOST="x86_64-cosmo" ;;
-esac
 
 # --- Configure flags ---
 CONFIGURE_ARGS=(
