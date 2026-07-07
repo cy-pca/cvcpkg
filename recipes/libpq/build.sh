@@ -27,7 +27,8 @@ meson setup "${CVC_BUILD_DIR}" \
     -Dreadline=enabled \
     -Dzstd=enabled \
     -Dlz4=enabled \
-    -Dnls=enabled
+    -Dnls=enabled \
+    -Dgssapi=enabled
 
 cd "${CVC_BUILD_DIR}"
 # Build only the libpq shared library and install the whole project.

@@ -1,0 +1,63 @@
+schema_version: 1
+recipe:
+  name: vpx-tools
+  upstream_version: "1.15.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.webmproject.org/code/
+  license: BSD-3-Clause
+  tags: [tools, multimedia, video]
+  description: >-
+    vpxenc and vpxdec — VP8/VP9 encoder and decoder command-line
+    tools from the libvpx project.  Built from the same source
+    tarball as the libvpx recipe.  Requires libvpx at runtime.
+
+source:
+  type: tarball
+  url: https://github.com/webmproject/libvpx/archive/refs/tags/v1.15.0.tar.gz
+  sha256: "e935eded7d81631a538bfae703fd1e293aad1c7fd3407ba00440c95105d2011e"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: libvpx
+    - name: nasm
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+  runtime:
+    - name: libvpx
+  host_tools:
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - bin/vpxenc*
+    - bin/vpxdec*

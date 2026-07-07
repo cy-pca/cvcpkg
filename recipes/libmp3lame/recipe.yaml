@@ -1,0 +1,61 @@
+schema_version: 1
+recipe:
+  name: libmp3lame
+  upstream_version: "3.100"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://lame.sourceforge.net/
+  license: LGPL-2.0-or-later
+  tags: [libraries, multimedia, audio]
+  description: >-
+    LAME — the LAME MP3 encoder library.  Provides MP3 encoding
+    support for FFmpeg (--enable-libmp3lame) and other audio tools.
+    Only the library is built; the lame frontend binary is omitted.
+
+source:
+  type: tarball
+  url: https://sourceforge.net/projects/lame/files/lame/3.100/lame-3.100.tar.gz/download
+  sha256: "ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools:
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libmp3lame*
+    - include/lame/
+    - bin/libmp3lame-*.dll
+  pkg_config: []

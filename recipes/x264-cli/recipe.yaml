@@ -1,0 +1,62 @@
+schema_version: 1
+recipe:
+  name: x264-cli
+  upstream_version: "0.164.stable"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.videolan.org/developers/x264.html
+  license: GPL-2.0-or-later
+  tags: [tools, multimedia, video]
+  description: >-
+    x264 command-line H.264 encoder.  Built from the same source
+    tarball as the x264 library recipe; only the x264 binary is
+    installed.  Requires libx264 at both build and runtime.
+
+source:
+  type: tarball
+  url: https://code.videolan.org/videolan/x264/-/archive/stable/x264-stable.tar.gz
+  sha256: "1108b94cd4c6943bc569afff1f8ec8c6034594a80d2baebc2b043bb438847485"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: x264
+    - name: nasm
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+  runtime:
+    - name: x264
+  host_tools:
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - bin/x264*

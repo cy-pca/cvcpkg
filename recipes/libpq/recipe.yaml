@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: libpq
   upstream_version: "18.4"
-  cvc_revision: 6
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -39,11 +39,15 @@ depends:
     - name: gettext
       version: "^1.0"
       platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: krb5
+      version: "^1.21"
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
   host_tools:
     - meson
     - ninja
     - flex
     - bison
+    - pkg-config
 
 build:
   matrix:

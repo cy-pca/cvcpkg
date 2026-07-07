@@ -1,0 +1,63 @@
+schema_version: 1
+recipe:
+  name: libopus
+  upstream_version: "1.6.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://opus-codec.org/
+  license: BSD-3-Clause
+  tags: [libraries, multimedia, audio]
+  description: >-
+    Opus — a totally open, royalty-free, highly versatile audio codec.
+    Standardised as RFC 6716.  Used by FFmpeg (--enable-libopus),
+    WebRTC, and many streaming applications.
+
+source:
+  type: tarball
+  url: https://ftp.osuosl.org/pub/xiph/releases/opus/opus-1.6.1.tar.gz
+  sha256: "6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools:
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libopus*
+    - lib/pkgconfig/opus.pc
+    - include/opus/
+    - bin/opus-*.dll
+  pkg_config:
+    - opus
