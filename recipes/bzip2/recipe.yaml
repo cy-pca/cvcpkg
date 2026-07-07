@@ -54,6 +54,9 @@ build:
     - platform: wasi
       host_platform: linux
       script: build-wasi.sh
+    - platform: cosmo
+      host_platform: linux
+      script: build-cosmo.sh
 
 package:
   files:
