@@ -202,27 +202,29 @@ function Invoke-CvcRewriteInstallPaths {
 
 function Get-CvcGitBash {
     # Return a bash.exe that has (or can find) mingw-w64 gcc + make +
-    # autotools on its PATH.  MSYS2's own bash under C:\msys64 is
-    # preferred because it is the environment where our MinGW packages
-    # (mingw-w64-x86_64-gcc, make, m4, libtool, autoconf, automake)
-    # are installed.  Git Bash is used as a fallback for platforms
-    # (e.g. wasm) where no native compilation is needed — those
-    # recipes drive emcc/emmake and don't rely on gcc/make being
-    # present in the shell.
-    foreach ($candidate in @(
+    # autotools on its PATH.  Priority order:
+    #   1. CVC_MSYS2_DIR env var (set by the msys2 recipe via cross_toolchain.env)
+    #   2. Well-known MSYS2 system paths (C:\msys64, C:\tools\msys64)
+    #   3. Git Bash fallback (no MinGW — usable only for wasm/non-compile scripts)
+    $candidates = [System.Collections.Generic.List[string]]@()
+    if ($env:CVC_MSYS2_DIR) {
+        $candidates.Add((Join-Path $env:CVC_MSYS2_DIR 'usr\bin\bash.exe'))
+    }
+    $candidates.AddRange([string[]]@(
         'C:\msys64\usr\bin\bash.exe',
         'C:\tools\msys64\usr\bin\bash.exe',
         "$env:ProgramFiles\Git\usr\bin\bash.exe",
         "$env:ProgramFiles\Git\bin\bash.exe",
         "${env:ProgramFiles(x86)}\Git\usr\bin\bash.exe"
-    )) {
+    ))
+    foreach ($candidate in $candidates) {
         if (Test-Path $candidate) { return $candidate }
     }
     $found = Get-Command bash -ErrorAction SilentlyContinue |
              Where-Object { $_.Source -notmatch 'System32' } |
              Select-Object -First 1
     if ($found) { return $found.Source }
-    throw 'bash.exe not found (looked under C:\msys64\usr\bin\, Git\usr\bin\, and PATH)'
+    throw 'bash.exe not found (looked under CVC_MSYS2_DIR, C:\msys64\usr\bin\, Git\usr\bin\, and PATH)'
 }
 
 function ConvertTo-CvcMsysPath {
@@ -356,6 +358,80 @@ function Invoke-CvcMsysAutotoolsBuild {
             }
         }
     }
+}
+
+# ── Meson / MSVC helper ─────────────────────────────────────────────
+#
+# Build a Meson project with the native MSVC toolchain (cl.exe).  This
+# produces proper Windows .dll/.lib files (MSVC ABI, not MinGW ABI) so
+# consumers built with cl.exe can link directly.
+#
+# Meson is expected on PATH or will be installed via pip automatically.
+# MinGW/MSYS2 directories are stripped from PATH for the duration of
+# the build to prevent gcc headers from contaminating the MSVC build.
+#
+# Usage:
+#   Invoke-CvcMesonBuild [-MesonArgs <string[]>]
+function Invoke-CvcMesonBuild {
+    param([string[]]$MesonArgs = @())
+
+    # Ensure meson is available; install via pip if missing.
+    if (-not (Get-Command meson -ErrorAction SilentlyContinue)) {
+        Write-Host 'cvcpkg: meson not found on PATH, installing via pip...'
+        & python -m pip install --quiet meson
+        if ($LASTEXITCODE -ne 0) { throw 'pip install meson failed' }
+    }
+    if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+        Write-Host 'cvcpkg: ninja not found on PATH, installing via pip...'
+        & python -m pip install --quiet ninja
+        if ($LASTEXITCODE -ne 0) { throw 'pip install ninja failed' }
+    }
+
+    # Strip MinGW/MSYS2 from PATH so meson selects cl.exe, not gcc.
+    $origPath = $env:PATH
+    $filteredPath = ($env:PATH -split ';' |
+        Where-Object { $_ -notmatch '(?i)\\msys64\\' -and $_ -notmatch '(?i)\\msys32\\' }) -join ';'
+    $env:PATH = $filteredPath
+
+    # Meson defaults: shared/static, release/debug, MSVC runtime.
+    $defaultLibrary = if ($env:CVC_LINK -eq 'static') { 'static' } else { 'shared' }
+    $buildtype      = $cmakeBuildType.ToLower()
+
+    $pkgConfigPath = if ($env:CVC_DEPS_PREFIX) {
+        Join-Path $env:CVC_DEPS_PREFIX 'lib\pkgconfig'
+    } else { '' }
+
+    try {
+        $setupArgs = @(
+            'setup',
+            "--prefix=$env:CVC_INSTALL_DIR",
+            "--buildtype=$buildtype",
+            '--libdir=lib',
+            "--default-library=$defaultLibrary"
+        )
+        if ($pkgConfigPath -and (Test-Path $pkgConfigPath)) {
+            $setupArgs += "--pkg-config-path=$pkgConfigPath"
+        }
+        if ($env:CVC_DEPS_PREFIX) {
+            $setupArgs += "-Dcmake_prefix_path=$env:CVC_DEPS_PREFIX"
+        }
+        $setupArgs += $MesonArgs
+        $setupArgs += $env:CVC_BUILD_DIR
+        $setupArgs += $env:CVC_SOURCE_DIR
+
+        & meson @setupArgs
+        if ($LASTEXITCODE -ne 0) { throw 'meson setup failed' }
+
+        & meson compile -C $env:CVC_BUILD_DIR -j $env:CVC_JOBS
+        if ($LASTEXITCODE -ne 0) { throw 'meson compile failed' }
+
+        & meson install -C $env:CVC_BUILD_DIR
+        if ($LASTEXITCODE -ne 0) { throw 'meson install failed' }
+    } finally {
+        $env:PATH = $origPath
+    }
+
+    Invoke-CvcRewriteInstallPaths
 }
 
 Write-Host "-- env-windows.ps1 loaded --"
