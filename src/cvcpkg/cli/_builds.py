@@ -799,6 +799,8 @@ def builds_submit_dag(
     # Valid platform→arch pairings.  wasm32 only pairs with wasm/wasi.
     _WASM_ARCHES = {"wasm32"}
     _WASM_PLATFORMS = {"wasm", "wasi"}
+    # Platforms that only support static linking (no shared libraries).
+    _STATIC_ONLY_PLATFORMS = {"wasm", "wasi", "cosmo"}
 
     # ── Drop combos no registered builder can serve ──────────────
     # The server dispatches a job only to a builder whose platform+arch
@@ -854,8 +856,8 @@ def builds_submit_dag(
                 continue
             for cfg in configs:
                 for lnk in links:
-                    # wasm/wasi only support static linking.
-                    if plat in _WASM_PLATFORMS and lnk != "static":
+                    # wasm/wasi/cosmo only support static linking.
+                    if plat in _STATIC_ONLY_PLATFORMS and lnk != "static":
                         continue
                     # Filter recipes: skip those with no matrix entry
                     eligible = [n for n in recipe_names if _has_platform_entry(n, plat)]
