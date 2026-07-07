@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import hashlib
-import os
 from pathlib import Path
 
 import yaml
 
+from cvcpkg.config import default_catalog_url
 from cvcpkg.errors import CatalogError, IntegrityError
 from cvcpkg.manifest import CatalogEntry, Dependency
-
-from cvcpkg.config import default_catalog_url
 
 GITHUB_CATALOG_URL = "https://transfix.github.io/libcvc-deps/catalog/latest.yaml"
 

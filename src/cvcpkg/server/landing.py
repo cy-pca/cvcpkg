@@ -1358,7 +1358,7 @@ def package_detail_html(name: str, *, org: str = "") -> str:
     <nav class="breadcrumb" aria-label="breadcrumbs">
       <ul>
         <li><a href="/" class="has-text-grey-light">Packages</a></li>
-        {f'<li><a href="/org/{safe_org}" class="has-text-grey-light">{safe_org}</a></li>' if safe_org else ''}
+        {f'<li><a href="/org/{safe_org}" class="has-text-grey-light">{safe_org}</a></li>' if safe_org else ""}
         <li class="is-active"><a href="#" class="has-text-light">{safe_name}</a></li>
       </ul>
     </nav>
@@ -1373,7 +1373,7 @@ def package_detail_html(name: str, *, org: str = "") -> str:
       <div class="column is-8">
         <h1 class="title is-2 has-text-white">
           <span class="icon mr-2"><i class="fas fa-cube"></i></span>
-          {f'<a href="/org/{safe_org}" class="has-text-link">{safe_org}</a><span class="has-text-grey mx-1">/</span>' if safe_org else ''}
+          {f'<a href="/org/{safe_org}" class="has-text-link">{safe_org}</a><span class="has-text-grey mx-1">/</span>' if safe_org else ""}
           <span id="pkg-title">{safe_name}</span>
           <span class="tag is-link is-rounded is-medium ml-3" id="pkg-version">&hellip;</span>
           <span class="tag is-warning is-rounded is-medium ml-2" id="pkg-license" style="display:none"></span>

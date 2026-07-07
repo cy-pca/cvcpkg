@@ -3,18 +3,17 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import click
 
-from cvcpkg.cli._helpers import (
-    _platform_opt,
-    _config_opt,
-    _link_opt,
-    _human_size,
-)
 from cvcpkg.cli import cli
 from cvcpkg.cli._build import _auto_platform
+from cvcpkg.cli._helpers import (
+    _config_opt,
+    _human_size,
+    _link_opt,
+    _platform_opt,
+)
 
 # ── cache subcommand group ──────────────────────────────────────
 
@@ -272,7 +271,6 @@ def cache_purge_cmd(
 )
 def cache_server_stats_cmd(server: str, token: str) -> None:
     """Show storage statistics from the remote cache server."""
-    import json
     import urllib.error
     import urllib.request
 
@@ -331,7 +329,6 @@ def cache_server_gc_cmd(
     max_size: str | None,
 ) -> None:
     """Run garbage collection on the remote cache server (admin-only)."""
-    import json
     import urllib.error
     import urllib.request
 

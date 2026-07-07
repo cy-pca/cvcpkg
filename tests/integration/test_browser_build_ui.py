@@ -465,9 +465,9 @@ class TestFmtRelativeHelper:
             }"""
         )
         assert result != "MISSING", "fmtRelative function not found in page"
-        assert (
-            "sec" in result.lower() or "just" in result.lower() or "ago" in result.lower()
-        ), f"Unexpected fmtRelative output for 30s ago: {result!r}"
+        assert "sec" in result.lower() or "just" in result.lower() or "ago" in result.lower(), (
+            f"Unexpected fmtRelative output for 30s ago: {result!r}"
+        )
 
     def test_fmt_relative_null(self, page):
         """fmtRelative should handle null gracefully."""
