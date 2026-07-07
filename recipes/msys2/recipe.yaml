@@ -8,28 +8,20 @@ recipe:
   maintainer_url: "https://cvcpkg.org"
   description: >-
     MSYS2 — a software distribution and build platform for Windows.
-    Provides a Unix-like POSIX shell (bash), GNU make, autotools (m4,
-    autoconf, automake, libtool), Meson, Ninja, pkg-config, and the
+    Provides a Unix-like POSIX shell (bash), GNU make, and the
     MinGW-w64 GCC toolchain.  Required as a host tool for
-    autotools-based and Meson-based builds on Windows.  Functions as
-    cvcpkg's analogue to the cosmocc / emsdk / wasi-sdk toolchain
-    recipes — once installed, other recipes declare `msys2` as a
-    host_tool and their build scripts can invoke
-    Invoke-CvcMsysAutotoolsBuild or Invoke-CvcMesonBuild.
+    autotools-based and Meson-based builds on Windows.  Use
+    Invoke-CvcMsysAutotoolsBuild or Invoke-CvcMesonBuild in build.ps1.
+    Additional tools (m4, autoconf, automake, libtool, meson, ninja)
+    are managed by their own cvcpkg recipes; declare those as
+    host_tools rather than relying on pacman.
   homepage: https://www.msys2.org/
   license: BSD-3-Clause
 
-# MSYS2 is a Windows-native build environment; it is only used as a
-# host tool (build-time only) and does not produce a separate target
-# platform.  Downstream recipes that need a POSIX shell or MinGW
-# toolchain on Windows list msys2 under depends.host_tools.
-# The builder exposes CVC_MSYS2_DIR (set via the env block below) so
-# helper functions in env-windows.ps1 know where bash.exe lives
-# without assuming the canonical C:\msys64 path.
-cross_toolchain:
-  target_platforms: []    # not a cross-compiler; Windows-native only
-  env:
-    CVC_MSYS2_DIR: "${PREFIX}/msys2"
+# MSYS2 is a Windows-native build environment used only at build time.
+# env-windows.ps1's Get-CvcGitBash locates bash.exe by checking (in
+# order): CVC_MSYS2_DIR env var, CVC_DEPS_PREFIX\msys2, C:\msys64,
+# and finally Git Bash.
 
 source:
   # The build script handles downloading the MSYS2 installer directly.
@@ -67,20 +59,21 @@ notes:
       %CVC_INSTALL_DIR%\msys2 via the official NSIS silent installer.
       If MSYS2 is already present at that path the installer is
       skipped and the existing installation is updated instead.
-      The recipe then installs the core autotools + MinGW-w64
-      development packages (base-devel, mingw-w64-x86_64-toolchain,
-      autoconf, automake, libtool, m4, make, meson, ninja, pkg-config).
+      Only base-devel (make, patch, diffutils, POSIX utilities) and
+      mingw-w64-x86_64-toolchain (gcc, g++, binutils) are installed
+      via pacman.  Autotools (m4, autoconf, automake, libtool),
+      meson, ninja, and pkg-config come from their own cvcpkg recipes.
   - title: "Large download (~500 MB)"
     platforms: [windows]
     description: >-
       The MSYS2 base installer is ~90 MB; post-install package updates
       bring the on-disk footprint to ~500 MB.
-  - title: "Analogue to cosmocc / emsdk"
+  - title: "bash.exe discovery"
     platforms: [windows]
     description: >-
-      Just as cosmocc is the toolchain recipe that enables the cosmo
-      platform and emsdk enables wasm, msys2 enables autotools and
-      Meson-based builds on Windows by providing bash, GNU make, and
-      the MinGW-w64 GCC compiler.  Downstream recipes simply list
-      msys2 under depends.host_tools and call Invoke-CvcMsysAutotoolsBuild
-      or Invoke-CvcMesonBuild from their build.ps1.
+      env-windows.ps1's Get-CvcGitBash locates bash.exe by checking
+      (1) CVC_MSYS2_DIR env var, (2) CVC_DEPS_PREFIX\msys2 (recipe
+      install path), (3) C:\msys64, (4) Git Bash.  Downstream recipes
+      call Invoke-CvcMsysAutotoolsBuild or Invoke-CvcMesonBuild from
+      their build.ps1 and declare required tools (autoconf, meson,
+      etc.) as host_tools in recipe.yaml.
