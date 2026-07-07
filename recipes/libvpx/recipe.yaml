@@ -1,0 +1,66 @@
+schema_version: 1
+recipe:
+  name: libvpx
+  upstream_version: "1.15.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.webmproject.org/code/
+  license: BSD-3-Clause
+  tags: [libraries, multimedia, video]
+  description: >-
+    libvpx — the WebM Project's VP8 and VP9 codec library.  Provides
+    VP8/VP9 encoding and decoding for FFmpeg (--enable-libvpx) and
+    is the reference codec used for WebM video.  Assembly
+    optimisations require nasm on x86 platforms.
+
+source:
+  type: tarball
+  url: https://github.com/webmproject/libvpx/archive/refs/tags/v1.15.0.tar.gz
+  sha256: "e935eded7d81631a538bfae703fd1e293aad1c7fd3407ba00440c95105d2011e"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: nasm
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+  runtime: []
+  host_tools:
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libvpx*
+    - lib/pkgconfig/vpx.pc
+    - include/vpx/
+    - bin/libvpx-*.dll
+  pkg_config:
+    - vpx

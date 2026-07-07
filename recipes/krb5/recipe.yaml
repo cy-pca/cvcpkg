@@ -1,0 +1,76 @@
+schema_version: 1
+recipe:
+  name: krb5
+  upstream_version: "1.21.3"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://web.mit.edu/kerberos/
+  license: MIT
+  tags: [libraries, security]
+  description: >-
+    MIT Kerberos 5 — network authentication protocol libraries.
+    Provides libkrb5 and libgssapi_krb5 needed by libpq (PostgreSQL
+    client) and other applications that authenticate via Kerberos or
+    GSSAPI.  Only the client libraries and headers are packaged;
+    the KDC server tools are excluded.  Windows uses the built-in
+    SSPI instead — this recipe is Unix-only.
+
+source:
+  type: tarball
+  url: https://web.mit.edu/kerberos/dist/krb5/1.21/krb5-1.21.3.tar.gz
+  sha256: "b7a4cd5ead67fb08b980b21abd150ff7217e85ea320c9ed0c6dadd304840ad35"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools:
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libkrb5*
+    - lib/libgssapi_krb5*
+    - lib/libkrb5support*
+    - lib/libk5crypto*
+    - lib/libcom_err*
+    - lib/pkgconfig/krb5*.pc
+    - lib/pkgconfig/mit-krb5*.pc
+    - lib/pkgconfig/gssrpc.pc
+    - include/krb5/
+    - include/krb5.h
+    - include/gssapi/
+    - include/gssapi.h
+    - bin/krb5-config
+  pkg_config:
+    - krb5
+    - krb5-gssapi
+    - mit-krb5
+    - mit-krb5-gssapi

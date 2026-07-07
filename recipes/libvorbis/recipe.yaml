@@ -1,0 +1,69 @@
+schema_version: 1
+recipe:
+  name: libvorbis
+  upstream_version: "1.3.7"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.xiph.org/vorbis/
+  license: BSD-3-Clause
+  tags: [libraries, multimedia, audio]
+  description: >-
+    libvorbis — the Ogg Vorbis audio compression library.  Provides
+    Vorbis encoding and decoding for FFmpeg (--enable-libvorbis).
+    Depends on libogg.
+
+source:
+  type: tarball
+  url: https://ftp.osuosl.org/pub/xiph/releases/vorbis/libvorbis-1.3.7.tar.gz
+  sha256: "0e982409a9c3fc82ee06e08205b1355e5c6aa4c36bca58146ef399621b0ce5ab"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: libogg
+  runtime:
+    - name: libogg
+  host_tools:
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libvorbis*
+    - lib/pkgconfig/vorbis*.pc
+    - include/vorbis/
+    - bin/libvorbis-*.dll
+    - bin/libvorbisenc-*.dll
+    - bin/libvorbisfile-*.dll
+  pkg_config:
+    - vorbis
+    - vorbisenc
+    - vorbisfile

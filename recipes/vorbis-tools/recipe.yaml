@@ -1,0 +1,66 @@
+schema_version: 1
+recipe:
+  name: vorbis-tools
+  upstream_version: "1.4.2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.xiph.org/downloads/
+  license: GPL-2.0-or-later
+  tags: [tools, multimedia, audio]
+  description: >-
+    vorbis-tools — command-line tools for Ogg Vorbis audio:
+    ogg123 (player), oggenc (encoder), oggdec (decoder),
+    ogginfo, and vorbiscomment.  Requires libogg and libvorbis.
+
+source:
+  type: tarball
+  url: https://downloads.xiph.org/releases/vorbis/vorbis-tools-1.4.2.tar.gz
+  sha256: "db7774ec2bf2c939b139452183669be84fda5774d6400fc57fde37f77624f0b0"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: libogg
+    - name: libvorbis
+  runtime:
+    - name: libogg
+    - name: libvorbis
+  host_tools:
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - bin/ogg123*
+    - bin/oggdec*
+    - bin/oggenc*
+    - bin/ogginfo*
+    - bin/vorbiscomment*

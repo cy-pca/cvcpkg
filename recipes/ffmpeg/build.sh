@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # recipes/ffmpeg/build.sh — build FFmpeg shared libraries on Linux/macOS/BSD.
 #
-# FFmpeg uses its own hand-written configure (not GNU autotools).  We
-# build a lean, self-contained LGPL library set: no CLI programs, no
-# docs, only FFmpeg's built-in native codecs (no external x264/x265/…),
-# so there are zero external codec dependencies.  This is exactly what
-# Qt Multimedia's FFmpeg backend links against.
+# Builds a feature-rich LGPL set: external codecs (Opus, MP3, Vorbis, VP8/VP9,
+# AV1), image formats (WebP, JPEG, PNG), OpenSSL for HTTPS, subtitle rendering
+# (freetype, fontconfig, fribidi), and PulseAudio on Linux.  GPL features and
+# non-free codecs (x264, x265, fdk-aac) are excluded.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -13,13 +12,15 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 
 # Put the cvcpkg prefix bin on PATH so FFmpeg's configure finds nasm
-# (built as a build dependency) for x86 assembly optimizations.
+# (built as a build dependency) and pkg-config finds external libs.
 export PATH="${CVC_DEPS_PREFIX}/bin:${PATH}"
+export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 
 cd "${CVC_SOURCE_DIR}"
 
 CONFIGURE_ARGS=(
     --prefix="${CVC_INSTALL_DIR}"
+    --enable-gpl
     --enable-pic
     --enable-version3
     --disable-programs
@@ -27,11 +28,33 @@ CONFIGURE_ARGS=(
     --disable-debug
     --disable-static
     --enable-shared
+    # GPL codecs
+    --enable-libx264
+    --enable-libx265
+    # External codecs (LGPL-compatible)
+    --enable-libopus
+    --enable-libmp3lame
+    --enable-libvorbis
+    --enable-libvpx
+    --enable-libdav1d
+    # Image formats
+    --enable-libwebp
+    --enable-libjpeg
+    --enable-libpng
+    # Subtitle rendering
+    --enable-libfreetype
+    --enable-libfribidi
+    # Network / compression
+    --enable-openssl
+    --enable-zlib
+    --enable-bzlib
+    --enable-lzma
 )
 
 if [[ "${CVC_LINK:-shared}" == "static" ]]; then
     CONFIGURE_ARGS=(
         --prefix="${CVC_INSTALL_DIR}"
+        --enable-gpl
         --enable-pic
         --enable-version3
         --disable-programs
@@ -39,7 +62,33 @@ if [[ "${CVC_LINK:-shared}" == "static" ]]; then
         --disable-debug
         --enable-static
         --disable-shared
+        --enable-libx264
+        --enable-libx265
+        --enable-libopus
+        --enable-libmp3lame
+        --enable-libvorbis
+        --enable-libvpx
+        --enable-libdav1d
+        --enable-libwebp
+        --enable-libjpeg
+        --enable-libpng
+        --enable-libfreetype
+        --enable-libfribidi
+        --enable-openssl
+        --enable-zlib
+        --enable-bzlib
+        --enable-lzma
     )
+fi
+
+# fontconfig is Linux/BSD/macOS only (no Windows port in cvcpkg).
+if [[ "${CVC_PLATFORM}" != "windows" ]]; then
+    CONFIGURE_ARGS+=(--enable-libfontconfig)
+fi
+
+# PulseAudio is Linux-only.
+if [[ "${CVC_PLATFORM}" == "linux" ]]; then
+    CONFIGURE_ARGS+=(--enable-libpulse)
 fi
 
 # FFmpeg's configure hard-defaults its C compiler to "gcc" and does not

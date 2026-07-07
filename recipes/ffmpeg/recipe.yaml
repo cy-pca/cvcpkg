@@ -7,15 +7,17 @@ recipe:
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   homepage: https://ffmpeg.org/
-  license: LGPL-2.1-or-later
+  license: GPL-2.0-or-later
   tags: [multimedia]
   description: >-
     FFmpeg — a complete, cross-platform solution to record, convert and
     stream audio and video.  Ships the libavformat, libavcodec,
-    libavutil, libavfilter, libswscale and libswresample shared
-    libraries that back Qt Multimedia's default FFmpeg backend.  Built
-    as LGPL (no --enable-gpl / --enable-nonfree) with only FFmpeg's
-    built-in native codecs, so it carries no external codec dependencies.
+    libavutil, libavfilter, libavdevice, libswscale and libswresample
+    shared libraries.  Built with --enable-gpl and a broad external
+    codec set: H.264 (x264), H.265/HEVC (x265), Opus, MP3, Vorbis,
+    VP8/VP9 (libvpx), AV1 (dav1d), WebP, JPEG, PNG, OpenSSL,
+    bzip2/lzma, freetype/fontconfig/fribidi, and PulseAudio on Linux.
+    Pared-down static builds are also provided for wasm, wasi, and cosmo.
 
 source:
   type: tarball
@@ -28,9 +30,86 @@ patches: []
 depends:
   build:
     - name: nasm
-      platforms: [linux, freebsd, openbsd, netbsd]
-  runtime: []
-  host_tools: []
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: x264
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: x265
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libopus
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libmp3lame
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libogg
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libvorbis
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: dav1d
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libvpx
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libwebp
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libjpeg-turbo
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libpng
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: freetype
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: fontconfig
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: fribidi
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: openssl
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: bzip2
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: xz
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: zlib
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libpulse
+      platforms: [linux]
+  runtime:
+    - name: x264
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: x265
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libopus
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libmp3lame
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libogg
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libvorbis
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: dav1d
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libvpx
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libwebp
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libjpeg-turbo
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libpng
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: freetype
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: fontconfig
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: fribidi
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: openssl
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: bzip2
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: xz
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: zlib
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libpulse
+      platforms: [linux]
+  host_tools:
+    - pkg-config
 
 build:
   matrix:
@@ -54,9 +133,21 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: cosmo
+      host_platform: linux
+      script: build-cosmo.sh
 
 package:
   files:
+    # Unix shared libs (.so / .dylib)
     - lib/libavformat*
     - lib/libavcodec*
     - lib/libavutil*
@@ -66,6 +157,22 @@ package:
     - lib/libswresample*
     - lib/pkgconfig/libav*
     - lib/pkgconfig/libsw*
+    # Windows DLLs and import libs
+    - bin/avformat-*.dll
+    - bin/avcodec-*.dll
+    - bin/avutil-*.dll
+    - bin/avfilter-*.dll
+    - bin/avdevice-*.dll
+    - bin/swscale-*.dll
+    - bin/swresample-*.dll
+    - lib/avformat.lib
+    - lib/avcodec.lib
+    - lib/avutil.lib
+    - lib/avfilter.lib
+    - lib/avdevice.lib
+    - lib/swscale.lib
+    - lib/swresample.lib
+    # Headers (shared)
     - include/libavformat/
     - include/libavcodec/
     - include/libavutil/

@@ -82,7 +82,8 @@ Set-Location $env:CVC_SOURCE_DIR
     '-Dreadline=disabled',
     '-Dzstd=disabled',
     '-Dlz4=disabled',
-    '-Dnls=disabled'
+    '-Dnls=disabled',
+    '-Dgssapi=enabled'
 ))
 if ($LASTEXITCODE -ne 0) { throw "meson setup failed" }
 
