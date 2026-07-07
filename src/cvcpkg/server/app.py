@@ -76,6 +76,7 @@ from cvcpkg.server.models import (
     DagSubmitRequest,
     DagSubmitResponse,
     EmailUpdateRequest,
+    FacetBucket,
     HealthResponse,
     MirrorInfo,
     MirrorListResponse,
@@ -88,9 +89,6 @@ from cvcpkg.server.models import (
     OrgUpdateRequest,
     PackageInfo,
     PackageListResponse,
-    FacetBucket,
-    SearchFacets,
-    SearchResponse,
     ProfileUpdateRequest,
     PublishResponse,
     RecipeInfo,
@@ -98,6 +96,8 @@ from cvcpkg.server.models import (
     RegistrationMode,
     RegistrationRequest,
     RegistrationResponse,
+    SearchFacets,
+    SearchResponse,
     TagCreateRequest,
     TagInfo,
     TagListResponse,
@@ -370,8 +370,8 @@ def _local_compute_facets(
     counts: dict[str, dict[str, int]] = {k: {} for k in facet_keys}
     tag_counts: dict[str, int] = {}
     for b in bundles:
-        for facet_name, field in facet_keys.items():
-            val = str(b.get(field) or "").strip()
+        for facet_name, facet_field in facet_keys.items():
+            val = str(b.get(facet_field) or "").strip()
             if not val:
                 continue
             counts[facet_name][val] = counts[facet_name].get(val, 0) + 1
@@ -1523,18 +1523,21 @@ def create_app(
             package_count = 0
             total_size_bytes = 0
             if include_facets:
-                raw_facets, total_bundles, distinct_names, total_size = (
-                    await _db_packages.get_search_facets(
-                        platform=platform,
-                        release=db_release,
-                        search=q,
-                        include_yanked=include_yanked,
-                        recipe_version=recipe_version,
-                        arch=arch,
-                        build_type=build_type,
-                        link=link,
-                        org_slug=org,
-                    )
+                (
+                    raw_facets,
+                    total_bundles,
+                    distinct_names,
+                    total_size,
+                ) = await _db_packages.get_search_facets(
+                    platform=platform,
+                    release=db_release,
+                    search=q,
+                    include_yanked=include_yanked,
+                    recipe_version=recipe_version,
+                    arch=arch,
+                    build_type=build_type,
+                    link=link,
+                    org_slug=org,
                 )
                 if release == "live" or tag:
                     # Facets from get_search_facets don't know about 'live'
@@ -2802,9 +2805,7 @@ def create_app(
                 return False
             if platform and b.get("platform") != platform:
                 return False
-            if link and b.get("link") != link:
-                return False
-            return True
+            return not (link and b.get("link") != link)
 
         state.index["bundles"] = [b for b in state.index.get("bundles", []) if not _matches(b)]
         after = len(state.index["bundles"])
@@ -3704,7 +3705,9 @@ def create_app(
             ET.SubElement(item, "pubDate").text = pkg.published_at.strftime(
                 "%a, %d %b %Y %H:%M:%S +0000"
             )
-            ET.SubElement(item, "guid", isPermaLink="false").text = (
+            ET.SubElement(
+                item, "guid", isPermaLink="false"
+            ).text = (
                 f"{pkg.name}-{pkg.version}-{pkg.platform}-{pkg.arch}-{pkg.build_type}-{pkg.link}"
             )
 
@@ -4189,9 +4192,12 @@ def create_app(
                     visible.append(b)
                 else:
                     org_info = await _db_orgs.get(b.org_slug)
-                    if org_info is None or not org_info.is_private:
-                        visible.append(b)
-                    elif caller and await _db_orgs.is_member(b.org_slug, caller.name):
+                    if (
+                        org_info is None
+                        or not org_info.is_private
+                        or caller
+                        and await _db_orgs.is_member(b.org_slug, caller.name)
+                    ):
                         visible.append(b)
             builders = visible
         return BuilderListResponse(total=len(builders), builders=builders)
@@ -5003,7 +5009,7 @@ def create_app(
         if not _use_db or _db_recipes is None:
             raise HTTPException(
                 501,
-                "recipe distribution requires a database backend " "(set CVCPKG_DATABASE_URL)",
+                "recipe distribution requires a database backend (set CVCPKG_DATABASE_URL)",
             )
 
     @app.post(
@@ -5127,8 +5133,8 @@ def create_app(
 
             try:
                 recipes_dir = find_recipes_dir()
-            except RecipeError:
-                raise HTTPException(404, "no recipes available")
+            except RecipeError as exc:
+                raise HTTPException(404, "no recipes available") from exc
 
             with tarfile.open(fileobj=buf, mode="w:gz") as tar:
                 for entry in sorted(recipes_dir.iterdir()):
@@ -5246,8 +5252,6 @@ def create_app(
 
         # Register as a placeholder — no archive, no sha256
         if _db_packages is not None and version:
-            import datetime
-
             await _db_packages.add_package(
                 name=name,
                 version=version,
@@ -5280,7 +5284,7 @@ def create_app(
         if not _use_db or _db_webhooks is None:
             raise HTTPException(
                 501,
-                "webhooks require a database backend " "(set CVCPKG_DATABASE_URL)",
+                "webhooks require a database backend (set CVCPKG_DATABASE_URL)",
             )
 
     @app.post(

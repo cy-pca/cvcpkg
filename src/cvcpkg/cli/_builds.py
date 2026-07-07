@@ -360,7 +360,6 @@ def builds_follow_dag(dag_id: str, server: str, token: str):
     """
     import concurrent.futures
     import threading
-    import time
 
     import httpx
 
@@ -482,7 +481,6 @@ def builds_follow_dag(dag_id: str, server: str, token: str):
 
 def _wait_for_jobs(server: str, token: str, job_ids: list[int]) -> None:
     """Poll until all job IDs reach a terminal state, printing updates."""
-    import time
 
     import httpx
 
@@ -528,7 +526,6 @@ def _wait_for_jobs(server: str, token: str, job_ids: list[int]) -> None:
 
 def _wait_for_dags(server: str, token: str, dag_ids: list[str]) -> None:
     """Poll until all jobs in the given DAGs reach terminal state."""
-    import time
 
     import httpx
 
@@ -564,7 +561,7 @@ def _wait_for_dags(server: str, token: str, dag_ids: list[str]) -> None:
                             icon = "\u2713" if status == "succeeded" else "\u2717"
                             click.echo(
                                 f"  {icon} #{jid} {j['recipe_name']} "
-                                f"({j['platform']}/{j.get('arch','?')}): {status}"
+                                f"({j['platform']}/{j.get('arch', '?')}): {status}"
                             )
                         counts[status] = counts.get(status, 0) + (1 if jid not in finished else 0)
                     else:
@@ -574,14 +571,10 @@ def _wait_for_dags(server: str, token: str, dag_ids: list[str]) -> None:
                 break
             if all_job_ids:
                 click.echo(
-                    f"  ... {len(all_job_ids) - len(finished)}/{len(all_job_ids)} "
-                    f"job(s) remaining",
+                    f"  ... {len(all_job_ids) - len(finished)}/{len(all_job_ids)} job(s) remaining",
                     err=True,
                 )
 
-    n_failed = sum(1 for jid in all_job_ids if jid not in finished) + len(
-        [j for j in all_job_ids if False]  # placeholder
-    )
     # Re-check final states
     failed_ids: list[int] = []
     with httpx.Client(timeout=30) as client:
@@ -791,16 +784,13 @@ def builds_submit_dag(
         """Check if a recipe has a build matrix entry for the platform."""
         data = recipe_data.get(name, {})
         matrix = data.get("build", {}).get("matrix", [])
-        for entry in matrix:
-            if entry.get("platform") in (plat, "any"):
-                return True
-        return False
+        return any(entry.get("platform") in (plat, "any") for entry in matrix)
 
     # Valid platform→arch pairings.  wasm32 only pairs with wasm/wasi.
-    _WASM_ARCHES = {"wasm32"}
-    _WASM_PLATFORMS = {"wasm", "wasi"}
+    _wasm_arches = {"wasm32"}
+    _wasm_platforms = {"wasm", "wasi"}
     # Platforms that only support static linking (no shared libraries).
-    _STATIC_ONLY_PLATFORMS = {"wasm", "wasi", "cosmo"}
+    _static_only_platforms = {"wasm", "wasi", "cosmo"}
 
     # ── Drop combos no registered builder can serve ──────────────
     # The server dispatches a job only to a builder whose platform+arch
@@ -846,9 +836,9 @@ def builds_submit_dag(
     for plat in platforms:
         for ar in arches:
             # Skip invalid platform/arch combos
-            if ar in _WASM_ARCHES and plat not in _WASM_PLATFORMS:
+            if ar in _wasm_arches and plat not in _wasm_platforms:
                 continue
-            if plat in _WASM_PLATFORMS and ar not in _WASM_ARCHES:
+            if plat in _wasm_platforms and ar not in _wasm_arches:
                 continue
             # Skip combos no registered builder can serve.
             if _builder_check and not _has_builder(plat, ar):
@@ -857,7 +847,7 @@ def builds_submit_dag(
             for cfg in configs:
                 for lnk in links:
                     # wasm/wasi/cosmo only support static linking.
-                    if plat in _STATIC_ONLY_PLATFORMS and lnk != "static":
+                    if plat in _static_only_platforms and lnk != "static":
                         continue
                     # Filter recipes: skip those with no matrix entry
                     eligible = [n for n in recipe_names if _has_platform_entry(n, plat)]
@@ -908,7 +898,7 @@ def builds_submit_dag(
                     )
                     dag_ids.append(data["dag_id"])
                     click.echo(
-                        f"DAG {data['dag_id']}: {data['total']} jobs " f"({plat}/{ar}/{cfg}/{lnk})"
+                        f"DAG {data['dag_id']}: {data['total']} jobs ({plat}/{ar}/{cfg}/{lnk})"
                     )
 
     if wait:
@@ -1028,7 +1018,6 @@ def builds_monitor(server: str, token: str, interval: float, dag_id: str | None)
       cvcpkg builds monitor --dag-id populate-20260604-190000
     """
     import shutil
-    import time
 
     import httpx
 
@@ -1091,8 +1080,7 @@ def builds_monitor(server: str, token: str, interval: float, dag_id: str | None)
         succeeded = sum(1 for j in done if j.get("status") == "succeeded")
         failed = sum(1 for j in done if j.get("status") == "failed")
         lines.append(
-            f"Jobs: {len(active)} active, {succeeded} succeeded, "
-            f"{failed} failed, {len(jobs)} total"
+            f"Jobs: {len(active)} active, {succeeded} succeeded, {failed} failed, {len(jobs)} total"
         )
         lines.append("")
 

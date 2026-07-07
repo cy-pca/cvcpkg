@@ -7,20 +7,21 @@ from pathlib import Path
 
 import click
 
+from cvcpkg.cli import cli
 from cvcpkg.cli._helpers import (
-    _platform_opt,
     _config_opt,
-    _link_opt,
-    _prefix_opt,
     _keep_build_opt,
-    _recipes_dir_opt,
-    _no_default_recipes_opt,
+    _link_opt,
     _local_opt,
     _maintainer_opt,
+    _no_default_recipes_opt,
+    _platform_opt,
+    _prefix_opt,
+    _recipes_dir_opt,
     _resolve_recipes_dirs,
     _validate_org_slug,
 )
-from cvcpkg.cli import cli
+from cvcpkg.cli._install import validate
 
 # ── world ───────────────────────────────────────────────────────
 
@@ -199,7 +200,7 @@ def _try_pull_server_recipes() -> tuple[str, ...]:
             return ()
     except Exception as exc:
         click.echo(
-            f"cvcpkg: could not reach {server} ({exc}), " "falling back to local recipes.",
+            f"cvcpkg: could not reach {server} ({exc}), falling back to local recipes.",
             err=True,
         )
         return ()

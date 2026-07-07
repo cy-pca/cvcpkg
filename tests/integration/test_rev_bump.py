@@ -365,9 +365,9 @@ class TestChainHashAfterBump:
         hashes_after = {n: chain_hash(r, by_name2) for n, r in by_name2.items()}
 
         for name in ["a", "b", "c"]:
-            assert (
-                hashes_before[name] != hashes_after[name]
-            ), f"{name} chain_hash should change after cascade bump"
+            assert hashes_before[name] != hashes_after[name], (
+                f"{name} chain_hash should change after cascade bump"
+            )
 
 
 # ── Integration: build_order after rev-bump ─────────────────────
@@ -512,9 +512,9 @@ class TestRevBumpRealRecipes:
         for name, dependants in rd.items():
             for dep in dependants:
                 ds = get_downstream(name, recipes)
-                assert (
-                    dep in ds
-                ), f"{dep} is a direct dependant of {name} but not in get_downstream({name})"
+                assert dep in ds, (
+                    f"{dep} is a direct dependant of {name} but not in get_downstream({name})"
+                )
 
     def test_all_recipes_loadable_after_hypothetical_bump(self):
         """Verify the recipe set is valid for rev_bump analysis."""

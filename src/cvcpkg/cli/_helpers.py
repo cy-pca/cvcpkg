@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import click
-import yaml
 
 # ── Shared option decorators ────────────────────────────────────
 #
@@ -84,7 +82,8 @@ _no_default_recipes_opt = click.option(
     "--no-default-recipes",
     is_flag=True,
     default=False,
-    help="Ignore the auto-detected default recipes directory; use only explicit --recipes-dir paths.",
+    help="Ignore the auto-detected default recipes directory;"
+    " use only explicit --recipes-dir paths.",
 )
 _maintainer_opt = click.option(
     "--maintainer",

@@ -20,13 +20,10 @@ for maintainability:
 
 from __future__ import annotations
 
-import sys
-
 import click
 
 from cvcpkg import __version__
 from cvcpkg.errors import CvcpkgError
-
 
 # ── Root group ──────────────────────────────────────────────────
 
@@ -59,18 +56,30 @@ def cli(ctx: click.Context) -> None:
 # @cli.command() or creates subgroups.
 
 from cvcpkg.cli import (  # noqa: E402, F401
-    _install,
-    _catalog,
-    _publish,
     _build,
-    _signing,
-    _cache,
-    _server,
     _builder,
     _builds,
+    _cache,
+    _catalog,
+    _install,
+    _publish,
     _recipe,
     _search,
+    _server,
+    _signing,
     _webhook,
+)
+from cvcpkg.cli._build import (  # noqa: E402, F401
+    _auto_platform,
+    _resolve_recipe_dir,
+    _try_pull_server_recipes,
+)
+from cvcpkg.cli._builds import (  # noqa: E402, F401
+    _wait_for_dags,
+    _wait_for_jobs,
+)
+from cvcpkg.cli._catalog import (  # noqa: E402, F401
+    _fetch_mirror_urls,
 )
 
 # ── Backward-compatible re-exports ──────────────────────────────
@@ -79,29 +88,16 @@ from cvcpkg.cli._helpers import (  # noqa: E402, F401
     _resolve_recipes_dirs,
     _validate_org_slug,
 )
-from cvcpkg.cli._build import (  # noqa: E402, F401
-    _resolve_recipe_dir,
-    _auto_platform,
-    _try_pull_server_recipes,
-)
 from cvcpkg.cli._publish import (  # noqa: E402, F401
-    _resolve_publish_archives,
-    _resolve_all_archives,
     _extract_manifest,
-    _publish_to_server,
-    _publish_to_backend,
-    _variant_exists,
-    _publish_simple,
     _publish_chunked,
+    _publish_simple,
+    _publish_to_backend,
+    _publish_to_server,
+    _resolve_all_archives,
+    _resolve_publish_archives,
+    _variant_exists,
 )
-from cvcpkg.cli._catalog import (  # noqa: E402, F401
-    _fetch_mirror_urls,
-)
-from cvcpkg.cli._builds import (  # noqa: E402, F401
-    _wait_for_jobs,
-    _wait_for_dags,
-)
-
 
 # ── main() wrapper for backward compat with tests ──────────────
 

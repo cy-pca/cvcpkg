@@ -109,7 +109,6 @@ class TestBuilderPublicAccess:
         c = server["client"]
         admin_tok = server["admin_token"]
         pub_tok = server["pub_token"]
-        member_tok = server["member_token"]
 
         # Create a public org and a private org
         self._create_org(c, admin_tok, "public-org", is_private=False)
