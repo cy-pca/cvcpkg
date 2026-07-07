@@ -22,7 +22,7 @@ with certbot).
 ## Quick Deploy
 
 ```bash
-cd tools/cvcpkg
+# from the repo root
 
 # 1. Create environment file
 cp .env.production.example .env.production
@@ -146,8 +146,8 @@ docker compose -f docker-compose.production.yml exec backend \
 Add a cron job:
 
 ```cron
-0 3 * * * cd /path/to/tools/cvcpkg && ./scripts/run-production.sh --backup
-0 4 * * 0 find /path/to/tools/cvcpkg/backups -name '*.gz' -mtime +30 -delete
+0 3 * * * cd /path/to/cvcpkg && ./scripts/run-production.sh --backup
+0 4 * * 0 find /path/to/cvcpkg/backups -name '*.gz' -mtime +30 -delete
 ```
 
 ## Monitoring
@@ -186,7 +186,7 @@ scrape_configs:
 ## Updating
 
 ```bash
-cd tools/cvcpkg
+# from the repo root
 git pull
 ./scripts/run-production.sh --build
 ./scripts/run-production.sh --down

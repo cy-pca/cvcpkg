@@ -8,7 +8,7 @@ name: deploy-prod
 # catx-03 deploys locally for pkg.tx.wtf and SSHes to cvcpkg-00
 # over the internal LAN for cvcpkg.org.
 #
-# Mirror config lives in catx-03:/home/tfx/libcvc-deps/tools/cvcpkg/
+# Mirror config lives in catx-03:/home/tfx/libcvc-deps/
 # .env.production (CVCPKG_MIRROR_MODE=1, CVCPKG_MIRROR_UPSTREAM=
 # https://cvcpkg.org).  The mirror sync loop runs inside the backend
 # container and pulls the upstream catalog every hour; downloads are
@@ -69,7 +69,7 @@ jobs:
           RELEASE_TAG="prod-${SHORT_SHA}"
           REMOTE="tfx@10.10.10.134"
           DEPLOY_DIR="/home/tfx/libcvc-deps"
-          CVCPKG_DIR="${DEPLOY_DIR}/tools/cvcpkg"
+          CVCPKG_DIR="${DEPLOY_DIR}"
           SSH="ssh -o StrictHostKeyChecking=accept-new"
 
           echo "=== Deploying to cvcpkg.org (cvcpkg-00) ==="
@@ -87,7 +87,7 @@ jobs:
           sudo find /tmp -maxdepth 1 -name 'cvcpkg-*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true
 
           # Clean old database backups (keep last 5)
-          BKDIR="/home/tfx/libcvc-deps/tools/cvcpkg/backups"
+          BKDIR="/home/tfx/libcvc-deps/backups"
           if [ -d "$BKDIR" ]; then
             ls -1t "$BKDIR"/pre-deploy-*.sql.gz 2>/dev/null | tail -n +6 | xargs rm -f 2>/dev/null || true
           fi
@@ -212,7 +212,7 @@ jobs:
           SHORT_SHA="${SHA:0:7}"
           RELEASE_TAG="prod-${SHORT_SHA}"
           DEPLOY_DIR="/home/tfx/libcvc-deps"
-          CVCPKG_DIR="${DEPLOY_DIR}/tools/cvcpkg"
+          CVCPKG_DIR="${DEPLOY_DIR}"
 
           echo "=== Deploying to pkg.tx.wtf (catx-03, local) ==="
 
@@ -312,7 +312,7 @@ jobs:
             echo "::warning::CVCPKG_PUBLISHER_TOKEN not set — skipping recipe push"
             exit 0
           fi
-          python3 -m pip install --quiet --user ./tools/cvcpkg || true
+          python3 -m pip install --quiet --user . || true
           # Prefer the freshly-checked-out package script over any installed copy.
           CVCPKG="python3 -m cvcpkg"
           ok=0
@@ -372,7 +372,7 @@ jobs:
               cd /root/libcvc-deps 2>/dev/null || cd /usr/local/src/libcvc-deps &&
               git fetch origin &&
               git checkout -f $SHA &&
-              cd tools/cvcpkg &&
+              cd . &&
               pip install --break-system-packages --quiet . 2>/dev/null;
               pip install --quiet . 2>/dev/null;
               echo \"\$(hostname): \$(cvcpkg --version)\"
@@ -435,7 +435,7 @@ jobs:
           echo "$(hostname): LLVM $(llvm-config-18 --version 2>/dev/null || echo 'not found')"
 
       - name: Install cvcpkg
-        working-directory: tools/cvcpkg
+        working-directory: .
         run: |
           pip install --break-system-packages --quiet . 2>/dev/null || \
           pip install --quiet .
@@ -509,7 +509,7 @@ jobs:
             cd C:/Users/tfx/src/cvc/libcvc-deps &&
             git fetch origin &&
             git checkout -f $SHA &&
-            cd tools/cvcpkg &&
+            cd . &&
             pip install --quiet . 2>NUL &&
             set PYTHONIOENCODING=utf-8 &&
             cvcpkg --version

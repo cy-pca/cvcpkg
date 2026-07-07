@@ -61,7 +61,7 @@ jobs:
           SHORT_SHA="${SHA:0:7}"
           RELEASE_TAG="dev-${SHORT_SHA}"
           DEPLOY_DIR="/opt/libcvc-deps"
-          CVCPKG_DIR="${DEPLOY_DIR}/tools/cvcpkg"
+          CVCPKG_DIR="${DEPLOY_DIR}"
 
           echo "=== Deploying to cvcpkg-server VM (dev) ==="
 
@@ -137,7 +137,7 @@ jobs:
           set -euo pipefail
           SHA="${{ steps.target.outputs.sha }}"
           DEPLOY_DIR="/opt/libcvc-deps"
-          CVCPKG_DIR="${DEPLOY_DIR}/tools/cvcpkg"
+          CVCPKG_DIR="${DEPLOY_DIR}"
 
           for VM in cvcpkg-builder-01 cvcpkg-builder-02; do
             echo "=== Updating $VM ==="

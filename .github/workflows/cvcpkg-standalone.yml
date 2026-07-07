@@ -62,7 +62,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install cvcpkg + PyInstaller
-        working-directory: tools/cvcpkg
+        working-directory: .
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
@@ -72,14 +72,14 @@ jobs:
         shell: bash
         run: |
           # Copy repo-level recipes so PyInstaller can bundle them
-          rm -rf tools/cvcpkg/src/cvcpkg/recipes/*
-          cp -r recipes/* tools/cvcpkg/src/cvcpkg/recipes/ 2>/dev/null || true
+          rm -rf src/cvcpkg/recipes/*
+          cp -r recipes/* src/cvcpkg/recipes/ 2>/dev/null || true
           # Remove the gitignore that hides them
-          rm -f tools/cvcpkg/src/cvcpkg/recipes/.gitignore
+          rm -f src/cvcpkg/recipes/.gitignore
 
       - name: Build standalone binary
         shell: bash
-        working-directory: tools/cvcpkg
+        working-directory: .
         run: |
           # PyInstaller data separator: ";" on Windows, ":" elsewhere
           SEP=":"
@@ -106,7 +106,7 @@ jobs:
 
       - name: Verify binary runs
         shell: bash
-        working-directory: tools/cvcpkg
+        working-directory: .
         run: |
           if [[ "${{ matrix.os }}" == windows-* ]]; then
             ./dist/cvcpkg.exe --version
@@ -117,7 +117,7 @@ jobs:
 
       - name: Rename artifact
         shell: bash
-        working-directory: tools/cvcpkg
+        working-directory: .
         run: |
           if [[ "${{ matrix.os }}" == windows-* ]]; then
             mv dist/cvcpkg.exe "dist/${{ matrix.artifact }}"
@@ -128,7 +128,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: tools/cvcpkg/dist/${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
 
   # ─────────────────── BSD builds via SSH ──────────────────────
   build-bsd:
@@ -227,11 +227,11 @@ jobs:
           ssh ${SSH_OPTS} "${VM}" "cd ${remote_dir} && \
             TMPDIR=/usr/local/tmp ${PYTHON} -m pip install --break-system-packages pyinstaller 2>/dev/null \
               || ${PYTHON} -m pip install pyinstaller && \
-            TMPDIR=/usr/local/tmp ${PYTHON} -m pip install --break-system-packages ./tools/cvcpkg 2>/dev/null \
-              || ${PYTHON} -m pip install ./tools/cvcpkg && \
-            rm -rf tools/cvcpkg/src/cvcpkg/recipes/.gitignore && \
-            cp -r recipes/* tools/cvcpkg/src/cvcpkg/recipes/ 2>/dev/null || true && \
-            cd tools/cvcpkg && \
+            TMPDIR=/usr/local/tmp ${PYTHON} -m pip install --break-system-packages . 2>/dev/null \
+              || ${PYTHON} -m pip install . && \
+            rm -f src/cvcpkg/recipes/.gitignore && \
+            cp -r recipes/* src/cvcpkg/recipes/ 2>/dev/null || true && \
+            cd . && \
             ${PYTHON} -m PyInstaller \
               --onefile \
               --name cvcpkg \
@@ -257,11 +257,11 @@ jobs:
           set -euo pipefail
           VM="root@${{ steps.vm.outputs.host }}"
 
-          ssh ${SSH_OPTS} "${VM}" "cd ${remote_dir}/tools/cvcpkg && \
+          ssh ${SSH_OPTS} "${VM}" "cd ${remote_dir. && \
             chmod +x dist/cvcpkg && ./dist/cvcpkg --version"
 
           mkdir -p dist
-          scp ${SSH_OPTS} "${VM}:${remote_dir}/tools/cvcpkg/dist/cvcpkg" \
+          scp ${SSH_OPTS} "${VM}:${remote_dir./dist/cvcpkg" \
             "dist/${{ matrix.artifact }}"
 
       - name: Clean up BSD VM

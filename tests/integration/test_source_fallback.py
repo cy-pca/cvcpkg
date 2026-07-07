@@ -10,7 +10,7 @@ require build tools (cmake, make/ninja) to be installed.
 Run on merge to master via the source-fallback-ci.yml workflow, or
 locally::
 
-    cd tools/cvcpkg
+    # from the repo root
     poetry run pytest tests/integration/test_source_fallback.py -v
 
 Markers:
@@ -30,7 +30,7 @@ import pytest
 # ── Paths ───────────────────────────────────────────────────────
 
 try:
-    _CVCPKG_ROOT = Path(__file__).resolve().parents[2]  # tools/cvcpkg
+    _CVCPKG_ROOT = Path(__file__).resolve().parents[2]  # repo root
     _REPO_ROOT = _CVCPKG_ROOT.parents[1]  # libcvc-deps
 except IndexError:
     _CVCPKG_ROOT = Path("/nonexistent")

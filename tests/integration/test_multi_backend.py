@@ -20,7 +20,7 @@ programmatically.  The tests exercise the core lifecycle:
 
 Run via Docker Compose::
 
-    cd tools/cvcpkg
+    # from the repo root
     docker compose -f docker-compose.test.yml run --rm test \
         pytest tests/integration/test_multi_backend.py -v
 

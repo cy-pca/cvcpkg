@@ -118,7 +118,7 @@ log "checking out $FULL_SHA..."
 git -c advice.detachedHead=false checkout --quiet "$FULL_SHA"
 
 # cd into the cvcpkg directory where the compose files live
-cd tools/cvcpkg
+cd .
 
 export CVCPKG_RELEASE="$RELEASE_TAG"
 COMPOSE="$DC -f $COMPOSE_FILE --env-file $ENV_FILE"

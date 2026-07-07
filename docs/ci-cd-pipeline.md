@@ -109,7 +109,7 @@ gh workflow run "Populate cvcpkg.org" \
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
 | `ci.yml` | PR/push to master | Full test suite |
-| `cvcpkg-ci.yml` | Changes to `tools/cvcpkg/`, `recipes/`, `packaging/` | cvcpkg-specific tests |
+| `cvcpkg-ci.yml` | Changes to the repo root, `recipes/`, `packaging/` | cvcpkg-specific tests |
 | `source-fallback-ci.yml` | Changes to recipes | Verify source download fallbacks |
 
 ## GitHub Actions Runners

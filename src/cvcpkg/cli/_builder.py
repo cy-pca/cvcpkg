@@ -968,14 +968,14 @@ def builder_run(
         """
         import subprocess
 
-        # Find the tools/cvcpkg directory
+        # Find the cvcpkg project root (where pyproject.toml lives)
         pkg_dir = Path(__file__).resolve().parent.parent  # cvcpkg package
         setup_dir = pkg_dir.parent  # src/
         # Walk up to find pyproject.toml
         candidates = [
-            setup_dir.parent,  # tools/cvcpkg
-            Path.home() / "libcvc-deps" / "tools" / "cvcpkg",
-            Path("/root/libcvc-deps/tools/cvcpkg"),
+            setup_dir.parent,  # repo root
+            Path.home() / "libcvc-deps",
+            Path("/root/libcvc-deps"),
         ]
         cvcpkg_dir: Path | None = None
         for c in candidates:
@@ -990,7 +990,7 @@ def builder_run(
         click.echo(f"  self-update: updating from {cvcpkg_dir}")
         try:
             # Pull latest code
-            repo_root = cvcpkg_dir.parent.parent  # libcvc-deps root
+            repo_root = cvcpkg_dir
             subprocess.run(
                 ["git", "pull", "--ff-only"],
                 cwd=repo_root,

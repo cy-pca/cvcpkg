@@ -9,7 +9,7 @@ revision 216 vs `recipes/*/recipe.yaml`
 
 We are ready to publish `cvcpkg` to PyPI (workflow, OIDC trusted
 publishing, TestPyPI dry-run, and live smoke tests are all in place —
-see [`tools/cvcpkg/docs/operator-runbook.md` §11](../../tools/cvcpkg/docs/operator-runbook.md)).
+see [`docs/operator-runbook.md` §11](../../docs/operator-runbook.md)).
 
 But a PyPI release means *anyone* doing `pip install cvcpkg && cvcpkg
 install boost qt6 vtk grpc protobuf openssl` against the default
@@ -124,7 +124,7 @@ but is published on macos.
 - [ ] **Register `cvcpkg` as a PyPI project** with a pending
       publisher matching `transfix/libcvc-deps` + workflow
       `cvcpkg-publish.yml` + environment `pypi`. See
-      [operator runbook §11.1](../../tools/cvcpkg/docs/operator-runbook.md#111-one-time-setup).
+      [operator runbook §11.1](../../docs/operator-runbook.md#111-one-time-setup).
 - [ ] **Register `cvcpkg` on TestPyPI** with the same pending
       publisher, environment `testpypi`.
 - [ ] Create GitHub Actions environments `pypi` and `testpypi`
@@ -135,7 +135,7 @@ but is published on macos.
 - [ ] Cut the first PyPI tag (`cvcpkg-v2.0.1` or
       `cvcpkg-v2.1.0`).
 - [ ] Bump `Development Status` classifier in
-      [`tools/cvcpkg/pyproject.toml`](../../tools/cvcpkg/pyproject.toml)
+      [`pyproject.toml`](../../pyproject.toml)
       from `3 - Alpha` → `4 - Beta` (the system is in production at
       cvcpkg.org and exercised by `live-smoke` in CI).
 

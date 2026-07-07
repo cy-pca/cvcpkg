@@ -60,7 +60,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install cvcpkg
-        run: pip install ./tools/cvcpkg
+        run: pip install .
 
       - name: Determine release tag
         id: tag
