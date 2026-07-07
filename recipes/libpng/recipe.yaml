@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: libpng
   upstream_version: "1.6.44"
-  cvc_revision: 1
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -53,6 +53,8 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
