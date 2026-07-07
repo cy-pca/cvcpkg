@@ -4371,9 +4371,17 @@ def create_app(
             }
             for j in body.jobs
         ]
-        infos = await _db_build_jobs.create_dag(
-            jobs=jobs_dicts, dag_id=dag_id, submitted_by=actor.name
-        )
+        try:
+            infos = await _db_build_jobs.create_dag(
+                jobs=jobs_dicts, dag_id=dag_id, submitted_by=actor.name
+            )
+        except Exception as exc:
+            import logging as _logging
+
+            _logging.getLogger("cvcpkg.server").exception(
+                "create_dag failed for dag_id=%s (%d jobs)", dag_id, len(jobs_dicts)
+            )
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
         await _db_audit.record(
             action=AuditAction.build_submit,
             actor=actor.name,

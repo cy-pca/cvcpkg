@@ -600,6 +600,7 @@ def builder_run(
         _TOOLCHAIN_MAP: dict[str, list[str]] = {
             "wasm": ["emsdk"],
             "wasi": ["wasi-sdk"],
+            "cosmo": ["cosmocc"],
         }
         toolchain_names = _TOOLCHAIN_MAP.get(target_platform, [])
         if not toolchain_names:

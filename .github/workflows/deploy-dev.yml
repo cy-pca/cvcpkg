@@ -173,6 +173,10 @@ jobs:
               if ! grep -q -- '--cross-platform wasi' \"\$UNIT\" 2>/dev/null; then
                 sed -i 's|--cross-platform wasm|& --cross-platform wasi|' \"\$UNIT\"
               fi
+              # Add --cross-platform cosmo if missing
+              if ! grep -q -- '--cross-platform cosmo' \"\$UNIT\" 2>/dev/null; then
+                sed -i 's|--cross-platform wasi|& --cross-platform cosmo|' \"\$UNIT\"
+              fi
               systemctl daemon-reload
               systemctl restart cvcpkg-builder
               sleep 2

@@ -875,10 +875,13 @@ def builds_submit_dag(
 
                     jobs = []
                     for name in eligible:
-                        dep_indices = []
-                        for dep_name in _dep_names(name):
-                            if dep_name in name_to_idx:
-                                dep_indices.append(name_to_idx[dep_name])
+                        dep_indices = list(
+                            dict.fromkeys(
+                                name_to_idx[dep_name]
+                                for dep_name in _dep_names(name)
+                                if dep_name in name_to_idx
+                            )
+                        )
                         jobs.append(
                             {
                                 "recipe_name": name,

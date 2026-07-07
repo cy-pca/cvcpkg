@@ -494,6 +494,10 @@ jobs:
             if ! grep -q -- '--cross-platform wasi' "$UNIT" 2>/dev/null; then
               sudo sed -i 's|--cross-platform wasm|& --cross-platform wasi|' "$UNIT"
             fi
+            # Add --cross-platform cosmo if missing
+            if ! grep -q -- '--cross-platform cosmo' "$UNIT" 2>/dev/null; then
+              sudo sed -i 's|--cross-platform wasi|& --cross-platform cosmo|' "$UNIT"
+            fi
             sudo systemctl daemon-reload
             sudo systemctl enable cvcpkg-builder 2>/dev/null || true
             sudo systemctl restart cvcpkg-builder
