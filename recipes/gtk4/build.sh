@@ -62,6 +62,10 @@ case "${CVC_PLATFORM}" in
     macos)
         MESON_OPTS+=( -Dmacos-backend=true -Dwayland-backend=false -Dx11-backend=false )
         ;;
+    freebsd|openbsd|netbsd)
+        # BSDs use X11; Wayland support is still maturing on non-Linux BSDs.
+        MESON_OPTS+=( -Dx11-backend=true -Dwayland-backend=false )
+        ;;
 esac
 
 meson setup "${CVC_BUILD_DIR}/meson" "${SRC}" "${MESON_OPTS[@]}"
