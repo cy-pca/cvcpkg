@@ -106,9 +106,10 @@ class TestSourceFallback:
             or "source" in result.stdout.lower()
         )
         # zlib should produce include/zlib.h and a library.
-        assert (prefix / "include" / "zlib.h").is_file(), (
-            f"zlib.h not found in {prefix / 'include'}; contents: "
-            + str(list((prefix / "include").iterdir()) if (prefix / "include").is_dir() else "N/A")
+        assert (
+            prefix / "include" / "zlib.h"
+        ).is_file(), f"zlib.h not found in {prefix / 'include'}; contents: " + str(
+            list((prefix / "include").iterdir()) if (prefix / "include").is_dir() else "N/A"
         )
 
     def test_fallback_on_missing_component(self, tmp_path: Path) -> None:
@@ -272,9 +273,9 @@ class TestLocalBuildMode:
             str(_RECIPES_DIR),
             check=False,
         )
-        assert result.returncode == 0, (
-            f"cvcpkg install --local failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-        )
+        assert (
+            result.returncode == 0
+        ), f"cvcpkg install --local failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         # --local implies --fallback-to-source, so zlib should be built
         assert (prefix / "include" / "zlib.h").is_file(), "zlib.h not found; contents: " + str(
             list((prefix / "include").iterdir()) if (prefix / "include").is_dir() else "N/A"
@@ -306,9 +307,9 @@ class TestLocalBuildMode:
             cwd=str(_CVCPKG_ROOT),
             env=env,
         )
-        assert result.returncode == 0, (
-            f"CVCPKG_LOCAL=1 install failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-        )
+        assert (
+            result.returncode == 0
+        ), f"CVCPKG_LOCAL=1 install failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         assert (prefix / "include" / "zlib.h").is_file()
 
     def test_build_local_produces_output(self, tmp_path: Path) -> None:
@@ -324,9 +325,9 @@ class TestLocalBuildMode:
             str(_RECIPES_DIR),
             check=False,
         )
-        assert result.returncode == 0, (
-            f"cvcpkg build --local failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-        )
+        assert (
+            result.returncode == 0
+        ), f"cvcpkg build --local failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         assert (prefix / "include" / "zlib.h").is_file()
         combined = result.stdout + result.stderr
         assert "cvcpkg.org" not in combined

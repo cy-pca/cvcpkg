@@ -217,9 +217,9 @@ class TestBuilderPublishImport:
         """_builder module must have _api_request in its own namespace."""
         from cvcpkg.cli import _builder
 
-        assert hasattr(_builder, "_api_request"), (
-            "_builder.py does not have _api_request in its namespace."
-        )
+        assert hasattr(
+            _builder, "_api_request"
+        ), "_builder.py does not have _api_request in its namespace."
 
     def test_builder_cross_imports_match_source(self):
         """Verify _builder.py's import statements include all cross-module refs."""
@@ -235,9 +235,9 @@ class TestBuilderPublishImport:
 
         # _publish_to_server must be imported from _publish
         assert "_publish" in cross_imports, "_builder.py missing import from _publish"
-        assert "_publish_to_server" in cross_imports["_publish"], (
-            "_builder.py does not import _publish_to_server from _publish"
-        )
+        assert (
+            "_publish_to_server" in cross_imports["_publish"]
+        ), "_builder.py does not import _publish_to_server from _publish"
 
 
 # ── 4. __init__.py re-exports coverage ──────────────────────────
@@ -267,6 +267,6 @@ class TestInitReexports:
                     imported_modules.add(node.module.split(".")[-1])
 
         for submodule in EXPECTED_SUBMODULES:
-            assert submodule in imported_modules, (
-                f"__init__.py does not import {submodule} — its CLI commands won't be registered"
-            )
+            assert (
+                submodule in imported_modules
+            ), f"__init__.py does not import {submodule} — its CLI commands won't be registered"

@@ -66,9 +66,9 @@ class TestLoadAllRecipes:
 
     def test_recipe_names_match_dirs(self):
         for r in list_recipes(RECIPES_DIR):
-            assert r.name == r.recipe_dir.name, (
-                f"Recipe name '{r.name}' doesn't match directory '{r.recipe_dir.name}'"
-            )
+            assert (
+                r.name == r.recipe_dir.name
+            ), f"Recipe name '{r.name}' doesn't match directory '{r.recipe_dir.name}'"
 
 
 # ── Manifest generation round-trip ──────────────────────────────
@@ -229,9 +229,9 @@ class TestCvcRequirements:
         reqs = Requirements.from_dict(raw)
         recipe_names = {r.name for r in list_recipes(RECIPES_DIR)}
         for c in reqs.components:
-            assert c.name in recipe_names, (
-                f"Component '{c.name}' in cvc-requirements.yaml has no recipe"
-            )
+            assert (
+                c.name in recipe_names
+            ), f"Component '{c.name}' in cvc-requirements.yaml has no recipe"
 
 
 # ── Build-order resolution with real recipes ───────────────────
@@ -258,9 +258,9 @@ class TestResolveBuildOrderIntegration:
             for dep in depends:
                 dep_name = dep if isinstance(dep, str) else dep["name"]
                 if dep_name in name_to_idx:
-                    assert name_to_idx[dep_name] < name_to_idx[r.name], (
-                        f"{dep_name} should come before {r.name}"
-                    )
+                    assert (
+                        name_to_idx[dep_name] < name_to_idx[r.name]
+                    ), f"{dep_name} should come before {r.name}"
 
     def test_no_duplicate_names(self):
         """Each recipe name should appear exactly once in the order."""
