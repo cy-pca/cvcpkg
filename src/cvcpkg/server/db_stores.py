@@ -2295,10 +2295,14 @@ class DbBuildJobStore:
 
             await session.flush()  # assigns IDs
 
-            # Resolve index-based deps to real IDs and insert edges
+            # Resolve index-based deps to real IDs and insert edges.
+            # Deduplicate to avoid violating the (job_id, depends_on_job_id)
+            # unique constraint when callers include repeated indices.
             for i, row in enumerate(created_rows):
+                seen: set[int] = set()
                 for dep_idx in idx_deps[i]:
-                    if 0 <= dep_idx < len(created_rows):
+                    if 0 <= dep_idx < len(created_rows) and dep_idx not in seen:
+                        seen.add(dep_idx)
                         dep_row = BuildJobDepRow(
                             job_id=row.id,
                             depends_on_job_id=created_rows[dep_idx].id,
@@ -2307,12 +2311,14 @@ class DbBuildJobStore:
 
             await session.flush()
 
-            # Build results with dep IDs
+            # Build results with dep IDs (deduplicated)
             results = []
             for i, row in enumerate(created_rows):
-                real_dep_ids = [
-                    created_rows[di].id for di in idx_deps[i] if 0 <= di < len(created_rows)
-                ]
+                real_dep_ids = list(
+                    dict.fromkeys(
+                        created_rows[di].id for di in idx_deps[i] if 0 <= di < len(created_rows)
+                    )
+                )
                 results.append(self._row_to_info(row, real_dep_ids))
             return results
 

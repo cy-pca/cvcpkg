@@ -192,6 +192,10 @@ def server(request, tmp_path) -> Generator[ServerInstance, None, None]:
     os.makedirs(state_dir, exist_ok=True)
 
     if backend == "sqlite":
+        try:
+            import aiosqlite  # noqa: F401
+        except ImportError:
+            pytest.skip("aiosqlite not installed — skipping SQLite backend")
         db_path = tmp_path / f"test-{backend}.db"
         db_url = f"sqlite+aiosqlite:///{db_path}"
     elif backend == "mysql":
