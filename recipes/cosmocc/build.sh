@@ -16,6 +16,11 @@ mkdir -p "${dest}"
 # strip_components:0 means the source dir has cosmocc's top-level
 # entries directly (bin/, include/, lib/, ...).  Copy them.
 cd "${CVC_SOURCE_DIR}"
+
+# Python's zipfile.extractall() does not preserve Unix executable bits.
+# Restore them on all ELF/APE binaries in bin/ and libexec/ before copying.
+chmod +x bin/* libexec/*/* 2>/dev/null || true
+
 cp -a bin include lib libexec x86_64-linux-cosmo aarch64-linux-cosmo "${dest}/"
 # Preserve top-level metadata files if present.
 for f in LICENSE.gpl2 LICENSE.gpl3 LICENSE.lgpl2 LICENSE.lgpl3 Name README.md; do
