@@ -53,20 +53,24 @@ def db_server_env(tmp_path, monkeypatch):
 def _make_recipe_bundle(name: str, build_script: str = "") -> bytes:
     """Create an in-memory recipe tar.gz bundle."""
     if not build_script:
-        build_script = textwrap.dedent("""\
+        build_script = textwrap.dedent(
+            """\
             #!/bin/bash
             mkdir -p "$CVC_INSTALL_DIR/include"
             echo "// stub" > "$CVC_INSTALL_DIR/include/{name}.h"
-        """).format(name=name)
+        """
+        ).format(name=name)
 
-    recipe_yaml = textwrap.dedent(f"""\
+    recipe_yaml = textwrap.dedent(
+        f"""\
         recipe:
           name: {name}
           upstream_version: "1.0.0"
           cvc_revision: 1
         source:
           type: none
-    """)
+    """
+    )
 
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
