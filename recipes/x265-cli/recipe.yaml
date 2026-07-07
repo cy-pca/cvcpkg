@@ -1,0 +1,69 @@
+schema_version: 1
+recipe:
+  name: x265-cli
+  upstream_version: "4.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://x265.readthedocs.io/
+  license: GPL-2.0-or-later
+  tags: [tools, multimedia, video]
+  description: >-
+    x265 command-line H.265/HEVC encoder.  Built from the same
+    source tarball as the x265 library recipe; only the x265 binary
+    is installed.  Requires libx265 at both build and runtime.
+
+source:
+  type: tarball
+  url: https://bitbucket.org/multicoreware/x265_git/downloads/x265_4.1.tar.gz
+  sha256: "a31699c6a89806b74b0151e5e6a7df65de4b49050482fe5ebf8a4379d7af8f29"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: x265
+    - name: nasm
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+  runtime:
+    - name: x265
+  host_tools:
+    - cmake
+    - ninja
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - bin/x265*
+    - bin/x265.exe
