@@ -44,6 +44,7 @@ depends:
     - ninja
     - flex
     - bison
+    - pkg-config
 
 build:
   matrix:
