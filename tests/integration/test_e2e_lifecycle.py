@@ -17,7 +17,7 @@ Exercises the full workflow in Docker containers:
 
 Run via Docker Compose::
 
-    cd tools/cvcpkg
+    # from the repo root
     docker compose -f docker-compose.test.yml up -d --build postgres backend
     # wait for health
     docker compose -f docker-compose.test.yml run --rm test \

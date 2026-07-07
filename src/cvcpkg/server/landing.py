@@ -3100,7 +3100,7 @@ def guide_html() -> str:
       <div class="guide-step">
         <p class="has-text-grey-lighter mb-2">Or install from the repository:</p>
         <div class="guide-code"><pre><code>git clone https://github.com/{repo}.git
-cd libcvc-deps/tools/cvcpkg
+cd cvcpkg
 pip install .</code></pre></div>
       </div>
       <div class="guide-step">
@@ -3490,7 +3490,7 @@ cvcpkg-server run --state-dir ./my-packages --port 8420</code></pre></div>
         <p class="has-text-grey-lighter mb-2">
           Or use the Docker Compose production stack:
         </p>
-        <div class="guide-code"><pre><code>cd tools/cvcpkg
+        <div class="guide-code"><pre><code># from the repo root
 cp .env.production.example .env.production
 # Edit .env.production with your secrets
 docker compose -f docker-compose.production.yml \\

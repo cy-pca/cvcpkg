@@ -302,8 +302,8 @@ jobs:
             exit 1
           fi
           echo "Using Python: $PY ($($PY --version 2>&1))"
-          "$PY" -m pip install --quiet --break-system-packages ./tools/cvcpkg \
-            || "$PY" -m pip install --quiet ./tools/cvcpkg
+          "$PY" -m pip install --quiet --break-system-packages . \
+            || "$PY" -m pip install --quiet .
           # Ensure ~/.local/bin is on PATH (self-hosted runners may not have it)
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 

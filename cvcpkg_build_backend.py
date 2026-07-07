@@ -34,7 +34,7 @@ _EXTS = {".yaml", ".sh", ".ps1", ".cmake", ".patch"}
 def _sync_recipes() -> None:
     """Copy recipe files into the package source tree."""
     src_recipes = _HERE / "src" / "cvcpkg" / "recipes"
-    repo_recipes = _HERE.parent.parent / "recipes"
+    repo_recipes = _HERE / "recipes"
 
     if not repo_recipes.is_dir():
         return  # Building from sdist or outside repo — skip

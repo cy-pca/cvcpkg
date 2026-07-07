@@ -84,7 +84,8 @@ runs:
         ref: ${{ inputs.libcvc_deps_ref }}
         path: _libcvc-deps
         sparse-checkout: |
-          tools/cvcpkg
+          src
+          pyproject.toml
           packaging
           cvc-requirements.yaml
         sparse-checkout-cone-mode: false
@@ -96,7 +97,7 @@ runs:
 
     - name: Install cvcpkg
       shell: bash
-      run: pip install ./_libcvc-deps/tools/cvcpkg
+      run: pip install ./_libcvc-deps
 
     - name: 'cvcpkg: resolve & install'
       id: install

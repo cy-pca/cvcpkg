@@ -280,7 +280,7 @@ manually update a specific builder:
 
 ```bash
 ssh <host> "cd ~/libcvc-deps && git fetch origin && git checkout origin/master && \
-  cd tools/cvcpkg && pip install --break-system-packages --quiet ."
+  pip install --break-system-packages --quiet ."
 ```
 
 No builder restart is needed — the running daemon will use the new code

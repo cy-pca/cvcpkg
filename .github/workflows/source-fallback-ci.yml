@@ -10,19 +10,19 @@ on:
   push:
     branches: [master, main]
     paths:
-      - 'tools/cvcpkg/src/cvcpkg/installer.py'
-      - 'tools/cvcpkg/src/cvcpkg/builder.py'
-      - 'tools/cvcpkg/src/cvcpkg/cli.py'
+      - 'src/cvcpkg/installer.py'
+      - 'src/cvcpkg/builder.py'
+      - 'src/cvcpkg/cli.py'
       - 'recipes/**'
-      - 'tools/cvcpkg/tests/integration/test_source_fallback.py'
+      - 'tests/integration/test_source_fallback.py'
       - '.github/workflows/source-fallback-ci.yml'
   pull_request:
     paths:
-      - 'tools/cvcpkg/src/cvcpkg/installer.py'
-      - 'tools/cvcpkg/src/cvcpkg/builder.py'
-      - 'tools/cvcpkg/src/cvcpkg/cli.py'
+      - 'src/cvcpkg/installer.py'
+      - 'src/cvcpkg/builder.py'
+      - 'src/cvcpkg/cli.py'
       - 'recipes/**'
-      - 'tools/cvcpkg/tests/integration/test_source_fallback.py'
+      - 'tests/integration/test_source_fallback.py'
       - '.github/workflows/source-fallback-ci.yml'
 
 concurrency:
@@ -54,11 +54,11 @@ jobs:
           sudo apt-get install -y --no-install-recommends cmake ninja-build gcc g++
 
       - name: Install cvcpkg
-        working-directory: tools/cvcpkg
+        working-directory: .
         run: pip install .
 
       - name: Run source-fallback integration tests
-        working-directory: tools/cvcpkg
+        working-directory: .
         run: |
           pip install pytest pyyaml
           python -m pytest tests/integration/test_source_fallback.py -v -m source_fallback

@@ -1,9 +1,0 @@
-.coverage
-htmlcov/
-coverage*.xml
-*-results.xml
-src/cvcpkg/recipes/
-
-# Production secrets
-.env.production
-backups/

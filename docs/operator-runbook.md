@@ -2,7 +2,7 @@
 
 Procedures for operating the cvcpkg-server production deployment.
 
-All commands assume you are in the `tools/cvcpkg` directory.
+All commands assume you are in the the repo root directory.
 
 ---
 
@@ -361,7 +361,7 @@ References:
 
 ### 11.2. Cutting a release
 
-1. Update `tools/cvcpkg/pyproject.toml` `version`.
+1. Update `pyproject.toml` `version`.
 2. Add a top section to [`CHANGELOG.md`](../../CHANGELOG.md) for the
    new version.
 3. Commit on `prod` (or merge a release PR into `prod`).

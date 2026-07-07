@@ -281,7 +281,7 @@ jobs:
       - name: Build Python wheel
         run: |
           pip install build
-          cd tools/cvcpkg
+          cd .
           # Bundle recipes into the wheel
           rm -rf src/cvcpkg/recipes/*
           cp -r "${{ github.workspace }}/recipes/"* src/cvcpkg/recipes/ 2>/dev/null || true
@@ -291,7 +291,7 @@ jobs:
           cp dist/cvcpkg-*.tar.gz "${{ github.workspace }}/artifacts/cvcpkg-sdist.tar.gz" 2>/dev/null || true
 
       - name: Install cvcpkg
-        run: pip install ./tools/cvcpkg
+        run: pip install .
 
       - name: Publish bundles to pkg.tx.wtf
         env:

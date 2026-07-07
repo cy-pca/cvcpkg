@@ -438,7 +438,7 @@ time in CI so collisions cannot ship.
 
 A small Python tool that resolves a requirement set against a
 release index, downloads the relevant bundles, and materializes a
-build prefix. Lives under `tools/cvcpkg/` in this repo and is
+build prefix. Lives at the repo root in this repo and is
 distributed as a standalone Python package on PyPI for use by lab
 collaborators and external downstreams who don't want to clone the
 `libcvc-deps` repo just to fetch its bundles.
@@ -452,7 +452,7 @@ state**. Everything is local to the current working tree.
 publishable to PyPI:
 
 ```
-tools/cvcpkg/
+./
   pyproject.toml          # poetry build-system, project metadata, deps, entry point
   README.md               # PyPI-rendered usage docs
   LICENSE                 # mirrors the libcvc-deps top-level LICENSE
@@ -1391,7 +1391,7 @@ same thing CI will execute on merge.
 | 0 | This doc | `docs/roadmap/split-distribution.md` | Reviewed | **Done** (PR #31) |
 | 1 | `packaging/components.yaml` + manifest schema | Source of truth + JSON-Schema / YAML schema doc | `make validate-components` in CI passes | **Done** (PR #32) |
 | 1b | `recipes/` directory with recipe schema (§7.2) + builder contract (§7.3) | One reference recipe (`zlib`) end-to-end on Linux | `cvcpkg pack recipes/zlib` produces a valid bundle locally | **Done** (PR #32) |
-| 2 | `tools/cvcpkg/` Poetry package (CLI, catalog-aware resolver, downloader, cache, recipe packager) | Working `cvcpkg install` against a mocked catalog and `cvcpkg pack` against one recipe; `poetry build` produces a wheel | Unit tests pass; `pipx install ./dist/cvcpkg-*.whl` works; resolver picks correctly across two mock releases | **Done** (PR #32) |
+| 2 | `./` Poetry package (CLI, catalog-aware resolver, downloader, cache, recipe packager) | Working `cvcpkg install` against a mocked catalog and `cvcpkg pack` against one recipe; `poetry build` produces a wheel | Unit tests pass; `pipx install ./dist/cvcpkg-*.whl` works; resolver picks correctly across two mock releases | **Done** (PR #32) |
 | 2b | `cvcpkg` published to PyPI as `0.1.0a1` | `pip install cvcpkg` works on Linux/macOS/Windows | Pre-release tag `cvcpkg-v0.1.0a1` triggers `cvcpkg-publish.yml`; package visible on pypi.org | **Done** (PR #32) |
 | 2c | Recipes for all components (§3.3) in `recipes/` | Every existing component has a recipe.yaml + build script(s) | `cvcpkg recipes --validate` passes; `cvcpkg world` reproduces the current Linux bundle set on a clean host | **Done** (PR #32) |
 | 3 | CI package stage on Linux first | Linux component bundles + per-release index + rolling catalog alongside the existing monolithic bundle, produced via `cvcpkg pack` | `cvcpkg install --from requirements.yaml --prefix /tmp/p` succeeds against the published catalog, downstream `libcvc` builds against `/tmp/p` | **Done** (PR #32) |

@@ -57,14 +57,14 @@ jobs:
           python-version: ${{ matrix.python }}
 
       - name: Install dependencies
-        working-directory: tools/cvcpkg
+        working-directory: .
         run: |
           python -m pip install --upgrade pip
           pip install poetry
           poetry install --with dev --extras "server db-sqlite"
 
       - name: Run tests
-        working-directory: tools/cvcpkg
+        working-directory: .
         run: poetry run pytest tests/ -v --tb=short
 
   build:
@@ -83,23 +83,29 @@ jobs:
       - name: Install build tools
         run: pip install build twine
 
+      - name: Bundle recipes into package
+        run: |
+          rm -rf src/cvcpkg/recipes/*
+          cp -r recipes/* src/cvcpkg/recipes/ 2>/dev/null || true
+          rm -f src/cvcpkg/recipes/.gitignore
+
       - name: Build sdist and wheel
-        working-directory: tools/cvcpkg
+        working-directory: .
         run: python -m build
 
       - name: Check distributions with twine
-        working-directory: tools/cvcpkg
+        working-directory: .
         run: twine check dist/*
 
       - name: Verify wheel installs
         run: |
-          pip install tools/cvcpkg/dist/cvcpkg-*.whl
+          pip install dist/cvcpkg-*.whl
           cvcpkg --version
 
       - uses: actions/upload-artifact@v4
         with:
           name: cvcpkg-dist
-          path: tools/cvcpkg/dist/
+          path: dist/
 
   live-smoke:
     name: Live smoke (${{ matrix.os }} / Py ${{ matrix.python }})

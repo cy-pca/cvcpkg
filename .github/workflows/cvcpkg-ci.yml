@@ -8,13 +8,13 @@ name: cvcpkg CI
 on:
   pull_request:
     paths:
-      - 'tools/cvcpkg/**'
+      - 'src/**'
       - 'recipes/**'
       - 'packaging/**'
   push:
     branches: [master, main]
     paths:
-      - 'tools/cvcpkg/**'
+      - 'src/**'
       - 'recipes/**'
       - 'packaging/**'
 
@@ -43,14 +43,14 @@ jobs:
           python-version: ${{ matrix.python }}
 
       - name: Install dependencies
-        working-directory: tools/cvcpkg
+        working-directory: .
         run: |
           python -m pip install --upgrade pip
           pip install poetry
           poetry install --with dev --extras server
 
       - name: Run unit tests
-        working-directory: tools/cvcpkg
+        working-directory: .
         shell: bash
         run: |
           poetry run pytest tests/unit/ -v --tb=short \
@@ -58,7 +58,7 @@ jobs:
             --cov=cvcpkg --cov-branch --cov-report=xml:coverage.xml
 
       - name: Run recipe integration tests
-        working-directory: tools/cvcpkg
+        working-directory: .
         shell: bash
         run: |
           poetry run pytest tests/integration/test_end_to_end.py -v --tb=short \
@@ -70,14 +70,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-results-${{ matrix.os }}-py${{ matrix.python }}
-          path: tools/cvcpkg/*-results.xml
+          path: *-results.xml
 
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage-${{ matrix.os }}-py${{ matrix.python }}
-          path: tools/cvcpkg/coverage.xml
+          path: coverage.xml
 
   validate:
     name: Validate schemas & recipes
@@ -108,24 +108,24 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        working-directory: tools/cvcpkg
+        working-directory: .
         run: |
           python -m pip install --upgrade pip
           pip install poetry
           poetry install --with dev --extras server
 
       - name: Ruff check
-        working-directory: tools/cvcpkg
+        working-directory: .
         run: poetry run ruff check src/ tests/
         continue-on-error: true
 
       - name: Ruff format check
-        working-directory: tools/cvcpkg
+        working-directory: .
         run: poetry run ruff format --check src/ tests/
         continue-on-error: true
 
       - name: Black format check
-        working-directory: tools/cvcpkg
+        working-directory: .
         run: poetry run black --check --diff src/ tests/
 
   # ── Docker integration tests (self-hosted only) ─────────────
@@ -145,7 +145,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Start test stack
-        working-directory: tools/cvcpkg
+        working-directory: .
         run: |
           docker compose -f docker-compose.test.yml down -v 2>/dev/null || true
           docker compose -f docker-compose.test.yml build --no-cache test playwright
@@ -156,25 +156,25 @@ jobs:
           echo "Test stack ready."
 
       - name: Run Docker integration tests
-        working-directory: tools/cvcpkg
+        working-directory: .
         env:
           CVCPKG_TEST_SERVER_URL: http://127.0.0.1:8421
         run: |
           docker compose -f docker-compose.test.yml run --build --rm test
 
       - name: Run Playwright browser tests
-        working-directory: tools/cvcpkg
+        working-directory: .
         run: |
           docker compose -f docker-compose.test.yml run --build --rm playwright
 
       - name: Collect logs on failure
         if: failure()
-        working-directory: tools/cvcpkg
+        working-directory: .
         run: |
           docker compose -f docker-compose.test.yml logs --tail=200 backend || true
           docker compose -f docker-compose.test.yml logs --tail=50 postgres || true
 
       - name: Tear down test stack
         if: always()
-        working-directory: tools/cvcpkg
+        working-directory: .
         run: docker compose -f docker-compose.test.yml down -v 2>/dev/null || true

@@ -11,7 +11,7 @@ match what CI uses.
 
 ```sh
 # Install cvcpkg (from the repo root)
-pip install ./tools/cvcpkg
+pip install .
 
 # Build everything for the current platform
 cvcpkg build-all \

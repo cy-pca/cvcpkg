@@ -229,7 +229,7 @@ jobs:
           set -euo pipefail
           VM="root@${{ steps.vm.outputs.host }}"
           PYTHON="${{ steps.vm.outputs.python }}"
-          INSTALL_CMD="TMPDIR=/usr/local/tmp ${PYTHON} -m pip install --break-system-packages ./tools/cvcpkg || ${PYTHON} -m pip install ./tools/cvcpkg"
+          INSTALL_CMD="TMPDIR=/usr/local/tmp ${PYTHON} -m pip install --break-system-packages . || ${PYTHON} -m pip install ."
           ssh ${SSH_OPTS} "${VM}" "mkdir -p /usr/local/tmp && cd ${remote_dir} && ${INSTALL_CMD}"
 
       # ── Build all recipes on BSD VM ──

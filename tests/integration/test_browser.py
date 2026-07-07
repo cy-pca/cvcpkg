@@ -8,7 +8,7 @@ between pages works.
 
 Run locally with Docker Compose::
 
-    cd tools/cvcpkg
+    # from the repo root
     docker compose -f docker-compose.test.yml up -d postgres backend
     # Wait for health
     until curl -sf http://127.0.0.1:8421/healthz; do sleep 2; done
