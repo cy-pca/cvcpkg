@@ -21,6 +21,35 @@ cd "${CVC_SOURCE_DIR}"
 # Restore them on all ELF/APE binaries in bin/ and libexec/ before copying.
 chmod +x bin/* libexec/*/* 2>/dev/null || true
 
+# Python's zipfile.extractall() also does not preserve symlinks — they
+# are extracted as small regular files whose content is the link target.
+# Scan bin/ and libexec/ for such files and recreate them as proper
+# symlinks so that multicall binaries (cosmocross, cosmocc) are
+# invoked with the correct argv[0].
+_fix_broken_symlinks() {
+    local dir="$1"
+    for f in "$dir"/*; do
+        [[ -f "$f" ]] || continue
+        local sz
+        sz=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null)
+        # Real binaries/scripts are >100 bytes; broken "symlinks" are tiny
+        if (( sz < 100 )); then
+            local target
+            target=$(cat "$f")
+            # Sanity: target must be a single token (no whitespace/slashes)
+            if [[ "$target" =~ ^[a-zA-Z0-9._+-]+$ ]] && [[ -e "$dir/$target" || -e "$dir/$(echo "$target" | head -1)" ]]; then
+                rm "$f"
+                ln -s "$target" "$f"
+            fi
+        fi
+    done
+}
+_fix_broken_symlinks bin
+# libexec has subdirectories (gcc/x86_64-linux-cosmo/14.1.0/ etc.)
+for subdir in libexec/*/*; do
+    [[ -d "$subdir" ]] && _fix_broken_symlinks "$subdir"
+done
+
 cp -a bin include lib libexec x86_64-linux-cosmo aarch64-linux-cosmo "${dest}/"
 # Preserve top-level metadata files if present.
 for f in LICENSE.gpl2 LICENSE.gpl3 LICENSE.lgpl2 LICENSE.lgpl3 Name README.md; do
