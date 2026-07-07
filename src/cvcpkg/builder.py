@@ -493,10 +493,12 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
     # be set when building recipes for their target platforms.  The
     # builder installs toolchains into the prefix before target recipes
     # are built, so we point these env vars at the prefix.
+    # Always override — the builder may have stale values (e.g. from
+    # a systemd Environment= line) that must not shadow the resolved
+    # per-build prefix path.
     if ctx.cross_toolchain_env:
         for var, tpl in ctx.cross_toolchain_env.items():
-            if var not in env:
-                env[var] = tpl.replace("${PREFIX}", str(ctx.prefix))
+            env[var] = tpl.replace("${PREFIX}", str(ctx.prefix))
 
     # Ensure host tools built into the prefix (cmake, ninja, protoc,
     # etc.) are found before system versions.
@@ -681,8 +683,7 @@ def run_test(
     # cross-compiled test programs.
     if ctx.cross_toolchain_env:
         for var, tpl in ctx.cross_toolchain_env.items():
-            if var not in env:
-                env[var] = tpl.replace("${PREFIX}", str(ctx.prefix))
+            env[var] = tpl.replace("${PREFIX}", str(ctx.prefix))
 
     # Ensure host tools built into the prefix (including cross-toolchain
     # binaries) are on PATH — mirrors _build_env() behaviour.

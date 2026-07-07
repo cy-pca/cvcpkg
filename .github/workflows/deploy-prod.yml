@@ -486,6 +486,9 @@ jobs:
           if [ -f "$UNIT" ]; then
             # Migrate from old --cross-target if present
             sudo sed -i 's|--cross-target |--cross-platform |g' "$UNIT"
+            # Remove stale CVC_COSMOCC_DIR env (toolchain path is now
+            # resolved dynamically per-build by _install_cross_toolchains)
+            sudo sed -i '/^Environment=CVC_COSMOCC_DIR=/d' "$UNIT"
             # Add --cross-platform wasm if missing
             if ! grep -q -- '--cross-platform wasm' "$UNIT" 2>/dev/null; then
               sudo sed -i 's|--work-dir [^ ]*|& --cross-platform wasm|' "$UNIT"
