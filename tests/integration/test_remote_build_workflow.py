@@ -51,13 +51,11 @@ def _make_recipe_bundle(
 ) -> bytes:
     """Create an in-memory recipe tar.gz bundle with optional deps."""
     if not build_script:
-        build_script = textwrap.dedent(
-            f"""\
+        build_script = textwrap.dedent(f"""\
             #!/bin/bash
             mkdir -p "$CVC_INSTALL_DIR/include"
             echo "// {name} stub header" > "$CVC_INSTALL_DIR/include/{name}.h"
-        """
-        )
+        """)
 
     recipe_dict: dict = {
         "recipe": {

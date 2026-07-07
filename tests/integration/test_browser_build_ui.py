@@ -457,13 +457,11 @@ class TestFmtRelativeHelper:
         page.reload()
         page.wait_for_load_state("networkidle")
         # Evaluate fmtRelative with a timestamp from 30 seconds ago
-        result = page.evaluate(
-            """() => {
+        result = page.evaluate("""() => {
                 if (typeof fmtRelative !== 'function') return 'MISSING';
                 const d = new Date(Date.now() - 30000).toISOString();
                 return fmtRelative(d);
-            }"""
-        )
+            }""")
         assert result != "MISSING", "fmtRelative function not found in page"
         assert (
             "sec" in result.lower() or "just" in result.lower() or "ago" in result.lower()
@@ -477,12 +475,10 @@ class TestFmtRelativeHelper:
         _inject_token(page)
         page.reload()
         page.wait_for_load_state("networkidle")
-        result = page.evaluate(
-            """() => {
+        result = page.evaluate("""() => {
                 if (typeof fmtRelative !== 'function') return 'MISSING';
                 return fmtRelative(null);
-            }"""
-        )
+            }""")
         assert result != "MISSING"
         # Should return dash or empty, not crash
         assert isinstance(result, str)
@@ -685,24 +681,20 @@ class TestEscFunction:
 
     def test_esc_escapes_double_quotes(self, page):
         page.goto(SERVER_URL)
-        result = page.evaluate(
-            """() => {
+        result = page.evaluate("""() => {
                 if (typeof esc !== 'function') return 'MISSING';
                 return esc('test"value');
-            }"""
-        )
+            }""")
         assert result != "MISSING", "esc() function not found"
         assert '"' not in result, f"esc() did not escape double quotes: {result!r}"
         assert "&quot;" in result
 
     def test_esc_escapes_single_quotes(self, page):
         page.goto(SERVER_URL)
-        result = page.evaluate(
-            """() => {
+        result = page.evaluate("""() => {
                 if (typeof esc !== 'function') return 'MISSING';
                 return esc("test'value");
-            }"""
-        )
+            }""")
         assert result != "MISSING"
         assert "'" not in result, f"esc() did not escape single quotes: {result!r}"
         assert "&#39;" in result
