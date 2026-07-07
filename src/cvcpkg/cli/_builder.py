@@ -583,6 +583,7 @@ def builder_run(
         host_arch: str,
         prefix: Path,
         log_cb: Callable[[str], None],
+        cache_dir: Path | None = None,
     ) -> dict[str, str]:
         """Install cross-toolchain packages and return their env vars.
 
@@ -591,6 +592,10 @@ def builder_run(
         Downloads the pre-built host-platform package and extracts it.
         Returns a merged ``cross_toolchain_env`` dict with ``${PREFIX}``
         already resolved to the actual *prefix* path.
+
+        When *cache_dir* is set, toolchain archives are extracted there
+        once and symlinked into *prefix* on subsequent calls, avoiding
+        repeated downloads of large toolchains (~800 MB for emsdk).
         """
         import yaml as _yaml
 
@@ -658,7 +663,54 @@ def builder_run(
                 if archive_url.startswith("/"):
                     archive_url = f"{base}{archive_url}"
 
-                log_cb(f"  Installing cross-toolchain: {tc_name} ({match.get('version', '')})\n")
+                tc_version = match.get("version", "unknown")
+
+                # ── Persistent toolchain cache ──────────────────────
+                # When a cache_dir is provided, extract the toolchain
+                # once into cache_dir/toolchains/<name>-<version>/
+                # and symlink its contents into the per-build prefix.
+                # This avoids re-downloading ~300-800 MB archives on
+                # every cross-compilation job.
+                extract_target = prefix
+                tc_cache_path: Path | None = None
+                if cache_dir is not None:
+                    tc_cache_root = cache_dir / "toolchains"
+                    tc_cache_path = tc_cache_root / f"{tc_name}-{tc_version}"
+                    if tc_cache_path.is_dir() and any(tc_cache_path.iterdir()):
+                        log_cb(
+                            f"  Toolchain {tc_name} ({tc_version}) cached, "
+                            f"symlinking into prefix\n"
+                        )
+                        # Symlink cached contents into the build prefix
+                        for child in tc_cache_path.iterdir():
+                            dst = prefix / child.name
+                            if not dst.exists():
+                                dst.symlink_to(child)
+                        # Resolve env and skip download
+                        for var, tpl in ct_env.items():
+                            merged_env[var] = tpl.replace("${PREFIX}", str(prefix))
+                        log_cb(
+                            f"  Toolchain {tc_name} ready "
+                            f"({', '.join(f'{k}={v}' for k, v in ct_env.items())})\n"
+                        )
+                        # Still install host_tools (cheap, small packages)
+                        for tool_name in ct_host_tools:
+                            if isinstance(tool_name, dict):
+                                tool_name = tool_name.get("name", "")
+                            if not tool_name:
+                                continue
+                            try:
+                                _install_host_package(
+                                    tool_name, host_platform, host_arch, prefix, log_cb
+                                )
+                            except Exception as exc:
+                                log_cb(f"  host_tool {tool_name}: install failed ({exc})\n")
+                        continue
+                    # Not cached yet — extract into cache dir
+                    tc_cache_path.mkdir(parents=True, exist_ok=True)
+                    extract_target = tc_cache_path
+
+                log_cb(f"  Installing cross-toolchain: {tc_name} ({tc_version})\n")
                 dl_resp = client.get(archive_url)
                 if dl_resp.status_code >= 400:
                     log_cb(f"  toolchain {tc_name}: download failed ({dl_resp.status_code})\n")
@@ -674,15 +726,15 @@ def builder_run(
                     suffix, kind = ".tar.zst", "zst"
                 else:
                     suffix, kind = ".bin", "unknown"
-                tmp_archive = prefix / f"_toolchain_{tc_name}{suffix}"
+                tmp_archive = extract_target / f"_toolchain_{tc_name}{suffix}"
                 tmp_archive.write_bytes(tc_bytes)
                 try:
                     if kind == "zip":
                         with zipfile.ZipFile(tmp_archive) as zf:
-                            zf.extractall(path=prefix)  # noqa: S202
+                            zf.extractall(path=extract_target)  # noqa: S202
                     elif kind == "gz":
                         with tarfile.open(tmp_archive, "r:gz") as tf:
-                            tf.extractall(path=prefix)  # noqa: S202
+                            tf.extractall(path=extract_target)  # noqa: S202
                     elif kind == "zst":
                         import zstandard  # type: ignore[import-untyped]
 
@@ -690,14 +742,24 @@ def builder_run(
                             dctx = zstandard.ZstdDecompressor()
                             with dctx.stream_reader(f_in) as reader:
                                 with tarfile.open(fileobj=reader, mode="r|") as tf:
-                                    tf.extractall(path=prefix)  # noqa: S202
+                                    tf.extractall(path=extract_target)  # noqa: S202
                     else:
                         raise ValueError(f"unknown archive format (magic={head!r})")
                 except Exception as exc:
                     log_cb(f"  toolchain {tc_name}: extract failed ({exc})\n")
+                    # Clean up broken cache entry
+                    if tc_cache_path and tc_cache_path.is_dir():
+                        shutil.rmtree(tc_cache_path, ignore_errors=True)
                     continue
                 finally:
                     tmp_archive.unlink(missing_ok=True)
+
+            # If we extracted into the cache, symlink into prefix now
+            if tc_cache_path and extract_target != prefix:
+                for child in tc_cache_path.iterdir():
+                    dst = prefix / child.name
+                    if not dst.exists():
+                        dst.symlink_to(child)
 
             # 3. Resolve env templates
             for var, tpl in ct_env.items():
@@ -874,6 +936,7 @@ def builder_run(
                     host_arch=arch,  # builder's native arch
                     prefix=dep_prefix,
                     log_cb=log_cb,
+                    cache_dir=work_root,
                 )
 
             # 3b. Build + package
