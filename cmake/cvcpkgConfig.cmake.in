@@ -1,0 +1,50 @@
+@PACKAGE_INIT@
+
+# cvcpkgConfig.cmake — marker config for a cvcpkg-managed prefix.
+#
+# Including this config lets downstream CMake projects verify they
+# are configured against a known cvcpkg dependency prefix.  It also
+# prepends the prefix to CMAKE_PREFIX_PATH so that subsequent
+# find_package() calls (Boost, Qt6, VTK, etc.) resolve here.
+#
+# Usage in a downstream CMakeLists.txt:
+#
+#     find_package(cvcpkg CONFIG REQUIRED)
+#     # Everything below resolves in the same prefix automatically:
+#     find_package(Boost REQUIRED COMPONENTS thread filesystem system)
+#     find_package(HDF5  REQUIRED COMPONENTS C CXX)
+#     find_package(Qt6   REQUIRED COMPONENTS Core Gui Widgets)
+#     find_package(VTK   REQUIRED)
+#
+# Alternatively, skip find_package(cvcpkg) entirely and just set
+# CMAKE_PREFIX_PATH to the install prefix (the `cvcpkg install`
+# activate script does this for you):
+#
+#     source ./deps/bin/activate
+#     cmake -B build        # CMAKE_PREFIX_PATH already set
+
+set(CVCPKG_VERSION   "@PROJECT_VERSION@")
+set(CVCPKG_ROOT_DIR  "${PACKAGE_PREFIX_DIR}")
+
+# Convenience: prepend our root to CMAKE_PREFIX_PATH so subsequent
+# find_package() calls in the same configure step automatically
+# search here too.  Harmless if the caller already passed it.
+if(NOT "${CVCPKG_ROOT_DIR}" IN_LIST CMAKE_PREFIX_PATH)
+  list(PREPEND CMAKE_PREFIX_PATH "${CVCPKG_ROOT_DIR}")
+endif()
+
+# Also set PKG_CONFIG_PATH for Meson/Autotools-based sub-projects.
+if(IS_DIRECTORY "${CVCPKG_ROOT_DIR}/lib/pkgconfig")
+  if(DEFINED ENV{PKG_CONFIG_PATH})
+    set(ENV{PKG_CONFIG_PATH} "${CVCPKG_ROOT_DIR}/lib/pkgconfig:$ENV{PKG_CONFIG_PATH}")
+  else()
+    set(ENV{PKG_CONFIG_PATH} "${CVCPKG_ROOT_DIR}/lib/pkgconfig")
+  endif()
+endif()
+
+set(cvcpkg_FOUND TRUE)
+
+# Backward compat aliases
+set(LIBCVC_DEPS_VERSION   "${CVCPKG_VERSION}")
+set(LIBCVC_DEPS_ROOT_DIR  "${CVCPKG_ROOT_DIR}")
+set(libcvc-deps_FOUND     TRUE)
