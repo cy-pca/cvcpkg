@@ -75,9 +75,9 @@ def _write_recipe(
 def _all_work_dirs_under(root: Path, contexts) -> None:
     """Assert every context's work_dir is a child of *root*."""
     for ctx in contexts:
-        assert ctx.work_dir.parent == root, (
-            f"{ctx.recipe.name}: work_dir {ctx.work_dir} is not under expected root {root}"
-        )
+        assert (
+            ctx.work_dir.parent == root
+        ), f"{ctx.recipe.name}: work_dir {ctx.work_dir} is not under expected root {root}"
 
 
 def _no_cvcpkg_dirs_in_system_temp(exclusions: set[Path] | None = None) -> None:
@@ -301,9 +301,9 @@ class TestBuildAllWorkDir:
         # In non-per-component mode, build_recipe is called which uses
         # work_dir_root for its work_dir.
         for ctx in contexts:
-            assert str(ctx.work_dir).startswith(str(scratch)), (
-                f"{ctx.recipe.name}: work_dir {ctx.work_dir} not under {scratch}"
-            )
+            assert str(ctx.work_dir).startswith(
+                str(scratch)
+            ), f"{ctx.recipe.name}: work_dir {ctx.work_dir} not under {scratch}"
 
         _no_cvcpkg_dirs_in_system_temp(pre_existing)
 
@@ -356,9 +356,9 @@ class TestCleanupWorkDirs:
         assert len(contexts) == 2
         # Work dirs should have been cleaned up
         for ctx in contexts:
-            assert not ctx.work_dir.is_dir(), (
-                f"{ctx.recipe.name}: work_dir {ctx.work_dir} should have been removed"
-            )
+            assert (
+                not ctx.work_dir.is_dir()
+            ), f"{ctx.recipe.name}: work_dir {ctx.work_dir} should have been removed"
         # But artifacts should still be in the prefix
         assert (tmp_path / "prefix" / "lib" / "libalpha.a").is_file()
         assert (tmp_path / "prefix" / "lib" / "libbeta.a").is_file()
@@ -386,9 +386,9 @@ class TestCleanupWorkDirs:
         assert len(contexts) == 2
         # Work dirs should still exist
         for ctx in contexts:
-            assert ctx.work_dir.is_dir(), (
-                f"{ctx.recipe.name}: work_dir {ctx.work_dir} should have survived"
-            )
+            assert (
+                ctx.work_dir.is_dir()
+            ), f"{ctx.recipe.name}: work_dir {ctx.work_dir} should have survived"
             # install_dir should contain artifacts
             assert (ctx.install_dir / "lib" / f"lib{ctx.recipe.name}.a").is_file()
 

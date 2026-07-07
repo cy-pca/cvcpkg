@@ -528,9 +528,9 @@ class TestChunkedUpload:
         pkgs_payload = resp.json()
         rows = pkgs_payload.get("packages", pkgs_payload.get("bundles", []))
         row = next(p for p in rows if p["name"] == "raced" and p["version"] == "1.0.0")
-        assert row["sha256"] == winner_sha, (
-            f"catalog sha256 drifted: DB={row['sha256']} winner={winner_sha}"
-        )
+        assert (
+            row["sha256"] == winner_sha
+        ), f"catalog sha256 drifted: DB={row['sha256']} winner={winner_sha}"
 
         archive_url = row.get("archive_url") or f"/v1/download/{row.get('filename', '')}"
         resp = client.get(archive_url, headers=hdrs)

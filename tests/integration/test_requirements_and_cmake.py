@@ -146,9 +146,9 @@ class TestRequirementsInstall:
         published_names = {e.name for e in entries}
 
         for comp in reqs.components:
-            assert comp.name in published_names, (
-                f"Component '{comp.name}' from cvc-requirements.yaml not found in server catalog"
-            )
+            assert (
+                comp.name in published_names
+            ), f"Component '{comp.name}' from cvc-requirements.yaml not found in server catalog"
 
     def test_requirements_install_cli(self, server_env, tmp_path):
         """Full CLI install from a requirements file."""
