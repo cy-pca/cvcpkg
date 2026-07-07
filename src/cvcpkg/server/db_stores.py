@@ -2340,6 +2340,9 @@ class DbBuildJobStore:
         dag_id: str | None = None,
         status: str | None = None,
         platform: str | None = None,
+        arch: str | None = None,
+        config: str | None = None,
+        link: str | None = None,
         recipe_name: str | None = None,
         builder_id: int | None = None,
         limit: int = 100,
@@ -2366,6 +2369,15 @@ class DbBuildJobStore:
             if platform is not None:
                 q = q.where(BuildJobRow.platform == platform)
                 count_q = count_q.where(BuildJobRow.platform == platform)
+            if arch is not None:
+                q = q.where(BuildJobRow.arch == arch)
+                count_q = count_q.where(BuildJobRow.arch == arch)
+            if config is not None:
+                q = q.where(BuildJobRow.config == config)
+                count_q = count_q.where(BuildJobRow.config == config)
+            if link is not None:
+                q = q.where(BuildJobRow.link == link)
+                count_q = count_q.where(BuildJobRow.link == link)
             if recipe_name is not None:
                 q = q.where(BuildJobRow.recipe_name == recipe_name)
                 count_q = count_q.where(BuildJobRow.recipe_name == recipe_name)

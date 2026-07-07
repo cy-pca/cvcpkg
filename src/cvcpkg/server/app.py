@@ -4394,6 +4394,9 @@ def create_app(
     async def list_builds(
         status: str | None = Query(None, description="Filter by status"),
         platform: str | None = Query(None, description="Filter by platform"),
+        arch: str | None = Query(None, description="Filter by architecture"),
+        config: str | None = Query(None, description="Filter by config (release/debug)"),
+        link: str | None = Query(None, description="Filter by link type (shared/static)"),
         dag_id: str | None = Query(None, description="Filter by DAG ID"),
         recipe_name: str | None = Query(None, description="Filter by recipe name"),
         org_slug: str | None = Query(None, description="Filter by org"),
@@ -4407,6 +4410,9 @@ def create_app(
         jobs, total = await _db_build_jobs.list_jobs(
             status=status,
             platform=platform,
+            arch=arch,
+            config=config,
+            link=link,
             dag_id=dag_id,
             recipe_name=recipe_name,
             org_slug=org_slug,

@@ -546,13 +546,7 @@ function renderResults(data) {
       </td></tr>`;
   } else {
     tbody.innerHTML = grouped.map(g => {
-      const isMainline = recipeNames.includes(g.name);
       const isOrg = !!g.org;
-      const badge = isOrg
-        ? '<span class="badge-org" title="Organization package"><i class="fas fa-building"></i> ' + esc(g.org) + '</span>'
-        : isMainline
-          ? '<span class="badge-mainline" title="Official cvcpkg recipe"><i class="fas fa-check-circle"></i> cvcpkg</span>'
-          : '<span class="badge-community" title="Community upload"><i class="fas fa-users"></i> community</span>';
       const pkgUrl = isOrg
         ? '/package/' + encodeURIComponent(g.name) + '?org=' + encodeURIComponent(g.org)
         : '/package/' + encodeURIComponent(g.name);
@@ -563,7 +557,6 @@ function renderResults(data) {
             ${isOrg ? '<span class="has-text-grey-light">' + esc(g.org) + '/</span>' : ''}
             <strong>${esc(g.name)}</strong>
           </a>
-          ${badge}
         </td>
         <td><code>${esc(g.version)}</code></td>
         <td>${[...g.platforms].sort().map(p => platformTag(p)).join(' ')}</td>
@@ -1843,7 +1836,11 @@ function renderOrg(data) {{
       Object.entries(groups).sort((a,b) => a[0].localeCompare(b[0])).map(([name, builds]) => {{
         const totalSize = builds.reduce((s, b) => s + (b.size_bytes || 0), 0);
         const orgParam = builds[0].org ? '?org=' + encodeURIComponent(builds[0].org) : '';
-        return '<tr><td><a href="/package/' + encodeURIComponent(name) + orgParam + '" class="has-text-link"><strong>' + esc(name) + '</strong></a></td>' +
+        const orgSlug = builds[0].org || '';
+        const displayName = orgSlug
+          ? '<span class="has-text-grey-light">' + esc(orgSlug) + '/</span><strong>' + esc(name) + '</strong>'
+          : '<strong>' + esc(name) + '</strong>';
+        return '<tr><td><a href="/package/' + encodeURIComponent(name) + orgParam + '" class="has-text-link">' + displayName + '</a></td>' +
           '<td><code>' + esc(builds[0].version) + '</code></td>' +
           '<td><span class="tag is-dark is-rounded">' + builds.length + '</span></td>' +
           '<td class="is-family-monospace is-size-7 has-text-grey-light">' + fmtSize(totalSize) + '</td></tr>';
@@ -2392,8 +2389,46 @@ def builds_html() -> str:
           <select id="filter-platform" onchange="loadJobs(true)">
             <option value="">All</option>
             <option value="linux">Linux</option>
+            <option value="freebsd">FreeBSD</option>
+            <option value="netbsd">NetBSD</option>
+            <option value="openbsd">OpenBSD</option>
             <option value="darwin">macOS</option>
             <option value="windows">Windows</option>
+            <option value="wasm">WASM</option>
+            <option value="wasi">WASI</option>
+            <option value="cosmo">Cosmo</option>
+          </select>
+        </div></div></div>
+      </div>
+      <div class="column is-narrow">
+        <div class="field"><label class="label has-text-grey-lighter is-small">Arch</label>
+        <div class="control"><div class="select is-small is-dark">
+          <select id="filter-arch" onchange="loadJobs(true)">
+            <option value="">All</option>
+            <option value="x86_64">x86_64</option>
+            <option value="aarch64">aarch64</option>
+            <option value="wasm32">wasm32</option>
+            <option value="fat">fat</option>
+          </select>
+        </div></div></div>
+      </div>
+      <div class="column is-narrow">
+        <div class="field"><label class="label has-text-grey-lighter is-small">Config</label>
+        <div class="control"><div class="select is-small is-dark">
+          <select id="filter-config" onchange="loadJobs(true)">
+            <option value="">All</option>
+            <option value="release">Release</option>
+            <option value="debug">Debug</option>
+          </select>
+        </div></div></div>
+      </div>
+      <div class="column is-narrow">
+        <div class="field"><label class="label has-text-grey-lighter is-small">Link</label>
+        <div class="control"><div class="select is-small is-dark">
+          <select id="filter-link" onchange="loadJobs(true)">
+            <option value="">All</option>
+            <option value="shared">Shared</option>
+            <option value="static">Static</option>
           </select>
         </div></div></div>
       </div>
@@ -2499,6 +2534,9 @@ async function loadJobs(resetOffset) {{
   if (resetOffset) currentOffset = 0;
   const status = document.getElementById('filter-status').value;
   const platform = document.getElementById('filter-platform').value;
+  const arch = document.getElementById('filter-arch').value;
+  const config = document.getElementById('filter-config').value;
+  const link = document.getElementById('filter-link').value;
   const recipe = document.getElementById('filter-recipe').value.trim();
   const dagId = document.getElementById('filter-dag').value.trim();
   const builderId = document.getElementById('filter-builder').value.trim();
@@ -2507,6 +2545,9 @@ async function loadJobs(resetOffset) {{
   const qp = new URLSearchParams();
   if (status) qp.set('status', status);
   if (platform) qp.set('platform', platform);
+  if (arch) qp.set('arch', arch);
+  if (config) qp.set('config', config);
+  if (link) qp.set('link', link);
   if (recipe) qp.set('recipe_name', recipe);
   if (dagId) qp.set('dag_id', dagId);
   if (builderId) qp.set('builder_id', builderId);
@@ -2516,6 +2557,9 @@ async function loadJobs(resetOffset) {{
   let url = '/v1/builds?limit=' + PAGE_SIZE + '&offset=' + currentOffset;
   if (status) url += '&status=' + encodeURIComponent(status);
   if (platform) url += '&platform=' + encodeURIComponent(platform);
+  if (arch) url += '&arch=' + encodeURIComponent(arch);
+  if (config) url += '&config=' + encodeURIComponent(config);
+  if (link) url += '&link=' + encodeURIComponent(link);
   if (recipe) url += '&recipe_name=' + encodeURIComponent(recipe);
   if (dagId) url += '&dag_id=' + encodeURIComponent(dagId);
   if (builderId) url += '&builder_id=' + encodeURIComponent(builderId);
@@ -2585,7 +2629,9 @@ async function loadJobs(resetOffset) {{
       return '<tr>' +
         '<td class="has-text-grey-light">' + j.id + '</td>' +
         '<td><a href="/build/' + j.id + '"><span class="tag ' + statusCls(j.status) + ' is-rounded"' + errTip + '>' + esc(j.status) + '</span></a></td>' +
-        '<td><a href="/package/' + encodeURIComponent(j.recipe_name) + '" class="has-text-link">' + esc(j.recipe_name) + '</a></td>' +
+        '<td><a href="/package/' + encodeURIComponent(j.recipe_name) +
+        (j.org_slug ? '?org=' + encodeURIComponent(j.org_slug) : '') +
+        '" class="has-text-link">' + (j.org_slug ? esc(j.org_slug) + '/' : '') + esc(j.recipe_name) + '</a></td>' +
         '<td>' + platformTag(j.platform) + '</td>' +
         '<td class="has-text-grey-light">' + esc(j.arch) + '</td>' +
         '<td class="has-text-grey-light">' + esc(j.config) + '</td>' +
@@ -2623,6 +2669,12 @@ async function init() {{
   if (recipeParam) document.getElementById('filter-recipe').value = recipeParam;
   const platformParam = params.get('platform');
   if (platformParam) document.getElementById('filter-platform').value = platformParam;
+  const archParam = params.get('arch');
+  if (archParam) document.getElementById('filter-arch').value = archParam;
+  const configParam = params.get('config');
+  if (configParam) document.getElementById('filter-config').value = configParam;
+  const linkParam = params.get('link');
+  if (linkParam) document.getElementById('filter-link').value = linkParam;
   const builderParam = params.get('builder_id');
   if (builderParam) document.getElementById('filter-builder').value = builderParam;
   await loadJobs();
@@ -2792,9 +2844,13 @@ function populateMeta(j) {{
   document.getElementById('build-status').className = 'tag ' + statusCls(j.status) + ' is-medium is-rounded';
   document.getElementById('build-status').textContent = j.status;
   document.getElementById('build-title').innerHTML =
-    'Build #' + j.id + ' &mdash; <a href="/package/' + encodeURIComponent(j.recipe_name) + '" class="has-text-link">' + esc(j.recipe_name) + '</a>';
+    'Build #' + j.id + ' &mdash; <a href="/package/' + encodeURIComponent(j.recipe_name) +
+    (j.org_slug ? '?org=' + encodeURIComponent(j.org_slug) : '') +
+    '" class="has-text-link">' + (j.org_slug ? esc(j.org_slug) + '/' : '') + esc(j.recipe_name) + '</a>';
   document.getElementById('meta-recipe').innerHTML =
-    '<a href="/package/' + encodeURIComponent(j.recipe_name) + '" class="has-text-link">' + esc(j.recipe_name) + '</a>';
+    '<a href="/package/' + encodeURIComponent(j.recipe_name) +
+    (j.org_slug ? '?org=' + encodeURIComponent(j.org_slug) : '') +
+    '" class="has-text-link">' + (j.org_slug ? esc(j.org_slug) + '/' : '') + esc(j.recipe_name) + '</a>';
   document.getElementById('meta-platform').innerHTML = platformTag(j.platform) + ' / ' + esc(j.arch);
   document.getElementById('meta-config').textContent = j.config + ' / ' + j.link;
   document.getElementById('meta-builder').textContent = j.builder_id ? 'Builder #' + j.builder_id : '\\u2014';
