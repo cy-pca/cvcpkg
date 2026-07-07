@@ -12,10 +12,13 @@ recipe:
   description: >-
     FFmpeg — a complete, cross-platform solution to record, convert and
     stream audio and video.  Ships the libavformat, libavcodec,
-    libavutil, libavfilter, libswscale and libswresample shared
-    libraries that back Qt Multimedia's default FFmpeg backend.  Built
-    as LGPL (no --enable-gpl / --enable-nonfree) with only FFmpeg's
-    built-in native codecs, so it carries no external codec dependencies.
+    libavutil, libavfilter, libavdevice, libswscale and libswresample
+    shared libraries.  Built as LGPL with a broad set of external
+    codecs and libraries: Opus (libopus), MP3 (libmp3lame), Vorbis
+    (libvorbis), VP8/VP9 (libvpx), AV1 (dav1d), WebP (libwebp), JPEG
+    (libjpeg-turbo), PNG, OpenSSL for HTTPS, bzip2/lzma compression,
+    freetype/fontconfig/fribidi for subtitle rendering, and PulseAudio
+    on Linux.
 
 source:
   type: tarball
@@ -28,8 +31,46 @@ patches: []
 depends:
   build:
     - name: nasm
-      platforms: [linux, freebsd, openbsd, netbsd]
-  runtime: []
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libopus
+    - name: libmp3lame
+    - name: libogg
+    - name: libvorbis
+    - name: dav1d
+    - name: libvpx
+    - name: libwebp
+    - name: libjpeg-turbo
+    - name: libpng
+    - name: freetype
+    - name: fontconfig
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: fribidi
+    - name: openssl
+    - name: bzip2
+    - name: xz
+    - name: zlib
+    - name: libpulse
+      platforms: [linux]
+  runtime:
+    - name: libopus
+    - name: libmp3lame
+    - name: libogg
+    - name: libvorbis
+    - name: dav1d
+    - name: libvpx
+    - name: libwebp
+    - name: libjpeg-turbo
+    - name: libpng
+    - name: freetype
+    - name: fontconfig
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: fribidi
+    - name: openssl
+    - name: bzip2
+    - name: xz
+    - name: zlib
+    - name: libpulse
+      platforms: [linux]
   host_tools:
     - pkg-config
 
@@ -55,9 +96,12 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
+    # Unix shared libs (.so / .dylib)
     - lib/libavformat*
     - lib/libavcodec*
     - lib/libavutil*
@@ -67,6 +111,22 @@ package:
     - lib/libswresample*
     - lib/pkgconfig/libav*
     - lib/pkgconfig/libsw*
+    # Windows DLLs and import libs
+    - bin/avformat-*.dll
+    - bin/avcodec-*.dll
+    - bin/avutil-*.dll
+    - bin/avfilter-*.dll
+    - bin/avdevice-*.dll
+    - bin/swscale-*.dll
+    - bin/swresample-*.dll
+    - lib/avformat.lib
+    - lib/avcodec.lib
+    - lib/avutil.lib
+    - lib/avfilter.lib
+    - lib/avdevice.lib
+    - lib/swscale.lib
+    - lib/swresample.lib
+    # Headers (shared)
     - include/libavformat/
     - include/libavcodec/
     - include/libavutil/
