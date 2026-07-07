@@ -1,0 +1,72 @@
+schema_version: 1
+recipe:
+  name: x265
+  upstream_version: "4.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://x265.readthedocs.io/
+  license: GPL-2.0-or-later
+  tags: [libraries, multimedia, video]
+  description: >-
+    x265 — H.265/HEVC video encoder.  Provides high-efficiency video
+    encoding for FFmpeg (--enable-gpl --enable-libx265).  CMake-based
+    build; the standalone encoder CLI is excluded.
+    Assembly optimisations require nasm on x86 platforms.
+
+source:
+  type: tarball
+  url: https://bitbucket.org/multicoreware/x265_git/downloads/x265_4.1.tar.gz
+  sha256: "a31699c6a89806b74b0151e5e6a7df65de4b49050482fe5ebf8a4379d7af8f29"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: nasm
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+  runtime: []
+  host_tools:
+    - cmake
+    - ninja
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libx265*
+    - lib/pkgconfig/x265.pc
+    - include/x265*.h
+    - bin/libx265-*.dll
+  pkg_config:
+    - x265

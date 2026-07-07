@@ -20,6 +20,7 @@ cd "${CVC_SOURCE_DIR}"
 
 CONFIGURE_ARGS=(
     --prefix="${CVC_INSTALL_DIR}"
+    --enable-gpl
     --enable-pic
     --enable-version3
     --disable-programs
@@ -27,7 +28,10 @@ CONFIGURE_ARGS=(
     --disable-debug
     --disable-static
     --enable-shared
-    # External codecs (all LGPL-compatible)
+    # GPL codecs
+    --enable-libx264
+    --enable-libx265
+    # External codecs (LGPL-compatible)
     --enable-libopus
     --enable-libmp3lame
     --enable-libvorbis
@@ -50,6 +54,7 @@ CONFIGURE_ARGS=(
 if [[ "${CVC_LINK:-shared}" == "static" ]]; then
     CONFIGURE_ARGS=(
         --prefix="${CVC_INSTALL_DIR}"
+        --enable-gpl
         --enable-pic
         --enable-version3
         --disable-programs
@@ -57,6 +62,8 @@ if [[ "${CVC_LINK:-shared}" == "static" ]]; then
         --disable-debug
         --enable-static
         --disable-shared
+        --enable-libx264
+        --enable-libx265
         --enable-libopus
         --enable-libmp3lame
         --enable-libvorbis
