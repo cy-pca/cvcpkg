@@ -25,7 +25,8 @@ patches: []
 depends:
   build: []
   runtime: []
-  host_tools: []
+  host_tools:
+    - pkg-config
 
 build:
   matrix:

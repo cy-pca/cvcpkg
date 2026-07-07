@@ -30,7 +30,8 @@ depends:
     - name: nasm
       platforms: [linux, freebsd, openbsd, netbsd]
   runtime: []
-  host_tools: []
+  host_tools:
+    - pkg-config
 
 build:
   matrix:
