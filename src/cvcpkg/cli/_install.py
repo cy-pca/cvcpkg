@@ -294,6 +294,24 @@ def install(
     if not picked and not source_only:
         raise click.ClickException("no bundles found in catalog for this platform tuple.")
 
+    # ── Conflict check ──
+    #
+    # Before touching the filesystem, verify that no package we are
+    # about to install declares a conflict with:
+    #   (a) another package in the current install set, or
+    #   (b) a package already present in the prefix (via lockfile).
+    #
+    # Conflict data comes from local recipe files.  When recipe dirs
+    # are not available the check is skipped gracefully.
+    rdirs = (
+        _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes) if recipes_dirs else None
+    )
+    _check_conflicts(
+        list(picked.keys()) + list(source_only),
+        prefix_path,
+        rdirs,
+    )
+
     # ── Download and extract each resolved bundle ──
     cache_dir = default_cache_dir()
     lock_entries: list[LockEntry] = []
@@ -420,6 +438,58 @@ def _activation_hint(plat: str, prefix: Path) -> str:
     if plat == "windows":
         return f". {prefix}\\Scripts\\Activate.ps1"
     return f"source {prefix}/bin/activate"
+
+
+def _check_conflicts(
+    installing: list[str],
+    prefix_path: Path | None,
+    recipe_dirs: list[Path] | None,
+) -> None:
+    """Raise ConflictError when any package in *installing* conflicts with
+    another package being installed or with an already-installed package.
+
+    Skips the check silently when *recipe_dirs* is not provided.
+    """
+    if not recipe_dirs or not installing:
+        return
+
+    from cvcpkg.builder import collect_recipe_conflicts
+    from cvcpkg.lockfile import Lockfile
+
+    conflict_map = collect_recipe_conflicts(installing, recipe_dirs)
+    if not conflict_map:
+        return
+
+    installing_set = set(installing)
+
+    # Also check what is already installed in the prefix lockfile.
+    installed_names: set[str] = set()
+    if prefix_path is not None:
+        lock_path = prefix_path / "share" / "libcvc-deps" / "lockfile.yaml"
+        if lock_path.is_file():
+            try:
+                existing_lock = Lockfile.read(lock_path)
+                installed_names = {b.name for b in existing_lock.bundles}
+            except Exception:
+                pass
+
+    for pkg, pkg_conflicts in conflict_map.items():
+        for conflict in pkg_conflicts:
+            if conflict in installing_set:
+                raise click.ClickException(
+                    f"{pkg!r} conflicts with co-requested package {conflict!r}.\n"
+                    f"You cannot install both at the same time.\n"
+                    f"Remove {conflict!r} from the install request and retry."
+                )
+            if conflict in installed_names:
+                prefix_str = str(prefix_path) if prefix_path else "<prefix>"
+                raise click.ClickException(
+                    f"{pkg!r} conflicts with installed package {conflict!r}.\n"
+                    f"To install {pkg!r}, first uninstall the conflicting package:\n"
+                    f"  cvcpkg uninstall {conflict} --prefix {prefix_str}\n"
+                    f"Then retry:\n"
+                    f"  cvcpkg install {pkg} --prefix {prefix_str}"
+                )
 
 
 # ── list ────────────────────────────────────────────────────────

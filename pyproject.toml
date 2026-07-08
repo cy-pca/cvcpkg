@@ -46,6 +46,7 @@ aiosqlite = { version = ">=0.20", optional = true }
 aiomysql = { version = ">=0.2", optional = true }
 cryptography = ">=41.0"
 httpx = ">=0.24"
+greenlet = ">=3.0"
 
 [tool.poetry.extras]
 progress = ["tqdm"]

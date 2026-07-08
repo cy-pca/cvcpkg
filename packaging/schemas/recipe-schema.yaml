@@ -53,6 +53,17 @@ properties:
           type: object
     description: "Human-readable build notes or special instructions"
 
+  conflicts:
+    type: array
+    items:
+      type: string
+      pattern: "^[a-z][a-z0-9-]*$"
+    description: >
+      Packages that cannot be installed in the same prefix as this one.
+      The conflict is checked before installation; the user is told to
+      uninstall the conflicting package first.  Should be declared
+      symmetrically (each conflicting pair lists the other).
+
   cross_toolchain:
     $ref: "#/$defs/cross_toolchain_block"
 

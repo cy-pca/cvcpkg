@@ -31,6 +31,12 @@ class CollisionError(InstallError):
     """Two bundles ship differing files at the same path."""
 
 
+class ConflictError(InstallError):
+    """A package to be installed conflicts with an already-installed (or
+    co-requested) package.  The error message names both packages and
+    tells the user which one to uninstall first."""
+
+
 class AbiError(CvcpkgError):
     """ABI-tag mismatch between two bundles."""
 

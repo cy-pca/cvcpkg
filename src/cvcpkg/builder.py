@@ -135,6 +135,7 @@ class Recipe:
     kind: str = ""  # e.g. data, media, config, iso -- for downstream hints
     cross_toolchain_targets: list[str] = field(default_factory=list)
     cross_toolchain_env: dict[str, str] = field(default_factory=dict)
+    conflicts: list[str] = field(default_factory=list)
 
     @property
     def full_version(self) -> str:
@@ -173,6 +174,7 @@ class Recipe:
             kind=recipe_block.get("kind", ""),
             cross_toolchain_targets=ct_block.get("target_platforms", []) or [],
             cross_toolchain_env=ct_block.get("env", {}) or {},
+            conflicts=raw.get("conflicts", []) or [],
         )
 
 
@@ -2391,6 +2393,30 @@ def load_all_recipes(recipe_dirs: list[Path]) -> list[Recipe]:
                     )
                 by_name[recipe.name] = recipe
     return sorted(by_name.values(), key=lambda r: r.name)
+
+
+def collect_recipe_conflicts(
+    names: list[str],
+    recipe_dirs: list[Path],
+) -> dict[str, list[str]]:
+    """Return a ``{package_name: [conflicting_package, ...]}`` mapping.
+
+    Only covers the packages named in *names*.  Packages whose recipe
+    cannot be found in *recipe_dirs* are silently skipped so the
+    function is safe to call when a recipe directory is not available.
+    """
+    conflicts: dict[str, list[str]] = {}
+    for rdir in recipe_dirs:
+        for name in names:
+            recipe_yaml = rdir / name / "recipe.yaml"
+            if recipe_yaml.is_file():
+                try:
+                    r = Recipe.load(rdir / name)
+                    if r.conflicts:
+                        conflicts.setdefault(name, []).extend(r.conflicts)
+                except Exception:
+                    pass
+    return conflicts
 
 
 # ── Revision bumping ───────────────────────────────────────────
