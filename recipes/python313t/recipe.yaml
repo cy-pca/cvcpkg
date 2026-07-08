@@ -12,11 +12,12 @@ recipe:
   description: >-
     CPython 3.13 free-threaded build — the GIL-disabled ("t") variant of
     python313.  Built with --disable-gil; the interpreter is named
-    python3.13t and the shared library libpython3.13t.  Suitable for
-    experiments with true multi-core parallelism in Python.
-    Supported on Linux, macOS, and BSD platforms (shared library);
-    experimental static builds for wasm (Emscripten) and cosmo (APE);
-    wasi is blocked pending WASI threads stabilisation.
+    python3.13t (python3.13t.exe on Windows) and the shared library is
+    libpython3.13t (python313t.dll on Windows).  Suitable for experiments
+    with true multi-core parallelism in Python.
+    Supported on Linux, macOS, BSD, and Windows; experimental static builds
+    for wasm (Emscripten) and cosmo (APE); wasi is blocked pending WASI
+    threads stabilisation.
 
 source:
   type: tarball
@@ -94,6 +95,8 @@ build:
     - platform: wasi
       host_platform: linux
       script: build-wasi.sh
+    - platform: windows
+      script: build.ps1
     - platform: cosmo
       host_platform: linux
       script: build-cosmo.sh
@@ -106,6 +109,9 @@ package:
     - lib/python3.13/
     - lib/pkgconfig/python-3.13t*.pc
     - include/python3.13t/
+    # Windows PCbuild --experimental-instdir layout
+    - python313t.dll
+    - python3.13t.exe
   cmake_packages:
     - { name: Python3t, targets: ["Python3t::Python", "Python3t::Interpreter"] }
 
@@ -114,12 +120,13 @@ abi:
 
 notes:
   - title: "Free-threaded (no-GIL) build"
-    platforms: [linux, macos, freebsd, openbsd, netbsd]
+    platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     description: >-
-      Built with --disable-gil.  The interpreter binary is python3.13t and
-      the shared library is libpython3.13t.so.  A python3t convenience
-      symlink is also created.  PGO (--enable-optimizations) is enabled on
-      Linux and macOS.
+      Built with --disable-gil.  The interpreter binary is python3.13t
+      (python3.13t.exe on Windows) and the shared library is
+      libpython3.13t.so (python313t.dll on Windows).  A python3t
+      convenience symlink is also created on Unix.  PGO is enabled on
+      Linux, macOS, and Windows.
   - title: "Shared stdlib with python313"
     platforms: [linux, macos, freebsd, openbsd, netbsd]
     description: >-
@@ -130,11 +137,13 @@ notes:
       lib/python3.13/lib-dynload/ directory.  Installing python313 and
       python313t into the same prefix is safe as long as both are built
       from the same source release.
-  - title: "Windows not supported"
-    platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasi, cosmo]
+  - title: "Windows (PCbuild) build"
+    platforms: [windows]
     description: >-
-      Windows (PCbuild) is not included.  The free-threaded build requires
-      a Unix-style configure toolchain.  Use python313 for Windows.
+      Built via PCbuild\build.bat --disable-gil using MSVC.  The free-threaded
+      interpreter is python3.13t.exe and the DLL is python313t.dll.  PGO is
+      enabled.  The Windows build uses the same CPython source tarball as the
+      Unix build; --experimental-instdir produces a relocatable install tree.
   - title: "WASM (Emscripten) — experimental"
     platforms: [wasm]
     description: >-
