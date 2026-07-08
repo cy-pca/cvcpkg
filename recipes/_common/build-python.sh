@@ -16,6 +16,11 @@ set -euo pipefail
 : "${CVC_DEPS_PREFIX:?CVC_DEPS_PREFIX must be set to the cvcpkg deps prefix}"
 : "${PYTHON_VERSION:?PYTHON_VERSION must be exported before sourcing this script}"
 : "${PYTHON_MINOR:?PYTHON_MINOR must be exported before sourcing this script}"
+# PYTHON_LDVERSION — ABI suffix for the binary/lib/include names.
+# Defaults to PYTHON_MINOR; free-threaded builds set this to e.g. "3.13t".
+: "${PYTHON_LDVERSION:=${PYTHON_MINOR}}"
+# PYTHON_DISABLE_GIL — set to "1" to pass --disable-gil (free-threaded build).
+: "${PYTHON_DISABLE_GIL:=0}"
 
 cd "${CVC_SOURCE_DIR}"
 
@@ -102,6 +107,11 @@ case "${CVC_PLATFORM}" in
         ;;
 esac
 
+# Free-threaded (no-GIL) build.
+if [ "${PYTHON_DISABLE_GIL}" = "1" ]; then
+    CONFIGURE_ARGS+=(--disable-gil)
+fi
+
 ./configure "${CONFIGURE_ARGS[@]}"
 
 $MAKE -j "${CVC_JOBS}"
@@ -111,7 +121,7 @@ $MAKE install
 # CPython's Makefile bakes the absolute build-time LDFLAGS rpath; patch
 # the installed binary so it uses $ORIGIN-relative paths instead.
 if [ "$IS_CROSS" = false ]; then
-    PY_BIN="${CVC_INSTALL_DIR}/bin/python${PYTHON_MINOR}"
+    PY_BIN="${CVC_INSTALL_DIR}/bin/python${PYTHON_LDVERSION}"
     if command -v patchelf >/dev/null 2>&1 && [[ "${CVC_PLATFORM}" != "macos" ]]; then
         patchelf --set-rpath "\$ORIGIN/../lib" "${PY_BIN}" 2>/dev/null || true
         # Patch extension modules so they find libpython.
@@ -121,23 +131,28 @@ if [ "$IS_CROSS" = false ]; then
 
     if [[ "${CVC_PLATFORM}" == "macos" ]]; then
         # Fix install_name on the framework-less shared build.
-        DYLIB="${CVC_INSTALL_DIR}/lib/libpython${PYTHON_MINOR}.dylib"
+        DYLIB="${CVC_INSTALL_DIR}/lib/libpython${PYTHON_LDVERSION}.dylib"
         if [[ -f "$DYLIB" ]]; then
-            install_name_tool -id "@rpath/libpython${PYTHON_MINOR}.dylib" "$DYLIB"
+            install_name_tool -id "@rpath/libpython${PYTHON_LDVERSION}.dylib" "$DYLIB"
             install_name_tool -change \
-                "${CVC_INSTALL_DIR}/lib/libpython${PYTHON_MINOR}.dylib" \
-                "@rpath/libpython${PYTHON_MINOR}.dylib" \
+                "${CVC_INSTALL_DIR}/lib/libpython${PYTHON_LDVERSION}.dylib" \
+                "@rpath/libpython${PYTHON_LDVERSION}.dylib" \
                 "${PY_BIN}" 2>/dev/null || true
         fi
     fi
 fi
 
 # --- Convenience symlinks ---
-# Ensure python3 → python3.X and python → python3.X in bin/ so scripts
-# that call /usr/bin/env python3 or python work when only one version is
-# installed.  These are "last-write wins" when multiple minor versions
-# are installed into the same prefix; use them as best-effort aliases.
 cd "${CVC_INSTALL_DIR}/bin"
-ln -sf "python${PYTHON_MINOR}" python3 2>/dev/null || true
-ln -sf "python${PYTHON_MINOR}" python  2>/dev/null || true
-ln -sf "python${PYTHON_MINOR}-config" python3-config 2>/dev/null || true
+if [ "${PYTHON_LDVERSION}" = "${PYTHON_MINOR}" ]; then
+    # Regular (GIL-enabled) build: create generic python3/python aliases.
+    # "last-write wins" when multiple minor versions share a prefix.
+    ln -sf "python${PYTHON_LDVERSION}" python3 2>/dev/null || true
+    ln -sf "python${PYTHON_LDVERSION}" python  2>/dev/null || true
+    ln -sf "python${PYTHON_LDVERSION}-config" python3-config 2>/dev/null || true
+else
+    # Free-threaded (t) build: add a short pythonXt alias (e.g. python3t)
+    # but do NOT clobber the generic python3/python symlinks.
+    MAJOR="${PYTHON_MINOR%%.*}"
+    ln -sf "python${PYTHON_LDVERSION}" "python${MAJOR}t" 2>/dev/null || true
+fi

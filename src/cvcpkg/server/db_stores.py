@@ -2892,12 +2892,13 @@ class DbBuildJobStore:
             log_path = log_sub / f"{job_id}.log"
 
             # Append data
-            with open(log_path, "a") as f:
-                f.write(data)
+            with open(log_path, "ab") as f:
+                f.write(data.encode() if isinstance(data, str) else data)
 
             # Update row metadata
             size = log_path.stat().st_size
-            row.log_url = str(log_path.relative_to(logs_dir))
+            # Use forward slashes so the URL is consistent on Windows too.
+            row.log_url = log_path.relative_to(logs_dir).as_posix()
             row.log_size_bytes = size
 
             dep_ids = await self._load_dep_ids(session, job_id)

@@ -1,0 +1,165 @@
+schema_version: 1
+recipe:
+  name: python313t
+  upstream_version: "3.13.3"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.python.org/
+  license: PSF-2.0
+  tags: [language, runtime, scripting]
+  description: >-
+    CPython 3.13 free-threaded build — the GIL-disabled ("t") variant of
+    python313.  Built with --disable-gil; the interpreter is named
+    python3.13t and the shared library libpython3.13t.  Suitable for
+    experiments with true multi-core parallelism in Python.
+    Supported on Linux, macOS, and BSD platforms (shared library);
+    experimental static builds for wasm (Emscripten) and cosmo (APE);
+    wasi is blocked pending WASI threads stabilisation.
+
+source:
+  type: tarball
+  url: https://www.python.org/ftp/python/3.13.3/Python-3.13.3.tar.xz
+  sha256: "40f868bcbdeb8149a3149580bb9bfd407b3321cd48f0be631af955ac92c0e041"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: openssl
+      version: "^3.0"
+    - name: zlib
+      version: "^1.3"
+    - name: libffi
+      version: "^3.0"
+    - name: bzip2
+      version: "^1.0"
+    - name: xz
+      version: "^5.0"
+    - name: readline
+      version: "^8.0"
+    - name: sqlite
+      version: "^3.0"
+    - name: ncurses
+      version: "^6.0"
+  runtime:
+    - name: openssl
+      version: "^3.0"
+    - name: zlib
+      version: "^1.3"
+    - name: libffi
+      version: "^3.0"
+    - name: bzip2
+      version: "^1.0"
+    - name: xz
+      version: "^5.0"
+    - name: readline
+      version: "^8.0"
+    - name: sqlite
+      version: "^3.0"
+    - name: ncurses
+      version: "^6.0"
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: macos
+      script: build-wasm.sh
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: cosmo
+      host_platform: linux
+      script: build-cosmo.sh
+
+package:
+  files:
+    - bin/python3.13t*
+    - bin/python3t
+    - lib/libpython3.13t*
+    - lib/python3.13/
+    - lib/pkgconfig/python-3.13t*.pc
+    - include/python3.13t/
+  cmake_packages:
+    - { name: Python3t, targets: ["Python3t::Python", "Python3t::Interpreter"] }
+
+abi:
+  cxx_std: 17
+
+notes:
+  - title: "Free-threaded (no-GIL) build"
+    platforms: [linux, macos, freebsd, openbsd, netbsd]
+    description: >-
+      Built with --disable-gil.  The interpreter binary is python3.13t and
+      the shared library is libpython3.13t.so.  A python3t convenience
+      symlink is also created.  PGO (--enable-optimizations) is enabled on
+      Linux and macOS.
+  - title: "Shared stdlib with python313"
+    platforms: [linux, macos, freebsd, openbsd, netbsd]
+    description: >-
+      The pure-Python standard library lives in lib/python3.13/ (without the
+      t suffix), the same directory used by the regular python313 recipe.
+      Extension modules use the t ABI tag (e.g. _ssl.cpython-313t-*.so) and
+      can coexist with regular python313 extension modules in the same
+      lib/python3.13/lib-dynload/ directory.  Installing python313 and
+      python313t into the same prefix is safe as long as both are built
+      from the same source release.
+  - title: "Windows not supported"
+    platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasi, cosmo]
+    description: >-
+      Windows (PCbuild) is not included.  The free-threaded build requires
+      a Unix-style configure toolchain.  Use python313 for Windows.
+  - title: "WASM (Emscripten) — experimental"
+    platforms: [wasm]
+    description: >-
+      Builds with -matomics -mbulk-memory -pthread to enable Emscripten's
+      SharedArrayBuffer-backed pthreads.  The resulting .wasm must be served
+      with COOP + COEP HTTP headers for SharedArrayBuffer to be available.
+      Multi-threaded behaviour under the Web Worker thread model is
+      experimental and may be non-deterministic under heavy concurrency.
+  - title: "WASI — expected to fail (no pthreads)"
+    platforms: [wasi]
+    description: >-
+      Standard wasm32-wasip1 (wasi-sdk ≤ 22) has no pthread support.
+      CPython configure will abort with "--disable-gil requires threading
+      support".  This matrix entry is kept to track upstream progress; it
+      will be enabled once the WASI threads proposal stabilises in wasi-sdk
+      and CPython's build system gains wasip2 support.
+  - title: "Cosmo (APE) — experimental"
+    platforms: [cosmo]
+    description: >-
+      Cosmopolitan libc ships pthreads, so --disable-gil configures and
+      builds.  The APE binary runs on Linux, macOS, Windows, and the BSDs.
+      The free-threaded runtime has been validated only on Linux/macOS;
+      behaviour on the broader Cosmo compatibility matrix (Windows TLS,
+      OpenBSD pledge, etc.) is unknown.  C extension modules are unavailable
+      (statically linked stdlib only).
+
+conflicts:
+  - python313

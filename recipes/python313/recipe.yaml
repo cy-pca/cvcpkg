@@ -147,3 +147,6 @@ notes:
       (--disable-shared) since extension modules (.so) are uncommon.
       Readline is disabled (--with-readline=tkinter) because the
       ncurses/readline ecosystem is not available on these platforms.
+
+conflicts:
+  - python313t

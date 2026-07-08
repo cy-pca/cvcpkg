@@ -31,6 +31,7 @@ from cvcpkg.builder import (
     _total_size,
     apply_patches,
     chain_hash,
+    collect_recipe_conflicts,
     create_archive,
     fetch_source,
     generate_manifest,
@@ -189,6 +190,26 @@ class TestRecipeLoad:
         _write_recipe(recipe_dir, recipe_dict)
         r = Recipe.load(recipe_dir)
         assert len(r.build_matrix) == 3
+
+    def test_load_conflicts_field(self, tmp_path):
+        recipe_dict = {**MINIMAL_RECIPE, "conflicts": ["pkg-a", "pkg-b"]}
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        assert r.conflicts == ["pkg-a", "pkg-b"]
+
+    def test_load_conflicts_defaults_to_empty_list(self, tmp_path):
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, MINIMAL_RECIPE)
+        r = Recipe.load(recipe_dir)
+        assert r.conflicts == []
+
+    def test_load_conflicts_null_treated_as_empty(self, tmp_path):
+        recipe_dict = {**MINIMAL_RECIPE, "conflicts": None}
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        assert r.conflicts == []
 
 
 # ── Matrix selection ────────────────────────────────────────────
@@ -3357,3 +3378,113 @@ class TestPackFromPrefix:
             fobj = tf.extractfile(member)
             assert fobj is not None
             assert fobj.read() == payload
+
+
+# ── collect_recipe_conflicts ─────────────────────────────────────
+
+
+def _write_conflict_recipe(recipes_dir: Path, name: str, conflicts: list) -> None:
+    """Write a minimal recipe.yaml with an optional conflicts list."""
+    d = {
+        "schema_version": 1,
+        "recipe": {
+            "name": name,
+            "upstream_version": "1.0.0",
+            "cvc_revision": 1,
+        },
+        "source": {"type": "vendored", "path": f"third-party/{name}"},
+        "patches": [],
+        "build": {
+            "matrix": [{"platform": "linux", "script": "build.sh"}],
+        },
+        "package": {"files": ["lib/*", "include/*"], "cmake_packages": []},
+    }
+    if conflicts:
+        d["conflicts"] = conflicts
+    recipe_dir = recipes_dir / name
+    recipe_dir.mkdir(parents=True, exist_ok=True)
+    (recipe_dir / "recipe.yaml").write_text(__import__("yaml").dump(d, default_flow_style=False))
+
+
+class TestCollectRecipeConflicts:
+    """Unit tests for collect_recipe_conflicts()."""
+
+    def test_empty_names_returns_empty(self, tmp_path):
+        rd = tmp_path / "recipes"
+        _write_conflict_recipe(rd, "alpha", ["beta"])
+        result = collect_recipe_conflicts([], [rd])
+        assert result == {}
+
+    def test_empty_recipe_dirs_returns_empty(self, tmp_path):
+        result = collect_recipe_conflicts(["alpha"], [])
+        assert result == {}
+
+    def test_package_with_no_conflicts_omitted(self, tmp_path):
+        rd = tmp_path / "recipes"
+        _write_conflict_recipe(rd, "alpha", [])
+        result = collect_recipe_conflicts(["alpha"], [rd])
+        assert result == {}
+
+    def test_package_not_in_recipes_silently_skipped(self, tmp_path):
+        rd = tmp_path / "recipes"
+        # only alpha exists, we ask for nonexistent
+        _write_conflict_recipe(rd, "alpha", ["beta"])
+        result = collect_recipe_conflicts(["nonexistent"], [rd])
+        assert result == {}
+
+    def test_single_conflict_returned(self, tmp_path):
+        rd = tmp_path / "recipes"
+        _write_conflict_recipe(rd, "alpha", ["beta"])
+        result = collect_recipe_conflicts(["alpha"], [rd])
+        assert result == {"alpha": ["beta"]}
+
+    def test_multiple_conflicts_returned(self, tmp_path):
+        rd = tmp_path / "recipes"
+        _write_conflict_recipe(rd, "alpha", ["beta", "gamma"])
+        result = collect_recipe_conflicts(["alpha"], [rd])
+        assert result == {"alpha": ["beta", "gamma"]}
+
+    def test_multiple_packages_with_conflicts(self, tmp_path):
+        rd = tmp_path / "recipes"
+        _write_conflict_recipe(rd, "python313", ["python313t"])
+        _write_conflict_recipe(rd, "python313t", ["python313"])
+        _write_conflict_recipe(rd, "zlib", [])
+        result = collect_recipe_conflicts(["python313", "python313t", "zlib"], [rd])
+        assert result == {
+            "python313": ["python313t"],
+            "python313t": ["python313"],
+        }
+
+    def test_only_requested_names_included(self, tmp_path):
+        rd = tmp_path / "recipes"
+        _write_conflict_recipe(rd, "alpha", ["beta"])
+        _write_conflict_recipe(rd, "beta", ["alpha"])
+        # Only ask for alpha, not beta
+        result = collect_recipe_conflicts(["alpha"], [rd])
+        assert "beta" not in result
+        assert result == {"alpha": ["beta"]}
+
+    def test_multiple_recipe_dirs_merged(self, tmp_path):
+        rd1 = tmp_path / "base"
+        rd2 = tmp_path / "overlay"
+        _write_conflict_recipe(rd1, "alpha", ["beta"])
+        _write_conflict_recipe(rd2, "gamma", ["delta"])
+        result = collect_recipe_conflicts(["alpha", "gamma"], [rd1, rd2])
+        assert result == {"alpha": ["beta"], "gamma": ["delta"]}
+
+    def test_later_dir_extends_conflicts(self, tmp_path):
+        """If both dirs have the same recipe, conflicts from both are merged."""
+        rd1 = tmp_path / "base"
+        rd2 = tmp_path / "overlay"
+        _write_conflict_recipe(rd1, "alpha", ["beta"])
+        _write_conflict_recipe(rd2, "alpha", ["gamma"])
+        result = collect_recipe_conflicts(["alpha"], [rd1, rd2])
+        assert "alpha" in result
+        assert set(result["alpha"]) == {"beta", "gamma"}
+
+    def test_broken_recipe_yaml_silently_skipped(self, tmp_path):
+        rd = tmp_path / "recipes"
+        (rd / "alpha").mkdir(parents=True)
+        (rd / "alpha" / "recipe.yaml").write_text("not: valid: yaml: [{")
+        result = collect_recipe_conflicts(["alpha"], [rd])
+        assert result == {}
