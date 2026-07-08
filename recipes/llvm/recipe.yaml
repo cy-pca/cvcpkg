@@ -1,0 +1,105 @@
+schema_version: 1
+recipe:
+  name: llvm
+  upstream_version: "22.1.8"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://llvm.org
+  license: Apache-2.0
+  tags: [compiler, toolchain, llvm, clang, development]
+  description: >-
+    LLVM 22 — the complete LLVM/Clang/LLD toolchain built from the LLVM
+    monorepo.  Provides clang, clang++, the LLVM static analysis and
+    optimisation infrastructure, the LLD linker, and all development
+    libraries and headers needed to build LLVM-based tools such as
+    llvm-cbe.  Targets: X86, AArch64, WebAssembly.
+
+source:
+  type: tarball
+  url: https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/llvm-project-22.1.8.src.tar.xz
+  sha256: "922f1817a0df7b1489272d18134ee0087a8b068828f87ac63b9861b1a9965888"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: zlib
+      version: "^1.3"
+    - name: ncurses
+      version: "^6.0"
+  runtime:
+    - name: zlib
+      version: "^1.3"
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - bin/clang*
+    - bin/lld*
+    - bin/ld.lld
+    - bin/ld64.lld
+    - bin/llvm-*
+    - bin/opt
+    - bin/llc
+    - bin/lli
+    - lib/libLLVM*
+    - lib/libclang*
+    - lib/liblld*
+    - lib/cmake/llvm/
+    - lib/cmake/clang/
+    - lib/cmake/lld/
+    - include/llvm/
+    - include/llvm-c/
+    - include/clang/
+    - include/clang-c/
+    - include/lld/
+  cmake_packages:
+    - { name: LLVM, targets: ["LLVM"] }
+    - { name: Clang, targets: ["clang", "clangTooling"] }
+
+abi:
+  cxx_std: 17
+
+notes:
+  - title: "Build time"
+    platforms: [linux, macos, windows, freebsd]
+    description: >-
+      LLVM is a very large project.  Expect 30–90 minutes to compile
+      depending on hardware.  The build uses -j${CVC_JOBS} parallelism.
+      LLVM_PARALLEL_LINK_JOBS is capped at 2 to avoid OOM during linking.
+  - title: "Included sub-projects"
+    platforms: [linux, macos, windows, freebsd]
+    description: >-
+      Built with LLVM_ENABLE_PROJECTS="clang;lld".  This provides clang,
+      clang++, clang-format, clang-tidy, the lld linker, and all LLVM
+      tools (opt, llc, lli, llvm-dis, llvm-link, llvm-nm, etc.).
+      Targets: X86, AArch64, WebAssembly.
+  - title: "Shared library"
+    platforms: [linux, macos, freebsd]
+    description: >-
+      LLVM_BUILD_LLVM_DYLIB=ON produces a single libLLVM.so/.dylib that
+      all LLVM tools link against, keeping the total install size smaller.
+      Downstream consumers (e.g. llvm-cbe) can also link against it.
+  - title: "llvm-cbe C backend"
+    platforms: [linux, macos, windows, freebsd]
+    description: >-
+      To convert LLVM bitcode to C, install the llvm-cbe recipe after
+      this one.  The full workflow is:
+        clang++ -std=c++20 -O2 -emit-llvm -c main.cpp -o main.bc
+        llvm-cbe main.bc -o main.c
