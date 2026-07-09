@@ -1,0 +1,87 @@
+schema_version: 1
+recipe:
+  name: libgeos
+  upstream_version: "3.13.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "GEOS — Geometry Engine, Open Source. A C/C++ computational-geometry library with a stable C API (libgeos_c); the geometry backend behind Shapely, PostGIS, and QGIS."
+  homepage: https://libgeos.org
+  license: LGPL-2.1-only
+  tags: [geometry, gis, math]
+
+source:
+  type: tarball
+  url: https://download.osgeo.org/geos/geos-3.13.0.tar.bz2
+  sha256: "47ec83ff334d672b9e4426695f15da6e6368244214971fabf386ff8ef6df39e4"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: wasi
+      host_platform: windows
+      script: build-wasi.ps1
+    - platform: cosmo
+      host_platform: linux
+      script: build-cosmo.sh
+
+package:
+  files:
+    - lib/libgeos*
+    - lib/geos*
+    - lib/cmake/GEOS/
+    - lib/pkgconfig/geos.pc
+    - include/geos.h
+    - include/geos_c.h
+    - include/geos/
+  cmake_packages:
+    - { name: GEOS, targets: ["GEOS::geos", "GEOS::geos_c"] }
+  pkg_config:
+    - geos
+
+abi:
+  cxx_std: 17

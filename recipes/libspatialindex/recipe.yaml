@@ -1,0 +1,85 @@
+schema_version: 1
+recipe:
+  name: libspatialindex
+  upstream_version: "2.1.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "libspatialindex — a robust C++ spatial indexing library (R*-tree, MVR-tree, TPR-tree) with a stable C API. The native backend used by Python's Rtree, and thus by GeoPandas/OSMnx spatial joins."
+  homepage: https://libspatialindex.org
+  license: MIT
+  tags: [geometry, gis, spatial-index]
+
+source:
+  type: tarball
+  url: https://github.com/libspatialindex/libspatialindex/releases/download/2.1.0/spatialindex-src-2.1.0.tar.bz2
+  sha256: "c59932395e98896038d59199f2e2453595df6d730ffbe09d69df2a661bcb619b"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: wasi
+      host_platform: windows
+      script: build-wasi.ps1
+    - platform: cosmo
+      host_platform: linux
+      script: build-cosmo.sh
+
+package:
+  files:
+    - lib/libspatialindex*
+    - lib/spatialindex*
+    - lib/cmake/libspatialindex/
+    - lib/pkgconfig/libspatialindex.pc
+    - include/spatialindex/
+  cmake_packages:
+    - { name: libspatialindex, targets: ["spatialindex", "spatialindex_c"] }
+  pkg_config:
+    - libspatialindex
+
+abi:
+  cxx_std: 17
