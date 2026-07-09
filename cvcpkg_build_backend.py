@@ -1,6 +1,6 @@
 """Custom PEP 517 build backend that wraps poetry-core.
 
-Copies ../../recipes into src/cvcpkg/recipes/ before building so that
+Copies ./recipes into src/cvcpkg/recipes/ before building so that
 recipe files are included in the wheel/sdist.
 """
 

@@ -89,7 +89,7 @@ services:
             CVCPKG_TEST_MYSQL_URL: mysql+aiomysql://cvcpkg_test:testpass@mysql:3306/cvcpkg_test
         volumes:
             - cvcpkg-state:/app/data
-            - ../../recipes:/repo/recipes:ro
+            - ./recipes:/repo/recipes:ro
         networks:
             - cvcpkg-test
 

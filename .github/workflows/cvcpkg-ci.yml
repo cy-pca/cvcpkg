@@ -11,12 +11,24 @@ on:
       - 'src/**'
       - 'recipes/**'
       - 'packaging/**'
+      - 'tests/**'
+      - 'docker-compose.test.yml'
+      - 'Dockerfile.test'
+      - 'Dockerfile.playwright'
+      - 'cvcpkg_build_backend.py'
+      - '.github/workflows/cvcpkg-ci.yml'
   push:
     branches: [master, main]
     paths:
       - 'src/**'
       - 'recipes/**'
       - 'packaging/**'
+      - 'tests/**'
+      - 'docker-compose.test.yml'
+      - 'Dockerfile.test'
+      - 'Dockerfile.playwright'
+      - 'cvcpkg_build_backend.py'
+      - '.github/workflows/cvcpkg-ci.yml'
 
 concurrency:
   group: cvcpkg-ci-${{ github.ref }}

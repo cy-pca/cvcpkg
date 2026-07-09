@@ -466,7 +466,7 @@ class TestYankUnyankCycle:
         )
         assert r.status_code == 200
 
-    def test_04_unyanked_back_in_catalog(self, client):
+    def test_04_unyanked_back_in_catalog(self, client, published_zlib):
         """After unyank, package should be visible again."""
         r = client.get("/v1/catalog")
         bundles = r.json()["bundles"]
@@ -498,15 +498,21 @@ class TestAuditTrailVerification:
         data = r.json()
         assert data["ok"] is True
 
-    def test_03_publish_audit_has_correct_target(self, client, admin_headers):
+    def test_03_publish_audit_has_correct_target(self, client, admin_headers, published_zlib):
         """The publish audit entry should reference zlib."""
-        r = client.get("/v1/audit", headers=admin_headers)
+        # Filter server-side by action + raise the limit so this stays
+        # correct even when the shared test server holds many entries.
+        r = client.get(
+            "/v1/audit",
+            params={"action": "publish", "limit": 1000},
+            headers=admin_headers,
+        )
         entries = r.json()["entries"]
         publish_entries = [
             e for e in entries if e["action"] == "publish" and e["actor"] == "e2e-publisher"
         ]
         assert len(publish_entries) >= 1
-        assert "zlib" in publish_entries[0]["target"]
+        assert any("zlib" in e["target"] for e in publish_entries)
 
 
 class TestCleanup:
