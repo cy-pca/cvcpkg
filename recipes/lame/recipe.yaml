@@ -26,10 +26,10 @@ patches: []
 depends:
   build:
     - name: libmp3lame
+    - pkg-config
   runtime:
     - name: libmp3lame
-  host_tools:
-    - pkg-config
+  host_tools: []
 
 build:
   matrix:

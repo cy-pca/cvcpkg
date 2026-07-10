@@ -1,0 +1,56 @@
+schema_version: 1
+recipe:
+  name: powershell
+  upstream_version: "7.4.6"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/PowerShell/PowerShell
+  license: MIT
+  tags: [tools, scripting]
+  description: >-
+    PowerShell 7 (pwsh) — cross-platform shell installed from the official
+    prebuilt release archives. A build-time host tool: every Windows recipe
+    build script is `#!/usr/bin/env pwsh` and uses pwsh-7-only syntax (e.g.
+    `&&`), so a bare Windows build host that lacks pwsh 7 can be provisioned by
+    cvcpkg instead of relying on a system install (the Store-alias pwsh.exe is
+    not usable non-interactively).
+
+source:
+  type: prebuilt
+  base_url: https://github.com/PowerShell/PowerShell/releases/download/v7.4.6
+  artifacts:
+    linux-x86_64: powershell-7.4.6-linux-x64.tar.gz
+    linux-arm64: powershell-7.4.6-linux-arm64.tar.gz
+    macos-x86_64: powershell-7.4.6-osx-x64.tar.gz
+    macos-arm64: powershell-7.4.6-osx-arm64.tar.gz
+    windows-x86_64: PowerShell-7.4.6-win-x64.zip
+
+patches: []
+
+depends:
+  build: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - bin/pwsh
+    - lib/powershell/
+  cmake_packages: []
+
+toolchain:
+  note: >-
+    Prebuilt binaries — pwsh ships as a self-contained .NET bundle. The tree is
+    staged under lib/powershell/ with a bin/pwsh launcher (relative symlink on
+    POSIX; pwsh.exe under lib/powershell on Windows).

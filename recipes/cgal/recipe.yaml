@@ -20,7 +20,9 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - cmake
+    - ninja
   runtime:
     - name: boost
       version: ">=1.82.0"
@@ -28,9 +30,7 @@ depends:
       version: ">=6.1.0"
     - name: mpfr
       version: ">=4.1.0"
-  host_tools:
-    - cmake
-    - ninja
+  host_tools: []
 
 build:
   matrix:

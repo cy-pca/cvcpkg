@@ -122,11 +122,21 @@ $MAKE install
 # the installed binary so it uses $ORIGIN-relative paths instead.
 if [ "$IS_CROSS" = false ]; then
     PY_BIN="${CVC_INSTALL_DIR}/bin/python${PYTHON_LDVERSION}"
-    if command -v patchelf >/dev/null 2>&1 && [[ "${CVC_PLATFORM}" != "macos" ]]; then
-        patchelf --set-rpath "\$ORIGIN/../lib" "${PY_BIN}" 2>/dev/null || true
-        # Patch extension modules so they find libpython.
+    if [[ "${CVC_PLATFORM}" != "macos" ]]; then
+        # ELF (Linux/BSD): overwrite the rpath with an $ORIGIN-relative path so
+        # the install is relocatable. CPython's Makefile otherwise bakes a
+        # make-MANGLED rpath — the $O in $ORIGIN is a make variable, so it
+        # expands to a broken "RIGIN/../lib" (RUNPATH). patchelf writes literal
+        # bytes and sidesteps make/shell $ORIGIN escaping entirely, so it is a
+        # REQUIRED build dependency here (declared per-recipe for linux/*bsd).
+        if ! command -v patchelf >/dev/null 2>&1; then
+            echo "build-python.sh: patchelf required on ${CVC_PLATFORM} but not found on PATH" >&2
+            exit 1
+        fi
+        patchelf --set-rpath '$ORIGIN/../lib' "${PY_BIN}"
+        # Extension modules (lib/pythonX.Y/**): point them back at the prefix.
         find "${CVC_INSTALL_DIR}/lib/python${PYTHON_MINOR}" -name '*.so' -print0 \
-            | xargs -0 -I{} patchelf --set-rpath "\$ORIGIN/../../.." {} 2>/dev/null || true
+            | xargs -0 -r -I{} patchelf --set-rpath '$ORIGIN/../../..' {} 2>/dev/null || true
     fi
 
     if [[ "${CVC_PLATFORM}" == "macos" ]]; then
@@ -142,17 +152,21 @@ if [ "$IS_CROSS" = false ]; then
     fi
 fi
 
-# --- Convenience symlinks ---
+# --- Alias hygiene: keep version-specific builds side-by-side safe ---
+# Version-specific recipes must ship ONLY versioned binaries (python3.X,
+# pip3.X, ...) so that several minor versions can be installed into the same
+# prefix without fighting over the generic names. The generic
+# python3/python/pip3/pip aliases are owned by the `python3` meta-recipe
+# instead, which points them at a single default interpreter.
+#
+# CPython's `make install` and ensurepip create some of these generic
+# aliases; strip them here so they never end up in the staged tree.
+# (stage_bundle copies the whole install dir — package.files does not filter
+# it — so removing the files here is what actually prevents the collision.)
 cd "${CVC_INSTALL_DIR}/bin"
-if [ "${PYTHON_LDVERSION}" = "${PYTHON_MINOR}" ]; then
-    # Regular (GIL-enabled) build: create generic python3/python aliases.
-    # "last-write wins" when multiple minor versions share a prefix.
-    ln -sf "python${PYTHON_LDVERSION}" python3 2>/dev/null || true
-    ln -sf "python${PYTHON_LDVERSION}" python  2>/dev/null || true
-    ln -sf "python${PYTHON_LDVERSION}-config" python3-config 2>/dev/null || true
-else
-    # Free-threaded (t) build: add a short pythonXt alias (e.g. python3t)
-    # but do NOT clobber the generic python3/python symlinks.
+rm -f python3 python python3-config pip3 pip 2>/dev/null || true
+if [ "${PYTHON_LDVERSION}" != "${PYTHON_MINOR}" ]; then
+    # Free-threaded (t) build: keep a short pythonXt alias (e.g. python3t).
     MAJOR="${PYTHON_MINOR%%.*}"
     ln -sf "python${PYTHON_LDVERSION}" "python${MAJOR}t" 2>/dev/null || true
 fi

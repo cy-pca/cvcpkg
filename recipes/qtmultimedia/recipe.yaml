@@ -20,27 +20,18 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - cmake
+    - ninja
+    - name: python3
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: python312
+      platforms: [windows]
   runtime:
     - {name: qt6, version: ">=6.8"}
     - {name: qtshadertools, version: ">=6.8"}
-    # FFmpeg is Qt Multimedia's default backend on Qt 6.8 (all desktop
-    # platforms).  PipeWire and GStreamer are additional Linux backends.
-    - name: ffmpeg
-      platforms: [linux, macos]
-    - name: pipewire
-      platforms: [linux]
-    - name: gstreamer
-      platforms: [linux, macos]
-    # libpulse gives Qt a low-level audio backend on Linux, which is what
-    # unlocks the FFmpeg media backend there (Qt gates it on PulseAudio).
-    - name: libpulse
-      platforms: [linux]
   host_tools:
-    - cmake
-    - ninja
     - perl
-    - python3
 
 build:
   matrix:

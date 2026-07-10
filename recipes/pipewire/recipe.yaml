@@ -25,13 +25,16 @@ source:
 patches: []
 
 depends:
-  build: []
-  runtime: []
-  host_tools:
-    - meson
+  build:
     - ninja
+    - meson
     - pkg-config
-    - python3
+    - name: python3
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: python312
+      platforms: [windows]
+  runtime: []
+  host_tools: []
 
 build:
   matrix:

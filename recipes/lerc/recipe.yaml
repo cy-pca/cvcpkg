@@ -21,10 +21,10 @@ patches:
   - bsd-assert-macro-collision.patch
 
 depends:
-  build: []
-  host_tools:
+  build:
     - cmake
     - ninja
+  host_tools: []
 
 build:
   matrix:

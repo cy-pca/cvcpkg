@@ -27,10 +27,10 @@ depends:
     - name: libvpx
     - name: nasm
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - pkg-config
   runtime:
     - name: libvpx
-  host_tools:
-    - pkg-config
+  host_tools: []
 
 build:
   matrix:

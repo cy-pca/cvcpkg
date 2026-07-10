@@ -22,7 +22,14 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - ninja
+    - meson
+    - pkg-config
+    - name: python3
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: python312
+      platforms: [windows]
   runtime:
     - name: glib
       version: "^2.80"
@@ -32,11 +39,7 @@ depends:
       version: "^1.6"
     - name: tiff
       version: "^4.6"
-  host_tools:
-    - meson
-    - ninja
-    - pkg-config
-    - python3
+  host_tools: []
 
 build:
   matrix:

@@ -21,7 +21,9 @@ patches:
   - grpc-link-abseil-sublibs.patch
 
 depends:
-  build: []
+  build:
+    - cmake
+    - ninja
   runtime:
     - name: protobuf
       version: ">=27.0"
@@ -35,9 +37,7 @@ depends:
       version: ">=2024-07-02"
     - name: zlib
       version: "^1.3"
-  host_tools:
-    - cmake
-    - ninja
+  host_tools: []
 
 build:
   matrix:

@@ -23,7 +23,12 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - ninja
+    - meson
+    - pkg-config
+    - bison
+    - flex
   runtime:
     - name: openssl
       version: "^3.0"
@@ -42,12 +47,7 @@ depends:
     - name: krb5
       version: "^1.21"
       platforms: [linux, macos, freebsd, openbsd, netbsd]
-  host_tools:
-    - meson
-    - ninja
-    - flex
-    - bison
-    - pkg-config
+  host_tools: []
 
 build:
   matrix:

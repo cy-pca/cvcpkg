@@ -20,10 +20,10 @@ source:
   strip_components: 1
 
 depends:
-  build: []
-  host_tools:
+  build:
     - cmake
     - ninja
+  host_tools: []
 
 toolchain:
   llvm:

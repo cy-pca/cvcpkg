@@ -20,14 +20,17 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - cmake
+    - ninja
+    - name: python3
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: python312
+      platforms: [windows]
   runtime:
     - {name: qt6, version: ">=6.8"}
   host_tools:
-    - cmake
-    - ninja
     - perl
-    - python3
 
 build:
   matrix:

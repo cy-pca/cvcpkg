@@ -20,7 +20,9 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - cmake
+    - ninja
   runtime:
     - name: libjpeg-turbo
     - name: xz
@@ -29,9 +31,7 @@ depends:
     - name: lerc
     - name: tiff
       version: "^4.6"
-  host_tools:
-    - cmake
-    - ninja
+  host_tools: []
 
 build:
   matrix:

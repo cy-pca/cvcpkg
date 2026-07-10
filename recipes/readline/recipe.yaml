@@ -20,9 +20,9 @@ source:
 patches: []
 
 depends:
-  build: []
-  host_tools:
+  build:
     - pkg-config
+  host_tools: []
 
 build:
   matrix:

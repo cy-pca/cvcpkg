@@ -26,11 +26,11 @@ depends:
   build:
     - name: libogg
     - name: libvorbis
+    - pkg-config
   runtime:
     - name: libogg
     - name: libvorbis
-  host_tools:
-    - pkg-config
+  host_tools: []
 
 build:
   matrix:

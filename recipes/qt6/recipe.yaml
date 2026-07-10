@@ -28,6 +28,12 @@ depends:
   build:
     - name: pcre2
       version: "^10.0"
+    - cmake
+    - ninja
+    - name: python3
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: python312
+      platforms: [windows]
   runtime:
     - name: openssl
       version: "^3.0"
@@ -36,10 +42,7 @@ depends:
     - name: pcre2
       version: "^10.0"
   host_tools:
-    - cmake
-    - ninja
     - perl
-    - python3
 
 build:
   matrix:

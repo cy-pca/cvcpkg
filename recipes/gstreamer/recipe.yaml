@@ -29,16 +29,19 @@ depends:
   build:
     - name: nasm
       platforms: [linux, freebsd, openbsd, netbsd]
+    - ninja
+    - meson
+    - pkg-config
+    - bison
+    - flex
+    - name: python3
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: python312
+      platforms: [windows]
   runtime:
     - name: glib
       version: "^2.80"
-  host_tools:
-    - meson
-    - ninja
-    - pkg-config
-    - python3
-    - bison
-    - flex
+  host_tools: []
 
 build:
   matrix:

@@ -22,16 +22,16 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - cmake
+    - autoconf
+    - automake
   runtime:
     - name: pcre2
       version: ">=10.40"
     - name: bison
       version: ">=3.8"
-  host_tools:
-    - cmake
-    - autoconf
-    - automake
+  host_tools: []
 
 build:
   build_type_independent: true

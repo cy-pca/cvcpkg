@@ -22,7 +22,9 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - cmake
+    - ninja
   runtime:
     - name: openblas
       version: ">=0.3"
@@ -30,9 +32,7 @@ depends:
     - name: clapack
       version: ">=3.2"
       platforms: [windows, wasm]
-  host_tools:
-    - cmake
-    - ninja
+  host_tools: []
 
 build:
   matrix:

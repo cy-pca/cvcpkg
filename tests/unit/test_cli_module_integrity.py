@@ -111,7 +111,7 @@ def _collect_all_defined_names(tree: ast.Module) -> set[str]:
         elif isinstance(node, ast.ImportFrom):
             for alias in node.names:
                 names.add(alias.asname or alias.name)
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             names.add(node.name)
             # Also add parameter names
             for arg in node.args.args + node.args.posonlyargs + node.args.kwonlyargs:
@@ -132,14 +132,14 @@ def _collect_all_defined_names(tree: ast.Module) -> set[str]:
                             names.add(elt.id)
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
             names.add(node.target.id)
-        elif isinstance(node, (ast.For, ast.AsyncFor)):
+        elif isinstance(node, ast.For | ast.AsyncFor):
             if isinstance(node.target, ast.Name):
                 names.add(node.target.id)
             elif isinstance(node.target, ast.Tuple):
                 for elt in node.target.elts:
                     if isinstance(elt, ast.Name):
                         names.add(elt.id)
-        elif isinstance(node, (ast.With, ast.AsyncWith)):
+        elif isinstance(node, ast.With | ast.AsyncWith):
             for item in node.items:
                 if item.optional_vars and isinstance(item.optional_vars, ast.Name):
                     names.add(item.optional_vars.id)
@@ -186,7 +186,7 @@ class TestCrossModuleReferences:
 
         unresolved: list[str] = []
         for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
                 continue
             for call_name, lineno in _find_bare_name_calls(node):
                 if call_name not in all_names and call_name not in _BUILTINS:
