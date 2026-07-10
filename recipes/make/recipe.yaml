@@ -1,0 +1,49 @@
+schema_version: 1
+recipe:
+  name: make
+  upstream_version: "4.4.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.gnu.org/software/make/
+  license: GPL-3.0-or-later
+  tags: [tools, build-system]
+  description: >-
+    GNU Make — the standard build-automation tool that drives
+    configure/make/make install pipelines. Provided so recipes and
+    downstream projects can rely on a known GNU Make rather than the
+    host's (which on BSD/macOS may be BSD make or an older version).
+
+source:
+  type: tarball
+  url: https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz
+  sha256: "dd16fb1d67bfab79a72f5e8390735c49e3e8e70b4945a15ab1f81ddb78658fb3"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - bin/make
+    - share/man/man1/make*
