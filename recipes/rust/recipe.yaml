@@ -1,0 +1,59 @@
+schema_version: 1
+recipe:
+  name: rust
+  upstream_version: "1.84.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.rust-lang.org/
+  license: "Apache-2.0 OR MIT"
+  tags: [tools, compiler]
+  description: >-
+    The Rust toolchain (rustc + cargo + std library), installed from the
+    official prebuilt release binaries. A build-time host tool for recipes
+    whose build invokes cargo/rustc (e.g. slint). No bootstrap compiler is
+    required — the standalone installer ships everything.
+
+source:
+  type: prebuilt
+  base_url: https://static.rust-lang.org/dist
+  artifacts:
+    linux-x86_64: rust-1.84.0-x86_64-unknown-linux-gnu.tar.gz
+    linux-arm64: rust-1.84.0-aarch64-unknown-linux-gnu.tar.gz
+    macos-x86_64: rust-1.84.0-x86_64-apple-darwin.tar.gz
+    macos-arm64: rust-1.84.0-aarch64-apple-darwin.tar.gz
+
+patches: []
+
+depends:
+  build: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+
+package:
+  files:
+    - bin/
+    - lib/
+  cmake_packages: []
+
+toolchain:
+  note: >-
+    Prebuilt release binaries — no bootstrap compiler required. The
+    official install.sh stages rustc, cargo, and the std library into
+    the install prefix.
+
+notes:
+  - title: "Windows deferred"
+    platforms: [windows]
+    description: >-
+      The x86_64-pc-windows-msvc release archive exists upstream; add a
+      build.ps1 (install.sh under git-bash) + windows matrix entry as a
+      follow-up if a Windows consumer needs a cvcpkg-supplied rust.
