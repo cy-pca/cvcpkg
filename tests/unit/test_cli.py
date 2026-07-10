@@ -60,11 +60,83 @@ def test_validate_components():
         "pack",
         "publish",
         "recipes",
+        "doctor",
     ],
 )
 def test_subcommand_help(subcmd):
     ret = main([subcmd, "--help"])
     assert ret == 0
+
+
+# ── doctor command ──────────────────────────────────────────────
+
+
+def test_doctor_runs_and_reports(capsys):
+    """cvcpkg doctor prints a report and checks Python."""
+    main(["doctor"])
+    out = capsys.readouterr().out
+    assert "cvcpkg doctor" in out
+    assert "Python" in out
+    assert "C/C++ compiler" in out
+
+
+def test_doctor_python_check_ok():
+    from cvcpkg.cli._doctor import _check_python
+
+    c = _check_python()
+    # The interpreter running the tests is >= 3.10.
+    assert c.status == "ok"
+
+
+def test_doctor_fails_when_required_tool_missing(capsys):
+    """When CMake / compiler are absent, doctor exits non-zero."""
+    from cvcpkg.cli import _doctor
+
+    with mock.patch.object(_doctor.shutil, "which", return_value=None):
+        ret = main(["doctor"])
+    err = capsys.readouterr().err
+    assert ret == 1
+    assert "problem" in err.lower()
+
+
+def test_doctor_server_unreachable(capsys):
+    """--server with an unreachable host reports a failure."""
+    from cvcpkg.cli._doctor import _check_server
+
+    c = _check_server("http://127.0.0.1:59999")
+    assert c.status == "fail"
+
+
+def test_doctor_server_ok():
+    """--server check parses a healthy /healthz response."""
+    from cvcpkg.cli import _doctor
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"version": "2.0.0", "packages_count": 7}
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url):
+            return _Resp()
+
+    import httpx
+
+    with mock.patch.object(httpx, "Client", _Client):
+        c = _doctor._check_server("http://example.test")
+    assert c.status == "ok"
+    assert "2.0.0" in c.detail
 
 
 # ── recipes command ─────────────────────────────────────────────
@@ -1884,6 +1956,152 @@ class TestPublishSimple:
         with mock.patch("httpx.Client", return_value=self._mock_client(resp)):
             with pytest.raises(click.ClickException, match="publish failed"):
                 _publish_simple("https://pkg.example.com", {}, {}, archive)
+
+
+# ── admin CLI trio: server stats / server backup / builder logs ─
+
+
+def _mock_httpx_client(get=None, post=None):
+    client = mock.MagicMock()
+    client.__enter__ = mock.MagicMock(return_value=client)
+    client.__exit__ = mock.MagicMock(return_value=False)
+    if get is not None:
+        client.get.return_value = get
+    if post is not None:
+        client.post.return_value = post
+    return client
+
+
+class TestServerStatsCLI:
+    def test_server_stats_prints_report(self, capsys):
+        from cvcpkg.cli import _server
+
+        stats = {
+            "version": "2.0.0",
+            "uptime_seconds": 12.3,
+            "storage_scheme": "file",
+            "mirror_mode": False,
+            "database_enabled": True,
+            "database_backend": "postgresql",
+            "packages_count": 42,
+            "total_storage_bytes": 2048,
+            "orgs_count": 3,
+            "builders_count": 2,
+            "builders_connected": 1,
+            "build_jobs_count": 7,
+            "audit_entries": 99,
+        }
+        with mock.patch.object(_server, "_api_request", return_value=stats):
+            ret = main(["server", "stats", "--server", "http://x", "--token", "t"])
+        out = capsys.readouterr().out
+        assert ret == 0
+        assert "postgresql" in out
+        assert "42" in out
+        assert "2.0 KiB" in out
+        assert "2 (1 connected)" in out
+
+    def test_human_bytes(self):
+        from cvcpkg.cli._server import _human_bytes
+
+        assert _human_bytes(0) == "0 B"
+        assert _human_bytes(1024) == "1.0 KiB"
+        assert _human_bytes(1536) == "1.5 KiB"
+
+
+class TestServerBackupCLI:
+    def test_server_backup_prints_result(self, capsys):
+        from cvcpkg.cli import _server
+
+        payload = {
+            "message": "backup complete",
+            "backend": "sqlite",
+            "path": "/srv/data/backups/backup-20260709T000000Z.sqlite",
+            "size_bytes": 4096,
+        }
+        with mock.patch.object(_server, "_api_request", return_value=payload):
+            ret = main(["server", "backup", "--server", "http://x", "--token", "t"])
+        out = capsys.readouterr().out
+        assert ret == 0
+        assert "Backup complete" in out
+        assert "sqlite" in out
+        assert "4.0 KiB" in out
+
+
+class TestBuilderLogsCLI:
+    def test_builder_logs_lists_jobs(self, capsys):
+        resp = mock.MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {
+            "total": 2,
+            "jobs": [
+                {
+                    "id": 5,
+                    "recipe_name": "zlib",
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "status": "succeeded",
+                    "builder_id": 1,
+                    "submitted_at": "2026-07-09T00:00:02Z",
+                },
+                {
+                    "id": 4,
+                    "recipe_name": "boost",
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "status": "failed",
+                    "builder_id": 1,
+                    "submitted_at": "2026-07-09T00:00:01Z",
+                },
+            ],
+        }
+        with mock.patch("httpx.Client", return_value=_mock_httpx_client(get=resp)):
+            ret = main(["builder", "logs", "1", "--server", "http://x", "--token", "t"])
+        out = capsys.readouterr().out
+        assert ret == 0
+        # Newest job first.
+        assert out.index("zlib") < out.index("boost")
+        assert "builder #1" in out
+
+    def test_builder_logs_empty(self, capsys):
+        resp = mock.MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {"total": 0, "jobs": []}
+        with mock.patch("httpx.Client", return_value=_mock_httpx_client(get=resp)):
+            ret = main(["builder", "logs", "--server", "http://x", "--token", "t"])
+        out = capsys.readouterr().out
+        assert ret == 0
+        assert "No build jobs found" in out
+
+    def test_builder_logs_tail(self, capsys):
+        list_resp = mock.MagicMock()
+        list_resp.status_code = 200
+        list_resp.json.return_value = {
+            "total": 1,
+            "jobs": [
+                {
+                    "id": 9,
+                    "recipe_name": "zlib",
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "status": "running",
+                    "builder_id": 2,
+                    "submitted_at": "2026-07-09T00:00:00Z",
+                }
+            ],
+        }
+        log_resp = mock.MagicMock()
+        log_resp.status_code = 200
+        log_resp.text = "line1\nline2\nline3\nline4\n"
+
+        client = _mock_httpx_client()
+        client.get.side_effect = [list_resp, log_resp]
+        with mock.patch("httpx.Client", return_value=client):
+            ret = main(["builder", "logs", "--server", "http://x", "--token", "t", "--tail", "2"])
+        out = capsys.readouterr().out
+        assert ret == 0
+        assert "log tail: job #9" in out
+        assert "line3" in out and "line4" in out
+        assert "line1" not in out
 
 
 # ── publish CLI integration tests ───────────────────────────────

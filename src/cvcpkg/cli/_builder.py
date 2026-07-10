@@ -1336,3 +1336,115 @@ def builder_unregister(builder_id: int, server: str, token: str):
     """Unregister a builder by ID (admin-only)."""
     _api_request("delete", f"{server.rstrip('/')}/v1/builders/{builder_id}", token)
     click.echo(f"Builder #{builder_id} unregistered.")
+
+
+@builder_group.command("logs")
+@click.argument("builder_id", type=int, required=False)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token.  [env: CVCPKG_TOKEN]",
+)
+@click.option(
+    "--limit", type=int, default=20, show_default=True, help="Number of recent jobs to show."
+)
+@click.option(
+    "--status", default=None, help="Filter by job status (e.g. running/failed/succeeded)."
+)
+@click.option(
+    "--tail",
+    type=int,
+    default=0,
+    metavar="LINES",
+    help="Also print the last LINES of the most recent job's log.",
+)
+@click.option(
+    "--job", type=int, default=None, help="Tail this specific job ID instead of the latest."
+)
+def builder_logs(
+    builder_id: int | None,
+    server: str,
+    token: str,
+    limit: int,
+    status: str | None,
+    tail: int,
+    job: int | None,
+):
+    """Show recent build activity, optionally for a single builder.
+
+    Lists the most recent build jobs (newest first) and, with ``--tail``,
+    prints the tail of a job's log — a lightweight alternative to the full
+    ``cvcpkg builds monitor`` view.
+    """
+    import httpx
+
+    params: dict[str, str] = {"limit": str(max(1, limit))}
+    if builder_id is not None:
+        params["builder_id"] = str(builder_id)
+    if status:
+        params["status"] = status
+
+    base = server.rstrip("/")
+    with httpx.Client(timeout=30) as client:
+        resp = client.get(
+            f"{base}/v1/builds",
+            headers={"Authorization": f"Bearer {token}"},
+            params=params,
+        )
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise click.ClickException(f"server returned {resp.status_code}: {detail}")
+
+    jobs = resp.json().get("jobs", [])
+    # Newest first by submission time.
+    jobs = sorted(jobs, key=lambda j: j.get("submitted_at") or "", reverse=True)
+
+    scope = f" for builder #{builder_id}" if builder_id is not None else ""
+    if not jobs:
+        click.echo(f"No build jobs found{scope}.")
+        return
+
+    click.echo(f"Recent build activity{scope}:")
+    click.echo(
+        f"{'Job':>6}  {'Recipe':<24} {'Plat/Arch':<16} {'Status':<10} {'Builder':>7}  Submitted"
+    )
+    click.echo("-" * 90)
+    for j in jobs:
+        pa = f"{j.get('platform', '?')}/{j.get('arch', '?')}"
+        bid = j.get("builder_id")
+        click.echo(
+            f"{j['id']:>6}  {j.get('recipe_name', '?'):<24} {pa:<16} "
+            f"{j.get('status', '?'):<10} {('#' + str(bid)) if bid else '-':>7}  "
+            f"{j.get('submitted_at', '')}"
+        )
+
+    if tail > 0:
+        target = job if job is not None else jobs[0]["id"]
+        with httpx.Client(timeout=30) as client:
+            log_resp = client.get(
+                f"{base}/v1/builds/{target}/log",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        if log_resp.status_code == 404:
+            click.echo(f"\n(no log available for job #{target})")
+            return
+        if log_resp.status_code >= 400:
+            raise click.ClickException(
+                f"server returned {log_resp.status_code} fetching log for job #{target}"
+            )
+        lines = log_resp.text.splitlines()
+        click.echo(f"\n── log tail: job #{target} (last {min(tail, len(lines))} lines) ──")
+        for line in lines[-tail:]:
+            click.echo(line)

@@ -545,6 +545,117 @@ async def dispose_engine() -> None:
         await _engine.dispose()
 
 
+def database_backend() -> str:
+    """Return the active database backend name (e.g. 'sqlite', 'postgresql')."""
+    if _engine is None:
+        return "unknown"
+    try:
+        return _engine.url.get_backend_name()
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+async def backup_database(dest_dir, timestamp: str):
+    """Write a backup of the current database into *dest_dir*.
+
+    Returns ``(path, size_bytes)``.  The backup strategy depends on the
+    active backend:
+
+    - **sqlite** — an online ``VACUUM INTO`` snapshot (``.sqlite``).
+    - **postgresql** — a ``pg_dump`` plain-SQL dump (``.sql``); requires the
+      ``pg_dump`` binary on the server's PATH.
+    - **mysql** — a ``mysqldump`` dump (``.sql``); requires ``mysqldump``.
+
+    Raises ``RuntimeError`` if the backend is unsupported or the required
+    external tool is missing/fails.
+    """
+    import shutil
+    from pathlib import Path
+
+    if _engine is None:
+        raise RuntimeError("database engine is not initialised")
+
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    url = _engine.url
+    backend = url.get_backend_name()
+
+    if backend == "sqlite":
+        db_path = url.database
+        if not db_path or db_path == ":memory:":
+            raise RuntimeError("cannot back up an in-memory sqlite database")
+        dest = dest_dir / f"backup-{timestamp}.sqlite"
+        # VACUUM INTO cannot run inside a transaction; use AUTOCOMMIT.
+        safe = str(dest).replace("'", "''")
+        async with _engine.connect() as conn:
+            conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            await conn.exec_driver_sql(f"VACUUM INTO '{safe}'")
+        return dest, dest.stat().st_size
+
+    if backend == "postgresql":
+        if not shutil.which("pg_dump"):
+            raise RuntimeError("pg_dump not found on the server PATH")
+        dest = dest_dir / f"backup-{timestamp}.sql"
+        args = ["pg_dump", "--no-owner", "--no-privileges", "-f", str(dest)]
+        if url.host:
+            args += ["-h", url.host]
+        if url.port:
+            args += ["-p", str(url.port)]
+        if url.username:
+            args += ["-U", url.username]
+        if url.database:
+            args += ["-d", url.database]
+        env = dict(**_os_environ())
+        if url.password:
+            env["PGPASSWORD"] = url.password
+        await _run_dump(args, env, dest)
+        return dest, dest.stat().st_size
+
+    if backend == "mysql":
+        if not shutil.which("mysqldump"):
+            raise RuntimeError("mysqldump not found on the server PATH")
+        dest = dest_dir / f"backup-{timestamp}.sql"
+        args = ["mysqldump", "--result-file", str(dest)]
+        if url.host:
+            args += ["-h", url.host]
+        if url.port:
+            args += ["-P", str(url.port)]
+        if url.username:
+            args += ["-u", url.username]
+        if url.password:
+            args += [f"-p{url.password}"]
+        if url.database:
+            args += [url.database]
+        await _run_dump(args, dict(**_os_environ()), dest)
+        return dest, dest.stat().st_size
+
+    raise RuntimeError(f"backups are not supported for backend '{backend}'")
+
+
+def _os_environ() -> dict:
+    import os
+
+    return dict(os.environ)
+
+
+async def _run_dump(args: list, env: dict, dest) -> None:
+    """Run a dump subprocess, raising RuntimeError on failure."""
+    import asyncio
+    from pathlib import Path
+
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _out, err = await proc.communicate()
+    if proc.returncode != 0:
+        Path(dest).unlink(missing_ok=True)
+        detail = (err or b"").decode("utf-8", "replace").strip()
+        raise RuntimeError(f"dump command failed ({proc.returncode}): {detail}")
+
+
 @asynccontextmanager
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     """Yield an async session for database operations."""

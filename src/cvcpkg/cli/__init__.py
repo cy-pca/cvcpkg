@@ -11,6 +11,7 @@ for maintainability:
 - ``_build``     — world, build, pack, build-all, pack-all, recipes, rev-bump
 - ``_signing``   — key management, sign, verify-sig
 - ``_cache``     — cache subcommand group
+- ``_doctor``    — environment diagnostics (``cvcpkg doctor``)
 - ``_server``    — token, user, registration, server, org management
 - ``_builder``   — builder agent commands
 - ``_builds``    — build job commands and wait helpers
@@ -61,6 +62,7 @@ from cvcpkg.cli import (  # noqa: E402, F401
     _builds,
     _cache,
     _catalog,
+    _doctor,
     _install,
     _publish,
     _recipe,

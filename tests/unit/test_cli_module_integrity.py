@@ -34,6 +34,7 @@ EXPECTED_SUBMODULES = [
     "_builds",
     "_cache",
     "_catalog",
+    "_doctor",
     "_install",
     "_publish",
     "_recipe",
