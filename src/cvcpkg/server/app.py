@@ -1151,6 +1151,85 @@ def create_app(
         )
         return {"message": f"notified {sent} builder(s)", "total_connected": len(_ws_builders)}
 
+    @app.get("/v1/admin/stats", tags=["admin"])
+    async def admin_stats(
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Return server resource and catalog statistics (admin-only)."""
+        state = _get_state()
+        storage_scheme = state.storage_uri.split("://")[0] if "://" in state.storage_uri else "file"
+        stats: dict = {
+            "version": __version__,
+            "uptime_seconds": round(time.monotonic() - _START_TIME, 2),
+            "storage_scheme": storage_scheme,
+            "mirror_mode": MIRROR_MODE,
+            "database_enabled": _use_db,
+            "builders_connected": len(_ws_builders),
+        }
+        if _use_db and not MIRROR_MODE:
+            from cvcpkg.server.db import database_backend
+
+            cat = await _db_packages.get_catalog_dict()
+            _, audit_total = await _db_audit.entries(limit=0, offset=0)
+            _, jobs_total = await _db_build_jobs.list_jobs(limit=0, offset=0)
+            builders = await _db_builders.list_builders()
+            _, orgs_total = await _db_orgs.list_orgs(limit=0, offset=0, include_private=True)
+            stats.update(
+                {
+                    "database_backend": database_backend(),
+                    "packages_count": len(cat.get("bundles", [])),
+                    "total_storage_bytes": await _db_packages.total_storage_bytes(),
+                    "orgs_count": orgs_total,
+                    "builders_count": len(builders),
+                    "build_jobs_count": jobs_total,
+                    "audit_entries": audit_total,
+                }
+            )
+        else:
+            stats["packages_count"] = len(state.index.get("bundles", []))
+        return stats
+
+    @app.post("/v1/admin/backup", tags=["admin"])
+    async def admin_backup(
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Trigger a database backup (admin-only).
+
+        Writes a timestamped snapshot under ``<state_dir>/backups`` and
+        returns its path and size.  Requires a database backend; the
+        strategy depends on the backend (sqlite VACUUM INTO, pg_dump, or
+        mysqldump).
+        """
+        if not _use_db:
+            raise HTTPException(501, "backup requires a database backend")
+
+        import datetime
+
+        from cvcpkg.server.db import backup_database, database_backend
+
+        state = _get_state()
+        backups_dir = state.state_dir / "backups"
+        timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        try:
+            path, size = await backup_database(backups_dir, timestamp)
+        except RuntimeError as exc:
+            raise HTTPException(500, f"backup failed: {exc}") from exc
+
+        if _db_audit is not None:
+            await _db_audit.record(
+                action=AuditAction.backup,
+                actor=actor.name,
+                target="database",
+                detail=f"backend={database_backend()} size={size} file={path.name}",
+            )
+        logger.info("database backup written to %s (%d bytes) by %s", path, size, actor.name)
+        return {
+            "message": "backup complete",
+            "backend": database_backend(),
+            "path": str(path),
+            "size_bytes": size,
+        }
+
     # ── Metrics (Prometheus text format) ────────────────────
 
     @app.get("/metrics", tags=["health"], response_class=PlainTextResponse)

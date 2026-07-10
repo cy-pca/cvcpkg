@@ -598,6 +598,89 @@ def server_status(server: str):
     click.echo(f"  Mirror:     {data.get('mirror_mode', False)}")
 
 
+def _human_bytes(n) -> str:
+    """Format a byte count as a human-readable string."""
+    try:
+        size = float(n)
+    except (TypeError, ValueError):
+        return str(n)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if size < 1024 or unit == "TiB":
+            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
+        size /= 1024
+    return f"{size:.1f} TiB"
+
+
+@server_group.command("stats")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    metavar="TOKEN",
+    help="Admin bearer token.  [env: CVCPKG_TOKEN]",
+)
+def server_stats(server: str, token: str):
+    """Show server resource usage and catalog statistics (admin token)."""
+    data = _api_request("get", f"{server.rstrip('/')}/v1/admin/stats", token)
+
+    click.echo("Server statistics")
+    click.echo(f"  Version:            {data.get('version', '?')}")
+    click.echo(f"  Uptime:             {data.get('uptime_seconds', '?')}s")
+    click.echo(f"  Storage scheme:     {data.get('storage_scheme', '?')}")
+    click.echo(f"  Mirror mode:        {data.get('mirror_mode', False)}")
+    backend = data.get("database_backend") or ("enabled" if data.get("database_enabled") else "n/a")
+    click.echo(f"  Database:           {backend}")
+    click.echo(f"  Packages:           {data.get('packages_count', '?')}")
+    if "total_storage_bytes" in data:
+        click.echo(f"  Package storage:    {_human_bytes(data['total_storage_bytes'])}")
+    if "orgs_count" in data:
+        click.echo(f"  Organizations:      {data['orgs_count']}")
+    if "builders_count" in data:
+        click.echo(
+            f"  Builders:           {data['builders_count']}"
+            f" ({data.get('builders_connected', 0)} connected)"
+        )
+    if "build_jobs_count" in data:
+        click.echo(f"  Build jobs:         {data['build_jobs_count']}")
+    if "audit_entries" in data:
+        click.echo(f"  Audit entries:      {data['audit_entries']}")
+
+
+@server_group.command("backup")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    metavar="TOKEN",
+    help="Admin bearer token.  [env: CVCPKG_TOKEN]",
+)
+def server_backup(server: str, token: str):
+    """Trigger a server-side database backup (admin token).
+
+    The backup is written on the server host under its state directory;
+    the resulting path and size are reported here.
+    """
+    data = _api_request("post", f"{server.rstrip('/')}/v1/admin/backup", token)
+    click.echo("Backup complete.")
+    click.echo(f"  Backend:  {data.get('backend', '?')}")
+    click.echo(f"  Path:     {data.get('path', '?')}")
+    click.echo(f"  Size:     {_human_bytes(data.get('size_bytes', 0))}")
+
+
 # ── remote org member management (client → server API) ─────────
 
 
