@@ -27,11 +27,11 @@ depends:
       platforms: [linux, macos, freebsd, openbsd, netbsd]
     - name: python312
       platforms: [windows]
+    - perl
   runtime:
     - {name: qt6, version: ">=6.8"}
     - {name: qtshadertools, version: ">=6.8"}
-  host_tools:
-    - perl
+  host_tools: []
 
 build:
   matrix:

@@ -47,3 +47,12 @@ package:
   files:
     - bin/make
     - share/man/man1/make*
+
+notes:
+  - title: "Base bootstrap tool — do not add a make dependency (self-cycle)"
+    description: >-
+      GNU Make is compiled with an existing make (build.sh runs
+      `./configure && make && make install`), i.e. it bootstraps from the host
+      toolchain. It must NOT be given a `make` build dependency — that would be
+      a self-cycle. The consumer relocation (host_tools -> depends.build)
+      deliberately skips the base tool recipes for this reason.

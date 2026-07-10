@@ -26,9 +26,9 @@ depends:
   build:
     - cmake
     - ninja
+    - rust
   runtime: []
   host_tools:
-    - rust
     - emsdk  # only referenced by the wasm entry, ignored otherwise
 
 build:

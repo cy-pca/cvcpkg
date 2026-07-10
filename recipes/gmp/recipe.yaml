@@ -21,9 +21,9 @@ source:
 patches: []
 
 depends:
-  build: []
-  host_tools:
+  build:
     - make
+  host_tools: []
 
 build:
   matrix:

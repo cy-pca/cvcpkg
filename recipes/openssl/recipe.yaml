@@ -22,8 +22,8 @@ patches: []
 depends:
   build:
     - nasm
-  host_tools:
     - perl
+  host_tools: []
 
 build:
   matrix:

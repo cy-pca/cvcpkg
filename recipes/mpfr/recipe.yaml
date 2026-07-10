@@ -21,12 +21,12 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - make
   runtime:
     - name: gmp
       version: ">=6.1.0"
-  host_tools:
-    - make
+  host_tools: []
 
 build:
   matrix:

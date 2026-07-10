@@ -80,3 +80,10 @@ notes:
     description: >-
       On Windows the recipe downloads pre-built CMake binaries from
       the official GitHub release rather than building from source.
+  - title: "Base bootstrap tool — keep deps minimal (cycle risk)"
+    description: >-
+      CMake bootstraps via ./bootstrap using the host make + C++ compiler (not
+      cmake itself), so it must NOT gain a `cmake` or `ninja` build dependency —
+      either would cycle through the build-tool layer. The relocation that moves
+      cmake/ninja into consumers' depends.build deliberately skips the tool
+      recipes themselves.
