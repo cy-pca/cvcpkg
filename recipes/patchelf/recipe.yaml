@@ -1,0 +1,45 @@
+schema_version: 1
+recipe:
+  name: patchelf
+  upstream_version: "0.18.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/NixOS/patchelf
+  license: GPL-3.0-or-later
+  tags: [tools, build-system]
+  description: >-
+    patchelf — modify the RPATH/RUNPATH and ELF interpreter of executables
+    and shared libraries. Used as a build-time host tool to make installed
+    binaries relocatable by baking $ORIGIN-relative rpaths. ELF only
+    (Linux/BSD); macOS uses install_name_tool instead.
+
+source:
+  type: tarball
+  url: https://github.com/NixOS/patchelf/releases/download/0.18.0/patchelf-0.18.0.tar.gz
+  sha256: "64de10e4c6b8b8379db7e87f58030f336ea747c0515f381132e810dbf84a86e7"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+
+package:
+  files:
+    - bin/patchelf
+    - share/man/man1/patchelf*

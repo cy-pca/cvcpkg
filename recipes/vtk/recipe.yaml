@@ -21,7 +21,9 @@ patches:
   - vtk-fmt-cstdlib-wasm.patch
 
 depends:
-  build: []
+  build:
+    - cmake
+    - ninja
   runtime:
     - name: qt6
       version: ">=6.7"
@@ -31,9 +33,7 @@ depends:
       version: "^4.6"
     - name: zlib
       version: "^1.3"
-  host_tools:
-    - cmake
-    - ninja
+  host_tools: []
 
 build:
   matrix:

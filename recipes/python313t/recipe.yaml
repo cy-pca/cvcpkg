@@ -29,6 +29,8 @@ patches: []
 
 depends:
   build:
+    - name: patchelf
+      platforms: [linux, freebsd, openbsd, netbsd]
     - name: openssl
       version: "^3.0"
     - name: zlib

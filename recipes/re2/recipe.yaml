@@ -20,13 +20,13 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - cmake
+    - ninja
   runtime:
     - name: abseil
       version: ">=20240722"
-  host_tools:
-    - cmake
-    - ninja
+  host_tools: []
 
 build:
   matrix:

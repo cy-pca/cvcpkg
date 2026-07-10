@@ -191,3 +191,42 @@ echo "ACTIVE_AFTER=${{CVCPKG_ACTIVE_PREFIX-unset}}"
         result = subprocess.run([bash, str(activate)], capture_output=True, text=True)
         assert result.returncode == 33
         assert "must be sourced" in result.stderr
+
+
+class TestPythonAliasReconcile:
+    """write_activate_scripts surfaces generic python/pip commands for
+    install trees whose python was staged as versioned-only binaries."""
+
+    def _versioned(self, bin_dir, *names):
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        for n in names:
+            (bin_dir / n).write_text("#!/bin/sh\n")
+
+    def test_creates_generic_commands(self, tmp_path):
+        bin_dir = tmp_path / "bin"
+        self._versioned(bin_dir, "python3.13", "python3.13-config", "pip3.13")
+        act.write_activate_scripts(tmp_path, platform="linux")
+        for name in ("python3", "python", "python3-config", "pip3", "pip"):
+            assert (bin_dir / name).is_symlink(), f"{name} should be created"
+        assert (bin_dir / "python3").resolve() == (bin_dir / "python3.13")
+        assert (bin_dir / "pip").resolve() == (bin_dir / "pip3.13")
+
+    def test_picks_highest_version(self, tmp_path):
+        bin_dir = tmp_path / "bin"
+        self._versioned(bin_dir, "python3.11", "python3.13", "python3.9")
+        act.write_activate_scripts(tmp_path, platform="linux")
+        assert (bin_dir / "python3").resolve() == (bin_dir / "python3.13")
+
+    def test_respects_existing_alias(self, tmp_path):
+        bin_dir = tmp_path / "bin"
+        self._versioned(bin_dir, "python3.11", "python3.13")
+        (bin_dir / "python3").symlink_to("python3.11")  # meta/user pinned 3.11
+        act.write_activate_scripts(tmp_path, platform="linux")
+        assert (bin_dir / "python3").resolve() == (bin_dir / "python3.11")  # not clobbered
+        assert (bin_dir / "python").resolve() == (bin_dir / "python3.13")  # bare created -> highest
+
+    def test_ignores_free_threaded_for_generic(self, tmp_path):
+        bin_dir = tmp_path / "bin"
+        self._versioned(bin_dir, "python3.13t")  # free-threaded only
+        act.write_activate_scripts(tmp_path, platform="linux")
+        assert not (bin_dir / "python3").exists()  # 't' build never becomes generic python3

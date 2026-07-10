@@ -27,11 +27,11 @@ depends:
   build:
     - name: nasm
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
-  runtime: []
-  host_tools:
     - cmake
     - ninja
     - pkg-config
+  runtime: []
+  host_tools: []
 
 build:
   matrix:

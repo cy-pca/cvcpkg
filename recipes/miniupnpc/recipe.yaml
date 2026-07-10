@@ -20,11 +20,11 @@ source:
 patches: []
 
 depends:
-  build: []
-  runtime: []
-  host_tools:
+  build:
     - cmake
     - ninja
+  runtime: []
+  host_tools: []
 
 build:
   matrix:

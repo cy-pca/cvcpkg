@@ -23,12 +23,12 @@ source:
 patches: []
 
 depends:
-  build: []
-  runtime: []
-  host_tools:
-    - meson
+  build:
     - ninja
+    - meson
     - pkg-config
+  runtime: []
+  host_tools: []
 
 build:
   matrix:

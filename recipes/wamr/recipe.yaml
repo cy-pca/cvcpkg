@@ -23,10 +23,10 @@ source:
 patches: []
 
 depends:
-  build: []
-  host_tools:
+  build:
     - cmake
     - ninja
+  host_tools: []
 
 build:
   matrix:

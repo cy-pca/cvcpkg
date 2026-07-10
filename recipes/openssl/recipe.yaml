@@ -20,10 +20,10 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - nasm
   host_tools:
     - perl
-    - nasm
 
 build:
   matrix:

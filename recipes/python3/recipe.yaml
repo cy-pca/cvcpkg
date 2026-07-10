@@ -1,0 +1,73 @@
+schema_version: 1
+recipe:
+  name: python3
+  upstream_version: "3.13"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.python.org/
+  license: PSF-2.0
+  tags: [tools, scripting, meta]
+  description: >-
+    Meta-recipe providing the generic `python3` / `python` (and `pip3` /
+    `pip`) commands, pointing at a single default CPython — currently
+    python313. Depend on this when a build just needs "a python3". Depend on
+    a versioned recipe (python312, python313, ...) only when a specific
+    interpreter version is required; the versioned recipes ship versioned
+    binaries only, so several can be installed side by side without colliding.
+
+source:
+  type: vendored
+  path: third-party/python3-meta
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - python313
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+
+package:
+  files:
+    - bin/python3
+    - bin/python
+    - bin/python3-config
+    - bin/pip3
+    - bin/pip
+
+notes:
+  - title: "Default interpreter"
+    platforms: [linux, macos, freebsd, openbsd, netbsd]
+    description: >-
+      Currently aliases python313. To change the default Python, repoint the
+      runtime dependency and the symlink targets in build.sh to the desired
+      versioned recipe; consumers that depend on `python3` need no change.
+  - title: "Windows deferred"
+    platforms: [windows]
+    description: >-
+      On Windows, consumers depend on the versioned python recipe directly;
+      a Windows build for this meta (creating python3/python shims) is a
+      follow-up.
+  - title: "Meta-package — never depend on this from a versioned python (cycle risk)"
+    description: >-
+      python3 depends on a single versioned CPython (python313) and owns the
+      generic python3/python/pip aliases. The dependency only ever flows
+      python3 -> pythonNNN. A versioned python recipe must NEVER depend on
+      python3, and this meta must not be swept into the versioned recipes'
+      deps by a future host_tools -> depends.build relocation — either would
+      create a cycle.

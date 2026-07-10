@@ -25,14 +25,14 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - ninja
+    - meson
+    - pkg-config
   runtime:
     - name: libsndfile
       version: "^1.2"
-  host_tools:
-    - meson
-    - ninja
-    - pkg-config
+  host_tools: []
 
 build:
   matrix:

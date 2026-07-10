@@ -26,10 +26,10 @@ source:
 patches: []
 
 depends:
-  build: []
-  runtime: []
-  host_tools:
+  build:
     - pkg-config
+  runtime: []
+  host_tools: []
 
 build:
   matrix:

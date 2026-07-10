@@ -23,16 +23,16 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - ninja
+    - meson
+    - pkg-config
   runtime:
     - name: libffi
       version: "^3.4"
     - name: expat
       version: "^2.6"
-  host_tools:
-    - meson
-    - ninja
-    - pkg-config
+  host_tools: []
 
 build:
   matrix:

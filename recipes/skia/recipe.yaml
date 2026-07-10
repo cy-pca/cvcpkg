@@ -25,11 +25,14 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - ninja
+    - name: python3
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: python312
+      platforms: [windows]
   runtime: []
   host_tools:
-    - python3
-    - ninja
     - emsdk
 
 build:

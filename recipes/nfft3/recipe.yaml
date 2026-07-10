@@ -20,13 +20,13 @@ source:
 patches: []
 
 depends:
-  build: []
-  runtime:
-    - fftw3
-  host_tools:
+  build:
     - autoconf
     - automake
     - libtool
+  runtime:
+    - fftw3
+  host_tools: []
 
 build:
   matrix:

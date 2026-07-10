@@ -22,16 +22,16 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - ninja
+    - meson
+    - pkg-config
   runtime:
     - name: glib
       version: "^2.80"
     - name: freetype
       version: "^2.13"
-  host_tools:
-    - meson
-    - ninja
-    - pkg-config
+  host_tools: []
 
 build:
   matrix:

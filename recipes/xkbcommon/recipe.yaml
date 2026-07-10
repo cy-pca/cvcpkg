@@ -23,7 +23,10 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - ninja
+    - meson
+    - pkg-config
   runtime:
     - name: wayland
       version: "^1.23"
@@ -31,10 +34,7 @@ depends:
     - name: wayland-protocols
       version: "^1.38"
       platforms: [linux, freebsd]
-  host_tools:
-    - meson
-    - ninja
-    - pkg-config
+  host_tools: []
 
 build:
   matrix:

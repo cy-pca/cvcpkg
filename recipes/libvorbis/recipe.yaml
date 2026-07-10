@@ -25,10 +25,10 @@ patches: []
 depends:
   build:
     - name: libogg
+    - pkg-config
   runtime:
     - name: libogg
-  host_tools:
-    - pkg-config
+  host_tools: []
 
 build:
   matrix:
