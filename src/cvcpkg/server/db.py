@@ -37,7 +37,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool, StaticPool
 
 
 class Base(DeclarativeBase):
@@ -505,14 +505,22 @@ def init_db(database_url: str) -> None:
     if is_sqlite:
         # In-memory SQLite (no path after "://") needs StaticPool so every
         # connection shares the same database instead of creating a new one.
-        is_memory = database_url.rstrip("/") in (
-            "sqlite+aiosqlite://",
-            "sqlite+aiosqlite:///",
-            "sqlite+aiosqlite:///:memory:",
-        )
+        # Covers the bare "sqlite+aiosqlite://", "…:///", and explicit
+        # "…:///:memory:" forms.
+        _path_part = database_url.split("://", 1)[-1].strip("/")
+        is_memory = _path_part in ("", ":memory:")
         pool_kwargs: dict = {}
         if is_memory:
             pool_kwargs["poolclass"] = StaticPool
+        else:
+            # File-backed SQLite: use NullPool so each connection is closed
+            # on release rather than kept by AsyncAdaptedQueuePool.  The
+            # pooled variant intermittently fails at shutdown with
+            # "sqlite3.OperationalError: no active connection": when a task
+            # is cancelled mid-session the pool later tries to terminate an
+            # aiosqlite connection whose worker thread is already gone.
+            # NullPool has no such background-connection lifecycle to race.
+            pool_kwargs["poolclass"] = NullPool
         _engine = create_async_engine(
             database_url,
             echo=False,
