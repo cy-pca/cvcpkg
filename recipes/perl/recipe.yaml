@@ -39,6 +39,8 @@ build:
       script: build.sh
     - platform: netbsd
       script: build.sh
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
@@ -48,9 +50,10 @@ package:
     - lib/site_perl/
 
 notes:
-  - title: "Windows deferred"
+  - title: "Windows uses Strawberry Perl"
     platforms: [windows]
     description: >-
-      A native Windows build (Strawberry/ActiveState-style) is out of
-      scope for this recipe; add a build.ps1 + windows matrix entry as a
-      follow-up if a Windows consumer needs a cvcpkg-supplied perl.
+      Building Perl from the CPAN source on Windows is impractical, so the
+      Windows target stages the official Strawberry Perl portable distribution
+      (5.40.2.1, same 5.40.2 core) under lib/strawberry/ with a bin/perl.cmd
+      launcher. The unix `source` tarball is fetched but unused on Windows.

@@ -21,10 +21,10 @@ source:
 patches: []
 
 depends:
-  build: []
-  host_tools:
+  build:
     - m4
     - perl
+  host_tools: []
 
 build:
   build_type_independent: true

@@ -71,3 +71,9 @@ notes:
     description: >-
       On Windows the recipe downloads pre-built ninja binaries from
       the official GitHub release.
+  - title: "Base bootstrap tool — keep deps minimal (cycle risk)"
+    description: >-
+      Ninja bootstraps via `python3 configure.py --bootstrap` using the host
+      python3 + compiler, so it must NOT gain a `ninja` build dependency (self-
+      cycle) nor be routed back through the build-tool layer. The relocation
+      that moves cmake/ninja into consumers deliberately skips the tool recipes.

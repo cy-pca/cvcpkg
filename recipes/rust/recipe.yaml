@@ -23,6 +23,7 @@ source:
     linux-arm64: rust-1.84.0-aarch64-unknown-linux-gnu.tar.gz
     macos-x86_64: rust-1.84.0-x86_64-apple-darwin.tar.gz
     macos-arm64: rust-1.84.0-aarch64-apple-darwin.tar.gz
+    windows-x86_64: rust-1.84.0-x86_64-pc-windows-msvc.tar.gz
 
 patches: []
 
@@ -37,6 +38,8 @@ build:
       script: build.sh
     - platform: macos
       script: build.sh
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
@@ -51,9 +54,9 @@ toolchain:
     the install prefix.
 
 notes:
-  - title: "Windows deferred"
+  - title: "Windows"
     platforms: [windows]
     description: >-
-      The x86_64-pc-windows-msvc release archive exists upstream; add a
-      build.ps1 (install.sh under git-bash) + windows matrix entry as a
-      follow-up if a Windows consumer needs a cvcpkg-supplied rust.
+      The x86_64-pc-windows-msvc release ships the same POSIX install.sh; the
+      Windows build runs it under Git-Bash (via env-windows.ps1's Get-CvcGitBash)
+      to stage rustc/cargo/std into the prefix.
