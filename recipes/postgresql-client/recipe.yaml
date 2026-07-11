@@ -1,0 +1,131 @@
+schema_version: 1
+recipe:
+  name: postgresql-client
+  upstream_version: "18.4"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.postgresql.org/
+  license: PostgreSQL
+  tags: [database]
+  description: >-
+    PostgreSQL client programs — psql, pg_dump, pg_dumpall, pg_restore,
+    createdb/dropdb, createuser/dropuser, clusterdb, reindexdb, vacuumdb,
+    pg_isready and pg_config — plus the bundled libpq client library.
+    The server daemon and server-side tools ship in postgresql-server.
+
+source:
+  type: tarball
+  url: https://github.com/postgres/postgres/archive/refs/tags/REL_18_4.tar.gz
+  sha256: "9b4f86dd2ac00b914582e9893d1bad1f54bc9be7108fa794318b8184f921ec08"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: openssl
+      version: "^3.0"
+    - name: zlib
+      version: "^1.3"
+    - name: zstd
+      version: "^1.5"
+    - name: lz4
+      version: "^1.9"
+    - name: readline
+      version: "^8.0"
+    - name: gettext
+      version: "^1.0"
+    - name: krb5
+      version: "^1.21"
+  host_tools:
+    - meson
+    - ninja
+    - flex
+    - bison
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - bin/psql
+    - bin/pg_dump
+    - bin/pg_dumpall
+    - bin/pg_restore
+    - bin/pg_isready
+    - bin/pg_config
+    - bin/createdb
+    - bin/dropdb
+    - bin/createuser
+    - bin/dropuser
+    - bin/clusterdb
+    - bin/reindexdb
+    - bin/vacuumdb
+    - lib/libpq*
+    - lib/*/libpq*
+    - lib/pkgconfig/libpq.pc
+    - lib/*/pkgconfig/libpq.pc
+    - lib/cmake/PostgreSQL/
+    - include/libpq-fe.h
+    - include/libpq-events.h
+    - include/libpq/
+    - include/pg_config*.h
+    - include/postgres_ext.h
+  cmake_packages:
+    - { name: PostgreSQL, targets: ["PostgreSQL::PostgreSQL"] }
+  pkg_config:
+    - libpq
+
+abi:
+  cxx_std: 17
+
+toolchain:
+  cc:
+    min_version: "any"
+    description: "C99-capable compiler"
+  meson:
+    min_version: "0.54"
+    description: "Meson build system required by PostgreSQL >= 16"
+
+notes:
+  - title: "Client programs built from the full PostgreSQL tree"
+    platforms: [linux, macos, freebsd, openbsd, netbsd]
+    description: >-
+      The meson build compiles the entire PostgreSQL source tree; the
+      recipe then removes the server daemon and server-side tools so the
+      bundle contains only the client programs and libpq.  The server
+      lives in the postgresql-server package.
+  - title: "Windows not yet supported"
+    platforms: [linux]
+    description: >-
+      Only Unix-like platforms are built.  For the libpq client library
+      alone on Windows, use the libpq recipe.
+  - title: "meson, ninja, flex and bison required"
+    platforms: [linux, macos]
+    description: >-
+      PostgreSQL 16+ builds with Meson and needs flex and bison for its
+      parsers.  On Ubuntu: apt install meson ninja-build flex bison.
