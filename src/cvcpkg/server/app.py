@@ -2277,29 +2277,33 @@ def create_app(
                     dest.unlink(missing_ok=True)
                     raise HTTPException(413, f"organization '{org}' storage limit exceeded")
 
-            await _db_packages.add_package(
-                name=name,
-                version=version,
-                platform=platform,
-                arch=arch,
-                build_type=build_type,
-                link=link,
-                sha256=sha256,
-                size_bytes=size_bytes,
-                archive_url=archive_url,
-                signature=signature,
-                key_fingerprint=key_fingerprint,
-                release_tag=release_tag,
-                recipe_version=recipe_version,
-                description=description,
-                homepage=homepage,
-                pkg_license=pkg_license,
-                maintainer=maintainer,
-                tags=pkg_tags,
-                org_slug=org,
-                published_by=actor.name,
-                required_deps=required_deps,
-            )
+            try:
+                await _db_packages.add_package(
+                    name=name,
+                    version=version,
+                    platform=platform,
+                    arch=arch,
+                    build_type=build_type,
+                    link=link,
+                    sha256=sha256,
+                    size_bytes=size_bytes,
+                    archive_url=archive_url,
+                    signature=signature,
+                    key_fingerprint=key_fingerprint,
+                    release_tag=release_tag,
+                    recipe_version=recipe_version,
+                    description=description,
+                    homepage=homepage,
+                    pkg_license=pkg_license,
+                    maintainer=maintainer,
+                    tags=pkg_tags,
+                    org_slug=org,
+                    published_by=actor.name,
+                    required_deps=required_deps,
+                )
+            except ValueError as exc:
+                dest.unlink(missing_ok=True)
+                raise HTTPException(409, str(exc)) from exc
 
             # Track org storage usage
             if org and _db_orgs is not None:
@@ -2635,28 +2639,33 @@ def create_app(
         import datetime
 
         if _use_db:
-            await _db_packages.add_package(
-                name=session.name,
-                version=session.version,
-                platform=session.platform,
-                arch=session.arch,
-                build_type=session.build_type,
-                link=session.link,
-                sha256=sha256,
-                size_bytes=size_bytes,
-                archive_url=archive_url,
-                signature=session.signature,
-                key_fingerprint=session.key_fingerprint,
-                release_tag=session.release_tag,
-                recipe_version=session.recipe_version,
-                description=session.description,
-                homepage=session.homepage,
-                pkg_license=session.pkg_license,
-                maintainer=session.maintainer,
-                tags=session.tags,
-                published_by=actor.name,
-                required_deps=session.required_deps,
-            )
+            try:
+                await _db_packages.add_package(
+                    name=session.name,
+                    version=session.version,
+                    platform=session.platform,
+                    arch=session.arch,
+                    build_type=session.build_type,
+                    link=session.link,
+                    sha256=sha256,
+                    size_bytes=size_bytes,
+                    archive_url=archive_url,
+                    signature=session.signature,
+                    key_fingerprint=session.key_fingerprint,
+                    release_tag=session.release_tag,
+                    recipe_version=session.recipe_version,
+                    description=session.description,
+                    homepage=session.homepage,
+                    pkg_license=session.pkg_license,
+                    maintainer=session.maintainer,
+                    tags=session.tags,
+                    published_by=actor.name,
+                    required_deps=session.required_deps,
+                )
+            except ValueError as exc:
+                dest.unlink(missing_ok=True)
+                _upload_sessions.pop(upload_id, None)
+                raise HTTPException(409, str(exc)) from exc
 
             await _db_audit.record(
                 action=AuditAction.publish,
