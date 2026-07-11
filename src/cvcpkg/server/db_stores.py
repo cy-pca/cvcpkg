@@ -964,6 +964,23 @@ class DbPackageIndex:
         required_deps: str = "[]",
     ) -> None:
         async with get_session() as session:
+            # Check for existing variant first.
+            existing = await session.execute(
+                select(PackageRow).where(
+                    PackageRow.name == name,
+                    PackageRow.version == version,
+                    PackageRow.platform == platform,
+                    PackageRow.arch == arch,
+                    PackageRow.build_type == build_type,
+                    PackageRow.link == link,
+                    PackageRow.org_slug == org_slug,
+                )
+            )
+            if existing.scalars().first() is not None:
+                raise ValueError(
+                    f"package {name}=={version} ({platform}/{arch}/{build_type}/{link})"
+                    f" already exists" + (f" in org '{org_slug}'" if org_slug else "")
+                )
             row = PackageRow(
                 name=name,
                 version=version,
