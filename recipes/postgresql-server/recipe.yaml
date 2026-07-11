@@ -1,0 +1,128 @@
+schema_version: 1
+recipe:
+  name: postgresql-server
+  upstream_version: "18.4"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.postgresql.org/
+  license: PostgreSQL
+  tags: [database]
+  description: >-
+    PostgreSQL database server — the postgres daemon plus server-side
+    tools (initdb, pg_ctl, pg_basebackup, pg_rewind, pg_upgrade, pg_waldump,
+    pg_checksums, …), backend extension modules, and the share/ data files
+    needed to initialise a cluster.  Pure client programs (psql, pg_dump,
+    createdb, …) ship in the separate postgresql-client package.
+
+source:
+  type: tarball
+  url: https://github.com/postgres/postgres/archive/refs/tags/REL_18_4.tar.gz
+  sha256: "9b4f86dd2ac00b914582e9893d1bad1f54bc9be7108fa794318b8184f921ec08"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: openssl
+      version: "^3.0"
+    - name: zlib
+      version: "^1.3"
+    - name: zstd
+      version: "^1.5"
+    - name: lz4
+      version: "^1.9"
+    - name: readline
+      version: "^8.0"
+    - name: gettext
+      version: "^1.0"
+    - name: krb5
+      version: "^1.21"
+  host_tools:
+    - meson
+    - ninja
+    - flex
+    - bison
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - bin/postgres
+    - bin/initdb
+    - bin/pg_ctl
+    - bin/pg_controldata
+    - bin/pg_resetwal
+    - bin/pg_rewind
+    - bin/pg_basebackup
+    - bin/pg_receivewal
+    - bin/pg_recvlogical
+    - bin/pg_waldump
+    - bin/pg_archivecleanup
+    - bin/pg_checksums
+    - bin/pg_verifybackup
+    - bin/pg_upgrade
+    - bin/pg_test_fsync
+    - bin/pg_test_timing
+    - bin/pg_isready
+    - bin/pg_config
+    - lib/libpq*
+    - lib/*/libpq*
+    - lib/postgresql/
+    - lib/*/postgresql/
+    - share/postgresql/
+
+abi:
+  cxx_std: 17
+
+toolchain:
+  cc:
+    min_version: "any"
+    description: "C99-capable compiler"
+  meson:
+    min_version: "0.54"
+    description: "Meson build system required by PostgreSQL >= 16"
+
+notes:
+  - title: "Server built from the full PostgreSQL tree"
+    platforms: [linux, macos, freebsd, openbsd, netbsd]
+    description: >-
+      The meson build compiles the entire PostgreSQL source tree; the
+      recipe then removes the pure client programs so the bundle contains
+      the server daemon and server-side utilities.  Client programs live
+      in the postgresql-client package.
+  - title: "Windows not yet supported"
+    platforms: [linux]
+    description: >-
+      A Windows server build via Meson is not included in this recipe yet;
+      only Unix-like platforms are built.
+  - title: "meson, ninja, flex and bison required"
+    platforms: [linux, macos]
+    description: >-
+      PostgreSQL 16+ builds with Meson and needs flex and bison for its
+      parsers.  On Ubuntu: apt install meson ninja-build flex bison.
