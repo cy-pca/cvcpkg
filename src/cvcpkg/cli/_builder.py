@@ -1,4 +1,4 @@
-"""CLI commands — auto-extracted from cli.py."""
+"""CLI commands - auto-extracted from cli.py."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from cvcpkg.cli import cli
 from cvcpkg.cli._publish import _publish_to_server
 from cvcpkg.cli._server import _api_request
 
-# ── Builder commands ────────────────────────────────────────────
+# -- Builder commands --------------------------------------------
 
 
 @cli.group("builder")
@@ -174,7 +174,7 @@ def builder_status(builder_id: int, server: str, token: str):
     "cross_archs",
     multiple=True,
     help="Architecture for each --cross-platform (positional pairing). "
-    "Defaults: wasm→wasm32, wasi→wasm32, others→host arch.",
+    "Defaults: wasm->wasm32, wasi->wasm32, others->host arch.",
 )
 def builder_run(
     server: str,
@@ -248,7 +248,7 @@ def builder_run(
         with _recipe_fetch_locks_guard:
             return _recipe_fetch_locks.setdefault(name, threading.Lock())
 
-    # ── Daemonize ───────────────────────────────────────────
+    # -- Daemonize -------------------------------------------
     import os as _os
 
     pid_path = (
@@ -275,10 +275,57 @@ def builder_run(
         _os.dup2(devnull, _sys.stderr.fileno())
         _os.close(devnull)
 
+    # -- Single-instance guard -------------------------------
+    # The builder must be a singleton per host.  A second concurrent
+    # ``cvcpkg builder run`` would register a duplicate builder, race on the
+    # shared work / recipe-cache directories, and (historically) pile up as
+    # "a ton of cvcpkg processes".  If the pidfile names a still-live builder,
+    # refuse to start; a stale pidfile (dead PID, or PID recycled by an
+    # unrelated program) is silently reclaimed.
+    def _pid_is_live_builder(pid: int) -> bool:
+        if pid <= 0 or pid == _os.getpid():
+            return False
+        if sys.platform == "win32":
+            import subprocess as _sp
+
+            try:
+                out = _sp.run(
+                    ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                ).stdout.lower()
+            except Exception:
+                return False
+            # Only a live python/cvcpkg image counts - otherwise the PID was
+            # recycled by an unrelated process and the pidfile is stale.
+            # NB: never use os.kill(pid, 0) here; on Windows signal 0 maps to
+            # TerminateProcess and would *kill* the process being probed.
+            return f'"{pid}"' in out and ("python" in out or "cvcpkg" in out)
+        try:
+            _os.kill(pid, 0)
+        except (ProcessLookupError, ValueError):
+            return False
+        except PermissionError:
+            return True
+        return True
+
     pid_path.parent.mkdir(parents=True, exist_ok=True)
+    if pid_path.exists():
+        try:
+            _existing_pid = int(pid_path.read_text().strip() or "0")
+        except ValueError:
+            _existing_pid = 0
+        if _pid_is_live_builder(_existing_pid):
+            raise click.ClickException(
+                f"another cvcpkg builder is already running (pid {_existing_pid}, "
+                f"pidfile {pid_path}); refusing to start a second instance. "
+                f"Stop it first, or delete the pidfile if it is stale."
+            )
+        pid_path.unlink(missing_ok=True)  # stale - reclaim it
     pid_path.write_text(str(_os.getpid()))
 
-    # ── Build cross-platform/arch pairs ─────────────────────
+    # -- Build cross-platform/arch pairs ---------------------
     _cross_arch_defaults = {
         "wasm": "wasm32",
         "wasi": "wasm32",
@@ -291,7 +338,7 @@ def builder_run(
             ca = _cross_arch_defaults.get(cp, arch or "x86_64")
         cross_entries.append({"platform": cp, "arch": ca})
 
-    # ── Registration ────────────────────────────────────────
+    # -- Registration ----------------------------------------
     caps: dict = {}
     if cross_entries:
         caps["cross_platforms"] = cross_entries
@@ -321,7 +368,7 @@ def builder_run(
         )
     else:
         cross_msg = ""
-    click.echo(f"Registered builder #{builder_id} ({name}) — {platform}/{arch}{cross_msg}")
+    click.echo(f"Registered builder #{builder_id} ({name}) - {platform}/{arch}{cross_msg}")
 
     shutdown = False
     current_jobs = 0
@@ -330,12 +377,12 @@ def builder_run(
     def _handle_signal(signum, frame):
         nonlocal shutdown
         shutdown = True
-        click.echo("\nShutdown requested — finishing in-flight jobs…")
+        click.echo("\nShutdown requested - finishing in-flight jobs...")
 
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
-    # ── Helpers ─────────────────────────────────────────────
+    # -- Helpers ---------------------------------------------
 
     def _heartbeat():
         """Send heartbeat to server."""
@@ -358,7 +405,7 @@ def builder_run(
         are cached in *cache_dir* so repeated builds of the same
         recipe don't re-download.
         """
-        # Serialize per recipe name — the job-execution thread and the
+        # Serialize per recipe name - the job-execution thread and the
         # recipe.push websocket handler thread can otherwise concurrently
         # rmtree+mkdir+extractall the same directory, and Recipe.load()
         # then observes a mid-extraction state ("recipe.yaml not found").
@@ -385,7 +432,7 @@ def builder_run(
             if extract_dir.exists():
                 shutil.rmtree(extract_dir, ignore_errors=True)
             if extract_dir.exists():
-                # rmtree left remnants — force remove
+                # rmtree left remnants - force remove
                 import subprocess
 
                 subprocess.run(["rm", "-rf", str(extract_dir)], check=False)
@@ -479,7 +526,7 @@ def builder_run(
                         queue.append(sd)
             except Exception:
                 # Recipe fetch may fail for host-tools that aren't
-                # packaged as recipes (system cmake, etc.) — skip.
+                # packaged as recipes (system cmake, etc.) - skip.
                 pass
             order.append(name)
         return order
@@ -558,7 +605,7 @@ def builder_run(
                     continue
 
                 # Extract into prefix.  The catalog's archive_url suffix
-                # (typically .tar.zst) is purely cosmetic — the server
+                # (typically .tar.zst) is purely cosmetic - the server
                 # serves whatever the builder produced (Linux/BSD/macOS:
                 # gzip; Windows: zip).  Sniff the magic bytes instead.
                 archive_bytes = dl_resp.content
@@ -638,7 +685,7 @@ def builder_run(
         """
         import yaml as _yaml
 
-        # Map target platforms → known toolchain recipe names.
+        # Map target platforms -> known toolchain recipe names.
         # The builder fetches the recipe bundle to read cross_toolchain.env
         # dynamically, but needs to know which recipes to look for.
         _toolchain_map: dict[str, list[str]] = {
@@ -704,7 +751,7 @@ def builder_run(
 
                 tc_version = match.get("version", "unknown")
 
-                # ── Persistent toolchain cache ──────────────────────
+                # -- Persistent toolchain cache ----------------------
                 # When a cache_dir is provided, extract the toolchain
                 # once into cache_dir/toolchains/<name>-<version>/
                 # and symlink its contents into the per-build prefix.
@@ -744,7 +791,7 @@ def builder_run(
                             except Exception as exc:
                                 log_cb(f"  host_tool {tool_name}: install failed ({exc})\n")
                         continue
-                    # Not cached yet — extract into cache dir
+                    # Not cached yet - extract into cache dir
                     tc_cache_path.mkdir(parents=True, exist_ok=True)
                     extract_target = tc_cache_path
 
@@ -936,7 +983,7 @@ def builder_run(
         dep_prefix: Path | None = None
         try:
             # 2. Download recipe
-            _stream_log(job_id, f"Downloading recipe '{recipe_name}'…\n")
+            _stream_log(job_id, f"Downloading recipe '{recipe_name}'...\n")
             recipe_dir = _fetch_recipe(recipe_name)
             _stream_log(job_id, f"Recipe extracted to {recipe_dir}\n")
 
@@ -1004,7 +1051,7 @@ def builder_run(
                 raise
 
             # 4. Publish the archive to the server
-            _stream_log(job_id, f"Publishing {archive_path.name}…\n")
+            _stream_log(job_id, f"Publishing {archive_path.name}...\n")
             try:
                 _publish_to_server(
                     server=base,
@@ -1017,7 +1064,7 @@ def builder_run(
                 _stream_log(job_id, "Published successfully.\n")
             except click.ClickException as pub_exc:
                 # Publish may raise if variant already exists on server.
-                # The build itself succeeded — log the warning and continue.
+                # The build itself succeeded - log the warning and continue.
                 _stream_log(job_id, f"Publish warning: {pub_exc.format_message()}\n")
 
             result_url = f"{base}/v1/packages/{recipe_name}"
@@ -1044,7 +1091,7 @@ def builder_run(
                     )
             except Exception:
                 pass
-            click.echo(f"  [{job_id}] Failed: {recipe_name} — {exc}", err=True)
+            click.echo(f"  [{job_id}] Failed: {recipe_name} - {exc}", err=True)
 
         finally:
             # Clean up output dir, dep prefix, and any leaked work dirs
@@ -1060,7 +1107,7 @@ def builder_run(
             with jobs_lock:
                 current_jobs -= 1
 
-    # ── Self-update helper ─────────────────────────────────
+    # -- Self-update helper ---------------------------------
 
     def _self_update() -> None:
         """Pip-install the latest cvcpkg from the local git repo and re-exec.
@@ -1116,13 +1163,29 @@ def builder_run(
                 capture_output=True,
                 timeout=120,
             )
-            click.echo("  self-update: installed, restarting…")
-            # Re-exec with the same arguments
+            if sys.platform == "win32":
+                # Windows has no in-place exec.  os.execv() here would spawn a
+                # *new* process (CRT _P_OVERLAY semantics) and - because the
+                # builder is launched via the ``cvcpkg.exe`` console-script -
+                # re-exec ``python.exe cvcpkg.exe builder run ...``, which is
+                # wrong and a source of stray/duplicate cvcpkg processes.  The
+                # freshly pip-installed code is already on disk; it takes
+                # effect the next time the scheduled task starts the builder.
+                # Keep this single instance running on the current code rather
+                # than spawning a broken successor.
+                click.echo(
+                    "  self-update: installed; new code applies on the next "
+                    "builder restart (Windows).",
+                )
+                return
+            click.echo("  self-update: installed, restarting...")
+            # POSIX: replace the process image in place - same PID, no new
+            # process, so the single-instance pidfile stays valid.
             os.execv(sys.executable, [sys.executable] + sys.argv)
         except Exception as exc:
             click.echo(f"  self-update failed: {exc}", err=True)
 
-    # ── WebSocket helpers ───────────────────────────────────
+    # -- WebSocket helpers -----------------------------------
 
     def _ws_url() -> str:
         """Build WebSocket URL from the HTTP base URL."""
@@ -1141,10 +1204,10 @@ def builder_run(
         try:
             import websockets.sync.client as ws_sync
         except ImportError:
-            click.echo("  websockets not installed — using HTTP long-poll", err=True)
+            click.echo("  websockets not installed - using HTTP long-poll", err=True)
             return False
 
-        click.echo("Connecting via WebSocket…")
+        click.echo("Connecting via WebSocket...")
         try:
             with ws_sync.connect(_ws_url(), close_timeout=5) as ws:
                 click.echo("WebSocket connected.")
@@ -1213,7 +1276,7 @@ def builder_run(
                         from cvcpkg import __version__
 
                         if server_ver and server_ver != __version__:
-                            click.echo(f"  Server requests update: {__version__} → {server_ver}")
+                            click.echo(f"  Server requests update: {__version__} -> {server_ver}")
                             _self_update()
 
                     elif msg_type == "job.timeout":
@@ -1227,12 +1290,12 @@ def builder_run(
 
         except Exception as exc:
             click.echo(
-                f"  WebSocket connection failed: {exc} — falling back to HTTP long-poll",
+                f"  WebSocket connection failed: {exc} - falling back to HTTP long-poll",
                 err=True,
             )
             return False
 
-    # ── Main loop ───────────────────────────────────────────
+    # -- Main loop -------------------------------------------
 
     last_heartbeat = 0.0
     heartbeat_interval = 60.0
@@ -1244,7 +1307,7 @@ def builder_run(
         if use_ws and not shutdown:
             ws_ok = _run_ws_loop()
             if ws_ok:
-                # WebSocket ran until shutdown — skip HTTP loop
+                # WebSocket ran until shutdown - skip HTTP loop
                 use_ws = True
             else:
                 use_ws = False
@@ -1300,10 +1363,10 @@ def builder_run(
         # Wait for in-flight jobs
         deadline = time.time() + 300  # 5 min grace period
         while current_jobs > 0 and time.time() < deadline:
-            click.echo(f"  Waiting for {current_jobs} in-flight job(s)…")
+            click.echo(f"  Waiting for {current_jobs} in-flight job(s)...")
             time.sleep(5)
 
-        click.echo("Shutting down — unregistering builder…")
+        click.echo("Shutting down - unregistering builder...")
         try:
             with httpx.Client(timeout=10) as client:
                 client.delete(f"{base}/v1/builders/{builder_id}", headers=headers)
@@ -1381,7 +1444,7 @@ def builder_logs(
     """Show recent build activity, optionally for a single builder.
 
     Lists the most recent build jobs (newest first) and, with ``--tail``,
-    prints the tail of a job's log — a lightweight alternative to the full
+    prints the tail of a job's log - a lightweight alternative to the full
     ``cvcpkg builds monitor`` view.
     """
     import httpx
@@ -1445,6 +1508,6 @@ def builder_logs(
                 f"server returned {log_resp.status_code} fetching log for job #{target}"
             )
         lines = log_resp.text.splitlines()
-        click.echo(f"\n── log tail: job #{target} (last {min(tail, len(lines))} lines) ──")
+        click.echo(f"\n-- log tail: job #{target} (last {min(tail, len(lines))} lines) --")
         for line in lines[-tail:]:
             click.echo(line)
