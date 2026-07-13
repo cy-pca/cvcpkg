@@ -1,7 +1,7 @@
 # Build and publish all Windows recipes to cvcpkg.org.
 #
 # Mirror of macos-build.yml for the windows-latest ephemeral runner.
-# Used while the self-hosted Windows builder (sandipaws) is offline,
+# Used while the self-hosted Windows builder is offline,
 # and as a permanent fallback for one-off Windows publishes.
 #
 # Triggered manually via workflow_dispatch or by the populate-server

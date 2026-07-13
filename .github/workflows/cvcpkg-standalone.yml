@@ -139,15 +139,12 @@ jobs:
       matrix:
         include:
           - os: freebsd-x86_64
-            host: 10.66.77.174
             python: python3.11
             artifact: cvcpkg-freebsd-x86_64
           - os: openbsd-x86_64
-            host: 10.66.77.197
             python: python3.12
             artifact: cvcpkg-openbsd-x86_64
           - os: netbsd-x86_64
-            host: 10.66.77.214
             python: python3.13
             artifact: cvcpkg-netbsd-x86_64
 
@@ -174,24 +171,20 @@ jobs:
           vm_is_reachable() {
             ssh ${SSH_OPTS} -o ConnectTimeout=5 "root@$1" true >/dev/null 2>&1
           }
+          # VM names + fallback IPs come from repo variables so they are not
+          # hard-coded in this public workflow.  Each var holds "primary
+          # secondary"; resolve_vm_ip prefers the live incus IP by VM name and
+          # falls back to the listed IP.
           case "${{ matrix.os }}" in
-            freebsd*)
-              HOST=$(resolve_vm_ip "freebsd-build" "${{ matrix.host }}")
-              FALLBACK=$(resolve_vm_ip "freebsd-build-2" "10.66.77.154")
-              ;;
-            openbsd*)
-              HOST=$(resolve_vm_ip "openbsd-build" "${{ matrix.host }}")
-              FALLBACK=$(resolve_vm_ip "openbsd-build-2" "10.66.77.235")
-              ;;
-            netbsd*)
-              HOST=$(resolve_vm_ip "netbsd-build" "${{ matrix.host }}")
-              FALLBACK=$(resolve_vm_ip "netbsd-build-2" "10.66.77.167")
-              ;;
-            *)
-              HOST="${{ matrix.host }}"
-              FALLBACK=""
-              ;;
+            freebsd*) VMS="${{ vars.FREEBSD_BUILDER_VMS }}"; IPS="${{ vars.FREEBSD_BUILDER_IPS }}" ;;
+            openbsd*) VMS="${{ vars.OPENBSD_BUILDER_VMS }}"; IPS="${{ vars.OPENBSD_BUILDER_IPS }}" ;;
+            netbsd*)  VMS="${{ vars.NETBSD_BUILDER_VMS }}";  IPS="${{ vars.NETBSD_BUILDER_IPS }}" ;;
+            *)        VMS=""; IPS="" ;;
           esac
+          read -r VM1 VM2 <<< "$VMS"
+          read -r IP1 IP2 <<< "$IPS"
+          HOST=$(resolve_vm_ip "$VM1" "$IP1")
+          FALLBACK=$(resolve_vm_ip "$VM2" "$IP2")
           if ! vm_is_reachable "$HOST" && [ -n "$FALLBACK" ]; then
             echo "::warning::Primary VM $HOST unreachable, falling back to $FALLBACK"
             HOST="$FALLBACK"

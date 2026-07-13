@@ -1,21 +1,15 @@
 name: deploy-prod
 
-# Deploys cvcpkg-server to both:
-#   - cvcpkg.org  (cvcpkg-00, 10.10.10.134 — primary/authoritative)
-#   - pkg.tx.wtf  (catx-03, local — read-only mirror of cvcpkg.org)
+# Deploys cvcpkg-server to the primary (cvcpkg.org) and a local read-only
+# mirror (pkg.tx.wtf).  A self-hosted runner (label: cvcpkg-prod) picks up the
+# job: it deploys the mirror locally and SSHes to the primary over the internal
+# network.
 #
-# The self-hosted runner on catx-03.tx.wtf picks up the job.
-# catx-03 deploys locally for pkg.tx.wtf and SSHes to cvcpkg-00
-# over the internal LAN for cvcpkg.org.
-#
-# Mirror config lives in catx-03:/home/tfx/libcvc-deps/
-# .env.production (CVCPKG_MIRROR_MODE=1, CVCPKG_MIRROR_UPSTREAM=
-# https://cvcpkg.org).  The mirror sync loop runs inside the backend
-# container and pulls the upstream catalog every hour; downloads are
-# proxied on demand and cached to the local archives volume.
-#
-# Required repo secrets:
-#   (none — the runner IS catx-03 and has SSH access to cvcpkg-00)
+# Host/target coordinates come from repository variables
+# (vars.PROD_SERVER_SSH, vars.BSD_BUILDER_SSH_HOSTS, vars.WINDOWS_BUILDER_SSH)
+# so they are not hard-coded in this public workflow.  The mirror pulls the
+# upstream catalog hourly inside the backend container; downloads are proxied
+# on demand and cached to the local archives volume.
 
 on:
   push:
@@ -60,22 +54,22 @@ jobs:
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "Deploying sha: $sha"
 
-      # ── Deploy to cvcpkg.org (cvcpkg-00) via SSH ──────────────
+      # ── Deploy to cvcpkg.org (primary) via SSH ──────────────
       - name: Deploy to cvcpkg.org
         run: |
           set -euo pipefail
           SHA="${{ steps.target.outputs.sha }}"
           SHORT_SHA="${SHA:0:7}"
           RELEASE_TAG="prod-${SHORT_SHA}"
-          REMOTE="tfx@10.10.10.134"
+          REMOTE="${{ vars.PROD_SERVER_SSH }}"
           DEPLOY_DIR="/home/tfx/libcvc-deps"
           CVCPKG_DIR="${DEPLOY_DIR}"
           SSH="ssh -o StrictHostKeyChecking=accept-new"
 
-          echo "=== Deploying to cvcpkg.org (cvcpkg-00) ==="
+          echo "=== Deploying to cvcpkg.org (primary) ==="
 
           # ── Pre-deploy disk cleanup ──
-          echo "Checking disk space on cvcpkg-00..."
+          echo "Checking disk space on primary..."
           $SSH "$REMOTE" bash -s <<'CLEANUP'
           set -euo pipefail
           echo "Before cleanup: $(df -h / | tail -1)"
@@ -221,7 +215,7 @@ jobs:
           $SSH "$REMOTE" "bash /tmp/cvcpkg-deploy.sh \
             '${RELEASE_TAG}' '${SHORT_SHA}' '${DEPLOY_DIR}' '${CVCPKG_DIR}'"
 
-      # ── Deploy to pkg.tx.wtf (catx-03, local) ────────────────
+      # ── Deploy to pkg.tx.wtf (local mirror) ────────────────
       - name: Deploy to pkg.tx.wtf
         run: |
           set -euo pipefail
@@ -231,7 +225,7 @@ jobs:
           DEPLOY_DIR="/home/tfx/libcvc-deps"
           CVCPKG_DIR="${DEPLOY_DIR}"
 
-          echo "=== Deploying to pkg.tx.wtf (catx-03, local) ==="
+          echo "=== Deploying to pkg.tx.wtf (local mirror) ==="
 
           # Migrate .env.production from old tools/cvcpkg/ location before rsync
           if [[ ! -f "${DEPLOY_DIR}/.env.production" && -f "${DEPLOY_DIR}/tools/cvcpkg/.env.production" ]]; then
@@ -362,9 +356,9 @@ jobs:
           echo "Recipes: $ok ok, $fail failed"
 
       # ── Update BSD builders via SSH ───────────────────────────
-      # (star-00 / star-01 are self-hosted runners — updated by
-      #  the update-linux-builders job below)
-      # (sandipaws is updated by the update-windows-builder job below)
+      # (Linux builder runners are updated by the update-linux-builders
+      #  job below)
+      # (the Windows builder is updated by the update-windows-builder job below)
       - name: Clean up BSD builder disk space
         continue-on-error: true
         run: |
@@ -372,9 +366,7 @@ jobs:
           SSH="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
           # BSD builders reachable only by LAN IP from the cvcpkg-prod
           # runner (no DNS for the *-build hostnames).
-          for host in root@10.66.77.214 root@10.66.77.167 \
-                      root@10.66.77.174 root@10.66.77.154 \
-                      root@10.66.77.197 root@10.66.77.235; do
+          for host in ${{ vars.BSD_BUILDER_SSH_HOSTS }}; do
             echo "--- $host ---"
             $SSH "$host" "
               # Remove leaked work dirs from failed builds
@@ -395,9 +387,7 @@ jobs:
           SSH="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
 
           # BSD builders reachable only by LAN IP from the cvcpkg-prod runner.
-          for host in root@10.66.77.214 root@10.66.77.167 \
-                      root@10.66.77.174 root@10.66.77.154 \
-                      root@10.66.77.197 root@10.66.77.235; do
+          for host in ${{ vars.BSD_BUILDER_SSH_HOSTS }}; do
             echo "--- $host ---"
             $SSH "$host" "
               cd /root/libcvc-deps 2>/dev/null || cd /usr/local/src/libcvc-deps &&
@@ -419,9 +409,7 @@ jobs:
 
           # BSD builders reachable only by LAN IP from the cvcpkg-prod runner.
           # Kill the running daemon, re-launch from its @reboot crontab entry.
-          for host in root@10.66.77.214 root@10.66.77.167 \
-                      root@10.66.77.174 root@10.66.77.154 \
-                      root@10.66.77.197 root@10.66.77.235; do
+          for host in ${{ vars.BSD_BUILDER_SSH_HOSTS }}; do
             echo "--- $host ---"
             $SSH "$host" "
               pkill -f 'cvcpkg builder run' 2>/dev/null || true
@@ -516,34 +504,35 @@ jobs:
             echo "::warning::$(hostname): no systemd unit at $UNIT — skipping restart"
           fi
 
-  # ── Update Windows builder (sandipaws) ─────────────────────────
-  # sandipaws is reachable via SSH from star-00/star-01.
+  # ── Update Windows builder ─────────────────────────────────────
+  # The Windows builder is reachable via SSH from a Linux runner.
   update-windows-builder:
-    name: Update builder (sandipaws)
+    name: Update builder (windows)
     needs: deploy
     runs-on: [self-hosted, Linux, X64, star-00]
     timeout-minutes: 10
 
     steps:
-      - name: Update and restart sandipaws
+      - name: Update and restart the Windows builder
         run: |
           set -euo pipefail
           SHA="${{ needs.deploy.outputs.sha }}"
           SSH="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15"
+          WIN="${{ vars.WINDOWS_BUILDER_SSH }}"
 
           echo "--- Configuring Windows Defender exclusions ---"
-          $SSH tfx@sandipaws "powershell -Command \"Add-MpPreference -ExclusionPath 'C:\Users\tfx\cvcpkg-builder' -ErrorAction SilentlyContinue; Add-MpPreference -ExclusionPath \$env:TEMP -ErrorAction SilentlyContinue; Add-MpPreference -ExclusionProcess 'pwsh.exe' -ErrorAction SilentlyContinue; Add-MpPreference -ExclusionProcess 'bash.exe' -ErrorAction SilentlyContinue; Write-Host 'Defender exclusions set'\"" || true
+          $SSH "$WIN" "powershell -Command \"Add-MpPreference -ExclusionPath 'C:\Users\tfx\cvcpkg-builder' -ErrorAction SilentlyContinue; Add-MpPreference -ExclusionPath \$env:TEMP -ErrorAction SilentlyContinue; Add-MpPreference -ExclusionProcess 'pwsh.exe' -ErrorAction SilentlyContinue; Add-MpPreference -ExclusionProcess 'bash.exe' -ErrorAction SilentlyContinue; Write-Host 'Defender exclusions set'\"" || true
 
           echo "--- Cleaning up stale build artifacts ---"
-          $SSH tfx@sandipaws "powershell -Command \"Get-ChildItem C:\Users\tfx\cvcpkg-builder -Directory | Where-Object { \$_.Name -match '^cvcpkg-' -and \$_.LastWriteTime -lt (Get-Date).AddHours(-1) } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue; Write-Host 'Cleanup done'\"" || true
+          $SSH "$WIN" "powershell -Command \"Get-ChildItem C:\Users\tfx\cvcpkg-builder -Directory | Where-Object { \$_.Name -match '^cvcpkg-' -and \$_.LastWriteTime -lt (Get-Date).AddHours(-1) } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue; Write-Host 'Cleanup done'\"" || true
 
-          echo "--- Stopping sandipaws builder ---"
+          echo "--- Stopping Windows builder ---"
           # Kill any running cvcpkg builder so pip can overwrite the exe
-          $SSH tfx@sandipaws "taskkill /f /im cvcpkg.exe 2>NUL & taskkill /f /im python.exe 2>NUL & echo stopped" || true
+          $SSH "$WIN" "taskkill /f /im cvcpkg.exe 2>NUL & taskkill /f /im python.exe 2>NUL & echo stopped" || true
           sleep 5
 
-          echo "--- Updating sandipaws ---"
-          $SSH tfx@sandipaws "
+          echo "--- Updating the Windows builder ---"
+          $SSH "$WIN" "
             cd C:/Users/tfx/src/cvc/libcvc-deps &&
             git fetch origin &&
             git checkout -f $SHA &&
@@ -553,5 +542,5 @@ jobs:
             cvcpkg --version
           "
 
-          echo "--- Restarting sandipaws builder ---"
-          $SSH tfx@sandipaws "schtasks /run /tn cvcpkg-builder 2>NUL && echo sandipaws: builder restarted || echo sandipaws: no scheduled task found"
+          echo "--- Restarting Windows builder ---"
+          $SSH "$WIN" "schtasks /run /tn cvcpkg-builder 2>NUL && echo windows: builder restarted || echo windows: no scheduled task found"
