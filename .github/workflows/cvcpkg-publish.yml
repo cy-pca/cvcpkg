@@ -85,9 +85,20 @@ jobs:
 
       - name: Bundle recipes into package
         run: |
+          # src/cvcpkg/recipes/ is gitignored and absent from a fresh
+          # checkout, so the target directory must be created first —
+          # `cp -r recipes/* <missing-dir>/` otherwise fails and, when
+          # errors are swallowed, silently ships a wheel with no recipes.
+          mkdir -p src/cvcpkg/recipes
           rm -rf src/cvcpkg/recipes/*
-          cp -r recipes/* src/cvcpkg/recipes/ 2>/dev/null || true
+          cp -r recipes/. src/cvcpkg/recipes/
           rm -f src/cvcpkg/recipes/.gitignore
+          count=$(find src/cvcpkg/recipes -name recipe.yaml | wc -l)
+          echo "Bundled ${count} recipe(s) into the package"
+          if [ "${count}" -eq 0 ]; then
+            echo "ERROR: no recipes were bundled" >&2
+            exit 1
+          fi
 
       - name: Build sdist and wheel
         working-directory: .
@@ -97,10 +108,19 @@ jobs:
         working-directory: .
         run: twine check dist/*
 
-      - name: Verify wheel installs
+      - name: Verify wheel bundles recipes and installs
         run: |
-          pip install dist/cvcpkg-*.whl
+          whl=$(ls dist/cvcpkg-*.whl)
+          n=$(unzip -l "$whl" | grep -cE "cvcpkg/recipes/[^/]+/recipe.yaml") || true
+          echo "Wheel bundles ${n} recipe.yaml file(s)"
+          if [ "${n}" -eq 0 ]; then
+            echo "ERROR: built wheel contains no recipes" >&2
+            exit 1
+          fi
+          pip install "${whl}"
           cvcpkg --version
+          # The bundled recipes must be usable from the installed package.
+          cvcpkg recipes --list | grep -q zlib
 
       - uses: actions/upload-artifact@v4
         with:
