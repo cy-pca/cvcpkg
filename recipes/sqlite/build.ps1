@@ -20,13 +20,23 @@ try {
     & nmake /f Makefile.msc `
         "PREFIX=$prefix" `
         "USE_NATIVE_LIBPATHS=1" `
-        sqlite3.dll sqlite3.lib shell.exe
+        sqlite3.dll sqlite3.lib
+    if ($LASTEXITCODE -ne 0) { throw "nmake (sqlite3.dll/sqlite3.lib) failed" }
+
+    # Build the CLI standalone from the amalgamation (shell.c + sqlite3.c).
+    # `nmake shell.exe` links the CLI against the DLL import lib, but shell.c
+    # uses sqlite3 functions the DLL does not export (the internal
+    # sqlite3_win32_* helpers, sqlite3_deserialize, ...), producing 133
+    # LNK2019 "unresolved external symbol" errors.  Compiling the amalgamation
+    # directly links the CLI statically and resolves every symbol.
+    & cl /nologo /O2 /I. shell.c sqlite3.c /Fe:sqlite3.exe
+    if ($LASTEXITCODE -ne 0) { throw "sqlite CLI (sqlite3.exe) build failed" }
 
     Copy-Item sqlite3.dll  $binDir -Force
     Copy-Item sqlite3.lib  $libDir -Force
     Copy-Item sqlite3.h    $incDir -Force
     Copy-Item sqlite3ext.h $incDir -Force
-    Copy-Item shell.exe "$binDir\sqlite3.exe" -Force
+    Copy-Item sqlite3.exe  "$binDir\sqlite3.exe" -Force
 
     # Generate a pkg-config file.
     New-Item -ItemType Directory -Force -Path "$libDir\pkgconfig" | Out-Null
