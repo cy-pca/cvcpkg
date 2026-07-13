@@ -226,20 +226,30 @@ def install_entry(
     cache_dir: Path,
     *,
     verify_signatures: bool = False,
+    require_signatures: bool = False,
     keys_dir: Path | None = None,
 ) -> Path:
     """Download, verify, and extract one bundle into *prefix*.
 
-    If *verify_signatures* is True and the entry has a signature,
-    the archive is verified against the trusted keyring before
-    extraction.  Unsigned entries are skipped (warning only) unless
-    no trusted keys exist.
+    Signature handling:
+
+    - *require_signatures* — every entry MUST carry a signature and it must
+      verify against the trusted keyring; an unsigned entry is a hard error.
+      Implies verification.
+    - *verify_signatures* — verify the signature when the entry has one, but
+      accept unsigned entries (verify-if-present).
 
     Returns the archive path from the cache.
     """
     archive = download_bundle(entry, cache_dir)
 
-    if verify_signatures and entry.signature:
+    if require_signatures and not entry.signature:
+        raise IntegrityError(
+            f"{entry.name}=={entry.version} has no signature, but "
+            "--require-signatures was requested"
+        )
+
+    if (verify_signatures or require_signatures) and entry.signature:
         from cvcpkg.signing import Signature, SigningError, verify_file
 
         sig = Signature(

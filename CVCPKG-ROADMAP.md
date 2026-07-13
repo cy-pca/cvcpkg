@@ -284,9 +284,10 @@ release.  These are the gaps to close **before** the final publish step.
    and local catalog files, but there's no guide for air-gapped usage.
 6. **Recipe test coverage** — not all recipes have been built and
    tested on all 7 platforms.  GTK4 stack is being built now.
-7. **Signature verification not enforced** — `cvcpkg verify-sig` exists
-   but `cvcpkg install` doesn't enforce signature checks by default.
-   Consider `--require-signatures` flag.
+7. ~~**Signature verification not enforced**~~ — ✅ `cvcpkg install
+   --require-signatures` now fails on any unsigned or invalidly-signed
+   package; `--verify-signatures` verifies when a signature is present.
+   (Making enforcement the default remains a future policy decision.)
 8. **No dependency version constraints** — recipes declare dependencies
    by name only, not by version range.  This hasn't been a problem yet
    but will be as the catalog grows.

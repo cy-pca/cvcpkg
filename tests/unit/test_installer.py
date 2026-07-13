@@ -8,8 +8,8 @@ import zipfile
 
 import pytest
 
-from cvcpkg.errors import InstallError
-from cvcpkg.installer import _archive_filename, extract_bundle
+from cvcpkg.errors import InstallError, IntegrityError
+from cvcpkg.installer import _archive_filename, extract_bundle, install_entry
 from cvcpkg.manifest import CatalogEntry
 
 # ── extract_bundle ──────────────────────────────────────────────
@@ -211,3 +211,58 @@ class TestArchiveFilename:
         )
         fn = _archive_filename(e)
         assert fn.endswith(".zip")
+
+
+# ── --require-signatures ────────────────────────────────────────
+
+
+class TestRequireSignatures:
+    """install_entry signature enforcement."""
+
+    def _entry(self, signature: str = "") -> CatalogEntry:
+        return CatalogEntry(
+            name="zlib",
+            version="1.3.1+cvc.1",
+            upstream_version="1.3.1",
+            cvc_revision=1,
+            platform="linux",
+            arch="x86_64",
+            build_type="release",
+            link="shared",
+            sha256="",
+            size_bytes=0,
+            archive_url="https://example.com/zlib.tar.gz",
+            source_release="",
+            signature=signature,
+        )
+
+    def _make_tar_gz(self, path):
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            data = b"\x00"
+            info = tarfile.TarInfo("lib/libz.so")
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+        path.write_bytes(buf.getvalue())
+        return path
+
+    def test_require_signatures_missing_is_fatal(self, tmp_path, monkeypatch):
+        import cvcpkg.installer as inst
+
+        archive = self._make_tar_gz(tmp_path / "zlib.tar.gz")
+        monkeypatch.setattr(inst, "download_bundle", lambda entry, cache_dir: archive)
+        prefix = tmp_path / "prefix"
+        with pytest.raises(IntegrityError, match="no signature"):
+            install_entry(self._entry(signature=""), prefix, tmp_path, require_signatures=True)
+        # Nothing should have been extracted.
+        assert not (prefix / "lib" / "libz.so").exists()
+
+    def test_verify_without_require_allows_unsigned(self, tmp_path, monkeypatch):
+        import cvcpkg.installer as inst
+
+        archive = self._make_tar_gz(tmp_path / "zlib.tar.gz")
+        monkeypatch.setattr(inst, "download_bundle", lambda entry, cache_dir: archive)
+        prefix = tmp_path / "prefix"
+        # verify-if-present: an unsigned entry is accepted and extracted.
+        install_entry(self._entry(signature=""), prefix, tmp_path, verify_signatures=True)
+        assert (prefix / "lib" / "libz.so").exists()
