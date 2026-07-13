@@ -16,6 +16,11 @@ from cvcpkg.cli import cli
 from cvcpkg.cli._publish import _publish_to_server
 from cvcpkg.cli._server import _api_request
 
+# Exit code the builder uses to ask its supervisor wrapper to pull the latest
+# cvcpkg and relaunch it (Windows supervised self-update).  Kept in sync with
+# windows/cvcpkg-builder-supervisor.cmd in the vm-provisioning repo.
+_SUPERVISOR_RESTART_CODE = 90
+
 # -- Builder commands --------------------------------------------
 
 
@@ -1117,6 +1122,21 @@ def builder_run(
         in known paths.
         """
         import subprocess
+
+        # When running under the Windows supervisor wrapper, hand the whole
+        # update+restart cycle back to it: exit with a sentinel code so the
+        # supervisor pulls the latest cvcpkg and relaunches us on fresh code.
+        # This is what makes a server-pushed update apply without a manual
+        # restart on Windows -- os.execv() cannot replace the process in
+        # place there, and the freshly installed code otherwise only takes
+        # effect on the next builder start.  The outer try/finally still runs
+        # (in-flight jobs drain, builder unregisters, pidfile is removed) so
+        # the successor starts clean past the single-instance guard.
+        if sys.platform == "win32" and os.environ.get("CVCPKG_BUILDER_SUPERVISED"):
+            click.echo(
+                f"  self-update: requesting supervisor restart (exit {_SUPERVISOR_RESTART_CODE})."
+            )
+            raise SystemExit(_SUPERVISOR_RESTART_CODE)
 
         # Find the cvcpkg project root (where pyproject.toml lives)
         pkg_dir = Path(__file__).resolve().parent.parent  # cvcpkg package
