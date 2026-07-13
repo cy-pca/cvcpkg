@@ -3,7 +3,29 @@
 > A cross-platform, language-agnostic binary package archive
 > for the scientific computing community.
 
-*Last updated: 2026-07-06*
+*Last updated: 2026-07-10*
+
+---
+
+## Project Rename — `libcvc-deps` → `cvcpkg`
+
+The project is being renamed to **`cvcpkg`** in its entirety; the
+`libcvc-deps` name is being dropped.  `cvcpkg` — the CLI, the server, the
+recipe archive, and the PyPI distribution — becomes the single name for the
+project going forward.
+
+- The Python distribution is already published as **`cvcpkg`** (not
+  `libcvc-deps`).
+- The GitHub repository will be renamed **`transfix/libcvc-deps` →
+  `transfix/cvcpkg`** *before* the first PyPI publish (see Phase 1.5).
+- Backward compatibility is retained where downstream consumers depend on
+  the old name — e.g. the `libcvc-depsConfig.cmake` compatibility wrapper
+  stays so existing `find_package(libcvc-deps)` calls keep working.
+
+> **Release ordering:** the PyPI publish is the **final** step of the
+> release — it happens only after the rename (project + repo), the trusted
+> publisher is configured for the new repo, and the remaining roadmap gaps
+> are closed.
 
 ---
 
@@ -170,12 +192,29 @@ Items required before `pip install cvcpkg` goes live on PyPI.
 
 #### Packaging & Distribution
 
+Ordered — the PyPI publish is the **last** step and happens only after the
+rename and the remaining gaps are closed.
+
 - [x] pyproject.toml at repo root with poetry-core backend
 - [x] `cvcpkg` and `cvcpkg-server` entry points
 - [x] Recipes bundled into wheel via CI publish workflow
-- [ ] Test `pip install cvcpkg` from TestPyPI
-- [ ] Publish v2.0.0 to PyPI
-- [ ] Verify `cvcpkg --version` and `cvcpkg-server --version` after pip install
+      (fixed: the publish workflow's bundle step now creates the target
+      dir, fails loudly, and verifies the built wheel contains recipes)
+- [x] Build + live-smoke the wheel on Linux/macOS/Windows via a release
+      candidate tag (`cvcpkg-v2.0.0rc6`: 129 recipes bundled, all green)
+- [x] Verify `cvcpkg --version` and `cvcpkg-server --version` from the
+      installed wheel
+- [ ] **Rename the project to `cvcpkg`, dropping `libcvc-deps`** (see the
+      Project Rename section above)
+- [ ] **Rename the GitHub repo `transfix/libcvc-deps` → `transfix/cvcpkg`**
+- [ ] **Configure the PyPI trusted publisher** for the renamed repo:
+      owner `transfix`, repo `cvcpkg`, workflow `cvcpkg-publish.yml`,
+      environment `pypi`.  (The earlier stable publish failed with
+      `invalid-publisher` because no matching trusted publisher exists.)
+- [ ] Close the remaining roadmap gaps below
+- [ ] **Publish v2.0.0 to PyPI — final release step.**  Gated behind the
+      `CVCPKG_PUBLISH_TO_PYPI` repo variable so a stable tag does not
+      publish until the rename + trusted publisher are in place.
 
 #### Admin CLI Completeness
 
@@ -185,9 +224,10 @@ Items required before `pip install cvcpkg` goes live on PyPI.
 - [x] `cvcpkg server` — stop, status
 - [x] `cvcpkg org` — members, add-member, remove-member
 - [x] `cvcpkg recipe` — push (sync recipes to server DB)
-- [ ] `cvcpkg server stats` — show server resource usage, DB size, active connections
-- [ ] `cvcpkg server backup` — trigger a database backup from CLI
-- [ ] `cvcpkg builder logs` — view recent builder activity without full monitor
+- [x] `cvcpkg server stats` — server resource + catalog statistics (DB backend, package/org/builder/job/audit counts, storage)
+- [x] `cvcpkg server backup` — trigger a server-side database backup from CLI (sqlite/pg_dump/mysqldump)
+- [x] `cvcpkg builder logs` — view recent build jobs / tail a job's log without the full monitor
+- [x] `cvcpkg doctor` — diagnose the local toolchain (Python, CMake, Ninja, compiler, git) and server reachability
 
 #### Testing & Quality
 
@@ -226,13 +266,15 @@ Items required before `pip install cvcpkg` goes live on PyPI.
 
 #### Gap Analysis
 
-The following items have been identified as potential gaps before the
-PyPI release:
+The following items were identified as potential gaps before the PyPI
+release.  These are the gaps to close **before** the final publish step.
 
-1. **No CHANGELOG.md** — users need to see what changed since v1.x.
-2. **No `cvcpkg doctor` command** — a diagnostic tool that checks the
-   local environment (Python version, pip, cmake, compiler) and reports
-   readiness for building/installing packages.
+1. ~~**No CHANGELOG.md**~~ — ✅ `CHANGELOG.md` exists; still needs a
+   v2.0.0 entry covering the `cvcpkg` tool changes (doctor, admin CLI,
+   recipe-bundling fix, NullPool fix, postgresql recipes) and the rename.
+2. ~~**No `cvcpkg doctor` command**~~ — ✅ Done.  `cvcpkg doctor` checks
+   Python, pip, CMake, Ninja, a C/C++ compiler, git, and (optionally)
+   server reachability.
 3. **No `cvcpkg init` command** — recipe scaffolding from templates
    (CMake, Meson, Autotools) is mentioned in Phase 4 but would be
    valuable for the initial release.
@@ -240,7 +282,7 @@ PyPI release:
    installed packages to newer versions without reinstalling everything.
 5. **No offline mode documentation** — cvcpkg supports source-fallback
    and local catalog files, but there's no guide for air-gapped usage.
-6. **Recipe test coverage** — not all 99 recipes have been built and
+6. **Recipe test coverage** — not all recipes have been built and
    tested on all 7 platforms.  GTK4 stack is being built now.
 7. **Signature verification not enforced** — `cvcpkg verify-sig` exists
    but `cvcpkg install` doesn't enforce signature checks by default.
