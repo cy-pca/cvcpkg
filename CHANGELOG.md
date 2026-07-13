@@ -28,11 +28,49 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
-## v2.0.0 (2026-06-06)
+## v2.0.0
 
 Major release: production daemon with database backend, the
 `cvcpkg.org` registry, distributed build infrastructure, and wasi
-support.  The `cvcpkg` 2.0 line is the first to drive the public
+support.
+
+> **The project is now named `cvcpkg`.**  The `libcvc-deps` name is
+> retired; the PyPI distribution, CLI, server, and recipe archive are all
+> `cvcpkg`.  Backward-compat shims remain where downstream depends on the
+> old name (e.g. `find_package(libcvc-deps)` still works via a generated
+> compat config).
+
+### Release-readiness changes (cvcpkg tool)
+
+Landed while hardening 2.0.0 for its first `pip install cvcpkg`:
+
+- **`cvcpkg doctor`** — diagnose the local toolchain (Python, CMake, Ninja,
+  a C/C++ compiler, git) and optional server reachability.
+- **`cvcpkg init`** — scaffold a schema-valid recipe (recipe.yaml + build
+  scripts) for cmake / meson / autotools.
+- **`cvcpkg upgrade`** — upgrade installed components to newer catalog
+  versions in place (with `--dry-run`), updating the lockfile.
+- **`cvcpkg install --require-signatures`** — enforce a valid Ed25519
+  signature on every installed archive (unsigned = hard failure).
+- **`cvcpkg install` writes `cvcpkgConfig.cmake`** into the prefix so
+  downstream `find_package(cvcpkg CONFIG REQUIRED)` (or the `libcvc-deps`
+  compat name) works with no manual `CMAKE_PREFIX_PATH`.
+- **Server admin CLI** — `cvcpkg server stats`, `cvcpkg server backup`
+  (sqlite/pg_dump/mysqldump), and `cvcpkg builder logs`.
+- **Duplicate-publish gating** — the server returns HTTP 409 on a duplicate
+  package variant at the store layer.
+- **PostgreSQL recipes** — `postgresql-server` and `postgresql-client`
+  (built from the same Meson tree as `libpq`).
+- **Packaging fix** — the PyPI publish workflow now actually bundles the
+  recipe files into the wheel/sdist (previously shipped zero recipes), and
+  verifies the built wheel contains them.
+- **Stability fixes** — file-backed SQLite uses `NullPool` to end an
+  intermittent "no active connection" teardown failure on macOS CI; the
+  Docker integration job's recipes mount was corrected.
+
+### Highlights (2.0.0 infrastructure, 2026-06-06)
+
+The `cvcpkg` 2.0 line is the first to drive the public
 catalog at <https://cvcpkg.org> from a SQLModel/Alembic-managed
 database (Phase 1 of the [cvcpkg 2.0 roadmap](docs/roadmap/cvcpkg-2.0.md))
 instead of YAML state files.
