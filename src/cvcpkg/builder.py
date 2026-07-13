@@ -582,9 +582,7 @@ def run_build(
         interpreter = _find_bash()
         cmd = [interpreter, str(script)]
     elif script.suffix == ".ps1":
-        interpreter = shutil.which("pwsh")
-        if not interpreter:
-            raise BuildError("pwsh not found on PATH -- required for .ps1 build scripts")
+        interpreter = _find_pwsh(ctx.prefix)
         cmd = [interpreter, "-NoProfile", "-NonInteractive", "-File", str(script)]
     else:
         raise BuildError(f"Unknown script type: {script.suffix}")
@@ -661,6 +659,38 @@ def _find_bash() -> str:
     if found:
         return found
     raise BuildError("bash not found on PATH")
+
+
+def _find_pwsh(prefix: Path | None = None) -> str:
+    """Find pwsh 7, preferring a cvcpkg-provided build under *prefix*.
+
+    Windows recipe build scripts are ``#!/usr/bin/env pwsh`` and use
+    pwsh-7-only syntax; the Windows Store alias ``pwsh.exe`` is not usable
+    non-interactively.  Prefer the pwsh installed by the ``powershell`` cvcpkg
+    recipe into the deps prefix (declare it as a ``host_tool``), so a bare
+    build host needs no system pwsh.  Fall back to PATH otherwise -- e.g. when
+    bootstrapping the ``powershell`` recipe itself, whose own build.ps1 must
+    run under a pre-existing pwsh.
+    """
+    candidates: list[Path] = []
+    if prefix is not None:
+        if sys.platform == "win32":
+            candidates += [
+                prefix / "lib" / "powershell" / "pwsh.exe",
+                prefix / "bin" / "pwsh.exe",
+            ]
+        else:
+            candidates.append(prefix / "bin" / "pwsh")
+    for c in candidates:
+        if c.is_file():
+            return str(c)
+    found = shutil.which("pwsh")
+    if found:
+        return found
+    raise BuildError(
+        "pwsh 7 not found -- add the 'powershell' recipe as a host_tool, "
+        "or install pwsh 7 on PATH"
+    )
 
 
 def run_test(
