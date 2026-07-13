@@ -77,7 +77,14 @@ from cvcpkg.cli._helpers import (
 @click.option(
     "--verify-signatures/--no-verify-signatures",
     default=False,
-    help="Verify Ed25519 signatures on downloaded archives.",
+    help="Verify Ed25519 signatures on downloaded archives when present.",
+)
+@click.option(
+    "--require-signatures",
+    is_flag=True,
+    default=False,
+    help="Require a valid Ed25519 signature on every archive; fail on any "
+    "unsigned or invalidly-signed package.  Implies --verify-signatures.",
 )
 @click.option(
     "--fallback-to-source/--no-fallback-to-source",
@@ -101,6 +108,7 @@ def install(
     source: str,
     ignore_abi: bool,
     verify_signatures: bool,
+    require_signatures: bool,
     fallback_to_source: bool,
     recipes_dirs: tuple[str, ...],
     no_default_recipes: bool,
@@ -336,7 +344,13 @@ def install(
                     entry.mirror_urls.append(fallback)
         click.echo(f"cvcpkg: installing {name} {entry.version} ...")
         try:
-            install_entry(entry, prefix_path, cache_dir, verify_signatures=verify_signatures)
+            install_entry(
+                entry,
+                prefix_path,
+                cache_dir,
+                verify_signatures=verify_signatures or require_signatures,
+                require_signatures=require_signatures,
+            )
         except (InstallError, IntegrityError) as exc:
             if not fallback_to_source:
                 raise
