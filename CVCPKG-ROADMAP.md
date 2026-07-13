@@ -249,7 +249,7 @@ rename and the remaining gaps are closed.
 - [x] `libcvc-depsConfig.cmake` — backward-compat wrapper
 - [x] `cvcpkg-toolchain.cmake` — for `-DCMAKE_TOOLCHAIN_FILE=` usage
 - [x] Activation scripts set CMAKE_PREFIX_PATH on `source activate`
-- [ ] Document CMake integration in README and docs/
+- [x] Document CMake integration in README and docs/ (docs/cmake-integration.md)
 - [x] `cvcpkg install` writes cvcpkgConfig.cmake into the prefix automatically
       (also a libcvc-deps compat config + version files)
 
@@ -260,10 +260,10 @@ rename and the remaining gaps are closed.
 - [x] docs/ci-cd-pipeline.md
 - [x] docs/deployment-guide.md
 - [x] docs/organizations.md
-- [ ] docs/cmake-integration.md — CMake usage guide for downstream projects
-- [ ] docs/recipe-authoring.md — how to create new recipes
-- [ ] docs/pypi-install.md — pip install guide and extras reference
-- [ ] CHANGELOG.md — release notes for v2.0.0
+- [x] docs/cmake-integration.md — CMake usage guide for downstream projects
+- [x] docs/recipe-authoring.md — how to create new recipes
+- [x] docs/pypi-install.md — pip install guide and extras reference
+- [x] CHANGELOG.md — release notes for v2.0.0
 
 #### Gap Analysis
 
@@ -282,8 +282,8 @@ release.  These are the gaps to close **before** the final publish step.
 4. ~~**No `cvcpkg upgrade` command**~~ — ✅ `cvcpkg upgrade [components]`
    checks the catalog for newer versions of the installed components and
    re-installs just those, updating the lockfile (`--dry-run` previews).
-5. **No offline mode documentation** — cvcpkg supports source-fallback
-   and local catalog files, but there's no guide for air-gapped usage.
+5. ~~**No offline mode documentation**~~ — ✅ documented in
+   docs/pypi-install.md (local catalog + `--local` source builds + cache).
 6. **Recipe test coverage** — not all recipes have been built and
    tested on all 7 platforms.  GTK4 stack is being built now.
 7. ~~**Signature verification not enforced**~~ — ✅ `cvcpkg install
