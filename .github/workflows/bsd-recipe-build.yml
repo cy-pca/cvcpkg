@@ -6,7 +6,7 @@
 #
 # Previously built recipes on BSD virtual machines (FreeBSD, OpenBSD,
 # NetBSD) hosted on the Incus cluster.
-# SSH access to every BSD VM on the 10.66.77.0/24 LAN.
+# SSH access to the BSD build VMs on the internal LAN.
 #
 # Prerequisite: the runner user's SSH key must be authorized on all
 # three BSD VMs (one-time setup via incus exec + authorized_keys).
@@ -102,20 +102,23 @@ jobs:
           HASH=$(echo -n "$COMBO" | cksum | awk '{print $1}')
           IDX=$(( HASH % 2 ))
 
+          # VM names + fallback IPs come from repo variables (each holds
+          # "primary secondary") so they are not hard-coded in this public
+          # workflow.
           case "${{ inputs.platform }}" in
             freebsd)
-              VMS=("freebsd-build" "freebsd-build-2")
-              FALLBACKS=("10.66.77.174" "10.66.77.154")
+              read -ra VMS <<< "${{ vars.FREEBSD_BUILDER_VMS }}"
+              read -ra FALLBACKS <<< "${{ vars.FREEBSD_BUILDER_IPS }}"
               echo "python=python3.11" >> "$GITHUB_OUTPUT"
               ;;
             openbsd)
-              VMS=("openbsd-build" "openbsd-build-2")
-              FALLBACKS=("10.66.77.197" "10.66.77.235")
+              read -ra VMS <<< "${{ vars.OPENBSD_BUILDER_VMS }}"
+              read -ra FALLBACKS <<< "${{ vars.OPENBSD_BUILDER_IPS }}"
               echo "python=python3.12" >> "$GITHUB_OUTPUT"
               ;;
             netbsd)
-              VMS=("netbsd-build" "netbsd-build-2")
-              FALLBACKS=("10.66.77.214" "10.66.77.167")
+              read -ra VMS <<< "${{ vars.NETBSD_BUILDER_VMS }}"
+              read -ra FALLBACKS <<< "${{ vars.NETBSD_BUILDER_IPS }}"
               echo "python=python3.13" >> "$GITHUB_OUTPUT"
               ;;
           esac

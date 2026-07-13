@@ -5,7 +5,7 @@ name: deploy-dev
 #   - cvcpkg-builder-01 (incus VM — test builder)
 #   - cvcpkg-builder-02 (incus VM — test builder)
 #
-# The self-hosted runner on star-00/star-01 picks up the job.
+# A self-hosted Linux runner picks up the job.
 # These machines host the incus cluster directly so they use
 # `incus exec` to update the VMs.
 #

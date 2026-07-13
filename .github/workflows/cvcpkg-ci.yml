@@ -145,7 +145,7 @@ jobs:
   # Spins up a PostgreSQL + cvcpkg-server stack in Docker, then runs
   # the full end-to-end test suite: token management, package build →
   # publish → install → smoke test, audit trail verification.
-  # Only runs on the self-hosted runner on catx-03 where Docker is
+  # Only runs on the self-hosted prod runner where Docker is
   # available.
   integration:
     name: Integration tests (Docker)

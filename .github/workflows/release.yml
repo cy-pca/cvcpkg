@@ -105,9 +105,8 @@ jobs:
     secrets: inherit
 
   # ─────────────────── Windows ─────────────────────────────────
-  # Shared builds run on self-hosted Windows runners (sandipaws +
-  # phm-win11) for faster turnaround; static builds run on
-  # GitHub-hosted windows-latest.
+  # Shared builds run on self-hosted Windows runners for faster
+  # turnaround; static builds run on GitHub-hosted windows-latest.
   windows:
     strategy:
       fail-fast: false
