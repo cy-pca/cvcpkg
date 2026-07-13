@@ -250,7 +250,8 @@ rename and the remaining gaps are closed.
 - [x] `cvcpkg-toolchain.cmake` — for `-DCMAKE_TOOLCHAIN_FILE=` usage
 - [x] Activation scripts set CMAKE_PREFIX_PATH on `source activate`
 - [ ] Document CMake integration in README and docs/
-- [ ] `cvcpkg install` writes cvcpkgConfig.cmake into the prefix automatically
+- [x] `cvcpkg install` writes cvcpkgConfig.cmake into the prefix automatically
+      (also a libcvc-deps compat config + version files)
 
 #### Documentation
 

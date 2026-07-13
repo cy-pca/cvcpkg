@@ -427,6 +427,19 @@ def install(
     lock.write(lock_path)
     click.echo(f"cvcpkg: lockfile written to {lock_path}")
 
+    # ── Write the CMake package config into the prefix ──
+    #
+    # So downstream projects can `find_package(cvcpkg CONFIG REQUIRED)`
+    # (or the libcvc-deps compat name) with no manual CMAKE_PREFIX_PATH.
+    try:
+        from cvcpkg import __version__
+        from cvcpkg.cmake_config import write_cmake_config
+
+        write_cmake_config(prefix_path, __version__)
+        click.echo(f"cvcpkg: CMake config written to {prefix_path / 'lib' / 'cmake' / 'cvcpkg'}")
+    except OSError as exc:
+        click.echo(f"cvcpkg: warning — could not write CMake config: {exc}", err=True)
+
     # ── Write activation scripts ──
     #
     # Users can `source <prefix>/bin/activate` (POSIX) or
