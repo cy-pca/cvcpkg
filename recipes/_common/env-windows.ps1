@@ -69,9 +69,20 @@ function Import-CvcMsvcEnv {
         throw "vcvars64.bat not found under $vsRoot"
     }
 
-    # Run vcvars64.bat in a subshell, dump the resulting environment,
-    # and import the diff back into our own process.
-    $dump = & cmd /c "`"$vcvars`" >nul 2>&1 && set"
+    # Run vcvars64.bat via a small temp .cmd (properly quoted inside the
+    # batch) and dump the resulting environment.  Invoking a single clean
+    # helper path avoids the fragile inline `cmd /c "..."` quote passing,
+    # whose handling of embedded quotes differs across PowerShell editions
+    # (Windows PowerShell 5.1 vs pwsh 7) and can silently mangle the quoted
+    # vcvars path (which lives under "C:\Program Files (x86)\...").
+    $helper = Join-Path ([System.IO.Path]::GetTempPath()) ("cvc-vcvars-{0}.cmd" -f ([guid]::NewGuid().ToString('N')))
+    $body = "@echo off`r`ncall `"$vcvars`" >nul 2>&1`r`nset`r`n"
+    Set-Content -LiteralPath $helper -Value $body -Encoding Ascii
+    try {
+        $dump = & cmd.exe /c $helper
+    } finally {
+        Remove-Item -LiteralPath $helper -ErrorAction SilentlyContinue
+    }
     foreach ($line in $dump) {
         if ($line -match '^([^=]+)=(.*)$') {
             $name = $matches[1]
