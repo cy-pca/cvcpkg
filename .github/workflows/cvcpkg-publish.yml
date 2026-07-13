@@ -208,12 +208,19 @@ jobs:
     name: Publish to PyPI
     runs-on: ubuntu-latest
     needs: live-smoke
-    # Only fire on stable tags: cvcpkg-vMAJOR.MINOR.PATCH (no pre-release
-    # suffix, no workflow_dispatch). This protects PyPI from being
-    # burned on iteration tags like cvcpkg-v2.0.0rc1.  Uses
-    # `github.ref_name` (bare tag) so the pre-release substring checks
-    # do not false-match against "tags" in the full ref path.
+    # Publishing to PyPI is the deliberate FINAL step of the release and is
+    # double-gated:
+    #
+    #   1. `vars.CVCPKG_PUBLISH_TO_PYPI == 'true'` — an explicit repo
+    #      variable that must be set when the team is ready to publish.
+    #      Until it is set, pushing even a stable tag builds + live-smokes
+    #      but does NOT publish, so the release can be staged (rename repo,
+    #      configure the trusted publisher, close roadmap gaps) first.
+    #   2. Stable tag only: cvcpkg-vMAJOR.MINOR.PATCH with no pre-release
+    #      suffix.  Uses `github.ref_name` (bare tag) so the substring
+    #      checks do not false-match against "tags" in the full ref path.
     if: >-
+      vars.CVCPKG_PUBLISH_TO_PYPI == 'true' &&
       github.event_name == 'push' &&
       startsWith(github.ref_name, 'cvcpkg-v') &&
       !contains(github.ref_name, 'a') &&
