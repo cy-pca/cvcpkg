@@ -811,3 +811,180 @@ def sync(prefix: str) -> None:
         click.echo(f"cvcpkg: synced {installed} bundle(s).")
     else:
         click.echo("cvcpkg: prefix is in sync.")
+
+
+# ── upgrade ─────────────────────────────────────────────────────
+
+
+def _version_is_newer(new_ver: str, old_ver: str) -> bool:
+    """Return True if *new_ver* is a newer cvcpkg version than *old_ver*.
+
+    Compares on (SemVer, cvc_revision) so a newer ``+cvc.N`` rebuild of the
+    same upstream version counts as newer (Version.__lt__ ignores build
+    metadata on its own).
+    """
+    from cvcpkg.semver import Version
+
+    try:
+        nv = Version.parse(new_ver)
+        ov = Version.parse(old_ver)
+    except ValueError:
+        return new_ver != old_ver
+    return (nv, nv.cvc_revision) > (ov, ov.cvc_revision)
+
+
+@cli.command("upgrade")
+@click.argument("components", nargs=-1)
+@_prefix_opt
+@click.option(
+    "--catalog",
+    metavar="URL",
+    help="Override catalog URL or path to a local catalog YAML file.",
+)
+@click.option(
+    "--source",
+    type=click.Choice(["auto", "server", "github"], case_sensitive=False),
+    default="auto",
+    help="Catalog source strategy (see `cvcpkg install`).",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show what would be upgraded without downloading or changing anything.",
+)
+@click.option(
+    "--verify-signatures/--no-verify-signatures",
+    default=False,
+    help="Verify Ed25519 signatures on downloaded archives when present.",
+)
+@click.option(
+    "--require-signatures",
+    is_flag=True,
+    default=False,
+    help="Require a valid signature on every upgraded archive.  Implies --verify-signatures.",
+)
+def upgrade(
+    components: tuple[str, ...],
+    prefix: str,
+    catalog: str | None,
+    source: str,
+    dry_run: bool,
+    verify_signatures: bool,
+    require_signatures: bool,
+) -> None:
+    """Upgrade installed components to newer catalog versions, in place.
+
+    Reads the prefix lockfile, checks the catalog for newer versions of the
+    installed components (matching the prefix's platform/arch/config/link),
+    and re-installs the ones with a newer version available.  Restrict to
+    specific COMPONENTS by naming them; otherwise every installed component
+    is considered.
+
+    \b
+    Examples:
+      cvcpkg upgrade --prefix ./deps                 # upgrade everything
+      cvcpkg upgrade zlib boost --prefix ./deps      # only these
+      cvcpkg upgrade --prefix ./deps --dry-run       # preview
+    """
+    from cvcpkg.cache import default_cache_dir
+    from cvcpkg.catalog import catalog_entries, fetch_catalog, load_catalog_from_file
+    from cvcpkg.installer import install_entry
+    from cvcpkg.lockfile import LockEntry, Lockfile
+    from cvcpkg.resolver import _sort_candidates
+
+    prefix_path = Path(prefix).resolve()
+    lock_path = prefix_path / "share" / "libcvc-deps" / "lockfile.yaml"
+    if not lock_path.exists():
+        raise click.ClickException(f"no lockfile at {lock_path} — nothing installed to upgrade")
+    lock = Lockfile.read(lock_path)
+    if not lock.bundles:
+        click.echo("cvcpkg: lockfile is empty, nothing to upgrade.")
+        return
+
+    catalog_url = catalog or ""
+    if catalog_url and Path(catalog_url).is_file():
+        cat = load_catalog_from_file(catalog_url)
+    else:
+        cat = fetch_catalog(catalog_url, cache_dir=default_cache_dir())
+
+    entries = catalog_entries(
+        cat,
+        platform=lock.platform,
+        arch=lock.arch,
+        build_type=lock.config,
+        link=lock.link,
+    )
+    by_name: dict[str, list] = {}
+    for e in entries:
+        by_name.setdefault(e.name, []).append(e)
+
+    wanted = {c.split("==")[0] for c in components} if components else None
+    if wanted:
+        unknown = wanted - {b.name for b in lock.bundles}
+        if unknown:
+            raise click.ClickException(
+                f"not installed in this prefix: {', '.join(sorted(unknown))}"
+            )
+
+    # Build the upgrade plan: (LockEntry, newest CatalogEntry).
+    plan: list[tuple[LockEntry, object]] = []
+    for b in lock.bundles:
+        if wanted and b.name not in wanted:
+            continue
+        cands = by_name.get(b.name, [])
+        if not cands:
+            continue
+        newest = _sort_candidates(cands, "")[0]
+        if _version_is_newer(newest.version, b.version):
+            plan.append((b, newest))
+
+    if not plan:
+        click.echo("cvcpkg: everything is up to date.")
+        return
+
+    click.echo(f"cvcpkg: {len(plan)} upgrade(s) available for {prefix_path}:")
+    for b, new in plan:
+        click.echo(f"  {b.name}: {b.version} -> {new.version}")
+
+    if dry_run:
+        click.echo("cvcpkg: dry run — no changes made.")
+        return
+
+    cache_dir = default_cache_dir()
+    server_url = os.environ.get("CVCPKG_SERVER_URL", "")
+    mirror_urls: list[str] = []
+    if server_url:
+        mirror_urls = _fetch_mirror_urls(server_url, os.environ.get("CVCPKG_TOKEN"))
+
+    by_lock_name = {b.name: b for b in lock.bundles}
+    upgraded = 0
+    for b, new in plan:
+        if mirror_urls and new.archive_url:
+            fname = new.archive_url.rsplit("/", 1)[-1]
+            for murl in mirror_urls:
+                fallback = f"{murl.rstrip('/')}/v1/mirror/download/{fname}"
+                if fallback not in new.mirror_urls:
+                    new.mirror_urls.append(fallback)
+        click.echo(f"cvcpkg: upgrading {b.name} {b.version} -> {new.version} ...")
+        install_entry(
+            new,
+            prefix_path,
+            cache_dir,
+            verify_signatures=verify_signatures or require_signatures,
+            require_signatures=require_signatures,
+        )
+        by_lock_name[b.name] = LockEntry(
+            name=new.name,
+            version=new.version,
+            upstream_version=new.upstream_version,
+            source_release=new.source_release,
+            sha256=new.sha256,
+            size_bytes=new.size_bytes,
+            archive_url=new.archive_url,
+        )
+        upgraded += 1
+
+    lock.bundles = list(by_lock_name.values())
+    lock.catalog_revision = cat.get("revision", lock.catalog_revision)
+    lock.write(lock_path)
+    click.echo(f"cvcpkg: upgraded {upgraded} component(s); lockfile updated.")
