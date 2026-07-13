@@ -279,8 +279,9 @@ release.  These are the gaps to close **before** the final publish step.
 3. ~~**No `cvcpkg init` command**~~ — ✅ `cvcpkg init <name>` scaffolds a
    schema-valid recipe (recipe.yaml + build scripts) for cmake, meson, or
    autotools.
-4. **No `cvcpkg upgrade` command** — users need a way to upgrade
-   installed packages to newer versions without reinstalling everything.
+4. ~~**No `cvcpkg upgrade` command**~~ — ✅ `cvcpkg upgrade [components]`
+   checks the catalog for newer versions of the installed components and
+   re-installs just those, updating the lockfile (`--dry-run` previews).
 5. **No offline mode documentation** — cvcpkg supports source-fallback
    and local catalog files, but there's no guide for air-gapped usage.
 6. **Recipe test coverage** — not all recipes have been built and
