@@ -275,9 +275,9 @@ release.  These are the gaps to close **before** the final publish step.
 2. ~~**No `cvcpkg doctor` command**~~ — ✅ Done.  `cvcpkg doctor` checks
    Python, pip, CMake, Ninja, a C/C++ compiler, git, and (optionally)
    server reachability.
-3. **No `cvcpkg init` command** — recipe scaffolding from templates
-   (CMake, Meson, Autotools) is mentioned in Phase 4 but would be
-   valuable for the initial release.
+3. ~~**No `cvcpkg init` command**~~ — ✅ `cvcpkg init <name>` scaffolds a
+   schema-valid recipe (recipe.yaml + build scripts) for cmake, meson, or
+   autotools.
 4. **No `cvcpkg upgrade` command** — users need a way to upgrade
    installed packages to newer versions without reinstalling everything.
 5. **No offline mode documentation** — cvcpkg supports source-fallback
