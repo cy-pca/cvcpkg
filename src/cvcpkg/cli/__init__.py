@@ -27,6 +27,23 @@ import click
 from cvcpkg import __version__
 from cvcpkg.errors import CvcpkgError
 
+
+def _restore_default_sigpipe() -> None:
+    """Terminate quietly when our stdout pipe is closed early.
+
+    Python installs SIG_IGN for SIGPIPE, which turns a closed downstream pipe
+    (``cvcpkg recipes | head``, ``… | grep -q``) into a BrokenPipeError and a
+    traceback on stdout flush.  Restore the default so cvcpkg behaves like a
+    normal Unix filter.  POSIX + main thread only; a no-op on Windows.
+    """
+    import signal
+
+    try:
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+    except (AttributeError, ValueError, OSError):  # no SIGPIPE / not main thread
+        pass
+
+
 # ── Root group ──────────────────────────────────────────────────
 
 
@@ -49,6 +66,7 @@ def cli(ctx: click.Context) -> None:
       cvcpkg build-all --prefix ./prefix --recipes-dir recipes
       cvcpkg validate
     """
+    _restore_default_sigpipe()
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
 

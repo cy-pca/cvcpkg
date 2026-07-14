@@ -1,0 +1,141 @@
+# Prove the built distribution is worthy of publishing to PyPI.
+#
+# On every change that can affect the package, this builds the wheel + sdist
+# (with recipes bundled), verifies their *contents* (entry points, bundled
+# recipes, metadata), then installs the wheel in a clean environment across
+# Linux/macOS/Windows and Python 3.10–3.13 and runs a network-free smoke of
+# the CLI.  A green run here is the packaging gate the publish workflow can
+# rely on before it ever tags a release.
+
+name: Wheel smoke
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'recipes/**'
+      - 'packaging/**'
+      - 'pyproject.toml'
+      - 'poetry.lock'
+      - 'cvcpkg_build_backend.py'
+      - '.github/workflows/wheel-smoke.yml'
+  push:
+    branches: [master, main]
+    paths:
+      - 'src/**'
+      - 'recipes/**'
+      - 'packaging/**'
+      - 'pyproject.toml'
+      - 'poetry.lock'
+      - 'cvcpkg_build_backend.py'
+      - '.github/workflows/wheel-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wheel-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & verify distribution
+    if: github.event_name != 'pull_request' || contains(vars.CI_ALLOWED_ACTORS, github.actor)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build tools
+        run: pip install build twine
+
+      - name: Bundle recipes into package
+        run: |
+          mkdir -p src/cvcpkg/recipes
+          rm -rf src/cvcpkg/recipes/*
+          cp -r recipes/. src/cvcpkg/recipes/
+          rm -f src/cvcpkg/recipes/.gitignore
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Twine metadata check
+        run: twine check dist/*
+
+      - name: Verify wheel contents
+        run: python packaging/verify_wheel.py dist/cvcpkg-*.whl --min-recipes 100
+
+      - name: Verify sdist contents
+        run: python packaging/verify_wheel.py dist/cvcpkg-*.tar.gz --min-recipes 100
+
+      - name: Smoke — install from sdist (rebuild) and run
+        run: |
+          python -m venv /tmp/sdist-env
+          /tmp/sdist-env/bin/pip install --upgrade pip
+          /tmp/sdist-env/bin/pip install dist/cvcpkg-*.tar.gz
+          /tmp/sdist-env/bin/cvcpkg --version
+          /tmp/sdist-env/bin/cvcpkg recipes --list | grep -q zlib
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cvcpkg-dist
+          path: dist/
+
+  smoke:
+    name: Install & run (${{ matrix.os }} / Py ${{ matrix.python }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ['3.10', '3.12', '3.13']
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: cvcpkg-dist
+          path: dist
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install the built wheel (clean env)
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install dist/cvcpkg-*.whl
+
+      - name: Smoke — version + entry points
+        shell: bash
+        run: |
+          cvcpkg --version
+          cvcpkg-server --version
+
+      - name: Smoke — bundled recipes are usable
+        shell: bash
+        run: |
+          # Capture to a file first: piping straight into `grep -q` lets grep
+          # close the pipe early (zlib is near the end of the list), which
+          # sends cvcpkg a SIGPIPE and fails the step under `set -o pipefail`.
+          cvcpkg recipes --list > recipes.txt
+          cat recipes.txt
+          grep -q '^zlib ' recipes.txt
+          grep -q '^postgresql-server ' recipes.txt
+          cvcpkg recipes --show zlib
+          cvcpkg recipes --show postgresql-server
+
+      - name: Smoke — doctor runs
+        shell: bash
+        run: cvcpkg doctor || echo "doctor reported optional-tool issues (fine for a packaging smoke)"
+
+      - name: Smoke — init scaffolds a recipe
+        shell: bash
+        run: |
+          cvcpkg init smoketest --dir cvcpkg-smoke-recipes --version 1.0.0
+          test -f cvcpkg-smoke-recipes/smoketest/recipe.yaml
+          test -f cvcpkg-smoke-recipes/smoketest/build.sh
