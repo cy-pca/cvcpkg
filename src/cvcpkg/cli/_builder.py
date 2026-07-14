@@ -1365,6 +1365,15 @@ def builder_run(
     def _past_deadline() -> bool:
         return run_deadline is not None and time.time() >= run_deadline
 
+    # Drain-mode settle window: ``next-job`` only returns jobs the server
+    # scheduler has already *dispatched to this builder*, and that loop runs
+    # on an interval (~10s).  A freshly-registered drain builder would
+    # otherwise get one 204 and exit before its first dispatch, orphaning
+    # pending jobs.  Require the queue to stay empty for this long before
+    # concluding it is truly drained; reset whenever a job is received.
+    drain_settle_secs = float(os.environ.get("CVCPKG_DRAIN_SETTLE_SECS", "20"))
+    drain_empty_since: float | None = None
+
     try:
         # Try WebSocket first (unless disabled).  Drain mode (--exit-when-empty)
         # needs the HTTP long-poll path: it returns 204 on an empty queue, which
@@ -1416,15 +1425,24 @@ def builder_run(
                 continue
 
             if resp.status_code == 204:
-                # No job available.  In drain mode, exit once nothing is left to
-                # do: an empty queue AND no in-flight jobs (which could still
-                # unlock dependent jobs when they finish).
+                # No job dispatched to us.  In drain mode, exit once nothing is
+                # left to do: an empty queue AND no in-flight jobs (which could
+                # still unlock dependent jobs when they finish).  But only after
+                # the queue has stayed empty for the settle window, so we don't
+                # exit before the scheduler has had a chance to dispatch pending
+                # jobs to a just-registered builder.
                 if exit_when_empty:
                     with jobs_lock:
                         inflight = current_jobs
                     if inflight == 0:
-                        click.echo("Queue empty - exiting (--exit-when-empty).")
-                        break
+                        now = time.time()
+                        if drain_empty_since is None:
+                            drain_empty_since = now
+                        elif now - drain_empty_since >= drain_settle_secs:
+                            click.echo("Queue empty - exiting (--exit-when-empty).")
+                            break
+                    else:
+                        drain_empty_since = None
                 continue
             if resp.status_code >= 400:
                 click.echo(
@@ -1435,6 +1453,7 @@ def builder_run(
                 continue
 
             job = resp.json()
+            drain_empty_since = None  # got work; restart the settle window
             with jobs_lock:
                 current_jobs += 1
 
