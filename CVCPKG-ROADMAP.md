@@ -240,8 +240,9 @@ rename and the remaining gaps are closed.
 - [x] Recipe validation via JSON schema in CI
 - [x] Source-fallback integration tests (Linux, macOS)
 - [ ] Windows CI integration tests
-- [ ] Automated upgrade/migration test (v1.x → v2.0.0)
-- [ ] Performance benchmarks for install/resolve with large catalogs
+- [x] Automated upgrade/migration test (v1.x → v2.0.0)
+      (migration-chain integrity + legacy-lockfile read; live PostgreSQL migration runs in the Docker job)
+- [x] Performance benchmarks for install/resolve with large catalogs (resolver regression guard on a 400-component chain)
 
 #### CMake Integration
 
@@ -290,9 +291,10 @@ release.  These are the gaps to close **before** the final publish step.
    --require-signatures` now fails on any unsigned or invalidly-signed
    package; `--verify-signatures` verifies when a signature is present.
    (Making enforcement the default remains a future policy decision.)
-8. **No dependency version constraints** — recipes declare dependencies
-   by name only, not by version range.  This hasn't been a problem yet
-   but will be as the catalog grows.
+8. ~~**No dependency version constraints**~~ — ✅ dependencies carry
+   version ranges (e.g. `^3.0`, `==1.3.0`) in the recipe/catalog, and the
+   resolver enforces them — user + transitive constraints, with
+   intersection and conflict rejection (see test_resolver.py).
 
 ### Phase 2 — Analytics & Telemetry
 
