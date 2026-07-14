@@ -285,8 +285,11 @@ release.  These are the gaps to close **before** the final publish step.
    re-installs just those, updating the lockfile (`--dry-run` previews).
 5. ~~**No offline mode documentation**~~ — ✅ documented in
    docs/pypi-install.md (local catalog + `--local` source builds + cache).
-6. **Recipe test coverage** — not all recipes have been built and
-   tested on all 7 platforms.  GTK4 stack is being built now.
+6. **Recipe test coverage** — building and testing every recipe on all
+   platforms is builder-fleet work.  `scripts/recipe_coverage.py` now
+   reports declared build-matrix coverage per platform and can gate CI
+   (`--require linux,macos,windows`); the actual cross-platform builds
+   remain a fleet task.
 7. ~~**Signature verification not enforced**~~ — ✅ `cvcpkg install
    --require-signatures` now fails on any unsigned or invalidly-signed
    package; `--verify-signatures` verifies when a signature is present.
