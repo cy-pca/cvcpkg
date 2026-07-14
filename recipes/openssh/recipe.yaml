@@ -1,0 +1,104 @@
+schema_version: 1
+recipe:
+  name: openssh
+  upstream_version: "10.4p1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    OpenSSH — the SSH client and server from a single portable build:
+    ssh, scp, sftp, ssh-keygen, ssh-agent, ssh-add, ssh-keyscan, plus sshd
+    and its sshd-session, sshd-auth and sftp-server helpers, and a sample
+    ssh_config / sshd_config + moduli.
+  homepage: https://www.openssh.com/
+  license: SSH-OpenSSH
+  tags: [networking, tools, crypto]
+
+source:
+  type: tarball
+  url: https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.4p1.tar.gz
+  sha256: "ef6026dd2aea8d56059638d5d3262902c892ceba9f88395835e0d06d3fb63238"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - pkg-config
+  runtime:
+    - name: openssl
+      version: "^3.0"
+    - name: zlib
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - bin/ssh
+    - bin/scp
+    - bin/sftp
+    - bin/ssh-add
+    - bin/ssh-agent
+    - bin/ssh-keygen
+    - bin/ssh-keyscan
+    - sbin/sshd
+    - libexec/sshd-session
+    - libexec/sshd-auth
+    - libexec/sftp-server
+    - libexec/ssh-keysign
+    - libexec/ssh-pkcs11-helper
+    - etc/ssh/ssh_config.sample
+    - etc/ssh/sshd_config.sample
+    - etc/ssh/moduli
+
+abi:
+  cxx_std: 17
+
+notes:
+  - title: "Platform scope — all POSIX natives; arch auto-detected"
+    platforms: [linux, macos, freebsd, openbsd, netbsd]
+    description: >-
+      One autotools build.sh per platform covers every architecture: the
+      builder's arch (x86_64, arm64, riscv64, ppc64le, s390x, …) is detected
+      by ./configure and by cvcpkg's host detection, so there is no per-arch
+      matrix entry. The matrix therefore lists the sensible maximum of native
+      targets — the same set as the curl recipe, the closest networking
+      analog.
+  - title: "Why not wasm / wasi / cosmo"
+    description: >-
+      Unlike the openssl/zlib libraries, ssh and sshd need real BSD sockets,
+      fork/exec, PTY allocation and privilege separation — none of which the
+      wasm/wasi sandboxes or the cosmopolitan (cosmo) portable-executable
+      target provide. There is no networking-daemon precedent on those
+      platforms, so they are intentionally excluded.
+  - title: "Why not native windows"
+    description: >-
+      Portable OpenSSH does not build with ./configure on native Windows;
+      Microsoft's Win32-OpenSSH is a separate codebase on its own (9.x)
+      version line. Supporting it would mean a distinct recipe that stages
+      the prebuilt Win32-OpenSSH release, not a matrix entry here. Windows
+      hosts that need a Linux builder use WSL, which builds as linux — see
+      docs/cvcpkg-builder-wsl-debian.md.
