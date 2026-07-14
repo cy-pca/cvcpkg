@@ -189,6 +189,24 @@ jobs:
             " || echo "Warning: failed to restart builder on $VM"
           done
 
+      # ── Update the WSL windows-cross builder on sandipaws ──────
+      # sandipaws-wsl is a WSL2 distro on the sandipaws laptop that
+      # serves windows/x86_64 dev jobs via the winhost delegation
+      # (recipes' build.ps1 runs on the Windows host through interop).
+      # It is reached by SSHing to the Windows host and entering the
+      # distro with wsl.exe — no inbound path into WSL is needed.
+      # Best-effort: the laptop may be off or away.
+      - name: Update WSL windows-cross builder (sandipaws-wsl)
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          SHA="${{ steps.target.outputs.sha }}"
+          echo "=== Updating sandipaws-wsl (WSL windows-cross builder) ==="
+          ssh -o ConnectTimeout=10 -o BatchMode=yes tfx@10.66.77.175 \
+            "wsl -d Ubuntu-24.04 -u tfx -e bash -lc 'set -e; cd ~/src/cvc/libcvc-deps && git fetch origin && git checkout -f ${SHA} && ~/.venv-cvcpkg/bin/pip install -q -e . && sudo systemctl restart cvcpkg-builder && systemctl is-active cvcpkg-builder'" \
+            && echo "sandipaws-wsl updated and restarted." \
+            || echo "::warning::sandipaws-wsl unreachable or update failed (laptop offline?)"
+
       # ── Notify builders to self-update via server API ─────────
       - name: Notify builders to self-update
         continue-on-error: true

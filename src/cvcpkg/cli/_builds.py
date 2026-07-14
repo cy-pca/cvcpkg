@@ -711,6 +711,18 @@ def builds_submit(
         "otherwise only reap them as unschedulable)."
     ),
 )
+@click.option(
+    "--skip-existing",
+    is_flag=True,
+    default=False,
+    help=(
+        "Skip jobs whose exact variant (name, current recipe version, "
+        "platform, arch, config, link) is already published on the server "
+        "— e.g. imported from upstream by the populate loop.  Dependents "
+        "of a skipped recipe still build; they fetch the published "
+        "package as a dependency."
+    ),
+)
 @click.argument("recipe_names", nargs=-1, required=True)
 def builds_submit_dag(
     server: str,
@@ -725,6 +737,7 @@ def builds_submit_dag(
     recipes_dirs: tuple[str, ...],
     no_default_recipes: bool,
     allow_unschedulable: bool,
+    skip_existing: bool,
     recipe_names: tuple[str, ...],
 ):
     """Submit a DAG of remote build jobs.
@@ -832,6 +845,55 @@ def builds_submit_dag(
     def _has_builder(plat: str, ar: str) -> bool:
         return (plat, ar) in _supported_targets or plat in _supported_platforms
 
+    # ── Published-variant set for --skip-existing ────────────────
+    # One paged listing up front; yanked packages are excluded by the
+    # server default, so a yanked variant is rebuilt rather than skipped.
+    _published: set[tuple[str, str, str, str, str, str]] = set()
+    if skip_existing:
+        import httpx as _httpx
+
+        try:
+            with _httpx.Client(timeout=60) as _c:
+                _offset = 0
+                while True:
+                    _resp = _c.get(
+                        f"{server.rstrip('/')}/v1/packages",
+                        params={"limit": 1000, "offset": _offset},
+                        headers={"Authorization": f"Bearer {token}"},
+                    )
+                    _resp.raise_for_status()
+                    _data = _resp.json()
+                    _batch = _data.get("packages", [])
+                    for _p in _batch:
+                        if not _p.get("archive_url"):
+                            continue  # placeholder rows have no artifacts
+                        _published.add(
+                            (
+                                _p.get("name", ""),
+                                _p.get("version", ""),
+                                _p.get("platform", ""),
+                                _p.get("arch", ""),
+                                _p.get("build_type", ""),
+                                _p.get("link", ""),
+                            )
+                        )
+                    _offset += len(_batch)
+                    if not _batch or _offset >= int(_data.get("total", 0)):
+                        break
+        except Exception as _e:  # noqa: BLE001 — best-effort, must not block submit
+            click.echo(
+                f"  Warning: could not read published packages ({_e}); "
+                "submitting without --skip-existing filtering."
+            )
+            skip_existing = False
+
+    def _full_version(name: str) -> str:
+        """The version this recipe builds to (matches manifest/publish form)."""
+        block = recipe_data.get(name, {}).get("recipe", {})
+        upstream_v = str(block.get("upstream_version", "0.0.0"))
+        rev = int(block.get("cvc_revision", 1))
+        return f"{upstream_v}+cvc.{rev}"
+
     dag_ids: list[str] = []
     for plat in platforms:
         for ar in arches:
@@ -857,6 +919,22 @@ def builds_submit_dag(
                             f"  Skipping {len(skipped)} recipe(s) "
                             f"with no {plat} matrix: {', '.join(sorted(skipped))}"
                         )
+
+                    # --skip-existing: drop recipes whose exact variant is
+                    # already published.  Dependents keep building — they
+                    # install the published package as a dependency.
+                    if skip_existing and eligible:
+                        satisfied = [
+                            n
+                            for n in eligible
+                            if (n, _full_version(n), plat, ar, cfg, lnk) in _published
+                        ]
+                        if satisfied:
+                            click.echo(
+                                f"  Skipping {len(satisfied)} already-published recipe(s) "
+                                f"for {plat}/{ar}/{cfg}/{lnk}: {', '.join(sorted(satisfied))}"
+                            )
+                            eligible = [n for n in eligible if n not in set(satisfied)]
 
                     if not eligible:
                         click.echo(f"  No eligible recipes for {plat}/{ar}/{cfg}/{lnk}")

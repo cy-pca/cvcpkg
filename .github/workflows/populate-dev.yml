@@ -17,9 +17,9 @@ on:
   workflow_dispatch:
     inputs:
       platforms:
-        description: "Comma-separated platforms to build (dev cluster is linux)"
+        description: "Comma-separated platforms to build (windows via the WSL cross builder)"
         required: true
-        default: "linux,wasm,wasi"
+        default: "linux,wasm,wasi,windows"
       arch:
         description: "Comma-separated arches"
         required: true
@@ -95,6 +95,8 @@ jobs:
           DAG_ID="populate-dev-$(date +%Y%m%d-%H%M%S)"
           echo "dag_id=$DAG_ID" >> "$GITHUB_OUTPUT"
           echo "Submitting ${#RECIPES[@]} recipes for ${{ inputs.platforms }}"
+          # --skip-existing: variants already on the dev server (e.g.
+          # imported from cvcpkg.org by the populate loop) are not rebuilt.
           cvcpkg builds submit-dag \
             --platform "${{ inputs.platforms }}" \
             --arch "${{ inputs.arch }}" \
@@ -103,6 +105,7 @@ jobs:
             --dag-id "$DAG_ID" \
             --recipes-dir recipes \
             --allow-unschedulable \
+            --skip-existing \
             "${RECIPES[@]}"
 
       - name: Follow build output

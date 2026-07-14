@@ -78,6 +78,15 @@ services:
             CVCPKG_MIRROR_UPSTREAM: ${CVCPKG_MIRROR_UPSTREAM:-}
             CVCPKG_MIRROR_TOKEN: ${CVCPKG_MIRROR_TOKEN:-}
             CVCPKG_MIRROR_SYNC_INTERVAL: ${CVCPKG_MIRROR_SYNC_INTERVAL:-3600}
+            # ── Upstream populate (optional) ───────────────────
+            # Set CVCPKG_POPULATE_UPSTREAM=<url> in .env.production
+            # to auto-import packages this server lacks from an
+            # upstream (e.g. https://cvcpkg.org).  The server stays
+            # writable, unlike mirror mode.
+            CVCPKG_POPULATE_UPSTREAM: ${CVCPKG_POPULATE_UPSTREAM:-}
+            CVCPKG_POPULATE_UPSTREAM_TOKEN: ${CVCPKG_POPULATE_UPSTREAM_TOKEN:-}
+            CVCPKG_POPULATE_INTERVAL: ${CVCPKG_POPULATE_INTERVAL:-900}
+            CVCPKG_POPULATE_MAX_PER_SYNC: ${CVCPKG_POPULATE_MAX_PER_SYNC:-200}
             TZ: ${TIMEZONE:-UTC}
         ports:
             - "${BACKEND_BIND_ADDR:-127.0.0.1}:${BACKEND_PORT:-8420}:8420"

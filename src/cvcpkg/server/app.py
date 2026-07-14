@@ -180,6 +180,28 @@ MIRROR_HEALTH_CHECK_INTERVAL = int(os.environ.get("CVCPKG_MIRROR_HEALTH_CHECK_IN
 # Consecutive health check failures before marking a mirror unhealthy.
 MIRROR_MAX_FAILURES = int(os.environ.get("CVCPKG_MIRROR_MAX_FAILURES", "3"))
 
+# ── Upstream populate configuration ─────────────────────────────
+
+# When set (and the server is not in mirror mode), a background loop
+# periodically imports packages this server does not have from the
+# given upstream — e.g. a dev server populating itself from
+# https://cvcpkg.org so dev builders don't rebuild what is already
+# published upstream.  Unlike mirror mode, the server stays fully
+# writable: local publishes and upstream imports coexist, deduplicated
+# by (name, version, platform, arch, build_type, link).  DB backend
+# required.
+POPULATE_UPSTREAM = os.environ.get("CVCPKG_POPULATE_UPSTREAM", "")
+
+# Bearer token for the upstream (only needed for private upstreams).
+POPULATE_UPSTREAM_TOKEN = os.environ.get("CVCPKG_POPULATE_UPSTREAM_TOKEN", "")
+
+# Seconds between populate syncs.
+POPULATE_INTERVAL = int(os.environ.get("CVCPKG_POPULATE_INTERVAL", "900"))
+
+# Cap on archives imported per sync cycle (bounds bandwidth/disk per
+# cycle; the next cycle continues where this one stopped).
+POPULATE_MAX_PER_SYNC = int(os.environ.get("CVCPKG_POPULATE_MAX_PER_SYNC", "200"))
+
 # Registration mode: "open" (default) or "admin-gated".
 REGISTRATION_MODE = RegistrationMode(os.environ.get("CVCPKG_REGISTRATION_MODE", "open"))
 
@@ -867,6 +889,204 @@ async def _mirror_sync_loop(state_dir: Path) -> None:
         await asyncio.sleep(MIRROR_SYNC_INTERVAL)
 
 
+# ── Upstream populate loop ──────────────────────────────────────
+
+# Rolling stats surfaced via /healthz when populate is enabled.
+_populate_stats: dict = {
+    "last_sync": "",
+    "last_imported": 0,
+    "imported_total": 0,
+    "last_error": "",
+}
+
+
+def _safe_archive_filename(
+    name: str, version: str, platform: str, arch: str, build_type: str, link: str
+) -> str:
+    """The on-disk archive filename convention shared with /v1/publish."""
+    fname = f"{name}-{version}-{platform}-{arch}-{build_type}-{link}.tar.zst"
+    return "".join(
+        c if c in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-+" else "_"
+        for c in fname
+    )
+
+
+async def _populate_sync_once() -> int:
+    """Import packages missing locally from ``POPULATE_UPSTREAM``.
+
+    Fetches the upstream ``/v1/catalog`` (which carries ``required_deps``
+    per bundle, unlike the paged package listing), diffs against the
+    local package set (including yanked variants, so a locally yanked
+    package is never silently resurrected), downloads missing archives
+    with sha256 verification, and registers them through the same
+    storage + DB path a publish uses.  Returns the number imported.
+    """
+    import httpx
+
+    state = _get_state()
+    upstream = POPULATE_UPSTREAM.rstrip("/")
+    headers: dict[str, str] = {}
+    if POPULATE_UPSTREAM_TOKEN:
+        headers["Authorization"] = f"Bearer {POPULATE_UPSTREAM_TOKEN}"
+
+    async with httpx.AsyncClient(timeout=120, headers=headers, follow_redirects=True) as client:
+        resp = await client.get(f"{upstream}/v1/catalog")
+        resp.raise_for_status()
+        upstream_bundles = resp.json().get("bundles", [])
+
+        # Local variant set — include yanked so we don't re-import them.
+        local: set[tuple[str, str, str, str, str, str]] = set()
+        offset = 0
+        while True:
+            pkgs, total = await _db_packages.get_bundles(
+                include_yanked=True, limit=1000, offset=offset
+            )
+            for p in pkgs:
+                local.add((p.name, p.version, p.platform, p.arch, p.build_type, p.link))
+            offset += len(pkgs)
+            if not pkgs or offset >= total:
+                break
+
+        imported = 0
+        skipped_capacity = 0
+        for b in upstream_bundles:
+            key = (
+                b.get("name", ""),
+                b.get("version", ""),
+                b.get("platform", ""),
+                b.get("arch", ""),
+                b.get("build_type", ""),
+                b.get("link", ""),
+            )
+            if not all(key) or key in local:
+                continue
+            if b.get("yanked") or not b.get("archive_url"):
+                continue  # yanked upstream / placeholder without artifacts
+            if b.get("org"):
+                continue  # only official/public packages are populated
+            size = int(b.get("size_bytes", 0) or 0)
+            if size > MAX_UPLOAD_BYTES:
+                logger.warning(
+                    "populate: skipping %s==%s (%s/%s): %d bytes exceeds MAX_UPLOAD_BYTES",
+                    key[0],
+                    key[1],
+                    key[2],
+                    key[3],
+                    size,
+                )
+                continue
+            if imported >= POPULATE_MAX_PER_SYNC:
+                skipped_capacity += 1
+                continue
+
+            archive_url = b["archive_url"]
+            if archive_url.startswith("/"):
+                archive_url = upstream + archive_url
+
+            # Stream the archive into the local archives dir.
+            fd, tmp_str = tempfile.mkstemp(dir=state.archives_dir(), suffix=".populate")
+            tmp_path = Path(tmp_str)
+            h = hashlib.sha256()
+            got = 0
+            try:
+                async with client.stream("GET", archive_url) as dl:
+                    dl.raise_for_status()
+                    with os.fdopen(fd, "wb") as f:
+                        async for chunk in dl.aiter_bytes(1 << 16):
+                            h.update(chunk)
+                            got += len(chunk)
+                            f.write(chunk)
+            except Exception as exc:
+                tmp_path.unlink(missing_ok=True)
+                logger.warning("populate: download failed for %s (%s)", archive_url, exc)
+                continue
+
+            want_sha = b.get("sha256", "")
+            if want_sha and h.hexdigest() != want_sha:
+                tmp_path.unlink(missing_ok=True)
+                logger.warning(
+                    "populate: sha256 mismatch for %s==%s (%s/%s) — skipping",
+                    key[0],
+                    key[1],
+                    key[2],
+                    key[3],
+                )
+                continue
+
+            safe_filename = _safe_archive_filename(*key)
+            dest = state.archives_dir() / safe_filename
+            tmp_path.rename(dest)
+
+            try:
+                await _db_packages.add_package(
+                    name=key[0],
+                    version=key[1],
+                    platform=key[2],
+                    arch=key[3],
+                    build_type=key[4],
+                    link=key[5],
+                    sha256=h.hexdigest(),
+                    size_bytes=got,
+                    archive_url=f"/v1/download/{safe_filename}",
+                    signature=b.get("signature", ""),
+                    key_fingerprint=b.get("key_fingerprint", ""),
+                    release_tag=b.get("release_tag", ""),
+                    recipe_version=b.get("recipe_version", ""),
+                    description=b.get("description", ""),
+                    homepage=b.get("homepage", ""),
+                    pkg_license=b.get("license", ""),
+                    maintainer=b.get("maintainer", ""),
+                    tags=b.get("tags", "") or "",
+                    published_by=f"populate:{upstream}",
+                    required_deps=json.dumps(b.get("required_deps") or []),
+                )
+            except ValueError:
+                # A concurrent local publish won the race — keep theirs.
+                dest.unlink(missing_ok=True)
+                continue
+
+            await _db_audit.record(
+                action=AuditAction.publish,
+                actor="populate",
+                target=f"{key[0]}=={key[1]}",
+                detail=(
+                    f"platform={key[2]} arch={key[3]} sha256={h.hexdigest()} "
+                    f"imported from {upstream}"
+                ),
+            )
+            local.add(key)
+            imported += 1
+
+        if skipped_capacity:
+            logger.info(
+                "populate: per-sync cap (%d) reached; %d more candidate(s) "
+                "deferred to the next cycle",
+                POPULATE_MAX_PER_SYNC,
+                skipped_capacity,
+            )
+        return imported
+
+
+async def _populate_sync_loop() -> None:
+    """Background task: keep importing missing packages from upstream."""
+    import asyncio
+    import datetime as _dt
+
+    while True:
+        try:
+            n = await _populate_sync_once()
+            _populate_stats["last_sync"] = _dt.datetime.now(_dt.timezone.utc).isoformat()
+            _populate_stats["last_imported"] = n
+            _populate_stats["imported_total"] += n
+            _populate_stats["last_error"] = ""
+            if n:
+                logger.info("populate sync: imported %d package(s) from %s", n, POPULATE_UPSTREAM)
+        except Exception as exc:
+            _populate_stats["last_error"] = str(exc)
+            logger.exception("populate sync failed")
+        await asyncio.sleep(POPULATE_INTERVAL)
+
+
 # ── Username validation ─────────────────────────────────────────
 
 _C_IDENTIFIER_RE = _re.compile(r"^[A-Za-z_][A-Za-z0-9_\-]*$")
@@ -963,6 +1183,8 @@ def create_app(
                 bg_tasks.append(asyncio.create_task(_build_scheduler_loop()))
                 if _LOG_RETENTION_DAYS > 0:
                     bg_tasks.append(asyncio.create_task(_log_retention_gc_loop()))
+                if POPULATE_UPSTREAM:
+                    bg_tasks.append(asyncio.create_task(_populate_sync_loop()))
             if MIRROR_MODE and MIRROR_UPSTREAM:
                 bg_tasks.append(asyncio.create_task(_mirror_sync_loop(sd)))
 
@@ -1098,6 +1320,8 @@ def create_app(
             packages_count=pkg_count,
             uptime_seconds=round(time.monotonic() - _START_TIME, 2),
             mirror_mode=MIRROR_MODE,
+            populate_upstream=POPULATE_UPSTREAM,
+            populate_stats=dict(_populate_stats) if POPULATE_UPSTREAM else {},
         )
 
     # ── Admin shutdown ──────────────────────────────────────

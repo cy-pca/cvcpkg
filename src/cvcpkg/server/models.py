@@ -387,6 +387,17 @@ class HealthResponse(BaseModel):
     packages_count: int
     uptime_seconds: float
     mirror_mode: bool = False
+    populate_upstream: str = Field(
+        default="",
+        description=(
+            "Upstream server this instance auto-populates missing packages "
+            "from (CVCPKG_POPULATE_UPSTREAM).  Empty when disabled."
+        ),
+    )
+    populate_stats: dict = Field(
+        default_factory=dict,
+        description="Rolling stats of the populate loop (last_sync, counts, last_error).",
+    )
 
 
 # ── Organizations ───────────────────────────────────────────────
