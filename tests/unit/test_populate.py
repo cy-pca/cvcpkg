@@ -242,6 +242,39 @@ class TestPopulateSyncOnce:
 
         assert run(_test) == [{"name": "dep1", "version": "^1"}]
 
+    def test_platform_allowlist(self, populate_env):
+        """Only platforms in CVCPKG_POPULATE_PLATFORMS are imported."""
+        run, _, monkeypatch = populate_env
+        monkeypatch.setattr(app_mod, "POPULATE_PLATFORMS", {"linux", "windows"})
+        bundles = [
+            _bundle(name="a", platform="linux"),
+            _bundle(name="b", platform="windows"),
+            _bundle(name="c", platform="macos"),
+            _bundle(name="d", platform="freebsd"),
+        ]
+        monkeypatch.setattr("httpx.AsyncClient", lambda **kw: _FakeAsyncClient(bundles))
+
+        async def _test():
+            n = await app_mod._populate_sync_once()
+            pkgs, _ = await app_mod._db_packages.get_bundles(limit=10)
+            return n, sorted(p.platform for p in pkgs)
+
+        assert run(_test) == (2, ["linux", "windows"])
+
+    def test_empty_allowlist_imports_all_platforms(self, populate_env):
+        run, _, monkeypatch = populate_env
+        monkeypatch.setattr(app_mod, "POPULATE_PLATFORMS", set())
+        bundles = [
+            _bundle(name="a", platform="linux"),
+            _bundle(name="c", platform="macos"),
+        ]
+        monkeypatch.setattr("httpx.AsyncClient", lambda **kw: _FakeAsyncClient(bundles))
+
+        async def _test():
+            return await app_mod._populate_sync_once()
+
+        assert run(_test) == 2
+
 
 # ── builds submit-dag --skip-existing ───────────────────────────
 

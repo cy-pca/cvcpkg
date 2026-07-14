@@ -215,6 +215,14 @@ POPULATE_INTERVAL = int(os.environ.get("CVCPKG_POPULATE_INTERVAL", "900"))
 # cycle; the next cycle continues where this one stopped).
 POPULATE_MAX_PER_SYNC = int(os.environ.get("CVCPKG_POPULATE_MAX_PER_SYNC", "200"))
 
+# Optional platform allowlist for populate.  Comma-separated (e.g.
+# "linux,windows"); empty means import every platform.  Lets a dev
+# cluster mirror only the platforms it actually needs instead of the
+# whole upstream catalog.
+POPULATE_PLATFORMS = {
+    p.strip() for p in os.environ.get("CVCPKG_POPULATE_PLATFORMS", "").split(",") if p.strip()
+}
+
 # Registration mode: "open" (default) or "admin-gated".
 REGISTRATION_MODE = RegistrationMode(os.environ.get("CVCPKG_REGISTRATION_MODE", "open"))
 
@@ -1050,6 +1058,8 @@ async def _populate_sync_once() -> int:
             )
             if not all(key) or key in local:
                 continue
+            if POPULATE_PLATFORMS and b.get("platform") not in POPULATE_PLATFORMS:
+                continue  # platform not in the allowlist for this mirror
             if b.get("yanked") or not b.get("archive_url"):
                 continue  # yanked upstream / placeholder without artifacts
             if b.get("org"):
