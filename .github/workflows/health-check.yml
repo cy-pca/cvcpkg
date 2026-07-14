@@ -1,0 +1,107 @@
+# Nightly health check for the cvcpkg deployments.
+#
+# Probes /healthz on the prod server (cvcpkg.org), the public mirror
+# (pkg.tx.wtf), and the internal dev cluster, asserts status == "ok", and
+# checks the mirror isn't significantly out of sync with prod.  On any failure
+# it files (or comments on) a GitHub issue assigned to the repo owner, who then
+# gets a GitHub notification.
+#
+# Each check job files its own alert, so a prod/mirror outage still notifies
+# even when the self-hosted dev runner is offline.
+
+name: Deployment health check
+
+on:
+  schedule:
+    - cron: "0 8 * * *" # 08:00 UTC daily
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  public:
+    name: Prod + mirror
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v5 # for the alert script
+
+      - name: Probe prod + mirror /healthz
+        run: |
+          set -uo pipefail
+          fail=0
+
+          # Prints packages_count to stdout; returns non-zero if unreachable or
+          # status != ok.  Called as `c=$(probe ...) || fail=1` so the failure
+          # propagates to the parent (command substitution runs a subshell).
+          probe() {
+            local name="$1" url="$2" body status count
+            if ! body=$(curl -fsS --max-time 15 "$url/healthz" 2>/dev/null); then
+              echo "::error::$name: /healthz unreachable ($url)" >&2
+              echo -1; return 1
+            fi
+            status=$(printf '%s' "$body" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status",""))' 2>/dev/null || echo "")
+            count=$(printf '%s' "$body" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("packages_count",-1))' 2>/dev/null || echo -1)
+            echo "$name: status=$status packages=$count" >&2
+            echo "$count"
+            [ "$status" = "ok" ] || { echo "::error::$name: status='$status' ($url)" >&2; return 1; }
+          }
+
+          primary_count=$(probe "prod (cvcpkg.org)" "https://cvcpkg.org") || fail=1
+          mirror_count=$(probe "mirror (pkg.tx.wtf)" "https://pkg.tx.wtf") || fail=1
+
+          # Mirror sync: allow small transient lag, alert on real drift (<95%).
+          if [ "${primary_count:-0}" -gt 0 ] && [ "${mirror_count:-0}" -ge 0 ]; then
+            threshold=$(( primary_count * 95 / 100 ))
+            if [ "$mirror_count" -lt "$threshold" ]; then
+              echo "::error::mirror out of sync: prod=$primary_count mirror=$mirror_count"
+              fail=1
+            fi
+          fi
+
+          exit $fail
+
+      - name: Alert on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SCOPE: "prod / mirror"
+        run: bash .github/scripts/health-alert.sh
+
+  dev:
+    name: Dev cluster
+    runs-on: [self-hosted, Linux, cvcpkg-builder]
+    timeout-minutes: 10
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v5 # for the alert script
+
+      - name: Probe dev /healthz
+        run: |
+          set -uo pipefail
+          IP=$(incus list cvcpkg-server -c4 -fcsv | head -1 | awk '{print $1}')
+          test -n "$IP" || { echo "::error::could not resolve dev cvcpkg-server IP"; exit 1; }
+          url="http://${IP}:8420"
+          if ! body=$(curl -fsS --max-time 15 "$url/healthz" 2>/dev/null); then
+            echo "::error::dev: /healthz unreachable ($url)"; exit 1
+          fi
+          status=$(printf '%s' "$body" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status",""))' 2>/dev/null || echo "")
+          echo "dev: status=$status ($url)"
+          [ "$status" = "ok" ] || { echo "::error::dev: status='$status'"; exit 1; }
+
+      - name: Alert on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SCOPE: "dev cluster"
+        run: bash .github/scripts/health-alert.sh

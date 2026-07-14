@@ -1,0 +1,112 @@
+# Populate the internal dev cluster (the dev-branch deployment).
+#
+# Pushes all recipes to the dev cvcpkg-server and submits build DAGs to the
+# dev builders.  Runs on the self-hosted runner with incus/LAN access to the
+# dev cluster (same one deploy-dev.yml uses) and resolves the dev server URL
+# via `incus list cvcpkg-server`.
+#
+# This is the dev-cluster counterpart to populate-server.yml (which targets
+# cvcpkg.org).
+#
+# Required repo secrets:
+#   CVCPKG_ADMIN_TOKEN  — a token valid on the dev server (publisher or admin)
+
+name: Populate dev cluster
+
+on:
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: "Comma-separated platforms to build (dev cluster is linux)"
+        required: true
+        default: "linux,wasm,wasi"
+      arch:
+        description: "Comma-separated arches"
+        required: true
+        default: "x86_64,wasm32"
+      config:
+        description: "Build config"
+        required: true
+        default: "release"
+      link:
+        description: "Link mode"
+        required: true
+        default: "shared"
+      skip_push:
+        description: "Skip recipe push (recipes already on dev)"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: populate-dev
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  populate:
+    name: Push recipes & submit builds (dev)
+    runs-on: [self-hosted, Linux, cvcpkg-builder]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install cvcpkg
+        run: |
+          pip install --user .
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Resolve dev server URL
+        id: dev
+        run: |
+          set -euo pipefail
+          IP=$(incus list cvcpkg-server -c4 -fcsv | head -1 | awk '{print $1}')
+          test -n "$IP" || { echo "::error::could not resolve dev cvcpkg-server IP"; exit 1; }
+          echo "url=http://${IP}:8420" >> "$GITHUB_OUTPUT"
+          echo "Dev server: http://${IP}:8420"
+
+      - name: Push all recipes
+        if: ${{ !inputs.skip_push }}
+        env:
+          CVCPKG_SERVER_URL: ${{ steps.dev.outputs.url }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_ADMIN_TOKEN }}
+        run: cvcpkg recipe push-all --recipes-dir recipes
+
+      - name: Submit build DAGs
+        id: submit
+        env:
+          CVCPKG_SERVER_URL: ${{ steps.dev.outputs.url }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          RECIPES=()
+          for dir in recipes/*/; do
+            name="$(basename "$dir")"
+            [[ "$name" == _* || "$name" == .* ]] && continue
+            [[ -f "$dir/recipe.yaml" ]] || continue
+            RECIPES+=("$name")
+          done
+          DAG_ID="populate-dev-$(date +%Y%m%d-%H%M%S)"
+          echo "dag_id=$DAG_ID" >> "$GITHUB_OUTPUT"
+          echo "Submitting ${#RECIPES[@]} recipes for ${{ inputs.platforms }}"
+          cvcpkg builds submit-dag \
+            --platform "${{ inputs.platforms }}" \
+            --arch "${{ inputs.arch }}" \
+            --config "${{ inputs.config }}" \
+            --link "${{ inputs.link }}" \
+            --dag-id "$DAG_ID" \
+            --recipes-dir recipes \
+            --allow-unschedulable \
+            "${RECIPES[@]}"
+
+      - name: Follow build output
+        env:
+          CVCPKG_SERVER_URL: ${{ steps.dev.outputs.url }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_ADMIN_TOKEN }}
+        run: cvcpkg builds follow-dag "${{ steps.submit.outputs.dag_id }}"
