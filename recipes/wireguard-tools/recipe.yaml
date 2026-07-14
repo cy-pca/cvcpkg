@@ -1,0 +1,67 @@
+schema_version: 1
+recipe:
+  name: wireguard-tools
+  upstream_version: "1.0.20260223"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    WireGuard userspace tools — the `wg` configuration utility and the
+    `wg-quick` helper for bringing tunnels up and down, plus man pages,
+    bash completion, and (on Linux) systemd units.  This is the control
+    plane; the data plane is the in-kernel WireGuard on Linux ≥ 5.6,
+    FreeBSD (if_wg) and OpenBSD (wg), or the userspace wireguard-go on
+    macOS.  Self-contained — bundles its own crypto, no external deps.
+  homepage: https://www.wireguard.com/
+  license: GPL-2.0-only
+  tags: [networking, tools, vpn, crypto]
+
+source:
+  type: tarball
+  url: https://git.zx2c4.com/wireguard-tools/snapshot/wireguard-tools-1.0.20260223.tar.xz
+  mirror: https://github.com/WireGuard/wireguard-tools/archive/refs/tags/v1.0.20260223.tar.gz
+  sha256: "af459827b80bfd31b83b08077f4b5843acb7d18ad9a33a2ef532d3090f291fbf"
+  strip_components: 1
+
+patches: []
+
+# No cvcpkg build deps: a C compiler + make (host baseline) are all it needs.
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+# Platforms with an upstream wg-quick variant and a WireGuard data plane:
+# linux (kernel), macos (wireguard-go), freebsd (if_wg), openbsd (wg).
+# NetBSD has no upstream wg-quick script; Windows ships from a separate
+# codebase (wireguard-windows), not these tools; wasm/wasi/cosmo have no
+# networking — so none of those are built here.
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2"
+
+package:
+  files:
+    - bin/wg
+    - bin/wg-quick
+    - share/man/man8/wg*.8
+    - share/bash-completion/completions/wg*
+
+test:
+  script: test.sh
