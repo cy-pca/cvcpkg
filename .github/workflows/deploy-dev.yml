@@ -202,8 +202,12 @@ jobs:
           set -euo pipefail
           SHA="${{ steps.target.outputs.sha }}"
           echo "=== Updating sandipaws-wsl (WSL windows-cross builder) ==="
+          # The ssh command lands in cmd.exe on the Windows host, and cmd
+          # only groups arguments with DOUBLE quotes — single quotes are
+          # passed literally and shatter the bash -lc payload.  Keep the
+          # inner quoting as escaped double quotes.
           ssh -o ConnectTimeout=10 -o BatchMode=yes tfx@10.66.77.175 \
-            "wsl -d Ubuntu-24.04 -u tfx -e bash -lc 'set -e; cd ~/src/cvc/libcvc-deps && git fetch origin && git checkout -f ${SHA} && ~/.venv-cvcpkg/bin/pip install -q -e . && sudo systemctl restart cvcpkg-builder && systemctl is-active cvcpkg-builder'" \
+            "wsl -d Ubuntu-24.04 -u tfx -e bash -lc \"set -e; cd ~/src/cvc/libcvc-deps && git fetch origin && git checkout -f ${SHA} && ~/.venv-cvcpkg/bin/pip install -q -e . && sudo systemctl restart cvcpkg-builder && systemctl is-active cvcpkg-builder\"" \
             && echo "sandipaws-wsl updated and restarted." \
             || echo "::warning::sandipaws-wsl unreachable or update failed (laptop offline?)"
 
