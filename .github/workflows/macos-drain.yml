@@ -1,0 +1,121 @@
+# Drain the macOS build queue on cvcpkg.org in chunks.
+#
+# macOS has no persistent builder (GitHub-hosted runners are ephemeral),
+# so macOS build jobs submitted to the server sit pending until something
+# builds them. This workflow runs an ephemeral macOS builder in *drain
+# mode*: it registers, claims + builds + publishes any pending macOS jobs,
+# and exits as soon as the queue is empty (--exit-when-empty) or the
+# runtime budget is hit (--max-runtime). Scheduled every 2 hours, so any
+# macOS jobs that show up get drained in bounded chunks.
+#
+# Unlike macos-build.yml (which rebuilds the whole macOS recipe DAG via
+# pack-all regardless of the queue), this only builds what's actually
+# queued — it never rebuilds packages that already exist.
+#
+# Required repo secrets:
+#   CVCPKG_PUBLISHER_TOKEN  — a publisher-role token for cvcpkg.org
+
+name: macOS drain queue
+
+on:
+  schedule:
+    # Every 2 hours, at :17 past (offset from the top of the hour).
+    - cron: "17 */2 * * *"
+  workflow_dispatch:
+    inputs:
+      server:
+        description: "cvcpkg server URL"
+        required: true
+        default: "https://cvcpkg.org"
+        type: string
+      max_runtime:
+        description: "Max wall-clock seconds to drain before exiting"
+        required: true
+        default: "5400"
+        type: string
+      max_jobs:
+        description: "Concurrent build jobs on the runner"
+        required: true
+        default: "2"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never run two drains at once — they'd claim each other's jobs.
+  group: macos-drain
+  cancel-in-progress: false
+
+jobs:
+  # Cheap pre-check: skip the (expensive, ~10 min) toolchain install and
+  # the macOS runner-minutes entirely when the queue has no macOS work.
+  check:
+    name: Any pending macOS jobs?
+    runs-on: ubuntu-latest
+    outputs:
+      pending: ${{ steps.q.outputs.pending }}
+    steps:
+      - id: q
+        env:
+          CVCPKG_SERVER_URL: ${{ inputs.server || 'https://cvcpkg.org' }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISHER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CVCPKG_TOKEN:-}" ]; then
+            echo "::error::CVCPKG_PUBLISHER_TOKEN is not set"; exit 1
+          fi
+          # Count pending macOS jobs (those waiting for a builder to claim).
+          n=$(curl -fsS -H "Authorization: Bearer $CVCPKG_TOKEN" "$CVCPKG_SERVER_URL/v1/builds?status=pending&limit=500" | python3 -c "import json,sys; print(sum(1 for j in json.load(sys.stdin).get('jobs',[]) if j.get('platform')=='macos'))")
+          echo "pending=$n" >> "$GITHUB_OUTPUT"
+          echo "macOS jobs to drain: $n"
+
+  drain:
+    name: Drain macOS queue
+    needs: check
+    if: needs.check.outputs.pending != '0'
+    runs-on: macos-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: prod
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system build tools
+        run: |
+          brew install ninja autoconf automake libtool pkg-config libomp meson flex bison
+          brew install llvm@18 2>/dev/null || true
+          # Pin cmake to 3.x — Boost 1.86 cmake files are incompatible with 4.x.
+          pip3 install --break-system-packages "cmake>=3.31,<4"
+
+      - name: Install cvcpkg
+        run: |
+          pip3 install --break-system-packages '.[progress]'
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$(python3 -m site --user-base)/bin" >> "$GITHUB_PATH"
+
+      - name: Drain the macOS build queue
+        env:
+          CVCPKG_SERVER_URL: ${{ inputs.server || 'https://cvcpkg.org' }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISHER_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/cvcpkg-builder
+          # Ephemeral builder: claim + build + publish pending macOS jobs,
+          # then exit 0 the moment the queue is empty and nothing is in
+          # flight (--exit-when-empty), or once the wall-clock budget is
+          # spent (--max-runtime), whichever comes first. arch auto-detects
+          # to arm64 on macos-latest, matching the macOS catalog.
+          cvcpkg builder run \
+            --server "$CVCPKG_SERVER_URL" \
+            --token "$CVCPKG_TOKEN" \
+            --name "macos-drain-gha-${{ github.run_id }}" \
+            --platform macos \
+            --max-jobs "${{ inputs.max_jobs || '2' }}" \
+            --work-dir /tmp/cvcpkg-builder \
+            --exit-when-empty \
+            --max-runtime "${{ inputs.max_runtime || '5400' }}"
