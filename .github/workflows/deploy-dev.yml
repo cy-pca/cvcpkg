@@ -193,23 +193,20 @@ jobs:
       # sandipaws-wsl is a WSL2 distro on the sandipaws laptop that
       # serves windows/x86_64 dev jobs via the winhost delegation
       # (recipes' build.ps1 runs on the Windows host through interop).
-      # It is reached by SSHing to the Windows host and entering the
-      # distro with wsl.exe — no inbound path into WSL is needed.
-      # Best-effort: the laptop may be off or away.
+      # Reached DIRECTLY over the star WireGuard overlay (10.100.0.10) —
+      # the runner host (star-01) is a WG peer, so no Windows-host SSH
+      # relay / wsl.exe hop is needed. See vm-provisioning
+      # cluster/wireguard/WIREGUARD.md. Best-effort: the laptop may be off.
       - name: Update WSL windows-cross builder (sandipaws-wsl)
         continue-on-error: true
         run: |
           set -euo pipefail
           SHA="${{ steps.target.outputs.sha }}"
           echo "=== Updating sandipaws-wsl (WSL windows-cross builder) ==="
-          # The ssh command lands in cmd.exe on the Windows host, and cmd
-          # only groups arguments with DOUBLE quotes — single quotes are
-          # passed literally and shatter the bash -lc payload.  Keep the
-          # inner quoting as escaped double quotes.
-          ssh -o ConnectTimeout=10 -o BatchMode=yes tfx@10.66.77.175 \
-            "wsl -d Ubuntu-24.04 -u tfx -e bash -lc \"set -e; cd ~/src/cvc/libcvc-deps && git fetch origin && git checkout -f ${SHA} && ~/.venv-cvcpkg/bin/pip install -q -e . && sudo systemctl restart cvcpkg-builder && systemctl is-active cvcpkg-builder\"" \
+          ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new tfx@10.100.0.10 \
+            "set -e; cd ~/src/cvc/libcvc-deps && git fetch origin && git checkout -f ${SHA} && ~/.venv-cvcpkg/bin/pip install -q -e . && sudo systemctl restart cvcpkg-builder && systemctl is-active cvcpkg-builder" \
             && echo "sandipaws-wsl updated and restarted." \
-            || echo "::warning::sandipaws-wsl unreachable or update failed (laptop offline?)"
+            || echo "::warning::sandipaws-wsl unreachable or update failed (offline?)"
 
       # ── Notify builders to self-update via server API ─────────
       - name: Notify builders to self-update
