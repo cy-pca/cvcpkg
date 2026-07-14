@@ -235,6 +235,12 @@ def builder_run(
     headers = {"Authorization": f"Bearer {token}"}
 
     work_root = Path(work_dir) if work_dir else None
+    if work_root is not None:
+        # Create the work-dir root up front (mirrors cache_dir below).  On a
+        # long-lived builder a /tmp reaper (systemd-tmpfiles, BSD /etc/periodic
+        # daily clean, tmpwatch) can later delete it out from under us; each job
+        # re-ensures it before mkdtemp (see _execute_job).
+        work_root.mkdir(parents=True, exist_ok=True)
     cache_dir = (
         Path(recipe_cache_dir)
         if recipe_cache_dir
@@ -1009,7 +1015,12 @@ def builder_run(
                 f"({job_platform}/{job_arch}/{job_config}/{job_link})\n",
             )
 
-            # 3a. Install runtime dependencies into a shared prefix
+            # 3a. Install runtime dependencies into a shared prefix.
+            # Re-ensure the work-dir root exists: on long-lived builders a /tmp
+            # reaper can delete it between jobs, which would otherwise make
+            # mkdtemp(dir=work_root) raise FileNotFoundError and fail the job.
+            if work_root is not None:
+                work_root.mkdir(parents=True, exist_ok=True)
             dep_prefix = Path(
                 tempfile.mkdtemp(prefix=f"cvcpkg-prefix-{recipe_name}-", dir=work_root)
             )
