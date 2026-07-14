@@ -464,6 +464,23 @@ class DbAuditLog:
     """Audit log backed by the ``audit_log`` table."""
 
     @staticmethod
+    def _coerce_action(value: str) -> AuditAction:
+        """Deserialize a stored action string tolerantly.
+
+        A row with an action string not in the :class:`AuditAction` enum
+        (e.g. a hand-inserted operator entry from before the value was
+        added) must never crash reads — ``record()`` reads the newest row
+        on every write to chain the hash, so one bad row would otherwise
+        503 every publish/push. Unknown values fall back to
+        ``admin_settings_update`` for in-memory use; the stored row is
+        left untouched.
+        """
+        try:
+            return AuditAction(value)
+        except ValueError:
+            return AuditAction.admin_settings_update
+
+    @staticmethod
     def _entry_hash(entry: AuditEntry) -> str:
         payload = json.dumps(
             {
@@ -495,7 +512,7 @@ class DbAuditLog:
                 prev_entry = AuditEntry(
                     id=last.id,
                     timestamp=last.timestamp,
-                    action=AuditAction(last.action),
+                    action=self._coerce_action(last.action),
                     actor=last.actor,
                     target=last.target,
                     detail=last.detail,
@@ -550,7 +567,7 @@ class DbAuditLog:
                 AuditEntry(
                     id=row.id,
                     timestamp=row.timestamp,
-                    action=AuditAction(row.action),
+                    action=self._coerce_action(row.action),
                     actor=row.actor,
                     target=row.target,
                     detail=row.detail,
@@ -572,7 +589,7 @@ class DbAuditLog:
             AuditEntry(
                 id=r.id,
                 timestamp=r.timestamp,
-                action=AuditAction(r.action),
+                action=self._coerce_action(r.action),
                 actor=r.actor,
                 target=r.target,
                 detail=r.detail,

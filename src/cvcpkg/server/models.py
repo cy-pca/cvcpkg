@@ -92,6 +92,9 @@ class AuditAction(str, Enum):
     webhook_update = "webhook_update"
     webhook_delete = "webhook_delete"
     webhook_delivery_failed = "webhook_delivery_failed"
+    # Manual operator correction of package metadata (e.g. fixing a
+    # catalog row's sha256/size to match the stored archive).
+    package_integrity_fix = "package_integrity_fix"
 
 
 # ── Token management ───────────────────────────────────────────
