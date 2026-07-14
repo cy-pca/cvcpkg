@@ -1,0 +1,70 @@
+schema_version: 1
+recipe:
+  name: openssh-win
+  upstream_version: "10.0.0.0p2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    OpenSSH for native Windows — Microsoft's Win32-OpenSSH port, staged from
+    the official prebuilt release (ssh.exe, sshd.exe and helpers + bundled
+    libcrypto.dll). Windows-only; POSIX platforms use the portable `openssh`
+    recipe. sshd is not installed by default on Windows, so this provides a
+    current, version-pinned server/client for Windows builders.
+  homepage: https://github.com/PowerShell/Win32-OpenSSH
+  license: SSH-OpenSSH
+  tags: [networking, tools, crypto, windows]
+
+source:
+  type: tarball
+  url: https://github.com/PowerShell/Win32-OpenSSH/releases/download/10.0.0.0p2-Preview/OpenSSH-Win64.zip
+  sha256: "23f50f3458c4c5d0b12217c6a5ddfde0137210a30fa870e98b29827f7b43aba5"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - bin/ssh.exe
+    - bin/scp.exe
+    - bin/sftp.exe
+    - bin/ssh-add.exe
+    - bin/ssh-agent.exe
+    - bin/ssh-keygen.exe
+    - bin/ssh-keyscan.exe
+    - bin/ssh-pkcs11-helper.exe
+    - bin/ssh-shellhost.exe
+    - bin/sshd.exe
+    - bin/sshd-session.exe
+    - bin/sshd-auth.exe
+    - bin/sftp-server.exe
+    - bin/libcrypto.dll
+    - etc/ssh/sshd_config.sample
+    - etc/ssh/moduli
+
+notes:
+  - title: "Windows-only; prebuilt from Microsoft's Win32-OpenSSH"
+    platforms: [windows]
+    description: >-
+      Win32-OpenSSH is a Windows-native fork; its release assets are Windows
+      PE binaries only and do not run on other platforms. This recipe stages
+      the official OpenSSH-Win64.zip rather than building from source (the
+      portable source does not compile with ./configure on Windows). POSIX
+      hosts use the `openssh` recipe instead. Only windows/x86_64 is packaged;
+      arm64 would need the separate OpenSSH-ARM64.zip asset.
+  - title: "Preview channel"
+    description: >-
+      Microsoft ships standalone Win32-OpenSSH on a Preview/Beta channel that
+      is typically newer than the in-box Windows optional feature. The version
+      is pinned by tag + sha256; bump both to update.
