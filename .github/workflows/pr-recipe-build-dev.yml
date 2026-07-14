@@ -1,0 +1,128 @@
+# Build recipes changed in a PR on the internal dev cluster.
+#
+# When a PR touches recipes/, this pushes the changed recipes to the dev
+# cvcpkg-server and submits build DAGs to the dev builders, then comments the
+# per-recipe result back on the PR.  Runs on the self-hosted runner that has
+# incus/LAN access to the dev cluster (same runner deploy-dev.yml uses).
+#
+# Required repo secrets:
+#   CVCPKG_ADMIN_TOKEN  — a token valid on the dev server (publisher or admin)
+
+name: PR recipe build (dev cluster)
+
+on:
+  pull_request:
+    paths:
+      - "recipes/**"
+
+concurrency:
+  group: pr-recipe-dev-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  build-on-dev:
+    # Same-repo PRs only: fork PRs must not reach the self-hosted runner or
+    # the dev cluster secrets.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, cvcpkg-builder]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # need the base ref for the diff
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install cvcpkg
+        run: |
+          pip install --user .
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Detect changed recipes
+        id: changed
+        run: |
+          set -euo pipefail
+          git fetch -q origin "${{ github.base_ref }}"
+          mapfile -t names < <(
+            git diff --name-only "origin/${{ github.base_ref }}...HEAD" -- recipes/ \
+              | grep -E '^recipes/[^/]+/' | cut -d/ -f2 | sort -u
+          )
+          echo "Changed recipes: ${names[*]:-<none>}"
+          # space-joined for the CLI, newline-joined for the report
+          printf 'names=%s\n' "${names[*]:-}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve dev server URL
+        id: dev
+        if: steps.changed.outputs.names != ''
+        run: |
+          set -euo pipefail
+          IP=$(incus list cvcpkg-server -c4 -fcsv | head -1 | awk '{print $1}')
+          test -n "$IP" || { echo "::error::could not resolve dev cvcpkg-server IP"; exit 1; }
+          echo "url=http://${IP}:8420" >> "$GITHUB_OUTPUT"
+
+      - name: Push + build changed recipes on dev
+        id: build
+        if: steps.changed.outputs.names != ''
+        env:
+          CVCPKG_SERVER_URL: ${{ steps.dev.outputs.url }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_ADMIN_TOKEN }}
+          NAMES: ${{ steps.changed.outputs.names }}
+        run: |
+          set -uo pipefail
+          echo "Dev server: $CVCPKG_SERVER_URL"
+
+          # 1. Push each changed recipe to the dev server.
+          for r in $NAMES; do
+            echo "::group::push $r"
+            cvcpkg recipe push "$r" --recipes-dir recipes \
+              --server "$CVCPKG_SERVER_URL" --token "$CVCPKG_TOKEN"
+            echo "::endgroup::"
+          done
+
+          # 2. Submit a build DAG across every platform the dev cluster might
+          #    serve.  --allow-unschedulable means combos with no dev builder
+          #    (e.g. windows/macos) are skipped rather than hanging; --wait
+          #    blocks until the schedulable jobs finish.
+          dag="pr-${{ github.event.pull_request.number }}-$(date +%H%M%S)"
+          set +e
+          cvcpkg builds submit-dag \
+            --server "$CVCPKG_SERVER_URL" --token "$CVCPKG_TOKEN" \
+            --platform linux,freebsd,openbsd,netbsd,windows,wasm,wasi \
+            --arch x86_64,wasm32 \
+            --config release --link shared \
+            --recipes-dir recipes \
+            --dag-id "${dag:0:60}" \
+            --allow-unschedulable --wait \
+            $NAMES | tee build.log
+          rc=$?
+          set -e
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          exit $rc
+
+      - name: Comment result on PR
+        if: always() && steps.changed.outputs.names != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          status="✅ passed"
+          [ "${{ steps.build.outputs.exit_code || '1' }}" = "0" ] || status="❌ failed"
+          {
+            echo "### Dev-cluster recipe build — $status"
+            echo ""
+            echo "Recipes: \`${{ steps.changed.outputs.names }}\`"
+            echo ""
+            echo "<details><summary>build log</summary>"
+            echo ""
+            echo '```'
+            tail -c 60000 build.log 2>/dev/null || echo "(no log)"
+            echo '```'
+            echo "</details>"
+          } > comment.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file comment.md
