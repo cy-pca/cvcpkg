@@ -18,11 +18,24 @@ set -euo pipefail
 
 cd "${CVC_SOURCE_DIR}/src"
 
+# wireguard-tools ships a GNU Makefile; the BSD `make` on freebsd/openbsd
+# cannot parse it.  Use gmake unless the native `make` is already GNU make
+# (linux, macOS ship GNU make as `make`).
+MAKE="${MAKE:-make}"
+if ! "${MAKE}" --version 2>/dev/null | grep -qi 'gnu make'; then
+    if command -v gmake >/dev/null 2>&1; then
+        MAKE=gmake
+    else
+        echo "wireguard-tools: need GNU make (gmake) on this platform" >&2
+        exit 1
+    fi
+fi
+
 # `install` depends on the `wg` target, so this both builds and installs.
 # WITH_WGQUICK/WITH_BASHCOMPLETION are forced on (they otherwise auto-enable
 # only when their target dirs already exist, which they don't in a fresh
 # prefix).  All *DIR knobs are pinned under the prefix for relocatability.
-make -j "${CVC_JOBS}" \
+"${MAKE}" -j "${CVC_JOBS}" \
     PREFIX="${CVC_INSTALL_DIR}" \
     SYSCONFDIR="${CVC_INSTALL_DIR}/etc" \
     SYSTEMDUNITDIR="${CVC_INSTALL_DIR}/lib/systemd/system" \
