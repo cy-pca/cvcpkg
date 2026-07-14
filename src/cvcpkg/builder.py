@@ -575,6 +575,15 @@ def run_build(
     if not script.is_file():
         raise BuildError(f"Build script not found: {script}")
 
+    # Windows-target cross builds from a WSL builder are delegated to
+    # the Windows host through interop (the host's MSVC toolchain runs
+    # the recipe's normal build.ps1) — see cvcpkg.winhost.
+    from cvcpkg import winhost
+
+    if winhost.should_delegate(ctx.platform, ctx.host_platform):
+        winhost.run_winhost_build(ctx, matrix, script, log_callback=log_callback)
+        return
+
     env = _build_env(ctx, matrix)
 
     # Determine the interpreter
@@ -710,6 +719,14 @@ def run_test(
     env["CVC_INSTALL_DIR"] = ctx.install_dir.as_posix()
     env["CVC_DEPS_PREFIX"] = ctx.prefix.as_posix()
     env["CVC_PLATFORM"] = ctx.platform
+
+    # Mark host-delegated Windows cross builds so test scripts can
+    # skip host-only steps (the install tree contains Windows binaries
+    # but this test process is running on the Linux side).
+    from cvcpkg import winhost as _winhost
+
+    if _winhost.should_delegate(ctx.platform, ctx.host_platform):
+        env["CVC_WINHOST"] = "1"
 
     # Propagate cross-toolchain env vars (CVC_EMSDK_DIR, CVC_WASI_SDK_DIR,
     # etc.) so test scripts can use emcc/node/wasmtime to compile and run

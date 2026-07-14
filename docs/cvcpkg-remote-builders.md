@@ -128,13 +128,20 @@ the builder's next start.
 
 For Windows-only machines that should contribute **Linux** capacity, a
 builder can run inside a Debian WSL2 instance. It registers as `linux/x86_64`
-(optionally with a `wasm` cross target) — it does not build native Windows
-artifacts. The inside-the-distro setup is identical to the systemd Linux case
-above; WSL adds a boot `schtasks` task (WSL doesn't start with Windows) and
-either `networkingMode=mirrored` or a `netsh portproxy` forward so SSH is
-reachable. Full walkthrough — SSH + OpenSSL setup, the Windows-side plumbing,
-and disk cleanup / `vhdx` compaction — in
-[cvcpkg-builder-wsl-debian.md](cvcpkg-builder-wsl-debian.md).
+(optionally with a `wasm` cross target). The inside-the-distro setup is
+identical to the systemd Linux case above; WSL adds a boot `schtasks` task
+(WSL doesn't start with Windows) and either `networkingMode=mirrored` or a
+`netsh portproxy` forward so SSH is reachable. Full walkthrough — SSH +
+OpenSSL setup, the Windows-side plumbing, and disk cleanup / `vhdx`
+compaction — in [cvcpkg-builder-wsl-debian.md](cvcpkg-builder-wsl-debian.md).
+
+A WSL builder can additionally build **native `windows/x86_64` packages**
+by registering with `--cross-platform windows`: the recipe's normal
+`build.ps1` executes on the Windows host through WSL interop (staged via
+an exchange directory in the host user's profile, MSVC found by
+`env-windows.ps1`'s auto-import), while packaging and publishing stay on
+the Linux side. See
+[cvcpkg-builder-wsl-windows-cross.md](cvcpkg-builder-wsl-windows-cross.md).
 
 ## API Tokens
 

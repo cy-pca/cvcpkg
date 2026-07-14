@@ -28,7 +28,7 @@ jobs:
     # Same-repo PRs only: fork PRs must not reach the self-hosted runner or
     # the dev cluster secrets.
     if: github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, Linux, cvcpkg-builder]
+    runs-on: [self-hosted, Linux, star-01]
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
@@ -51,8 +51,10 @@ jobs:
           git fetch -q origin "${{ github.base_ref }}"
           mapfile -t names < <(
             git diff --name-only "origin/${{ github.base_ref }}...HEAD" -- recipes/ \
-              | grep -E '^recipes/[^/]+/' | cut -d/ -f2 | sort -u
+              | grep -E '^recipes/[^/]+/' | cut -d/ -f2 | grep -v '^_' | sort -u
           )
+          # _common/ and other _-prefixed dirs are shared helpers, not
+          # recipes — they ship inside every recipe bundle instead.
           echo "Changed recipes: ${names[*]:-<none>}"
           # space-joined for the CLI, newline-joined for the report
           printf 'names=%s\n' "${names[*]:-}" >> "$GITHUB_OUTPUT"
@@ -62,7 +64,7 @@ jobs:
         if: steps.changed.outputs.names != ''
         run: |
           set -euo pipefail
-          IP=$(incus list cvcpkg-server -c4 -fcsv | head -1 | awk '{print $1}')
+          IP=$(incus list cvcpkg-server -c4 -fcsv | tr -d '"' | tr ',' '\n' | awk '{print $1}' | grep -E '^10\.' | head -1)
           test -n "$IP" || { echo "::error::could not resolve dev cvcpkg-server IP"; exit 1; }
           echo "url=http://${IP}:8420" >> "$GITHUB_OUTPUT"
 
@@ -125,4 +127,9 @@ jobs:
             echo '```'
             echo "</details>"
           } > comment.md
-          gh pr comment "${{ github.event.pull_request.number }}" --body-file comment.md
+          if command -v gh >/dev/null 2>&1; then
+            gh pr comment "${{ github.event.pull_request.number }}" --body-file comment.md
+          else
+            echo "::warning::gh CLI not on this runner; skipping PR comment"
+            cat comment.md
+          fi

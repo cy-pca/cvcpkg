@@ -76,7 +76,7 @@ jobs:
 
   dev:
     name: Dev cluster
-    runs-on: [self-hosted, Linux, cvcpkg-builder]
+    runs-on: [self-hosted, Linux, star-01]
     timeout-minutes: 10
     permissions:
       issues: write
@@ -86,7 +86,7 @@ jobs:
       - name: Probe dev /healthz
         run: |
           set -uo pipefail
-          IP=$(incus list cvcpkg-server -c4 -fcsv | head -1 | awk '{print $1}')
+          IP=$(incus list cvcpkg-server -c4 -fcsv | tr -d '"' | tr ',' '\n' | awk '{print $1}' | grep -E '^10\.' | head -1)
           test -n "$IP" || { echo "::error::could not resolve dev cvcpkg-server IP"; exit 1; }
           url="http://${IP}:8420"
           if ! body=$(curl -fsS --max-time 15 "$url/healthz" 2>/dev/null); then

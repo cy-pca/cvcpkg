@@ -439,6 +439,12 @@ def build(
         "from git or CMake at build time."
     ),
 )
+@click.option(
+    "--host-platform",
+    default="",
+    help="Host platform for cross-compilation (e.g. linux, macos, windows). "
+    "Selects the matching build script when multiple host_platform entries exist.",
+)
 def pack(
     recipe: tuple[str, ...],
     platform: str,
@@ -454,6 +460,7 @@ def pack(
     signing_key: str | None,
     from_prefix: str | None,
     version_override: str,
+    host_platform: str,
 ) -> None:
     """Build and archive one or more recipes.
 
@@ -516,6 +523,7 @@ def pack(
                 output_dir=output,
                 keep_build_dir=keep_build_dir,
                 maintainer=maintainer,
+                host_platform=host_platform,
             )
         click.echo(f"  {archive} ({size:,} bytes, sha256={sha})")
         if signing_key:

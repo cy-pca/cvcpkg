@@ -48,7 +48,7 @@ permissions:
 jobs:
   populate:
     name: Push recipes & submit builds (dev)
-    runs-on: [self-hosted, Linux, cvcpkg-builder]
+    runs-on: [self-hosted, Linux, star-01]
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v5
@@ -66,7 +66,7 @@ jobs:
         id: dev
         run: |
           set -euo pipefail
-          IP=$(incus list cvcpkg-server -c4 -fcsv | head -1 | awk '{print $1}')
+          IP=$(incus list cvcpkg-server -c4 -fcsv | tr -d '"' | tr ',' '\n' | awk '{print $1}' | grep -E '^10\.' | head -1)
           test -n "$IP" || { echo "::error::could not resolve dev cvcpkg-server IP"; exit 1; }
           echo "url=http://${IP}:8420" >> "$GITHUB_OUTPUT"
           echo "Dev server: http://${IP}:8420"

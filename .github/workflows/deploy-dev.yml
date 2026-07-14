@@ -29,7 +29,7 @@ concurrency:
 jobs:
   deploy:
     name: Deploy to dev (star incus cluster)
-    runs-on: [self-hosted, Linux, cvcpkg-builder]
+    runs-on: [self-hosted, Linux, star-01]
     timeout-minutes: 15
 
     steps:
@@ -196,7 +196,7 @@ jobs:
           CVCPKG_ADMIN_TOKEN: ${{ secrets.CVCPKG_ADMIN_TOKEN }}
         run: |
           sleep 10
-          SERVER_URL="http://$(incus list cvcpkg-server -c4 -fcsv | head -1 | awk '{print $1}'):8420"
+          SERVER_URL="http://$(incus list cvcpkg-server -c4 -fcsv | tr -d '"' | tr ',' '\n' | awk '{print $1}' | grep -E '^10\.' | head -1):8420"
           if [ -n "${CVCPKG_ADMIN_TOKEN:-}" ]; then
             echo "Notifying builders via $SERVER_URL to self-update..."
             curl -fsS -X POST "$SERVER_URL/v1/admin/update-builders" \
