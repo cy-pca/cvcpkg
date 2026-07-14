@@ -534,3 +534,176 @@ class TestMirrorAudit:
         entries = resp.json().get("entries", [])
         remove_entries = [e for e in entries if e.get("action") == AuditAction.mirror_remove.value]
         assert len(remove_entries) >= 1
+
+
+# ── Mirror archive sync ─────────────────────────────────────────
+
+
+class TestMirrorArchiveSync:
+    """_mirror_sync_archives — a mirror fetches archive bytes, not just
+    the catalog index (regression for the pkg.tx.wtf archive-stale
+    mirror, whose /v1/download 404'd everything published after its
+    one-time seed)."""
+
+    def _state(self, tmp_path):
+        from cvcpkg.server import app as app_mod
+
+        state = app_mod.ServerState(tmp_path, storage_uri="", require_auth_for_reads=False)
+        state.archives_dir().mkdir(parents=True, exist_ok=True)
+        return state
+
+    def _bundle(self, fname, content=b"archive-bytes", **over):
+        import hashlib
+
+        b = {
+            "name": fname.split("-")[0],
+            "version": "1.0.0",
+            "platform": "linux",
+            "arch": "x86_64",
+            "build_type": "release",
+            "link": "shared",
+            "sha256": hashlib.sha256(content).hexdigest(),
+            "size_bytes": len(content),
+            "archive_url": f"/v1/download/{fname}",
+            "yanked": False,
+        }
+        b.update(over)
+        return b
+
+    def _fake_client(self, content_by_suffix):
+        class _Resp:
+            def __init__(self, content):
+                self._content = content
+
+            def raise_for_status(self):
+                pass
+
+            async def aiter_bytes(self, n):
+                yield self._content
+
+        class _Stream:
+            def __init__(self, content):
+                self._resp = _Resp(content)
+
+            async def __aenter__(self):
+                return self._resp
+
+            async def __aexit__(self, *a):
+                pass
+
+        class _Client:
+            def __init__(self, **kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                pass
+
+            def stream(self, method, url, **kw):
+                for suffix, content in content_by_suffix.items():
+                    if url.endswith(suffix):
+                        return _Stream(content)
+                return _Stream(b"")
+
+        return _Client
+
+    def test_fetches_missing_archive(self, tmp_path, monkeypatch):
+        import asyncio
+
+        from cvcpkg.server import app as app_mod
+
+        state = self._state(tmp_path)
+        content = b"new archive published upstream"
+        catalog = {"bundles": [self._bundle("newpkg-1.0.0-linux.tar.zst", content)]}
+        monkeypatch.setattr(app_mod, "MIRROR_UPSTREAM", "http://primary.example")
+        monkeypatch.setattr(
+            "httpx.AsyncClient", self._fake_client({"newpkg-1.0.0-linux.tar.zst": content})
+        )
+
+        n = asyncio.run(app_mod._mirror_sync_archives(state, catalog))
+        assert n == 1
+        assert (state.archives_dir() / "newpkg-1.0.0-linux.tar.zst").read_bytes() == content
+
+    def test_present_archive_not_refetched(self, tmp_path, monkeypatch):
+        import asyncio
+
+        from cvcpkg.server import app as app_mod
+
+        state = self._state(tmp_path)
+        content = b"already here"
+        (state.archives_dir() / "have-1.0.0.tar.zst").write_bytes(content)
+        catalog = {"bundles": [self._bundle("have-1.0.0.tar.zst", content)]}
+        monkeypatch.setattr(app_mod, "MIRROR_UPSTREAM", "http://primary.example")
+        monkeypatch.setattr("httpx.AsyncClient", self._fake_client({}))
+
+        assert asyncio.run(app_mod._mirror_sync_archives(state, catalog)) == 0
+
+    def test_size_drift_triggers_refetch(self, tmp_path, monkeypatch):
+        """An archive whose row was corrected upstream is re-downloaded."""
+        import asyncio
+
+        from cvcpkg.server import app as app_mod
+
+        state = self._state(tmp_path)
+        (state.archives_dir() / "fixed-1.0.0.tar.zst").write_bytes(b"stale bytes!")
+        new_content = b"corrected bytes"
+        catalog = {"bundles": [self._bundle("fixed-1.0.0.tar.zst", new_content)]}
+        monkeypatch.setattr(app_mod, "MIRROR_UPSTREAM", "http://primary.example")
+        monkeypatch.setattr(
+            "httpx.AsyncClient", self._fake_client({"fixed-1.0.0.tar.zst": new_content})
+        )
+
+        assert asyncio.run(app_mod._mirror_sync_archives(state, catalog)) == 1
+        assert (state.archives_dir() / "fixed-1.0.0.tar.zst").read_bytes() == new_content
+
+    def test_sha_mismatch_discarded(self, tmp_path, monkeypatch):
+        import asyncio
+
+        from cvcpkg.server import app as app_mod
+
+        state = self._state(tmp_path)
+        bundle = self._bundle("bad-1.0.0.tar.zst", b"expected bytes")
+        catalog = {"bundles": [bundle]}
+        monkeypatch.setattr(app_mod, "MIRROR_UPSTREAM", "http://primary.example")
+        monkeypatch.setattr(
+            "httpx.AsyncClient", self._fake_client({"bad-1.0.0.tar.zst": b"tampered bytes!!"})
+        )
+
+        assert asyncio.run(app_mod._mirror_sync_archives(state, catalog)) == 0
+        assert not (state.archives_dir() / "bad-1.0.0.tar.zst").exists()
+
+    def test_per_cycle_cap(self, tmp_path, monkeypatch):
+        import asyncio
+
+        from cvcpkg.server import app as app_mod
+
+        state = self._state(tmp_path)
+        content = b"x"
+        catalog = {"bundles": [self._bundle(f"pkg{i}-1.0.0.tar.zst", content) for i in range(5)]}
+        monkeypatch.setattr(app_mod, "MIRROR_UPSTREAM", "http://primary.example")
+        monkeypatch.setattr(app_mod, "MIRROR_MAX_ARCHIVES_PER_SYNC", 2)
+        monkeypatch.setattr(
+            "httpx.AsyncClient",
+            self._fake_client({f"pkg{i}-1.0.0.tar.zst": content for i in range(5)}),
+        )
+
+        assert asyncio.run(app_mod._mirror_sync_archives(state, catalog)) == 2
+
+    def test_yanked_and_placeholder_skipped(self, tmp_path, monkeypatch):
+        import asyncio
+
+        from cvcpkg.server import app as app_mod
+
+        state = self._state(tmp_path)
+        catalog = {
+            "bundles": [
+                self._bundle("gone-1.0.0.tar.zst", yanked=True),
+                self._bundle("stub-1.0.0.tar.zst", archive_url=""),
+            ]
+        }
+        monkeypatch.setattr(app_mod, "MIRROR_UPSTREAM", "http://primary.example")
+        monkeypatch.setattr("httpx.AsyncClient", self._fake_client({}))
+
+        assert asyncio.run(app_mod._mirror_sync_archives(state, catalog)) == 0

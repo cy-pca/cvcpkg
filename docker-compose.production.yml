@@ -78,6 +78,8 @@ services:
             CVCPKG_MIRROR_UPSTREAM: ${CVCPKG_MIRROR_UPSTREAM:-}
             CVCPKG_MIRROR_TOKEN: ${CVCPKG_MIRROR_TOKEN:-}
             CVCPKG_MIRROR_SYNC_INTERVAL: ${CVCPKG_MIRROR_SYNC_INTERVAL:-3600}
+            CVCPKG_MIRROR_SYNC_ARCHIVES: ${CVCPKG_MIRROR_SYNC_ARCHIVES:-1}
+            CVCPKG_MIRROR_MAX_ARCHIVES_PER_SYNC: ${CVCPKG_MIRROR_MAX_ARCHIVES_PER_SYNC:-200}
             # ── Upstream populate (optional) ───────────────────
             # Set CVCPKG_POPULATE_UPSTREAM=<url> in .env.production
             # to auto-import packages this server lacks from an

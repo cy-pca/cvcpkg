@@ -174,6 +174,19 @@ MIRROR_TOKEN = os.environ.get("CVCPKG_MIRROR_TOKEN", "")
 # Sync interval in seconds (how often the mirror pulls the upstream catalog).
 MIRROR_SYNC_INTERVAL = int(os.environ.get("CVCPKG_MIRROR_SYNC_INTERVAL", "3600"))
 
+# Also sync the archives themselves (not just the catalog index).  Without
+# this a mirror's /v1/download serves only whatever archives were seeded
+# out-of-band and 404s for everything published upstream afterwards.
+MIRROR_SYNC_ARCHIVES = os.environ.get("CVCPKG_MIRROR_SYNC_ARCHIVES", "1").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+
+# Cap on archives fetched per sync cycle (bounds bandwidth/disk per cycle;
+# the next cycle continues where this one stopped).
+MIRROR_MAX_ARCHIVES_PER_SYNC = int(os.environ.get("CVCPKG_MIRROR_MAX_ARCHIVES_PER_SYNC", "200"))
+
 # Health check interval for registered mirrors (on the primary).
 MIRROR_HEALTH_CHECK_INTERVAL = int(os.environ.get("CVCPKG_MIRROR_HEALTH_CHECK_INTERVAL", "300"))
 
@@ -857,8 +870,81 @@ async def _mirror_health_loop() -> None:
             logger.exception("mirror health check loop error")
 
 
+async def _mirror_sync_archives(state: ServerState, catalog: dict) -> int:
+    """Fetch archives the mirror is missing (or that changed upstream).
+
+    For every non-yanked bundle in *catalog*: if the local archive is
+    absent, or its size no longer matches the bundle metadata (e.g. the
+    row was corrected upstream), download it from ``MIRROR_UPSTREAM``,
+    verify the sha256 against the bundle, and move it into place.
+    Returns the number of archives fetched; capped per cycle by
+    ``MIRROR_MAX_ARCHIVES_PER_SYNC``.
+    """
+    import httpx
+
+    headers: dict[str, str] = {}
+    if MIRROR_TOKEN:
+        headers["Authorization"] = f"Bearer {MIRROR_TOKEN}"
+    upstream = MIRROR_UPSTREAM.rstrip("/")
+    archives_dir = state.archives_dir()
+
+    fetched = 0
+    deferred = 0
+    async with httpx.AsyncClient(timeout=120, headers=headers, follow_redirects=True) as client:
+        for b in catalog.get("bundles", []):
+            archive_url = b.get("archive_url", "")
+            if not archive_url or b.get("yanked"):
+                continue
+            fname = Path(archive_url.rsplit("/", 1)[-1]).name
+            local = archives_dir / fname
+            size = int(b.get("size_bytes", 0) or 0)
+            if local.is_file() and (size == 0 or local.stat().st_size == size):
+                continue
+            if fetched >= MIRROR_MAX_ARCHIVES_PER_SYNC:
+                deferred += 1
+                continue
+
+            url = archive_url if not archive_url.startswith("/") else upstream + archive_url
+            fd, tmp_str = tempfile.mkstemp(dir=archives_dir, suffix=".mirror")
+            tmp_path = Path(tmp_str)
+            h = hashlib.sha256()
+            try:
+                async with client.stream("GET", url) as dl:
+                    dl.raise_for_status()
+                    with os.fdopen(fd, "wb") as f:
+                        async for chunk in dl.aiter_bytes(1 << 16):
+                            h.update(chunk)
+                            f.write(chunk)
+            except Exception as exc:
+                tmp_path.unlink(missing_ok=True)
+                logger.warning("mirror sync: download failed for %s (%s)", fname, exc)
+                continue
+
+            want_sha = b.get("sha256", "")
+            if want_sha and h.hexdigest() != want_sha:
+                tmp_path.unlink(missing_ok=True)
+                logger.warning(
+                    "mirror sync: sha256 mismatch for %s (upstream row vs served bytes) — skipping",
+                    fname,
+                )
+                continue
+
+            # replace(), not rename(): the refetch path overwrites a stale
+            # local file, and Windows rename() refuses existing targets.
+            tmp_path.replace(local)
+            fetched += 1
+
+    if deferred:
+        logger.info(
+            "mirror sync: per-cycle archive cap (%d) reached; %d deferred to the next cycle",
+            MIRROR_MAX_ARCHIVES_PER_SYNC,
+            deferred,
+        )
+    return fetched
+
+
 async def _mirror_sync_loop(state_dir: Path) -> None:
-    """Periodically sync the catalog from the upstream server (mirror mode)."""
+    """Periodically sync the catalog (and archives) from the upstream (mirror mode)."""
     import asyncio
 
     import httpx
@@ -883,6 +969,10 @@ async def _mirror_sync_loop(state_dir: Path) -> None:
                 upstream,
                 bundle_count,
             )
+            if MIRROR_SYNC_ARCHIVES:
+                fetched = await _mirror_sync_archives(state, catalog)
+                if fetched:
+                    logger.info("mirror sync: fetched %d archive(s) from %s", fetched, upstream)
         except Exception:
             logger.exception("mirror sync failed")
 
