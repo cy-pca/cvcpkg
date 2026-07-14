@@ -472,6 +472,54 @@ scaling and federation:
 
 ---
 
+### Phase 7 — Python Ecosystem Integration (Hermetic Python + Native Prefixes)
+
+**Status: Planned**
+
+cvcpkg already ships CPython interpreters as recipes (`python311`/`312`/`313`) that install
+`libpython`, the interpreter, and the stdlib into a prefix under `CVC_INSTALL_DIR`. Phase 7
+closes the loop: **cvcpkg installs upstream Python wheels *into that same prefix*** so a
+downstream project gets one activatable prefix carrying both the native C/C++ libraries
+(`find_package`-able) *and* a complete, pinned Python environment (`import`-able) — with minimum
+system dependencies. This extends cvcpkg's "any compiled language" vision to the Python packages
+layered on top of those libraries, and gives the CVC science stack (volrover, MolSurf, TexMol,
+F2Dock) a single reproducible **Python + native** environment.
+
+**Two new `source.type` values (additive, schema_version 1):**
+
+- **`python_wheel`** — stage a pinned, sha256-verified prebuilt wheel (numpy, torch, sionna,
+  warp-lang, physicsnemo) via `pip install --no-deps --no-index --prefix $CVC_INSTALL_DIR` into the
+  prefix interpreter's own `lib/pythonX.Y/site-packages`. The wheel analogue of the `prebuilt`
+  C-source type; never re-hosted (fetched from PyPI/`download.pytorch.org` at build time).
+- **`python_sdist`** — build a C-extension wheel from a pinned sdist with **build-isolation off**
+  so the extension links the prefix's **cvcpkg** C libraries (h5py→cvcpkg `hdf5`, an FFTW/CUDA-
+  linking extension→cvcpkg `fftw3`/`cufft`, mpi4py→cvcpkg MPI) via `depends.build` on the cvcpkg C
+  recipes + `HDF5_DIR`/`CMAKE_PREFIX_PATH` env. This is the hermeticity payoff: no `apt install
+  libhdf5-dev`; the extension binds cvcpkg's copy.
+
+Recipes add a top-level **`python:`** block (`interpreter`, `abi`, `manylinux_min`,
+`build_isolation`, pinned `build_requires`); a "resolve like pip from requirements.txt" mode is
+**rejected** for release artifacts — every wheel/sdist is pinned by filename + sha256, transitive
+Python deps are themselves cvcpkg Python recipes resolved by the existing `depends` graph.
+
+**Hermeticity goals:** every wheel/sdist sha256-pinned and frozen in the LTS release manifest
+alongside the C recipes; offline/air-gapped install via a local mirror (`--no-index`); the only
+system requirement is a C toolchain + the manylinux glibc floor. Composes with Phase 1.5
+(`pip install cvcpkg`): the tool is pip-installable; the tool then installs other wheels into a
+target prefix. Known tension: the `torch` wheel bundles its own CUDA and will not share cvcpkg's —
+ship it self-contained as `python_wheel`; reserve cvcpkg CUDA-math recipes for C++ consumers and
+`python_sdist` extensions we build.
+
+**Planned CUDA-math recipes (prerequisite for the C++/sdist side).** Prebuilt-staging recipes for
+the NVIDIA redistributable math libs (download `.tar.xz`, sha256-verify, generate a relocatable
+`Config.cmake`): a `cuda-cudart` base + `cufft`, `cublas`, `cusparse`, `cusolver`. Dep order
+`cudart → cublas/cusparse → cusolver`; Linux-first, Windows-optional (NVIDIA ships no macOS/wasm).
+Highest cross-value is `cufft` (F2Dock's FFT-correlation docking; `libcufftw` is a near drop-in for
+the existing `fftw3` recipe), then `cublas`/`cusolver`/`cusparse` for volrover/MolSurf dense &
+sparse solves.
+
+---
+
 ## Package Recipes
 
 ### Current Recipes (v2.0.0) — 99 recipes
