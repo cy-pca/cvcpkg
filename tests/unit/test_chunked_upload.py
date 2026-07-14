@@ -457,6 +457,70 @@ class TestChunkedUpload:
         names = [p["name"] for p in pkgs.get("packages", pkgs.get("bundles", []))]
         assert "chunked-pkg" in names
 
+    def test_publish_race_loser_leaves_winner_archive_intact(self, db_server_env, monkeypatch):
+        """Regression: a /v1/publish that loses the insert race must not
+        touch the winner's archive.
+
+        The July 2026 incident (7 corrupted catalog variants: bzip2,
+        fontconfig, graphene, libpq, lua, nasm, wayland) came through the
+        direct-publish path: two builders published the same variant
+        concurrently, both passed the advisory duplicate pre-check, and
+        the loser renamed its temp over the winner's archive before its
+        add_package() 409'd — old code then even unlinked the destination.
+
+        The race window is simulated by disabling the advisory pre-check
+        (as if both requests passed it before either row existed). The
+        loser must 409, and the winner's row AND bytes must survive.
+        """
+        client, _, pub_token, _, _ = db_server_env
+        hdrs = self._admin_headers(pub_token)
+        params = {
+            "name": "raced-direct",
+            "version": "2.0.0",
+            "platform": "linux",
+            "arch": "x86_64",
+        }
+
+        winner_content = b"winner via direct publish - must survive"
+        winner_sha = hashlib.sha256(winner_content).hexdigest()
+        resp = client.post(
+            "/v1/publish",
+            params=params,
+            files={"file": ("raced-direct.tar.zst", io.BytesIO(winner_content))},
+            headers=hdrs,
+        )
+        assert resp.status_code in (200, 201), resp.text
+
+        # Simulate the race: the loser's advisory pre-check saw no row.
+        from cvcpkg.server import app as app_mod
+
+        async def _no_dup(*a, **k):
+            return False
+
+        monkeypatch.setattr(app_mod._db_packages, "check_duplicate", _no_dup)
+
+        loser_content = b"loser via direct publish - must be discarded!!"
+        loser_sha = hashlib.sha256(loser_content).hexdigest()
+        assert loser_sha != winner_sha
+        resp = client.post(
+            "/v1/publish",
+            params=params,
+            files={"file": ("raced-direct.tar.zst", io.BytesIO(loser_content))},
+            headers=hdrs,
+        )
+        assert resp.status_code == 409, resp.text
+
+        # Winner's row is intact and the served bytes still match it.
+        resp = client.get("/v1/packages", params={"name": "raced-direct"}, headers=hdrs)
+        rows = resp.json().get("packages", [])
+        row = next(p for p in rows if p["version"] == "2.0.0")
+        assert row["sha256"] == winner_sha
+        resp = client.get(row["archive_url"], headers=hdrs)
+        assert resp.status_code == 200, "winner's archive was deleted by the losing publish"
+        assert (
+            hashlib.sha256(resp.content).hexdigest() == winner_sha
+        ), "winner's archive bytes were clobbered by the losing publish"
+
     def test_complete_does_not_clobber_existing_archive(self, db_server_env):
         """Regression: /v1/upload/{id}/complete must not clobber an on-disk
         archive when another publish races in between init and complete.

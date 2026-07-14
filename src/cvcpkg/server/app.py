@@ -2457,7 +2457,15 @@ def create_app(
         )
         dest = state.archives_dir() / safe_filename
 
-        # Write to temp file in the same directory, then rename for atomicity
+        # Write to a temp file in the same directory.  The temp is renamed
+        # onto the final destination only AFTER the catalog row is
+        # committed: the DB unique index (or the file-backed dup check) is
+        # the arbiter between racing duplicate publishes, and the loser
+        # must never touch the destination file.  Historically the rename
+        # happened before add_package(), so a racing duplicate overwrote
+        # the winner's archive and then 409'd — leaving the stored bytes
+        # different from the row's sha256/size (7 catalog variants were
+        # corrupted this way in July 2026).
         fd, tmp_path_str = tempfile.mkstemp(dir=state.archives_dir(), suffix=".upload")
         tmp_path = Path(tmp_path_str)
         try:
@@ -2474,7 +2482,6 @@ def create_app(
                         )
                     h.update(chunk)
                     tmp_f.write(chunk)
-            tmp_path.rename(dest)
         except Exception:
             tmp_path.unlink(missing_ok=True)
             raise
@@ -2492,13 +2499,13 @@ def create_app(
             if GLOBAL_CACHE_STORAGE_LIMIT_BYTES > 0:
                 total_used = await _db_packages.total_storage_bytes()
                 if total_used + size_bytes > GLOBAL_CACHE_STORAGE_LIMIT_BYTES:
-                    dest.unlink(missing_ok=True)
+                    tmp_path.unlink(missing_ok=True)
                     raise HTTPException(413, "global cache storage limit exceeded")
 
             # Check org storage limit before registering
             if org and _db_orgs is not None:
                 if not await _db_orgs.check_storage_limit(org, size_bytes):
-                    dest.unlink(missing_ok=True)
+                    tmp_path.unlink(missing_ok=True)
                     raise HTTPException(413, f"organization '{org}' storage limit exceeded")
 
             try:
@@ -2526,8 +2533,14 @@ def create_app(
                     required_deps=required_deps,
                 )
             except ValueError as exc:
-                dest.unlink(missing_ok=True)
+                # Lost the race to a concurrent publish of the same
+                # variant — discard our temp; the winner's archive stays.
+                tmp_path.unlink(missing_ok=True)
                 raise HTTPException(409, str(exc)) from exc
+
+            # Row committed — this request owns the variant; materialize
+            # the archive at its final name.
+            tmp_path.rename(dest)
 
             # Track org storage usage
             if org and _db_orgs is not None:
@@ -2566,6 +2579,8 @@ def create_app(
             }
             state.index.setdefault("bundles", []).append(bundle)
             state.save_index()
+            # Index updated — materialize the archive at its final name.
+            tmp_path.rename(dest)
             state.audit.record(
                 action=AuditAction.publish,
                 actor=actor.name,
@@ -2845,7 +2860,10 @@ def create_app(
                 f"/{session.build_type}/{session.link}) already published.",
             )
 
-        # Build safe filename and move temp → final
+        # Build the safe filename.  The temp file is renamed onto the
+        # destination only AFTER the catalog row is committed — the DB
+        # unique index is the arbiter between racing duplicate publishes,
+        # and the loser must never touch (or delete) the winner's archive.
         safe_filename = (
             f"{session.name}-{session.version}-{session.platform}-{session.arch}"
             f"-{session.build_type}-{session.link}.tar.zst"
@@ -2855,7 +2873,6 @@ def create_app(
             for c in safe_filename
         )
         dest = state.archives_dir() / safe_filename
-        session.temp_path.rename(dest)
 
         archive_url = f"/v1/download/{safe_filename}"
         size_bytes = session.bytes_received
@@ -2887,9 +2904,14 @@ def create_app(
                     required_deps=session.required_deps,
                 )
             except ValueError as exc:
-                dest.unlink(missing_ok=True)
+                # Lost the race to a concurrent publish — discard our
+                # temp; the winner's archive stays untouched.
+                session.temp_path.unlink(missing_ok=True)
                 _upload_sessions.pop(upload_id, None)
                 raise HTTPException(409, str(exc)) from exc
+
+            # Row committed — materialize the archive at its final name.
+            session.temp_path.rename(dest)
 
             await _db_audit.record(
                 action=AuditAction.publish,
@@ -2922,6 +2944,8 @@ def create_app(
             }
             state.index.setdefault("bundles", []).append(bundle)
             state.save_index()
+            # Index updated — materialize the archive at its final name.
+            session.temp_path.rename(dest)
             state.audit.record(
                 action=AuditAction.publish,
                 actor=actor.name,
