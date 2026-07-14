@@ -108,18 +108,15 @@ jobs:
         working-directory: .
         run: twine check dist/*
 
-      - name: Verify wheel bundles recipes and installs
+      - name: Verify wheel + sdist contents
         run: |
-          whl=$(ls dist/cvcpkg-*.whl)
-          n=$(unzip -l "$whl" | grep -cE "cvcpkg/recipes/[^/]+/recipe.yaml") || true
-          echo "Wheel bundles ${n} recipe.yaml file(s)"
-          if [ "${n}" -eq 0 ]; then
-            echo "ERROR: built wheel contains no recipes" >&2
-            exit 1
-          fi
-          pip install "${whl}"
+          python packaging/verify_wheel.py dist/cvcpkg-*.whl --min-recipes 100
+          python packaging/verify_wheel.py dist/cvcpkg-*.tar.gz --min-recipes 100
+
+      - name: Verify wheel installs and recipes are usable
+        run: |
+          pip install dist/cvcpkg-*.whl
           cvcpkg --version
-          # The bundled recipes must be usable from the installed package.
           cvcpkg recipes --list | grep -q zlib
 
       - uses: actions/upload-artifact@v4
