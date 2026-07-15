@@ -1724,6 +1724,7 @@ def create_app(
     ):
         """Return forward and reverse dependency maps derived from recipes."""
         from cvcpkg.builder import RecipeError, find_recipes_dir, list_recipes
+        from cvcpkg.refs import parse_dep_ref
 
         try:
             recipes = list_recipes(find_recipes_dir())
@@ -1741,12 +1742,14 @@ def create_app(
             raw_deps = depends_block.get("runtime", depends_block.get("build", []))
             names: list[str] = []
             for d in raw_deps:
-                if isinstance(d, str):
-                    names.append(d)
-                elif isinstance(d, dict):
-                    dep_org = d.get("org", "")
-                    dep_name = d["name"]
-                    names.append(f"{dep_org}/{dep_name}" if dep_org else dep_name)
+                try:
+                    ref = parse_dep_ref(d)
+                except ValueError:
+                    continue
+                key = ref.qualified_name
+                if ref.server:
+                    key = f"cvc://{ref.server}/{key}"
+                names.append(key)
             forward[r.name] = names
             meta[r.name] = {
                 "description": recipe_block.get("description", ""),
@@ -2141,11 +2144,14 @@ def create_app(
         name: str,
         org: str = Query("", description="Filter by organization slug"),
         include_yanked: bool = Query(False, description="Include yanked packages in results"),
-        _auth: None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         if _use_db:
             packages, total = await _db_packages.get_bundles(
-                name=name, org_slug=org, include_yanked=include_yanked
+                name=name,
+                org_slug=org,
+                include_yanked=include_yanked,
+                caller_token_name=(caller.name if caller else ""),
             )
             return PackageListResponse(total=total, packages=packages)
         state = _get_state()

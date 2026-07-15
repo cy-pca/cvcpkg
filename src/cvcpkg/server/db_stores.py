@@ -634,6 +634,7 @@ class DbPackageIndex:
         arch: str = "",
         build_type: str = "",
         link: str = "",
+        caller_token_name: str | None = None,
     ) -> tuple[list[PackageInfo], int]:
         async with get_session() as session:
             q = select(PackageRow, TokenRow.email.label("publisher_email")).outerjoin(
@@ -673,6 +674,28 @@ class DbPackageIndex:
             if org_slug:
                 q = q.where(PackageRow.org_slug == org_slug)
                 count_q = count_q.where(PackageRow.org_slug == org_slug)
+            if caller_token_name is not None:
+                # Visibility filter (opt-in): public base packages, packages in
+                # public orgs, and — for a named caller — packages in private
+                # orgs the caller is a member of.  Callers that pass None (the
+                # default) get no filtering (internal/admin paths).
+                visible = or_(
+                    PackageRow.org_slug == "",
+                    PackageRow.org_slug.in_(
+                        select(OrganizationRow.slug).where(
+                            OrganizationRow.is_private == False  # noqa: E712
+                        )
+                    ),
+                )
+                if caller_token_name:
+                    member_orgs = (
+                        select(OrganizationRow.slug)
+                        .join(OrgMemberRow, OrgMemberRow.org_id == OrganizationRow.id)
+                        .where(OrgMemberRow.token_name == caller_token_name)
+                    )
+                    visible = or_(visible, PackageRow.org_slug.in_(member_orgs))
+                q = q.where(visible)
+                count_q = count_q.where(visible)
             if recipe_version:
                 q = q.where(PackageRow.recipe_version == recipe_version)
                 count_q = count_q.where(PackageRow.recipe_version == recipe_version)
@@ -724,6 +747,7 @@ class DbPackageIndex:
                         published_by=row.published_by,
                         published_by_email=pub_email,
                         org=row.org_slug,
+                        required_deps=json.loads(row.required_deps or "[]"),
                     )
                 )
             return packages, total

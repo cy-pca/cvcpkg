@@ -272,6 +272,13 @@ class PackageInfo(BaseModel):
             "Organization slug that owns the package.  Empty for official/public base packages."
         ),
     )
+    required_deps: list = Field(
+        default_factory=list,
+        description=(
+            "Runtime dependencies as dicts [{name, version, org?, server?}, ...]. "
+            "`server` names a federated registry host (see cvcpkg.refs)."
+        ),
+    )
 
     @property
     def qualified_name(self) -> str:
