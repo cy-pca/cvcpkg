@@ -400,8 +400,32 @@ def builder_run(
     click.echo(f"Registered builder #{builder_id} ({name}) - {platform}/{arch}{cross_msg}")
 
     shutdown = False
+    # ``current_jobs`` is derived from the set of in-flight job tokens so it
+    # can never desync: a token is added under the lock when a job thread is
+    # launched and removed in that thread's finally (see _run_job_guarded),
+    # which runs no matter how the job exits.  A raw increment/decrement
+    # counter previously leaked a slot whenever the claim step returned early,
+    # wedging the builder at max capacity forever.
+    active_jobs: set[int] = set()
+    _job_seq = 0
     current_jobs = 0
     jobs_lock = threading.Lock()
+
+    def _claim_slot() -> int:
+        """Reserve a slot; returns a unique token to release it with.
+        Caller must hold no assumption beyond passing the token to
+        _release_slot.  Call under jobs_lock."""
+        nonlocal _job_seq, current_jobs
+        _job_seq += 1
+        active_jobs.add(_job_seq)
+        current_jobs = len(active_jobs)
+        return _job_seq
+
+    def _release_slot(token: int) -> None:
+        nonlocal current_jobs
+        with jobs_lock:
+            active_jobs.discard(token)
+            current_jobs = len(active_jobs)
 
     def _handle_signal(signum, frame):
         nonlocal shutdown
@@ -415,12 +439,14 @@ def builder_run(
 
     def _heartbeat():
         """Send heartbeat to server."""
+        with jobs_lock:
+            jobs_now = current_jobs
         try:
             with httpx.Client(timeout=30) as client:
                 resp = client.post(
                     f"{base}/v1/builders/{builder_id}/heartbeat",
                     headers=headers,
-                    json={"status": "online", "current_jobs": current_jobs},
+                    json={"status": "online", "current_jobs": jobs_now},
                 )
             if resp.status_code >= 400:
                 click.echo(f"  heartbeat failed: {resp.status_code}", err=True)
@@ -975,8 +1001,8 @@ def builder_run(
                 tmp_archive.unlink(missing_ok=True)
 
     def _execute_job(job: dict) -> None:
-        """Execute a single build job."""
-        nonlocal current_jobs
+        """Execute a single build job.  The slot is released by the calling
+        _run_job_guarded wrapper, not here."""
         job_id = job["id"]
         recipe_name = job["recipe_name"]
         job_platform = job.get("platform", platform)
@@ -1138,8 +1164,25 @@ def builder_run(
             for stale in cleanup_root.glob(f"cvcpkg-{recipe_name}-*"):
                 if stale.is_dir():
                     shutil.rmtree(stale, ignore_errors=True)
-            with jobs_lock:
-                current_jobs -= 1
+            # NB: the slot count is released by _run_job_guarded's finally,
+            # not here — so an early return from the claim step above (which
+            # never reaches this try) still frees the slot.
+
+    def _run_job_guarded(job: dict, token: int) -> None:
+        """Thread entry point: run a job and ALWAYS release its slot.
+
+        The caller reserves the slot (``_claim_slot``) before starting the
+        thread; this wrapper's finally releases it no matter how
+        ``_execute_job`` exits — normal return, exception, or the early
+        ``return`` in its claim step.  Previously the release lived inside
+        ``_execute_job``'s try/finally, which a failed-claim early return
+        skipped, permanently leaking a slot (a max-jobs=2 builder wedged at
+        2/2 after two failed claims and stopped taking work).
+        """
+        try:
+            _execute_job(job)
+        finally:
+            _release_slot(token)
 
     # -- Self-update helper ---------------------------------
 
@@ -1309,8 +1352,10 @@ def builder_run(
                         with jobs_lock:
                             if current_jobs >= max_jobs:
                                 continue
-                            current_jobs += 1
-                        t = threading.Thread(target=_execute_job, args=(job,), daemon=True)
+                            token = _claim_slot()
+                        t = threading.Thread(
+                            target=_run_job_guarded, args=(job, token), daemon=True
+                        )
                         t.start()
 
                     elif msg_type == "recipe.push":
@@ -1455,10 +1500,11 @@ def builder_run(
             job = resp.json()
             drain_empty_since = None  # got work; restart the settle window
             with jobs_lock:
-                current_jobs += 1
+                token = _claim_slot()
 
-            # Run in a thread so we can keep heartbeating & polling
-            t = threading.Thread(target=_execute_job, args=(job,), daemon=True)
+            # Run in a thread so we can keep heartbeating & polling.  The
+            # guarded wrapper releases the slot on any exit path.
+            t = threading.Thread(target=_run_job_guarded, args=(job, token), daemon=True)
             t.start()
 
     finally:

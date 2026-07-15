@@ -2778,18 +2778,29 @@ class DbBuildJobStore:
         """Mark running jobs that exceed their timeout as timed_out.
 
         Uses per-job ``timeout_seconds`` if set, otherwise *default_timeout*.
+
+        The reference time is ``started_at`` when set, else ``submitted_at``.
+        A ``running`` row is *supposed* to have ``started_at``, but a builder
+        that abandons a job (crashed, killed mid-build, or a claim that set
+        the status without a start timestamp) can leave one with
+        ``started_at IS NULL``.  The old query excluded those, so such rows
+        stayed ``running`` forever — and because the heartbeat reconciles a
+        builder's ``current_jobs`` from its running jobs, two stuck rows
+        pinned a max-jobs=2 builder at capacity and it silently stopped
+        taking work (this wedged both openbsd builders).  Falling back to
+        ``submitted_at`` (always set, and old for a genuinely stuck row)
+        lets the reaper clear them.
         """
         now = datetime.datetime.now(datetime.timezone.utc)
         async with get_session() as session:
-            q = select(BuildJobRow).where(
-                BuildJobRow.status == BuildJobStatus.running,
-                BuildJobRow.started_at.isnot(None),
-            )
+            q = select(BuildJobRow).where(BuildJobRow.status == BuildJobStatus.running)
             rows = (await session.execute(q)).scalars().all()
             reaped = []
             for row in rows:
                 timeout = row.timeout_seconds or default_timeout
-                started = row.started_at
+                started = row.started_at or row.submitted_at
+                if started is None:
+                    continue
                 # SQLite returns naive datetimes; ensure UTC-aware
                 if started.tzinfo is None:
                     started = started.replace(tzinfo=datetime.timezone.utc)

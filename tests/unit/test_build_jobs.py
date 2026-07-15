@@ -716,6 +716,43 @@ class TestDbBuildJobStore:
 
         self._run(_test())
 
+    def test_reap_timed_out_running_with_null_started_at(self):
+        """A running job whose started_at is NULL must still be reaped (via
+        the submitted_at fallback).  Such rows previously stayed running
+        forever and pinned a builder's current_jobs at capacity — the exact
+        way both openbsd builders wedged."""
+        import datetime
+
+        from sqlalchemy import select
+
+        from cvcpkg.server.db import BuildJobRow, get_session
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            job = await store.create(
+                recipe_name="gettext",
+                platform="openbsd",
+                arch="x86_64",
+                submitted_by="admin",
+                timeout_seconds=60,
+            )
+            old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=3)
+            async with get_session() as session:
+                row = (
+                    await session.execute(select(BuildJobRow).where(BuildJobRow.id == job.id))
+                ).scalar()
+                row.status = BuildJobStatus.running
+                row.started_at = None  # corrupt/abandoned running row
+                row.submitted_at = old
+
+            reaped = await store.reap_timed_out(default_timeout=86400)
+            assert len(reaped) == 1
+            assert reaped[0].id == job.id
+            assert reaped[0].status == BuildJobStatus.timed_out
+
+        self._run(_test())
+
     def test_priority_ordering(self):
         from cvcpkg.server.db_stores import DbBuildJobStore
 
@@ -1654,6 +1691,105 @@ class TestDbBuildJobStore:
             # Without reconcile, trusts the client
             info = await bstore.heartbeat(builder.id, current_jobs=0, reconcile=False)
             assert info.current_jobs == 0  # client value used
+
+        self._run(_test())
+
+    def test_stuck_running_job_wedges_then_reap_frees_builder(self):
+        """End-to-end regression for the openbsd builder wedge.
+
+        Two jobs stuck ``running`` with a null ``started_at`` make the
+        heartbeat reconcile report the builder as full (current_jobs ==
+        max_jobs), so the scheduler stops giving it work.  After
+        reap_timed_out clears them, the next reconcile frees the builder.
+        """
+        import datetime
+
+        from sqlalchemy import select
+
+        from cvcpkg.server.db import BuildJobRow, get_session
+        from cvcpkg.server.db_stores import DbBuilderStore, DbBuildJobStore
+
+        async def _test():
+            bstore = DbBuilderStore()
+            builder = await bstore.register(
+                name="obsd",
+                platform="openbsd",
+                arch="x86_64",
+                registered_by="a",
+                max_jobs=2,
+            )
+            store = DbBuildJobStore()
+
+            old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=3)
+            job_ids = []
+            for recipe in ("gettext", "libunistring"):
+                j = await store.create(
+                    recipe_name=recipe,
+                    platform="openbsd",
+                    arch="x86_64",
+                    submitted_by="admin",
+                    timeout_seconds=60,
+                )
+                await store.dispatch(j.id, builder.id)
+                await store.claim(j.id, builder.id)
+                job_ids.append(j.id)
+
+            # Corrupt both into the abandoned-running state (null started_at,
+            # old submitted_at) that the old reaper skipped.
+            async with get_session() as session:
+                for jid in job_ids:
+                    row = (
+                        await session.execute(select(BuildJobRow).where(BuildJobRow.id == jid))
+                    ).scalar()
+                    row.status = BuildJobStatus.running
+                    row.started_at = None
+                    row.submitted_at = old
+
+            # Wedged: reconcile counts both stuck rows → builder looks full.
+            info = await bstore.heartbeat(builder.id, current_jobs=0, reconcile=True)
+            assert info.current_jobs == 2
+            assert info.current_jobs >= builder.max_jobs  # scheduler would skip it
+
+            # The reaper clears them...
+            reaped = await store.reap_timed_out(default_timeout=86400)
+            assert {r.id for r in reaped} == set(job_ids)
+
+            # ...and the next reconcile frees the builder.
+            info = await bstore.heartbeat(builder.id, current_jobs=0, reconcile=True)
+            assert info.current_jobs == 0
+
+        self._run(_test())
+
+    def test_reap_timed_out_leaves_fresh_running_job(self):
+        """Guard against over-reaping: a running job started well within its
+        timeout must NOT be reaped."""
+        import datetime
+
+        from sqlalchemy import select
+
+        from cvcpkg.server.db import BuildJobRow, get_session
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            job = await store.create(
+                recipe_name="zlib",
+                platform="linux",
+                arch="x86_64",
+                submitted_by="admin",
+                timeout_seconds=3600,
+            )
+            async with get_session() as session:
+                row = (
+                    await session.execute(select(BuildJobRow).where(BuildJobRow.id == job.id))
+                ).scalar()
+                row.status = BuildJobStatus.running
+                row.started_at = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+                    seconds=30
+                )
+
+            reaped = await store.reap_timed_out(default_timeout=86400)
+            assert reaped == []
 
         self._run(_test())
 

@@ -27,6 +27,14 @@ def _no_signal_handlers(monkeypatch):
     monkeypatch.setattr(signal, "signal", lambda *a, **k: None)
 
 
+@pytest.fixture(autouse=True)
+def _fast_drain_settle(monkeypatch):
+    """Drain mode waits ``CVCPKG_DRAIN_SETTLE_SECS`` (default 20s, giving the
+    scheduler time to dispatch) before concluding the queue is empty.  Zero it
+    so the empty-queue tests exit immediately."""
+    monkeypatch.setenv("CVCPKG_DRAIN_SETTLE_SECS", "0")
+
+
 class _Resp:
     def __init__(self, status=200, data=None, text=""):
         self.status_code = status
@@ -148,3 +156,113 @@ def test_drain_unregisters_on_exit(monkeypatch, tmp_path):
     )
     assert result.exit_code == 0, result.output
     assert any(method == "DELETE" for method, _ in calls)
+
+
+def test_drain_settle_waits_before_exit(monkeypatch, tmp_path):
+    """With a non-zero settle window, an empty queue does NOT exit on the
+    first 204 — it waits, giving the scheduler time to dispatch a pending
+    job to a just-registered drain builder (regression for the macOS drain
+    orphaning jobs)."""
+    monkeypatch.setenv("CVCPKG_DRAIN_SETTLE_SECS", "1")
+    monkeypatch.setattr(httpx, "Client", _fake_client(get_status=204))
+
+    import time as _time
+
+    start = _time.time()
+    runner = CliRunner()
+    result = runner.invoke(
+        builder_run,
+        [
+            "--server",
+            "http://s.example",
+            "--token",
+            "t",
+            "--name",
+            "drain-settle",
+            "--work-dir",
+            str(tmp_path),
+            "--exit-when-empty",
+            "--no-websocket",
+        ],
+    )
+    elapsed = _time.time() - start
+    assert result.exit_code == 0, result.output
+    # It must have waited out the ~1s settle window rather than exiting on
+    # the first empty poll.
+    assert elapsed >= 1.0, f"drain exited too fast ({elapsed:.2f}s); settle window not honored"
+    assert "Queue empty" in result.output
+
+
+def test_failed_claim_releases_slot(monkeypatch, tmp_path):
+    """A job whose claim fails (>=400) must release its slot. Otherwise the
+    slot leaks and a max-jobs=1 builder wedges at capacity, never polling
+    again — the openbsd builders got stuck at 2/2 exactly this way.
+
+    Setup: next-job hands out one job, then 204 forever; the claim POST
+    returns 409. With the leak the builder would never poll next-job again
+    (available==0) and would only exit via --max-runtime. Fixed, the slot is
+    released, the next poll sees 204, and it exits 'Queue empty'."""
+    job_given = {"n": 0}
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def close(self):
+            pass
+
+        def post(self, url, **k):
+            if url.endswith("/register"):
+                return _Resp(200, {"id": 1})
+            if url.endswith("/claim"):
+                return _Resp(409, {"detail": "already claimed"})  # force early return
+            return _Resp(200, {})
+
+        def get(self, url, **k):
+            if url.endswith("/next-job"):
+                if job_given["n"] == 0:
+                    job_given["n"] = 1
+                    return _Resp(
+                        200,
+                        {
+                            "id": 42,
+                            "recipe_name": "zlib",
+                            "platform": "macos",
+                            "arch": "arm64",
+                        },
+                    )
+                return _Resp(204)
+            return _Resp(204)
+
+        def delete(self, url, **k):
+            return _Resp(200, {})
+
+    monkeypatch.setattr(httpx, "Client", _Client)
+    result = CliRunner().invoke(
+        builder_run,
+        _BASE_ARGS
+        + [
+            "--name",
+            "leak-test",
+            "--max-jobs",
+            "1",
+            "--exit-when-empty",
+            "--max-runtime",
+            "20",
+            "--work-dir",
+            str(tmp_path / "wd"),
+            "--pidfile",
+            str(tmp_path / "b.pid"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    # If the slot leaked, capacity would stay 0 and it could only exit via the
+    # runtime budget.  The fix means it drains and exits on the empty queue.
+    assert "Queue empty" in result.output, result.output
+    assert "Max runtime reached" not in result.output, result.output
