@@ -203,6 +203,17 @@ Setting `is_private` to `true` restricts visibility:
 - **Member list**: Only visible to members and admins.
 - **Package downloads**: Require a valid token belonging to an org member.
 
+The visibility rule is enforced on **every** read path — the per-name lookup,
+the paged listing, search (including its facet buckets and counts), and the
+catalog — so a private org's packages, and even their existence, never leak to a
+non-member.
+
+> On an **edge/satellite** server, org packages are *local-only*: published on
+> the edge and never propagated to or from the upstream primary. See
+> [Clusters & Federation](clusters-and-federation.md) for the upstream-mirror +
+> local-only-org model, and for depending on another server's org packages
+> across a federation.
+
 To make an existing org private:
 
 ```bash

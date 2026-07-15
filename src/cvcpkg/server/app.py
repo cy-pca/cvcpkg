@@ -1833,7 +1833,7 @@ def create_app(
         include_yanked: bool = Query(False, description="Include yanked packages in results"),
         limit: int = Query(100, ge=1, le=1000),
         offset: int = Query(0, ge=0),
-        _auth: None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         if _use_db:
             # 'live' is a virtual tag meaning release_tag == ""
@@ -1851,6 +1851,7 @@ def create_app(
                 build_type=build_type,
                 link=link,
                 org_slug=org,
+                caller_token_name=(caller.name if caller else ""),
             )
             if release == "live":
                 # get_bundles with release="" returns all — filter to empty tag
@@ -1933,7 +1934,7 @@ def create_app(
             alias="facets",
             description="Compute facet buckets over the filtered result set.",
         ),
-        _auth: None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         """Search the package catalog with optional facets.
 
@@ -1966,6 +1967,7 @@ def create_app(
                 build_type=build_type,
                 link=link,
                 org_slug=org,
+                caller_token_name=(caller.name if caller else ""),
             )
             if release == "live":
                 packages = [p for p in packages if not p.release_tag]
@@ -1987,6 +1989,7 @@ def create_app(
                     build_type=build_type,
                     link=link,
                     org_slug=org,
+                    caller_token_name=(caller.name if caller else ""),
                 )
                 more = _apply_tag_filter(more)
                 total = len(more)
@@ -2011,6 +2014,7 @@ def create_app(
                     build_type=build_type,
                     link=link,
                     org_slug=org,
+                    caller_token_name=(caller.name if caller else ""),
                 )
                 if release == "live" or tag:
                     # Facets from get_search_facets don't know about 'live'

@@ -229,3 +229,29 @@ class TestPrivatePackageVisibility:
         assert bundles and all(b.get("org") == "shell" for b in bundles)
         # The listing now exposes required_deps (needed for federated resolution).
         assert "required_deps" in bundles[0]
+
+    def test_list_endpoint_hides_private(self, edge_server):
+        client, pub_token, _ = edge_server
+        self._publish_private(client, pub_token)
+        anon = client.get("/v1/packages", params={"org": "shell"}).json()
+        assert _bundles(anon) == []
+        member = client.get(
+            "/v1/packages", params={"org": "shell"}, headers=_hdr(pub_token)
+        ).json()
+        assert any(b.get("org") == "shell" for b in _bundles(member))
+
+    def test_search_hides_private_including_facets(self, edge_server):
+        client, pub_token, _ = edge_server
+        self._publish_private(client, pub_token)
+        anon = client.get("/v1/search", params={"q": "secretlib"}).json()
+        # No private bundle in results, and the private org must not leak via facets.
+        assert all(b.get("org") != "shell" for b in _bundles(anon))
+        orgs_facet = [
+            fb.get("value") for fb in (anon.get("facets", {}) or {}).get("orgs", []) or []
+        ]
+        assert "shell" not in orgs_facet
+        # A member sees their own private package in search.
+        member = client.get(
+            "/v1/search", params={"q": "secretlib"}, headers=_hdr(pub_token)
+        ).json()
+        assert any(b.get("org") == "shell" for b in _bundles(member))

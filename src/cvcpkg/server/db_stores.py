@@ -766,6 +766,7 @@ class DbPackageIndex:
         build_type: str = "",
         link: str = "",
         max_buckets: int = 50,
+        caller_token_name: str | None = None,
     ) -> tuple[dict[str, list[tuple[str, int]]], int, int, int]:
         """Return facet buckets for the same filter set as ``get_bundles``.
 
@@ -775,6 +776,26 @@ class DbPackageIndex:
         ``max_buckets`` caps the per-facet list length.
         """
         base_filters = []
+        if caller_token_name is not None:
+            # Visibility (mirrors get_bundles): public base + public orgs +
+            # private orgs the caller is a member of.  Keeps private packages —
+            # and private org names — out of facet buckets and totals.
+            visible = or_(
+                PackageRow.org_slug == "",
+                PackageRow.org_slug.in_(
+                    select(OrganizationRow.slug).where(
+                        OrganizationRow.is_private == False  # noqa: E712
+                    )
+                ),
+            )
+            if caller_token_name:
+                member_orgs = (
+                    select(OrganizationRow.slug)
+                    .join(OrgMemberRow, OrgMemberRow.org_id == OrganizationRow.id)
+                    .where(OrgMemberRow.token_name == caller_token_name)
+                )
+                visible = or_(visible, PackageRow.org_slug.in_(member_orgs))
+            base_filters.append(visible)
         if not include_yanked:
             base_filters.append(PackageRow.yanked == False)  # noqa: E712
         if name:
