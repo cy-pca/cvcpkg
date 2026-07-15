@@ -266,6 +266,32 @@ class DownloadEventRow(Base):
     __table_args__ = (Index("ix_download_events_name_date", "package_name", "downloaded_at"),)
 
 
+class TelemetryEventRow(Base):
+    """Opt-in client telemetry pings (Phase 2 roadmap).
+
+    Strictly anonymous environment fingerprints: platform, arch, Python and
+    cvcpkg versions, tool availability, and a CI flag.  No address (not even
+    hashed), no hostname, no user, no paths.  Clients only send these when
+    ``CVCPKG_TELEMETRY=1`` or via an explicit ``cvcpkg telemetry send``.
+    """
+
+    __tablename__ = "telemetry_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    platform: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    arch: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    python_version: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    cvcpkg_version: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    ci: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    tools: Mapped[str] = mapped_column(Text, nullable=False, default="{}")  # JSON name→version
+    received_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        index=True,
+    )
+
+
 class TagRow(Base):
     """Curated tag metadata for the browse-by-tag front page.
 

@@ -459,6 +459,13 @@ def install(
 
     click.echo(f"cvcpkg: done -- {len(picked)} component(s) installed to {prefix_path}")
 
+    # Opt-in telemetry (Phase 2): fire-and-forget, only when the user set
+    # CVCPKG_TELEMETRY=1.  Never raises, never slows the install by more
+    # than a few seconds, sends only anonymous environment facts.
+    from cvcpkg.cli._telemetry import maybe_send_telemetry
+
+    maybe_send_telemetry(os.environ.get("CVCPKG_SERVER_URL", ""))
+
 
 def _activation_hint(plat: str, prefix: Path) -> str:
     """Return a copy-pasteable activate command for the user."""

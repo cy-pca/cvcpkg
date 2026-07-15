@@ -939,3 +939,20 @@ class WebhookUpdateRequest(BaseModel):
 class WebhookListResponse(BaseModel):
     total: int
     webhooks: list[WebhookInfo]
+
+
+class TelemetryPayload(BaseModel):
+    """Opt-in client telemetry ping (Phase 2 roadmap).
+
+    Strictly anonymous environment facts — no hostname, user, or paths.
+    """
+
+    platform: str = Field(default="", max_length=64)
+    arch: str = Field(default="", max_length=64)
+    python_version: str = Field(default="", max_length=64)
+    cvcpkg_version: str = Field(default="", max_length=64)
+    ci: bool = False
+    tools: dict[str, str] = Field(
+        default_factory=dict,
+        description="Tool name -> version string (cmake, ninja, compiler, git).",
+    )

@@ -89,6 +89,7 @@ from cvcpkg.cli import (  # noqa: E402, F401
     _search,
     _server,
     _signing,
+    _telemetry,
     _webhook,
 )
 from cvcpkg.cli._build import (  # noqa: E402, F401

@@ -42,6 +42,7 @@ EXPECTED_SUBMODULES = [
     "_search",
     "_server",
     "_signing",
+    "_telemetry",
     "_webhook",
 ]
 

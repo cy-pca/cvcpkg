@@ -28,6 +28,7 @@ from cvcpkg.server.db import (
     PackageRow,
     RecipeRow,
     TagRow,
+    TelemetryEventRow,
     TokenRequestRow,
     TokenRow,
     WebhookRow,
@@ -1746,6 +1747,86 @@ class DbDownloadStore:
             )
             rows = (await session.execute(q)).all()
         return [{"version": r.cvcpkg_version or "", "count": r.count} for r in rows]
+
+
+# ── Telemetry store ─────────────────────────────────────────────
+
+
+class DbTelemetryStore:
+    """Opt-in client telemetry backed by ``telemetry_events``.
+
+    Aggregate-only by design: the row carries no address, hostname, or
+    user identifier, so every query here is a GROUP BY over environment
+    facts.
+    """
+
+    async def record(
+        self,
+        *,
+        platform: str = "",
+        arch: str = "",
+        python_version: str = "",
+        cvcpkg_version: str = "",
+        ci: bool = False,
+        tools: dict[str, str] | None = None,
+    ) -> None:
+        """Store one telemetry ping."""
+        tools_json = json.dumps(
+            {str(k)[:32]: str(v)[:64] for k, v in (tools or {}).items()},
+            sort_keys=True,
+        )[:2048]
+        async with get_session() as session:
+            session.add(
+                TelemetryEventRow(
+                    platform=platform[:64],
+                    arch=arch[:64],
+                    python_version=python_version[:64],
+                    cvcpkg_version=cvcpkg_version[:64],
+                    ci=bool(ci),
+                    tools=tools_json,
+                )
+            )
+
+    async def get_summary(self, days: int = 30) -> dict:
+        """Aggregate telemetry over the last N days."""
+        cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+        async with get_session() as session:
+            total = (
+                await session.execute(
+                    select(sa_func.count(TelemetryEventRow.id)).where(
+                        TelemetryEventRow.received_at >= cutoff
+                    )
+                )
+            ).scalar() or 0
+
+            async def _grouped(*cols):
+                q = (
+                    select(*cols, sa_func.count(TelemetryEventRow.id).label("count"))
+                    .where(TelemetryEventRow.received_at >= cutoff)
+                    .group_by(*cols)
+                    .order_by(sa_func.count(TelemetryEventRow.id).desc())
+                )
+                return (await session.execute(q)).all()
+
+            plat_rows = await _grouped(TelemetryEventRow.platform, TelemetryEventRow.arch)
+            py_rows = await _grouped(TelemetryEventRow.python_version)
+            ver_rows = await _grouped(TelemetryEventRow.cvcpkg_version)
+            ci_rows = await _grouped(TelemetryEventRow.ci)
+
+        return {
+            "total": total,
+            "platforms": [
+                {"platform": r.platform or "unknown", "arch": r.arch or "", "count": r.count}
+                for r in plat_rows
+            ],
+            "python_versions": [
+                {"version": r.python_version or "", "count": r.count} for r in py_rows
+            ],
+            "cvcpkg_versions": [
+                {"version": r.cvcpkg_version or "", "count": r.count} for r in ver_rows
+            ],
+            "ci": [{"ci": bool(r.ci), "count": r.count} for r in ci_rows],
+        }
 
 
 # ── Mirror store ────────────────────────────────────────────────

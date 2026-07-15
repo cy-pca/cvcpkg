@@ -102,6 +102,7 @@ from cvcpkg.server.models import (
     TagInfo,
     TagListResponse,
     TagUpdateRequest,
+    TelemetryPayload,
     TokenCreateRequest,
     TokenCreateResponse,
     TokenRecord,
@@ -287,6 +288,7 @@ _db_audit = None  # DbAuditLog when using DB backend
 _db_packages = None  # DbPackageIndex when using DB backend
 _db_orgs = None  # DbOrgStore when using DB backend
 _db_downloads = None  # DbDownloadStore when using DB backend
+_db_telemetry = None  # DbTelemetryStore when using DB backend
 _db_mirrors = None  # DbMirrorStore when using DB backend
 _db_tags = None  # DbTagStore when using DB backend
 _db_token_requests = None  # DbTokenRequestStore when using DB backend
@@ -1219,6 +1221,7 @@ def create_app(
         global _state, _START_TIME, _use_db
         global _db_tokens, _db_audit, _db_packages, _db_orgs
         global _db_downloads, _db_mirrors, _db_tags, _db_token_requests
+        global _db_telemetry
         global _db_builders
         global _db_build_jobs
         global _db_recipes
@@ -1250,6 +1253,7 @@ def create_app(
                 DbPackageIndex,
                 DbRecipeStore,
                 DbTagStore,
+                DbTelemetryStore,
                 DbTokenRequestStore,
                 DbTokenStore,
                 DbWebhookStore,
@@ -1262,6 +1266,7 @@ def create_app(
             _db_packages = DbPackageIndex()
             _db_orgs = DbOrgStore()
             _db_downloads = DbDownloadStore()
+            _db_telemetry = DbTelemetryStore()
             _db_mirrors = DbMirrorStore()
             _db_tags = DbTagStore()
             _db_token_requests = DbTokenRequestStore()
@@ -4295,6 +4300,40 @@ def create_app(
         _require_analytics()
         daily = await _db_downloads.get_daily_downloads(package_name=name, days=days)
         return {"filter_name": name, "days": days, "daily": daily}
+
+    @app.post("/v1/telemetry", tags=["analytics"], status_code=204)
+    async def submit_telemetry(payload: TelemetryPayload):
+        """Accept an opt-in, anonymous client telemetry ping.
+
+        Clients only call this when CVCPKG_TELEMETRY=1 is set or the user
+        runs ``cvcpkg telemetry send`` explicitly.  The payload carries no
+        identifying information and nothing is derived from the connection
+        (no address hash) -- see the Phase 2 privacy notes.
+        """
+        if not _use_db or _db_telemetry is None:
+            raise HTTPException(503, "telemetry requires the database backend")
+        if len(payload.tools) > 16:
+            raise HTTPException(422, "too many tool entries")
+        await _db_telemetry.record(
+            platform=payload.platform,
+            arch=payload.arch,
+            python_version=payload.python_version,
+            cvcpkg_version=payload.cvcpkg_version,
+            ci=payload.ci,
+            tools=payload.tools,
+        )
+        return Response(status_code=204)
+
+    @app.get("/v1/analytics/telemetry", tags=["analytics"])
+    async def analytics_telemetry(
+        days: int = Query(30, ge=1, le=365),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Aggregated opt-in telemetry: platform/python/client mix, CI share."""
+        if not _use_db or _db_telemetry is None:
+            raise HTTPException(503, "telemetry requires the database backend")
+        summary = await _db_telemetry.get_summary(days=days)
+        return {"days": days, **summary}
 
     # ── Admin settings ──────────────────────────────────────
 

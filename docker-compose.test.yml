@@ -36,8 +36,9 @@ services:
             MYSQL_DATABASE: cvcpkg_test
             MYSQL_USER: cvcpkg_test
             MYSQL_PASSWORD: testpass
-        ports:
-            - "127.0.0.1:3307:3306"
+        # No host port publish: tests reach this service over the compose
+        # network (mysql:3306). A host binding only invites port collisions
+        # with unrelated containers on shared runners.
         healthcheck:
             test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-ptestpass"]
             interval: 5s
