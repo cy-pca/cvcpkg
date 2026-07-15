@@ -223,7 +223,9 @@ rename and the remaining gaps are closed.
 - [x] E2E live test (Docker Compose + real server + builder + compile consumer)
 - [x] Recipe validation via JSON schema in CI
 - [x] Source-fallback integration tests (Linux, macOS)
-- [ ] Windows CI integration tests
+- [x] Windows CI integration tests (the full non-Docker integration suite
+      runs on windows-latest in the CI test matrix; server/Docker-bound
+      modules auto-skip via conftest, bash-only modules skip on win32)
 - [x] Automated upgrade/migration test (v1.x → v2.0.0)
       (migration-chain integrity + legacy-lockfile read; live PostgreSQL migration runs in the Docker job)
 - [x] Performance benchmarks for install/resolve with large catalogs (resolver regression guard on a 400-component chain)
@@ -255,9 +257,10 @@ rename and the remaining gaps are closed.
 The following items were identified as potential gaps before the PyPI
 release.  These are the gaps to close **before** the final publish step.
 
-1. ~~**No CHANGELOG.md**~~ — ✅ `CHANGELOG.md` exists; still needs a
-   v2.0.0 entry covering the `cvcpkg` tool changes (doctor, admin CLI,
-   recipe-bundling fix, NullPool fix, postgresql recipes) and the rename.
+1. ~~**No CHANGELOG.md**~~ — ✅ Done.  `CHANGELOG.md` carries a full
+   v2.0.0 entry: the rename note, the release-readiness tool changes
+   (doctor, init, upgrade, admin CLI, signature enforcement), the
+   recipe-bundling and NullPool fixes, and the postgresql recipes.
 2. ~~**No `cvcpkg doctor` command**~~ — ✅ Done.  `cvcpkg doctor` checks
    Python, pip, CMake, Ninja, a C/C++ compiler, git, and (optionally)
    server reachability.

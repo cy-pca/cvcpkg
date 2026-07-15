@@ -69,11 +69,18 @@ jobs:
             --junitxml=unit-results.xml \
             --cov=cvcpkg --cov-branch --cov-report=xml:coverage.xml
 
-      - name: Run recipe integration tests
+      - name: Run integration tests
         working-directory: .
         shell: bash
         run: |
-          poetry run pytest tests/integration/test_end_to_end.py -v --tb=short \
+          # The full non-Docker integration suite runs on every OS in the
+          # matrix (including windows-latest — Phase 1.5 "Windows CI
+          # integration tests").  Server-dependent modules auto-skip via
+          # tests/integration/conftest.py when no live server is reachable,
+          # and platform-specific modules carry their own skip markers
+          # (e.g. test_work_dir is bash-only).  The Docker-backed suite
+          # still runs in the dedicated `integration` job below.
+          poetry run pytest tests/integration/ -v --tb=short \
             --junitxml=integration-results.xml \
             --cov=cvcpkg --cov-branch --cov-append --cov-report=xml:coverage.xml
 

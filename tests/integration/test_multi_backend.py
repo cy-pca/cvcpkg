@@ -99,14 +99,21 @@ def _bootstrap_admin(state_dir: str, db_url: str) -> str:
     global _TOKEN_COUNTER
     _TOKEN_COUNTER += 1
     import subprocess
+    import sys
 
     env = os.environ.copy()
     env["CVCPKG_DATABASE_URL"] = db_url
 
     token_name = f"admin-{os.getpid()}-{_TOKEN_COUNTER}"
+    # Invoke the server CLI through the *running* interpreter rather than a
+    # bare "cvcpkg-server" from PATH: on a machine with another cvcpkg
+    # installed globally (e.g. a Windows builder host), PATH resolution can
+    # pick a different environment that lacks the server extras.
     result = subprocess.run(
         [
-            "cvcpkg-server",
+            sys.executable,
+            "-c",
+            "from cvcpkg.server.cli import server_cli; server_cli()",
             "token",
             "create",
             "--name",

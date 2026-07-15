@@ -1115,7 +1115,10 @@ async def _populate_sync_once() -> int:
 
             safe_filename = _safe_archive_filename(*key)
             dest = state.archives_dir() / safe_filename
-            tmp_path.rename(dest)
+            # Path.replace, not rename: on Windows rename() raises
+            # FileExistsError if dest exists (e.g. republish after delete);
+            # replace() has POSIX overwrite semantics on every platform.
+            tmp_path.replace(dest)
 
             try:
                 await _db_packages.add_package(
@@ -2640,7 +2643,10 @@ def create_app(
 
             # Row committed — this request owns the variant; materialize
             # the archive at its final name.
-            tmp_path.rename(dest)
+            # Path.replace, not rename: on Windows rename() raises
+            # FileExistsError if dest exists (e.g. republish after delete);
+            # replace() has POSIX overwrite semantics on every platform.
+            tmp_path.replace(dest)
 
             # Track org storage usage
             if org and _db_orgs is not None:
@@ -2680,7 +2686,10 @@ def create_app(
             state.index.setdefault("bundles", []).append(bundle)
             state.save_index()
             # Index updated — materialize the archive at its final name.
-            tmp_path.rename(dest)
+            # Path.replace, not rename: on Windows rename() raises
+            # FileExistsError if dest exists (e.g. republish after delete);
+            # replace() has POSIX overwrite semantics on every platform.
+            tmp_path.replace(dest)
             state.audit.record(
                 action=AuditAction.publish,
                 actor=actor.name,
@@ -3011,7 +3020,7 @@ def create_app(
                 raise HTTPException(409, str(exc)) from exc
 
             # Row committed — materialize the archive at its final name.
-            session.temp_path.rename(dest)
+            session.temp_path.replace(dest)  # overwrite-safe on Windows
 
             await _db_audit.record(
                 action=AuditAction.publish,
@@ -3045,7 +3054,7 @@ def create_app(
             state.index.setdefault("bundles", []).append(bundle)
             state.save_index()
             # Index updated — materialize the archive at its final name.
-            session.temp_path.rename(dest)
+            session.temp_path.replace(dest)  # overwrite-safe on Windows
             state.audit.record(
                 action=AuditAction.publish,
                 actor=actor.name,
@@ -5988,7 +5997,7 @@ def create_app(
                 archives.mkdir(parents=True, exist_ok=True)
                 tmp = local.with_suffix(".downloading")
                 tmp.write_bytes(resp.content)
-                tmp.rename(local)
+                tmp.replace(local)  # overwrite-safe on Windows
         except httpx.HTTPStatusError as exc:
             raise HTTPException(
                 exc.response.status_code,
