@@ -2412,6 +2412,7 @@ def create_app(
     @app.get("/v1/download/{filename}", tags=["packages"])
     async def download_archive(
         filename: str,
+        request: Request,
         _auth: None = Depends(optional_reader_auth),
     ):
         state = _get_state()
@@ -2431,6 +2432,7 @@ def create_app(
             pkg_name = stem.split("-")[0] if "-" in stem else stem
             pkg_version = ""
             pkg_platform = ""
+            pkg_arch = ""
             if _db_packages is not None:
                 # Try to find the package by archive_url for accurate metadata
                 pkgs, _ = await _db_packages.get_bundles(limit=1000)
@@ -2439,8 +2441,38 @@ def create_app(
                         pkg_name = p.name
                         pkg_version = p.version
                         pkg_platform = p.platform
+                        pkg_arch = getattr(p, "arch", "") or ""
                         break
-            await _db_downloads.record(pkg_name, pkg_version, pkg_platform)
+
+            # Privacy: store a salted hash of the client address — never the
+            # plain IP.  Salt = the server's token HMAC key (stable across
+            # restarts so aggregates stay consistent, but the address is not
+            # recoverable without the server secret).
+            client_ip = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+            if not client_ip and request.client:
+                client_ip = request.client.host or ""
+            ip_hash = ""
+            if client_ip:
+                salt = getattr(getattr(state, "tokens", None), "_hmac_key", b"") or b"cvcpkg"
+                ip_hash = hashlib.sha256(salt + client_ip.encode()).hexdigest()
+
+            user_agent = request.headers.get("user-agent", "")
+            # cvcpkg clients identify via X-Cvcpkg-Version or a
+            # "cvcpkg/x.y.z" User-Agent prefix.
+            cvcpkg_version = request.headers.get("x-cvcpkg-version", "")
+            if not cvcpkg_version and user_agent.startswith("cvcpkg/"):
+                cvcpkg_version = user_agent.split(" ", 1)[0].removeprefix("cvcpkg/")
+
+            await _db_downloads.record(
+                pkg_name,
+                pkg_version,
+                pkg_platform,
+                arch=pkg_arch,
+                client_ip_hash=ip_hash,
+                user_agent=user_agent,
+                cvcpkg_version=cvcpkg_version,
+                bytes_sent=archive_path.stat().st_size,
+            )
 
         def _stream():
             with open(archive_path, "rb") as f:
@@ -4200,6 +4232,69 @@ def create_app(
                 },
             }
         )
+
+    # ── Analytics (admin) ───────────────────────────────────
+    #
+    # Phase 2 roadmap: aggregate download / bandwidth / platform /
+    # trend analytics for administrators.  All data is aggregate —
+    # client addresses are stored only as salted hashes.
+
+    def _require_analytics():
+        if not _use_db or _db_downloads is None:
+            raise HTTPException(503, "analytics requires the database backend")
+
+    @app.get("/v1/analytics/downloads", tags=["analytics"])
+    async def analytics_downloads(
+        name: str = Query("", description="Filter totals by package name"),
+        days: int = Query(30, ge=1, le=365),
+        limit: int = Query(20, ge=1, le=100, description="Top-package list size"),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Download counts: total, filtered total, and top packages."""
+        _require_analytics()
+        total = await _db_downloads.get_total_downloads()
+        filtered = await _db_downloads.get_total_downloads(package_name=name) if name else total
+        top = await _db_downloads.get_top_packages(days=days, limit=limit)
+        return {
+            "total_all_time": total,
+            "total_filtered": filtered,
+            "filter_name": name,
+            "days": days,
+            "top_packages": top,
+        }
+
+    @app.get("/v1/analytics/bandwidth", tags=["analytics"])
+    async def analytics_bandwidth(
+        name: str = Query("", description="Filter by package name"),
+        days: int = Query(30, ge=1, le=365),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Bandwidth accounting: total bytes served + daily series."""
+        _require_analytics()
+        bw = await _db_downloads.get_bandwidth(package_name=name, days=days)
+        return {"filter_name": name, "days": days, **bw}
+
+    @app.get("/v1/analytics/platforms", tags=["analytics"])
+    async def analytics_platforms(
+        days: int = Query(30, ge=1, le=365),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Download distribution by (platform, arch) and by client version."""
+        _require_analytics()
+        platforms = await _db_downloads.get_platform_distribution(days=days)
+        clients = await _db_downloads.get_client_versions(days=days)
+        return {"days": days, "platforms": platforms, "client_versions": clients}
+
+    @app.get("/v1/analytics/trends", tags=["analytics"])
+    async def analytics_trends(
+        name: str = Query("", description="Filter by package name"),
+        days: int = Query(30, ge=1, le=365),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Time-series download counts (zero-filled daily buckets)."""
+        _require_analytics()
+        daily = await _db_downloads.get_daily_downloads(package_name=name, days=days)
+        return {"filter_name": name, "days": days, "daily": daily}
 
     # ── Admin settings ──────────────────────────────────────
 

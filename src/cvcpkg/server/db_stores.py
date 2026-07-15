@@ -1556,13 +1556,33 @@ class DbOrgStore:
 class DbDownloadStore:
     """Download event tracking backed by the ``download_events`` table."""
 
-    async def record(self, package_name: str, version: str, platform: str = "") -> None:
-        """Record a download event."""
+    async def record(
+        self,
+        package_name: str,
+        version: str,
+        platform: str = "",
+        *,
+        arch: str = "",
+        client_ip_hash: str = "",
+        user_agent: str = "",
+        cvcpkg_version: str = "",
+        bytes_sent: int = 0,
+    ) -> None:
+        """Record a download event.
+
+        ``client_ip_hash`` must already be salted+hashed by the caller —
+        this store never sees a plain client address.
+        """
         async with get_session() as session:
             row = DownloadEventRow(
                 package_name=package_name,
                 version=version,
                 platform=platform,
+                arch=arch,
+                client_ip_hash=client_ip_hash,
+                user_agent=user_agent[:255],
+                cvcpkg_version=cvcpkg_version[:64],
+                bytes_sent=bytes_sent,
             )
             session.add(row)
 
@@ -1575,6 +1595,27 @@ class DbDownloadStore:
             result = await session.execute(q)
             return result.scalar() or 0
 
+    @staticmethod
+    def _day_bucket():
+        """Dialect-safe "date part of downloaded_at" expression.
+
+        ``CAST(... AS DATE)`` is correct on PostgreSQL/MySQL but broken on
+        SQLite, where DATE has NUMERIC affinity — ``CAST('2026-07-14 ...' AS
+        DATE)`` yields the integer ``2026``, which then blows up SQLAlchemy's
+        Date result processor.  SQLite's ``date()`` function returns the
+        proper ``YYYY-MM-DD`` string instead.
+        """
+        from sqlalchemy import Date, cast
+
+        from cvcpkg.server import db as _db
+
+        dialect = ""
+        if getattr(_db, "_engine", None) is not None:
+            dialect = _db._engine.dialect.name
+        if dialect == "sqlite":
+            return sa_func.date(DownloadEventRow.downloaded_at)
+        return cast(DownloadEventRow.downloaded_at, Date)
+
     async def get_daily_downloads(
         self,
         package_name: str = "",
@@ -1584,12 +1625,10 @@ class DbDownloadStore:
 
         Returns list of {"date": "YYYY-MM-DD", "count": N} dicts.
         """
-        from sqlalchemy import Date, cast
-
         cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
         async with get_session() as session:
             q = select(
-                cast(DownloadEventRow.downloaded_at, Date).label("day"),
+                self._day_bucket().label("day"),
                 sa_func.count(DownloadEventRow.id).label("count"),
             ).where(DownloadEventRow.downloaded_at >= cutoff)
             if package_name:
@@ -1610,6 +1649,103 @@ class DbDownloadStore:
             ds = d.isoformat()
             result_list.append({"date": ds, "count": day_counts.get(ds, 0)})
         return result_list
+
+    async def get_top_packages(self, days: int = 30, limit: int = 20) -> list[dict]:
+        """Top downloaded packages over the last N days.
+
+        Returns [{"name": ..., "count": N, "bytes_sent": M}, ...] ordered by
+        count descending.
+        """
+        cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+        async with get_session() as session:
+            q = (
+                select(
+                    DownloadEventRow.package_name,
+                    sa_func.count(DownloadEventRow.id).label("count"),
+                    sa_func.coalesce(sa_func.sum(DownloadEventRow.bytes_sent), 0).label("bytes"),
+                )
+                .where(DownloadEventRow.downloaded_at >= cutoff)
+                .group_by(DownloadEventRow.package_name)
+                .order_by(sa_func.count(DownloadEventRow.id).desc())
+                .limit(limit)
+            )
+            rows = (await session.execute(q)).all()
+        return [
+            {"name": r.package_name, "count": r.count, "bytes_sent": int(r.bytes or 0)}
+            for r in rows
+        ]
+
+    async def get_platform_distribution(self, days: int = 30) -> list[dict]:
+        """Download counts grouped by (platform, arch) over the last N days."""
+        cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+        async with get_session() as session:
+            q = (
+                select(
+                    DownloadEventRow.platform,
+                    DownloadEventRow.arch,
+                    sa_func.count(DownloadEventRow.id).label("count"),
+                )
+                .where(DownloadEventRow.downloaded_at >= cutoff)
+                .group_by(DownloadEventRow.platform, DownloadEventRow.arch)
+                .order_by(sa_func.count(DownloadEventRow.id).desc())
+            )
+            rows = (await session.execute(q)).all()
+        return [
+            {"platform": r.platform or "unknown", "arch": r.arch or "", "count": r.count}
+            for r in rows
+        ]
+
+    async def get_bandwidth(self, package_name: str = "", days: int = 30) -> dict:
+        """Bandwidth accounting over the last N days.
+
+        Returns {"total_bytes": N, "daily": [{"date", "bytes"}, ...]} with
+        zero-filled days, oldest first.
+        """
+        cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+        async with get_session() as session:
+            q = select(
+                self._day_bucket().label("day"),
+                sa_func.coalesce(sa_func.sum(DownloadEventRow.bytes_sent), 0).label("bytes"),
+            ).where(DownloadEventRow.downloaded_at >= cutoff)
+            if package_name:
+                q = q.where(DownloadEventRow.package_name == package_name)
+            q = q.group_by("day").order_by("day")
+            rows = (await session.execute(q)).all()
+
+        day_bytes: dict[str, int] = {}
+        for row in rows:
+            day_str = row.day.isoformat() if hasattr(row.day, "isoformat") else str(row.day)
+            day_bytes[day_str] = int(row.bytes or 0)
+
+        daily = []
+        total = 0
+        for i in range(days):
+            d = (cutoff + datetime.timedelta(days=i + 1)).date()
+            ds = d.isoformat()
+            b = day_bytes.get(ds, 0)
+            total += b
+            daily.append({"date": ds, "bytes": b})
+        return {"total_bytes": total, "daily": daily}
+
+    async def get_client_versions(self, days: int = 30) -> list[dict]:
+        """cvcpkg client version distribution over the last N days.
+
+        Events without a client version (browsers, curl) are aggregated
+        under the empty string.
+        """
+        cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+        async with get_session() as session:
+            q = (
+                select(
+                    DownloadEventRow.cvcpkg_version,
+                    sa_func.count(DownloadEventRow.id).label("count"),
+                )
+                .where(DownloadEventRow.downloaded_at >= cutoff)
+                .group_by(DownloadEventRow.cvcpkg_version)
+                .order_by(sa_func.count(DownloadEventRow.id).desc())
+            )
+            rows = (await session.execute(q)).all()
+        return [{"version": r.cvcpkg_version or "", "count": r.count} for r in rows]
 
 
 # ── Mirror store ────────────────────────────────────────────────

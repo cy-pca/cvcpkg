@@ -9,6 +9,20 @@ from typing import BinaryIO, ClassVar
 from cvcpkg.storage import ObjectInfo, StorageBackend
 
 
+def _user_agent() -> str:
+    """Identify the cvcpkg client (and version) to servers.
+
+    The cvcpkg server's download analytics use the ``cvcpkg/x.y.z``
+    User-Agent prefix for client-version distribution (Phase 2 roadmap).
+    """
+    try:
+        from cvcpkg import __version__
+
+        return f"cvcpkg/{__version__}"
+    except Exception:
+        return "cvcpkg/unknown"
+
+
 class HttpsBackend(StorageBackend):
     """Fetch objects over HTTPS/HTTP using Python's stdlib.
 
@@ -19,7 +33,7 @@ class HttpsBackend(StorageBackend):
     schemes: ClassVar[tuple[str, ...]] = ("https", "http")
 
     def head(self, uri: str) -> ObjectInfo:
-        req = urllib.request.Request(uri, method="HEAD")
+        req = urllib.request.Request(uri, method="HEAD", headers={"User-Agent": _user_agent()})
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
                 size = int(resp.headers.get("Content-Length", -1))
@@ -30,8 +44,9 @@ class HttpsBackend(StorageBackend):
             raise OSError(f"HEAD {uri}: {exc}") from exc
 
     def open(self, uri: str) -> BinaryIO:
+        req = urllib.request.Request(uri, headers={"User-Agent": _user_agent()})
         try:
-            resp = urllib.request.urlopen(uri, timeout=120)  # noqa: S310
+            resp = urllib.request.urlopen(req, timeout=120)  # noqa: S310
             return resp  # type: ignore[return-value]
         except urllib.error.URLError as exc:
             raise OSError(f"GET {uri}: {exc}") from exc
@@ -48,6 +63,7 @@ class HttpsBackend(StorageBackend):
         body = data.read()
         req = urllib.request.Request(uri, data=body, method="PUT")
         req.add_header("Content-Type", "application/octet-stream")
+        req.add_header("User-Agent", _user_agent())
         if size >= 0:
             req.add_header("Content-Length", str(size))
         try:

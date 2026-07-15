@@ -238,7 +238,12 @@ class AuditRow(Base):
 
 
 class DownloadEventRow(Base):
-    """Records individual package download events for analytics."""
+    """Records individual package download events for analytics.
+
+    Privacy: ``client_ip_hash`` is a salted SHA-256 of the client address
+    (salted with the server's HMAC key) — the plain IP is never stored.
+    All analytics queries aggregate; there is no per-user tracking.
+    """
 
     __tablename__ = "download_events"
 
@@ -246,6 +251,11 @@ class DownloadEventRow(Base):
     package_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     version: Mapped[str] = mapped_column(String(255), nullable=False)
     platform: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    arch: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    client_ip_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    user_agent: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    cvcpkg_version: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    bytes_sent: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     downloaded_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
