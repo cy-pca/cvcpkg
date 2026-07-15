@@ -643,6 +643,128 @@ flowchart LR
 
 ---
 
+### Phase 10 — Peer Providers & Hardware-Aware Concretization
+
+**Status: Planned**
+
+Some libraries have **multiple interchangeable implementations behind one ABI** — BLAS/LAPACK
+(OpenBLAS, Intel MKL, BLIS, Apple Accelerate, Arm PL), FFT (FFTW3, MKL's FFTW3 wrapper), an
+SSL/TLS ABI (OpenSSL, …), an OpenMP runtime, and so on. Today a recipe must hard-depend on one
+concrete provider (`openblas`), which bakes a portability/performance choice into every
+downstream package. Phase 10 makes providers **swappable peers**: downstream packages depend on
+the *capability* (the ABI contract), and cvcpkg **concretizes** it to the best provider available
+for the target platform, architecture, and **CPU hardware profile**.
+
+This is the established pattern from Spack (*virtual dependencies + providers + `archspec`
+microarchitecture concretization*), Conda (*mutex metapackages* like `blas * mkl` + virtual
+packages `__avx2` / `__cuda`), Gentoo (*virtuals*), and Debian (*Provides* + *alternatives*) —
+adapted to cvcpkg's pinned, cross-platform, reproducible model.
+
+#### Concepts
+
+1. **Virtual capability** — a named ABI contract defined once in `capabilities/<name>.yaml`: the
+   headers, soname(s), the CMake target consumers link (e.g. `BLAS::BLAS`), an ABI/interface
+   version, the ranked list of candidate providers, and a **mutex** rule (exactly one provider of
+   a virtual may be active in a prefix — two BLAS libraries colliding on the same soname is an
+   error, not a merge).
+2. **`provides:` (peers)** — a recipe declares which virtuals it satisfies. `openblas` →
+   `provides: [blas, lapack, cblas]`; `mkl` → `provides: [blas, lapack, cblas, fftw3]`. Recipes
+   providing the same virtual are **peers**: ABI-compatible and swappable. Peers must honour the
+   capability's ABI contract (same target, same headers/soname), which `cvcpkg validate` checks.
+3. **Eligibility gating** — each provider entry carries `platforms:` (arch/OS availability — MKL
+   is `linux-x86_64` / `windows-x64` only) and `requires_isa:` (CPU instruction sets it needs to
+   *run/perform* — an AVX-512 MKL variant requires `avx512f`; a baseline build requires `sse4_2`).
+   Providers whose platform or ISA requirements the target can't meet are pruned **before**
+   selection.
+4. **Meta-package shim** — downstream depends on the **virtual**, not a provider:
+   `depends: { runtime: [blas, lapack] }`. Resolution replaces the virtual with the concretized
+   peer. A thin `blas` meta-recipe (depends only on the virtual) is shipped for users who just want
+   "the sane default for my machine."
+5. **Hardware-aware concretization** — the solver: (a) filters providers to those whose
+   `platforms` include the target and whose `requires_isa ⊆` the target **hardware profile**;
+   (b) ranks the survivors by the capability's `default_priority`, overridable per-user
+   (`providers: { blas: mkl }` in config, or `--provider blas=mkl`); (c) enforces the mutex and
+   reports conflicts. A **HardwareProfile** descriptor — `{arch, isa: [avx2, avx512f, fma, neon…],
+   gpu: {vendor, arch}}` — is **probed from the local target by default** (cpuid / `/proc/cpuinfo`
+   / `sysctl`), or **supplied explicitly** to concretize a runtime pack for *other* hardware
+   (cross-target builds; mirrors Conda `__`-virtuals / archspec).
+6. **Provenance & reproducibility** — the concretized choice (which peer, and *why*: platform +
+   satisfied ISA + priority) is recorded in the lockfile / release manifest **per target profile**.
+   Re-resolving on the same profile is deterministic; a *different* profile may legitimately
+   resolve a different peer. An LTS release therefore pins provider resolution per profile, not a
+   single global provider.
+
+#### recipe.yaml / schema additions (additive, backward-compatible)
+
+```yaml
+# capabilities/blas.yaml — the virtual ABI contract (new recipe kind)
+kind: capability
+capability:
+  name: blas
+  abi_version: "3"                 # netlib BLAS interface
+  cmake_target: BLAS::BLAS         # what consumers link; every provider must export it
+  mutex: true                      # exactly one provider per prefix
+providers:                         # ranked; first eligible wins unless overridden
+  - { name: mkl,        platforms: [linux-x86_64, windows-x64], requires_isa: [avx2], priority: 30 }
+  - { name: blis,       platforms: [linux-x86_64, windows-x64], requires_isa: [avx2], priority: 20 }
+  - { name: armpl,      platforms: [linux-aarch64],             requires_isa: [neon], priority: 20 }
+  - { name: accelerate, platforms: [macos-arm64, macos-x86_64],                       priority: 25 }
+  - { name: openblas,   platforms: ["*"],                       requires_isa: [],     priority: 10 }  # portable default
+default: openblas
+```
+
+```yaml
+# recipes/openblas/recipe.yaml — a peer provider
+recipe: { name: openblas, ... }
+provides: [ { virtual: blas, abi_version: "3" }, { virtual: lapack, abi_version: "3.1" }, cblas ]
+requires_isa: []            # runs anywhere; a per-arch build matrix handles kernels internally
+
+# recipes/mkl/recipe.yaml — a peer provider (x86-64 only)
+recipe: { name: mkl, ... }        # prebuilt-staging; ships MKLConfig.cmake
+provides: [ { virtual: blas, abi_version: "3" }, { virtual: lapack, abi_version: "3.1" }, cblas,
+            { virtual: fftw3, abi_version: "3" } ]     # MKL also satisfies the FFTW3 ABI
+requires_isa: [avx2]
+
+# downstream — depend on the capability, not a provider
+# recipes/numpy/recipe.yaml  (a Phase-7 python_sdist)
+depends: { build: [ { virtual: blas }, { virtual: lapack } ],
+           runtime: [ { virtual: blas }, { virtual: lapack } ] }
+```
+
+#### CLI
+
+```
+cvcpkg install --provider blas=mkl numpy scipy     # force a peer
+cvcpkg providers blas                              # list eligible/selected peers for this host
+cvcpkg profile                                     # show detected HardwareProfile (arch + ISA + gpu)
+cvcpkg install --hardware-profile lonestar6.yaml … # concretize for a *different* target
+```
+
+#### Worked example — BLAS on three targets
+
+With `numpy`, `scipy`, and `F2Dock` all declaring `depends: [blas, lapack]`:
+
+- **Lonestar6 (x86-64, AVX-512):** eligible = {mkl, blis, openblas} → **mkl** (highest priority,
+  ISA satisfied). numpy/scipy/F2Dock link MKL; F2Dock also gets MKL's FFTW3 ABI for free.
+- **Apple M-series (macos-arm64):** eligible = {accelerate, openblas} → **accelerate**.
+- **Linux aarch64 server:** eligible = {armpl, openblas} → **armpl** if present, else **openblas**.
+- **Older x86-64 without AVX2:** mkl/blis pruned by `requires_isa` → **openblas** (the portable
+  default always survives).
+
+#### Composition with the rest of the roadmap
+
+- **Phase 7 (Python).** A numpy/scipy `python_sdist` that `depends: [blas]` builds against whichever
+  peer is concretized — "MKL numpy vs OpenBLAS numpy" becomes a **provider choice, not two
+  recipes**, and the whole hermetic Python+native prefix shares the one selected BLAS.
+- **Provider families.** The same mechanism generalizes the ad-hoc `CVC_BLAS_PROVIDER` /
+  `CVC_FFT_PROVIDER` switches discussed for the Intel-MKL work into a first-class,
+  hardware-aware selector — and extends to any single-ABI/many-implementations library (FFT, SSL,
+  OpenMP runtime, malloc, …).
+- **Releases.** An LTS release records the resolved provider per `HardwareProfile`, keeping
+  cross-platform reproducibility while letting each target get its best-available implementation.
+
+---
+
 ## Package Recipes
 
 ### Current Recipes (v2.0.0) — 99 recipes at release; 129 live in `recipes/` as of 2026-07
