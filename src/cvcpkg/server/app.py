@@ -34,6 +34,7 @@ import yaml
 from fastapi import (
     Depends,
     FastAPI,
+    Form,
     Header,
     HTTPException,
     Query,
@@ -48,6 +49,7 @@ from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
     PlainTextResponse,
+    RedirectResponse,
     Response,
     StreamingResponse,
 )
@@ -4334,6 +4336,94 @@ def create_app(
             raise HTTPException(503, "telemetry requires the database backend")
         summary = await _db_telemetry.get_summary(days=days)
         return {"days": days, **summary}
+
+    # ── Admin dashboard UI (Phase 3) ────────────────────────
+
+    def _admin_session_key() -> bytes:
+        state = _get_state()
+        key = getattr(getattr(state, "tokens", None), "_hmac_key", b"")
+        return key or b"cvcpkg-admin-session"
+
+    def _has_admin_session(request: Request) -> bool:
+        from cvcpkg.server import admin_ui
+
+        val = request.cookies.get(admin_ui._SESSION_COOKIE, "")
+        return bool(val) and admin_ui.verify_session_value(_admin_session_key(), val)
+
+    @app.get("/admin", tags=["admin"], response_class=HTMLResponse)
+    async def admin_dashboard(request: Request):
+        """Server-rendered admin overview (login page when unauthenticated)."""
+        from cvcpkg import __version__ as _server_version
+        from cvcpkg.server import admin_ui
+
+        if not _has_admin_session(request):
+            return HTMLResponse(admin_ui.login_html())
+
+        days = 30
+        data: dict = {"days": days, "stats": {"version": _server_version, "packages_count": 0}}
+        if _use_db:
+            if _db_packages is not None:
+                _pkgs, total_pkgs = await _db_packages.get_bundles(limit=1)
+                data["stats"]["packages_count"] = total_pkgs
+            if _db_downloads is not None:
+                data["downloads"] = {
+                    "total_all_time": await _db_downloads.get_total_downloads(),
+                    "top_packages": await _db_downloads.get_top_packages(days=days, limit=15),
+                }
+                data["bandwidth"] = await _db_downloads.get_bandwidth(days=days)
+                data["platforms"] = {
+                    "platforms": await _db_downloads.get_platform_distribution(days=days),
+                    "client_versions": await _db_downloads.get_client_versions(days=days),
+                }
+                data["trend_daily"] = await _db_downloads.get_daily_downloads(days=days)
+            if _db_telemetry is not None:
+                data["telemetry"] = await _db_telemetry.get_summary(days=days)
+        return HTMLResponse(admin_ui.dashboard_html(data))
+
+    @app.post("/admin/login", tags=["admin"], response_class=HTMLResponse)
+    async def admin_login(token: str = Form("")):
+        """Exchange an admin API token for a signed session cookie."""
+        from cvcpkg.server import admin_ui
+
+        record = None
+        if _use_db and _db_tokens is not None:
+            record = await _db_tokens.verify(token)
+        else:
+            state = _get_state()
+            record = state.tokens.verify(token)
+
+        if record is None or record.role != TokenRole.admin:
+            return HTMLResponse(
+                admin_ui.login_html(error="Invalid token or not an admin token."),
+                status_code=401,
+            )
+
+        if _use_db and _db_audit is not None:
+            await _db_audit.record(
+                action=AuditAction.token_create,  # closest existing action
+                actor=record.name,
+                target="admin-ui",
+                detail="admin dashboard login",
+            )
+
+        resp = RedirectResponse("/admin", status_code=303)
+        resp.set_cookie(
+            admin_ui._SESSION_COOKIE,
+            admin_ui.make_session_value(_admin_session_key()),
+            max_age=admin_ui._SESSION_TTL_SECONDS,
+            httponly=True,
+            samesite="lax",
+            path="/admin",
+        )
+        return resp
+
+    @app.post("/admin/logout", tags=["admin"])
+    async def admin_logout():
+        from cvcpkg.server import admin_ui
+
+        resp = RedirectResponse("/admin", status_code=303)
+        resp.delete_cookie(admin_ui._SESSION_COOKIE, path="/admin")
+        return resp
 
     # ── Admin settings ──────────────────────────────────────
 
