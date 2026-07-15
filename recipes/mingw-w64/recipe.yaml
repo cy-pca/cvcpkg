@@ -1,0 +1,79 @@
+schema_version: 1
+recipe:
+  name: mingw-w64
+  upstream_version: "20260616"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/mstorsjo/llvm-mingw
+  license: "Apache-2.0 WITH LLVM-exception"
+  tags: [tools, toolchain, windows, cross]
+  description: >-
+    A prebuilt LLVM/Clang mingw-w64 cross-toolchain (llvm-mingw) that runs on
+    Linux and targets native Windows x86_64 (UCRT).  It lets a Linux build host
+    cross-compile Windows PE binaries with no Windows machine and no MSVC — the
+    GNU/Clang counterpart to cvcpkg's MSVC winhost path.  Ships clang, lld, the
+    mingw-w64 CRT + headers, libc++/libunwind, and the
+    x86_64-w64-mingw32-{gcc,g++,clang,windres,...} wrappers.  (Trimmed to the
+    x86_64 target; the upstream i686/aarch64/armv7 sysroots are dropped to keep
+    the package lean — an arm64 Windows variant can be added later.)
+
+# Consumed by cvcpkg's cross-build machinery: a builder run with
+# `--cross-platform windows-gnu` stages this toolchain and exports CVC_MINGW_DIR
+# so a recipe's windows-gnu build script can find x86_64-w64-mingw32-*.
+cross_toolchain:
+  target_platforms: [windows-gnu]
+  env:
+    CVC_MINGW_DIR: "${PREFIX}"
+
+source:
+  # Single Linux-host artifact (this toolchain only runs on the build host), so
+  # a sha256-pinned tarball is simpler than a per-platform prebuilt block.
+  type: tarball
+  url: https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-ubuntu-22.04-x86_64.tar.xz
+  sha256: "534b92e067b22a6b4441f48ae9240a3341b17825d04d577eab0cf85c44b4deda"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+      env: {}
+
+package:
+  files:
+    - bin/
+    - lib/
+    - include/
+    - share/
+    - x86_64-w64-mingw32/
+    - generic-w64-mingw32/
+  cmake_packages: []
+
+toolchain:
+  note: >-
+    Pre-built binaries — no compiler required at build time.
+
+notes:
+  - title: "Prebuilt llvm-mingw (Clang + mingw-w64, Linux → Windows)"
+    platforms: [linux]
+    description: >-
+      Stages the pinned llvm-mingw UCRT release into the prefix.  Use it as a
+      host_tool plus a `--cross-platform windows-gnu` cross target to build
+      Windows PE binaries from Linux with zero Windows dependencies.
+  - title: "GNU/mingw vs MSVC — different ABI"
+    platforms: [linux]
+    description: >-
+      mingw output uses the GNU/mingw ABI + CRT, distinct from the MSVC
+      `windows` platform (winhost).  It links cleanly for C libraries and
+      standalone executables (a mingw import lib is usable from MSVC for pure-C
+      symbols); keep the MSVC `windows` path for C++ libraries whose ABI an MSVC
+      consumer must match.
