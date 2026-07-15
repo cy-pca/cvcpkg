@@ -1410,11 +1410,24 @@ class DbOrgStore:
         limit: int = 100,
         offset: int = 0,
         include_private: bool = False,
+        caller_token_name: str = "",
     ) -> tuple[list[OrgInfo], int]:
         async with get_session() as session:
-            base_filter = (
-                True if include_private else OrganizationRow.is_private == False  # noqa: E712
-            )
+            if include_private:
+                base_filter = True  # admin: all orgs
+            elif caller_token_name:
+                # Public orgs + private orgs the caller is a member of.
+                member_slugs = (
+                    select(OrganizationRow.slug)
+                    .join(OrgMemberRow, OrgMemberRow.org_id == OrganizationRow.id)
+                    .where(OrgMemberRow.token_name == caller_token_name)
+                )
+                base_filter = or_(
+                    OrganizationRow.is_private == False,  # noqa: E712
+                    OrganizationRow.slug.in_(member_slugs),
+                )
+            else:
+                base_filter = OrganizationRow.is_private == False  # noqa: E712
             count_q = select(sa_func.count(OrganizationRow.id)).where(base_filter)
             total = (await session.execute(count_q)).scalar() or 0
 
@@ -1427,6 +1440,18 @@ class DbOrgStore:
             )
             result = await session.execute(q)
             return [self._row_to_info(r) for r in result.scalars().all()], total
+
+    async def member_org_slugs(self, token_name: str) -> set[str]:
+        """Return the set of org slugs *token_name* is a member of."""
+        if not token_name:
+            return set()
+        async with get_session() as session:
+            q = (
+                select(OrganizationRow.slug)
+                .join(OrgMemberRow, OrgMemberRow.org_id == OrganizationRow.id)
+                .where(OrgMemberRow.token_name == token_name)
+            )
+            return set((await session.execute(q)).scalars().all())
 
     async def update(
         self,

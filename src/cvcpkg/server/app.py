@@ -230,6 +230,15 @@ def _reject_public_publish_on_edge(org: str) -> None:
             "instead (pass --org / org=...).",
         )
 
+
+def _redact_org_storage(org):
+    """Return a copy of *org* with the member/admin-only storage figures nulled.
+
+    Storage limit + usage are visible only to org members and super-admins; the
+    API nulls them for everyone else so the SPA simply omits the storage UI.
+    """
+    return org.model_copy(update={"storage_limit_bytes": None, "storage_used_bytes": None})
+
 # Seconds between populate syncs.
 POPULATE_INTERVAL = int(os.environ.get("CVCPKG_POPULATE_INTERVAL", "900"))
 
@@ -4014,14 +4023,22 @@ def create_app(
     async def list_orgs(
         limit: int = Query(100, ge=1, le=1000),
         offset: int = Query(0, ge=0),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         if not _use_db or _db_orgs is None:
             return OrgListResponse(total=0, organizations=[])
+        is_admin = caller is not None and caller.role == TokenRole.admin
+        caller_name = caller.name if caller else ""
         orgs, total = await _db_orgs.list_orgs(
             limit=limit,
             offset=offset,
-            include_private=False,
+            include_private=is_admin,
+            caller_token_name=caller_name,
         )
+        # Storage figures are member/super-admin-only.
+        if not is_admin:
+            member_slugs = await _db_orgs.member_org_slugs(caller_name)
+            orgs = [o if o.slug in member_slugs else _redact_org_storage(o) for o in orgs]
         return OrgListResponse(total=total, organizations=orgs)
 
     @app.get("/v1/orgs/{slug}", response_model=OrgDetailResponse, tags=["organizations"])
@@ -4046,7 +4063,11 @@ def create_app(
             members = await _db_orgs.get_members(slug)
         else:
             members = []
-        packages, _ = await _db_packages.get_bundles(org_slug=slug)
+            # Storage figures are member/super-admin-only.
+            org = _redact_org_storage(org)
+        packages, _ = await _db_packages.get_bundles(
+            org_slug=slug, caller_token_name=(caller_name or "")
+        )
         return OrgDetailResponse(org=org, members=members, packages=packages)
 
     @app.patch("/v1/orgs/{slug}", response_model=OrgInfo, tags=["organizations"])

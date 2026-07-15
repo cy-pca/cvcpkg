@@ -429,8 +429,10 @@ class OrgInfo(BaseModel):
     logo_url: str = ""
     homepage: str = ""
     is_private: bool = False
-    storage_limit_bytes: int = 10 * 1024 * 1024 * 1024
-    storage_used_bytes: int = 0
+    # Storage figures are member/super-admin-only; the API nulls them for
+    # non-members so the SPA simply omits the storage UI.
+    storage_limit_bytes: int | None = 10 * 1024 * 1024 * 1024
+    storage_used_bytes: int | None = 0
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
     )
