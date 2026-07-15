@@ -1,6 +1,12 @@
 # recipes/sqlite/build.ps1 — build SQLite from source on Windows (MSVC).
 $ErrorActionPreference = 'Stop'
 
+# Import the MSVC environment (puts cl/nmake/link on PATH).  Native
+# builder sessions may already have it, but winhost delegation and any
+# clean shell do not — recipes must self-import, like zlib does.
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+. "$scriptDir\..\\_common\\env-windows.ps1"
+
 if (-not $env:CVC_SOURCE_DIR)  { throw 'CVC_SOURCE_DIR must be set' }
 if (-not $env:CVC_INSTALL_DIR) { throw 'CVC_INSTALL_DIR must be set' }
 if (-not $env:CVC_JOBS)        { $env:CVC_JOBS = [Environment]::ProcessorCount }
