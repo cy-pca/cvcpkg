@@ -765,6 +765,42 @@ With `numpy`, `scipy`, and `F2Dock` all declaring `depends: [blas, lapack]`:
 
 ---
 
+### Phase 8 — Self-Hosting Toolchains + `cvpkg` (Zero-System-Dependency Deploys)
+
+**Status: Proposed**
+
+The end-state of cvcpkg's "minimum system dependencies" goal is to deploy onto a **bare
+base-system userland** — no system compiler, no system SDK, nothing but the OS libc and
+shell — with cvcpkg supplying the whole toolchain *and* dependency graph. Two threads:
+
+**1. Platform-toolchain recipes.** Recipes for the compilers/SDKs themselves, so a build
+host needs only cvcpkg + a base system. Prioritize the **redistributable, self-hostable**
+links first (they unblock most recipes), and treat non-redistributable SDKs as
+builder-provisioning requirements (recorded in vm-provisioning), *not* recipes:
+
+| Target | Redistributable → recipe | Not redistributable → provisioning dep |
+|---|---|---|
+| **Cross C/C++** | `llvm`/`clang` (exists), `binutils`, `lld`, `libc++` | — |
+| **Linux** | pinned glibc/musl sysroot floor (manylinux-style), `make`/`cmake`/`ninja` (exist) | — |
+| **Windows** | **mingw-w64 + clang** as the portable toolchain | **MSVC + Windows SDK** (can't be re-hosted; e.g. `openssh-win` stays MSVC-native — see vm-provisioning) |
+| **macOS** | clang | **Apple macOS SDK** (reference the Xcode/CLT SDK, don't re-host) |
+| **BSD** | pin `gmake`/autotools (partly done) | base compiler ships with the OS |
+
+Recommendation: start with clang/LLVM + binutils + lld + mingw-w64 + the build tools —
+these are freely self-hostable and cover the bulk of the catalog. MSVC, the Windows SDK,
+and the macOS SDK are licensing-encumbered and stay host prerequisites; that's an accepted
+boundary of "zero system deps," not a failure of it.
+
+**2. `cvpkg` — cvcpkg building itself.** Once the toolchain recipes exist, add a recipe that
+builds **cvcpkg itself** into a self-contained, zero-system-dependency artifact — the
+`cvpkg` bootstrap distribution (cf. Phase 1.5's `pip install cvcpkg`, but with no Python
+system requirement). **Once the `cvpkg` build + recipe are working, release the `cvpkg`
+artifact as a versioned GitHub release asset** so a fresh machine can fetch a single
+self-contained `cvpkg` (`curl … | sh`) and bootstrap the rest of the catalog with zero
+prior dependencies.
+
+---
+
 ## Package Recipes
 
 ### Current Recipes (v2.0.0) — 99 recipes at release; 129 live in `recipes/` as of 2026-07
