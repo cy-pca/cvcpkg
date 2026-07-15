@@ -8,6 +8,15 @@ set -euo pipefail
 
 cd "${CVC_SOURCE_DIR}"
 
-./configure --prefix="${CVC_INSTALL_DIR}"
-make -j "${CVC_JOBS}"
-make install
+# OpenBSD's automake depfiles bootstrap fails during config.status
+# ("Something went wrong bootstrapping makefile fragments").  Dependency
+# tracking only speeds incremental rebuilds, which a one-shot package build
+# doesn't need — disable it.
+./configure --prefix="${CVC_INSTALL_DIR}" --disable-dependency-tracking
+
+# Use gmake on BSDs (the generated Makefile uses GNU-make syntax).
+MAKE=make
+command -v gmake >/dev/null 2>&1 && MAKE=gmake
+
+$MAKE -j "${CVC_JOBS}"
+$MAKE install

@@ -42,12 +42,25 @@ fi
 
 cd "${CVC_SOURCE_DIR}"
 
+# OpenBSD ships no iconv in libc, so GLib must link cvcpkg's GNU libiconv
+# (staged by the openbsd-only iconv dep).  Force meson's external-iconv path
+# and put our libiconv on the compiler/linker search paths.  No-op elsewhere
+# (libc provides iconv), where iconv is not a dep of this recipe.
+ICONV_ARGS=()
+if [ -n "${CVC_DEPS_PREFIX:-}" ] && [ -f "${CVC_DEPS_PREFIX}/include/iconv.h" ]; then
+    ICONV_ARGS=(-Diconv=external)
+    export CFLAGS="-I${CVC_DEPS_PREFIX}/include ${CFLAGS:-}"
+    export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib ${LDFLAGS:-}"
+    export LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LIBRARY_PATH:+:${LIBRARY_PATH}}"
+fi
+
 meson setup "${CVC_BUILD_DIR}" \
     --prefix="${CVC_INSTALL_DIR}" \
     --buildtype=release \
     --libdir=lib \
     --default-library="${_default_lib}" \
     --pkg-config-path="${CVC_DEPS_PREFIX}/lib/pkgconfig" \
+    "${ICONV_ARGS[@]}" \
     -Dc_link_args="${_rpath_flags}" \
     -Dcpp_link_args="${_rpath_flags}" \
     -Dtests=false \

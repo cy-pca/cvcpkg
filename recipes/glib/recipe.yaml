@@ -32,6 +32,10 @@ depends:
       platforms: [linux, macos, freebsd, openbsd, netbsd]
     - name: python312
       platforms: [windows]
+    # OpenBSD has no iconv in libc; GLib links cvcpkg's GNU libiconv there.
+    - name: iconv
+      version: ">=1.17"
+      platforms: [openbsd]
   runtime:
     - name: libffi
       version: "^3.4"

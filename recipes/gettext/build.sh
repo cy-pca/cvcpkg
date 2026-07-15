@@ -37,6 +37,16 @@ else
     CONFIGURE_ARGS+=(--enable-shared --disable-static)
 fi
 
+# OpenBSD has no iconv in libc; use cvcpkg's GNU libiconv (staged into
+# CVC_DEPS_PREFIX by the openbsd-only iconv dep) so the bundled libxml finds
+# <iconv.h> and links libiconv.  A no-op where iconv isn't a dep (other
+# platforms use their libc iconv).
+if [[ -n "${CVC_DEPS_PREFIX:-}" && -f "${CVC_DEPS_PREFIX}/include/iconv.h" ]]; then
+    export CPPFLAGS="-I${CVC_DEPS_PREFIX}/include ${CPPFLAGS:-}"
+    export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib ${LDFLAGS:-}"
+    CONFIGURE_ARGS+=(--with-libiconv-prefix="${CVC_DEPS_PREFIX}")
+fi
+
 # On BSDs, use gmake if available.
 if command -v gmake >/dev/null 2>&1; then
     MAKE=gmake

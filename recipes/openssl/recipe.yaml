@@ -22,7 +22,11 @@ patches: []
 depends:
   build:
     - nasm
-    - perl
+    # OpenBSD's cvcpkg perl build is broken (missing core modules like strict.pm),
+    # so ./Configure aborts.  Use the base-system perl on OpenBSD instead — it has
+    # everything openssl's Configure + build scripts need.
+    - name: perl
+      platforms: [linux, macos, freebsd, netbsd, windows]
   host_tools: []
 
 build:

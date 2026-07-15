@@ -25,7 +25,11 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    # OpenBSD has no iconv in libc; the bundled internal glib needs GNU libiconv.
+    - name: iconv
+      version: ">=1.17"
+      platforms: [openbsd]
   host_tools: []
 
 build:

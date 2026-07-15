@@ -8,6 +8,14 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 
 cd "${CVC_SOURCE_DIR}"
 
+# OpenBSD's base clang rejects the GCC-ism '-print-multi-os-directory' that
+# libffi's libtool multilib probe emits, aborting configure.  Build libffi with
+# the gcc package's egcc there instead — a small pure-C library, ABI-compatible
+# with the clang-built catalog.
+if [ "${CVC_PLATFORM}" = "openbsd" ] && command -v egcc >/dev/null 2>&1; then
+    export CC=egcc CXX=eg++
+fi
+
 CONFIGURE_ARGS=(
     --prefix="${CVC_INSTALL_DIR}"
     --disable-docs
