@@ -89,16 +89,20 @@ def _sort_candidates(entries: list[CatalogEntry], recommended_ver: str) -> list[
     recommended_entry: CatalogEntry | None = None
     rest: list[CatalogEntry] = []
 
-    # Parse once; drop entries whose version can't be understood so a
-    # single malformed bundle in the catalog doesn't sink resolution
-    # for unrelated components. Bad entries are still unusable — any
-    # request that actually needs them will fail in _backtrack.
+    # Parse once.  Entries whose version is not semver (e.g. openssh's
+    # "10.4p1+cvc.1") cannot be ordered against the rest — but dropping
+    # them made published bundles silently uninstallable ("no candidate
+    # for 'openssh'").  Keep them: they are offered AFTER all parseable
+    # candidates (lexically, newest-looking first), and version-range
+    # constraints still reject them in _backtrack /
+    # _compatible_with_picked (satisfies() raising counts as no-match).
     parsed: list[tuple[CatalogEntry, Version]] = []
+    unparseable: list[CatalogEntry] = []
     for e in entries:
         try:
             parsed.append((e, Version.parse(e.version)))
         except ValueError:
-            continue
+            unparseable.append(e)
 
     def _sort_key(e: CatalogEntry) -> tuple[Version, int]:
         # Tiebreak on cvc_revision so a newer +cvc.N rebuild of the same
@@ -126,6 +130,7 @@ def _sort_candidates(entries: list[CatalogEntry], recommended_ver: str) -> list[
         rest = [e for e, _ in parsed]
 
     rest.sort(key=_sort_key, reverse=True)
+    rest.extend(sorted(unparseable, key=lambda e: e.version, reverse=True))
 
     if recommended_entry is not None:
         return [recommended_entry] + rest

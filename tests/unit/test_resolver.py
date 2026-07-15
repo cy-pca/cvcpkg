@@ -183,3 +183,52 @@ class TestResolverDeps:
         }
         result = resolve(reqs, candidates)
         assert result.picked["zlib"].version == "1.3.1+cvc.1"
+
+
+class TestNonSemverVersions:
+    """Published bundles with non-semver versions (openssh "10.4p1+cvc.1")
+    must stay installable — the resolver offers them after all parseable
+    candidates instead of silently dropping them."""
+
+    def test_nonsemver_only_candidate_resolves(self):
+        reqs = [ComponentReq(name="openssh")]
+        candidates = {"openssh": [_entry("openssh", "10.4p1+cvc.1")]}
+        result = resolve(reqs, candidates)
+        assert result.picked["openssh"].version == "10.4p1+cvc.1"
+
+    def test_nonsemver_with_parseable_deps(self):
+        reqs = [ComponentReq(name="openssh")]
+        candidates = {
+            "openssh": [
+                _entry(
+                    "openssh",
+                    "10.4p1+cvc.1",
+                    [Dependency(name="openssl", version="^3.0")],
+                )
+            ],
+            "openssl": [_entry("openssl", "3.4.1+cvc.3")],
+        }
+        result = resolve(reqs, candidates)
+        assert result.picked["openssh"].version == "10.4p1+cvc.1"
+        assert result.picked["openssl"].version == "3.4.1+cvc.3"
+
+    def test_parseable_candidates_preferred(self):
+        reqs = [ComponentReq(name="foo")]
+        candidates = {"foo": [_entry("foo", "2.0beta+cvc.1"), _entry("foo", "1.9.0+cvc.1")]}
+        result = resolve(reqs, candidates)
+        assert result.picked["foo"].version == "1.9.0+cvc.1"
+
+    def test_range_constraint_rejects_nonsemver(self):
+        reqs = [ComponentReq(name="app")]
+        candidates = {
+            "app": [
+                _entry(
+                    "app",
+                    "1.0.0+cvc.1",
+                    [Dependency(name="openssh", version="^10.0")],
+                )
+            ],
+            "openssh": [_entry("openssh", "10.4p1+cvc.1")],
+        }
+        with pytest.raises(ResolveError):
+            resolve(reqs, candidates)
