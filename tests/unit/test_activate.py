@@ -193,6 +193,32 @@ echo "ACTIVE_AFTER=${{CVCPKG_ACTIVE_PREFIX-unset}}"
         assert "must be sourced" in result.stderr
 
 
+def _can_symlink() -> bool:
+    """True when this process may create symlinks.
+
+    On Windows, os.symlink needs an elevated token or Developer Mode
+    (SeCreateSymbolicLinkPrivilege); a plain user shell raises OSError
+    WinError 1314.  CI runners are elevated, so these tests still run
+    there — only unprivileged dev boxes skip.
+    """
+    import os
+    import tempfile
+    import uuid
+
+    probe = os.path.join(tempfile.gettempdir(), f"cvc-symlink-probe-{uuid.uuid4().hex}")
+    try:
+        os.symlink("probe-target", probe)
+    except (OSError, NotImplementedError):
+        return False
+    else:
+        os.unlink(probe)
+        return True
+
+
+@pytest.mark.skipif(
+    not _can_symlink(),
+    reason="symlink creation not permitted (Windows without elevation/Developer Mode)",
+)
 class TestPythonAliasReconcile:
     """write_activate_scripts surfaces generic python/pip commands for
     install trees whose python was staged as versioned-only binaries."""
