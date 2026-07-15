@@ -276,3 +276,107 @@ class TestAdminAuditPage:
 
         r = manage_server.get("/admin/audit?verify=1")
         assert "Audit chain intact" in r.text
+
+
+# ── Health + Releases pages (increment 3) ───────────────────────
+
+
+@pytest.fixture()
+def health_server(tmp_path, monkeypatch):
+    """Admin server with a tagged + an untagged package and one builder."""
+    db_url = f"sqlite+aiosqlite:///{tmp_path / 'health.db'}"
+    monkeypatch.setenv("CVCPKG_DATABASE_URL", db_url)
+    monkeypatch.delenv("CVCPKG_MIRROR_MODE", raising=False)
+
+    from cvcpkg.server.db import create_tables, dispose_engine, init_db
+    from cvcpkg.server.db_stores import DbBuilderStore, DbPackageIndex, DbTokenStore
+
+    async def _seed():
+        init_db(db_url)
+        await create_tables()
+        store = DbTokenStore(tmp_path)
+        admin = await store.create("test-admin", TokenRole.admin)
+        idx = DbPackageIndex()
+        await idx.add_package(
+            name="zlib",
+            version="1.3.1",
+            platform="linux",
+            arch="x86_64",
+            build_type="release",
+            link="shared",
+            sha256="0" * 64,
+            size_bytes=100,
+            archive_url="/v1/download/z1.tar.zst",
+            release_tag="v2.0.0",
+        )
+        await idx.add_package(
+            name="zstd",
+            version="1.5.6",
+            platform="linux",
+            arch="x86_64",
+            build_type="release",
+            link="shared",
+            sha256="1" * 64,
+            size_bytes=100,
+            archive_url="/v1/download/z2.tar.zst",
+        )
+        await DbBuilderStore().register(
+            name="builder-x",
+            platform="linux",
+            arch="x86_64",
+            registered_by="test",
+        )
+        await dispose_engine()
+        return admin
+
+    admin_token = asyncio.run(_seed())
+    app = create_app(state_dir=tmp_path)
+    with TestClient(app) as client:
+        client.post("/admin/login", data={"token": admin_token})
+        yield client
+
+
+class TestAdminHealthPage:
+    def test_requires_session(self, health_server):
+        anon = TestClient(health_server.app)
+        assert "Sign in" in anon.get("/admin/health").text
+
+    def test_renders_stats_and_builders(self, health_server):
+        r = health_server.get("/admin/health")
+        assert r.status_code == 200
+        assert "Uptime" in r.text
+        assert "Builder fleet" in r.text
+        assert "builder-x" in r.text
+        assert "sqlite" in r.text  # database backend card
+
+    def test_stats_endpoint_still_works(self, health_server, tmp_path):
+        # The refactor must not break the JSON endpoint contract.
+        # (Bearer auth — reuse the session-login token path is cookie-based,
+        # so mint a fresh admin token via the tokens page.)
+        r = health_server.post("/admin/tokens/create", data={"name": "probe", "role": "admin"})
+        raw = next(line for line in r.text.splitlines() if "cvctok_" in line)
+        token = raw.split("cvctok_", 1)[1].split("<", 1)[0]
+        r = health_server.get(
+            "/v1/admin/stats", headers={"Authorization": f"Bearer cvctok_{token}"}
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["database_enabled"] is True
+        assert data["packages_count"] == 2
+
+
+class TestAdminReleasesPage:
+    def test_lists_tags(self, health_server):
+        r = health_server.get("/admin/releases")
+        assert r.status_code == 200
+        assert "v2.0.0" in r.text
+        assert "(live / untagged)" in r.text
+
+    def test_tag_detail(self, health_server):
+        r = health_server.get("/admin/releases?tag=v2.0.0")
+        assert "zlib" in r.text
+        assert "zstd" not in r.text  # untagged package not under this tag
+
+    def test_untagged_detail(self, health_server):
+        r = health_server.get("/admin/releases?tag=")
+        assert "zstd" in r.text

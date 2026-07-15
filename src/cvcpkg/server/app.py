@@ -1485,11 +1485,8 @@ def create_app(
         )
         return {"message": f"notified {sent} builder(s)", "total_connected": len(_ws_builders)}
 
-    @app.get("/v1/admin/stats", tags=["admin"])
-    async def admin_stats(
-        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
-    ):
-        """Return server resource and catalog statistics (admin-only)."""
+    async def _gather_admin_stats() -> dict:
+        """Shared server/catalog stats for /v1/admin/stats and /admin/health."""
         state = _get_state()
         storage_scheme = state.storage_uri.split("://")[0] if "://" in state.storage_uri else "file"
         stats: dict = {
@@ -1522,6 +1519,41 @@ def create_app(
         else:
             stats["packages_count"] = len(state.index.get("bundles", []))
         return stats
+
+    @app.get("/v1/admin/stats", tags=["admin"])
+    async def admin_stats(
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Return server resource and catalog statistics (admin-only)."""
+        return await _gather_admin_stats()
+
+    @app.get("/admin/health", tags=["admin"], response_class=HTMLResponse)
+    async def admin_health_page(request: Request):
+        from cvcpkg.server import admin_ui
+
+        if not _has_admin_session(request):
+            return HTMLResponse(admin_ui.login_html())
+        stats = await _gather_admin_stats()
+        builders: list = []
+        if _use_db and _db_builders is not None:
+            builders = await _db_builders.list_builders()
+        return HTMLResponse(admin_ui.health_html(stats, builders))
+
+    @app.get("/admin/releases", tags=["admin"], response_class=HTMLResponse)
+    async def admin_releases_page(request: Request, tag: str | None = Query(None)):
+        from cvcpkg.server import admin_ui
+
+        if not _has_admin_session(request):
+            return HTMLResponse(admin_ui.login_html())
+        tags: list = []
+        pkgs: list | None = None
+        if _use_db and _db_packages is not None:
+            tags = await _db_packages.get_release_tags()
+            if tag is not None:
+                pkgs, _total = await _db_packages.get_bundles(
+                    release=tag, include_yanked=True, limit=200
+                )
+        return HTMLResponse(admin_ui.releases_html(tags, selected=tag, pkgs=pkgs))
 
     @app.post("/v1/admin/backup", tags=["admin"])
     async def admin_backup(

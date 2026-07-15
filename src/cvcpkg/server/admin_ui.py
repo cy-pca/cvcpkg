@@ -266,6 +266,8 @@ def _tabs(active: str) -> str:
         ("Packages", "/admin/packages"),
         ("Tokens", "/admin/tokens"),
         ("Audit", "/admin/audit"),
+        ("Releases", "/admin/releases"),
+        ("Health", "/admin/health"),
     ]
     lis = "".join(
         '<li class="{cls}"><a href="{href}">{label}</a></li>'.format(
@@ -485,3 +487,143 @@ def audit_html(entries: list, total: int, *, chain: tuple[bool, str] | None = No
 {table}
 """
     return _PAGE_SHELL.format(title="Audit", nav_right=_NAV_SIGNOUT, body=body)
+
+
+# ── Health + Releases pages (increment 3) ───────────────────────
+
+
+def _human_duration(seconds: float) -> str:
+    s = int(seconds)
+    days, s = divmod(s, 86400)
+    hours, s = divmod(s, 3600)
+    minutes, _ = divmod(s, 60)
+    if days:
+        return f"{days}d {hours}h {minutes}m"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
+def health_html(stats: dict, builders: list) -> str:
+    cards = "".join(
+        [
+            _stat_card("Uptime", _human_duration(stats.get("uptime_seconds", 0))),
+            _stat_card(
+                "Database",
+                str(stats.get("database_backend", "yaml")),
+                sub="mirror mode" if stats.get("mirror_mode") else "primary",
+            ),
+            _stat_card("Archive storage", _human_bytes(int(stats.get("total_storage_bytes", 0)))),
+            _stat_card("Audit entries", f"{stats.get('audit_entries', 0):,}"),
+            _stat_card("Packages", f"{stats.get('packages_count', 0):,}"),
+            _stat_card("Organizations", f"{stats.get('orgs_count', 0):,}"),
+            _stat_card("Build jobs (total)", f"{stats.get('build_jobs_count', 0):,}"),
+            _stat_card(
+                "Builders (live WS)",
+                f"{stats.get('builders_count', 0):,}",
+                sub=f"{stats.get('builders_connected', 0)} on websocket",
+            ),
+        ]
+    )
+    rows = []
+    for b in builders:
+        status = getattr(b, "status", "")
+        status_val = getattr(status, "value", status)
+        cls = {
+            "online": "is-success",
+            "busy": "is-info",
+            "offline": "is-danger",
+        }.get(str(status_val), "is-light")
+        hb = getattr(b, "last_heartbeat", "")
+        hb_s = hb.strftime("%Y-%m-%d %H:%M:%S") if hasattr(hb, "strftime") else str(hb or "never")
+        rows.append(
+            "<tr>"
+            f"<td>{_esc(getattr(b, 'name', ''))}</td>"
+            f"<td>{_esc(getattr(b, 'platform', ''))}/{_esc(getattr(b, 'arch', ''))}</td>"
+            f'<td><span class="tag {cls} is-light">{_esc(status_val)}</span></td>'
+            f"<td class='cvc-num'>{_esc(getattr(b, 'current_jobs', 0))}/"
+            f"{_esc(getattr(b, 'max_jobs', 0))}</td>"
+            f"<td class='cvc-num'>{_esc(hb_s)}</td></tr>"
+        )
+    if rows:
+        btable = (
+            '<table class="table is-fullwidth is-striped is-narrow">'
+            "<thead><tr><th>builder</th><th>platform</th><th>status</th>"
+            "<th>jobs</th><th>last heartbeat (UTC)</th></tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table>"
+        )
+    else:
+        btable = '<p class="cvc-muted">no builders registered</p>'
+    body = f"""
+{_tabs("health")}
+<div class="columns is-multiline">{cards}</div>
+<div class="box">
+  <h2 class="subtitle is-6">Builder fleet</h2>
+  {btable}
+</div>
+"""
+    return _PAGE_SHELL.format(title="Health", nav_right=_NAV_SIGNOUT, body=body)
+
+
+def releases_html(
+    tags: list[dict], *, selected: str | None = None, pkgs: list | None = None
+) -> str:
+    tag_rows = []
+    for t in tags:
+        tag = t.get("tag", "")
+        label = tag if tag else "(live / untagged)"
+        href = f"/admin/releases?tag={_esc(tag)}" if tag else "/admin/releases?tag="
+        active = ' class="is-selected"' if selected is not None and selected == tag else ""
+        tag_rows.append(
+            f'<tr{active}><td><a href="{href}">{_esc(label)}</a></td>'
+            f"<td class='cvc-num'>{t.get('count', 0):,}</td></tr>"
+        )
+    if tag_rows:
+        tag_table = (
+            '<table class="table is-fullwidth is-striped is-narrow">'
+            "<thead><tr><th>release tag</th><th>variants</th></tr></thead>"
+            f"<tbody>{''.join(tag_rows)}</tbody></table>"
+        )
+    else:
+        tag_table = '<p class="cvc-muted">no packages published yet</p>'
+
+    detail = ""
+    if selected is not None:
+        label = selected if selected else "(live / untagged)"
+        prows = []
+        for p in pkgs or []:
+            prows.append(
+                "<tr>"
+                f"<td>{_esc(getattr(p, 'name', ''))}</td>"
+                f"<td class='cvc-num'>{_esc(getattr(p, 'version', ''))}</td>"
+                f"<td>{_esc(getattr(p, 'platform', ''))}/{_esc(getattr(p, 'arch', ''))}</td>"
+                f"<td>{_esc(getattr(p, 'build_type', ''))}/{_esc(getattr(p, 'link', ''))}</td>"
+                "</tr>"
+            )
+        if prows:
+            ptable = (
+                '<table class="table is-fullwidth is-striped is-narrow">'
+                "<thead><tr><th>package</th><th>version</th><th>platform</th>"
+                "<th>variant</th></tr></thead>"
+                f"<tbody>{''.join(prows)}</tbody></table>"
+            )
+        else:
+            ptable = '<p class="cvc-muted">no variants under this tag</p>'
+        detail = f"""
+<div class="box">
+  <h2 class="subtitle is-6">Variants in {_esc(label)} (first {len(prows)})</h2>
+  {ptable}
+</div>"""
+
+    body = f"""
+{_tabs("releases")}
+<div class="box">
+  <h2 class="subtitle is-6">Release tags</h2>
+  <p class="cvc-muted is-size-7">A release freeze stamps packages with a
+  release tag; untagged variants are the live channel. Release creation /
+  promotion tooling is tracked in the roadmap (Phase 3 follow-up).</p>
+  {tag_table}
+</div>
+{detail}
+"""
+    return _PAGE_SHELL.format(title="Releases", nav_right=_NAV_SIGNOUT, body=body)

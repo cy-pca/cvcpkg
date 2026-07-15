@@ -1099,6 +1099,23 @@ class DbPackageIndex:
             result = await session.execute(stmt)
             return result.rowcount
 
+    async def get_release_tags(self) -> list[dict]:
+        """Distinct release tags with variant counts, most-populated first.
+
+        The empty tag (live / untagged packages) is included as ``""``.
+        """
+        async with get_session() as session:
+            q = (
+                select(
+                    PackageRow.release_tag,
+                    sa_func.count(PackageRow.id).label("count"),
+                )
+                .group_by(PackageRow.release_tag)
+                .order_by(sa_func.count(PackageRow.id).desc())
+            )
+            rows = (await session.execute(q)).all()
+        return [{"tag": r.release_tag or "", "count": r.count} for r in rows]
+
     async def delete_by_link(self, platform: str, link: str) -> int:
         """Delete all bundles matching a platform and link mode."""
         from sqlalchemy import delete as sa_delete
