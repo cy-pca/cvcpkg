@@ -20,11 +20,12 @@ fi
 
 CONFIGURE_ARGS=(
     --prefix="${CVC_INSTALL_DIR}"
-    # Enable common extensions used by downstream (JSON, FTS5, R*Tree, math).
-    --enable-fts5
-    --enable-json1
-    --enable-rtree
-    --enable-math-functions
+    # SQLite 3.49's autosetup configure enables JSON and math SQL functions
+    # by default and dropped the old autoconf-style --enable-json1 /
+    # --enable-math-functions options (passing them now aborts with
+    # "Unknown option --json1").  --all turns on the remaining bundled
+    # extensions: FTS3/4/5, Geopoly, RTree, and Sessions.
+    --all
 )
 
 if [[ "${CVC_LINK:-shared}" == "static" ]]; then
