@@ -255,3 +255,233 @@ def dashboard_html(data: dict) -> str:
 </div>
 """
     return _PAGE_SHELL.format(title="Overview", nav_right=nav_right, body=body)
+
+
+# ── Management pages (increment 2) ──────────────────────────────
+
+
+def _tabs(active: str) -> str:
+    items = [
+        ("Overview", "/admin"),
+        ("Packages", "/admin/packages"),
+        ("Tokens", "/admin/tokens"),
+        ("Audit", "/admin/audit"),
+    ]
+    lis = "".join(
+        '<li class="{cls}"><a href="{href}">{label}</a></li>'.format(
+            cls="is-active" if label.lower() == active else "",
+            href=href,
+            label=label,
+        )
+        for label, href in items
+    )
+    return f'<div class="tabs is-boxed"><ul>{lis}</ul></div>'
+
+
+_NAV_SIGNOUT = (
+    '<div class="navbar-item">'
+    '<form method="post" action="/admin/logout">'
+    '<button class="button is-small is-light" type="submit">Sign out</button>'
+    "</form></div>"
+)
+
+
+def _variant_fields(p: object) -> str:
+    """Hidden form fields identifying one package variant."""
+    fields = ""
+    for field in ("name", "version", "platform", "arch", "build_type", "link"):
+        value = _esc(getattr(p, field, ""))
+        fields += f'<input type="hidden" name="{field}" value="{value}">'
+    return fields
+
+
+def packages_html(pkgs: list, total: int, *, q: str = "", notice: str = "") -> str:
+    notice_html = (
+        f'<div class="notification is-success is-light">{_esc(notice)}</div>' if notice else ""
+    )
+    rows = []
+    for p in pkgs:
+        yanked = bool(getattr(p, "yanked", False))
+        state = '<span class="tag is-warning">yanked</span>' if yanked else ""
+        toggle_action = "unyank" if yanked else "yank"
+        toggle_class = "is-success is-light" if yanked else "is-warning is-light"
+        actions = (
+            '<form method="post" action="/admin/packages/action" style="display:inline">'
+            f"{_variant_fields(p)}"
+            f'<input type="hidden" name="action" value="{toggle_action}">'
+            f'<button class="button is-small {toggle_class}" type="submit">'
+            f"{toggle_action}</button></form> "
+            '<form method="post" action="/admin/packages/action" style="display:inline" '
+            "onsubmit=\"return confirm('Delete this variant permanently?')\">"
+            f"{_variant_fields(p)}"
+            '<input type="hidden" name="action" value="delete">'
+            '<button class="button is-small is-danger is-light" type="submit">delete</button>'
+            "</form>"
+        )
+        rows.append(
+            "<tr>"
+            f"<td>{_esc(getattr(p, 'name', ''))} {state}</td>"
+            f"<td class='cvc-num'>{_esc(getattr(p, 'version', ''))}</td>"
+            f"<td>{_esc(getattr(p, 'platform', ''))}/{_esc(getattr(p, 'arch', ''))}</td>"
+            f"<td>{_esc(getattr(p, 'build_type', ''))}/{_esc(getattr(p, 'link', ''))}</td>"
+            f"<td>{actions}</td>"
+            "</tr>"
+        )
+    if rows:
+        table = (
+            '<table class="table is-fullwidth is-striped is-narrow">'
+            "<thead><tr><th>package</th><th>version</th><th>platform</th>"
+            "<th>variant</th><th>actions</th></tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table>"
+        )
+    else:
+        table = '<p class="cvc-muted">no packages match</p>'
+    body = f"""
+{_tabs("packages")}
+{notice_html}
+<form method="get" action="/admin/packages" class="field has-addons">
+  <div class="control is-expanded">
+    <input class="input" type="text" name="q" value="{_esc(q)}"
+           placeholder="filter by name substring">
+  </div>
+  <div class="control"><button class="button is-link" type="submit">Filter</button></div>
+</form>
+<p class="cvc-muted is-size-7">{len(pkgs)} shown of {total} variants (yanked included)</p>
+{table}
+"""
+    return _PAGE_SHELL.format(title="Packages", nav_right=_NAV_SIGNOUT, body=body)
+
+
+def tokens_html(
+    tokens: list,
+    *,
+    new_token: tuple[str, str] | None = None,
+    notice: str = "",
+    error: str = "",
+) -> str:
+    flash = ""
+    if new_token:
+        tname, raw = new_token
+        flash = (
+            '<div class="notification is-success">'
+            f"Token <strong>{_esc(tname)}</strong> created. Copy it now — "
+            "it will not be shown again:<br>"
+            f'<code style="word-break:break-all">{_esc(raw)}</code></div>'
+        )
+    elif notice:
+        flash = f'<div class="notification is-success is-light">{_esc(notice)}</div>'
+    if error:
+        flash += f'<div class="notification is-danger is-light">{_esc(error)}</div>'
+
+    rows = []
+    for t in tokens:
+        role = getattr(getattr(t, "role", None), "value", getattr(t, "role", ""))
+        revoked = bool(getattr(t, "revoked", False))
+        created = getattr(t, "created_at", "")
+        created_s = created.strftime("%Y-%m-%d") if hasattr(created, "strftime") else str(created)
+        state = (
+            '<span class="tag is-danger is-light">revoked</span>'
+            if revoked
+            else '<span class="tag is-success is-light">active</span>'
+        )
+        tok_name = _esc(getattr(t, "name", ""))
+        if revoked:
+            revoke_btn = ""
+        else:
+            revoke_btn = (
+                '<form method="post" action="/admin/tokens/revoke" style="display:inline" '
+                f"onsubmit=\"return confirm('Revoke token {tok_name}?')\">"
+                f'<input type="hidden" name="name" value="{tok_name}">'
+                '<button class="button is-small is-danger is-light" type="submit">'
+                "revoke</button></form>"
+            )
+        rows.append(
+            "<tr>"
+            f"<td>{tok_name}</td>"
+            f"<td>{_esc(role)}</td>"
+            f"<td class='cvc-num'>{_esc(created_s)}</td>"
+            f"<td>{state}</td><td>{revoke_btn}</td></tr>"
+        )
+    if rows:
+        table = (
+            '<table class="table is-fullwidth is-striped is-narrow">'
+            "<thead><tr><th>name</th><th>role</th><th>created</th>"
+            "<th>status</th><th></th></tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table>"
+        )
+    else:
+        table = '<p class="cvc-muted">no tokens</p>'
+    body = f"""
+{_tabs("tokens")}
+{flash}
+<div class="box">
+  <h2 class="subtitle is-6">Create token</h2>
+  <form method="post" action="/admin/tokens/create" class="field is-grouped">
+    <div class="control is-expanded">
+      <input class="input" type="text" name="name" placeholder="token name" required>
+    </div>
+    <div class="control">
+      <div class="select">
+        <select name="role">
+          <option value="reader">reader</option>
+          <option value="publisher" selected>publisher</option>
+          <option value="admin">admin</option>
+        </select>
+      </div>
+    </div>
+    <div class="control"><button class="button is-link" type="submit">Create</button></div>
+  </form>
+</div>
+{table}
+"""
+    return _PAGE_SHELL.format(title="Tokens", nav_right=_NAV_SIGNOUT, body=body)
+
+
+def audit_html(entries: list, total: int, *, chain: tuple[bool, str] | None = None) -> str:
+    chain_html = ""
+    if chain is not None:
+        ok, msg = chain
+        cls = "is-success" if ok else "is-danger"
+        verdict = "intact" if ok else "BROKEN"
+        detail = f": {_esc(msg)}" if msg else ""
+        chain_html = f'<div class="notification {cls} is-light">Audit chain {verdict}{detail}</div>'
+    rows = []
+    for e in entries:
+        ts = getattr(e, "timestamp", "")
+        ts_s = ts.strftime("%Y-%m-%d %H:%M:%S") if hasattr(ts, "strftime") else str(ts)
+        action = getattr(getattr(e, "action", None), "value", getattr(e, "action", ""))
+        rows.append(
+            "<tr>"
+            f"<td class='cvc-num'>{_esc(ts_s)}</td>"
+            f"<td>{_esc(action)}</td>"
+            f"<td>{_esc(getattr(e, 'actor', ''))}</td>"
+            f"<td>{_esc(getattr(e, 'target', ''))}</td>"
+            f"<td>{_esc(getattr(e, 'detail', ''))}</td></tr>"
+        )
+    if rows:
+        table = (
+            '<table class="table is-fullwidth is-striped is-narrow">'
+            "<thead><tr><th>time (UTC)</th><th>action</th><th>actor</th>"
+            "<th>target</th><th>detail</th></tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table>"
+        )
+    else:
+        table = '<p class="cvc-muted">no audit entries</p>'
+    shown = len(entries)
+    body = f"""
+{_tabs("audit")}
+{chain_html}
+<div class="level">
+  <div class="level-left">
+    <p class="cvc-muted is-size-7">latest {shown} of {total} entries</p>
+  </div>
+  <div class="level-right">
+    <form method="get" action="/admin/audit">
+      <input type="hidden" name="verify" value="1">
+      <button class="button is-small is-link is-light" type="submit">Verify chain</button>
+    </form>
+  </div>
+</div>
+{table}
+"""
+    return _PAGE_SHELL.format(title="Audit", nav_right=_NAV_SIGNOUT, body=body)

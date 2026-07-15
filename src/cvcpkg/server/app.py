@@ -4425,6 +4425,142 @@ def create_app(
         resp.delete_cookie(admin_ui._SESSION_COOKIE, path="/admin")
         return resp
 
+    @app.get("/admin/packages", tags=["admin"], response_class=HTMLResponse)
+    async def admin_packages_page(request: Request, q: str = Query("")):
+        from cvcpkg.server import admin_ui
+
+        if not _has_admin_session(request):
+            return HTMLResponse(admin_ui.login_html())
+        pkgs: list = []
+        total = 0
+        if _use_db and _db_packages is not None:
+            pkgs, total = await _db_packages.get_bundles(search=q, include_yanked=True, limit=200)
+        return HTMLResponse(admin_ui.packages_html(pkgs, total, q=q))
+
+    @app.post("/admin/packages/action", tags=["admin"])
+    async def admin_packages_action(
+        request: Request,
+        action: str = Form(...),
+        name: str = Form(...),
+        version: str = Form(...),
+        platform: str = Form(""),
+        arch: str = Form(""),
+        build_type: str = Form(""),
+        link: str = Form(""),
+    ):
+        if not _has_admin_session(request):
+            raise HTTPException(403, "admin session required")
+        if not _use_db or _db_packages is None:
+            raise HTTPException(503, "package management requires the database backend")
+        if action not in ("yank", "unyank", "delete"):
+            raise HTTPException(422, f"unknown action: {action}")
+
+        kwargs = dict(
+            platform=platform or None,
+            arch=arch or None,
+            build_type=build_type or None,
+            link=link or None,
+        )
+        if action == "yank":
+            await _db_packages.yank(name, version, **kwargs)
+        elif action == "unyank":
+            await _db_packages.unyank(name, version, **kwargs)
+        else:
+            # delete() narrows by platform/link only (matches /v1 delete API).
+            await _db_packages.delete(name, version, platform=platform or None, link=link or None)
+
+        if _db_audit is not None:
+            await _db_audit.record(
+                action={
+                    "yank": AuditAction.yank,
+                    "unyank": AuditAction.unyank,
+                    "delete": AuditAction.delete,
+                }[action],
+                actor="admin-ui",
+                target=f"{name}=={version}",
+                detail=f"{platform}/{arch}/{build_type}/{link} via /admin",
+            )
+        return RedirectResponse("/admin/packages", status_code=303)
+
+    @app.get("/admin/tokens", tags=["admin"], response_class=HTMLResponse)
+    async def admin_tokens_page(request: Request):
+        from cvcpkg.server import admin_ui
+
+        if not _has_admin_session(request):
+            return HTMLResponse(admin_ui.login_html())
+        tokens: list = []
+        if _use_db and _db_tokens is not None:
+            tokens = await _db_tokens.list_tokens()
+        return HTMLResponse(admin_ui.tokens_html(tokens))
+
+    @app.post("/admin/tokens/create", tags=["admin"], response_class=HTMLResponse)
+    async def admin_tokens_create(
+        request: Request,
+        name: str = Form(...),
+        role: str = Form("publisher"),
+    ):
+        from cvcpkg.server import admin_ui
+
+        if not _has_admin_session(request):
+            raise HTTPException(403, "admin session required")
+        if not _use_db or _db_tokens is None:
+            raise HTTPException(503, "token management requires the database backend")
+        try:
+            role_val = TokenRole(role)
+        except ValueError:
+            raise HTTPException(422, f"unknown role: {role}") from None
+        try:
+            raw = await _db_tokens.create(name.strip(), role_val)
+        except Exception as exc:
+            tokens = await _db_tokens.list_tokens()
+            return HTMLResponse(
+                admin_ui.tokens_html(tokens, error=f"create failed: {exc}"),
+                status_code=409,
+            )
+        if _db_audit is not None:
+            await _db_audit.record(
+                action=AuditAction.token_create,
+                actor="admin-ui",
+                target=name.strip(),
+                detail=f"role={role_val.value} via /admin",
+            )
+        tokens = await _db_tokens.list_tokens()
+        return HTMLResponse(admin_ui.tokens_html(tokens, new_token=(name.strip(), raw)))
+
+    @app.post("/admin/tokens/revoke", tags=["admin"])
+    async def admin_tokens_revoke(request: Request, name: str = Form(...)):
+        if not _has_admin_session(request):
+            raise HTTPException(403, "admin session required")
+        if not _use_db or _db_tokens is None:
+            raise HTTPException(503, "token management requires the database backend")
+        ok = await _db_tokens.revoke(name)
+        if ok and _db_audit is not None:
+            await _db_audit.record(
+                action=AuditAction.token_revoke,
+                actor="admin-ui",
+                target=name,
+                detail="via /admin",
+            )
+        return RedirectResponse("/admin/tokens", status_code=303)
+
+    @app.get("/admin/audit", tags=["admin"], response_class=HTMLResponse)
+    async def admin_audit_page(request: Request, verify: str = Query("")):
+        from cvcpkg.server import admin_ui
+
+        if not _has_admin_session(request):
+            return HTMLResponse(admin_ui.login_html())
+        entries: list = []
+        total = 0
+        chain = None
+        if _use_db and _db_audit is not None:
+            entries, total = await _db_audit.entries(limit=100)
+            # Show newest first regardless of the store's natural order.
+            if entries and entries[0].id < entries[-1].id:
+                entries = list(reversed(entries))
+            if verify:
+                chain = await _db_audit.verify_chain()
+        return HTMLResponse(admin_ui.audit_html(entries, total, chain=chain))
+
     # ── Admin settings ──────────────────────────────────────
 
     @app.get("/v1/admin/settings", tags=["admin"])
