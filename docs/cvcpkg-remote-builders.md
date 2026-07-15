@@ -5,18 +5,12 @@ build fleet that compiles packages across multiple platforms.
 
 ## Architecture
 
-```
-              +---------------------+
-              |    cvcpkg-server    |
-              |   (API + database)  |
-              +----------+----------+
-                         | WebSocket / HTTP
-        +----------------+----------------+
-        |                |                |
-   +----+----+      +----+----+      +----+----+
-   | Linux   |      | BSD     |      | Windows |
-   | builders|      | builders|      | builders|
-   +---------+      +---------+      +---------+
+```mermaid
+flowchart TD
+    S["cvcpkg-server<br/>(API + database)"]
+    S <-->|WebSocket / HTTP| L["Linux builders"]
+    S <-->|WebSocket / HTTP| B["BSD builders"]
+    S <-->|WebSocket / HTTP| W["Windows builders"]
 ```
 
 Builders connect to the server, register themselves, and poll for jobs.

@@ -3,7 +3,7 @@
 > A cross-platform, language-agnostic binary package archive
 > for the scientific computing community.
 
-*Last updated: 2026-07-10*
+*Last updated: 2026-07-14*
 
 ---
 
@@ -86,14 +86,11 @@ standards are promoted into the release manifest.
 
 ### Release Workflow
 
-```
-┌─────────────┐     ┌──────────────┐     ┌────────────────┐
-│  Develop     │────▶│  Candidate   │────▶│  Release       │
-│  (live)      │     │  (freeze)    │     │  (LTS tag)     │
-└─────────────┘     └──────────────┘     └────────────────┘
-     ▲                                         │
-     │          bug fixes / CVE patches        │
-     └─────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    D["Develop<br/>(live)"] --> C["Candidate<br/>(freeze)"]
+    C --> R["Release<br/>(LTS tag)"]
+    R -- "bug fixes / CVE patches" --> D
 ```
 
 1. **Development phase** — recipes land on `main`, are built by CI, and
@@ -108,44 +105,31 @@ standards are promoted into the release manifest.
 
 ## Architecture
 
-### Current (v0.1.0)
+### Current (v2.0.0)
 
-```
-┌────────────────────────────────────────────────────┐
-│                    cvcpkg.org                      │
-│   Apache2 + Let's Encrypt (TLS termination)        │
-│        │                                           │
-│        ▼                                           │
-│   FastAPI (cvcpkg-server)          port 8420       │
-│        │                                           │
-│        ├── /            Landing page (package index)│
-│        ├── /v1/catalog  Public catalog JSON         │
-│        ├── /v1/packages Package listing + search    │
-│        ├── /v1/download Package binary download     │
-│        ├── /v1/publish  Authenticated publish       │
-│        ├── /v1/tokens   Token management (admin)    │
-│        └── /v1/audit    Tamper-evident audit trail   │
-│        │                                           │
-│        ▼                                           │
-│   PostgreSQL 16                                    │
-│   (packages, tokens, audit log)                    │
-└────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    CLI["cvcpkg CLI / browser"] -->|HTTPS| TLS["Apache2 + Let's Encrypt<br/>(TLS termination)"]
+    TLS --> API["FastAPI cvcpkg-server<br/>(port 8420)"]
+    API --> EP["<b>/</b> landing page · package index<br/><b>/v1/catalog</b> public catalog JSON<br/><b>/v1/packages</b> listing + search<br/><b>/v1/download</b> binary download<br/><b>/v1/publish</b> authenticated publish<br/><b>/v1/tokens</b> token management<br/><b>/v1/audit</b> tamper-evident audit trail"]
+    API --> DB[("PostgreSQL 16<br/>packages · tokens · audit log")]
+    BLD["builder fleet<br/>(WebSocket / HTTP long-poll)"] <--> API
 ```
 
 ### Deployment
 
-- **Primary host:** cvcpkg.org (cvcpkg-00, 10.10.10.134)
-- **Mirror host:** pkg.tx.wtf (catx-03, local read-only mirror)
+- **Primary:** cvcpkg.org
+- **Mirror:** pkg.tx.wtf (read-only mirror with hourly catalog sync)
 - **Containerization:** Docker Compose (postgres + backend)
 - **CI/CD:** GitHub Actions → `prod` branch push → self-hosted runner →
   auto-deploy script → zero-downtime restart
 - **TLS:** Let's Encrypt via certbot, auto-renewal
-- **Builders:** 13 builder agents across 7 platforms:
-  - Linux x86_64: star-00, star-01, lat, rebota (self-hosted runners)
-  - FreeBSD x86_64: freebsd-build, freebsd-build-2 (Incus containers)
-  - NetBSD x86_64: netbsd-build, netbsd-build-2 (Incus containers)
-  - OpenBSD x86_64: openbsd-build, openbsd-build-2 (Incus containers)
-  - Windows x86_64: sandipaws, stablefarm-win11 (self-hosted)
+- **Builders:** 13+ builder agents across 7 platforms:
+  - Linux x86_64: 4× self-hosted (also wasm/wasi/cosmo cross-builders)
+  - FreeBSD x86_64: 2× Incus VMs
+  - NetBSD x86_64: 2× Incus VMs
+  - OpenBSD x86_64: 2× Incus VMs
+  - Windows x86_64: 2× self-hosted (+ a WSL2 windows-cross builder)
   - macOS (x86_64 + arm64): GitHub-hosted runners via workflow_dispatch
 
 ---
@@ -432,6 +416,17 @@ deliberately language-agnostic.  Future expansion:
 - **Conan compatibility layer** — consume Conan recipes as cvcpkg recipes.
 - **vcpkg manifest mode** — read `vcpkg.json` and resolve packages from the
   cvcpkg archive.
+- **cpkg integration** ([getcpkg.net](https://getcpkg.net/)) — cpkg is a
+  Lua + Ninja project/dependency tool for C/C++ (decentralized, script-driven
+  builds; Windows + Linux).  Two-way friendliness with that community:
+  1. a **`cpkg` recipe** so the tool itself installs from the cvcpkg archive
+     (see Planned Recipes), and
+  2. a **cvcpkg Lua helper for `cpkg.lua` scripts** — e.g.
+     `cvcpkg.dependency("boost")` inside `add_dependency()` resolves a
+     pinned, prebuilt binary from cvcpkg.org into the project prefix instead
+     of re-building from source.  cpkg keeps its build scripting; cvcpkg
+     supplies the full-fledged binary package manager underneath (catalog,
+     signing, reproducible LTS pins, cross-platform archive).
 
 ### Phase 5 — Federation & Scaling
 
@@ -518,11 +513,136 @@ Highest cross-value is `cufft` (F2Dock's FFT-correlation docking; `libcufftw` is
 the existing `fftw3` recipe), then `cublas`/`cusolver`/`cusparse` for volrover/MolSurf dense &
 sparse solves.
 
+#### Per-Interpreter Wheel Matrix (incl. Free-Threaded / No-GIL)
+
+cvcpkg ships **five** CPython interpreters as recipes — `python311`,
+`python312`, `python313`, and `python313t` (built with `--disable-gil`),
+plus the `python3` meta-recipe.  The wheel work above is not a single
+recipe per package: it is a **matrix** of wheel recipes, one per shipped
+interpreter ABI, so any prefix interpreter gets a complete, pinned wheel
+set built for *exactly* its ABI tag:
+
+```mermaid
+flowchart LR
+    subgraph Interpreters["cvcpkg interpreters"]
+        P311["python311<br/>(cp311)"]
+        P312["python312<br/>(cp312)"]
+        P313["python313<br/>(cp313)"]
+        P313T["python313t<br/>(cp313t · no-GIL)"]
+    end
+    subgraph Wheels["wheel recipes (python_wheel / python_sdist)"]
+        W["numpy · scipy · h5py · mpi4py · …"]
+    end
+    P311 --> W
+    P312 --> W
+    P313 --> W
+    P313T --> W
+```
+
+- [ ] **Wheel recipes for every shipped interpreter** — each wheel package
+      gets variants for cp311 / cp312 / cp313 / cp313t, resolved through the
+      normal `depends` graph against the matching `python31x` recipe.
+- [ ] **Free-threaded (no-GIL) wheel channel** — the `python313t` (cp313t)
+      column is the flagship: every cp313t wheel is built against the
+      free-threaded interpreter **and its test suite is executed with the
+      GIL disabled on the builder fleet** as part of the recipe `test:`
+      step.  cvcpkg can therefore deliver packages that **provably work
+      without the GIL** — not "should work", but *demonstrated on every
+      platform we publish for*, which general-purpose indexes cannot claim.
+- [ ] **Per-interpreter test harness** — a shared `_common` helper that
+      imports the package and runs its smoke/test suite under the exact
+      target interpreter (GIL-disabled run for cp313t), failing the build on
+      thread-safety regressions (`PYTHON_GIL=0`, `-X gil=0`).
+- [ ] **Release-manifest freeze** — the LTS manifest pins the full
+      interpreter × wheel matrix (filenames + sha256) alongside the C
+      recipes, so a release describes one reproducible Python stack per
+      interpreter.
+
+---
+
+### Phase 8 — Self-Hosting & Universal Bootstrap (`cvpkg`)
+
+**Status: Planned**
+
+Close the loop on distribution: cvcpkg should be installable *by* cvcpkg,
+and bootstrappable on a bare machine with **zero prerequisites** — no
+Python, no compiler, no package manager.
+
+#### cvcpkg self-install recipe
+
+- [ ] **A `cvcpkg` recipe** that installs the cvcpkg wheel into a prefix
+      using cvcpkg's own Python packages: `depends` on a shipped
+      interpreter (`python313` by default) plus `python_wheel` recipes for
+      the runtime deps (click, httpx, PyYAML, cryptography, …).
+      `cvcpkg install cvcpkg` then produces a self-contained, activatable
+      prefix whose `bin/cvcpkg` runs on the prefix interpreter — fully
+      hermetic, no system Python involved.
+- [ ] Dogfoods the Phase 7 machinery end-to-end (interpreter recipe +
+      wheel matrix + entry-point shims) and becomes the recommended
+      install path for build machines.
+
+#### `cvpkg` — an Actually Portable Executable bootstrap
+
+- [ ] **APE build toolchain** — use `cosmocc` (already a cvcpkg recipe and
+      cross-platform target) with CPython to compile a Python application
+      into a single **Actually Portable Executable** (αcτµαlly pδrταblε
+      εxεcµταblε) that runs unmodified on Linux, macOS, Windows, and the
+      BSDs.
+- [ ] **`cvpkg` recipe** — a trimmed cut of cvcpkg (install / verify /
+      activate / doctor; no server, no builder) compiled as a completely
+      self-contained APE.  One binary, every supported platform, no
+      installed Python required.
+- [ ] **Zero-dependency bootstrap** — publish the APE on cvcpkg.org so a
+      bare machine can go from nothing to a working build environment:
+
+      ```
+      curl -LO https://cvcpkg.org/cvpkg && chmod +x cvpkg
+      ./cvpkg install --prefix ./deps boost hdf5 fftw3
+      ```
+
+- [ ] **Fleet smoke test** — CI builds the APE via the cosmocc recipe
+      infrastructure and executes it on every builder platform in the
+      fleet (linux, windows, macos, freebsd, netbsd, openbsd) each release.
+
+```mermaid
+flowchart LR
+    SRC["cvcpkg source<br/>(trimmed: install/verify/activate)"] --> COSMO["cosmocc + CPython<br/>(APE link)"]
+    COSMO --> APE["cvpkg<br/>single APE binary"]
+    APE --> L[Linux]
+    APE --> W[Windows]
+    APE --> M[macOS]
+    APE --> B[BSDs]
+```
+
+### Phase 9 — Fleet & Platform Expansion
+
+**Status: Planned**
+
+- [ ] **GhostBSD builders** — GhostBSD is FreeBSD-based (binary-compatible
+      userland, `pkg` packages), so a builder validates the desktop-BSD
+      story cheaply.  Decide whether GhostBSD consumes the existing
+      `freebsd` platform packages (compat mode) or warrants a distinct
+      `ghostbsd` platform tag; provision as an Incus VM on the star
+      cluster alongside the existing BSD fleet (see the vm-provisioning
+      repo, `docs/CVCPKG-BUILDERS.md`, for capacity notes and the
+      provisioning plan).
+- [ ] **DragonflyBSD builders** — a genuinely new platform (`dragonflybsd`
+      tag): its own kernel, HAMMER2 filesystem, DPorts/`pkg` packages.
+      Requires porting the `_common` build helpers and platform detection,
+      then an Incus VM pair like the other BSDs.
+- [ ] **qemu recipe stack** (see Planned Recipes below) — beyond its value
+      as a package, qemu unlocks **emulated builders** for platforms and
+      architectures we lack hardware for (arm64/riscv64 Linux, exotic
+      BSDs), and reproducible VM images for builder provisioning.
+- [ ] **Emulated-arch pilot** — once qemu recipes land, trial a
+      qemu-system-aarch64 Linux builder VM to extend the fleet beyond
+      x86_64 without new hardware.
+
 ---
 
 ## Package Recipes
 
-### Current Recipes (v2.0.0) — 99 recipes
+### Current Recipes (v2.0.0) — 99 recipes at release; 129 live in `recipes/` as of 2026-07
 
 | Category | Recipes |
 |---|---|
@@ -537,12 +657,21 @@ sparse solves.
 | **GUI / Graphics** | cairo, fontconfig, freetype, fribidi, gdk-pixbuf, graphene, gtk4, harfbuzz, libepoxy, pango, pixman, qt6, qtmultimedia, qtshadertools, skia, slint, wayland, wayland-protocols, xkbcommon |
 | **Audio** | ffmpeg, gstreamer, libpulse, libsndfile, pipewire |
 | **Build tools** | autoconf, automake, bazel, bison, cmake, cosmocc, emsdk, flex, libtool, m4, meson, nasm, ninja, swig |
-| **Python** | python311, python312, python313 |
+| **Python** | python3, python311, python312, python313, python313t (free-threaded / no-GIL) |
 | **Databases** | mariadb-connector-c, sqlite |
 | **Runtime / Interop** | libffi, libunistring, iconv, idn2, pcre2, wamr, wasi-sdk, wasmedge, wasmer, wasmtime |
 | **Security** | ca-bundle |
 | **Text** | aspell, gettext, glib, lua |
 | **Misc** | f2c, gmp, libiimod |
+
+### Planned Recipes
+
+| Category | Recipes | Why |
+|---|---|---|
+| **Emulation / Virtualization** | qemu, dtc (device-tree compiler), libslirp, capstone | qemu itself as a package, plus emulated builders (Phase 9). Most of qemu's dependency stack already exists as recipes: glib, pixman, zlib, curl, libffi, meson/ninja. |
+| **Python wheels (Phase 7)** | numpy, scipy, h5py, mpi4py, … × {cp311, cp312, cp313, cp313t} | per-interpreter wheel matrix; the cp313t column ships provably no-GIL-safe packages. |
+| **Bootstrap (Phase 8)** | cvcpkg (self-install), cvpkg (APE) | cvcpkg installable by cvcpkg; single-binary zero-dependency bootstrap. |
+| **C/C++ tooling** | cpkg ([getcpkg.net](https://getcpkg.net/)) | ship the Lua+Ninja project tool as a recipe, plus a cvcpkg Lua resolver helper so `cpkg.lua` scripts pull prebuilt cvcpkg binaries (see Phase 4 Interoperability). |
 
 ### Recipe Categories
 
@@ -629,6 +758,12 @@ cvcpkg validate                     # validate all recipes
 cvcpkg build zlib --prefix ./prefix # build a single recipe
 cvcpkg pack zlib --output-dir dist  # build + archive
 ```
+
+**Documentation convention — diagrams are Mermaid.**  Charts, graphs, and
+architecture diagrams in project docs use fenced `mermaid` code blocks
+(GitHub renders them natively) rather than ASCII art.  When editing a
+document that still contains an ASCII diagram, convert it to Mermaid as part
+of the change.
 
 ---
 
