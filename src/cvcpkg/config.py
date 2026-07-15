@@ -179,3 +179,70 @@ def merge_cli_overrides(
         base.mirrors = cli_mirrors + base.mirrors
 
     return base
+
+
+# ── Federated registries ────────────────────────────────────────
+#
+# A dependency may name a federated registry *host* (see cvcpkg.refs).  The
+# host is resolved to a base URL + token through the registries config, which
+# is also the trust **allowlist**: a host that is not configured here is
+# refused by the resolver, so a recipe can never point the resolver at an
+# arbitrary/attacker host.
+
+
+@dataclass(frozen=True)
+class Registry:
+    """A federated cvcpkg registry: a logical host -> base URL + credential."""
+
+    host: str
+    url: str
+    token: str = ""
+
+
+def _registries_path(config_dir: Path | None = None) -> Path:
+    override = os.environ.get("CVCPKG_REGISTRIES_FILE")
+    if override:
+        return Path(override)
+    if config_dir is None:
+        config_dir = _default_config_dir()
+    return config_dir / "registries.yaml"
+
+
+def load_registries(config_dir: Path | None = None) -> dict[str, Registry]:
+    """Load federated registry entries as ``{host: Registry}``.
+
+    Sources (later overriding earlier):
+      1. ``<config_dir>/registries.yaml`` (or ``$CVCPKG_REGISTRIES_FILE``)
+      2. ``$CVCPKG_REGISTRIES`` — inline YAML/JSON, for CI/containers
+
+    The set of configured hosts is the federation allowlist.
+    """
+    raw: dict = {}
+    fd = _load_yaml_file(_registries_path(config_dir))
+    if isinstance(fd.get("registries"), dict):
+        raw.update(fd["registries"])
+    env = os.environ.get("CVCPKG_REGISTRIES", "").strip()
+    if env:
+        try:
+            parsed = yaml.safe_load(env)
+        except yaml.YAMLError as exc:  # pragma: no cover - defensive
+            raise ValueError(f"CVCPKG_REGISTRIES is not valid YAML/JSON: {exc}") from exc
+        reg = parsed.get("registries", parsed) if isinstance(parsed, dict) else None
+        if isinstance(reg, dict):
+            raw.update(reg)
+
+    out: dict[str, Registry] = {}
+    for host, entry in raw.items():
+        host = str(host).strip()
+        if not host or not isinstance(entry, dict):
+            continue
+        url = str(entry.get("url", "") or "").rstrip("/") or f"https://{host}"
+        out[host] = Registry(host=host, url=url, token=str(entry.get("token", "") or ""))
+    return out
+
+
+def registry_for(host: str, config_dir: Path | None = None) -> "Registry | None":
+    """Return the configured registry for *host*, or None if not allowlisted."""
+    if not host:
+        return None
+    return load_registries(config_dir).get(host)
