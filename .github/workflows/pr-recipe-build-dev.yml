@@ -29,7 +29,11 @@ jobs:
     # the dev cluster secrets.
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, star-01]
-    timeout-minutes: 90
+    # Backstop only — a healthy run is push + a handful of dev builds
+    # (~5-15 min).  45 min covers the worst legitimate case (builder-
+    # registry read fails at submit → jobs pend until the server's
+    # 30-min unschedulable reap, which --wait now treats as terminal).
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
         with:
@@ -88,9 +92,15 @@ jobs:
           done
 
           # 2. Submit a build DAG across every platform the dev cluster might
-          #    serve.  --allow-unschedulable means combos with no dev builder
-          #    (e.g. windows/macos) are skipped rather than hanging; --wait
-          #    blocks until the schedulable jobs finish.
+          #    serve.  By default submit-dag skips combos no registered dev
+          #    builder can serve (it reads the builder registry up front), so
+          #    platforms like the BSDs simply don't produce jobs here.  Do NOT
+          #    add --allow-unschedulable: it force-submits those combos, whose
+          #    jobs then sit pending until the server's 30-min unschedulable
+          #    reap — that flag is for queues drained by ephemeral builders
+          #    (e.g. macos-drain), not for a --wait CI check.  This exact
+          #    combination wedged this workflow for its full timeout on every
+          #    recipe PR (pr-223, pr-226).
           dag="pr-${{ github.event.pull_request.number }}-$(date +%H%M%S)"
           set +e
           cvcpkg builds submit-dag \
@@ -100,7 +110,7 @@ jobs:
             --config release --link shared \
             --recipes-dir recipes \
             --dag-id "${dag:0:60}" \
-            --allow-unschedulable --wait \
+            --wait \
             $NAMES | tee build.log
           rc=$?
           set -e

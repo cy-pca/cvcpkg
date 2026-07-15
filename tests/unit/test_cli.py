@@ -5796,3 +5796,80 @@ class TestInstallConflictWithRequirementsFile:
         err = capsys.readouterr().err
         assert "python313" in err
         assert "python313t" in err
+
+
+# ── _wait_for_dags unschedulable handling (regression) ──────────
+
+
+class TestWaitForDagsUnschedulable:
+    """submit-dag --wait must terminate when the server reaps jobs as
+    unschedulable.  Regression for the pr-recipe-build-dev hangs (dags
+    pr-223 / pr-226): "unschedulable" was missing from the wait loops'
+    terminal-state set, so a DAG containing platforms no dev builder
+    serves polled forever and wedged the CI runner until the workflow
+    timeout."""
+
+    def _mock_client(self, statuses):
+        """Client serving a one-DAG /v1/builds listing + per-job detail."""
+        jobs = [
+            {"id": jid, "status": st, "recipe_name": "r", "platform": "p", "arch": "x"}
+            for jid, st in statuses.items()
+        ]
+
+        def _get(url, headers=None, params=None):
+            resp = mock.MagicMock()
+            resp.status_code = 200
+            if url.endswith("/v1/builds"):
+                resp.json.return_value = {"jobs": jobs}
+            else:  # /v1/builds/<id>
+                jid = int(url.rsplit("/", 1)[1])
+                resp.json.return_value = {"id": jid, "status": statuses[jid]}
+            return resp
+
+        client = mock.MagicMock()
+        client.__enter__ = mock.MagicMock(return_value=client)
+        client.__exit__ = mock.MagicMock(return_value=False)
+        client.get.side_effect = _get
+        return client
+
+    def _bounded_sleep(self):
+        """A time.sleep stand-in that fails the test instead of hanging
+        it if the wait loop stops treating the statuses as terminal."""
+        calls = {"n": 0}
+
+        def _sleep(_seconds):
+            calls["n"] += 1
+            if calls["n"] > 10:
+                raise AssertionError("wait loop did not terminate")
+
+        return _sleep
+
+    def test_unschedulable_is_terminal_and_fails_strict_wait(self):
+        from cvcpkg.cli._builds import _wait_for_dags
+
+        client = self._mock_client({1: "succeeded", 2: "unschedulable"})
+        with (
+            mock.patch("httpx.Client", return_value=client),
+            mock.patch("cvcpkg.cli._builds.time.sleep", side_effect=self._bounded_sleep()),
+        ):
+            with pytest.raises(click.ClickException):
+                _wait_for_dags("http://srv", "tok", ["dag-1"])
+
+    def test_allow_unschedulable_wait_skips_and_succeeds(self):
+        from cvcpkg.cli._builds import _wait_for_dags
+
+        client = self._mock_client({1: "succeeded", 2: "unschedulable"})
+        with (
+            mock.patch("httpx.Client", return_value=client),
+            mock.patch("cvcpkg.cli._builds.time.sleep", side_effect=self._bounded_sleep()),
+        ):
+            # --allow-unschedulable semantics: reaped jobs are skipped,
+            # the wait returns cleanly.
+            _wait_for_dags("http://srv", "tok", ["dag-1"], fail_on_unschedulable=False)
+
+    def test_terminal_statuses_cover_reaped_states(self):
+        from cvcpkg.cli._builds import _TERMINAL_STATUSES
+
+        assert "unschedulable" in _TERMINAL_STATUSES
+        assert "cancelled" in _TERMINAL_STATUSES
+        assert "timed_out" in _TERMINAL_STATUSES

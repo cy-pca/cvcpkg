@@ -10,6 +10,13 @@ import click
 from cvcpkg.cli import cli
 from cvcpkg.cli._server import _api_request
 
+# Build-job states that never change again.  "unschedulable" IS terminal:
+# the server reaps a pending job to it when no registered builder covers
+# its platform/arch (and cancels the job's dependents).  A waiter that
+# leaves it out polls forever — this wedged the pr-recipe-build-dev CI
+# runs (dag pr-223 hung 91 min; pr-226 needed a manual cancel).
+_TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled", "timed_out", "unschedulable"})
+
 # ── Build job commands ──────────────────────────────────────────
 
 
@@ -365,7 +372,7 @@ def builds_follow_dag(dag_id: str, server: str, token: str):
 
     base = server.rstrip("/")
     headers = {"Authorization": f"Bearer {token}"}
-    terminal = {"succeeded", "failed", "cancelled", "timed_out"}
+    terminal = _TERMINAL_STATUSES
     print_lock = threading.Lock()
     seen_jobs: set[int] = set()
     final_statuses: dict[int, str] = {}
@@ -486,7 +493,7 @@ def _wait_for_jobs(server: str, token: str, job_ids: list[int]) -> None:
 
     base = server.rstrip("/")
     headers = {"Authorization": f"Bearer {token}"}
-    terminal = {"succeeded", "failed", "cancelled", "timed_out"}
+    terminal = _TERMINAL_STATUSES
     pending = set(job_ids)
 
     click.echo(f"\nWaiting for {len(pending)} job(s)...")
@@ -524,14 +531,26 @@ def _wait_for_jobs(server: str, token: str, job_ids: list[int]) -> None:
     click.echo(f"\nAll {len(job_ids)} job(s) succeeded.")
 
 
-def _wait_for_dags(server: str, token: str, dag_ids: list[str]) -> None:
-    """Poll until all jobs in the given DAGs reach terminal state."""
+def _wait_for_dags(
+    server: str,
+    token: str,
+    dag_ids: list[str],
+    *,
+    fail_on_unschedulable: bool = True,
+) -> None:
+    """Poll until all jobs in the given DAGs reach terminal state.
+
+    With ``fail_on_unschedulable=False`` (``submit-dag
+    --allow-unschedulable``), jobs the server reaped as unschedulable
+    count as skipped rather than failed — the caller explicitly accepted
+    submitting combos no registered builder serves.
+    """
 
     import httpx
 
     base = server.rstrip("/")
     headers = {"Authorization": f"Bearer {token}"}
-    terminal = {"succeeded", "failed", "cancelled", "timed_out"}
+    terminal = _TERMINAL_STATUSES
 
     click.echo(f"\nWaiting for {len(dag_ids)} DAG(s)...")
     all_job_ids: set[int] = set()
@@ -577,16 +596,29 @@ def _wait_for_dags(server: str, token: str, dag_ids: list[str]) -> None:
 
     # Re-check final states
     failed_ids: list[int] = []
+    skipped_ids: list[int] = []
     with httpx.Client(timeout=30) as client:
         for jid in all_job_ids:
             resp = client.get(f"{base}/v1/builds/{jid}", headers=headers)
             if resp.status_code < 400:
                 info = resp.json()
-                if info.get("status") != "succeeded":
-                    failed_ids.append(jid)
+                status = info.get("status")
+                if status == "succeeded":
+                    continue
+                if status == "unschedulable" and not fail_on_unschedulable:
+                    skipped_ids.append(jid)
+                    continue
+                failed_ids.append(jid)
     if failed_ids:
         raise click.ClickException(f"{len(failed_ids)} job(s) did not succeed: {failed_ids}")
-    click.echo(f"\nAll {len(all_job_ids)} job(s) succeeded.")
+    if skipped_ids:
+        click.echo(
+            f"\n{len(all_job_ids) - len(skipped_ids)} job(s) succeeded, "
+            f"{len(skipped_ids)} skipped as unschedulable (no registered builder): "
+            f"{sorted(skipped_ids)}"
+        )
+    else:
+        click.echo(f"\nAll {len(all_job_ids)} job(s) succeeded.")
 
 
 @builds_group.command("submit")
@@ -980,7 +1012,12 @@ def builds_submit_dag(
                     )
 
     if wait:
-        _wait_for_dags(server, token, dag_ids)
+        _wait_for_dags(
+            server,
+            token,
+            dag_ids,
+            fail_on_unschedulable=not allow_unschedulable,
+        )
 
 
 @builds_group.command("purge")
