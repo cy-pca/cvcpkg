@@ -1,32 +1,41 @@
 schema_version: 1
 recipe:
   name: openssh-win
-  upstream_version: "10.0.0.0p2"
-  cvc_revision: 1
+  upstream_version: "10.0.0.0"
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   description: >-
-    OpenSSH for native Windows — Microsoft's Win32-OpenSSH port, staged from
-    the official prebuilt release (ssh.exe, sshd.exe and helpers + bundled
-    libcrypto.dll). Windows-only; POSIX platforms use the portable `openssh`
-    recipe. sshd is not installed by default on Windows, so this provides a
-    current, version-pinned server/client for Windows builders.
-  homepage: https://github.com/PowerShell/Win32-OpenSSH
+    OpenSSH for native Windows — built from source (PowerShell/openssh-portable,
+    the Win32-OpenSSH port) with MSVC, linking cvcpkg's own OpenSSL + zlib
+    recipes instead of the vcpkg-fetched crypto. Windows-only; POSIX platforms
+    use the portable `openssh` recipe.
+  homepage: https://github.com/PowerShell/openssh-portable
   license: SSH-OpenSSH
   tags: [networking, tools, crypto, windows]
 
 source:
+  # PowerShell/openssh-portable @ latestw_all HEAD (OpenSSH_for_Windows_10.0).
+  # Pinned to a commit for reproducibility; bump commit + sha256 to update.
   type: tarball
-  url: https://github.com/PowerShell/Win32-OpenSSH/releases/download/10.0.0.0p2-Preview/OpenSSH-Win64.zip
-  sha256: "23f50f3458c4c5d0b12217c6a5ddfde0137210a30fa870e98b29827f7b43aba5"
+  url: https://github.com/PowerShell/openssh-portable/archive/e98b11e5de035cbd0eecbddc95a87da42f14671f.tar.gz
+  sha256: "b3a08ec515bf3fc0a3e72868f5969d4402bd688750caa176d364542858aa0e39"
   strip_components: 1
 
 patches: []
 
 depends:
-  build: []
-  runtime: []
+  build:
+    # cvcpkg's own crypto/compression, staged into the build in place of the
+    # vcpkg-fetched libraries (see build.ps1).
+    - name: openssl
+      version: "^3.0"
+    - name: zlib
+  runtime:
+    - name: openssl
+      version: "^3.0"
+    - name: zlib
   host_tools: []
 
 build:
@@ -49,22 +58,22 @@ package:
     - bin/sshd-session.exe
     - bin/sshd-auth.exe
     - bin/sftp-server.exe
-    - bin/libcrypto.dll
+    - bin/*.dll
     - etc/ssh/sshd_config.sample
-    - etc/ssh/moduli
 
 notes:
-  - title: "Windows-only; prebuilt from Microsoft's Win32-OpenSSH"
+  - title: "Built from source with cvcpkg's own OpenSSL + zlib"
     platforms: [windows]
     description: >-
-      Win32-OpenSSH is a Windows-native fork; its release assets are Windows
-      PE binaries only and do not run on other platforms. This recipe stages
-      the official OpenSSH-Win64.zip rather than building from source (the
-      portable source does not compile with ./configure on Windows). POSIX
-      hosts use the `openssh` recipe instead. Only windows/x86_64 is packaged;
-      arm64 would need the separate OpenSSH-ARM64.zip asset.
-  - title: "Preview channel"
+      Unlike a prebuilt-binary stage, this compiles the Win32-OpenSSH port
+      (Start-OpenSSHBuild, MSVC/msbuild) and links the openssl + zlib recipes
+      from CVC_DEPS_PREFIX rather than the vcpkg-managed libraries the upstream
+      build normally fetches. windows/x86_64 only.
+  - title: "Experimental — validate on a Windows builder"
     description: >-
-      Microsoft ships standalone Win32-OpenSSH on a Preview/Beta channel that
-      is typically newer than the in-box Windows optional feature. The version
-      is pinned by tag + sha256; bump both to update.
+      The upstream Windows build system is tightly coupled to its vcpkg crypto
+      layout; substituting our own OpenSSL is a first-pass wiring that may need
+      iteration on a real Windows builder (lib naming: the solution wants
+      libcrypto.lib and zs.lib; header/lib search paths). If a from-source
+      build regresses, cvc_revision 1 staged the official prebuilt
+      OpenSSH-Win64.zip instead.
