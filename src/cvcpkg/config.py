@@ -46,6 +46,27 @@ def default_catalog_url() -> str:
     return f"{default_server_url().rstrip('/')}/v1/catalog"
 
 
+def default_root_url() -> str:
+    """Authoritative **root** server for the public namespace (Phase 12).
+
+    In a satellite deployment the client talks to a nearby edge server
+    (``CVCPKG_SERVER_URL``) that mirrors a canonical root.  The root is
+    authoritative for **public** packages; ``CVCPKG_ROOT_URL`` names it
+    (default: the compiled-in ``cvcpkg.org``).  When it equals the server
+    URL there is no separate root and resolution is unchanged.
+    """
+    return os.environ.get("CVCPKG_ROOT_URL", DEFAULT_SERVER_URL)
+
+
+def default_root_catalog_url() -> str:
+    """Catalog URL of the authoritative root (``CVCPKG_ROOT_CATALOG_URL``
+    override, else ``{CVCPKG_ROOT_URL}/v1/catalog``)."""
+    explicit = os.environ.get("CVCPKG_ROOT_CATALOG_URL")
+    if explicit:
+        return explicit
+    return f"{default_root_url().rstrip('/')}/v1/catalog"
+
+
 # ── Data model ──────────────────────────────────────────────────
 
 

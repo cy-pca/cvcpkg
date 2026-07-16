@@ -110,6 +110,59 @@ def load_catalog_from_file(path: str | Path) -> dict:
         return yaml.safe_load(f)
 
 
+def fetch_authoritative_catalog(
+    *,
+    server_catalog_url: str = "",
+    root_catalog_url: str = "",
+    cache_dir: Path | None = None,
+    fallback_urls: list[str] | None = None,
+) -> dict:
+    """Fetch a catalog with the **root authoritative for public packages**.
+
+    Top-down resolution (roadmap Phase 12): the root server is authoritative
+    for the public namespace; the local/satellite server supplies organization
+    packages and serves as the offline fallback.
+
+    - When *root_catalog_url* is empty or equals *server_catalog_url*, this is
+      a plain :func:`fetch_catalog` of the server catalog (no distinct root).
+    - Otherwise it fetches the **root** catalog (authoritative public) and the
+      **local** catalog (org packages), and merges them root-authoritative.
+      If the **root is unreachable**, it falls back to the local catalog so an
+      offline / air-gapped satellite still resolves.
+    """
+    from cvcpkg.config import default_catalog_url, default_root_catalog_url
+    from cvcpkg.root_resolution import merge_root_authoritative
+
+    server_catalog_url = server_catalog_url or default_catalog_url()
+    root_catalog_url = root_catalog_url or default_root_catalog_url()
+
+    if not root_catalog_url or root_catalog_url == server_catalog_url:
+        return fetch_catalog(server_catalog_url, cache_dir=cache_dir, fallback_urls=fallback_urls)
+
+    # Local catalog (org packages + offline public fallback).
+    try:
+        local_cat = fetch_catalog(server_catalog_url, cache_dir=cache_dir)
+    except CatalogError:
+        local_cat = None
+
+    # Authoritative root catalog for public packages.
+    try:
+        root_cat = fetch_catalog(root_catalog_url, cache_dir=cache_dir, fallback_urls=fallback_urls)
+    except CatalogError:
+        if local_cat is None:
+            raise
+        import sys
+
+        print(
+            f"cvcpkg: root {root_catalog_url} unreachable; resolving from the "
+            f"local mirror (offline).",
+            file=sys.stderr,
+        )
+        root_cat = None
+
+    return merge_root_authoritative(root_cat, local_cat)
+
+
 def catalog_entries(
     catalog: dict,
     *,

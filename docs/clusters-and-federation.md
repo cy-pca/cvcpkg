@@ -186,6 +186,32 @@ otherwise the package is simply invisible (the same visibility rule as local
 reads), and the dependency fails to resolve. A dependency naming an
 un-allowlisted host is refused outright.
 
+### Top-down, root-authoritative resolution
+
+When a client talks to a **satellite** (a nearby edge server) it resolves
+**top-down**: the **root is authoritative for the public namespace**, and the
+satellite is a cache.  A client configured with a distinct root:
+
+- resolves **public** packages against the **root** catalog (authoritative
+  versions + checksums) — a satellite can never present a divergent or stale
+  public package as authoritative;
+- resolves **organization** packages against the **local** server (they are
+  local-authoritative and live only there — the inverse of public);
+- **falls back to the local mirror** when the root is unreachable, so an
+  offline / air-gapped satellite still resolves.
+
+Config:
+
+- **`CVCPKG_ROOT_URL`** — the authoritative root server (default: the
+  compiled-in `cvcpkg.org`).  When it equals `CVCPKG_SERVER_URL` there is no
+  separate root and resolution is unchanged.
+- **`CVCPKG_ROOT_CATALOG_URL`** — override the root's catalog URL directly.
+
+An explicit `--catalog` / `CVCPKG_CATALOG_URL` bypasses this and uses the
+given catalog verbatim.  (Download *locality* — fetching a root-resolved
+public archive from the nearer satellite mirror — is a separate optimization,
+tracked as a follow-up.)
+
 ## Laboratory
 
 A runnable lab proves the whole model end-to-end (canonical upstream + three
@@ -210,5 +236,7 @@ See `lab/README.md`.
 | `CVCPKG_POPULATE_EXCLUDE` | edge | Optional package-name denylist (never mirror these); wins over the allowlist. |
 | `CVCPKG_POPULATE_MAX_PACKAGE_BYTES` | edge | Per-package size cap for mirroring (default: `CVCPKG_MAX_UPLOAD_BYTES`). |
 | `CVCPKG_POPULATE_MAX_MIRROR_BYTES` | edge | Total mirror-cache size budget; least-downloaded populate packages are evicted over it (0 = unbounded). |
+| `CVCPKG_ROOT_URL` | client | Authoritative root server for public packages (default `cvcpkg.org`); resolution is top-down when it differs from `CVCPKG_SERVER_URL`. |
+| `CVCPKG_ROOT_CATALOG_URL` | client | Override the root's catalog URL directly. |
 | `CVCPKG_MIRROR_MODE` / `CVCPKG_MIRROR_UPSTREAM` | mirror | Read-only mirror of a primary. |
 | `registries.yaml` / `CVCPKG_REGISTRIES` / `CVCPKG_REGISTRIES_FILE` | client | Federated registry hosts → `{url, token}` (allowlist + credentials). |

@@ -237,8 +237,17 @@ def install(
         try:
             if catalog_url and Path(catalog_url).is_file():
                 cat = load_catalog_from_file(catalog_url)
-            else:
+            elif catalog_url:
+                # Explicit --catalog / CVCPKG_CATALOG_URL override: use it as-is.
                 cat = fetch_catalog(catalog_url, cache_dir=default_cache_dir())
+            else:
+                # Default path: root-authoritative resolution (Phase 12) — the
+                # configured root is authoritative for public packages, the
+                # local/satellite server supplies org packages, with an offline
+                # fallback to the local mirror.  No-op when root == server.
+                from cvcpkg.catalog import fetch_authoritative_catalog
+
+                cat = fetch_authoritative_catalog(cache_dir=default_cache_dir())
         except Exception as exc:
             if not fallback_to_source:
                 raise
