@@ -250,6 +250,17 @@ def _try_pull_server_recipes() -> tuple[str, ...]:
     default="",
     help="Host platform for cross-compilation (e.g. linux, macos, windows).",
 )
+@click.option(
+    "--host-tools-prefix",
+    type=click.Path(),
+    default=None,
+    help=(
+        "Separate prefix for build-time host tools (cmake, ninja, "
+        "cross-toolchains) so they stay OUT of the deliverable --prefix. "
+        "Defaults to '<prefix>.host-tools' beside --prefix; pass the same "
+        "path as --prefix to disable the separation (legacy behaviour)."
+    ),
+)
 def build(
     recipe: tuple[str, ...],
     platform: str,
@@ -262,6 +273,7 @@ def build(
     local_mode: bool,
     with_deps: bool,
     host_platform: str,
+    host_tools_prefix: str | None,
 ) -> None:
     """Build one or more recipes from source.
 
@@ -293,6 +305,15 @@ def build(
     if not local_mode and not recipes_dirs:
         recipes_dirs = _try_pull_server_recipes()
     prefix_path = Path(prefix).resolve() if prefix else None
+
+    # Host tools (cmake, ninja, cross-toolchains) install into a SEPARATE prefix
+    # so the deliverable --prefix contains only target artifacts.
+    if host_tools_prefix:
+        host_tools_prefix_path: Path | None = Path(host_tools_prefix).resolve()
+    elif prefix_path is not None:
+        host_tools_prefix_path = prefix_path.with_name(prefix_path.name + ".host-tools")
+    else:
+        host_tools_prefix_path = None
 
     if with_deps:
         # Resolve all deps and build in topological order
@@ -354,13 +375,15 @@ def build(
         if host_tool_recipes:
             host_ordered = resolve_build_order(host_tool_recipes, host_plat)
             for r in host_ordered:
-                print(f"\ncvcpkg: ══ {r.name} ({r.full_version}) [host tool] ══")
+                _htp = host_tools_prefix_path or prefix_path
+                _dest = f" -> {_htp}" if _htp else ""
+                print(f"\ncvcpkg: ══ {r.name} ({r.full_version}) [host tool{_dest}] ══")
                 build_recipe(
                     r.recipe_dir,
                     platform=host_plat,
                     config=config,
                     link=link,
-                    prefix=prefix_path,
+                    prefix=_htp,
                     keep_build_dir=keep_build_dir,
                 )
 
@@ -381,6 +404,7 @@ def build(
                 keep_build_dir=keep_build_dir,
                 host_platform=host_plat,
                 cross_toolchain_env=merged_toolchain_env,
+                host_tools_prefix=host_tools_prefix_path,
             )
     else:
         for name in recipe:
