@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: cgal
   upstream_version: "6.0.1"
-  cvc_revision: 2
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -44,6 +44,18 @@ build:
         MACOSX_DEPLOYMENT_TARGET: "13.0"
     - platform: windows
       script: build.ps1
+    - platform: freebsd
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
     - platform: wasm
       host_platform: linux
       script: build-wasm.sh
