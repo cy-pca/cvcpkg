@@ -94,6 +94,32 @@ The authoritative schema is
   Use `lib/*/…` variants to catch Debian multiarch paths (e.g.
   `lib/x86_64-linux-gnu/`).
 
+### Cross-compilation host tools
+
+Two kinds of build-time tooling exist, and they are treated differently:
+
+- **`depends.host_tools`** — tools that must be on `PATH` during *this*
+  recipe's build (e.g. `cmake`, `ninja`). They are resolved and made
+  available for the build but are not part of the recipe's own output.
+- **`cross_toolchain`** — declared by a recipe that *is itself* a cross
+  toolchain (e.g. `emsdk`, a bazel-based toolchain). It lists the target
+  platforms it enables and any env vars to export into dependent builds:
+
+  ```yaml
+  cross_toolchain:
+    target_platforms: [wasm]        # targets this toolchain enables
+    env:
+      CVC_BAZEL_BIN: "${PREFIX}/bin/bazel"   # ${PREFIX} = the host-tools prefix
+  ```
+
+A recipe with a `cross_toolchain` block is a **host tool**: its bundle
+manifest carries `bundle.host_tool: true`, and when it is auto-pulled to
+cross-build another package it installs into a **separate host-tools
+prefix**, never into the deliverable `--prefix`. See
+[Host tools stay out of the deliverable](cvcpkg-builder-wsl-windows-cross.md#host-tools-stay-out-of-the-deliverable)
+in the cross-build guide for the `--host-tools-prefix` / `--keep-host-tools`
+CLI semantics and the `share/libcvc-deps/host-tools.yaml` record.
+
 ## Build scripts
 
 Build scripts run with these environment variables set:

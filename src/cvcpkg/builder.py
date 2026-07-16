@@ -833,12 +833,18 @@ def generate_manifest(
     maintainer: str = "",
     all_recipes: dict[str, Recipe] | None = None,
     org_slug: str = "",
+    host_tool: bool | None = None,
 ) -> dict[str, Any]:
     """Generate a bundle manifest.yaml from the recipe + installed tree.
 
     When *all_recipes* is provided, ``recipe_sha256`` is a transitive
     dependency chain hash instead of a single-file hash.  This makes the
     hash sensitive to changes anywhere in the dependency tree.
+
+    ``host_tool`` flags the bundle as a build-time host tool in the manifest.
+    When left as ``None`` it is derived from the recipe (a recipe that
+    declares ``cross_toolchain.target_platforms`` is a host tool); pass an
+    explicit bool to override.
     """
     files = _file_list(install_dir)
     cmake_packages = recipe.raw.get("package", {}).get("cmake_packages", [])
@@ -876,6 +882,7 @@ def generate_manifest(
     recipe_block = recipe.raw.get("recipe", {})
     description = recipe_block.get("description", "")
     built_at = datetime.now(timezone.utc).isoformat()
+    is_host_tool = host_tool if host_tool is not None else bool(recipe.cross_toolchain_targets)
     manifest: dict[str, Any] = {
         "schema_version": 3,
         "bundle": {
@@ -889,6 +896,7 @@ def generate_manifest(
             "link": link,
             "abi": abi,
             **({"org": org_slug} if org_slug else {}),
+            **({"host_tool": True} if is_host_tool else {}),
         },
         "contents": {
             "description": description,

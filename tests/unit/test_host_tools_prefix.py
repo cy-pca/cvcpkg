@@ -51,10 +51,15 @@ class TestHostToolsPrefix:
     def test_toolchain_env_resolves_to_host_tools_prefix(self, tmp_path):
         r = _recipe(tmp_path)
         ht = tmp_path / "ht"
-        ctx = _ctx(tmp_path, r, host_tools_prefix=ht, cross={"CVC_BAZEL_BIN": "${PREFIX}/bin/bazel"})
+        ctx = _ctx(
+            tmp_path, r, host_tools_prefix=ht, cross={"CVC_BAZEL_BIN": "${PREFIX}/bin/bazel"}
+        )
         env = _build_env(ctx, r.build_matrix[0])
-        # ${PREFIX} points at the host-tools prefix, NOT the deliverable prefix
-        assert env["CVC_BAZEL_BIN"] == str(ht / "bin" / "bazel")
+        # ${PREFIX} is a literal substitution, so the separators after the
+        # prefix follow the recipe template ("/") rather than os.sep -- assert
+        # exactly what the substitution yields (portable across Windows).
+        assert env["CVC_BAZEL_BIN"] == str(ht) + "/bin/bazel"
+        # ...and it points at the host-tools prefix, NOT the deliverable prefix
         assert str(tmp_path / "prefix") not in env["CVC_BAZEL_BIN"]
 
     def test_host_tools_bin_is_first_on_path(self, tmp_path):
@@ -70,9 +75,11 @@ class TestHostToolsPrefix:
     def test_fallback_to_prefix_when_not_separated(self, tmp_path):
         # host_tools_prefix=None -> legacy behaviour: everything under --prefix
         r = _recipe(tmp_path)
-        ctx = _ctx(tmp_path, r, host_tools_prefix=None, cross={"CVC_BAZEL_BIN": "${PREFIX}/bin/bazel"})
+        ctx = _ctx(
+            tmp_path, r, host_tools_prefix=None, cross={"CVC_BAZEL_BIN": "${PREFIX}/bin/bazel"}
+        )
         env = _build_env(ctx, r.build_matrix[0])
-        assert env["CVC_BAZEL_BIN"] == str(tmp_path / "prefix" / "bin" / "bazel")
+        assert env["CVC_BAZEL_BIN"] == str(tmp_path / "prefix") + "/bin/bazel"
 
     def test_cli_default_host_tools_prefix_is_sibling(self):
         # mirrors the CLI default: <prefix>.host-tools beside --prefix

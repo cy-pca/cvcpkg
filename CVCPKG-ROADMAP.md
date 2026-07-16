@@ -3,7 +3,7 @@
 > A cross-platform, language-agnostic binary package archive
 > for the scientific computing community.
 
-*Last updated: 2026-07-15*
+*Last updated: 2026-07-16*
 
 ---
 
@@ -501,6 +501,34 @@ deliberately language-agnostic.  Future expansion:
      of re-building from source.  cpkg keeps its build scripting; cvcpkg
      supplies the full-fledged binary package manager underneath (catalog,
      signing, reproducible LTS pins, cross-platform archive).
+
+#### Cross-Build & Host-Tools Hygiene
+
+When building for a target that needs cross-compilation, the build-time
+**host tools** (cmake, ninja, bazel/bazelisk, cross-toolchains) are a
+byproduct — they must not pollute the deliverable install prefix that a
+downstream project (e.g. a C# consumer) ingests.
+
+- **Separate host-tools prefix (done).** `cvcpkg build --host-tools-prefix`
+  installs host tools into their own prefix (default `<prefix>.host-tools`,
+  a sibling of the deliverable `--prefix`).  Passing the same path as
+  `--prefix` disables the separation (legacy behaviour).  This fixes the
+  bazel/bazelisk leak into `bin/`.
+- **Manifest-flagged (done).** Host-tool bundles carry `bundle.host_tool: true`
+  in their `manifest.yaml` (derived from a recipe's `cross_toolchain`
+  declaration).  The deliverable prefix records the separation in
+  `share/libcvc-deps/host-tools.yaml` (`present`, `prefix`, `tools`,
+  `stripped`).
+- **Strip on install (done).** On install we strip the recorded host-tools
+  prefix directory **unless `--keep-host-tools` is passed** — the install
+  command reads the record to know a host-tools prefix exists and where.
+  `cvcpkg build` strips by default at the end of a build; `cvcpkg install`
+  honours the record on finalize; `--keep-host-tools` retains the toolchain
+  (e.g. to reuse it for a subsequent build).
+- **Future.** Thread the same host-tools separation through
+  `cvcpkg install`'s from-source fallback (`build_from_source_fallback`), so
+  host tools built *during* an install are also recorded and stripped; and a
+  server/requirements-level default policy for the strip.
 
 ### Phase 5 — Federation & Scaling
 

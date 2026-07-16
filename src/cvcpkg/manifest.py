@@ -58,6 +58,11 @@ class BundleManifest:
     abi: AbiTag = field(default_factory=AbiTag)
     introduced_in: str = ""
     last_seen_in: str = ""
+    # True when this bundle is itself a cross-build toolchain -- a recipe that
+    # declares ``cross_toolchain`` (e.g. emsdk) -- rather than a target-runtime
+    # deliverable.  Such host tools install into a separate host-tools prefix
+    # and are stripped on install unless kept.  See cvcpkg.host_tools.
+    host_tool: bool = False
 
     # contents
     description: str = ""
@@ -125,6 +130,7 @@ class BundleManifest:
                 abi=abi,
                 introduced_in=b.get("introduced_in", ""),
                 last_seen_in=b.get("last_seen_in", ""),
+                host_tool=bool(b.get("host_tool", False)),
                 description=contents.get("description", meta.get("description", "")),
                 files=contents.get("files", []),
                 cmake_packages=[

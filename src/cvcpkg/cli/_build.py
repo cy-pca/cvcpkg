@@ -261,6 +261,16 @@ def _try_pull_server_recipes() -> tuple[str, ...]:
         "path as --prefix to disable the separation (legacy behaviour)."
     ),
 )
+@click.option(
+    "--keep-host-tools/--strip-host-tools",
+    default=False,
+    help=(
+        "Keep the build-time host-tools prefix after the build instead of "
+        "stripping it.  By default the host-tools prefix is removed once the "
+        "build completes (it is a build-time byproduct); pass --keep-host-tools "
+        "to retain it (e.g. to reuse the toolchain for a later build)."
+    ),
+)
 def build(
     recipe: tuple[str, ...],
     platform: str,
@@ -274,6 +284,7 @@ def build(
     with_deps: bool,
     host_platform: str,
     host_tools_prefix: str | None,
+    keep_host_tools: bool,
 ) -> None:
     """Build one or more recipes from source.
 
@@ -406,6 +417,38 @@ def build(
                 cross_toolchain_env=merged_toolchain_env,
                 host_tools_prefix=host_tools_prefix_path,
             )
+
+        # ── Host-tools separation: record + strip ──
+        # When host tools were built into a separate prefix, record that in the
+        # deliverable prefix (share/libcvc-deps/host-tools.yaml) so install can
+        # find them, then strip the host-tools prefix -- a build-time byproduct
+        # -- unless --keep-host-tools was passed.
+        if (
+            host_tool_recipes
+            and prefix_path is not None
+            and host_tools_prefix_path is not None
+            and host_tools_prefix_path != prefix_path
+            and prefix_path.is_dir()
+        ):
+            from cvcpkg.host_tools import strip_host_tools, write_host_tools_record
+
+            write_host_tools_record(
+                prefix_path,
+                host_tools_prefix_path,
+                [r.name for r in host_tool_recipes],
+            )
+            if keep_host_tools:
+                click.echo(
+                    f"cvcpkg: host tools kept at {host_tools_prefix_path} "
+                    "(recorded in share/libcvc-deps/host-tools.yaml)"
+                )
+            else:
+                stripped = strip_host_tools(prefix_path, keep=False)
+                if stripped is not None:
+                    click.echo(
+                        f"cvcpkg: stripped host-tools prefix {stripped} "
+                        "(pass --keep-host-tools to keep it)"
+                    )
     else:
         for name in recipe:
             recipe_dir = _resolve_recipe_dir(name, recipes_dirs, no_default=no_default_recipes)
