@@ -86,6 +86,7 @@ runs:
         sparse-checkout: |
           src
           pyproject.toml
+          README.md
           packaging
           cvc-requirements.yaml
         sparse-checkout-cone-mode: false
