@@ -149,14 +149,14 @@ flowchart TD
 | 4 | Multi-Language & Ecosystem | ⬜ Future |
 | 5 | Federation & Scaling | 🔶 Partially Done — cluster roles (primary/mirror/edge), pull-only populate, and public-vs-org namespace invariants landed (2026-07); CDN/sharding/replicas still future |
 | 6 | Community & Governance | 🔶 Partially Done — org namespaces + private-visibility isolation shipped |
-| 7 | Python Ecosystem (hermetic wheels, no-GIL) | ⬜ Planned |
+| 7 | Python Ecosystem (hermetic wheels, no-GIL) | 🔶 Partially Done — `python_wheel`/`python_sdist` source types, the `python:` block, the GIL-disabled test harness, and the first full matrix (`numpy` × cp311/cp312/cp313/cp313t) landed; more wheels + CUDA-math recipes + manifest freeze remain |
 | 8 | Self-Hosting & Universal Bootstrap (`cvpkg`) | ⬜ Planned — `mingw-w64` toolchain recipe is the first concrete step (landed 2026-07) |
 | 9 | Fleet & Platform Expansion (GhostBSD/DragonflyBSD, qemu) | 🔶 In Progress — DragonflyBSD platform + provisioning underway in a parallel track |
 | 10 | Peer Providers & Hardware-Aware Concretization | ⬜ Planned |
 | 11 | Self-Hosting Toolchains (extends Phase 8) | ⬜ Proposed |
-| 12 | Federation Hardening — Selective Mirroring & Authoritative Resolution | ⬜ Planned |
+| 12 | Federation Hardening — Selective Mirroring & Authoritative Resolution | ✅ Complete — mirror allow/deny policy, size budget with usage-based eviction, and top-down root-authoritative resolution |
 | 13 | Identity & Access — OIDC / External Providers | ✅ Complete — OIDC login for the admin dashboard (code flow + PKCE, claim→role mapping); HMAC tokens remain for machines |
-| 14 | Source Recipes — File-Artifact Packages | ⬜ Planned |
+| 14 | Source Recipes — File-Artifact Packages | ✅ Complete — `platform: any` file artifacts consumed by downstream platform recipes, canonized by an end-to-end test |
 | 15 | **PyPI Release** | ⬜ **Final phase** — the project/repo rename, trusted-publisher config, and the gated publish. Deliberately last: `pip install cvcpkg` ships only after the roadmap is otherwise complete. |
 
 **Road to PyPI (`pip install cvcpkg`):** the PyPI publish is the **last phase of the
@@ -639,7 +639,11 @@ scaling and federation:
 
 ### Phase 7 — Python Ecosystem Integration (Hermetic Python + Native Prefixes)
 
-**Status: Planned**
+**Status: Partially Done** — the `python_wheel`/`python_sdist` source types, the
+`python:` block, the per-interpreter test harness (incl. the GIL-disabled
+assertion), and the first full matrix (`numpy` × cp311/cp312/cp313/cp313t) have
+landed.  Remaining: more wheel packages (scipy/h5py/mpi4py), the CUDA-math
+prerequisite recipes, and the release-manifest freeze.
 
 cvcpkg already ships CPython interpreters as recipes (`python311`/`312`/`313`) that install
 `libpython`, the interpreter, and the stdlib into a prefix under `CVC_INSTALL_DIR`. Phase 7
@@ -709,24 +713,46 @@ flowchart LR
     P313T --> W
 ```
 
-- [ ] **Wheel recipes for every shipped interpreter** — each wheel package
+- [x] **`python_wheel` / `python_sdist` source types** — additive to
+      `schema_version: 1`, plus the top-level `python:` block
+      (`interpreter`, `abi`, `manylinux_min`, `build_isolation`,
+      `build_requires`).  cvcpkg fetches and sha256-verifies the artifact
+      itself instead of trusting each build script to do it, so an unpinned
+      wheel is a hard error and the install runs offline (`--no-index`).
+- [x] **Wheel recipes for every shipped interpreter** — each wheel package
       gets variants for cp311 / cp312 / cp313 / cp313t, resolved through the
       normal `depends` graph against the matching `python31x` recipe.
-- [ ] **Free-threaded (no-GIL) wheel channel** — the `python313t` (cp313t)
+      Shipped: `numpy-cp311/cp312/cp313/cp313t`, 5 platforms pinned each.
+- [x] **Free-threaded (no-GIL) wheel channel** — the `python313t` (cp313t)
       column is the flagship: every cp313t wheel is built against the
       free-threaded interpreter **and its test suite is executed with the
       GIL disabled on the builder fleet** as part of the recipe `test:`
       step.  cvcpkg can therefore deliver packages that **provably work
       without the GIL** — not "should work", but *demonstrated on every
       platform we publish for*, which general-purpose indexes cannot claim.
-- [ ] **Per-interpreter test harness** — a shared `_common` helper that
-      imports the package and runs its smoke/test suite under the exact
-      target interpreter (GIL-disabled run for cp313t), failing the build on
-      thread-safety regressions (`PYTHON_GIL=0`, `-X gil=0`).
+- [x] **Per-interpreter test harness** — `_common/python-wheel.{sh,ps1}`
+      installs into and runs the check under the exact target interpreter.
+      For a free-threaded ABI it asserts `Py_GIL_DISABLED` *and* that
+      `sys._is_gil_enabled()` is false before running the snippet — CPython
+      silently re-enables the GIL for extensions not marked
+      free-threading-safe, so without that assertion the no-GIL claim would
+      be unproven (`PYTHON_GIL=0`, `-X gil=0`).
+- [ ] **Wheel matrix beyond numpy** — scipy, h5py (`python_sdist` against
+      cvcpkg `hdf5`), mpi4py; plus the CUDA-math prerequisite recipes.
 - [ ] **Release-manifest freeze** — the LTS manifest pins the full
       interpreter × wheel matrix (filenames + sha256) alongside the C
       recipes, so a release describes one reproducible Python stack per
       interpreter.
+
+> **Interpreter coverage moves upstream.**  numpy **2.5.x dropped both
+> `cp311` and `cp313t`** (its free-threaded column is now `cp314t`).  The
+> matrix is pinned to **numpy 2.4.6**, the newest release still carrying all
+> four ABIs cvcpkg ships.  Advancing the pin needs either a numpy covering
+> every shipped interpreter or a `python314t` recipe first — the same
+> tension will recur for every wheel, so the matrix tracks *our*
+> interpreters, not upstream's latest.
+
+See [docs/python-wheels.md](docs/python-wheels.md).
 
 ---
 
@@ -752,6 +778,32 @@ Python, no compiler, no package manager.
 - [ ] Dogfoods the Phase 7 machinery end-to-end (interpreter recipe +
       wheel matrix + entry-point shims) and becomes the recommended
       install path for build machines.
+
+**Dependency survey (2026-07-16).** Auditing cvcpkg's own non-optional
+runtime closure against PyPI turned up two constraints that shape this work:
+
+| dependency | shape | note |
+|---|---|---|
+| click, httpx, httpcore, h11, certifi, idna, anyio, sniffio, typing_extensions | pure Python (`py3-none-any`) | one `platform: any` recipe each — no matrix |
+| sqlalchemy | pure Python **and** cp-tagged speedups | either column works |
+| **cryptography** | **`cp311-abi3`** (26/45 wheels) | stable ABI — one wheel serves cp311+ |
+| **PyYAML**, **greenlet** | cp-tagged, **no cp313t**, no abi3 | free-threaded column does not exist upstream |
+
+1. **abi3 collapses the matrix.**  A stable-ABI wheel is version-independent,
+   so `cryptography` is *one* recipe, not four.  The `python:` block accepts
+   `abi: abi3` for exactly this case.
+2. **cvcpkg cannot yet self-install onto `python313t`.**  PyYAML and greenlet
+   publish no free-threaded wheels, and the 3.13 free-threaded build does not
+   implement the stable ABI, so `cryptography`'s abi3 wheel does not cover it
+   either.  The self-install recipe therefore targets **`python313`** (as
+   this phase already specifies); a `python313t` self-install needs those
+   dependencies built from sdist via `python_sdist` — which is the concrete
+   next step, not a blocker on the default path.
+
+   There is an irony worth stating plainly: Phase 7 lets cvcpkg *prove* numpy
+   works with the GIL disabled, while cvcpkg itself cannot yet run GIL-disabled
+   from wheels.  That gap is upstream's, and it is exactly the gap the
+   `python_sdist` type exists to close.
 
 #### `cvpkg` — an Actually Portable Executable bootstrap
 
@@ -974,7 +1026,8 @@ prior dependencies.
 
 ### Phase 12 — Federation Hardening (Selective Mirroring & Authoritative Resolution)
 
-**Status: Planned**
+**Status: Complete** — mirror allow/deny policy, mirror size budget with
+usage-based eviction, and top-down root-authoritative resolution all shipped.
 
 Phase 5 stood up the cluster-role model (primary / mirror / edge-satellite) and
 the public-vs-org namespace invariants.  Phase 12 hardens the edge/satellite
@@ -1068,7 +1121,9 @@ account management, password handling, and permission UX from scratch.
 
 ### Phase 14 — Source Recipes (File-Artifact Packages)
 
-**Status: Planned**
+**Status: Complete** — source recipes announce as `platform: any` / `noarch`
+file artifacts, downstream recipes consume the staged tree, and an end-to-end
+integration test canonizes the workflow.
 
 Some deliverables are **just source files** — a header-only tree, a vendored
 source drop, a patch set, a data blob — with no compilation.  cvcpkg should

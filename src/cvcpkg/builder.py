@@ -25,7 +25,7 @@ from typing import Any
 import yaml
 
 from cvcpkg.errors import CvcpkgError
-from cvcpkg.platform import detect_platform
+from cvcpkg.platform import detect_arch, detect_platform
 
 # ── Errors ──────────────────────────────────────────────────────
 
@@ -73,7 +73,8 @@ def qualified_name(name: str, org: str = "") -> str:
 class SourceSpec:
     """Parsed ``source:`` block from recipe.yaml."""
 
-    type: str  # tarball | git | vcpkg | brew | apt | vendored
+    type: str  # tarball | git | vcpkg | brew | apt | vendored | prebuilt |
+    #            python_wheel | python_sdist
     url: str = ""
     mirror: str = ""
     sha256: str = ""
@@ -82,6 +83,8 @@ class SourceSpec:
     triplet: str = ""
     baseline: str = ""
     strip_components: int = 1
+    base_url: str = ""
+    artifacts: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> SourceSpec:
@@ -95,6 +98,66 @@ class SourceSpec:
             triplet=d.get("triplet", ""),
             baseline=d.get("baseline", ""),
             strip_components=d.get("strip_components", 1),
+            base_url=d.get("base_url", ""),
+            artifacts=d.get("artifacts", {}) or {},
+        )
+
+
+@dataclass
+class PythonSpec:
+    """Parsed ``python:`` block from recipe.yaml (Phase 7).
+
+    Declares which cvcpkg interpreter a wheel/sdist recipe targets.  The
+    ``abi`` is the CPython ABI tag the artifact is built for (``cp311`` …
+    ``cp313t``); a trailing ``t`` marks the free-threaded (no-GIL) ABI.
+    """
+
+    interpreter: str = ""  # cvcpkg recipe name, e.g. "python313t"
+    abi: str = ""  # wheel ABI tag, e.g. "cp313t", or "abi3"
+    manylinux_min: str = ""  # e.g. "manylinux_2_28"
+    build_isolation: bool = False
+    build_requires: list[str] = field(default_factory=list)
+
+    @property
+    def stable_abi(self) -> bool:
+        """True for a stable-ABI (``abi3``) wheel.
+
+        One abi3 wheel serves every interpreter from ``interpreter`` upwards,
+        so such a package collapses the matrix to a single column instead of
+        one recipe per interpreter.
+        """
+        return self.abi == "abi3"
+
+    @property
+    def free_threaded(self) -> bool:
+        """True for the GIL-disabled ABI (``cp313t``), which we test at -X gil=0.
+
+        Never true for abi3: the 3.13 free-threaded build does not implement
+        the stable ABI, so a stable-ABI wheel cannot cover cp313t.
+        """
+        return self.abi.endswith("t")
+
+    @property
+    def version_tag(self) -> str:
+        """``cp313t`` -> ``3.13``: the X.Y the interpreter reports.
+
+        Empty for abi3, which pins no single version by construction.
+        """
+        if self.stable_abi:
+            return ""
+        digits = "".join(c for c in self.abi if c.isdigit())
+        if len(digits) < 3:
+            return ""
+        return f"{digits[0]}.{digits[1:]}"
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> PythonSpec:
+        return cls(
+            interpreter=d.get("interpreter", ""),
+            abi=d.get("abi", ""),
+            manylinux_min=d.get("manylinux_min", ""),
+            build_isolation=bool(d.get("build_isolation", False)),
+            build_requires=list(d.get("build_requires", []) or []),
         )
 
 
@@ -136,6 +199,7 @@ class Recipe:
     cross_toolchain_targets: list[str] = field(default_factory=list)
     cross_toolchain_env: dict[str, str] = field(default_factory=dict)
     conflicts: list[str] = field(default_factory=list)
+    python: PythonSpec | None = None
 
     @property
     def full_version(self) -> str:
@@ -158,6 +222,7 @@ class Recipe:
         test_block = raw.get("test", {})
 
         ct_block = raw.get("cross_toolchain", {})
+        python_block = raw.get("python", {})
 
         return cls(
             name=recipe_block.get("name", recipe_dir.name),
@@ -175,6 +240,7 @@ class Recipe:
             cross_toolchain_targets=ct_block.get("target_platforms", []) or [],
             cross_toolchain_env=ct_block.get("env", {}) or {},
             conflicts=raw.get("conflicts", []) or [],
+            python=PythonSpec.from_dict(python_block) if python_block else None,
         )
 
 
@@ -338,13 +404,108 @@ def _resolve_vendored(source: SourceSpec, recipe_dir: Path) -> Path:
     return src
 
 
-def fetch_source(recipe: Recipe, work_dir: Path) -> Path:
-    """Fetch or locate the source tree for a recipe."""
+def _resolve_artifact(source: SourceSpec, platform: str, arch: str) -> tuple[str, str, str]:
+    """Resolve the ``artifacts`` entry for *platform*/*arch*.
+
+    Returns ``(url, sha256, filename)``.  Entries may be a bare filename
+    (joined onto ``base_url``) or a mapping carrying its own ``url``/``file``
+    and ``sha256``.  A recipe with no ``artifacts`` map falls back to the
+    top-level ``url``/``sha256`` — that is the ``platform: any`` case (a pure
+    Python wheel is valid everywhere).
+    """
+    if not source.artifacts:
+        if not source.url:
+            raise RecipeError("no artifacts map and no source.url to fall back on")
+        return source.url, source.sha256, source.url.rsplit("/", 1)[-1]
+
+    key = f"{platform}-{arch}"
+    entry = source.artifacts.get(key)
+    if entry is None:
+        available = ", ".join(sorted(source.artifacts)) or "(none)"
+        raise RecipeError(f"no artifact for {key}; recipe provides: {available}")
+
+    if isinstance(entry, str):
+        filename = entry
+        url = f"{source.base_url.rstrip('/')}/{filename}" if source.base_url else filename
+        return url, source.sha256, filename
+
+    filename = entry.get("file", "")
+    url = entry.get("url", "")
+    if not url:
+        if not filename:
+            raise RecipeError(f"artifact {key} has neither 'url' nor 'file'")
+        if not source.base_url:
+            raise RecipeError(f"artifact {key} uses 'file' but recipe has no base_url")
+        url = f"{source.base_url.rstrip('/')}/{filename}"
+    if not filename:
+        filename = url.rsplit("/", 1)[-1]
+    return url, entry.get("sha256", ""), filename
+
+
+def _fetch_python_wheel(source: SourceSpec, dest: Path, platform: str, arch: str) -> Path:
+    """Download and sha256-verify a pinned wheel; do not unpack it.
+
+    pip parses the compatibility tags out of the wheel *filename*, so the
+    artifact keeps its upstream name.  Unlike the hand-rolled downloads in
+    ``prebuilt`` build scripts, the pin is enforced here in cvcpkg rather
+    than trusted to each recipe — Phase 7 requires every wheel to be
+    sha256-pinned, so a missing hash is an error, not a warning.
+    """
+    import urllib.error
+    import urllib.request
+
+    url, sha256, filename = _resolve_artifact(source, platform, arch)
+    if not sha256:
+        raise RecipeError(f"python_wheel artifact {filename} has no sha256 (pinning is required)")
+
+    source_dir = dest / "src"
+    source_dir.mkdir(exist_ok=True)
+    wheel_path = source_dir / filename
+
+    cache_dir = _source_cache_dir()
+    cached = cache_dir / f"{sha256}.whl" if cache_dir is not None else None
+    if cached is not None and cached.is_file() and _sha256_file(cached) == sha256:
+        shutil.copy2(str(cached), str(wheel_path))
+        return source_dir
+
+    try:
+        urllib.request.urlretrieve(url, wheel_path)  # noqa: S310
+    except (urllib.error.URLError, OSError) as e:
+        raise RecipeError(f"failed to download wheel from {url}: {e}") from e
+
+    actual = _sha256_file(wheel_path)
+    if actual != sha256:
+        raise RecipeError(f"SHA-256 mismatch for {filename}: expected {sha256}, got {actual}")
+
+    if cached is not None:
+        cache_dir.mkdir(parents=True, exist_ok=True)  # type: ignore[union-attr]
+        shutil.copy2(str(wheel_path), str(cached))
+    return source_dir
+
+
+def fetch_source(recipe: Recipe, work_dir: Path, *, platform: str = "", arch: str = "") -> Path:
+    """Fetch or locate the source tree for a recipe.
+
+    *platform*/*arch* select the entry from an ``artifacts`` map; they
+    default to the host, which is what a native build wants.
+    """
     src = recipe.source
     if src.type == "tarball":
         return _fetch_tarball(src, work_dir)
     if src.type == "vendored":
         return _resolve_vendored(src, recipe.recipe_dir)
+    if src.type == "python_wheel":
+        return _fetch_python_wheel(
+            src, work_dir, platform or detect_platform(), arch or detect_arch()
+        )
+    if src.type == "python_sdist":
+        # An sdist is just a tarball whose URL may be platform-resolved.
+        url, sha256, _ = _resolve_artifact(
+            src, platform or detect_platform(), arch or detect_arch()
+        )
+        if not sha256:
+            raise RecipeError("python_sdist requires a sha256 (pinning is required)")
+        return _fetch_tarball(replace(src, url=url, sha256=sha256, mirror=""), work_dir)
     if src.type in ("vcpkg", "brew", "apt", "prebuilt"):
         # These are handled by the build script itself; return a
         # dummy source directory.
@@ -484,6 +645,18 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
     # install_dir; callers building into isolated per-component dirs
     # can override via the prefix field.
     env["CVC_DEPS_PREFIX"] = str(ctx.prefix)
+
+    # Phase 7: wheel/sdist recipes tell _common/python-wheel.{sh,ps1} which
+    # interpreter in the prefix to install into and test under.
+    if ctx.recipe.python is not None:
+        env["CVC_PYTHON_ABI"] = ctx.recipe.python.abi
+        env["CVC_PYTHON_INTERPRETER"] = ctx.recipe.python.interpreter
+        if ctx.recipe.python.manylinux_min:
+            env["CVC_PYTHON_MANYLINUX_MIN"] = ctx.recipe.python.manylinux_min
+        if ctx.recipe.python.free_threaded:
+            # Belt and braces: a free-threaded child process must not silently
+            # re-enable the GIL just because some extension asked for it.
+            env["PYTHON_GIL"] = "0"
 
     build_type = "Release" if ctx.config == "release" else "Debug"
     env["CMAKE_BUILD_TYPE"] = build_type
@@ -1157,7 +1330,7 @@ def build_recipe(
     install_dir = work_dir / "install"
     build_dir = work_dir / "build"
 
-    source_dir = fetch_source(recipe, work_dir)
+    source_dir = fetch_source(recipe, work_dir, platform=platform)
     if recipe.patches:
         apply_patches(recipe, source_dir)
 

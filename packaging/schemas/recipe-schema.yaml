@@ -45,6 +45,9 @@ properties:
   abi:
     $ref: "#/$defs/abi_block"
 
+  python:
+    $ref: "#/$defs/python_block"
+
   notes:
     oneOf:
       - type: string
@@ -117,7 +120,18 @@ $defs:
     properties:
       type:
         type: string
-        enum: [tarball, git, vcpkg, brew, apt, vendored, prebuilt]
+        enum:
+          [
+            tarball,
+            git,
+            vcpkg,
+            brew,
+            apt,
+            vendored,
+            prebuilt,
+            python_wheel,
+            python_sdist,
+          ]
       url:
         type: string
         format: uri
@@ -161,6 +175,45 @@ $defs:
             - type: object
               additionalProperties: { type: string }
         description: "Platform-keyed map of prebuilt artifact filenames and checksums"
+
+  python_block:
+    type: object
+    required: [interpreter, abi]
+    additionalProperties: false
+    description: >
+      Present on python_wheel / python_sdist recipes (Phase 7).  Declares
+      which cvcpkg interpreter the artifact targets, so the wheel matrix
+      resolves through the ordinary depends graph.
+    properties:
+      interpreter:
+        type: string
+        pattern: "^python3[0-9]{2}t?$"
+        description: "cvcpkg interpreter recipe this artifact targets, e.g. python313t"
+      abi:
+        type: string
+        pattern: "^(cp3[0-9]{2}t?|abi3)$"
+        description: >
+          CPython ABI tag the artifact is built for (cp311 … cp313t), or
+          abi3 for a stable-ABI wheel.  A trailing 't' is the free-threaded
+          (no-GIL) ABI, whose test step runs with the GIL disabled.  abi3
+          wheels are version-independent, so one recipe covers every
+          interpreter from `interpreter` upwards and the matrix collapses to
+          a single column — note the 3.13 free-threaded build does not
+          support the stable ABI, so abi3 never implies cp313t coverage.
+      manylinux_min:
+        type: string
+        pattern: "^manylinux_[0-9]+_[0-9]+$"
+        description: "Minimum manylinux glibc floor, e.g. manylinux_2_28"
+      build_isolation:
+        type: boolean
+        description: >
+          python_sdist only.  False (the default) builds against the
+          prefix's cvcpkg C libraries instead of pip-downloaded copies —
+          this is the hermeticity payoff.
+      build_requires:
+        type: array
+        items: { type: string }
+        description: "Pinned build backend requirements when build_isolation is false"
 
   depends_block:
     type: object
