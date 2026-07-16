@@ -551,8 +551,43 @@ scaling and federation:
 - **Federated registries** — multiple independent cvcpkg servers can
   cross-reference packages.  A client can query multiple registries
   with fallback.
-- **Sharded storage** — split the archive across multiple storage backends
-  by package name hash or category.
+- **Storage backends & named volumes** — let artifacts live on many
+  backends at once, with recipes choosing where.
+
+  *Already built (harden, don't rebuild):* a pluggable `StorageBackend`
+  protocol (`cvcpkg/backends/`) with **9 backends** — `s3` (S3/MinIO/Garage
+  via boto, honoring `CVCPKG_S3_ENDPOINT_URL`), `gcs`, `azure`, `sftp`,
+  `rsync`, `rclone`, `https`, `file`, `gh-release` — dispatched **by URI
+  scheme** (`cvcpkg.storage.get_backend`), with per-scheme options
+  (`backends:` in config) and third-party registration via the
+  `cvcpkg.storage_backends` entry point. **Reads are already multi-backend:**
+  a catalog can mix `s3://…`, `https://…`, `gh-release://…` freely and each
+  package downloads through its own backend. The **write** side is the gap —
+  the server stores every archive under a single `storage_uri`.
+
+  *To build — server-defined named volumes:*
+  - The **cvcpkg-server config declares named volumes**, each a
+    `{name, backend URI/scheme, options, tier, org scope}`. Example:
+    `garage-hot` → `s3://cvcpkg@garage`, `gh-cold` → `gh-release://…`.
+  - **Volumes are advertised to clients/recipes** via the API and are
+    **valid only in the context of that server's domain** — a volume name is
+    resolved against the server it was fetched from; the same name on another
+    domain is unrelated. (Downloads still use the fully-resolved URI recorded
+    in package metadata, so a moved/renamed volume never breaks existing
+    installs.)
+  - **Recipes (and `publish`) select a target volume by name**; the server
+    writes the artifact to that volume's backend and records the resolved URI
+    in the package row. Falls back to a server default volume when unset.
+  - **SLA / provider tiers** — volumes carry tier metadata (hot/cold,
+    durability, region, provider). Different providers can expose different
+    volumes; users pick per-recipe. Opens an SLA/billing hook (a provider can
+    price or gate a premium `--volume`).
+  - **Hardening tasks:** wire the server publish path to write through any
+    backend (not just `file://`), add publish/download round-trip tests per
+    backend, validate/authorize volume selection, and migrate the server
+    `storage_uri` off `file://` onto Garage (S3) — proven on the dev cluster
+    first (a small Garage there), then prod (HA Garage, see the fleet-storage
+    plan in vm-provisioning `docs/FLEET-STORAGE.md`).
 - **Read replicas** — PostgreSQL streaming replication for read-heavy
   workloads.
 
