@@ -8,36 +8,11 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
+# Moved to the dependency-free cvcpkg.orgs so the CLI can validate slugs
+# without the server extras; re-exported here for backward compatibility.
+from cvcpkg.orgs import validate_org_slug  # noqa: F401
+
 # ── Org slug validation (GitHub username rules) ─────────────────
-
-_ORG_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
-_CONSECUTIVE_HYPHENS_RE = re.compile(r"--")
-
-
-def validate_org_slug(slug: str) -> str | None:
-    """Validate an organization slug using GitHub username rules.
-
-    Rules (matching GitHub):
-    - 1–39 characters
-    - Only lowercase alphanumeric characters or hyphens
-    - Cannot start or end with a hyphen
-    - No consecutive hyphens
-
-    Returns ``None`` on success or an error message string on failure.
-    """
-    if not slug:
-        return "organization slug must not be empty"
-    if len(slug) > 39:
-        return f"organization slug must be at most 39 characters (got {len(slug)})"
-    if _CONSECUTIVE_HYPHENS_RE.search(slug):
-        return "organization slug must not contain consecutive hyphens"
-    if not _ORG_SLUG_RE.match(slug):
-        return (
-            "organization slug may only contain lowercase alphanumeric "
-            "characters or hyphens, and cannot start or end with a hyphen"
-        )
-    return None
-
 
 # ── Enums ───────────────────────────────────────────────────────
 
