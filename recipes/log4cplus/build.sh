@@ -51,7 +51,7 @@ CMAKE_PKG_DIR="${CVC_INSTALL_DIR}/lib/cmake/log4cplus"
 # /usr/lib/x86_64-linux-gnu/librt.a, libnsl.so on glibc) into
 # INTERFACE_LINK_LIBRARIES; rewrite them to plain -l names so the bundle
 # links on distros with different system-library layouts.
-sed -E -i.cvcbak 's|/usr/lib[^;"]*/lib([A-Za-z0-9_+-]+)\.(a|so[.0-9]*)|\1|g' \
+sed -E -i.cvcbak 's#/usr/lib[^;"]*/lib([A-Za-z0-9_+-]+)\.(a|so[.0-9]*)#\1#g' \
     "${CMAKE_PKG_DIR}/log4cplusTargets.cmake"
 rm -f "${CMAKE_PKG_DIR}/log4cplusTargets.cmake.cvcbak"
 
