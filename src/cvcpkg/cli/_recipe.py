@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from cvcpkg._archive import safe_tar_extractall
 import click
 import yaml
 
@@ -452,7 +453,7 @@ def recipe_pull(name: str, server: str, token: str, org_slug: str, output_dir: s
     bundle_path.write_bytes(resp.content)
 
     with tarfile.open(bundle_path, "r:gz") as tar:
-        tar.extractall(path=output)  # noqa: S202
+        safe_tar_extractall(tar, output)
     bundle_path.unlink()
     click.echo(f"Recipe '{name}' extracted to {output / name}")
 
@@ -519,7 +520,7 @@ def recipe_pull_all(server: str, token: str, org_slug: str, output_dir: str):
     bundle_path.write_bytes(resp.content)
 
     with tarfile.open(bundle_path, "r:gz") as tar:
-        tar.extractall(path=output)  # noqa: S202
+        safe_tar_extractall(tar, output)
     bundle_path.unlink()
 
     # Count extracted recipes

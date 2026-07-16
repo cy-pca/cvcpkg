@@ -1050,7 +1050,7 @@ function renderInfo() {
   }
   if (p.homepage) {
     const el = document.getElementById('pkg-homepage');
-    el.href = p.homepage;
+    if (/^https?:\/\//i.test(p.homepage || '')) el.href = p.homepage;
     el.textContent = p.homepage;
     el.parentElement.style.display = '';
   }
@@ -1335,8 +1335,18 @@ async function loadBuildJobs(name) {
 
 
 def _js_string_literal(s: str) -> str:
-    """Encode a Python string as a safe JavaScript string literal."""
-    return _json.dumps(s)
+    """Encode a Python string as a JS string literal that is safe inside HTML.
+
+    json.dumps leaves <, >, & (hence </script>) intact, which
+    would let a reflected value break out of the surrounding <script> block.
+    Each is emitted as a JS unicode escape.
+    """
+    return (
+        _json.dumps(s)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
 
 
 def package_detail_html(name: str, *, org: str = "") -> str:
@@ -1797,7 +1807,7 @@ function renderOrg(data) {{
     const el = document.getElementById('org-homepage');
     el.style.display = '';
     const link = document.getElementById('org-homepage-link');
-    link.href = o.homepage;
+    if (/^https?:\/\//i.test(o.homepage || '')) link.href = o.homepage;
     link.textContent = o.homepage;
   }}
 

@@ -235,6 +235,7 @@ class TestMirrorRegister:
         client, admin_tok, pub_tok, _ = db_server_env
         resp = client.post(
             "/v1/mirrors/register",
+            headers={"Authorization": f"Bearer {admin_tok}"},
             json={
                 "url": "https://mirror1.example.com",
                 "display_name": "EU Mirror",
@@ -251,6 +252,7 @@ class TestMirrorRegister:
         client, admin_tok, pub_tok, _ = db_server_env
         resp = client.post(
             "/v1/mirrors/register",
+            headers={"Authorization": f"Bearer {admin_tok}"},
             json={"url": "ftp://bad.example.com"},
         )
         assert resp.status_code == 422
@@ -260,6 +262,7 @@ class TestMirrorRegister:
         # Register
         client.post(
             "/v1/mirrors/register",
+            headers={"Authorization": f"Bearer {admin_tok}"},
             json={"url": "https://m1.example.com"},
         )
         # Reject it
@@ -271,6 +274,7 @@ class TestMirrorRegister:
         # Re-register
         resp = client.post(
             "/v1/mirrors/register",
+            headers={"Authorization": f"Bearer {admin_tok}"},
             json={"url": "https://m1.example.com"},
         )
         assert resp.status_code == 200
@@ -283,10 +287,12 @@ class TestMirrorList:
         # Register two mirrors
         client.post(
             "/v1/mirrors/register",
+            headers={"Authorization": f"Bearer {admin_tok}"},
             json={"url": "https://m1.example.com"},
         )
         client.post(
             "/v1/mirrors/register",
+            headers={"Authorization": f"Bearer {admin_tok}"},
             json={"url": "https://m2.example.com"},
         )
 
@@ -329,6 +335,7 @@ class TestMirrorReject:
         client, admin_tok, pub_tok, _ = db_server_env
         client.post(
             "/v1/mirrors/register",
+            headers={"Authorization": f"Bearer {admin_tok}"},
             json={"url": "https://m1.example.com"},
         )
 
@@ -347,6 +354,7 @@ class TestMirrorReject:
         client, admin_tok, pub_tok, _ = db_server_env
         client.post(
             "/v1/mirrors/register",
+            headers={"Authorization": f"Bearer {admin_tok}"},
             json={"url": "https://m1.example.com"},
         )
         resp = client.post(
@@ -371,6 +379,7 @@ class TestMirrorRemove:
         client, admin_tok, pub_tok, _ = db_server_env
         client.post(
             "/v1/mirrors/register",
+            headers={"Authorization": f"Bearer {admin_tok}"},
             json={"url": "https://m1.example.com"},
         )
 
@@ -392,6 +401,7 @@ class TestMirrorRemove:
         client, admin_tok, pub_tok, _ = db_server_env
         client.post(
             "/v1/mirrors/register",
+            headers={"Authorization": f"Bearer {admin_tok}"},
             json={"url": "https://m1.example.com"},
         )
         resp = client.delete(
@@ -478,6 +488,7 @@ class TestMirrorAudit:
         client, admin_tok, pub_tok, _ = db_server_env
         client.post(
             "/v1/mirrors/register",
+            headers={"Authorization": f"Bearer {admin_tok}"},
             json={"url": "https://m1.example.com", "display_name": "EU Mirror"},
         )
 
@@ -497,6 +508,7 @@ class TestMirrorAudit:
         client, admin_tok, pub_tok, _ = db_server_env
         client.post(
             "/v1/mirrors/register",
+            headers={"Authorization": f"Bearer {admin_tok}"},
             json={"url": "https://m1.example.com"},
         )
         client.post(
@@ -518,6 +530,7 @@ class TestMirrorAudit:
         client, admin_tok, pub_tok, _ = db_server_env
         client.post(
             "/v1/mirrors/register",
+            headers={"Authorization": f"Bearer {admin_tok}"},
             json={"url": "https://m1.example.com"},
         )
         client.delete(

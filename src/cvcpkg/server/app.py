@@ -2313,6 +2313,7 @@ def create_app(
                 include_yanked=False,
                 limit=limit,
                 offset=offset,
+                caller_token_name=(None if actor.role == TokenRole.admin else actor.name),
             )
             # get_bundles with release="" returns ALL; filter to empty release_tag
             packages = [p for p in packages if not p.release_tag]
@@ -2496,7 +2497,7 @@ def create_app(
     async def download_archive(
         filename: str,
         request: Request,
-        _auth: None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         state = _get_state()
         # Sanitise filename to prevent path traversal
@@ -2504,6 +2505,25 @@ def create_app(
         archive_path = state.archives_dir() / safe_name
         if not archive_path.is_file():
             raise HTTPException(404, f"archive not found: {safe_name}")
+
+        # Enforce org visibility on the archive: a PRIVATE org's archive is
+        # downloadable only by a member (or admin). Resolve the archive to its
+        # package row, then gate on membership. 404 (not 403) so the endpoint
+        # never confirms a private archive's existence to an outsider.
+        if _use_db and _db_packages is not None:
+            _dl_pkgs, _ = await _db_packages.get_bundles(limit=1000)
+            _dl_pkg = next(
+                (p for p in _dl_pkgs if p.archive_url.endswith(f"/{safe_name}")), None
+            )
+            if _dl_pkg is not None and _dl_pkg.org and _db_orgs is not None:
+                _dl_org = await _db_orgs.get(_dl_pkg.org)
+                if _dl_org is not None and _dl_org.is_private:
+                    _ok = caller is not None and (
+                        caller.role == TokenRole.admin
+                        or await _db_orgs.is_member(_dl_pkg.org, caller.name)
+                    )
+                    if not _ok:
+                        raise HTTPException(404, f"archive not found: {safe_name}")
 
         # Record download event for analytics
         if _use_db and _db_downloads is not None:
@@ -3254,6 +3274,24 @@ def create_app(
         ),
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
+        # Ownership: only the package's publisher, a member of its org, or an
+        # admin may yank it -- a publisher must not yank someone else's package.
+        if actor.role != TokenRole.admin and _use_db and _db_packages is not None:
+            _yk, _ = await _db_packages.get_bundles(name=name, include_yanked=True, limit=1)
+            if _yk:
+                _yp = _yk[0]
+                _owns = _yp.published_by == actor.name
+                _in_org = (
+                    bool(_yp.org)
+                    and _db_orgs is not None
+                    and await _db_orgs.is_member(_yp.org, actor.name)
+                )
+                if not (_owns or _in_org):
+                    raise HTTPException(
+                        403,
+                        "you may only yank packages you published or that belong "
+                        "to an organization you are a member of",
+                    )
         scope_parts = [
             f"{k}={v}"
             for k, v in (
@@ -3405,7 +3443,7 @@ def create_app(
     async def delete_packages_by_link(
         platform: str,
         link: str,
-        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
     ):
         """Delete all bundles matching a platform and link mode (admin only)."""
         if _use_db:
@@ -3799,13 +3837,14 @@ def create_app(
     # ── Registration (public) ──────────────────────────────
 
     @app.post("/v1/register", response_model=RegistrationResponse, tags=["registration"])
-    async def register(req: RegistrationRequest):
+    async def register(req: RegistrationRequest, request: Request):
         """Self-service token registration.
 
         In ``open`` mode the token is created immediately and returned.
         In ``admin-gated`` mode a pending request is recorded for admin
         approval.
         """
+        _check_rate_limit(request)
         if not req.name or not req.name.strip():
             raise HTTPException(422, "name is required")
         if not _is_valid_identifier(req.name):
@@ -3823,7 +3862,7 @@ def create_app(
                 if _use_db:
                     raw = await _db_tokens.create(
                         name=req.name,
-                        role=req.role,
+                        role=TokenRole.reader,  # open self-registration is reader-only
                         email=req.email,
                         description=req.description,
                         metadata=req.metadata,
@@ -3831,7 +3870,7 @@ def create_app(
                 else:
                     raw = state.tokens.create(
                         name=req.name,
-                        role=req.role,
+                        role=TokenRole.reader,  # open self-registration is reader-only
                         email=req.email,
                         description=req.description,
                         metadata=req.metadata,
@@ -4226,13 +4265,15 @@ def create_app(
     @app.get("/v1/feed.xml", tags=["feed"], response_class=Response)
     async def rss_feed(
         limit: int = Query(50, ge=1, le=200, description="Number of items in the feed"),
-        _auth: None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         """RSS 2.0 feed of the latest published packages."""
         import xml.etree.ElementTree as ET
 
         if _use_db:
-            packages, _ = await _db_packages.get_bundles(limit=limit, offset=0)
+            packages, _ = await _db_packages.get_bundles(
+                limit=limit, offset=0, caller_token_name=(caller.name if caller else "")
+            )
         else:
             state = _get_state()
             bundles = state.index.get("bundles", [])
@@ -4935,7 +4976,10 @@ def create_app(
     # ── Mirror endpoints ────────────────────────────────────
 
     @app.post("/v1/mirrors/register", response_model=MirrorInfo, tags=["mirrors"])
-    async def register_mirror(body: MirrorRegisterRequest):
+    async def register_mirror(
+        body: MirrorRegisterRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
         """Register a mirror with the primary server.
 
         Mirrors call this endpoint to announce themselves.  The primary
@@ -4962,7 +5006,7 @@ def create_app(
         )
         await _db_audit.record(
             action=AuditAction.mirror_register,
-            actor="mirror",
+            actor=actor.name,
             target=url,
             detail=body.display_name or "",
         )
@@ -5234,6 +5278,9 @@ def create_app(
     ):
         """Submit a single build job."""
         _require_db_build_jobs()
+        if body.org_slug and actor.role != TokenRole.admin and _db_orgs is not None:
+            if not await _db_orgs.is_member(body.org_slug, actor.name):
+                raise HTTPException(403, "not a member of this organization")
         # wasm/wasi/cosmo only support static linking — enforce server-side.
         link = body.link
         if body.platform in ("wasm", "wasi", "cosmo") and link != "static":
@@ -5273,6 +5320,10 @@ def create_app(
         import uuid as _uuid
 
         _require_db_build_jobs()
+        if actor.role != TokenRole.admin and _db_orgs is not None:
+            for _org in {j.org_slug for j in body.jobs if j.org_slug}:
+                if not await _db_orgs.is_member(_org, actor.name):
+                    raise HTTPException(403, f"not a member of organization '{_org}'")
         dag_id = body.dag_id or str(_uuid.uuid4())[:12]
         jobs_dicts = [
             {
@@ -5310,6 +5361,26 @@ def create_app(
         )
         return DagSubmitResponse(dag_id=dag_id, total=len(infos), jobs=infos)
 
+    async def _assert_build_visible(actor: TokenRecord, info) -> None:
+        """404 unless *actor* may see build job *info* (member of its private org)."""
+        if actor.role == TokenRole.admin or _db_orgs is None:
+            return
+        org = getattr(info, "org_slug", "") or ""
+        if not org:
+            return
+        org_info = await _db_orgs.get(org)
+        if org_info is not None and org_info.is_private:
+            if not await _db_orgs.is_member(org, actor.name):
+                raise HTTPException(404, "build job not found")
+
+    async def _assert_dag_visible(actor: TokenRecord, dag_id: str) -> None:
+        """404 unless *actor* may act on DAG *dag_id* (member of its private org)."""
+        if actor.role == TokenRole.admin or _db_orgs is None:
+            return
+        _jobs, _ = await _db_build_jobs.list_jobs(dag_id=dag_id, limit=1, offset=0)
+        if _jobs:
+            await _assert_build_visible(actor, _jobs[0])
+
     @app.get("/v1/builds", response_model=BuildJobListResponse, tags=["builds"])
     async def list_builds(
         status: str | None = Query(None, description="Filter by status"),
@@ -5340,6 +5411,22 @@ def create_app(
             limit=limit,
             offset=offset,
         )
+        if actor.role != TokenRole.admin and _db_orgs is not None:
+            _priv: dict[str, bool] = {}
+            visible = []
+            for j in jobs:
+                o = getattr(j, "org_slug", "") or ""
+                if not o:
+                    visible.append(j)
+                    continue
+                if o not in _priv:
+                    _oi = await _db_orgs.get(o)
+                    _priv[o] = bool(_oi and _oi.is_private)
+                if not _priv[o] or await _db_orgs.is_member(o, actor.name):
+                    visible.append(j)
+            if len(visible) != len(jobs):
+                total = len(visible)
+            jobs = visible
         return BuildJobListResponse(total=total, jobs=jobs)
 
     @app.get("/v1/builds/{job_id}", response_model=BuildJobInfo, tags=["builds"])
@@ -5352,6 +5439,7 @@ def create_app(
         info = await _db_build_jobs.get(job_id)
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
+        await _assert_build_visible(actor, info)
         return info
 
     @app.post("/v1/builds/{job_id}/cancel", tags=["builds"])
@@ -5376,6 +5464,10 @@ def create_app(
         cascade-cancelled, and the builder is notified via WebSocket.
         """
         _require_db_build_jobs()
+        _existing = await _db_build_jobs.get(job_id)
+        if _existing is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _assert_build_visible(actor, _existing)
         info = await _db_build_jobs.cancel(job_id, force=force)
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
@@ -5426,6 +5518,7 @@ def create_app(
     ):
         """Cancel all pending/dispatched jobs in a DAG."""
         _require_db_build_jobs()
+        await _assert_dag_visible(actor, dag_id)
         count = await _db_build_jobs.cancel_dag(dag_id)
         await _db_audit.record(
             action=AuditAction.build_cancel,
@@ -5450,6 +5543,10 @@ def create_app(
     ):
         """Pause a pending or dispatched build job."""
         _require_db_build_jobs()
+        _existing = await _db_build_jobs.get(job_id)
+        if _existing is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _assert_build_visible(actor, _existing)
         info = await _db_build_jobs.pause(job_id)
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
@@ -5462,6 +5559,10 @@ def create_app(
     ):
         """Resume a paused build job back to pending."""
         _require_db_build_jobs()
+        _existing = await _db_build_jobs.get(job_id)
+        if _existing is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _assert_build_visible(actor, _existing)
         info = await _db_build_jobs.resume(job_id)
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
@@ -5474,6 +5575,7 @@ def create_app(
     ):
         """Pause all pending/dispatched jobs in a DAG."""
         _require_db_build_jobs()
+        await _assert_dag_visible(actor, dag_id)
         count = await _db_build_jobs.pause_dag(dag_id)
         return {"message": "dag paused", "dag_id": dag_id, "paused": count}
 
@@ -5484,6 +5586,7 @@ def create_app(
     ):
         """Resume all paused jobs in a DAG back to pending."""
         _require_db_build_jobs()
+        await _assert_dag_visible(actor, dag_id)
         count = await _db_build_jobs.resume_dag(dag_id)
         return {"message": "dag resumed", "dag_id": dag_id, "resumed": count}
 
@@ -5641,6 +5744,10 @@ def create_app(
     ):
         """Download the full log for a build job."""
         _require_db_build_jobs()
+        _job = await _db_build_jobs.get(job_id)
+        if _job is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _assert_build_visible(actor, _job)
         state = _get_state()
         path = await _db_build_jobs.get_log_path(job_id, logs_dir=state.logs_dir())
         if path is None:
@@ -5695,6 +5802,11 @@ def create_app(
             raise HTTPException(401, "invalid or expired token")
         if record.role not in (TokenRole.publisher, TokenRole.admin):
             raise HTTPException(403, "insufficient role")
+        # Enforce org membership when the job exists; a missing job falls through
+        # to the generator's existing "job not found" SSE event (preserved contract).
+        _job = await _db_build_jobs.get(job_id)
+        if _job is not None:
+            await _assert_build_visible(record, _job)
         state = _get_state()
 
         async def _event_generator():
@@ -5947,6 +6059,20 @@ def create_app(
         if not _re_mod.match(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$", name):
             raise HTTPException(400, "invalid recipe name")
 
+        # Validate + authorize the org namespace: org_slug lands in a
+        # filesystem path (recipe_bundles/<org_slug>), so a bare length bound
+        # would allow traversal, and any publisher could otherwise write into
+        # another org's private recipe namespace.
+        if org_slug:
+            from cvcpkg.server.models import validate_org_slug
+
+            slug_err = validate_org_slug(org_slug)
+            if slug_err:
+                raise HTTPException(422, slug_err)
+            if actor.role != TokenRole.admin and _db_orgs is not None:
+                if not await _db_orgs.is_member(org_slug, actor.name):
+                    raise HTTPException(403, "not a member of this organization")
+
         state = _get_state()
         recipes_dir = state.state_dir / "recipe_bundles"
         if org_slug:
@@ -5956,6 +6082,21 @@ def create_app(
         dest = recipes_dir / f"{name}.tar.gz"
         # Write uploaded file
         content = await file.read()
+        # Reject bundles with path-traversal / link-escape members so a poisoned
+        # recipe can't write outside the extraction dir on a client that later
+        # unpacks it (defense in depth alongside safe_tar_extractall).
+        import io as _io_mod
+        import tarfile as _tf_mod
+
+        try:
+            from cvcpkg._archive import tar_has_unsafe_member
+
+            with _tf_mod.open(fileobj=_io_mod.BytesIO(content), mode="r:gz") as _chk:
+                _bad_member = tar_has_unsafe_member(_chk)
+        except _tf_mod.TarError as exc:
+            raise HTTPException(400, "recipe bundle is not a valid tar.gz") from exc
+        if _bad_member is not None:
+            raise HTTPException(400, f"unsafe recipe bundle member: {_bad_member!r}")
         dest.write_bytes(content)
         bundle_size = len(content)
 
@@ -6003,9 +6144,33 @@ def create_app(
     ):
         """List server-managed recipe bundles."""
         _require_db_recipes()
+        is_admin = actor.role == TokenRole.admin
+        allowed: set[str] | None = None
+        if not is_admin and _db_orgs is not None:
+            allowed = {""} | await _db_orgs.member_org_slugs(actor.name)
+            if org_slug is not None and org_slug not in allowed:
+                _o = await _db_orgs.get(org_slug)
+                if _o is not None and _o.is_private:
+                    raise HTTPException(403, "not a member of this organization")
         recipes, total = await _db_recipes.list_recipes(
             org_slug=org_slug, limit=limit, offset=offset
         )
+        if allowed is not None and org_slug is None:
+            _priv: dict[str, bool] = {}
+            visible = []
+            for r in recipes:
+                o = r.org_slug or ""
+                if o in allowed:
+                    visible.append(r)
+                    continue
+                if o not in _priv:
+                    _oi = await _db_orgs.get(o)
+                    _priv[o] = bool(_oi and _oi.is_private)
+                if not _priv[o]:
+                    visible.append(r)
+            if len(visible) != len(recipes):
+                total = len(visible)
+            recipes = visible
         return RecipeListResponse(total=total, recipes=recipes)
 
     @app.get(
@@ -6030,6 +6195,16 @@ def create_app(
 
         buf = io.BytesIO()
 
+        # Private-org recipe sets are visible only to members / admins.
+        if org_slug and _use_db and _db_orgs is not None:
+            _org = await _db_orgs.get(org_slug)
+            if _org is not None and _org.is_private:
+                _is_admin = _caller is not None and _caller.role == TokenRole.admin
+                if not _is_admin and (
+                    _caller is None or not await _db_orgs.is_member(org_slug, _caller.name)
+                ):
+                    raise HTTPException(404, "no recipes available")
+
         if _use_db and _db_recipes is not None:
             recipes_list, _ = await _db_recipes.list_recipes(
                 org_slug=org_slug or None, limit=10000, offset=0
@@ -6040,6 +6215,10 @@ def create_app(
                     if bundle_path and Path(bundle_path).is_file():
                         with tarfile.open(bundle_path, "r:gz") as inner:
                             for member in inner.getmembers():
+                                if member.name.startswith("/") or ".." in Path(
+                                    member.name
+                                ).parts:
+                                    continue
                                 f = inner.extractfile(member) if member.isfile() else None
                                 tar.addfile(member, f)
         else:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from cvcpkg._archive import safe_tar_extractall
+
 import json
 import os
 import re
@@ -493,7 +495,7 @@ def builder_run(
                 subprocess.run(["rm", "-rf", str(extract_dir)], check=False)
             extract_dir.mkdir(parents=True, exist_ok=True)
             with tarfile.open(bundle_path, "r:gz") as tar:
-                tar.extractall(path=extract_dir)  # noqa: S202
+                safe_tar_extractall(tar, extract_dir)
 
             # recipe_push stores recipe files under ``<name>/`` inside
             # the tar (with ``_common/`` alongside).  If that nested dir
