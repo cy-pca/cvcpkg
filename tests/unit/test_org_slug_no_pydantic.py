@@ -47,9 +47,7 @@ def test_org_validation_importable_with_pydantic_blocked():
         "    raise AssertionError('bad slug not rejected')\n"
         "print('OK')\n"
     )
-    out = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True, timeout=60
-    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     assert "OK" in out.stdout
 
