@@ -155,7 +155,7 @@ flowchart TD
 | 10 | Peer Providers & Hardware-Aware Concretization | ⬜ Planned |
 | 11 | Self-Hosting Toolchains (extends Phase 8) | ⬜ Proposed |
 | 12 | Federation Hardening — Selective Mirroring & Authoritative Resolution | ⬜ Planned |
-| 13 | Identity & Access — OIDC / External Providers | ⬜ Planned |
+| 13 | Identity & Access — OIDC / External Providers | ✅ Complete — OIDC login for the admin dashboard (code flow + PKCE, claim→role mapping); HMAC tokens remain for machines |
 | 14 | Source Recipes — File-Artifact Packages | ⬜ Planned |
 | 15 | **PyPI Release** | ⬜ **Final phase** — the project/repo rename, trusted-publisher config, and the gated publish. Deliberately last: `pip install cvcpkg` ships only after the roadmap is otherwise complete. |
 
@@ -1019,7 +1019,33 @@ answer regardless of which server they hit.
 
 ### Phase 13 — Identity & Access (OIDC / External Providers)
 
-**Status: Planned**
+**Status: Complete (2026-07)**
+
+**Shipped** — see [docs/oidc-identity.md](docs/oidc-identity.md):
+
+- [x] **OIDC login** for the `/admin` dashboard: standard authorization-code
+      flow for a confidential client, with **state** (CSRF), **nonce**, and
+      **PKCE S256**.  The PKCE verifier rides in a signed, HttpOnly, 10-minute
+      transaction cookie — never in `state`.
+- [x] **Authorization from claims** — `CVCPKG_OIDC_ADMIN_GROUPS` /
+      `PUBLISHER_GROUPS` / `ADMIN_EMAILS` map IdP claims onto cvcpkg roles
+      (configurable groups claim).  A user who authenticates but matches no
+      mapping is **refused**, never silently downgraded.
+- [x] **Tokens remain for machines** — the admin token form always stays
+      available for CI and break-glass access; OIDC is additive and only
+      offered when the provider is fully configured (otherwise `/admin/oidc/*`
+      is 404 and nothing changes).
+- [x] Logins are audit-logged with the user's email/username as the actor.
+- [x] 28 tests: config gating, claim→role precedence, PKCE S256, signed-txn
+      tamper/expiry, and the full flow against a stubbed IdP (state mismatch,
+      missing txn, IdP error, and unentitled-user refusal all covered).
+
+Deliberately **no JWT/JWKS dependency**: tokens are obtained by direct
+server-to-server TLS exchange with the token endpoint, so per OIDC Core
+§3.1.3.7 TLS server validation stands in for id_token signature checking;
+claims come from the userinfo endpoint.  Local id_token signature
+verification, OIDC-authenticated publishing, and IdP-group→org-membership
+sync are documented follow-ups.
 
 Delivers the **User/org management** capability flagged as future in Phase 3 —
 but by **delegating identity to an external OIDC provider** instead of building

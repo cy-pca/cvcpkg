@@ -1760,7 +1760,7 @@ def create_app(
         from cvcpkg.server import admin_ui
 
         if not _has_admin_session(request):
-            return HTMLResponse(admin_ui.login_html())
+            return HTMLResponse(admin_ui.login_html(oidc_enabled=_oidc_enabled()))
         stats = await _gather_admin_stats()
         builders: list = []
         if _use_db and _db_builders is not None:
@@ -1772,7 +1772,7 @@ def create_app(
         from cvcpkg.server import admin_ui
 
         if not _has_admin_session(request):
-            return HTMLResponse(admin_ui.login_html())
+            return HTMLResponse(admin_ui.login_html(oidc_enabled=_oidc_enabled()))
         tags: list = []
         pkgs: list | None = None
         if _use_db and _db_packages is not None:
@@ -4742,6 +4742,12 @@ def create_app(
         val = request.cookies.get(admin_ui._SESSION_COOKIE, "")
         return bool(val) and admin_ui.verify_session_value(_admin_session_key(), val)
 
+    def _oidc_enabled() -> bool:
+        """True when an OIDC provider is fully configured (Phase 13)."""
+        from cvcpkg.server.oidc import OidcConfig
+
+        return OidcConfig.from_env().is_enabled()
+
     @app.get("/admin", tags=["admin"], response_class=HTMLResponse)
     async def admin_dashboard(request: Request):
         """Server-rendered admin overview (login page when unauthenticated)."""
@@ -4749,7 +4755,7 @@ def create_app(
         from cvcpkg.server import admin_ui
 
         if not _has_admin_session(request):
-            return HTMLResponse(admin_ui.login_html())
+            return HTMLResponse(admin_ui.login_html(oidc_enabled=_oidc_enabled()))
 
         days = 30
         data: dict = {"days": days, "stats": {"version": _server_version, "packages_count": 0}}
@@ -4786,7 +4792,9 @@ def create_app(
 
         if record is None or record.role != TokenRole.admin:
             return HTMLResponse(
-                admin_ui.login_html(error="Invalid token or not an admin token."),
+                admin_ui.login_html(
+                    error="Invalid token or not an admin token.", oidc_enabled=_oidc_enabled()
+                ),
                 status_code=401,
             )
 
@@ -4809,6 +4817,137 @@ def create_app(
         )
         return resp
 
+    # ── OIDC login (Phase 13) ───────────────────────────────
+    #
+    # Human users authenticate against an external OIDC provider; the
+    # callback maps their claims onto a cvcpkg role and mints the same
+    # signed admin session cookie the token login uses.  HMAC tokens stay
+    # the mechanism for machines.
+
+    @app.get("/admin/oidc/login", tags=["admin"])
+    async def admin_oidc_login():
+        """Begin the OIDC authorization-code flow (state + nonce + PKCE)."""
+        import secrets as _secrets
+
+        from cvcpkg.server import oidc as _oidc
+
+        cfg = _oidc.OidcConfig.from_env()
+        if not cfg.is_enabled():
+            raise HTTPException(404, "OIDC is not configured on this server")
+
+        try:
+            doc = await _oidc.discover(cfg)
+        except Exception as exc:
+            raise HTTPException(502, f"OIDC discovery failed: {exc}") from exc
+        authorize = doc.get("authorization_endpoint")
+        if not authorize:
+            raise HTTPException(502, "OIDC discovery document has no authorization_endpoint")
+
+        verifier, challenge = _oidc.new_pkce_pair()
+        state = _secrets.token_urlsafe(16)
+        nonce = _secrets.token_urlsafe(16)
+        txn = _oidc.sign_txn(
+            _admin_session_key(), {"state": state, "verifier": verifier, "nonce": nonce}
+        )
+
+        url = _oidc.build_authorize_url(
+            authorize, cfg, state=state, nonce=nonce, challenge=challenge
+        )
+        resp = RedirectResponse(url, status_code=303)
+        # The PKCE verifier must never ride in `state` (visible to the IdP and
+        # the address bar) — keep it in an HttpOnly transaction cookie.
+        resp.set_cookie(
+            _oidc._TXN_COOKIE,
+            txn,
+            max_age=_oidc._TXN_TTL_SECONDS,
+            httponly=True,
+            samesite="lax",
+            path="/admin",
+        )
+        return resp
+
+    @app.get("/admin/oidc/callback", tags=["admin"], response_class=HTMLResponse)
+    async def admin_oidc_callback(
+        request: Request,
+        code: str = Query(""),
+        state: str = Query(""),
+        error: str = Query(""),
+    ):
+        """Complete the OIDC flow and establish an admin session."""
+        from cvcpkg.server import admin_ui
+        from cvcpkg.server import oidc as _oidc
+
+        cfg = _oidc.OidcConfig.from_env()
+        if not cfg.is_enabled():
+            raise HTTPException(404, "OIDC is not configured on this server")
+
+        if error:
+            return HTMLResponse(
+                admin_ui.login_html(error=f"identity provider returned: {error}"),
+                status_code=401,
+            )
+
+        txn = _oidc.verify_txn(_admin_session_key(), request.cookies.get(_oidc._TXN_COOKIE, ""))
+        if not txn:
+            return HTMLResponse(
+                admin_ui.login_html(error="login session expired — please try again."),
+                status_code=400,
+            )
+        # CSRF: the state echoed by the IdP must match the one we signed.
+        if not code or not state or not secrets.compare_digest(state, str(txn.get("state", ""))):
+            return HTMLResponse(
+                admin_ui.login_html(error="invalid OIDC state — login refused."),
+                status_code=400,
+            )
+
+        try:
+            doc = await _oidc.discover(cfg)
+            tokens = await _oidc.exchange_code(
+                doc["token_endpoint"], cfg, code=code, verifier=str(txn.get("verifier", ""))
+            )
+            claims = await _oidc.fetch_userinfo(
+                doc["userinfo_endpoint"], tokens.get("access_token", "")
+            )
+        except Exception as exc:
+            return HTMLResponse(
+                admin_ui.login_html(error=f"OIDC exchange failed: {exc}"),
+                status_code=502,
+            )
+
+        role = _oidc.map_claims_to_role(claims, cfg)
+        subject = _oidc.claims_subject(claims)
+        if role != "admin":
+            # Authenticated with the IdP but not entitled to the dashboard.
+            return HTMLResponse(
+                admin_ui.login_html(
+                    error=(
+                        f"{subject or 'this account'} is not authorized for the admin "
+                        "dashboard (no admin group/email mapping)."
+                    )
+                ),
+                status_code=403,
+            )
+
+        if _use_db and _db_audit is not None:
+            await _db_audit.record(
+                action=AuditAction.token_create,
+                actor=subject or "oidc-user",
+                target="admin-ui",
+                detail="admin dashboard login via OIDC",
+            )
+
+        resp = RedirectResponse("/admin", status_code=303)
+        resp.set_cookie(
+            admin_ui._SESSION_COOKIE,
+            admin_ui.make_session_value(_admin_session_key()),
+            max_age=admin_ui._SESSION_TTL_SECONDS,
+            httponly=True,
+            samesite="lax",
+            path="/admin",
+        )
+        resp.delete_cookie(_oidc._TXN_COOKIE, path="/admin")
+        return resp
+
     @app.post("/admin/logout", tags=["admin"])
     async def admin_logout():
         from cvcpkg.server import admin_ui
@@ -4822,7 +4961,7 @@ def create_app(
         from cvcpkg.server import admin_ui
 
         if not _has_admin_session(request):
-            return HTMLResponse(admin_ui.login_html())
+            return HTMLResponse(admin_ui.login_html(oidc_enabled=_oidc_enabled()))
         pkgs: list = []
         total = 0
         if _use_db and _db_packages is not None:
@@ -4879,7 +5018,7 @@ def create_app(
         from cvcpkg.server import admin_ui
 
         if not _has_admin_session(request):
-            return HTMLResponse(admin_ui.login_html())
+            return HTMLResponse(admin_ui.login_html(oidc_enabled=_oidc_enabled()))
         tokens: list = []
         if _use_db and _db_tokens is not None:
             tokens = await _db_tokens.list_tokens()
@@ -4940,7 +5079,7 @@ def create_app(
         from cvcpkg.server import admin_ui
 
         if not _has_admin_session(request):
-            return HTMLResponse(admin_ui.login_html())
+            return HTMLResponse(admin_ui.login_html(oidc_enabled=_oidc_enabled()))
         entries: list = []
         total = 0
         chain = None
