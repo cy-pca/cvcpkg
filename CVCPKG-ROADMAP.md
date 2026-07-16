@@ -3,7 +3,7 @@
 > A cross-platform, language-agnostic binary package archive
 > for the scientific computing community.
 
-*Last updated: 2026-07-14*
+*Last updated: 2026-07-15*
 
 ---
 
@@ -136,6 +136,27 @@ flowchart TD
 
 ## Roadmap Phases
 
+### Status Snapshot (2026-07-15)
+
+| Phase | Title | Status |
+|---|---|---|
+| 1 | Foundation | ✅ Complete (v2.0.0) |
+| 1.5 | PyPI Release Readiness | 🔶 In Progress — all engineering gaps closed; **only the rename + trusted-publisher + final publish remain** (see below) |
+| 2 | Analytics & Telemetry | ✅ Complete — download analytics, bandwidth, platform/version distribution, and opt-in client telemetry all shipped (server + client + dashboard) |
+| 3 | Admin Dashboard | ✅ Complete — `/admin` overview, packages, tokens, audit, releases, health (release *creation* workflow is the one follow-up) |
+| 4 | Multi-Language & Ecosystem | ⬜ Future |
+| 5 | Federation & Scaling | 🔶 Partially Done — cluster roles (primary/mirror/edge), pull-only populate, and public-vs-org namespace invariants landed (2026-07); CDN/sharding/replicas still future |
+| 6 | Community & Governance | 🔶 Partially Done — org namespaces + private-visibility isolation shipped |
+| 7 | Python Ecosystem (hermetic wheels, no-GIL) | ⬜ Planned |
+| 8 | Self-Hosting & Universal Bootstrap (`cvpkg`) | ⬜ Planned — `mingw-w64` toolchain recipe is the first concrete step (landed 2026-07) |
+| 9 | Fleet & Platform Expansion (GhostBSD/DragonflyBSD, qemu) | 🔶 In Progress — DragonflyBSD platform + provisioning underway in a parallel track |
+| 10 | Peer Providers & Hardware-Aware Concretization | ⬜ Planned |
+| 11 | Self-Hosting Toolchains (extends Phase 8) | ⬜ Proposed |
+
+**Road to PyPI (`pip install cvcpkg`):** the remaining blockers are all in Phase 1.5's
+*Packaging & Distribution* list — the project/repo rename, the PyPI trusted-publisher
+config, and the gated final publish. Every other engineering gap is closed.
+
 ### Phase 1 — Foundation
 
 **Status: Complete (v2.0.0)**
@@ -170,9 +191,15 @@ flowchart TD
 
 ### Phase 1.5 — PyPI Release Readiness
 
-**Status: In Progress**
+**Status: In Progress — engineering gaps closed; rename + publish remain**
 
-Items required before `pip install cvcpkg` goes live on PyPI.
+Items required before `pip install cvcpkg` goes live on PyPI.  As of
+2026-07-15 every testing/CLI/CMake/documentation gap below is closed
+(including Windows CI integration tests and a full server-side security
+hardening pass — private-data isolation, tenant scoping, tar-slip and
+reflected-XSS fixes).  The **only** open items are the ordered
+Packaging & Distribution steps: the project + repo rename, the PyPI
+trusted-publisher configuration, and the gated final publish.
 
 #### Packaging & Distribution
 
@@ -288,11 +315,31 @@ release.  These are the gaps to close **before** the final publish step.
 
 ### Phase 2 — Analytics & Telemetry
 
-**Status: Planned**
+**Status: Complete (2026-07)**
 
 Package administrators need visibility into how the archive is being used
 to make informed decisions about resource allocation, deprecation, and
 support priorities.
+
+**Shipped:**
+
+- [x] `download_events` extended with `arch`, salted `client_ip_hash`,
+      `user_agent`, `cvcpkg_version`, `bytes_sent` (migration 013); the
+      `/v1/download` endpoint records all of them.
+- [x] Admin analytics API: `GET /v1/analytics/downloads` (totals + top
+      packages), `/bandwidth` (daily byte series), `/platforms`
+      (platform/arch + client-version mix), `/trends` (daily counts).
+- [x] Opt-in client telemetry: `cvcpkg telemetry status|send`, the
+      `CVCPKG_TELEMETRY=1` post-install ping, `telemetry_events`
+      (migration 014), public `POST /v1/telemetry`, admin
+      `GET /v1/analytics/telemetry`.  Anonymous by construction; the
+      client sends a `cvcpkg/<version>` User-Agent so downloads attribute
+      to a client version.
+- [x] Displayed on the admin dashboard (Phase 3).
+
+**Deferred:** geo-IP bucketing (needs a GeoIP data source decision) and
+install success/failure telemetry.  The privacy model below is implemented
+(salted IP hashes; telemetry stores nothing derived from the connection).
 
 #### Download Analytics
 
@@ -349,10 +396,30 @@ support priorities.
 
 ### Phase 3 — Admin Dashboard
 
-**Status: Planned**
+**Status: Complete (2026-07)**
 
 A web-based administration interface at `/admin` for managing the cvcpkg
 archive without CLI access.
+
+**Shipped** — server-rendered (Bulma, no SPA), admin-token → HMAC-signed
+session cookie (HttpOnly, `/admin`-scoped), every mutation audit-logged,
+zero admin credentials in browser JS:
+
+- [x] **Overview** — stat cards + downloads sparkline + top packages +
+      platform/client/telemetry mixes (delivers Phase 2's "display
+      analytics" item).
+- [x] **Packages** — filterable variant list (yanked included); per-variant
+      yank / unyank / delete.
+- [x] **Tokens** — list, create (raw token shown once), revoke.
+- [x] **Audit** — latest entries newest-first + one-click tamper-evident
+      chain verification.
+- [x] **Health** — uptime, DB backend, archive storage, counts, and a live
+      builder-fleet table.
+- [x] **Releases** — release-tag list with per-tag variant view.
+
+**One follow-up:** release *creation / promotion* (freezing live recipes
+into an LTS manifest) needs a freeze-process design and is tracked
+separately; the release *view* is shipped.
 
 #### Features
 
@@ -433,7 +500,11 @@ deliberately language-agnostic.  Future expansion:
 
 ### Phase 5 — Federation & Scaling
 
-**Status: Future**
+**Status: Partially Done** — the cluster-role model (primary / mirror /
+edge-satellite), pull-only public-catalog populate, and the
+public-vs-organization namespace invariants landed in 2026-07.  CDN
+offload, federated multi-registry query, sharded storage, and read
+replicas remain future work.
 
 As the archive grows, a single server won't suffice.  Plan for horizontal
 scaling and federation:
@@ -594,7 +665,9 @@ flowchart LR
 
 ### Phase 8 — Self-Hosting & Universal Bootstrap (`cvpkg`)
 
-**Status: Planned**
+**Status: Planned** — see also Phase 11, which develops the
+platform-toolchain-recipe thread (the `mingw-w64` cross-toolchain recipe
+landed 2026-07 as the first step).
 
 Close the loop on distribution: cvcpkg should be installable *by* cvcpkg,
 and bootstrappable on a bare machine with **zero prerequisites** — no
@@ -794,9 +867,11 @@ With `numpy`, `scipy`, and `F2Dock` all declaring `depends: [blas, lapack]`:
 
 ---
 
-### Phase 8 — Self-Hosting Toolchains + `cvpkg` (Zero-System-Dependency Deploys)
+### Phase 11 — Self-Hosting Toolchains + `cvpkg` (Zero-System-Dependency Deploys)
 
-**Status: Proposed**
+**Status: Proposed** — extends Phase 8 (Self-Hosting & Universal Bootstrap)
+with the platform-toolchain-recipe angle; the `mingw-w64` recipe (landed
+2026-07) is the first concrete step.
 
 The end-state of cvcpkg's "minimum system dependencies" goal is to deploy onto a **bare
 base-system userland** — no system compiler, no system SDK, nothing but the OS libc and
@@ -832,7 +907,7 @@ prior dependencies.
 
 ## Package Recipes
 
-### Current Recipes (v2.0.0) — 99 recipes at release; 129 live in `recipes/` as of 2026-07
+### Current Recipes (v2.0.0) — 99 recipes at release; 133 live in `recipes/` as of 2026-07
 
 | Category | Recipes |
 |---|---|
