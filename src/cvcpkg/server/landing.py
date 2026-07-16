@@ -1785,7 +1785,7 @@ def org_detail_html(slug: str) -> str:
 
 async function init() {{
   try {{
-    const resp = await fetch('/v1/orgs/' + encodeURIComponent({_json.dumps(slug)}));
+    const resp = await fetch('/v1/orgs/' + encodeURIComponent({_js_string_literal(slug)}));
     const data = await resp.json();
     renderOrg(data);
   }} catch (err) {{
@@ -2097,8 +2097,8 @@ def tag_detail_html(tag_name: str, org_slug: str = "") -> str:
 {_HELPERS_JS}
 {_NAVBAR_JS}
 
-const TAG_NAME = {_json.dumps(tag_name)};
-const TAG_ORG = {_json.dumps(org_slug)};
+const TAG_NAME = {_js_string_literal(tag_name)};
+const TAG_ORG = {_js_string_literal(org_slug)};
 
 async function init() {{
   // Load tag metadata (if curated)

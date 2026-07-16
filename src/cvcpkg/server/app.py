@@ -521,14 +521,21 @@ async def optional_reader_auth(authorization: str | None = Header(None)) -> Toke
 
 
 async def optional_token(authorization: str | None = Header(None)) -> TokenRecord | None:
-    """Try to resolve a bearer token if present, but never require it."""
+    """Resolve a bearer token if present to identify the caller for visibility
+    filtering.  Never requires one UNLESS the server sets ``require_auth_for_reads``
+    — in that case a missing/invalid token is rejected, so switching read
+    endpoints from ``optional_reader_auth`` to this dependency does not silently
+    open them on auth-required deployments."""
+    state = _get_state()
     raw = _extract_token(authorization)
     if raw is None:
+        if state.require_auth_for_reads:
+            raise HTTPException(401, "this server requires authentication for reads")
         return None
-    if _use_db:
-        return await _db_tokens.verify(raw)
-    state = _get_state()
-    return state.tokens.verify(raw)
+    record = await _db_tokens.verify(raw) if _use_db else state.tokens.verify(raw)
+    if record is None and state.require_auth_for_reads:
+        raise HTTPException(401, "invalid or expired token")
+    return record
 
 
 async def _authenticate_token(raw: str) -> TokenRecord | None:
@@ -2406,7 +2413,16 @@ def create_app(
                 "total_size_bytes": total_bytes,
                 "orgs": {},
             }
-        return await _db_packages.cache_stats()
+        result = await _db_packages.cache_stats()
+        # Redact the per-org breakdown for non-admins: the full map would expose
+        # every org's name + storage, including private orgs. Members keep their
+        # own orgs; admins see all.
+        if actor.role != TokenRole.admin and isinstance(result, dict) and _db_orgs is not None:
+            member = await _db_orgs.member_org_slugs(actor.name)
+            orgs = result.get("orgs")
+            if isinstance(orgs, dict):
+                result = {**result, "orgs": {k: v for k, v in orgs.items() if k in member}}
+        return result
 
     @app.post("/v1/cache/gc", tags=["cache"])
     async def cache_gc(
@@ -2474,16 +2490,34 @@ def create_app(
 
     # ── Download (read) ─────────────────────────────────────
 
+    async def _archive_is_visible(caller: TokenRecord | None, safe_name: str) -> bool:
+        """True if *caller* may download the archive *safe_name*. Private-org
+        archives require admin or membership; public/base archives are open.
+        Resolves via a direct, unbounded, yank-inclusive query (no truncation)."""
+        if not (_use_db and _db_packages is not None and _db_orgs is not None):
+            return True
+        org = await _db_packages.get_archive_org(safe_name)
+        if not org:  # None (no package row) or "" (public namespace)
+            return True
+        org_info = await _db_orgs.get(org)
+        if org_info is None or not org_info.is_private:
+            return True
+        return caller is not None and (
+            caller.role == TokenRole.admin or await _db_orgs.is_member(org, caller.name)
+        )
+
     @app.head("/v1/download/{filename}", tags=["packages"])
     async def head_download_archive(
         filename: str,
-        _auth: None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         """HEAD support so clients can check size before downloading."""
         state = _get_state()
         safe_name = Path(filename).name
         archive_path = state.archives_dir() / safe_name
         if not archive_path.is_file():
+            raise HTTPException(404, f"archive not found: {safe_name}")
+        if not await _archive_is_visible(caller, safe_name):
             raise HTTPException(404, f"archive not found: {safe_name}")
         return Response(
             status_code=200,
@@ -2510,20 +2544,8 @@ def create_app(
         # downloadable only by a member (or admin). Resolve the archive to its
         # package row, then gate on membership. 404 (not 403) so the endpoint
         # never confirms a private archive's existence to an outsider.
-        if _use_db and _db_packages is not None:
-            _dl_pkgs, _ = await _db_packages.get_bundles(limit=1000)
-            _dl_pkg = next(
-                (p for p in _dl_pkgs if p.archive_url.endswith(f"/{safe_name}")), None
-            )
-            if _dl_pkg is not None and _dl_pkg.org and _db_orgs is not None:
-                _dl_org = await _db_orgs.get(_dl_pkg.org)
-                if _dl_org is not None and _dl_org.is_private:
-                    _ok = caller is not None and (
-                        caller.role == TokenRole.admin
-                        or await _db_orgs.is_member(_dl_pkg.org, caller.name)
-                    )
-                    if not _ok:
-                        raise HTTPException(404, f"archive not found: {safe_name}")
+        if not await _archive_is_visible(caller, safe_name):
+            raise HTTPException(404, f"archive not found: {safe_name}")
 
         # Record download event for analytics
         if _use_db and _db_downloads is not None:
@@ -4360,7 +4382,7 @@ def create_app(
             le=365,
             description="Number of days of history",
         ),
-        _auth: None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         """Get daily download counts for charting."""
         if not _use_db or _db_downloads is None:
@@ -4376,6 +4398,32 @@ def create_app(
                     },
                 }
             )
+        # A per-name query must not become an existence/volume oracle for a
+        # private package the caller cannot see.
+        if name and _db_packages is not None:
+            _vis, _ = await _db_packages.get_bundles(
+                name=name,
+                include_yanked=True,
+                limit=1,
+                caller_token_name=(
+                    None
+                    if (caller is not None and caller.role == TokenRole.admin)
+                    else (caller.name if caller is not None else "")
+                ),
+            )
+            if not _vis:
+                return JSONResponse(
+                    {
+                        "total": 0,
+                        "daily": [],
+                        "config": {
+                            "days": days,
+                            "color": DOWNLOAD_GRAPH_COLOR,
+                            "fill_color": DOWNLOAD_GRAPH_FILL_COLOR,
+                            "height": DOWNLOAD_GRAPH_HEIGHT,
+                        },
+                    }
+                )
         total = await _db_downloads.get_total_downloads(package_name=name)
         daily = await _db_downloads.get_daily_downloads(package_name=name, days=days)
         return JSONResponse(
@@ -5325,6 +5373,10 @@ def create_app(
                 if not await _db_orgs.is_member(_org, actor.name):
                     raise HTTPException(403, f"not a member of organization '{_org}'")
         dag_id = body.dag_id or str(_uuid.uuid4())[:12]
+        import re as _re_dag
+
+        if not _re_dag.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", dag_id):
+            raise HTTPException(422, "invalid dag_id (allowed: letters, digits, . _ -)")
         jobs_dicts = [
             {
                 "recipe_name": j.recipe_name,
@@ -5374,12 +5426,22 @@ def create_app(
                 raise HTTPException(404, "build job not found")
 
     async def _assert_dag_visible(actor: TokenRecord, dag_id: str) -> None:
-        """404 unless *actor* may act on DAG *dag_id* (member of its private org)."""
+        """404 unless *actor* may act on EVERY private org in DAG *dag_id* (a DAG
+        can span orgs; checking only jobs[0] would let a member of one org
+        cancel/pause another org's jobs in the same DAG)."""
         if actor.role == TokenRole.admin or _db_orgs is None:
             return
-        _jobs, _ = await _db_build_jobs.list_jobs(dag_id=dag_id, limit=1, offset=0)
-        if _jobs:
-            await _assert_build_visible(actor, _jobs[0])
+        _jobs, _ = await _db_build_jobs.list_jobs(dag_id=dag_id, limit=1000, offset=0)
+        for _org in {(getattr(j, "org_slug", "") or "") for j in _jobs}:
+            if not _org:
+                continue
+            _oi = await _db_orgs.get(_org)
+            if (
+                _oi is not None
+                and _oi.is_private
+                and not await _db_orgs.is_member(_org, actor.name)
+            ):
+                raise HTTPException(404, "build job not found")
 
     @app.get("/v1/builds", response_model=BuildJobListResponse, tags=["builds"])
     async def list_builds(
@@ -5602,6 +5664,10 @@ def create_app(
     ):
         """Builder claims a dispatched job → running."""
         _require_db_build_jobs()
+        _existing = await _db_build_jobs.get(job_id)
+        if _existing is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _assert_build_visible(actor, _existing)
         info = await _db_build_jobs.claim(job_id, body.builder_id)
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
@@ -5636,6 +5702,10 @@ def create_app(
     ):
         """Report a build job as completed successfully."""
         _require_db_build_jobs()
+        _existing = await _db_build_jobs.get(job_id)
+        if _existing is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _assert_build_visible(actor, _existing)
         info = await _db_build_jobs.complete(job_id, result_archive_url=body.result_archive_url)
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
@@ -5679,6 +5749,10 @@ def create_app(
     ):
         """Report a build job as failed."""
         _require_db_build_jobs()
+        _existing = await _db_build_jobs.get(job_id)
+        if _existing is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _assert_build_visible(actor, _existing)
         info = await _db_build_jobs.fail(job_id, error_message=body.error_message)
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
@@ -5728,6 +5802,10 @@ def create_app(
     ):
         """Append a chunk of log data to a build job's log."""
         _require_db_build_jobs()
+        _existing = await _db_build_jobs.get(job_id)
+        if _existing is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _assert_build_visible(actor, _existing)
         state = _get_state()
         info = await _db_build_jobs.append_log(job_id, body.data, logs_dir=state.logs_dir())
         if info is None:
@@ -6268,6 +6346,14 @@ def create_app(
     ):
         """Download a recipe bundle (tar.gz)."""
         _require_db_recipes()
+        if org_slug and _db_orgs is not None and actor.role != TokenRole.admin:
+            _o = await _db_orgs.get(org_slug)
+            if (
+                _o is not None
+                and _o.is_private
+                and not await _db_orgs.is_member(org_slug, actor.name)
+            ):
+                raise HTTPException(404, f"recipe '{name}' not found")
         info = await _db_recipes.get(name, org_slug=org_slug)
         if info is None:
             raise HTTPException(404, f"recipe '{name}' not found")

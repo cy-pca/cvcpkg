@@ -34,7 +34,15 @@ def safe_tar_extractall(tar: tarfile.TarFile, dest) -> None:
         if _escapes(dest, target):
             raise ValueError(f"unsafe tar member escapes destination: {member.name!r}")
         if member.issym() or member.islnk():
-            link_target = (target.parent / member.linkname).resolve()
+            # tarfile resolves a SYMLINK target relative to the link's own
+            # directory but a HARDLINK target relative to the extraction ROOT.
+            # Using the wrong base under-counts the '..' needed to escape (a
+            # subdir hardlink like 's/hl' -> 'foo/../../victim' would pass a
+            # parent-relative check yet escape at extraction).
+            if member.islnk():
+                link_target = (dest / member.linkname).resolve()
+            else:
+                link_target = (target.parent / member.linkname).resolve()
             if _escapes(dest, link_target):
                 raise ValueError(
                     f"unsafe tar link '{member.name}' -> '{member.linkname}' escapes destination"
@@ -53,6 +61,12 @@ def tar_has_unsafe_member(tar: tarfile.TarFile) -> str | None:
     for member in tar.getmembers():
         if _escapes(root, (root / member.name).resolve()):
             return member.name
-        if (member.issym() or member.islnk()) and member.linkname.startswith(("/", "..")):
-            return member.name
+        if member.issym() or member.islnk():
+            # Reject a link whose target escapes the root under EITHER base
+            # (symlink: the member's own dir; hardlink: the root). The plain
+            # startswith(('/','..')) test misses e.g. 'foo/../../victim'.
+            member_dir = (root / member.name).resolve().parent
+            for base in (root, member_dir):
+                if _escapes(root, (base / member.linkname).resolve()):
+                    return member.name
     return None

@@ -619,6 +619,21 @@ class DbAuditLog:
 class DbPackageIndex:
     """Package catalog backed by the ``packages`` table."""
 
+    async def get_archive_org(self, archive_name: str) -> str | None:
+        """org_slug of the package whose archive_url ends with '/<archive_name>'
+        (any yank state), or None when no package matches. LIKE wildcards in the
+        name are escaped so the suffix match stays exact (no truncation, unlike
+        scanning a capped get_bundles page)."""
+        esc = archive_name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        async with get_session() as session:
+            return (
+                await session.execute(
+                    select(PackageRow.org_slug)
+                    .where(PackageRow.archive_url.like(f"%/{esc}", escape="\\"))
+                    .limit(1)
+                )
+            ).scalar()
+
     async def get_bundles(
         self,
         *,
@@ -3237,8 +3252,11 @@ class DbBuildJobStore:
                 log_sub = logs_dir / row.dag_id
             else:
                 log_sub = logs_dir / "standalone"
-            log_sub.mkdir(parents=True, exist_ok=True)
             log_path = log_sub / f"{job_id}.log"
+            # Defense in depth: a crafted dag_id must never escape logs_dir.
+            if logs_dir.resolve() not in log_path.resolve().parents:
+                raise ValueError(f"log path escapes logs_dir (dag_id={row.dag_id!r})")
+            log_sub.mkdir(parents=True, exist_ok=True)
 
             # Append data
             with open(log_path, "ab") as f:

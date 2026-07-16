@@ -377,3 +377,188 @@ class TestBuildIsolation:
         assert (
             client.post(f"/v1/builds/{job_id}/cancel", headers=_hdr(stranger)).status_code == 404
         )
+
+
+# ── second-round: adversarial-verification findings ─────────────
+class TestTarSlipHardlink:
+    def _evil_hardlink(self):
+        # s/hl -> foo/../../victim : escapes the extraction ROOT (a subdir
+        # hardlink under-counts the '..' vs a parent-relative check).
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as tf:
+            for d in ("foo", "s"):
+                ti = tarfile.TarInfo(d)
+                ti.type = tarfile.DIRTYPE
+                ti.mode = 0o755
+                tf.addfile(ti)
+            hl = tarfile.TarInfo("s/hl")
+            hl.type = tarfile.LNKTYPE
+            hl.linkname = "foo/../../victim"
+            tf.addfile(hl)
+            payload = b"PWNED"
+            reg = tarfile.TarInfo("s/hl")
+            reg.size = len(payload)
+            tf.addfile(reg, io.BytesIO(payload))
+        buf.seek(0)
+        return buf
+
+    def test_subdir_hardlink_escape_detected(self):
+        from cvcpkg._archive import tar_has_unsafe_member
+
+        with tarfile.open(fileobj=self._evil_hardlink()) as tf:
+            assert tar_has_unsafe_member(tf) == "s/hl"
+
+    def test_subdir_hardlink_escape_blocked(self, tmp_path):
+        from cvcpkg._archive import safe_tar_extractall
+
+        victim = tmp_path / "victim"
+        victim.write_text("ORIGINAL")
+        dest = tmp_path / "extract"
+        dest.mkdir()
+        with tarfile.open(fileobj=self._evil_hardlink()) as tf:
+            with pytest.raises(ValueError):
+                safe_tar_extractall(tf, dest)
+        assert victim.read_text() == "ORIGINAL"  # not overwritten
+
+
+class TestTagOrgXss:
+    def test_tag_and_org_pages_neutralise_script_close(self):
+        from cvcpkg.server.landing import org_detail_html, tag_detail_html
+
+        payload = "</script><script>steal()</script>"
+        assert "</script><script>steal" not in tag_detail_html("zlib", payload)
+        assert "</script><script>steal" not in org_detail_html(payload)
+
+
+class TestReadAuthEnforcement:
+    @pytest.fixture()
+    def ra_server(self, tmp_path, monkeypatch):
+        db_url = f"sqlite+aiosqlite:///{tmp_path / 'ra.db'}"
+        monkeypatch.setenv("CVCPKG_DATABASE_URL", db_url)
+        monkeypatch.delenv("CVCPKG_MIRROR_MODE", raising=False)
+        from cvcpkg.server.db import create_tables, dispose_engine, init_db
+        from cvcpkg.server.db_stores import DbTokenStore
+
+        async def _seed():
+            init_db(db_url)
+            await create_tables()
+            reader = await DbTokenStore(tmp_path).create("r", TokenRole.reader)
+            await dispose_engine()
+            return reader
+
+        reader = asyncio.run(_seed())
+        app = create_app(state_dir=tmp_path, require_auth_for_reads=True)
+        with TestClient(app) as client:
+            yield client, reader
+
+    def test_anonymous_reads_rejected(self, ra_server):
+        client, reader = ra_server
+        # optional_token now enforces require_auth_for_reads on data-read paths.
+        assert client.get("/v1/packages").status_code == 401
+        assert client.get("/v1/feed.xml").status_code == 401
+        assert client.get("/v1/download/whatever.tar.zst").status_code == 401
+        # a valid token is still accepted
+        assert client.get("/v1/packages", headers=_hdr(reader)).status_code == 200
+
+
+class TestPrivateDownloadHardening:
+    def test_head_download_gated(self, sec_server):
+        client, admin, owner, stranger, _reader = sec_server
+        _publish_private(client, owner)
+        pkgs = client.get(
+            "/v1/packages", params={"name": "libsecret"}, headers=_hdr(owner)
+        ).json()
+        url = (pkgs.get("packages") or pkgs.get("bundles"))[0]["archive_url"]
+        assert client.head(url, headers=_hdr(stranger)).status_code == 404
+        assert client.head(url).status_code == 404  # anonymous
+        assert client.head(url, headers=_hdr(owner)).status_code == 200
+
+    def test_download_idor_survives_yank(self, sec_server):
+        client, admin, owner, stranger, _reader = sec_server
+        _publish_private(client, owner)
+        pkgs = client.get(
+            "/v1/packages", params={"name": "libsecret"}, headers=_hdr(owner)
+        ).json()
+        url = (pkgs.get("packages") or pkgs.get("bundles"))[0]["archive_url"]
+        # yank the private package (its row flips to yanked but the file remains)
+        y = client.post("/v1/packages/libsecret/1.0.0/yank", headers=_hdr(owner))
+        assert y.status_code in (200, 201), y.text
+        # exact archive->org lookup includes yanked rows, so the gate still holds
+        assert client.get(url, headers=_hdr(stranger)).status_code == 404
+        assert client.get(url).status_code == 404
+
+
+class TestBuildCallbackIsolation:
+    def _submit(self, client, token, org="shell"):
+        return client.post(
+            "/v1/builds",
+            json={"recipe_name": "libsecret", "platform": "linux", "arch": "x86_64",
+                  "org_slug": org},
+            headers=_hdr(token),
+        )
+
+    def test_builder_callbacks_scoped_to_org(self, sec_server):
+        client, _admin, owner, stranger, _reader = sec_server
+        job_id = self._submit(client, owner).json()["id"]
+        h = _hdr(stranger)
+        assert client.post(f"/v1/builds/{job_id}/claim", json={"builder_id": 1}, headers=h).status_code == 404
+        assert client.post(f"/v1/builds/{job_id}/complete", json={"result_archive_url": "x"}, headers=h).status_code == 404
+        assert client.post(f"/v1/builds/{job_id}/fail", json={"error_message": "x"}, headers=h).status_code == 404
+        assert client.patch(f"/v1/builds/{job_id}/log", json={"data": "x"}, headers=h).status_code == 404
+
+    def test_dag_id_path_traversal_rejected(self, sec_server):
+        client, _admin, owner, *_ = sec_server
+        r = client.post(
+            "/v1/builds/dag",
+            json={"jobs": [{"recipe_name": "x", "platform": "linux", "arch": "x86_64"}],
+                  "dag_id": "../../../tmp/pwn"},
+            headers=_hdr(owner),
+        )
+        assert r.status_code == 422
+
+
+class TestSingleRecipeBundleMembership:
+    def test_nonmember_cannot_download_private_bundle(self, sec_server):
+        client, admin, owner, stranger, _reader = sec_server
+        up = client.post(
+            "/v1/recipes/librecipe",
+            params={"org_slug": "shell", "version": "1.0.0"},
+            files={"file": ("librecipe.tar.gz", _GOOD_RECIPE, "application/gzip")},
+            headers=_hdr(owner),
+        )
+        assert up.status_code in (200, 201), up.text
+        assert client.get("/v1/recipes/librecipe", params={"org_slug": "shell"},
+                          headers=_hdr(stranger)).status_code == 404
+        assert client.get("/v1/recipes/librecipe", params={"org_slug": "shell"},
+                          headers=_hdr(owner)).status_code == 200
+        assert client.get("/v1/recipes/librecipe", params={"org_slug": "shell"},
+                          headers=_hdr(admin)).status_code == 200
+
+
+class TestStatsOracles:
+    def test_cache_stats_org_map_redacted(self, sec_server):
+        client, admin, owner, stranger, _reader = sec_server
+        _publish_private(client, owner)  # gives 'shell' some storage
+        stranger_orgs = client.get("/v1/cache/stats", headers=_hdr(stranger)).json().get("orgs", {})
+        assert "shell" not in stranger_orgs
+        owner_orgs = client.get("/v1/cache/stats", headers=_hdr(owner)).json().get("orgs", {})
+        assert "shell" in owner_orgs
+        admin_orgs = client.get("/v1/cache/stats", headers=_hdr(admin)).json().get("orgs", {})
+        assert "shell" in admin_orgs
+
+    def test_download_stats_not_a_private_oracle(self, sec_server):
+        client, _admin, owner, stranger, _reader = sec_server
+        _publish_private(client, owner)
+        pkgs = client.get(
+            "/v1/packages", params={"name": "libsecret"}, headers=_hdr(owner)
+        ).json()
+        url = (pkgs.get("packages") or pkgs.get("bundles"))[0]["archive_url"]
+        client.get(url, headers=_hdr(owner))  # record one download (synchronous)
+        # non-member sees zeros for a private package they cannot see
+        assert client.get(
+            "/v1/downloads/stats", params={"name": "libsecret"}, headers=_hdr(stranger)
+        ).json()["total"] == 0
+        # a member is not over-blocked
+        assert client.get(
+            "/v1/downloads/stats", params={"name": "libsecret"}, headers=_hdr(owner)
+        ).json()["total"] >= 1
