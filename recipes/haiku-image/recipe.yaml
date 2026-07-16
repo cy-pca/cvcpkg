@@ -1,0 +1,57 @@
+schema_version: 1
+recipe:
+  name: haiku-image
+  upstream_version: "r1beta5"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.haiku-os.org/
+  license: MIT
+  tags: [tools, images, haiku]
+  description: >-
+    A headless, self-configuring HaikuOS builder image, built from source
+    (configure + jam) with OpenSSH, a build toolchain, and a builder user
+    baked in.  Boots with NO VGA/GUI interaction — Haiku's Installer is
+    graphical-only, so this image is pre-installed and pre-configured at
+    build time.  Ships a qcow2 (portable) plus an anyboot image and import
+    docs for Incus, LXD, Proxmox, and plain QEMU/libvirt.
+
+source:
+  # build.sh clones the Haiku source + buildtools at pinned refs and builds a
+  # custom anyboot image via a dedicated jam build profile.  There is no
+  # single upstream tarball.
+  type: prebuilt
+  url: https://github.com/haiku/haiku
+
+patches: []
+
+depends:
+  build: []
+  host_tools: []
+
+build:
+  # A Linux-host recipe that PRODUCES a Haiku VM image (the recipe itself is
+  # not a Haiku package).  Runs only on Linux x86_64 builders.
+  build_type_independent: true
+    # Linux x86_64 host only (builds a Haiku cross-toolchain + x86_64 image).
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        # Set by the fleet's CI from a secret so the image trusts the builder
+        # key; empty in public builds (import then inject a key — see README).
+        HAIKU_BUILDER_SSH_PUBKEY: ""
+
+package:
+  files:
+    - haiku-builder.qcow2
+    - haiku-builder-anyboot.iso
+    - metadata.yaml
+    - README-import.md
+
+notes: >-
+  Building Haiku from source builds a cross-toolchain first and takes
+  roughly 45-90 minutes on a modern multi-core Linux host with ~30 GB of
+  free disk.  The recipe installs its own host build dependencies on
+  Debian/Ubuntu builders (git, nasm, xorriso, qemu-utils, ...).

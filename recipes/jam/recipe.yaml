@@ -1,0 +1,59 @@
+schema_version: 1
+recipe:
+  name: jam
+  upstream_version: "r1beta5"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.haiku-os.org/
+  license: MIT
+  tags: [tools, build-system]
+  description: >-
+    Jam — the portable build tool used by Haiku (a maintained fork of
+    Perforce Jam, from the Haiku buildtools).  Needed to build Haiku and
+    Haiku-style projects; a host tool for the haiku-image recipe.
+
+source:
+  # The build script does a shallow clone of the Haiku buildtools and
+  # compiles the jam/ subdirectory; there is no upstream release tarball.
+  type: prebuilt
+  url: https://github.com/haiku/buildtools
+
+patches: []
+
+depends:
+  build: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2"
+
+package:
+  files:
+    - bin/jam
+
+toolchain:
+  cc:
+    min_version: "any"
