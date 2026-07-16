@@ -63,6 +63,22 @@ whether to mirror it (evaluated denylist → allowlist → platform → size):
 Skipped packages are simply never pulled; a client that needs one still resolves
 it from the authoritative upstream root (see *Resolution*).
 
+### Mirror size budget & usage-based eviction
+
+An edge can also cap the **total** size of its upstream-mirrored cache:
+
+- **`CVCPKG_POPULATE_MAX_MIRROR_BYTES`** — a byte budget for populate-origin
+  public packages (`0` = unbounded).
+
+After each sync, if the mirror exceeds the budget, cvcpkg **evicts the
+least-downloaded** populate-origin packages (usage comes from the Phase 2
+download analytics; ties broken by largest-first) until it fits.  An evicted
+package **re-populates on demand** the next time it is still upstream and
+wanted.  Only populate-origin public packages are eligible — **org-local and
+locally-published packages are never evicted**.  Eviction is audit-logged
+(`actor = mirror-evict`), and `populate_stats` reports `last_evicted` /
+`evicted_total`.
+
 `GET /healthz` reports `populate_upstream` and `populate_stats`.
 
 ### Upstream is canonical for public packages
@@ -193,5 +209,6 @@ See `lab/README.md`.
 | `CVCPKG_POPULATE_INCLUDE` | edge | Optional package-name allowlist (mirror only these). |
 | `CVCPKG_POPULATE_EXCLUDE` | edge | Optional package-name denylist (never mirror these); wins over the allowlist. |
 | `CVCPKG_POPULATE_MAX_PACKAGE_BYTES` | edge | Per-package size cap for mirroring (default: `CVCPKG_MAX_UPLOAD_BYTES`). |
+| `CVCPKG_POPULATE_MAX_MIRROR_BYTES` | edge | Total mirror-cache size budget; least-downloaded populate packages are evicted over it (0 = unbounded). |
 | `CVCPKG_MIRROR_MODE` / `CVCPKG_MIRROR_UPSTREAM` | mirror | Read-only mirror of a primary. |
 | `registries.yaml` / `CVCPKG_REGISTRIES` / `CVCPKG_REGISTRIES_FILE` | client | Federated registry hosts → `{url, token}` (allowlist + credentials). |

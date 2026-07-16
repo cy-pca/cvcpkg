@@ -570,3 +570,78 @@ class TestHealthzPopulateFields:
         assert data["populate_upstream"] == "http://upstream.example"
         assert data["populate_stats"]["imported_total"] == 2
         assert json.dumps(data)  # serializable
+
+
+# ── mirror size budget + usage-based eviction (Phase 12 increment 2) ──
+
+
+class TestMirrorEviction:
+    async def _add(self, name, size, *, published_by="populate:up", org_slug="", downloads=0):
+        await app_mod._db_packages.add_package(
+            name=name,
+            version="1.0.0",
+            platform="linux",
+            arch="x86_64",
+            build_type="release",
+            link="shared",
+            sha256="s" * 64,
+            size_bytes=size,
+            archive_url=f"/v1/download/{name}.tar.zst",
+            published_by=published_by,
+            org_slug=org_slug,
+        )
+        for _ in range(downloads):
+            await app_mod._db_downloads.record(name, "1.0.0", "linux")
+
+    def test_evicts_least_downloaded_over_budget(self, populate_env):
+        run, _, monkeypatch = populate_env
+        monkeypatch.setattr(app_mod, "POPULATE_MAX_MIRROR_BYTES", 250)
+
+        async def _test():
+            from cvcpkg.server.db_stores import DbDownloadStore
+
+            monkeypatch.setattr(app_mod, "_db_downloads", DbDownloadStore())
+            # 3 populate packages, 100 bytes each (total 300 > budget 250).
+            await self._add("popular", 100, downloads=50)
+            await self._add("rare", 100, downloads=0)
+            await self._add("medium", 100, downloads=5)
+            evicted = await app_mod._enforce_mirror_budget()
+            pkgs, _ = await app_mod._db_packages.get_bundles(limit=10)
+            return evicted, sorted(p.name for p in pkgs)
+
+        evicted, remaining = run(_test)
+        assert evicted == 1
+        assert "rare" not in remaining  # least-downloaded evicted
+        assert "popular" in remaining and "medium" in remaining
+
+    def test_never_evicts_org_or_local_packages(self, populate_env):
+        run, _, monkeypatch = populate_env
+        monkeypatch.setattr(app_mod, "POPULATE_MAX_MIRROR_BYTES", 50)
+
+        async def _test():
+            from cvcpkg.server.db_stores import DbDownloadStore
+
+            monkeypatch.setattr(app_mod, "_db_downloads", DbDownloadStore())
+            # Way over a tiny budget, but none of these are evictable:
+            await self._add("orgpkg", 100, org_slug="acme", downloads=0)
+            await self._add("localpub", 100, published_by="alice", downloads=0)
+            evicted = await app_mod._enforce_mirror_budget()
+            pkgs, _ = await app_mod._db_packages.get_bundles(limit=10)
+            return evicted, sorted(p.name for p in pkgs)
+
+        evicted, remaining = run(_test)
+        assert evicted == 0  # org + locally-published are never evicted
+        assert remaining == ["localpub", "orgpkg"]
+
+    def test_no_budget_evicts_nothing(self, populate_env):
+        run, _, monkeypatch = populate_env
+        monkeypatch.setattr(app_mod, "POPULATE_MAX_MIRROR_BYTES", 0)
+
+        async def _test():
+            from cvcpkg.server.db_stores import DbDownloadStore
+
+            monkeypatch.setattr(app_mod, "_db_downloads", DbDownloadStore())
+            await self._add("a", 10**9, downloads=0)
+            return await app_mod._enforce_mirror_budget()
+
+        assert run(_test) == 0

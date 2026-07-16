@@ -258,6 +258,12 @@ def _load_mirror_policy():
     return MirrorPolicy.from_env(default_max_bytes=MAX_UPLOAD_BYTES)
 
 
+# Total-size budget for the upstream-mirrored cache (Phase 12).  When the
+# populate-origin public packages exceed this, the least-downloaded ones
+# are evicted after each sync (they re-populate on demand).  0 == unbounded.
+POPULATE_MAX_MIRROR_BYTES = int(os.environ.get("CVCPKG_POPULATE_MAX_MIRROR_BYTES", "0"))
+
+
 # Registration mode: "open" (default) or "admin-gated".
 REGISTRATION_MODE = RegistrationMode(os.environ.get("CVCPKG_REGISTRATION_MODE", "open"))
 
@@ -1090,6 +1096,8 @@ _populate_stats: dict = {
     "last_imported": 0,
     "imported_total": 0,
     "last_error": "",
+    "last_evicted": 0,
+    "evicted_total": 0,
 }
 
 
@@ -1272,6 +1280,92 @@ async def _populate_sync_once() -> int:
         return imported
 
 
+async def _enforce_mirror_budget() -> int:
+    """Evict least-downloaded mirrored packages to fit the size budget.
+
+    Only **populate-origin public** packages (``published_by`` starts with
+    ``populate:`` and no org) are eligible — org-local and locally-published
+    packages are never evicted.  Usage comes from the Phase 2 download
+    analytics (per package name); the least-downloaded packages are removed
+    (archive + DB row) until the mirror is under
+    ``POPULATE_MAX_MIRROR_BYTES``.  An evicted package simply re-populates on
+    the next sync if it is still upstream and wanted.  Returns the count
+    evicted.
+    """
+    from cvcpkg.server.mirror_policy import EvictionCandidate, select_evictions
+
+    budget = POPULATE_MAX_MIRROR_BYTES
+    if budget <= 0 or not _use_db or _db_packages is None:
+        return 0
+
+    state = _get_state()
+
+    # Enumerate populate-origin public packages, grouped at delete
+    # granularity (name, version, platform, link — arch/build_type variants
+    # share an archive-delete).  Sum sizes per group; use the package name's
+    # download count as the usage signal.
+    groups: dict[tuple[str, str, str, str], dict] = {}
+    dl_cache: dict[str, int] = {}
+    offset = 0
+    while True:
+        pkgs, total = await _db_packages.get_bundles(include_yanked=True, limit=1000, offset=offset)
+        for p in pkgs:
+            if p.org or not (p.published_by or "").startswith("populate:"):
+                continue
+            gkey = (p.name, p.version, p.platform, p.link)
+            if p.name not in dl_cache:
+                dl_cache[p.name] = (
+                    await _db_downloads.get_total_downloads(p.name)
+                    if _db_downloads is not None
+                    else 0
+                )
+            g = groups.setdefault(
+                gkey, {"size": 0, "downloads": dl_cache[p.name], "archives": set()}
+            )
+            g["size"] += int(p.size_bytes or 0)
+            if p.archive_url:
+                g["archives"].add(p.archive_url.rsplit("/", 1)[-1])
+        offset += len(pkgs)
+        if not pkgs or offset >= total:
+            break
+
+    if not groups:
+        return 0
+
+    candidates = [
+        EvictionCandidate(key=gkey, size_bytes=g["size"], downloads=g["downloads"])
+        for gkey, g in groups.items()
+    ]
+    to_evict = select_evictions(candidates, budget)
+
+    evicted = 0
+    for cand in to_evict:
+        name, version, platform, link = cand.key
+        await _db_packages.delete(name, version, platform=platform, link=link)
+        for fname in groups[cand.key]["archives"]:
+            (state.archives_dir() / fname).unlink(missing_ok=True)
+        if _db_audit is not None:
+            await _db_audit.record(
+                action=AuditAction.delete,
+                actor="mirror-evict",
+                target=f"{name}=={version}",
+                detail=(
+                    f"platform={platform} link={link} evicted "
+                    f"({cand.size_bytes} bytes, {cand.downloads} downloads) "
+                    f"to fit mirror budget {budget}"
+                ),
+            )
+        evicted += 1
+
+    if evicted:
+        logger.info(
+            "mirror budget: evicted %d least-used populate package group(s) " "to fit %d bytes",
+            evicted,
+            budget,
+        )
+    return evicted
+
+
 async def _populate_sync_loop() -> None:
     """Background task: keep importing missing packages from upstream."""
     import asyncio
@@ -1286,6 +1380,10 @@ async def _populate_sync_loop() -> None:
             _populate_stats["last_error"] = ""
             if n:
                 logger.info("populate sync: imported %d package(s) from %s", n, POPULATE_UPSTREAM)
+            # Enforce the mirror size budget after importing (Phase 12).
+            evicted = await _enforce_mirror_budget()
+            _populate_stats["last_evicted"] = evicted
+            _populate_stats["evicted_total"] = _populate_stats.get("evicted_total", 0) + evicted
         except Exception as exc:
             _populate_stats["last_error"] = str(exc)
             logger.exception("populate sync failed")

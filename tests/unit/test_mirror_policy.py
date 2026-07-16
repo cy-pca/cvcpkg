@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from cvcpkg.server.mirror_policy import MirrorPolicy
+from cvcpkg.server.mirror_policy import (
+    EvictionCandidate,
+    MirrorPolicy,
+    select_evictions,
+)
 
 
 class TestDecide:
@@ -99,3 +103,56 @@ class TestFromEnv:
         monkeypatch.setenv("CVCPKG_POPULATE_INCLUDE", "boost")
         p = MirrorPolicy.from_env(default_max_bytes=123)
         assert p.max_package_bytes == 123
+
+
+class TestSelectEvictions:
+    def _c(self, key, size, downloads):
+        return EvictionCandidate(key=key, size_bytes=size, downloads=downloads)
+
+    def test_under_budget_evicts_nothing(self):
+        cands = [self._c("a", 100, 0), self._c("b", 100, 5)]
+        assert select_evictions(cands, budget_bytes=1000) == []
+
+    def test_zero_budget_is_unbounded(self):
+        cands = [self._c("a", 100, 0)]
+        assert select_evictions(cands, budget_bytes=0) == []
+        assert select_evictions(cands, budget_bytes=-1) == []
+
+    def test_evicts_least_downloaded_first(self):
+        cands = [
+            self._c("popular", 100, 50),
+            self._c("rare", 100, 1),
+            self._c("medium", 100, 10),
+        ]
+        # total 300, budget 250 -> evict one; the rarest goes first.
+        evicted = select_evictions(cands, budget_bytes=250)
+        assert [c.key for c in evicted] == ["rare"]
+
+    def test_tie_breaks_largest_first(self):
+        # equal downloads -> evict the larger (frees more per eviction)
+        cands = [self._c("small", 100, 0), self._c("big", 300, 0)]
+        evicted = select_evictions(cands, budget_bytes=100)
+        assert [c.key for c in evicted] == ["big"]
+
+    def test_evicts_until_under_budget(self):
+        cands = [
+            self._c("a", 100, 1),
+            self._c("b", 100, 2),
+            self._c("c", 100, 3),
+            self._c("d", 100, 4),
+        ]
+        # total 400, budget 150 -> must evict until <=150 (evict 3: a,b,c).
+        evicted = select_evictions(cands, budget_bytes=150)
+        assert sorted(c.key for c in evicted) == ["a", "b", "c"]
+        remaining = 400 - sum(c.size_bytes for c in evicted)
+        assert remaining <= 150
+
+    def test_keeps_most_downloaded_within_budget(self):
+        cands = [
+            self._c("keep", 100, 100),
+            self._c("drop1", 100, 1),
+            self._c("drop2", 100, 2),
+        ]
+        evicted = select_evictions(cands, budget_bytes=100)
+        assert "keep" not in [c.key for c in evicted]
+        assert sorted(c.key for c in evicted) == ["drop1", "drop2"]

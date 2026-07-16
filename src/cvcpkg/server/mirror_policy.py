@@ -38,6 +38,38 @@ class MirrorDecision:
 
 
 @dataclass(frozen=True)
+class EvictionCandidate:
+    """A mirrored item eligible for usage-based eviction."""
+
+    key: object  # opaque identifier (the caller maps it back to a package)
+    size_bytes: int
+    downloads: int
+
+
+def select_evictions(
+    candidates: list[EvictionCandidate], budget_bytes: int
+) -> list[EvictionCandidate]:
+    """Pick the least-valuable mirrored items to evict to fit *budget_bytes*.
+
+    Keeps the most-downloaded items within budget: evicts **least-downloaded
+    first**, breaking ties by **largest size first** (frees more per
+    eviction).  Returns the items to evict, in eviction order.  A
+    non-positive budget means "unbounded" — nothing is evicted.
+    """
+    total = sum(c.size_bytes for c in candidates)
+    if budget_bytes <= 0 or total <= budget_bytes:
+        return []
+    order = sorted(candidates, key=lambda c: (c.downloads, -c.size_bytes))
+    evict: list[EvictionCandidate] = []
+    for c in order:
+        if total <= budget_bytes:
+            break
+        evict.append(c)
+        total -= c.size_bytes
+    return evict
+
+
+@dataclass(frozen=True)
 class MirrorPolicy:
     """Which upstream packages an edge/satellite mirrors."""
 
