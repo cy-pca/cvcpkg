@@ -113,7 +113,7 @@ class TokenStore:
         token_hash = _hash_token(raw_token, self._hmac_key)
         now = datetime.datetime.now(datetime.timezone.utc)
         for t in self._tokens:
-            if t.token_hash == token_hash:
+            if hmac.compare_digest(t.token_hash, token_hash):
                 if t.revoked:
                     return None
                 if t.expires_at is not None and t.expires_at < now:

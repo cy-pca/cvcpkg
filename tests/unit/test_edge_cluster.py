@@ -184,3 +184,70 @@ class TestEdgeRejectHelper:
     def test_helper_allows_public_off_edge(self, monkeypatch):
         monkeypatch.setattr(app_mod, "POPULATE_UPSTREAM", "")
         app_mod._reject_public_publish_on_edge("")  # must not raise
+
+
+class TestPrivatePackageVisibility:
+    """A private org's packages must be invisible to non-members via the
+    per-name listing (regression: /v1/packages/{name} leaked them)."""
+
+    def _publish_private(self, client, pub_token):
+        r = client.post(
+            "/v1/publish",
+            params={
+                "name": "secretlib",
+                "version": "1.0.0",
+                "platform": "linux",
+                "arch": "x86_64",
+                "org": "shell",
+            },
+            files={"file": ("f.tar.zst", b"data", "application/octet-stream")},
+            headers=_hdr(pub_token),
+        )
+        assert r.status_code in (200, 201), r.text
+
+    def test_hidden_from_anonymous_and_bogus_token(self, edge_server):
+        client, pub_token, _ = edge_server
+        self._publish_private(client, pub_token)
+        # Anonymous request must not see the private package.
+        anon = client.get("/v1/packages/secretlib", params={"org": "shell"}).json()
+        assert _bundles(anon) == []
+        # A bogus/invalid token resolves to no identity -> still hidden.
+        bogus = client.get(
+            "/v1/packages/secretlib",
+            params={"org": "shell"},
+            headers={"Authorization": "Bearer not-a-real-token"},
+        ).json()
+        assert _bundles(bogus) == []
+
+    def test_visible_to_member(self, edge_server):
+        client, pub_token, _ = edge_server
+        self._publish_private(client, pub_token)
+        got = client.get(
+            "/v1/packages/secretlib", params={"org": "shell"}, headers=_hdr(pub_token)
+        ).json()
+        bundles = _bundles(got)
+        assert bundles and all(b.get("org") == "shell" for b in bundles)
+        # The listing now exposes required_deps (needed for federated resolution).
+        assert "required_deps" in bundles[0]
+
+    def test_list_endpoint_hides_private(self, edge_server):
+        client, pub_token, _ = edge_server
+        self._publish_private(client, pub_token)
+        anon = client.get("/v1/packages", params={"org": "shell"}).json()
+        assert _bundles(anon) == []
+        member = client.get("/v1/packages", params={"org": "shell"}, headers=_hdr(pub_token)).json()
+        assert any(b.get("org") == "shell" for b in _bundles(member))
+
+    def test_search_hides_private_including_facets(self, edge_server):
+        client, pub_token, _ = edge_server
+        self._publish_private(client, pub_token)
+        anon = client.get("/v1/search", params={"q": "secretlib"}).json()
+        # No private bundle in results, and the private org must not leak via facets.
+        assert all(b.get("org") != "shell" for b in _bundles(anon))
+        orgs_facet = [
+            fb.get("value") for fb in (anon.get("facets", {}) or {}).get("orgs", []) or []
+        ]
+        assert "shell" not in orgs_facet
+        # A member sees their own private package in search.
+        member = client.get("/v1/search", params={"q": "secretlib"}, headers=_hdr(pub_token)).json()
+        assert any(b.get("org") == "shell" for b in _bundles(member))

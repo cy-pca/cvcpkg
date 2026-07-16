@@ -7,6 +7,7 @@ from pathlib import Path
 
 import click
 
+from cvcpkg._archive import safe_tar_extractall
 from cvcpkg.cli import cli
 from cvcpkg.cli._helpers import (
     _config_opt,
@@ -221,7 +222,7 @@ def _try_pull_server_recipes() -> tuple[str, ...]:
         shutil.rmtree(extract_dir)
     extract_dir.mkdir(parents=True)
     with tarfile.open(bundle_path, "r:gz") as tar:
-        tar.extractall(path=extract_dir)  # noqa: S202
+        safe_tar_extractall(tar, extract_dir)
     click.echo(f"cvcpkg: using recipes from {server}")
     return (str(extract_dir),)
 

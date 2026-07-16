@@ -619,6 +619,21 @@ class DbAuditLog:
 class DbPackageIndex:
     """Package catalog backed by the ``packages`` table."""
 
+    async def get_archive_org(self, archive_name: str) -> str | None:
+        """org_slug of the package whose archive_url ends with '/<archive_name>'
+        (any yank state), or None when no package matches. LIKE wildcards in the
+        name are escaped so the suffix match stays exact (no truncation, unlike
+        scanning a capped get_bundles page)."""
+        esc = archive_name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        async with get_session() as session:
+            return (
+                await session.execute(
+                    select(PackageRow.org_slug)
+                    .where(PackageRow.archive_url.like(f"%/{esc}", escape="\\"))
+                    .limit(1)
+                )
+            ).scalar()
+
     async def get_bundles(
         self,
         *,
@@ -634,6 +649,7 @@ class DbPackageIndex:
         arch: str = "",
         build_type: str = "",
         link: str = "",
+        caller_token_name: str | None = None,
     ) -> tuple[list[PackageInfo], int]:
         async with get_session() as session:
             q = select(PackageRow, TokenRow.email.label("publisher_email")).outerjoin(
@@ -673,6 +689,28 @@ class DbPackageIndex:
             if org_slug:
                 q = q.where(PackageRow.org_slug == org_slug)
                 count_q = count_q.where(PackageRow.org_slug == org_slug)
+            if caller_token_name is not None:
+                # Visibility filter (opt-in): public base packages, packages in
+                # public orgs, and — for a named caller — packages in private
+                # orgs the caller is a member of.  Callers that pass None (the
+                # default) get no filtering (internal/admin paths).
+                visible = or_(
+                    PackageRow.org_slug == "",
+                    PackageRow.org_slug.in_(
+                        select(OrganizationRow.slug).where(
+                            OrganizationRow.is_private == False  # noqa: E712
+                        )
+                    ),
+                )
+                if caller_token_name:
+                    member_orgs = (
+                        select(OrganizationRow.slug)
+                        .join(OrgMemberRow, OrgMemberRow.org_id == OrganizationRow.id)
+                        .where(OrgMemberRow.token_name == caller_token_name)
+                    )
+                    visible = or_(visible, PackageRow.org_slug.in_(member_orgs))
+                q = q.where(visible)
+                count_q = count_q.where(visible)
             if recipe_version:
                 q = q.where(PackageRow.recipe_version == recipe_version)
                 count_q = count_q.where(PackageRow.recipe_version == recipe_version)
@@ -724,6 +762,7 @@ class DbPackageIndex:
                         published_by=row.published_by,
                         published_by_email=pub_email,
                         org=row.org_slug,
+                        required_deps=json.loads(row.required_deps or "[]"),
                     )
                 )
             return packages, total
@@ -742,6 +781,7 @@ class DbPackageIndex:
         build_type: str = "",
         link: str = "",
         max_buckets: int = 50,
+        caller_token_name: str | None = None,
     ) -> tuple[dict[str, list[tuple[str, int]]], int, int, int]:
         """Return facet buckets for the same filter set as ``get_bundles``.
 
@@ -751,6 +791,26 @@ class DbPackageIndex:
         ``max_buckets`` caps the per-facet list length.
         """
         base_filters = []
+        if caller_token_name is not None:
+            # Visibility (mirrors get_bundles): public base + public orgs +
+            # private orgs the caller is a member of.  Keeps private packages —
+            # and private org names — out of facet buckets and totals.
+            visible = or_(
+                PackageRow.org_slug == "",
+                PackageRow.org_slug.in_(
+                    select(OrganizationRow.slug).where(
+                        OrganizationRow.is_private == False  # noqa: E712
+                    )
+                ),
+            )
+            if caller_token_name:
+                member_orgs = (
+                    select(OrganizationRow.slug)
+                    .join(OrgMemberRow, OrgMemberRow.org_id == OrganizationRow.id)
+                    .where(OrgMemberRow.token_name == caller_token_name)
+                )
+                visible = or_(visible, PackageRow.org_slug.in_(member_orgs))
+            base_filters.append(visible)
         if not include_yanked:
             base_filters.append(PackageRow.yanked == False)  # noqa: E712
         if name:
@@ -1365,11 +1425,24 @@ class DbOrgStore:
         limit: int = 100,
         offset: int = 0,
         include_private: bool = False,
+        caller_token_name: str = "",
     ) -> tuple[list[OrgInfo], int]:
         async with get_session() as session:
-            base_filter = (
-                True if include_private else OrganizationRow.is_private == False  # noqa: E712
-            )
+            if include_private:
+                base_filter = True  # admin: all orgs
+            elif caller_token_name:
+                # Public orgs + private orgs the caller is a member of.
+                member_slugs = (
+                    select(OrganizationRow.slug)
+                    .join(OrgMemberRow, OrgMemberRow.org_id == OrganizationRow.id)
+                    .where(OrgMemberRow.token_name == caller_token_name)
+                )
+                base_filter = or_(
+                    OrganizationRow.is_private == False,  # noqa: E712
+                    OrganizationRow.slug.in_(member_slugs),
+                )
+            else:
+                base_filter = OrganizationRow.is_private == False  # noqa: E712
             count_q = select(sa_func.count(OrganizationRow.id)).where(base_filter)
             total = (await session.execute(count_q)).scalar() or 0
 
@@ -1382,6 +1455,18 @@ class DbOrgStore:
             )
             result = await session.execute(q)
             return [self._row_to_info(r) for r in result.scalars().all()], total
+
+    async def member_org_slugs(self, token_name: str) -> set[str]:
+        """Return the set of org slugs *token_name* is a member of."""
+        if not token_name:
+            return set()
+        async with get_session() as session:
+            q = (
+                select(OrganizationRow.slug)
+                .join(OrgMemberRow, OrgMemberRow.org_id == OrganizationRow.id)
+                .where(OrgMemberRow.token_name == token_name)
+            )
+            return set((await session.execute(q)).scalars().all())
 
     async def update(
         self,
@@ -2615,8 +2700,15 @@ class DbBuildJobStore:
         builder_id: int | None = None,
         limit: int = 100,
         offset: int = 0,
+        visible_to: str | None = None,
     ) -> tuple[list[BuildJobInfo], int]:
-        """List jobs with filters. Returns (jobs, total_count)."""
+        """List jobs with filters. Returns (jobs, total_count).
+
+        When *visible_to* is not None, results are restricted to public jobs,
+        jobs in public orgs, and — for a named caller — jobs in private orgs the
+        caller belongs to (so the total count can't leak a private org's job
+        count). None (default) means no visibility filtering (admin/internal).
+        """
         async with get_session() as session:
             q = select(BuildJobRow)
             count_q = select(sa_func.count(BuildJobRow.id))
@@ -2652,6 +2744,24 @@ class DbBuildJobStore:
             if builder_id is not None:
                 q = q.where(BuildJobRow.builder_id == builder_id)
                 count_q = count_q.where(BuildJobRow.builder_id == builder_id)
+            if visible_to is not None:
+                _vis = or_(
+                    BuildJobRow.org_slug == "",
+                    BuildJobRow.org_slug.in_(
+                        select(OrganizationRow.slug).where(
+                            OrganizationRow.is_private == False  # noqa: E712
+                        )
+                    ),
+                )
+                if visible_to:
+                    _member = (
+                        select(OrganizationRow.slug)
+                        .join(OrgMemberRow, OrgMemberRow.org_id == OrganizationRow.id)
+                        .where(OrgMemberRow.token_name == visible_to)
+                    )
+                    _vis = or_(_vis, BuildJobRow.org_slug.in_(_member))
+                q = q.where(_vis)
+                count_q = count_q.where(_vis)
 
             total = (await session.execute(count_q)).scalar() or 0
             q = (
@@ -3167,8 +3277,11 @@ class DbBuildJobStore:
                 log_sub = logs_dir / row.dag_id
             else:
                 log_sub = logs_dir / "standalone"
-            log_sub.mkdir(parents=True, exist_ok=True)
             log_path = log_sub / f"{job_id}.log"
+            # Defense in depth: a crafted dag_id must never escape logs_dir.
+            if logs_dir.resolve() not in log_path.resolve().parents:
+                raise ValueError(f"log path escapes logs_dir (dag_id={row.dag_id!r})")
+            log_sub.mkdir(parents=True, exist_ok=True)
 
             # Append data
             with open(log_path, "ab") as f:

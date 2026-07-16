@@ -36,6 +36,8 @@ class Dependency:
     name: str
     version: str = ""
     reason: str = ""
+    org: str = ""
+    server: str = ""  # federated registry host[:port]; "" = current server
 
 
 @dataclass
@@ -136,6 +138,8 @@ class BundleManifest:
                         name=dep["name"],
                         version=dep.get("version", ""),
                         reason=dep.get("reason", ""),
+                        org=dep.get("org", ""),
+                        server=dep.get("server", ""),
                     )
                     for dep in dep_required
                 ],
@@ -144,6 +148,8 @@ class BundleManifest:
                         name=dep["name"],
                         version=dep.get("version", ""),
                         reason=dep.get("reason", ""),
+                        org=dep.get("org", ""),
+                        server=dep.get("server", ""),
                     )
                     for dep in (deps.get("optional", []) if isinstance(deps, dict) else [])
                 ],
@@ -229,7 +235,12 @@ class ReleaseIndex:
                     archive_url=e.get("archive_url", ""),
                     source_release=e.get("source_release", ""),
                     required_deps=[
-                        Dependency(name=dep["name"], version=dep.get("version", ""))
+                        Dependency(
+                            name=dep["name"],
+                            version=dep.get("version", ""),
+                            org=dep.get("org", ""),
+                            server=dep.get("server", ""),
+                        )
                         for dep in e.get("required_deps", [])
                     ],
                     mirror_urls=e.get("mirror_urls", []),

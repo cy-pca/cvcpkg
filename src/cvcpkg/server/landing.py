@@ -1050,7 +1050,7 @@ function renderInfo() {
   }
   if (p.homepage) {
     const el = document.getElementById('pkg-homepage');
-    el.href = p.homepage;
+    if (new RegExp('^https?://', 'i').test(p.homepage || '')) el.href = p.homepage;
     el.textContent = p.homepage;
     el.parentElement.style.display = '';
   }
@@ -1335,8 +1335,13 @@ async function loadBuildJobs(name) {
 
 
 def _js_string_literal(s: str) -> str:
-    """Encode a Python string as a safe JavaScript string literal."""
-    return _json.dumps(s)
+    """Encode a Python string as a JS string literal that is safe inside HTML.
+
+    json.dumps leaves <, >, & (hence </script>) intact, which
+    would let a reflected value break out of the surrounding <script> block.
+    Each is emitted as a JS unicode escape.
+    """
+    return _json.dumps(s).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
 
 
 def package_detail_html(name: str, *, org: str = "") -> str:
@@ -1667,11 +1672,10 @@ function render(orgs) {{
             </div>
             <div class="media-content">
               <a href="/org/${{encodeURIComponent(o.slug)}}" class="title is-5 has-text-link">${{esc(o.display_name)}}</a>
+              ${{o.is_private ? '<span class="tag is-warning is-light ml-2"><span class="icon is-small"><i class="fas fa-lock"></i></span><span>private</span></span>' : ''}}
               <p class="is-size-7 has-text-grey-light">${{esc(o.slug)}}</p>
               ${{o.description ? '<p class="is-size-7 has-text-grey-lighter mt-2">' + esc(o.description) + '</p>' : ''}}
-              <p class="is-size-7 has-text-grey mt-2">
-                Storage: ${{fmtSize(o.storage_used_bytes)}} / ${{fmtSize(o.storage_limit_bytes)}}
-              </p>
+              ${{o.storage_limit_bytes != null ? '<p class="is-size-7 has-text-grey mt-2">Storage: ' + fmtSize(o.storage_used_bytes) + ' / ' + fmtSize(o.storage_limit_bytes) + '</p>' : ''}}
             </div>
           </article>
         </div>
@@ -1692,7 +1696,6 @@ document.addEventListener('DOMContentLoaded', init);
 def org_detail_html(slug: str) -> str:
     """Return the HTML for an organization detail page."""
     import html as _html
-    import json as _json
 
     safe_slug = _html.escape(slug, quote=True)
 
@@ -1724,7 +1727,9 @@ def org_detail_html(slug: str) -> str:
             <span class="icon is-large has-text-link"><i class="fas fa-building fa-2x"></i></span>
           </div>
           <div class="media-content">
-            <h1 class="title is-2 has-text-white" id="org-name">{safe_slug}</h1>
+            <h1 class="title is-2 has-text-white">
+              <span id="org-name">{safe_slug}</span><span id="org-private-badge" class="tag is-warning is-light is-medium ml-2" style="display:none"><span class="icon is-small"><i class="fas fa-lock"></i></span><span>private</span></span>
+            </h1>
             <p class="subtitle is-6 has-text-grey-lighter" id="org-desc"></p>
           </div>
         </div>
@@ -1740,7 +1745,7 @@ def org_detail_html(slug: str) -> str:
               <p class="title is-4 has-text-info" id="org-pkg-count">&mdash;</p>
               <p class="heading has-text-grey-light">Packages</p>
             </div>
-            <div class="column has-text-centered">
+            <div class="column has-text-centered" id="org-storage-col">
               <p class="title is-4 has-text-warning" id="org-storage">&mdash;</p>
               <p class="heading has-text-grey-light">Storage</p>
             </div>
@@ -1774,7 +1779,7 @@ def org_detail_html(slug: str) -> str:
 
 async function init() {{
   try {{
-    const resp = await fetch('/v1/orgs/' + encodeURIComponent({_json.dumps(slug)}));
+    const resp = await fetch('/v1/orgs/' + encodeURIComponent({_js_string_literal(slug)}));
     const data = await resp.json();
     renderOrg(data);
   }} catch (err) {{
@@ -1786,6 +1791,7 @@ async function init() {{
 function renderOrg(data) {{
   const o = data.org;
   document.getElementById('org-name').textContent = o.display_name;
+  if (o.is_private) document.getElementById('org-private-badge').style.display = '';
   if (o.description) document.getElementById('org-desc').textContent = o.description;
   if (o.logo_url) {{
     document.getElementById('org-logo').innerHTML =
@@ -1795,13 +1801,21 @@ function renderOrg(data) {{
     const el = document.getElementById('org-homepage');
     el.style.display = '';
     const link = document.getElementById('org-homepage-link');
-    link.href = o.homepage;
+    if (new RegExp('^https?://', 'i').test(o.homepage || '')) link.href = o.homepage;
     link.textContent = o.homepage;
   }}
 
-  document.getElementById('org-storage').textContent = fmtSize(o.storage_used_bytes);
-  const pct = o.storage_limit_bytes > 0 ? Math.round(o.storage_used_bytes / o.storage_limit_bytes * 100) : 0;
-  document.getElementById('org-storage-bar').value = pct;
+  if (o.storage_limit_bytes != null) {{
+    document.getElementById('org-storage').textContent = fmtSize(o.storage_used_bytes);
+    const pct = o.storage_limit_bytes > 0 ? Math.round(o.storage_used_bytes / o.storage_limit_bytes * 100) : 0;
+    document.getElementById('org-storage-bar').value = pct;
+  }} else {{
+    // Storage is member/super-admin-only — omit the storage UI entirely.
+    const col = document.getElementById('org-storage-col');
+    if (col) col.style.display = 'none';
+    const bar = document.getElementById('org-storage-bar');
+    if (bar) bar.style.display = 'none';
+  }}
 
   // Members
   const members = data.members || [];
@@ -1994,7 +2008,6 @@ document.addEventListener('DOMContentLoaded', () => {{
 
 def tag_detail_html(tag_name: str, org_slug: str = "") -> str:
     """Return the HTML for a tag detail page showing description + packages."""
-    import json as _json
 
     safe_name = _html.escape(tag_name, quote=True)
     safe_org = _html.escape(org_slug, quote=True)
@@ -2077,8 +2090,8 @@ def tag_detail_html(tag_name: str, org_slug: str = "") -> str:
 {_HELPERS_JS}
 {_NAVBAR_JS}
 
-const TAG_NAME = {_json.dumps(tag_name)};
-const TAG_ORG = {_json.dumps(org_slug)};
+const TAG_NAME = {_js_string_literal(tag_name)};
+const TAG_ORG = {_js_string_literal(org_slug)};
 
 async function init() {{
   // Load tag metadata (if curated)

@@ -203,6 +203,17 @@ Setting `is_private` to `true` restricts visibility:
 - **Member list**: Only visible to members and admins.
 - **Package downloads**: Require a valid token belonging to an org member.
 
+The visibility rule is enforced on **every** read path — the per-name lookup,
+the paged listing, search (including its facet buckets and counts), and the
+catalog — so a private org's packages, and even their existence, never leak to a
+non-member.
+
+> On an **edge/satellite** server, org packages are *local-only*: published on
+> the edge and never propagated to or from the upstream primary. See
+> [Clusters & Federation](clusters-and-federation.md) for the upstream-mirror +
+> local-only-org model, and for depending on another server's org packages
+> across a federation.
+
 To make an existing org private:
 
 ```bash
@@ -220,6 +231,11 @@ Each org has an independent storage budget (default 10 GiB). The server
 tracks cumulative storage as packages are published and deleted.
 
 If a publish would exceed the limit, the server returns `413 Payload Too Large`.
+
+**Visibility:** an org's storage limit and usage are shown only to its
+**members** and **super-admins**. For everyone else the API returns them as
+`null` (in `GET /v1/orgs` and `GET /v1/orgs/{slug}`) and the web UI simply omits
+the storage figures — so a public org's budget is never exposed to outsiders.
 
 Admins can adjust the limit per org:
 

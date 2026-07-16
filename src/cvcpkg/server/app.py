@@ -230,6 +230,16 @@ def _reject_public_publish_on_edge(org: str) -> None:
             "instead (pass --org / org=...).",
         )
 
+
+def _redact_org_storage(org):
+    """Return a copy of *org* with the member/admin-only storage figures nulled.
+
+    Storage limit + usage are visible only to org members and super-admins; the
+    API nulls them for everyone else so the SPA simply omits the storage UI.
+    """
+    return org.model_copy(update={"storage_limit_bytes": None, "storage_used_bytes": None})
+
+
 # Seconds between populate syncs.
 POPULATE_INTERVAL = int(os.environ.get("CVCPKG_POPULATE_INTERVAL", "900"))
 
@@ -512,14 +522,21 @@ async def optional_reader_auth(authorization: str | None = Header(None)) -> Toke
 
 
 async def optional_token(authorization: str | None = Header(None)) -> TokenRecord | None:
-    """Try to resolve a bearer token if present, but never require it."""
+    """Resolve a bearer token if present to identify the caller for visibility
+    filtering.  Never requires one UNLESS the server sets ``require_auth_for_reads``
+    — in that case a missing/invalid token is rejected, so switching read
+    endpoints from ``optional_reader_auth`` to this dependency does not silently
+    open them on auth-required deployments."""
+    state = _get_state()
     raw = _extract_token(authorization)
     if raw is None:
+        if state.require_auth_for_reads:
+            raise HTTPException(401, "this server requires authentication for reads")
         return None
-    if _use_db:
-        return await _db_tokens.verify(raw)
-    state = _get_state()
-    return state.tokens.verify(raw)
+    record = await _db_tokens.verify(raw) if _use_db else state.tokens.verify(raw)
+    if record is None and state.require_auth_for_reads:
+        raise HTTPException(401, "invalid or expired token")
+    return record
 
 
 async def _authenticate_token(raw: str) -> TokenRecord | None:
@@ -533,6 +550,36 @@ async def _authenticate_token(raw: str) -> TokenRecord | None:
 # ── Webhook delivery engine ────────────────────────────────────
 
 _WEBHOOK_RETRY_DELAYS = [10, 60, 300]  # seconds between retries
+
+
+def _url_target_allowed(url: str) -> bool:
+    """True if *url* is an http(s) URL not pointing at an obviously-internal
+    target. Blocks SSRF to IP-literal loopback / private / link-local / reserved
+    hosts, plus ``localhost`` and the cloud-metadata hostname. DNS names are
+    allowed (resolving them at check time is environment-fragile and webhook
+    config is admin-only — attacker-controlled-domain->internal-IP is a
+    documented residual). Network-free so behaviour is deterministic."""
+    import ipaddress
+    from urllib.parse import urlparse
+
+    p = urlparse(url)
+    if p.scheme not in ("http", "https") or not p.hostname:
+        return False
+    host = p.hostname.lower().rstrip(".")
+    if host == "localhost" or host.endswith(".localhost") or host == "metadata.google.internal":
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return True  # other DNS name — allowed
+    return not (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
 
 
 async def _deliver_webhook(
@@ -549,6 +596,14 @@ async def _deliver_webhook(
 
     import httpx
 
+    if not _url_target_allowed(url):
+        logger.warning(
+            "webhook %d delivery to %s blocked (non-public / non-http target)",
+            webhook_id,
+            url,
+        )
+        await _db_webhooks.record_failure(webhook_id)
+        return False
     sig = _hm.new(secret.encode(), payload.encode(), _h.sha256).hexdigest()
     delivery_id = str(uuid.uuid4())
     headers = {
@@ -1724,6 +1779,7 @@ def create_app(
     ):
         """Return forward and reverse dependency maps derived from recipes."""
         from cvcpkg.builder import RecipeError, find_recipes_dir, list_recipes
+        from cvcpkg.refs import parse_dep_ref
 
         try:
             recipes = list_recipes(find_recipes_dir())
@@ -1741,12 +1797,14 @@ def create_app(
             raw_deps = depends_block.get("runtime", depends_block.get("build", []))
             names: list[str] = []
             for d in raw_deps:
-                if isinstance(d, str):
-                    names.append(d)
-                elif isinstance(d, dict):
-                    dep_org = d.get("org", "")
-                    dep_name = d["name"]
-                    names.append(f"{dep_org}/{dep_name}" if dep_org else dep_name)
+                try:
+                    ref = parse_dep_ref(d)
+                except ValueError:
+                    continue
+                key = ref.qualified_name
+                if ref.server:
+                    key = f"cvc://{ref.server}/{key}"
+                names.append(key)
             forward[r.name] = names
             meta[r.name] = {
                 "description": recipe_block.get("description", ""),
@@ -1830,7 +1888,7 @@ def create_app(
         include_yanked: bool = Query(False, description="Include yanked packages in results"),
         limit: int = Query(100, ge=1, le=1000),
         offset: int = Query(0, ge=0),
-        _auth: None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         if _use_db:
             # 'live' is a virtual tag meaning release_tag == ""
@@ -1848,6 +1906,7 @@ def create_app(
                 build_type=build_type,
                 link=link,
                 org_slug=org,
+                caller_token_name=(caller.name if caller else ""),
             )
             if release == "live":
                 # get_bundles with release="" returns all — filter to empty tag
@@ -1930,7 +1989,7 @@ def create_app(
             alias="facets",
             description="Compute facet buckets over the filtered result set.",
         ),
-        _auth: None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         """Search the package catalog with optional facets.
 
@@ -1963,6 +2022,7 @@ def create_app(
                 build_type=build_type,
                 link=link,
                 org_slug=org,
+                caller_token_name=(caller.name if caller else ""),
             )
             if release == "live":
                 packages = [p for p in packages if not p.release_tag]
@@ -1984,6 +2044,7 @@ def create_app(
                     build_type=build_type,
                     link=link,
                     org_slug=org,
+                    caller_token_name=(caller.name if caller else ""),
                 )
                 more = _apply_tag_filter(more)
                 total = len(more)
@@ -2008,6 +2069,7 @@ def create_app(
                     build_type=build_type,
                     link=link,
                     org_slug=org,
+                    caller_token_name=(caller.name if caller else ""),
                 )
                 if release == "live" or tag:
                     # Facets from get_search_facets don't know about 'live'
@@ -2141,11 +2203,14 @@ def create_app(
         name: str,
         org: str = Query("", description="Filter by organization slug"),
         include_yanked: bool = Query(False, description="Include yanked packages in results"),
-        _auth: None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         if _use_db:
             packages, total = await _db_packages.get_bundles(
-                name=name, org_slug=org, include_yanked=include_yanked
+                name=name,
+                org_slug=org,
+                include_yanked=include_yanked,
+                caller_token_name=(caller.name if caller else ""),
             )
             return PackageListResponse(total=total, packages=packages)
         state = _get_state()
@@ -2294,6 +2359,7 @@ def create_app(
                 include_yanked=False,
                 limit=limit,
                 offset=offset,
+                caller_token_name=(None if actor.role == TokenRole.admin else actor.name),
             )
             # get_bundles with release="" returns ALL; filter to empty release_tag
             packages = [p for p in packages if not p.release_tag]
@@ -2386,7 +2452,16 @@ def create_app(
                 "total_size_bytes": total_bytes,
                 "orgs": {},
             }
-        return await _db_packages.cache_stats()
+        result = await _db_packages.cache_stats()
+        # Redact the per-org breakdown for non-admins: the full map would expose
+        # every org's name + storage, including private orgs. Members keep their
+        # own orgs; admins see all.
+        if actor.role != TokenRole.admin and isinstance(result, dict) and _db_orgs is not None:
+            member = await _db_orgs.member_org_slugs(actor.name)
+            orgs = result.get("orgs")
+            if isinstance(orgs, dict):
+                result = {**result, "orgs": {k: v for k, v in orgs.items() if k in member}}
+        return result
 
     @app.post("/v1/cache/gc", tags=["cache"])
     async def cache_gc(
@@ -2454,16 +2529,34 @@ def create_app(
 
     # ── Download (read) ─────────────────────────────────────
 
+    async def _archive_is_visible(caller: TokenRecord | None, safe_name: str) -> bool:
+        """True if *caller* may download the archive *safe_name*. Private-org
+        archives require admin or membership; public/base archives are open.
+        Resolves via a direct, unbounded, yank-inclusive query (no truncation)."""
+        if not (_use_db and _db_packages is not None and _db_orgs is not None):
+            return True
+        org = await _db_packages.get_archive_org(safe_name)
+        if not org:  # None (no package row) or "" (public namespace)
+            return True
+        org_info = await _db_orgs.get(org)
+        if org_info is None or not org_info.is_private:
+            return True
+        return caller is not None and (
+            caller.role == TokenRole.admin or await _db_orgs.is_member(org, caller.name)
+        )
+
     @app.head("/v1/download/{filename}", tags=["packages"])
     async def head_download_archive(
         filename: str,
-        _auth: None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         """HEAD support so clients can check size before downloading."""
         state = _get_state()
         safe_name = Path(filename).name
         archive_path = state.archives_dir() / safe_name
         if not archive_path.is_file():
+            raise HTTPException(404, f"archive not found: {safe_name}")
+        if not await _archive_is_visible(caller, safe_name):
             raise HTTPException(404, f"archive not found: {safe_name}")
         return Response(
             status_code=200,
@@ -2477,13 +2570,20 @@ def create_app(
     async def download_archive(
         filename: str,
         request: Request,
-        _auth: None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         state = _get_state()
         # Sanitise filename to prevent path traversal
         safe_name = Path(filename).name
         archive_path = state.archives_dir() / safe_name
         if not archive_path.is_file():
+            raise HTTPException(404, f"archive not found: {safe_name}")
+
+        # Enforce org visibility on the archive: a PRIVATE org's archive is
+        # downloadable only by a member (or admin). Resolve the archive to its
+        # package row, then gate on membership. 404 (not 403) so the endpoint
+        # never confirms a private archive's existence to an outsider.
+        if not await _archive_is_visible(caller, safe_name):
             raise HTTPException(404, f"archive not found: {safe_name}")
 
         # Record download event for analytics
@@ -2870,9 +2970,7 @@ def create_app(
                 if org_info is None:
                     raise HTTPException(404, f"organization '{org}' not found")
                 if not await _db_orgs.is_member(org, actor.name):
-                    raise HTTPException(
-                        403, f"you are not a member of organization '{org}'"
-                    )
+                    raise HTTPException(403, f"you are not a member of organization '{org}'")
         _check_rate_limit(request)
         _purge_expired_sessions()
         state = _get_state()
@@ -3235,6 +3333,24 @@ def create_app(
         ),
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
+        # Ownership: only the package's publisher, a member of its org, or an
+        # admin may yank it -- a publisher must not yank someone else's package.
+        if actor.role != TokenRole.admin and _use_db and _db_packages is not None:
+            _yk, _ = await _db_packages.get_bundles(name=name, include_yanked=True, limit=1)
+            if _yk:
+                _yp = _yk[0]
+                _owns = _yp.published_by == actor.name
+                _in_org = (
+                    bool(_yp.org)
+                    and _db_orgs is not None
+                    and await _db_orgs.is_member(_yp.org, actor.name)
+                )
+                if not (_owns or _in_org):
+                    raise HTTPException(
+                        403,
+                        "you may only yank packages you published or that belong "
+                        "to an organization you are a member of",
+                    )
         scope_parts = [
             f"{k}={v}"
             for k, v in (
@@ -3386,7 +3502,7 @@ def create_app(
     async def delete_packages_by_link(
         platform: str,
         link: str,
-        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
     ):
         """Delete all bundles matching a platform and link mode (admin only)."""
         if _use_db:
@@ -3780,13 +3896,14 @@ def create_app(
     # ── Registration (public) ──────────────────────────────
 
     @app.post("/v1/register", response_model=RegistrationResponse, tags=["registration"])
-    async def register(req: RegistrationRequest):
+    async def register(req: RegistrationRequest, request: Request):
         """Self-service token registration.
 
         In ``open`` mode the token is created immediately and returned.
         In ``admin-gated`` mode a pending request is recorded for admin
         approval.
         """
+        _check_rate_limit(request)
         if not req.name or not req.name.strip():
             raise HTTPException(422, "name is required")
         if not _is_valid_identifier(req.name):
@@ -3804,7 +3921,7 @@ def create_app(
                 if _use_db:
                     raw = await _db_tokens.create(
                         name=req.name,
-                        role=req.role,
+                        role=TokenRole.reader,  # open self-registration is reader-only
                         email=req.email,
                         description=req.description,
                         metadata=req.metadata,
@@ -3812,7 +3929,7 @@ def create_app(
                 else:
                     raw = state.tokens.create(
                         name=req.name,
-                        role=req.role,
+                        role=TokenRole.reader,  # open self-registration is reader-only
                         email=req.email,
                         description=req.description,
                         metadata=req.metadata,
@@ -3978,6 +4095,9 @@ def create_app(
         err = validate_org_slug(body.slug)
         if err:
             raise HTTPException(422, err)
+        for _field, _val in (("logo_url", body.logo_url), ("homepage", body.homepage)):
+            if _val and not _val.startswith(("http://", "https://", "/")):
+                raise HTTPException(422, f"{_field} must be an http(s) URL or a relative path")
 
         try:
             org = await _db_orgs.create(
@@ -4004,14 +4124,22 @@ def create_app(
     async def list_orgs(
         limit: int = Query(100, ge=1, le=1000),
         offset: int = Query(0, ge=0),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         if not _use_db or _db_orgs is None:
             return OrgListResponse(total=0, organizations=[])
+        is_admin = caller is not None and caller.role == TokenRole.admin
+        caller_name = caller.name if caller else ""
         orgs, total = await _db_orgs.list_orgs(
             limit=limit,
             offset=offset,
-            include_private=False,
+            include_private=is_admin,
+            caller_token_name=caller_name,
         )
+        # Storage figures are member/super-admin-only.
+        if not is_admin:
+            member_slugs = await _db_orgs.member_org_slugs(caller_name)
+            orgs = [o if o.slug in member_slugs else _redact_org_storage(o) for o in orgs]
         return OrgListResponse(total=total, organizations=orgs)
 
     @app.get("/v1/orgs/{slug}", response_model=OrgDetailResponse, tags=["organizations"])
@@ -4036,7 +4164,11 @@ def create_app(
             members = await _db_orgs.get_members(slug)
         else:
             members = []
-        packages, _ = await _db_packages.get_bundles(org_slug=slug)
+            # Storage figures are member/super-admin-only.
+            org = _redact_org_storage(org)
+        packages, _ = await _db_packages.get_bundles(
+            org_slug=slug, caller_token_name=(caller_name or "")
+        )
         return OrgDetailResponse(org=org, members=members, packages=packages)
 
     @app.patch("/v1/orgs/{slug}", response_model=OrgInfo, tags=["organizations"])
@@ -4052,6 +4184,9 @@ def create_app(
         # storage_limit_bytes is admin-only
         if body.storage_limit_bytes is not None and actor.role != TokenRole.admin:
             raise HTTPException(403, "only admins can change storage limits")
+        for _field, _val in (("logo_url", body.logo_url), ("homepage", body.homepage)):
+            if _val and not _val.startswith(("http://", "https://", "/")):
+                raise HTTPException(422, f"{_field} must be an http(s) URL or a relative path")
         updated = await _db_orgs.update(
             slug,
             display_name=body.display_name,
@@ -4195,13 +4330,15 @@ def create_app(
     @app.get("/v1/feed.xml", tags=["feed"], response_class=Response)
     async def rss_feed(
         limit: int = Query(50, ge=1, le=200, description="Number of items in the feed"),
-        _auth: None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         """RSS 2.0 feed of the latest published packages."""
         import xml.etree.ElementTree as ET
 
         if _use_db:
-            packages, _ = await _db_packages.get_bundles(limit=limit, offset=0)
+            packages, _ = await _db_packages.get_bundles(
+                limit=limit, offset=0, caller_token_name=(caller.name if caller else "")
+            )
         else:
             state = _get_state()
             bundles = state.index.get("bundles", [])
@@ -4288,7 +4425,7 @@ def create_app(
             le=365,
             description="Number of days of history",
         ),
-        _auth: None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         """Get daily download counts for charting."""
         if not _use_db or _db_downloads is None:
@@ -4304,6 +4441,32 @@ def create_app(
                     },
                 }
             )
+        # A per-name query must not become an existence/volume oracle for a
+        # private package the caller cannot see.
+        if name and _db_packages is not None:
+            _vis, _ = await _db_packages.get_bundles(
+                name=name,
+                include_yanked=True,
+                limit=1,
+                caller_token_name=(
+                    None
+                    if (caller is not None and caller.role == TokenRole.admin)
+                    else (caller.name if caller is not None else "")
+                ),
+            )
+            if not _vis:
+                return JSONResponse(
+                    {
+                        "total": 0,
+                        "daily": [],
+                        "config": {
+                            "days": days,
+                            "color": DOWNLOAD_GRAPH_COLOR,
+                            "fill_color": DOWNLOAD_GRAPH_FILL_COLOR,
+                            "height": DOWNLOAD_GRAPH_HEIGHT,
+                        },
+                    }
+                )
         total = await _db_downloads.get_total_downloads(package_name=name)
         daily = await _db_downloads.get_daily_downloads(package_name=name, days=days)
         return JSONResponse(
@@ -4383,7 +4546,7 @@ def create_app(
         return {"filter_name": name, "days": days, "daily": daily}
 
     @app.post("/v1/telemetry", tags=["analytics"], status_code=204)
-    async def submit_telemetry(payload: TelemetryPayload):
+    async def submit_telemetry(payload: TelemetryPayload, request: Request):
         """Accept an opt-in, anonymous client telemetry ping.
 
         Clients only call this when CVCPKG_TELEMETRY=1 is set or the user
@@ -4391,6 +4554,7 @@ def create_app(
         identifying information and nothing is derived from the connection
         (no address hash) -- see the Phase 2 privacy notes.
         """
+        _check_rate_limit(request)
         if not _use_db or _db_telemetry is None:
             raise HTTPException(503, "telemetry requires the database backend")
         if len(payload.tools) > 16:
@@ -4418,10 +4582,16 @@ def create_app(
 
     # ── Admin dashboard UI (Phase 3) ────────────────────────
 
+    # Per-process random fallback: if no real HMAC key is configured we must NOT
+    # sign admin sessions with a publicly-known constant (that would let anyone
+    # forge an admin cookie). A random per-process key keeps sessions valid
+    # within a process while making forged cookies unverifiable.
+    _fallback_admin_key = secrets.token_bytes(32)
+
     def _admin_session_key() -> bytes:
         state = _get_state()
         key = getattr(getattr(state, "tokens", None), "_hmac_key", b"")
-        return key or b"cvcpkg-admin-session"
+        return key or _fallback_admin_key
 
     def _has_admin_session(request: Request) -> bool:
         from cvcpkg.server import admin_ui
@@ -4753,28 +4923,42 @@ def create_app(
         org: str = "",
         limit: int = 200,
         offset: int = 0,
-        _auth: TokenRecord | None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         """List curated tags with package counts."""
         if not _use_db or _db_tags is None:
             return TagListResponse(total=0, tags=[])
+        is_admin = caller is not None and caller.role == TokenRole.admin
         org_filter: str | None = org if org else None
-        # If the org is private, check access
+        # If a specific private org is requested, require membership.
         if org and _db_orgs is not None:
             org_info = await _db_orgs.get(org)
-            if org_info and org_info.is_private:
-                caller = _auth
-                if caller is None or (
-                    caller.role != TokenRole.admin
-                    and not await _db_orgs.is_member(org, caller.name)
-                ):
+            if org_info and org_info.is_private and not is_admin:
+                if caller is None or not await _db_orgs.is_member(org, caller.name):
                     raise HTTPException(403, "private organization -- access denied")
         tags, total = await _db_tags.list_tags(org_slug=org_filter, limit=limit, offset=offset)
+        # Unscoped listing must not leak private-org tag names to non-members.
+        if not org and not is_admin and _db_orgs is not None:
+            _priv: dict[str, bool] = {}
+            visible = []
+            for _t in tags:
+                slug = getattr(_t, "org_slug", "") or ""
+                if not slug:
+                    visible.append(_t)
+                    continue
+                if slug not in _priv:
+                    _oi = await _db_orgs.get(slug)
+                    _priv[slug] = bool(_oi and _oi.is_private)
+                if not _priv[slug] or (caller and await _db_orgs.is_member(slug, caller.name)):
+                    visible.append(_t)
+            if len(visible) != len(tags):
+                total = len(visible)
+            tags = visible
         return TagListResponse(total=total, tags=tags)
 
     @app.get("/v1/tags/all", tags=["tags"])
     async def list_all_tags(
-        _auth: TokenRecord | None = Depends(optional_reader_auth),
+        _auth: TokenRecord | None = Depends(optional_token),
     ):
         """Return all tag names (curated + ad-hoc) with package counts.
 
@@ -4904,7 +5088,10 @@ def create_app(
     # ── Mirror endpoints ────────────────────────────────────
 
     @app.post("/v1/mirrors/register", response_model=MirrorInfo, tags=["mirrors"])
-    async def register_mirror(body: MirrorRegisterRequest):
+    async def register_mirror(
+        body: MirrorRegisterRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
         """Register a mirror with the primary server.
 
         Mirrors call this endpoint to announce themselves.  The primary
@@ -4931,7 +5118,7 @@ def create_app(
         )
         await _db_audit.record(
             action=AuditAction.mirror_register,
-            actor="mirror",
+            actor=actor.name,
             target=url,
             detail=body.display_name or "",
         )
@@ -5203,6 +5390,9 @@ def create_app(
     ):
         """Submit a single build job."""
         _require_db_build_jobs()
+        if body.org_slug and actor.role != TokenRole.admin and _db_orgs is not None:
+            if not await _db_orgs.is_member(body.org_slug, actor.name):
+                raise HTTPException(403, "not a member of this organization")
         # wasm/wasi/cosmo only support static linking — enforce server-side.
         link = body.link
         if body.platform in ("wasm", "wasi", "cosmo") and link != "static":
@@ -5242,7 +5432,15 @@ def create_app(
         import uuid as _uuid
 
         _require_db_build_jobs()
+        if actor.role != TokenRole.admin and _db_orgs is not None:
+            for _org in {j.org_slug for j in body.jobs if j.org_slug}:
+                if not await _db_orgs.is_member(_org, actor.name):
+                    raise HTTPException(403, f"not a member of organization '{_org}'")
         dag_id = body.dag_id or str(_uuid.uuid4())[:12]
+        import re as _re_dag
+
+        if not _re_dag.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", dag_id):
+            raise HTTPException(422, "invalid dag_id (allowed: letters, digits, . _ -)")
         jobs_dicts = [
             {
                 "recipe_name": j.recipe_name,
@@ -5279,6 +5477,36 @@ def create_app(
         )
         return DagSubmitResponse(dag_id=dag_id, total=len(infos), jobs=infos)
 
+    async def _assert_build_visible(actor: TokenRecord, info) -> None:
+        """404 unless *actor* may see build job *info* (member of its private org)."""
+        if actor.role == TokenRole.admin or _db_orgs is None:
+            return
+        org = getattr(info, "org_slug", "") or ""
+        if not org:
+            return
+        org_info = await _db_orgs.get(org)
+        if org_info is not None and org_info.is_private:
+            if not await _db_orgs.is_member(org, actor.name):
+                raise HTTPException(404, "build job not found")
+
+    async def _assert_dag_visible(actor: TokenRecord, dag_id: str) -> None:
+        """404 unless *actor* may act on EVERY private org in DAG *dag_id* (a DAG
+        can span orgs; checking only jobs[0] would let a member of one org
+        cancel/pause another org's jobs in the same DAG)."""
+        if actor.role == TokenRole.admin or _db_orgs is None:
+            return
+        _jobs, _ = await _db_build_jobs.list_jobs(dag_id=dag_id, limit=1000, offset=0)
+        for _org in {(getattr(j, "org_slug", "") or "") for j in _jobs}:
+            if not _org:
+                continue
+            _oi = await _db_orgs.get(_org)
+            if (
+                _oi is not None
+                and _oi.is_private
+                and not await _db_orgs.is_member(_org, actor.name)
+            ):
+                raise HTTPException(404, "build job not found")
+
     @app.get("/v1/builds", response_model=BuildJobListResponse, tags=["builds"])
     async def list_builds(
         status: str | None = Query(None, description="Filter by status"),
@@ -5308,6 +5536,7 @@ def create_app(
             builder_id=builder_id,
             limit=limit,
             offset=offset,
+            visible_to=(None if actor.role == TokenRole.admin else actor.name),
         )
         return BuildJobListResponse(total=total, jobs=jobs)
 
@@ -5321,6 +5550,7 @@ def create_app(
         info = await _db_build_jobs.get(job_id)
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
+        await _assert_build_visible(actor, info)
         return info
 
     @app.post("/v1/builds/{job_id}/cancel", tags=["builds"])
@@ -5345,6 +5575,10 @@ def create_app(
         cascade-cancelled, and the builder is notified via WebSocket.
         """
         _require_db_build_jobs()
+        _existing = await _db_build_jobs.get(job_id)
+        if _existing is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _assert_build_visible(actor, _existing)
         info = await _db_build_jobs.cancel(job_id, force=force)
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
@@ -5395,6 +5629,7 @@ def create_app(
     ):
         """Cancel all pending/dispatched jobs in a DAG."""
         _require_db_build_jobs()
+        await _assert_dag_visible(actor, dag_id)
         count = await _db_build_jobs.cancel_dag(dag_id)
         await _db_audit.record(
             action=AuditAction.build_cancel,
@@ -5419,6 +5654,10 @@ def create_app(
     ):
         """Pause a pending or dispatched build job."""
         _require_db_build_jobs()
+        _existing = await _db_build_jobs.get(job_id)
+        if _existing is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _assert_build_visible(actor, _existing)
         info = await _db_build_jobs.pause(job_id)
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
@@ -5431,6 +5670,10 @@ def create_app(
     ):
         """Resume a paused build job back to pending."""
         _require_db_build_jobs()
+        _existing = await _db_build_jobs.get(job_id)
+        if _existing is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _assert_build_visible(actor, _existing)
         info = await _db_build_jobs.resume(job_id)
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
@@ -5443,6 +5686,7 @@ def create_app(
     ):
         """Pause all pending/dispatched jobs in a DAG."""
         _require_db_build_jobs()
+        await _assert_dag_visible(actor, dag_id)
         count = await _db_build_jobs.pause_dag(dag_id)
         return {"message": "dag paused", "dag_id": dag_id, "paused": count}
 
@@ -5453,6 +5697,7 @@ def create_app(
     ):
         """Resume all paused jobs in a DAG back to pending."""
         _require_db_build_jobs()
+        await _assert_dag_visible(actor, dag_id)
         count = await _db_build_jobs.resume_dag(dag_id)
         return {"message": "dag resumed", "dag_id": dag_id, "resumed": count}
 
@@ -5468,6 +5713,10 @@ def create_app(
     ):
         """Builder claims a dispatched job → running."""
         _require_db_build_jobs()
+        _existing = await _db_build_jobs.get(job_id)
+        if _existing is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _assert_build_visible(actor, _existing)
         info = await _db_build_jobs.claim(job_id, body.builder_id)
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
@@ -5502,6 +5751,10 @@ def create_app(
     ):
         """Report a build job as completed successfully."""
         _require_db_build_jobs()
+        _existing = await _db_build_jobs.get(job_id)
+        if _existing is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _assert_build_visible(actor, _existing)
         info = await _db_build_jobs.complete(job_id, result_archive_url=body.result_archive_url)
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
@@ -5545,6 +5798,10 @@ def create_app(
     ):
         """Report a build job as failed."""
         _require_db_build_jobs()
+        _existing = await _db_build_jobs.get(job_id)
+        if _existing is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _assert_build_visible(actor, _existing)
         info = await _db_build_jobs.fail(job_id, error_message=body.error_message)
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
@@ -5594,6 +5851,10 @@ def create_app(
     ):
         """Append a chunk of log data to a build job's log."""
         _require_db_build_jobs()
+        _existing = await _db_build_jobs.get(job_id)
+        if _existing is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _assert_build_visible(actor, _existing)
         state = _get_state()
         info = await _db_build_jobs.append_log(job_id, body.data, logs_dir=state.logs_dir())
         if info is None:
@@ -5610,6 +5871,10 @@ def create_app(
     ):
         """Download the full log for a build job."""
         _require_db_build_jobs()
+        _job = await _db_build_jobs.get(job_id)
+        if _job is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _assert_build_visible(actor, _job)
         state = _get_state()
         path = await _db_build_jobs.get_log_path(job_id, logs_dir=state.logs_dir())
         if path is None:
@@ -5664,6 +5929,11 @@ def create_app(
             raise HTTPException(401, "invalid or expired token")
         if record.role not in (TokenRole.publisher, TokenRole.admin):
             raise HTTPException(403, "insufficient role")
+        # Enforce org membership when the job exists; a missing job falls through
+        # to the generator's existing "job not found" SSE event (preserved contract).
+        _job = await _db_build_jobs.get(job_id)
+        if _job is not None:
+            await _assert_build_visible(record, _job)
         state = _get_state()
 
         async def _event_generator():
@@ -5916,6 +6186,20 @@ def create_app(
         if not _re_mod.match(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$", name):
             raise HTTPException(400, "invalid recipe name")
 
+        # Validate + authorize the org namespace: org_slug lands in a
+        # filesystem path (recipe_bundles/<org_slug>), so a bare length bound
+        # would allow traversal, and any publisher could otherwise write into
+        # another org's private recipe namespace.
+        if org_slug:
+            from cvcpkg.server.models import validate_org_slug
+
+            slug_err = validate_org_slug(org_slug)
+            if slug_err:
+                raise HTTPException(422, slug_err)
+            if actor.role != TokenRole.admin and _db_orgs is not None:
+                if not await _db_orgs.is_member(org_slug, actor.name):
+                    raise HTTPException(403, "not a member of this organization")
+
         state = _get_state()
         recipes_dir = state.state_dir / "recipe_bundles"
         if org_slug:
@@ -5925,6 +6209,21 @@ def create_app(
         dest = recipes_dir / f"{name}.tar.gz"
         # Write uploaded file
         content = await file.read()
+        # Reject bundles with path-traversal / link-escape members so a poisoned
+        # recipe can't write outside the extraction dir on a client that later
+        # unpacks it (defense in depth alongside safe_tar_extractall).
+        import io as _io_mod
+        import tarfile as _tf_mod
+
+        try:
+            from cvcpkg._archive import tar_has_unsafe_member
+
+            with _tf_mod.open(fileobj=_io_mod.BytesIO(content), mode="r:gz") as _chk:
+                _bad_member = tar_has_unsafe_member(_chk)
+        except _tf_mod.TarError as exc:
+            raise HTTPException(400, "recipe bundle is not a valid tar.gz") from exc
+        if _bad_member is not None:
+            raise HTTPException(400, f"unsafe recipe bundle member: {_bad_member!r}")
         dest.write_bytes(content)
         bundle_size = len(content)
 
@@ -5972,9 +6271,33 @@ def create_app(
     ):
         """List server-managed recipe bundles."""
         _require_db_recipes()
+        is_admin = actor.role == TokenRole.admin
+        allowed: set[str] | None = None
+        if not is_admin and _db_orgs is not None:
+            allowed = {""} | await _db_orgs.member_org_slugs(actor.name)
+            if org_slug is not None and org_slug not in allowed:
+                _o = await _db_orgs.get(org_slug)
+                if _o is not None and _o.is_private:
+                    raise HTTPException(403, "not a member of this organization")
         recipes, total = await _db_recipes.list_recipes(
             org_slug=org_slug, limit=limit, offset=offset
         )
+        if allowed is not None and org_slug is None:
+            _priv: dict[str, bool] = {}
+            visible = []
+            for r in recipes:
+                o = r.org_slug or ""
+                if o in allowed:
+                    visible.append(r)
+                    continue
+                if o not in _priv:
+                    _oi = await _db_orgs.get(o)
+                    _priv[o] = bool(_oi and _oi.is_private)
+                if not _priv[o]:
+                    visible.append(r)
+            if len(visible) != len(recipes):
+                total = len(visible)
+            recipes = visible
         return RecipeListResponse(total=total, recipes=recipes)
 
     @app.get(
@@ -5999,6 +6322,16 @@ def create_app(
 
         buf = io.BytesIO()
 
+        # Private-org recipe sets are visible only to members / admins.
+        if org_slug and _use_db and _db_orgs is not None:
+            _org = await _db_orgs.get(org_slug)
+            if _org is not None and _org.is_private:
+                _is_admin = _caller is not None and _caller.role == TokenRole.admin
+                if not _is_admin and (
+                    _caller is None or not await _db_orgs.is_member(org_slug, _caller.name)
+                ):
+                    raise HTTPException(404, "no recipes available")
+
         if _use_db and _db_recipes is not None:
             recipes_list, _ = await _db_recipes.list_recipes(
                 org_slug=org_slug or None, limit=10000, offset=0
@@ -6009,6 +6342,8 @@ def create_app(
                     if bundle_path and Path(bundle_path).is_file():
                         with tarfile.open(bundle_path, "r:gz") as inner:
                             for member in inner.getmembers():
+                                if member.name.startswith("/") or ".." in Path(member.name).parts:
+                                    continue
                                 f = inner.extractfile(member) if member.isfile() else None
                                 tar.addfile(member, f)
         else:
@@ -6058,6 +6393,14 @@ def create_app(
     ):
         """Download a recipe bundle (tar.gz)."""
         _require_db_recipes()
+        if org_slug and _db_orgs is not None and actor.role != TokenRole.admin:
+            _o = await _db_orgs.get(org_slug)
+            if (
+                _o is not None
+                and _o.is_private
+                and not await _db_orgs.is_member(org_slug, actor.name)
+            ):
+                raise HTTPException(404, f"recipe '{name}' not found")
         info = await _db_recipes.get(name, org_slug=org_slug)
         if info is None:
             raise HTTPException(404, f"recipe '{name}' not found")
@@ -6181,6 +6524,10 @@ def create_app(
     ):
         """Register a new webhook (admin only)."""
         _require_db_webhooks()
+        if not _url_target_allowed(body.url):
+            raise HTTPException(
+                422, "webhook url must be an http(s) URL resolving to a public address"
+            )
         info = await _db_webhooks.register(
             url=body.url,
             events=body.events,
