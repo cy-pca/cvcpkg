@@ -469,3 +469,26 @@ class TestInteropResolution:
         assert io["env"] == {"WSL_INTEROP": "/run/WSL/1_interop"}
         # Cached now.
         assert winhost._resolve_interop() is io
+
+
+class TestExchangeOverride:
+    """CVCPKG_WINHOST_EXCHANGE parsing — forward-slash normalization and
+    detection of systemd EnvironmentFile backslash-stripping (dev job
+    #52, 2026-07-15)."""
+
+    def test_unset_returns_empty(self, monkeypatch):
+        monkeypatch.delenv("CVCPKG_WINHOST_EXCHANGE", raising=False)
+        assert winhost._exchange_override() == ""
+
+    def test_backslash_form_passes_through(self, monkeypatch):
+        monkeypatch.setenv("CVCPKG_WINHOST_EXCHANGE", "C:\\Users\\tfx\\cvc-exchange")
+        assert winhost._exchange_override() == "C:\\Users\\tfx\\cvc-exchange"
+
+    def test_forward_slash_form_normalized(self, monkeypatch):
+        monkeypatch.setenv("CVCPKG_WINHOST_EXCHANGE", "C:/Users/tfx/cvc-exchange/")
+        assert winhost._exchange_override() == "C:\\Users\\tfx\\cvc-exchange"
+
+    def test_systemd_mangled_value_raises(self, monkeypatch):
+        monkeypatch.setenv("CVCPKG_WINHOST_EXCHANGE", "C:Userstfxcvcpkg-winhost-sandipaws-wsl")
+        with pytest.raises(winhost.WinhostError, match="EnvironmentFile"):
+            winhost._exchange_override()

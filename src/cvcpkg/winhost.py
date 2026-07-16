@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import glob
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -262,6 +263,30 @@ def win_user_profile() -> str:
     if not profile:
         raise WinhostError("could not resolve %USERPROFILE% on the Windows host")
     return profile
+
+
+def _exchange_override() -> str:
+    """Read and sanity-check ``CVCPKG_WINHOST_EXCHANGE``.
+
+    Accepts backslash or forward-slash Windows paths (normalized to the
+    backslash form, no trailing separator).  Detects the classic systemd
+    ``EnvironmentFile`` mangling — unescaped backslashes are stripped
+    while parsing, turning ``C:\\Users\\x`` into ``C:Usersx`` — and
+    fails with an actionable message instead of an opaque wslpath error
+    on every windows job.
+    """
+    raw = os.environ.get("CVCPKG_WINHOST_EXCHANGE", "").strip().strip('"')
+    if not raw:
+        return ""
+    if re.match(r"^[A-Za-z]:(?![/\\])", raw):
+        raise WinhostError(
+            f"CVCPKG_WINHOST_EXCHANGE looks mangled: {raw!r} — drive colon "
+            "with no path separator after it. If this is set via a systemd "
+            "EnvironmentFile (e.g. /etc/cvcpkg/builder.env), systemd strips "
+            "unescaped backslashes; write the path with forward slashes "
+            "(C:/Users/<user>/cvcpkg-winhost) or doubled backslashes."
+        )
+    return raw.replace("/", "\\").rstrip("\\")
 
 
 # ── Path fix-ups ────────────────────────────────────────────────
@@ -489,7 +514,7 @@ def run_winhost_build(
             job_dir_wsl = ctx.work_dir
         else:
             # Stage into the exchange directory in the Windows profile.
-            exchange_win = os.environ.get("CVCPKG_WINHOST_EXCHANGE", "").strip()
+            exchange_win = _exchange_override()
             if not exchange_win:
                 exchange_win = win_user_profile().rstrip("\\") + "\\cvcpkg-winhost"
             exchange_root = wsl_path(exchange_win)
