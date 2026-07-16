@@ -274,7 +274,23 @@ $defs:
     properties:
       platform:
         type: string
-        enum: [linux, macos, windows, windows-gnu, wasm, wasi, cosmo, freebsd, openbsd, netbsd]
+        enum:
+          [
+            any,
+            linux,
+            macos,
+            windows,
+            windows-gnu,
+            wasm,
+            wasi,
+            cosmo,
+            freebsd,
+            openbsd,
+            netbsd,
+          ]
+        description: >
+          `any` marks a platform-independent recipe (Phase 14 source recipes
+          and pure-Python wheels): built once, valid everywhere, arch noarch.
       host_platform:
         type: string
         enum: [linux, macos, windows, freebsd, openbsd, netbsd]
