@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from cvcpkg._archive import safe_tar_extractall
 import os
 from pathlib import Path
 
 import click
 
+from cvcpkg._archive import safe_tar_extractall
 from cvcpkg.cli import cli
 from cvcpkg.cli._helpers import (
     _config_opt,

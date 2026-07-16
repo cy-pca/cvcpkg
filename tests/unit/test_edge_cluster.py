@@ -235,9 +235,7 @@ class TestPrivatePackageVisibility:
         self._publish_private(client, pub_token)
         anon = client.get("/v1/packages", params={"org": "shell"}).json()
         assert _bundles(anon) == []
-        member = client.get(
-            "/v1/packages", params={"org": "shell"}, headers=_hdr(pub_token)
-        ).json()
+        member = client.get("/v1/packages", params={"org": "shell"}, headers=_hdr(pub_token)).json()
         assert any(b.get("org") == "shell" for b in _bundles(member))
 
     def test_search_hides_private_including_facets(self, edge_server):
@@ -251,7 +249,5 @@ class TestPrivatePackageVisibility:
         ]
         assert "shell" not in orgs_facet
         # A member sees their own private package in search.
-        member = client.get(
-            "/v1/search", params={"q": "secretlib"}, headers=_hdr(pub_token)
-        ).json()
+        member = client.get("/v1/search", params={"q": "secretlib"}, headers=_hdr(pub_token)).json()
         assert any(b.get("org") == "shell" for b in _bundles(member))

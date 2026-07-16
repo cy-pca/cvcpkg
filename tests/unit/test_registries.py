@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from cvcpkg.config import Registry, load_registries, registry_for
 
 

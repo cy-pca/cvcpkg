@@ -307,9 +307,7 @@ class TestPrivatePackageLeaks:
     def test_archive_download_idor(self, sec_server):
         client, admin, owner, stranger, _reader = sec_server
         _publish_private(client, owner)
-        pkgs = client.get(
-            "/v1/packages", params={"name": "libsecret"}, headers=_hdr(owner)
-        ).json()
+        pkgs = client.get("/v1/packages", params={"name": "libsecret"}, headers=_hdr(owner)).json()
         bundles = pkgs.get("packages") or pkgs.get("bundles") or []
         assert bundles, pkgs
         url = bundles[0]["archive_url"]
@@ -374,9 +372,7 @@ class TestBuildIsolation:
         client, _admin, owner, stranger, _reader = sec_server
         r = self._submit(client, owner)
         job_id = r.json()["id"]
-        assert (
-            client.post(f"/v1/builds/{job_id}/cancel", headers=_hdr(stranger)).status_code == 404
-        )
+        assert client.post(f"/v1/builds/{job_id}/cancel", headers=_hdr(stranger)).status_code == 404
 
 
 # ── second-round: adversarial-verification findings ─────────────
@@ -465,9 +461,7 @@ class TestPrivateDownloadHardening:
     def test_head_download_gated(self, sec_server):
         client, admin, owner, stranger, _reader = sec_server
         _publish_private(client, owner)
-        pkgs = client.get(
-            "/v1/packages", params={"name": "libsecret"}, headers=_hdr(owner)
-        ).json()
+        pkgs = client.get("/v1/packages", params={"name": "libsecret"}, headers=_hdr(owner)).json()
         url = (pkgs.get("packages") or pkgs.get("bundles"))[0]["archive_url"]
         assert client.head(url, headers=_hdr(stranger)).status_code == 404
         assert client.head(url).status_code == 404  # anonymous
@@ -476,9 +470,7 @@ class TestPrivateDownloadHardening:
     def test_download_idor_survives_yank(self, sec_server):
         client, admin, owner, stranger, _reader = sec_server
         _publish_private(client, owner)
-        pkgs = client.get(
-            "/v1/packages", params={"name": "libsecret"}, headers=_hdr(owner)
-        ).json()
+        pkgs = client.get("/v1/packages", params={"name": "libsecret"}, headers=_hdr(owner)).json()
         url = (pkgs.get("packages") or pkgs.get("bundles"))[0]["archive_url"]
         # yank the private package (its row flips to yanked but the file remains)
         y = client.post("/v1/packages/libsecret/1.0.0/yank", headers=_hdr(owner))
@@ -492,8 +484,12 @@ class TestBuildCallbackIsolation:
     def _submit(self, client, token, org="shell"):
         return client.post(
             "/v1/builds",
-            json={"recipe_name": "libsecret", "platform": "linux", "arch": "x86_64",
-                  "org_slug": org},
+            json={
+                "recipe_name": "libsecret",
+                "platform": "linux",
+                "arch": "x86_64",
+                "org_slug": org,
+            },
             headers=_hdr(token),
         )
 
@@ -501,17 +497,35 @@ class TestBuildCallbackIsolation:
         client, _admin, owner, stranger, _reader = sec_server
         job_id = self._submit(client, owner).json()["id"]
         h = _hdr(stranger)
-        assert client.post(f"/v1/builds/{job_id}/claim", json={"builder_id": 1}, headers=h).status_code == 404
-        assert client.post(f"/v1/builds/{job_id}/complete", json={"result_archive_url": "x"}, headers=h).status_code == 404
-        assert client.post(f"/v1/builds/{job_id}/fail", json={"error_message": "x"}, headers=h).status_code == 404
-        assert client.patch(f"/v1/builds/{job_id}/log", json={"data": "x"}, headers=h).status_code == 404
+        assert (
+            client.post(f"/v1/builds/{job_id}/claim", json={"builder_id": 1}, headers=h).status_code
+            == 404
+        )
+        assert (
+            client.post(
+                f"/v1/builds/{job_id}/complete", json={"result_archive_url": "x"}, headers=h
+            ).status_code
+            == 404
+        )
+        assert (
+            client.post(
+                f"/v1/builds/{job_id}/fail", json={"error_message": "x"}, headers=h
+            ).status_code
+            == 404
+        )
+        assert (
+            client.patch(f"/v1/builds/{job_id}/log", json={"data": "x"}, headers=h).status_code
+            == 404
+        )
 
     def test_dag_id_path_traversal_rejected(self, sec_server):
         client, _admin, owner, *_ = sec_server
         r = client.post(
             "/v1/builds/dag",
-            json={"jobs": [{"recipe_name": "x", "platform": "linux", "arch": "x86_64"}],
-                  "dag_id": "../../../tmp/pwn"},
+            json={
+                "jobs": [{"recipe_name": "x", "platform": "linux", "arch": "x86_64"}],
+                "dag_id": "../../../tmp/pwn",
+            },
             headers=_hdr(owner),
         )
         assert r.status_code == 422
@@ -527,12 +541,24 @@ class TestSingleRecipeBundleMembership:
             headers=_hdr(owner),
         )
         assert up.status_code in (200, 201), up.text
-        assert client.get("/v1/recipes/librecipe", params={"org_slug": "shell"},
-                          headers=_hdr(stranger)).status_code == 404
-        assert client.get("/v1/recipes/librecipe", params={"org_slug": "shell"},
-                          headers=_hdr(owner)).status_code == 200
-        assert client.get("/v1/recipes/librecipe", params={"org_slug": "shell"},
-                          headers=_hdr(admin)).status_code == 200
+        assert (
+            client.get(
+                "/v1/recipes/librecipe", params={"org_slug": "shell"}, headers=_hdr(stranger)
+            ).status_code
+            == 404
+        )
+        assert (
+            client.get(
+                "/v1/recipes/librecipe", params={"org_slug": "shell"}, headers=_hdr(owner)
+            ).status_code
+            == 200
+        )
+        assert (
+            client.get(
+                "/v1/recipes/librecipe", params={"org_slug": "shell"}, headers=_hdr(admin)
+            ).status_code
+            == 200
+        )
 
 
 class TestStatsOracles:
@@ -549,19 +575,23 @@ class TestStatsOracles:
     def test_download_stats_not_a_private_oracle(self, sec_server):
         client, _admin, owner, stranger, _reader = sec_server
         _publish_private(client, owner)
-        pkgs = client.get(
-            "/v1/packages", params={"name": "libsecret"}, headers=_hdr(owner)
-        ).json()
+        pkgs = client.get("/v1/packages", params={"name": "libsecret"}, headers=_hdr(owner)).json()
         url = (pkgs.get("packages") or pkgs.get("bundles"))[0]["archive_url"]
         client.get(url, headers=_hdr(owner))  # record one download (synchronous)
         # non-member sees zeros for a private package they cannot see
-        assert client.get(
-            "/v1/downloads/stats", params={"name": "libsecret"}, headers=_hdr(stranger)
-        ).json()["total"] == 0
+        assert (
+            client.get(
+                "/v1/downloads/stats", params={"name": "libsecret"}, headers=_hdr(stranger)
+            ).json()["total"]
+            == 0
+        )
         # a member is not over-blocked
-        assert client.get(
-            "/v1/downloads/stats", params={"name": "libsecret"}, headers=_hdr(owner)
-        ).json()["total"] >= 1
+        assert (
+            client.get(
+                "/v1/downloads/stats", params={"name": "libsecret"}, headers=_hdr(owner)
+            ).json()["total"]
+            >= 1
+        )
 
 
 # ── low-severity follow-ups folded in ──────────────────────────
@@ -586,35 +616,53 @@ class TestLowSeverityFindings:
             "/v1/tags", json={"name": "secret-tag", "org_slug": "shell"}, headers=_hdr(admin)
         )
         assert t.status_code in (200, 201), t.text
-        assert client.get("/v1/tags", params={"org": "shell"}, headers=_hdr(stranger)).status_code == 403
-        assert client.get("/v1/tags", params={"org": "shell"}, headers=_hdr(owner)).status_code == 200
+        assert (
+            client.get("/v1/tags", params={"org": "shell"}, headers=_hdr(stranger)).status_code
+            == 403
+        )
+        assert (
+            client.get("/v1/tags", params={"org": "shell"}, headers=_hdr(owner)).status_code == 200
+        )
         names = {x["name"] for x in client.get("/v1/tags", headers=_hdr(stranger)).json()["tags"]}
         assert "secret-tag" not in names  # unscoped listing must not leak it
 
     def test_webhook_ssrf_blocked(self, sec_server):
         client, admin, *_ = sec_server
-        for bad in ("http://127.0.0.1:9/hook", "http://169.254.169.254/latest", "ftp://example.com/x"):
+        for bad in (
+            "http://127.0.0.1:9/hook",
+            "http://169.254.169.254/latest",
+            "ftp://example.com/x",
+        ):
             r = client.post(
-                "/v1/webhooks", json={"url": bad, "events": ["package.published"]},
+                "/v1/webhooks",
+                json={"url": bad, "events": ["package.published"]},
                 headers=_hdr(admin),
             )
             assert r.status_code == 422, (bad, r.status_code)
 
     def test_org_logo_and_homepage_scheme_rejected(self, sec_server):
         client, _admin, owner, *_ = sec_server
-        assert client.post(
-            "/v1/orgs",
-            json={"slug": "jsorg", "display_name": "J", "logo_url": "javascript:alert(1)"},
-            headers=_hdr(owner),
-        ).status_code == 422
-        assert client.post(
-            "/v1/orgs",
-            json={"slug": "jsorg2", "display_name": "J", "homepage": "javascript:alert(1)"},
-            headers=_hdr(owner),
-        ).status_code == 422
+        assert (
+            client.post(
+                "/v1/orgs",
+                json={"slug": "jsorg", "display_name": "J", "logo_url": "javascript:alert(1)"},
+                headers=_hdr(owner),
+            ).status_code
+            == 422
+        )
+        assert (
+            client.post(
+                "/v1/orgs",
+                json={"slug": "jsorg2", "display_name": "J", "homepage": "javascript:alert(1)"},
+                headers=_hdr(owner),
+            ).status_code
+            == 422
+        )
 
     def test_telemetry_rate_limited(self, sec_server, monkeypatch):
         client, *_ = sec_server
         monkeypatch.setattr(app_mod, "RATE_LIMIT_RPM", 3, raising=False)
-        codes = [client.post("/v1/telemetry", json={"platform": "linux"}).status_code for _ in range(6)]
+        codes = [
+            client.post("/v1/telemetry", json={"platform": "linux"}).status_code for _ in range(6)
+        ]
         assert 429 in codes, codes

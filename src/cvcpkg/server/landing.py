@@ -1050,7 +1050,7 @@ function renderInfo() {
   }
   if (p.homepage) {
     const el = document.getElementById('pkg-homepage');
-    if (/^https?:\/\//i.test(p.homepage || '')) el.href = p.homepage;
+    if (new RegExp('^https?://', 'i').test(p.homepage || '')) el.href = p.homepage;
     el.textContent = p.homepage;
     el.parentElement.style.display = '';
   }
@@ -1341,12 +1341,7 @@ def _js_string_literal(s: str) -> str:
     would let a reflected value break out of the surrounding <script> block.
     Each is emitted as a JS unicode escape.
     """
-    return (
-        _json.dumps(s)
-        .replace("<", "\\u003c")
-        .replace(">", "\\u003e")
-        .replace("&", "\\u0026")
-    )
+    return _json.dumps(s).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
 
 
 def package_detail_html(name: str, *, org: str = "") -> str:
@@ -1701,7 +1696,6 @@ document.addEventListener('DOMContentLoaded', init);
 def org_detail_html(slug: str) -> str:
     """Return the HTML for an organization detail page."""
     import html as _html
-    import json as _json
 
     safe_slug = _html.escape(slug, quote=True)
 
@@ -1807,7 +1801,7 @@ function renderOrg(data) {{
     const el = document.getElementById('org-homepage');
     el.style.display = '';
     const link = document.getElementById('org-homepage-link');
-    if (/^https?:\/\//i.test(o.homepage || '')) link.href = o.homepage;
+    if (new RegExp('^https?://', 'i').test(o.homepage || '')) link.href = o.homepage;
     link.textContent = o.homepage;
   }}
 
@@ -2014,7 +2008,6 @@ document.addEventListener('DOMContentLoaded', () => {{
 
 def tag_detail_html(tag_name: str, org_slug: str = "") -> str:
     """Return the HTML for a tag detail page showing description + packages."""
-    import json as _json
 
     safe_name = _html.escape(tag_name, quote=True)
     safe_org = _html.escape(org_slug, quote=True)

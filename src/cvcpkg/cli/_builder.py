@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from cvcpkg._archive import safe_tar_extractall
-
 import json
 import os
 import re
@@ -14,6 +12,7 @@ from pathlib import Path
 
 import click
 
+from cvcpkg._archive import safe_tar_extractall
 from cvcpkg.cli import cli
 from cvcpkg.cli._publish import _publish_to_server
 from cvcpkg.cli._server import _api_request

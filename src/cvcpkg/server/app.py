@@ -239,6 +239,7 @@ def _redact_org_storage(org):
     """
     return org.model_copy(update={"storage_limit_bytes": None, "storage_used_bytes": None})
 
+
 # Seconds between populate syncs.
 POPULATE_INTERVAL = int(os.environ.get("CVCPKG_POPULATE_INTERVAL", "900"))
 
@@ -2969,9 +2970,7 @@ def create_app(
                 if org_info is None:
                     raise HTTPException(404, f"organization '{org}' not found")
                 if not await _db_orgs.is_member(org, actor.name):
-                    raise HTTPException(
-                        403, f"you are not a member of organization '{org}'"
-                    )
+                    raise HTTPException(403, f"you are not a member of organization '{org}'")
         _check_rate_limit(request)
         _purge_expired_sessions()
         state = _get_state()
@@ -6343,9 +6342,7 @@ def create_app(
                     if bundle_path and Path(bundle_path).is_file():
                         with tarfile.open(bundle_path, "r:gz") as inner:
                             for member in inner.getmembers():
-                                if member.name.startswith("/") or ".." in Path(
-                                    member.name
-                                ).parts:
+                                if member.name.startswith("/") or ".." in Path(member.name).parts:
                                     continue
                                 f = inner.extractfile(member) if member.isfile() else None
                                 tar.addfile(member, f)

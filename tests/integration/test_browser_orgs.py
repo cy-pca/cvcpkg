@@ -71,18 +71,32 @@ def seeded_server(tmp_path_factory):
     def cli(*args):
         return subprocess.run(
             [sys.executable, "-c", "from cvcpkg.server.cli import server_cli; server_cli()", *args],
-            env=env, capture_output=True, text=True,
+            env=env,
+            capture_output=True,
+            text=True,
         )
 
     boot = cli("bootstrap", "--state-dir", str(state))
-    m = re.search(r"Token:\s*(\S+)", boot.stdout) or re.search(r"(cvcp[_a-zA-Z0-9]{16,})", boot.stdout)
+    m = re.search(r"Token:\s*(\S+)", boot.stdout) or re.search(
+        r"(cvcp[_a-zA-Z0-9]{16,})", boot.stdout
+    )
     assert m, f"bootstrap gave no token:\n{boot.stdout}\n{boot.stderr}"
     admin = m.group(1)
 
     proc = subprocess.Popen(
-        [sys.executable, "-c", "from cvcpkg.server.cli import server_cli; server_cli()",
-         "run", "--host", "127.0.0.1", "--port", str(port)],
-        env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        [
+            sys.executable,
+            "-c",
+            "from cvcpkg.server.cli import server_cli; server_cli()",
+            "run",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+        ],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
     try:
         for _ in range(100):
@@ -94,19 +108,38 @@ def seeded_server(tmp_path_factory):
             raise RuntimeError("server did not become healthy")
 
         h = {"Authorization": f"Bearer {admin}"}
-        for slug, priv, desc in (("acme", False, "Acme public packages"),
-                                 ("shell", True, "Shell private packages")):
-            r = httpx.post(f"{url}/v1/orgs", headers=h, timeout=10,
-                           json={"slug": slug, "display_name": slug.title(),
-                                 "description": desc, "is_private": priv})
+        for slug, priv, desc in (
+            ("acme", False, "Acme public packages"),
+            ("shell", True, "Shell private packages"),
+        ):
+            r = httpx.post(
+                f"{url}/v1/orgs",
+                headers=h,
+                timeout=10,
+                json={
+                    "slug": slug,
+                    "display_name": slug.title(),
+                    "description": desc,
+                    "is_private": priv,
+                },
+            )
             r.raise_for_status()
 
         def publish(name, org):
-            httpx.post(f"{url}/v1/publish", headers=h, timeout=15,
-                       params={"name": name, "version": "1.0.0", "platform": "linux",
-                               "arch": "x86_64", "org": org, "required_deps": json.dumps([])},
-                       files={"file": (f"{name}.tar.zst", b"x" * 64, "application/octet-stream")}
-                       ).raise_for_status()
+            httpx.post(
+                f"{url}/v1/publish",
+                headers=h,
+                timeout=15,
+                params={
+                    "name": name,
+                    "version": "1.0.0",
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "org": org,
+                    "required_deps": json.dumps([]),
+                },
+                files={"file": (f"{name}.tar.zst", b"x" * 64, "application/octet-stream")},
+            ).raise_for_status()
 
         publish("acme-lib", "acme")
         publish("shell-lib", "shell")
@@ -125,8 +158,8 @@ class TestOrgListPage:
         page.goto(f"{seeded_server}/orgs")
         page.wait_for_selector("#orgs-list a", timeout=10_000)
         body = page.inner_text("#orgs-list")
-        assert "Acme" in body           # public org shown
-        assert "Shell" not in body      # private org hidden from anonymous
+        assert "Acme" in body  # public org shown
+        assert "Shell" not in body  # private org hidden from anonymous
 
     def test_no_storage_or_private_badge_for_anonymous(self, page, seeded_server):
         page.goto(f"{seeded_server}/orgs")
@@ -184,8 +217,8 @@ class TestLandingPackageList:
             timeout=10_000,
         )
         body = page.inner_text("#pkg-body")
-        assert "acme-lib" in body            # public-org package visible
-        assert "shell-lib" not in body       # private package hidden from anonymous
+        assert "acme-lib" in body  # public-org package visible
+        assert "shell-lib" not in body  # private package hidden from anonymous
 
     def test_search_box_filters_to_public_package(self, page, seeded_server):
         page.goto(seeded_server)

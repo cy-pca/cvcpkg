@@ -241,7 +241,7 @@ def load_registries(config_dir: Path | None = None) -> dict[str, Registry]:
     return out
 
 
-def registry_for(host: str, config_dir: Path | None = None) -> "Registry | None":
+def registry_for(host: str, config_dir: Path | None = None) -> Registry | None:
     """Return the configured registry for *host*, or None if not allowlisted."""
     if not host:
         return None

@@ -135,7 +135,10 @@ def test_repr_does_not_leak_token(tmp_path, monkeypatch):
     _registries(tmp_path)
     catalog = {("http://local", "app"): []}
     order = resolve_federated(
-        "app", local_url="http://local", local_token="s3cret", config_dir=tmp_path,
+        "app",
+        local_url="http://local",
+        local_token="s3cret",
+        config_dir=tmp_path,
         http_get=_fake_get(catalog, []),
     )
     assert "s3cret" not in repr(order[0])

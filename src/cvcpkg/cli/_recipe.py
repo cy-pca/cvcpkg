@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cvcpkg._archive import safe_tar_extractall
 import click
 import yaml
 
+from cvcpkg._archive import safe_tar_extractall
 from cvcpkg.cli import cli
 from cvcpkg.cli._helpers import (
     _resolve_recipes_dirs,
