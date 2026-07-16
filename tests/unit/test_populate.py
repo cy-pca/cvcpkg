@@ -282,7 +282,7 @@ class TestPopulateSyncOnce:
     def test_platform_allowlist(self, populate_env):
         """Only platforms in CVCPKG_POPULATE_PLATFORMS are imported."""
         run, _, monkeypatch = populate_env
-        monkeypatch.setattr(app_mod, "POPULATE_PLATFORMS", {"linux", "windows"})
+        monkeypatch.setenv("CVCPKG_POPULATE_PLATFORMS", "linux,windows")
         bundles = [
             _bundle(name="a", platform="linux"),
             _bundle(name="b", platform="windows"),
@@ -300,7 +300,7 @@ class TestPopulateSyncOnce:
 
     def test_empty_allowlist_imports_all_platforms(self, populate_env):
         run, _, monkeypatch = populate_env
-        monkeypatch.setattr(app_mod, "POPULATE_PLATFORMS", set())
+        monkeypatch.delenv("CVCPKG_POPULATE_PLATFORMS", raising=False)
         bundles = [
             _bundle(name="a", platform="linux"),
             _bundle(name="c", platform="macos"),
@@ -311,6 +311,42 @@ class TestPopulateSyncOnce:
             return await app_mod._populate_sync_once()
 
         assert run(_test) == 2
+
+    def test_mirror_exclude_denylist(self, populate_env):
+        """CVCPKG_POPULATE_EXCLUDE packages are never mirrored (Phase 12)."""
+        run, _, monkeypatch = populate_env
+        monkeypatch.setenv("CVCPKG_POPULATE_EXCLUDE", "qt6,vtk")
+        bundles = [
+            _bundle(name="boost", platform="linux"),
+            _bundle(name="qt6", platform="linux"),
+            _bundle(name="vtk", platform="linux"),
+        ]
+        monkeypatch.setattr("httpx.AsyncClient", lambda **kw: _FakeAsyncClient(bundles))
+
+        async def _test():
+            n = await app_mod._populate_sync_once()
+            pkgs, _ = await app_mod._db_packages.get_bundles(limit=10)
+            return n, sorted(p.name for p in pkgs)
+
+        assert run(_test) == (1, ["boost"])
+
+    def test_mirror_include_allowlist(self, populate_env):
+        """With CVCPKG_POPULATE_INCLUDE set, only listed packages mirror."""
+        run, _, monkeypatch = populate_env
+        monkeypatch.setenv("CVCPKG_POPULATE_INCLUDE", "boost,zlib")
+        bundles = [
+            _bundle(name="boost", platform="linux"),
+            _bundle(name="zlib", platform="linux"),
+            _bundle(name="qt6", platform="linux"),
+        ]
+        monkeypatch.setattr("httpx.AsyncClient", lambda **kw: _FakeAsyncClient(bundles))
+
+        async def _test():
+            n = await app_mod._populate_sync_once()
+            pkgs, _ = await app_mod._db_packages.get_bundles(limit=10)
+            return n, sorted(p.name for p in pkgs)
+
+        assert run(_test) == (2, ["boost", "zlib"])
 
 
 # ── builds submit-dag --skip-existing ───────────────────────────

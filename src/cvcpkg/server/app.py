@@ -247,13 +247,16 @@ POPULATE_INTERVAL = int(os.environ.get("CVCPKG_POPULATE_INTERVAL", "900"))
 # cycle; the next cycle continues where this one stopped).
 POPULATE_MAX_PER_SYNC = int(os.environ.get("CVCPKG_POPULATE_MAX_PER_SYNC", "200"))
 
-# Optional platform allowlist for populate.  Comma-separated (e.g.
-# "linux,windows"); empty means import every platform.  Lets a dev
-# cluster mirror only the platforms it actually needs instead of the
-# whole upstream catalog.
-POPULATE_PLATFORMS = {
-    p.strip() for p in os.environ.get("CVCPKG_POPULATE_PLATFORMS", "").split(",") if p.strip()
-}
+
+# Selective-mirroring policy (Phase 12): package-name allow/deny lists,
+# the platform allowlist above, and a per-package size cap.  Built from
+# the CVCPKG_POPULATE_* environment; see server/mirror_policy.py.  The
+# default per-package cap is MAX_UPLOAD_BYTES.
+def _load_mirror_policy():
+    from cvcpkg.server.mirror_policy import MirrorPolicy
+
+    return MirrorPolicy.from_env(default_max_bytes=MAX_UPLOAD_BYTES)
+
 
 # Registration mode: "open" (default) or "admin-gated".
 REGISTRATION_MODE = RegistrationMode(os.environ.get("CVCPKG_REGISTRATION_MODE", "open"))
@@ -1115,6 +1118,7 @@ async def _populate_sync_once() -> int:
 
     state = _get_state()
     upstream = POPULATE_UPSTREAM.rstrip("/")
+    mirror_policy = _load_mirror_policy()
     headers: dict[str, str] = {}
     if POPULATE_UPSTREAM_TOKEN:
         headers["Authorization"] = f"Bearer {POPULATE_UPSTREAM_TOKEN}"
@@ -1155,21 +1159,22 @@ async def _populate_sync_once() -> int:
             )
             if not all(key) or key in local:
                 continue
-            if POPULATE_PLATFORMS and b.get("platform") not in POPULATE_PLATFORMS:
-                continue  # platform not in the allowlist for this mirror
             if b.get("yanked") or not b.get("archive_url"):
                 continue  # yanked upstream / placeholder without artifacts
             if b.get("org"):
                 continue  # only official/public packages are populated
             size = int(b.get("size_bytes", 0) or 0)
-            if size > MAX_UPLOAD_BYTES:
-                logger.warning(
-                    "populate: skipping %s==%s (%s/%s): %d bytes exceeds MAX_UPLOAD_BYTES",
+            # Selective-mirroring policy (Phase 12): name allow/deny lists,
+            # platform allowlist, and per-package size cap.
+            decision = mirror_policy.decide(name=key[0], platform=key[2], size_bytes=size)
+            if not decision.mirror:
+                logger.debug(
+                    "populate: skipping %s==%s (%s/%s): %s",
                     key[0],
                     key[1],
                     key[2],
                     key[3],
-                    size,
+                    decision.reason,
                 )
                 continue
             if imported >= POPULATE_MAX_PER_SYNC:

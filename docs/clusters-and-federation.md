@@ -35,13 +35,33 @@ cvcpkg-server run \
   #   CVCPKG_POPULATE_UPSTREAM        upstream primary base URL
   #   CVCPKG_POPULATE_UPSTREAM_TOKEN  (optional) bearer token for the upstream
   #   CVCPKG_POPULATE_INTERVAL        seconds between syncs (default 900)
-  #   CVCPKG_POPULATE_PLATFORMS       (optional) allowlist, e.g. "linux,windows"
+  #   CVCPKG_POPULATE_PLATFORMS       (optional) platform allowlist, "linux,windows"
+  #   CVCPKG_POPULATE_INCLUDE         (optional) package-name allowlist
+  #   CVCPKG_POPULATE_EXCLUDE         (optional) package-name denylist
+  #   CVCPKG_POPULATE_MAX_PACKAGE_BYTES  (optional) per-package size cap
 ```
 
 Populate is **pull-only** — it fetches from upstream and never pushes back — and
 it **only imports public packages** (upstream org-owned bundles are skipped). It
 downloads each missing archive, verifies its `sha256`, and registers it exactly
 like a publish (recorded as `published_by = populate:<upstream>`).
+
+### Selective mirroring
+
+An edge operator rarely wants to mirror the *entire* upstream catalog — some
+packages are very large.  A **mirror policy** decides, per upstream bundle,
+whether to mirror it (evaluated denylist → allowlist → platform → size):
+
+- **`CVCPKG_POPULATE_EXCLUDE`** — comma-separated package names never mirrored
+  (e.g. `qt6,vtk`).  The denylist wins over the allowlist.
+- **`CVCPKG_POPULATE_INCLUDE`** — comma-separated package-name allowlist; when
+  set, *only* these packages are mirrored.
+- **`CVCPKG_POPULATE_PLATFORMS`** — platform allowlist (as before).
+- **`CVCPKG_POPULATE_MAX_PACKAGE_BYTES`** — skip any bundle larger than this
+  (defaults to `CVCPKG_MAX_UPLOAD_BYTES`).
+
+Skipped packages are simply never pulled; a client that needs one still resolves
+it from the authoritative upstream root (see *Resolution*).
 
 `GET /healthz` reports `populate_upstream` and `populate_stats`.
 
@@ -170,5 +190,8 @@ See `lab/README.md`.
 | `CVCPKG_POPULATE_UPSTREAM_TOKEN` | edge | Optional bearer token for the upstream. |
 | `CVCPKG_POPULATE_INTERVAL` | edge | Seconds between populate syncs (default 900). |
 | `CVCPKG_POPULATE_PLATFORMS` | edge | Optional platform allowlist for imports. |
+| `CVCPKG_POPULATE_INCLUDE` | edge | Optional package-name allowlist (mirror only these). |
+| `CVCPKG_POPULATE_EXCLUDE` | edge | Optional package-name denylist (never mirror these); wins over the allowlist. |
+| `CVCPKG_POPULATE_MAX_PACKAGE_BYTES` | edge | Per-package size cap for mirroring (default: `CVCPKG_MAX_UPLOAD_BYTES`). |
 | `CVCPKG_MIRROR_MODE` / `CVCPKG_MIRROR_UPSTREAM` | mirror | Read-only mirror of a primary. |
 | `registries.yaml` / `CVCPKG_REGISTRIES` / `CVCPKG_REGISTRIES_FILE` | client | Federated registry hosts → `{url, token}` (allowlist + credentials). |
