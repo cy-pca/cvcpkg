@@ -1037,6 +1037,7 @@ def builder_run(
         error_message = ""
         archive_path: Path | None = None
         dep_prefix: Path | None = None
+        job_root: Path | None = None
         try:
             # 2. Download recipe
             _stream_log(job_id, f"Downloading recipe '{recipe_name}'...\n")
@@ -1066,8 +1067,17 @@ def builder_run(
             # mkdtemp(dir=work_root) raise FileNotFoundError and fail the job.
             if work_root is not None:
                 work_root.mkdir(parents=True, exist_ok=True)
+            # Per-job isolation root. A single `builds submit` fans out to
+            # several config/link variants of the SAME recipe that run
+            # concurrently (max-jobs>1). Everything this job creates — dep
+            # prefix, build work dir, output dir — lives under job_root so
+            # the finally-cleanup can remove exactly this job's trees. The
+            # previous cleanup globbed `cvcpkg-<recipe>-*` and deleted a
+            # sibling variant's still-in-use work dir mid-build, which raised
+            # FileNotFoundError at staging.mkdir() in the losing variant.
+            job_root = Path(tempfile.mkdtemp(prefix=f"cvcpkg-job-{recipe_name}-", dir=work_root))
             dep_prefix = Path(
-                tempfile.mkdtemp(prefix=f"cvcpkg-prefix-{recipe_name}-", dir=work_root)
+                tempfile.mkdtemp(prefix=f"cvcpkg-prefix-{recipe_name}-", dir=job_root)
             )
             log_cb = lambda text, _jid=job_id: _stream_log(_jid, text)  # noqa: E731
             _install_deps(
@@ -1086,8 +1096,8 @@ def builder_run(
                     cache_dir=work_root,
                 )
 
-            # 3b. Build + package
-            output_dir = Path(tempfile.mkdtemp(prefix=f"cvcpkg-out-{recipe_name}-"))
+            # 3b. Build + package (output dir under the per-job root)
+            output_dir = Path(tempfile.mkdtemp(prefix=f"cvcpkg-out-{recipe_name}-", dir=job_root))
             try:
                 archive_path, sha256, size = pack_recipe(
                     recipe_dir,
@@ -1097,7 +1107,7 @@ def builder_run(
                     link=job_link,
                     prefix=dep_prefix,
                     output_dir=output_dir,
-                    work_dir_root=work_root,
+                    work_dir_root=job_root,
                     log_callback=log_cb,
                     host_platform=host_plat,
                     cross_toolchain_env=cross_env or None,
@@ -1155,16 +1165,13 @@ def builder_run(
             click.echo(f"  [{job_id}] Failed: {recipe_name} - {exc}", err=True)
 
         finally:
-            # Clean up output dir, dep prefix, and any leaked work dirs
-            if archive_path and archive_path.parent.is_dir():
-                shutil.rmtree(archive_path.parent, ignore_errors=True)
-            if dep_prefix and dep_prefix.is_dir():
-                shutil.rmtree(dep_prefix, ignore_errors=True)
-            # build_recipe creates cvcpkg-{name}-* work dirs that leak on failure
-            cleanup_root = work_root or Path(tempfile.gettempdir())
-            for stale in cleanup_root.glob(f"cvcpkg-{recipe_name}-*"):
-                if stale.is_dir():
-                    shutil.rmtree(stale, ignore_errors=True)
+            # Remove exactly this job's isolated tree (dep prefix, build work
+            # dir, and output dir all live under job_root). Do NOT glob
+            # cvcpkg-<recipe>-* across the shared work_root — concurrent
+            # variant jobs of the same recipe would delete each other's
+            # live work dirs (the FileNotFoundError-at-staging bug).
+            if job_root is not None and job_root.is_dir():
+                shutil.rmtree(job_root, ignore_errors=True)
             # NB: the slot count is released by _run_job_guarded's finally,
             # not here — so an early return from the claim step above (which
             # never reaches this try) still frees the slot.

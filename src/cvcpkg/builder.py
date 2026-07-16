@@ -1223,7 +1223,11 @@ def pack_recipe(
     )
 
     staging = ctx.work_dir / "staging"
-    staging.mkdir()
+    # parents/exist_ok: defensive against a work_dir that a /tmp reaper (or,
+    # historically, a concurrent same-recipe job's over-broad cleanup) may
+    # have disturbed — fail later in stage_bundle with a clearer cause than a
+    # bare FileNotFoundError on mkdir.
+    staging.mkdir(parents=True, exist_ok=True)
     stage_bundle(ctx.install_dir, manifest, staging, recipe_dir=ctx.recipe.recipe_dir)
 
     archive_path, sha256, size = create_archive(
