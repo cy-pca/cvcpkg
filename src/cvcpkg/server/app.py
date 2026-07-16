@@ -737,6 +737,39 @@ _LOG_RETENTION_DAYS = int(os.environ.get("CVCPKG_LOG_RETENTION_DAYS", "0"))
 _LOG_GC_INTERVAL = int(os.environ.get("CVCPKG_LOG_GC_INTERVAL", "3600"))
 
 
+def _choose_builder(job, available):
+    """Pick a builder for *job*, or ``None``.
+
+    Enforces **org isolation** (a job runs only on a builder in the same org
+    namespace), matches platform/arch or a cross-platform capability, respects
+    per-builder capacity, and prefers affinity builders as a soft preference.
+    """
+    candidates = []
+    for b in available:
+        if b.current_jobs >= b.max_jobs:
+            continue
+        if b.org_slug != job.org_slug:
+            # Public jobs run on public builders; an org's (private) jobs only
+            # on that org's builders -- a private build never lands on a public
+            # builder, and a private builder never runs someone else's work.
+            continue
+        if b.platform == job.platform and b.arch == job.arch:
+            candidates.append(b)
+            continue
+        for cp in b.capabilities.get("cross_platforms", []):
+            if isinstance(cp, dict):
+                if cp.get("platform") == job.platform and cp.get("arch") == job.arch:
+                    candidates.append(b)
+                    break
+            elif cp == job.platform:  # legacy platform-only cross target
+                candidates.append(b)
+                break
+    if not candidates:
+        return None
+    affinity = [b for b in candidates if b.prefer_affinity]
+    return affinity[0] if affinity else candidates[0]
+
+
 async def _build_scheduler_loop() -> None:
     """Continuously match ready jobs to available builders."""
     import asyncio
@@ -853,29 +886,9 @@ async def _build_scheduler_loop() -> None:
                     available.append(b)
 
             for job in ready_jobs:
-                # Find matching builder (platform + arch, or cross-platform)
-                candidates = []
-                for b in available:
-                    if b.current_jobs >= b.max_jobs:
-                        continue
-                    if b.platform == job.platform and b.arch == job.arch:
-                        candidates.append(b)
-                    else:
-                        for cp in b.capabilities.get("cross_platforms", []):
-                            if isinstance(cp, dict):
-                                if cp["platform"] == job.platform and cp["arch"] == job.arch:
-                                    candidates.append(b)
-                                    break
-                            elif cp == job.platform:
-                                # Legacy cross_targets compat (platform-only)
-                                candidates.append(b)
-                                break
-                if not candidates:
+                chosen = _choose_builder(job, available)
+                if chosen is None:
                     continue
-
-                # Prefer affinity builders (soft preference)
-                affinity = [b for b in candidates if b.prefer_affinity]
-                chosen = affinity[0] if affinity else candidates[0]
 
                 await _db_build_jobs.dispatch(job.id, chosen.id)
                 # Notify builder via WebSocket if connected
