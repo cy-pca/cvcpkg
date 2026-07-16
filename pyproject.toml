@@ -48,6 +48,14 @@ cryptography = ">=41.0"
 httpx = ">=0.24"
 greenlet = ">=3.0"
 
+# Optional storage backends — lazily imported by cvcpkg.backends.* and
+# enabled via the matching extras below.
+boto3 = { version = ">=1.28", optional = true }
+azure-storage-blob = { version = ">=12.14", optional = true }
+azure-identity = { version = ">=1.14", optional = true }
+google-cloud-storage = { version = ">=2.10", optional = true }
+paramiko = { version = ">=3.0", optional = true }
+
 [tool.poetry.extras]
 progress = ["tqdm"]
 server = ["fastapi", "uvicorn", "pydantic", "python-multipart"]
@@ -56,6 +64,11 @@ db-sqlite = ["aiosqlite", "alembic"]
 db-mysql = ["aiomysql", "alembic"]
 db-all = ["asyncpg", "aiosqlite", "aiomysql", "alembic"]
 production = ["fastapi", "uvicorn", "pydantic", "python-multipart", "asyncpg", "alembic"]
+s3 = ["boto3"]
+azure = ["azure-storage-blob", "azure-identity"]
+gcs = ["google-cloud-storage"]
+sftp = ["paramiko"]
+storage-all = ["boto3", "azure-storage-blob", "azure-identity", "google-cloud-storage", "paramiko"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"
