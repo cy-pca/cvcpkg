@@ -50,6 +50,19 @@ class TestDetectPlatform:
         monkeypatch.setattr("sys.platform", "netbsd10")
         assert detect_platform() == "netbsd"
 
+    def test_dragonfly(self, monkeypatch):
+        monkeypatch.setattr("sys.platform", "dragonfly6")
+        assert detect_platform() == "dragonflybsd"
+
+    def test_dragonfly_unversioned(self, monkeypatch):
+        monkeypatch.setattr("sys.platform", "dragonfly")
+        assert detect_platform() == "dragonflybsd"
+
+    def test_ghostbsd_detects_as_freebsd(self, monkeypatch):
+        # GhostBSD's kernel identifies as FreeBSD — compat mode by design.
+        monkeypatch.setattr("sys.platform", "freebsd15")
+        assert detect_platform() == "freebsd"
+
     def test_unsupported(self, monkeypatch):
         monkeypatch.setattr("sys.platform", "haiku1")
         with pytest.raises(RuntimeError, match="unsupported platform"):
@@ -104,11 +117,23 @@ class TestDetectLibc:
         monkeypatch.setattr("sys.platform", "netbsd10")
         assert detect_libc() == "netbsd-libc"
 
+    def test_dragonfly_libc(self, monkeypatch):
+        monkeypatch.setattr("sys.platform", "dragonfly6")
+        assert detect_libc() == "dragonfly-libc"
+
 
 class TestDefaultTuple:
     def test_returns_dict(self):
         t = default_tuple()
         assert "platform" in t
         assert "arch" in t
-        assert t["platform"] in ("linux", "macos", "windows", "freebsd", "openbsd", "netbsd")
+        assert t["platform"] in (
+            "linux",
+            "macos",
+            "windows",
+            "freebsd",
+            "openbsd",
+            "netbsd",
+            "dragonflybsd",
+        )
         assert t["arch"] in ("x86_64", "arm64")
