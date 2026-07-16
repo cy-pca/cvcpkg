@@ -637,7 +637,7 @@ def _wait_for_dags(
 )
 @click.option("--recipe", "recipe_name", required=True, help="Recipe name to build.")
 @click.option("--platform", required=True, help="Target platform (e.g. linux, macos, windows).")
-@click.option("--arch", required=True, help="Target architecture (e.g. x86_64, aarch64).")
+@click.option("--arch", required=True, help="Target architecture (e.g. x86_64, arm64).")
 @click.option("--config", default="release", help="Build config (release or debug).")
 @click.option("--link", default="shared", help="Link mode (shared or static).")
 @click.option("--org", "org_slug", default="", help="Organization scope.")

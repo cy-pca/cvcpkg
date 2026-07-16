@@ -121,11 +121,18 @@ runs:
           *)       platform=$(echo "$RUNNER_OS" | tr '[:upper:]' '[:lower:]') ;;
         esac
 
-        # --- Resolve arch ---
+        # --- Resolve arch (canonical cvcpkg vocabulary) ---
+        # Normalize the raw machine name the way cvcpkg's platform.detect_arch
+        # does, so an arm64 host queries the catalog for 'arm64' (not the raw
+        # 'aarch64') and x86_64 hosts never split into an 'amd64' keyspace.
         if [ "$platform" = "windows" ]; then
           arch="x86_64"
         else
-          arch=$(uname -m)
+          case "$(uname -m)" in
+            x86_64|amd64|x64)      arch="x86_64" ;;
+            aarch64|arm64)         arch="arm64" ;;
+            *)                     arch=$(uname -m) ;;
+          esac
         fi
 
         # --- Resolve prefix ---
