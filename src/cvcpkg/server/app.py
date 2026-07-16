@@ -211,6 +211,25 @@ POPULATE_UPSTREAM = os.environ.get("CVCPKG_POPULATE_UPSTREAM", "")
 # Bearer token for the upstream (only needed for private upstreams).
 POPULATE_UPSTREAM_TOKEN = os.environ.get("CVCPKG_POPULATE_UPSTREAM_TOKEN", "")
 
+
+def _reject_public_publish_on_edge(org: str) -> None:
+    """Enforce upstream-canonical semantics on an edge/satellite cluster.
+
+    A cluster that populates its public catalog from an upstream primary
+    (``POPULATE_UPSTREAM`` set) treats the public namespace (``org_slug == ""``)
+    as canonical upstream: it may only *import* public packages, never accept a
+    local public publish (which would shadow the canonical upstream package).
+    Local publishes must target an organization.  Raises 409 otherwise.
+    """
+    if POPULATE_UPSTREAM and not org:
+        raise HTTPException(
+            409,
+            "this cluster mirrors its public catalog from an upstream primary "
+            f"({POPULATE_UPSTREAM}); the public namespace is canonical upstream "
+            "and cannot be published to locally. Publish into an organization "
+            "instead (pass --org / org=...).",
+        )
+
 # Seconds between populate syncs.
 POPULATE_INTERVAL = int(os.environ.get("CVCPKG_POPULATE_INTERVAL", "900"))
 
@@ -332,6 +351,7 @@ class UploadSession:
     maintainer: str = ""
     tags: str = ""
     required_deps: str = "[]"
+    org: str = ""
     hasher: hashlib._Hash = field(default_factory=lambda: hashlib.sha256())
     bytes_received: int = 0
     total_size: int = 0  # 0 = unknown
@@ -1044,6 +1064,11 @@ async def _populate_sync_once() -> int:
                 include_yanked=True, limit=1000, offset=offset
             )
             for p in pkgs:
+                # Org packages are a separate namespace (the package unique key
+                # includes org_slug); they must never shadow a public upstream
+                # package in the populate diff, so only public packages count.
+                if p.org:
+                    continue
                 local.add((p.name, p.version, p.platform, p.arch, p.build_type, p.link))
             offset += len(pkgs)
             if not pkgs or offset >= total:
@@ -2571,6 +2596,7 @@ def create_app(
                 403,
                 "this server is running in mirror mode and does not accept publishes",
             )
+        _reject_public_publish_on_edge(org)
         _check_rate_limit(request)
         state = _get_state()
 
@@ -2815,6 +2841,10 @@ def create_app(
         maintainer: str = Query(""),
         pkg_tags: str = Query("", alias="tags"),
         required_deps: str = Query("[]", description="JSON-encoded runtime deps"),
+        org: str = Query(
+            "",
+            description="Organization slug. Empty for official/public packages.",
+        ),
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
         """Initialise a chunked upload session.
@@ -2828,6 +2858,21 @@ def create_app(
                 403,
                 "this server is running in mirror mode and does not accept publishes",
             )
+        _reject_public_publish_on_edge(org)
+        if org:
+            from cvcpkg.server.models import validate_org_slug
+
+            err = validate_org_slug(org)
+            if err:
+                raise HTTPException(422, err)
+            if _use_db and _db_orgs is not None:
+                org_info = await _db_orgs.get(org)
+                if org_info is None:
+                    raise HTTPException(404, f"organization '{org}' not found")
+                if not await _db_orgs.is_member(org, actor.name):
+                    raise HTTPException(
+                        403, f"you are not a member of organization '{org}'"
+                    )
         _check_rate_limit(request)
         _purge_expired_sessions()
         state = _get_state()
@@ -2840,7 +2885,7 @@ def create_app(
         # Auto-create stub tag rows before the duplicate check so tags
         # are populated even when the package already exists.
         if _use_db and pkg_tags and _db_tags is not None:
-            await _db_tags.ensure_tags(tags_csv=pkg_tags, org_slug="", created_by=actor.name)
+            await _db_tags.ensure_tags(tags_csv=pkg_tags, org_slug=org, created_by=actor.name)
 
         # Check for duplicates
         if _use_db:
@@ -2891,6 +2936,7 @@ def create_app(
             actor_name=actor.name,
             temp_path=tmp_path,
             total_size=total_size,
+            org=org,
         )
 
         return JSONResponse(
@@ -3080,6 +3126,7 @@ def create_app(
                     pkg_license=session.pkg_license,
                     maintainer=session.maintainer,
                     tags=session.tags,
+                    org_slug=session.org,
                     published_by=actor.name,
                     required_deps=session.required_deps,
                 )

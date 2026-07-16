@@ -441,9 +441,38 @@ scaling and federation:
 - **CDN integration** — serve package archives from CloudFlare R2, AWS S3,
   or similar.  The server becomes a metadata/API layer; binaries are served
   from edge locations.
-- **Mirror protocol** — institutions can run local mirrors that sync from
-  the primary server.  Useful for air-gapped environments and reducing
-  bandwidth costs.
+- **Cluster roles & catalog authority** — three deployment roles, distinguished
+  by how each treats the **public namespace** (`org_slug == ""`):
+  - **Primary** (e.g. `cvcpkg.org`) — the canonical source of truth for public
+    packages; accepts public publishes.
+  - **Mirror** (e.g. `pkg.tx.wtf`, `--mirror-mode`) — a read-only replica of a
+    primary; rejects *all* publishes.
+  - **Edge / Satellite** (`CVCPKG_POPULATE_UPSTREAM` set) — a read-write cluster
+    that **populates** its public catalog *from* an upstream primary while
+    hosting its **own private org packages locally**. This is the enterprise /
+    air-gapped deployment shape (e.g. the dev cluster, a licensed-host builder).
+
+  Invariants (implemented 2026-07):
+  - **Upstream is canonical for the public namespace.** An edge cluster only
+    *imports* public packages — populate is pull-only, there is no push to
+    upstream — and it **hard-rejects local publishes into the public namespace**
+    (HTTP 409). Public packages can therefore never diverge from upstream. Local
+    publishes must target an organization (`--org`).
+  - **Org packages are a separate namespace.** The package unique key includes
+    `org_slug`, so `shell/foo==1.0` and public `foo==1.0` coexist. Org packages
+    are local-authoritative: private-capable, never populated from or pushed to
+    upstream. The populate diff is namespace-scoped to the public catalog, so a
+    private package can never shadow a public upstream one.
+  - Private org packages (`is_private`) are visible only to org members; the
+    chunked-upload path is org-aware so large private packages are supported.
+
+  Still open: populate imports *missing* public variants only — syncing upstream
+  *updates* (a re-published public variant, same key, new content) and
+  multi-upstream fan-in are future work; the invariants above keep the public
+  catalog safe in the meantime.
+- **Mirror protocol** — institutions can run local read-only mirrors
+  (`--mirror-mode`) that sync from a primary. Useful for pure read-only
+  air-gapped caches; the read-write variant is the *edge* role above.
 - **Federated registries** — multiple independent cvcpkg servers can
   cross-reference packages.  A client can query multiple registries
   with fallback.

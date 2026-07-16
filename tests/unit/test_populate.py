@@ -191,6 +191,43 @@ class TestPopulateSyncOnce:
 
         assert run(_test) == 0
 
+    def test_local_org_pkg_does_not_shadow_public_upstream(self, populate_env):
+        """A private org package must not shadow a public upstream package that
+        shares its variant key: org packages are a separate namespace, so
+        populate must still import the public one.  Regression for the
+        populate-diff collision bug (the diff set omitted org_slug)."""
+        run, _, monkeypatch = populate_env
+        import hashlib
+
+        sha = hashlib.sha256(b"data").hexdigest()
+        monkeypatch.setattr(
+            "httpx.AsyncClient", lambda **kw: _FakeAsyncClient([_bundle(sha256=sha)])
+        )
+
+        async def _test():
+            # Pre-existing LOCAL org package sharing the upstream variant key.
+            await app_mod._db_packages.add_package(
+                name="zlib",
+                version="1.3.1+cvc.3",
+                platform="windows",
+                arch="x86_64",
+                build_type="release",
+                link="shared",
+                sha256="localorg",
+                size_bytes=1,
+                archive_url="/v1/download/local-org.tar.zst",
+                org_slug="acme",
+            )
+            n = await app_mod._populate_sync_once()
+            pkgs, total = await app_mod._db_packages.get_bundles(limit=10)
+            return n, total, sorted((p.org, p.published_by) for p in pkgs)
+
+        n, total, rows = run(_test)
+        assert n == 1  # public upstream variant imported despite the org row
+        assert total == 2
+        assert ("", "populate:http://upstream.example") in rows  # public one landed
+        assert any(org == "acme" for org, _ in rows)  # org one untouched
+
     def test_skips_placeholders_orgs_and_sha_mismatch(self, populate_env):
         run, _, monkeypatch = populate_env
         bundles = [
