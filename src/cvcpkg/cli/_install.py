@@ -94,6 +94,16 @@ from cvcpkg.cli._helpers import (
 @_recipes_dir_opt
 @_no_default_recipes_opt
 @_local_opt
+@click.option(
+    "--keep-host-tools/--strip-host-tools",
+    default=False,
+    help=(
+        "Keep any build-time host-tools prefix recorded for this deliverable "
+        "instead of stripping it.  When a build separated host tools into their "
+        "own prefix, install strips it by default (it is a build-time "
+        "byproduct); pass --keep-host-tools to retain it."
+    ),
+)
 def install(
     components: tuple[str, ...],
     from_file: str | None,
@@ -113,6 +123,7 @@ def install(
     recipes_dirs: tuple[str, ...],
     no_default_recipes: bool,
     local_mode: bool,
+    keep_host_tools: bool,
 ) -> None:
     """Install component bundles into a prefix.
 
@@ -465,6 +476,21 @@ def install(
                 click.echo(f"cvcpkg: activate with: {hint}")
     except OSError as exc:
         click.echo(f"cvcpkg: warning — could not write activate scripts: {exc}", err=True)
+
+    # ── Strip the build-time host-tools prefix ──
+    #
+    # If a host-tools prefix was recorded for this deliverable (written by
+    # 'cvcpkg build' into share/libcvc-deps/host-tools.yaml), strip it now: it
+    # is a build-time byproduct, not part of the deliverable.  --keep-host-tools
+    # retains it.  No-op when there is no record (a pure prebuilt install).
+    try:
+        from cvcpkg.host_tools import strip_host_tools
+
+        stripped = strip_host_tools(prefix_path, keep=keep_host_tools)
+        if stripped is not None:
+            click.echo(f"cvcpkg: stripped host-tools prefix {stripped}")
+    except OSError as exc:
+        click.echo(f"cvcpkg: warning — could not strip host tools: {exc}", err=True)
 
     click.echo(f"cvcpkg: done -- {len(picked)} component(s) installed to {prefix_path}")
 

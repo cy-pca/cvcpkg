@@ -186,6 +186,46 @@ degrade to their non-fatal WARN branches (a Linux `cc` cannot link
 Windows import libraries).  Test scripts that want to do more under
 delegation can branch on `CVC_WINHOST`.
 
+## Host tools stay out of the deliverable
+
+Cross-building often pulls **host tools** — cmake, ninja, bazel/bazelisk, or a
+whole cross toolchain — that run on the builder to produce target artifacts.
+These are a build-time byproduct and must not end up in the deliverable you
+ship to a consumer (a C# project ingesting `bin/`, say).  cvcpkg keeps them
+separate:
+
+- **Separate prefix.**  `cvcpkg build --prefix P …` installs host tools into a
+  sibling **host-tools prefix**, `P.host-tools`, by default.  The deliverable
+  `P` contains only target artifacts.  Override the location with
+  `--host-tools-prefix DIR`, or pass the same path as `--prefix` to disable the
+  separation (legacy behaviour).  This is what keeps `bazel`/`bazelisk` out of
+  `P/bin`.
+
+  A host tool is any recipe that declares a `cross_toolchain` block; its bundle
+  manifest is flagged `bundle.host_tool: true`.
+
+- **Recorded in the deliverable.**  When the separation is active, cvcpkg writes
+  `P/share/libcvc-deps/host-tools.yaml` recording that host tools are present,
+  where (`prefix`), which ones (`tools`), and whether they have been stripped:
+
+  ```yaml
+  schema_version: 1
+  host_tools:
+    present: true
+    prefix: /abs/path/to/P.host-tools
+    tools: [bazel, bazelisk]
+    stripped: false
+    stripped_at: ''
+  ```
+
+- **Stripped by default.**  Because the host-tools prefix is only needed during
+  the build, it is **removed once the build/install completes**.  `cvcpkg build`
+  strips it at the end of the build; `cvcpkg install` reads the record on
+  finalize and strips it there.  Pass **`--keep-host-tools`** to either command
+  to retain the toolchain (e.g. to reuse it for a subsequent build); the record
+  then keeps `stripped: false`.  The strip never touches the deliverable prefix
+  itself, and is a no-op when no record is present (a plain prebuilt install).
+
 ## Gotchas
 
 - **Don't force direct mode for CMake recipes.**  `cl.exe` itself

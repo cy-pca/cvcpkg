@@ -948,6 +948,7 @@ class TestBuildCrossPlatformDeps:
             keep_build_dir,
             host_platform="",
             cross_toolchain_env=None,
+            host_tools_prefix=None,
         ):
             build_calls.append((recipe_dir.name, platform))
             # Return a minimal mock context
@@ -1004,6 +1005,7 @@ class TestBuildCrossPlatformDeps:
             keep_build_dir,
             host_platform="",
             cross_toolchain_env=None,
+            host_tools_prefix=None,
         ):
             build_calls.append((recipe_dir.name, platform))
             return mock.MagicMock()

@@ -457,6 +457,9 @@ class BuildContext:
     keep_build_dir: bool = False
     host_platform: str = ""
     cross_toolchain_env: dict[str, str] = field(default_factory=dict)
+    # Separate prefix for build-time host tools (cmake, ninja, toolchains) so
+    # they stay out of the deliverable install prefix.  None => same as prefix.
+    host_tools_prefix: Path | None = None
 
 
 def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
@@ -499,16 +502,21 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
     # Always override — the builder may have stale values (e.g. from
     # a systemd Environment= line) that must not shadow the resolved
     # per-build prefix path.
+    # Host tools (cmake, ninja, cross-toolchains) may live in a separate
+    # host-tools prefix so the deliverable --prefix stays clean; fall back to
+    # the install prefix when the separation is disabled.
+    host_tools_prefix = ctx.host_tools_prefix or ctx.prefix
     if ctx.cross_toolchain_env:
         for var, tpl in ctx.cross_toolchain_env.items():
-            env[var] = tpl.replace("${PREFIX}", str(ctx.prefix))
+            env[var] = tpl.replace("${PREFIX}", str(host_tools_prefix))
 
-    # Ensure host tools built into the prefix (cmake, ninja, protoc,
-    # etc.) are found before system versions.
-    bin_dirs = [
-        str((ctx.prefix / "bin").resolve()),
-        str((ctx.install_dir / "bin").resolve()),
-    ]
+    # Ensure host tools (cmake, ninja, protoc, toolchains, ...) are found
+    # before system versions.  The host-tools bin comes first.
+    bin_dirs: list[str] = []
+    for _d in ((host_tools_prefix / "bin"), (ctx.prefix / "bin"), (ctx.install_dir / "bin")):
+        _s = str(_d.resolve())
+        if _s not in bin_dirs:
+            bin_dirs.append(_s)
     existing_path = env.get("PATH", "")
     env["PATH"] = os.pathsep.join(bin_dirs + ([existing_path] if existing_path else []))
 
@@ -825,12 +833,18 @@ def generate_manifest(
     maintainer: str = "",
     all_recipes: dict[str, Recipe] | None = None,
     org_slug: str = "",
+    host_tool: bool | None = None,
 ) -> dict[str, Any]:
     """Generate a bundle manifest.yaml from the recipe + installed tree.
 
     When *all_recipes* is provided, ``recipe_sha256`` is a transitive
     dependency chain hash instead of a single-file hash.  This makes the
     hash sensitive to changes anywhere in the dependency tree.
+
+    ``host_tool`` flags the bundle as a build-time host tool in the manifest.
+    When left as ``None`` it is derived from the recipe (a recipe that
+    declares ``cross_toolchain.target_platforms`` is a host tool); pass an
+    explicit bool to override.
     """
     files = _file_list(install_dir)
     cmake_packages = recipe.raw.get("package", {}).get("cmake_packages", [])
@@ -868,6 +882,7 @@ def generate_manifest(
     recipe_block = recipe.raw.get("recipe", {})
     description = recipe_block.get("description", "")
     built_at = datetime.now(timezone.utc).isoformat()
+    is_host_tool = host_tool if host_tool is not None else bool(recipe.cross_toolchain_targets)
     manifest: dict[str, Any] = {
         "schema_version": 3,
         "bundle": {
@@ -881,6 +896,7 @@ def generate_manifest(
             "link": link,
             "abi": abi,
             **({"org": org_slug} if org_slug else {}),
+            **({"host_tool": True} if is_host_tool else {}),
         },
         "contents": {
             "description": description,
@@ -1113,6 +1129,7 @@ def build_recipe(
     host_platform: str = "",
     work_dir_root: Path | None = None,
     cross_toolchain_env: dict[str, str] | None = None,
+    host_tools_prefix: Path | None = None,
     log_callback: Callable[[str], None] | None = None,
 ) -> BuildContext:
     """Build a single recipe. Returns the BuildContext.
@@ -1152,6 +1169,7 @@ def build_recipe(
         keep_build_dir=keep_build_dir,
         host_platform=host_platform,
         cross_toolchain_env=cross_toolchain_env or {},
+        host_tools_prefix=host_tools_prefix,
     )
 
     run_build(ctx, log_callback=log_callback)

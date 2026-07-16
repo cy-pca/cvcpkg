@@ -250,6 +250,27 @@ def _try_pull_server_recipes() -> tuple[str, ...]:
     default="",
     help="Host platform for cross-compilation (e.g. linux, macos, windows).",
 )
+@click.option(
+    "--host-tools-prefix",
+    type=click.Path(),
+    default=None,
+    help=(
+        "Separate prefix for build-time host tools (cmake, ninja, "
+        "cross-toolchains) so they stay OUT of the deliverable --prefix. "
+        "Defaults to '<prefix>.host-tools' beside --prefix; pass the same "
+        "path as --prefix to disable the separation (legacy behaviour)."
+    ),
+)
+@click.option(
+    "--keep-host-tools/--strip-host-tools",
+    default=False,
+    help=(
+        "Keep the build-time host-tools prefix after the build instead of "
+        "stripping it.  By default the host-tools prefix is removed once the "
+        "build completes (it is a build-time byproduct); pass --keep-host-tools "
+        "to retain it (e.g. to reuse the toolchain for a later build)."
+    ),
+)
 def build(
     recipe: tuple[str, ...],
     platform: str,
@@ -262,6 +283,8 @@ def build(
     local_mode: bool,
     with_deps: bool,
     host_platform: str,
+    host_tools_prefix: str | None,
+    keep_host_tools: bool,
 ) -> None:
     """Build one or more recipes from source.
 
@@ -293,6 +316,15 @@ def build(
     if not local_mode and not recipes_dirs:
         recipes_dirs = _try_pull_server_recipes()
     prefix_path = Path(prefix).resolve() if prefix else None
+
+    # Host tools (cmake, ninja, cross-toolchains) install into a SEPARATE prefix
+    # so the deliverable --prefix contains only target artifacts.
+    if host_tools_prefix:
+        host_tools_prefix_path: Path | None = Path(host_tools_prefix).resolve()
+    elif prefix_path is not None:
+        host_tools_prefix_path = prefix_path.with_name(prefix_path.name + ".host-tools")
+    else:
+        host_tools_prefix_path = None
 
     if with_deps:
         # Resolve all deps and build in topological order
@@ -354,13 +386,15 @@ def build(
         if host_tool_recipes:
             host_ordered = resolve_build_order(host_tool_recipes, host_plat)
             for r in host_ordered:
-                print(f"\ncvcpkg: ══ {r.name} ({r.full_version}) [host tool] ══")
+                _htp = host_tools_prefix_path or prefix_path
+                _dest = f" -> {_htp}" if _htp else ""
+                print(f"\ncvcpkg: ══ {r.name} ({r.full_version}) [host tool{_dest}] ══")
                 build_recipe(
                     r.recipe_dir,
                     platform=host_plat,
                     config=config,
                     link=link,
-                    prefix=prefix_path,
+                    prefix=_htp,
                     keep_build_dir=keep_build_dir,
                 )
 
@@ -381,7 +415,40 @@ def build(
                 keep_build_dir=keep_build_dir,
                 host_platform=host_plat,
                 cross_toolchain_env=merged_toolchain_env,
+                host_tools_prefix=host_tools_prefix_path,
             )
+
+        # ── Host-tools separation: record + strip ──
+        # When host tools were built into a separate prefix, record that in the
+        # deliverable prefix (share/libcvc-deps/host-tools.yaml) so install can
+        # find them, then strip the host-tools prefix -- a build-time byproduct
+        # -- unless --keep-host-tools was passed.
+        if (
+            host_tool_recipes
+            and prefix_path is not None
+            and host_tools_prefix_path is not None
+            and host_tools_prefix_path != prefix_path
+            and prefix_path.is_dir()
+        ):
+            from cvcpkg.host_tools import strip_host_tools, write_host_tools_record
+
+            write_host_tools_record(
+                prefix_path,
+                host_tools_prefix_path,
+                [r.name for r in host_tool_recipes],
+            )
+            if keep_host_tools:
+                click.echo(
+                    f"cvcpkg: host tools kept at {host_tools_prefix_path} "
+                    "(recorded in share/libcvc-deps/host-tools.yaml)"
+                )
+            else:
+                stripped = strip_host_tools(prefix_path, keep=False)
+                if stripped is not None:
+                    click.echo(
+                        f"cvcpkg: stripped host-tools prefix {stripped} "
+                        "(pass --keep-host-tools to keep it)"
+                    )
     else:
         for name in recipe:
             recipe_dir = _resolve_recipe_dir(name, recipes_dirs, no_default=no_default_recipes)
