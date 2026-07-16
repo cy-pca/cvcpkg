@@ -22,10 +22,12 @@ project going forward.
   the old name — e.g. the `libcvc-depsConfig.cmake` compatibility wrapper
   stays so existing `find_package(libcvc-deps)` calls keep working.
 
-> **Release ordering:** the PyPI publish is the **final** step of the
-> release — it happens only after the rename (project + repo), the trusted
-> publisher is configured for the new repo, and the remaining roadmap gaps
-> are closed.
+> **Release ordering:** the PyPI publish is the **final phase of the entire
+> roadmap** (Phase 15), not an early milestone.  It happens only after the
+> rename (project + repo), the trusted publisher is configured, and **every
+> other roadmap phase — including the pre-release hardening phases 12–14 — is
+> closed**.  Publishing to PyPI claims a name and makes a community-facing
+> commitment, so it is deliberately last.
 
 ---
 
@@ -136,12 +138,12 @@ flowchart TD
 
 ## Roadmap Phases
 
-### Status Snapshot (2026-07-15)
+### Status Snapshot (2026-07-16)
 
 | Phase | Title | Status |
 |---|---|---|
 | 1 | Foundation | ✅ Complete (v2.0.0) |
-| 1.5 | PyPI Release Readiness | 🔶 In Progress — all engineering gaps closed; **only the rename + trusted-publisher + final publish remain** (see below) |
+| 1.5 | Release Engineering Readiness | ✅ Complete — the *engineering* prerequisites for a wheel release (build backend, recipe bundling, wheel smoke, admin CLI, testing, CMake, docs). The actual publish is the **final phase**, not here. |
 | 2 | Analytics & Telemetry | ✅ Complete — download analytics, bandwidth, platform/version distribution, and opt-in client telemetry all shipped (server + client + dashboard) |
 | 3 | Admin Dashboard | ✅ Complete — `/admin` overview, packages, tokens, audit, releases, health (release *creation* workflow is the one follow-up) |
 | 4 | Multi-Language & Ecosystem | ⬜ Future |
@@ -152,10 +154,17 @@ flowchart TD
 | 9 | Fleet & Platform Expansion (GhostBSD/DragonflyBSD, qemu) | 🔶 In Progress — DragonflyBSD platform + provisioning underway in a parallel track |
 | 10 | Peer Providers & Hardware-Aware Concretization | ⬜ Planned |
 | 11 | Self-Hosting Toolchains (extends Phase 8) | ⬜ Proposed |
+| 12 | Federation Hardening — Selective Mirroring & Authoritative Resolution | ⬜ Planned |
+| 13 | Identity & Access — OIDC / External Providers | ⬜ Planned |
+| 14 | Source Recipes — File-Artifact Packages | ⬜ Planned |
+| 15 | **PyPI Release** | ⬜ **Final phase** — the project/repo rename, trusted-publisher config, and the gated publish. Deliberately last: `pip install cvcpkg` ships only after the roadmap is otherwise complete. |
 
-**Road to PyPI (`pip install cvcpkg`):** the remaining blockers are all in Phase 1.5's
-*Packaging & Distribution* list — the project/repo rename, the PyPI trusted-publisher
-config, and the gated final publish. Every other engineering gap is closed.
+**Road to PyPI (`pip install cvcpkg`):** the PyPI publish is the **last phase of the
+roadmap** (Phase 15), not an early step.  The *engineering* readiness for it (Phase 1.5)
+is done, but the release itself happens only after the remaining phases — including the
+three pre-release hardening phases below (12–14) — are closed.  This is a deliberate
+correction: publishing to PyPI is a one-way, name-claiming, community-facing commitment,
+so it comes at the very end.
 
 ### Phase 1 — Foundation
 
@@ -189,22 +198,23 @@ config, and the gated final publish. Every other engineering gap is closed.
 - [x] Build caching (server-cache for CI and builders)
 - [x] Mirror protocol (pkg.tx.wtf mirrors cvcpkg.org with sync loop)
 
-### Phase 1.5 — PyPI Release Readiness
+### Phase 1.5 — Release Engineering Readiness
 
-**Status: In Progress — engineering gaps closed; rename + publish remain**
+**Status: Complete**
 
-Items required before `pip install cvcpkg` goes live on PyPI.  As of
-2026-07-15 every testing/CLI/CMake/documentation gap below is closed
+The *engineering* prerequisites for a wheel release — everything that has to
+work before a `pip install cvcpkg` is even buildable.  All of these are done
 (including Windows CI integration tests and a full server-side security
 hardening pass — private-data isolation, tenant scoping, tar-slip and
-reflected-XSS fixes).  The **only** open items are the ordered
-Packaging & Distribution steps: the project + repo rename, the PyPI
-trusted-publisher configuration, and the gated final publish.
+reflected-XSS fixes).
 
-#### Packaging & Distribution
+> **The actual PyPI publish is not here.**  It moved to **Phase 15 — PyPI
+> Release**, the final phase of the roadmap.  The rename (project + repo),
+> trusted-publisher configuration, and the gated publish all happen there,
+> after every other phase is closed.  See the release-ordering note at the top
+> of this document.
 
-Ordered — the PyPI publish is the **last** step and happens only after the
-rename and the remaining gaps are closed.
+#### Packaging & Distribution (engineering — done)
 
 - [x] pyproject.toml at repo root with poetry-core backend
 - [x] `cvcpkg` and `cvcpkg-server` entry points
@@ -215,17 +225,9 @@ rename and the remaining gaps are closed.
       candidate tag (`cvcpkg-v2.0.0rc6`: 129 recipes bundled, all green)
 - [x] Verify `cvcpkg --version` and `cvcpkg-server --version` from the
       installed wheel
-- [ ] **Rename the project to `cvcpkg`, dropping `libcvc-deps`** (see the
-      Project Rename section above)
-- [ ] **Rename the GitHub repo `transfix/libcvc-deps` → `transfix/cvcpkg`**
-- [ ] **Configure the PyPI trusted publisher** for the renamed repo:
-      owner `transfix`, repo `cvcpkg`, workflow `cvcpkg-publish.yml`,
-      environment `pypi`.  (The earlier stable publish failed with
-      `invalid-publisher` because no matching trusted publisher exists.)
-- [ ] Close the remaining roadmap gaps below
-- [ ] **Publish v2.0.0 to PyPI — final release step.**  Gated behind the
-      `CVCPKG_PUBLISH_TO_PYPI` repo variable so a stable tag does not
-      publish until the rename + trusted publisher are in place.
+- [x] Publish workflow (`cvcpkg-publish.yml`) wired for PyPI trusted
+      publishing (OIDC), gated behind the `CVCPKG_PUBLISH_TO_PYPI` repo
+      variable so a stable tag cannot publish until Phase 15 flips it on
 
 #### Admin CLI Completeness
 
@@ -436,7 +438,9 @@ separately; the release *view* is shipped.
 - **Health monitoring** — server uptime, database stats, disk usage,
   certificate expiry.
 - **User/org management** (future) — manage publisher accounts, organization
-  namespaces, permission scopes.
+  namespaces, permission scopes.  **Delivered by Phase 13 (Identity & Access —
+  OIDC):** rather than build local account management, user registration /
+  login / permissions come from an external OIDC identity provider.
 
 #### Technical Approach
 
@@ -905,6 +909,135 @@ prior dependencies.
 
 ---
 
+### Phase 12 — Federation Hardening (Selective Mirroring & Authoritative Resolution)
+
+**Status: Planned**
+
+Phase 5 stood up the cluster-role model (primary / mirror / edge-satellite) and
+the public-vs-org namespace invariants.  Phase 12 hardens the edge/satellite
+story for real deployments, where an operator follows an upstream root but does
+**not** want to mirror everything, and where clients must get a consistent
+answer regardless of which server they hit.
+
+#### Selective mirroring (allow / deny lists)
+
+- A server that follows an upstream (edge/satellite, `CVCPKG_POPULATE_UPSTREAM`)
+  can configure a **whitelist or blacklist** of packages it mirrors from
+  upstream.  Primary use case: **very large packages** an operator would rather
+  not cache (e.g. `qt6`, `vtk`, CUDA libs) while still mirroring the rest.
+- Lists match by package name (and optionally platform/arch/variant), evaluated
+  during the populate/sync loop so excluded packages are simply never pulled.
+- Managed via the admin API, the `/admin` dashboard, and a `cvcpkg server
+  mirror-policy` CLI.  Org-local packages are unaffected (they are locally
+  authoritative, never mirrored).
+
+#### Bounded mirror + usage-based eviction
+
+- Admins set a **maximum mirror size** (bytes) for the upstream-mirrored cache.
+- When the mirror exceeds its budget, cvcpkg **evicts upstream-origin packages
+  by usage** (least-recently / least-frequently downloaded first, informed by
+  the Phase 2 download analytics).  A re-request re-populates on demand.
+- Org-local and pinned/release packages are never evicted — only the pull-only
+  public cache is subject to the budget.
+
+#### Top-down authoritative resolution
+
+- When a client resolves packages it queries **from the root down**: the root
+  server is **authoritative** for the public namespace (default `cvcpkg.org`,
+  but the root can be any configured server).  A satellite defers to its
+  upstream root for public packages and answers locally only for its own org
+  packages.
+- This guarantees the public namespace is **consistent no matter which
+  satellite a client talks to** — a satellite can never present a divergent or
+  stale public package as authoritative — while still serving private org
+  packages locally and offline.
+- Composes with the Phase 5 invariant that edge clusters hard-reject public
+  publishes: the root is the single source of truth, satellites are caches.
+
+### Phase 13 — Identity & Access (OIDC / External Providers)
+
+**Status: Planned**
+
+Delivers the **User/org management** capability flagged as future in Phase 3 —
+but by **delegating identity to an external OIDC provider** instead of building
+account management, password handling, and permission UX from scratch.
+
+- **OIDC authentication** — sign in with an external identity provider (Google,
+  GitHub, GitLab, or any generic/enterprise OIDC IdP).  The web UX (landing
+  page + `/admin`) gains real **user registration, login, and sessions**
+  without cvcpkg storing passwords.
+- **Authorization from claims** — map OIDC identities and group/claim data onto
+  cvcpkg **roles, organization membership, and permission scopes**, so access
+  control is driven by the IdP the institution already runs.
+- **Tokens remain for machines.** HMAC-SHA256 API tokens stay the mechanism for
+  CI, builders, and scripted publishes (they are the right tool there); OIDC is
+  for **human users and the browser UX**.  This revisits — and scopes — the
+  "HMAC-SHA256 tokens are simpler than OAuth" design principle: simple tokens
+  for machines, delegated OIDC for people.
+- Aligns with Phase 6 (org namespaces + governance) and Phase 3 (the admin
+  dashboard's cookie session becomes an OIDC session).
+
+### Phase 14 — Source Recipes (File-Artifact Packages)
+
+**Status: Planned**
+
+Some deliverables are **just source files** — a header-only tree, a vendored
+source drop, a patch set, a data blob — with no compilation.  cvcpkg should
+publish and consume these directly, reusing existing infrastructure rather than
+inventing a new recipe type.
+
+- **No new `source` recipe type.**  A source recipe is an ordinary recipe that
+  **announces it is a file artifact**: `platform: any`, `arch: any` (source is
+  valid everywhere), a files-only package, and no toolchain — leaning on the
+  existing `platform: any` build class (already handled in the builder's
+  build-order and matrix logic) and the existing `source.type`/`prebuilt`
+  staging.  The only processing is **patches and optional packaging scripts**;
+  the output archive *is* the source tree.
+- **Published once, valid everywhere.**  Because the artifact is `any/any`, it
+  is built once and served to every platform — no per-platform fan-out.
+- **Downstream recipes consume sources to produce binaries.**  A platform/arch
+  recipe declares a build dependency on a source recipe; the builder stages the
+  source artifact (instead of re-fetching upstream) and compiles per-platform.
+  This gives a clean split: one authoritative, checksummed source package feeding
+  many binary variants — reproducible and mirror-friendly.
+- **End-to-end integration tests canonize the workflow.**  A test publishes a
+  source recipe (`any/any`), publishes a downstream recipe that consumes it and
+  builds a real binary on at least one platform, installs both, and verifies the
+  binary — locking in the source→binary contract so it cannot regress.
+
+---
+
+### Phase 15 — PyPI Release (Final Phase)
+
+**Status: Blocked on all prior phases — deliberately last**
+
+The **actual** `pip install cvcpkg` release.  This is the terminal phase of the
+roadmap: it happens only after every other phase (including the Phase 12–14
+hardening) is closed.  Publishing to PyPI claims the `cvcpkg` name and is a
+one-way, community-facing commitment, so it is sequenced last on purpose.
+
+The engineering readiness for it landed long ago in Phase 1.5; what remains are
+the release *actions*, in order:
+
+- [ ] **Rename the project to `cvcpkg`, dropping `libcvc-deps`** (see the
+      Project Rename section at the top of this document).
+- [ ] **Rename the GitHub repo `transfix/libcvc-deps` → `transfix/cvcpkg`**
+      (deferred to here so downstream `uses:` references can be updated
+      simultaneously without breaking CI).
+- [ ] **Configure the PyPI trusted publisher** for the renamed repo:
+      owner `transfix`, repo `cvcpkg`, workflow `cvcpkg-publish.yml`,
+      environment `pypi`.  (An earlier stable publish failed with
+      `invalid-publisher` because no matching trusted publisher exists yet.)
+- [ ] **Flip `CVCPKG_PUBLISH_TO_PYPI` to `true` and push a stable tag** to
+      trigger the gated publish workflow.
+- [ ] **Publish to PyPI** — `pip install cvcpkg` goes live.
+
+These steps require GitHub-org-admin and PyPI-account actions (repo rename,
+trusted-publisher setup, the publish flag); they are intentionally operator
+actions, not something CI does on its own.
+
+---
+
 ## Package Recipes
 
 ### Current Recipes (v2.0.0) — 99 recipes at release; 133 live in `recipes/` as of 2026-07
@@ -980,7 +1113,10 @@ browsable and to help users discover related packages:
 5. **Security by default.**  TLS everywhere, signed packages, tamper-evident
    audit trail, role-based access control.  But also: no unnecessary
    complexity.  HMAC-SHA256 tokens are simpler than OAuth and sufficient for
-   the threat model.
+   **machine** auth (CI, builders, scripted publishes) — which is why they
+   remain the token mechanism.  For **human** users, Phase 13 layers on
+   delegated OIDC rather than reinventing account management: the right tool
+   for each audience, not one-size-fits-all.
 
 6. **Community-first.**  The system should be easy to contribute to.  Recipe
    format is YAML — no DSL to learn.  Publishing is a single CLI command.
