@@ -551,6 +551,36 @@ async def _authenticate_token(raw: str) -> TokenRecord | None:
 _WEBHOOK_RETRY_DELAYS = [10, 60, 300]  # seconds between retries
 
 
+def _url_target_allowed(url: str) -> bool:
+    """True if *url* is an http(s) URL not pointing at an obviously-internal
+    target. Blocks SSRF to IP-literal loopback / private / link-local / reserved
+    hosts, plus ``localhost`` and the cloud-metadata hostname. DNS names are
+    allowed (resolving them at check time is environment-fragile and webhook
+    config is admin-only — attacker-controlled-domain->internal-IP is a
+    documented residual). Network-free so behaviour is deterministic."""
+    import ipaddress
+    from urllib.parse import urlparse
+
+    p = urlparse(url)
+    if p.scheme not in ("http", "https") or not p.hostname:
+        return False
+    host = p.hostname.lower().rstrip(".")
+    if host == "localhost" or host.endswith(".localhost") or host == "metadata.google.internal":
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return True  # other DNS name — allowed
+    return not (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
+
+
 async def _deliver_webhook(
     webhook_id: int,
     url: str,
@@ -565,6 +595,14 @@ async def _deliver_webhook(
 
     import httpx
 
+    if not _url_target_allowed(url):
+        logger.warning(
+            "webhook %d delivery to %s blocked (non-public / non-http target)",
+            webhook_id,
+            url,
+        )
+        await _db_webhooks.record_failure(webhook_id)
+        return False
     sig = _hm.new(secret.encode(), payload.encode(), _h.sha256).hexdigest()
     delivery_id = str(uuid.uuid4())
     headers = {
@@ -4058,6 +4096,9 @@ def create_app(
         err = validate_org_slug(body.slug)
         if err:
             raise HTTPException(422, err)
+        for _field, _val in (("logo_url", body.logo_url), ("homepage", body.homepage)):
+            if _val and not _val.startswith(("http://", "https://", "/")):
+                raise HTTPException(422, f"{_field} must be an http(s) URL or a relative path")
 
         try:
             org = await _db_orgs.create(
@@ -4144,6 +4185,9 @@ def create_app(
         # storage_limit_bytes is admin-only
         if body.storage_limit_bytes is not None and actor.role != TokenRole.admin:
             raise HTTPException(403, "only admins can change storage limits")
+        for _field, _val in (("logo_url", body.logo_url), ("homepage", body.homepage)):
+            if _val and not _val.startswith(("http://", "https://", "/")):
+                raise HTTPException(422, f"{_field} must be an http(s) URL or a relative path")
         updated = await _db_orgs.update(
             slug,
             display_name=body.display_name,
@@ -4503,7 +4547,7 @@ def create_app(
         return {"filter_name": name, "days": days, "daily": daily}
 
     @app.post("/v1/telemetry", tags=["analytics"], status_code=204)
-    async def submit_telemetry(payload: TelemetryPayload):
+    async def submit_telemetry(payload: TelemetryPayload, request: Request):
         """Accept an opt-in, anonymous client telemetry ping.
 
         Clients only call this when CVCPKG_TELEMETRY=1 is set or the user
@@ -4511,6 +4555,7 @@ def create_app(
         identifying information and nothing is derived from the connection
         (no address hash) -- see the Phase 2 privacy notes.
         """
+        _check_rate_limit(request)
         if not _use_db or _db_telemetry is None:
             raise HTTPException(503, "telemetry requires the database backend")
         if len(payload.tools) > 16:
@@ -4538,10 +4583,16 @@ def create_app(
 
     # ── Admin dashboard UI (Phase 3) ────────────────────────
 
+    # Per-process random fallback: if no real HMAC key is configured we must NOT
+    # sign admin sessions with a publicly-known constant (that would let anyone
+    # forge an admin cookie). A random per-process key keeps sessions valid
+    # within a process while making forged cookies unverifiable.
+    _fallback_admin_key = secrets.token_bytes(32)
+
     def _admin_session_key() -> bytes:
         state = _get_state()
         key = getattr(getattr(state, "tokens", None), "_hmac_key", b"")
-        return key or b"cvcpkg-admin-session"
+        return key or _fallback_admin_key
 
     def _has_admin_session(request: Request) -> bool:
         from cvcpkg.server import admin_ui
@@ -4873,28 +4924,42 @@ def create_app(
         org: str = "",
         limit: int = 200,
         offset: int = 0,
-        _auth: TokenRecord | None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         """List curated tags with package counts."""
         if not _use_db or _db_tags is None:
             return TagListResponse(total=0, tags=[])
+        is_admin = caller is not None and caller.role == TokenRole.admin
         org_filter: str | None = org if org else None
-        # If the org is private, check access
+        # If a specific private org is requested, require membership.
         if org and _db_orgs is not None:
             org_info = await _db_orgs.get(org)
-            if org_info and org_info.is_private:
-                caller = _auth
-                if caller is None or (
-                    caller.role != TokenRole.admin
-                    and not await _db_orgs.is_member(org, caller.name)
-                ):
+            if org_info and org_info.is_private and not is_admin:
+                if caller is None or not await _db_orgs.is_member(org, caller.name):
                     raise HTTPException(403, "private organization -- access denied")
         tags, total = await _db_tags.list_tags(org_slug=org_filter, limit=limit, offset=offset)
+        # Unscoped listing must not leak private-org tag names to non-members.
+        if not org and not is_admin and _db_orgs is not None:
+            _priv: dict[str, bool] = {}
+            visible = []
+            for _t in tags:
+                slug = getattr(_t, "org_slug", "") or ""
+                if not slug:
+                    visible.append(_t)
+                    continue
+                if slug not in _priv:
+                    _oi = await _db_orgs.get(slug)
+                    _priv[slug] = bool(_oi and _oi.is_private)
+                if not _priv[slug] or (caller and await _db_orgs.is_member(slug, caller.name)):
+                    visible.append(_t)
+            if len(visible) != len(tags):
+                total = len(visible)
+            tags = visible
         return TagListResponse(total=total, tags=tags)
 
     @app.get("/v1/tags/all", tags=["tags"])
     async def list_all_tags(
-        _auth: TokenRecord | None = Depends(optional_reader_auth),
+        _auth: TokenRecord | None = Depends(optional_token),
     ):
         """Return all tag names (curated + ad-hoc) with package counts.
 
@@ -5472,23 +5537,8 @@ def create_app(
             builder_id=builder_id,
             limit=limit,
             offset=offset,
+            visible_to=(None if actor.role == TokenRole.admin else actor.name),
         )
-        if actor.role != TokenRole.admin and _db_orgs is not None:
-            _priv: dict[str, bool] = {}
-            visible = []
-            for j in jobs:
-                o = getattr(j, "org_slug", "") or ""
-                if not o:
-                    visible.append(j)
-                    continue
-                if o not in _priv:
-                    _oi = await _db_orgs.get(o)
-                    _priv[o] = bool(_oi and _oi.is_private)
-                if not _priv[o] or await _db_orgs.is_member(o, actor.name):
-                    visible.append(j)
-            if len(visible) != len(jobs):
-                total = len(visible)
-            jobs = visible
         return BuildJobListResponse(total=total, jobs=jobs)
 
     @app.get("/v1/builds/{job_id}", response_model=BuildJobInfo, tags=["builds"])
@@ -6477,6 +6527,10 @@ def create_app(
     ):
         """Register a new webhook (admin only)."""
         _require_db_webhooks()
+        if not _url_target_allowed(body.url):
+            raise HTTPException(
+                422, "webhook url must be an http(s) URL resolving to a public address"
+            )
         info = await _db_webhooks.register(
             url=body.url,
             events=body.events,

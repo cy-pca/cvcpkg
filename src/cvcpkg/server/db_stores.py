@@ -2700,8 +2700,15 @@ class DbBuildJobStore:
         builder_id: int | None = None,
         limit: int = 100,
         offset: int = 0,
+        visible_to: str | None = None,
     ) -> tuple[list[BuildJobInfo], int]:
-        """List jobs with filters. Returns (jobs, total_count)."""
+        """List jobs with filters. Returns (jobs, total_count).
+
+        When *visible_to* is not None, results are restricted to public jobs,
+        jobs in public orgs, and — for a named caller — jobs in private orgs the
+        caller belongs to (so the total count can't leak a private org's job
+        count). None (default) means no visibility filtering (admin/internal).
+        """
         async with get_session() as session:
             q = select(BuildJobRow)
             count_q = select(sa_func.count(BuildJobRow.id))
@@ -2737,6 +2744,24 @@ class DbBuildJobStore:
             if builder_id is not None:
                 q = q.where(BuildJobRow.builder_id == builder_id)
                 count_q = count_q.where(BuildJobRow.builder_id == builder_id)
+            if visible_to is not None:
+                _vis = or_(
+                    BuildJobRow.org_slug == "",
+                    BuildJobRow.org_slug.in_(
+                        select(OrganizationRow.slug).where(
+                            OrganizationRow.is_private == False  # noqa: E712
+                        )
+                    ),
+                )
+                if visible_to:
+                    _member = (
+                        select(OrganizationRow.slug)
+                        .join(OrgMemberRow, OrgMemberRow.org_id == OrganizationRow.id)
+                        .where(OrgMemberRow.token_name == visible_to)
+                    )
+                    _vis = or_(_vis, BuildJobRow.org_slug.in_(_member))
+                q = q.where(_vis)
+                count_q = count_q.where(_vis)
 
             total = (await session.execute(count_q)).scalar() or 0
             q = (

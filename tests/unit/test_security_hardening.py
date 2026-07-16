@@ -562,3 +562,59 @@ class TestStatsOracles:
         assert client.get(
             "/v1/downloads/stats", params={"name": "libsecret"}, headers=_hdr(owner)
         ).json()["total"] >= 1
+
+
+# ── low-severity follow-ups folded in ──────────────────────────
+class TestLowSeverityFindings:
+    def test_list_builds_total_not_leaked(self, sec_server):
+        client, _admin, owner, stranger, _reader = sec_server
+        r = client.post(
+            "/v1/builds",
+            json={"recipe_name": "x", "platform": "linux", "arch": "x86_64", "org_slug": "shell"},
+            headers=_hdr(owner),
+        )
+        assert r.status_code in (200, 201), r.text
+        # count is filtered in the DB query, so a non-member sees total 0
+        sres = client.get("/v1/builds", headers=_hdr(stranger)).json()
+        assert sres["total"] == 0 and sres["jobs"] == []
+        assert client.get("/v1/builds", headers=_hdr(owner)).json()["total"] >= 1
+
+    def test_private_org_tags_gated(self, sec_server):
+        client, admin, owner, stranger, _reader = sec_server
+        # tag creation is admin-gated at the dependency level
+        t = client.post(
+            "/v1/tags", json={"name": "secret-tag", "org_slug": "shell"}, headers=_hdr(admin)
+        )
+        assert t.status_code in (200, 201), t.text
+        assert client.get("/v1/tags", params={"org": "shell"}, headers=_hdr(stranger)).status_code == 403
+        assert client.get("/v1/tags", params={"org": "shell"}, headers=_hdr(owner)).status_code == 200
+        names = {x["name"] for x in client.get("/v1/tags", headers=_hdr(stranger)).json()["tags"]}
+        assert "secret-tag" not in names  # unscoped listing must not leak it
+
+    def test_webhook_ssrf_blocked(self, sec_server):
+        client, admin, *_ = sec_server
+        for bad in ("http://127.0.0.1:9/hook", "http://169.254.169.254/latest", "ftp://example.com/x"):
+            r = client.post(
+                "/v1/webhooks", json={"url": bad, "events": ["package.published"]},
+                headers=_hdr(admin),
+            )
+            assert r.status_code == 422, (bad, r.status_code)
+
+    def test_org_logo_and_homepage_scheme_rejected(self, sec_server):
+        client, _admin, owner, *_ = sec_server
+        assert client.post(
+            "/v1/orgs",
+            json={"slug": "jsorg", "display_name": "J", "logo_url": "javascript:alert(1)"},
+            headers=_hdr(owner),
+        ).status_code == 422
+        assert client.post(
+            "/v1/orgs",
+            json={"slug": "jsorg2", "display_name": "J", "homepage": "javascript:alert(1)"},
+            headers=_hdr(owner),
+        ).status_code == 422
+
+    def test_telemetry_rate_limited(self, sec_server, monkeypatch):
+        client, *_ = sec_server
+        monkeypatch.setattr(app_mod, "RATE_LIMIT_RPM", 3, raising=False)
+        codes = [client.post("/v1/telemetry", json={"platform": "linux"}).status_code for _ in range(6)]
+        assert 429 in codes, codes
