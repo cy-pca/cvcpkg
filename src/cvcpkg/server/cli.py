@@ -795,5 +795,170 @@ def _alembic_config():
     return Config(str(cfg_path))
 
 
+# ── storage (archive backend migration + doctor) ────────────────
+
+
+@server_cli.group()
+def storage() -> None:
+    """Migrate and repair the server's package-archive storage backend."""
+
+
+_storage_state_dir_opt = click.option(
+    "--state-dir",
+    type=click.Path(),
+    envvar="CVCPKG_SERVER_STATE_DIR",
+    default="./cvcpkg-server-data",
+    help="Server state directory.",
+)
+_storage_db_url_opt = click.option(
+    "--database-url",
+    default="",
+    envvar="CVCPKG_DATABASE_URL",
+    help="DB catalog URL (PostgreSQL/SQLite). Omit to read the YAML index.",
+)
+
+
+@storage.command("show")
+@_storage_state_dir_opt
+def storage_show(state_dir: str) -> None:
+    """Print the server's active storage-backend URI."""
+    from cvcpkg.server import archive_store
+
+    d = Path(state_dir)
+    click.echo(archive_store.load_storage_uri(d, f"file://{d}"))
+
+
+@storage.command("migrate")
+@click.option(
+    "--to",
+    "dest_uri",
+    required=True,
+    metavar="URI",
+    help="Destination backend, e.g. s3://bucket/prefix or file:///srv/cvcpkg.",
+)
+@_storage_state_dir_opt
+@_storage_db_url_opt
+@click.option("--no-resume", is_flag=True, help="Ignore any prior journal; recopy everything.")
+@click.option(
+    "--no-deep-verify",
+    is_flag=True,
+    help="Skip re-reading each object from the destination to re-hash it.",
+)
+def storage_migrate(
+    dest_uri: str,
+    state_dir: str,
+    database_url: str,
+    no_resume: bool,
+    no_deep_verify: bool,
+) -> None:
+    """Copy every archive to a new backend (SHA-256 verified), then switch to it.
+
+    Run with the server stopped.  Safe to re-run: already-verified archives are
+    skipped via the migration journal.  The active backend is switched only if
+    every archive copies and verifies.
+    """
+    from cvcpkg.server.storage_migration import MigrationError, run_migration
+
+    try:
+        result = run_migration(
+            Path(state_dir),
+            dest_uri,
+            database_url=database_url,
+            resume=not no_resume,
+            deep_verify=not no_deep_verify,
+            log=click.echo,
+        )
+    except MigrationError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo("")
+    click.echo(
+        f"total={result.total} migrated={result.migrated} "
+        f"skipped={result.skipped} failed={len(result.failures)}"
+    )
+    if result.failures:
+        for fn, err in result.failures:
+            click.echo(f"  FAIL {fn}: {err}", err=True)
+        click.echo(
+            "migration incomplete — re-run to resume or use `storage doctor --heal`.", err=True
+        )
+        raise SystemExit(1)
+    click.echo(f"active storage backend is now: {result.dest_uri}")
+
+
+@storage.command("doctor")
+@_storage_state_dir_opt
+@_storage_db_url_opt
+@click.option(
+    "--source",
+    "source_uri",
+    default="",
+    metavar="URI",
+    help="Backend to restore missing/corrupt archives from (with --heal).",
+)
+@click.option("--deep", is_flag=True, help="Re-hash every archive (authoritative, O(bytes)).")
+@click.option("--orphans", is_flag=True, help="Also list backend objects not in the catalog.")
+@click.option(
+    "--heal",
+    is_flag=True,
+    help="Repair missing/corrupt archives from --source and resume any incomplete migration.",
+)
+def storage_doctor(
+    state_dir: str,
+    database_url: str,
+    source_uri: str,
+    deep: bool,
+    orphans: bool,
+    heal: bool,
+) -> None:
+    """Check archive integrity against the catalog; optionally heal a botched migration.
+
+    Exits non-zero when problems remain, so it works as a CI/ops gate.
+    """
+    from cvcpkg.server import storage_doctor as doc
+
+    report = doc.diagnose(
+        Path(state_dir), database_url=database_url, deep=deep, check_orphans=orphans
+    )
+    click.echo(f"active backend  : {report.active_uri}")
+    click.echo(f"catalog archives: {report.total}")
+    click.echo(f"scan            : {'deep (sha256)' if report.deep else 'shallow (presence/size)'}")
+    for f in report.findings:
+        click.echo(f"  {f.status.upper():13s} {f.filename}  {f.detail}")
+    if report.journal_incomplete:
+        click.echo(
+            f"  INCOMPLETE-MIGRATION -> {report.journal_dest} "
+            f"({len(report.journal_pending)} archive(s) not verified)"
+        )
+    for o in report.orphans:
+        click.echo(f"  ORPHAN        {o}  (present in backend, absent from catalog)")
+    if report.healthy and not report.orphans:
+        click.echo("OK — every catalog archive is present and intact.")
+
+    if not heal:
+        if not report.healthy:
+            raise SystemExit(1)
+        return
+
+    click.echo("")
+    click.echo("healing ...")
+    result = doc.heal(
+        Path(state_dir), database_url=database_url, source_uri=source_uri, log=click.echo
+    )
+    click.echo("")
+    click.echo(f"healed={len(result.healed)} unhealable={len(result.unhealable)}")
+    for fn, why in result.unhealable:
+        click.echo(f"  UNHEALABLE {fn}: {why}", err=True)
+    if result.resumed_migration is not None:
+        r = result.resumed_migration
+        click.echo(
+            f"resumed migration: migrated={r.migrated} "
+            f"skipped={r.skipped} failed={len(r.failures)}"
+        )
+    if not result.ok:
+        raise SystemExit(1)
+    click.echo("heal complete — storage is consistent with the catalog.")
+
+
 if __name__ == "__main__":
     server_cli()

@@ -55,6 +55,7 @@ from fastapi.responses import (
 )
 
 from cvcpkg import __version__
+from cvcpkg.server import archive_store
 from cvcpkg.server.audit import AuditLog
 from cvcpkg.server.auth import TokenStore
 from cvcpkg.server.models import (
@@ -287,7 +288,13 @@ class ServerState:
         require_auth_for_reads: bool = False,
     ) -> None:
         self.state_dir = state_dir
-        self.storage_uri = storage_uri or f"file://{state_dir}"
+        # Precedence: explicit param (--storage) > persisted (a prior
+        # `storage migrate` writes storage.yaml) > default (local file://).
+        # Persisting means a migrated server keeps serving from the new
+        # backend across restarts without re-passing --storage.
+        self.storage_uri = storage_uri or archive_store.load_storage_uri(
+            state_dir, f"file://{state_dir}"
+        )
         self.require_auth_for_reads = require_auth_for_reads
         self.tokens = TokenStore(state_dir)
         self.audit = AuditLog(state_dir)
@@ -2669,18 +2676,15 @@ def create_app(
         """HEAD support so clients can check size before downloading."""
         state = _get_state()
         safe_name = Path(filename).name
-        archive_path = state.archives_dir() / safe_name
-        if not archive_path.is_file():
+        if not archive_store.exists(state.storage_uri, safe_name):
             raise HTTPException(404, f"archive not found: {safe_name}")
         if not await _archive_is_visible(caller, safe_name):
             raise HTTPException(404, f"archive not found: {safe_name}")
-        return Response(
-            status_code=200,
-            headers={
-                "Content-Length": str(archive_path.stat().st_size),
-                "Content-Type": "application/octet-stream",
-            },
-        )
+        headers = {"Content-Type": "application/octet-stream"}
+        archive_size = archive_store.size(state.storage_uri, safe_name)
+        if archive_size >= 0:
+            headers["Content-Length"] = str(archive_size)
+        return Response(status_code=200, headers=headers)
 
     @app.get("/v1/download/{filename}", tags=["packages"])
     async def download_archive(
@@ -2691,9 +2695,12 @@ def create_app(
         state = _get_state()
         # Sanitise filename to prevent path traversal
         safe_name = Path(filename).name
-        archive_path = state.archives_dir() / safe_name
-        if not archive_path.is_file():
+        # Resolve the archive through the configured storage backend: a local
+        # file for file:// (served straight from disk), or a streamed object
+        # for a remote backend (s3://…) after a storage migration.
+        if not archive_store.exists(state.storage_uri, safe_name):
             raise HTTPException(404, f"archive not found: {safe_name}")
+        archive_size = archive_store.size(state.storage_uri, safe_name)
 
         # Enforce org visibility on the archive: a PRIVATE org's archive is
         # downloadable only by a member (or admin). Resolve the archive to its
@@ -2751,21 +2758,21 @@ def create_app(
                 client_ip_hash=ip_hash,
                 user_agent=user_agent,
                 cvcpkg_version=cvcpkg_version,
-                bytes_sent=archive_path.stat().st_size,
+                bytes_sent=archive_size,
             )
 
         def _stream():
-            with open(archive_path, "rb") as f:
+            with archive_store.open_stream(state.storage_uri, safe_name) as f:
                 while chunk := f.read(1 << 16):
                     yield chunk
 
+        headers = {"Content-Disposition": f'attachment; filename="{safe_name}"'}
+        if archive_size >= 0:
+            headers["Content-Length"] = str(archive_size)
         return StreamingResponse(
             _stream(),
             media_type="application/octet-stream",
-            headers={
-                "Content-Disposition": f'attachment; filename="{safe_name}"',
-                "Content-Length": str(archive_path.stat().st_size),
-            },
+            headers=headers,
         )
 
     # ── Publish (write) ─────────────────────────────────────
@@ -2871,17 +2878,14 @@ def create_app(
             c if c in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-+" else "_"
             for c in safe_filename
         )
-        dest = state.archives_dir() / safe_filename
-
-        # Write to a temp file in the same directory.  The temp is renamed
-        # onto the final destination only AFTER the catalog row is
-        # committed: the DB unique index (or the file-backed dup check) is
-        # the arbiter between racing duplicate publishes, and the loser
-        # must never touch the destination file.  Historically the rename
-        # happened before add_package(), so a racing duplicate overwrote
-        # the winner's archive and then 409'd — leaving the stored bytes
-        # different from the row's sha256/size (7 catalog variants were
-        # corrupted this way in July 2026).
+        # Write to a temp file first.  It is committed to the storage backend
+        # (archive_store.store) only AFTER the catalog row is written: the DB
+        # unique index (or the file-backed dup check) is the arbiter between
+        # racing duplicate publishes, and the loser must never touch the
+        # stored archive.  Historically the rename happened before
+        # add_package(), so a racing duplicate overwrote the winner's archive
+        # and then 409'd — leaving the stored bytes different from the row's
+        # sha256/size (7 catalog variants were corrupted this way in July 2026).
         fd, tmp_path_str = tempfile.mkstemp(dir=state.archives_dir(), suffix=".upload")
         tmp_path = Path(tmp_path_str)
         try:
@@ -2954,12 +2958,10 @@ def create_app(
                 tmp_path.unlink(missing_ok=True)
                 raise HTTPException(409, str(exc)) from exc
 
-            # Row committed — this request owns the variant; materialize
-            # the archive at its final name.
-            # Path.replace, not rename: on Windows rename() raises
-            # FileExistsError if dest exists (e.g. republish after delete);
-            # replace() has POSIX overwrite semantics on every platform.
-            tmp_path.replace(dest)
+            # Row committed — this request owns the variant; materialize the
+            # archive in the configured storage backend (a local move for
+            # file://, an upload for a remote backend such as s3://).
+            archive_store.store(state.storage_uri, safe_filename, tmp_path)
 
             # Track org storage usage
             if org and _db_orgs is not None:
@@ -2998,11 +3000,9 @@ def create_app(
             }
             state.index.setdefault("bundles", []).append(bundle)
             state.save_index()
-            # Index updated — materialize the archive at its final name.
-            # Path.replace, not rename: on Windows rename() raises
-            # FileExistsError if dest exists (e.g. republish after delete);
-            # replace() has POSIX overwrite semantics on every platform.
-            tmp_path.replace(dest)
+            # Index updated — materialize the archive in the configured
+            # storage backend (local move for file://, upload for s3://…).
+            archive_store.store(state.storage_uri, safe_filename, tmp_path)
             state.audit.record(
                 action=AuditAction.publish,
                 actor=actor.name,
