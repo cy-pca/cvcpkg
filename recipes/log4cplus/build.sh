@@ -45,5 +45,27 @@ else
     build_flavor shared ON    # primary: owns the CMake export
 fi
 
+CMAKE_PKG_DIR="${CVC_INSTALL_DIR}/lib/cmake/log4cplus"
+
+# Upstream bakes find_library() absolute paths for system libs (e.g.
+# /usr/lib/x86_64-linux-gnu/librt.a, libnsl.so on glibc) into
+# INTERFACE_LINK_LIBRARIES; rewrite them to plain -l names so the bundle
+# links on distros with different system-library layouts.
+sed -E -i.cvcbak 's#/usr/lib[^;"]*/lib([A-Za-z0-9_+-]+)\.(a|so[.0-9]*)#\1#g' \
+    "${CMAKE_PKG_DIR}/log4cplusTargets.cmake"
+rm -f "${CMAKE_PKG_DIR}/log4cplusTargets.cmake.cvcbak"
+
+# Uniform consumer target: a static-primary export defines only
+# log4cplus::log4cplusS. Wrap it so find_package consumers can link
+# log4cplus::log4cplus regardless of the bundle's link variant.
+cat >> "${CMAKE_PKG_DIR}/log4cplusConfig.cmake" <<'EOF'
+
+if(NOT TARGET log4cplus::log4cplus AND TARGET log4cplus::log4cplusS)
+  add_library(log4cplus::log4cplus INTERFACE IMPORTED)
+  set_target_properties(log4cplus::log4cplus PROPERTIES
+    INTERFACE_LINK_LIBRARIES log4cplus::log4cplusS)
+endif()
+EOF
+
 # Ensure installed .pc/.cmake files are relocatable.
 cvc_rewrite_install_paths

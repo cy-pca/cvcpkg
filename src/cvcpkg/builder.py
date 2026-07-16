@@ -487,6 +487,11 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
 
     build_type = "Release" if ctx.config == "release" else "Debug"
     env["CMAKE_BUILD_TYPE"] = build_type
+    # The _common/env-*.sh scripts (and env-windows.ps1 via winhost) key off
+    # CVC_BUILD_TYPE and re-derive CMAKE_BUILD_TYPE from it, defaulting to
+    # Release when unset — without this export every recipe sourcing them
+    # silently built Release regardless of --config.
+    env["CVC_BUILD_TYPE"] = build_type
     env.setdefault("BUILD_SHARED_LIBS", "ON" if ctx.link == "shared" else "OFF")
 
     # Cross-compilation: set CVC_HOST_PLATFORM when the matrix
