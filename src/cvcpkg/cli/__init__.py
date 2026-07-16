@@ -81,6 +81,7 @@ from cvcpkg.cli import (  # noqa: E402, F401
     _builds,
     _cache,
     _catalog,
+    _cpkg,
     _doctor,
     _init,
     _install,
