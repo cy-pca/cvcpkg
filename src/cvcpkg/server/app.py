@@ -213,6 +213,31 @@ POPULATE_UPSTREAM = os.environ.get("CVCPKG_POPULATE_UPSTREAM", "")
 POPULATE_UPSTREAM_TOKEN = os.environ.get("CVCPKG_POPULATE_UPSTREAM_TOKEN", "")
 
 
+def _reject_noncanonical_platform_arch(platform: str, arch: str) -> None:
+    """422 on platform/arch values outside the canonical keyspace.
+
+    Prevents a misconfigured client (e.g. raw `uname -m` giving 'aarch64'
+    or BSD 'amd64') from silently minting an orphan catalog keyspace that
+    no canonical consumer will ever query. Empty strings remain allowed
+    for backward compatibility.
+    """
+    from cvcpkg.platform import ARCH_ALIASES, CANONICAL_ARCHES, CANONICAL_PLATFORMS
+
+    if platform and platform not in CANONICAL_PLATFORMS:
+        raise HTTPException(
+            422,
+            f"non-canonical platform '{platform}'; expected one of "
+            f"{sorted(CANONICAL_PLATFORMS)}",
+        )
+    if arch and arch not in CANONICAL_ARCHES:
+        hint = ARCH_ALIASES.get(arch.strip().lower())
+        suffix = f" (did you mean '{hint}'?)" if hint else ""
+        raise HTTPException(
+            422,
+            f"non-canonical arch '{arch}'; expected one of " f"{sorted(CANONICAL_ARCHES)}{suffix}",
+        )
+
+
 def _reject_public_publish_on_edge(org: str) -> None:
     """Enforce upstream-canonical semantics on an edge/satellite cluster.
 
@@ -2820,6 +2845,7 @@ def create_app(
                 "this server is running in mirror mode and does not accept publishes",
             )
         _reject_public_publish_on_edge(org)
+        _reject_noncanonical_platform_arch(platform, arch)
         _check_rate_limit(request)
         state = _get_state()
 
@@ -3075,6 +3101,7 @@ def create_app(
                 "this server is running in mirror mode and does not accept publishes",
             )
         _reject_public_publish_on_edge(org)
+        _reject_noncanonical_platform_arch(platform, arch)
         if org:
             from cvcpkg.server.models import validate_org_slug
 

@@ -72,7 +72,7 @@ def _publish(
 
 def _seed(client, pub_tok):
     _publish(client, pub_tok, name="boost", version="1.86", platform="linux")
-    _publish(client, pub_tok, name="boost", version="1.86", platform="darwin", link="static")
+    _publish(client, pub_tok, name="boost", version="1.86", platform="macos", link="static")
     _publish(client, pub_tok, name="fftw3", version="3.3.10", platform="linux", link="static")
     _publish(client, pub_tok, name="fftw3", version="3.3.10", platform="windows")
     _publish(client, pub_tok, name="zlib", version="1.3.1", platform="linux")
@@ -111,10 +111,10 @@ class TestSearchEndpointDb:
     def test_query_and_filter_combined(self, db_server_env):
         client, _, pub_tok, _ = db_server_env
         _seed(client, pub_tok)
-        data = client.get("/v1/search", params={"q": "boost", "platform": "darwin"}).json()
+        data = client.get("/v1/search", params={"q": "boost", "platform": "macos"}).json()
         assert data["total"] == 1
         assert data["packages"][0]["name"] == "boost"
-        assert data["packages"][0]["platform"] == "darwin"
+        assert data["packages"][0]["platform"] == "macos"
 
     def test_pagination(self, db_server_env):
         client, _, pub_tok, _ = db_server_env
@@ -132,7 +132,7 @@ class TestSearchEndpointDb:
         _seed(client, pub_tok)
         data = client.get("/v1/search").json()
         platforms = {b["value"]: b["count"] for b in data["facets"]["platforms"]}
-        assert platforms == {"linux": 3, "darwin": 1, "windows": 1}
+        assert platforms == {"linux": 3, "macos": 1, "windows": 1}
         links = {b["value"]: b["count"] for b in data["facets"]["links"]}
         assert links == {"shared": 3, "static": 2}
 

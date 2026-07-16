@@ -2408,7 +2408,7 @@ def builds_html() -> str:
             <option value="netbsd">NetBSD</option>
             <option value="openbsd">OpenBSD</option>
             <option value="dragonflybsd">DragonflyBSD</option>
-            <option value="darwin">macOS</option>
+            <option value="macos">macOS</option>
             <option value="windows">Windows</option>
             <option value="wasm">WASM</option>
             <option value="wasi">WASI</option>
