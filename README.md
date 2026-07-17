@@ -525,6 +525,10 @@ cvcpkg token create --name ci_reader --role reader
 cvcpkg token create --name another_publisher --role publisher --expires-in-days 90
 cvcpkg token list
 cvcpkg token revoke --name old_token
+
+# Rotate a secret in place (name/role/org memberships survive); the old
+# secret keeps working for an hour so CI secrets can be swapped calmly:
+cvcpkg token rotate --name another_publisher --grace-minutes 60
 ```
 
 ### 3. Push recipes to the server
@@ -1103,6 +1107,7 @@ Clients call `GET /v1/catalog` to receive the full bundle list, then
 | DELETE | `/v1/packages/{name}/{version}`        | admin         | Permanently delete a version       |
 | POST   | `/v1/tokens`                           | admin         | Create a new API token             |
 | DELETE | `/v1/tokens/{name}`                    | admin         | Revoke a token                     |
+| POST   | `/v1/tokens/{name}/rotate`             | admin/self    | Rotate a token's secret in place   |
 | GET    | `/v1/tokens`                           | admin         | List all tokens                    |
 | GET    | `/v1/audit`                            | admin         | Paginated audit log                |
 | GET    | `/v1/audit/verify`                     | admin         | Verify audit chain integrity       |

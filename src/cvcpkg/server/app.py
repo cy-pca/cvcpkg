@@ -112,6 +112,8 @@ from cvcpkg.server.models import (
     TokenRequestListResponse,
     TokenRequestStatus,
     TokenRole,
+    TokenRotateRequest,
+    TokenRotateResponse,
     UserListResponse,
     UserProfileResponse,
     WebhookInfo,
@@ -3884,6 +3886,70 @@ def create_app(
                 f"{',metadata' if req.metadata is not None else ''}",
             )
         return {"message": f"profile for '{name}' updated"}
+
+    @app.post(
+        "/v1/tokens/{name}/rotate",
+        response_model=TokenRotateResponse,
+        tags=["tokens"],
+    )
+    async def rotate_token(
+        name: str,
+        req: TokenRotateRequest | None = None,
+        authorization: str | None = Header(None),
+    ):
+        """Rotate a token's secret in place.
+
+        The token keeps its name, role, expiry, and org memberships —
+        only the secret changes.  ``grace_minutes`` lets the old secret
+        keep working while stored copies are updated.  Admins can rotate
+        any token; non-admins can only rotate their own.
+        """
+        state = _get_state()
+        raw_actor = _extract_token(authorization)
+        if raw_actor is None:
+            raise HTTPException(401, "missing Authorization header")
+        if _use_db:
+            actor = await _db_tokens.verify(raw_actor)
+        else:
+            actor = state.tokens.verify(raw_actor)
+        if actor is None:
+            raise HTTPException(401, "invalid or expired token")
+        if actor.role != TokenRole.admin and actor.name != name:
+            raise HTTPException(403, "you can only rotate your own token")
+
+        grace_minutes = req.grace_minutes if req is not None else 0
+        if _use_db:
+            raw = await _db_tokens.rotate(name, grace_minutes=grace_minutes)
+        else:
+            raw = state.tokens.rotate(name, grace_minutes=grace_minutes)
+        if raw is None:
+            raise HTTPException(404, f"token '{name}' not found")
+
+        record = await _db_tokens.verify(raw) if _use_db else state.tokens.verify(raw)
+        detail = f"grace_minutes={grace_minutes}"
+        if _use_db:
+            await _db_audit.record(
+                action=AuditAction.token_rotate,
+                actor=actor.name,
+                target=name,
+                detail=detail,
+            )
+        else:
+            state.audit.record(
+                action=AuditAction.token_rotate,
+                actor=actor.name,
+                target=name,
+                detail=detail,
+            )
+        return TokenRotateResponse(
+            name=name,
+            role=record.role if record else actor.role,
+            token=raw,
+            expires_at=record.expires_at if record else None,
+            previous_valid_until=(
+                record.previous_hash_expires_at if record and grace_minutes > 0 else None
+            ),
+        )
 
     @app.get(
         "/v1/users",

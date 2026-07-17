@@ -119,6 +119,52 @@ def token_revoke(server: str, token: str, name: str):
     click.echo(f"Revoked token '{name}'.")
 
 
+@token_group.command("rotate")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    required=True,
+    help="Bearer token (admin, or the token being rotated).  [env: CVCPKG_TOKEN]",
+)
+@click.option("--name", required=True, help="Name of the token to rotate.")
+@click.option(
+    "--grace-minutes",
+    type=click.IntRange(0, 10080),
+    default=0,
+    show_default=True,
+    help="Keep the old secret working this long so stored copies can be swapped without an outage.",
+)
+def token_rotate(server: str, token: str, name: str, grace_minutes: int):
+    """Rotate a token's secret in place.
+
+    The token keeps its name, role, expiry, and org memberships — only
+    the secret changes.  Admins can rotate any token; a non-admin token
+    can rotate itself.
+    """
+    data = _api_request(
+        "post",
+        f"{server.rstrip('/')}/v1/tokens/{name}/rotate",
+        token,
+        json={"grace_minutes": grace_minutes},
+    )
+    click.echo(f"Rotated token '{data['name']}' (role: {data['role']})")
+    click.echo(f"  New token: {data['token']}")
+    click.echo("  ⚠ Store this token securely — it will not be shown again.")
+    if data.get("previous_valid_until"):
+        click.echo(f"  Old secret valid until: {data['previous_valid_until']}")
+    else:
+        click.echo("  Old secret is no longer valid.")
+    if data.get("expires_at"):
+        click.echo(f"  Expires: {data['expires_at']}")
+
+
 @token_group.command("set-email")
 @click.option(
     "--server",

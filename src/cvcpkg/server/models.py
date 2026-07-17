@@ -52,6 +52,7 @@ class AuditAction(str, Enum):
     registration_deny = "registration_deny"
     token_update_email = "token_update_email"
     token_update_profile = "token_update_profile"
+    token_rotate = "token_rotate"
     builder_register = "builder_register"
     builder_unregister = "builder_unregister"
     builder_update = "builder_update"
@@ -88,6 +89,11 @@ class TokenRecord(BaseModel):
     )
     expires_at: datetime.datetime | None = None
     revoked: bool = False
+    # Rotation grace window: the pre-rotation secret's hash stays valid
+    # until previous_hash_expires_at so callers can swap stored secrets
+    # (CI variables, requirement files) without an outage.
+    previous_token_hash: str = ""
+    previous_hash_expires_at: datetime.datetime | None = None
 
 
 class TokenCreateRequest(BaseModel):
@@ -104,6 +110,29 @@ class TokenCreateResponse(BaseModel):
     role: TokenRole
     token: str = Field(description="Bearer token — shown only once")
     expires_at: datetime.datetime | None = None
+
+
+class TokenRotateRequest(BaseModel):
+    grace_minutes: int = Field(
+        default=0,
+        ge=0,
+        le=10080,  # one week
+        description=(
+            "How long the pre-rotation secret keeps working after rotation. "
+            "0 kills it immediately."
+        ),
+    )
+
+
+class TokenRotateResponse(BaseModel):
+    name: str
+    role: TokenRole
+    token: str = Field(description="New bearer token — shown only once")
+    expires_at: datetime.datetime | None = None
+    previous_valid_until: datetime.datetime | None = Field(
+        default=None,
+        description="When the pre-rotation secret stops working (None = immediately)",
+    )
 
 
 class EmailUpdateRequest(BaseModel):

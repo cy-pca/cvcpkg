@@ -264,6 +264,38 @@ List all tokens (without secrets). Auth: `admin`.
 
 Revoke a token by name. Auth: `admin`.
 
+### `POST /v1/tokens/{name}/rotate`
+
+Rotate a token's secret **in place**: the token keeps its name, role,
+expiry, and org memberships — only the secret changes. Auth: `admin`
+(any token) or the token itself (self-rotation).
+
+**Body** (optional):
+
+```json
+{
+  "grace_minutes": 60
+}
+```
+
+`grace_minutes` (0–10080, default 0) keeps the pre-rotation secret
+working while stored copies (CI secrets, config files) are updated;
+`0` kills it immediately. Revoking the token ends both secrets at once.
+
+**Response** `200 OK`:
+
+```json
+{
+  "name": "ci-publisher",
+  "role": "publisher",
+  "token": "cvctok_...",
+  "expires_at": "2027-05-25T00:00:00+00:00",
+  "previous_valid_until": "2026-07-16T13:00:00+00:00"
+}
+```
+
+> **The new token value is shown only once.** Store it securely.
+
 ---
 
 ## Audit Trail
