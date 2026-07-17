@@ -19,6 +19,8 @@ Tables:
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import datetime
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -712,9 +714,29 @@ async def _run_dump(args: list, env: dict, dest) -> None:
         raise RuntimeError(f"dump command failed ({proc.returncode}): {detail}")
 
 
+# Request-scoped "ambient" session for the unit-of-work pattern.  When set
+# (by atomic_session), every get_session() in the same async context joins
+# that transaction instead of opening its own — so a store mutation and its
+# audit entry commit atomically.  Default None ⇒ unchanged standalone
+# behaviour for every existing caller.
+_current_session: contextvars.ContextVar[AsyncSession | None] = contextvars.ContextVar(
+    "cvcpkg_current_session", default=None
+)
+
+
 @asynccontextmanager
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
-    """Yield an async session for database operations."""
+    """Yield an async session for database operations.
+
+    If an ambient unit-of-work session is active (see ``atomic_session``),
+    yield it *without* committing — the owner of the unit of work commits
+    once at the end.  Otherwise open a fresh session that commits on
+    success and rolls back on error (the standalone behaviour).
+    """
+    ambient = _current_session.get()
+    if ambient is not None:
+        yield ambient
+        return
     if _session_factory is None:
         raise RuntimeError("call init_db() first")
     async with _session_factory() as session:
@@ -724,3 +746,73 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         except Exception:
             await session.rollback()
             raise
+
+
+@asynccontextmanager
+async def atomic_session() -> AsyncGenerator[AsyncSession, None]:
+    """Run a block as one transaction that every ``get_session()`` joins.
+
+    Store mutations and the audit write inside the block share a single
+    session and commit together (all-or-nothing): a crash between them can
+    no longer leave a mutation applied but unlogged.  On exception the
+    whole unit of work rolls back.
+    """
+    if _session_factory is None:
+        raise RuntimeError("call init_db() first")
+    async with _session_factory() as session:
+        token = _current_session.set(session)
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            _current_session.reset(token)
+
+
+def in_atomic_session() -> bool:
+    """True when an ambient unit-of-work session is active."""
+    return _current_session.get() is not None
+
+
+# ── Audit-append serialization ─────────────────────────────────
+#
+# The audit chain hashes each entry against the previous one, so the
+# read-last-row → insert step must be serialized: two concurrent appends
+# that both read the same "last" row fork the chain and make
+# verify_chain() report false tampering.  A process-local lock serializes
+# appends within a worker; a per-event-loop instance avoids the
+# "bound to a different event loop" error when tests spin up fresh loops
+# via asyncio.run().  Multi-worker Postgres additionally takes a
+# transaction-scoped advisory lock (see audit_advisory_lock).
+
+_AUDIT_ADVISORY_KEY = 0x63766361  # "cvca" — fixed key for pg_advisory
+_append_lock: asyncio.Lock | None = None
+_append_lock_loop: asyncio.AbstractEventLoop | None = None
+
+
+def audit_append_lock() -> asyncio.Lock:
+    """Return the audit-append lock bound to the running event loop."""
+    global _append_lock, _append_lock_loop
+    loop = asyncio.get_running_loop()
+    if _append_lock is None or _append_lock_loop is not loop:
+        _append_lock = asyncio.Lock()
+        _append_lock_loop = loop
+    return _append_lock
+
+
+async def audit_advisory_lock(session: AsyncSession) -> None:
+    """Take a transaction-scoped advisory lock on Postgres.
+
+    Serializes audit-chain appends across worker processes (the
+    process-local ``audit_append_lock`` only covers one worker).  Released
+    automatically when the transaction commits or rolls back.  A no-op on
+    SQLite/other backends, which are single-process in practice.
+    """
+    if _engine is None:
+        return
+    if _engine.url.get_backend_name() == "postgresql":
+        from sqlalchemy import text
+
+        await session.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _AUDIT_ADVISORY_KEY})

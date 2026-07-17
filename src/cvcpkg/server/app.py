@@ -26,6 +26,7 @@ import secrets
 import signal
 import tempfile
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -376,6 +377,82 @@ def _get_state() -> ServerState:
     if _state is None:
         raise RuntimeError("server not initialised")
     return _state
+
+
+class _AuditCtx:
+    """Handle yielded by :func:`_audit_txn`.
+
+    ``detail``/``target`` may be updated inside the block for audit fields
+    that are only known after the mutation runs.  Set ``skip = True`` to
+    suppress the audit entry when the block turned out to be a no-op (e.g.
+    "already cancelled" paths that still return success but changed
+    nothing).  ``session`` is the shared unit-of-work session on the DB
+    backend (None on the YAML backend); handlers rarely need it because
+    store methods join the ambient session automatically.
+    """
+
+    __slots__ = ("target", "detail", "session", "skip")
+
+    def __init__(self, target: str, detail: str) -> None:
+        self.target = target
+        self.detail = detail
+        self.session = None
+        self.skip = False
+
+
+@asynccontextmanager
+async def _audit_txn(
+    action: AuditAction,
+    actor: str,
+    target: str,
+    detail: str = "",
+) -> AsyncIterator[_AuditCtx]:
+    """Run a mutation and its audit entry as one atomic unit.
+
+    On the DB backend the block body (store mutations) and the audit
+    append share a single transaction that commits once on clean exit and
+    rolls back on any exception — so a crash can no longer leave a
+    mutation applied but unlogged.  The audit-append lock is held across
+    the whole transaction (including commit) so concurrent audited writes
+    cannot fork the hash chain.  On the YAML backend the mutation persists
+    immediately and the audit entry is written right after, preserving the
+    original behaviour.
+
+    Tradeoff: holding the append lock across the whole transaction (rather
+    than only the audit row's read-last→insert→commit) serializes audited
+    *writes* within a worker.  Narrowing the window would reintroduce a
+    chain fork under SQLite's transaction-level snapshot isolation (a
+    read-last after a lock-free mutation could miss a concurrent commit),
+    so correctness wins here.  Audited writes are low-QPS; only rare bulk
+    operations (cache GC, large DAG submits) hold it long enough to matter,
+    and reads/downloads are never audited and never blocked.
+
+    Usage::
+
+        async with _audit_txn(AuditAction.token_revoke, actor.name, name) as ac:
+            if _use_db:
+                ok = await _db_tokens.revoke(name)
+            else:
+                ok = state.tokens.revoke(name)
+            if not ok:
+                raise HTTPException(404, ...)   # rolls back, no audit row
+            ac.detail = "..."                    # optional post-mutation detail
+    """
+    ctx = _AuditCtx(target=target, detail=detail)
+    if _use_db:
+        from cvcpkg.server.db import atomic_session, audit_append_lock
+
+        async with audit_append_lock():
+            async with atomic_session() as session:
+                ctx.session = session
+                yield ctx
+                if not ctx.skip:
+                    await _db_audit.record(action, actor, ctx.target, ctx.detail)
+            # atomic_session commits here, still holding the append lock.
+    else:
+        yield ctx
+        if not ctx.skip:
+            _get_state().audit.record(action, actor, ctx.target, ctx.detail)
 
 
 # ── Chunked upload session tracking ────────────────────────────
@@ -2593,29 +2670,29 @@ def create_app(
             raise HTTPException(501, "Bulk cache deletion requires database backend")
 
         deleted: list[dict] = []
-        if older_than:
-            secs = _parse_duration(older_than)
-            deleted = await _db_packages.gc_by_age(secs)
-        else:
-            # Delete all non-release packages (max_storage_bytes=0 evicts
-            # everything down to zero).
-            deleted = await _db_packages.gc_by_storage(0)
+        async with _audit_txn(
+            AuditAction.cache_gc,
+            actor.name,
+            "cache",
+        ) as ac:
+            if older_than:
+                secs = _parse_duration(older_than)
+                deleted = await _db_packages.gc_by_age(secs)
+            else:
+                # Delete all non-release packages (max_storage_bytes=0 evicts
+                # everything down to zero).
+                deleted = await _db_packages.gc_by_storage(0)
 
-        # Update org storage counters.
-        org_deltas: dict[str, int] = {}
-        for d in deleted:
-            slug = d.get("org_slug", "")
-            if slug and _db_orgs is not None:
-                org_deltas[slug] = org_deltas.get(slug, 0) + d["size_bytes"]
-        for slug, delta in org_deltas.items():
-            await _db_orgs.update_storage_used(slug, -delta)
+            # Update org storage counters.
+            org_deltas: dict[str, int] = {}
+            for d in deleted:
+                slug = d.get("org_slug", "")
+                if slug and _db_orgs is not None:
+                    org_deltas[slug] = org_deltas.get(slug, 0) + d["size_bytes"]
+            for slug, delta in org_deltas.items():
+                await _db_orgs.update_storage_used(slug, -delta)
 
-        await _db_audit.record(
-            action=AuditAction.cache_gc,
-            actor=actor.name,
-            target="cache",
-            detail=f"bulk_delete deleted={len(deleted)} older_than={older_than!r}",
-        )
+            ac.detail = f"bulk_delete deleted={len(deleted)} older_than={older_than!r}"
         return {"deleted_count": len(deleted), "deleted": deleted}
 
     @app.get("/v1/cache/stats", tags=["cache"])
@@ -2663,46 +2740,46 @@ def create_app(
         body = await request.json()
         deleted: list[dict] = []
 
-        if "max_age_seconds" in body:
-            age = float(body["max_age_seconds"])
-            if age <= 0:
-                raise HTTPException(422, "max_age_seconds must be > 0")
-            deleted.extend(await _db_packages.gc_by_age(age))
+        async with _audit_txn(
+            AuditAction.cache_gc,
+            actor.name,
+            "cache",
+        ) as ac:
+            if "max_age_seconds" in body:
+                age = float(body["max_age_seconds"])
+                if age <= 0:
+                    raise HTTPException(422, "max_age_seconds must be > 0")
+                deleted.extend(await _db_packages.gc_by_age(age))
 
-        if "max_storage_bytes" in body:
-            cap = int(body["max_storage_bytes"])
-            if cap < 0:
-                raise HTTPException(422, "max_storage_bytes must be >= 0")
-            deleted.extend(await _db_packages.gc_by_storage(cap))
+            if "max_storage_bytes" in body:
+                cap = int(body["max_storage_bytes"])
+                if cap < 0:
+                    raise HTTPException(422, "max_storage_bytes must be >= 0")
+                deleted.extend(await _db_packages.gc_by_storage(cap))
 
-        if "valid_chain_hashes" in body:
-            hashes = body["valid_chain_hashes"]
-            if not isinstance(hashes, list):
-                raise HTTPException(422, "valid_chain_hashes must be a list of strings")
-            deleted.extend(await _db_packages.gc_by_staleness(set(hashes)))
+            if "valid_chain_hashes" in body:
+                hashes = body["valid_chain_hashes"]
+                if not isinstance(hashes, list):
+                    raise HTTPException(422, "valid_chain_hashes must be a list of strings")
+                deleted.extend(await _db_packages.gc_by_staleness(set(hashes)))
 
-        if not body or not any(
-            k in body for k in ("max_age_seconds", "max_storage_bytes", "valid_chain_hashes")
-        ):
-            raise HTTPException(
-                422, "specify max_age_seconds, max_storage_bytes, and/or valid_chain_hashes"
-            )
+            if not body or not any(
+                k in body for k in ("max_age_seconds", "max_storage_bytes", "valid_chain_hashes")
+            ):
+                raise HTTPException(
+                    422, "specify max_age_seconds, max_storage_bytes, and/or valid_chain_hashes"
+                )
 
-        # Update org storage counters for deleted packages.
-        org_deltas: dict[str, int] = {}
-        for d in deleted:
-            org_slug = d.get("org_slug", "")
-            if org_slug and _db_orgs is not None:
-                org_deltas[org_slug] = org_deltas.get(org_slug, 0) + d["size_bytes"]
-        for org_slug, delta in org_deltas.items():
-            await _db_orgs.update_storage_used(org_slug, -delta)
+            # Update org storage counters for deleted packages.
+            org_deltas: dict[str, int] = {}
+            for d in deleted:
+                org_slug = d.get("org_slug", "")
+                if org_slug and _db_orgs is not None:
+                    org_deltas[org_slug] = org_deltas.get(org_slug, 0) + d["size_bytes"]
+            for org_slug, delta in org_deltas.items():
+                await _db_orgs.update_storage_used(org_slug, -delta)
 
-        await _db_audit.record(
-            action=AuditAction.cache_gc,
-            actor=actor.name,
-            target="cache",
-            detail=f"deleted={len(deleted)} params={body}",
-        )
+            ac.detail = f"deleted={len(deleted)} params={body}"
         return {
             "deleted_count": len(deleted),
             "deleted": deleted,
@@ -2989,55 +3066,60 @@ def create_app(
                     tmp_path.unlink(missing_ok=True)
                     raise HTTPException(413, f"organization '{org}' storage limit exceeded")
 
-            try:
-                await _db_packages.add_package(
-                    name=name,
-                    version=version,
-                    platform=platform,
-                    arch=arch,
-                    build_type=build_type,
-                    link=link,
-                    sha256=sha256,
-                    size_bytes=size_bytes,
-                    archive_url=archive_url,
-                    signature=signature,
-                    key_fingerprint=key_fingerprint,
-                    release_tag=release_tag,
-                    recipe_version=recipe_version,
-                    description=description,
-                    homepage=homepage,
-                    pkg_license=pkg_license,
-                    maintainer=maintainer,
-                    tags=pkg_tags,
-                    org_slug=org,
-                    published_by=actor.name,
-                    required_deps=required_deps,
-                )
-            except ValueError as exc:
-                # Lost the race to a concurrent publish of the same
-                # variant — discard our temp; the winner's archive stays.
-                tmp_path.unlink(missing_ok=True)
-                raise HTTPException(409, str(exc)) from exc
+            # Catalog row + org-storage stat + audit commit as one unit of
+            # work.  The archive itself is a non-transactional side effect
+            # and is materialized only AFTER that commit, so the DB row
+            # stays the sole arbiter between racing duplicate publishes and
+            # the loser never overwrites the winner's stored archive.
+            async with _audit_txn(
+                AuditAction.publish,
+                actor.name,
+                f"{name}=={version}",
+                (
+                    f"platform={platform} arch={arch}"
+                    f" sha256={sha256} release={release_tag or 'live'}"
+                    f" org={org or 'public'}"
+                ),
+            ):
+                try:
+                    await _db_packages.add_package(
+                        name=name,
+                        version=version,
+                        platform=platform,
+                        arch=arch,
+                        build_type=build_type,
+                        link=link,
+                        sha256=sha256,
+                        size_bytes=size_bytes,
+                        archive_url=archive_url,
+                        signature=signature,
+                        key_fingerprint=key_fingerprint,
+                        release_tag=release_tag,
+                        recipe_version=recipe_version,
+                        description=description,
+                        homepage=homepage,
+                        pkg_license=pkg_license,
+                        maintainer=maintainer,
+                        tags=pkg_tags,
+                        org_slug=org,
+                        published_by=actor.name,
+                        required_deps=required_deps,
+                    )
+                except ValueError as exc:
+                    # Lost the race to a concurrent publish of the same
+                    # variant — roll back, discard our temp; winner's
+                    # archive stays.
+                    tmp_path.unlink(missing_ok=True)
+                    raise HTTPException(409, str(exc)) from exc
+
+                # Track org storage usage in the same transaction.
+                if org and _db_orgs is not None:
+                    await _db_orgs.update_storage_used(org, size_bytes)
 
             # Row committed — this request owns the variant; materialize the
             # archive in the configured storage backend (a local move for
             # file://, an upload for a remote backend such as s3://).
             archive_store.store(state.storage_uri, safe_filename, tmp_path)
-
-            # Track org storage usage
-            if org and _db_orgs is not None:
-                await _db_orgs.update_storage_used(org, size_bytes)
-
-            await _db_audit.record(
-                action=AuditAction.publish,
-                actor=actor.name,
-                target=f"{name}=={version}",
-                detail=(
-                    f"platform={platform} arch={arch}"
-                    f" sha256={sha256} release={release_tag or 'live'}"
-                    f" org={org or 'public'}"
-                ),
-            )
         else:
             bundle = {
                 "name": name,
@@ -3059,20 +3141,23 @@ def create_app(
                 "org": org,
                 "required_deps": json.loads(required_deps),
             }
-            state.index.setdefault("bundles", []).append(bundle)
-            state.save_index()
-            # Index updated — materialize the archive in the configured
-            # storage backend (local move for file://, upload for s3://…).
-            archive_store.store(state.storage_uri, safe_filename, tmp_path)
-            state.audit.record(
-                action=AuditAction.publish,
-                actor=actor.name,
-                target=f"{name}=={version}",
-                detail=(
+            async with _audit_txn(
+                AuditAction.publish,
+                actor.name,
+                f"{name}=={version}",
+                (
                     f"platform={platform} arch={arch}"
                     f" sha256={sha256} release={release_tag or 'live'}"
                 ),
-            )
+            ):
+                state.index.setdefault("bundles", []).append(bundle)
+                state.save_index()
+                # YAML has no transaction, so materialize the archive INSIDE
+                # the block: a store failure must skip the audit rather than
+                # leave a publish entry claiming success with no archive
+                # (the audit fires at block exit). The DB path stores after
+                # commit because there the row is the race arbiter.
+                archive_store.store(state.storage_uri, safe_filename, tmp_path)
 
         _metrics["publishes_total"] += 1
         _metrics["bytes_uploaded_total"] += size_bytes
@@ -3389,50 +3474,48 @@ def create_app(
 
         import datetime
 
+        _publish_detail = (
+            f"platform={session.platform} arch={session.arch} "
+            f"sha256={sha256} release={session.release_tag or 'live'} chunked=yes"
+        )
+        _publish_target = f"{session.name}=={session.version}"
         if _use_db:
-            try:
-                await _db_packages.add_package(
-                    name=session.name,
-                    version=session.version,
-                    platform=session.platform,
-                    arch=session.arch,
-                    build_type=session.build_type,
-                    link=session.link,
-                    sha256=sha256,
-                    size_bytes=size_bytes,
-                    archive_url=archive_url,
-                    signature=session.signature,
-                    key_fingerprint=session.key_fingerprint,
-                    release_tag=session.release_tag,
-                    recipe_version=session.recipe_version,
-                    description=session.description,
-                    homepage=session.homepage,
-                    pkg_license=session.pkg_license,
-                    maintainer=session.maintainer,
-                    tags=session.tags,
-                    org_slug=session.org,
-                    published_by=actor.name,
-                    required_deps=session.required_deps,
-                )
-            except ValueError as exc:
-                # Lost the race to a concurrent publish — discard our
-                # temp; the winner's archive stays untouched.
-                session.temp_path.unlink(missing_ok=True)
-                _upload_sessions.pop(upload_id, None)
-                raise HTTPException(409, str(exc)) from exc
+            async with _audit_txn(
+                AuditAction.publish, actor.name, _publish_target, _publish_detail
+            ):
+                try:
+                    await _db_packages.add_package(
+                        name=session.name,
+                        version=session.version,
+                        platform=session.platform,
+                        arch=session.arch,
+                        build_type=session.build_type,
+                        link=session.link,
+                        sha256=sha256,
+                        size_bytes=size_bytes,
+                        archive_url=archive_url,
+                        signature=session.signature,
+                        key_fingerprint=session.key_fingerprint,
+                        release_tag=session.release_tag,
+                        recipe_version=session.recipe_version,
+                        description=session.description,
+                        homepage=session.homepage,
+                        pkg_license=session.pkg_license,
+                        maintainer=session.maintainer,
+                        tags=session.tags,
+                        org_slug=session.org,
+                        published_by=actor.name,
+                        required_deps=session.required_deps,
+                    )
+                except ValueError as exc:
+                    # Lost the race to a concurrent publish — roll back,
+                    # discard our temp; the winner's archive stays untouched.
+                    session.temp_path.unlink(missing_ok=True)
+                    _upload_sessions.pop(upload_id, None)
+                    raise HTTPException(409, str(exc)) from exc
 
             # Row committed — materialize the archive at its final name.
             session.temp_path.replace(dest)  # overwrite-safe on Windows
-
-            await _db_audit.record(
-                action=AuditAction.publish,
-                actor=actor.name,
-                target=f"{session.name}=={session.version}",
-                detail=(
-                    f"platform={session.platform} arch={session.arch} "
-                    f"sha256={sha256} release={session.release_tag or 'live'} chunked=yes"
-                ),
-            )
         else:
             bundle = {
                 "name": session.name,
@@ -3453,19 +3536,15 @@ def create_app(
                 "published_by": actor.name,
                 "required_deps": json.loads(session.required_deps),
             }
-            state.index.setdefault("bundles", []).append(bundle)
-            state.save_index()
-            # Index updated — materialize the archive at its final name.
-            session.temp_path.replace(dest)  # overwrite-safe on Windows
-            state.audit.record(
-                action=AuditAction.publish,
-                actor=actor.name,
-                target=f"{session.name}=={session.version}",
-                detail=(
-                    f"platform={session.platform} arch={session.arch} "
-                    f"sha256={sha256} release={session.release_tag or 'live'} chunked=yes"
-                ),
-            )
+            async with _audit_txn(
+                AuditAction.publish, actor.name, _publish_target, _publish_detail
+            ):
+                state.index.setdefault("bundles", []).append(bundle)
+                state.save_index()
+                # YAML has no transaction: materialize the archive inside the
+                # block so a failed move skips the audit (DB path replaces
+                # after commit, where the row is the arbiter).
+                session.temp_path.replace(dest)  # overwrite-safe on Windows
 
         _metrics["publishes_total"] += 1
         _metrics["bytes_uploaded_total"] += size_bytes
@@ -3553,37 +3632,28 @@ def create_app(
         target = f"{name}=={version}"
         if scope_detail:
             target = f"{target} [{scope_detail}]"
-        if _use_db:
-            n = await _db_packages.yank(
-                name, version, platform=platform, arch=arch, link=link, build_type=build_type
-            )
-            await _db_audit.record(
-                action=AuditAction.yank,
-                actor=actor.name,
-                target=target,
-            )
-        else:
-            state = _get_state()
-            n = 0
-            for b in state.index.get("bundles", []):
-                if b["name"] != name or b["version"] != version:
-                    continue
-                if platform is not None and b.get("platform") != platform:
-                    continue
-                if arch is not None and b.get("arch") != arch:
-                    continue
-                if link is not None and b.get("link") != link:
-                    continue
-                if build_type is not None and b.get("build_type") != build_type:
-                    continue
-                b["yanked"] = True
-                n += 1
-            state.save_index()
-            state.audit.record(
-                action=AuditAction.yank,
-                actor=actor.name,
-                target=target,
-            )
+        async with _audit_txn(AuditAction.yank, actor.name, target):
+            if _use_db:
+                n = await _db_packages.yank(
+                    name, version, platform=platform, arch=arch, link=link, build_type=build_type
+                )
+            else:
+                state = _get_state()
+                n = 0
+                for b in state.index.get("bundles", []):
+                    if b["name"] != name or b["version"] != version:
+                        continue
+                    if platform is not None and b.get("platform") != platform:
+                        continue
+                    if arch is not None and b.get("arch") != arch:
+                        continue
+                    if link is not None and b.get("link") != link:
+                        continue
+                    if build_type is not None and b.get("build_type") != build_type:
+                        continue
+                    b["yanked"] = True
+                    n += 1
+                state.save_index()
         return {"message": f"yanked {target}", "count": n}
 
     @app.post("/v1/packages/{name}/{version}/unyank", tags=["publish"])
@@ -3610,37 +3680,28 @@ def create_app(
         target = f"{name}=={version}"
         if scope_detail:
             target = f"{target} [{scope_detail}]"
-        if _use_db:
-            n = await _db_packages.unyank(
-                name, version, platform=platform, arch=arch, link=link, build_type=build_type
-            )
-            await _db_audit.record(
-                action=AuditAction.unyank,
-                actor=actor.name,
-                target=target,
-            )
-        else:
-            state = _get_state()
-            n = 0
-            for b in state.index.get("bundles", []):
-                if b["name"] != name or b["version"] != version:
-                    continue
-                if platform is not None and b.get("platform") != platform:
-                    continue
-                if arch is not None and b.get("arch") != arch:
-                    continue
-                if link is not None and b.get("link") != link:
-                    continue
-                if build_type is not None and b.get("build_type") != build_type:
-                    continue
-                b["yanked"] = False
-                n += 1
-            state.save_index()
-            state.audit.record(
-                action=AuditAction.unyank,
-                actor=actor.name,
-                target=target,
-            )
+        async with _audit_txn(AuditAction.unyank, actor.name, target):
+            if _use_db:
+                n = await _db_packages.unyank(
+                    name, version, platform=platform, arch=arch, link=link, build_type=build_type
+                )
+            else:
+                state = _get_state()
+                n = 0
+                for b in state.index.get("bundles", []):
+                    if b["name"] != name or b["version"] != version:
+                        continue
+                    if platform is not None and b.get("platform") != platform:
+                        continue
+                    if arch is not None and b.get("arch") != arch:
+                        continue
+                    if link is not None and b.get("link") != link:
+                        continue
+                    if build_type is not None and b.get("build_type") != build_type:
+                        continue
+                    b["yanked"] = False
+                    n += 1
+                state.save_index()
         return {"message": f"unyanked {target}", "count": n}
 
     # ── Delete (admin only) ─────────────────────────────────
@@ -3653,38 +3714,32 @@ def create_app(
         link: str | None = Query(None, description="Only delete bundles with this link mode"),
         actor: TokenRecord = Depends(require_role(TokenRole.admin)),
     ):
-        if _use_db:
-            removed = await _db_packages.delete(name, version, platform=platform, link=link)
-            if removed == 0:
-                raise HTTPException(404, f"{name}=={version} not found")
-            await _db_audit.record(
-                action=AuditAction.delete,
-                actor=actor.name,
-                target=f"{name}=={version}",
-                detail=f"platform={platform} link={link}" if platform or link else "",
-            )
-            return {"message": f"deleted {name}=={version}", "removed": removed}
-        state = _get_state()
-        before = len(state.index.get("bundles", []))
+        async with _audit_txn(AuditAction.delete, actor.name, f"{name}=={version}") as ac:
+            if _use_db:
+                removed = await _db_packages.delete(name, version, platform=platform, link=link)
+                if removed == 0:
+                    raise HTTPException(404, f"{name}=={version} not found")
+                ac.detail = f"platform={platform} link={link}" if platform or link else ""
+            else:
+                state = _get_state()
+                before = len(state.index.get("bundles", []))
 
-        def _matches(b: dict) -> bool:
-            if b["name"] != name or b["version"] != version:
-                return False
-            if platform and b.get("platform") != platform:
-                return False
-            return not (link and b.get("link") != link)
+                def _matches(b: dict) -> bool:
+                    if b["name"] != name or b["version"] != version:
+                        return False
+                    if platform and b.get("platform") != platform:
+                        return False
+                    return not (link and b.get("link") != link)
 
-        state.index["bundles"] = [b for b in state.index.get("bundles", []) if not _matches(b)]
-        after = len(state.index["bundles"])
-        if before == after:
-            raise HTTPException(404, f"{name}=={version} not found")
-        state.save_index()
-        state.audit.record(
-            action=AuditAction.delete,
-            actor=actor.name,
-            target=f"{name}=={version}",
-        )
-        return {"message": f"deleted {name}=={version}", "removed": before - after}
+                state.index["bundles"] = [
+                    b for b in state.index.get("bundles", []) if not _matches(b)
+                ]
+                after = len(state.index["bundles"])
+                if before == after:
+                    raise HTTPException(404, f"{name}=={version} not found")
+                state.save_index()
+                removed = before - after
+        return {"message": f"deleted {name}=={version}", "removed": removed}
 
     @app.delete("/v1/packages/by-link/{platform}/{link}", tags=["publish"])
     async def delete_packages_by_link(
@@ -3693,36 +3748,31 @@ def create_app(
         actor: TokenRecord = Depends(require_role(TokenRole.admin)),
     ):
         """Delete all bundles matching a platform and link mode (admin only)."""
-        if _use_db:
-            removed = await _db_packages.delete_by_link(platform, link)
-            if removed == 0:
-                raise HTTPException(404, f"no {platform}/{link} bundles found")
-            await _db_audit.record(
-                action=AuditAction.delete,
-                actor=actor.name,
-                target=f"platform={platform}/link={link}",
-                detail=f"{removed} bundles",
-            )
-            return {"message": f"deleted {platform}/{link} bundles", "removed": removed}
-        # File-based backend
-        state = _get_state()
-        before = len(state.index.get("bundles", []))
-        state.index["bundles"] = [
-            b
-            for b in state.index.get("bundles", [])
-            if not (b.get("platform") == platform and b.get("link") == link)
-        ]
-        after = len(state.index["bundles"])
-        if before == after:
-            raise HTTPException(404, f"no {platform}/{link} bundles found")
-        state.save_index()
-        state.audit.record(
-            action=AuditAction.delete,
-            actor=actor.name,
-            target=f"platform={platform}/link={link}",
-            detail=f"{before - after} bundles",
-        )
-        return {"message": f"deleted {platform}/{link} bundles", "removed": before - after}
+        async with _audit_txn(
+            AuditAction.delete,
+            actor.name,
+            f"platform={platform}/link={link}",
+        ) as ac:
+            if _use_db:
+                removed = await _db_packages.delete_by_link(platform, link)
+                if removed == 0:
+                    raise HTTPException(404, f"no {platform}/{link} bundles found")
+            else:
+                # File-based backend
+                state = _get_state()
+                before = len(state.index.get("bundles", []))
+                state.index["bundles"] = [
+                    b
+                    for b in state.index.get("bundles", [])
+                    if not (b.get("platform") == platform and b.get("link") == link)
+                ]
+                after = len(state.index["bundles"])
+                if before == after:
+                    raise HTTPException(404, f"no {platform}/{link} bundles found")
+                state.save_index()
+                removed = before - after
+            ac.detail = f"{removed} bundles"
+        return {"message": f"deleted {platform}/{link} bundles", "removed": removed}
 
     # ── Token management (admin) ────────────────────────────
 
@@ -3739,46 +3789,37 @@ def create_app(
                 " letters, digits, underscores, or hyphens)",
             )
         state = _get_state()
-        try:
-            if _use_db:
-                raw = await _db_tokens.create(
-                    name=req.name,
-                    role=req.role,
-                    expires_in_days=req.expires_in_days,
-                    email=req.email,
-                    description=req.description,
-                    metadata=req.metadata,
-                )
-            else:
-                raw = state.tokens.create(
-                    name=req.name,
-                    role=req.role,
-                    expires_in_days=req.expires_in_days,
-                    email=req.email,
-                    description=req.description,
-                    metadata=req.metadata,
-                )
-        except ValueError:
-            raise HTTPException(
-                409,
-                f"token name '{req.name}' is already taken",
-            ) from None
-        if _use_db:
-            await _db_audit.record(
-                action=AuditAction.token_create,
-                actor=actor.name,
-                target=req.name,
-                detail=f"role={req.role.value}",
-            )
-            record = await _db_tokens.verify(raw)
-        else:
-            state.audit.record(
-                action=AuditAction.token_create,
-                actor=actor.name,
-                target=req.name,
-                detail=f"role={req.role.value}",
-            )
-            record = state.tokens.verify(raw)
+        async with _audit_txn(
+            AuditAction.token_create,
+            actor.name,
+            req.name,
+            f"role={req.role.value}",
+        ):
+            try:
+                if _use_db:
+                    raw = await _db_tokens.create(
+                        name=req.name,
+                        role=req.role,
+                        expires_in_days=req.expires_in_days,
+                        email=req.email,
+                        description=req.description,
+                        metadata=req.metadata,
+                    )
+                else:
+                    raw = state.tokens.create(
+                        name=req.name,
+                        role=req.role,
+                        expires_in_days=req.expires_in_days,
+                        email=req.email,
+                        description=req.description,
+                        metadata=req.metadata,
+                    )
+            except ValueError:
+                raise HTTPException(
+                    409,
+                    f"token name '{req.name}' is already taken",
+                ) from None
+        record = await _db_tokens.verify(raw) if _use_db else state.tokens.verify(raw)
         return TokenCreateResponse(
             name=req.name,
             role=req.role,
@@ -3792,22 +3833,13 @@ def create_app(
         actor: TokenRecord = Depends(require_role(TokenRole.admin)),
     ):
         state = _get_state()
-        if _use_db:
-            if not await _db_tokens.revoke(name):
-                raise HTTPException(404, f"token '{name}' not found")
-            await _db_audit.record(
-                action=AuditAction.token_revoke,
-                actor=actor.name,
-                target=name,
-            )
-        else:
-            if not state.tokens.revoke(name):
-                raise HTTPException(404, f"token '{name}' not found")
-            state.audit.record(
-                action=AuditAction.token_revoke,
-                actor=actor.name,
-                target=name,
-            )
+        async with _audit_txn(AuditAction.token_revoke, actor.name, name):
+            if _use_db:
+                if not await _db_tokens.revoke(name):
+                    raise HTTPException(404, f"token '{name}' not found")
+            else:
+                if not state.tokens.revoke(name):
+                    raise HTTPException(404, f"token '{name}' not found")
         return {"message": f"revoked token '{name}'"}
 
     @app.get("/v1/tokens", tags=["tokens"])
@@ -3861,24 +3893,18 @@ def create_app(
         if actor.role != TokenRole.admin and actor.name != name:
             raise HTTPException(403, "you can only update your own token's email")
 
-        if _use_db:
-            if not await _db_tokens.update_email(name, req.email):
-                raise HTTPException(404, f"token '{name}' not found")
-            await _db_audit.record(
-                action=AuditAction.token_update_email,
-                actor=actor.name,
-                target=name,
-                detail=f"email={req.email}",
-            )
-        else:
-            if not state.tokens.update_email(name, req.email):
-                raise HTTPException(404, f"token '{name}' not found")
-            state.audit.record(
-                action=AuditAction.token_update_email,
-                actor=actor.name,
-                target=name,
-                detail=f"email={req.email}",
-            )
+        async with _audit_txn(
+            AuditAction.token_update_email,
+            actor.name,
+            name,
+            f"email={req.email}",
+        ):
+            if _use_db:
+                if not await _db_tokens.update_email(name, req.email):
+                    raise HTTPException(404, f"token '{name}' not found")
+            else:
+                if not state.tokens.update_email(name, req.email):
+                    raise HTTPException(404, f"token '{name}' not found")
         return {"message": f"email for '{name}' updated"}
 
     @app.patch("/v1/tokens/{name}/profile", tags=["tokens"])
@@ -3906,30 +3932,23 @@ def create_app(
         if actor.role != TokenRole.admin and actor.name != name:
             raise HTTPException(403, "you can only update your own profile")
 
-        if _use_db:
-            if not await _db_tokens.update_profile(
-                name, description=req.description, metadata=req.metadata
-            ):
-                raise HTTPException(404, f"token '{name}' not found")
-            await _db_audit.record(
-                action=AuditAction.token_update_profile,
-                actor=actor.name,
-                target=name,
-                detail=f"fields={'description' if req.description is not None else ''}"
-                f"{',metadata' if req.metadata is not None else ''}",
-            )
-        else:
-            if not state.tokens.update_profile(
-                name, description=req.description, metadata=req.metadata
-            ):
-                raise HTTPException(404, f"token '{name}' not found")
-            state.audit.record(
-                action=AuditAction.token_update_profile,
-                actor=actor.name,
-                target=name,
-                detail=f"fields={'description' if req.description is not None else ''}"
-                f"{',metadata' if req.metadata is not None else ''}",
-            )
+        async with _audit_txn(
+            AuditAction.token_update_profile,
+            actor.name,
+            name,
+            f"fields={'description' if req.description is not None else ''}"
+            f"{',metadata' if req.metadata is not None else ''}",
+        ):
+            if _use_db:
+                if not await _db_tokens.update_profile(
+                    name, description=req.description, metadata=req.metadata
+                ):
+                    raise HTTPException(404, f"token '{name}' not found")
+            else:
+                if not state.tokens.update_profile(
+                    name, description=req.description, metadata=req.metadata
+                ):
+                    raise HTTPException(404, f"token '{name}' not found")
         return {"message": f"profile for '{name}' updated"}
 
     @app.post(
@@ -3968,36 +3987,29 @@ def create_app(
         _reject_grace_secret(actor)
 
         grace_minutes = req.grace_minutes if req is not None else 0
-        if _use_db:
-            raw = await _db_tokens.rotate(name, grace_minutes=grace_minutes)
-        else:
-            raw = state.tokens.rotate(name, grace_minutes=grace_minutes)
-        if raw is None:
-            raise HTTPException(404, f"token '{name}' not found")
+        async with _audit_txn(
+            AuditAction.token_rotate,
+            actor.name,
+            name,
+        ) as ac:
+            if _use_db:
+                raw = await _db_tokens.rotate(name, grace_minutes=grace_minutes)
+            else:
+                raw = state.tokens.rotate(name, grace_minutes=grace_minutes)
+            if raw is None:
+                raise HTTPException(404, f"token '{name}' not found")
 
-        record = await _db_tokens.verify(raw) if _use_db else state.tokens.verify(raw)
-        # Record the EFFECTIVE window end (rotate() clamps it to the token's
-        # own expiry), not the requested minutes, so the audit trail shows
-        # how long the old secret actually lived.
-        previous_valid_until = (
-            record.previous_hash_expires_at if record and grace_minutes > 0 else None
-        )
-        window = previous_valid_until.isoformat() if previous_valid_until is not None else "none"
-        detail = f"grace_minutes={grace_minutes} previous_valid_until={window}"
-        if _use_db:
-            await _db_audit.record(
-                action=AuditAction.token_rotate,
-                actor=actor.name,
-                target=name,
-                detail=detail,
+            record = await _db_tokens.verify(raw) if _use_db else state.tokens.verify(raw)
+            # Record the EFFECTIVE window end (rotate() clamps it to the token's
+            # own expiry), not the requested minutes, so the audit trail shows
+            # how long the old secret actually lived.
+            previous_valid_until = (
+                record.previous_hash_expires_at if record and grace_minutes > 0 else None
             )
-        else:
-            state.audit.record(
-                action=AuditAction.token_rotate,
-                actor=actor.name,
-                target=name,
-                detail=detail,
+            window = (
+                previous_valid_until.isoformat() if previous_valid_until is not None else "none"
             )
+            ac.detail = f"grace_minutes={grace_minutes} previous_valid_until={window}"
         return TokenRotateResponse(
             name=name,
             role=record.role if record else actor.role,
@@ -4181,42 +4193,34 @@ def create_app(
 
         if RegistrationMode.open == REGISTRATION_MODE:
             state = _get_state()
-            try:
-                if _use_db:
-                    raw = await _db_tokens.create(
-                        name=req.name,
-                        role=TokenRole.reader,  # open self-registration is reader-only
-                        email=req.email,
-                        description=req.description,
-                        metadata=req.metadata,
-                    )
-                else:
-                    raw = state.tokens.create(
-                        name=req.name,
-                        role=TokenRole.reader,  # open self-registration is reader-only
-                        email=req.email,
-                        description=req.description,
-                        metadata=req.metadata,
-                    )
-            except ValueError:
-                raise HTTPException(
-                    409,
-                    f"username '{req.name}' is already taken",
-                ) from None
-            if _use_db:
-                await _db_audit.record(
-                    action=AuditAction.registration_request,
-                    actor=req.name,
-                    target=req.name,
-                    detail=f"role={req.role.value} email={req.email} mode=open auto_approved",
-                )
-            else:
-                state.audit.record(
-                    action=AuditAction.registration_request,
-                    actor=req.name,
-                    target=req.name,
-                    detail=f"role={req.role.value} email={req.email} mode=open auto_approved",
-                )
+            async with _audit_txn(
+                AuditAction.registration_request,
+                req.name,
+                req.name,
+                f"role={req.role.value} email={req.email} mode=open auto_approved",
+            ):
+                try:
+                    if _use_db:
+                        raw = await _db_tokens.create(
+                            name=req.name,
+                            role=TokenRole.reader,  # open self-registration is reader-only
+                            email=req.email,
+                            description=req.description,
+                            metadata=req.metadata,
+                        )
+                    else:
+                        raw = state.tokens.create(
+                            name=req.name,
+                            role=TokenRole.reader,  # open self-registration is reader-only
+                            email=req.email,
+                            description=req.description,
+                            metadata=req.metadata,
+                        )
+                except ValueError:
+                    raise HTTPException(
+                        409,
+                        f"username '{req.name}' is already taken",
+                    ) from None
             return RegistrationResponse(
                 message="Token created. Save it — it will not be shown again.",
                 token=raw,
@@ -4228,18 +4232,18 @@ def create_app(
                     501,
                     "admin-gated registration requires a database backend",
                 )
-            request_record = await _db_token_requests.create(
-                name=req.name, email=req.email, role=req.role
-            )
-            await _db_audit.record(
-                action=AuditAction.registration_request,
-                actor=req.name,
-                target=req.name,
-                detail=(
+            async with _audit_txn(
+                AuditAction.registration_request,
+                req.name,
+                req.name,
+            ) as ac:
+                request_record = await _db_token_requests.create(
+                    name=req.name, email=req.email, role=req.role
+                )
+                ac.detail = (
                     f"role={req.role.value} email={req.email}"
                     f" mode=admin-gated request_id={request_record.id}"
-                ),
-            )
+                )
             return RegistrationResponse(
                 message="Registration request submitted. An admin will review it.",
                 request_id=request_record.id,
@@ -4273,17 +4277,17 @@ def create_app(
             raise HTTPException(404, f"token request {request_id} not found")
         if tr.status != TokenRequestStatus.pending:
             raise HTTPException(409, f"token request {request_id} already {tr.status.value}")
-        if not await _db_token_requests.resolve(
-            request_id, TokenRequestStatus.approved, actor.name
+        async with _audit_txn(
+            AuditAction.registration_approve,
+            actor.name,
+            tr.name,
+            f"request_id={request_id} role={tr.role.value}",
         ):
-            raise HTTPException(409, "request already resolved")
-        raw = await _db_tokens.create(name=tr.name, role=tr.role, email=tr.email)
-        await _db_audit.record(
-            action=AuditAction.registration_approve,
-            actor=actor.name,
-            target=tr.name,
-            detail=f"request_id={request_id} role={tr.role.value}",
-        )
+            if not await _db_token_requests.resolve(
+                request_id, TokenRequestStatus.approved, actor.name
+            ):
+                raise HTTPException(409, "request already resolved")
+            raw = await _db_tokens.create(name=tr.name, role=tr.role, email=tr.email)
         return {
             "message": f"approved request {request_id} — token created for '{tr.name}'",
             "token": raw,
@@ -4301,14 +4305,16 @@ def create_app(
             raise HTTPException(404, f"token request {request_id} not found")
         if tr.status != TokenRequestStatus.pending:
             raise HTTPException(409, f"token request {request_id} already {tr.status.value}")
-        if not await _db_token_requests.resolve(request_id, TokenRequestStatus.denied, actor.name):
-            raise HTTPException(409, "request already resolved")
-        await _db_audit.record(
-            action=AuditAction.registration_deny,
-            actor=actor.name,
-            target=tr.name,
-            detail=f"request_id={request_id}",
-        )
+        async with _audit_txn(
+            AuditAction.registration_deny,
+            actor.name,
+            tr.name,
+            f"request_id={request_id}",
+        ):
+            if not await _db_token_requests.resolve(
+                request_id, TokenRequestStatus.denied, actor.name
+            ):
+                raise HTTPException(409, "request already resolved")
         return {"message": f"denied token request {request_id}"}
 
     # ── Audit trail (admin) ─────────────────────────────────
@@ -4363,25 +4369,25 @@ def create_app(
             if _val and not _val.startswith(("http://", "https://", "/")):
                 raise HTTPException(422, f"{_field} must be an http(s) URL or a relative path")
 
-        try:
-            org = await _db_orgs.create(
-                slug=body.slug,
-                display_name=body.display_name,
-                description=body.description,
-                logo_url=body.logo_url,
-                homepage=body.homepage,
-                is_private=body.is_private,
-                created_by=actor.name,
-                storage_limit_bytes=ORG_STORAGE_LIMIT_BYTES,
-            )
-        except ValueError as exc:
-            raise HTTPException(409, str(exc)) from exc
-        await _db_audit.record(
-            action=AuditAction.org_create,
-            actor=actor.name,
-            target=body.slug,
-            detail=f"display_name={body.display_name}",
-        )
+        async with _audit_txn(
+            AuditAction.org_create,
+            actor.name,
+            body.slug,
+            f"display_name={body.display_name}",
+        ):
+            try:
+                org = await _db_orgs.create(
+                    slug=body.slug,
+                    display_name=body.display_name,
+                    description=body.description,
+                    logo_url=body.logo_url,
+                    homepage=body.homepage,
+                    is_private=body.is_private,
+                    created_by=actor.name,
+                    storage_limit_bytes=ORG_STORAGE_LIMIT_BYTES,
+                )
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from exc
         return org
 
     @app.get("/v1/orgs", response_model=OrgListResponse, tags=["organizations"])
@@ -4451,22 +4457,22 @@ def create_app(
         for _field, _val in (("logo_url", body.logo_url), ("homepage", body.homepage)):
             if _val and not _val.startswith(("http://", "https://", "/")):
                 raise HTTPException(422, f"{_field} must be an http(s) URL or a relative path")
-        updated = await _db_orgs.update(
+        async with _audit_txn(
+            AuditAction.org_update,
+            actor.name,
             slug,
-            display_name=body.display_name,
-            description=body.description,
-            logo_url=body.logo_url,
-            homepage=body.homepage,
-            is_private=body.is_private,
-            storage_limit_bytes=body.storage_limit_bytes,
-        )
-        if updated is None:
-            raise HTTPException(404, f"organization '{slug}' not found")
-        await _db_audit.record(
-            action=AuditAction.org_update,
-            actor=actor.name,
-            target=slug,
-        )
+        ):
+            updated = await _db_orgs.update(
+                slug,
+                display_name=body.display_name,
+                description=body.description,
+                logo_url=body.logo_url,
+                homepage=body.homepage,
+                is_private=body.is_private,
+                storage_limit_bytes=body.storage_limit_bytes,
+            )
+            if updated is None:
+                raise HTTPException(404, f"organization '{slug}' not found")
         return updated
 
     @app.post("/v1/orgs/{slug}/logo", tags=["organizations"])
@@ -4515,13 +4521,13 @@ def create_app(
 
         # Update the org's logo_url to the serve endpoint
         logo_url = f"/v1/orgs/{slug}/logo"
-        await _db_orgs.update(slug, logo_url=logo_url)
-        await _db_audit.record(
-            action=AuditAction.org_update,
-            actor=actor.name,
-            target=slug,
-            detail="logo uploaded",
-        )
+        async with _audit_txn(
+            AuditAction.org_update,
+            actor.name,
+            slug,
+            "logo uploaded",
+        ):
+            await _db_orgs.update(slug, logo_url=logo_url)
         return {"message": "logo uploaded", "logo_url": logo_url}
 
     @app.get("/v1/orgs/{slug}/logo", tags=["organizations"])
@@ -4551,18 +4557,18 @@ def create_app(
             raise HTTPException(501, "organizations require database backend")
         if not await _db_orgs.is_owner(slug, actor.name) and actor.role != TokenRole.admin:
             raise HTTPException(403, "only org owners or admins can manage members")
-        try:
-            added = await _db_orgs.add_member(slug, token_name, role)
-        except ValueError as exc:
-            raise HTTPException(404, str(exc)) from exc
-        if not added:
-            raise HTTPException(409, f"'{token_name}' is already a member of '{slug}'")
-        await _db_audit.record(
-            action=AuditAction.org_add_member,
-            actor=actor.name,
-            target=slug,
-            detail=f"member={token_name} role={role.value}",
-        )
+        async with _audit_txn(
+            AuditAction.org_add_member,
+            actor.name,
+            slug,
+            f"member={token_name} role={role.value}",
+        ):
+            try:
+                added = await _db_orgs.add_member(slug, token_name, role)
+            except ValueError as exc:
+                raise HTTPException(404, str(exc)) from exc
+            if not added:
+                raise HTTPException(409, f"'{token_name}' is already a member of '{slug}'")
         return {"message": f"added '{token_name}' to '{slug}' as {role.value}"}
 
     @app.delete("/v1/orgs/{slug}/members/{token_name}", tags=["organizations"])
@@ -4575,18 +4581,18 @@ def create_app(
             raise HTTPException(501, "organizations require database backend")
         if not await _db_orgs.is_owner(slug, actor.name) and actor.role != TokenRole.admin:
             raise HTTPException(403, "only org owners or admins can manage members")
-        try:
-            removed = await _db_orgs.remove_member(slug, token_name)
-        except ValueError as exc:
-            raise HTTPException(404, str(exc)) from exc
-        if not removed:
-            raise HTTPException(404, f"'{token_name}' is not a member of '{slug}'")
-        await _db_audit.record(
-            action=AuditAction.org_remove_member,
-            actor=actor.name,
-            target=slug,
-            detail=f"member={token_name}",
-        )
+        async with _audit_txn(
+            AuditAction.org_remove_member,
+            actor.name,
+            slug,
+            f"member={token_name}",
+        ):
+            try:
+                removed = await _db_orgs.remove_member(slug, token_name)
+            except ValueError as exc:
+                raise HTTPException(404, str(exc)) from exc
+            if not removed:
+                raise HTTPException(404, f"'{token_name}' is not a member of '{slug}'")
         return {"message": f"removed '{token_name}' from '{slug}'"}
 
     # ── RSS Feed ────────────────────────────────────────────
@@ -5113,25 +5119,26 @@ def create_app(
             build_type=build_type or None,
             link=link or None,
         )
-        if action == "yank":
-            await _db_packages.yank(name, version, **kwargs)
-        elif action == "unyank":
-            await _db_packages.unyank(name, version, **kwargs)
-        else:
-            # delete() narrows by platform/link only (matches /v1 delete API).
-            await _db_packages.delete(name, version, platform=platform or None, link=link or None)
-
-        if _db_audit is not None:
-            await _db_audit.record(
-                action={
-                    "yank": AuditAction.yank,
-                    "unyank": AuditAction.unyank,
-                    "delete": AuditAction.delete,
-                }[action],
-                actor="admin-ui",
-                target=f"{name}=={version}",
-                detail=f"{platform}/{arch}/{build_type}/{link} via /admin",
-            )
+        audit_action = {
+            "yank": AuditAction.yank,
+            "unyank": AuditAction.unyank,
+            "delete": AuditAction.delete,
+        }[action]
+        async with _audit_txn(
+            audit_action,
+            "admin-ui",
+            f"{name}=={version}",
+            f"{platform}/{arch}/{build_type}/{link} via /admin",
+        ):
+            if action == "yank":
+                await _db_packages.yank(name, version, **kwargs)
+            elif action == "unyank":
+                await _db_packages.unyank(name, version, **kwargs)
+            else:
+                # delete() narrows by platform/link only (matches /v1 delete API).
+                await _db_packages.delete(
+                    name, version, platform=platform or None, link=link or None
+                )
         return RedirectResponse("/admin/packages", status_code=303)
 
     @app.get("/admin/tokens", tags=["admin"], response_class=HTMLResponse)
@@ -5162,19 +5169,19 @@ def create_app(
         except ValueError:
             raise HTTPException(422, f"unknown role: {role}") from None
         try:
-            raw = await _db_tokens.create(name.strip(), role_val)
+            async with _audit_txn(
+                AuditAction.token_create,
+                "admin-ui",
+                name.strip(),
+                f"role={role_val.value} via /admin",
+            ):
+                raw = await _db_tokens.create(name.strip(), role_val)
         except Exception as exc:
+            # create (or its atomic audit) failed — nothing committed.
             tokens = await _db_tokens.list_tokens()
             return HTMLResponse(
                 admin_ui.tokens_html(tokens, error=f"create failed: {exc}"),
                 status_code=409,
-            )
-        if _db_audit is not None:
-            await _db_audit.record(
-                action=AuditAction.token_create,
-                actor="admin-ui",
-                target=name.strip(),
-                detail=f"role={role_val.value} via /admin",
             )
         tokens = await _db_tokens.list_tokens()
         return HTMLResponse(admin_ui.tokens_html(tokens, new_token=(name.strip(), raw)))
@@ -5185,14 +5192,10 @@ def create_app(
             raise HTTPException(403, "admin session required")
         if not _use_db or _db_tokens is None:
             raise HTTPException(503, "token management requires the database backend")
-        ok = await _db_tokens.revoke(name)
-        if ok and _db_audit is not None:
-            await _db_audit.record(
-                action=AuditAction.token_revoke,
-                actor="admin-ui",
-                target=name,
-                detail="via /admin",
-            )
+        async with _audit_txn(AuditAction.token_revoke, "admin-ui", name, "via /admin") as ac:
+            ok = await _db_tokens.revoke(name)
+            if not ok:
+                ac.skip = True  # nothing revoked → no audit entry (unchanged behaviour)
         return RedirectResponse("/admin/tokens", status_code=303)
 
     @app.get("/admin/audit", tags=["admin"], response_class=HTMLResponse)
@@ -5243,26 +5246,26 @@ def create_app(
 
         body = await request.json()
         changed: dict[str, int] = {}
-        if "global_cache_storage_limit_bytes" in body:
-            val = int(body["global_cache_storage_limit_bytes"])
-            if val < 0:
-                raise HTTPException(422, "global_cache_storage_limit_bytes must be >= 0")
-            GLOBAL_CACHE_STORAGE_LIMIT_BYTES = val
-            changed["global_cache_storage_limit_bytes"] = val
-        if "org_storage_limit_bytes" in body:
-            val = int(body["org_storage_limit_bytes"])
-            if val < 0:
-                raise HTTPException(422, "org_storage_limit_bytes must be >= 0")
-            ORG_STORAGE_LIMIT_BYTES = val
-            changed["org_storage_limit_bytes"] = val
-        if not changed:
-            raise HTTPException(422, "no recognised settings in request body")
-        await _db_audit.record(
-            action=AuditAction.admin_settings_update,
-            actor=actor.name,
-            target="settings",
-            detail=str(changed),
-        )
+        async with _audit_txn(
+            AuditAction.admin_settings_update,
+            actor.name,
+            "settings",
+        ) as ac:
+            if "global_cache_storage_limit_bytes" in body:
+                val = int(body["global_cache_storage_limit_bytes"])
+                if val < 0:
+                    raise HTTPException(422, "global_cache_storage_limit_bytes must be >= 0")
+                GLOBAL_CACHE_STORAGE_LIMIT_BYTES = val
+                changed["global_cache_storage_limit_bytes"] = val
+            if "org_storage_limit_bytes" in body:
+                val = int(body["org_storage_limit_bytes"])
+                if val < 0:
+                    raise HTTPException(422, "org_storage_limit_bytes must be >= 0")
+                ORG_STORAGE_LIMIT_BYTES = val
+                changed["org_storage_limit_bytes"] = val
+            if not changed:
+                raise HTTPException(422, "no recognised settings in request body")
+            ac.detail = str(changed)
         return {"message": "settings updated", "updated": changed}
 
     # ── Org HTML pages ──────────────────────────────────────
@@ -5405,23 +5408,24 @@ def create_app(
                         403,
                         "only org owners or global admins can create org-scoped tags",
                     )
-        try:
-            tag = await _db_tags.create(
-                name=body.name,
-                org_slug=body.org_slug,
-                display_name=body.display_name,
-                description=body.description,
-                logo_url=body.logo_url,
-                created_by=actor.name,
-            )
-        except ValueError as exc:
-            raise HTTPException(409, str(exc)) from None
-        await _db_audit.record(
-            action=AuditAction.tag_create,
-            actor=actor.name,
-            target=tag.qualified_name,
-            detail=f"display_name={tag.display_name}",
-        )
+        async with _audit_txn(
+            AuditAction.tag_create,
+            actor.name,
+            body.name,
+        ) as ac:
+            try:
+                tag = await _db_tags.create(
+                    name=body.name,
+                    org_slug=body.org_slug,
+                    display_name=body.display_name,
+                    description=body.description,
+                    logo_url=body.logo_url,
+                    created_by=actor.name,
+                )
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from None
+            ac.target = tag.qualified_name
+            ac.detail = f"display_name={tag.display_name}"
         return tag
 
     @app.put("/v1/tags/{tag_name}", response_model=TagInfo, tags=["tags"])
@@ -5443,20 +5447,21 @@ def create_app(
                         403,
                         "only org owners or global admins can edit org-scoped tags",
                     )
-        tag = await _db_tags.update(
-            name=tag_name,
-            org_slug=org,
-            display_name=body.display_name,
-            description=body.description,
-            logo_url=body.logo_url,
-        )
-        if tag is None:
-            raise HTTPException(404, "tag not found")
-        await _db_audit.record(
-            action=AuditAction.tag_update,
-            actor=actor.name,
-            target=tag.qualified_name,
-        )
+        async with _audit_txn(
+            AuditAction.tag_update,
+            actor.name,
+            tag_name,
+        ) as ac:
+            tag = await _db_tags.update(
+                name=tag_name,
+                org_slug=org,
+                display_name=body.display_name,
+                description=body.description,
+                logo_url=body.logo_url,
+            )
+            if tag is None:
+                raise HTTPException(404, "tag not found")
+            ac.target = tag.qualified_name
         return tag
 
     @app.delete("/v1/tags/{tag_name}", tags=["tags"])
@@ -5477,15 +5482,15 @@ def create_app(
                         403,
                         "only org owners or global admins can delete org-scoped tags",
                     )
-        deleted = await _db_tags.delete(name=tag_name, org_slug=org)
-        if not deleted:
-            raise HTTPException(404, "tag not found")
         qualified = f"{org}/{tag_name}" if org else tag_name
-        await _db_audit.record(
-            action=AuditAction.tag_delete,
-            actor=actor.name,
-            target=qualified,
-        )
+        async with _audit_txn(
+            AuditAction.tag_delete,
+            actor.name,
+            qualified,
+        ):
+            deleted = await _db_tags.delete(name=tag_name, org_slug=org)
+            if not deleted:
+                raise HTTPException(404, "tag not found")
         return {"message": f"tag '{qualified}' deleted"}
 
     # ── Mirror endpoints ────────────────────────────────────
@@ -5514,17 +5519,17 @@ def create_app(
         url = body.url.rstrip("/")
         if not url.startswith(("http://", "https://")):
             raise HTTPException(422, "mirror URL must start with http:// or https://")
-        info = await _db_mirrors.register(
-            url=url,
-            display_name=body.display_name,
-            contact=body.contact,
-        )
-        await _db_audit.record(
-            action=AuditAction.mirror_register,
-            actor=actor.name,
-            target=url,
-            detail=body.display_name or "",
-        )
+        async with _audit_txn(
+            AuditAction.mirror_register,
+            actor.name,
+            url,
+            body.display_name or "",
+        ):
+            info = await _db_mirrors.register(
+                url=url,
+                display_name=body.display_name,
+                contact=body.contact,
+            )
         return info
 
     @app.get("/v1/mirrors", response_model=MirrorListResponse, tags=["mirrors"])
@@ -5565,14 +5570,14 @@ def create_app(
         """
         if not _use_db or _db_mirrors is None:
             raise HTTPException(501, "mirror registry requires a database backend")
-        found = await _db_mirrors.reject(url, actor.name)
-        if not found:
-            raise HTTPException(404, f"mirror not found: {url}")
-        await _db_audit.record(
-            action=AuditAction.mirror_reject,
-            actor=actor.name,
-            target=url,
-        )
+        async with _audit_txn(
+            AuditAction.mirror_reject,
+            actor.name,
+            url,
+        ):
+            found = await _db_mirrors.reject(url, actor.name)
+            if not found:
+                raise HTTPException(404, f"mirror not found: {url}")
         return {"message": "mirror rejected", "url": url}
 
     @app.delete("/v1/mirrors", tags=["mirrors"])
@@ -5583,14 +5588,14 @@ def create_app(
         """Permanently remove a mirror from the registry (admin-only)."""
         if not _use_db or _db_mirrors is None:
             raise HTTPException(501, "mirror registry requires a database backend")
-        found = await _db_mirrors.remove(url)
-        if not found:
-            raise HTTPException(404, f"mirror not found: {url}")
-        await _db_audit.record(
-            action=AuditAction.mirror_remove,
-            actor=actor.name,
-            target=url,
-        )
+        async with _audit_txn(
+            AuditAction.mirror_remove,
+            actor.name,
+            url,
+        ):
+            found = await _db_mirrors.remove(url)
+            if not found:
+                raise HTTPException(404, f"mirror not found: {url}")
         return {"message": "mirror removed", "url": url}
 
     # ── Builders ────────────────────────────────────────────
@@ -5608,23 +5613,23 @@ def create_app(
     ):
         """Register a new builder or re-register an existing one."""
         _require_db_builders()
-        info = await _db_builders.register(
-            name=body.name,
-            platform=body.platform,
-            arch=body.arch,
-            registered_by=actor.name,
-            org_slug=body.org_slug,
-            labels=body.labels,
-            capabilities=body.capabilities,
-            max_jobs=body.max_jobs,
-            prefer_affinity=body.prefer_affinity,
-        )
-        await _db_audit.record(
-            action=AuditAction.builder_register,
-            actor=actor.name,
-            target=f"{body.org_slug}/{body.name}" if body.org_slug else body.name,
-            detail=f"{body.platform}/{body.arch}",
-        )
+        async with _audit_txn(
+            AuditAction.builder_register,
+            actor.name,
+            f"{body.org_slug}/{body.name}" if body.org_slug else body.name,
+            f"{body.platform}/{body.arch}",
+        ):
+            info = await _db_builders.register(
+                name=body.name,
+                platform=body.platform,
+                arch=body.arch,
+                registered_by=actor.name,
+                org_slug=body.org_slug,
+                labels=body.labels,
+                capabilities=body.capabilities,
+                max_jobs=body.max_jobs,
+                prefer_affinity=body.prefer_affinity,
+            )
         await emit_webhook_event(
             "builder.online",
             {
@@ -5708,20 +5713,20 @@ def create_app(
     ):
         """Update mutable builder fields."""
         _require_db_builders()
-        info = await _db_builders.update(
-            builder_id,
-            labels=body.labels,
-            capabilities=body.capabilities,
-            max_jobs=body.max_jobs,
-            prefer_affinity=body.prefer_affinity,
-        )
-        if info is None:
-            raise HTTPException(404, f"builder {builder_id} not found")
-        await _db_audit.record(
-            action=AuditAction.builder_update,
-            actor=actor.name,
-            target=str(builder_id),
-        )
+        async with _audit_txn(
+            AuditAction.builder_update,
+            actor.name,
+            str(builder_id),
+        ):
+            info = await _db_builders.update(
+                builder_id,
+                labels=body.labels,
+                capabilities=body.capabilities,
+                max_jobs=body.max_jobs,
+                prefer_affinity=body.prefer_affinity,
+            )
+            if info is None:
+                raise HTTPException(404, f"builder {builder_id} not found")
         return info
 
     @app.post(
@@ -5762,12 +5767,12 @@ def create_app(
         info = await _db_builders.get(builder_id)
         if info is None:
             raise HTTPException(404, f"builder {builder_id} not found")
-        await _db_builders.unregister(builder_id)
-        await _db_audit.record(
-            action=AuditAction.builder_unregister,
-            actor=actor.name,
-            target=f"{info.org_slug}/{info.name}" if info.org_slug else info.name,
-        )
+        async with _audit_txn(
+            AuditAction.builder_unregister,
+            actor.name,
+            f"{info.org_slug}/{info.name}" if info.org_slug else info.name,
+        ):
+            await _db_builders.unregister(builder_id)
         await emit_webhook_event(
             "builder.offline",
             {
@@ -5800,26 +5805,26 @@ def create_app(
         link = body.link
         if body.platform in ("wasm", "wasi", "cosmo") and link != "static":
             link = "static"
-        info = await _db_build_jobs.create(
-            recipe_name=body.recipe_name,
-            platform=body.platform,
-            arch=body.arch,
-            submitted_by=actor.name,
-            recipe_version=body.recipe_version,
-            recipe_hash=body.recipe_hash,
-            config=body.config,
-            link=link,
-            org_slug=body.org_slug,
-            priority=body.priority,
-            timeout_seconds=body.timeout_seconds,
-            depends_on=body.depends_on,
-        )
-        await _db_audit.record(
-            action=AuditAction.build_submit,
-            actor=actor.name,
-            target=f"{body.recipe_name}@{body.platform}/{body.arch}",
-            detail=f"job #{info.id}",
-        )
+        async with _audit_txn(
+            AuditAction.build_submit,
+            actor.name,
+            f"{body.recipe_name}@{body.platform}/{body.arch}",
+        ) as ac:
+            info = await _db_build_jobs.create(
+                recipe_name=body.recipe_name,
+                platform=body.platform,
+                arch=body.arch,
+                submitted_by=actor.name,
+                recipe_version=body.recipe_version,
+                recipe_hash=body.recipe_hash,
+                config=body.config,
+                link=link,
+                org_slug=body.org_slug,
+                priority=body.priority,
+                timeout_seconds=body.timeout_seconds,
+                depends_on=body.depends_on,
+            )
+            ac.detail = f"job #{info.id}"
         return info
 
     @app.post("/v1/builds/dag", response_model=DagSubmitResponse, tags=["builds"])
@@ -5861,23 +5866,23 @@ def create_app(
             }
             for j in body.jobs
         ]
-        try:
-            infos = await _db_build_jobs.create_dag(
-                jobs=jobs_dicts, dag_id=dag_id, submitted_by=actor.name
-            )
-        except Exception as exc:
-            import logging as _logging
+        async with _audit_txn(
+            AuditAction.build_submit,
+            actor.name,
+            f"dag:{dag_id}",
+        ) as ac:
+            try:
+                infos = await _db_build_jobs.create_dag(
+                    jobs=jobs_dicts, dag_id=dag_id, submitted_by=actor.name
+                )
+            except Exception as exc:
+                import logging as _logging
 
-            _logging.getLogger("cvcpkg.server").exception(
-                "create_dag failed for dag_id=%s (%d jobs)", dag_id, len(jobs_dicts)
-            )
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        await _db_audit.record(
-            action=AuditAction.build_submit,
-            actor=actor.name,
-            target=f"dag:{dag_id}",
-            detail=f"{len(infos)} jobs",
-        )
+                _logging.getLogger("cvcpkg.server").exception(
+                    "create_dag failed for dag_id=%s (%d jobs)", dag_id, len(jobs_dicts)
+                )
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
+            ac.detail = f"{len(infos)} jobs"
         return DagSubmitResponse(dag_id=dag_id, total=len(infos), jobs=infos)
 
     async def _assert_build_visible(actor: TokenRecord, info) -> None:
@@ -6013,30 +6018,35 @@ def create_app(
         if _existing is None:
             raise HTTPException(404, f"build job {job_id} not found")
         await _assert_build_visible(actor, _existing)
-        info = await _db_build_jobs.cancel(job_id, force=force)
-        if info is None:
-            raise HTTPException(404, f"build job {job_id} not found")
+        cascaded = 0
+        # Cancel + the force-cascade + audit commit as one unit; the no-op
+        # path (running-without-force / already-terminal) records nothing.
+        async with _audit_txn(
+            AuditAction.build_cancel,
+            actor.name,
+            str(job_id),
+            "force" if force else "",
+        ) as ac:
+            info = await _db_build_jobs.cancel(job_id, force=force)
+            if info is None:
+                raise HTTPException(404, f"build job {job_id} not found")
+            if info.status != BuildJobStatus.cancelled:
+                ac.skip = True
+            elif force:
+                cascaded = await _db_build_jobs.cancel_downstream(job_id)
         if info.status != BuildJobStatus.cancelled:
             # The store no-op'd (e.g. running without force, or already terminal)
             return {"message": "no-op", "id": job_id, "status": info.status}
-        await _db_audit.record(
-            action=AuditAction.build_cancel,
-            actor=actor.name,
-            target=str(job_id),
-            detail="force" if force else "",
-        )
-        cascaded = 0
-        if force:
-            cascaded = await _db_build_jobs.cancel_downstream(job_id)
-            if info.builder_id is not None:
-                await _ws_send(
-                    info.builder_id,
-                    {
-                        "type": "job.cancel",
-                        "job_id": job_id,
-                        "message": f"force-cancelled by {actor.name}",
-                    },
-                )
+        # Notify the builder + webhook subscribers after the commit.
+        if force and info.builder_id is not None:
+            await _ws_send(
+                info.builder_id,
+                {
+                    "type": "job.cancel",
+                    "job_id": job_id,
+                    "message": f"force-cancelled by {actor.name}",
+                },
+            )
         await emit_webhook_event(
             "build.cancelled",
             {
@@ -6064,13 +6074,13 @@ def create_app(
         """Cancel all pending/dispatched jobs in a DAG."""
         _require_db_build_jobs()
         await _assert_dag_visible(actor, dag_id)
-        count = await _db_build_jobs.cancel_dag(dag_id)
-        await _db_audit.record(
-            action=AuditAction.build_cancel,
-            actor=actor.name,
-            target=f"dag:{dag_id}",
-            detail=f"{count} jobs cancelled",
-        )
+        async with _audit_txn(
+            AuditAction.build_cancel,
+            actor.name,
+            f"dag:{dag_id}",
+        ) as ac:
+            count = await _db_build_jobs.cancel_dag(dag_id)
+            ac.detail = f"{count} jobs cancelled"
         await emit_webhook_event(
             "build.cancelled",
             {
@@ -6178,16 +6188,18 @@ def create_app(
             )
             if not mine:
                 raise HTTPException(409, f"build job {job_id} is already running")
-        info = await _db_build_jobs.claim(job_id, body.builder_id, claimant=body.claimant.strip())
-        if info is None:
-            raise HTTPException(404, f"build job {job_id} not found")
         _who = f"builder #{body.builder_id}" if body.builder_id is not None else body.claimant
-        await _db_audit.record(
-            action=AuditAction.build_claim,
-            actor=actor.name,
-            target=str(job_id),
-            detail=_who,
-        )
+        async with _audit_txn(
+            AuditAction.build_claim,
+            actor.name,
+            str(job_id),
+            _who,
+        ):
+            info = await _db_build_jobs.claim(
+                job_id, body.builder_id, claimant=body.claimant.strip()
+            )
+            if info is None:
+                raise HTTPException(404, f"build job {job_id} not found")
         await emit_webhook_event(
             "build.started",
             {
@@ -6218,14 +6230,10 @@ def create_app(
         if _existing is None:
             raise HTTPException(404, f"build job {job_id} not found")
         await _assert_build_visible(actor, _existing)
-        info = await _db_build_jobs.complete(job_id, result_archive_url=body.result_archive_url)
-        if info is None:
-            raise HTTPException(404, f"build job {job_id} not found")
-        await _db_audit.record(
-            action=AuditAction.build_complete,
-            actor=actor.name,
-            target=str(job_id),
-        )
+        async with _audit_txn(AuditAction.build_complete, actor.name, str(job_id)):
+            info = await _db_build_jobs.complete(job_id, result_archive_url=body.result_archive_url)
+            if info is None:
+                raise HTTPException(404, f"build job {job_id} not found")
         await emit_webhook_event(
             "build.completed",
             {
@@ -6265,17 +6273,18 @@ def create_app(
         if _existing is None:
             raise HTTPException(404, f"build job {job_id} not found")
         await _assert_build_visible(actor, _existing)
-        info = await _db_build_jobs.fail(job_id, error_message=body.error_message)
-        if info is None:
-            raise HTTPException(404, f"build job {job_id} not found")
-        # Cascade-cancel downstream dependents (parity with the WS job.fail path).
-        cascaded = await _db_build_jobs.cancel_downstream(job_id)
-        await _db_audit.record(
-            action=AuditAction.build_fail,
-            actor=actor.name,
-            target=str(job_id),
-            detail=body.error_message[:200] if body.error_message else "",
-        )
+        async with _audit_txn(
+            AuditAction.build_fail,
+            actor.name,
+            str(job_id),
+            body.error_message[:200] if body.error_message else "",
+        ):
+            info = await _db_build_jobs.fail(job_id, error_message=body.error_message)
+            if info is None:
+                raise HTTPException(404, f"build job {job_id} not found")
+            # Cascade-cancel downstream dependents in the same transaction
+            # (parity with the WS job.fail path).
+            cascaded = await _db_build_jobs.cancel_downstream(job_id)
         await emit_webhook_event(
             "build.failed",
             {
@@ -6690,21 +6699,21 @@ def create_app(
         dest.write_bytes(content)
         bundle_size = len(content)
 
-        info = await _db_recipes.upload(
-            name=name,
-            bundle_path=str(dest),
-            bundle_size=bundle_size,
-            uploaded_by=actor.name,
-            version=version,
-            recipe_hash=recipe_hash,
-            org_slug=org_slug,
-        )
-        await _db_audit.record(
-            action=AuditAction.recipe_upload,
-            actor=actor.name,
-            target=name,
-            detail=f"version={version} org={org_slug}" if org_slug else f"version={version}",
-        )
+        async with _audit_txn(
+            AuditAction.recipe_upload,
+            actor.name,
+            name,
+            f"version={version} org={org_slug}" if org_slug else f"version={version}",
+        ):
+            info = await _db_recipes.upload(
+                name=name,
+                bundle_path=str(dest),
+                bundle_size=bundle_size,
+                uploaded_by=actor.name,
+                version=version,
+                recipe_hash=recipe_hash,
+                org_slug=org_slug,
+            )
         # Notify connected builders of the new/updated recipe
         bundle_url = f"/v1/recipes/{name}"
         if org_slug:
@@ -6892,14 +6901,10 @@ def create_app(
         if bundle_path and Path(bundle_path).is_file():
             Path(bundle_path).unlink()
 
-        deleted = await _db_recipes.delete(name, org_slug=org_slug)
-        if not deleted:
-            raise HTTPException(404, f"recipe '{name}' not found")
-        await _db_audit.record(
-            action=AuditAction.recipe_delete,
-            actor=actor.name,
-            target=name,
-        )
+        async with _audit_txn(AuditAction.recipe_delete, actor.name, name):
+            deleted = await _db_recipes.delete(name, org_slug=org_slug)
+            if not deleted:
+                raise HTTPException(404, f"recipe '{name}' not found")
         return {"ok": True, "name": name}
 
     @app.post(
@@ -6991,18 +6996,16 @@ def create_app(
             raise HTTPException(
                 422, "webhook url must be an http(s) URL resolving to a public address"
             )
-        info = await _db_webhooks.register(
-            url=body.url,
-            events=body.events,
-            registered_by=actor.name,
-            org_slug=body.org_slug,
-        )
-        await _db_audit.record(
-            action=AuditAction.webhook_register,
-            actor=actor.name,
-            target=str(info.id),
-            detail=f"url={body.url}",
-        )
+        async with _audit_txn(
+            AuditAction.webhook_register, actor.name, "", f"url={body.url}"
+        ) as ac:
+            info = await _db_webhooks.register(
+                url=body.url,
+                events=body.events,
+                registered_by=actor.name,
+                org_slug=body.org_slug,
+            )
+            ac.target = str(info.id)
         return info
 
     @app.get(
@@ -7053,19 +7056,15 @@ def create_app(
     ):
         """Update a webhook (admin only)."""
         _require_db_webhooks()
-        info = await _db_webhooks.update(
-            webhook_id,
-            url=body.url,
-            events=body.events,
-            active=body.active,
-        )
-        if info is None:
-            raise HTTPException(404, f"webhook {webhook_id} not found")
-        await _db_audit.record(
-            action=AuditAction.webhook_update,
-            actor=actor.name,
-            target=str(webhook_id),
-        )
+        async with _audit_txn(AuditAction.webhook_update, actor.name, str(webhook_id)):
+            info = await _db_webhooks.update(
+                webhook_id,
+                url=body.url,
+                events=body.events,
+                active=body.active,
+            )
+            if info is None:
+                raise HTTPException(404, f"webhook {webhook_id} not found")
         return info
 
     @app.delete(
@@ -7078,14 +7077,10 @@ def create_app(
     ):
         """Delete a webhook (admin only)."""
         _require_db_webhooks()
-        deleted = await _db_webhooks.delete(webhook_id)
-        if not deleted:
-            raise HTTPException(404, f"webhook {webhook_id} not found")
-        await _db_audit.record(
-            action=AuditAction.webhook_delete,
-            actor=actor.name,
-            target=str(webhook_id),
-        )
+        async with _audit_txn(AuditAction.webhook_delete, actor.name, str(webhook_id)):
+            deleted = await _db_webhooks.delete(webhook_id)
+            if not deleted:
+                raise HTTPException(404, f"webhook {webhook_id} not found")
         return {"ok": True, "id": webhook_id}
 
     @app.post(

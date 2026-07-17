@@ -32,7 +32,10 @@ from cvcpkg.server.db import (
     TokenRequestRow,
     TokenRow,
     WebhookRow,
+    audit_advisory_lock,
+    audit_append_lock,
     get_session,
+    in_atomic_session,
 )
 from cvcpkg.server.models import (
     AuditAction,
@@ -559,6 +562,56 @@ class DbAuditLog:
         )
         return hashlib.sha256(payload.encode()).hexdigest()
 
+    async def _append(
+        self,
+        session,
+        action: AuditAction,
+        actor: str,
+        target: str,
+        detail: str,
+    ) -> AuditEntry:
+        """Read the last row, chain-hash it, and insert the new entry.
+
+        Must run inside a serialized critical section (append lock held,
+        advisory lock taken) so the read-last → insert cannot interleave
+        with another appender and fork the chain.
+        """
+        await audit_advisory_lock(session)
+        result = await session.execute(select(AuditRow).order_by(AuditRow.id.desc()).limit(1))
+        last = result.scalars().first()
+        prev_hash = ""
+        if last is not None:
+            prev_entry = AuditEntry(
+                id=last.id,
+                timestamp=last.timestamp,
+                action=self._coerce_action(last.action),
+                actor=last.actor,
+                target=last.target,
+                detail=last.detail,
+                prev_sha256=last.prev_sha256,
+            )
+            prev_hash = self._entry_hash(prev_entry)
+
+        row = AuditRow(
+            action=action.value,
+            actor=actor,
+            target=target,
+            detail=detail,
+            prev_sha256=prev_hash,
+        )
+        session.add(row)
+        await session.flush()
+
+        return AuditEntry(
+            id=row.id,
+            timestamp=row.timestamp,
+            action=action,
+            actor=actor,
+            target=target,
+            detail=detail,
+            prev_sha256=prev_hash,
+        )
+
     async def record(
         self,
         action: AuditAction,
@@ -566,42 +619,26 @@ class DbAuditLog:
         target: str,
         detail: str = "",
     ) -> AuditEntry:
-        async with get_session() as session:
-            # Get prev hash from last entry
-            result = await session.execute(select(AuditRow).order_by(AuditRow.id.desc()).limit(1))
-            last = result.scalars().first()
-            prev_hash = ""
-            if last is not None:
-                prev_entry = AuditEntry(
-                    id=last.id,
-                    timestamp=last.timestamp,
-                    action=self._coerce_action(last.action),
-                    actor=last.actor,
-                    target=last.target,
-                    detail=last.detail,
-                    prev_sha256=last.prev_sha256,
-                )
-                prev_hash = self._entry_hash(prev_entry)
+        """Append an entry to the tamper-evident chain.
 
-            row = AuditRow(
-                action=action.value,
-                actor=actor,
-                target=target,
-                detail=detail,
-                prev_sha256=prev_hash,
-            )
-            session.add(row)
-            await session.flush()
+        When an ambient unit-of-work session is active (see
+        ``atomic_session``), the row is written into the caller's
+        transaction so the mutation and its audit entry commit atomically;
+        the caller is responsible for holding the append lock across its
+        commit (see ``_audit_txn`` in app.py).  Otherwise a standalone
+        transaction is opened with the append lock held end-to-end so a
+        concurrent append cannot fork the hash chain.
+        """
+        if in_atomic_session():
+            # Ambient transaction: the caller (_audit_txn) already holds
+            # the append lock across its commit.  Do not re-acquire it
+            # (asyncio.Lock is not reentrant) — just append.
+            async with get_session() as session:
+                return await self._append(session, action, actor, target, detail)
 
-            return AuditEntry(
-                id=row.id,
-                timestamp=row.timestamp,
-                action=action,
-                actor=actor,
-                target=target,
-                detail=detail,
-                prev_sha256=prev_hash,
-            )
+        async with audit_append_lock():
+            async with get_session() as session:
+                return await self._append(session, action, actor, target, detail)
 
     async def entries(
         self,
