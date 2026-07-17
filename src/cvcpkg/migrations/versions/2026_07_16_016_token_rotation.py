@@ -1,7 +1,7 @@
 """token rotation grace-window columns
 
-Revision ID: 015
-Revises: 014
+Revision ID: 016
+Revises: 015
 Create Date: 2026-07-16
 
 Adds ``previous_token_hash`` and ``previous_hash_expires_at`` to
@@ -16,8 +16,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "015"
-down_revision: str | None = "014"
+revision: str = "016"
+down_revision: str | None = "015"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
