@@ -17,7 +17,7 @@ import pytest
 pytest.importorskip("pydantic", reason="server extras not installed")
 
 from cvcpkg.server.auth import TokenStore
-from cvcpkg.server.models import TokenRole
+from cvcpkg.server.models import TokenRecord, TokenRole
 
 _PAST = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=1)
 
@@ -716,3 +716,48 @@ class TestRotationOrgMembershipAndDbEndpoint:
             "entries"
         ]
         assert any(e["action"] == "token_rotate" and e["target"] == "dbrot" for e in audit)
+
+
+# ── Live builder-socket re-auth gate ────────────────────────────
+
+
+class TestWsReauthRejection:
+    """The builder-socket re-auth gate mirrors the connect-time checks so a
+    revoked, expired, rotated, or demoted token cannot outlive its validity on
+    an already-open WebSocket."""
+
+    @staticmethod
+    def _reject():
+        pytest.importorskip("fastapi", reason="server extras not installed")
+        from cvcpkg.server.app import _ws_reauth_rejection
+
+        return _ws_reauth_rejection
+
+    @staticmethod
+    def _record(role=TokenRole.publisher, via_previous_hash=False):
+        return TokenRecord(
+            name="bot",
+            role=role,
+            token_hash="deadbeef",
+            via_previous_hash=via_previous_hash,
+        )
+
+    def test_missing_record_closes_4001(self):
+        # verify() returns None once the token is revoked/expired/grace-closed.
+        assert self._reject()(None) == (4001, "token revoked or expired")
+
+    def test_valid_publisher_is_kept(self):
+        assert self._reject()(self._record()) is None
+
+    def test_valid_admin_is_kept(self):
+        assert self._reject()(self._record(role=TokenRole.admin)) is None
+
+    def test_grace_secret_closes_4003(self):
+        # The socket's secret is now only the pre-rotation grace hash: a
+        # rotation must not leave the old secret holding a live socket.
+        code, _reason = self._reject()(self._record(via_previous_hash=True))
+        assert code == 4003
+
+    def test_demoted_below_publisher_closes_4003(self):
+        code, _reason = self._reject()(self._record(role=TokenRole.reader))
+        assert code == 4003
