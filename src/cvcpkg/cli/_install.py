@@ -496,11 +496,16 @@ def install(
 
     # ── Strip the build prefix ──
     #
-    # If a build prefix was recorded for this deliverable (written by
-    # 'cvcpkg build' into share/libcvc-deps/host-tools.yaml), strip it now: the
-    # build-dependency closure (host tools, staged sources) is a build-time
-    # byproduct, not part of the deliverable.  --keep-build-prefix retains it,
-    # e.g. to ship sources.  No-op when there is no record (prebuilt install).
+    # Prune a build-dependency closure (host tools, staged sources) that shipped
+    # *inside* this prefix: it is a build-time byproduct, not part of the
+    # deliverable.  --keep-build-prefix retains it, e.g. to ship sources.
+    #
+    # No owned_prefix is passed: install never creates a build prefix of its
+    # own (build_from_source_fallback builds straight into prefix_path), so the
+    # only prefix it may strip is one that arrived in the package.  The record
+    # ships inside the package and its `prefix:` is an absolute path from the
+    # BUILD machine -- strip_host_tools refuses anything outside this prefix,
+    # which previously let an install delete the builder's directory.
     try:
         from cvcpkg.host_tools import strip_host_tools
 

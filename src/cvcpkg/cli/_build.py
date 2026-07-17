@@ -495,7 +495,10 @@ def build(
                     "(recorded in share/libcvc-deps/host-tools.yaml)"
                 )
             else:
-                stripped = strip_host_tools(prefix_path, keep=False)
+                # This run created build_prefix_path, so vouch for it: without
+                # owned_prefix, strip_host_tools refuses paths outside the
+                # deliverable (the build prefix is a sibling of it).
+                stripped = strip_host_tools(prefix_path, keep=False, owned_prefix=build_prefix_path)
                 if stripped is not None:
                     click.echo(
                         f"cvcpkg: stripped build prefix {stripped} "

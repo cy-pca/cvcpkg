@@ -133,7 +133,9 @@ class TestStripHostTools:
 
     def test_strip_removes_prefix_and_marks_stripped(self, tmp_path):
         prefix, ht = self._setup(tmp_path)
-        stripped = strip_host_tools(prefix, keep=False, now="2026-07-16T00:00:00+00:00")
+        stripped = strip_host_tools(
+            prefix, keep=False, now="2026-07-16T00:00:00+00:00", owned_prefix=ht
+        )
         assert stripped == ht
         assert not ht.exists()
         # record updated in place
@@ -159,9 +161,9 @@ class TestStripHostTools:
 
     def test_already_stripped_is_noop(self, tmp_path):
         prefix, ht = self._setup(tmp_path)
-        strip_host_tools(prefix, keep=False, now="2026-07-16T00:00:00+00:00")
+        strip_host_tools(prefix, keep=False, now="2026-07-16T00:00:00+00:00", owned_prefix=ht)
         # second call: record says stripped -> nothing to do
-        assert strip_host_tools(prefix, keep=False) is None
+        assert strip_host_tools(prefix, keep=False, owned_prefix=ht) is None
 
     def test_refuses_to_strip_when_prefix_equals_deliverable(self, tmp_path):
         # separation disabled: host-tools prefix == deliverable prefix
@@ -173,12 +175,58 @@ class TestStripHostTools:
         # deliverable must be untouched
         assert (prefix / "bin" / "cmake").exists()
 
+    def test_refuses_a_build_machine_path_outside_the_deliverable(self, tmp_path):
+        # THE install case.  The record ships inside the package, so `prefix:`
+        # is an absolute path from whatever machine built it.  Installing must
+        # never delete it: here it is someone's home directory, not ours.
+        #
+        # Real incident: `cvcpkg install --prefix /tmp/smoke-release` printed
+        # "stripped build prefix /home/usjrkx/clients/wt-validate-out3.build"
+        # and deleted the build machine's directory.
+        victim = tmp_path / "somebody-elses-data"
+        (victim / "important").mkdir(parents=True)
+        (victim / "important" / "file.txt").write_text("do not delete me")
+
+        prefix = tmp_path / "install-prefix"
+        prefix.mkdir()
+        write_host_tools_record(prefix, victim, ["bazel"])
+
+        # install passes no owned_prefix: it never creates a build prefix.
+        assert strip_host_tools(prefix, keep=False) is None
+        assert (victim / "important" / "file.txt").read_text() == "do not delete me"
+        # and it must stay retryable rather than claim a false success
+        rec = read_host_tools_record(prefix)
+        assert rec is not None and rec.stripped is False
+
+    def test_strips_a_build_prefix_that_shipped_inside_the_deliverable(self, tmp_path):
+        # The one thing install may prune: a tree that actually arrived in the
+        # package, so removing it only undoes what we extracted.
+        prefix = tmp_path / "deps"
+        shipped = prefix / "build-prefix"
+        (shipped / "bin").mkdir(parents=True)
+        (shipped / "bin" / "bazel").write_text("x")
+        (prefix / "bin").mkdir(parents=True)
+        (prefix / "bin" / "app").write_text("keep")
+        write_host_tools_record(prefix, shipped, ["bazel"])
+
+        assert strip_host_tools(prefix, keep=False, now="t") == shipped
+        assert not shipped.exists()
+        assert (prefix / "bin" / "app").exists(), "pruning must not touch the deliverable"
+
+    def test_owned_prefix_must_match_the_record_to_strip(self, tmp_path):
+        # Vouching for one path does not authorise deleting a different one.
+        prefix, ht = self._setup(tmp_path)
+        other = tmp_path / "not-the-recorded-one"
+        other.mkdir()
+        assert strip_host_tools(prefix, keep=False, owned_prefix=other) is None
+        assert ht.exists()
+
     def test_missing_prefix_dir_still_marks_stripped(self, tmp_path):
         prefix = tmp_path / "deps"
         prefix.mkdir()
         gone = tmp_path / "deps.host-tools"  # never created
         write_host_tools_record(prefix, gone, ["bazel"])
-        stripped = strip_host_tools(prefix, keep=False, now="t")
+        stripped = strip_host_tools(prefix, keep=False, now="t", owned_prefix=gone)
         assert stripped == gone
         rec = read_host_tools_record(prefix)
         assert rec is not None and rec.stripped is True
@@ -191,7 +239,7 @@ class TestStripHostTools:
 
         prefix, ht = self._setup(tmp_path)
         monkeypatch.setattr(ht_mod.shutil, "rmtree", lambda *a, **k: None)  # no-op
-        result = strip_host_tools(prefix, keep=False, now="t")
+        result = strip_host_tools(prefix, keep=False, now="t", owned_prefix=ht)
         assert result is None  # nothing conclusively stripped
         assert ht.exists()  # leftover remains
         rec = read_host_tools_record(prefix)
@@ -200,7 +248,7 @@ class TestStripHostTools:
         assert rec.stripped_at == ""
         # a later call (with real rmtree restored) still strips it
         monkeypatch.undo()
-        assert strip_host_tools(prefix, keep=False, now="t2") == ht
+        assert strip_host_tools(prefix, keep=False, now="t2", owned_prefix=ht) == ht
         assert not ht.exists()
 
     def test_symlinked_prefix_unlinks_link_not_target(self, tmp_path):
@@ -220,7 +268,7 @@ class TestStripHostTools:
             pytest.skip("symlinks unsupported on this platform")
         write_host_tools_record(prefix, link, ["bazel"])
 
-        stripped = strip_host_tools(prefix, keep=False, now="t")
+        stripped = strip_host_tools(prefix, keep=False, now="t", owned_prefix=link)
         assert stripped == link
         assert not link.exists() and not link.is_symlink()  # link removed
         assert real.exists() and (real / "bin" / "bazel").exists()  # target kept
