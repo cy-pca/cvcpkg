@@ -4917,7 +4917,12 @@ def create_app(
             state = _get_state()
             record = state.tokens.verify(token)
 
-        if record is None or record.role != TokenRole.admin:
+        # A pre-rotation grace secret must not mint an admin session: the
+        # cookie is a durable control-plane credential that outlives the
+        # grace window, so accepting the old secret here would defeat
+        # rotation as a leak remediation (the bearer-token control-plane
+        # guards already reject grace secrets).
+        if record is None or record.role != TokenRole.admin or record.via_previous_hash:
             return HTMLResponse(
                 admin_ui.login_html(
                     error="Invalid token or not an admin token.", oidc_enabled=_oidc_enabled()
@@ -6401,6 +6406,9 @@ def create_app(
             raise HTTPException(401, "invalid or expired token")
         if record.role not in (TokenRole.publisher, TokenRole.admin):
             raise HTTPException(403, "insufficient role")
+        # Grace secrets are data-plane-only (publish/upload); privileged
+        # build-log access is not opted in, so reject them here too.
+        _reject_grace_secret(record)
         # Enforce org membership when the job exists; a missing job falls through
         # to the generator's existing "job not found" SSE event (preserved contract).
         _job = await _db_build_jobs.get(job_id)
@@ -6494,6 +6502,13 @@ def create_app(
             return
         if actor.role not in (TokenRole.publisher, TokenRole.admin):
             await websocket.close(code=4003, reason="insufficient role")
+            return
+        # A pre-rotation grace secret must not open a long-lived builder
+        # session that outlives the grace window (grace secrets are
+        # data-plane-only; _reject_grace_secret can't be used here because
+        # it raises HTTP, not a WS close).
+        if actor.via_previous_hash:
+            await websocket.close(code=4003, reason="pre-rotation secret not allowed")
             return
 
         # Validate builder exists
