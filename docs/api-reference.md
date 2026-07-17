@@ -215,11 +215,47 @@ Upload and publish a package bundle.
 
 ### `POST /v1/packages/{name}/{version}/yank`
 
-Mark a package as yanked. Auth: `publisher` or `admin`.
+Mark a package as yanked. Auth: `publisher` or `admin` — a publisher may only
+yank packages it published, or that belong to an org it is a member of.
+
+| Query param | Effect |
+| --- | --- |
+| `platform` | Only yank bundles for this platform |
+| `arch` | Only yank bundles for this arch |
+| `link` | Only yank bundles for this link mode (`shared`/`static`) |
+| `build_type` | Only yank bundles for this build type (`release`/`debug`) |
+
+**Omitting a scope param matches every value of it**, so a call with no params
+yanks *every* variant of that version. A call that matches nothing returns
+`200` with `{"count": 0}` rather than an error — check `count`.
+
+```json
+{ "message": "yanked readline==8.3+cvc.1 [platform=linux]", "count": 1 }
+```
+
+Yanking hides bundles from the catalog and from dependency resolution. It does
+not delete the archive, and it is reversible. Note it is stronger than cargo's
+yank: the catalog **omits** yanked bundles rather than flagging them, so a pin
+to a yanked version stops resolving too — that install falls back to building
+from source, or fails.
+
+Prefer the CLI, which previews the affected bundles, warns when a yank would
+leave a variant with no active bundle, and refuses a no-op instead of reporting
+`count: 0`:
+
+```console
+$ cvcpkg yank readline 8.3+cvc.1 --platform linux --arch x86_64 \
+      --config release --link shared
+```
 
 ### `POST /v1/packages/{name}/{version}/unyank`
 
-Remove yank status. Auth: `admin` only.
+Remove yank status. Auth: `admin` only — unlike yank, a publisher cannot
+un-retire even its own package. Takes the same scope query params.
+
+```console
+$ cvcpkg unyank readline 8.3+cvc.1 --platform linux --arch x86_64
+```
 
 ### `DELETE /v1/packages/{name}/{version}`
 
