@@ -125,6 +125,9 @@ class TokenStore:
                     return None
                 if t.expires_at is not None and t.expires_at < now:
                     return None
+                if matches_previous and not matches_current:
+                    # Copy so the transient flag never reaches _persist().
+                    return t.model_copy(update={"via_previous_hash": True})
                 return t
         return None
 
@@ -137,14 +140,21 @@ class TokenStore:
         copies can be updated without an outage.  Returns None if no
         active token has this name.
         """
+        now = datetime.datetime.now(datetime.timezone.utc)
         for t in self._tokens:
             if t.name == name and not t.revoked:
+                if t.expires_at is not None and t.expires_at < now:
+                    # An expired token cannot verify, so a "rotated" secret
+                    # would be dead on arrival — treat like not found.
+                    return None
                 raw = f"cvctok_{secrets.token_urlsafe(32)}"
                 if grace_minutes > 0:
+                    window_end = now + datetime.timedelta(minutes=grace_minutes)
+                    if t.expires_at is not None and t.expires_at < window_end:
+                        # The old secret can never outlive the token itself.
+                        window_end = t.expires_at
                     t.previous_token_hash = t.token_hash
-                    t.previous_hash_expires_at = datetime.datetime.now(
-                        datetime.timezone.utc
-                    ) + datetime.timedelta(minutes=grace_minutes)
+                    t.previous_hash_expires_at = window_end
                 else:
                     t.previous_token_hash = ""
                     t.previous_hash_expires_at = None

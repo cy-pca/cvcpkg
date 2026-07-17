@@ -38,6 +38,9 @@ def upgrade() -> None:
     for name, coltype in _NEW_COLUMNS:
         if name not in existing:
             op.add_column("tokens", sa.Column(name, coltype, nullable=True))
+    existing_indexes = {ix["name"] for ix in insp.get_indexes("tokens")}
+    if "ix_tokens_previous_token_hash" not in existing_indexes:
+        op.create_index("ix_tokens_previous_token_hash", "tokens", ["previous_token_hash"])
 
 
 def downgrade() -> None:
@@ -45,6 +48,9 @@ def downgrade() -> None:
     insp = sa.inspect(conn)
     if "tokens" not in insp.get_table_names():
         return
+    existing_indexes = {ix["name"] for ix in insp.get_indexes("tokens")}
+    if "ix_tokens_previous_token_hash" in existing_indexes:
+        op.drop_index("ix_tokens_previous_token_hash", table_name="tokens")
     existing = {c["name"] for c in insp.get_columns("tokens")}
     for name, _coltype in _NEW_COLUMNS:
         if name in existing:

@@ -83,6 +83,31 @@ class TestTokenStoreRotate:
         store.revoke("bot")
         assert store.rotate("bot") is None
 
+    def test_rotate_expired_token_returns_none(self, tmp_path):
+        store = TokenStore(tmp_path)
+        new = store.create("bot", TokenRole.publisher)
+        rec = store.verify(new)
+        rec.expires_at = _PAST
+        assert store.rotate("bot") is None
+
+    def test_grace_window_clamped_to_token_expiry(self, tmp_path):
+        store = TokenStore(tmp_path)
+        store.create("bot", TokenRole.publisher, expires_in_days=1)
+        new = store.rotate("bot", grace_minutes=10080)  # a week > 1 day
+        rec = store.verify(new)
+        assert rec.previous_hash_expires_at is not None
+        assert rec.previous_hash_expires_at <= rec.expires_at
+
+    def test_grace_verify_flags_previous_hash_and_does_not_persist_flag(self, tmp_path):
+        store = TokenStore(tmp_path)
+        old = store.create("bot", TokenRole.publisher)
+        new = store.rotate("bot", grace_minutes=5)
+        assert store.verify(new).via_previous_hash is False
+        assert store.verify(old).via_previous_hash is True
+        # The transient flag must never reach tokens.yaml
+        raw_yaml = (tmp_path / "tokens.yaml").read_text()
+        assert "via_previous_hash" not in raw_yaml
+
     def test_rotation_survives_reload(self, tmp_path):
         store = TokenStore(tmp_path)
         old = store.create("bot", TokenRole.publisher)
@@ -167,6 +192,36 @@ class TestDbTokenStoreRotate:
             await store.create("bot", TokenRole.publisher)
             await store.revoke("bot")
             assert await store.rotate("bot") is None
+
+        self._run(scenario)
+
+    def test_rotate_expired_token_returns_none(self):
+        async def scenario(store):
+            from sqlalchemy import update
+
+            from cvcpkg.server.db import TokenRow, get_session
+
+            await store.create("bot", TokenRole.publisher)
+            async with get_session() as session:
+                await session.execute(
+                    update(TokenRow).where(TokenRow.name == "bot").values(expires_at=_PAST)
+                )
+            assert await store.rotate("bot") is None
+
+        self._run(scenario)
+
+    def test_grace_with_token_expiry_no_crash_and_clamped(self):
+        # Regression: SQLite returns naive datetimes; the grace verify
+        # path must not TypeError against aware `now`, and the window
+        # must be clamped to the token's own expiry.
+        async def scenario(store):
+            old = await store.create("bot", TokenRole.publisher, expires_in_days=1)
+            new = await store.rotate("bot", grace_minutes=10080)  # a week > 1 day
+            rec_old = await store.verify(old)
+            rec_new = await store.verify(new)
+            assert rec_old is not None and rec_old.via_previous_hash is True
+            assert rec_new is not None and rec_new.via_previous_hash is False
+            assert rec_new.previous_hash_expires_at <= rec_new.expires_at
 
         self._run(scenario)
 
@@ -282,9 +337,36 @@ class TestTokenRotateAPI:
             "/v1/audit",
             headers={"Authorization": f"Bearer {admin_tok}"},
         )
-        if resp.status_code == 200:
-            actions = [e.get("action") for e in resp.json().get("entries", [])]
-            assert "token_rotate" in actions
+        assert resp.status_code == 200
+        actions = [e.get("action") for e in resp.json().get("entries", [])]
+        assert "token_rotate" in actions
+
+    def test_grace_secret_cannot_rotate(self, server_env):
+        # A leaked pre-rotation secret must not be able to re-rotate and
+        # steal the token during the grace window.
+        client, _admin_tok, pub_tok, _ = server_env
+        resp = client.post(
+            "/v1/tokens/test-publisher/rotate",
+            json={"grace_minutes": 30},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+        new_secret = resp.json()["token"]
+        # Old (grace) secret still authenticates for normal use...
+        assert self._self_probe(client, pub_tok, "test-publisher") == 200
+        # ...but is refused rotation.
+        resp = client.post(
+            "/v1/tokens/test-publisher/rotate",
+            json={"grace_minutes": 0},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 403
+        # The owner's current secret still rotates fine.
+        resp = client.post(
+            "/v1/tokens/test-publisher/rotate",
+            headers={"Authorization": f"Bearer {new_secret}"},
+        )
+        assert resp.status_code == 200
 
 
 # ── CLI ─────────────────────────────────────────────────────────

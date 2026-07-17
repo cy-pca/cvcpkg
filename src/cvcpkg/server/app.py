@@ -3916,6 +3916,16 @@ def create_app(
             raise HTTPException(401, "invalid or expired token")
         if actor.role != TokenRole.admin and actor.name != name:
             raise HTTPException(403, "you can only rotate your own token")
+        if actor.via_previous_hash:
+            # A pre-rotation grace secret must not rotate: a leaked old
+            # secret could otherwise re-rotate inside the window, mint
+            # itself a fresh permanent secret, and lock out the owner —
+            # defeating rotation as a leak remediation.
+            raise HTTPException(
+                403,
+                "the pre-rotation secret cannot rotate this token; "
+                "use the current secret or an admin token",
+            )
 
         grace_minutes = req.grace_minutes if req is not None else 0
         if _use_db:

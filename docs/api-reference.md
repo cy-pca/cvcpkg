@@ -296,6 +296,9 @@ working while stored copies (CI secrets, config files) are updated;
 
 > **The new token value is shown only once.** Store it securely.
 
+See [Token Rotation](token-rotation.md) for the full workflow, security
+model, and CI examples.
+
 ---
 
 ## Audit Trail

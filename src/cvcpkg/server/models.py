@@ -94,6 +94,11 @@ class TokenRecord(BaseModel):
     # (CI variables, requirement files) without an outage.
     previous_token_hash: str = ""
     previous_hash_expires_at: datetime.datetime | None = None
+    # Transient (never persisted): True when this verification was
+    # satisfied by the pre-rotation grace hash rather than the current
+    # secret. Rotation is denied to such callers — otherwise a leaked
+    # old secret could re-rotate inside the window and steal the token.
+    via_previous_hash: bool = Field(default=False, exclude=True)
 
 
 class TokenCreateRequest(BaseModel):

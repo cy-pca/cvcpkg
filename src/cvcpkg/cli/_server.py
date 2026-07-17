@@ -28,7 +28,10 @@ def _api_request(method: str, url: str, token: str, **kwargs):
 
 @cli.group("token")
 def token_group() -> None:
-    """Manage server API tokens (requires admin token).
+    """Manage server API tokens.
+
+    Most subcommands require an admin token; `rotate` also accepts the
+    token being rotated (self-service).
 
     These commands talk to the running cvcpkg-server via its REST API,
     so mutations go through the same code path as normal requests —
