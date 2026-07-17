@@ -15,31 +15,24 @@ from cvcpkg._archive import safe_tar_extractall
 from cvcpkg.cli import cli
 from cvcpkg.cli._publish import _publish_to_server
 from cvcpkg.cli._server import _api_request
-from cvcpkg.semver import Version
-
-_ZERO_VERSION = Version(major=0, minor=0, patch=0, pre="", build="")
+from cvcpkg.semver import version_sort_key
 
 
-def _newest_first(pkg: dict) -> tuple[int, Version, int]:
-    """Sort key ordering catalog entries newest-first; unparseable versions last.
+def _newest_first(pkg: dict) -> tuple:
+    """Newest-first ordering key for a catalog entry (a dict with "version").
 
-    The ``cvc_revision`` tiebreak is the point.  ``Version.__lt__`` ignores
-    build metadata per the SemVer spec, so ``8.3+cvc.2`` and ``8.3+cvc.1``
-    compare *equal* and a plain sort leaves the winner to the server's list
-    order.  That is how a libpq build silently got readline ``8.3+cvc.1``,
-    whose libreadline.so predates the SHLIB_LIBS fix and so declares no
-    libtinfo -- leaving tgetent unresolvable, which fails both halves of
-    libpq's readline probe (pkg-config *and* the cc.find_library link test)
-    and drops it through to a fatal libedit error.
-
-    ``resolver.py::_sort_key`` already keys on ``(version, cvc_revision)`` for
-    this reason; the builder resolved deps itself and missed it.
+    Delegates to the canonical ``version_sort_key`` so the builder's dep
+    selection agrees with the resolver, installer, and server -- one ordering,
+    not five.  The +cvc.N tiebreak is why this exists: SemVer ignores build
+    metadata, so ``8.3+cvc.2`` and ``8.3+cvc.1`` compare equal and a plain sort
+    left the winner to the server's list order.  That is how a libpq build
+    silently got the broken readline ``8.3+cvc.1`` (its libreadline.so predates
+    the SHLIB_LIBS fix, so it declares no libtinfo, leaving tgetent unresolvable
+    and failing both halves of libpq's readline probe).  The earlier local key
+    additionally collapsed every *unparseable* version to one sentinel, which
+    re-tied openssh/x264/llvm-cbe -- version_sort_key orders those too.
     """
-    try:
-        v = Version.parse(pkg.get("version", ""))
-    except ValueError:
-        return (0, _ZERO_VERSION, 0)
-    return (1, v, v.cvc_revision)
+    return version_sort_key(pkg.get("version", ""))
 
 
 # Exit code the builder uses to ask its supervisor wrapper to pull the latest
