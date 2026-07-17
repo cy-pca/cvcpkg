@@ -30,6 +30,10 @@ depends:
     - ninja
     - meson
     - pkg-config
+    # Protocol XML consumed by wayland-scanner at build time; gtk4 links
+    # libwayland (kept under runtime) but never the protocol definitions.
+    - name: wayland-protocols
+      version: "^1.38"
   runtime:
     - name: glib
       version: "^2.80"
@@ -50,8 +54,6 @@ depends:
     - name: wayland
       version: "^1.23"
       platforms: [linux, freebsd]
-    - name: wayland-protocols
-      version: "^1.38"
       platforms: [linux, freebsd]
     - name: xkbcommon
       version: "^1.7"

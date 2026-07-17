@@ -26,11 +26,13 @@ depends:
     - cmake
     - autoconf
     - automake
+    # bison generates SWIG's parser at build time; nothing in the shipped
+    # artifact links or invokes it, so it must not ship.
+    - name: bison
+      version: ">=3.8"
   runtime:
     - name: pcre2
       version: ">=10.40"
-    - name: bison
-      version: ">=3.8"
   host_tools: []
 
 build:

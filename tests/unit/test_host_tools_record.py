@@ -242,21 +242,29 @@ class TestHostToolsCliFlags:
 
         return CliRunner().invoke(cli, args)
 
-    def test_build_has_keep_host_tools_flag(self):
+    def test_build_has_keep_build_prefix_flag(self):
         res = self._help(["build", "--help"])
         assert res.exit_code == 0
-        assert "--keep-host-tools" in res.output
-        assert "--strip-host-tools" in res.output
+        assert "--keep-build-prefix" in res.output
+        assert "--strip-build-prefix" in res.output
 
-    def test_install_has_keep_host_tools_flag(self):
+    def test_install_has_keep_build_prefix_flag(self):
         res = self._help(["install", "--help"])
         assert res.exit_code == 0
-        assert "--keep-host-tools" in res.output
+        assert "--keep-build-prefix" in res.output
+        assert "--strip-build-prefix" in res.output
+        # the old spelling is a hidden deprecated alias
+        assert "--keep-host-tools" not in res.output
 
-    def test_build_has_host_tools_prefix_flag(self):
+    def test_build_has_build_prefix_flag(self):
         res = self._help(["build", "--help"])
         assert res.exit_code == 0
-        assert "--host-tools-prefix" in res.output
+        assert "--build-prefix" in res.output
+
+    def test_deprecated_host_tools_aliases_still_accepted(self):
+        # hidden from --help, but must still parse (back-compat)
+        res = self._help(["build", "--help"])
+        assert "--host-tools-prefix" not in res.output
 
     def test_empty_install_is_a_noop_and_leaves_record_intact(self, tmp_path):
         """'cvcpkg install' with no components short-circuits before finalize,

@@ -27,7 +27,8 @@ depends:
     - ninja
     - meson
     - pkg-config
-  runtime:
+    # This package ships only protocol XML + a .pc file -- it links nothing, so
+    # wayland cannot be a runtime dep; it is only needed to build/validate.
     - name: wayland
       version: "^1.23"
   host_tools: []

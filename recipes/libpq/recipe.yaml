@@ -29,6 +29,12 @@ depends:
     - pkg-config
     - bison
     - flex
+    # build.sh passes -Dreadline=enabled, which only affects psql -- and this
+    # recipe ships just lib/libpq* + headers, not bin/psql.  libpq itself does
+    # not link readline, so it is build-time only and must not ship.
+    - name: readline
+      version: "^8.0"
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
   runtime:
     - name: openssl
       version: "^3.0"
@@ -38,9 +44,6 @@ depends:
       version: "^1.5"
     - name: lz4
       version: "^1.9"
-    - name: readline
-      version: "^8.0"
-      platforms: [linux, macos, freebsd, openbsd, netbsd]
     - name: gettext
       version: "^1.0"
       platforms: [linux, macos, freebsd, openbsd, netbsd]

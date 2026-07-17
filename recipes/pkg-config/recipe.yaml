@@ -25,8 +25,11 @@ source:
 patches: []
 
 depends:
-  build:
-    # OpenBSD has no iconv in libc; the bundled internal glib needs GNU libiconv.
+  runtime:
+    # OpenBSD has no iconv in libc; the bundled internal glib *links* GNU
+    # libiconv, so the shipped bin/pkg-config carries a DT_NEEDED on
+    # libiconv.so -- a runtime dep.  Filing it under `build:` would strip it
+    # from the deliverable and leave pkg-config unable to start on OpenBSD.
     - name: iconv
       version: ">=1.17"
       platforms: [openbsd]

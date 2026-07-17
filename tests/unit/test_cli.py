@@ -919,6 +919,74 @@ class TestBuildCrossPlatformDeps:
         for m in matrix:
             (d / m["script"]).write_text("#!/bin/sh\ntrue\n")
 
+    def test_any_source_dep_built_as_any_into_build_prefix(self, tmp_path):
+        """A `platform: any` source package consumed as a build dep must be
+        built ONCE as `any` and into the BUILD prefix — never "for" the target.
+
+        Regression (caught only by a real windows cross-build, not by the
+        linux-only e2e): building it with platform=windows from a WSL host sent
+        its build.sh to winhost delegation, which only runs .ps1 ->
+        "winhost delegation only supports .ps1 build scripts, got build.sh".
+        """
+        recipes_dir = tmp_path / "recipes"
+        # mysrc: a source package — platform-independent, files only
+        self._make_recipe(recipes_dir, "mysrc", matrix=[{"platform": "any", "script": "build.sh"}])
+        # app: the windows deliverable, consuming the source package as a BUILD dep
+        self._make_recipe(
+            recipes_dir,
+            "app",
+            matrix=[{"platform": "windows", "script": "build.ps1"}],
+            deps=["mysrc"],
+        )
+
+        calls = []
+
+        def mock_build_recipe(
+            recipe_dir,
+            *,
+            platform,
+            config,
+            link,
+            prefix,
+            keep_build_dir,
+            host_platform="",
+            cross_toolchain_env=None,
+            host_tools_prefix=None,
+            build_prefix=None,
+        ):
+            calls.append((recipe_dir.name, platform, str(prefix)))
+            return mock.MagicMock()
+
+        pfx = tmp_path / "pfx"
+        with (
+            mock.patch("cvcpkg.builder.build_recipe", side_effect=mock_build_recipe),
+            mock.patch("cvcpkg.platform.detect_platform", return_value="linux"),
+        ):
+            main(
+                [
+                    "build",
+                    "app",
+                    "--platform",
+                    "windows",
+                    "--prefix",
+                    str(pfx),
+                    "--local",
+                    "--recipes-dir",
+                    str(recipes_dir),
+                    "--no-default-recipes",
+                ]
+            )
+
+        by_name = {c[0]: c for c in calls}
+        assert "mysrc" in by_name, f"source dep never built: {calls}"
+        # THE bug: it must be built as `any`, not for the windows target.
+        assert by_name["mysrc"][1] == "any", f"source pkg built as {by_name['mysrc'][1]!r}"
+        # ...and staged into the build prefix, not the deliverable.
+        assert by_name["mysrc"][2] == str(pfx) + ".build", by_name["mysrc"][2]
+        # The deliverable itself still builds for the real target, into --prefix.
+        assert by_name["app"][1] == "windows"
+        assert by_name["app"][2] == str(pfx)
+
     def test_host_tool_built_before_wasm_target(self, tmp_path):
         """emsdk-like host tool is built with host platform, then wasm target."""
         recipes_dir = tmp_path / "recipes"
@@ -949,6 +1017,7 @@ class TestBuildCrossPlatformDeps:
             host_platform="",
             cross_toolchain_env=None,
             host_tools_prefix=None,
+            build_prefix=None,
         ):
             build_calls.append((recipe_dir.name, platform))
             # Return a minimal mock context
@@ -1006,6 +1075,7 @@ class TestBuildCrossPlatformDeps:
             host_platform="",
             cross_toolchain_env=None,
             host_tools_prefix=None,
+            build_prefix=None,
         ):
             build_calls.append((recipe_dir.name, platform))
             return mock.MagicMock()

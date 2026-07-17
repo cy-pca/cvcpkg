@@ -95,14 +95,21 @@ from cvcpkg.cli._helpers import (
 @_no_default_recipes_opt
 @_local_opt
 @click.option(
-    "--keep-host-tools/--strip-host-tools",
+    "--keep-build-prefix/--strip-build-prefix",
     default=False,
     help=(
-        "Keep any build-time host-tools prefix recorded for this deliverable "
-        "instead of stripping it.  When a build separated host tools into their "
-        "own prefix, install strips it by default (it is a build-time "
-        "byproduct); pass --keep-host-tools to retain it."
+        "Keep any build prefix recorded for this deliverable instead of "
+        "stripping it.  When a build separated the build-dependency closure "
+        "(host tools, cross-toolchains, staged source packages) into its own "
+        "prefix, install strips it by default -- it is a build-time byproduct. "
+        "Pass --keep-build-prefix to retain it, e.g. to ship the sources."
     ),
+)
+@click.option(
+    "--keep-host-tools/--strip-host-tools",
+    default=None,
+    hidden=True,
+    help="Deprecated alias for --keep-build-prefix/--strip-build-prefix.",
 )
 def install(
     components: tuple[str, ...],
@@ -123,7 +130,8 @@ def install(
     recipes_dirs: tuple[str, ...],
     no_default_recipes: bool,
     local_mode: bool,
-    keep_host_tools: bool,
+    keep_build_prefix: bool,
+    keep_host_tools: bool | None,
 ) -> None:
     """Install component bundles into a prefix.
 
@@ -170,6 +178,15 @@ def install(
 
     ctx = click.get_current_context()
     prefix_path = Path(prefix).resolve()
+
+    if keep_host_tools is not None:
+        click.echo(
+            "cvcpkg: warning — --keep-host-tools/--strip-host-tools is deprecated; use "
+            "--keep-build-prefix/--strip-build-prefix (the prefix now also holds "
+            "staged source packages).",
+            err=True,
+        )
+        keep_build_prefix = keep_host_tools
 
     # --local implies --fallback-to-source and skips the catalog entirely
     if local_mode:
@@ -477,20 +494,21 @@ def install(
     except OSError as exc:
         click.echo(f"cvcpkg: warning — could not write activate scripts: {exc}", err=True)
 
-    # ── Strip the build-time host-tools prefix ──
+    # ── Strip the build prefix ──
     #
-    # If a host-tools prefix was recorded for this deliverable (written by
-    # 'cvcpkg build' into share/libcvc-deps/host-tools.yaml), strip it now: it
-    # is a build-time byproduct, not part of the deliverable.  --keep-host-tools
-    # retains it.  No-op when there is no record (a pure prebuilt install).
+    # If a build prefix was recorded for this deliverable (written by
+    # 'cvcpkg build' into share/libcvc-deps/host-tools.yaml), strip it now: the
+    # build-dependency closure (host tools, staged sources) is a build-time
+    # byproduct, not part of the deliverable.  --keep-build-prefix retains it,
+    # e.g. to ship sources.  No-op when there is no record (prebuilt install).
     try:
         from cvcpkg.host_tools import strip_host_tools
 
-        stripped = strip_host_tools(prefix_path, keep=keep_host_tools)
+        stripped = strip_host_tools(prefix_path, keep=keep_build_prefix)
         if stripped is not None:
-            click.echo(f"cvcpkg: stripped host-tools prefix {stripped}")
+            click.echo(f"cvcpkg: stripped build prefix {stripped}")
     except OSError as exc:
-        click.echo(f"cvcpkg: warning — could not strip host tools: {exc}", err=True)
+        click.echo(f"cvcpkg: warning — could not strip the build prefix: {exc}", err=True)
 
     click.echo(f"cvcpkg: done -- {len(picked)} component(s) installed to {prefix_path}")
 

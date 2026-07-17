@@ -31,10 +31,12 @@ source:
 patches: []
 
 depends:
-  build:
+  runtime:
+    # llvm-cbe links LLVM's libraries, so LLVM must ship with it: the shipped
+    # binary/plugin resolves LLVM symbols at runtime.  Under edge-based
+    # placement a `build:`-filed llvm would be stripped from the deliverable.
     - name: llvm
       version: "^22"
-  runtime: []
   host_tools: []
 
 build:

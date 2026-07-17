@@ -502,29 +502,37 @@ deliberately language-agnostic.  Future expansion:
      supplies the full-fledged binary package manager underneath (catalog,
      signing, reproducible LTS pins, cross-platform archive).
 
-#### Cross-Build & Host-Tools Hygiene
+#### Build-Prefix Hygiene (build vs runtime placement)
 
 When building for a target that needs cross-compilation, the build-time
 **host tools** (cmake, ninja, bazel/bazelisk, cross-toolchains) are a
 byproduct — they must not pollute the deliverable install prefix that a
 downstream project (e.g. a C# consumer) ingests.
 
-- **Separate host-tools prefix (done).** `cvcpkg build --host-tools-prefix`
-  installs host tools into their own prefix (default `<prefix>.host-tools`,
-  a sibling of the deliverable `--prefix`).  Passing the same path as
-  `--prefix` disables the separation (legacy behaviour).  This fixes the
-  bazel/bazelisk leak into `bin/`.
+- **Separate build prefix (done).** `cvcpkg build --build-prefix` installs the
+  whole build-dependency closure into its own prefix (default `<prefix>.build`,
+  a sibling of the deliverable `--prefix`); the deliverable gets only the
+  runtime closure.  Passing the same path as `--prefix` disables the separation
+  (legacy behaviour).  This fixes the bazel/bazelisk leak into `bin/`.
+- **Placement by dependency edge (done).** `depends.build`/`depends.host_tools`
+  closure → build prefix; `depends.runtime` closure → install prefix.  Neither
+  `platform: any` nor "source-ness" affects placement, so an `any` runtime dep
+  still ships.  Source packages stage to `<build-prefix>/src/<name>` purely by
+  being build deps.  `CVC_BUILD_PREFIX` is exposed to build scripts alongside
+  `CVC_DEPS_PREFIX`.  NOTE: this makes the build/runtime split load-bearing —
+  mis-filed deps are now real bugs.
 - **Manifest-flagged (done).** Host-tool bundles carry `bundle.host_tool: true`
   in their `manifest.yaml` (derived from a recipe's `cross_toolchain`
   declaration).  The deliverable prefix records the separation in
   `share/libcvc-deps/host-tools.yaml` (`present`, `prefix`, `tools`,
   `stripped`).
-- **Strip on install (done).** On install we strip the recorded host-tools
-  prefix directory **unless `--keep-host-tools` is passed** — the install
-  command reads the record to know a host-tools prefix exists and where.
-  `cvcpkg build` strips by default at the end of a build; `cvcpkg install`
-  honours the record on finalize; `--keep-host-tools` retains the toolchain
-  (e.g. to reuse it for a subsequent build).
+- **Strip on install (done).** On install we strip the recorded build prefix
+  **unless `--keep-build-prefix` is passed** — the install command reads the
+  record to know a build prefix exists and where.  `cvcpkg build` strips by
+  default at the end of a build; `cvcpkg install` honours the record on
+  finalize; `--keep-build-prefix` retains it (reuse a toolchain, or ship the
+  staged sources).  `--host-tools-prefix`/`--keep-host-tools` remain as
+  deprecated aliases.
 - **Future.** Thread the same host-tools separation through
   `cvcpkg install`'s from-source fallback (`build_from_source_fallback`), so
   host tools built *during* an install are also recorded and stripped; and a

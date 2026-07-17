@@ -35,10 +35,24 @@ else
     BUILD_SHARED_LIBS=ON
 fi
 
-# Assemble CMAKE_PREFIX_PATH from $CVC_DEPS_PREFIX if set.
-if [[ -n "${CVC_DEPS_PREFIX:-}" ]]; then
-    export CMAKE_PREFIX_PATH="${CVC_DEPS_PREFIX}"
+# Assemble CMAKE_PREFIX_PATH from the two dependency roots:
+#   CVC_DEPS_PREFIX  — the runtime closure (install prefix; these ship)
+#   CVC_BUILD_PREFIX — the build closure (build prefix; stripped on install)
+# Both must be searchable at build time; only the former is part of the
+# deliverable.  CVC_BUILD_PREFIX is unset/equal for legacy single-prefix
+# layouts, in which case this collapses to the old behaviour.
+_cvc_prefix_path=""
+for _cvc_root in "${CVC_DEPS_PREFIX:-}" "${CVC_BUILD_PREFIX:-}"; do
+    [[ -n "${_cvc_root}" ]] || continue
+    case ":${_cvc_prefix_path}:" in
+        *":${_cvc_root}:"*) continue ;;   # already present
+    esac
+    _cvc_prefix_path="${_cvc_prefix_path:+${_cvc_prefix_path};}${_cvc_root}"
+done
+if [[ -n "${_cvc_prefix_path}" ]]; then
+    export CMAKE_PREFIX_PATH="${_cvc_prefix_path}"
 fi
+unset _cvc_prefix_path _cvc_root
 
 # Helper: run cmake configure + build + install in one call.
 cvc_cmake_build() {
