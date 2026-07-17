@@ -448,13 +448,20 @@ def builds_follow_dag(dag_id: str, server: str, token: str):
                 label = _make_label(j)
 
                 if status in terminal:
-                    if jid not in final_statuses:
+                    # Record on *change*, not just first sight.  A job can leave
+                    # a terminal state (a retried build re-runs and succeeds);
+                    # keying on "have we seen it at all" froze the first verdict
+                    # and reported a succeeded job as failed.
+                    if final_statuses.get(jid) != status:
                         final_statuses[jid] = status
                         icon = "\u2713" if status == "succeeded" else "\u2717"
                         with print_lock:
                             click.echo(f"  {icon} #{jid} {label}: {status}")
                 else:
                     all_terminal = False
+                    # Back to running: drop the earlier verdict so the summary
+                    # counts the outcome of the attempt that actually finishes.
+                    final_statuses.pop(jid, None)
 
                 # Start following active (non-pending) jobs we haven't seen
                 if jid not in seen_jobs and status not in ("pending", *terminal):

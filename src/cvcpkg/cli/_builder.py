@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 import time
 from collections.abc import Callable
@@ -16,11 +15,41 @@ from cvcpkg._archive import safe_tar_extractall
 from cvcpkg.cli import cli
 from cvcpkg.cli._publish import _publish_to_server
 from cvcpkg.cli._server import _api_request
+from cvcpkg.semver import Version
+
+_ZERO_VERSION = Version(major=0, minor=0, patch=0, pre="", build="")
+
+
+def _newest_first(pkg: dict) -> tuple[int, Version, int]:
+    """Sort key ordering catalog entries newest-first; unparseable versions last.
+
+    The ``cvc_revision`` tiebreak is the point.  ``Version.__lt__`` ignores
+    build metadata per the SemVer spec, so ``8.3+cvc.2`` and ``8.3+cvc.1``
+    compare *equal* and a plain sort leaves the winner to the server's list
+    order.  That is how a libpq build silently got readline ``8.3+cvc.1``,
+    whose libreadline.so predates the SHLIB_LIBS fix and so declares no
+    libtinfo -- leaving tgetent unresolvable, which fails both halves of
+    libpq's readline probe (pkg-config *and* the cc.find_library link test)
+    and drops it through to a fatal libedit error.
+
+    ``resolver.py::_sort_key`` already keys on ``(version, cvc_revision)`` for
+    this reason; the builder resolved deps itself and missed it.
+    """
+    try:
+        v = Version.parse(pkg.get("version", ""))
+    except ValueError:
+        return (0, _ZERO_VERSION, 0)
+    return (1, v, v.cvc_revision)
+
 
 # Exit code the builder uses to ask its supervisor wrapper to pull the latest
 # cvcpkg and relaunch it (Windows supervised self-update).  Kept in sync with
 # windows/cvcpkg-builder-supervisor.cmd in the vm-provisioning repo.
 _SUPERVISOR_RESTART_CODE = 90
+
+# How long an extracted recipe directory may sit before it is swept.  Well
+# above any job timeout so a sweep cannot delete a directory a build is using.
+_RECIPE_DIR_TTL_SECS = 24 * 60 * 60
 
 # -- Builder commands --------------------------------------------
 
@@ -258,7 +287,7 @@ def builder_run(
 
     import httpx
 
-    from cvcpkg.builder import pack_recipe
+    from cvcpkg.builder import _rewrite_pc_prefixes, _rewrite_script_prefixes, pack_recipe
     from cvcpkg.platform import detect_arch, detect_platform
 
     if platform is None:
@@ -485,18 +514,39 @@ def builder_run(
         except Exception as exc:
             click.echo(f"  heartbeat error: {exc}", err=True)
 
-    def _fetch_recipe(recipe_name: str) -> Path:
-        """Download recipe bundle and extract to a local directory.
+    def _sweep_stale_recipe_dirs() -> None:
+        """Drop extraction dirs left by long-finished fetches.
 
-        Returns the path to the extracted recipe directory.  Bundles
-        are cached in *cache_dir* so repeated builds of the same
-        recipe don't re-download.
+        Each fetch gets its own directory (see _fetch_recipe), so they would
+        otherwise accumulate for the life of the builder.  The TTL is far
+        beyond any job timeout, so this can never reap a dir still in use.
         """
-        # Serialize per recipe name - the job-execution thread and the
-        # recipe.push websocket handler thread can otherwise concurrently
-        # rmtree+mkdir+extractall the same directory, and Recipe.load()
-        # then observes a mid-extraction state ("recipe.yaml not found").
+        cutoff = time.time() - _RECIPE_DIR_TTL_SECS
+        for d in cache_dir.glob("*-*"):
+            try:
+                if d.is_dir() and d.stat().st_mtime < cutoff:
+                    shutil.rmtree(d, ignore_errors=True)
+            except OSError:
+                continue
+
+    def _fetch_recipe(recipe_name: str) -> Path:
+        """Download a recipe bundle and extract it to a private directory.
+
+        Returns the path to the extracted recipe directory.  Each call
+        extracts into its own directory: the caller keeps using that path
+        long after this function returns (``_execute_job`` builds out of it
+        for the whole job), so a shared, stable path is unsafe.  It used to be
+        ``cache_dir/<name>``, which any *other* fetch of the same recipe would
+        rmtree mid-build -- the job thread then hit "recipe.yaml not found" and
+        the job was recorded as failed.  That spurious failure also cancelled
+        the job's dependents, which is how a gtk4 build was cancelled with
+        "dependency 137 failed" 0.4s after glib started, while glib itself went
+        on to succeed and publish.
+        """
+        # The lock still serializes same-recipe fetches: bundle_path below is a
+        # shared path, and it is written and read entirely within this block.
         with _get_recipe_lock(recipe_name):
+            _sweep_stale_recipe_dirs()
             bundle_path = cache_dir / f"{recipe_name}.tar.gz"
 
             # Always re-download (server may have a newer version).
@@ -514,16 +564,11 @@ def builder_run(
             bundle_path.parent.mkdir(parents=True, exist_ok=True)
             bundle_path.write_bytes(resp.content)
 
-            # Extract
-            extract_dir = cache_dir / recipe_name
-            if extract_dir.exists():
-                shutil.rmtree(extract_dir, ignore_errors=True)
-            if extract_dir.exists():
-                # rmtree left remnants - force remove
-                import subprocess
-
-                subprocess.run(["rm", "-rf", str(extract_dir)], check=False)
-            extract_dir.mkdir(parents=True, exist_ok=True)
+            # Extract into a directory nobody else will touch.  mkdtemp both
+            # creates it and guarantees the name is unique, so there is no
+            # existing tree to rmtree and no window for a concurrent fetch to
+            # delete it out from under the build that is about to use it.
+            extract_dir = Path(tempfile.mkdtemp(prefix=f"{recipe_name}-", dir=cache_dir))
             with tarfile.open(bundle_path, "r:gz") as tar:
                 safe_tar_extractall(tar, extract_dir)
 
@@ -650,7 +695,10 @@ def builder_run(
                     log_cb(f"  dep {dep_name}: not found on server (skipping)\n")
                     continue
 
-                pkgs = resp.json().get("packages", [])
+                # Newest first, so an exact match below picks the newest build
+                # of a dep rather than whichever the server happened to list
+                # first (see _newest_first).
+                pkgs = sorted(resp.json().get("packages", []), key=_newest_first, reverse=True)
                 # Find best match for platform/arch/config/link
                 match = None
                 for p in pkgs:
@@ -729,26 +777,20 @@ def builder_run(
                 finally:
                     tmp_archive.unlink(missing_ok=True)
 
-                # Fix up pkg-config .pc files: replace hardcoded build-time
-                # prefix with the actual install prefix so that downstream
-                # configure / cmake find_package calls work correctly.
-                pc_dir = prefix / "lib" / "pkgconfig"
-                if pc_dir.is_dir():
-                    prefix_str = str(prefix.resolve())
-                    for pc_file in pc_dir.glob("*.pc"):
-                        text = pc_file.read_text()
-                        # Use a lambda for the replacement so that backslashes
-                        # in Windows paths (e.g. C:\Users\...) are not treated
-                        # as regex group references / unknown escapes.
-                        fixed = re.sub(
-                            r"^prefix=.*$",
-                            lambda _m, p=prefix_str: f"prefix={p}",
-                            text,
-                            count=1,
-                            flags=re.MULTILINE,
-                        )
-                        if fixed != text:
-                            pc_file.write_text(fixed)
+        # Packages bake their build-time --prefix into the files they ship:
+        # .pc files carry it in ``prefix=``, and autotools utilities embed it
+        # at configure time (aclocal hardcodes @datadir@, so it looks for
+        # share/aclocal-X.Y under the temp dir it was built in).  Those paths
+        # are gone by the time a dependent job extracts the archive here, which
+        # is why swig failed with:
+        #   aclocal: error: couldn't open directory
+        #   '/tmp/cvcpkg-builder/cvcpkg-automake-g3spihed/install/share/aclocal-1.17'
+        # build_all() already repoints both when it merges into a shared prefix;
+        # reuse the same helpers so the builder agrees with local builds.
+        # Rewriting once after the loop (not per dep) keeps this O(prefix), and
+        # both helpers are idempotent.
+        _rewrite_pc_prefixes(prefix)
+        _rewrite_script_prefixes(prefix)
 
     def _install_cross_toolchains(
         target_platform: str,
@@ -1409,11 +1451,12 @@ def builder_run(
                         recipe = msg.get("recipe", {})
                         rname = recipe.get("name", "")
                         if rname:
+                            # Note only.  This used to eagerly _fetch_recipe() to
+                            # warm the cache, but every fetch re-downloads anyway
+                            # ("server may have a newer version"), so the warm-up
+                            # bought nothing while adding a second thread racing
+                            # the extraction directory of any in-flight build.
                             click.echo(f"  Recipe updated: {rname}")
-                            try:
-                                _fetch_recipe(rname)
-                            except Exception:
-                                pass
 
                     elif msg_type == "ping":
                         try:

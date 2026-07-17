@@ -1288,34 +1288,66 @@ def _rewrite_pc_prefixes(target_dir: Path) -> None:
 _TEMP_PREFIX_RE = re.compile(r"(?:/[^\s'\",:;)}\]]+)?/cvcpkg-[A-Za-z0-9_-]+-[A-Za-z0-9_]+/install")
 
 
+# Data files that commonly bake the configure-time --prefix.  bin/ is scanned
+# wholesale (interpreter scripts usually carry no extension), but elsewhere an
+# extension allowlist keeps the reads bounded rather than slurping every byte of
+# a multi-gigabyte prefix (llvm).  ``.pm`` matters because automake splits its
+# baked libdir out into share/automake-X.Y/Automake/Config.pm, and ``.la`` because
+# libtool archives carry an absolute ``libdir=``.
+_BAKED_PATH_SUFFIXES = frozenset(
+    {".pm", ".pl", ".la", ".pc", ".sh", ".m4", ".mk", ".am", ".in", ".cmake", ".py", ".conf"}
+)
+
+# Skip anything implausibly large for a script/data file; guards against reading
+# a big binary that happens to match the allowlist.
+_MAX_REWRITE_BYTES = 4 * 1024 * 1024
+
+
 def _rewrite_script_prefixes(target_dir: Path) -> None:
-    """Rewrite hardcoded temp-install paths in scripts under *target_dir*/bin.
+    """Rewrite hardcoded temp-install paths in text files under *target_dir*.
 
     Autotools utilities (``aclocal``, ``automake``, ``libtoolize``, etc.)
     embed absolute ``--prefix`` paths at ``configure`` time.  When
     recipes are built into isolated temp directories and then merged to
     a shared prefix, these embedded paths become stale.
 
-    This helper scans text files in ``bin/`` for paths that look like
-    cvcpkg temp install directories and replaces them with *target_dir*.
+    Scans ``bin/`` plus files whose extension is in ``_BAKED_PATH_SUFFIXES``
+    anywhere under *target_dir*, replacing cvcpkg temp install directories with
+    *target_dir*.  Such a path always points at a deleted directory, so
+    rewriting it is unambiguously correct.
+
+    Looking beyond ``bin/`` matters: rewriting only ``bin/aclocal`` fixes
+    aclocal but leaves ``automake`` broken, because its libdir lives in
+    ``share/automake-X.Y/Automake/Config.pm`` and it reads ``$libdir/am/*.am``
+    at runtime.
     """
     bin_dir = target_dir / "bin"
-    if not bin_dir.is_dir():
-        return
     target_str = str(target_dir)
-    for script in bin_dir.iterdir():
-        if not script.is_file():
+    for path in target_dir.rglob("*"):
+        if path.parent != bin_dir and path.suffix not in _BAKED_PATH_SUFFIXES:
+            continue
+        if not path.is_file():
             continue
         try:
-            text = script.read_text(encoding="utf-8", errors="replace")
+            if path.stat().st_size > _MAX_REWRITE_BYTES:
+                continue
+            data = path.read_bytes()
         except OSError:
             continue
-        # Quick check: skip binary files and files without temp paths.
-        if "\x00" in text[:512]:
+        # Never touch binaries: the replacement changes length, which would
+        # corrupt offsets.  Check the whole file -- a NUL can sit past any
+        # fixed-size sniff window.
+        if b"\x00" in data:
+            continue
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            # Decoding with errors="replace" and writing back would silently
+            # replace undecodable bytes with U+FFFD, corrupting the file.
             continue
         new_text = _TEMP_PREFIX_RE.sub(target_str, text)
         if new_text != text:
-            script.write_text(new_text, encoding="utf-8")
+            path.write_text(new_text, encoding="utf-8")
 
 
 def build_recipe(
