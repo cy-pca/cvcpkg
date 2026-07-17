@@ -2,11 +2,18 @@
 #
 # macOS has no persistent builder (GitHub-hosted runners are ephemeral),
 # so macOS build jobs submitted to the server sit pending until something
-# builds them. This workflow runs an ephemeral macOS builder in *drain
-# mode*: it registers, claims + builds + publishes any pending macOS jobs,
-# and exits as soon as the queue is empty (--exit-when-empty) or the
-# runtime budget is hit (--max-runtime). Scheduled every 2 hours, so any
-# macOS jobs that show up get drained in bounded chunks.
+# builds them. This workflow drains them *without registering a builder*
+# (--no-register): it selects pending macOS jobs by platform, claims them
+# under a run-scoped claimant name, builds + publishes, and exits when the
+# queue is empty (--exit-when-empty) or the runtime budget is hit
+# (--max-runtime). Scheduled every 2 hours.
+#
+# Why --no-register: this runner ceases to exist when the job ends, so it
+# has no business appearing in the builder fleet. Registering per run also
+# used to leave a dead `macos-drain-gha-<run_id>` entry behind forever —
+# the unregister endpoint is admin-only and this workflow holds a publisher
+# token, so the DELETE 403'd and the client never checked the status. macOS
+# is a publisher that happens to consume queue items, not a builder.
 #
 # Unlike macos-build.yml (which rebuilds the whole macOS recipe DAG via
 # pack-all regardless of the queue), this only builds what's actually
@@ -105,17 +112,19 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/cvcpkg-builder
-          # Ephemeral builder: claim + build + publish pending macOS jobs,
-          # then exit 0 the moment the queue is empty and nothing is in
-          # flight (--exit-when-empty), or once the wall-clock budget is
-          # spent (--max-runtime), whichever comes first. arch auto-detects
-          # to arm64 on macos-latest, matching the macOS catalog.
+          # Unregistered drain (--no-register): claim + build + publish pending
+          # macOS jobs without ever joining the builder fleet, then exit 0 the
+          # moment the queue is empty and nothing is in flight, or once the
+          # wall-clock budget is spent (--max-runtime), whichever comes first.
+          # --name is the claimant identity recorded on each job (so a running
+          # job still points back at the run building it), not a registration.
+          # arch auto-detects to arm64 on macos-latest, matching the catalog.
           cvcpkg builder run \
             --server "$CVCPKG_SERVER_URL" \
             --token "$CVCPKG_TOKEN" \
-            --name "macos-drain-gha-${{ github.run_id }}" \
+            --name "gha-run-${{ github.run_id }}" \
             --platform macos \
             --max-jobs "${{ inputs.max_jobs || '2' }}" \
             --work-dir /tmp/cvcpkg-builder \
-            --exit-when-empty \
+            --no-register \
             --max-runtime "${{ inputs.max_runtime || '5400' }}"

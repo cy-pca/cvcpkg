@@ -175,6 +175,17 @@ def builder_status(builder_id: int, server: str, token: str):
     "must stay under a hard job timeout.",
 )
 @click.option(
+    "--no-register",
+    is_flag=True,
+    default=False,
+    help="Drain the queue without registering as a builder.  Selects work by "
+    "platform instead of waiting to be dispatched to, and never appears in "
+    "the builder list.  For platforms whose runners are ephemeral (macOS on "
+    "GitHub-hosted runners), where registering per CI run leaves a dead "
+    "builder behind.  --name is used as the claimant identity.  Implies "
+    "--exit-when-empty.",
+)
+@click.option(
     "--daemon",
     is_flag=True,
     help="Run as a background daemon (fork and detach).",
@@ -212,6 +223,7 @@ def builder_run(
     no_websocket: bool,
     exit_when_empty: bool,
     max_runtime: float | None,
+    no_register: bool,
     daemon: bool,
     pidfile: str,
     cross_platforms: tuple[str, ...],
@@ -231,6 +243,10 @@ def builder_run(
       6. Reports success or failure
 
     Press Ctrl-C to finish in-flight jobs, unregister, and exit.
+
+    With ``--no-register`` the builder never registers: it selects pending
+    jobs by platform, claims them under ``--name`` as the claimant, and
+    leaves no entry in the builder list.  Steps 2-6 are identical.
     """
     import shutil
     import signal
@@ -369,36 +385,46 @@ def builder_run(
         cross_entries.append({"platform": cp, "arch": ca})
 
     # -- Registration ----------------------------------------
-    caps: dict = {}
-    if cross_entries:
-        caps["cross_platforms"] = cross_entries
-    body = {
-        "name": name,
-        "platform": platform,
-        "arch": arch,
-        "org_slug": org_slug,
-        "max_jobs": max_jobs,
-        "labels": list(labels),
-        "capabilities": caps,
-    }
-    with httpx.Client(timeout=30) as client:
-        resp = client.post(f"{base}/v1/builders/register", headers=headers, json=body)
-    if resp.status_code >= 400:
-        detail = resp.text
-        try:
-            detail = resp.json().get("detail", detail)
-        except Exception:
-            pass
-        raise click.ClickException(f"registration failed ({resp.status_code}): {detail}")
-    info = resp.json()
-    builder_id = info["id"]
     if cross_entries:
         cross_msg = " [cross: {}]".format(
             ", ".join(f"{e['platform']}/{e['arch']}" for e in cross_entries)
         )
     else:
         cross_msg = ""
-    click.echo(f"Registered builder #{builder_id} ({name}) - {platform}/{arch}{cross_msg}")
+
+    builder_id: int | None
+    if no_register:
+        # Unregistered drain: no builder row, so nothing to leave behind when
+        # this runner evaporates.  Work is selected by platform rather than
+        # dispatched to us, and `name` becomes the claimant identity.
+        builder_id = None
+        exit_when_empty = True  # a drainer with nothing to drain must exit
+        click.echo(f"Draining as '{name}' (unregistered) - {platform}/{arch}{cross_msg}")
+    else:
+        caps: dict = {}
+        if cross_entries:
+            caps["cross_platforms"] = cross_entries
+        body = {
+            "name": name,
+            "platform": platform,
+            "arch": arch,
+            "org_slug": org_slug,
+            "max_jobs": max_jobs,
+            "labels": list(labels),
+            "capabilities": caps,
+        }
+        with httpx.Client(timeout=30) as client:
+            resp = client.post(f"{base}/v1/builders/register", headers=headers, json=body)
+        if resp.status_code >= 400:
+            detail = resp.text
+            try:
+                detail = resp.json().get("detail", detail)
+            except Exception:
+                pass
+            raise click.ClickException(f"registration failed ({resp.status_code}): {detail}")
+        info = resp.json()
+        builder_id = info["id"]
+        click.echo(f"Registered builder #{builder_id} ({name}) - {platform}/{arch}{cross_msg}")
 
     shutdown = False
     # ``current_jobs`` is derived from the set of in-flight job tokens so it
@@ -439,7 +465,12 @@ def builder_run(
     # -- Helpers ---------------------------------------------
 
     def _heartbeat():
-        """Send heartbeat to server."""
+        """Send heartbeat to server.
+
+        A no-op when unregistered — there is no builder row to keep alive.
+        """
+        if builder_id is None:
+            return
         with jobs_lock:
             jobs_now = current_jobs
         try:
@@ -1018,12 +1049,20 @@ def builder_run(
 
         # 1. Claim the job
         try:
+            claim_body: dict = (
+                {"builder_id": builder_id} if builder_id is not None else {"claimant": name}
+            )
             with httpx.Client(timeout=30) as client:
                 resp = client.post(
                     f"{base}/v1/builds/{job_id}/claim",
                     headers=headers,
-                    json={"builder_id": builder_id},
+                    json=claim_body,
                 )
+            if resp.status_code == 409:
+                # Someone else got there first (unregistered workers select by
+                # platform, so two can see the same job).  Not an error.
+                click.echo(f"  [{job_id}] already claimed elsewhere, skipping")
+                return
             if resp.status_code >= 400:
                 click.echo(
                     f"  [{job_id}] claim failed ({resp.status_code}), skipping",
@@ -1464,14 +1503,23 @@ def builder_run(
                 time.sleep(poll_interval)
                 continue
 
-            # Poll for next job (short timeout so we stay responsive)
+            # Poll for next job (short timeout so we stay responsive).  An
+            # unregistered drainer has nothing to be dispatched *to*, so it
+            # selects pending work by platform instead.
             try:
                 with httpx.Client(timeout=35) as client:
-                    resp = client.get(
-                        f"{base}/v1/builders/{builder_id}/next-job",
-                        headers=headers,
-                        params={"timeout": "5"},
-                    )
+                    if builder_id is None:
+                        resp = client.get(
+                            f"{base}/v1/builds/next-claimable",
+                            headers=headers,
+                            params={"platform": platform, "arch": arch},
+                        )
+                    else:
+                        resp = client.get(
+                            f"{base}/v1/builders/{builder_id}/next-job",
+                            headers=headers,
+                            params={"timeout": "5"},
+                        )
             except Exception as exc:
                 click.echo(f"  poll error: {exc}", err=True)
                 time.sleep(poll_interval)
@@ -1522,18 +1570,33 @@ def builder_run(
             click.echo(f"  Waiting for {current_jobs} in-flight job(s)...")
             time.sleep(5)
 
-        click.echo("Shutting down - unregistering builder...")
-        try:
-            with httpx.Client(timeout=10) as client:
-                client.delete(f"{base}/v1/builders/{builder_id}", headers=headers)
-            click.echo("Builder unregistered.")
-        except Exception:
-            click.echo("Warning: failed to unregister builder.", err=True)
-        finally:
+        if builder_id is None:
+            click.echo("Drain finished (nothing registered, nothing to clean up).")
+        else:
+            click.echo("Shutting down - unregistering builder...")
             try:
-                pid_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+                with httpx.Client(timeout=10) as client:
+                    resp = client.delete(f"{base}/v1/builders/{builder_id}", headers=headers)
+                # httpx does not raise on 4xx, so an unchecked delete reports
+                # success while leaving the registration behind — that is how
+                # ephemeral CI builders accumulated as dead entries (the
+                # endpoint is admin-only and CI runs with a publisher token).
+                if resp.status_code >= 400:
+                    click.echo(
+                        f"Warning: failed to unregister builder #{builder_id} "
+                        f"({resp.status_code}: {resp.text[:120]}). "
+                        "It will linger in the builder list.",
+                        err=True,
+                    )
+                else:
+                    click.echo("Builder unregistered.")
+            except Exception as exc:
+                click.echo(f"Warning: failed to unregister builder: {exc}", err=True)
+
+        try:
+            pid_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 @builder_group.command("unregister")

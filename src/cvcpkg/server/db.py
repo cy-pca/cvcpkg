@@ -409,6 +409,11 @@ class BuildJobRow(Base):
     builder_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("builders.id", ondelete="SET NULL"), nullable=True
     )
+    # Identity of an *unregistered* worker that claimed this job (e.g.
+    # "gha-run-29372085620").  Platforms with no persistent builder drain their
+    # queue anonymously, leaving builder_id NULL; this keeps such a job
+    # attributable to the run that is building it.
+    claimed_by: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     timeout_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)

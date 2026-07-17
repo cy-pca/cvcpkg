@@ -2543,6 +2543,7 @@ class DbBuildJobStore:
             config=row.config,
             link=row.link,
             builder_id=row.builder_id,
+            claimed_by=row.claimed_by or "",
             status=row.status,
             priority=row.priority,
             timeout_seconds=row.timeout_seconds,
@@ -2977,8 +2978,19 @@ class DbBuildJobStore:
                 "unschedulable": unschedulable,
             }
 
-    async def claim(self, job_id: int, builder_id: int) -> BuildJobInfo | None:
-        """Builder claims a dispatched job → running."""
+    async def claim(
+        self,
+        job_id: int,
+        builder_id: int | None,
+        *,
+        claimant: str = "",
+    ) -> BuildJobInfo | None:
+        """A worker claims a pending or dispatched job → running.
+
+        *builder_id* is None for an unregistered worker (a platform with no
+        persistent builder draining its own queue); *claimant* then records
+        who is building it so the job is still attributable.
+        """
         now = datetime.datetime.now(datetime.timezone.utc)
         async with get_session() as session:
             row = (
@@ -2994,6 +3006,7 @@ class DbBuildJobStore:
                 return self._row_to_info(row, dep_ids)
             row.status = BuildJobStatus.running
             row.builder_id = builder_id
+            row.claimed_by = claimant
             row.started_at = now
             dep_ids = await self._load_dep_ids(session, job_id)
             return self._row_to_info(row, dep_ids)

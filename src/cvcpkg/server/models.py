@@ -701,6 +701,7 @@ class BuildJobInfo(BaseModel):
     config: str = "release"
     link: str = "shared"
     builder_id: int | None = None
+    claimed_by: str = ""
     status: str = BuildJobStatus.pending
     priority: int = 0
     timeout_seconds: int | None = None
@@ -807,11 +808,31 @@ class BuildJobListResponse(BaseModel):
 
 
 class BuildJobClaimRequest(BaseModel):
-    """Builder claims a dispatched job."""
+    """A worker claims a pending or dispatched job.
 
-    builder_id: int = Field(
-        ...,
-        description="ID of the builder claiming the job.",
+    ``builder_id`` is optional so a platform with no persistent builder can
+    still drain its queue.  macOS is the motivating case: GitHub-hosted
+    runners are ephemeral, and registering one as a builder per drain leaves
+    a dead registration behind for a machine that no longer exists.  Such a
+    worker claims anonymously and identifies itself with ``claimant``.
+    """
+
+    builder_id: int | None = Field(
+        None,
+        description=(
+            "ID of the registered builder claiming the job.  Omit for an "
+            "unregistered worker (e.g. an ephemeral CI runner draining the "
+            "queue); pass claimant instead."
+        ),
+    )
+    claimant: str = Field(
+        "",
+        max_length=255,
+        description=(
+            "Free-form identity of an unregistered worker, e.g. "
+            "'gha-run-29372085620'.  Recorded for traceability so a running "
+            "job is never anonymous."
+        ),
     )
 
 

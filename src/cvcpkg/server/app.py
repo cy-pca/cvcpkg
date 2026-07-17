@@ -5822,6 +5822,37 @@ def create_app(
         )
         return BuildJobListResponse(total=total, jobs=jobs)
 
+    @app.get("/v1/builds/next-claimable", tags=["builds"])
+    async def next_claimable_build(
+        platform: str = Query(..., description="Target platform, e.g. 'macos'"),
+        arch: str = Query("", description="Target arch; empty matches any"),
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Return the next pending job for *platform*, or 204 when none.
+
+        The builder-oriented ``/v1/builders/{id}/next-job`` requires a
+        registered builder to dispatch to.  A platform whose runners are
+        ephemeral (macOS on GitHub-hosted runners) has no such builder, and
+        registering one per CI run leaves a dead registration behind for a
+        machine that no longer exists.  This selects work by *platform*
+        instead, so a runner can drain the queue while staying anonymous.
+
+        Ordering matches the dispatcher: highest priority first, then oldest.
+        """
+        _require_db_build_jobs()
+        candidates, _total = await _db_build_jobs.list_jobs(
+            status=BuildJobStatus.pending,
+            platform=platform,
+            arch=arch or None,
+            limit=500,
+            # Never hand a private org's job to a caller who cannot see it.
+            visible_to=None if actor.role == TokenRole.admin else actor.name,
+        )
+        if not candidates:
+            return Response(status_code=204)
+        candidates.sort(key=lambda j: (-j.priority, j.submitted_at))
+        return candidates[0]
+
     @app.get("/v1/builds/{job_id}", response_model=BuildJobInfo, tags=["builds"])
     async def get_build(
         job_id: int,
@@ -5993,20 +6024,48 @@ def create_app(
         body: BuildJobClaimRequest,
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
-        """Builder claims a dispatched job → running."""
+        """A worker claims a pending or dispatched job → running.
+
+        ``builder_id`` may be omitted by an unregistered worker draining a
+        queue for a platform with no persistent builder (macOS).  Such a
+        claim must still say who it is, so ``claimant`` is required in that
+        case — a running job is never anonymous.
+        """
         _require_db_build_jobs()
+        if body.builder_id is None and not body.claimant.strip():
+            raise HTTPException(
+                422, "claim requires either builder_id or claimant (a job may not be anonymous)"
+            )
         _existing = await _db_build_jobs.get(job_id)
         if _existing is None:
             raise HTTPException(404, f"build job {job_id} not found")
         await _assert_build_visible(actor, _existing)
-        info = await _db_build_jobs.claim(job_id, body.builder_id)
+        # Refuse a *running* job that belongs to someone else.  ``claim``
+        # silently no-ops on a non-claimable job and hands the row back, so
+        # without this the loser of a race gets a 200 and builds a job another
+        # worker is already building.  That was unreachable while every job was
+        # dispatched to exactly one builder, but unregistered workers select by
+        # platform, so two of them can now reach the same job.
+        #
+        # Re-claiming a job you already hold stays idempotent: a builder whose
+        # claim response was lost to a network blip must be able to retry.
+        # Terminal states keep no-opping, as before.
+        if _existing.status == BuildJobStatus.running:
+            _claimant = body.claimant.strip()
+            mine = (body.builder_id is not None and _existing.builder_id == body.builder_id) or (
+                bool(_claimant) and _existing.claimed_by == _claimant
+            )
+            if not mine:
+                raise HTTPException(409, f"build job {job_id} is already running")
+        info = await _db_build_jobs.claim(job_id, body.builder_id, claimant=body.claimant.strip())
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
+        _who = f"builder #{body.builder_id}" if body.builder_id is not None else body.claimant
         await _db_audit.record(
             action=AuditAction.build_claim,
             actor=actor.name,
             target=str(job_id),
-            detail=f"builder #{body.builder_id}",
+            detail=_who,
         )
         await emit_webhook_event(
             "build.started",
@@ -6016,6 +6075,7 @@ def create_app(
                 "platform": info.platform,
                 "arch": info.arch,
                 "builder_id": body.builder_id,
+                "claimed_by": info.claimed_by,
             },
             org_slug=info.org_slug,
         )
