@@ -227,6 +227,44 @@ class TestExchangeMode:
         assert env["CVC_COMPONENT"] == recipe.name
         assert env["CMAKE_BUILD_TYPE"] == "Release"
         assert env["BUILD_SHARED_LIBS"] == "ON"
+        # No build-prefix separation here -> CVC_BUILD_PREFIX falls back to deps
+        # so host-side scripts always have a valid root to resolve against.
+        assert env["CVC_BUILD_PREFIX"] == win_job + "\\deps"
+
+    def test_build_prefix_is_staged_and_mapped(self, tmp_path, monkeypatch):
+        """A separated build prefix (host tools / staged source packages) must
+        be copied to the host and exposed as CVC_BUILD_PREFIX — otherwise a
+        windows recipe consuming a source package finds nothing there."""
+        host = _FakeHost(tmp_path, monkeypatch)
+        recipe = _make_recipe(tmp_path)
+        ctx = _make_ctx(tmp_path, recipe)
+        ctx.keep_build_dir = True
+
+        bp = tmp_path / "prefix.build"
+        (bp / "src" / "mathsrc").mkdir(parents=True)
+        (bp / "src" / "mathsrc" / "addmul.c").write_text("int f(void){return 1;}\n")
+        (bp / "bin").mkdir(parents=True)
+        (bp / "bin" / "sometool").write_text("#!/bin/sh\n")
+        ctx.build_prefix = bp
+
+        winhost.run_winhost_build(
+            ctx, recipe.build_matrix[0], recipe.recipe_dir / "build.ps1", None
+        )
+
+        jobs_root = host.root / "cvcpkg-winhost" / "jobs"
+        (job_dir,) = list(jobs_root.iterdir())
+
+        # The build closure is staged host-side, distinct from deps...
+        assert (job_dir / "build-prefix" / "src" / "mathsrc" / "addmul.c").is_file()
+        assert (job_dir / "build-prefix" / "bin" / "sometool").is_file()
+
+        # ...and CVC_BUILD_PREFIX points at it (not at deps).
+        job = json.loads((job_dir / "winhost-job.json").read_text())
+        env = job["env"]
+        win_job = "W:\\profile\\cvcpkg-winhost\\jobs\\" + job_dir.name
+        assert env["CVC_BUILD_PREFIX"] == win_job + "\\build-prefix"
+        assert env["CVC_DEPS_PREFIX"] == win_job + "\\deps"
+        assert env["CVC_BUILD_PREFIX"] != env["CVC_DEPS_PREFIX"]
 
         # Dep .pc prefix rewritten from the Linux path to the exchange path.
         pc = (job_dir / "deps" / "lib" / "pkgconfig" / "zlib.pc").read_text()

@@ -345,6 +345,10 @@ def _job_env(
         "CVC_INSTALL_DIR": paths["install"],
         "CVC_DEPS_PREFIX": paths["deps"],
         "CVC_RECIPE_DIR": paths["recipe"],
+        # The build closure (host tools, staged source packages) lives in a
+        # separate prefix that must also be visible host-side.  Falls back to
+        # the deps prefix when the build prefix is not separated.
+        "CVC_BUILD_PREFIX": paths.get("build_prefix") or paths["deps"],
         "CVC_PLATFORM": "windows",
         "CVC_CONFIG": ctx.config,
         "CVC_BUILD_TYPE": build_type,
@@ -503,6 +507,10 @@ def run_winhost_build(
                 "deps": win_path(ctx.prefix.resolve()),
                 "recipe": win_path(ctx.recipe.recipe_dir),
             }
+            # The build closure (host tools, staged source packages) lives in a
+            # separate prefix; the host build must see it too.
+            if ctx.build_prefix is not None and ctx.build_prefix != ctx.prefix:
+                paths["build_prefix"] = win_path(ctx.build_prefix.resolve())
             # Dependency .pc/.cmake files reference Linux paths; point
             # them at the UNC form the host toolchain will resolve.
             n = _rewrite_prefix_references(
@@ -540,6 +548,16 @@ def run_winhost_build(
             else:
                 deps_dst.mkdir(parents=True, exist_ok=True)
 
+            # Stage the build closure (host tools, staged source packages) so
+            # the host build can reach it at CVC_BUILD_PREFIX -- e.g. a source
+            # package's tree at <build-prefix>\src\<name>.  Only when the build
+            # prefix is actually separated from the deliverable prefix.
+            bp_dst: Path | None = None
+            _separated = ctx.build_prefix is not None and ctx.build_prefix != ctx.prefix
+            if _separated and Path(ctx.build_prefix).is_dir():
+                bp_dst = exchange_job_dir / "build-prefix"
+                _copytree(Path(ctx.build_prefix), bp_dst)
+
             job_win = exchange_win.rstrip("\\") + "\\jobs\\" + job_name
             paths = {
                 "source": job_win + "\\source",
@@ -548,9 +566,17 @@ def run_winhost_build(
                 "deps": job_win + "\\deps",
                 "recipe": job_win + "\\recipe\\" + ctx.recipe.recipe_dir.name,
             }
+            if bp_dst is not None:
+                paths["build_prefix"] = job_win + "\\build-prefix"
             n = _rewrite_prefix_references(deps_dst, str(Path(ctx.prefix).resolve()), paths["deps"])
             if n:
                 _log(f"cvcpkg-winhost: rewrote {n} dep metadata file(s) to exchange paths")
+            if bp_dst is not None:
+                n = _rewrite_prefix_references(
+                    bp_dst, str(Path(ctx.build_prefix).resolve()), paths["build_prefix"]
+                )
+                if n:
+                    _log(f"cvcpkg-winhost: rewrote {n} build-prefix metadata file(s)")
             runner_win = paths["recipe"].rsplit("\\", 1)[0] + "\\_common\\" + RUNNER_NAME
 
         job = {

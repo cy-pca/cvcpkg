@@ -128,3 +128,26 @@ class TestDepClosures:
         app = _mk(tmp_path, "app", build=["not-in-tree"])
         rt, bt = resolve_dep_closures(["app"], _recipes(app), "linux")
         assert bt == {"not-in-tree"}
+
+
+class TestAnyBuildDepPlatformSelection:
+    """A platform-independent build dep (a source package) must be built ONCE,
+    natively — never "for" the target platform.
+
+    Regression: building an `any` source package with platform=windows from a
+    WSL host handed its build.sh to winhost delegation, which only runs .ps1:
+    "winhost delegation only supports .ps1 build scripts, got build.sh".
+    """
+
+    def _pick(self, recipe, target):
+        # mirrors the rule the build CLI applies to build-closure recipes
+        return "any" if all(m.platform == "any" for m in recipe.build_matrix) else target
+
+    def test_any_only_recipe_builds_as_any_not_target(self, tmp_path):
+        src = _mk(tmp_path, "mysrc", platform="any")
+        assert self._pick(src, "windows") == "any"
+        assert self._pick(src, "linux") == "any"
+
+    def test_platform_specific_build_dep_builds_for_target(self, tmp_path):
+        tool = _mk(tmp_path, "tool", platform="windows")
+        assert self._pick(tool, "windows") == "windows"

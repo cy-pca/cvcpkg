@@ -434,11 +434,16 @@ def build(
         # into <build-prefix>/src/<name>).  Build-time only: never shipped.
         if build_only_recipes:
             for r in resolve_build_order(build_only_recipes, plat):
+                # A platform-independent recipe (source packages: every matrix
+                # entry is `any`) is built ONCE, natively -- never for the target
+                # platform.  Building it "for windows" from a WSL host would
+                # hand its build.sh to winhost delegation, which only runs .ps1.
+                _p = "any" if all(m.platform == "any" for m in r.build_matrix) else plat
                 _dest = f" -> {_bp}" if _bp else ""
                 print(f"\ncvcpkg: ══ {r.name} ({r.full_version}) [build dep{_dest}] ══")
                 build_recipe(
                     r.recipe_dir,
-                    platform=plat,
+                    platform=_p,
                     config=config,
                     link=link,
                     prefix=_bp,
