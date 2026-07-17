@@ -20,10 +20,14 @@ source:
 patches: []
 
 depends:
-  build:
+  runtime:
     # OpenBSD ships no iconv in libc, so gettext's bundled libxml/libtextstyle
     # can't find <iconv.h>.  Pull in cvcpkg's GNU libiconv there (linux/BSD-with-
-    # libc-iconv build fine without it).  build.sh wires --with-libiconv-prefix.
+    # libc-iconv build fine without it).  build.sh wires --with-libiconv-prefix,
+    # which puts -liconv on the link line, so the shipped libintl/libtextstyle
+    # carry a DT_NEEDED on libiconv.so -- a *runtime* dep.  Filing it under
+    # `build:` would strip it from the deliverable and also hide it from
+    # build.sh's ${CVC_DEPS_PREFIX}/include/iconv.h probe.
     - name: iconv
       version: ">=1.17"
       platforms: [openbsd]

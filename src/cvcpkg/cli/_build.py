@@ -251,25 +251,39 @@ def _try_pull_server_recipes() -> tuple[str, ...]:
     help="Host platform for cross-compilation (e.g. linux, macos, windows).",
 )
 @click.option(
-    "--host-tools-prefix",
+    "--build-prefix",
     type=click.Path(),
     default=None,
     help=(
-        "Separate prefix for build-time host tools (cmake, ninja, "
-        "cross-toolchains) so they stay OUT of the deliverable --prefix. "
-        "Defaults to '<prefix>.host-tools' beside --prefix; pass the same "
+        "Separate prefix for the build-dependency closure -- host tools "
+        "(cmake, ninja, cross-toolchains) and staged source packages under "
+        "'src/<name>' -- so the deliverable --prefix ships only the runtime "
+        "closure.  Defaults to '<prefix>.build' beside --prefix; pass the same "
         "path as --prefix to disable the separation (legacy behaviour)."
     ),
 )
 @click.option(
-    "--keep-host-tools/--strip-host-tools",
+    "--host-tools-prefix",
+    type=click.Path(),
+    default=None,
+    hidden=True,
+    help="Deprecated alias for --build-prefix.",
+)
+@click.option(
+    "--keep-build-prefix/--strip-build-prefix",
     default=False,
     help=(
-        "Keep the build-time host-tools prefix after the build instead of "
-        "stripping it.  By default the host-tools prefix is removed once the "
-        "build completes (it is a build-time byproduct); pass --keep-host-tools "
-        "to retain it (e.g. to reuse the toolchain for a later build)."
+        "Keep the build prefix after the build instead of stripping it.  By "
+        "default it is removed once the build completes (it is a build-time "
+        "byproduct); pass --keep-build-prefix to retain it -- e.g. to reuse a "
+        "toolchain for a later build, or to ship the staged sources."
     ),
+)
+@click.option(
+    "--keep-host-tools/--strip-host-tools",
+    default=None,
+    hidden=True,
+    help="Deprecated alias for --keep-build-prefix/--strip-build-prefix.",
 )
 def build(
     recipe: tuple[str, ...],
@@ -283,8 +297,10 @@ def build(
     local_mode: bool,
     with_deps: bool,
     host_platform: str,
+    build_prefix: str | None,
     host_tools_prefix: str | None,
-    keep_host_tools: bool,
+    keep_build_prefix: bool,
+    keep_host_tools: bool | None,
 ) -> None:
     """Build one or more recipes from source.
 
@@ -317,14 +333,33 @@ def build(
         recipes_dirs = _try_pull_server_recipes()
     prefix_path = Path(prefix).resolve() if prefix else None
 
-    # Host tools (cmake, ninja, cross-toolchains) install into a SEPARATE prefix
-    # so the deliverable --prefix contains only target artifacts.
-    if host_tools_prefix:
-        host_tools_prefix_path: Path | None = Path(host_tools_prefix).resolve()
+    # The build-dependency closure (host tools, cross-toolchains, staged source
+    # packages) installs into a SEPARATE build prefix so the deliverable
+    # --prefix ships only the runtime closure.
+    #
+    # --host-tools-prefix / --keep-host-tools are deprecated aliases from the
+    # earlier host-tools-only separation; honour them but steer to the new flags.
+    if host_tools_prefix and not build_prefix:
+        click.echo(
+            "cvcpkg: warning — --host-tools-prefix is deprecated; use --build-prefix "
+            "(it now also holds staged source packages).",
+            err=True,
+        )
+        build_prefix = host_tools_prefix
+    if keep_host_tools is not None:
+        click.echo(
+            "cvcpkg: warning — --keep-host-tools/--strip-host-tools is deprecated; use "
+            "--keep-build-prefix/--strip-build-prefix.",
+            err=True,
+        )
+        keep_build_prefix = keep_host_tools
+
+    if build_prefix:
+        build_prefix_path: Path | None = Path(build_prefix).resolve()
     elif prefix_path is not None:
-        host_tools_prefix_path = prefix_path.with_name(prefix_path.name + ".host-tools")
+        build_prefix_path = prefix_path.with_name(prefix_path.name + ".build")
     else:
-        host_tools_prefix_path = None
+        build_prefix_path = None
 
     if with_deps:
         # Resolve all deps and build in topological order
@@ -341,32 +376,15 @@ def build(
             all_recipes = list_recipes(rdirs[0])
         by_name = {r.name: r for r in all_recipes}
 
-        # Collect requested + their transitive deps
-        needed: set[str] = set()
+        # Placement is decided by the dependency EDGE, not by what a package
+        # is (``platform: any`` and source packages are not special):
+        #   depends.runtime closure -> install prefix (it ships)
+        #   depends.build  closure -> build prefix (build-time only, stripped
+        #                             on install unless --keep-build-prefix)
+        from cvcpkg.builder import resolve_dep_closures
 
-        def _collect(name: str) -> None:
-            if name in needed:
-                return
-            needed.add(name)
-            if name not in by_name:
-                return
-            r = by_name[name]
-            deps_block = r.raw.get("depends", {})
-            # Collect both build and runtime deps so that libraries
-            # needed at link time (listed under runtime) are available.
-            all_deps: list = []
-            for key in ("build", "runtime"):
-                all_deps.extend(deps_block.get(key, []) or [])
-            for d in all_deps:
-                dep_name = d if isinstance(d, str) else d.get("name", "")
-                plats = d.get("platforms") if isinstance(d, dict) else None
-                if plats and plat not in plats:
-                    continue
-                if dep_name:
-                    _collect(dep_name)
-
-        for name in recipe:
-            _collect(name)
+        runtime_closure, build_closure = resolve_dep_closures(list(recipe), by_name, plat)
+        needed: set[str] = set(recipe) | runtime_closure | build_closure
 
         # Filter to what's available
         available = [by_name[n] for n in needed if n in by_name]
@@ -375,26 +393,35 @@ def build(
         from cvcpkg.platform import detect_platform
 
         host_plat = host_platform or detect_platform()
-        target_recipes = [
-            r
-            for r in available
-            if any(m.platform == plat or m.platform == "any" for m in r.build_matrix)
+
+        def _builds_for_target(r: object) -> bool:
+            return any(m.platform == plat or m.platform == "any" for m in r.build_matrix)
+
+        ships = set(recipe) | runtime_closure
+        # Requested targets + their runtime closure: these are the deliverable.
+        target_recipes = [r for r in available if _builds_for_target(r) and r.name in ships]
+        # Build-closure deps (e.g. staged source packages): needed to build,
+        # never shipped -- they go to the build prefix.
+        build_only_recipes = [
+            r for r in available if _builds_for_target(r) and r.name in build_closure
         ]
+        # Cross-toolchains auto-discovered for this target are build-time too.
         host_tool_recipes = _collect_host_tools(target_recipes, all_recipes, plat, host_plat)
 
-        # Build host tools first (e.g. emsdk), then target recipes
+        _bp = build_prefix_path or prefix_path
+
+        # Build host tools first (e.g. emsdk) -- into the build prefix.
         if host_tool_recipes:
             host_ordered = resolve_build_order(host_tool_recipes, host_plat)
             for r in host_ordered:
-                _htp = host_tools_prefix_path or prefix_path
-                _dest = f" -> {_htp}" if _htp else ""
+                _dest = f" -> {_bp}" if _bp else ""
                 print(f"\ncvcpkg: ══ {r.name} ({r.full_version}) [host tool{_dest}] ══")
                 build_recipe(
                     r.recipe_dir,
                     platform=host_plat,
                     config=config,
                     link=link,
-                    prefix=_htp,
+                    prefix=_bp,
                     keep_build_dir=keep_build_dir,
                 )
 
@@ -403,6 +430,25 @@ def build(
         for r in host_tool_recipes:
             merged_toolchain_env.update(r.cross_toolchain_env)
 
+        # Then the rest of the build closure (e.g. source packages, which stage
+        # into <build-prefix>/src/<name>).  Build-time only: never shipped.
+        if build_only_recipes:
+            for r in resolve_build_order(build_only_recipes, plat):
+                _dest = f" -> {_bp}" if _bp else ""
+                print(f"\ncvcpkg: ══ {r.name} ({r.full_version}) [build dep{_dest}] ══")
+                build_recipe(
+                    r.recipe_dir,
+                    platform=plat,
+                    config=config,
+                    link=link,
+                    prefix=_bp,
+                    keep_build_dir=keep_build_dir,
+                    host_platform=host_plat,
+                    cross_toolchain_env=merged_toolchain_env,
+                    build_prefix=build_prefix_path,
+                )
+
+        # Finally the deliverable: requested targets + their runtime closure.
         ordered = resolve_build_order(target_recipes, plat)
         for r in ordered:
             print(f"\ncvcpkg: ══ {r.name} ({r.full_version}) ══")
@@ -415,39 +461,40 @@ def build(
                 keep_build_dir=keep_build_dir,
                 host_platform=host_plat,
                 cross_toolchain_env=merged_toolchain_env,
-                host_tools_prefix=host_tools_prefix_path,
+                build_prefix=build_prefix_path,
             )
 
-        # ── Host-tools separation: record + strip ──
-        # When host tools were built into a separate prefix, record that in the
-        # deliverable prefix (share/libcvc-deps/host-tools.yaml) so install can
-        # find them, then strip the host-tools prefix -- a build-time byproduct
-        # -- unless --keep-host-tools was passed.
+        # ── Build-prefix separation: record + strip ──
+        # When a build closure was built into a separate prefix, record that in
+        # the deliverable prefix (share/libcvc-deps/host-tools.yaml) so install
+        # can find it, then strip the build prefix -- a build-time byproduct --
+        # unless --keep-build-prefix was passed.
+        _build_closure_built = [*host_tool_recipes, *build_only_recipes]
         if (
-            host_tool_recipes
+            _build_closure_built
             and prefix_path is not None
-            and host_tools_prefix_path is not None
-            and host_tools_prefix_path != prefix_path
+            and build_prefix_path is not None
+            and build_prefix_path != prefix_path
             and prefix_path.is_dir()
         ):
             from cvcpkg.host_tools import strip_host_tools, write_host_tools_record
 
             write_host_tools_record(
                 prefix_path,
-                host_tools_prefix_path,
-                [r.name for r in host_tool_recipes],
+                build_prefix_path,
+                [r.name for r in _build_closure_built],
             )
-            if keep_host_tools:
+            if keep_build_prefix:
                 click.echo(
-                    f"cvcpkg: host tools kept at {host_tools_prefix_path} "
+                    f"cvcpkg: build prefix kept at {build_prefix_path} "
                     "(recorded in share/libcvc-deps/host-tools.yaml)"
                 )
             else:
                 stripped = strip_host_tools(prefix_path, keep=False)
                 if stripped is not None:
                     click.echo(
-                        f"cvcpkg: stripped host-tools prefix {stripped} "
-                        "(pass --keep-host-tools to keep it)"
+                        f"cvcpkg: stripped build prefix {stripped} "
+                        "(pass --keep-build-prefix to keep it)"
                     )
     else:
         for name in recipe:

@@ -186,7 +186,7 @@ degrade to their non-fatal WARN branches (a Linux `cc` cannot link
 Windows import libraries).  Test scripts that want to do more under
 delegation can branch on `CVC_WINHOST`.
 
-## Host tools stay out of the deliverable
+## Build-time deps stay out of the deliverable
 
 Cross-building often pulls **host tools** — cmake, ninja, bazel/bazelisk, or a
 whole cross toolchain — that run on the builder to produce target artifacts.
@@ -194,36 +194,45 @@ These are a build-time byproduct and must not end up in the deliverable you
 ship to a consumer (a C# project ingesting `bin/`, say).  cvcpkg keeps them
 separate:
 
-- **Separate prefix.**  `cvcpkg build --prefix P …` installs host tools into a
-  sibling **host-tools prefix**, `P.host-tools`, by default.  The deliverable
-  `P` contains only target artifacts.  Override the location with
-  `--host-tools-prefix DIR`, or pass the same path as `--prefix` to disable the
-  separation (legacy behaviour).  This is what keeps `bazel`/`bazelisk` out of
-  `P/bin`.
+- **Separate prefix.**  `cvcpkg build --prefix P …` installs the whole
+  **build-dependency closure** into a sibling **build prefix**, `P.build`, by
+  default.  The deliverable `P` receives only the *runtime closure*.  Override
+  the location with `--build-prefix DIR`, or pass the same path as `--prefix` to
+  disable the separation (legacy behaviour).  This is what keeps
+  `bazel`/`bazelisk` out of `P/bin`.
 
-  A host tool is any recipe that declares a `cross_toolchain` block; its bundle
-  manifest is flagged `bundle.host_tool: true`.
+  **Placement follows the dependency edge**, not the package: `depends.build` /
+  `depends.host_tools` → build prefix; `depends.runtime` → install prefix.  That
+  covers cross-toolchains (any recipe declaring a `cross_toolchain` block; its
+  manifest is flagged `bundle.host_tool: true`) *and* source packages, which
+  stage to `P.build/src/<name>`.  See [source recipes](source-recipes.md).
+
+  Build scripts get both roots: `CVC_DEPS_PREFIX` (install prefix — runtime deps
+  you link) and `CVC_BUILD_PREFIX` (build prefix — tools on `PATH`, sources at
+  `src/<name>`).
+
+  `--host-tools-prefix` / `--keep-host-tools` still work as deprecated aliases.
 
 - **Recorded in the deliverable.**  When the separation is active, cvcpkg writes
-  `P/share/libcvc-deps/host-tools.yaml` recording that host tools are present,
-  where (`prefix`), which ones (`tools`), and whether they have been stripped:
+  `P/share/libcvc-deps/host-tools.yaml` recording that a build prefix is present,
+  where (`prefix`), what it holds (`tools`), and whether it has been stripped:
 
   ```yaml
   schema_version: 1
   host_tools:
     present: true
-    prefix: /abs/path/to/P.host-tools
+    prefix: /abs/path/to/P.build
     tools: [bazel, bazelisk]
     stripped: false
     stripped_at: ''
   ```
 
-- **Stripped by default.**  Because the host-tools prefix is only needed during
-  the build, it is **removed once the build/install completes**.  `cvcpkg build`
+- **Stripped by default.**  Because the build prefix is only needed during the
+  build, it is **removed once the build/install completes**.  `cvcpkg build`
   strips it at the end of the build; `cvcpkg install` reads the record on
-  finalize and strips it there.  Pass **`--keep-host-tools`** to either command
-  to retain the toolchain (e.g. to reuse it for a subsequent build); the record
-  then keeps `stripped: false`.  The strip never touches the deliverable prefix
+  finalize and strips it there.  Pass **`--keep-build-prefix`** to either command
+  to retain it — to reuse a toolchain for a subsequent build, or to ship the
+  staged sources in the distribution; the record then keeps `stripped: false`.  The strip never touches the deliverable prefix
   itself, and is a no-op when no record is present (a plain prebuilt install).
 
 ## Gotchas

@@ -11,7 +11,13 @@
 #
 # Downstream platform/arch recipes then depend on the source recipe
 # (`depends.build`), find the staged tree at
-# `$CVC_DEPS_PREFIX/src/<name>/`, and compile it into a real binary.
+# `$CVC_BUILD_PREFIX/src/<name>/`, and compile it into a real binary.
+#
+# Placement follows the dependency edge: a source recipe consumed via
+# `depends.build` is part of the build closure, so it is installed into the
+# build prefix (stripped on install unless --keep-build-prefix) rather than the
+# deliverable install prefix.  Nothing about being "source" routes it -- being a
+# build dep does.
 #
 # Usage in a source recipe's build.sh:
 #
@@ -59,8 +65,16 @@ cvc_stage_source() {
 
 # Echo the staged-source directory for a dependency source recipe, so a
 # downstream build.sh can locate it: SRC=$(cvc_source_dir_of mysource).
+#
+# Source packages are build dependencies, so they live in the build prefix
+# ($CVC_BUILD_PREFIX).  Fall back to $CVC_DEPS_PREFIX when the build prefix is
+# not separated (legacy layout, or --build-prefix == --prefix).
 cvc_source_dir_of() {
-  : "${CVC_DEPS_PREFIX:?CVC_DEPS_PREFIX must be set}"
   local name="${1:?usage: cvc_source_dir_of <source-recipe-name>}"
-  echo "${CVC_DEPS_PREFIX}/src/${name}"
+  local root="${CVC_BUILD_PREFIX:-${CVC_DEPS_PREFIX:-}}"
+  if [ -z "${root}" ]; then
+    echo "cvc_source_dir_of: CVC_BUILD_PREFIX or CVC_DEPS_PREFIX must be set" >&2
+    return 1
+  fi
+  echo "${root}/src/${name}"
 }

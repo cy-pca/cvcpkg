@@ -165,8 +165,9 @@ class TestSourceRecipeWorkflow:
         built = {c.recipe.name for c in contexts}
         assert {"mathsrc", "mathdemo"} <= built, f"built: {built}"
 
-        # 1. The source recipe staged its files under the canonical layout,
-        #    merged into the shared prefix — with no compilation artifacts.
+        # 1. The source recipe staged its files under the canonical layout.
+        #    With no --build-prefix separation requested, everything merges into
+        #    the single shared prefix (legacy layout, kept for back-compat).
         staged = prefix / "src" / "mathsrc"
         assert (staged / "addmul.c").is_file()
         assert (staged / "addmul.h").is_file()
@@ -178,6 +179,42 @@ class TestSourceRecipeWorkflow:
 
         # 3. The downstream consumer produced a real binary from the staged
         #    source, and it runs correctly (6*7 + 2 == 44).
+        binary = prefix / "bin" / ("mathdemo.exe" if sys.platform == "win32" else "mathdemo")
+        assert binary.is_file(), f"consumer binary missing: {binary}"
+        out = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
+        assert out.returncode == 0, out.stderr
+        assert out.stdout.strip() == "44"
+
+    def test_source_stages_into_build_prefix_not_the_deliverable(self, tmp_path):
+        """The contract: a source package is consumed as a BUILD dependency, so
+        it stages into the build prefix and never ships in the deliverable.
+
+        Placement follows the dependency edge -- mathdemo declares
+        ``depends.build: [mathsrc]`` -- not the fact that mathsrc is `any` or
+        "source".  The consumer's own artifacts still land in the install prefix.
+        """
+        recipes = _make_recipes(tmp_path)
+        prefix = tmp_path / "prefix"
+        build_prefix = tmp_path / "prefix.build"
+        plat = detect_platform()
+
+        contexts = build_all(
+            recipes,
+            platform=plat,
+            prefix=prefix,
+            build_prefix=build_prefix,
+            no_cache=True,
+        )
+        built = {c.recipe.name for c in contexts}
+        assert {"mathsrc", "mathdemo"} <= built, f"built: {built}"
+
+        # The staged source lives in the BUILD prefix...
+        assert (build_prefix / "src" / "mathsrc" / "addmul.c").is_file()
+        assert (build_prefix / "src" / "mathsrc" / "addmul.h").is_file()
+        # ...and must NOT pollute the deliverable.
+        assert not (prefix / "src" / "mathsrc").exists(), "source leaked into the install prefix"
+
+        # The consumer still compiled against it and its binary ships.
         binary = prefix / "bin" / ("mathdemo.exe" if sys.platform == "win32" else "mathdemo")
         assert binary.is_file(), f"consumer binary missing: {binary}"
         out = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)

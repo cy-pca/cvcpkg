@@ -32,11 +32,15 @@ depends:
       platforms: [linux, macos, freebsd, openbsd, netbsd]
     - name: python312
       platforms: [windows]
-    # OpenBSD has no iconv in libc; GLib links cvcpkg's GNU libiconv there.
+  runtime:
+    # OpenBSD has no iconv in libc; GLib *links* cvcpkg's GNU libiconv there, so
+    # this is a runtime dep: the shipped libglib-2.0.so carries a DT_NEEDED on
+    # libiconv.so and glib-2.0.pc references -liconv.  Filing it under `build:`
+    # would strip it from the deliverable and break consumers on OpenBSD (and
+    # would hide it from build.sh's ${CVC_DEPS_PREFIX}/include/iconv.h probe).
     - name: iconv
       version: ">=1.17"
       platforms: [openbsd]
-  runtime:
     - name: libffi
       version: "^3.4"
     - name: pcre2
