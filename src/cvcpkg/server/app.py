@@ -698,6 +698,39 @@ def _reject_grace_secret(actor: TokenRecord) -> None:
         )
 
 
+# How often (seconds) an open build-log SSE stream re-verifies its token.  The
+# stream authenticates once at request start and can then tail for the whole
+# life of a build; without re-verification a token that is later revoked,
+# expired, or rotated keeps reading the log until the client disconnects.  Re-
+# checking on this cadence bounds that exposure without hitting the token store
+# on every poll, and — because it consults the shared token store — it works
+# across workers.  Tunable via ``CVCPKG_SSE_REAUTH_INTERVAL``.
+_SSE_REAUTH_INTERVAL_SECONDS = float(os.environ.get("CVCPKG_SSE_REAUTH_INTERVAL", "30"))
+
+# How often (seconds) that stream polls the job log for new data / a terminal
+# state.  Named so the re-auth cadence and tests can reason about the loop
+# period rather than a bare literal.
+_SSE_LOG_POLL_INTERVAL_SECONDS = 2.0
+
+
+def _sse_reauth_rejection(actor: TokenRecord | None) -> str | None:
+    """Reason an open build-log stream must end, or ``None`` to keep it.
+
+    Mirrors the connect-time auth in :func:`stream_build_log` so a credential
+    that is later revoked, expired, rotated (its secret now only a grace
+    secret), or demoted below publisher cannot keep tailing the log on an
+    already-open Server-Sent-Events stream.  Org-membership changes are checked
+    separately (they need the job) via :func:`_assert_build_visible`.
+    """
+    if actor is None:
+        return "token revoked or expired"
+    if actor.via_previous_hash:
+        return "pre-rotation secret not allowed"
+    if actor.role not in (TokenRole.publisher, TokenRole.admin):
+        return "insufficient role"
+    return None
+
+
 # ── Webhook delivery engine ────────────────────────────────────
 
 _WEBHOOK_RETRY_DELAYS = [10, 60, 300]  # seconds between retries
@@ -6444,11 +6477,35 @@ def create_app(
         async def _event_generator():
             logs_dir = state.logs_dir()
             offset = 0
+            last_reauth = time.monotonic()
             while True:
                 info = await _db_build_jobs.get(job_id)
                 if info is None:
                     yield "event: error\ndata: job not found\n\n"
                     return
+
+                # Re-verify the token on a cadence.  The one-shot auth at request
+                # start is not enough for a tail that can run for the whole life
+                # of a build: a credential that is later revoked, expired,
+                # rotated (grace=0), demoted, or dropped from the job's private
+                # org must lose the stream here instead of reading the log until
+                # the client happens to disconnect.  Time-gated so a chatty log
+                # does not hit the token store on every poll.
+                now = time.monotonic()
+                if now - last_reauth >= _SSE_REAUTH_INTERVAL_SECONDS:
+                    fresh = await _authenticate_token(raw)
+                    reason = _sse_reauth_rejection(fresh)
+                    if reason is not None:
+                        yield f"event: error\ndata: {reason}\n\n"
+                        return
+                    try:
+                        await _assert_build_visible(fresh, info)
+                    except HTTPException:
+                        # Membership was revoked mid-stream; mask like the
+                        # connect-time check rather than confirm the job exists.
+                        yield "event: error\ndata: build job not found\n\n"
+                        return
+                    last_reauth = now
 
                 path = await _db_build_jobs.get_log_path(job_id, logs_dir=logs_dir)
                 if path is not None:
@@ -6471,7 +6528,7 @@ def create_app(
                 ):
                     yield f"event: done\ndata: {info.status}\n\n"
                     return
-                await asyncio.sleep(2)
+                await asyncio.sleep(_SSE_LOG_POLL_INTERVAL_SECONDS)
 
         return StreamingResponse(
             _event_generator(),
