@@ -847,6 +847,31 @@ async def emit_webhook_event(
 # Maps builder_id -> WebSocket for all connected builders.
 _ws_builders: dict[int, WebSocket] = {}
 
+# How often (seconds) an open builder WebSocket re-verifies its token.  A
+# builder socket authenticates once at connect and then lives for hours; without
+# re-verification a token that is later revoked, expired, or rotated keeps full
+# job-plane access until the builder happens to disconnect.  Re-checking on this
+# cadence bounds that exposure without hitting the token store on every frame.
+_WS_REAUTH_INTERVAL_SECONDS = float(os.environ.get("CVCPKG_WS_REAUTH_INTERVAL", "30"))
+
+
+def _ws_reauth_rejection(actor: TokenRecord | None) -> tuple[int, str] | None:
+    """Decide whether a re-verified builder-socket token may keep its socket.
+
+    Returns ``(close_code, reason)`` when the live socket must be torn down, or
+    ``None`` when the token is still a valid builder credential.  Mirrors the
+    connect-time checks in :func:`builder_ws` so a credential that is later
+    revoked, expired, rotated (its secret now only a grace secret), or demoted
+    below publisher cannot outlive its validity on an already-open socket.
+    """
+    if actor is None:
+        return (4001, "token revoked or expired")
+    if actor.via_previous_hash:
+        return (4003, "pre-rotation secret not allowed")
+    if actor.role not in (TokenRole.publisher, TokenRole.admin):
+        return (4003, "insufficient role")
+    return None
+
 
 async def _ws_send(builder_id: int, msg: dict) -> bool:
     """Send a JSON message to a connected builder.  Returns True on success."""
@@ -6524,9 +6549,39 @@ def create_app(
         _ws_builders[builder_id] = websocket
         logger.info("builder %d connected via WebSocket", builder_id)
 
+        last_reauth = time.monotonic()
         try:
             while True:
-                data = await websocket.receive_json()
+                # Block for a frame, but wake at least once per re-auth interval
+                # so an idle socket is still re-verified promptly.
+                try:
+                    data = await asyncio.wait_for(
+                        websocket.receive_json(),
+                        timeout=_WS_REAUTH_INTERVAL_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    data = None
+
+                # Re-verify the token periodically: one-shot auth at connect is
+                # not enough for a long-lived socket, so a revoked, expired, or
+                # rotated credential loses job-plane access here instead of
+                # surviving until the builder happens to disconnect.
+                now = time.monotonic()
+                if data is None or now - last_reauth >= _WS_REAUTH_INTERVAL_SECONDS:
+                    rejection = _ws_reauth_rejection(await _authenticate_token(token_value))
+                    if rejection is not None:
+                        code, reason = rejection
+                        logger.info(
+                            "builder %d socket closed on re-auth: %s",
+                            builder_id,
+                            reason,
+                        )
+                        await websocket.close(code=code, reason=reason)
+                        break
+                    last_reauth = now
+                if data is None:
+                    continue
+
                 msg_type = data.get("type", "")
 
                 if msg_type == "heartbeat":

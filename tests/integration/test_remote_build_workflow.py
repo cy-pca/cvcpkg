@@ -1924,3 +1924,39 @@ class TestCLIBuildCommands:
         # CLI: builds log-delete
         ret = self._cli(server, ["builds", "log-delete", str(jid)])
         assert ret == 0
+
+    # ── test: live token revocation tears down an open socket ──
+
+    def test_40_revoked_token_tears_down_live_socket(self, server, monkeypatch):
+        """Revoking a builder's token must close its already-open socket.
+
+        A builder socket authenticates once at connect; without periodic
+        re-verification a revoked token would retain full job-plane access
+        until the builder happened to disconnect.  The server should instead
+        re-verify on its re-auth cadence and close the live socket.
+        """
+        from fastapi import WebSocketDisconnect
+
+        c = server["client"]
+        admin = server["admin_token"]
+        pub = server["pub_token"]  # role=publisher, name="builder-ci"
+
+        builder = self._register_builder(c, admin, "reauth-builder")
+        builder_id = builder["id"]
+
+        # Re-verify aggressively so the test does not wait on the 30s default.
+        monkeypatch.setattr("cvcpkg.server.app._WS_REAUTH_INTERVAL_SECONDS", 0.1)
+
+        with c.websocket_connect(f"/v1/builders/{builder_id}/ws?token={pub}") as ws:
+            # The socket is live: a heartbeat is acknowledged.
+            ws.send_json({"type": "heartbeat", "status": "online", "current_jobs": 0})
+            assert ws.receive_json()["type"] == "heartbeat_ack"
+
+            # Revoke the publisher's token out from under the open socket.
+            resp = c.delete("/v1/tokens/builder-ci", headers=_auth(admin))
+            assert resp.status_code == 200, resp.text
+
+            # The next re-auth tick tears the socket down (4001 = token gone).
+            with pytest.raises(WebSocketDisconnect) as exc:
+                ws.receive_json()
+            assert exc.value.code == 4001
