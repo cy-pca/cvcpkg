@@ -191,6 +191,13 @@ class TokenRow(Base):
         DateTime(timezone=True), nullable=True
     )
     revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Rotation grace window: pre-rotation secret hash, honored until
+    # previous_hash_expires_at (see DbTokenStore.rotate). Indexed: verify()
+    # falls back to this lookup for every failed current-hash match.
+    previous_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    previous_hash_expires_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class TokenRequestRow(Base):

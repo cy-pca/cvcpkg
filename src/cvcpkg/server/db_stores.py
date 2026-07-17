@@ -77,6 +77,13 @@ def _hash_token(raw_token: str, hmac_key: bytes) -> str:
     return hmac.new(hmac_key, raw_token.encode(), hashlib.sha256).hexdigest()
 
 
+def _ensure_aware(dt: datetime.datetime | None) -> datetime.datetime | None:
+    """Treat naive datetimes from the driver (e.g. SQLite) as UTC."""
+    if dt is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=datetime.timezone.utc)
+    return dt
+
+
 # ── DB Token Store ──────────────────────────────────────────────
 
 
@@ -134,11 +141,24 @@ class DbTokenStore:
                 select(TokenRow).where(TokenRow.token_hash == token_hash)
             )
             row = result.scalars().first()
+            via_previous = False
             if row is None:
-                return None
+                # Rotation grace window: the pre-rotation secret keeps
+                # verifying until previous_hash_expires_at.
+                result = await session.execute(
+                    select(TokenRow).where(TokenRow.previous_token_hash == token_hash)
+                )
+                row = result.scalars().first()
+                if row is None:
+                    return None
+                window_end = _ensure_aware(row.previous_hash_expires_at)
+                if window_end is None or now >= window_end:
+                    return None
+                via_previous = True
             if row.revoked:
                 return None
-            if row.expires_at is not None and row.expires_at < now:
+            expires_at = _ensure_aware(row.expires_at)
+            if expires_at is not None and expires_at < now:
                 return None
             return TokenRecord(
                 name=row.name,
@@ -148,9 +168,51 @@ class DbTokenStore:
                 description=row.description,
                 metadata=row.user_metadata,
                 created_at=row.created_at,
-                expires_at=row.expires_at,
+                expires_at=expires_at,
                 revoked=row.revoked,
+                previous_token_hash=row.previous_token_hash or "",
+                previous_hash_expires_at=_ensure_aware(row.previous_hash_expires_at),
+                via_previous_hash=via_previous,
             )
+
+    async def rotate(self, name: str, grace_minutes: int = 0) -> str | None:
+        """Swap in a new secret for an active token, returning the raw value.
+
+        The row (name, role, expiry, org memberships keyed by name) is
+        untouched; only the secret changes.  With ``grace_minutes > 0`` the
+        old secret keeps verifying until the window closes.  Returns None
+        if no active token has this name.
+        """
+        raw = f"cvctok_{secrets.token_urlsafe(32)}"
+        new_hash = _hash_token(raw, self._hmac_key)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            result = await session.execute(
+                select(TokenRow).where(
+                    TokenRow.name == name,
+                    TokenRow.revoked == False,  # noqa: E712
+                )
+            )
+            row = result.scalars().first()
+            if row is None:
+                return None
+            expires_at = _ensure_aware(row.expires_at)
+            if expires_at is not None and expires_at < now:
+                # An expired token cannot verify, so a "rotated" secret
+                # would be dead on arrival — treat like not found.
+                return None
+            if grace_minutes > 0:
+                window_end = now + datetime.timedelta(minutes=grace_minutes)
+                if expires_at is not None and expires_at < window_end:
+                    # The old secret can never outlive the token itself.
+                    window_end = expires_at
+                row.previous_token_hash = row.token_hash
+                row.previous_hash_expires_at = window_end
+            else:
+                row.previous_token_hash = None
+                row.previous_hash_expires_at = None
+            row.token_hash = new_hash
+        return raw
 
     async def revoke(self, name: str) -> bool:
         async with get_session() as session:

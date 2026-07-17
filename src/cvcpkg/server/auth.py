@@ -113,12 +113,54 @@ class TokenStore:
         token_hash = _hash_token(raw_token, self._hmac_key)
         now = datetime.datetime.now(datetime.timezone.utc)
         for t in self._tokens:
-            if hmac.compare_digest(t.token_hash, token_hash):
+            matches_current = hmac.compare_digest(t.token_hash, token_hash)
+            matches_previous = (
+                t.previous_token_hash != ""
+                and t.previous_hash_expires_at is not None
+                and now < t.previous_hash_expires_at
+                and hmac.compare_digest(t.previous_token_hash, token_hash)
+            )
+            if matches_current or matches_previous:
                 if t.revoked:
                     return None
                 if t.expires_at is not None and t.expires_at < now:
                     return None
+                if matches_previous and not matches_current:
+                    # Copy so the transient flag never reaches _persist().
+                    return t.model_copy(update={"via_previous_hash": True})
                 return t
+        return None
+
+    def rotate(self, name: str, grace_minutes: int = 0) -> str | None:
+        """Swap in a new secret for an active token, returning the raw value.
+
+        The record (name, role, expiry, org memberships keyed by name) is
+        untouched; only the secret changes.  With ``grace_minutes > 0`` the
+        old secret keeps verifying until the window closes, so stored
+        copies can be updated without an outage.  Returns None if no
+        active token has this name.
+        """
+        now = datetime.datetime.now(datetime.timezone.utc)
+        for t in self._tokens:
+            if t.name == name and not t.revoked:
+                if t.expires_at is not None and t.expires_at < now:
+                    # An expired token cannot verify, so a "rotated" secret
+                    # would be dead on arrival — treat like not found.
+                    return None
+                raw = f"cvctok_{secrets.token_urlsafe(32)}"
+                if grace_minutes > 0:
+                    window_end = now + datetime.timedelta(minutes=grace_minutes)
+                    if t.expires_at is not None and t.expires_at < window_end:
+                        # The old secret can never outlive the token itself.
+                        window_end = t.expires_at
+                    t.previous_token_hash = t.token_hash
+                    t.previous_hash_expires_at = window_end
+                else:
+                    t.previous_token_hash = ""
+                    t.previous_hash_expires_at = None
+                t.token_hash = _hash_token(raw, self._hmac_key)
+                self._persist()
+                return raw
         return None
 
     def revoke(self, name: str) -> bool:

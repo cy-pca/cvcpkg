@@ -112,6 +112,8 @@ from cvcpkg.server.models import (
     TokenRequestListResponse,
     TokenRequestStatus,
     TokenRole,
+    TokenRotateRequest,
+    TokenRotateResponse,
     UserListResponse,
     UserProfileResponse,
     WebhookInfo,
@@ -521,8 +523,19 @@ def _extract_token(authorization: str | None = Header(None)) -> str | None:
     return None
 
 
-def require_role(*roles: TokenRole):
-    """FastAPI dependency that requires one of the given roles."""
+def require_role(*roles: TokenRole, allow_grace: bool = False):
+    """FastAPI dependency that requires one of the given roles.
+
+    By default a pre-rotation *grace* secret (one still valid only because
+    it is inside a rotation grace window) is rejected: the grace window
+    exists so an automated consumer can keep *using* the credential (i.e.
+    publishing) while the secret is swapped, NOT so it can administer
+    tokens or org membership.  Allowing a grace secret to reach a
+    control-plane endpoint would let a leaked old secret mint a fresh
+    permanent credential or membership that outlives the window —
+    defeating rotation as a leak remediation.  Data-plane publish/upload
+    endpoints opt back in with ``allow_grace=True``.
+    """
 
     async def _dep(authorization: str | None = Header(None)) -> TokenRecord:
         state = _get_state()
@@ -539,6 +552,12 @@ def require_role(*roles: TokenRole):
             raise HTTPException(
                 403,
                 f"role '{record.role.value}' not in {[r.value for r in roles]}",
+            )
+        if record.via_previous_hash and not allow_grace:
+            raise HTTPException(
+                403,
+                "the pre-rotation (grace-window) secret cannot perform this "
+                "operation; use the current secret or an admin token",
             )
         return record
 
@@ -586,6 +605,20 @@ async def _authenticate_token(raw: str) -> TokenRecord | None:
         return await _db_tokens.verify(raw)
     state = _get_state()
     return state.tokens.verify(raw)
+
+
+def _reject_grace_secret(actor: TokenRecord) -> None:
+    """Bar a pre-rotation grace secret from control-plane operations.
+
+    Mirror of ``require_role``'s grace check for the endpoints that
+    resolve the actor manually (token self-service, rotation).
+    """
+    if actor.via_previous_hash:
+        raise HTTPException(
+            403,
+            "the pre-rotation (grace-window) secret cannot perform this "
+            "operation; use the current secret or an admin token",
+        )
 
 
 # ── Webhook delivery engine ────────────────────────────────────
@@ -2837,7 +2870,9 @@ def create_app(
             "[]",
             description="JSON-encoded list of runtime dependency dicts [{name, version}, ...]",
         ),
-        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+        actor: TokenRecord = Depends(
+            require_role(TokenRole.publisher, TokenRole.admin, allow_grace=True)
+        ),
     ):
         if MIRROR_MODE:
             raise HTTPException(
@@ -3087,7 +3122,9 @@ def create_app(
             "",
             description="Organization slug. Empty for official/public packages.",
         ),
-        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+        actor: TokenRecord = Depends(
+            require_role(TokenRole.publisher, TokenRole.admin, allow_grace=True)
+        ),
     ):
         """Initialise a chunked upload session.
 
@@ -3193,7 +3230,9 @@ def create_app(
     @app.get("/v1/upload/{upload_id}", tags=["upload"])
     async def upload_status(
         upload_id: str,
-        _actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+        _actor: TokenRecord = Depends(
+            require_role(TokenRole.publisher, TokenRole.admin, allow_grace=True)
+        ),
     ):
         """Return current status of a chunked upload (bytes received so far)."""
         session = _upload_sessions.get(upload_id)
@@ -3211,7 +3250,9 @@ def create_app(
     async def upload_chunk(
         upload_id: str,
         request: Request,
-        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+        actor: TokenRecord = Depends(
+            require_role(TokenRole.publisher, TokenRole.admin, allow_grace=True)
+        ),
     ):
         """Append a chunk to an in-progress upload.
 
@@ -3270,7 +3311,9 @@ def create_app(
         upload_id: str,
         request: Request,
         expected_sha256: str = Query("", description="Expected SHA-256 for verification"),
-        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+        actor: TokenRecord = Depends(
+            require_role(TokenRole.publisher, TokenRole.admin, allow_grace=True)
+        ),
     ):
         """Finalise a chunked upload — verify integrity and register the package."""
         _check_rate_limit(request)
@@ -3449,7 +3492,9 @@ def create_app(
     @app.delete("/v1/upload/{upload_id}", tags=["upload"], status_code=204)
     async def upload_cancel(
         upload_id: str,
-        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+        actor: TokenRecord = Depends(
+            require_role(TokenRole.publisher, TokenRole.admin, allow_grace=True)
+        ),
     ):
         """Cancel and discard an in-progress upload session."""
         session = _upload_sessions.get(upload_id)
@@ -3811,6 +3856,7 @@ def create_app(
             actor = state.tokens.verify(raw)
         if actor is None:
             raise HTTPException(401, "invalid or expired token")
+        _reject_grace_secret(actor)
         # Non-admins can only update their own email
         if actor.role != TokenRole.admin and actor.name != name:
             raise HTTPException(403, "you can only update your own token's email")
@@ -3856,6 +3902,7 @@ def create_app(
             actor = state.tokens.verify(raw)
         if actor is None:
             raise HTTPException(401, "invalid or expired token")
+        _reject_grace_secret(actor)
         if actor.role != TokenRole.admin and actor.name != name:
             raise HTTPException(403, "you can only update your own profile")
 
@@ -3884,6 +3931,80 @@ def create_app(
                 f"{',metadata' if req.metadata is not None else ''}",
             )
         return {"message": f"profile for '{name}' updated"}
+
+    @app.post(
+        "/v1/tokens/{name}/rotate",
+        response_model=TokenRotateResponse,
+        tags=["tokens"],
+    )
+    async def rotate_token(
+        name: str,
+        req: TokenRotateRequest | None = None,
+        authorization: str | None = Header(None),
+    ):
+        """Rotate a token's secret in place.
+
+        The token keeps its name, role, expiry, and org memberships —
+        only the secret changes.  ``grace_minutes`` lets the old secret
+        keep working while stored copies are updated.  Admins can rotate
+        any token; non-admins can only rotate their own.
+        """
+        state = _get_state()
+        raw_actor = _extract_token(authorization)
+        if raw_actor is None:
+            raise HTTPException(401, "missing Authorization header")
+        if _use_db:
+            actor = await _db_tokens.verify(raw_actor)
+        else:
+            actor = state.tokens.verify(raw_actor)
+        if actor is None:
+            raise HTTPException(401, "invalid or expired token")
+        if actor.role != TokenRole.admin and actor.name != name:
+            raise HTTPException(403, "you can only rotate your own token")
+        # A pre-rotation grace secret must not rotate: a leaked old secret
+        # could otherwise re-rotate inside the window, mint itself a fresh
+        # permanent secret, and lock out the owner — defeating rotation as
+        # a leak remediation.
+        _reject_grace_secret(actor)
+
+        grace_minutes = req.grace_minutes if req is not None else 0
+        if _use_db:
+            raw = await _db_tokens.rotate(name, grace_minutes=grace_minutes)
+        else:
+            raw = state.tokens.rotate(name, grace_minutes=grace_minutes)
+        if raw is None:
+            raise HTTPException(404, f"token '{name}' not found")
+
+        record = await _db_tokens.verify(raw) if _use_db else state.tokens.verify(raw)
+        # Record the EFFECTIVE window end (rotate() clamps it to the token's
+        # own expiry), not the requested minutes, so the audit trail shows
+        # how long the old secret actually lived.
+        previous_valid_until = (
+            record.previous_hash_expires_at if record and grace_minutes > 0 else None
+        )
+        window = previous_valid_until.isoformat() if previous_valid_until is not None else "none"
+        detail = f"grace_minutes={grace_minutes} previous_valid_until={window}"
+        if _use_db:
+            await _db_audit.record(
+                action=AuditAction.token_rotate,
+                actor=actor.name,
+                target=name,
+                detail=detail,
+            )
+        else:
+            state.audit.record(
+                action=AuditAction.token_rotate,
+                actor=actor.name,
+                target=name,
+                detail=detail,
+            )
+        return TokenRotateResponse(
+            name=name,
+            role=record.role if record else actor.role,
+            token=raw,
+            expires_at=record.expires_at if record else None,
+            previous_valid_until=previous_valid_until,
+        )
 
     @app.get(
         "/v1/users",
