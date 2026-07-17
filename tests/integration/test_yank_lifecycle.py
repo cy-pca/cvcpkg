@@ -409,6 +409,80 @@ class TestYankRetentionStore:
 
         self._run(_t())
 
+    # ── 20. manual nuke writes a tombstone with reason=manual ────
+
+    def test_20_manual_nuke_tombstone_reason_and_actor(self):
+        from cvcpkg.server.db_stores import DbPackageIndex
+
+        async def _t():
+            idx = DbPackageIndex()
+            fname = await self._add(idx)
+            await self._set_row("widget", "1.0.0", yanked=True, yanked_at=_ago(1))
+            await idx.nuke_bundles(
+                "widget",
+                "1.0.0",
+                storage_uri=self.storage_uri,
+                nuked_by="alice-admin",
+                reason="manual",
+            )
+            ts = await idx.get_tombstones("widget")
+            assert len(ts) == 1
+            assert ts[0]["reason"] == "manual"
+            assert ts[0]["nuked_by"] == "alice-admin"
+            # forensic context is copied off the row before it's deleted
+            assert ts[0]["sha256"] == hashlib.sha256(b"archive-bytes").hexdigest()
+            assert ts[0]["filename"] == fname
+            assert ts[0]["yanked_at"] is not None
+
+        self._run(_t())
+
+    # ── 21. retention purge writes reason=retention / retention-gc ─
+
+    def test_21_retention_purge_tombstone_reason(self):
+        from cvcpkg.server.db_stores import DbPackageIndex
+
+        async def _t():
+            idx = DbPackageIndex()
+            await self._add(idx)
+            await self._set_row("widget", "1.0.0", yanked=True, yanked_at=_ago(400))
+            await idx.purge_yanked(older_than_days=90, storage_uri=self.storage_uri)
+            ts = await idx.get_tombstones("widget")
+            assert len(ts) == 1
+            assert ts[0]["reason"] == "retention"
+            assert ts[0]["nuked_by"] == "retention-gc"
+
+        self._run(_t())
+
+    # ── 22. a dry-run purge writes NO tombstone ──────────────────
+
+    def test_22_dry_run_writes_no_tombstone(self):
+        from cvcpkg.server.db_stores import DbPackageIndex
+
+        async def _t():
+            idx = DbPackageIndex()
+            await self._add(idx)
+            await self._set_row("widget", "1.0.0", yanked=True, yanked_at=_ago(400))
+            await idx.purge_yanked(older_than_days=90, storage_uri=self.storage_uri, dry_run=True)
+            assert await idx.get_tombstones("widget") == []
+
+        self._run(_t())
+
+    # ── 23. tombstone reachable BY FILENAME (drives the 410) ─────
+
+    def test_23_tombstone_lookup_by_filename(self):
+        from cvcpkg.server.db_stores import DbPackageIndex
+
+        async def _t():
+            idx = DbPackageIndex()
+            fname = await self._add(idx)
+            assert await idx.get_tombstone_by_filename(fname) is None
+            await self._set_row("widget", "1.0.0", yanked=True, yanked_at=_ago(1))
+            await idx.nuke_bundles("widget", "1.0.0", storage_uri=self.storage_uri)
+            hit = await idx.get_tombstone_by_filename(fname)
+            assert hit is not None and hit["filename"] == fname
+
+        self._run(_t())
+
 
 # ────────────────────────────────────────────────────────────────
 # ENDPOINT-LEVEL: DB-backed TestClient (RBAC / ownership / storage / audit)
@@ -625,6 +699,39 @@ def test_12_nuke_rbac(db_env):
     allowed = client.post("/v1/packages/nukepkg/1.0.0/nuke", headers=_hdr(admin))
     assert allowed.status_code == 200, allowed.text
     assert allowed.json()["count"] == 1
+
+
+# ── 24. after nuke: download is 410 Gone, and the tombstone API explains it ──
+
+
+def test_24_nuked_download_is_410_and_tombstone_api(db_env):
+    client, admin, pub_a, _pb, _tmp = db_env
+
+    assert _publish_client(client, pub_a, name="gonepkg").status_code == 200
+    # the archive is downloadable while it exists
+    dl_before = client.get("/v1/download/gonepkg-1.0.0-linux-x86_64-release-shared.tar.zst")
+    assert dl_before.status_code == 200, dl_before.text
+
+    assert client.post("/v1/packages/gonepkg/1.0.0/yank", headers=_hdr(pub_a)).status_code == 200
+    assert client.post("/v1/packages/gonepkg/1.0.0/nuke", headers=_hdr(admin)).status_code == 200
+
+    # Downloading the purged archive now says 410 Gone with the reason, not 404.
+    dl = client.get("/v1/download/gonepkg-1.0.0-linux-x86_64-release-shared.tar.zst")
+    assert dl.status_code == 410, dl.text
+    detail = dl.json()["detail"]
+    assert "nuked" in detail and "manual" in detail and "gonepkg==1.0.0" in detail
+
+    # A never-published archive is still a plain 404 (not a false 410).
+    assert (
+        client.get("/v1/download/neverpkg-9.9-linux-x86_64-release-shared.tar.zst").status_code
+        == 404
+    )
+
+    # The tombstone API records reason=manual and who did it.
+    ts = client.get("/v1/packages/gonepkg/tombstones").json()
+    assert ts["count"] == 1
+    assert ts["tombstones"][0]["reason"] == "manual"
+    assert ts["tombstones"][0]["nuked_by"] == "yank-admin"
 
 
 # ── 13. a publisher cannot yank another publisher's package ──────

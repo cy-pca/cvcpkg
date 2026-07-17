@@ -1,7 +1,7 @@
 """packages.yanked_at
 
-Revision ID: 017
-Revises: 016
+Revision ID: 018
+Revises: 017
 Create Date: 2026-07-17
 
 Adds ``yanked_at`` to ``packages``.  ``yanked`` is a bare boolean, so there was
@@ -23,8 +23,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "017"
-down_revision: str | None = "016"
+revision: str = "018"
+down_revision: str | None = "017"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

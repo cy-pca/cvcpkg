@@ -299,6 +299,25 @@ POST /v1/admin/gc/yanked?older_than_days=365&dry_run=true
 
 Retention purges are audited under the `nuke` action with actor `retention-gc`.
 
+### Nuked-package tombstones
+
+A nuked bundle's catalog row is hard-deleted (freeing the slot for republish),
+so a lightweight **tombstone** records that it existed and why it went away.
+Every nuke — manual or retention — writes one, carrying `reason` (`manual` = an
+admin's `cvcpkg nuke`, `retention` = fell off the schedule), `nuked_by`,
+`nuked_at`, and forensic context (sha256, sizes, the original `published_at` and
+`yanked_at`).
+
+`GET /v1/packages/{name}/tombstones` — records for `name`, newest first;
+narrow with the same scope query params. Private-org tombstones are visible only
+to a member or admin.
+
+Because of tombstones, **downloading a nuked archive returns `410 Gone`** with
+the reason and date (e.g. `readline==8.3+cvc.1 was nuked (retention) on
+2026-07-17`) rather than a bare `404` — a consumer whose lockfile pinned it
+learns it was retired, not that it never existed. A genuinely unknown archive is
+still `404`.
+
 ### `DELETE /v1/packages/{name}/{version}`
 
 Delete a package's catalog row. Auth: `admin` only. **Legacy** — it accepts only

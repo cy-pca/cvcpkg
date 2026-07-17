@@ -28,6 +28,7 @@ from cvcpkg.server.db import (
     OrganizationRow,
     OrgMemberRow,
     PackageRow,
+    PackageTombstoneRow,
     RecipeRow,
     TagRow,
     TelemetryEventRow,
@@ -726,6 +727,66 @@ class DbAuditLog:
 
 # ── DB Package Index ────────────────────────────────────────────
 
+# Why a nuked bundle went away.  Kept in sync with the CLI/API and the
+# package_tombstones.reason column.
+NUKE_REASON_MANUAL = "manual"  # an admin's `cvcpkg nuke`
+NUKE_REASON_RETENTION = "retention"  # fell off the yank-retention schedule
+
+
+def _tombstone_dict(r) -> dict:
+    return {
+        "name": r.name,
+        "version": r.version,
+        "platform": r.platform,
+        "arch": r.arch,
+        "build_type": r.build_type,
+        "link": r.link,
+        "org_slug": r.org_slug,
+        "filename": r.filename,
+        "reason": r.reason,
+        "nuked_by": r.nuked_by,
+        "nuked_at": r.nuked_at,
+        "size_bytes": r.size_bytes,
+        "sha256": r.sha256,
+        "published_at": r.published_at,
+        "yanked_at": r.yanked_at,
+    }
+
+
+def _record_tombstones(
+    session,
+    rows,
+    *,
+    reason: str,
+    nuked_by: str,
+) -> None:
+    """Insert a tombstone for each PackageRow about to be nuked.
+
+    Called inside the nuke/purge transaction so the tombstone and the row
+    delete commit together -- a nuked bundle is never gone without a record of
+    why.  Forensic fields (sha256, sizes, timestamps) are copied off the row
+    before it disappears.
+    """
+    session.add_all(
+        PackageTombstoneRow(
+            name=r.name,
+            version=r.version,
+            platform=r.platform,
+            arch=r.arch,
+            build_type=r.build_type,
+            link=r.link,
+            org_slug=r.org_slug,
+            filename=(r.archive_url or "").rsplit("/", 1)[-1],
+            reason=reason,
+            nuked_by=nuked_by,
+            size_bytes=r.size_bytes,
+            sha256=r.sha256,
+            published_at=r.published_at,
+            yanked_at=r.yanked_at,
+        )
+        for r in rows
+    )
+
 
 class DbPackageIndex:
     """Package catalog backed by the ``packages`` table."""
@@ -1317,6 +1378,8 @@ class DbPackageIndex:
         build_type: str | None = None,
         require_yanked: bool = True,
         storage_uri: str = "",
+        nuked_by: str = "",
+        reason: str = "manual",
     ) -> dict:
         """Irreversibly remove matching bundles: DB rows AND archive bytes.
 
@@ -1378,6 +1441,10 @@ class DbPackageIndex:
                 }
                 for r in rows
             ]
+            # Tombstone each variant BEFORE deleting the row, in the same
+            # transaction, so the record and the deletion commit atomically --
+            # a nuked bundle can never be gone without a tombstone explaining it.
+            _record_tombstones(session, rows, reason=reason, nuked_by=nuked_by)
             ids = [r.id for r in rows]
             await session.execute(sa_delete(PackageRow).where(PackageRow.id.in_(ids)))
             await session.flush()
@@ -1402,6 +1469,56 @@ class DbPackageIndex:
                     )
 
             return {"nuked": nuked, "count": len(nuked)}
+
+    async def get_tombstones(
+        self,
+        name: str,
+        version: str = "",
+        *,
+        platform: str = "",
+        arch: str = "",
+        build_type: str = "",
+        link: str = "",
+    ) -> list[dict]:
+        """Tombstones for *name*, newest first; narrow by version/variant.
+
+        Backs the per-package "what happened to it" view and the 410 Gone a
+        pinned consumer gets in place of a bare 404.
+        """
+        async with get_session() as session:
+            q = select(PackageTombstoneRow).where(PackageTombstoneRow.name == name)
+            if version:
+                q = q.where(PackageTombstoneRow.version == version)
+            if platform:
+                q = q.where(PackageTombstoneRow.platform == platform)
+            if arch:
+                q = q.where(PackageTombstoneRow.arch == arch)
+            if build_type:
+                q = q.where(PackageTombstoneRow.build_type == build_type)
+            if link:
+                q = q.where(PackageTombstoneRow.link == link)
+            q = q.order_by(PackageTombstoneRow.nuked_at.desc(), PackageTombstoneRow.id.desc())
+            rows = (await session.execute(q)).scalars().all()
+            return [_tombstone_dict(r) for r in rows]
+
+    async def get_tombstone_by_filename(self, filename: str) -> dict | None:
+        """The newest tombstone for an archive *filename*, or None.
+
+        Lets the download endpoint answer 410 Gone ("nuked, reason, when") for a
+        purged archive instead of a bare 404.
+        """
+        if not filename:
+            return None
+        async with get_session() as session:
+            r = (
+                await session.execute(
+                    select(PackageTombstoneRow)
+                    .where(PackageTombstoneRow.filename == filename)
+                    .order_by(PackageTombstoneRow.nuked_at.desc(), PackageTombstoneRow.id.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            return _tombstone_dict(r) if r is not None else None
 
     async def get_release_tags(self) -> list[dict]:
         """Distinct release tags with variant counts, most-populated first.
@@ -1519,6 +1636,7 @@ class DbPackageIndex:
         older_than_days: int,
         storage_uri: str = "",
         dry_run: bool = False,
+        nuked_by: str = "retention-gc",
     ) -> list[dict]:
         """Permanently remove bundles yanked longer ago than *older_than_days*.
 
@@ -1532,7 +1650,7 @@ class DbPackageIndex:
 
         Never purges:
           * ``yanked_at IS NULL`` -- either never yanked, or yanked before the
-            column existed (migration 017 deliberately does not backfill, so
+            column existed (migration 018 deliberately does not backfill, so
             historical yanks are exempt rather than instantly expired);
           * tagged releases (``release_tag != ""``) -- immutable by this
             codebase's convention, matching gc_by_age/gc_by_storage.  A yanked
@@ -1586,6 +1704,11 @@ class DbPackageIndex:
             if dry_run or not rows:
                 return purged
 
+            # Tombstone with reason="retention" before deleting -- a package that
+            # fell off the schedule is effectively nuked, and a consumer that
+            # pinned it should learn it was retired on a schedule, not that it
+            # never existed.
+            _record_tombstones(session, rows, reason=NUKE_REASON_RETENTION, nuked_by=nuked_by)
             ids = [r.id for r in rows]
             await session.execute(sa_delete(PackageRow).where(PackageRow.id.in_(ids)))
 

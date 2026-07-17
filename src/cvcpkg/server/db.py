@@ -72,7 +72,7 @@ class PackageRow(Base):
     # When the bundle was yanked; NULL when it never was, or once unyanked.
     # The yank-retention GC keys on this and treats NULL as "never purge", so
     # rows yanked before the column existed are exempt rather than instantly
-    # expired.  See migration 017.
+    # expired.  See migration 018.
     yanked_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -131,6 +131,57 @@ class PackageRow(Base):
             "org_slug",
             unique=True,
         ),
+    )
+
+
+class PackageTombstoneRow(Base):
+    """Record that a bundle variant was nuked, and why.
+
+    A nuked ``packages`` row is hard-deleted (freeing the slot for republish),
+    so this is the only lasting per-package trace.  ``reason`` distinguishes a
+    manual ``cvcpkg nuke`` ("manual") from a retention-schedule expiry
+    ("retention"); ``nuked_by`` is the admin token name or "retention-gc".  It
+    drives the 410 Gone a pinned consumer gets instead of a bare 404.
+    """
+
+    __tablename__ = "package_tombstones"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    version: Mapped[str] = mapped_column(String(128), nullable=False)
+    platform: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    arch: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    build_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="", server_default=""
+    )
+    link: Mapped[str] = mapped_column(String(32), nullable=False, default="", server_default="")
+    org_slug: Mapped[str] = mapped_column(
+        String(255), nullable=False, default="", server_default=""
+    )
+    filename: Mapped[str] = mapped_column(
+        String(512), nullable=False, default="", server_default=""
+    )
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    nuked_by: Mapped[str] = mapped_column(
+        String(255), nullable=False, default="", server_default=""
+    )
+    nuked_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    size_bytes: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    published_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    yanked_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        Index("ix_package_tombstones_name_version", "name", "version"),
+        Index("ix_package_tombstones_filename", "filename"),
     )
 
 

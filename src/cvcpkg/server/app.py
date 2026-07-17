@@ -2953,6 +2953,18 @@ def create_app(
         # file for file:// (served straight from disk), or a streamed object
         # for a remote backend (s3://…) after a storage migration.
         if not archive_store.exists(state.storage_uri, safe_name):
+            # A nuked/purged archive gets 410 Gone (with why + when), not a bare
+            # 404 -- a consumer that pinned it should learn it was retired, not
+            # that it never existed.
+            if _use_db and _db_packages is not None:
+                ts = await _db_packages.get_tombstone_by_filename(safe_name)
+                if ts is not None:
+                    when = str(ts.get("nuked_at", ""))[:10]
+                    raise HTTPException(
+                        410,
+                        f"{ts['name']}=={ts['version']} was nuked "
+                        f"({ts['reason']}) on {when}; the archive is gone.",
+                    )
             raise HTTPException(404, f"archive not found: {safe_name}")
         archive_size = archive_store.size(state.storage_uri, safe_name)
 
@@ -3871,6 +3883,8 @@ def create_app(
                     build_type=build_type,
                     require_yanked=True,
                     storage_uri=_get_state().storage_uri,
+                    nuked_by=actor.name,
+                    reason="manual",
                 )
             except ValueError as exc:
                 # Not yanked -> 409, the same class as the publish-conflict 409.
@@ -3890,6 +3904,48 @@ def create_app(
                 await _db_orgs.update_storage_used(slug, -delta)
             ac.detail = f"nuked={result['count']}"
         return {"message": f"nuked {target}", "count": result["count"]}
+
+    @app.get("/v1/packages/{name}/tombstones", tags=["packages"])
+    async def package_tombstones(
+        name: str,
+        version: str = Query("", description="Narrow to one version."),
+        platform: str = Query(""),
+        arch: str = Query(""),
+        build_type: str = Query(""),
+        link: str = Query(""),
+        caller: TokenRecord | None = Depends(optional_token),
+    ):
+        """Records of variants of *name* that were nuked, newest first.
+
+        Each carries ``reason`` (``manual`` = an admin's ``cvcpkg nuke``,
+        ``retention`` = fell off the yank-retention schedule), ``nuked_by``,
+        ``nuked_at``, and forensic context.  This is how you learn a bundle was
+        retired-and-purged rather than never-published.
+        """
+        if not _use_db or _db_packages is None:
+            return {"tombstones": [], "count": 0}
+        tombstones = await _db_packages.get_tombstones(
+            name,
+            version,
+            platform=platform,
+            arch=arch,
+            build_type=build_type,
+            link=link,
+        )
+        # Private-org tombstones are visible only to a member or admin -- the
+        # same rule as the package itself, so a purge doesn't become an info leak.
+        visible = []
+        for t in tombstones:
+            org = t.get("org_slug", "")
+            if org and _db_orgs is not None:
+                org_info = await _db_orgs.get(org)
+                if org_info is not None and org_info.is_private:
+                    if caller is None or not (
+                        caller.role == TokenRole.admin or await _db_orgs.is_member(org, caller.name)
+                    ):
+                        continue
+            visible.append(t)
+        return {"tombstones": visible, "count": len(visible)}
 
     # ── Delete (admin only) ─────────────────────────────────
 
