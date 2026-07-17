@@ -12,7 +12,9 @@ tests/unit/test_dep_closures.py.  The CLI wires ``--build-prefix`` (default
 from __future__ import annotations
 
 import os
+import sys
 
+import pytest
 import yaml
 
 from cvcpkg.builder import BuildContext, Recipe, _build_env
@@ -85,12 +87,21 @@ class TestBuildPrefix:
         assert env["CVC_BUILD_PREFIX"] != env["CVC_DEPS_PREFIX"]
 
     def test_build_prefix_lib_is_searchable(self, tmp_path):
-        # A build-closure tool may link its own shared libs.
+        # A build-closure tool may link its own shared libs, so the build
+        # prefix's lib/ must be on the runtime loader path.
+        #
+        # _build_env only sets a *nix loader var: DYLD_LIBRARY_PATH on macOS,
+        # LD_LIBRARY_PATH elsewhere -- and nothing on Windows, where DLLs
+        # resolve via PATH (covered by test_build_prefix_bin_is_first_on_path).
+        # Use sys.platform, not os.uname(): the latter does not exist on
+        # Windows and made this test explode there rather than skip.
         r = _recipe(tmp_path)
         bp = tmp_path / "bp"
         ctx = _ctx(tmp_path, r, build_prefix=bp)
         env = _build_env(ctx, r.build_matrix[0])
-        key = "DYLD_LIBRARY_PATH" if os.uname().sysname == "Darwin" else "LD_LIBRARY_PATH"
+        if sys.platform == "win32":
+            pytest.skip("no loader env var on Windows; DLLs resolve via PATH")
+        key = "DYLD_LIBRARY_PATH" if sys.platform == "darwin" else "LD_LIBRARY_PATH"
         assert str((bp / "lib").resolve()) in env.get(key, "")
 
     def test_fallback_to_prefix_when_not_separated(self, tmp_path):
