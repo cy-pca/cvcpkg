@@ -199,6 +199,11 @@ class Recipe:
     cross_toolchain_targets: list[str] = field(default_factory=list)
     cross_toolchain_env: dict[str, str] = field(default_factory=dict)
     conflicts: list[str] = field(default_factory=list)
+    # Virtual slots this package fills.  Every provider of a slot is mutually
+    # exclusive with every other, so a group of n alternatives needs n
+    # declarations instead of n*(n-1) pairwise `conflicts` entries — and cannot
+    # be declared asymmetrically.
+    provides: list[str] = field(default_factory=list)
     python: PythonSpec | None = None
 
     @property
@@ -240,6 +245,7 @@ class Recipe:
             cross_toolchain_targets=ct_block.get("target_platforms", []) or [],
             cross_toolchain_env=ct_block.get("env", {}) or {},
             conflicts=raw.get("conflicts", []) or [],
+            provides=raw.get("provides", []) or [],
             python=PythonSpec.from_dict(python_block) if python_block else None,
         )
 
@@ -1081,6 +1087,9 @@ def generate_manifest(
             "files": files,
             "cmake_packages": cmake_packages,
             "pkg_config": pkg_config,
+            # Carry the recipe's exclusivity slots into the bundle so an
+            # installed prefix knows what it fills without needing the recipe.
+            **({"provides": list(recipe.provides)} if recipe.provides else {}),
         },
         "dependencies": {
             "required": dep_list,
@@ -2642,28 +2651,77 @@ def load_all_recipes(recipe_dirs: list[Path]) -> list[Recipe]:
     return sorted(by_name.values(), key=lambda r: r.name)
 
 
+def _slot_providers(slots: set[str], recipe_dirs: list[Path]) -> dict[str, set[str]]:
+    """Map each slot in *slots* to the package names providing it."""
+    providers: dict[str, set[str]] = {s: set() for s in slots}
+    for rdir in recipe_dirs:
+        if not rdir.is_dir():
+            continue
+        for child in sorted(rdir.iterdir()):
+            if not (child / "recipe.yaml").is_file():
+                continue
+            try:
+                r = Recipe.load(child)
+            except Exception:
+                continue
+            for slot in slots.intersection(r.provides):
+                providers[slot].add(r.name)
+    return providers
+
+
 def collect_recipe_conflicts(
     names: list[str],
     recipe_dirs: list[Path],
 ) -> dict[str, list[str]]:
     """Return a ``{package_name: [conflicting_package, ...]}`` mapping.
 
-    Only covers the packages named in *names*.  Packages whose recipe
-    cannot be found in *recipe_dirs* are silently skipped so the
-    function is safe to call when a recipe directory is not available.
+    Covers two sources:
+
+    * explicit ``conflicts:`` on the recipes named in *names*;
+    * ``provides:`` slots — every package providing a slot is mutually
+      exclusive with every other provider of that slot.
+
+    The slot form exists because explicit ``conflicts:`` must be declared
+    symmetrically (each of a pair naming the other), and nothing enforces
+    that.  A one-sided declaration only fires in one direction: this
+    function loads recipes for the packages *being installed*, so if A
+    declares B but B does not declare A, installing B onto an existing A
+    sails through.  For a mutually exclusive *group* of n packages, the
+    pairwise form needs n*(n-1) declarations all kept in sync by hand;
+    a slot needs n, and cannot be asymmetric by construction.
+
+    Packages whose recipe cannot be found in *recipe_dirs* are silently
+    skipped so the function is safe to call when a recipe directory is
+    not available.
     """
     conflicts: dict[str, list[str]] = {}
+    slots_of: dict[str, set[str]] = {}
+
     for rdir in recipe_dirs:
         for name in names:
             recipe_yaml = rdir / name / "recipe.yaml"
             if recipe_yaml.is_file():
                 try:
                     r = Recipe.load(rdir / name)
-                    if r.conflicts:
-                        conflicts.setdefault(name, []).extend(r.conflicts)
                 except Exception:
-                    pass
-    return conflicts
+                    continue
+                if r.conflicts:
+                    conflicts.setdefault(name, []).extend(r.conflicts)
+                if r.provides:
+                    slots_of.setdefault(name, set()).update(r.provides)
+
+    # Resolve slots to their other providers.  Only scan every recipe when
+    # something being installed actually claims a slot — most do not.
+    wanted = {s for slots in slots_of.values() for s in slots}
+    if wanted:
+        providers = _slot_providers(wanted, recipe_dirs)
+        for name, slots in slots_of.items():
+            for slot in slots:
+                for other in providers.get(slot, ()):
+                    if other != name:
+                        conflicts.setdefault(name, []).append(other)
+
+    return {k: sorted(set(v)) for k, v in conflicts.items()}
 
 
 # ── Revision bumping ───────────────────────────────────────────

@@ -99,6 +99,41 @@ class TestPlatformAny:
         assert _valid(schema, _recipe(build={"matrix": [{"platform": plat, "script": "build.sh"}]}))
 
 
+class TestProvidesSlots:
+    """`provides:` must be expressible for the cases it exists to serve."""
+
+    def test_version_bearing_slot_accepted(self, schema):
+        # `cpython-3.13` is the motivating example — a slot name carrying a
+        # version, i.e. containing a dot.  The package-name pattern would
+        # reject it and ship the feature unusable.
+        assert _valid(schema, _recipe(provides=["cpython-3.13"]))
+
+    def test_plain_slot_accepted(self, schema):
+        assert _valid(schema, _recipe(provides=["libgl-implementation"]))
+
+    def test_multiple_slots_accepted(self, schema):
+        assert _valid(schema, _recipe(provides=["cpython-3.13", "python-interpreter"]))
+
+    def test_empty_list_accepted(self, schema):
+        # `patches: []` is a common idiom in these recipes; `provides: []`
+        # must not be a gratuitous failure.
+        assert _valid(schema, _recipe(provides=[]))
+
+    def test_uppercase_slot_rejected(self, schema):
+        assert not _valid(schema, _recipe(provides=["Bad_Name"]))
+
+    def test_builder_reads_what_the_schema_accepts(self, schema, tmp_path):
+        # Guard the schema/builder seam the same way platform: any is guarded.
+        from cvcpkg.builder import Recipe
+
+        r = _recipe(provides=["cpython-3.13"])
+        assert _valid(schema, r)
+        (tmp_path / "widget").mkdir(parents=True)
+        with open(tmp_path / "widget" / "recipe.yaml", "w", encoding="utf-8") as f:
+            yaml.safe_dump(r, f)
+        assert Recipe.load(tmp_path / "widget").provides == ["cpython-3.13"]
+
+
 class TestShippedRecipesValidate:
     def test_every_shipped_recipe_matches_the_schema(self, schema):
         # Mirrors packaging/validate.py so schema drift fails the unit suite

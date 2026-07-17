@@ -64,8 +64,27 @@ properties:
     description: >
       Packages that cannot be installed in the same prefix as this one.
       The conflict is checked before installation; the user is told to
-      uninstall the conflicting package first.  Should be declared
-      symmetrically (each conflicting pair lists the other).
+      uninstall the conflicting package first.  Must be declared
+      symmetrically (each conflicting pair lists the other) — a one-sided
+      declaration only fires in one direction, since the check loads the
+      recipes of the packages being installed.  Symmetry is enforced by
+      tests.  For a mutually exclusive *group*, prefer `provides` below,
+      which cannot be asymmetric.
+
+  provides:
+    type: array
+    items:
+      type: string
+      # Slots are a virtual namespace, not package names, so a dot is allowed
+      # — version-bearing slots like `cpython-3.13` are the common case.
+      pattern: "^[a-z][a-z0-9.-]*$"
+    description: >
+      Virtual slots this package fills, e.g. `cpython-3.13`.  Every package
+      providing a slot is mutually exclusive with every other provider of
+      that slot, so a group of n alternatives needs n declarations rather
+      than the n*(n-1) pairwise `conflicts` entries — and the exclusion is
+      symmetric by construction.  Use this when several packages install
+      the same files (a clobber) or are otherwise interchangeable.
 
   cross_toolchain:
     $ref: "#/$defs/cross_toolchain_block"
