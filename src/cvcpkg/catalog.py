@@ -278,10 +278,23 @@ def generate_catalog(
         yaml.dump(index_manifest, default_flow_style=False, sort_keys=False)
     )
 
+    # Recommend the newest version per component by the canonical ordering key
+    # rather than last-write-wins over the bundle list (which let input order,
+    # not version, decide the baseline).
+    from cvcpkg.semver import version_sort_key
+
+    recommended: dict[str, str] = {}
+    for b in all_bundles:
+        bname = b["name"]
+        bver = b["version"]
+        cur = recommended.get(bname)
+        if cur is None or version_sort_key(bver) > version_sort_key(cur):
+            recommended[bname] = bver
+
     release_index = {
         "schema_version": 1,
         "release_version": version,
-        "recommended": {b["name"]: b["version"] for b in all_bundles},
+        "recommended": recommended,
         "bundles": all_bundles,
     }
     (output_dir / f"{release_tag}-index.yaml").write_text(

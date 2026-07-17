@@ -674,9 +674,9 @@ def info(component: str) -> None:
     if not matches:
         raise click.ClickException(f"component '{component}' not found in catalog.")
 
-    from cvcpkg.semver import Version
+    from cvcpkg.semver import version_sort_key
 
-    matches.sort(key=lambda e: Version.parse(e.version), reverse=True)
+    matches.sort(key=lambda e: version_sort_key(e.version), reverse=True)
     latest = matches[0]
 
     click.echo(f"Name:             {latest.qualified_name}")
@@ -688,7 +688,10 @@ def info(component: str) -> None:
             f"{d.name}" + (f" {d.version}" if d.version else "") for d in latest.required_deps
         )
         click.echo(f"Dependencies:     {deps}")
-    click.echo(f"Available versions: {', '.join(sorted({e.version for e in matches}))}")
+    click.echo(
+        "Available versions: "
+        f"{', '.join(sorted({e.version for e in matches}, key=version_sort_key))}"
+    )
 
 
 # ── validate ────────────────────────────────────────────────────
@@ -884,18 +887,15 @@ def sync(prefix: str) -> None:
 def _version_is_newer(new_ver: str, old_ver: str) -> bool:
     """Return True if *new_ver* is a newer cvcpkg version than *old_ver*.
 
-    Compares on (SemVer, cvc_revision) so a newer ``+cvc.N`` rebuild of the
-    same upstream version counts as newer (Version.__lt__ ignores build
-    metadata on its own).
+    Uses the canonical ``version_sort_key`` so a newer ``+cvc.N`` rebuild of the
+    same upstream version counts as newer, ordering matches the resolver and
+    server, and unparseable versions never raise.  The key is a total order, so
+    this is antisymmetric: an unorderable/older pair means "not newer" and
+    ``cvcpkg upgrade`` never proposes a downgrade (openssh 10.4p1 -> 9.9p1).
     """
-    from cvcpkg.semver import Version
+    from cvcpkg.semver import version_sort_key
 
-    try:
-        nv = Version.parse(new_ver)
-        ov = Version.parse(old_ver)
-    except ValueError:
-        return new_ver != old_ver
-    return (nv, nv.cvc_revision) > (ov, ov.cvc_revision)
+    return version_sort_key(new_ver) > version_sort_key(old_ver)
 
 
 @cli.command("upgrade")
