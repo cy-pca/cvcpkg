@@ -16,6 +16,7 @@ from pathlib import Path
 from sqlalchemy import distinct, or_, select, update
 from sqlalchemy import func as sa_func
 
+from cvcpkg.semver import version_sort_key
 from cvcpkg.server.db import (
     AuditRow,
     BuilderRow,
@@ -749,6 +750,7 @@ class DbPackageIndex:
         build_type: str = "",
         link: str = "",
         caller_token_name: str | None = None,
+        order: str = "version",
     ) -> tuple[list[PackageInfo], int]:
         async with get_session() as session:
             q = select(PackageRow, TokenRow.email.label("publisher_email")).outerjoin(
@@ -864,6 +866,21 @@ class DbPackageIndex:
                         required_deps=json.loads(row.required_deps or "[]"),
                     )
                 )
+            if order == "version":
+                # SQL orders by (name, published_at DESC); re-order the versions
+                # WITHIN each name newest-first by the canonical key so callers
+                # don't get published-time order masquerading as version order.
+                # Name grouping/order is preserved exactly (first-seen = SQL
+                # order).  Callers wanting publish order (the RSS feed) pass
+                # order="published_at" to keep the SQL ordering untouched.
+                grouped: dict[str, list[PackageInfo]] = {}
+                for p in packages:
+                    grouped.setdefault(p.name, []).append(p)
+                reordered: list[PackageInfo] = []
+                for group in grouped.values():
+                    group.sort(key=lambda p: version_sort_key(p.version), reverse=True)
+                    reordered.extend(group)
+                packages = reordered
             return packages, total
 
     async def get_search_facets(
@@ -1067,6 +1084,17 @@ class DbPackageIndex:
 
             q = q.order_by(PackageRow.name)
             result = await session.execute(q)
+            # SQL groups by name; order versions WITHIN each name newest-first by
+            # the canonical key, with PackageRow.id as a stable final tiebreak.
+            rows = list(result.scalars().all())
+            grouped_rows: dict[str, list[PackageRow]] = {}
+            for r in rows:
+                grouped_rows.setdefault(r.name, []).append(r)
+            ordered_rows: list[PackageRow] = []
+            for group in grouped_rows.values():
+                group.sort(key=lambda r: r.id)
+                group.sort(key=lambda r: version_sort_key(r.version), reverse=True)
+                ordered_rows.extend(group)
             bundles = [
                 {
                     "name": row.name,
@@ -1093,7 +1121,7 @@ class DbPackageIndex:
                     "org": row.org_slug,
                     "required_deps": json.loads(row.required_deps or "[]"),
                 }
-                for row in result.scalars().all()
+                for row in ordered_rows
             ]
             count_result = await session.execute(select(sa_func.count(PackageRow.id)))
             revision = count_result.scalar() or 0

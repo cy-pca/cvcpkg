@@ -25,6 +25,26 @@ _VER_RE = re.compile(
 )
 
 
+def _pre_key(pre: str) -> tuple[tuple[int, int, str], ...]:
+    """Identifier-wise pre-release precedence, per SemVer §11.4.1-11.4.4.
+
+    Compared field by field: a numeric identifier compares numerically and
+    ranks BELOW an alphanumeric one, and a larger set of fields outranks a
+    smaller one that is otherwise an equal prefix.  This is why ``rc.10`` must
+    outrank ``rc.9`` -- comparing the raw ``pre`` strings sorts them lexically
+    and gets it backwards.
+    """
+    if not pre:
+        return ()
+    out: list[tuple[int, int, str]] = []
+    for ident in pre.split("."):
+        if ident.isdigit():
+            out.append((0, int(ident), ""))
+        else:
+            out.append((1, 0, ident))
+    return tuple(out)
+
+
 @total_ordering
 @dataclass(frozen=True, slots=True)
 class Version:
@@ -48,14 +68,27 @@ class Version:
         )
 
     @property
-    def _cmp_tuple(self) -> tuple[int, int, int, bool, str]:
-        # Pre-release versions sort before the release (SemVer rule).
-        return (self.major, self.minor, self.patch, not bool(self.pre), self.pre)
+    def _cmp_tuple(self) -> tuple:
+        # Pre-release versions sort before the release (SemVer rule); build
+        # metadata is deliberately absent -- it never affects precedence.
+        return (
+            self.major,
+            self.minor,
+            self.patch,
+            not bool(self.pre),
+            _pre_key(self.pre),
+        )
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Version):
             return NotImplemented
         return self._cmp_tuple == other._cmp_tuple
+
+    def __hash__(self) -> int:
+        # __eq__ ignores `build`, so hashing must too, or equal Versions land
+        # in different buckets.  The frozen dataclass's default __hash__ would
+        # include `build`; pin it to the comparison identity instead.
+        return hash(self._cmp_tuple)
 
     def __lt__(self, other: object) -> bool:
         if not isinstance(other, Version):
@@ -93,7 +126,15 @@ class _Constraint:
 
     def satisfied_by(self, v: Version) -> bool:
         if self.op == "==":
-            return v == self.ver
+            # Version.__eq__ is SemVer-faithful and ignores +cvc.N, but a pin is
+            # a *selection*, not a range test: after the readline incident an
+            # operator pins "==8.3+cvc.2" precisely to avoid the broken cvc.1,
+            # so an exact pin that names a revision must hold the revision too.
+            # Ranges (>=, ^, ~>) still ignore build metadata -- that is the spec.
+            if v != self.ver:
+                return False
+            want = self.ver.cvc_revision
+            return want == 0 or v.cvc_revision == want
         if self.op == ">=":
             return v >= self.ver
         if self.op == "<=":
@@ -152,3 +193,74 @@ def satisfies(version: str | Version, spec: str) -> bool:
     """Return True if *version* satisfies every constraint in *spec*."""
     v = Version.parse(version) if isinstance(version, str) else version
     return all(c.satisfied_by(v) for c in parse_range(spec))
+
+
+# ── Canonical ordering key ──────────────────────────────────────
+#
+# THE one place allowed to call Version.parse inside a sort key.  Every "which
+# version wins" decision -- resolver, installer, publish, the server catalog --
+# must route through this, so they cannot disagree.  Four hand-rolled orderings
+# had already diverged, and each got the +cvc.N tie or an unparseable version
+# wrong in its own way (the readline 8.3+cvc.1-over-cvc.2 incident, cvcpkg
+# upgrade proposing openssh downgrades, cvcpkg info crashing on a raw version).
+
+_CVC_RE = re.compile(r"\+cvc\.(\d+)$")
+_NAT_RE = re.compile(r"(\d+)")
+
+
+def _natural_key(s: str) -> tuple[tuple[int, int, str], ...]:
+    """Digit runs compare numerically, text runs lexically, so '10' > '9'.
+
+    Used to order versions that are not valid SemVer (openssh "10.4p1", x264
+    "0.164.stable", jam "r1beta5") among themselves without a raw lexical sort.
+    """
+    out: list[tuple[int, int, str]] = []
+    for tok in _NAT_RE.split(s):
+        if not tok:
+            continue
+        out.append((0, int(tok), "") if tok.isdigit() else (1, 0, tok))
+    return tuple(out)
+
+
+def version_sort_key(version: str, cvc_revision: int | None = None) -> tuple:
+    """Total, never-raising ASCENDING ordering key for a cvcpkg version string.
+
+    For newest-first use ``max(xs, key=version_sort_key)`` or
+    ``sorted(xs, key=version_sort_key, reverse=True)[0]``.
+
+    Guarantees, each load-bearing:
+
+    * **Never raises.**  ``cvcpkg info openssh`` used to traceback because the
+      selection sort called a bare ``Version.parse`` on ``10.4p1+cvc.1``.
+    * **Unparseable versions sort BELOW every parseable one** (rank 0 vs 1) but
+      stay ordered among themselves by ``(natural key of upstream, +cvc.N)`` --
+      preserving the resolver's intent that they remain installable yet never
+      beat a well-formed version.  They are never collapsed to a sentinel (which
+      would re-tie openssh/x264/llvm-cbe and let input order decide) and never
+      sorted lexically (which flips ``10`` below ``9``).
+    * **The +cvc.N revision is read from the STRING**, not the caller's
+      argument, so two call sites that pass different arguments cannot produce
+      different orders.  ``cvc_revision`` is a fallback used only when the
+      string has no ``+cvc.N`` (the server catalog omits the suffix).
+    * **Reuses ``Version._cmp_tuple``** for the parseable branch, so sort order
+      and ``satisfies()`` range-filtering can never diverge.
+    * **Total.**  The raw string is the final tiebreak, so two *distinct*
+      version strings for one package can never tie and fall back to the
+      caller's input order -- which is the entire bug class this replaces.
+    """
+    raw = (version or "").strip()
+    m = _CVC_RE.search(raw)
+    if m:
+        rev = int(m.group(1))
+        head = raw[: m.start()]
+    else:
+        rev = cvc_revision if cvc_revision is not None else 0
+        head = raw
+    try:
+        v = Version.parse(raw)
+    except ValueError:
+        # rank 0: below every parseable version.  slot 0 differs from the
+        # parseable branch, so the shape-incompatible slots are never compared
+        # across ranks and sorted() over a mixed corpus still succeeds.
+        return (0, _natural_key(head), rev, raw)
+    return (1, v._cmp_tuple, rev, raw)

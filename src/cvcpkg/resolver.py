@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 
 from cvcpkg.errors import ResolveError
 from cvcpkg.manifest import CatalogEntry, ComponentReq
-from cvcpkg.semver import Version, satisfies
+from cvcpkg.semver import Version, satisfies, version_sort_key
 
 
 @dataclass
@@ -83,54 +83,49 @@ def resolve(
 def _sort_candidates(entries: list[CatalogEntry], recommended_ver: str) -> list[CatalogEntry]:
     """Sort candidates: recommended first, then highest version.
 
-    We return a list where recommended (if present) is first, then remaining
-    candidates sorted by descending version.
+    Everything is ordered by the canonical ``version_sort_key`` (descending),
+    so it agrees with the resolver's ``satisfies()`` filtering and the +cvc.N
+    tiebreak.  Entries whose version is not semver (e.g. openssh's
+    "10.4p1+cvc.1") cannot be dropped — that made published bundles silently
+    uninstallable ("no candidate for 'openssh'") — so the key ranks them below
+    every parseable candidate yet keeps them *ordered* among themselves (by
+    natural key + cvc revision) instead of dumping them last lexically.
+    Version-range constraints still reject them in _backtrack /
+    _compatible_with_picked (satisfies() raising counts as no-match).
     """
+    ordered = sorted(
+        entries,
+        key=lambda e: version_sort_key(e.version, e.cvc_revision),
+        reverse=True,
+    )
+
+    if not recommended_ver:
+        return ordered
+
+    # Prefer an exact match on cvc_revision when the recommendation carries
+    # one; otherwise fall back to base-version equality.  An unparseable
+    # recommendation (rv is None) matches nothing — every entry flows to rest.
+    try:
+        rv: Version | None = Version.parse(recommended_ver)
+    except ValueError:
+        rv = None
+    rv_rev = rv.cvc_revision if rv is not None else 0
+
     recommended_entry: CatalogEntry | None = None
     rest: list[CatalogEntry] = []
-
-    # Parse once.  Entries whose version is not semver (e.g. openssh's
-    # "10.4p1+cvc.1") cannot be ordered against the rest — but dropping
-    # them made published bundles silently uninstallable ("no candidate
-    # for 'openssh'").  Keep them: they are offered AFTER all parseable
-    # candidates (lexically, newest-looking first), and version-range
-    # constraints still reject them in _backtrack /
-    # _compatible_with_picked (satisfies() raising counts as no-match).
-    parsed: list[tuple[CatalogEntry, Version]] = []
-    unparseable: list[CatalogEntry] = []
-    for e in entries:
-        try:
-            parsed.append((e, Version.parse(e.version)))
-        except ValueError:
-            unparseable.append(e)
-
-    def _sort_key(e: CatalogEntry) -> tuple[Version, int]:
-        # Tiebreak on cvc_revision so a newer +cvc.N rebuild of the same
-        # upstream version wins over an older, possibly-broken bundle.
-        # Version.__lt__ intentionally ignores build metadata (SemVer),
-        # so without this the tie was broken by input list order.
-        v = Version.parse(e.version)
-        return (v, v.cvc_revision)
-
-    if recommended_ver:
-        try:
-            rv: Version | None = Version.parse(recommended_ver)
-        except ValueError:
-            rv = None
-        rv_rev = rv.cvc_revision if rv is not None else 0
-        # Prefer an exact match on cvc_revision when the recommendation
-        # carries one; otherwise fall back to base-version equality.
-        for e, v in parsed:
-            is_match = rv is not None and v == rv and (rv_rev == 0 or v.cvc_revision == rv_rev)
-            if is_match and recommended_entry is None:
-                recommended_entry = e
-            else:
-                rest.append(e)
-    else:
-        rest = [e for e, _ in parsed]
-
-    rest.sort(key=_sort_key, reverse=True)
-    rest.extend(sorted(unparseable, key=lambda e: e.version, reverse=True))
+    for e in ordered:
+        is_match = False
+        if rv is not None and recommended_entry is None:
+            try:
+                v = Version.parse(e.version)
+            except ValueError:
+                v = None
+            if v is not None and v == rv and (rv_rev == 0 or v.cvc_revision == rv_rev):
+                is_match = True
+        if is_match:
+            recommended_entry = e
+        else:
+            rest.append(e)
 
     if recommended_entry is not None:
         return [recommended_entry] + rest
