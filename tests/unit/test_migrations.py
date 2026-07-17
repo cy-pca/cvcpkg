@@ -1,36 +1,73 @@
 """Migration-chain integrity checks (v1.x → v2.0.0 schema history).
 
-These run without a database: they verify the Alembic revision graph is a
-single, unbroken, cycle-free line from the initial v1 schema to the current
-head, and that every ORM model table is created by some migration (catching
-"added a model but forgot the migration" drift).  Running the migrations
-themselves against a live PostgreSQL is exercised by the Docker integration
-job; SQLite users get the schema via create_tables()/metadata.create_all.
+Most of these run without a database: they verify the Alembic revision graph
+is a single, unbroken, cycle-free line from the initial v1 schema to the
+current head, and that every ORM model table is created by some migration
+(catching "added a model but forgot the migration" drift).  Running the
+migrations against a live PostgreSQL is exercised by the Docker integration
+job.
+
+``test_alembic_upgrade_head_on_sqlite`` additionally drives the real chain
+against a throwaway SQLite file.  The rest of the suite gets its schema from
+create_tables()/metadata.create_all, which never calls Alembic at all — so
+without this test a migration can be unrunnable on SQLite indefinitely while
+every other test stays green.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import os
 import re
+import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 pytest.importorskip("alembic", reason="alembic required for migration checks")
 
-_VERSIONS = Path(__file__).resolve().parents[2] / "src" / "cvcpkg" / "migrations" / "versions"
+_ROOT = Path(__file__).resolve().parents[2]
+_VERSIONS = _ROOT / "src" / "cvcpkg" / "migrations" / "versions"
 
 
-def _load_revisions() -> dict[str, str | None]:
-    """Return {revision: down_revision} for every migration module."""
-    revs: dict[str, str | None] = {}
+def _load_revision_records() -> list[tuple[str, str | None, str]]:
+    """Return (revision, down_revision, filename) for every migration module."""
+    records: list[tuple[str, str | None, str]] = []
     for f in sorted(_VERSIONS.glob("*.py")):
         spec = importlib.util.spec_from_file_location(f"_mig_{f.stem}", f)
         mod = importlib.util.module_from_spec(spec)
         assert spec and spec.loader
         spec.loader.exec_module(mod)
-        revs[mod.revision] = mod.down_revision
-    return revs
+        records.append((mod.revision, mod.down_revision, f.name))
+    return records
+
+
+def _load_revisions() -> dict[str, str | None]:
+    """Return {revision: down_revision} for every migration module.
+
+    Keyed by revision, so this cannot represent a collision — two files
+    claiming one revision collapse to a single entry.  test_no_duplicate_
+    revision_ids is what rules that out; this mapping assumes it.
+    """
+    return {rev: down for rev, down, _ in _load_revision_records()}
+
+
+def test_no_duplicate_revision_ids():
+    """No two migrations may claim the same revision.
+
+    A collision gives alembic two heads and breaks `alembic upgrade head` on
+    every backend, PostgreSQL included.  It is invisible to the head count in
+    test_single_head_linear_chain, whose dict keeps only the last file with a
+    given revision — which is how two 015s reached master on 2026-07-16.
+    """
+    by_rev: dict[str, list[str]] = {}
+    for rev, _down, name in _load_revision_records():
+        by_rev.setdefault(rev, []).append(name)
+
+    dupes = {rev: sorted(files) for rev, files in by_rev.items() if len(files) > 1}
+    assert not dupes, f"revision id claimed by more than one migration: {dupes}"
 
 
 def test_single_head_linear_chain():
@@ -68,6 +105,80 @@ def test_every_model_table_has_a_create_table_migration():
 
     missing = set(Base.metadata.tables) - created
     assert not missing, f"model tables with no create_table migration: {sorted(missing)}"
+
+
+@pytest.fixture(scope="module")
+def _sqlite_upgrade_head(tmp_path_factory):
+    """Run ``alembic upgrade head`` once against an empty SQLite file.
+
+    Returns (CompletedProcess, db_path).  The database must be *fresh*: several
+    migrations skip their body when the table already exists, so a reused file
+    would mask exactly the breakage this is here to catch.
+    """
+    pytest.importorskip("aiosqlite", reason="aiosqlite required to migrate SQLite")
+
+    db = tmp_path_factory.mktemp("alembic") / "migrate.db"
+    # as_posix() keeps this a valid URL on Windows (C:/...) and POSIX (//tmp/...).
+    env = {
+        **os.environ,
+        "CVCPKG_DATABASE_URL": f"sqlite+aiosqlite:///{db.as_posix()}",
+        "PYTHONPATH": str(_ROOT / "src"),
+    }
+    proc = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=_ROOT,  # alembic.ini lives at the repo root
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    return proc, db
+
+
+def test_alembic_upgrade_head_on_sqlite(_sqlite_upgrade_head):
+    """The full chain applies to SQLite, not just PostgreSQL.
+
+    SQLite is the documented dev / small-install backend, but it cannot ALTER
+    a table to add a constraint.  A migration that does so outside
+    op.batch_alter_table() raises NotImplementedError and leaves every
+    SQLite deployment unable to migrate, while PostgreSQL CI stays green.
+    """
+    proc, _ = _sqlite_upgrade_head
+    assert proc.returncode == 0, (
+        "alembic upgrade head failed against SQLite\n"
+        f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
+    )
+
+
+def test_sqlite_chain_builds_the_recipe_unique_constraint(_sqlite_upgrade_head):
+    """uq_recipe_name_org survives the SQLite batch-mode rebuild.
+
+    Guards the tempting bad fix for the error above: dropping the constraint
+    to make SQLite quiet.  That would keep the rc==0 test passing while
+    letting duplicate (name, org_slug) recipes into the table.
+    """
+    proc, db = _sqlite_upgrade_head
+    assert proc.returncode == 0, "upgrade failed; see test_alembic_upgrade_head_on_sqlite"
+
+    conn = sqlite3.connect(db)
+    try:
+        row = ("dup", "acme", "/bundles/dup.tar.zst", "someone")
+        conn.execute(
+            "insert into recipes (name, org_slug, bundle_path, uploaded_by) values (?,?,?,?)",
+            row,
+        )
+        with pytest.raises(sqlite3.IntegrityError, match="name, recipes.org_slug"):
+            conn.execute(
+                "insert into recipes (name, org_slug, bundle_path, uploaded_by) "
+                "values (?,?,?,?)",
+                row,
+            )
+        # batch mode copy-and-moves via a temp table; it must not leave one behind.
+        leaked = conn.execute(
+            "select name from sqlite_master where name like '_alembic_tmp%'"
+        ).fetchall()
+        assert not leaked, f"batch mode left temp tables behind: {leaked}"
+    finally:
+        conn.close()
 
 
 def test_lockfile_reads_legacy_v1_schema(tmp_path):

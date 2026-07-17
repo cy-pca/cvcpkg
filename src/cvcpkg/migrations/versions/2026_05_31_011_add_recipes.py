@@ -52,7 +52,11 @@ def upgrade() -> None:
                 server_default=sa.func.now(),
             ),
         )
-        op.create_unique_constraint("uq_recipe_name_org", "recipes", ["name", "org_slug"])
+        # SQLite cannot ALTER a table to add a constraint; batch mode emits a
+        # copy-and-move instead, and passes the ALTER straight through on
+        # PostgreSQL.
+        with op.batch_alter_table("recipes") as batch_op:
+            batch_op.create_unique_constraint("uq_recipe_name_org", ["name", "org_slug"])
         op.create_index("ix_recipes_name", "recipes", ["name"])
         op.create_index("ix_recipes_org_slug", "recipes", ["org_slug"])
 

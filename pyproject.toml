@@ -80,6 +80,10 @@ httpx = ">=0.24"
 pytest-asyncio = ">=0.21"
 jsonschema = ">=4.0"
 aiosqlite = ">=0.20"
+# Only an extra for real installs (see [tool.poetry.extras]), but the suite
+# needs it unconditionally: tests/unit/test_migrations.py importorskips the
+# whole module without it, which silently disabled every migration check in CI.
+alembic = ">=1.13"
 # Mocks the S3 API (Garage-compatible) so the storage-migration test
 # exercises cvcpkg's real s3:// backend in CI; pulls boto3.
 moto = { version = ">=5.0", extras = ["s3"] }
