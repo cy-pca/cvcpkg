@@ -235,7 +235,7 @@ def _publish_to_server(
         display_name = f"{org or manifest_org}/{name}" if (org or manifest_org) else name
         label = f"{display_name}=={version} ({plat}/{arch}/{build_type}/{link})"
 
-        if _variant_exists(base, headers, name, version, plat, arch, build_type, link):
+        if _variant_exists(base, headers, name, version, plat, arch, build_type, link, org):
             click.echo(f"cvcpkg: skipping {label} (already on server)")
             continue
 
@@ -413,22 +413,33 @@ def _variant_exists(
     arch: str,
     build_type: str,
     link: str,
+    org: str,
 ) -> bool:
-    """Check if this exact package variant already exists on the server."""
+    """Check if this exact package variant already exists on the server.
+
+    Only a live (non-yanked) bundle in the same org counts: a yanked
+    artifact, or an identical variant under a different org, must not
+    suppress the upload.
+    """
     import httpx
 
     try:
         with httpx.Client(timeout=30) as client:
             resp = client.get(
                 f"{base}/v1/packages/{name}",
-                params={"platform": platform, "limit": 200},
+                params={"platform": platform, "limit": 200, "org": org},
                 headers=headers,
             )
         if resp.status_code != 200:
             return False
         for pkg in resp.json().get("packages", []):
+            # The server treats org="" as "no filter" and older servers may
+            # return yanked bundles, so both must be re-checked client-side.
+            if pkg.get("yanked", False):
+                continue
             if (
-                pkg.get("version") == version
+                pkg.get("org", "") == org
+                and pkg.get("version") == version
                 and pkg.get("platform") == platform
                 and pkg.get("arch") == arch
                 and pkg.get("build_type") == build_type

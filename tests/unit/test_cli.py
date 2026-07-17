@@ -1793,6 +1793,7 @@ class TestVariantExists:
                     "x86_64",
                     "release",
                     "shared",
+                    "",
                 )
                 is True
             )
@@ -1819,6 +1820,7 @@ class TestVariantExists:
                     "x86_64",
                     "release",
                     "shared",
+                    "",
                 )
                 is False
             )
@@ -1844,6 +1846,7 @@ class TestVariantExists:
                     "x86_64",
                     "release",
                     "shared",
+                    "",
                 )
                 is False
             )
@@ -1867,6 +1870,7 @@ class TestVariantExists:
                     "x86_64",
                     "release",
                     "shared",
+                    "",
                 )
                 is False
             )
@@ -1904,6 +1908,129 @@ class TestVariantExists:
                     "x86_64",
                     "release",
                     "shared",
+                    "",
+                )
+                is False
+            )
+
+    def test_variant_different_org_not_matched(self):
+        """A stale public (org='') artifact must not block a publish to an org."""
+        from cvcpkg.cli import _variant_exists
+
+        mock_resp = mock.MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "packages": [
+                {
+                    "version": "1.3.1+cvc.1",
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "build_type": "release",
+                    "link": "shared",
+                    "org": "",
+                    "yanked": False,
+                }
+            ]
+        }
+        mock_client = mock.MagicMock()
+        mock_client.__enter__ = mock.MagicMock(return_value=mock_client)
+        mock_client.__exit__ = mock.MagicMock(return_value=False)
+        mock_client.get.return_value = mock_resp
+
+        with mock.patch("httpx.Client", return_value=mock_client):
+            assert (
+                _variant_exists(
+                    "https://pkg.example.com",
+                    {"Authorization": "Bearer tok"},
+                    "zlib",
+                    "1.3.1+cvc.1",
+                    "linux",
+                    "x86_64",
+                    "release",
+                    "shared",
+                    "cvc-org",
+                )
+                is False
+            )
+        # The org must also be pushed down to the server as a query filter.
+        assert mock_client.get.call_args.kwargs["params"]["org"] == "cvc-org"
+
+    def test_variant_same_org_matched(self):
+        """A live same-variant bundle in the same org is a match."""
+        from cvcpkg.cli import _variant_exists
+
+        mock_resp = mock.MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "packages": [
+                {
+                    "version": "1.3.1+cvc.1",
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "build_type": "release",
+                    "link": "shared",
+                    "org": "cvc-org",
+                    "yanked": False,
+                }
+            ]
+        }
+        mock_client = mock.MagicMock()
+        mock_client.__enter__ = mock.MagicMock(return_value=mock_client)
+        mock_client.__exit__ = mock.MagicMock(return_value=False)
+        mock_client.get.return_value = mock_resp
+
+        with mock.patch("httpx.Client", return_value=mock_client):
+            assert (
+                _variant_exists(
+                    "https://pkg.example.com",
+                    {"Authorization": "Bearer tok"},
+                    "zlib",
+                    "1.3.1+cvc.1",
+                    "linux",
+                    "x86_64",
+                    "release",
+                    "shared",
+                    "cvc-org",
+                )
+                is True
+            )
+
+    def test_variant_yanked_not_matched(self):
+        """A yanked same-variant bundle is treated as absent (must republish)."""
+        from cvcpkg.cli import _variant_exists
+
+        mock_resp = mock.MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "packages": [
+                {
+                    "version": "3.2.4+cvc.1",
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "build_type": "release",
+                    "link": "shared",
+                    "org": "",
+                    "yanked": True,
+                }
+            ]
+        }
+        mock_client = mock.MagicMock()
+        mock_client.__enter__ = mock.MagicMock(return_value=mock_client)
+        mock_client.__exit__ = mock.MagicMock(return_value=False)
+        mock_client.get.return_value = mock_resp
+
+        with mock.patch("httpx.Client", return_value=mock_client):
+            assert (
+                _variant_exists(
+                    "https://pkg.example.com",
+                    {"Authorization": "Bearer tok"},
+                    "libcvc",
+                    "3.2.4+cvc.1",
+                    "linux",
+                    "x86_64",
+                    "release",
+                    "shared",
+                    "",
                 )
                 is False
             )
