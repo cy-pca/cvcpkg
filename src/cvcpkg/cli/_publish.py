@@ -974,3 +974,115 @@ def unyank(
       cvcpkg unyank readline 8.3+cvc.1 --platform linux --arch x86_64
     """
     _yank_impl("unyank", name, version, server, token, platform, arch, build_type, link, yes)
+
+
+def _human_bytes(n: int) -> str:
+    f = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if f < 1024 or unit == "GB":
+            return f"{f:.1f} {unit}" if unit != "B" else f"{int(f)} B"
+        f /= 1024
+    return f"{f:.1f} GB"
+
+
+@cli.command()
+@click.argument("name")
+@click.argument("version")
+@_server_opts
+@_scope_opts
+@click.option(
+    "--confirm",
+    "confirm",
+    default=None,
+    metavar="NAME==VERSION",
+    help="Skip the typed prompt by passing 'NAME==VERSION' (must match the target). For scripts.",
+)
+def nuke(
+    name: str,
+    version: str,
+    server: str,
+    token: str,
+    platform: str | None,
+    arch: str | None,
+    build_type: str | None,
+    link: str | None,
+    confirm: str | None,
+) -> None:
+    """Permanently delete a yanked bundle -- row AND archive bytes. IRREVERSIBLE.
+
+    Unlike yank (reversible, keeps the bytes) this destroys the archive.  Use it
+    to reclaim storage before the yank-retention window elapses.
+
+    Safety, above yank's:
+
+    \b
+      * the bundle must ALREADY be yanked -- nuke only accelerates retention; it
+        refuses a live package (yank it first);
+      * requires an ADMIN token;
+      * there is deliberately no --yes: you confirm by typing NAME==VERSION (or
+        passing --confirm NAME==VERSION for automation).
+
+    \b
+    Example:
+      cvcpkg nuke readline 8.3+cvc.1 --platform linux --arch x86_64 \\
+          --config release --link shared
+    """
+    base = server.rstrip("/")
+    listing = _api_request(
+        "get", f"{base}/v1/packages/{name}", token, params={"include_yanked": "true"}
+    )
+    all_bundles = listing.get("packages", [])
+    if not all_bundles:
+        raise click.ClickException(f"no package named '{name}' on {base}")
+
+    matched = _matching_bundles(all_bundles, version, platform, arch, build_type, link)
+    if not matched:
+        known = sorted({b.get("version", "") for b in all_bundles})
+        raise click.ClickException(
+            f"no bundle matches {name}=={version} with that scope.\n"
+            f"  published versions: {', '.join(known)}"
+        )
+
+    # Refuse a live bundle here too (the server also enforces it), so the
+    # operator sees the reason before any prompt rather than at a 409.
+    live = [b for b in matched if not b.get("yanked")]
+    if live:
+        variants = ", ".join(_variant(b) for b in sorted(live, key=_variant))
+        raise click.ClickException(
+            f"refusing to nuke a bundle that is not yanked: {variants}\n"
+            f"  yank it first:  cvcpkg yank {name} {version} ...\n"
+            "  nuke only removes an already-yanked bundle."
+        )
+
+    total_bytes = sum(int(b.get("size_bytes") or 0) for b in matched)
+    click.echo(f"cvcpkg: NUKE {name}=={version} on {base}")
+    click.echo("  this permanently deletes these bundles AND their archive bytes:")
+    for b in sorted(matched, key=_variant):
+        click.echo(f"    {_variant(b):38s} {_human_bytes(int(b.get('size_bytes') or 0))}")
+    click.echo(
+        f"  {len(matched)} bundle(s), {_human_bytes(total_bytes)} freed.  THIS CANNOT BE UNDONE."
+    )
+
+    expected = f"{name}=={version}"
+    if confirm is not None:
+        if confirm != expected:
+            raise click.ClickException(
+                f"--confirm {confirm!r} does not match the target {expected!r}"
+            )
+    else:
+        typed = click.prompt(f"  Type '{expected}' to confirm", default="", show_default=False)
+        if typed.strip() != expected:
+            raise click.ClickException("confirmation did not match; nothing was nuked.")
+
+    params = {
+        k: v
+        for k, v in (
+            ("platform", platform),
+            ("arch", arch),
+            ("link", link),
+            ("build_type", build_type),
+        )
+        if v is not None
+    }
+    resp = _api_request("post", f"{base}/v1/packages/{name}/{version}/nuke", token, params=params)
+    click.echo(f"cvcpkg: {resp.get('message', 'nuked')} ({resp.get('count', 0)} bundle(s))")

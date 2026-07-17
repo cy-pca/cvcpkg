@@ -862,6 +862,7 @@ class DbPackageIndex:
                         archive_url=row.archive_url,
                         published_at=row.published_at,
                         yanked=row.yanked,
+                        yanked_at=row.yanked_at,
                         signature=row.signature,
                         key_fingerprint=row.key_fingerprint,
                         release_tag=row.release_tag,
@@ -1234,9 +1235,16 @@ class DbPackageIndex:
     ) -> int:
         async with get_session() as session:
             stmt = (
-                update(PackageRow)
-                .where(PackageRow.name == name, PackageRow.version == version)
-                .values(yanked=True)
+                update(PackageRow).where(PackageRow.name == name, PackageRow.version == version)
+                # coalesce, not a bare now(): this UPDATE also matches rows that
+                # are ALREADY yanked (there is no yanked.is_(False) guard), so a
+                # re-yank with a wider scope would otherwise reset the retention
+                # clock and postpone expiry indefinitely.  A guard instead of
+                # coalesce would break rowcount, which the endpoint returns as
+                # `count` and the CLI's no-op refusal depends on.
+                .values(
+                    yanked=True, yanked_at=sa_func.coalesce(PackageRow.yanked_at, sa_func.now())
+                )
             )
             if platform is not None:
                 stmt = stmt.where(PackageRow.platform == platform)
@@ -1261,9 +1269,10 @@ class DbPackageIndex:
     ) -> int:
         async with get_session() as session:
             stmt = (
-                update(PackageRow)
-                .where(PackageRow.name == name, PackageRow.version == version)
-                .values(yanked=False)
+                update(PackageRow).where(PackageRow.name == name, PackageRow.version == version)
+                # Clearing yanked_at disarms retention: an unyanked bundle must
+                # not carry a stale clock that expires it later.
+                .values(yanked=False, yanked_at=None)
             )
             if platform is not None:
                 stmt = stmt.where(PackageRow.platform == platform)
@@ -1296,6 +1305,103 @@ class DbPackageIndex:
                 stmt = stmt.where(PackageRow.link == link)
             result = await session.execute(stmt)
             return result.rowcount
+
+    async def nuke_bundles(
+        self,
+        name: str,
+        version: str,
+        *,
+        platform: str | None = None,
+        arch: str | None = None,
+        link: str | None = None,
+        build_type: str | None = None,
+        require_yanked: bool = True,
+        storage_uri: str = "",
+    ) -> dict:
+        """Irreversibly remove matching bundles: DB rows AND archive bytes.
+
+        The scope is the full four-tuple, unlike ``delete`` which only accepts
+        platform/link -- the missing arch/build_type there silently over-deleted
+        (``?arch=x86_64`` was ignored, so a request meant for one variant took
+        the others too), and for an irreversible op that is the worst failure.
+
+        With ``require_yanked`` (the default) every match must already be
+        yanked; otherwise raises ``ValueError`` naming the live variants, so
+        nuke only ever accelerates an existing retention clock rather than
+        destroying something consumers are actively resolving.
+
+        Returns ``{"nuked": [...], "count": N}``.  Row delete precedes archive
+        unlink so a crash mid-purge leaves a visible orphan row pointing at a
+        gone archive (recoverable) rather than an unreferenced blob (invisible).
+        An archive is unlinked only when no surviving row still references its
+        filename.
+        """
+        from sqlalchemy import delete as sa_delete
+
+        async with get_session() as session:
+            sel = select(PackageRow).where(PackageRow.name == name, PackageRow.version == version)
+            if platform is not None:
+                sel = sel.where(PackageRow.platform == platform)
+            if arch is not None:
+                sel = sel.where(PackageRow.arch == arch)
+            if link is not None:
+                sel = sel.where(PackageRow.link == link)
+            if build_type is not None:
+                sel = sel.where(PackageRow.build_type == build_type)
+            rows = (await session.execute(sel)).scalars().all()
+
+            if not rows:
+                return {"nuked": [], "count": 0}
+
+            if require_yanked:
+                live = [r for r in rows if not r.yanked]
+                if live:
+                    variants = ", ".join(
+                        f"{r.platform}/{r.arch}/{r.build_type}/{r.link}" for r in live
+                    )
+                    raise ValueError(
+                        f"{name}=={version}: not yanked: {variants}. "
+                        "Yank it first -- nuke only removes an already-yanked bundle."
+                    )
+
+            nuked = [
+                {
+                    "name": r.name,
+                    "version": r.version,
+                    "platform": r.platform,
+                    "arch": r.arch,
+                    "build_type": r.build_type,
+                    "link": r.link,
+                    "size_bytes": r.size_bytes,
+                    "org_slug": r.org_slug,
+                    "archive_url": r.archive_url,
+                }
+                for r in rows
+            ]
+            ids = [r.id for r in rows]
+            await session.execute(sa_delete(PackageRow).where(PackageRow.id.in_(ids)))
+            await session.flush()
+
+            if storage_uri:
+                from cvcpkg.server import archive_store
+
+                for rec in nuked:
+                    fname = (rec.get("archive_url") or "").rsplit("/", 1)[-1]
+                    if not fname:
+                        continue
+                    # Unlink only when no surviving row references the file.
+                    still = (
+                        await session.execute(
+                            select(PackageRow.id)
+                            .where(PackageRow.archive_url.like(f"%/{fname}"))
+                            .limit(1)
+                        )
+                    ).first()
+                    rec["archive_deleted"] = (
+                        False if still else archive_store.delete(storage_uri, fname)
+                    )
+
+            return {"nuked": nuked, "count": len(nuked)}
 
     async def get_release_tags(self) -> list[dict]:
         """Distinct release tags with variant counts, most-populated first.
@@ -1406,6 +1512,93 @@ class DbPackageIndex:
                 ids = [r.id for r in rows]
                 await session.execute(sa_delete(PackageRow).where(PackageRow.id.in_(ids)))
             return deleted
+
+    async def purge_yanked(
+        self,
+        *,
+        older_than_days: int,
+        storage_uri: str = "",
+        dry_run: bool = False,
+    ) -> list[dict]:
+        """Permanently remove bundles yanked longer ago than *older_than_days*.
+
+        Unlike every other GC here this deletes the ARCHIVE as well as the row
+        -- a yank-retention sweep that dropped only rows would leak the bytes
+        forever and leave them downloadable (download_archive gates on the file
+        existing, never on the row).
+
+        Returns ``gc_by_age``'s dict shape plus ``archive_deleted``, so callers
+        can feed the org storage counters unchanged.
+
+        Never purges:
+          * ``yanked_at IS NULL`` -- either never yanked, or yanked before the
+            column existed (migration 017 deliberately does not backfill, so
+            historical yanks are exempt rather than instantly expired);
+          * tagged releases (``release_tag != ""``) -- immutable by this
+            codebase's convention, matching gc_by_age/gc_by_storage.  A yanked
+            tagged release therefore never ages out; `cvcpkg nuke` is the
+            explicit path for it.
+
+        *older_than_days* <= 0 means DISABLED and returns nothing.  It does not
+        mean "purge everything" -- unlike gc_by_storage(0), where 0 legitimately
+        means evict-all.  Overloading 0 here would turn a misread config into
+        total destruction of every yanked bundle.
+        """
+        import datetime as _dt
+
+        from sqlalchemy import delete as sa_delete
+
+        if older_than_days <= 0:
+            return []
+
+        cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=older_than_days)
+        async with get_session() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(PackageRow).where(
+                            PackageRow.yanked.is_(True),
+                            PackageRow.yanked_at.is_not(None),
+                            PackageRow.yanked_at < cutoff,
+                            PackageRow.release_tag == "",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            purged: list[dict] = []
+            for r in rows:
+                purged.append(
+                    {
+                        "name": r.name,
+                        "version": r.version,
+                        "size_bytes": r.size_bytes,
+                        "org_slug": r.org_slug,
+                        "platform": r.platform,
+                        "arch": r.arch,
+                        "build_type": r.build_type,
+                        "link": r.link,
+                        "yanked_at": r.yanked_at,
+                        "archive_deleted": False,
+                    }
+                )
+            if dry_run or not rows:
+                return purged
+
+            ids = [r.id for r in rows]
+            await session.execute(sa_delete(PackageRow).where(PackageRow.id.in_(ids)))
+
+            # Rows go first: if the archive delete fails we would rather serve
+            # 404 for a purged bundle than keep a row whose bytes are gone.
+            if storage_uri:
+                from cvcpkg.server import archive_store
+
+                for r, rec in zip(rows, purged, strict=True):
+                    fname = (r.archive_url or "").rsplit("/", 1)[-1]
+                    if fname:
+                        rec["archive_deleted"] = archive_store.delete(storage_uri, fname)
+            return purged
 
     async def gc_by_storage(self, max_bytes: int) -> list[dict]:
         """Evict oldest non-release packages until total storage <= *max_bytes*.

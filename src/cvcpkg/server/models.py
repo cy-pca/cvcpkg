@@ -31,6 +31,10 @@ class AuditAction(str, Enum):
     yank = "yank"
     unyank = "unyank"
     delete = "delete"
+    # Irreversible removal of a yanked bundle's row AND archive bytes, whether
+    # by an admin's `cvcpkg nuke` or by the yank-retention GC (recorded with
+    # actor "retention-gc", which holds no token).
+    nuke = "nuke"
     token_create = "token_create"
     token_revoke = "token_revoke"
     catalog_rebuild = "catalog_rebuild"
@@ -243,6 +247,9 @@ class PackageInfo(BaseModel):
     archive_url: str
     published_at: datetime.datetime
     yanked: bool = False
+    # Set when yanked, cleared on unyank.  Exposed so clients can show when a
+    # bundle was retired and when yank retention will purge it.
+    yanked_at: datetime.datetime | None = None
     signature: str = ""
     key_fingerprint: str = ""
     release_tag: str = Field(

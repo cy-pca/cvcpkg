@@ -69,6 +69,13 @@ class PackageRow(Base):
         server_default=func.now(),
     )
     yanked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # When the bundle was yanked; NULL when it never was, or once unyanked.
+    # The yank-retention GC keys on this and treats NULL as "never purge", so
+    # rows yanked before the column existed are exempt rather than instantly
+    # expired.  See migration 017.
+    yanked_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     signature: Mapped[str] = mapped_column(Text, nullable=False, default="")
     key_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     release_tag: Mapped[str] = mapped_column(

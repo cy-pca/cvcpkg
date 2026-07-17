@@ -20,7 +20,7 @@ from unittest import mock
 from click.testing import CliRunner
 
 from cvcpkg.cli import _publish
-from cvcpkg.cli._publish import _matching_bundles, _orphaned_variants, unyank, yank
+from cvcpkg.cli._publish import _matching_bundles, _orphaned_variants, nuke, unyank, yank
 
 # The real readline shape from the dev catalog: cvc.1 is the broken bundle that
 # a libpq build installed instead of cvc.2 (libreadline.so with no libtinfo).
@@ -253,3 +253,186 @@ class TestUnyank:
             CliRunner().invoke(unyank, ["readline", "8.3+cvc.1", *_ARGS, "--yes"])
         get = [c for c in calls if c[0] == "get"][0]
         assert get[2].get("include_yanked") == "true"
+
+
+# cvc.1 yanked, cvc.2 active -- the shape nuke is designed for.
+_MIXED = [dict(b, yanked=(b["version"] == "8.3+cvc.1")) for b in _READLINE]
+
+
+class TestNuke:
+    # nuke is irreversible (row AND archive bytes), so its gates are stronger
+    # than yank's: yanked-first, typed confirmation, no --yes.
+
+    def test_refuses_a_bundle_that_is_not_yanked(self):
+        # nuke only accelerates retention; a live bundle must be yanked first.
+        calls: list = []
+        with mock.patch.object(_publish, "_api_request", _api(_MIXED, calls)):
+            res = CliRunner().invoke(
+                nuke, ["readline", "8.3+cvc.2", *_ARGS, "--confirm", "readline==8.3+cvc.2"]
+            )
+        assert res.exit_code != 0
+        assert "not yanked" in res.output
+        assert "yank it first" in res.output.lower()
+        assert not [c for c in calls if c[0] == "post"], "must not POST for a live bundle"
+
+    def test_typed_confirmation_must_match(self):
+        calls: list = []
+        with mock.patch.object(_publish, "_api_request", _api(_MIXED, calls)):
+            res = CliRunner().invoke(nuke, ["readline", "8.3+cvc.1", *_ARGS], input="nope\n")
+        assert res.exit_code != 0
+        assert not [c for c in calls if c[0] == "post"], "wrong confirmation must not POST"
+
+    def test_confirm_flag_must_match_the_target(self):
+        calls: list = []
+        with mock.patch.object(_publish, "_api_request", _api(_MIXED, calls)):
+            res = CliRunner().invoke(
+                nuke, ["readline", "8.3+cvc.1", *_ARGS, "--confirm", "readline==9.9"]
+            )
+        assert res.exit_code != 0
+        assert "does not match" in res.output
+        assert not [c for c in calls if c[0] == "post"]
+
+    def test_correct_confirmation_posts_to_nuke_with_scope(self):
+        calls: list = []
+        with mock.patch.object(_publish, "_api_request", _api(_MIXED, calls)):
+            res = CliRunner().invoke(
+                nuke,
+                [
+                    "readline",
+                    "8.3+cvc.1",
+                    *_ARGS,
+                    "--platform",
+                    "linux",
+                    "--arch",
+                    "x86_64",
+                    "--config",
+                    "release",
+                    "--link",
+                    "shared",
+                    "--confirm",
+                    "readline==8.3+cvc.1",
+                ],
+            )
+        assert res.exit_code == 0, res.output
+        post = [c for c in calls if c[0] == "post"][0]
+        assert post[1].endswith("/v1/packages/readline/8.3+cvc.1/nuke")
+        assert post[2] == {
+            "platform": "linux",
+            "arch": "x86_64",
+            "link": "shared",
+            "build_type": "release",
+        }
+
+    def test_typed_prompt_accepts_the_exact_target(self):
+        calls: list = []
+        with mock.patch.object(_publish, "_api_request", _api(_MIXED, calls)):
+            res = CliRunner().invoke(
+                nuke, ["readline", "8.3+cvc.1", *_ARGS], input="readline==8.3+cvc.1\n"
+            )
+        assert res.exit_code == 0, res.output
+        assert [c for c in calls if c[0] == "post"]
+
+    def test_has_no_yes_flag(self):
+        # A muscle-memory -y carried from yank must not destroy archives.
+        res = CliRunner().invoke(nuke, ["--help"])
+        opts = res.output.split("Options:")[-1]
+        assert "-y" not in opts and "--yes" not in opts
+        assert "--confirm" in opts
+
+    def test_no_match_refuses_without_posting(self):
+        calls: list = []
+        with mock.patch.object(_publish, "_api_request", _api(_MIXED, calls)):
+            res = CliRunner().invoke(
+                nuke, ["readline", "8.3+cvc.99", *_ARGS, "--confirm", "readline==8.3+cvc.99"]
+            )
+        assert res.exit_code != 0
+        assert "no bundle matches" in res.output
+        assert not [c for c in calls if c[0] == "post"]
+
+
+class TestSearchRevealsYanked:
+    """`cvcpkg search` used to print yanked and active bundles as identical
+    rows, so a user could not tell which to unyank.  The renderer must
+    distinguish them and hand back a runnable unyank command.
+    """
+
+    _RESP = {
+        "total": 2,
+        "package_count": 1,
+        "packages": [
+            {
+                "name": "readline",
+                "version": "8.3+cvc.2",
+                "platform": "linux",
+                "arch": "x86_64",
+                "link": "shared",
+                "build_type": "release",
+                "size_bytes": 900000,
+                "yanked": False,
+                "yanked_at": None,
+            },
+            {
+                "name": "readline",
+                "version": "8.3+cvc.1",
+                "platform": "linux",
+                "arch": "x86_64",
+                "link": "shared",
+                "build_type": "release",
+                "size_bytes": 910000,
+                "yanked": True,
+                "yanked_at": "2026-07-17T15:18:16Z",
+            },
+        ],
+    }
+
+    def _run(self, flags):
+        import httpx
+
+        from cvcpkg.cli._search import search
+
+        class _Resp:
+            status_code = 200
+
+            def json(self):
+                return self._RESP
+
+        _Resp._RESP = self._RESP
+
+        class _Client:
+            def __init__(self, *a, **k):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def get(self, *a, **k):
+                return _Resp()
+
+        with mock.patch.object(httpx, "Client", _Client):
+            return CliRunner().invoke(
+                search, ["readline", "--server", "http://t", "--token", "x", *flags]
+            )
+
+    def test_include_yanked_marks_which_row_is_yanked(self):
+        res = self._run(["--include-yanked"])
+        assert res.exit_code == 0, res.output
+        assert "State" in res.output
+        # both rows visible, one marked yanked, one active -- not identical
+        assert "active" in res.output
+        assert "yanked" in res.output
+
+    def test_emits_a_runnable_unyank_command_for_the_yanked_row(self):
+        res = self._run(["--include-yanked"])
+        assert (
+            "cvcpkg unyank readline 8.3+cvc.1 "
+            "--platform linux --arch x86_64 --config release --link shared" in res.output
+        )
+
+    def test_yanked_only_filters_to_yanked_rows(self):
+        res = self._run(["--yanked-only"])
+        assert res.exit_code == 0, res.output
+        assert "8.3+cvc.1" in res.output  # the yanked one
+        assert "8.3+cvc.2" not in res.output  # the active one filtered out
