@@ -122,6 +122,7 @@ def strip_host_tools(
     *,
     keep: bool = False,
     now: str | None = None,
+    owned_prefix: Path | None = None,
 ) -> Path | None:
     """Strip the host-tools prefix recorded for *deliverable_prefix*.
 
@@ -129,8 +130,23 @@ def strip_host_tools(
     the recorded host-tools prefix directory and rewrites the record with
     ``stripped=true`` (kept for provenance).  Returns the stripped path, or
     ``None`` when there is nothing to strip: no record, ``keep=True``, already
-    stripped, an empty prefix field, or a prefix that resolves to the
-    deliverable itself (separation disabled -- never delete the deliverable).
+    stripped, an empty prefix field, a prefix that resolves to the deliverable
+    itself (separation disabled -- never delete the deliverable), or a prefix
+    this caller has no claim to (see below).
+
+    ``rec.prefix`` is an absolute path recorded on the machine that BUILT the
+    package, and the record ships inside the package
+    (share/libcvc-deps/host-tools.yaml).  Anywhere else it names a directory
+    this machine never created, so it is only safe to delete when either:
+
+    * it lives inside *deliverable_prefix* -- it shipped with the package, so
+      removing it is just pruning what we extracted; or
+    * the caller passes *owned_prefix* equal to it, vouching that this run
+      created it (``cvcpkg build`` does this for its --build-prefix).
+
+    Otherwise this refuses.  Without that check ``cvcpkg install`` deleted the
+    build machine's build prefix -- a path chosen by whoever built the package,
+    entirely outside the install prefix.
 
     The strip is verified: ``stripped=true`` is recorded only when the prefix
     is actually gone afterwards.  A partial removal (locked/read-only files) or
@@ -145,12 +161,22 @@ def strip_host_tools(
 
     target = Path(rec.prefix)
     try:
-        same = target.resolve() == deliverable_prefix.resolve()
+        target_r = target.resolve()
+        deliverable_r = deliverable_prefix.resolve()
+        same = target_r == deliverable_r
+        inside = target_r != deliverable_r and target_r.is_relative_to(deliverable_r)
+        owned = owned_prefix is not None and target_r == owned_prefix.resolve()
     except OSError:
         same = str(target) == str(deliverable_prefix)
+        inside = False
+        owned = owned_prefix is not None and str(target) == str(owned_prefix)
     if same:
         # Separation was disabled (host-tools prefix == deliverable prefix);
         # stripping would delete the deliverable.  Refuse.
+        return None
+    if not inside and not owned:
+        # A build-machine path we have no claim to.  Refuse rather than delete
+        # an unrelated tree at a path the package author chose.
         return None
 
     stamp = now or datetime.now(timezone.utc).isoformat()
