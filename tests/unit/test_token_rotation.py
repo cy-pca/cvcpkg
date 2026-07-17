@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import io
 from unittest import mock
 
 import pytest
@@ -247,11 +248,28 @@ def server_env(tmp_path):
 
 
 class TestTokenRotateAPI:
+    _probe_seq = 0
+
     def _self_probe(self, client, token, name):
-        """A request any live token can make about itself (200 = alive)."""
-        return client.patch(
-            f"/v1/tokens/{name}/email",
-            json={"email": "probe@example.com"},
+        """Data-plane liveness probe (publish): 200 = the secret still works.
+
+        Publish is deliberately chosen over a token-management call: a
+        grace-window secret is *meant* to keep publishing during the swap,
+        so this stays 200 for a live grace secret. 401 means the secret is
+        dead. (`name` is unused; kept for call-site readability.)
+        """
+        del name
+        TestTokenRotateAPI._probe_seq += 1
+        seq = TestTokenRotateAPI._probe_seq
+        return client.post(
+            "/v1/publish",
+            params={
+                "name": f"probe{seq}",
+                "version": "1.0",
+                "platform": "linux",
+                "arch": "x86_64",
+            },
+            files={"file": ("p.tar.zst", io.BytesIO(b"probe archive"))},
             headers={"Authorization": f"Bearer {token}"},
         ).status_code
 
@@ -367,6 +385,115 @@ class TestTokenRotateAPI:
             headers={"Authorization": f"Bearer {new_secret}"},
         )
         assert resp.status_code == 200
+
+
+class TestGraceSecretControlPlaneBoundary:
+    """A grace-window secret may keep using the credential (publish) but
+    must not reach any control-plane / IAM operation, or a leaked old
+    secret could establish access that outlives the grace window."""
+
+    def _grace_secret(self, client, admin_tok, name, role="publisher"):
+        """Create `name`, rotate it with grace, return (old_grace, new_current)."""
+        created = client.post(
+            "/v1/tokens",
+            json={"name": name, "role": role},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        assert created.status_code == 200
+        old = created.json()["token"]
+        rotated = client.post(
+            f"/v1/tokens/{name}/rotate",
+            json={"grace_minutes": 60},
+            headers={"Authorization": f"Bearer {old}"},
+        )
+        assert rotated.status_code == 200
+        return old, rotated.json()["token"]
+
+    def test_grace_secret_can_still_publish(self, server_env):
+        client, admin_tok, _pub, _ = server_env
+        old, _new = self._grace_secret(client, admin_tok, "pubrole")
+        resp = client.post(
+            "/v1/publish",
+            params={
+                "name": "graceable",
+                "version": "1.0",
+                "platform": "linux",
+                "arch": "x86_64",
+            },
+            files={"file": ("g.tar.zst", io.BytesIO(b"data"))},
+            headers={"Authorization": f"Bearer {old}"},
+        )
+        assert resp.status_code == 200, resp.text
+
+    def test_grace_admin_secret_cannot_create_token(self, server_env):
+        # The critical finding: a grace admin secret minting a fresh
+        # permanent admin token, outliving the grace window.
+        client, admin_tok, _pub, _ = server_env
+        old, _new = self._grace_secret(client, admin_tok, "adminrole", role="admin")
+        resp = client.post(
+            "/v1/tokens",
+            json={"name": "backdoor", "role": "admin"},
+            headers={"Authorization": f"Bearer {old}"},
+        )
+        assert resp.status_code == 403
+
+    def test_grace_secret_cannot_update_email(self, server_env):
+        client, admin_tok, _pub, _ = server_env
+        old, _new = self._grace_secret(client, admin_tok, "emailrole")
+        resp = client.patch(
+            "/v1/tokens/emailrole/email",
+            json={"email": "attacker@evil.example"},
+            headers={"Authorization": f"Bearer {old}"},
+        )
+        assert resp.status_code == 403
+
+    def test_grace_secret_cannot_update_profile(self, server_env):
+        client, admin_tok, _pub, _ = server_env
+        old, _new = self._grace_secret(client, admin_tok, "profrole")
+        resp = client.patch(
+            "/v1/tokens/profrole/profile",
+            json={"description": "pwned"},
+            headers={"Authorization": f"Bearer {old}"},
+        )
+        assert resp.status_code == 403
+
+    def test_grace_admin_secret_cannot_revoke_tokens(self, server_env):
+        client, admin_tok, _pub, _ = server_env
+        old, _new = self._grace_secret(client, admin_tok, "revrole", role="admin")
+        resp = client.delete(
+            "/v1/tokens/test-publisher",
+            headers={"Authorization": f"Bearer {old}"},
+        )
+        assert resp.status_code == 403
+
+    def test_grace_secret_cannot_manage_org_members(self, server_env):
+        client, admin_tok, _pub, tmp_path = server_env
+        # Create an org owned by the token, then rotate the token to grace.
+        created = client.post(
+            "/v1/tokens",
+            json={"name": "orgowner", "role": "publisher"},
+            headers={"Authorization": f"Bearer {admin_tok}"},
+        )
+        owner_tok = created.json()["token"]
+        org = client.post(
+            "/v1/orgs",
+            json={"slug": "acme", "display_name": "Acme"},
+            headers={"Authorization": f"Bearer {owner_tok}"},
+        )
+        if org.status_code not in (200, 201):
+            pytest.skip("orgs require the DB backend; not exercised on YAML env")
+        rotated = client.post(
+            "/v1/tokens/orgowner/rotate",
+            json={"grace_minutes": 60},
+            headers={"Authorization": f"Bearer {owner_tok}"},
+        )
+        old = rotated.json()["token"]
+        resp = client.post(
+            "/v1/orgs/acme/members",
+            params={"token_name": "test-publisher", "role": "owner"},
+            headers={"Authorization": f"Bearer {old}"},
+        )
+        assert resp.status_code == 403
 
 
 # ── CLI ─────────────────────────────────────────────────────────

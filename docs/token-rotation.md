@@ -50,13 +50,24 @@ survives; only the secret changes.
 
 - **Who may rotate**: an admin token can rotate any token; a non-admin
   token can rotate only itself.
-- **A grace-window (old) secret cannot rotate.** During the window the
-  old secret still works for normal API calls, but rotation requires
-  the *current* secret or an admin. Without this rule, a thief holding
-  the leaked old secret could re-rotate, mint themselves the fresh
-  secret, and lock the owner out — defeating rotation as a leak
-  remediation. If you rotated *because* of a suspected leak and want
-  zero residual access, use `--grace-minutes 0` (the default).
+- **A grace-window (old) secret is data-plane only.** During the window
+  the old secret keeps working for the credential's normal job —
+  publishing and uploading — because that is the whole reason the grace
+  window exists (an in-flight CI job keeps working while the secret is
+  swapped). But it is refused (`403`) at every *control-plane* endpoint:
+  it cannot rotate, create or revoke tokens, edit a token's
+  email/profile, or manage organization membership. Those operations
+  can establish access that *outlives* the grace window (a fresh
+  permanent token, a new org membership), so a leaked old secret must
+  not reach them — otherwise rotation would not actually remediate the
+  leak.
+- **For a suspected leak, use `--grace-minutes 0` (the default).** With
+  a grace window the old secret retains data-plane powers (it can still
+  publish/yank) until the window closes; `0` kills it immediately.
+  Reserve `grace_minutes > 0` for *uncompromised* rotations where you
+  only need a swap window.
+- **Revocation wins**: `cvcpkg token revoke` kills both the current and
+  grace secrets at once.
 - Expired or revoked tokens cannot be rotated (`404`) — a rotated
   secret for a dead token would be dead on arrival.
 - The new secret is returned exactly once and only its HMAC-SHA256
