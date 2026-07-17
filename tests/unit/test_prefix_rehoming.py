@@ -115,6 +115,23 @@ class TestScriptRehoming:
         _rewrite_script_prefixes(p)
         assert _BAKED in doc.read_text()
 
+    def test_backslashes_in_the_target_path_are_not_regex_escapes(self, tmp_path):
+        # ``re`` treats backslashes in a *replacement* as escapes, so rewriting
+        # into a Windows prefix (C:\Users\...) died with
+        #   re.error: bad escape \U at position 2
+        # on every windows-latest job.  A prefix containing backslashes
+        # reproduces it on any platform: POSIX makes one literal directory of
+        # this name, Windows makes it nested -- either way str(prefix) carries
+        # backslashes, and "\U" is an invalid escape.
+        p = tmp_path / r"deps\Users\x"
+        (p / "bin").mkdir(parents=True)
+        script = p / "bin" / "aclocal"
+        script.write_text(f"my @inc = ('{_BAKED}/share/aclocal');")
+        _rewrite_script_prefixes(p)  # must not raise re.error
+        text = script.read_text()
+        assert _BAKED not in text
+        assert str(p) in text
+
     def test_is_idempotent(self, tmp_path):
         p = _prefix(tmp_path)
         s = p / "bin" / "aclocal"

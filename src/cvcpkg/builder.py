@@ -1345,7 +1345,10 @@ def _rewrite_script_prefixes(target_dir: Path) -> None:
             # Decoding with errors="replace" and writing back would silently
             # replace undecodable bytes with U+FFFD, corrupting the file.
             continue
-        new_text = _TEMP_PREFIX_RE.sub(target_str, text)
+        # Replace via a function, not a string: re treats backslashes in a
+        # replacement as escapes, so a Windows target_str (C:\Users\...) raises
+        # "bad escape \U".  A callable's return value is used literally.
+        new_text = _TEMP_PREFIX_RE.sub(lambda _m: target_str, text)
         if new_text != text:
             path.write_text(new_text, encoding="utf-8")
 
