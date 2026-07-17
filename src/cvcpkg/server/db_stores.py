@@ -15,6 +15,7 @@ from pathlib import Path
 
 from sqlalchemy import distinct, or_, select, update
 from sqlalchemy import func as sa_func
+from sqlalchemy.exc import IntegrityError
 
 from cvcpkg.server.db import (
     AuditRow,
@@ -134,6 +135,16 @@ class DbTokenStore:
                 expires_at=expires_at,
             )
             session.add(row)
+            try:
+                # Flush inside the guard so a unique-constraint violation surfaces
+                # here as a clean ValueError (→ 409) instead of escaping the store
+                # as an IntegrityError (→ 500) at commit time.  This closes the
+                # gap between the active-name check above and the INSERT (a
+                # concurrent create), and — on backends without a partial index
+                # (MySQL) — the collision with a revoked same-name row.
+                await session.flush()
+            except IntegrityError as exc:
+                raise ValueError(f"token name '{name}' already exists") from exc
         return raw
 
     async def verify(self, raw_token: str) -> TokenRecord | None:

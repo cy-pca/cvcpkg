@@ -36,6 +36,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -178,7 +179,10 @@ class TokenRow(Base):
     __tablename__ = "tokens"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    # Uniqueness is enforced by uq_tokens_active_name (see __table_args__), not
+    # a column-level UNIQUE: a revoked name must be reusable (parity with the
+    # YAML TokenStore), which a full column UNIQUE forbids.
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     email: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
@@ -199,6 +203,22 @@ class TokenRow(Base):
     previous_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     previous_hash_expires_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        # "One *active* token per name" — a revoked name can be reissued, matching
+        # the YAML backend.  Postgres and SQLite support partial indexes, so the
+        # unique applies only to non-revoked rows.  MySQL ignores the dialect
+        # ``*_where`` kwargs and falls back to a full UNIQUE(name); there,
+        # DbTokenStore.create() converts the IntegrityError into a clean 409
+        # rather than silently reusing the name.  Kept in sync with migration 017.
+        Index(
+            "uq_tokens_active_name",
+            "name",
+            unique=True,
+            sqlite_where=text("revoked = 0"),
+            postgresql_where=text("revoked = false"),
+        ),
     )
 
 
