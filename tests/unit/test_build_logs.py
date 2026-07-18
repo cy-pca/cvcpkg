@@ -727,6 +727,59 @@ class TestBuildLogEndpoints:
 
         assert frames == ["event: done\ndata: failed\n\n"]
 
+    def test_log_stream_masks_mid_stream_org_revocation(self):
+        """Org membership revoked mid-stream ends the tail with a masked frame.
+
+        When the re-auth tick's visibility check raises (the caller lost
+        access to the job's private org), the stream must end with the
+        masked 'build job not found' frame — mirroring the connect-time
+        check rather than confirming the job exists — and must NOT leak
+        the HTTPException detail.  This is the only place that masking
+        happens mid-stream; previously it had no coverage.
+        """
+        import asyncio
+        from unittest import mock
+
+        from fastapi import HTTPException
+
+        from cvcpkg.server import app as server_app
+        from cvcpkg.server.models import TokenRole
+
+        class _Job:
+            status = "running"  # never terminal: only the masking can end it
+
+        store = mock.MagicMock()
+        store.get = mock.AsyncMock(return_value=_Job())
+        store.get_log_path = mock.AsyncMock(return_value=None)
+
+        # A credential that still authenticates fine — only visibility fails.
+        fresh = mock.MagicMock()
+        fresh.via_previous_hash = False
+        fresh.role = TokenRole.publisher
+        authenticate = mock.AsyncMock(return_value=fresh)
+        revoked_visibility = mock.AsyncMock(
+            side_effect=HTTPException(404, "org membership revoked — secret detail")
+        )
+
+        async def _drain():
+            return [
+                f async for f in server_app._build_log_events(1, None, "tok", revoked_visibility)
+            ]
+
+        with (
+            mock.patch.object(server_app, "_db_build_jobs", store),
+            mock.patch.object(server_app, "_authenticate_token", authenticate),
+            mock.patch.object(server_app, "_SSE_REAUTH_INTERVAL_SECONDS", 0),
+            mock.patch.object(server_app, "_SSE_KEEPALIVE_SECONDS", 3600),
+            mock.patch.object(server_app, "_SSE_LOG_POLL_INTERVAL_SECONDS", 0),
+        ):
+            frames = asyncio.run(asyncio.wait_for(_drain(), timeout=10))
+
+        assert frames == ["event: error\ndata: build job not found\n\n"]
+        # The mask must hold: no leaked detail from the visibility failure.
+        assert not any("secret detail" in f or "org" in f for f in frames)
+        revoked_visibility.assert_awaited_once()
+
     def test_log_stream_not_found(self, db_server_env):
         """Stream for nonexistent job should return error event."""
         client, admin_tok, pub_tok, reader_tok, _ = db_server_env

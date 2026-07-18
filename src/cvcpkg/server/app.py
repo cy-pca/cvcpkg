@@ -954,7 +954,10 @@ async def _build_log_events(job_id: int, logs_dir, raw: str, assert_visible):
     heartbeat, re-auth and terminal behaviour can be driven directly in
     tests without opening a real stream — a client tailing a live stream
     cannot be unwound from a test without wedging it.  ``assert_visible``
-    is the endpoint's visibility check, which closes over request state.
+    is the app's org-visibility check (``_assert_build_visible``); it is
+    injected because it lives at ``create_app`` scope, but it captures no
+    request state — only module globals — which is what makes calling it
+    from here, after the request handler has returned, safe.
     """
     offset = 0
     last_send = time.monotonic()
