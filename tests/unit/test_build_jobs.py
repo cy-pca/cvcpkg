@@ -12,7 +12,7 @@ aiosqlite = pytest.importorskip("aiosqlite", reason="aiosqlite required for buil
 from fastapi.testclient import TestClient
 
 from cvcpkg.server.app import create_app
-from cvcpkg.server.models import BuildJobStatus, TokenRole
+from cvcpkg.server.models import BuildJobAlreadyClaimedError, BuildJobStatus, TokenRole
 
 # ── Fixtures ────────────────────────────────────────────────────
 
@@ -942,8 +942,14 @@ class TestDbBuildJobStore:
 
         self._run(_test())
 
-    def test_claim_running_job_noop(self):
-        """Claiming an already-running job should be a no-op."""
+    def test_claim_running_job_is_refused(self):
+        """Claiming a job another worker is running must be refused.
+
+        This used to assert a "no-op" that still returned the job info to the
+        second builder.  The row was not stolen, but the caller walked away
+        holding the job and built the same variant concurrently -- two builds
+        racing one publish.  A rival must be told no.
+        """
         from cvcpkg.server.db_stores import DbBuilderStore, DbBuildJobStore
 
         async def _test():
@@ -968,9 +974,13 @@ class TestDbBuildJobStore:
                 submitted_by="admin",
             )
             await store.claim(job.id, b1.id)
-            result = await store.claim(job.id, b2.id)
-            assert result.status == BuildJobStatus.running
-            assert result.builder_id == b1.id  # still b1
+            with pytest.raises(BuildJobAlreadyClaimedError):
+                await store.claim(job.id, b2.id)
+
+            # b1 keeps it.
+            still = await store.get(job.id)
+            assert still.status == BuildJobStatus.running
+            assert still.builder_id == b1.id
 
         self._run(_test())
 

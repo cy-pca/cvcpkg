@@ -728,6 +728,25 @@ class BuildJobStatus(str, Enum):
     unschedulable = "unschedulable"
 
 
+class BuildJobAlreadyClaimedError(Exception):
+    """A worker tried to claim a job another worker already holds.
+
+    Kept distinct from "job not found" so the API can answer 409 rather than
+    404 -- and, above all, rather than handing the loser the job anyway, which
+    is what let two workers build the same variant concurrently.
+
+    Lives here rather than in db_stores so app.py can catch it without pulling
+    in the SQLAlchemy layer, which it imports lazily.
+    """
+
+    def __init__(self, job_id: int, *, holder: str = "", builder_id: int | None = None):
+        self.job_id = job_id
+        self.holder = holder
+        self.builder_id = builder_id
+        who = holder or (f"builder #{builder_id}" if builder_id is not None else "another worker")
+        super().__init__(f"build job {job_id} is already claimed by {who}")
+
+
 class BuildJobInfo(BaseModel):
     """Public representation of a build job."""
 

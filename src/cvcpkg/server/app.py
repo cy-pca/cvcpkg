@@ -67,6 +67,7 @@ from cvcpkg.server.models import (
     BuilderListResponse,
     BuilderRegisterRequest,
     BuilderUpdateRequest,
+    BuildJobAlreadyClaimedError,
     BuildJobClaimRequest,
     BuildJobCompleteRequest,
     BuildJobFailRequest,
@@ -6464,9 +6465,26 @@ def create_app(
             str(job_id),
             _who,
         ):
-            info = await _db_build_jobs.claim(
-                job_id, body.builder_id, claimant=body.claimant.strip()
-            )
+            try:
+                info = await _db_build_jobs.claim(
+                    job_id, body.builder_id, claimant=body.claimant.strip()
+                )
+            except BuildJobAlreadyClaimedError:
+                # The pre-check above only sees a snapshot; between it and the
+                # claim another worker can win the job.  ``claim`` settles it
+                # atomically, so trust that verdict here.  Re-claiming a job we
+                # already hold stays idempotent (a builder whose claim response
+                # was lost must be able to retry); anything else means the other
+                # worker owns it and we must NOT build it too.
+                _held = await _db_build_jobs.get(job_id)
+                _claimant_now = body.claimant.strip()
+                _mine = _held is not None and (
+                    (body.builder_id is not None and _held.builder_id == body.builder_id)
+                    or (bool(_claimant_now) and _held.claimed_by == _claimant_now)
+                )
+                if not _mine:
+                    raise HTTPException(409, f"build job {job_id} is already running") from None
+                info = _held
             if info is None:
                 raise HTTPException(404, f"build job {job_id} not found")
         await emit_webhook_event(
