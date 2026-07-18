@@ -355,17 +355,32 @@ jobs:
           done
           echo "Recipes: $ok ok, $fail failed"
 
-      # ── Update BSD builders via SSH ───────────────────────────
-      # (Linux builder runners are updated by the update-linux-builders
-      #  job below)
-      # (the Windows builder is updated by the update-windows-builder job below)
+
+  # ── Update BSD builders via SSH ─────────────────────────────────
+  # Runs on star-00, NOT the cvcpkg-prod runner.  cvcpkg-prod cannot reach
+  # the BSD guests at all -- every host times out -- which is why these
+  # builders sat weeks out of date while the steps reported success.
+  # star-00 is on their LAN and its runner user already holds the keys.
+  #
+  # continue-on-error, as for the other builder jobs: housekeeping after an
+  # already-successful deploy must not turn deploy-prod red.  The steps still
+  # exit non-zero when NOT ONE host is reachable, so a fleet-wide outage shows
+  # as a red step on a green job rather than as silence.
+  update-bsd-builders:
+    name: Update BSD builders
+    needs: deploy
+    continue-on-error: true
+    runs-on: [self-hosted, Linux, X64, star-00]
+    timeout-minutes: 20
+
+    steps:
       - name: Clean up BSD builder disk space
         continue-on-error: true
         run: |
           set -euo pipefail
           SSH="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
-          # BSD builders reachable only by LAN IP from the cvcpkg-prod
-          # runner (no DNS for the *-build hostnames).
+          # BSD builders are addressed by LAN IP (no DNS for the *-build
+          # hostnames); star-00 shares that LAN.
           for host in ${{ vars.BSD_BUILDER_SSH_HOSTS }}; do
             echo "--- $host ---"
             $SSH "$host" "
@@ -383,13 +398,12 @@ jobs:
         continue-on-error: true
         run: |
           set -uo pipefail
-          SHA="${{ steps.target.outputs.sha }}"
+          SHA="${{ needs.deploy.outputs.sha }}"
           SSH="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
-          # Optional jump host. The BSD guests are not always routable from the
-          # runner directly -- when they were not, every host timed out while
-          # this step still reported success, and the fleet silently ran code
-          # weeks out of date. Set BSD_BUILDER_SSH_JUMP (e.g. tfx@10.66.77.217)
-          # to reach them via star-00; leave it unset for direct LAN access.
+          # Optional jump host, kept as a fallback: this job now runs on star-00,
+          # which is already on the builders' LAN, so it should not be needed.
+          # Set BSD_BUILDER_SSH_JUMP only if these steps ever move to a runner
+          # that cannot reach them directly.
           if [ -n "${{ vars.BSD_BUILDER_SSH_JUMP }}" ]; then
             SSH="$SSH -J ${{ vars.BSD_BUILDER_SSH_JUMP }}"
           fi
@@ -423,7 +437,6 @@ jobs:
             exit 1
           fi
 
-      # ── Restart BSD builder agents ────────────────────────────
       - name: Restart non-runner builders (BSD)
         continue-on-error: true
         run: |
