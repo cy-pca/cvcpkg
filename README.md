@@ -96,6 +96,60 @@ conflicts).
 
 ---
 
+## cvcpkg as a build & configuration system
+
+> **Status: planned (roadmap Phase 23).**  This section describes a
+> direction, not shipped behavior.  It is documented here because it
+> shapes the recipe format; the checkboxes live in `CVCPKG-ROADMAP.md`.
+
+cvcpkg is not only for publishing packages.  A recipe set can be used as a
+**general build system and configuration-management tool** — closer in
+spirit to SaltStack/Ansible than to a plain package manager, but built into
+one holistic, cross-platform, content-addressed system rather than bolted
+on beside it:
+
+- **Installing a recipe applies state**; **uninstalling tears it down.**
+- A **machine's configuration is a dependency graph of recipes** — installing
+  one triggers its dependent recipes and their state changes, in dependency
+  order.
+- Recipes can **initialize proprietary or licensed software and then layer
+  legal, first-party modifications on top**, with the license and
+  redistributability of every input declared explicitly in the recipe.
+- **Bring-your-own (BYO)** recipes reference assets cvcpkg cannot legally
+  redistribute (a licensed installer, retail game data, a client's
+  proprietary blob): the *user* supplies the file, cvcpkg verifies it by
+  a pre-published `sha256`, and never fetches or re-hosts it.
+
+The model is deliberately **declarative-with-an-escape-hatch**: typed
+`state:` resources (`file`, `template`, `service`, `env`, `registry-key`,
+…) follow a Get/Test/Set contract so they are idempotent and
+auto-reversible, while an explicit `script:` + `teardown:` pair handles
+anything the built-ins do not cover.  Three modes, **no resident agent**:
+`cvcpkg check` (audit/report-only), `cvcpkg apply`, and `cvcpkg uninstall`;
+a scheduler (cron/CI) owns any enforcement loop.
+
+**Honest limits (documented on purpose, so nothing over-promises):**
+
+- **Teardown is authoritative inside the prefix, best-effort outside it.**
+  Files cvcpkg tracks, it removes cleanly; state a recipe reaches out to
+  mutate (system services, the registry, `/etc`) is reverted only by a
+  declared inverse — a `teardown:` slot, or the captured prior value of a
+  typed resource.  Recipes with an untracked imperative effect are *labeled
+  non-revertible* in status output.
+- **Apply is on-demand and non-atomic** — it corrects drift when you run it
+  (Ansible-shaped), not continuously (Puppet-shaped).  A half-failed apply
+  leaves a half-configured host; there is no automatic rollback of arbitrary
+  scripts.
+- **Idempotency is a per-recipe contract**, enforced in CI (apply twice →
+  the second run is a no-op), not a magic property of the engine.
+
+Every state operation is recorded in a per-machine, hash-chained,
+append-only **transaction journal** (who, from where, what changed, with
+per-file before/after hashes) that cross-anchors to the server audit log —
+a tamper-evident paper trail for forensics that mainstream configuration
+tools do not provide.  See `CVCPKG-ROADMAP.md` Phase 23 for the full design,
+security model, and worked recipe examples.
+
 ## Activating a prefix
 
 `cvcpkg install` writes shell activation scripts into the prefix in
