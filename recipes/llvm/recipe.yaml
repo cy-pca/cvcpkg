@@ -13,8 +13,11 @@ recipe:
     LLVM 22 — the complete LLVM/Clang/LLD toolchain built from the LLVM
     monorepo.  Provides clang, clang++, the LLVM static analysis and
     optimisation infrastructure, the LLD linker, and all development
-    libraries and headers needed to build LLVM-based tools such as
-    llvm-cbe.  Targets: X86, AArch64, WebAssembly.
+    libraries and headers needed to build LLVM-based tools.
+    Targets: X86, AArch64, WebAssembly.
+
+    This is the recipe to depend on unless you are pinned to an older LLVM
+    major.  See `llvm20` for consumers that CMake-require LLVM 20.x.
 
 source:
   type: tarball
@@ -95,11 +98,13 @@ notes:
     description: >-
       LLVM_BUILD_LLVM_DYLIB=ON produces a single libLLVM.so/.dylib that
       all LLVM tools link against, keeping the total install size smaller.
-      Downstream consumers (e.g. llvm-cbe) can also link against it.
+      Downstream consumers can also link against it.
   - title: "llvm-cbe C backend"
     platforms: [linux, macos, windows, freebsd]
     description: >-
-      To convert LLVM bitcode to C, install the llvm-cbe recipe after
-      this one.  The full workflow is:
+      llvm-cbe converts LLVM bitcode to C, but does NOT build against this
+      recipe: upstream requires LLVM 20.1 and CMake's find_package matches
+      on major, so it depends on `llvm20` instead.  Use this recipe's clang
+      to produce the bitcode:
         clang++ -std=c++20 -O2 -emit-llvm -c main.cpp -o main.bc
         llvm-cbe main.bc -o main.c
