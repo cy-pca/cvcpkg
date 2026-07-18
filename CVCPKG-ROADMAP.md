@@ -17,7 +17,9 @@ project going forward.
 - The Python distribution is already published as **`cvcpkg`** (not
   `libcvc-deps`).
 - The GitHub repository will be renamed **`transfix/libcvc-deps` →
-  `transfix/cvcpkg`** *before* the first PyPI publish (see Phase 20).
+  `<cyberpcangel-org>/cvcpkg`** *before* the first PyPI publish — the rename
+  now also moves the repo into the new CyberPC Angel org (see the Ownership
+  section above and Phase 20).
 - Backward compatibility is retained where downstream consumers depend on
   the old name — e.g. the `libcvc-depsConfig.cmake` compatibility wrapper
   stays so existing `find_package(libcvc-deps)` calls keep working.
@@ -28,6 +30,83 @@ project going forward.
 > other roadmap phase — including the pre-release hardening phases 12–14 and
 > the v2.0.0 product phases 15–19 — is closed**.  Publishing to PyPI claims a
 > name and makes a community-facing commitment, so it is deliberately last.
+
+---
+
+## Ownership, Copyright & Branding — CyberPC Angel, LLC
+
+**cvcpkg is owned by [CyberPC Angel, LLC](https://cyberpcangel.com).**  The
+work was 100% funded by the CyberPC Angel team, and CyberPC Angel, LLC owns
+the intellectual property.  All copyright and provenance branding across the
+project is being set to **CyberPC Angel, LLC**.  This effort is sequenced
+alongside the rename and the org move below, and lands **before** the Phase 20
+PyPI publish so the first public release carries the correct ownership.
+
+- [ ] **Copyright & provenance branding sweep → CyberPC Angel, LLC.**  Set
+      the owning entity to CyberPC Angel, LLC everywhere provenance is
+      asserted: `pyproject.toml` (`authors`, `homepage`/`repository`),
+      `README.md`, the server landing-page footer (currently
+      `cvcpkg — cross-platform binary package archive…`, no owner), the docs,
+      and the GitHub repo metadata/social preview.  *(The `LICENSE` file
+      already carries `Copyright (c) 2026 CyberPC Angel, LLC` — this
+      generalizes that to the rest of the project.)*
+  - **Do not rewrite per-recipe `maintainer` / `maintainer_email` fields.**
+    Those name the **upstream package** maintainers (e.g. the zlib or boost
+    packager), not cvcpkg's owner — they are legitimate third-party
+    attribution and must survive the sweep untouched.
+- [ ] **Source-file headers (bonus).**  Add a CyberPC Angel, LLC copyright +
+      MIT notice header to every first-party source file — recommended form
+      is an SPDX one-liner so it stays greppable and tooling-friendly:
+      `# SPDX-License-Identifier: MIT` + `# Copyright (c) 2026 CyberPC Angel,
+      LLC`.  Today **0 of 93** first-party Python files carry any
+      copyright/license header, so this is a green-field sweep (a
+      `scripts/apply_headers.py` + a CI check to keep new files compliant).
+      Exclude vendored `third-party/` and per-recipe upstream sources.
+- [ ] **ASCII-art gears logo (double bonus).**  Add an ASCII-art rendition of
+      the CyberPC Angel, LLC **gears** logo to the source tree (e.g. a banner
+      comment / the `cvcpkg` `--version` or no-arg splash) and to the top of
+      `README.md`.  Keep it plain 7-bit ASCII so it renders in any terminal
+      and in the `landing.py` guide.
+- [ ] **Project logo = CyberPC Angel gears icon.**  Use the CyberPC Angel,
+      LLC gears icon as the project logo: a **favicon** and `og:image` on the
+      server landing page (it has **neither** today — see `_head_html`), a
+      logo in the README header, and the GitHub repo social-preview image.
+      Ship the asset self-hosted (no external CDN) consistent with the CSP.
+- [ ] **New GitHub organization for the CyberPC Angel team; cvcpkg lives
+      under it.**  Create a dedicated **CyberPC Angel** GitHub org (slug TBD,
+      e.g. `cyberpcangel`) and move cvcpkg into it.  This **changes the
+      Phase 20 rename target and the PyPI trusted-publisher owner** from
+      `transfix` to the new org, the `_GITHUB_REPO` default
+      (`transfix/libcvc-deps`, env-overridable via `CVCPKG_GITHUB_REPO`), and
+      all `transfix/libcvc-deps` URL references (**~53 occurrences across ~20
+      files** — CI workflows, composite actions, `landing.py`/`app.py`,
+      `config.py`, schemas, docs).  Coordinate with the deferred repo rename
+      so downstream `uses:` directives update in one pass.
+- [x] **License stays MIT.**  MIT is the right fit and matches peer package
+      managers (vcpkg, Conan, pip are all MIT).  Retained deliberately; the
+      one alternative worth a conversation is Apache-2.0 (or a dual
+      MIT/Apache-2.0), whose only material addition is an explicit patent
+      grant — see the license note below.
+
+### License choice — why MIT (with the honest caveat)
+
+*Not legal advice.*  Among comparable package managers / build-dependency
+tools, **MIT is the mainstream choice**: vcpkg, Conan, and pip are MIT;
+Homebrew and conda are BSD; Spack and the Rust `cargo` toolchain use a
+**dual MIT/Apache-2.0**.  So keeping **MIT** puts cvcpkg squarely in the norm
+for this category, maximizes downstream adoption, and is trivially
+understood.
+
+The one thing MIT lacks that **Apache-2.0** adds is an **explicit patent
+license + patent-retaliation clause** (plus a `NOTICE` mechanism).  For a
+company-owned project that could matter if patent exposure is ever a concern;
+the common way to get both the simplicity *and* the patent grant is the
+**dual MIT OR Apache-2.0** license the Rust ecosystem popularized.  Net
+recommendation: **MIT is appropriate and well-justified** for a tool like
+this; only reach for Apache-2.0 / dual-licensing if an explicit patent grant
+becomes a requirement.  (BSD-2/3-Clause is essentially MIT-equivalent for
+these purposes; the 3-clause no-endorsement term offers a mild trademark
+nicety but nothing MIT + a trademark policy doesn't also cover.)
 
 ---
 
@@ -1706,13 +1785,16 @@ the release *actions*, in order:
 
 - [ ] **Rename the project to `cvcpkg`, dropping `libcvc-deps`** (see the
       Project Rename section at the top of this document).
-- [ ] **Rename the GitHub repo `transfix/libcvc-deps` → `transfix/cvcpkg`**
-      (deferred to here so downstream `uses:` references can be updated
-      simultaneously without breaking CI).
+- [ ] **Create the CyberPC Angel GitHub org and move the repo into it**,
+      renaming in the same pass: `transfix/libcvc-deps` →
+      `<cyberpcangel-org>/cvcpkg` (deferred to here so downstream `uses:`
+      references can be updated simultaneously without breaking CI).  See the
+      Ownership, Copyright & Branding section for the full org move.
 - [ ] **Configure the PyPI trusted publisher** for the renamed repo:
-      owner `transfix`, repo `cvcpkg`, workflow `cvcpkg-publish.yml`,
-      environment `pypi`.  (An earlier stable publish failed with
-      `invalid-publisher` because no matching trusted publisher exists yet.)
+      owner `<cyberpcangel-org>` (the new org, **not** `transfix`), repo
+      `cvcpkg`, workflow `cvcpkg-publish.yml`, environment `pypi`.  (An
+      earlier stable publish failed with `invalid-publisher` because no
+      matching trusted publisher exists yet.)
 - [ ] **Flip `CVCPKG_PUBLISH_TO_PYPI` to `true` and push a stable tag** to
       trigger the gated publish workflow.
 - [ ] **Publish to PyPI** — `pip install cvcpkg` goes live.
@@ -1824,10 +1906,14 @@ The project has been restructured for the **cvcpkg** identity:
 - [x] pyproject.toml at repo root (promoted from tools/cvcpkg/)
 - [x] `cvcpkgConfig.cmake` installed alongside backward-compat `libcvc-depsConfig.cmake`
 - [x] README.md and docs reflect cvcpkg branding
-- [ ] **Repo rename** — `transfix/libcvc-deps` → `transfix/cvcpkg` (deferred
+- [ ] **Org move + repo rename** — `transfix/libcvc-deps` →
+  `<cyberpcangel-org>/cvcpkg`, into the new CyberPC Angel org (deferred
   until PyPI release to avoid breaking CI in downstream repos; GitHub will
   redirect git URLs but `uses:` directives in libcvc and TexMol workflows
-  must be updated simultaneously)
+  must be updated simultaneously).  See the Ownership, Copyright & Branding
+  section.
+- [ ] **Owning entity = CyberPC Angel, LLC** — copyright/provenance branding,
+  source headers, gears logo, and the org move (Ownership section)
 - [ ] **PyPI publication** — `pip install cvcpkg` (the final roadmap phase;
   see Phase 20)
 
