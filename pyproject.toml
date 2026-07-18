@@ -124,3 +124,7 @@ warn_unused_configs = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v --tb=short"
+# Test the working tree, never a copy installed into site-packages.  On the
+# self-hosted runner a stale non-editable install shadowed src/, so a plain
+# `pytest` silently exercised old code (and hung on a bug already fixed here).
+pythonpath = ["src"]

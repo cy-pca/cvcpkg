@@ -941,6 +941,90 @@ _DEFAULT_BUILD_TIMEOUT = int(os.environ.get("CVCPKG_BUILD_TIMEOUT", "7200"))
 # ephemeral / just-restarted builder time to register after submission.
 _UNSCHEDULABLE_TTL = int(os.environ.get("CVCPKG_UNSCHEDULABLE_TTL", "1800"))
 
+# Heartbeat interval for the build-log SSE stream.  Must stay well below both
+# any fronting proxy's idle timeout and the client's stream read timeout
+# (_FOLLOW_READ_TIMEOUT in cli/_builds.py).
+_SSE_KEEPALIVE_SECONDS = int(os.environ.get("CVCPKG_SSE_KEEPALIVE", "15"))
+
+
+async def _build_log_events(job_id: int, logs_dir, raw: str, assert_visible):
+    """Yield SSE frames for a build job's log until the job is terminal.
+
+    Module-level (rather than a closure inside the endpoint) so the
+    heartbeat, re-auth and terminal behaviour can be driven directly in
+    tests without opening a real stream — a client tailing a live stream
+    cannot be unwound from a test without wedging it.  ``assert_visible``
+    is the app's org-visibility check (``_assert_build_visible``); it is
+    injected because it lives at ``create_app`` scope, but it captures no
+    request state — only module globals — which is what makes calling it
+    from here, after the request handler has returned, safe.
+    """
+    offset = 0
+    last_send = time.monotonic()
+    last_reauth = time.monotonic()
+    while True:
+        info = await _db_build_jobs.get(job_id)
+        if info is None:
+            yield "event: error\ndata: job not found\n\n"
+            return
+
+        # Re-verify the token on a cadence.  The one-shot auth at request
+        # start is not enough for a tail that can run for the whole life of a
+        # build: a credential that is later revoked, expired, rotated
+        # (grace=0), demoted, or dropped from the job's private org must lose
+        # the stream here instead of reading the log until the client happens
+        # to disconnect.  Time-gated so a chatty log does not hit the token
+        # store on every poll.
+        now = time.monotonic()
+        if now - last_reauth >= _SSE_REAUTH_INTERVAL_SECONDS:
+            fresh = await _authenticate_token(raw)
+            reason = _sse_reauth_rejection(fresh)
+            if reason is not None:
+                yield f"event: error\ndata: {reason}\n\n"
+                return
+            try:
+                await assert_visible(fresh, info)
+            except HTTPException:
+                # Membership was revoked mid-stream; mask like the
+                # connect-time check rather than confirm the job exists.
+                yield "event: error\ndata: build job not found\n\n"
+                return
+            last_reauth = now
+
+        path = await _db_build_jobs.get_log_path(job_id, logs_dir=logs_dir)
+        if path is not None:
+            size = path.stat().st_size
+            if size > offset:
+                with open(path) as f:
+                    f.seek(offset)
+                    chunk = f.read()
+                offset = size
+                # Escape newlines for SSE
+                for line in chunk.splitlines():
+                    yield f"data: {line}\n\n"
+                last_send = time.monotonic()
+
+        # Check terminal states
+        if info.status in (
+            "succeeded",
+            "failed",
+            "cancelled",
+            "timed_out",
+        ):
+            yield f"event: done\ndata: {info.status}\n\n"
+            return
+
+        # Heartbeat: a build can compile for minutes without emitting a
+        # line.  Without traffic an intermediary proxy drops the idle
+        # connection, and a client tailing it then blocks on a half-open
+        # socket.  SSE comment lines are inert to readers.
+        if time.monotonic() - last_send >= _SSE_KEEPALIVE_SECONDS:
+            yield ": keepalive\n\n"
+            last_send = time.monotonic()
+
+        await asyncio.sleep(_SSE_LOG_POLL_INTERVAL_SECONDS)
+
+
 # Log retention: 0 means disabled (no automatic GC)
 _LOG_RETENTION_DAYS = int(os.environ.get("CVCPKG_LOG_RETENTION_DAYS", "0"))
 # How often the log retention GC runs (seconds, default 1 hour)
@@ -6798,64 +6882,8 @@ def create_app(
             await _assert_build_visible(record, _job)
         state = _get_state()
 
-        async def _event_generator():
-            logs_dir = state.logs_dir()
-            offset = 0
-            last_reauth = time.monotonic()
-            while True:
-                info = await _db_build_jobs.get(job_id)
-                if info is None:
-                    yield "event: error\ndata: job not found\n\n"
-                    return
-
-                # Re-verify the token on a cadence.  The one-shot auth at request
-                # start is not enough for a tail that can run for the whole life
-                # of a build: a credential that is later revoked, expired,
-                # rotated (grace=0), demoted, or dropped from the job's private
-                # org must lose the stream here instead of reading the log until
-                # the client happens to disconnect.  Time-gated so a chatty log
-                # does not hit the token store on every poll.
-                now = time.monotonic()
-                if now - last_reauth >= _SSE_REAUTH_INTERVAL_SECONDS:
-                    fresh = await _authenticate_token(raw)
-                    reason = _sse_reauth_rejection(fresh)
-                    if reason is not None:
-                        yield f"event: error\ndata: {reason}\n\n"
-                        return
-                    try:
-                        await _assert_build_visible(fresh, info)
-                    except HTTPException:
-                        # Membership was revoked mid-stream; mask like the
-                        # connect-time check rather than confirm the job exists.
-                        yield "event: error\ndata: build job not found\n\n"
-                        return
-                    last_reauth = now
-
-                path = await _db_build_jobs.get_log_path(job_id, logs_dir=logs_dir)
-                if path is not None:
-                    size = path.stat().st_size
-                    if size > offset:
-                        with open(path) as f:
-                            f.seek(offset)
-                            chunk = f.read()
-                        offset = size
-                        # Escape newlines for SSE
-                        for line in chunk.splitlines():
-                            yield f"data: {line}\n\n"
-
-                # Check terminal states
-                if info.status in (
-                    "succeeded",
-                    "failed",
-                    "cancelled",
-                    "timed_out",
-                ):
-                    yield f"event: done\ndata: {info.status}\n\n"
-                    return
-                await asyncio.sleep(_SSE_LOG_POLL_INTERVAL_SECONDS)
-
         return StreamingResponse(
-            _event_generator(),
+            _build_log_events(job_id, state.logs_dir(), raw, _assert_build_visible),
             media_type="text/event-stream",
         )
 
