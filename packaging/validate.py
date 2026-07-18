@@ -30,18 +30,15 @@ ROOT = Path(__file__).resolve().parent
 SCHEMAS = ROOT / "schemas"
 
 # Recipes whose minted version ("<upstream_version>+cvc.<rev>") is not valid
-# SemVer and so cannot be ordered by version_sort_key's parseable rank.  They
-# predate the parseability gate below and are grandfathered so it RATCHETS: new
-# recipes must parse, and this set may only shrink.  Do NOT add to it -- pick an
-# upstream_version that parses (dot-separated dates like "2024.07.02", drop
-# non-numeric suffixes, avoid a second "+").
-#
-#   openssh "10.4p1", openssh-win "10.0.0.0" (4 components), x264/x264-cli
-#   "0.164.stable", jam/haiku-image "r1beta5", llvm-cbe "0.0.0+git.<sha>" (a
-#   second "+").
-_UNPARSEABLE_VERSION_GRANDFATHER = frozenset(
-    {"openssh", "openssh-win", "x264", "x264-cli", "jam", "haiku-image", "llvm-cbe"}
-)
+# SemVer and so cannot be ordered by version_sort_key's parseable rank.  The gate
+# below RATCHETS: new recipes must parse, and this set may only shrink -- it is
+# now EMPTY, since the seven that predated the gate were normalized (openssh
+# 10.4p1->10.4.1, openssh-win 10.0.0.0->10.0.0, x264/x264-cli
+# 0.164.stable->0.164.0, jam/haiku-image r1beta5->1.0.0-beta.5, llvm-cbe
+# 0.0.0+git.<sha>->0.0.0-git.<sha>).  Do NOT add to it -- pick an
+# upstream_version that parses (dot-separated numeric components; a git hash or
+# tag goes in a "-<pre>" prerelease, never a second "+").
+_UNPARSEABLE_VERSION_GRANDFATHER: frozenset[str] = frozenset()
 
 
 def _load(path: Path) -> dict:

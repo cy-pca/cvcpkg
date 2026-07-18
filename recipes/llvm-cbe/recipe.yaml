@@ -1,7 +1,7 @@
 schema_version: 1
 recipe:
   name: llvm-cbe
-  upstream_version: "0.0.0+git.2c21c57"
+  upstream_version: "0.0.0-git.2c21c57"
   cvc_revision: 1
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
