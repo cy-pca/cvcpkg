@@ -45,6 +45,15 @@ def _uri_to_path(uri: str) -> Path:
     if len(netloc) == 1 and netloc.isalpha():
         return Path(netloc + ":" + path_str)
 
+    # Case: RFC 8089 file URI with the drive letter in the PATH, e.g.
+    # file:///C:/Users/x → netloc='', path='/C:/Users/x'.  This is the canonical
+    # form Path.as_uri() emits and the docstring's "correct URI" case, but
+    # urlparse keeps the leading slash, so a bare Path() yields "\C:\Users\x" on
+    # Windows -- a broken path that fails every filesystem op with WinError 123.
+    # Strip the leading slash so the drive letter starts the path.
+    if len(path_str) >= 3 and path_str[0] == "/" and path_str[1].isalpha() and path_str[2] == ":":
+        return Path(path_str[1:])
+
     # Case: netloc is empty or a network host — use path directly.
     if not path_str and netloc:
         return Path(netloc)
