@@ -656,6 +656,75 @@ class TestBuildLogEndpoints:
         assert "building zlib" in body
         assert "event: done" in body
 
+    def test_log_stream_heartbeats_while_job_is_quiet(self):
+        """A non-terminal job with no new output must still produce traffic.
+
+        Without a heartbeat an intermediary drops the idle connection and
+        the CLI's follower blocks on a half-open socket — the wedge behind
+        the populate-server runner burns (run 29630731633).  Driven against
+        the generator directly: a live stream cannot be unwound from a test
+        without hanging it.
+        """
+        import asyncio
+        from unittest import mock
+
+        from cvcpkg.server import app as server_app
+
+        class _Job:
+            def __init__(self, status):
+                self.status = status
+
+        # Quiet and running for two polls, then finishes.
+        statuses = iter([_Job("running"), _Job("running"), _Job("succeeded")])
+        store = mock.MagicMock()
+        store.get = mock.AsyncMock(side_effect=lambda _jid: next(statuses))
+        store.get_log_path = mock.AsyncMock(return_value=None)  # no log output
+
+        async def _drain():
+            frames = []
+            async for frame in server_app._build_log_events(1, logs_dir=None):
+                frames.append(frame)
+            return frames
+
+        with (
+            mock.patch.object(server_app, "_db_build_jobs", store),
+            mock.patch.object(server_app, "_SSE_KEEPALIVE_SECONDS", 0),
+            mock.patch.object(server_app, "_SSE_POLL_SECONDS", 0),
+        ):
+            frames = asyncio.run(asyncio.wait_for(_drain(), timeout=10))
+
+        assert any(
+            f.startswith(": ") and "keepalive" in f for f in frames
+        ), f"no keepalive on an idle build-log stream: {frames}"
+        # Heartbeats must not replace or delay the real terminator.
+        assert frames[-1] == "event: done\ndata: succeeded\n\n"
+
+    def test_log_stream_terminal_job_emits_no_keepalive(self):
+        """An already-finished job should close immediately, not heartbeat."""
+        import asyncio
+        from unittest import mock
+
+        from cvcpkg.server import app as server_app
+
+        class _Job:
+            status = "failed"
+
+        store = mock.MagicMock()
+        store.get = mock.AsyncMock(return_value=_Job())
+        store.get_log_path = mock.AsyncMock(return_value=None)
+
+        async def _drain():
+            return [f async for f in server_app._build_log_events(1, logs_dir=None)]
+
+        with (
+            mock.patch.object(server_app, "_db_build_jobs", store),
+            mock.patch.object(server_app, "_SSE_KEEPALIVE_SECONDS", 0),
+            mock.patch.object(server_app, "_SSE_POLL_SECONDS", 0),
+        ):
+            frames = asyncio.run(asyncio.wait_for(_drain(), timeout=10))
+
+        assert frames == ["event: done\ndata: failed\n\n"]
+
     def test_log_stream_not_found(self, db_server_env):
         """Stream for nonexistent job should return error event."""
         client, admin_tok, pub_tok, reader_tok, _ = db_server_env

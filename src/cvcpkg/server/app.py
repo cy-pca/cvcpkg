@@ -661,6 +661,60 @@ _UNSCHEDULABLE_TTL = int(os.environ.get("CVCPKG_UNSCHEDULABLE_TTL", "1800"))
 # (_FOLLOW_READ_TIMEOUT in cli/_builds.py).
 _SSE_KEEPALIVE_SECONDS = int(os.environ.get("CVCPKG_SSE_KEEPALIVE", "15"))
 
+# How often the build-log stream re-checks the job for new output.
+_SSE_POLL_SECONDS = 2.0
+
+
+async def _build_log_events(job_id: int, logs_dir):
+    """Yield SSE frames for a build job's log until the job is terminal.
+
+    Module-level (rather than a closure inside the endpoint) so the
+    heartbeat and terminal behaviour can be driven directly in tests
+    without opening a real stream — a client tailing a live stream cannot
+    be unwound from a test without wedging it.
+    """
+    offset = 0
+    last_send = time.monotonic()
+    while True:
+        info = await _db_build_jobs.get(job_id)
+        if info is None:
+            yield "event: error\ndata: job not found\n\n"
+            return
+
+        path = await _db_build_jobs.get_log_path(job_id, logs_dir=logs_dir)
+        if path is not None:
+            size = path.stat().st_size
+            if size > offset:
+                with open(path) as f:
+                    f.seek(offset)
+                    chunk = f.read()
+                offset = size
+                # Escape newlines for SSE
+                for line in chunk.splitlines():
+                    yield f"data: {line}\n\n"
+                last_send = time.monotonic()
+
+        # Check terminal states
+        if info.status in (
+            "succeeded",
+            "failed",
+            "cancelled",
+            "timed_out",
+        ):
+            yield f"event: done\ndata: {info.status}\n\n"
+            return
+
+        # Heartbeat: a build can compile for minutes without emitting a
+        # line.  Without traffic an intermediary proxy drops the idle
+        # connection, and a client tailing it then blocks on a half-open
+        # socket.  SSE comment lines are inert to readers.
+        if time.monotonic() - last_send >= _SSE_KEEPALIVE_SECONDS:
+            yield ": keepalive\n\n"
+            last_send = time.monotonic()
+
+        await asyncio.sleep(_SSE_POLL_SECONDS)
+
+
 # Log retention: 0 means disabled (no automatic GC)
 _LOG_RETENTION_DAYS = int(os.environ.get("CVCPKG_LOG_RETENTION_DAYS", "0"))
 # How often the log retention GC runs (seconds, default 1 hour)
@@ -5624,51 +5678,8 @@ def create_app(
             raise HTTPException(403, "insufficient role")
         state = _get_state()
 
-        async def _event_generator():
-            logs_dir = state.logs_dir()
-            offset = 0
-            last_send = time.monotonic()
-            while True:
-                info = await _db_build_jobs.get(job_id)
-                if info is None:
-                    yield "event: error\ndata: job not found\n\n"
-                    return
-
-                path = await _db_build_jobs.get_log_path(job_id, logs_dir=logs_dir)
-                if path is not None:
-                    size = path.stat().st_size
-                    if size > offset:
-                        with open(path) as f:
-                            f.seek(offset)
-                            chunk = f.read()
-                        offset = size
-                        # Escape newlines for SSE
-                        for line in chunk.splitlines():
-                            yield f"data: {line}\n\n"
-                        last_send = time.monotonic()
-
-                # Check terminal states
-                if info.status in (
-                    "succeeded",
-                    "failed",
-                    "cancelled",
-                    "timed_out",
-                ):
-                    yield f"event: done\ndata: {info.status}\n\n"
-                    return
-
-                # Heartbeat: a build can compile for minutes without emitting
-                # a line.  Without traffic an intermediary proxy drops the
-                # idle connection, and a client tailing it then blocks on a
-                # half-open socket.  SSE comment lines are inert to readers.
-                if time.monotonic() - last_send >= _SSE_KEEPALIVE_SECONDS:
-                    yield ": keepalive\n\n"
-                    last_send = time.monotonic()
-
-                await asyncio.sleep(2)
-
         return StreamingResponse(
-            _event_generator(),
+            _build_log_events(job_id, state.logs_dir()),
             media_type="text/event-stream",
         )
 

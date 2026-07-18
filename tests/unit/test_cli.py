@@ -6193,3 +6193,78 @@ class TestWaitForDagsBounds:
                 _wait_for_dags("http://srv", "tok", ["dag-1"], wait_timeout=60)
         # Timed out rather than falsely reporting "nothing to wait for".
         assert exc.value.code == _EXIT_WAIT_TIMEOUT
+
+
+class TestWaitForJobsBounds:
+    """_wait_for_jobs shares the same unbounded-poll shape as the DAG
+    waiters: a job that never reaches a terminal state pinned the runner
+    until the workflow timeout."""
+
+    def test_wait_timeout_raises_exit_2(self):
+        from cvcpkg.cli._builds import _EXIT_WAIT_TIMEOUT, _wait_for_jobs
+
+        def _get(url, headers=None, params=None):
+            resp = mock.MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = {
+                "id": 7,
+                "status": "running",  # never terminal
+                "recipe_name": "zlib",
+                "platform": "linux",
+            }
+            return resp
+
+        client = mock.MagicMock()
+        client.__enter__ = mock.MagicMock(return_value=client)
+        client.__exit__ = mock.MagicMock(return_value=False)
+        client.get.side_effect = _get
+
+        calls = {"n": 0}
+
+        def _sleep(_s):
+            calls["n"] += 1
+            if calls["n"] > 200:
+                raise AssertionError("wait loop did not terminate")
+
+        clock = iter([0.0, 10_000.0])
+
+        def _monotonic():
+            try:
+                return next(clock)
+            except StopIteration:
+                return 10_000.0
+
+        with (
+            mock.patch("httpx.Client", return_value=client),
+            mock.patch("cvcpkg.cli._builds.time.sleep", side_effect=_sleep),
+            mock.patch("cvcpkg.cli._builds.time.monotonic", _monotonic),
+        ):
+            with pytest.raises(SystemExit) as exc:
+                _wait_for_jobs("http://srv", "tok", [7], wait_timeout=60)
+        assert exc.value.code == _EXIT_WAIT_TIMEOUT
+
+    def test_no_timeout_preserves_existing_behaviour(self):
+        """Default (0) still waits for terminal states, as before."""
+        from cvcpkg.cli._builds import _wait_for_jobs
+
+        def _get(url, headers=None, params=None):
+            resp = mock.MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = {
+                "id": 7,
+                "status": "succeeded",
+                "recipe_name": "zlib",
+                "platform": "linux",
+            }
+            return resp
+
+        client = mock.MagicMock()
+        client.__enter__ = mock.MagicMock(return_value=client)
+        client.__exit__ = mock.MagicMock(return_value=False)
+        client.get.side_effect = _get
+
+        with (
+            mock.patch("httpx.Client", return_value=client),
+            mock.patch("cvcpkg.cli._builds.time.sleep"),
+        ):
+            _wait_for_jobs("http://srv", "tok", [7])

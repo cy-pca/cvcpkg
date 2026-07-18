@@ -576,8 +576,13 @@ def builds_follow_dag(dag_id: str, server: str, token: str, wait_timeout: int):
 # ── Build-wait helpers ──────────────────────────────────────────────
 
 
-def _wait_for_jobs(server: str, token: str, job_ids: list[int]) -> None:
-    """Poll until all job IDs reach a terminal state, printing updates."""
+def _wait_for_jobs(server: str, token: str, job_ids: list[int], *, wait_timeout: int = 0) -> None:
+    """Poll until all job IDs reach a terminal state, printing updates.
+
+    ``wait_timeout`` bounds the wait (0 = indefinitely); exceeding it exits
+    ``_EXIT_WAIT_TIMEOUT`` rather than polling forever on a job that never
+    reaches a terminal state.
+    """
 
     import httpx
 
@@ -585,11 +590,19 @@ def _wait_for_jobs(server: str, token: str, job_ids: list[int]) -> None:
     headers = {"Authorization": f"Bearer {token}"}
     terminal = _TERMINAL_STATUSES
     pending = set(job_ids)
+    deadline = time.monotonic() + wait_timeout if wait_timeout > 0 else None
 
     click.echo(f"\nWaiting for {len(pending)} job(s)...")
     with httpx.Client(timeout=30) as client:
         while pending:
             time.sleep(5)
+            if deadline is not None and time.monotonic() >= deadline:
+                click.echo(
+                    f"Timed out after {wait_timeout}s with "
+                    f"{len(pending)} job(s) still running: {sorted(pending)}",
+                    err=True,
+                )
+                raise SystemExit(_EXIT_WAIT_TIMEOUT)
             done_this_round = []
             for jid in list(pending):
                 resp = client.get(f"{base}/v1/builds/{jid}", headers=headers)
@@ -759,6 +772,14 @@ def _wait_for_dags(
 @click.option(
     "--wait", "-w", is_flag=True, help="Wait for the job to finish, printing status updates."
 )
+@click.option(
+    "--wait-timeout",
+    "wait_timeout",
+    type=int,
+    default=0,
+    metavar="SECONDS",
+    help="With --wait, give up after SECONDS and exit 2 (0 = wait indefinitely).",
+)
 def builds_submit(
     server: str,
     token: str,
@@ -771,6 +792,7 @@ def builds_submit(
     priority: int,
     timeout_seconds: int | None,
     wait: bool,
+    wait_timeout: int,
 ):
     """Submit a single remote build job.
 
@@ -805,7 +827,7 @@ def builds_submit(
         click.echo(f"  DAG:    {data['dag_id']}")
 
     if wait:
-        _wait_for_jobs(server, token, [data["id"]])
+        _wait_for_jobs(server, token, [data["id"]], wait_timeout=wait_timeout)
 
 
 @builds_group.command("submit-dag")
