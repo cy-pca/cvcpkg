@@ -469,6 +469,17 @@ function updateFilterOptions(facets) {
   _syncSelect('tag-filter', facets.tags || [], state.tag);
 }
 
+// Best-effort guess of the visitor's OS, to steer the copy-paste download
+// command toward an archive they can actually use.  Returns a cvcpkg platform
+// string ('linux'/'macos'/'windows') or '' when undetectable.
+function detectVisitorPlatform() {
+  const s = ((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
+  if (/Win/i.test(s)) return 'windows';
+  if (/Mac/i.test(s)) return 'macos';
+  if (/Linux|X11|Android/i.test(s)) return 'linux';
+  return '';
+}
+
 function groupBundlesByName(pkgs) {
   const groups = {};
   pkgs.forEach(p => {
@@ -941,8 +952,18 @@ function renderDeps(forward, reverse, meta, recipeNames) {
     transitiveDeps(pkgName, allDeps);
     allDeps.delete(pkgName);
 
-    // Pick best build for first platform available
-    const firstBuild = allBuilds[0];
+    // Pick the build for the copy-paste command.  allBuilds arrives
+    // newest-version-first from the server (/v1/packages/{name} orders by
+    // version_sort_key), so we do NOT re-rank versions here -- a second
+    // ordering impl in JS is exactly how the server/CLI orderings diverged.
+    // We only steer PLATFORM: a Linux visitor must not be handed a Windows
+    // archive.  The first build matching the visitor's OS is therefore already
+    // its newest version; fall back to the newest overall if none matches.
+    const wantPlat = detectVisitorPlatform();
+    const firstBuild =
+      allBuilds.find(b => b.platform === wantPlat && b.arch === 'x86_64') ||
+      allBuilds.find(b => b.platform === wantPlat) ||
+      allBuilds[0];
 
     const depNames = [...allDeps].sort();
     let lines = ['mkdir -p /opt/cvcpkg', ''];
@@ -953,7 +974,9 @@ function renderDeps(forward, reverse, meta, recipeNames) {
       });
       lines.push('');
     }
-    lines.push('# Download and extract ' + pkgName + ':');
+    lines.push('# Download and extract ' + pkgName +
+               ' (' + firstBuild.version + ', ' +
+               firstBuild.platform + '/' + firstBuild.arch + '):');
     const url = 'https://cvcpkg.org' + firstBuild.archive_url;
     const fname = firstBuild.archive_url.split('/').pop();
     lines.push('curl -LO ' + url);
