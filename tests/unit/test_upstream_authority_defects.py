@@ -161,6 +161,88 @@ class TestTombstoneNotDuplicated:
         assert counts[2]["tombstoned"] == 0
 
 
+class TestMirroredNukeStopsServingBytes:
+    """A nuke inherited from upstream must also stop downloads.
+
+    A local nuke deletes the archive, so absence alone produced the 410.  A
+    mirrored nuke deliberately keeps the bytes for the ordinary yank-retention
+    GC -- and the tombstone lookup was nested inside "if the file is missing",
+    so the mirror happily kept serving a bundle its upstream had nuked. Found
+    live: prod answered 410 for zzz-authprobe while dev, which had correctly
+    recorded the tombstone, answered 200 for the same archive.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _db(self, tmp_path, monkeypatch):
+        db_url = f"sqlite+aiosqlite:///{tmp_path / 'gone.db'}"
+        monkeypatch.setenv("CVCPKG_DATABASE_URL", db_url)
+        from cvcpkg.server.db import create_tables, dispose_engine, init_db
+
+        async def _init():
+            init_db(db_url)
+            await create_tables()
+
+        asyncio.run(_init())
+        yield
+        asyncio.run(dispose_engine())
+
+    ARCHIVE = "gone-1.0.0+cvc.1-linux-x86_64-release-shared.tar.zst"
+
+    def _seed(self, *, yanked_after_reconcile=True):
+        from cvcpkg.server.db_stores import DbPackageIndex
+
+        store = DbPackageIndex()
+
+        async def scenario():
+            await store.add_package(
+                name="gone",
+                version="1.0.0+cvc.1",
+                platform="linux",
+                arch="x86_64",
+                build_type="release",
+                link="shared",
+                sha256="0" * 64,
+                size_bytes=1,
+                archive_url=f"/v1/download/{self.ARCHIVE}",
+                origin_upstream=UPSTREAM,
+            )
+            if yanked_after_reconcile:
+                await store.reconcile_from_upstream(
+                    UPSTREAM,
+                    upstream_yanked=set(),
+                    upstream_present=set(),
+                    upstream_tombstoned={_key("gone")},
+                )
+            return (
+                await store.get_tombstone_by_filename(self.ARCHIVE),
+                await store.get_archive_is_yanked(self.ARCHIVE),
+            )
+
+        return asyncio.run(scenario())
+
+    def test_upstream_nuke_leaves_a_tombstone_and_a_yanked_row(self):
+        ts, yanked = self._seed()
+
+        assert ts is not None, "the mirrored nuke must be recorded"
+        assert ts["reason"] == "upstream"
+        # The row survives on purpose -- retention GC owns the bytes -- which is
+        # exactly why absence cannot be the 410 trigger.
+        assert yanked is True
+
+    def test_a_live_republished_variant_is_not_reported_as_yanked(self):
+        # No reconcile: the row is present and un-yanked. A stale tombstone for
+        # an older incarnation must not make the new one unreachable.
+        _ts, yanked = self._seed(yanked_after_reconcile=False)
+
+        assert yanked is False
+
+    def test_unknown_archive_reports_none(self):
+        from cvcpkg.server.db_stores import DbPackageIndex
+
+        store = DbPackageIndex()
+        assert asyncio.run(store.get_archive_is_yanked("no-such-archive.tar.zst")) is None
+
+
 class TestOriginUpstreamBackfill:
     """Migration 022: reconciliation must reach rows imported before the column."""
 

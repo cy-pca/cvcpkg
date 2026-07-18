@@ -816,6 +816,25 @@ class DbPackageIndex:
                 )
             ).scalar()
 
+    async def get_archive_is_yanked(self, archive_name: str) -> bool | None:
+        """Yank state of the package owning *archive_name*, None if no row.
+
+        Distinguishes a bundle retired on upstream's orders (row still present
+        but yanked, bytes awaiting retention GC) from one whose variant has
+        since been published again -- the latter must keep downloading even
+        though a tombstone for the older incarnation still exists.
+        """
+        esc = archive_name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(PackageRow.yanked)
+                    .where(PackageRow.archive_url.like(f"%/{esc}", escape="\\"))
+                    .limit(1)
+                )
+            ).scalar()
+        return None if row is None else bool(row)
+
     async def get_bundles(
         self,
         *,
