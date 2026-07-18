@@ -442,9 +442,32 @@ jobs:
               git fetch origin &&
               git checkout -f $SHA &&
               cd . &&
-              pip install --break-system-packages --quiet . 2>/dev/null;
-              pip install --quiet . 2>/dev/null;
-              echo \"\$(hostname): \$(cvcpkg --version)\"
+              # Bare 'pip' does not exist on these hosts -- NetBSD/pkgsrc ships
+              # only pip3.13, OpenBSD only pip3.12 -- so both of the old
+              # 'pip install ... 2>/dev/null' lines failed as command-not-found
+              # with the error discarded, and the trailing echo still made the
+              # SSH exit 0. Every deploy reported success while installing
+              # nothing: netbsd-build sat on Jul-14 code, missing the slot-id
+              # fix entirely, for as long as that was true.
+              PY=\"\"
+              for c in python3.13 python3.12 python3; do
+                command -v \$c >/dev/null 2>&1 && { PY=\$c; break; }
+              done
+              if [ -z \"\$PY\" ]; then
+                echo \"::warning::\$(hostname): no python3 interpreter found\"
+                exit 1
+              fi
+              # OpenBSD needs --break-system-packages (PEP 668); NetBSD does not
+              # mind it being absent. Try with, fall back to without, and fail
+              # the host if neither works -- do NOT swallow the error.
+              if ! \$PY -m pip install --break-system-packages --quiet . >/tmp/cvcpkg-pip.log 2>&1; then
+                if ! \$PY -m pip install --quiet . >>/tmp/cvcpkg-pip.log 2>&1; then
+                  echo \"::warning::\$(hostname): pip install FAILED\"
+                  tail -15 /tmp/cvcpkg-pip.log
+                  exit 1
+                fi
+              fi
+              echo \"\$(hostname): \$(cvcpkg --version) [installed with \$PY]\"
             "; then
               ok=$((ok + 1))
             else
@@ -518,12 +541,27 @@ jobs:
               # that PID is alive. A bare 'pgrep -f' here reports success by
               # matching this very shell, so it can never fail -- it would have
               # called four dead builders 'restarted'.
+              # Two independent signals, either sufficient. The pidfile is the
+              # stronger one, but not every host writes it -- freebsd-build runs
+              # a perfectly healthy daemon and heartbeats fine with no pidfile in
+              # its work dir, so requiring it reported a false failure on the one
+              # builder that had never been broken. The pgrep is trustworthy here
+              # only because the pattern is bracket-escaped and therefore cannot
+              # match this shell; a bare pattern would make this check incapable
+              # of failing, which is the bug this whole step is recovering from.
               PIDFILE=\"\${WORKDIR:-/tmp/cvcpkg-builder}/cvcpkg-builder.pid\"
               DPID=\$(cat \"\$PIDFILE\" 2>/dev/null || true)
+              LIVE=\"\"
               if [ -n \"\$DPID\" ] && kill -0 \"\$DPID\" 2>/dev/null; then
-                echo \"\$(hostname): builder restarted (pid \$DPID)\"
+                LIVE=\"pid \$DPID (pidfile)\"
               else
-                echo \"::warning::\$(hostname): builder failed to start (no live pid in \$PIDFILE)\"
+                PPID_FOUND=\$(pgrep -f '[c]vcpkg builder run' 2>/dev/null | head -1)
+                [ -n \"\$PPID_FOUND\" ] && LIVE=\"pid \$PPID_FOUND (process, no pidfile)\"
+              fi
+              if [ -n \"\$LIVE\" ]; then
+                echo \"\$(hostname): builder restarted -- \$LIVE\"
+              else
+                echo \"::warning::\$(hostname): builder failed to start (no live pid in \$PIDFILE, no matching process)\"
                 exit 1
               fi
             "; then
