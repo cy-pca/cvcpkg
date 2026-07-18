@@ -518,12 +518,27 @@ jobs:
               # that PID is alive. A bare 'pgrep -f' here reports success by
               # matching this very shell, so it can never fail -- it would have
               # called four dead builders 'restarted'.
+              # Two independent signals, either sufficient. The pidfile is the
+              # stronger one, but not every host writes it -- freebsd-build runs
+              # a perfectly healthy daemon and heartbeats fine with no pidfile in
+              # its work dir, so requiring it reported a false failure on the one
+              # builder that had never been broken. The pgrep is trustworthy here
+              # only because the pattern is bracket-escaped and therefore cannot
+              # match this shell; a bare pattern would make this check incapable
+              # of failing, which is the bug this whole step is recovering from.
               PIDFILE=\"\${WORKDIR:-/tmp/cvcpkg-builder}/cvcpkg-builder.pid\"
               DPID=\$(cat \"\$PIDFILE\" 2>/dev/null || true)
+              LIVE=\"\"
               if [ -n \"\$DPID\" ] && kill -0 \"\$DPID\" 2>/dev/null; then
-                echo \"\$(hostname): builder restarted (pid \$DPID)\"
+                LIVE=\"pid \$DPID (pidfile)\"
               else
-                echo \"::warning::\$(hostname): builder failed to start (no live pid in \$PIDFILE)\"
+                PPID_FOUND=\$(pgrep -f '[c]vcpkg builder run' 2>/dev/null | head -1)
+                [ -n \"\$PPID_FOUND\" ] && LIVE=\"pid \$PPID_FOUND (process, no pidfile)\"
+              fi
+              if [ -n \"\$LIVE\" ]; then
+                echo \"\$(hostname): builder restarted -- \$LIVE\"
+              else
+                echo \"::warning::\$(hostname): builder failed to start (no live pid in \$PIDFILE, no matching process)\"
                 exit 1
               fi
             "; then
