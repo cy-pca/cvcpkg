@@ -119,6 +119,19 @@ class PackageRow(Base):
         server_default="[]",
     )
 
+    # Base URL of the upstream this bundle was imported from, or "" when it was
+    # published here.  Populate reconciliation follows upstream's yank/nuke
+    # decisions, and it must only ever act on rows it imported: an edge hosts
+    # its own packages alongside mirrored ones, and "absent upstream" is not
+    # evidence that a locally published package should disappear.
+    origin_upstream: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="",
+        server_default="",
+        index=True,
+    )
+
     __table_args__ = (
         Index(
             "ix_packages_unique_variant",
