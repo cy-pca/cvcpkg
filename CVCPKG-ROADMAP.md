@@ -791,6 +791,32 @@ Python, no compiler, no package manager.
 - [ ] Dogfoods the Phase 7 machinery end-to-end (interpreter recipe +
       wheel matrix + entry-point shims) and becomes the recommended
       install path for build machines.
+- [ ] **A `cvcpkg-sc` recipe — a fully self-contained cvcpkg (for
+      completeness).**  Where the generic `cvcpkg` recipe above installs
+      the hermetic Python setup as an *activatable prefix* (a directory
+      tree: interpreter + wheels + `bin/cvcpkg` shim), `cvcpkg-sc` packages
+      that same full, hermetic cvcpkg — the complete tool including server
+      and builder, not a trimmed cut — into a **single self-contained
+      deliverable**.  It builds on the generic recipe (`depends: [cvcpkg]`)
+      and then seals the resulting prefix with the Phase 19 **`cvcpkg
+      bake`** machinery, so the output is one self-mounting binary that
+      launches into `cvcpkg` with its hermetic prefix mounted.
+
+  The three self-hosting artifacts are deliberately distinct:
+
+  | recipe | output | feature set | mechanism |
+  |---|---|---|---|
+  | `cvcpkg` | activatable prefix (directory tree) | full | hermetic Python prefix (Phase 7) |
+  | **`cvcpkg-sc`** | **single self-contained binary** | **full (server + builder + all)** | **Phase 19 `cvcpkg bake` of the hermetic prefix** |
+  | `cvpkg` | single Actually Portable Executable | trimmed (install / verify / activate / doctor; no server, no builder) | `cosmocc` + CPython APE (below) |
+
+  `cvcpkg-sc` and `cvpkg` are *not* the same artifact: `cvpkg` is a
+  cosmo APE carrying a trimmed feature set, whereas `cvcpkg-sc` is the
+  **whole** cvcpkg baked from its native hermetic prefix (CPython
+  interpreter + wheels), so it keeps the full CLI/server/builder surface
+  at the cost of being platform-native rather than one-file-everywhere.
+  Ships the same self-mounting-binary UX per platform as any other bake
+  (Linux squashfuse/overlay, macOS dmg+shadow, Windows ISO+scratch).
 
 **Dependency survey (2026-07-16).** Auditing cvcpkg's own non-optional
 runtime closure against PyPI turned up two constraints that shape this work:
@@ -1727,7 +1753,7 @@ actions, not something CI does on its own.
 |---|---|---|
 | **Emulation / Virtualization** | qemu, dtc (device-tree compiler), libslirp, capstone | qemu itself as a package, plus emulated builders (Phase 9). Most of qemu's dependency stack already exists as recipes: glib, pixman, zlib, curl, libffi, meson/ninja. |
 | **Python wheels (Phase 7)** | numpy, scipy, h5py, mpi4py, … × {cp311, cp312, cp313, cp313t} | per-interpreter wheel matrix; the cp313t column ships provably no-GIL-safe packages. |
-| **Bootstrap (Phase 8)** | cvcpkg (self-install), cvpkg (APE) | cvcpkg installable by cvcpkg; single-binary zero-dependency bootstrap. |
+| **Bootstrap (Phase 8)** | cvcpkg (self-install prefix), cvcpkg-sc (full cvcpkg baked to one self-contained binary), cvpkg (trimmed cosmo APE) | cvcpkg installable by cvcpkg; single-binary zero-dependency bootstrap. Three distinct artifacts — hermetic prefix, full self-contained binary, trimmed portable APE. |
 | **C/C++ tooling** | cpkg ([getcpkg.net](https://getcpkg.net/)) | ship the Lua+Ninja project tool as a recipe, plus a cvcpkg Lua resolver helper so `cpkg.lua` scripts pull prebuilt cvcpkg binaries (see Phase 4 Interoperability). |
 | **Compilers (Phase 11)** | clang (→ existing `llvm`), clang20 (→ legacy `llvm20`); feasibility: gcc, gfortran, Intel oneAPI icx/ifx, rust toolchain + cargo package support | package the compiler front ends on the LLVM recipes already in the tree; survey the rest against the redistributable-vs-provisioning boundary (VS2022/MSVC stays provisioning-only). |
 | **Assemblers (Phase 11)** | cross-binutils GNU `as` (aarch64, riscv64, …), vasm | assemblers for common CPUs beyond x86 (`nasm` already covers x86). |
