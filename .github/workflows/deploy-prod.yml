@@ -384,8 +384,21 @@ jobs:
           for host in ${{ vars.BSD_BUILDER_SSH_HOSTS }}; do
             echo "--- $host ---"
             $SSH "$host" "
-              # Remove leaked work dirs from failed builds
-              find /tmp -maxdepth 1 -name 'cvcpkg-*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null
+              # Remove leaked work dirs from failed builds.
+              #
+              # -not -name cvcpkg-builder is load-bearing: that is the daemon's
+              # own --work-dir, it matches 'cvcpkg-*', and it is always older
+              # than 60 minutes. Deleting it left the builder unable to write
+              # its pidfile, so the restart below killed a working daemon and
+              # could not bring it back. Four builders went down that way the
+              # first time these steps reached a host they could actually
+              # log into.
+              find /tmp -maxdepth 1 -name 'cvcpkg-*' -not -name 'cvcpkg-builder' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null
+              # Stale job dirs *inside* the work dir are still fair game.
+              # -mindepth 1 matters: find tests its own starting point, and
+              # 'cvcpkg-builder' matches 'cvcpkg-*', so without it this line
+              # deletes the very directory the line above was written to spare.
+              find /tmp/cvcpkg-builder -mindepth 1 -maxdepth 1 -name 'cvcpkg-*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null
               # Clean pip cache
               pip cache purge 2>/dev/null || true
               # Reclaim cvcpkg client cache if it landed on the root fs
@@ -455,17 +468,23 @@ jobs:
           for host in ${{ vars.BSD_BUILDER_SSH_HOSTS }}; do
             echo "--- $host ---"
             if $SSH "$host" "
-              pkill -f 'cvcpkg builder run' 2>/dev/null || true
-              sleep 2
               CMD=\$(crontab -l 2>/dev/null | grep '@reboot.*cvcpkg builder run' | sed 's/@reboot //')
-              if [ -n \"\$CMD\" ]; then
-                eval \"\$CMD\"
-                sleep 2
-                pgrep -f 'cvcpkg builder run' >/dev/null 2>&1 && echo \"\$(hostname): builder restarted\" || { echo \"::warning::\$(hostname): builder failed to start\"; exit 1; }
-              else
+              if [ -z \"\$CMD\" ]; then
                 echo \"::warning::\$(hostname): no @reboot cvcpkg entry found\"
                 exit 1
               fi
+              # Recreate the work dir before killing anything. It is passed as
+              # --work-dir and the daemon needs it to write its pidfile; if it
+              # is missing the relaunch fails and we have merely destroyed a
+              # working builder.
+              WORKDIR=\$(echo \"\$CMD\" | sed -n 's/.*--work-dir \\([^ ]*\\).*/\\1/p')
+              [ -n \"\$WORKDIR\" ] && mkdir -p \"\$WORKDIR\"
+              pkill -f 'cvcpkg builder run' 2>/dev/null || true
+              sleep 2
+              # Keep stderr: when this fails, the reason is the whole point.
+              eval \"\$CMD\" || echo \"\$(hostname): launch command exited non-zero\"
+              sleep 3
+              pgrep -f 'cvcpkg builder run' >/dev/null 2>&1 && echo \"\$(hostname): builder restarted\" || { echo \"::warning::\$(hostname): builder failed to start\"; exit 1; }
             "; then
               ok=$((ok + 1))
             else
@@ -475,8 +494,13 @@ jobs:
           done
 
           echo "BSD restart: $ok restarted, $failed failed"
-          if [ "$ok" -eq 0 ]; then
-            echo "::error::No BSD builder could be restarted ($failed unreachable). Any code update above is NOT live."
+          # Any failure here is a builder we just killed and did not bring back,
+          # which is strictly worse than the stale-but-running state we found it
+          # in -- so unlike the update step, this one does not tolerate a partial
+          # result. Reporting 2-of-6 as success is how four builders stayed down
+          # behind a green check.
+          if [ "$failed" -gt 0 ]; then
+            echo "::error::$failed BSD builder(s) were stopped and did not come back up. They are DOWN, not merely stale."
             exit 1
           fi
 
