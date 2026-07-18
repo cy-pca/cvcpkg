@@ -79,7 +79,14 @@ class TestYankRetentionStore:
 
         asyncio.run(_init())
         self._tmp = tmp_path
-        self.storage_uri = str(tmp_path / "storage")
+        # A file:// URI, not a bare path: archive_store.scheme_of() runs
+        # urlparse on this, and a bare Windows path ("C:\\...\\storage") is read
+        # with "c" as the scheme, so is_local() is False and the local dir is
+        # treated as a remote backend.  Production always passes a file:// URI
+        # (state.storage_uri); .as_uri() matches that portably.  _storage_root
+        # is the real Path for staging archive files by hand.
+        self._storage_root = tmp_path / "storage"
+        self.storage_uri = self._storage_root.as_uri()
         yield
 
         from cvcpkg.server.db import dispose_engine
@@ -118,7 +125,7 @@ class TestYankRetentionStore:
             fname = archive_url.rsplit("/", 1)[-1]
 
         if write_archive:
-            root = pathlib.Path(self.storage_uri) / "archives"
+            root = self._storage_root / "archives"
             root.mkdir(parents=True, exist_ok=True)
             (root / fname).write_bytes(content)
 
