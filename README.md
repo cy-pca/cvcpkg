@@ -1,4 +1,8 @@
+<img src="src/cvcpkg/server/assets/cyberpc-angel-gears.png" alt="CyberPC Angel, LLC" width="72" align="left" />
+
 # cvcpkg
+
+A [CyberPC Angel, LLC](https://cyberpcangel.com) project.
 
 Component package manager for **libcvc-deps** prebuilt dependency bundles.
 

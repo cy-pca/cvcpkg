@@ -27,6 +27,7 @@ classifiers = [
 packages = [{ include = "cvcpkg", from = "src" }]
 include = [
     { path = "src/cvcpkg/recipes", format = ["sdist", "wheel"] },
+    { path = "src/cvcpkg/server/assets", format = ["sdist", "wheel"] },
     { path = "cvcpkg_build_backend.py", format = "sdist" },
 ]
 

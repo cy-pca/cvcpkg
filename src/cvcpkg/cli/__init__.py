@@ -68,6 +68,12 @@ def cli(ctx: click.Context) -> None:
     """
     _restore_default_sigpipe()
     if ctx.invoked_subcommand is None:
+        from cvcpkg.branding import splash
+
+        banner = splash()
+        if banner:
+            click.echo(banner)
+            click.echo()
         click.echo(ctx.get_help())
 
 
