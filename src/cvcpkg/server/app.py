@@ -3164,6 +3164,17 @@ def create_app(
         """HEAD support so clients can check size before downloading."""
         state = _get_state()
         safe_name = Path(filename).name
+        # Mirror GET's verdict: a client that probes with HEAD before fetching
+        # must not be told 200 for something GET will refuse with 410.
+        if _use_db and _db_packages is not None:
+            ts = await _db_packages.get_tombstone_by_filename(safe_name)
+            if ts is not None and await _db_packages.get_archive_is_yanked(safe_name) is not False:
+                when = str(ts.get("nuked_at", ""))[:10]
+                raise HTTPException(
+                    410,
+                    f"{ts['name']}=={ts['version']} was nuked "
+                    f"({ts['reason']}) on {when}; the archive is gone.",
+                )
         if not archive_store.exists(state.storage_uri, safe_name):
             raise HTTPException(404, f"archive not found: {safe_name}")
         if not await _archive_is_visible(caller, safe_name):
@@ -3186,19 +3197,30 @@ def create_app(
         # Resolve the archive through the configured storage backend: a local
         # file for file:// (served straight from disk), or a streamed object
         # for a remote backend (s3://…) after a storage migration.
-        if not archive_store.exists(state.storage_uri, safe_name):
-            # A nuked/purged archive gets 410 Gone (with why + when), not a bare
-            # 404 -- a consumer that pinned it should learn it was retired, not
-            # that it never existed.
-            if _use_db and _db_packages is not None:
-                ts = await _db_packages.get_tombstone_by_filename(safe_name)
-                if ts is not None:
+        # A nuked/purged archive gets 410 Gone (with why + when), not a bare
+        # 404 -- a consumer that pinned it should learn it was retired, not
+        # that it never existed.
+        #
+        # This is checked even when the bytes are still on disk.  A local nuke
+        # deletes them outright, but a nuke inherited from upstream deliberately
+        # leaves them to the ordinary yank-retention GC -- so gating the lookup
+        # on absence let a mirror keep serving a bundle its upstream had nuked,
+        # which is precisely what upstream authority is supposed to prevent.
+        if _use_db and _db_packages is not None:
+            ts = await _db_packages.get_tombstone_by_filename(safe_name)
+            if ts is not None:
+                # Unless the variant has since been published again: a live,
+                # un-yanked row means this is a new incarnation and the old
+                # tombstone no longer describes what is being served.
+                yanked = await _db_packages.get_archive_is_yanked(safe_name)
+                if yanked is not False:
                     when = str(ts.get("nuked_at", ""))[:10]
                     raise HTTPException(
                         410,
                         f"{ts['name']}=={ts['version']} was nuked "
                         f"({ts['reason']}) on {when}; the archive is gone.",
                     )
+        if not archive_store.exists(state.storage_uri, safe_name):
             raise HTTPException(404, f"archive not found: {safe_name}")
         archive_size = archive_store.size(state.storage_uri, safe_name)
 
