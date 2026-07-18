@@ -527,16 +527,29 @@ jobs:
               # working builder.
               WORKDIR=\$(echo \"\$CMD\" | sed -n 's/.*--work-dir \\([^ ]*\\).*/\\1/p')
               [ -n \"\$WORKDIR\" ] && mkdir -p \"\$WORKDIR\"
+              # SIGKILL, not SIGTERM. The daemon traps TERM and waits up to 300s
+              # for in-flight jobs before exiting, so a TERM leaves it holding
+              # the pidfile; the relaunch then refuses to start and the host is
+              # left with no builder. That is documented in vm-provisioning's
+              # docs/CVCPKG-BUILDERS.md ('Recovering a wedged builder') and it
+              # is what took three builders down after they had just been fixed.
               # Belt and braces: never signal our own process tree, even if a
               # future edit reintroduces an unescaped pattern.
               SELF=\$\$
               for p in \$(pgrep -f '[c]vcpkg builder run' 2>/dev/null); do
-                [ \"\$p\" = \"\$SELF\" ] || kill \"\$p\" 2>/dev/null || true
+                [ \"\$p\" = \"\$SELF\" ] || kill -KILL \"\$p\" 2>/dev/null || true
               done
               sleep 2
+              # A pidfile left by the killed daemon would block the relaunch.
+              [ -n \"\$WORKDIR\" ] && rm -f \"\$WORKDIR/cvcpkg-builder.pid\"
               # Keep stderr: when this fails, the reason is the whole point.
               eval \"\$CMD\" || echo \"\$(hostname): launch command exited non-zero\"
-              sleep 3
+              # Daemonising took >3s on the openbsd guests, so a 3s wait called
+              # healthy builders dead. Poll instead of guessing a constant.
+              for _ in 1 2 3 4 5 6 7 8 9 10; do
+                sleep 2
+                pgrep -f '[c]vcpkg builder run' >/dev/null 2>&1 && break
+              done
               # Verify against the pidfile the daemon actually wrote, and check
               # that PID is alive. A bare 'pgrep -f' here reports success by
               # matching this very shell, so it can never fail -- it would have
