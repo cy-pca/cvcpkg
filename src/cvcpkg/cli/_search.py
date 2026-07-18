@@ -31,7 +31,13 @@ from cvcpkg.cli._helpers import _human_size
 @click.option("--release", default="", help="Filter by release tag ('live' for unreleased).")
 @click.option("--org", default="", help="Filter by organization slug.")
 @click.option("--tag", default="", help="Filter by a single tag name.")
-@click.option("--include-yanked", is_flag=True, help="Include yanked packages.")
+@click.option("--include-yanked", is_flag=True, help="Include yanked packages in the results.")
+@click.option(
+    "--yanked-only",
+    is_flag=True,
+    help="Show ONLY yanked packages (implies --include-yanked). "
+    "Useful for finding a bundle to unyank.",
+)
 @click.option("--limit", type=int, default=50, show_default=True, help="Page size (max 200).")
 @click.option("--offset", type=int, default=0, show_default=True, help="Result offset.")
 @click.option(
@@ -52,6 +58,7 @@ def search(
     org: str,
     tag: str,
     include_yanked: bool,
+    yanked_only: bool,
     limit: int,
     offset: int,
     as_json: bool,
@@ -93,7 +100,9 @@ def search(
         params["org"] = org
     if tag:
         params["tag"] = tag
-    if include_yanked:
+    # --yanked-only is a client-side filter over the results, so it needs the
+    # yanked rows in the response.
+    if include_yanked or yanked_only:
         params["include_yanked"] = True
 
     headers = {"Authorization": f"Bearer {token}"} if token else {}
@@ -116,23 +125,37 @@ def search(
     total = int(data.get("total") or 0)
     pkg_count = int(data.get("package_count") or 0)
     packages = data.get("packages") or []
+    if yanked_only:
+        packages = [p for p in packages if p.get("yanked")]
     if not packages:
-        click.echo("No matching packages.")
+        click.echo("No yanked packages." if yanked_only else "No matching packages.")
         return
 
-    click.echo(
-        f"{pkg_count} package(s), {total} build(s) match "
-        f"(showing {len(packages)} starting at offset {offset}):"
-    )
+    # Whether to show the State column at all: only meaningful once yanked rows
+    # can appear.  Without it, --include-yanked printed yanked and active bundles
+    # as identical rows -- the whole reason a user could not tell which to unyank.
+    show_state = include_yanked or yanked_only or any(p.get("yanked") for p in packages)
+
+    if yanked_only:
+        click.echo(f"{len(packages)} yanked build(s):")
+    else:
+        click.echo(
+            f"{pkg_count} package(s), {total} build(s) match "
+            f"(showing {len(packages)} starting at offset {offset}):"
+        )
     click.echo()
-    click.echo(
+    header = (
         f"{'Name':<24} {'Version':<20} {'Platform':<10} {'Arch':<8} "
         f"{'Link':<7} {'Build':<8} {'Size':>10}"
     )
-    click.echo("-" * 90)
+    if show_state:
+        header += f"  {'State':<8}"
+    click.echo(header)
+    click.echo("-" * (90 + (10 if show_state else 0)))
+    any_yanked = False
     for p in packages:
         size = _human_size(int(p.get("size_bytes") or 0))
-        click.echo(
+        row = (
             f"{(p.get('name') or ''):<24} "
             f"{(p.get('version') or ''):<20} "
             f"{(p.get('platform') or ''):<10} "
@@ -141,8 +164,30 @@ def search(
             f"{(p.get('build_type') or ''):<8} "
             f"{size:>10}"
         )
+        if show_state:
+            yanked = bool(p.get("yanked"))
+            any_yanked = any_yanked or yanked
+            state = "yanked" if yanked else "active"
+            yat = p.get("yanked_at")
+            if yanked and yat:
+                state = f"yanked {str(yat)[:10]}"  # date only
+            row += f"  {state}"
+        click.echo(row)
+
+    if any_yanked and not as_json:
+        # The stated purpose of revealing yanked bundles: give the operator the
+        # command to restore one.  Emit a concrete example off the first yanked
+        # row so it can be copy-pasted and narrowed.
+        y = next(p for p in packages if p.get("yanked"))
+        click.echo()
+        click.echo("To restore a yanked bundle (admin token required):")
+        click.echo(
+            f"  cvcpkg unyank {y.get('name')} {y.get('version')} "
+            f"--platform {y.get('platform')} --arch {y.get('arch')} "
+            f"--config {y.get('build_type')} --link {y.get('link')}"
+        )
 
     remaining = total - (offset + len(packages))
-    if remaining > 0:
+    if remaining > 0 and not yanked_only:
         click.echo()
         click.echo(f"{remaining} more result(s) available — rerun with --offset {offset + limit}")

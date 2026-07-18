@@ -945,6 +945,16 @@ _LOG_RETENTION_DAYS = int(os.environ.get("CVCPKG_LOG_RETENTION_DAYS", "0"))
 # How often the log retention GC runs (seconds, default 1 hour)
 _LOG_GC_INTERVAL = int(os.environ.get("CVCPKG_LOG_GC_INTERVAL", "3600"))
 
+# Yank retention: a yanked package's row AND archive are permanently purged once
+# it has been yanked this many days.  0 disables (rows with yanked_at IS NULL
+# are exempt regardless).  Default 0 -- this is the first GC that destroys
+# ARTIFACTS rather than logs, and cvcpkg's other retention GCs also ship
+# disabled; 365 is the documented, recommended value, to be made the default in
+# a later release once the audit trail has been observed on a real deployment.
+_YANK_RETENTION_DAYS = int(os.environ.get("CVCPKG_YANK_RETENTION_DAYS", "0"))
+# How often the yank retention GC runs (seconds, default 6 hours)
+_YANK_GC_INTERVAL = int(os.environ.get("CVCPKG_YANK_GC_INTERVAL", "21600"))
+
 
 def _choose_builder(job, available):
     """Pick a builder for *job*, or ``None``.
@@ -1141,6 +1151,52 @@ async def _log_retention_gc_loop() -> None:
                 logger.info("log retention GC: purged %d old logs", purged)
         except Exception:
             logger.exception("log retention GC error")
+
+
+async def _yank_retention_gc_loop() -> None:
+    """Permanently purge packages yanked longer than the retention window.
+
+    Unlike the log GC this destroys ARTIFACTS: the DB row and the archive
+    bytes.  It is registered only when _YANK_RETENTION_DAYS > 0 and only off the
+    non-mirror scheduler block -- a mirror must never purge, since it may hold
+    the only surviving copy of a bundle an upstream retired (see the registration
+    guard).  Sleep-first so a restart storm cannot trigger a purge, and each
+    batch is written through _audit_txn so a deletion can never land unlogged.
+    """
+    import asyncio
+
+    while True:
+        await asyncio.sleep(_YANK_GC_INTERVAL)
+        if _YANK_RETENTION_DAYS <= 0:
+            continue
+        if not _use_db or _db_packages is None or _state is None:
+            continue
+        try:
+            target = f"older_than={_YANK_RETENTION_DAYS}d"
+            async with _audit_txn(AuditAction.nuke, "retention-gc", target) as ac:
+                purged = await _db_packages.purge_yanked(
+                    older_than_days=_YANK_RETENTION_DAYS,
+                    storage_uri=_state.storage_uri,
+                )
+                # Decrement each affected org's storage counter exactly once
+                # (yank never decremented, so purge is the sole adjustment) --
+                # same shape as the bulk-delete handler.
+                org_deltas: dict[str, int] = {}
+                for d in purged:
+                    slug = d.get("org_slug", "")
+                    if slug and _db_orgs is not None:
+                        org_deltas[slug] = org_deltas.get(slug, 0) + d["size_bytes"]
+                for slug, delta in org_deltas.items():
+                    await _db_orgs.update_storage_used(slug, -delta)
+                ac.detail = f"purged={len(purged)} {target}"
+            if purged:
+                logger.info(
+                    "yank retention GC: purged %d bundle(s) yanked over %d days ago",
+                    len(purged),
+                    _YANK_RETENTION_DAYS,
+                )
+        except Exception:
+            logger.exception("yank retention GC error")
 
 
 # ── Mirror background tasks ─────────────────────────────────────
@@ -1689,6 +1745,11 @@ def create_app(
                 bg_tasks.append(asyncio.create_task(_build_scheduler_loop()))
                 if _LOG_RETENTION_DAYS > 0:
                     bg_tasks.append(asyncio.create_task(_log_retention_gc_loop()))
+                # Non-mirror only (the enclosing guard): a mirror may hold the
+                # last copy of a bundle its upstream retired, so it must never
+                # auto-purge.
+                if _YANK_RETENTION_DAYS > 0:
+                    bg_tasks.append(asyncio.create_task(_yank_retention_gc_loop()))
                 if POPULATE_UPSTREAM:
                     bg_tasks.append(asyncio.create_task(_populate_sync_loop()))
             if MIRROR_MODE and MIRROR_UPSTREAM:
@@ -2892,6 +2953,18 @@ def create_app(
         # file for file:// (served straight from disk), or a streamed object
         # for a remote backend (s3://…) after a storage migration.
         if not archive_store.exists(state.storage_uri, safe_name):
+            # A nuked/purged archive gets 410 Gone (with why + when), not a bare
+            # 404 -- a consumer that pinned it should learn it was retired, not
+            # that it never existed.
+            if _use_db and _db_packages is not None:
+                ts = await _db_packages.get_tombstone_by_filename(safe_name)
+                if ts is not None:
+                    when = str(ts.get("nuked_at", ""))[:10]
+                    raise HTTPException(
+                        410,
+                        f"{ts['name']}=={ts['version']} was nuked "
+                        f"({ts['reason']}) on {when}; the archive is gone.",
+                    )
             raise HTTPException(404, f"archive not found: {safe_name}")
         archive_size = archive_store.size(state.storage_uri, safe_name)
 
@@ -3046,7 +3119,8 @@ def create_app(
                 raise HTTPException(
                     409,
                     f"{name}=={version} ({platform}/{arch}/{build_type}/{link}) already published. "
-                    "Yank the existing version first, or use a new revision.",
+                    "Publish a new revision, or ask an admin to nuke the existing bundle "
+                    "first.",
                 )
         else:
             for b in state.index.get("bundles", []):
@@ -3062,7 +3136,8 @@ def create_app(
                         409,
                         f"{name}=={version} ({platform}/{arch}/{build_type}"
                         f"/{link}) already published. "
-                        "Yank the existing version first, or use a new revision.",
+                        "Publish a new revision, or ask an admin to nuke the "
+                        "existing bundle first.",
                     )
 
         # Read and hash the upload — stream to disk to avoid holding
@@ -3761,6 +3836,116 @@ def create_app(
                     n += 1
                 state.save_index()
         return {"message": f"unyanked {target}", "count": n}
+
+    @app.post("/v1/packages/{name}/{version}/nuke", tags=["publish"])
+    async def nuke(
+        name: str,
+        version: str,
+        platform: str | None = Query(None, description="Only nuke bundles for this platform"),
+        arch: str | None = Query(None, description="Only nuke bundles for this arch"),
+        link: str | None = Query(None, description="Only nuke bundles with this link mode"),
+        build_type: str | None = Query(None, description="Only nuke bundles for this build type"),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Irreversibly delete a yanked bundle's row AND archive bytes.
+
+        A new endpoint rather than a reshaping of DELETE, whose scope contract
+        (platform/link only) is already shipped and may have external callers.
+        This carries the safe semantics explicitly: full four-way scope, and it
+        refuses a bundle that is not yanked so nuke only accelerates retention.
+        Admin only, matching unyank and DELETE.
+        """
+        if not _use_db or _db_packages is None:
+            raise HTTPException(501, "nuke requires the database backend")
+
+        scope_parts = [
+            f"{k}={v}"
+            for k, v in (
+                ("platform", platform),
+                ("arch", arch),
+                ("link", link),
+                ("build_type", build_type),
+            )
+            if v is not None
+        ]
+        target = f"{name}=={version}"
+        if scope_parts:
+            target = f"{target} [{','.join(scope_parts)}]"
+
+        async with _audit_txn(AuditAction.nuke, actor.name, target) as ac:
+            try:
+                result = await _db_packages.nuke_bundles(
+                    name,
+                    version,
+                    platform=platform,
+                    arch=arch,
+                    link=link,
+                    build_type=build_type,
+                    require_yanked=True,
+                    storage_uri=_get_state().storage_uri,
+                    nuked_by=actor.name,
+                    reason="manual",
+                )
+            except ValueError as exc:
+                # Not yanked -> 409, the same class as the publish-conflict 409.
+                raise HTTPException(409, str(exc)) from exc
+
+            if result["count"] == 0:
+                raise HTTPException(404, f"{target} not found")
+
+            # Yank never decremented the org counter, so purge is the sole
+            # adjustment; decrement once per nuked bundle.
+            org_deltas: dict[str, int] = {}
+            for d in result["nuked"]:
+                slug = d.get("org_slug", "")
+                if slug and _db_orgs is not None:
+                    org_deltas[slug] = org_deltas.get(slug, 0) + d["size_bytes"]
+            for slug, delta in org_deltas.items():
+                await _db_orgs.update_storage_used(slug, -delta)
+            ac.detail = f"nuked={result['count']}"
+        return {"message": f"nuked {target}", "count": result["count"]}
+
+    @app.get("/v1/packages/{name}/tombstones", tags=["packages"])
+    async def package_tombstones(
+        name: str,
+        version: str = Query("", description="Narrow to one version."),
+        platform: str = Query(""),
+        arch: str = Query(""),
+        build_type: str = Query(""),
+        link: str = Query(""),
+        caller: TokenRecord | None = Depends(optional_token),
+    ):
+        """Records of variants of *name* that were nuked, newest first.
+
+        Each carries ``reason`` (``manual`` = an admin's ``cvcpkg nuke``,
+        ``retention`` = fell off the yank-retention schedule), ``nuked_by``,
+        ``nuked_at``, and forensic context.  This is how you learn a bundle was
+        retired-and-purged rather than never-published.
+        """
+        if not _use_db or _db_packages is None:
+            return {"tombstones": [], "count": 0}
+        tombstones = await _db_packages.get_tombstones(
+            name,
+            version,
+            platform=platform,
+            arch=arch,
+            build_type=build_type,
+            link=link,
+        )
+        # Private-org tombstones are visible only to a member or admin -- the
+        # same rule as the package itself, so a purge doesn't become an info leak.
+        visible = []
+        for t in tombstones:
+            org = t.get("org_slug", "")
+            if org and _db_orgs is not None:
+                org_info = await _db_orgs.get(org)
+                if org_info is not None and org_info.is_private:
+                    if caller is None or not (
+                        caller.role == TokenRole.admin or await _db_orgs.is_member(org, caller.name)
+                    ):
+                        continue
+            visible.append(t)
+        return {"tombstones": visible, "count": len(visible)}
 
     # ── Delete (admin only) ─────────────────────────────────
 
@@ -7290,6 +7475,57 @@ def create_app(
             delete_logs=delete_logs,
         )
         return {"ok": True, "purged": purged}
+
+    @app.post(
+        "/v1/admin/gc/yanked",
+        tags=["admin"],
+    )
+    async def admin_gc_yanked(
+        older_than_days: int = Query(
+            _YANK_RETENTION_DAYS,
+            ge=1,
+            description="Purge bundles yanked more than this many days ago.",
+        ),
+        dry_run: bool = Query(
+            True,
+            description="Report what would be purged without deleting anything.",
+        ),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Run the yank-retention purge on demand (admin only).
+
+        The same operation as the background GC, exposed so an operator can
+        preview it (``dry_run=true``, the default -- artifact deletion should
+        never be the accidental default) and so it is synchronously testable.
+        Rows with ``yanked_at IS NULL`` and tagged releases are exempt, exactly
+        as the loop.
+        """
+        if not _use_db or _db_packages is None:
+            raise HTTPException(501, "yank retention GC requires the database backend")
+        state = _get_state()
+        purged = await _db_packages.purge_yanked(
+            older_than_days=older_than_days,
+            storage_uri=state.storage_uri,
+            dry_run=dry_run,
+        )
+        if not dry_run and purged:
+            org_deltas: dict[str, int] = {}
+            for d in purged:
+                slug = d.get("org_slug", "")
+                if slug and _db_orgs is not None:
+                    org_deltas[slug] = org_deltas.get(slug, 0) + d["size_bytes"]
+            for slug, delta in org_deltas.items():
+                await _db_orgs.update_storage_used(slug, -delta)
+            async with _audit_txn(
+                AuditAction.nuke, actor.name, f"gc/yanked older_than={older_than_days}d"
+            ) as ac:
+                ac.detail = f"purged={len(purged)}"
+        return {
+            "ok": True,
+            "dry_run": dry_run,
+            "count": len(purged),
+            "purged": [{k: v for k, v in p.items() if k != "yanked_at"} for p in purged],
+        }
 
     @app.post(
         "/v1/admin/purge/builds",

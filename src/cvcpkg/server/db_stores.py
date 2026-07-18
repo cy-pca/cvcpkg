@@ -28,6 +28,7 @@ from cvcpkg.server.db import (
     OrganizationRow,
     OrgMemberRow,
     PackageRow,
+    PackageTombstoneRow,
     RecipeRow,
     TagRow,
     TelemetryEventRow,
@@ -726,6 +727,66 @@ class DbAuditLog:
 
 # ── DB Package Index ────────────────────────────────────────────
 
+# Why a nuked bundle went away.  Kept in sync with the CLI/API and the
+# package_tombstones.reason column.
+NUKE_REASON_MANUAL = "manual"  # an admin's `cvcpkg nuke`
+NUKE_REASON_RETENTION = "retention"  # fell off the yank-retention schedule
+
+
+def _tombstone_dict(r) -> dict:
+    return {
+        "name": r.name,
+        "version": r.version,
+        "platform": r.platform,
+        "arch": r.arch,
+        "build_type": r.build_type,
+        "link": r.link,
+        "org_slug": r.org_slug,
+        "filename": r.filename,
+        "reason": r.reason,
+        "nuked_by": r.nuked_by,
+        "nuked_at": r.nuked_at,
+        "size_bytes": r.size_bytes,
+        "sha256": r.sha256,
+        "published_at": r.published_at,
+        "yanked_at": r.yanked_at,
+    }
+
+
+def _record_tombstones(
+    session,
+    rows,
+    *,
+    reason: str,
+    nuked_by: str,
+) -> None:
+    """Insert a tombstone for each PackageRow about to be nuked.
+
+    Called inside the nuke/purge transaction so the tombstone and the row
+    delete commit together -- a nuked bundle is never gone without a record of
+    why.  Forensic fields (sha256, sizes, timestamps) are copied off the row
+    before it disappears.
+    """
+    session.add_all(
+        PackageTombstoneRow(
+            name=r.name,
+            version=r.version,
+            platform=r.platform,
+            arch=r.arch,
+            build_type=r.build_type,
+            link=r.link,
+            org_slug=r.org_slug,
+            filename=(r.archive_url or "").rsplit("/", 1)[-1],
+            reason=reason,
+            nuked_by=nuked_by,
+            size_bytes=r.size_bytes,
+            sha256=r.sha256,
+            published_at=r.published_at,
+            yanked_at=r.yanked_at,
+        )
+        for r in rows
+    )
+
 
 class DbPackageIndex:
     """Package catalog backed by the ``packages`` table."""
@@ -862,6 +923,7 @@ class DbPackageIndex:
                         archive_url=row.archive_url,
                         published_at=row.published_at,
                         yanked=row.yanked,
+                        yanked_at=row.yanked_at,
                         signature=row.signature,
                         key_fingerprint=row.key_fingerprint,
                         release_tag=row.release_tag,
@@ -1234,9 +1296,16 @@ class DbPackageIndex:
     ) -> int:
         async with get_session() as session:
             stmt = (
-                update(PackageRow)
-                .where(PackageRow.name == name, PackageRow.version == version)
-                .values(yanked=True)
+                update(PackageRow).where(PackageRow.name == name, PackageRow.version == version)
+                # coalesce, not a bare now(): this UPDATE also matches rows that
+                # are ALREADY yanked (there is no yanked.is_(False) guard), so a
+                # re-yank with a wider scope would otherwise reset the retention
+                # clock and postpone expiry indefinitely.  A guard instead of
+                # coalesce would break rowcount, which the endpoint returns as
+                # `count` and the CLI's no-op refusal depends on.
+                .values(
+                    yanked=True, yanked_at=sa_func.coalesce(PackageRow.yanked_at, sa_func.now())
+                )
             )
             if platform is not None:
                 stmt = stmt.where(PackageRow.platform == platform)
@@ -1261,9 +1330,10 @@ class DbPackageIndex:
     ) -> int:
         async with get_session() as session:
             stmt = (
-                update(PackageRow)
-                .where(PackageRow.name == name, PackageRow.version == version)
-                .values(yanked=False)
+                update(PackageRow).where(PackageRow.name == name, PackageRow.version == version)
+                # Clearing yanked_at disarms retention: an unyanked bundle must
+                # not carry a stale clock that expires it later.
+                .values(yanked=False, yanked_at=None)
             )
             if platform is not None:
                 stmt = stmt.where(PackageRow.platform == platform)
@@ -1296,6 +1366,159 @@ class DbPackageIndex:
                 stmt = stmt.where(PackageRow.link == link)
             result = await session.execute(stmt)
             return result.rowcount
+
+    async def nuke_bundles(
+        self,
+        name: str,
+        version: str,
+        *,
+        platform: str | None = None,
+        arch: str | None = None,
+        link: str | None = None,
+        build_type: str | None = None,
+        require_yanked: bool = True,
+        storage_uri: str = "",
+        nuked_by: str = "",
+        reason: str = "manual",
+    ) -> dict:
+        """Irreversibly remove matching bundles: DB rows AND archive bytes.
+
+        The scope is the full four-tuple, unlike ``delete`` which only accepts
+        platform/link -- the missing arch/build_type there silently over-deleted
+        (``?arch=x86_64`` was ignored, so a request meant for one variant took
+        the others too), and for an irreversible op that is the worst failure.
+
+        With ``require_yanked`` (the default) every match must already be
+        yanked; otherwise raises ``ValueError`` naming the live variants, so
+        nuke only ever accelerates an existing retention clock rather than
+        destroying something consumers are actively resolving.
+
+        Returns ``{"nuked": [...], "count": N}``.  Row delete precedes archive
+        unlink so a crash mid-purge leaves a visible orphan row pointing at a
+        gone archive (recoverable) rather than an unreferenced blob (invisible).
+        An archive is unlinked only when no surviving row still references its
+        filename.
+        """
+        from sqlalchemy import delete as sa_delete
+
+        async with get_session() as session:
+            sel = select(PackageRow).where(PackageRow.name == name, PackageRow.version == version)
+            if platform is not None:
+                sel = sel.where(PackageRow.platform == platform)
+            if arch is not None:
+                sel = sel.where(PackageRow.arch == arch)
+            if link is not None:
+                sel = sel.where(PackageRow.link == link)
+            if build_type is not None:
+                sel = sel.where(PackageRow.build_type == build_type)
+            rows = (await session.execute(sel)).scalars().all()
+
+            if not rows:
+                return {"nuked": [], "count": 0}
+
+            if require_yanked:
+                live = [r for r in rows if not r.yanked]
+                if live:
+                    variants = ", ".join(
+                        f"{r.platform}/{r.arch}/{r.build_type}/{r.link}" for r in live
+                    )
+                    raise ValueError(
+                        f"{name}=={version}: not yanked: {variants}. "
+                        "Yank it first -- nuke only removes an already-yanked bundle."
+                    )
+
+            nuked = [
+                {
+                    "name": r.name,
+                    "version": r.version,
+                    "platform": r.platform,
+                    "arch": r.arch,
+                    "build_type": r.build_type,
+                    "link": r.link,
+                    "size_bytes": r.size_bytes,
+                    "org_slug": r.org_slug,
+                    "archive_url": r.archive_url,
+                }
+                for r in rows
+            ]
+            # Tombstone each variant BEFORE deleting the row, in the same
+            # transaction, so the record and the deletion commit atomically --
+            # a nuked bundle can never be gone without a tombstone explaining it.
+            _record_tombstones(session, rows, reason=reason, nuked_by=nuked_by)
+            ids = [r.id for r in rows]
+            await session.execute(sa_delete(PackageRow).where(PackageRow.id.in_(ids)))
+            await session.flush()
+
+            if storage_uri:
+                from cvcpkg.server import archive_store
+
+                for rec in nuked:
+                    fname = (rec.get("archive_url") or "").rsplit("/", 1)[-1]
+                    if not fname:
+                        continue
+                    # Unlink only when no surviving row references the file.
+                    still = (
+                        await session.execute(
+                            select(PackageRow.id)
+                            .where(PackageRow.archive_url.like(f"%/{fname}"))
+                            .limit(1)
+                        )
+                    ).first()
+                    rec["archive_deleted"] = (
+                        False if still else archive_store.delete(storage_uri, fname)
+                    )
+
+            return {"nuked": nuked, "count": len(nuked)}
+
+    async def get_tombstones(
+        self,
+        name: str,
+        version: str = "",
+        *,
+        platform: str = "",
+        arch: str = "",
+        build_type: str = "",
+        link: str = "",
+    ) -> list[dict]:
+        """Tombstones for *name*, newest first; narrow by version/variant.
+
+        Backs the per-package "what happened to it" view and the 410 Gone a
+        pinned consumer gets in place of a bare 404.
+        """
+        async with get_session() as session:
+            q = select(PackageTombstoneRow).where(PackageTombstoneRow.name == name)
+            if version:
+                q = q.where(PackageTombstoneRow.version == version)
+            if platform:
+                q = q.where(PackageTombstoneRow.platform == platform)
+            if arch:
+                q = q.where(PackageTombstoneRow.arch == arch)
+            if build_type:
+                q = q.where(PackageTombstoneRow.build_type == build_type)
+            if link:
+                q = q.where(PackageTombstoneRow.link == link)
+            q = q.order_by(PackageTombstoneRow.nuked_at.desc(), PackageTombstoneRow.id.desc())
+            rows = (await session.execute(q)).scalars().all()
+            return [_tombstone_dict(r) for r in rows]
+
+    async def get_tombstone_by_filename(self, filename: str) -> dict | None:
+        """The newest tombstone for an archive *filename*, or None.
+
+        Lets the download endpoint answer 410 Gone ("nuked, reason, when") for a
+        purged archive instead of a bare 404.
+        """
+        if not filename:
+            return None
+        async with get_session() as session:
+            r = (
+                await session.execute(
+                    select(PackageTombstoneRow)
+                    .where(PackageTombstoneRow.filename == filename)
+                    .order_by(PackageTombstoneRow.nuked_at.desc(), PackageTombstoneRow.id.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            return _tombstone_dict(r) if r is not None else None
 
     async def get_release_tags(self) -> list[dict]:
         """Distinct release tags with variant counts, most-populated first.
@@ -1406,6 +1629,99 @@ class DbPackageIndex:
                 ids = [r.id for r in rows]
                 await session.execute(sa_delete(PackageRow).where(PackageRow.id.in_(ids)))
             return deleted
+
+    async def purge_yanked(
+        self,
+        *,
+        older_than_days: int,
+        storage_uri: str = "",
+        dry_run: bool = False,
+        nuked_by: str = "retention-gc",
+    ) -> list[dict]:
+        """Permanently remove bundles yanked longer ago than *older_than_days*.
+
+        Unlike every other GC here this deletes the ARCHIVE as well as the row
+        -- a yank-retention sweep that dropped only rows would leak the bytes
+        forever and leave them downloadable (download_archive gates on the file
+        existing, never on the row).
+
+        Returns ``gc_by_age``'s dict shape plus ``archive_deleted``, so callers
+        can feed the org storage counters unchanged.
+
+        Never purges:
+          * ``yanked_at IS NULL`` -- either never yanked, or yanked before the
+            column existed (migration 018 deliberately does not backfill, so
+            historical yanks are exempt rather than instantly expired);
+          * tagged releases (``release_tag != ""``) -- immutable by this
+            codebase's convention, matching gc_by_age/gc_by_storage.  A yanked
+            tagged release therefore never ages out; `cvcpkg nuke` is the
+            explicit path for it.
+
+        *older_than_days* <= 0 means DISABLED and returns nothing.  It does not
+        mean "purge everything" -- unlike gc_by_storage(0), where 0 legitimately
+        means evict-all.  Overloading 0 here would turn a misread config into
+        total destruction of every yanked bundle.
+        """
+        import datetime as _dt
+
+        from sqlalchemy import delete as sa_delete
+
+        if older_than_days <= 0:
+            return []
+
+        cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=older_than_days)
+        async with get_session() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(PackageRow).where(
+                            PackageRow.yanked.is_(True),
+                            PackageRow.yanked_at.is_not(None),
+                            PackageRow.yanked_at < cutoff,
+                            PackageRow.release_tag == "",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            purged: list[dict] = []
+            for r in rows:
+                purged.append(
+                    {
+                        "name": r.name,
+                        "version": r.version,
+                        "size_bytes": r.size_bytes,
+                        "org_slug": r.org_slug,
+                        "platform": r.platform,
+                        "arch": r.arch,
+                        "build_type": r.build_type,
+                        "link": r.link,
+                        "yanked_at": r.yanked_at,
+                        "archive_deleted": False,
+                    }
+                )
+            if dry_run or not rows:
+                return purged
+
+            # Tombstone with reason="retention" before deleting -- a package that
+            # fell off the schedule is effectively nuked, and a consumer that
+            # pinned it should learn it was retired on a schedule, not that it
+            # never existed.
+            _record_tombstones(session, rows, reason=NUKE_REASON_RETENTION, nuked_by=nuked_by)
+            ids = [r.id for r in rows]
+            await session.execute(sa_delete(PackageRow).where(PackageRow.id.in_(ids)))
+
+            # Rows go first: if the archive delete fails we would rather serve
+            # 404 for a purged bundle than keep a row whose bytes are gone.
+            if storage_uri:
+                from cvcpkg.server import archive_store
+
+                for r, rec in zip(rows, purged, strict=True):
+                    fname = (r.archive_url or "").rsplit("/", 1)[-1]
+                    if fname:
+                        rec["archive_deleted"] = archive_store.delete(storage_uri, fname)
+            return purged
 
     async def gc_by_storage(self, max_bytes: int) -> list[dict]:
         """Evict oldest non-release packages until total storage <= *max_bytes*.

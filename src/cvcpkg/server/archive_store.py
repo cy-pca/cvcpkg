@@ -26,6 +26,7 @@ backends are NOT persisted here — they come from the environment
 from __future__ import annotations
 
 import hashlib
+import logging
 import shutil
 from pathlib import Path
 from typing import BinaryIO
@@ -34,6 +35,8 @@ from urllib.parse import urlparse
 import yaml
 
 from cvcpkg.storage import get_backend
+
+logger = logging.getLogger("cvcpkg.server")
 
 # Kept in sync with app.py's _ARCHIVES_DIR: the subdirectory/prefix under the
 # storage root where archives live.
@@ -148,6 +151,48 @@ def exists(storage_uri: str, filename: str) -> bool:
         get_backend(storage_uri).head(archive_uri(storage_uri, filename))
         return True
     except Exception:
+        return False
+
+
+def delete(storage_uri: str, filename: str) -> bool:
+    """Remove the stored archive *filename*.  Returns whether it was there.
+
+    Until this existed nothing in cvcpkg deleted archive bytes, which made
+    "delete" weaker than a yank: after DELETE /v1/packages/{name}/{version}
+    removed the row, GET /v1/download/... still served the archive, because
+    download_archive gates on archive_store.exists() and never consults the
+    package row.  Yank retention and `cvcpkg nuke` both depend on this.
+
+    Remote backends are duck-typed: the storage backends implement put/open/
+    head, and only some grow a delete.  A backend that cannot delete says so
+    loudly rather than letting a caller believe the bytes are gone -- a silent
+    no-op here would leak storage forever and, worse, would let `nuke` report
+    success while the archive stayed downloadable.
+    """
+    lp = local_path(storage_uri, filename)
+    if lp is not None:
+        existed = lp.is_file()
+        lp.unlink(missing_ok=True)
+        return existed
+
+    backend = get_backend(storage_uri)
+    fn = getattr(backend, "delete", None)
+    if fn is None:
+        logger.warning(
+            "archive_store.delete: backend for scheme %r cannot delete; "
+            "%s is orphaned and still downloadable",
+            scheme_of(storage_uri),
+            filename,
+        )
+        return False
+    try:
+        return bool(fn(archive_uri(storage_uri, filename)))
+    except Exception:
+        logger.exception(
+            "archive_store.delete: backend %r failed to delete %s",
+            scheme_of(storage_uri),
+            filename,
+        )
         return False
 
 

@@ -215,15 +215,114 @@ Upload and publish a package bundle.
 
 ### `POST /v1/packages/{name}/{version}/yank`
 
-Mark a package as yanked. Auth: `publisher` or `admin`.
+Mark a package as yanked. Auth: `publisher` or `admin` — a publisher may only
+yank packages it published, or that belong to an org it is a member of.
+
+| Query param | Effect |
+| --- | --- |
+| `platform` | Only yank bundles for this platform |
+| `arch` | Only yank bundles for this arch |
+| `link` | Only yank bundles for this link mode (`shared`/`static`) |
+| `build_type` | Only yank bundles for this build type (`release`/`debug`) |
+
+**Omitting a scope param matches every value of it**, so a call with no params
+yanks *every* variant of that version. A call that matches nothing returns
+`200` with `{"count": 0}` rather than an error — check `count`.
+
+```json
+{ "message": "yanked readline==8.3+cvc.1 [platform=linux]", "count": 1 }
+```
+
+Yanking hides bundles from the catalog and from dependency resolution. It does
+not delete the archive, and it is reversible. Note it is stronger than cargo's
+yank: the catalog **omits** yanked bundles rather than flagging them, so a pin
+to a yanked version stops resolving too — that install falls back to building
+from source, or fails.
+
+Prefer the CLI, which previews the affected bundles, warns when a yank would
+leave a variant with no active bundle, and refuses a no-op instead of reporting
+`count: 0`:
+
+```console
+$ cvcpkg yank readline 8.3+cvc.1 --platform linux --arch x86_64 \
+      --config release --link shared
+```
 
 ### `POST /v1/packages/{name}/{version}/unyank`
 
-Remove yank status. Auth: `admin` only.
+Remove yank status. Auth: `admin` only — unlike yank, a publisher cannot
+un-retire even its own package. Takes the same scope query params.
+
+```console
+$ cvcpkg unyank readline 8.3+cvc.1 --platform linux --arch x86_64
+```
+
+To find a yanked bundle to restore (yanked bundles are hidden from the normal
+catalog), reveal them with search:
+
+```console
+$ cvcpkg search readline --yanked-only     # or --include-yanked to show both
+```
+
+### `POST /v1/packages/{name}/{version}/nuke`
+
+**Irreversibly** delete a yanked bundle's catalog row **and its archive bytes**.
+Auth: `admin` only. Takes the same scope query params as yank.
+
+Unlike yank (reversible; the archive stays) this destroys the archive; use it
+to reclaim storage before yank retention elapses. The bundle **must already be
+yanked** — nuking a live bundle returns `409` (yank it first), so nuke only
+ever accelerates retention. `404` if nothing matches.
+
+```console
+$ cvcpkg nuke readline 8.3+cvc.1 --platform linux --arch x86_64 \
+      --config release --link shared
+```
+
+The CLI has no `--yes`: you confirm by typing `name==version` (or
+`--confirm name==version` for automation).
+
+### Yank retention
+
+A yanked bundle is permanently purged (row **and** archive) once it has been
+yanked longer than `CVCPKG_YANK_RETENTION_DAYS` (default **0 = disabled**; the
+recommended value is `365`). Rows yanked before the `yanked_at` column existed
+(`yanked_at IS NULL`) and tagged releases (`release_tag != ""`) are never
+auto-purged. A mirror never purges — it may hold the last copy of a bundle its
+upstream retired.
+
+Run it on demand, admin only (dry-run by default):
+
+```
+POST /v1/admin/gc/yanked?older_than_days=365&dry_run=true
+```
+
+Retention purges are audited under the `nuke` action with actor `retention-gc`.
+
+### Nuked-package tombstones
+
+A nuked bundle's catalog row is hard-deleted (freeing the slot for republish),
+so a lightweight **tombstone** records that it existed and why it went away.
+Every nuke — manual or retention — writes one, carrying `reason` (`manual` = an
+admin's `cvcpkg nuke`, `retention` = fell off the schedule), `nuked_by`,
+`nuked_at`, and forensic context (sha256, sizes, the original `published_at` and
+`yanked_at`).
+
+`GET /v1/packages/{name}/tombstones` — records for `name`, newest first;
+narrow with the same scope query params. Private-org tombstones are visible only
+to a member or admin.
+
+Because of tombstones, **downloading a nuked archive returns `410 Gone`** with
+the reason and date (e.g. `readline==8.3+cvc.1 was nuked (retention) on
+2026-07-17`) rather than a bare `404` — a consumer whose lockfile pinned it
+learns it was retired, not that it never existed. A genuinely unknown archive is
+still `404`.
 
 ### `DELETE /v1/packages/{name}/{version}`
 
-Permanently delete a package. Auth: `admin` only.
+Delete a package's catalog row. Auth: `admin` only. **Legacy** — it accepts only
+`platform`/`link` scope (not `arch`/`build_type`) and does not delete the
+archive bytes. Prefer `nuke`, which has full scope and removes the archive.
 
 ---
 

@@ -16,6 +16,7 @@ from cvcpkg.cli._helpers import (
     _platform_opt,
     _validate_org_slug,
 )
+from cvcpkg.cli._server import _api_request
 
 # ── publish ─────────────────────────────────────────────────────
 
@@ -714,3 +715,374 @@ def remove(components: tuple[str, ...], from_file: str) -> None:
     with open(path, "w") as f:
         yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
     click.echo(f"cvcpkg: removed {', '.join(removed)} from {from_file}")
+
+
+# ── yank / unyank ───────────────────────────────────────────────
+#
+# The server has had /v1/packages/{name}/{version}/{yank,unyank} for a while
+# with nothing in the CLI driving them, so the only way to retire a bad bundle
+# was a hand-rolled curl -- easy to get wrong in the one direction that matters
+# (see _scope_opts).
+
+
+# Scope options are deliberately NOT the shared _platform_opt/_config_opt/
+# _link_opt: those default to auto/release/shared, whereas the server treats an
+# omitted scope field as "every variant of this version".  Reusing them would
+# silently narrow every yank to one variant -- the opposite of what the operator
+# typed.  Tri-state (None = unscoped) is the whole contract here.
+def _scope_opts(fn):
+    fn = click.option(
+        "--link",
+        type=click.Choice(["shared", "static"], case_sensitive=False),
+        default=None,
+        help="Only this link mode.  Omit to match every link mode.",
+    )(fn)
+    fn = click.option(
+        "--config",
+        "build_type",
+        type=click.Choice(["release", "debug"], case_sensitive=False),
+        default=None,
+        help="Only this build configuration.  Omit to match both.",
+    )(fn)
+    fn = click.option(
+        "--arch", default=None, metavar="ARCH", help="Only this arch.  Omit to match every arch."
+    )(fn)
+    fn = click.option(
+        "--platform",
+        default=None,
+        metavar="PLATFORM",
+        help="Only this platform.  Omit to match every platform.",
+    )(fn)
+    return fn
+
+
+def _server_opts(fn):
+    fn = click.option(
+        "--token",
+        envvar="CVCPKG_TOKEN",
+        required=True,
+        help="Bearer token.  [env: CVCPKG_TOKEN]",
+    )(fn)
+    fn = click.option(
+        "--server",
+        envvar="CVCPKG_SERVER_URL",
+        required=True,
+        metavar="URL",
+        help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+    )(fn)
+    return fn
+
+
+def _matching_bundles(
+    bundles: list[dict],
+    version: str,
+    platform: str | None,
+    arch: str | None,
+    build_type: str | None,
+    link: str | None,
+) -> list[dict]:
+    """The bundles the server would act on, for previewing before we POST.
+
+    Mirrors the server's filter exactly (app.py yank/unyank and
+    db_stores.yank): exact match on version, plus equality on each scope field
+    that was supplied.  If this drifts from the server the preview lies about
+    what is about to happen, which is worse than no preview.
+    """
+    out = []
+    for b in bundles:
+        if b.get("version") != version:
+            continue
+        if platform is not None and b.get("platform") != platform:
+            continue
+        if arch is not None and b.get("arch") != arch:
+            continue
+        if link is not None and b.get("link") != link:
+            continue
+        if build_type is not None and b.get("build_type") != build_type:
+            continue
+        out.append(b)
+    return out
+
+
+def _variant(b: dict) -> str:
+    return (
+        f"{b.get('platform', '?')}/{b.get('arch', '?')}/"
+        f"{b.get('build_type', '?')}/{b.get('link', '?')}"
+    )
+
+
+def _orphaned_variants(matched: list[dict], all_bundles: list[dict]) -> list[str]:
+    """Variants left with no installable bundle once *matched* is yanked.
+
+    Yanking the only bundle for a platform/arch/config/link makes that variant
+    unresolvable for consumers.  That is sometimes exactly the intent, so this
+    warns rather than refuses.
+    """
+    orphaned = []
+    for b in matched:
+        if b.get("yanked"):
+            continue  # already yanked; nothing changes for this variant
+        survivors = [
+            o
+            for o in all_bundles
+            if _variant(o) == _variant(b)
+            and o.get("version") != b.get("version")
+            and not o.get("yanked")
+        ]
+        if not survivors:
+            orphaned.append(_variant(b))
+    return sorted(set(orphaned))
+
+
+def _yank_impl(
+    action: str,
+    name: str,
+    version: str,
+    server: str,
+    token: str,
+    platform: str | None,
+    arch: str | None,
+    build_type: str | None,
+    link: str | None,
+    yes: bool,
+) -> None:
+    base = server.rstrip("/")
+    # include_yanked so unyank can see its targets, and so yank can report a
+    # target that is already yanked instead of silently "succeeding".
+    listing = _api_request(
+        "get", f"{base}/v1/packages/{name}", token, params={"include_yanked": "true"}
+    )
+    all_bundles = listing.get("packages", [])
+    if not all_bundles:
+        raise click.ClickException(f"no package named '{name}' on {base}")
+
+    matched = _matching_bundles(all_bundles, version, platform, arch, build_type, link)
+    if not matched:
+        known = sorted({b.get("version", "") for b in all_bundles})
+        raise click.ClickException(
+            f"no bundle matches {name}=={version} with that scope.\n"
+            f"  published versions: {', '.join(known)}\n"
+            "  (the server would report success having changed nothing)"
+        )
+
+    want_yanked = action == "yank"
+    changing = [b for b in matched if bool(b.get("yanked")) != want_yanked]
+
+    click.echo(f"cvcpkg: {action} {name}=={version} on {base}")
+    for b in sorted(matched, key=_variant):
+        state = "yanked" if b.get("yanked") else "active"
+        note = "" if bool(b.get("yanked")) != want_yanked else "  (already there, no change)"
+        click.echo(f"  {_variant(b):38s} {state}{note}")
+
+    if not changing:
+        click.echo(f"cvcpkg: nothing to do -- all {len(matched)} bundle(s) already {action}ed.")
+        return
+
+    if want_yanked:
+        for v in _orphaned_variants(changing, all_bundles):
+            click.echo(
+                f"  warning: {v} has no other active bundle -- "
+                "consumers resolving that variant will find nothing",
+                err=True,
+            )
+
+    if not yes:
+        click.confirm(f"{action} {len(changing)} bundle(s)?", abort=True)
+
+    params = {
+        k: v
+        for k, v in (
+            ("platform", platform),
+            ("arch", arch),
+            ("link", link),
+            ("build_type", build_type),
+        )
+        if v is not None
+    }
+    resp = _api_request(
+        "post", f"{base}/v1/packages/{name}/{version}/{action}", token, params=params
+    )
+    click.echo(f"cvcpkg: {resp.get('message', action)} ({resp.get('count', 0)} bundle(s))")
+
+
+@cli.command()
+@click.argument("name")
+@click.argument("version")
+@_server_opts
+@_scope_opts
+@click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
+def yank(
+    name: str,
+    version: str,
+    server: str,
+    token: str,
+    platform: str | None,
+    arch: str | None,
+    build_type: str | None,
+    link: str | None,
+    yes: bool,
+) -> None:
+    """Yank a published version so resolution stops selecting it.
+
+    Use it to retire a bundle that builds but is broken.  The archive is not
+    deleted and yank is reversible ('cvcpkg unyank'), but note this is stronger
+    than cargo's yank: the catalog OMITS yanked bundles rather than flagging
+    them, so a pin to a yanked version stops resolving too -- that install now
+    builds from source (--fallback-to-source / --local) or fails.
+
+    Scope flags narrow which variants are affected.  With none of them, EVERY
+    variant of the version is yanked.
+
+    Requires a publisher token (which may only yank its own packages, or its
+    org's) or an admin token.
+
+    \b
+    Examples:
+      # retire one broken variant
+      cvcpkg yank readline 8.3+cvc.1 --platform linux --arch x86_64 \\
+          --config release --link shared
+      # retire a whole version, no prompt
+      cvcpkg yank mypkg 1.2.3+cvc.1 --yes
+    """
+    _yank_impl("yank", name, version, server, token, platform, arch, build_type, link, yes)
+
+
+@cli.command()
+@click.argument("name")
+@click.argument("version")
+@_server_opts
+@_scope_opts
+@click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
+def unyank(
+    name: str,
+    version: str,
+    server: str,
+    token: str,
+    platform: str | None,
+    arch: str | None,
+    build_type: str | None,
+    link: str | None,
+    yes: bool,
+) -> None:
+    """Restore a yanked version to the catalog.
+
+    The inverse of 'cvcpkg yank'.  Unlike yank, this requires an ADMIN token --
+    a publisher cannot un-retire even its own package.
+
+    \b
+    Example:
+      cvcpkg unyank readline 8.3+cvc.1 --platform linux --arch x86_64
+    """
+    _yank_impl("unyank", name, version, server, token, platform, arch, build_type, link, yes)
+
+
+def _human_bytes(n: int) -> str:
+    f = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if f < 1024 or unit == "GB":
+            return f"{f:.1f} {unit}" if unit != "B" else f"{int(f)} B"
+        f /= 1024
+    return f"{f:.1f} GB"
+
+
+@cli.command()
+@click.argument("name")
+@click.argument("version")
+@_server_opts
+@_scope_opts
+@click.option(
+    "--confirm",
+    "confirm",
+    default=None,
+    metavar="NAME==VERSION",
+    help="Skip the typed prompt by passing 'NAME==VERSION' (must match the target). For scripts.",
+)
+def nuke(
+    name: str,
+    version: str,
+    server: str,
+    token: str,
+    platform: str | None,
+    arch: str | None,
+    build_type: str | None,
+    link: str | None,
+    confirm: str | None,
+) -> None:
+    """Permanently delete a yanked bundle -- row AND archive bytes. IRREVERSIBLE.
+
+    Unlike yank (reversible, keeps the bytes) this destroys the archive.  Use it
+    to reclaim storage before the yank-retention window elapses.
+
+    Safety, above yank's:
+
+    \b
+      * the bundle must ALREADY be yanked -- nuke only accelerates retention; it
+        refuses a live package (yank it first);
+      * requires an ADMIN token;
+      * there is deliberately no --yes: you confirm by typing NAME==VERSION (or
+        passing --confirm NAME==VERSION for automation).
+
+    \b
+    Example:
+      cvcpkg nuke readline 8.3+cvc.1 --platform linux --arch x86_64 \\
+          --config release --link shared
+    """
+    base = server.rstrip("/")
+    listing = _api_request(
+        "get", f"{base}/v1/packages/{name}", token, params={"include_yanked": "true"}
+    )
+    all_bundles = listing.get("packages", [])
+    if not all_bundles:
+        raise click.ClickException(f"no package named '{name}' on {base}")
+
+    matched = _matching_bundles(all_bundles, version, platform, arch, build_type, link)
+    if not matched:
+        known = sorted({b.get("version", "") for b in all_bundles})
+        raise click.ClickException(
+            f"no bundle matches {name}=={version} with that scope.\n"
+            f"  published versions: {', '.join(known)}"
+        )
+
+    # Refuse a live bundle here too (the server also enforces it), so the
+    # operator sees the reason before any prompt rather than at a 409.
+    live = [b for b in matched if not b.get("yanked")]
+    if live:
+        variants = ", ".join(_variant(b) for b in sorted(live, key=_variant))
+        raise click.ClickException(
+            f"refusing to nuke a bundle that is not yanked: {variants}\n"
+            f"  yank it first:  cvcpkg yank {name} {version} ...\n"
+            "  nuke only removes an already-yanked bundle."
+        )
+
+    total_bytes = sum(int(b.get("size_bytes") or 0) for b in matched)
+    click.echo(f"cvcpkg: NUKE {name}=={version} on {base}")
+    click.echo("  this permanently deletes these bundles AND their archive bytes:")
+    for b in sorted(matched, key=_variant):
+        click.echo(f"    {_variant(b):38s} {_human_bytes(int(b.get('size_bytes') or 0))}")
+    click.echo(
+        f"  {len(matched)} bundle(s), {_human_bytes(total_bytes)} freed.  THIS CANNOT BE UNDONE."
+    )
+
+    expected = f"{name}=={version}"
+    if confirm is not None:
+        if confirm != expected:
+            raise click.ClickException(
+                f"--confirm {confirm!r} does not match the target {expected!r}"
+            )
+    else:
+        typed = click.prompt(f"  Type '{expected}' to confirm", default="", show_default=False)
+        if typed.strip() != expected:
+            raise click.ClickException("confirmation did not match; nothing was nuked.")
+
+    params = {
+        k: v
+        for k, v in (
+            ("platform", platform),
+            ("arch", arch),
+            ("link", link),
+            ("build_type", build_type),
+        )
+        if v is not None
+    }
+    resp = _api_request("post", f"{base}/v1/packages/{name}/{version}/nuke", token, params=params)
+    click.echo(f"cvcpkg: {resp.get('message', 'nuked')} ({resp.get('count', 0)} bundle(s))")
