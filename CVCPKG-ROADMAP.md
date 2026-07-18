@@ -229,14 +229,14 @@ flowchart TD
 | 5 | Federation & Scaling | 🔶 Partially Done — cluster roles (primary/mirror/edge), pull-only populate, and public-vs-org namespace invariants landed (2026-07); CDN/sharding/replicas still future |
 | 6 | Community & Governance | 🔶 Partially Done — org namespaces + private-visibility isolation shipped |
 | 7 | Python Ecosystem (hermetic wheels, no-GIL) | 🔶 Partially Done — `python_wheel`/`python_sdist` source types, the `python:` block, the GIL-disabled test harness, and the first full matrix (`numpy` × cp311/cp312/cp313/cp313t) landed; more wheels + CUDA-math recipes + manifest freeze remain |
-| 8 | Self-Hosting & Universal Bootstrap (`cvpkg`) | ⬜ Planned — `mingw-w64` toolchain recipe is the first concrete step (landed 2026-07) |
+| 8 | Self-Hosting & Universal Bootstrap (`cvpkg`) | ⬜ Planned — `mingw-w64` toolchain recipe is the first concrete step (landed 2026-07); single-binary `cvpkg`/`cvcpkg-sc` runs a full server (seed from built-in recipes, remote builders, ad-hoc push, air-gapped) |
 | 9 | Fleet & Platform Expansion (GhostBSD/DragonflyBSD, qemu) | 🔶 In Progress — DragonflyBSD platform + provisioning underway in a parallel track |
 | 10 | Peer Providers & Hardware-Aware Concretization | ⬜ Planned |
 | 11 | Self-Hosting Toolchains (extends Phase 8) | ⬜ Proposed |
 | 12 | Federation Hardening — Selective Mirroring & Authoritative Resolution | ✅ Complete — mirror allow/deny policy, size budget with usage-based eviction, and top-down root-authoritative resolution |
 | 13 | Identity & Access — OIDC / External Providers | ✅ Complete — OIDC login for the admin dashboard (code flow + PKCE, claim→role mapping); HMAC tokens remain for machines |
 | 14 | Source Recipes — File-Artifact Packages | ✅ Complete — `platform: any` file artifacts consumed by downstream platform recipes, canonized by an end-to-end test |
-| 15 | CLI UX & the Recipe-First Workflow | ⬜ Planned — deprecate `cvc-requirements.yaml`, `~/.cvcpkg/` defaults (settings/recipes/build/install/cache), install-prefix registry (`~/.cvcpkg/local.db`) with aliases + delete/inspect/modify, per-prefix state DB (`share/cvcpkg/prefix.db`: installed-file tracking, **first-class `uninstall`**, idempotent installs, hash-verify, ops journal), recipe generation from existing projects, clean/activate commands, terminal graphics, offline source cache, recipe-set export + source pre-seeding for air-gapped self-hosting |
+| 15 | CLI UX & the Recipe-First Workflow | ⬜ Planned — single entry point (fold `cvcpkg-server` into `cvcpkg server`), deprecate `cvc-requirements.yaml`, `~/.cvcpkg/` defaults + auto-populated `settings.yaml` with a `--save` sticky-overrides flag, install-prefix registry (`~/.cvcpkg/local.db`) with aliases + delete/inspect/modify, per-prefix state DB (`share/cvcpkg/prefix.db`: installed-file tracking, **first-class `uninstall`**, idempotent installs, hash-verify, ops journal), recipe generation from existing projects, clean/activate commands, terminal graphics, offline source cache, recipe-set export + source pre-seeding for air-gapped self-hosting |
 | 16 | Prefix Provenance & Server Seeding | ⬜ Planned — install prefixes carry catalog info + recipes in `share/cvcpkg/` so a prefix can seed a cvcpkg-server; org/private status explicit with warnings |
 | 17 | Recipe Archives — Declared Artifacts & Package-Page UX | ⬜ Planned — schema-declared recipe artifacts, full recipe directories on the server, downloadable recipe archives, collapsible artifact viewer, package-list layout rework |
 | 18 | Server Backups, Scheduled Jobs & Quota Governance | ⬜ Planned — recipe/package backup + restore; a general admin job manager + scheduler (none exists today); quota governance (global default → infinite, reconciliation job, recipes count against org quota) |
@@ -892,15 +892,20 @@ Python, no compiler, no package manager.
   |---|---|---|---|
   | `cvcpkg` | activatable prefix (directory tree) | full | hermetic Python prefix (Phase 7) |
   | **`cvcpkg-sc`** | **single self-contained binary** | **full (server + builder + all)** | **Phase 19 `cvcpkg bake` of the hermetic prefix** |
-  | `cvpkg` | single Actually Portable Executable | trimmed (install / verify / activate / doctor; no server, no builder) | `cosmocc` + CPython APE (below) |
+  | `cvpkg` | single Actually Portable Executable | install / verify / activate / doctor **+ run a full server + builder** | `cosmocc` + CPython APE (below) |
 
   `cvcpkg-sc` and `cvpkg` are *not* the same artifact: `cvpkg` is a
-  cosmo APE carrying a trimmed feature set, whereas `cvcpkg-sc` is the
+  cosmo APE (one file, every platform), whereas `cvcpkg-sc` is the
   **whole** cvcpkg baked from its native hermetic prefix (CPython
-  interpreter + wheels), so it keeps the full CLI/server/builder surface
-  at the cost of being platform-native rather than one-file-everywhere.
-  Ships the same self-mounting-binary UX per platform as any other bake
-  (Linux squashfuse/overlay, macOS dmg+shadow, Windows ISO+scratch).
+  interpreter + wheels), platform-native rather than one-file-everywhere.
+  `cvcpkg-sc` ships the same self-mounting-binary UX per platform as any
+  other bake (Linux squashfuse/overlay, macOS dmg+shadow, Windows
+  ISO+scratch).  **Both must be able to run a fully-fledged
+  `cvcpkg server` (see the single-binary-server subsection below);** for
+  the cosmo APE that means bundling the server deps (FastAPI, uvicorn,
+  SQLAlchemy, an aiosqlite DB) into the APE — heavier than the original
+  "bootstrap only" cut, but the deliberate goal is a single file that is
+  client, builder, *and* server.
 
 **Dependency survey (2026-07-16).** Auditing cvcpkg's own non-optional
 runtime closure against PyPI turned up two constraints that shape this work:
@@ -935,10 +940,13 @@ runtime closure against PyPI turned up two constraints that shape this work:
       into a single **Actually Portable Executable** (αcτµαlly pδrταblε
       εxεcµταblε) that runs unmodified on Linux, macOS, Windows, and the
       BSDs.
-- [ ] **`cvpkg` recipe** — a trimmed cut of cvcpkg (install / verify /
-      activate / doctor; no server, no builder) compiled as a completely
-      self-contained APE.  One binary, every supported platform, no
-      installed Python required.
+- [ ] **`cvpkg` recipe** — cvcpkg compiled as a completely self-contained
+      APE (client + builder + **server**, via the single `cvcpkg server`
+      entry point from Phase 15).  One binary, every supported platform,
+      no installed Python required.  Bundling the server deps
+      (FastAPI/uvicorn/SQLAlchemy/aiosqlite) makes the APE larger than a
+      bootstrap-only cut, but the goal is one file that can be client,
+      builder, *and* server.
 - [ ] **Zero-dependency bootstrap** — publish the APE on cvcpkg.org so a
       bare machine can go from nothing to a working build environment:
 
@@ -953,13 +961,45 @@ runtime closure against PyPI turned up two constraints that shape this work:
 
 ```mermaid
 flowchart LR
-    SRC["cvcpkg source<br/>(trimmed: install/verify/activate)"] --> COSMO["cosmocc + CPython<br/>(APE link)"]
+    SRC["cvcpkg source<br/>(client + builder + server)"] --> COSMO["cosmocc + CPython<br/>(APE link)"]
     COSMO --> APE["cvpkg<br/>single APE binary"]
     APE --> L[Linux]
     APE --> W[Windows]
     APE --> M[macOS]
     APE --> B[BSDs]
 ```
+
+#### Single-binary server — every workflow from one file
+
+The payoff of the single entry point (Phase 15) plus a full-featured
+self-contained binary: **`cvpkg` / `cvcpkg-sc` can run a fully-fledged
+cvcpkg-server**, so one file is client, builder, *and* server.  The
+built-in recipes are the seed, and every population path is supported:
+
+- [ ] **Seed a base server from the built-in recipes.**  `cvpkg server
+      run` on a bare machine comes up with the **bundled recipe set already
+      loaded** as the starting catalog — a working server with zero
+      external input (no network, no separate recipe push).  Composes with
+      Phase 16 prefix-seeding and Phase 15's recipe export.
+- [ ] **Register remote builders to populate it.**  Builders (themselves
+      `cvpkg`/`cvcpkg-sc` binaries) register against the single-binary
+      server, claim jobs, build, and publish — the existing builder-fleet
+      workflow, now hostable from one file.
+- [ ] **Ad-hoc push from another `cvpkg`.**  A second `cvpkg` process that
+      builds packages locally (e.g. on a developer laptop or an isolated
+      build box) can **push the finished builds** to the server — no
+      standing builder registration required.
+- [ ] **Air-gapped operation end to end.**  With recipes built in and the
+      **source cache pre-seeded** (Phase 15's `recipe export` +
+      `source fetch`), a single `cvpkg` binary on an isolated host runs the
+      server, builds from the warmed cache, and serves the results to
+      air-gapped clients — no internet at any step.  This is the flagship
+      airgap story: carry one binary + a source cache in, stand up a full
+      archive.
+- [ ] **Same server, three shapes.**  `cvcpkg server run` behaves
+      identically whether launched from a `pip install`ed `cvcpkg`, the
+      native `cvcpkg-sc` bake, or the `cvpkg` APE — one code path, one
+      entry point, selected only by which binary you happen to hold.
 
 ### Phase 9 — Fleet & Platform Expansion
 
@@ -1328,6 +1368,26 @@ the terminal experience worthy of the web front end.
       cpkg, Conan, or similar project (extends `cvcpkg init`'s current
       cmake/meson/autotools templates with build-system detection/import).
 
+#### Single entry point — fold `cvcpkg-server` into `cvcpkg server`
+
+Today there are **two** console entry points: `cvcpkg` (the client) and a
+**separate** `cvcpkg-server` (`cvcpkg.server.cli:server_cli`, whose `run`
+command is the actual server, alongside its own `token`/`audit` groups).
+The client already has a `cvcpkg server` group, but it is
+**management-only** (`stop`, `status`, `stats`, `backup` — commands that
+talk *to* a running server).  Everything should live behind the single
+`cvcpkg` binary.
+
+- [ ] **Fold the server into `cvcpkg server run`** — move the
+      `cvcpkg-server` group's subcommands (`run`, plus its server-local
+      `token`/`audit` management) under the existing client `cvcpkg server`
+      group, and **drop the separate `cvcpkg-server` console script** (keep
+      a deprecation shim for one release).  One binary, one entry point;
+      `cvcpkg server run --port … --storage …` starts the server.  This is
+      also the prerequisite for the single self-contained binary running a
+      server (Phase 8) — a bake/APE with one entry point can't ship two
+      console scripts.
+
 #### `~/.cvcpkg/` — settings, search paths, and default prefixes
 
 - [ ] **Recipe discovery** — by default, look for a `recipes/` directory in
@@ -1340,6 +1400,21 @@ the terminal experience worthy of the web front end.
       built-in defaults *and* environment variables.  (Today config lives in
       `~/.config/cvcpkg/config.yaml`; consolidate the user-facing home under
       `~/.cvcpkg/` as part of this phase.)
+- [ ] **Auto-populate `settings.yaml` with defaults on first client run.**
+      When cvcpkg runs as a client and no `~/.cvcpkg/settings.yaml` exists,
+      write one seeded with the **effective defaults** (fully commented, so
+      it doubles as self-documentation of every knob).  Today `config.py`
+      is **load-only** — it reads the config file but never creates it and
+      has no write path at all — so this is net-new.
+- [ ] **`--save` to persist overrides (sticky settings).**  A flag on all
+      relevant commands that writes the values overridden *this invocation*
+      — whether they came from a CLI argument or an environment variable —
+      back into `~/.cvcpkg/settings.yaml`, so future commands don't have to
+      repeat the same `--server`/`--prefix`/`--cache-dir`/… or `CVCPKG_*`
+      exports.  Precedence stays: explicit CLI arg > env var > saved
+      settings > built-in default; `--save` just promotes the top of that
+      stack into the file.  Pairs with a `cvcpkg config get/set/unset/edit`
+      surface for direct editing.
 - [ ] **Default build prefix `~/.cvcpkg/build`** — builds no longer require
       an explicit `--prefix` to have a sane, stable home.
 - [ ] **Default install prefix `~/.cvcpkg/install`** — likewise for
