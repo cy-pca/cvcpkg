@@ -814,29 +814,40 @@ publish it to the cvcpkg server so consumers can pull it with
 Create `recipes/<your-package>/recipe.yaml`:
 
 ```yaml
-name: my-library
-upstream_version: "2.1.0"
-cvc_revision: 1
-description: "My library for CVC downstream consumers"
+# recipe.yaml
+schema_version: 1
+
+recipe:
+  name: my-library
+  upstream_version: "2.1.0"
+  cvc_revision: 1
+  description: "My library for CVC downstream consumers"
 
 source:
+  type: tarball
   url: "https://github.com/org/my-library/archive/refs/tags/v2.1.0.tar.gz"
   sha256: "<sha256-of-tarball>"
 
-build_matrix:
-  - platform: linux
-    arch: x86_64
-  - platform: macos
-    arch: arm64
-  - platform: windows
-    arch: x86_64
+depends:
+  build:
+    - name: boost
+      version: ">=1.83"
+    - name: hdf5
+      version: ">=1.10"
+  runtime:
+    - name: boost
+      version: ">=1.83"
+    - name: hdf5
+      version: ">=1.10"
 
 build:
-  system: cmake
-  args:
-    - "-DCMAKE_BUILD_TYPE={{config}}"
-    - "-DBUILD_SHARED_LIBS={{shared}}"
-    - "-DCMAKE_INSTALL_PREFIX={{prefix}}"
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
@@ -844,16 +855,26 @@ package:
     - "include/**"
     - "share/**/cmake/**"
     - "bin/**"
+  cmake_packages:
+    - name: MyLibrary
+      targets: ["MyLibrary::MyLibrary"]
+```
 
-dependencies:
-  - name: boost
-    version: ">=1.83"
-  - name: hdf5
-    version: ">=1.10"
+Each `matrix` entry's `script` names a build file next to `recipe.yaml`
+(not inline shell).  The script receives the staged source, the install
+prefix, and the resolved dependency prefix via environment variables:
 
-cmake_packages:
-  - name: MyLibrary
-    targets: ["MyLibrary::MyLibrary"]
+```bash
+#!/bin/bash
+# build.sh
+set -e
+cmake -S "$CVC_SOURCE_DIR" -B build \
+  -DCMAKE_BUILD_TYPE="$CVC_BUILD_TYPE" \
+  -DBUILD_SHARED_LIBS="$BUILD_SHARED_LIBS" \
+  -DCMAKE_INSTALL_PREFIX="$CVC_INSTALL_DIR" \
+  -DCMAKE_PREFIX_PATH="$CVC_DEPS_PREFIX"
+cmake --build build --parallel
+cmake --install build
 ```
 
 ### Step 2: Build the package
@@ -1273,9 +1294,10 @@ resolver when multiple builds of the same upstream version exist.
 The `cvc_revision` field in `recipe.yaml` controls the suffix:
 
 ```yaml
-name: boost
-upstream_version: "1.86.0"
-cvc_revision: 1      # → published as 1.86.0+cvc.1
+recipe:
+  name: boost
+  upstream_version: "1.86.0"
+  cvc_revision: 1      # → published as 1.86.0+cvc.1
 ```
 
 ### Duplicate detection (publish conflicts)

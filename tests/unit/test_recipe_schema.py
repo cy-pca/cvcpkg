@@ -183,3 +183,89 @@ class TestShippedRecipesValidate:
             except jsonschema.ValidationError as e:
                 bad.append(f"{d.name}: {e.message[:100]}")
         assert not bad, "recipes failing schema:\n  " + "\n  ".join(bad)
+
+
+README_PATH = SCHEMA_PATH.parents[2] / "README.md"
+
+# A dummy 64-hex digest so placeholder shas (e.g. "<sha256-of-tarball>") pass
+# the schema's ``^[0-9a-f]{64}$`` pattern; the README examples are structural,
+# not real, so only the shape is under test.
+_DUMMY_SHA = "0" * 64
+
+
+def _readme_yaml_blocks() -> list[tuple[int, dict]]:
+    """Return (fence-index, parsed) for every ```yaml block in the README
+    that parses to a mapping (skips CI-workflow list snippets etc.)."""
+    text = README_PATH.read_text(encoding="utf-8")
+    blocks: list[tuple[int, dict]] = []
+    in_yaml = False
+    buf: list[str] = []
+    idx = 0
+    for line in text.splitlines():
+        if line.strip() == "```yaml":
+            in_yaml, buf = True, []
+            continue
+        if in_yaml and line.strip() == "```":
+            in_yaml = False
+            idx += 1
+            try:
+                doc = yaml.safe_load("\n".join(buf))
+            except yaml.YAMLError:
+                continue
+            if isinstance(doc, dict):
+                blocks.append((idx, doc))
+            continue
+        if in_yaml:
+            buf.append(line)
+    return blocks
+
+
+def _is_full_recipe(doc: dict) -> bool:
+    """A full recipe.yaml example carries build/package structure — enough to
+    distinguish it from cvc-requirements.yaml, config snippets, or the
+    deliberately partial ``recipe:`` version fragment."""
+    return any(k in doc for k in ("build", "build_matrix", "package"))
+
+
+class TestReadmeRecipeExamples:
+    """recipe.yaml examples in the README must match the real schema.  This is
+    exactly the drift PR #309 fixed for the ``any`` example while leaving the
+    "Write a recipe" and versioning examples in the old, unvalidatable format
+    (top-level fields, ``build_matrix``, ``build.system``, ``dependencies``) —
+    a copy-paste trap for downstream authors.
+
+    Detection is structural (not "has ``schema_version``"), because the whole
+    failure mode is examples that *omit* the fields the schema requires.
+    """
+
+    def test_readme_has_full_recipe_examples(self):
+        # Guard against the extractor silently matching nothing.
+        n = sum(1 for _, d in _readme_yaml_blocks() if _is_full_recipe(d))
+        assert n >= 2, f"expected >=2 full recipe examples in README, found {n}"
+
+    def test_full_recipe_examples_validate(self, schema):
+        bad = []
+        for idx, doc in _readme_yaml_blocks():
+            if not _is_full_recipe(doc):
+                continue
+            src = doc.get("source")
+            if isinstance(src, dict) and "sha256" in src:
+                src["sha256"] = _DUMMY_SHA  # normalize placeholder digests
+            try:
+                jsonschema.validate(doc, schema)
+            except jsonschema.ValidationError as e:
+                name = (doc.get("recipe") or {}).get("name", "?")
+                bad.append(f"README yaml block #{idx} ({name}): {e.message[:120]}")
+        assert not bad, "README recipe examples failing schema:\n  " + "\n  ".join(bad)
+
+    def test_no_flat_recipe_fields(self):
+        # The tell-tale of the pre-#309 format: recipe identity fields at the
+        # top level instead of nested under ``recipe:``.  Catches both broken
+        # full examples and partial fragments (e.g. the versioning snippet).
+        offenders = [
+            idx for idx, doc in _readme_yaml_blocks() if "name" in doc and "upstream_version" in doc
+        ]
+        assert not offenders, (
+            "README yaml blocks put recipe fields at the top level instead of "
+            f"under `recipe:` (blocks: {offenders})"
+        )
