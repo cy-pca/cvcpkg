@@ -19,13 +19,13 @@ project going forward.
 - The GitHub repository will be renamed **`transfix/libcvc-deps` →
   `<cyberpcangel-org>/cvcpkg`** *before* the first PyPI publish — the rename
   now also moves the repo into the new CyberPC Angel org (see the Ownership
-  section above and Phase 23).
+  section above and Phase 25).
 - Backward compatibility is retained where downstream consumers depend on
   the old name — e.g. the `libcvc-depsConfig.cmake` compatibility wrapper
   stays so existing `find_package(libcvc-deps)` calls keep working.
 
 > **Release ordering:** the PyPI publish is the **final phase of the entire
-> roadmap** (Phase 23), not an early milestone.  It happens only after the
+> roadmap** (Phase 25), not an early milestone.  It happens only after the
 > rename (project + repo), the trusted publisher is configured, and **every
 > other roadmap phase — including the pre-release hardening phases 12–14 and
 > the v2.0.0 product phases 15–19 — is closed**.  Publishing to PyPI claims a
@@ -39,7 +39,7 @@ project going forward.
 work was 100% funded by the CyberPC Angel team, and CyberPC Angel, LLC owns
 the intellectual property.  All copyright and provenance branding across the
 project is being set to **CyberPC Angel, LLC**.  This effort is sequenced
-alongside the rename and the org move below, and lands **before** the Phase 23
+alongside the rename and the org move below, and lands **before** the Phase 25
 PyPI publish so the first public release carries the correct ownership.
 
 - [ ] **Copyright & provenance branding sweep → CyberPC Angel, LLC.**  Set
@@ -75,7 +75,7 @@ PyPI publish so the first public release carries the correct ownership.
 - [ ] **New GitHub organization for the CyberPC Angel team; cvcpkg lives
       under it.**  Create a dedicated **CyberPC Angel** GitHub org (slug TBD,
       e.g. `cyberpcangel`) and move cvcpkg into it.  This **changes the
-      Phase 23 rename target and the PyPI trusted-publisher owner** from
+      Phase 25 rename target and the PyPI trusted-publisher owner** from
       `transfix` to the new org, the `_GITHUB_REPO` default
       (`transfix/libcvc-deps`, env-overridable via `CVCPKG_GITHUB_REPO`), and
       all `transfix/libcvc-deps` URL references (**~53 occurrences across ~20
@@ -229,27 +229,29 @@ flowchart TD
 | 5 | Federation & Scaling | 🔶 Partially Done — cluster roles (primary/mirror/edge), pull-only populate, and public-vs-org namespace invariants landed (2026-07); CDN/sharding/replicas still future |
 | 6 | Community & Governance | 🔶 Partially Done — org namespaces + private-visibility isolation shipped |
 | 7 | Python Ecosystem (hermetic wheels, no-GIL) | 🔶 Partially Done — `python_wheel`/`python_sdist` source types, the `python:` block, the GIL-disabled test harness, and the first full matrix (`numpy` × cp311/cp312/cp313/cp313t) landed; more wheels + CUDA-math recipes + manifest freeze remain |
-| 8 | Self-Hosting & Universal Bootstrap (`cvpkg`) | ⬜ Planned — `mingw-w64` toolchain recipe is the first concrete step (landed 2026-07) |
+| 8 | Self-Hosting & Universal Bootstrap (`cvpkg`) | ⬜ Planned — `mingw-w64` toolchain recipe is the first concrete step (landed 2026-07); single-binary `cvpkg`/`cvcpkg-sc` runs a full server (seed from built-in recipes, remote builders, ad-hoc push, air-gapped) |
 | 9 | Fleet & Platform Expansion (GhostBSD/DragonflyBSD, qemu) | 🔶 In Progress — DragonflyBSD platform + provisioning underway in a parallel track |
 | 10 | Peer Providers & Hardware-Aware Concretization | ⬜ Planned |
 | 11 | Self-Hosting Toolchains (extends Phase 8) | ⬜ Proposed |
 | 12 | Federation Hardening — Selective Mirroring & Authoritative Resolution | ✅ Complete — mirror allow/deny policy, size budget with usage-based eviction, and top-down root-authoritative resolution |
 | 13 | Identity & Access — OIDC / External Providers | ✅ Complete — OIDC login for the admin dashboard (code flow + PKCE, claim→role mapping); HMAC tokens remain for machines |
 | 14 | Source Recipes — File-Artifact Packages | ✅ Complete — `platform: any` file artifacts consumed by downstream platform recipes, canonized by an end-to-end test |
-| 15 | CLI UX & the Recipe-First Workflow | ⬜ Planned — deprecate `cvc-requirements.yaml`, `~/.cvcpkg/` defaults (settings/recipes/build/install/cache), install-prefix registry (`~/.cvcpkg/local.db`) with aliases + delete/inspect/modify, recipe generation from existing projects, clean/activate commands, terminal graphics, offline source cache |
+| 15 | CLI UX & the Recipe-First Workflow | ⬜ Planned — single entry point (fold `cvcpkg-server` into `cvcpkg server`), deprecate `cvc-requirements.yaml`, `~/.cvcpkg/` defaults + auto-populated `settings.yaml` with a `--save` sticky-overrides flag, install-prefix registry (`~/.cvcpkg/local.db`) with aliases + delete/inspect/modify, per-prefix state DB (`share/cvcpkg/prefix.db`: installed-file tracking, **first-class `uninstall`**, idempotent installs, hash-verify, ops journal), recipe generation from existing projects, clean/activate commands, terminal graphics, offline source cache, recipe-set export + source pre-seeding for air-gapped self-hosting |
 | 16 | Prefix Provenance & Server Seeding | ⬜ Planned — install prefixes carry catalog info + recipes in `share/cvcpkg/` so a prefix can seed a cvcpkg-server; org/private status explicit with warnings |
 | 17 | Recipe Archives — Declared Artifacts & Package-Page UX | ⬜ Planned — schema-declared recipe artifacts, full recipe directories on the server, downloadable recipe archives, collapsible artifact viewer, package-list layout rework |
-| 18 | Server Backups & Restore | ⬜ Planned — first-class recipe/package backup + restore commands, admin-managed scheduled backup jobs to the storage backends |
+| 18 | Server Backups, Scheduled Jobs & Quota Governance | ⬜ Planned — recipe/package backup + restore; a general admin job manager + scheduler (none exists today); quota governance (global default → infinite, reconciliation job, recipes count against org quota) |
 | 19 | Application Packaging & Desktop Delivery | ⬜ Planned — recipe entry points, desktop assets, exe/MSI + AppImage + dmg installer commands from a prefix, `cvcpkg bake` self-mounting prefix binaries (feasibility: native per-OS mechanisms + persistent state layers + cosmo APE variant, no Docker) |
 | 20 | First-Party & Featured Software Recipes | ⬜ Planned — org namespaces `cypca` (eiskaltdcpp, eiskaltdcpp-py, verlihub), `cvc` (TexMol alongside libcvc/volrover), `tfx` (ezquake); SDL2/SDL3 across platforms + satellites; the wheel recipes needed to self-host cvcpkg |
 | 21 | Package Visibility — Hidden Packages | ⬜ Planned — discoverability-only suppression (a third axis beside `yanked` and org `is_private`); upstream is authoritative; propagation through mirror + populate |
 | 22 | Federation Topology — Nested Authority & Network Introspection | ⬜ Planned — N-tier edge→mid→root authority, cross-tier consistency warnings, same-org override, permission-gated network statistics |
-| 23 | **PyPI Release** | ⬜ **Final phase** — the project/repo rename, trusted-publisher config, and the gated publish. Deliberately last: `pip install cvcpkg` ships only after the roadmap is otherwise complete. |
+| 23 | Build & Configuration-Management System | ⬜ Planned — recipes as state (Get/Test/Set, `check`/`apply`/`uninstall`), BYO non-redistributable assets, security (config-channel-is-C2), tamper-evident local forensic journal, per-machine generations |
+| 24 | Live Updates, Activity Feed & Build Transparency | ⬜ Planned — client WebSocket push + new-package notifications, a public visibility-filtered activity feed (recipes/builds/yanks/unyanks/nukes), public read for public build jobs+logs (private orgs stay private) |
+| 25 | **PyPI Release** | ⬜ **Final phase** — the project/repo rename, trusted-publisher config, and the gated publish. Deliberately last: `pip install cvcpkg` ships only after the roadmap is otherwise complete. |
 
 **Road to PyPI (`pip install cvcpkg`):** the PyPI publish is the **last phase of the
-roadmap** (Phase 23), not an early step.  The *engineering* readiness for it (Phase 1.5)
+roadmap** (Phase 25), not an early step.  The *engineering* readiness for it (Phase 1.5)
 is done, but the release itself happens only after the remaining phases — including the
-pre-release hardening phases (12–14) and the v2.0.0 product phases (15–22) — are
+pre-release hardening phases (12–14) and the v2.0.0 product phases (15–24) — are
 closed.  This is a deliberate correction: publishing to PyPI is a one-way,
 name-claiming, community-facing commitment, so it comes at the very end.
 
@@ -295,7 +297,7 @@ work before a `pip install cvcpkg` is even buildable.  All of these are done
 hardening pass — private-data isolation, tenant scoping, tar-slip and
 reflected-XSS fixes).
 
-> **The actual PyPI publish is not here.**  It moved to **Phase 23 — PyPI
+> **The actual PyPI publish is not here.**  It moved to **Phase 25 — PyPI
 > Release**, the final phase of the roadmap.  The rename (project + repo),
 > trusted-publisher configuration, and the gated publish all happen there,
 > after every other phase is closed.  See the release-ordering note at the top
@@ -314,7 +316,7 @@ reflected-XSS fixes).
       installed wheel
 - [x] Publish workflow (`cvcpkg-publish.yml`) wired for PyPI trusted
       publishing (OIDC), gated behind the `CVCPKG_PUBLISH_TO_PYPI` repo
-      variable so a stable tag cannot publish until Phase 23 flips it on
+      variable so a stable tag cannot publish until Phase 25 flips it on
 
 #### Admin CLI Completeness
 
@@ -890,15 +892,20 @@ Python, no compiler, no package manager.
   |---|---|---|---|
   | `cvcpkg` | activatable prefix (directory tree) | full | hermetic Python prefix (Phase 7) |
   | **`cvcpkg-sc`** | **single self-contained binary** | **full (server + builder + all)** | **Phase 19 `cvcpkg bake` of the hermetic prefix** |
-  | `cvpkg` | single Actually Portable Executable | trimmed (install / verify / activate / doctor; no server, no builder) | `cosmocc` + CPython APE (below) |
+  | `cvpkg` | single Actually Portable Executable | install / verify / activate / doctor **+ run a full server + builder** | `cosmocc` + CPython APE (below) |
 
   `cvcpkg-sc` and `cvpkg` are *not* the same artifact: `cvpkg` is a
-  cosmo APE carrying a trimmed feature set, whereas `cvcpkg-sc` is the
+  cosmo APE (one file, every platform), whereas `cvcpkg-sc` is the
   **whole** cvcpkg baked from its native hermetic prefix (CPython
-  interpreter + wheels), so it keeps the full CLI/server/builder surface
-  at the cost of being platform-native rather than one-file-everywhere.
-  Ships the same self-mounting-binary UX per platform as any other bake
-  (Linux squashfuse/overlay, macOS dmg+shadow, Windows ISO+scratch).
+  interpreter + wheels), platform-native rather than one-file-everywhere.
+  `cvcpkg-sc` ships the same self-mounting-binary UX per platform as any
+  other bake (Linux squashfuse/overlay, macOS dmg+shadow, Windows
+  ISO+scratch).  **Both must be able to run a fully-fledged
+  `cvcpkg server` (see the single-binary-server subsection below);** for
+  the cosmo APE that means bundling the server deps (FastAPI, uvicorn,
+  SQLAlchemy, an aiosqlite DB) into the APE — heavier than the original
+  "bootstrap only" cut, but the deliberate goal is a single file that is
+  client, builder, *and* server.
 
 **Dependency survey (2026-07-16).** Auditing cvcpkg's own non-optional
 runtime closure against PyPI turned up two constraints that shape this work:
@@ -933,10 +940,13 @@ runtime closure against PyPI turned up two constraints that shape this work:
       into a single **Actually Portable Executable** (αcτµαlly pδrταblε
       εxεcµταblε) that runs unmodified on Linux, macOS, Windows, and the
       BSDs.
-- [ ] **`cvpkg` recipe** — a trimmed cut of cvcpkg (install / verify /
-      activate / doctor; no server, no builder) compiled as a completely
-      self-contained APE.  One binary, every supported platform, no
-      installed Python required.
+- [ ] **`cvpkg` recipe** — cvcpkg compiled as a completely self-contained
+      APE (client + builder + **server**, via the single `cvcpkg server`
+      entry point from Phase 15).  One binary, every supported platform,
+      no installed Python required.  Bundling the server deps
+      (FastAPI/uvicorn/SQLAlchemy/aiosqlite) makes the APE larger than a
+      bootstrap-only cut, but the goal is one file that can be client,
+      builder, *and* server.
 - [ ] **Zero-dependency bootstrap** — publish the APE on cvcpkg.org so a
       bare machine can go from nothing to a working build environment:
 
@@ -951,13 +961,45 @@ runtime closure against PyPI turned up two constraints that shape this work:
 
 ```mermaid
 flowchart LR
-    SRC["cvcpkg source<br/>(trimmed: install/verify/activate)"] --> COSMO["cosmocc + CPython<br/>(APE link)"]
+    SRC["cvcpkg source<br/>(client + builder + server)"] --> COSMO["cosmocc + CPython<br/>(APE link)"]
     COSMO --> APE["cvpkg<br/>single APE binary"]
     APE --> L[Linux]
     APE --> W[Windows]
     APE --> M[macOS]
     APE --> B[BSDs]
 ```
+
+#### Single-binary server — every workflow from one file
+
+The payoff of the single entry point (Phase 15) plus a full-featured
+self-contained binary: **`cvpkg` / `cvcpkg-sc` can run a fully-fledged
+cvcpkg-server**, so one file is client, builder, *and* server.  The
+built-in recipes are the seed, and every population path is supported:
+
+- [ ] **Seed a base server from the built-in recipes.**  `cvpkg server
+      run` on a bare machine comes up with the **bundled recipe set already
+      loaded** as the starting catalog — a working server with zero
+      external input (no network, no separate recipe push).  Composes with
+      Phase 16 prefix-seeding and Phase 15's recipe export.
+- [ ] **Register remote builders to populate it.**  Builders (themselves
+      `cvpkg`/`cvcpkg-sc` binaries) register against the single-binary
+      server, claim jobs, build, and publish — the existing builder-fleet
+      workflow, now hostable from one file.
+- [ ] **Ad-hoc push from another `cvpkg`.**  A second `cvpkg` process that
+      builds packages locally (e.g. on a developer laptop or an isolated
+      build box) can **push the finished builds** to the server — no
+      standing builder registration required.
+- [ ] **Air-gapped operation end to end.**  With recipes built in and the
+      **source cache pre-seeded** (Phase 15's `recipe export` +
+      `source fetch`), a single `cvpkg` binary on an isolated host runs the
+      server, builds from the warmed cache, and serves the results to
+      air-gapped clients — no internet at any step.  This is the flagship
+      airgap story: carry one binary + a source cache in, stand up a full
+      archive.
+- [ ] **Same server, three shapes.**  `cvcpkg server run` behaves
+      identically whether launched from a `pip install`ed `cvcpkg`, the
+      native `cvcpkg-sc` bake, or the `cvpkg` APE — one code path, one
+      entry point, selected only by which binary you happen to hold.
 
 ### Phase 9 — Fleet & Platform Expansion
 
@@ -1326,6 +1368,26 @@ the terminal experience worthy of the web front end.
       cpkg, Conan, or similar project (extends `cvcpkg init`'s current
       cmake/meson/autotools templates with build-system detection/import).
 
+#### Single entry point — fold `cvcpkg-server` into `cvcpkg server`
+
+Today there are **two** console entry points: `cvcpkg` (the client) and a
+**separate** `cvcpkg-server` (`cvcpkg.server.cli:server_cli`, whose `run`
+command is the actual server, alongside its own `token`/`audit` groups).
+The client already has a `cvcpkg server` group, but it is
+**management-only** (`stop`, `status`, `stats`, `backup` — commands that
+talk *to* a running server).  Everything should live behind the single
+`cvcpkg` binary.
+
+- [ ] **Fold the server into `cvcpkg server run`** — move the
+      `cvcpkg-server` group's subcommands (`run`, plus its server-local
+      `token`/`audit` management) under the existing client `cvcpkg server`
+      group, and **drop the separate `cvcpkg-server` console script** (keep
+      a deprecation shim for one release).  One binary, one entry point;
+      `cvcpkg server run --port … --storage …` starts the server.  This is
+      also the prerequisite for the single self-contained binary running a
+      server (Phase 8) — a bake/APE with one entry point can't ship two
+      console scripts.
+
 #### `~/.cvcpkg/` — settings, search paths, and default prefixes
 
 - [ ] **Recipe discovery** — by default, look for a `recipes/` directory in
@@ -1338,6 +1400,21 @@ the terminal experience worthy of the web front end.
       built-in defaults *and* environment variables.  (Today config lives in
       `~/.config/cvcpkg/config.yaml`; consolidate the user-facing home under
       `~/.cvcpkg/` as part of this phase.)
+- [ ] **Auto-populate `settings.yaml` with defaults on first client run.**
+      When cvcpkg runs as a client and no `~/.cvcpkg/settings.yaml` exists,
+      write one seeded with the **effective defaults** (fully commented, so
+      it doubles as self-documentation of every knob).  Today `config.py`
+      is **load-only** — it reads the config file but never creates it and
+      has no write path at all — so this is net-new.
+- [ ] **`--save` to persist overrides (sticky settings).**  A flag on all
+      relevant commands that writes the values overridden *this invocation*
+      — whether they came from a CLI argument or an environment variable —
+      back into `~/.cvcpkg/settings.yaml`, so future commands don't have to
+      repeat the same `--server`/`--prefix`/`--cache-dir`/… or `CVCPKG_*`
+      exports.  Precedence stays: explicit CLI arg > env var > saved
+      settings > built-in default; `--save` just promotes the top of that
+      stack into the file.  Pairs with a `cvcpkg config get/set/unset/edit`
+      surface for direct editing.
 - [ ] **Default build prefix `~/.cvcpkg/build`** — builds no longer require
       an explicit `--prefix` to have a sane, stable home.
 - [ ] **Default install prefix `~/.cvcpkg/install`** — likewise for
@@ -1406,6 +1483,53 @@ Phase 15 gives prefixes a first-class management story:
       computes the real referenced-hash set from each registered prefix's
       lockfile instead of pruning against an empty set.
 
+#### Prefix state database — file tracking, uninstall, idempotent installs
+
+Four primitives that are **first-class functionality, not nice-to-haves**
+(directive 2026-07-18): today extraction is a **blind merge** into the
+prefix tree with no record of which package wrote which file, there is no
+`cvcpkg uninstall` (an install-conflict error message already tells users
+to run one that does not exist), recipes have no teardown slot, and
+re-install always re-extracts.  The data backbone is a **per-prefix SQLite
+database at `share/cvcpkg/prefix.db`**, next to the prefix's existing
+metadata (today `share/libcvc-deps/lockfile.yaml` + per-bundle
+`manifest.yaml`) — the machine-level `~/.cvcpkg/local.db` indexes
+prefixes; `prefix.db` is each prefix's own ground truth and **travels with
+the prefix**.
+
+- [ ] **Installed-file tracking.**  At extract time, record every
+      materialized path with its sha256, mode, and owning package into
+      `prefix.db` (the recipe's `package.files` are *globs*, not a file
+      list — the DB holds what actually landed).  Enables `cvcpkg owns
+      <file>`, real file-conflict detection, and hash-level verification.
+- [ ] **First-class `cvcpkg uninstall <pkg> --prefix/-alias`.**  Remove
+      exactly the files the package owns, prune emptied directories,
+      update lockfile + DB atomically (SQLite transaction), and handle
+      dependents deliberately: refuse by default when other installed
+      packages depend on the target, `--cascade` to remove the dependent
+      closure (the resolver already knows the runtime graph).  Runs the
+      recipe's teardown hook when one is declared (the state contract in
+      the configuration-management phase below).
+- [ ] **Idempotent installs.**  Installing a variant already recorded in
+      `prefix.db` that passes verification is a **no-op** (today it
+      re-downloads and re-extracts over the tree); `--force` overrides;
+      partial damage re-extracts only what fails verification.
+- [ ] **`cvcpkg verify` with teeth.**  Verify currently cross-checks
+      metadata only — no file is ever hashed, despite the docstring
+      claiming corruption detection.  With the file table it becomes a
+      real integrity check: hash installed files against recorded digests,
+      report modified/missing/unowned files (drift detection for the
+      config-management phase).
+- [ ] **Upgrades stop leaving corpses.**  `upgrade` currently
+      extract-merges the new version over the old; with file tracking it
+      becomes install-new + remove-files-no-longer-present — no orphaned
+      files from renamed/dropped paths.
+- [ ] **Append-only operations journal.**  A journal table in `prefix.db`
+      records every install / uninstall / upgrade / verify / state-apply
+      with timestamp, acting user, package set, and pre/post digests —
+      the local forensic substrate (see the configuration-management
+      phase for chaining and server-anchoring).
+
 #### Terminal experience
 
 - [ ] **Nice terminal graphics when the terminal supports it** — progress
@@ -1433,6 +1557,61 @@ Phase 15 gives prefixes a first-class management story:
       source download cache directory where it makes sense, with the
       default moving to `~/.cvcpkg/cache` (today `~/.cache/cvcpkg`),
       consistent with the `~/.cvcpkg/` consolidation above.
+
+#### Recipe-set export & source pre-seeding (air-gapped self-hosting)
+
+The payoff scenario: pre-download a recipe set **and** its source cache
+online, carry them to an air-gapped host, and build there with a single
+self-contained `cvpkg` / `cvcpkg-sc` binary (Phase 8 / Phase 19–20) — no
+network, no server.  Also the extraction path for a self-contained binary
+that has recipes baked in but where the user wants them on disk.
+
+- [ ] **`cvcpkg recipe export <packages…>` — recipe-set archive with
+      dependency closure.**  Generate and return an archive (tarball / zip /
+      others) of the recipes for the requested packages.  **By default it
+      pulls in the full recipe dependency closure** (build + host_tools +
+      runtime deps, transitively, plus `_common`); `--no-deps` exports only
+      the named recipes.  Include each recipe's declared artifacts
+      (Phase 17: scripts, patches, media) so the result extracts to a
+      **well-formed recipes directory** usable directly by
+      `cvcpkg build/install`.  This is distinct from what exists today:
+      `/v1/recipes/bundle` returns **all** recipes with no selection or
+      closure, and `cvcpkg download` fetches **binary bundles**, not
+      recipe sources.
+- [ ] **Newest-recipe resolution, remote-preferred but local-revision-
+      aware.**  Lean on remote servers for the newest recipes (top-down per
+      Phase 22 authority), but a **newer local `cvc_revision`** wins when
+      present — export the newest available version per recipe from either
+      source, and report where each came from.  Composes with the Phase 22
+      cross-tier consistency warnings.
+- [ ] **Server API for the selective bundle** — extend the recipe API with
+      a package-set + closure parameter (e.g. `POST /v1/recipes/export`
+      taking a package list and a `deps` flag), returning the archive.
+      Honors org/private visibility and the hidden-package rules
+      (Phases 21) — a hidden recipe still exports when explicitly requested
+      or pulled in as a dependency.  The client falls back to composing the
+      closure itself from `/v1/recipes/{name}` when the server predates the
+      endpoint.
+- [ ] **`cvcpkg source fetch <packages…>` — pre-download the source
+      cache.**  Download all upstream source archives *referred to* by the
+      exported recipe set (the `source.url` / `source.artifacts` tarballs,
+      verified by their recipe `sha256`) into a directory, so the
+      air-gapped host builds entirely from the warmed cache (extends the
+      "Pre-download for air-gapped machines" item above from "current
+      recipes" to "an explicit recipe-set closure").  `--cache-dir`
+      controls the destination (default `~/.cvcpkg/cache`).
+- [ ] **Compressed or extracted source cache.**  The pre-downloaded source
+      cache can be kept **either** as the fetched compressed archives
+      **or** already extracted into source directories — a flag selects.
+      Extracted trees are the substrate for later **patch generation and
+      recipe-patch iteration** (Phase 15's developer loop), so the two
+      forms are first-class, not an afterthought.
+- [ ] **One-shot seed + a manifest** — a convenience that runs
+      `recipe export` + `source fetch` together and writes a small manifest
+      (recipe set, versions, source hashes, provenance) so the air-gapped
+      side can verify completeness before building, and so the bundle
+      itself is reproducible and auditable (ties into Phase 16 provenance
+      and Phase 23's forensic journal).
 
 ---
 
@@ -1498,6 +1677,48 @@ package page.
       recipe directory** usable with the normal cvcpkg commands to build,
       install, and publish packages.
 
+#### Recipe storage accounting & publish governance
+
+**Current state (audited 2026-07-18).**  When a recipe is pushed to
+*announce* a package before it is built, the server **does** store the
+full recipe directory — `recipe.yaml` plus all scripts, patches, and any
+media present — as one `tar.gz` under
+`state_dir/recipe_bundles/[org]/<name>.tar.gz`.  But three things are
+missing, and they matter for private-org fairness and abuse resistance:
+
+- [ ] **Recipe bundles must count against the organization's storage
+      quota.**  Today recipe uploads count against **nothing** — the
+      per-org `storage_used_bytes` quota (default 10 GiB) and the global
+      cap are **package-only**; `upload_recipe` never calls
+      `check_storage_limit`.  A private org can therefore stage unlimited
+      recipe bytes for free.  Count org-scoped recipe bundles against the
+      org quota; **global/base recipes (an admin concern — see below) stay
+      exempt.**
+- [ ] **Gate global/base recipe publishing to admins.**  The premise that
+      a global recipe is "published by an admin" is **not currently
+      enforced** — `upload_recipe` requires only a `publisher` token, and
+      the admin/org-member check is **skipped entirely when `org_slug` is
+      empty**, so any publisher can push *or silently overwrite* a global
+      base recipe.  Require admin for the public namespace (matching
+      `DELETE /v1/recipes/{name}` and the register-placeholder endpoint,
+      which already do), so the exemption above is safe and the public
+      recipe set is admin-curated.
+- [ ] **A recipe-upload size cap.**  `upload_recipe` reads the entire body
+      into memory with **no `MAX_UPLOAD_BYTES` check** (unlike the
+      chunked, capped package-upload path) and there is no body-size
+      middleware — a recipe bundle can be arbitrarily large.  Add a cap and
+      stream to disk.
+- [ ] **Route recipe bundles through the pluggable storage backend.**
+      Recipe bundles are written directly to the server's local filesystem
+      and **bypass** the `StorageBackend` layer that package archives use,
+      so they cannot live on `s3://`/`gcs://`/etc. and are not covered by
+      the Phase 18 backups' backend targets.  Route them through the same
+      backend abstraction.
+
+> These compose with the **quota-reconciliation job** and the
+> **default-infinite global quota** in Phase 18 — recipe accounting is
+> only trustworthy once a job reconciles the materialized counters.
+
 #### Package-page recipe section
 
 - [ ] **Show the declared artifacts alongside the recipe** — in the recipe
@@ -1523,9 +1744,15 @@ package page.
 
 ---
 
-### Phase 18 — Server Backups & Restore
+### Phase 18 — Server Backups, Scheduled Jobs & Quota Governance
 
 **Status: Planned — required before the v2.0.0 PyPI release**
+
+Three related operator concerns: restorable backups, a way for admins to
+*manage and schedule* server jobs (which the scheduled backup needs and
+which does not exist today), and honest storage quotas.
+
+#### Backups & restore
 
 `cvcpkg server backup` today is a database dump.  Before 2.0.0 the server
 needs **first-class, restorable** backups of the things that actually matter:
@@ -1547,6 +1774,55 @@ the recipes and the packages.
       that handles regular backups to **various backend types** — reusing
       the Phase 5 storage-backend layer (`s3`, `gcs`, `azure`, `sftp`,
       `rsync`, `rclone`, `file`, `gh-release`) for offsite destinations.
+
+#### General admin job manager & scheduler
+
+**Current state (audited 2026-07-18): there is no general job scheduler.**
+All periodic server work — mirror sync, populate sync, mirror health,
+log/yank retention GC, build dispatch — is a set of **hardcoded
+fixed-interval `asyncio` loops** in the app lifespan, tunable only by env
+vars and **not addressable, pausable, or rescheduleable** at runtime.  The
+only *manageable* jobs are **build jobs** (submit/list/cancel/pause/resume,
+per-org scoped); there is no cron/`ScheduledJob`/job-queue abstraction, and
+the `/admin` dashboard's job surface is **view-only** (the Health tab shows
+counts and a builder table with no controls).  The scheduled backup above
+has nowhere to live.  This phase builds the missing substrate:
+
+- [ ] **A scheduled-task abstraction** — a jobs-with-schedule table + a
+      scheduler that runs registered jobs at admin-configured times/
+      intervals (backups, quota reconciliation, retention GC, populate/
+      mirror sync all become *registered jobs* instead of hardcoded loops).
+- [ ] **An admin job manager** — API + `/admin` dashboard + CLI to **list,
+      pause, resume, reschedule, trigger-now, and cancel** scheduled jobs
+      and view their run history/last-status, extending management beyond
+      build jobs to all server-internal work.  Every job action is
+      audit-logged (composes with Phase 23's forensic journal).
+- [ ] **Surface existing jobs** — bring the current hardcoded loops under
+      the manager as read-at-minimum (next-run, last-run, interval) so
+      operators can see and adjust them without redeploying.
+
+#### Quota governance
+
+**Current state (audited 2026-07-18): quotas exist but are incomplete.**
+There is a **per-org** quota (`storage_used_bytes` vs `storage_limit_bytes`,
+default 10 GiB) and a **global** cap
+(`CVCPKG_GLOBAL_CACHE_STORAGE_LIMIT_BYTES`) — but the global default is
+**100 GiB, not infinite**, the org counter is a materialized value that can
+**drift** (mutated incrementally on publish/delete/yank with no
+reconciliation), and neither counts recipe bundles (see Phase 17).
+
+- [ ] **Default the global quota to infinite.**  Keep the knob, but change
+      the default from 100 GiB to **unlimited (0 = infinite)** so a
+      self-hosted server does not silently reject publishes at 100 GiB;
+      operators opt *in* to a cap.
+- [ ] **Quota-reconciliation job** — a scheduled job (using the manager
+      above) that recomputes each org's `storage_used_bytes` from the true
+      `SUM(size_bytes)` — including recipe bundles once Phase 17 counts them
+      — so the materialized counter cannot drift from reality.
+- [ ] **Quota admin UI** — surface and edit the global and per-org limits
+      (and current usage) in the `/admin` dashboard; today they are only
+      reachable via the JSON API (`PATCH /v1/admin/settings`,
+      `PATCH /v1/orgs/{slug}`).
 
 ---
 
@@ -1771,6 +2047,68 @@ travel *inside* the bake — and its private-org warning applies to baking
 one), and Phase 15's air-gap story (a bake is its logical endpoint: one
 file, no network, no unpack).
 
+#### Code signing — official CyberPC Angel, LLC binaries
+
+Every installer and bake above should eventually ship **signed as CyberPC
+Angel, LLC**, so our builds are verifiably official.  Researched
+2026-07-18 — the landscape moved recently, and two common assumptions
+need correcting up front:
+
+> **You don't buy a "Microsoft license" or an "Apple license" for this.**
+> Windows Authenticode certificates come from commercial CAs (DigiCert,
+> Sectigo, SSL.com, GlobalSign…), not Microsoft — though Microsoft *now
+> sells a signing service* (below) that is the best fit for us.  Apple's
+> is a **$99/yr Developer Program membership** plus a Developer ID
+> certificate, not a per-product license.
+>
+> **EV certificates no longer buy SmartScreen reputation.**  Microsoft
+> removed the EV fast-track in 2024 and its docs now say paying an EV
+> premium "solely to avoid SmartScreen warnings is no longer justified" —
+> OV and EV are treated identically, and reputation accrues organically
+> from clean-install volume for both.  Ignore any vendor page still
+> claiming "instant SmartScreen bypass"; do not buy EV.
+
+- [ ] **Windows — Azure Artifact Signing (~$120/yr), signed from Linux
+      CI.**  Microsoft's signing service (GA Jan 2026, $9.99/mo Basic,
+      5,000 signatures/mo): a US LLC qualifies, the old 3-year org-age
+      rule is gone, no USB token or HSM to manage.  Certs are 72-hour
+      short-lived, so **RFC 3161 timestamping is mandatory**, and
+      **`jsign`** is the only client that reaches it from Linux — which
+      suits the builder fleet.  Fallback path: SSL.com OV + eSigner
+      (~$309/yr).  Context on why cloud signing: since June 2023 all
+      code-signing keys must live in FIPS-140-2-L2 hardware (the
+      downloadable `.pfx` is dead), and since March 2026 certs max out at
+      ~15 months — cloud signing sidesteps the token-reship treadmill.
+- [ ] **macOS — Apple Developer Program (org) + notarization.**
+      Enrollment needs a **D-U-N-S number** (free, ~week) and the real
+      legal entity; then a **Developer ID Application** cert (plus
+      Developer ID *Installer* for `.pkg`).  Pipeline: `codesign
+      --options runtime --timestamp` → `notarytool` submit (`altool` is
+      dead) → `stapler staple`.  **Notarization is effectively mandatory
+      now** — macOS 15 removed the Control-click bypass, leaving
+      unnotarized apps behind an admin-password wall.  Signing/stapling
+      needs a macOS runner (the fleet's mac builders); `rcodesign` is a
+      viable Linux-native secondary, not the primary.  For dmg:
+      sign+notarize+**staple the app first**, then build/sign/notarize/
+      staple the dmg.  Universal binaries: `lipo` first, sign the fat
+      binary.
+- [ ] **Linux — GPG + checksums; cosign for provenance.**  No OS trust
+      authority exists to pay; ship detached GPG signatures + SHA256SUMS
+      on release artifacts, sign apt/rpm repos if we publish them, and
+      add **sigstore/cosign** attestations in CI for supply-chain
+      provenance (valuable to automated consumers, invisible to desktop
+      users; AppImage's own signature field is effectively decorative).
+      Composes with cvcpkg's existing Ed25519 package signing.
+- [ ] **Order of operations** — Windows first (worst unsigned UX, cheapest
+      fix, reputation takes weeks to accrue so start early), macOS second
+      (longer enrollment lead time), Linux continuous/cheap.  Realistic
+      floor: **~$220/yr** in program fees plus macOS CI capacity.
+- [ ] **Pitfalls to design in from day one** — timestamp *everything* (an
+      untimestamped signature dies with its cert, retroactively, on every
+      user's disk); expect a SmartScreen **reputation reset on any cert
+      change** (renew early, overlap, keep one consistent signing
+      identity); make notarization CI steps retryable (no SLA).
+
 ---
 
 ### Phase 20 — First-Party & Featured Software Recipes
@@ -1870,11 +2208,10 @@ to install *itself*.
       Windows, Linux, macOS, and BSD, with mingw cross presets.  Note it
       vendors `src/qwprot` as a **submodule** — the recipe must fetch it
       recursively or vendor it.
-      *Source decision:* the `transfix/ezquake-source` fork currently has
-      **zero divergence from upstream** (0 ahead / 153 behind; its `master`
-      HEAD SHA exists in `QW-Group/ezquake-source`), so the recipe should
-      track **upstream** unless the separate `hybrid-race-condition` branch
-      is the intended source.
+      *Source: **upstream `QW-Group/ezquake-source`** — decided.*  The
+      maintainer's earlier changes were merged upstream, and the
+      `transfix/ezquake-source` fork carries no remaining divergence
+      (0 ahead / 153 behind), so the recipe tracks upstream directly.
 - [ ] **Org page links to the maintainer's GitHub profile** — extends the
       organization page with an optional profile/website link field.
 
@@ -1905,6 +2242,259 @@ the fleet.
       are unrelated numbers), and each drags its own codec tree
       (png/jpeg/tiff/webp/avif; ogg/vorbis/opus/flac/mpg123; freetype/
       harfbuzz) — so budget one item each, not a single "satellites" line.
+
+#### Quake engines & tooling
+
+SDL's first real payoff: a family of GPL-2.0 engines and tools that share
+the SDL/codec dependency stack already being built above.  These are
+upstream open-source projects, so they land in the **public namespace**
+(unlike `ezquake`, which stays in `tfx` as a personal build); moving any of
+them under an org later is a one-line change.
+
+> **Policy: build from source, do not repackage upstream binaries.**
+> Every engine here publishes prebuilt binaries, and it would be tempting
+> to stage them as `prebuilt` recipes.  Don't — build each from source
+> against cvcpkg's own dependency closure.  This is the whole point of the
+> archive (reproducibility, a known dependency graph, cross-platform
+> coverage the upstreams don't offer, and CVE-patchable deps), and it is
+> what makes the binaries *ours* to sign (see **Code signing** in
+> Phase 19).  It also avoids inheriting upstream's vendored-static habits:
+> QuakeSpasm ships statically-linked libjpeg/zlib/png/ogg/vorbis/opus/mad,
+> and FTE's `make makelibs` downloads and builds its own copies of the same
+> libraries — both of which defeat a shared, auditable dependency graph.
+> `prebuilt` staging stays reserved for genuinely non-redistributable or
+> non-buildable artifacts (vendor SDKs, NVIDIA redistributables).
+
+- [ ] **`fteqw`** — the FTE QuakeWorld engine (GPL-2.0).  Supports **both
+      SDL2 and SDL3**; on Linux the default build uses the native
+      X11/Wayland path with `DYNAMIC_SDL`, i.e. **SDL is `dlopen`'d rather
+      than linked** — the same portability property SDL itself has.
+      Optional deps (CMake warns and continues): `zlib`, `bzip2`,
+      `libjpeg-turbo`, `libpng`, `freetype` + `fontconfig`, vorbisfile,
+      `gnutls`, OpenGL, draco.  Vulkan is **headers-only** (loader
+      `dlopen`'d) and OpenAL is runtime-loaded.  **Note: libcurl is *not* a
+      dependency** — FTE ships its own HTTP stack; don't add it.
+      *Landmines:* (1) **`make makelibs` downloads source tarballs over the
+      network at build time** (ijg.org, zlib.net, xiph.org, SourceForge,
+      GitHub, libsdl.org…) — a hermetic recipe must **skip `makelibs`
+      entirely** and build against cvcpkg deps.  (2) Two build systems:
+      Make is the tested/blessed path but must run from `engine/`, while
+      `CMakeLists.txt` sits at the repo root.  (3) Renderer variants
+      (`gl-rel`, `vk-rel`, `d3d-rel`, `mingl-rel`) are build *flavors* that
+      produce the same binary name — shipping GL and Vulkan side by side
+      needs separate build dirs or renaming.  (4) The `ffmpeg` plugin is
+      pinned to **ffmpeg 4.x** and will not build against modern ffmpeg.
+      *Source caveat:* `github.com/fte-team/fteqw` self-describes as a
+      **mirror** (origin was SourceForge SVN; a Forgejo instance may be the
+      live upstream — the site served binaries newer than the mirror), so
+      **pin a commit SHA** rather than tracking a branch.
+- [ ] **`fteqcc`** — the FTE QuakeC compiler, built from the **same repo**
+      (`engine/qclib/`, targets `qcc-rel`/`qccgui-rel`); there is no
+      separate upstream repo.  The CLI is essentially freestanding C
+      (optional zlib).  Worth its own recipe beyond QuakeC: **`fteqcc`
+      doubles as a pak/pk3 creator and extractor** (`-l`/`-x`/`-0`/`-9`),
+      making it a genuinely useful standalone archive tool.
+      `fteqccgui` is a separate matter — on non-Windows it needs **Qt5
+      Widgets + QScintilla**, and the Make path *regenerates* Scintilla
+      lexers via `python LexGen.py` (build-time code generation), so treat
+      the GUI as an optional variant, not the default.
+- [ ] **Other FTE tools as separate recipes** — `fteqw-sv` (dedicated
+      server; **no GL/SDL deps, the cleanest recipe of the set**),
+      `fteqw-cl` (client-only), `iqmtool` (model converter: smd/gltf/glb/
+      iqe/md5/fbx/obj → IQM/VVM/MDL), `imgtool` (texture/WAD/cubemap
+      conversion + compression), `qtv` (QuakeTV relay — **ships its own
+      LICENSE file**, verify separately), `ftemaster`, `httpserver`,
+      `qcvm`, and `q3asm2` (QVM assembler; Make-only, absent from the CMake
+      targets).
+- [ ] **`qss-m`** — **QSS-M (QuakeSpasm Spiked Multiplayer)**, the client
+      the maintainer asked for (`github.com/timbergeron/QSS-M`,
+      `qssm.quakeone.com`, GPL-2.0).  Lineage: Quake 1.09 → FitzQuake →
+      QuakeSpasm → QuakeSpasm-Spiked → QSS-M; it is the **most actively
+      maintained** of that line.  Makefile build (`build-linux.sh` →
+      `QSS-M-l64`; macOS universal `.app`; MSYS2 on Windows).  Unlike
+      FTEQW, **libcurl and GnuTLS are genuine dependencies here**, along
+      with SDL2, `libmad`, `opus`/`opusfile`, `vorbis`, `zlib`.  Note the
+      required `-Wl,--allow-multiple-definition` link flag on modern GCC.
+- [ ] **`quakespasm-spiked` (QSS)** and **`quakespasm`** — optional
+      companions to QSS-M.  QSS (`Shpoike/Quakespasm`, GPL-2.0) is Spike's
+      fork and the bridge to the FTE codebase, but is less active.  Plain
+      QuakeSpasm's canonical home is **SourceForge** with
+      `github.com/sezero/quakespasm` as the official mirror — avoid the
+      archived `ericwa/Quakespasm`.  *Gotcha:* upstream QuakeSpasm defaults
+      to **SDL-1.2** unless `USE_SDL2=1`; QSS and QSS-M default to SDL2.
+      **Set the SDL major explicitly in every recipe.**  Upstream ships
+      statically-linked binaries, so expect friction building fully-shared.
+- [ ] **`darkplaces`** — LadyHavoc's engine (GPL-2.0), the base for several
+      standalone games.  Track **`DarkPlacesEngine/darkplaces`** on GitHub
+      (its README states the Git repo officially replaces the old SVN).
+      *Note:* `hemebond.gitlab.io/darkplaces-www` is a **rebuild of the
+      classic project website**, not a fork — useful as documentation, not
+      as a source to track.  Makefile build (`make sdl-release`); a VS2019
+      solution exists but upstream does not recommend it.
+      Deps are **narrower than folklore suggests**: client needs
+      `libjpeg-turbo` + **SDL2 ≥ 2.0.18** (≥ 2.24.0 on Windows), with
+      `libcurl`, `libpng`, `freetype`, vorbisfile optional; the
+      **dedicated server needs only libjpeg + zlib and no SDL at all** —
+      so ship two targets from one source.  Audio goes through SDL2, so
+      there is no direct ALSA/OSS dependency, and `libd0_blind_id` /
+      `libtheora` are *not* deps (those are Xonotic-side concerns).
+- [ ] **Companion engines (optional)** — `vkquake` (Vulkan, the most active
+      of the family) and `ironwail` (performance-focused QuakeSpasm fork);
+      both GPL-2.0.
+
+#### Quake servers, proxies & server mods
+
+All GPL-licensed and self-contained — a clean, high-value cluster.
+
+- [ ] **`mvdsv`** — the standard QuakeWorld server (GPL-2.0, CMake,
+      **no external dependencies**).  Pin **`QW-Group/mvdsv`**:
+      `deurk/mvdsv` is a rename-redirect to it, not a separate fork.
+- [ ] **`qwfwd`** — the maintained QuakeWorld server **proxy**
+      (`QW-Group/qwfwd`, GPL-2.0, CMake, no declared deps).
+- [ ] **`fteqw-sv`** — FTE's dedicated server (see above); covers both
+      NetQuake and QuakeWorld protocols, and is the dependency target for
+      `crmod7` below.
+- [ ] **`ktx`** — the competitive QuakeWorld mod (`QW-Group/ktx`,
+      GPL-2.0).  **Recipe-shape warning: KTX is a native C shared library
+      (`qwprogs.so` / `.dll`), *not* compiled QuakeC** — it builds with
+      CMake + gcc/clang and **does not use fteqcc**.  Runtime dependency on
+      `mvdsv`.  An alternate **QVM** target exists (`build_cmake.sh
+      linux-amd64 qvm`) whose toolchain upstream does not document —
+      default the recipe to the native `.so` and treat QVM as an optional
+      variant.
+- [ ] **`crmod7`** — the CRx / CRMod line (**`quakeone/CRMod7`**,
+      GPL-3.0).  Note both `quakeone/CRx` and `quakeone/crmod-plus` are
+      **rename-redirects to `CRMod7`** — pin the real name.  This is the
+      **opposite recipe shape from KTX**: it is QuakeC compiled with
+      **`fteqcc`** into `progs.dat` (+ optional `csprogs.dat`), which makes
+      it the first real consumer of the `fteqcc` recipe above.  It is a
+      **NetQuake** mod and **requires FTE extensions — it must run on
+      `qss-m` or `fteqw-sv`**, a hard dependency edge.  Actively developed
+      but has **no tagged releases**, so pin a commit.
+      *Legacy note:* `jp-grossman/crmod` (the original ClanRing CRMod++ —
+      "CR" = **ClanRing**) ships a GPL-3.0 `LICENSE.txt` today, but its
+      historical distribution readme carried a bare "Copyright 2000, Idle
+      Communications, Inc." with no grant.  It is also MSVC/qccx
+      toolchain-bound and stale since 2021 — **package CRMod7, not the
+      legacy tree**, and don't treat the older provenance as settled.
+- [ ] **`fortressone`** — ⚠️ **licensing blocker, engine-only for now.**
+      FortressOne is a standalone QuakeWorld Team Fortress distribution
+      that **ships FTE**; the engine side is fine (upstream FTE is
+      GPL-2.0).  But `FortressOne/server-qwprogs` (the TF mod),
+      `FortressOne/fteqw-code`, the installers, and `oztf` all carry
+      **no LICENSE file at all** (API reports `null`), and the mod
+      descends from TF 2.9, whose original licensing was never
+      free-software.  Only `qwtf-discord-bot` (MIT) is cleanly licensed.
+      Package the engine; **do not assert a license for the mod** — that
+      needs an upstream conversation before it can ship.
+- [ ] ~~**Attackers Go Red** (attackersgored.com)~~ — **not packageable.**
+      It is a real Quake 1 / QuakeWorld CustomTF "O vs D" mod with a
+      long-running community, but the site publishes **no source and no
+      license** (it is a WordPress/phpBB community presence, with files
+      routed via email).  The packageable substrate is the engine plus a
+      generic CustomTF progs, not AGR itself.
+- [ ] ~~**nQuake**~~ — **not a compile target.**  nQuake is a
+      downloader/installer that assembles shareware Quake + ezQuake +
+      textures + configs + bots.  Packaging it would mean reimplementing
+      its distfile assembly *and* inherit the shareware problem below.
+      Package `ezquake` + assets directly instead.
+
+#### Game content — a redistribution tier model
+
+Engines are GPL-2.0 and carry **no legal friction**.  Game *content* is a
+different problem, and the naïve version of "package public Quake map
+collections" is not safely executable.  Researched 2026-07-18; **not legal
+advice**, and the Tier B conditions below are worth a short consult before
+hosting bytes.
+
+> **The critical architectural point.**  A `source.url` + `sha256` recipe
+> does **not** by itself avoid redistribution.  cvcpkg is a *binary*
+> archive: the normal flow is recipe → build → **publish the built artifact**.
+> For source code the build transforms input into output; **for game data
+> there is no transformation** — the "build" is repackaging, so the
+> published artifact contains the original copyrighted bytes verbatim and
+> the archive is redistributing them.  Protection only exists when the
+> archive hosts **only the recipe** and the *client* fetches the payload at
+> install time.
+
+- [ ] **`redistributable: false` recipe flag (highest-value item here).**
+      A per-recipe flag that **hard-blocks binary publication** and forces
+      the install-time-fetch path.  Without it, a maintainer running the
+      normal publish pipeline silently turns a lawful recipe into an
+      infringing archive artifact.  Direct precedents: **Flathub's
+      `extra-data`** source type (uri + checksum + size, fetched from the
+      publisher at install; Flathub *requires* it for non-redistributable
+      sources) and **Debian's `game-data-packager`**, which ships no data
+      and assembles packages on the user's machine.
+
+**Tier A — safe to host outright.**  `librequake` (BSD-3-Clause art +
+GPL-2.0 QuakeC; actively maintained, still beta — note it has **no root
+LICENSE file**, so automated detection reports `NOASSERTION` and the
+licences must be asserted by hand), `spirit-quake-maps-gpl` (GPL-2.0
+`.map` sources), and every engine above.  **Start here** — this is the
+part of the plan with no legal friction.
+
+**Tier B — host only as the byte-identical original archive.**  Arcane
+Dimensions, Copper, Alkaline, and Underdark Overbright each carry an
+**explicit** electronic-redistribution grant in their readme — but all are
+conditioned on *unaltered*, *no charge to the recipient*, and *readme
+included*.  That condition is a trap for a package manager: recompressing
+into our own format, installing a file subset, or stripping docs
+**breaches the very licence being relied on**.  Copper goes further and
+explicitly forbids repackaging its `progs.dat`/assets alongside maps, which
+rules out convenience bundles.  Given how tight this is, Tier B is a good
+candidate for the fetch-at-install path *even though* hosting is arguably
+permitted.
+
+**Tier C — fetch-at-install or user-supplied only; never host.**
+Retail `pak0.pak`/`pak1.pak` and the mission packs must come from the
+user's own Steam/GOG/CD install — detect, verify by sha256, never fetch,
+never host (the `game-data-packager` model).  The 2021 Nightdive
+re-release content (`QuakeEX.kpf`, Dimension of the Machine) is under the
+ZeniMax EULA — user-supplied only.
+**Shareware `pak0.pak` belongs here too, and is weaker than its
+reputation** — see the note below.
+
+**Tier D — avoid entirely.**  **Dwell** is not merely unlicensed: its own
+readme credits assets *"ripped"* from Serious Sam (Croteam), plus Raven,
+Digital Extremes, and Lobotomy content — affirmatively contaminated, and
+its compiled Copper-derived `progs.dat` raises a separate GPL-2.0
+source-availability question.  **Quake Epsilon** aggregates dozens of packs
+with individually unverified terms plus a repackaged shareware `pak0`; the
+maintainer's "these builds are legal" is a self-assertion, not a grant.
+Also avoid assuming that Internet Archive or Quaketastic hosting implies
+permission — it does not.
+
+> **On the shareware episode.**  It is commonly believed to be freely
+> redistributable; the actual *Limited Use Software License Agreement* is
+> narrower.  §6 grants the right to distribute **"the Software as a
+> whole"** free of charge — extracting `pak0.pak` and shipping it
+> standalone is not "as a whole".  §3 prohibits reproducing or preparing
+> derivative works, and §4 separately prohibits use of the contained
+> "art work, images… sound effects, music".  Debian classifies
+> `quake-shareware` as **non-free** and declines to host it.  Carmack's GPL
+> release note said he would *see about* relicensing the shareware episode
+> for redistribution — there is no evidence it ever happened.  Compounding
+> this, **`ftp.idsoftware.com` is dead** (DNS resolves; ports closed), so
+> even a fetch-at-install recipe would point at a third-party mirror that
+> holds no redistribution right of its own.  Recommendation: treat the
+> shareware data as Tier C at best, and make **LibreQuake** the default
+> out-of-the-box content so an engine install is playable with no
+> proprietary data at all.
+
+- [ ] **Provenance + takedown hygiene** — record per-package provenance
+      (Quaddicted exposes stable content-addressed `by-sha256/` IDs and
+      asks only for attribution), publish a DMCA/takedown contact, and act
+      on requests promptly.
+- [ ] **Naming and trademark care** — "Quake" is a registered id Software
+      trademark, and enforcement in this space is **trademark-forward**
+      (the QDoom project drew a cease-and-desist over trademark/logo use,
+      then was invited to ship officially).  Package *names* and branding
+      deserve as much care as package contents.
+
+> *Correction carried into the plan:* "Slipgate Cyberdemon" does not exist
+> as a pack — most likely a garbling of **Slipgate Sightseer**
+> (slipseer.com), which is a community *site*, not a release.
 
 ---
 
@@ -2051,7 +2641,444 @@ Work items:
 
 ---
 
-### Phase 23 — PyPI Release (Final Phase)
+### Phase 23 — cvcpkg as a Build & Configuration-Management System
+
+**Status: Planned — required before the PyPI release**
+
+cvcpkg is not only for publishing packages.  With a recipe set it should
+work as a **general build system and configuration-management tool**:
+installing a recipe applies state and runs its dependency recipes;
+uninstalling tears it down; a machine's configuration is a **dependency
+graph of recipes**.  The pitch is "SaltStack, but cleaner — because it is
+integrated into a holistic, cross-platform, content-addressed package
+manager instead of bolted onto one."  This phase formalizes that pattern,
+plus **BYO (bring-your-own)** recipes for assets we cannot legally
+redistribute, and it depends on the per-prefix state database and the
+first-class `uninstall` from Phase 15.
+
+This is grounded in a survey of the field (researched 2026-07-18); the
+sourced findings shape every decision below, and the honest failure modes
+are stated, not glossed.
+
+#### Positioning — and the honest limits
+
+There are exactly two architectures that unify packaging and configuration,
+and they made **opposite** bets:
+
+- **Camp A — functional/immutable (Nix/NixOS, Guix).**  The whole system
+  is a pure function of its inputs; config files and services are *build
+  outputs*; install paths are content-addressed; rollback is a symlink
+  swap; removal is reference-counted GC.  This gets atomicity, generations,
+  and real rollback — paid for with a purity model and a learning curve
+  that would violate cvcpkg's "a graduate student understands it in an
+  afternoon" design principle.
+- **Camp B — resource model over a mutable OS (PowerShell DSC, winget
+  `configure`, Portage).**  Declared resources with idempotency checks
+  applied to a mutable host.  **Microsoft's `winget configure` is literally
+  this pitch already shipped** — a package manager that grew a DSC-powered
+  config engine.  cvcpkg's mutable install prefixes + arbitrary
+  `build.sh`/`build.ps1` sit structurally in **camp B**, so camp B's
+  failure modes are the ones cvcpkg will actually hit.
+
+We adopt **camp B, with the best camp-A ideas grafted on where the prefix
+boundary makes them cheap** (per-prefix generations; the content-addressed
+cache already re-materializes any prior state offline).  The roadmap states
+the limits up front rather than discovering them in production:
+
+> **Four walls every camp-B tool hits, stated honestly.**
+> 1. **Arbitrary scripts are not idempotent.**  Being "in a package
+>    manager" does not fix this; even `dpkg`/`rpm` maintainer scripts are
+>    *required* to be idempotent and are a notorious breakage source.
+> 2. **Teardown is authoritative inside the prefix, best-effort outside.**
+>    Files cvcpkg tracks, it can remove; state it reaches out to mutate
+>    (services, registry, `/etc`, the desktop) it can only revert with a
+>    hand-written, drift-prone inverse — exactly as Salt/Chef/Ansible do.
+>    Even NixOS does **not** revert side effects (a DB migration survives a
+>    rollback), and is *deprecating* its own unstructured activation
+>    scripts for being "unsandboxed, un-rolled-back, order-dependent."
+> 3. **Apply is on-demand and non-atomic**, not a continuous enforcement
+>    daemon.  cvcpkg will be Ansible-shaped (corrects drift when you run
+>    it), not Puppet-shaped (self-heals every 30 min).  A half-failed apply
+>    leaves a half-configured host — `winget configure` documents exactly
+>    this.  We do **not** market it as enforcement.
+> 4. **A single topological pass need not converge** (Salt's classic
+>    two-run problem) and cross-referencing state recipes surfaces
+>    dependency cycles as hard errors.
+
+#### The state contract (Get / Test / Set)
+
+The load-bearing lesson from every tool that survived: **idempotency is a
+per-resource contract, never a free property of the engine.**  DSC states
+it best as a wire-level `Get`/`Test`/`Set` triple — the engine runs `Test`
+first and calls `Set` only when non-compliant.
+
+- [ ] **Typed `state:` resources** in the recipe — `file`, `symlink`,
+      `template`, `env`, `service`, `registry-key` (Windows), `user` — each
+      with built-in Get/Test/Set, so the common 90% is declarative,
+      verifiable, and **auto-reversible** (capture the prior value before
+      `Set`, store it in `prefix.db`, replay on uninstall — the MDM
+      removal-semantics model).
+- [ ] **A labeled imperative escape hatch** — a recipe-supplied
+      `script:` + **`teardown:`** slot for anything the built-ins do not
+      cover.  Recipes with a `script:` effect but no `teardown:` are
+      **labeled non-revertible in status output** (NixOS-style honesty
+      about the imperative 10%); apply scripts are contractually required
+      to be idempotent and are re-checked via content-hash (`run_onchange`
+      semantics).
+- [ ] **Three modes, no daemon** — `cvcpkg check` (audit/report-only, per
+      the DSC "Audit" mode that survived two Microsoft generations),
+      `cvcpkg apply` (apply + monitor), autocorrect left to an *external*
+      loop (cron/CI).  **Explicitly no resident agent and no pull server**
+      — DSC's LCM and pull server are being retired; ship an honest CLI
+      with machine-readable exit codes and let a scheduler own the loop.
+- [ ] **On Windows, delegate rather than reimplement** — DSC v3 resources
+      are now an open executable-plus-JSON-manifest protocol; a `state:`
+      entry can invoke them instead of cvcpkg re-growing the entire
+      Registry/Service resource zoo.
+- [ ] **Never enforce fields you did not declare** — drift correction
+      touches only resources in the applied generation's manifest (the
+      Kubernetes field-ownership / ostree `/etc`-merge lesson); user
+      modifications outside the declared set are sacred.
+
+#### BYO — bring-your-own, non-redistributable assets
+
+The cleanest prior art is **Gentoo**, because it splits into *separate
+axes* what every other tool conflates.  A recipe should be able to point at
+an asset the archive cannot host (a licensed installer, retail game data, a
+client's proprietary blob) and have the *user* supply it:
+
+- [ ] **`source.type: byo`** (and/or a `restrict: [fetch, mirror]` axis
+      split): declares the artifact **cannot be rehosted** *and* **cannot
+      be auto-fetched** — the two are distinct permissions, as Gentoo's
+      `RESTRICT="mirror"` vs `RESTRICT="fetch"` proves.
+- [ ] **A `pkg_nofetch`-style instructions phase** — when the asset is
+      missing, print machine-authored acquisition instructions *at the
+      moment it is needed*, not buried in a wiki.
+- [ ] **Verification invariant to provenance** — a mandatory, pre-published
+      `sha256` (+ `size` as a cheap second signal) checked identically
+      whether the file was hand-dropped or fetched; there is **no "skip
+      because the user supplied it."**  Steal `game-data-packager`'s trick
+      of **checksumming the extracted assets, not the container**, so a CD,
+      a GOG installer, and a Steam depot (three bitstreams → one asset set)
+      all verify.
+- [ ] **A search path** — `~/.cvcpkg/distfiles`, a `CVCPKG_DISTFILES` env
+      var, plus explicit `--asset path=…`.  This maps directly onto the
+      existing airgap / licensed-client-host / patch-recipe workflow.
+- [ ] **License-acceptance gating** — a `license.eula: true` axis requiring
+      explicit opt-in (Gentoo `ACCEPT_LICENSE` / `@EULA`), so a EULA'd
+      asset never installs silently.  Composes with the Phase 20
+      `redistributable: false` flag (which hard-blocks *publishing* the
+      built artifact).
+
+#### Security — the config channel is a C2 channel
+
+Once install applies state, recipes execute arbitrary scripts, often as
+root.  The defining incident is **SaltStack CVE-2020-11651/-11652** (2020):
+two auth-bypass bugs turned exposed salt-masters into fleet-wide remote
+root within ~72 hours — LineageOS, Ghost, and a **DigiCert CT-log signing
+key** among the fallout.  The structural lesson is permanent: **a config
+master is a pre-authorized root-execution channel to every node; its auth
+boundary is a fleet-wide C2 boundary.**  Supply-chain history adds the
+rest (event-stream's maintainer-trust transfer, Codecov's key-in-a-public-
+artifact, the xz backdoor where *the built tarball ≠ the audited repo*,
+Birsan's dependency confusion).
+
+- [ ] **Signing ≠ safety, and static Ed25519 ≠ survivable compromise.**
+      cvcpkg has the *identity* half.  It lacks (a) **TUF-style rotation /
+      thresholds / expiry** so a stolen key is not game-over — note PyPI
+      *abandoned* forcing developer key management in favor of OIDC Trusted
+      Publishers because key custody "did not survive contact with real
+      maintainers" — and (b) a **client-verifiable transparency log**: the
+      existing chained-hash audit log is **server-side**, so a compromised
+      server can push unlogged state.  Sigstore's Rekor is the shape to
+      match (client checks an inclusion proof before apply).
+- [ ] **Mandatory hash pinning in apply-mode** — reject unpinned
+      fetch-at-install; TOFU is not enough (the Codecov/xz shape).
+- [ ] **Namespace-scoped resolution, never "highest version wins across
+      trust domains"** — private/org names must never be shadowed by public
+      ones (the dependency-confusion antidote; composes with Phase 22).
+- [ ] **Sandbox everything up to apply; treat apply as privileged.**  Fetch
+      / build / template-render can be hermetic (no net, restricted FS —
+      the Nix/Bazel ceiling); a root `apply`/`teardown` **cannot** be
+      sandboxed by definition.  Confine it with OS-level MAC
+      (seccomp/AppArmor) around a *declared surface manifest* ("this recipe
+      may touch `/etc`, install unit X, open port N"), and make fleet-wide
+      state changes a **two-person-reviewed, transparency-logged** operation
+      (the GitOps model: signed, approved manifest in a repo).
+- [ ] **Secrets are references, never embedded** — resolved at apply-time
+      from an external store (SOPS/age or Vault), never baked into a
+      recipe, lockfile, cache, or the audit log; no plaintext temp files
+      during apply (the Ansible-Vault CVE shape).
+- [ ] **Integrity-protect local state** — the lockfile and `prefix.db` /
+      `local.db` decide what uninstall reverts and what reconcile
+      re-applies; unprotected, a local attacker retargets teardown or hides
+      an install.  Sign/HMAC the local state; detect out-of-band edits.
+
+#### Longevity — will a recipe fleet still be healthy in five years?
+
+The instructive finding: **three of the four major CM ecosystems were
+damaged by *ownership events*, not technical failure** — Salt (Broadcom
+gutted maintenance; repo killed on a week's notice), Chef (binaries went
+proprietary → the Cinc community rebuild), Puppet (Perforce moved to
+private repos + a node-count EULA → the OpenVox fork).  The recipes
+survived; the **engine and distribution channel** rotted.
+
+- cvcpkg **owns its engine**, which removes vendor-rot risk but transfers
+  the whole burden to cvcpkg's own compatibility discipline.
+- [ ] **A written recipe-schema versioning + dated-deprecation policy**
+      (Ansible's ~6-month deprecation floor is the best-in-class model;
+      Salt's cliff-edge is the anti-model).  This is a survival trait, not
+      bureaucracy — and old lockfiles must stay installable from the
+      content-addressed store (the property that let Cinc/OpenVox exist).
+- [ ] **Shrink the shell surface over time** — grow typed resources for the
+      common cases (each with generated verify/teardown), keep shell as the
+      *labeled* escape hatch.  Arbitrary shell is non-idempotent,
+      statically unverifiable, and irreversible; every CM tool made this
+      same shell→typed migration.
+- [ ] **CI the idempotency contract** — run `apply` twice on a clean image
+      (second run must be a no-op) **and** once on a *dirty* aged snapshot
+      (the "worked in staging, diverged in prod" failure class is
+      structural for mutate-in-place CM; Knight Capital is the extreme
+      form).  cvcpkg recipes are already CI-built, so the marginal cost is
+      low — a genuine edge over Ansible-without-Molecule.
+
+> **Market note.**  The industry moved from mutate-in-place CM toward
+> immutable images + orchestration — but CM persists exactly where cvcpkg's
+> users live: **HPC, scientific computing, bare-metal, air-gapped,
+> licensed, and lab/workstation fleets** — long-lived, heterogeneous
+> machines that cannot be treated as cattle.  The winning pattern in that
+> niche is *hybrid*: a known base plus a **narrow, verifiable delta**.  So
+> cvcpkg's CM mode should be "install content-addressed artifacts + a small
+> declared config delta," not "run arbitrary mutation scripts" — the closer
+> the delta is to package semantics (files with owners and hashes), the
+> more the fleet behaves immutably even while technically mutated in place.
+
+#### Forensics — a genuinely superior paper trail
+
+When a production system breaks or is breached, most CM tools provide a
+poor record: Salt's job cache defaults to **24-hour** retention, PuppetDB's
+reports to **14 days** — against a **2024–2025 median attacker dwell time
+of 11–14 days**.  `ansible-playbook` records *nothing* centrally.  And
+**none** of the mainstream CM tools makes its record tamper-evident (their
+history sits in ordinary mutable databases).  `rpm -Va` trusts a local
+mutable DB an attacker with root simply edits.  cvcpkg already owns the two
+hardest prerequisites — a signing infrastructure and a server-side chained
+log — so a genuinely better story is within reach.  This is a real
+differentiator; lean into it.
+
+- [ ] **Local append-only transaction journal (the keystone)** — one
+      hash-chained JSONL per machine: every install / uninstall / apply /
+      revert / reconcile appends `{seq, wall+monotonic time, uid/euid +
+      SUDO_USER + SSH_CONNECTION (the "by whom, from where" local CM logs
+      never capture), recipe name/version/hash, artifact sha256s, per-file
+      pre/post hashes, exit status, prev-record-hash}` (the CloudTrail
+      digest-chain pattern, machine-scoped).  `fsync` on append, never
+      rewrite, **retain by default forever** — explicitly contrasted with
+      Salt's 24 h against a 14-day dwell time.
+- [ ] **Cross-anchor the local chain to the server audit log (and vice
+      versa)** — on each server contact the client submits its chain head;
+      the server appends it to its chained log and returns *its* head, which
+      the client records next.  Rewriting a machine's history then requires
+      rewriting the server's log, which every other client's checkpoint
+      makes detectable — the Certificate-Transparency / Rekor witness
+      pattern, built from parts cvcpkg already has.  For air-gapped/BYO
+      hosts: export signed checkpoints with each patch-recipe transfer, and
+      optionally FSS-style forward-secure sealing of journal segments.
+- [ ] **Per-package installed-file manifests, signed** — the Phase 15
+      file-tracking table, but with the manifest **embedded in the
+      Ed25519-signed package** and verified against *that* rather than a
+      local mutable DB (structurally immune to the `/var/lib/rpm` tamper
+      problem).  Enables uninstall, ownership queries, drift detection, and
+      **NSRL-style known-good filtering at file granularity** ("these 40,000
+      hashes are files we shipped; these 3 are not").
+- [ ] **Generation snapshots that recover content, not just hashes** —
+      every CM transaction is an immutable generation (resolved state set +
+      recipe graph); **store the pre-mutation content of every overwritten
+      file in the existing content-addressed cache** (they are just blobs).
+      This out-does Nix (recoverable before-state, not merely a logged hash)
+      *and* covers the mutable system state Nix/ostree refuse to manage.
+      Gives `cvcpkg diff --gen 41 --gen 47` and makes revert "re-apply the
+      previous generation."
+- [ ] **`local.db` is a rebuildable index, not the source of truth** —
+      derived from journal + manifests, reconstructible via `cvcpkg
+      rebuild-index`; store the journal chain head in it so index/journal
+      divergence is itself a detection signal.
+- [ ] **DFIR-friendly output** — document the journal format and expose it
+      as an **osquery table** and a plaso/Timesketch-ingestible timeline, so
+      investigators meet cvcpkg inside the tooling they already use.
+      *Honest limit stated in the docs:* none of this constrains a root
+      attacker *going forward* — only forwarding/anchoring frequency bounds
+      the rewriteable window — but the **pre-compromise record is provably
+      intact and post-compromise divergence is detectable**, which no
+      mainstream CM tool offers.
+
+#### Worked recipe examples (licensing explicit in every recipe)
+
+Illustrative sketches — schema is indicative, not final — showing the
+initialize-proprietary-software-then-legally-modify pattern the user asked
+for.  **Every recipe declares its license and redistributability
+explicitly.**
+
+- [ ] **`quake-data-retail` — a BYO recipe** (user supplies their own
+      purchased game data; cvcpkg never fetches or hosts it):
+
+      ```yaml
+      recipe: { name: quake-data-retail, upstream_version: "1.0", cvc_revision: 1 }
+      license: "id Software EULA (proprietary)"     # NOT ours to license
+      redistributable: false                        # hard-blocks publishing the artifact
+      source:
+        type: byo                                   # user-supplied
+        restrict: [fetch, mirror]                   # cannot auto-fetch, cannot rehost
+        asset: { file: "pak0.pak", sha256: "<retail pak0 digest>", size: 18689235 }
+      license_gate: { eula: true }                  # must be explicitly accepted
+      nofetch: |                                    # printed when the asset is missing
+        Copy pak0.pak and pak1.pak from your purchased Quake (Steam/GOG/CD)
+        into ~/.cvcpkg/distfiles/ , or pass --asset pak0.pak=/path/to/pak0.pak
+      package: { files: ["id1/*.pak"] }
+      ```
+
+- [ ] **`arcane-dimensions` — an explicitly-licensed, fetch-at-install
+      recipe** (the map pack grants electronic redistribution but only
+      *unaltered*, so cvcpkg fetches the byte-identical original and does
+      not repackage it):
+
+      ```yaml
+      recipe: { name: arcane-dimensions, upstream_version: "1.8", cvc_revision: 1 }
+      license: "AD readme grant: electronic distribution, unaltered, no charge, readme included"
+      redistributable: false            # host the recipe, not the bytes (Tier B)
+      source:
+        type: byo
+        restrict: [mirror]              # may auto-fetch, may NOT rehost
+        asset: { url: "https://www.simonoc.com/files/ad/ad_v1_8_final.zip",
+                 sha256: "<ad zip digest>" }
+      package: { files: ["**"] }        # installed byte-identical, readme included
+      ```
+
+- [ ] **`lab-quake-server` — a state/config recipe that composes the
+      above** and legally layers a first-party config on top (initialize
+      proprietary/licensed data, then add *our* GPL/CC-licensed
+      modifications):
+
+      ```yaml
+      recipe: { name: lab-quake-server, upstream_version: "1.0", cvc_revision: 1 }
+      license: "MIT (CyberPC Angel, LLC) — our config only; deps carry their own"
+      depends:
+        runtime: [ fteqw-sv, ktx, quake-data-retail ]   # engine + mod + BYO data
+      state:
+        - service: { name: "quakeworld", exec: "${CVC_PREFIX}/bin/fteqw-sv +exec server.cfg" }
+        - template: { src: "server.cfg.j2", dest: "${CVC_PREFIX}/id1/server.cfg" }   # OUR config
+        - file: { path: "/etc/systemd/system/qw.service", mode: "0644", from: "qw.service" }
+      teardown: |                        # explicit inverse for the out-of-prefix unit
+        systemctl disable --now qw.service 2>/dev/null || true
+        rm -f /etc/systemd/system/qw.service
+      ```
+      Installing `lab-quake-server` triggers its dependency recipes (engine,
+      mod, and the BYO data whose EULA the operator accepted), then applies
+      the typed `state:` resources (auto-reverted on uninstall) and the one
+      labeled-imperative systemd unit (reverted by its `teardown:`).
+
+#### Delivery
+
+- [ ] **Integration tests exemplifying the pattern** — alongside the
+      existing `tests/integration/test_source_recipe_workflow.py`,
+      `test_platform_any.py`, and `TestLocalBuildMode`
+      (`test_source_fallback.py`): a fully-local (no-server)
+      build→install→**apply**→verify→**uninstall**→verify-clean lifecycle;
+      an idempotency test (apply twice → second run is a no-op; apply on a
+      dirty snapshot); a BYO test (missing asset prints instructions and
+      fails; supplied asset with correct hash succeeds; wrong hash is
+      rejected); and a teardown test (uninstall reverts both typed state and
+      the labeled-imperative `teardown:`).
+- [ ] **README section** — a "cvcpkg as a build & configuration system"
+      section (fits after "Build modes"): the recipes-as-state model, the
+      Get/Test/Set contract, `check`/`apply`/`uninstall`, BYO assets, and —
+      stated plainly — the four honest limits above, so the docs never
+      over-promise reconciliation, atomicity, or script reversibility.
+
+---
+
+### Phase 24 — Live Updates, Activity Feed & Build Transparency
+
+**Status: Planned — required before the PyPI release**
+
+Give users a **real-time view of the archive**: WebSocket push for new
+packages and notifications, a **live activity feed** of site events (new
+recipes, published builds, yanks / unyanks / nukes), and public visibility
+into how public packages are built — while keeping private organizations'
+builders and build logs strictly private.  Especially useful when a flood
+of packages is expected and users want to watch them land.
+
+**Current state (audited 2026-07-18).**  The SPA is **poll-based**
+(`setInterval` refreshes builders every 30s, jobs every 15s) with no client
+real-time.  The **only** WebSocket is builder-facing
+(`/v1/builders/{id}/ws`); the **only** client-facing stream is the
+per-build-log SSE (`/v1/builds/{id}/log/stream`), and it is
+publisher/admin-gated.  The **audit log already records the full event
+vocabulary** wanted here (`publish, yank, unyank, delete, nuke,
+recipe_upload, build_*`) — but `GET /v1/audit` is **admin-only**, and
+yank/unyank/nuke currently emit **no** event at all (only an audit row;
+today only `package.published` and the build/builder lifecycle fan out via
+the outbound webhook bus).
+
+#### Live updates & notifications
+
+- [ ] **A client-facing real-time channel** — a browser/CLI-facing
+      WebSocket (or SSE) carrying catalog events, net-new: the existing
+      builder WebSocket and the `emit_webhook_event` outbound bus are
+      server↔infra only and carry no client subscribers.  Reuse that
+      plumbing rather than inventing a parallel one.
+- [ ] **New-package push + notifications** — push `package.published`
+      (already emitted to webhooks) to subscribed clients as an in-page
+      notification; a live counter/toast when new packages land.
+- [ ] **User subscriptions** — "notify me on a new version of X / new
+      packages in org Y."  No user-facing subscribe/notify primitive exists
+      today (the only subscription is the admin-managed, org-scoped
+      server-to-server webhook); this is the per-user layer on top.
+
+#### Live activity feed
+
+- [ ] **Emit events for the whole lifecycle** — yank, unyank, nuke, and
+      recipe upload currently write only an audit row and fan out nothing.
+      Emit them (as webhook/bus events) so they can reach the feed.
+- [ ] **A public, filtered activity feed** — a live projection of the audit
+      stream (new recipes, published builds, yanks/unyanks/nukes) that the
+      SPA renders as a scrolling feed.  It must be a **visibility-filtered
+      public projection**, not the admin-only `GET /v1/audit`: exclude
+      private-org and hidden-package (Phase 21) events for unauthorized
+      viewers, exactly as `/v1/feed.xml` already excludes yanked/private
+      packages.  Extends that RSS feed (latest *published packages* only)
+      to the full event stream.
+
+#### Build transparency — public sausage-making, private stays private
+
+The org-privacy dimension is **already enforced** for builders (public and
+no-org builders are visible to everyone via `optional_reader_auth`;
+private-org builders 404 for non-members — implemented and covered by
+`test_builder_public_access.py`).  The gap is on the **build-job and
+build-log side**, which are publisher/admin-only with **no public read
+path even for public builds**:
+
+- [ ] **Make public build jobs and logs publicly readable** — add
+      `optional_reader_auth`-style public read to `GET /v1/builds`,
+      `/v1/builds/{id}`, `/v1/builds/{id}/log`, and the log SSE stream for
+      **public / no-org builds**, mirroring what `/v1/builders` already
+      does.  Let anyone watch how the public packages are built (logs and
+      all) — "see how the sausage is made."
+- [ ] **Keep private builders and logs strictly private** — preserve the
+      existing `_assert_build_visible` / `_assert_dag_visible` org checks so
+      **only authorized org members (or admins) can read a private org's
+      build logs, jobs, or builder details**; unauthorized callers get 404,
+      never a leak.  (Privacy is org-derived via `OrganizationRow.is_private`
+      today; no per-object visibility flag is needed unless a finer grain is
+      wanted later.)
+- [ ] **Close the test gap** — there is a public/private access test for
+      *builders* but **none for build jobs or logs**; add the parallel
+      suite asserting anonymous/reader can read public build logs and are
+      404'd on private-org ones, and that members/admins can.
+
+---
+
+### Phase 25 — PyPI Release (Final Phase)
 
 **Status: Blocked on all prior phases — deliberately last**
 
@@ -2199,7 +3226,7 @@ The project has been restructured for the **cvcpkg** identity:
 - [ ] **Owning entity = CyberPC Angel, LLC** — copyright/provenance branding,
   source headers, gears logo, and the org move (Ownership section)
 - [ ] **PyPI publication** — `pip install cvcpkg` (the final roadmap phase;
-  see Phase 23)
+  see Phase 25)
 
 ---
 
