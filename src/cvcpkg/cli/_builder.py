@@ -461,19 +461,23 @@ def builder_run(
     jobs_lock = threading.Lock()
 
     def _claim_slot() -> int:
-        """Reserve a slot; returns a unique token to release it with.
-        Caller must hold no assumption beyond passing the token to
-        _release_slot.  Call under jobs_lock."""
+        """Reserve a slot; returns a unique id to release it with.
+
+        Deliberately NOT called a "token": this id lives in the same scope as
+        ``builder_run``'s bearer ``token`` parameter, and binding it to that
+        name silently replaced the credential with an int -- every subsequent
+        publish then sent ``Authorization: Bearer 1``.  Call under jobs_lock.
+        """
         nonlocal _job_seq, current_jobs
         _job_seq += 1
         active_jobs.add(_job_seq)
         current_jobs = len(active_jobs)
         return _job_seq
 
-    def _release_slot(token: int) -> None:
+    def _release_slot(slot_id: int) -> None:
         nonlocal current_jobs
         with jobs_lock:
-            active_jobs.discard(token)
+            active_jobs.discard(slot_id)
             current_jobs = len(active_jobs)
 
     def _handle_signal(signum, frame):
@@ -1257,7 +1261,7 @@ def builder_run(
             # not here — so an early return from the claim step above (which
             # never reaches this try) still frees the slot.
 
-    def _run_job_guarded(job: dict, token: int) -> None:
+    def _run_job_guarded(job: dict, slot_id: int) -> None:
         """Thread entry point: run a job and ALWAYS release its slot.
 
         The caller reserves the slot (``_claim_slot``) before starting the
@@ -1271,7 +1275,7 @@ def builder_run(
         try:
             _execute_job(job)
         finally:
-            _release_slot(token)
+            _release_slot(slot_id)
 
     # -- Self-update helper ---------------------------------
 
@@ -1441,9 +1445,9 @@ def builder_run(
                         with jobs_lock:
                             if current_jobs >= max_jobs:
                                 continue
-                            token = _claim_slot()
+                            slot_id = _claim_slot()
                         t = threading.Thread(
-                            target=_run_job_guarded, args=(job, token), daemon=True
+                            target=_run_job_guarded, args=(job, slot_id), daemon=True
                         )
                         t.start()
 
@@ -1599,11 +1603,14 @@ def builder_run(
             job = resp.json()
             drain_empty_since = None  # got work; restart the settle window
             with jobs_lock:
-                token = _claim_slot()
+                # NOT `token`: this runs in builder_run's own scope, so binding
+                # the slot id to that name replaced the bearer credential every
+                # nested closure reads -- publishes then sent "Bearer 1".
+                slot_id = _claim_slot()
 
             # Run in a thread so we can keep heartbeating & polling.  The
             # guarded wrapper releases the slot on any exit path.
-            t = threading.Thread(target=_run_job_guarded, args=(job, token), daemon=True)
+            t = threading.Thread(target=_run_job_guarded, args=(job, slot_id), daemon=True)
             t.start()
 
     finally:
