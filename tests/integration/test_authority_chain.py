@@ -314,6 +314,48 @@ class TestAuthorityChain:
         )
         assert row["upstream_yanked"] is True, "upstream's verdict is still recorded"
 
+    def test_a_middle_hop_cannot_launder_the_origins_yank(self, chain, tmp_path):
+        """B dissenting must not clear A's verdict for C.
+
+        Every other dissent test unyanks at C, the leaf -- which has nothing
+        downstream, so it cannot demonstrate laundering.  Dissenting in the
+        *middle* is the case that matters: B serves the bundle again
+        (``yanked`` false) while still disclosing ``upstream_yanked``.  A
+        downstream that classifies on ``yanked`` alone reads that as an
+        ordinary live bundle, un-yanks, and clears its own record of A's
+        ruling -- so a bundle A withdrew for a CVE is served by C with no
+        disclosure and nothing for --trust-mirror to opt into.
+        """
+        a, b, c = chain
+        _publish(a, _make_archive(tmp_path / "arc"))
+        b.await_(_present, "B to import")
+        c.await_(_present, "C to import")
+
+        a.yank()
+        b.await_(_yanked, "B to follow the yank")
+        c.await_(_yanked, "C to follow the yank")
+
+        # B's operator overrides -- legitimately, and it is recorded on B.
+        b.unyank()
+        assert b.one()["yanked"] is False
+        assert b.one()["upstream_yanked"] is True
+
+        # Let several sync cycles run: C now sees B advertising the bundle as
+        # not-yanked, which is exactly the laundering opportunity.
+        time.sleep(8)
+
+        row = c.one()
+        assert row["upstream_yanked"] is True, (
+            "a middle mirror's dissent erased the origin's verdict downstream -- "
+            "C has no record that A ever retired this bundle, so --trust-mirror "
+            "cannot opt into or out of anything"
+        )
+        assert row["yanked"] is True, (
+            "C un-yanked a bundle the origin withdrew, because one mirror "
+            "in between chose to keep serving it"
+        )
+        assert PKG not in c.catalog_names()
+
     def test_upstream_wins_by_default_and_trust_mirror_opts_out(self, chain, tmp_path):
         """The client-side half of the same disagreement."""
         from cvcpkg.catalog import catalog_entries

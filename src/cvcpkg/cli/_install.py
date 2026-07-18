@@ -113,13 +113,13 @@ from cvcpkg.cli._helpers import (
     help="Deprecated alias for --keep-build-prefix/--strip-build-prefix.",
 )
 @click.option(
-    "--trust-mirror",
-    is_flag=True,
-    default=False,
+    "--trust-mirror/--no-trust-mirror",
+    default=None,
     help=(
         "Accept a mirror's ruling over its upstream's. By default upstream "
         "is authoritative, so a bundle the upstream retired is skipped even "
-        "if this mirror still serves it."
+        "if this mirror still serves it. --no-trust-mirror restores that "
+        "default when CVCPKG_TRUST_MIRROR is set in the environment."
     ),
 )
 def install(
@@ -143,7 +143,7 @@ def install(
     local_mode: bool,
     keep_build_prefix: bool,
     keep_host_tools: bool | None,
-    trust_mirror: bool,
+    trust_mirror: bool | None,
 ) -> None:
     """Install component bundles into a prefix.
 
@@ -176,11 +176,12 @@ def install(
     and --link override the corresponding values in the requirements
     file if explicitly provided on the command line.
     """
-    if trust_mirror:
+    if trust_mirror is not None:
         # Consulted by cvcpkg.catalog.trust_mirror_default(); set here so
         # every downstream resolution path sees it without threading a
-        # parameter through each one.
-        _os.environ["CVCPKG_TRUST_MIRROR"] = "1"
+        # parameter through each one.  Writing "0" on --no-trust-mirror is what
+        # lets the flag override an inherited CVCPKG_TRUST_MIRROR=1.
+        _os.environ["CVCPKG_TRUST_MIRROR"] = "1" if trust_mirror else "0"
     from cvcpkg.cache import default_cache_dir
     from cvcpkg.catalog import (
         catalog_entries,

@@ -6,6 +6,7 @@ import os as _os
 
 import click
 
+from cvcpkg.catalog import trust_mirror_default as _trust_mirror_default
 from cvcpkg.cli import cli
 from cvcpkg.cli._helpers import _human_size
 
@@ -49,13 +50,13 @@ from cvcpkg.cli._helpers import _human_size
     help="Print the raw JSON response instead of a formatted table.",
 )
 @click.option(
-    "--trust-mirror",
-    is_flag=True,
-    default=False,
+    "--trust-mirror/--no-trust-mirror",
+    default=None,
     help=(
         "Accept a mirror's ruling over its upstream's. By default upstream "
         "is authoritative, so a bundle the upstream retired is skipped even "
-        "if this mirror still serves it."
+        "if this mirror still serves it. --no-trust-mirror restores that "
+        "default when CVCPKG_TRUST_MIRROR is set in the environment."
     ),
 )
 def search(
@@ -74,7 +75,7 @@ def search(
     limit: int,
     offset: int,
     as_json: bool,
-    trust_mirror: bool,
+    trust_mirror: bool | None,
 ) -> None:
     """Search the cvcpkg catalog by name, tag, description, and more.
 
@@ -88,11 +89,17 @@ def search(
       cvcpkg search --platform linux --tag scientific
       cvcpkg search fft --link static --release v1.3.0
     """
-    if trust_mirror:
+    if trust_mirror is not None:
         # Consulted by cvcpkg.catalog.trust_mirror_default(); set here so
         # every downstream resolution path sees it without threading a
-        # parameter through each one.
-        _os.environ["CVCPKG_TRUST_MIRROR"] = "1"
+        # parameter through each one.  Writing "0" on --no-trust-mirror is what
+        # lets the flag override an inherited CVCPKG_TRUST_MIRROR=1.
+        _os.environ["CVCPKG_TRUST_MIRROR"] = "1" if trust_mirror else "0"
+    # search talks to /v1/search directly rather than going through
+    # catalog_entries(), so the upstream-authoritative default has to be applied
+    # here too -- otherwise search is the one command that still shows a
+    # mirror's dissent as though upstream had never retired the bundle.
+    _trust = _trust_mirror_default() if trust_mirror is None else trust_mirror
     import json as _json
 
     import httpx
@@ -145,6 +152,11 @@ def search(
     packages = data.get("packages") or []
     if yanked_only:
         packages = [p for p in packages if p.get("yanked")]
+    elif not _trust and not include_yanked:
+        # Upstream retired these; the mirror serving them anyway is exactly the
+        # dissent --trust-mirror exists to opt into.  --include-yanked is a
+        # deliberate request to see retired builds, so it is left alone.
+        packages = [p for p in packages if not p.get("upstream_yanked")]
     if not packages:
         click.echo("No yanked packages." if yanked_only else "No matching packages.")
         return
