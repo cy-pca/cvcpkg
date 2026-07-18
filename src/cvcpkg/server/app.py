@@ -1593,6 +1593,9 @@ async def _populate_sync_once() -> int:
                     tags=b.get("tags", "") or "",
                     published_by=f"populate:{upstream}",
                     required_deps=json.dumps(b.get("required_deps") or []),
+                    # Provenance, so reconciliation may later follow upstream's
+                    # yank/nuke decisions for this row -- and only this row.
+                    origin_upstream=upstream,
                 )
             except ValueError:
                 # A concurrent local publish won the race — keep theirs.
@@ -1618,7 +1621,93 @@ async def _populate_sync_once() -> int:
                 POPULATE_MAX_PER_SYNC,
                 skipped_capacity,
             )
+
+        # ── Follow upstream's yank/nuke decisions ────────────────
+        # Upstream owns the packages it publishes, so a client resolving
+        # against this mirror must get the same answer upstream would give.
+        # Importing alone left us silently disagreeing: a bundle yanked or
+        # nuked upstream carried on being served here forever.
+        await _reconcile_with_upstream(client, upstream, upstream_bundles)
+
         return imported
+
+
+def _bundle_key(b: dict) -> tuple[str, str, str, str, str, str]:
+    return (
+        b.get("name", ""),
+        b.get("version", ""),
+        b.get("platform", ""),
+        b.get("arch", ""),
+        b.get("build_type", ""),
+        b.get("link", ""),
+    )
+
+
+async def _reconcile_with_upstream(client, upstream: str, upstream_bundles: list) -> None:
+    """Make bundles imported from *upstream* agree with what upstream serves now.
+
+    Only rows carrying this upstream's provenance are eligible; a locally
+    published package is never removed because some upstream lacks it.
+
+    A bundle missing from upstream's catalogue is ambiguous on its own -- it
+    could equally be a truncated response -- so upstream's tombstones decide.
+    Tombstones are fetched only for the packages that actually went missing,
+    not the whole catalogue.
+    """
+    present: set[tuple[str, str, str, str, str, str]] = set()
+    yanked_up: set[tuple[str, str, str, str, str, str]] = set()
+    for b in upstream_bundles:
+        key = _bundle_key(b)
+        if not all(key) or b.get("org"):
+            continue
+        (yanked_up if b.get("yanked") else present).add(key)
+
+    mirrored = await _db_packages.mirrored_keys(upstream)
+    if not mirrored:
+        return
+    missing = {k for k in mirrored if k not in present and k not in yanked_up}
+
+    tombstoned: set[tuple[str, str, str, str, str, str]] = set()
+    for pkg_name in sorted({k[0] for k in missing}):
+        try:
+            resp = await client.get(f"{upstream}/v1/packages/{pkg_name}/tombstones")
+            if resp.status_code >= 400:
+                continue
+            payload = resp.json()
+            entries = payload.get("tombstones", payload if isinstance(payload, list) else [])
+        except Exception as exc:  # noqa: BLE001 — advisory; never block a sync
+            logger.warning("populate: tombstone lookup failed for %s: %s", pkg_name, exc)
+            continue
+        for t in entries or []:
+            tombstoned.add(_bundle_key(t))
+
+    counts = await _db_packages.reconcile_from_upstream(
+        upstream,
+        upstream_yanked=yanked_up,
+        upstream_present=present,
+        upstream_tombstoned=tombstoned,
+    )
+    if any(counts.values()):
+        logger.info(
+            "populate: reconciled with %s — yanked %d, tombstoned %d, " "yanked-but-unexplained %d",
+            upstream,
+            counts["yanked"],
+            counts["tombstoned"],
+            counts["ambiguous"],
+        )
+        _populate_stats["last_evicted"] = counts["yanked"] + counts["tombstoned"]
+        _populate_stats["evicted_total"] += counts["yanked"] + counts["tombstoned"]
+    if counts["ambiguous"]:
+        # Loud on purpose: upstream dropped a bundle without a tombstone, so we
+        # yanked rather than tombstoned.  A transient upstream fault looks
+        # exactly like this, and `cvcpkg unyank` is the recovery.
+        logger.warning(
+            "populate: %d bundle(s) vanished from %s with no tombstone; yanked "
+            "locally but NOT tombstoned — unyank them if upstream was merely "
+            "unavailable",
+            counts["ambiguous"],
+            upstream,
+        )
 
 
 async def _enforce_mirror_budget() -> int:

@@ -673,6 +673,34 @@ scaling and federation:
 - **Mirror protocol** — institutions can run local read-only mirrors
   (`--mirror-mode`) that sync from a primary. Useful for pure read-only
   air-gapped caches; the read-write variant is the *edge* role above.
+
+  **Upstream is authoritative.** A client resolving against a mirror or edge
+  must get the same answer it would have got from upstream. Populate was
+  originally add-only, so a bundle yanked or nuked upstream carried on being
+  served by every downstream indefinitely — the mirror silently disagreed with
+  the registry it claimed to mirror, and a bundle retired for being broken (or
+  for a CVE) stayed installable. Each populate cycle now reconciles:
+
+  - upstream **yanked** it → yank locally (reversible; an upstream unyank
+    propagates back on the next cycle)
+  - upstream **nuked** it (absent from the catalog *and* carrying a tombstone)
+    → yank locally and write a local tombstone, so downloads answer `410 Gone`
+    exactly as upstream does
+  - upstream **dropped it with no tombstone** → ambiguous: yank only, and log
+    loudly. A truncated catalog or a transient upstream fault is
+    indistinguishable from a deletion, and yank is recoverable.
+
+  Two deliberate limits:
+
+  - **Provenance-scoped.** Only rows carrying that upstream's
+    `origin_upstream` are eligible. An edge hosts its own packages beside the
+    mirrored ones, and "upstream doesn't have it" is not evidence that a
+    locally published package should disappear.
+  - **A mirrored nuke does not delete bytes.** It stops serving the bundle
+    immediately and leaves the archive to the ordinary yank-retention GC.
+    Deleting on sight would let one upstream mistake — or one compromised
+    upstream — destroy data across every mirror simultaneously, and an
+    air-gapped edge may hold the last copy in existence.
 - **Federated registries** — multiple independent cvcpkg servers can
   cross-reference packages.  A client can query multiple registries
   with fallback.

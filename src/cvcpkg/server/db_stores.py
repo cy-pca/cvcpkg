@@ -732,6 +732,14 @@ class DbAuditLog:
 # package_tombstones.reason column.
 NUKE_REASON_MANUAL = "manual"  # an admin's `cvcpkg nuke`
 NUKE_REASON_RETENTION = "retention"  # fell off the yank-retention schedule
+# Followed an upstream nuke on a mirror/edge.  The bundle stops being served
+# here immediately (yanked + tombstoned, so downloads answer 410 exactly as
+# upstream does), while the archive bytes are left for the ordinary
+# yank-retention GC to reclaim.  Deleting them the moment an upstream API call
+# is observed would let one upstream mistake -- or one compromised upstream --
+# destroy data across every mirror at once, and an air-gapped edge may hold the
+# last copy in existence.
+NUKE_REASON_UPSTREAM = "upstream"
 
 
 def _tombstone_dict(r) -> dict:
@@ -1241,6 +1249,7 @@ class DbPackageIndex:
         org_slug: str = "",
         published_by: str = "",
         required_deps: str = "[]",
+        origin_upstream: str = "",
     ) -> None:
         async with get_session() as session:
             # Check for existing variant first.
@@ -1282,6 +1291,7 @@ class DbPackageIndex:
                 org_slug=org_slug,
                 published_by=published_by,
                 required_deps=required_deps,
+                origin_upstream=origin_upstream,
             )
             session.add(row)
 
@@ -1318,6 +1328,111 @@ class DbPackageIndex:
                 stmt = stmt.where(PackageRow.build_type == build_type)
             result = await session.execute(stmt)
             return result.rowcount
+
+    async def mirrored_keys(self, upstream: str) -> set[tuple[str, str, str, str, str, str]]:
+        """Variant keys this server imported from *upstream*.
+
+        Lets the caller work out which mirrored bundles upstream no longer
+        lists, so it can fetch tombstones for just those packages instead of
+        interrogating upstream about the whole catalogue.
+        """
+        if not upstream:
+            return set()
+        async with get_session() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(PackageRow).where(PackageRow.origin_upstream == upstream)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return {(r.name, r.version, r.platform, r.arch, r.build_type, r.link) for r in rows}
+
+    async def reconcile_from_upstream(
+        self,
+        upstream: str,
+        *,
+        upstream_yanked: set[tuple[str, str, str, str, str, str]],
+        upstream_present: set[tuple[str, str, str, str, str, str]],
+        upstream_tombstoned: set[tuple[str, str, str, str, str, str]],
+        nuked_by: str = "populate-reconcile",
+    ) -> dict[str, int]:
+        """Make bundles imported from *upstream* agree with what upstream now says.
+
+        Upstream is authoritative for the packages it owns: a client resolving
+        against a mirror must get the same answer it would get from upstream.
+        Populate only ever added, so a bundle yanked or nuked upstream kept
+        being served here indefinitely -- the mirror silently disagreed.
+
+        Only rows whose ``origin_upstream`` equals *upstream* are considered.
+        A locally published package, an org package, or a bundle mirrored from
+        some other upstream is never touched: "absent upstream" says nothing
+        about a package upstream never had.
+
+        Three cases, in decreasing confidence:
+
+        * upstream says **yanked** -> yank here (reversible, and unyanking
+          upstream propagates back on the next sync).
+        * upstream **dropped it and has a tombstone** -> upstream nuked it, so
+          stop serving it: yank + write a local tombstone, which makes
+          downloads answer 410 exactly as upstream does.  The archive bytes are
+          deliberately left to the ordinary yank-retention GC.
+        * upstream **dropped it with no tombstone** -> ambiguous.  A partial
+          catalog, a truncated response or a transient upstream fault all look
+          like this, so only yank (recoverable) and let the caller log it.
+
+        Returns counts keyed ``yanked`` / ``tombstoned`` / ``ambiguous``.
+        """
+        now = datetime.datetime.now(datetime.timezone.utc)
+        counts = {"yanked": 0, "tombstoned": 0, "ambiguous": 0}
+        if not upstream:
+            return counts
+
+        async with get_session() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(PackageRow).where(PackageRow.origin_upstream == upstream)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+            to_tombstone = []
+            for r in rows:
+                key = (r.name, r.version, r.platform, r.arch, r.build_type, r.link)
+                if key in upstream_yanked:
+                    if not r.yanked:
+                        r.yanked = True
+                        r.yanked_at = r.yanked_at or now
+                        counts["yanked"] += 1
+                    continue
+                if key in upstream_present:
+                    continue  # upstream still serves it; nothing to do
+                # Gone from upstream's catalog.
+                if key in upstream_tombstoned:
+                    if not r.yanked:
+                        r.yanked = True
+                        r.yanked_at = r.yanked_at or now
+                    to_tombstone.append(r)
+                    counts["tombstoned"] += 1
+                else:
+                    if not r.yanked:
+                        r.yanked = True
+                        r.yanked_at = r.yanked_at or now
+                        counts["ambiguous"] += 1
+
+            if to_tombstone:
+                _record_tombstones(
+                    session,
+                    to_tombstone,
+                    reason=NUKE_REASON_UPSTREAM,
+                    nuked_by=nuked_by,
+                )
+        return counts
 
     async def unyank(
         self,
