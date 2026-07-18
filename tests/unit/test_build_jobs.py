@@ -1278,6 +1278,39 @@ class TestDbBuildJobStore:
 
         self._run(_test())
 
+    def test_cancel_dag_prefix_match(self):
+        """A trailing '*' cancels every sub-DAG of a PR run, not other PRs.
+
+        submit-dag splits one logical DAG into
+        ``pr-<n>-<run>-<platform>-<arch>-<config>-<link>`` sub-DAGs, and a
+        superseded CI run leaves several such orphans; the cleanup cancels them
+        by the ``pr-<n>-<run>-*`` prefix.  ``pr-288-*`` must NOT reach
+        ``pr-2881-*`` -- the trailing dash makes the prefix unambiguous.
+        """
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            one = lambda name: [  # noqa: E731
+                {"recipe_name": name, "platform": "linux", "arch": "x86_64", "depends_on": []}
+            ]
+            await store.create_dag(one("a"), "pr-288-run1-linux-x86_64-release-shared", "admin")
+            await store.create_dag(one("b"), "pr-288-run1-windows-x86_64-release-shared", "admin")
+            await store.create_dag(one("c"), "pr-288-run2-linux-x86_64-release-shared", "admin")
+            other = await store.create_dag(
+                one("d"), "pr-2881-run1-linux-x86_64-release-shared", "admin"
+            )
+
+            # Prefix cancels all three pr-288 sub-DAGs; pr-2881 is untouched.
+            count = await store.cancel_dag("pr-288-*")
+            assert count == 3
+            assert (await store.get(other[0].id)).status == BuildJobStatus.pending
+
+            # Exact match still works and is unaffected by the '*' path.
+            assert await store.cancel_dag("pr-2881-run1-linux-x86_64-release-shared") == 1
+
+        self._run(_test())
+
     # ── cancel_downstream edge cases ────────────────────────────
 
     def test_cancel_downstream_diamond(self):
