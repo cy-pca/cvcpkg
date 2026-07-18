@@ -427,9 +427,16 @@ jobs:
 
   # ── Update Linux builder runners ───────────────────────────────
   # Each runner has a unique label matching its hostname.
+  #
+  # continue-on-error: refreshing a builder is housekeeping that happens
+  # *after* the server deploy has already succeeded.  An unreachable or
+  # wedged builder must not report the deploy itself as failed — that
+  # turns deploy-prod permanently red and masks real deploy failures.
+  # Failures stay visible as ::warning:: annotations on the run.
   update-linux-builders:
     name: Update builder (${{ matrix.runner }})
     needs: deploy
+    continue-on-error: true
     runs-on: [self-hosted, Linux, X64, "${{ matrix.runner }}"]
     strategy:
       fail-fast: false
@@ -506,19 +513,42 @@ jobs:
 
   # ── Update Windows builder ─────────────────────────────────────
   # The Windows builder is reachable via SSH from a Linux runner.
+  #
+  # continue-on-error: same rationale as update-linux-builders above.
+  # The Windows host in particular has a history of staying alive and
+  # building jobs while its *inbound* SSH path breaks (host moves to a
+  # different link, Tailscale/Hyper-V adapter conflicts).  That is a
+  # builder-connectivity problem, not a deploy failure.
   update-windows-builder:
     name: Update builder (windows)
     needs: deploy
+    continue-on-error: true
     runs-on: [self-hosted, Linux, X64, star-00]
     timeout-minutes: 10
 
     steps:
       - name: Update and restart the Windows builder
         run: |
-          set -euo pipefail
+          # NB: no `set -e` — an unreachable builder must warn, not fail.
+          set -uo pipefail
           SHA="${{ needs.deploy.outputs.sha }}"
           SSH="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15"
           WIN="${{ vars.WINDOWS_BUILDER_SSH }}"
+
+          if [ -z "$WIN" ]; then
+            echo "::warning::vars.WINDOWS_BUILDER_SSH is unset — skipping the Windows builder update"
+            exit 0
+          fi
+
+          # Preflight.  This host has a history of staying alive — still
+          # heartbeating to cvcpkg.org and claiming windows jobs — while its
+          # *inbound* SSH path is broken (link change, Tailscale/Hyper-V
+          # adapter conflict).  That is a builder-connectivity problem to
+          # warn about, not a failure of the deploy that already succeeded.
+          if ! $SSH -o BatchMode=yes "$WIN" "echo ok" >/dev/null 2>&1; then
+            echo "::warning::Windows builder ($WIN) is unreachable over SSH — skipping its update. It may still be online and building jobs with a stale cvcpkg; check its inbound connectivity."
+            exit 0
+          fi
 
           echo "--- Configuring Windows Defender exclusions ---"
           $SSH "$WIN" "powershell -Command \"Add-MpPreference -ExclusionPath 'C:\Users\tfx\cvcpkg-builder' -ErrorAction SilentlyContinue; Add-MpPreference -ExclusionPath \$env:TEMP -ErrorAction SilentlyContinue; Add-MpPreference -ExclusionProcess 'pwsh.exe' -ErrorAction SilentlyContinue; Add-MpPreference -ExclusionProcess 'bash.exe' -ErrorAction SilentlyContinue; Write-Host 'Defender exclusions set'\"" || true
@@ -540,7 +570,8 @@ jobs:
             pip install --quiet . 2>NUL &&
             set PYTHONIOENCODING=utf-8 &&
             cvcpkg --version
-          "
+          " || echo "::warning::Failed to update the Windows builder ($WIN) to $SHA — it may be running a stale cvcpkg"
 
           echo "--- Restarting Windows builder ---"
-          $SSH "$WIN" "schtasks /run /tn cvcpkg-builder 2>NUL && echo windows: builder restarted || echo windows: no scheduled task found"
+          $SSH "$WIN" "schtasks /run /tn cvcpkg-builder 2>NUL && echo windows: builder restarted || echo windows: no scheduled task found" \
+            || echo "::warning::Failed to restart the Windows builder ($WIN)"
