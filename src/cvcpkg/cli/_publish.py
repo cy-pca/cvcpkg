@@ -602,6 +602,14 @@ def _publish_chunked(
         data = resp.json()
         click.echo(f"  published (chunked): sha256={data['sha256']}")
         return "published"
+    elif resp.status_code == 409:
+        # The variant pre-check and the init-time 409 only close the window
+        # before the transfer starts; this one spans the whole multi-minute
+        # chunk upload, so a concurrent publish of the same variant lands here.
+        # Since publish failures now propagate, treating this as an error would
+        # fail a job whose bytes did reach the catalogue.
+        click.echo(f"  skipped (already published): {resp.json().get('detail', '')}")
+        return "skipped"
     else:
         raise click.ClickException(f"upload complete failed ({resp.status_code}): {resp.text}")
 

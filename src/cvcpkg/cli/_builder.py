@@ -1214,8 +1214,10 @@ def builder_run(
             except click.ClickException as pub_exc:
                 # Do NOT swallow this.  An already-published variant never
                 # reaches here: _publish_to_server skips it up front via
-                # _variant_exists, and a 409 from either the simple or the
-                # chunked upload path returns "skipped" instead of raising.
+                # _variant_exists, and every 409 -- simple upload, chunked
+                # init, and chunked finalise -- returns "skipped" rather than
+                # raising.  (Finalise was missing that until it was found to
+                # fail jobs whose bytes had in fact reached the catalogue.)
                 # So a ClickException here is a genuine publish failure --
                 # auth, storage, a failed chunk -- and completing the job would
                 # advertise a bundle that is not in the catalog.  That is

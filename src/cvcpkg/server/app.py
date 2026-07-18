@@ -1439,6 +1439,13 @@ _populate_stats: dict = {
     "last_error": "",
     "last_evicted": 0,
     "evicted_total": 0,
+    # Kept apart from the eviction counters above: evicting to fit a size budget
+    # and retiring a bundle because upstream retired it are different events,
+    # and folding them together both lost the reconcile number (the budget pass
+    # overwrote it later in the same cycle) and made the operator-facing total
+    # unreadable.
+    "last_reconciled": 0,
+    "reconciled_total": 0,
 }
 
 
@@ -1663,10 +1670,27 @@ async def _reconcile_with_upstream(client, upstream: str, upstream_bundles: list
         key = _bundle_key(b)
         if not all(key) or b.get("org"):
             continue
-        (yanked_up if b.get("yanked") else present).add(key)
+        # Upstream's verdict travels the chain independently of each hop's
+        # local enforcement.  A mirror that dissents serves yanked=false with
+        # upstream_yanked=true; reading only ``yanked`` here would let that hop
+        # launder the origin's ruling into a clean unyank for everyone below it.
+        (yanked_up if (b.get("yanked") or b.get("upstream_yanked")) else present).add(key)
 
     mirrored = await _db_packages.mirrored_keys(upstream)
     if not mirrored:
+        # Nothing to reconcile is normal for a server that mirrors nothing --
+        # but it is also what a provenance mismatch looks like, and that one is
+        # a silent hole in upstream's authority rather than a quiet success.
+        stranded = await _db_packages.stranded_upstreams(upstream)
+        if stranded:
+            logger.warning(
+                "populate: no rows carry provenance for %s, but %d bundle(s) are "
+                "stamped with other upstream(s): %s — reconciliation does not "
+                "cover them, so upstream yanks and nukes will not propagate",
+                upstream,
+                sum(stranded.values()),
+                ", ".join(f"{k} ({v})" for k, v in sorted(stranded.items())),
+            )
         return
     missing = {k for k in mirrored if k not in present and k not in yanked_up}
 
@@ -1690,7 +1714,10 @@ async def _reconcile_with_upstream(client, upstream: str, upstream_bundles: list
         upstream_present=present,
         upstream_tombstoned=tombstoned,
     )
-    if any(counts.values()):
+    # Guard on exactly what is printed.  ``overridden`` re-counts a standing
+    # dissent on every single sync, so including it here logged a line whose
+    # three numbers were all zero, forever, once any override existed.
+    if counts["yanked"] or counts["tombstoned"] or counts["ambiguous"]:
         logger.info(
             "populate: reconciled with %s — yanked %d, tombstoned %d, " "yanked-but-unexplained %d",
             upstream,
@@ -1698,8 +1725,9 @@ async def _reconcile_with_upstream(client, upstream: str, upstream_bundles: list
             counts["tombstoned"],
             counts["ambiguous"],
         )
-        _populate_stats["last_evicted"] = counts["yanked"] + counts["tombstoned"]
-        _populate_stats["evicted_total"] += counts["yanked"] + counts["tombstoned"]
+        _retired = counts["yanked"] + counts["tombstoned"]
+        _populate_stats["last_reconciled"] = _retired
+        _populate_stats["reconciled_total"] += _retired
     if counts["ambiguous"]:
         # Loud on purpose: upstream dropped a bundle without a tombstone, so we
         # yanked rather than tombstoned.  A transient upstream fault looks
@@ -7007,7 +7035,30 @@ def create_app(
                 elif msg_type == "job.claim":
                     job_id = data.get("job_id")
                     if job_id is not None:
-                        result = await _db_build_jobs.claim(job_id, builder_id)
+                        try:
+                            result = await _db_build_jobs.claim(job_id, builder_id)
+                        except BuildJobAlreadyClaimedError:
+                            # Losing a claim race is routine, not a protocol
+                            # error.  Letting this escape would reach the outer
+                            # ``except Exception`` and close the socket, taking
+                            # heartbeat and log/complete delivery down with it.
+                            # Re-claiming a job we already hold stays idempotent,
+                            # matching the HTTP claim endpoint.
+                            _held = await _db_build_jobs.get(job_id)
+                            result = (
+                                _held
+                                if _held is not None and _held.builder_id == builder_id
+                                else None
+                            )
+                            if result is None:
+                                await websocket.send_json(
+                                    {
+                                        "type": "job.claim_ack",
+                                        "job_id": job_id,
+                                        "status": "already_claimed",
+                                    }
+                                )
+                                continue
                         await websocket.send_json(
                             {
                                 "type": "job.claim_ack",

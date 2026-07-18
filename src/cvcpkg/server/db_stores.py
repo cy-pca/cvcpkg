@@ -1362,6 +1362,34 @@ class DbPackageIndex:
             )
             return {(r.name, r.version, r.platform, r.arch, r.build_type, r.link) for r in rows}
 
+    async def stranded_upstreams(self, upstream: str) -> dict[str, int]:
+        """Provenance values that no longer match the configured upstream.
+
+        ``origin_upstream`` is matched by exact string, so changing the
+        configured URL at all -- http to https, a port added, a host renamed --
+        silently strands every row stamped with the old spelling: reconciliation
+        stops covering them, and populate will not re-stamp them because they
+        are already present.  Reporting them is what turns that from an
+        invisible no-op into something an operator can act on.
+        """
+        async with get_session() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(PackageRow.origin_upstream).where(
+                            PackageRow.origin_upstream != "",
+                            PackageRow.origin_upstream != upstream,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        counted: dict[str, int] = {}
+        for value in rows:
+            counted[value] = counted.get(value, 0) + 1
+        return counted
+
     async def reconcile_from_upstream(
         self,
         upstream: str,
@@ -1421,6 +1449,23 @@ class DbPackageIndex:
                 .all()
             )
 
+            # The rows stay put (a mirrored nuke is yank + tombstone + ordinary
+            # retention GC, not an immediate delete), so without this they would
+            # match the tombstone branch on every single sync -- and the table
+            # has no unique constraint to stop the duplicate insert.
+            already_tombstoned = {
+                (t.name, t.version, t.platform, t.arch, t.build_type, t.link)
+                for t in (
+                    await session.execute(
+                        select(PackageTombstoneRow).where(
+                            PackageTombstoneRow.reason == NUKE_REASON_UPSTREAM
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            }
+
             to_tombstone = []
             for r in rows:
                 key = (r.name, r.version, r.platform, r.arch, r.build_type, r.link)
@@ -1459,8 +1504,9 @@ class DbPackageIndex:
                     if not r.yanked:
                         r.yanked = True
                         r.yanked_at = r.yanked_at or now
-                    to_tombstone.append(r)
-                    counts["tombstoned"] += 1
+                    if key not in already_tombstoned:
+                        to_tombstone.append(r)
+                        counts["tombstoned"] += 1
                 else:
                     if not r.yanked:
                         r.yanked = True

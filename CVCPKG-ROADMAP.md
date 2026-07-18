@@ -721,7 +721,25 @@ scaling and federation:
   `upstream_yanked` on such a bundle, and clients resolve with upstream winning
   by default — a bundle withdrawn for a CVE must not come back just because one
   mirror still serves it. `--trust-mirror` (or `CVCPKG_TRUST_MIRROR=1`) opts
-  into the mirror operator's ruling instead.
+  into the mirror operator's ruling instead, and `--no-trust-mirror` restores
+  upstream authority when that variable is already set in the environment.
+
+  Authority is a property of the **chain**, not of one hop. A mirror's dissent
+  is enforced locally but never propagated as though upstream had reconsidered:
+  each server classifies an upstream bundle as retired when *either* `yanked` or
+  `upstream_yanked` is set, so the origin's ruling reaches the bottom of a
+  nested chain even when a middle mirror is serving the bundle anyway. Reading
+  only `yanked` let a dissenting middle hop launder the origin's decision into a
+  clean unyank for everything below it — with the disclosure flag cleared, so
+  `--trust-mirror` had nothing left to opt into.
+
+  Reconciliation is scoped by recorded provenance (`origin_upstream`), which
+  means it only ever covers rows that carry it. Servers that mirrored anything
+  before that column existed are backfilled from the `populate:<upstream>`
+  provenance already in `published_by` (migration 022); without it,
+  reconciliation is a silent no-op over a mirror's entire pre-existing
+  catalogue. A stamp that no longer matches the configured upstream — after a
+  scheme, host or port change — is reported rather than quietly ignored.
 - **Federated registries** — multiple independent cvcpkg servers can
   cross-reference packages.  A client can query multiple registries
   with fallback.
