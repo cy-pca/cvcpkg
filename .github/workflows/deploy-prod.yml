@@ -382,14 +382,22 @@ jobs:
       - name: Update non-runner builders (BSD)
         continue-on-error: true
         run: |
-          set -euo pipefail
+          set -uo pipefail
           SHA="${{ steps.target.outputs.sha }}"
           SSH="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
+          # Optional jump host. The BSD guests are not always routable from the
+          # runner directly -- when they were not, every host timed out while
+          # this step still reported success, and the fleet silently ran code
+          # weeks out of date. Set BSD_BUILDER_SSH_JUMP (e.g. tfx@10.66.77.217)
+          # to reach them via star-00; leave it unset for direct LAN access.
+          if [ -n "${{ vars.BSD_BUILDER_SSH_JUMP }}" ]; then
+            SSH="$SSH -J ${{ vars.BSD_BUILDER_SSH_JUMP }}"
+          fi
 
-          # BSD builders reachable only by LAN IP from the cvcpkg-prod runner.
+          ok=0; failed=0
           for host in ${{ vars.BSD_BUILDER_SSH_HOSTS }}; do
             echo "--- $host ---"
-            $SSH "$host" "
+            if $SSH "$host" "
               cd /root/libcvc-deps 2>/dev/null || cd /usr/local/src/libcvc-deps &&
               git fetch origin &&
               git checkout -f $SHA &&
@@ -397,33 +405,67 @@ jobs:
               pip install --break-system-packages --quiet . 2>/dev/null;
               pip install --quiet . 2>/dev/null;
               echo \"\$(hostname): \$(cvcpkg --version)\"
-            " || echo "::warning::Failed to update $host"
+            "; then
+              ok=$((ok + 1))
+            else
+              failed=$((failed + 1))
+              echo "::warning::Failed to update $host"
+            fi
           done
+
+          echo "BSD update: $ok updated, $failed failed"
+          # continue-on-error keeps an unreachable builder from turning the
+          # whole deploy red, but the step must still SAY it did nothing.
+          # Swallowing every failure into a warning is what let "green" mean
+          # "never touched a single host".
+          if [ "$ok" -eq 0 ]; then
+            echo "::error::No BSD builder could be updated ($failed unreachable). They are running stale code."
+            exit 1
+          fi
 
       # ── Restart BSD builder agents ────────────────────────────
       - name: Restart non-runner builders (BSD)
         continue-on-error: true
         run: |
-          set -euo pipefail
+          set -uo pipefail
           SSH="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
+          if [ -n "${{ vars.BSD_BUILDER_SSH_JUMP }}" ]; then
+            SSH="$SSH -J ${{ vars.BSD_BUILDER_SSH_JUMP }}"
+          fi
 
-          # BSD builders reachable only by LAN IP from the cvcpkg-prod runner.
           # Kill the running daemon, re-launch from its @reboot crontab entry.
+          # This matters more than it looks: Python loads its modules at process
+          # start, so a builder whose files were refreshed but whose daemon was
+          # never restarted keeps executing the OLD code indefinitely. Updating
+          # without restarting is not a partial success, it is a no-op.
+          ok=0; failed=0
           for host in ${{ vars.BSD_BUILDER_SSH_HOSTS }}; do
             echo "--- $host ---"
-            $SSH "$host" "
+            if $SSH "$host" "
               pkill -f 'cvcpkg builder run' 2>/dev/null || true
               sleep 2
               CMD=\$(crontab -l 2>/dev/null | grep '@reboot.*cvcpkg builder run' | sed 's/@reboot //')
               if [ -n \"\$CMD\" ]; then
                 eval \"\$CMD\"
                 sleep 2
-                pgrep -f 'cvcpkg builder run' >/dev/null 2>&1 && echo \"\$(hostname): builder restarted\" || echo \"::warning::\$(hostname): builder failed to start\"
+                pgrep -f 'cvcpkg builder run' >/dev/null 2>&1 && echo \"\$(hostname): builder restarted\" || { echo \"::warning::\$(hostname): builder failed to start\"; exit 1; }
               else
                 echo \"::warning::\$(hostname): no @reboot cvcpkg entry found\"
+                exit 1
               fi
-            " || echo "::warning::Failed to restart builder on $host"
+            "; then
+              ok=$((ok + 1))
+            else
+              failed=$((failed + 1))
+              echo "::warning::Failed to restart builder on $host"
+            fi
           done
+
+          echo "BSD restart: $ok restarted, $failed failed"
+          if [ "$ok" -eq 0 ]; then
+            echo "::error::No BSD builder could be restarted ($failed unreachable). Any code update above is NOT live."
+            exit 1
+          fi
 
   # ── Update Linux builder runners ───────────────────────────────
   # Each runner has a unique label matching its hostname.
