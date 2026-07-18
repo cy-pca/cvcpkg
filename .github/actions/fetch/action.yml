@@ -14,7 +14,7 @@ description: |
 
   Behaviour:
     * Computes the URL from inputs (defaults match libcvc-deps's
-      release.yml stem naming).
+      archive stem naming).
     * curl -fL the archive into a temp file; falls back to nothing
       on any HTTP error (404, network blip, etc.) instead of
       failing the build. This keeps the calling workflow robust to

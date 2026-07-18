@@ -2,10 +2,8 @@
 
 This document lists every tool and system dependency needed to
 reproduce a full `cvcpkg build-all` run on each supported platform.
-The CI workflow
-([`.github/workflows/recipe-build.yml`](.github/workflows/recipe-build.yml))
-installs exactly these prerequisites, so the lists below always
-match what CI uses.
+The cvcpkg remote builders install exactly these prerequisites, so
+the lists below always match what the build fleet uses.
 
 ## Quick start
 

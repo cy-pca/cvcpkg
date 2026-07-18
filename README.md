@@ -896,7 +896,7 @@ package:
 | **Build** | Included in *every* platform's `build-all` run so it is always available |
 | **Cache key** | Uses `any/noarch` — the same artifact is shared across all platforms |
 | **Dependencies** | Other recipes can depend on `any` packages; they are included regardless of the consuming platform |
-| **CI workflow** | `recipe-build.yml` maps `platform: any` to `ARCH=noarch` and skips the cmake marker |
+| **Builder** | Maps `platform: any` to `ARCH=noarch` and skips the cmake marker |
 | **Recipe `kind`** | Optional `recipe.kind` field (e.g. `data`, `media`, `config`, `iso`) is emitted as `meta.kind` in the manifest for downstream tooling hints |
 
 ### `cvc-requirements.yaml` usage
