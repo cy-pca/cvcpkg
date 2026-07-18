@@ -7,10 +7,9 @@ on:
     branches: [ master, main ]
 
 # Cancel superseded runs on the same ref so a push during an
-# in-progress build doesn't waste runners. The VTK build cache is
-# saved via actions/cache@v4 inside release.yml; vcpkg likewise. Both
-# tolerate cancellation because the cache save runs as a post-step
-# only when the cache key is fresh.
+# in-progress build doesn't waste runners. Any cache save runs as a
+# post-step only when the cache key is fresh, so it tolerates
+# cancellation.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true

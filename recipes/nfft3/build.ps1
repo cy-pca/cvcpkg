@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
   Build NFFT3 on Windows via MSYS2/mingw64 + generate MSVC import lib.
-  Mirrors the CI logic in .github/workflows/release.yml.
+  This is the canonical Windows build logic for the NFFT3 recipe.
 .DESCRIPTION
   1) Builds NFFT3 with autotools inside MSYS2/mingw64.
   2) Uses gendef + MSVC lib /def: to create an MSVC-friendly .lib.
