@@ -3298,12 +3298,24 @@ class DbBuildJobStore:
             return results
 
     async def cancel_dag(self, dag_id: str) -> int:
-        """Cancel all pending/dispatched jobs in a DAG. Returns count cancelled."""
+        """Cancel all pending/dispatched jobs in a DAG. Returns count cancelled.
+
+        A trailing ``*`` makes it a prefix match, e.g. ``cancel_dag("pr-288-*")``
+        cancels every sub-DAG of a PR run -- submit-dag splits one logical DAG
+        into ``<base>-<platform>-<arch>-<config>-<link>`` sub-DAGs, and a
+        superseded CI run leaves several such orphans behind.
+        """
         now = datetime.datetime.now(datetime.timezone.utc)
         async with get_session() as session:
+            if dag_id.endswith("*"):
+                # escape LIKE metacharacters in the fixed prefix, then match.
+                prefix = dag_id[:-1].replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                dag_pred = BuildJobRow.dag_id.like(prefix + "%", escape="\\")
+            else:
+                dag_pred = BuildJobRow.dag_id == dag_id
             q = (
                 select(BuildJobRow)
-                .where(BuildJobRow.dag_id == dag_id)
+                .where(dag_pred)
                 .where(
                     BuildJobRow.status.in_(
                         [
