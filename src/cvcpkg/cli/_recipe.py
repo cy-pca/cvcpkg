@@ -7,6 +7,7 @@ from pathlib import Path
 import click
 import yaml
 
+from cvcpkg._archive import safe_tar_extractall
 from cvcpkg.cli import cli
 from cvcpkg.cli._helpers import (
     _resolve_recipes_dirs,
@@ -39,6 +40,78 @@ def _bundle_vendored_source(tar, recipe_path: Path, rdir: Path) -> None:
 @cli.group("recipe")
 def recipe_group() -> None:
     """Manage server-side recipe bundles."""
+
+
+@recipe_group.command("sync-common")
+@click.argument("recipes_dir", type=click.Path(exists=True, file_okay=False))
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Report what would change without writing anything.",
+)
+def recipe_sync_common(recipes_dir: str, dry_run: bool) -> None:
+    """Refresh a recipes directory's shared ``_common/`` helpers.
+
+    A local recipes tree (e.g. an air-gapped client work tree created by
+    ``new-client-project.sh``) vendors a snapshot of ``recipes/_common`` at
+    onboarding time.  Nothing refreshes it afterwards, yet it is what local
+    builds source and what winhost stages to the Windows host -- so helpers
+    added to cvcpkg later (e.g. ``stage-source.sh``) are silently missing and
+    builds fail with confusing errors deep into a job.
+
+    This copies the authoritative ``_common/`` from the installed cvcpkg into
+    *RECIPES_DIR*.  Run it after upgrading cvcpkg.
+
+    \b
+    Example:
+      cvcpkg recipe sync-common ~/clients/myproj/work/cvcpkg/recipes
+    """
+    import filecmp
+    import shutil
+
+    from cvcpkg.builder import find_recipes_dir
+
+    try:
+        src_common = find_recipes_dir() / "_common"
+    except Exception as exc:  # pragma: no cover - defensive
+        raise click.ClickException(f"could not locate cvcpkg's recipes: {exc}") from exc
+    if not src_common.is_dir():
+        raise click.ClickException(f"cvcpkg has no bundled _common at {src_common}")
+
+    dst_common = Path(recipes_dir).resolve() / "_common"
+    if dst_common.resolve() == src_common.resolve():
+        click.echo("cvcpkg: source and destination are the same tree; nothing to do.")
+        return
+
+    added: list[str] = []
+    updated: list[str] = []
+    for src in sorted(p for p in src_common.rglob("*") if p.is_file()):
+        rel = src.relative_to(src_common)
+        dst = dst_common / rel
+        if not dst.exists():
+            added.append(str(rel))
+        elif not filecmp.cmp(src, dst, shallow=False):
+            updated.append(str(rel))
+        else:
+            continue
+        if not dry_run:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+
+    if not added and not updated:
+        click.echo(f"cvcpkg: {dst_common} is already up to date.")
+        return
+
+    verb = "would add" if dry_run else "added"
+    for rel in added:
+        click.echo(f"  {verb}: {rel}")
+    verb = "would update" if dry_run else "updated"
+    for rel in updated:
+        click.echo(f"  {verb}: {rel}")
+    click.echo(
+        f"cvcpkg: {'would sync' if dry_run else 'synced'} {len(added) + len(updated)} "
+        f"file(s) into {dst_common} (from {src_common})"
+    )
 
 
 @recipe_group.command("push")
@@ -452,7 +525,7 @@ def recipe_pull(name: str, server: str, token: str, org_slug: str, output_dir: s
     bundle_path.write_bytes(resp.content)
 
     with tarfile.open(bundle_path, "r:gz") as tar:
-        tar.extractall(path=output)  # noqa: S202
+        safe_tar_extractall(tar, output)
     bundle_path.unlink()
     click.echo(f"Recipe '{name}' extracted to {output / name}")
 
@@ -519,7 +592,7 @@ def recipe_pull_all(server: str, token: str, org_slug: str, output_dir: str):
     bundle_path.write_bytes(resp.content)
 
     with tarfile.open(bundle_path, "r:gz") as tar:
-        tar.extractall(path=output)  # noqa: S202
+        safe_tar_extractall(tar, output)
     bundle_path.unlink()
 
     # Count extracted recipes

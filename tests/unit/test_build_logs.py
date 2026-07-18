@@ -679,17 +679,18 @@ class TestBuildLogEndpoints:
         store = mock.MagicMock()
         store.get = mock.AsyncMock(side_effect=lambda _jid: next(statuses))
         store.get_log_path = mock.AsyncMock(return_value=None)  # no log output
+        _visible = mock.AsyncMock()
 
         async def _drain():
             frames = []
-            async for frame in server_app._build_log_events(1, logs_dir=None):
+            async for frame in server_app._build_log_events(1, None, "tok", _visible):
                 frames.append(frame)
             return frames
 
         with (
             mock.patch.object(server_app, "_db_build_jobs", store),
             mock.patch.object(server_app, "_SSE_KEEPALIVE_SECONDS", 0),
-            mock.patch.object(server_app, "_SSE_POLL_SECONDS", 0),
+            mock.patch.object(server_app, "_SSE_LOG_POLL_INTERVAL_SECONDS", 0),
         ):
             frames = asyncio.run(asyncio.wait_for(_drain(), timeout=10))
 
@@ -712,14 +713,15 @@ class TestBuildLogEndpoints:
         store = mock.MagicMock()
         store.get = mock.AsyncMock(return_value=_Job())
         store.get_log_path = mock.AsyncMock(return_value=None)
+        _visible = mock.AsyncMock()
 
         async def _drain():
-            return [f async for f in server_app._build_log_events(1, logs_dir=None)]
+            return [f async for f in server_app._build_log_events(1, None, "tok", _visible)]
 
         with (
             mock.patch.object(server_app, "_db_build_jobs", store),
             mock.patch.object(server_app, "_SSE_KEEPALIVE_SECONDS", 0),
-            mock.patch.object(server_app, "_SSE_POLL_SECONDS", 0),
+            mock.patch.object(server_app, "_SSE_LOG_POLL_INTERVAL_SECONDS", 0),
         ):
             frames = asyncio.run(asyncio.wait_for(_drain(), timeout=10))
 
@@ -740,3 +742,108 @@ class TestBuildLogEndpoints:
         client, admin_tok, pub_tok, reader_tok, _ = db_server_env
         resp = client.get("/v1/builds/1/log/stream")
         assert resp.status_code == 401
+
+    def test_log_stream_revoked_token_terminates(self, db_server_env, monkeypatch):
+        """A token revoked mid-stream must tear down its live log stream.
+
+        The stream authenticates once at connect; without periodic
+        re-verification a revoked token would keep tailing the log until the
+        client happened to disconnect.  The generator re-checks on its re-auth
+        cadence and ends the stream with an error event instead.
+        """
+        import threading
+        import time
+
+        import cvcpkg.server.app as appmod
+
+        client, admin_tok, pub_tok, reader_tok, _ = db_server_env
+
+        # Re-verify on every poll and poll fast so the test does not wait on the
+        # 30s / 2s production defaults.
+        monkeypatch.setattr(appmod, "_SSE_REAUTH_INTERVAL_SECONDS", 0.0)
+        monkeypatch.setattr(appmod, "_SSE_LOG_POLL_INTERVAL_SECONDS", 0.05)
+
+        sub = self._submit(client, pub_tok)
+        job_id = sub.json()["id"]
+        # Seed a log line and leave the job non-terminal so the stream tails.
+        client.patch(
+            f"/v1/builds/{job_id}/log",
+            json={"data": "building zlib...\n"},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+
+        async def _revoke():
+            return await appmod._db_tokens.revoke("test-publisher")
+
+        def _revoke_after_connect():
+            # Let the stream connect (connect-time auth still passes) and start
+            # tailing, then revoke the token on the server's own event loop.
+            time.sleep(0.4)
+            client.portal.call(_revoke)
+
+        revoker = threading.Thread(target=_revoke_after_connect)
+        revoker.start()
+        try:
+            # Blocking read: the stream self-terminates once the revoked token
+            # fails the next re-auth tick (as test_log_stream_returns_sse relies
+            # on a terminal job to end the stream).
+            resp = client.get(
+                f"/v1/builds/{job_id}/log/stream",
+                headers={"Authorization": f"Bearer {pub_tok}"},
+            )
+        finally:
+            revoker.join()
+
+        assert resp.status_code == 200
+        body = resp.text
+        # The log seeded before revocation streamed through ...
+        assert "building zlib" in body
+        # ... then the revoked token tore the stream down.
+        assert "event: error" in body
+        assert "token revoked or expired" in body
+
+
+# ── Live log-stream re-auth gate ────────────────────────────────
+
+
+class TestSseReauthRejection:
+    """The build-log stream re-auth gate mirrors the connect-time checks so a
+    revoked, expired, rotated, or demoted token cannot outlive its validity on
+    an already-open Server-Sent-Events stream."""
+
+    @staticmethod
+    def _reject():
+        from cvcpkg.server.app import _sse_reauth_rejection
+
+        return _sse_reauth_rejection
+
+    @staticmethod
+    def _record(role=TokenRole.publisher, via_previous_hash=False):
+        from cvcpkg.server.models import TokenRecord
+
+        return TokenRecord(
+            name="bot",
+            role=role,
+            token_hash="deadbeef",
+            via_previous_hash=via_previous_hash,
+        )
+
+    def test_missing_record_is_rejected(self):
+        # verify() returns None once the token is revoked/expired/grace-closed.
+        assert self._reject()(None) == "token revoked or expired"
+
+    def test_valid_publisher_is_kept(self):
+        assert self._reject()(self._record()) is None
+
+    def test_valid_admin_is_kept(self):
+        assert self._reject()(self._record(role=TokenRole.admin)) is None
+
+    def test_grace_secret_is_rejected(self):
+        # The stream's secret is now only the pre-rotation grace hash: a
+        # rotation must not leave the old secret tailing a live log.
+        assert self._reject()(self._record(via_previous_hash=True)) == (
+            "pre-rotation secret not allowed"
+        )
+
+    def test_demoted_below_publisher_is_rejected(self):
+        assert self._reject()(self._record(role=TokenRole.reader)) == "insufficient role"

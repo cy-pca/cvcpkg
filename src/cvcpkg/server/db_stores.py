@@ -15,7 +15,9 @@ from pathlib import Path
 
 from sqlalchemy import distinct, or_, select, update
 from sqlalchemy import func as sa_func
+from sqlalchemy.exc import IntegrityError
 
+from cvcpkg.semver import version_sort_key
 from cvcpkg.server.db import (
     AuditRow,
     BuilderRow,
@@ -26,19 +28,24 @@ from cvcpkg.server.db import (
     OrganizationRow,
     OrgMemberRow,
     PackageRow,
+    PackageTombstoneRow,
     RecipeRow,
     TagRow,
     TelemetryEventRow,
     TokenRequestRow,
     TokenRow,
     WebhookRow,
+    audit_advisory_lock,
+    audit_append_lock,
     get_session,
+    in_atomic_session,
 )
 from cvcpkg.server.models import (
     AuditAction,
     AuditEntry,
     BuilderInfo,
     BuilderStatus,
+    BuildJobAlreadyClaimedError,
     BuildJobInfo,
     BuildJobStatus,
     MirrorInfo,
@@ -75,6 +82,13 @@ def _ensure_hmac_key(state_dir: Path) -> bytes:
 
 def _hash_token(raw_token: str, hmac_key: bytes) -> str:
     return hmac.new(hmac_key, raw_token.encode(), hashlib.sha256).hexdigest()
+
+
+def _ensure_aware(dt: datetime.datetime | None) -> datetime.datetime | None:
+    """Treat naive datetimes from the driver (e.g. SQLite) as UTC."""
+    if dt is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=datetime.timezone.utc)
+    return dt
 
 
 # ── DB Token Store ──────────────────────────────────────────────
@@ -124,6 +138,16 @@ class DbTokenStore:
                 expires_at=expires_at,
             )
             session.add(row)
+            try:
+                # Flush inside the guard so a unique-constraint violation surfaces
+                # here as a clean ValueError (→ 409) instead of escaping the store
+                # as an IntegrityError (→ 500) at commit time.  This closes the
+                # gap between the active-name check above and the INSERT (a
+                # concurrent create), and — on backends without a partial index
+                # (MySQL) — the collision with a revoked same-name row.
+                await session.flush()
+            except IntegrityError as exc:
+                raise ValueError(f"token name '{name}' already exists") from exc
         return raw
 
     async def verify(self, raw_token: str) -> TokenRecord | None:
@@ -134,11 +158,24 @@ class DbTokenStore:
                 select(TokenRow).where(TokenRow.token_hash == token_hash)
             )
             row = result.scalars().first()
+            via_previous = False
             if row is None:
-                return None
+                # Rotation grace window: the pre-rotation secret keeps
+                # verifying until previous_hash_expires_at.
+                result = await session.execute(
+                    select(TokenRow).where(TokenRow.previous_token_hash == token_hash)
+                )
+                row = result.scalars().first()
+                if row is None:
+                    return None
+                window_end = _ensure_aware(row.previous_hash_expires_at)
+                if window_end is None or now >= window_end:
+                    return None
+                via_previous = True
             if row.revoked:
                 return None
-            if row.expires_at is not None and row.expires_at < now:
+            expires_at = _ensure_aware(row.expires_at)
+            if expires_at is not None and expires_at < now:
                 return None
             return TokenRecord(
                 name=row.name,
@@ -148,9 +185,51 @@ class DbTokenStore:
                 description=row.description,
                 metadata=row.user_metadata,
                 created_at=row.created_at,
-                expires_at=row.expires_at,
+                expires_at=expires_at,
                 revoked=row.revoked,
+                previous_token_hash=row.previous_token_hash or "",
+                previous_hash_expires_at=_ensure_aware(row.previous_hash_expires_at),
+                via_previous_hash=via_previous,
             )
+
+    async def rotate(self, name: str, grace_minutes: int = 0) -> str | None:
+        """Swap in a new secret for an active token, returning the raw value.
+
+        The row (name, role, expiry, org memberships keyed by name) is
+        untouched; only the secret changes.  With ``grace_minutes > 0`` the
+        old secret keeps verifying until the window closes.  Returns None
+        if no active token has this name.
+        """
+        raw = f"cvctok_{secrets.token_urlsafe(32)}"
+        new_hash = _hash_token(raw, self._hmac_key)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            result = await session.execute(
+                select(TokenRow).where(
+                    TokenRow.name == name,
+                    TokenRow.revoked == False,  # noqa: E712
+                )
+            )
+            row = result.scalars().first()
+            if row is None:
+                return None
+            expires_at = _ensure_aware(row.expires_at)
+            if expires_at is not None and expires_at < now:
+                # An expired token cannot verify, so a "rotated" secret
+                # would be dead on arrival — treat like not found.
+                return None
+            if grace_minutes > 0:
+                window_end = now + datetime.timedelta(minutes=grace_minutes)
+                if expires_at is not None and expires_at < window_end:
+                    # The old secret can never outlive the token itself.
+                    window_end = expires_at
+                row.previous_token_hash = row.token_hash
+                row.previous_hash_expires_at = window_end
+            else:
+                row.previous_token_hash = None
+                row.previous_hash_expires_at = None
+            row.token_hash = new_hash
+        return raw
 
     async def revoke(self, name: str) -> bool:
         async with get_session() as session:
@@ -497,6 +576,56 @@ class DbAuditLog:
         )
         return hashlib.sha256(payload.encode()).hexdigest()
 
+    async def _append(
+        self,
+        session,
+        action: AuditAction,
+        actor: str,
+        target: str,
+        detail: str,
+    ) -> AuditEntry:
+        """Read the last row, chain-hash it, and insert the new entry.
+
+        Must run inside a serialized critical section (append lock held,
+        advisory lock taken) so the read-last → insert cannot interleave
+        with another appender and fork the chain.
+        """
+        await audit_advisory_lock(session)
+        result = await session.execute(select(AuditRow).order_by(AuditRow.id.desc()).limit(1))
+        last = result.scalars().first()
+        prev_hash = ""
+        if last is not None:
+            prev_entry = AuditEntry(
+                id=last.id,
+                timestamp=last.timestamp,
+                action=self._coerce_action(last.action),
+                actor=last.actor,
+                target=last.target,
+                detail=last.detail,
+                prev_sha256=last.prev_sha256,
+            )
+            prev_hash = self._entry_hash(prev_entry)
+
+        row = AuditRow(
+            action=action.value,
+            actor=actor,
+            target=target,
+            detail=detail,
+            prev_sha256=prev_hash,
+        )
+        session.add(row)
+        await session.flush()
+
+        return AuditEntry(
+            id=row.id,
+            timestamp=row.timestamp,
+            action=action,
+            actor=actor,
+            target=target,
+            detail=detail,
+            prev_sha256=prev_hash,
+        )
+
     async def record(
         self,
         action: AuditAction,
@@ -504,42 +633,26 @@ class DbAuditLog:
         target: str,
         detail: str = "",
     ) -> AuditEntry:
-        async with get_session() as session:
-            # Get prev hash from last entry
-            result = await session.execute(select(AuditRow).order_by(AuditRow.id.desc()).limit(1))
-            last = result.scalars().first()
-            prev_hash = ""
-            if last is not None:
-                prev_entry = AuditEntry(
-                    id=last.id,
-                    timestamp=last.timestamp,
-                    action=self._coerce_action(last.action),
-                    actor=last.actor,
-                    target=last.target,
-                    detail=last.detail,
-                    prev_sha256=last.prev_sha256,
-                )
-                prev_hash = self._entry_hash(prev_entry)
+        """Append an entry to the tamper-evident chain.
 
-            row = AuditRow(
-                action=action.value,
-                actor=actor,
-                target=target,
-                detail=detail,
-                prev_sha256=prev_hash,
-            )
-            session.add(row)
-            await session.flush()
+        When an ambient unit-of-work session is active (see
+        ``atomic_session``), the row is written into the caller's
+        transaction so the mutation and its audit entry commit atomically;
+        the caller is responsible for holding the append lock across its
+        commit (see ``_audit_txn`` in app.py).  Otherwise a standalone
+        transaction is opened with the append lock held end-to-end so a
+        concurrent append cannot fork the hash chain.
+        """
+        if in_atomic_session():
+            # Ambient transaction: the caller (_audit_txn) already holds
+            # the append lock across its commit.  Do not re-acquire it
+            # (asyncio.Lock is not reentrant) — just append.
+            async with get_session() as session:
+                return await self._append(session, action, actor, target, detail)
 
-            return AuditEntry(
-                id=row.id,
-                timestamp=row.timestamp,
-                action=action,
-                actor=actor,
-                target=target,
-                detail=detail,
-                prev_sha256=prev_hash,
-            )
+        async with audit_append_lock():
+            async with get_session() as session:
+                return await self._append(session, action, actor, target, detail)
 
     async def entries(
         self,
@@ -615,9 +728,84 @@ class DbAuditLog:
 
 # ── DB Package Index ────────────────────────────────────────────
 
+# Why a nuked bundle went away.  Kept in sync with the CLI/API and the
+# package_tombstones.reason column.
+NUKE_REASON_MANUAL = "manual"  # an admin's `cvcpkg nuke`
+NUKE_REASON_RETENTION = "retention"  # fell off the yank-retention schedule
+
+
+def _tombstone_dict(r) -> dict:
+    return {
+        "name": r.name,
+        "version": r.version,
+        "platform": r.platform,
+        "arch": r.arch,
+        "build_type": r.build_type,
+        "link": r.link,
+        "org_slug": r.org_slug,
+        "filename": r.filename,
+        "reason": r.reason,
+        "nuked_by": r.nuked_by,
+        "nuked_at": r.nuked_at,
+        "size_bytes": r.size_bytes,
+        "sha256": r.sha256,
+        "published_at": r.published_at,
+        "yanked_at": r.yanked_at,
+    }
+
+
+def _record_tombstones(
+    session,
+    rows,
+    *,
+    reason: str,
+    nuked_by: str,
+) -> None:
+    """Insert a tombstone for each PackageRow about to be nuked.
+
+    Called inside the nuke/purge transaction so the tombstone and the row
+    delete commit together -- a nuked bundle is never gone without a record of
+    why.  Forensic fields (sha256, sizes, timestamps) are copied off the row
+    before it disappears.
+    """
+    session.add_all(
+        PackageTombstoneRow(
+            name=r.name,
+            version=r.version,
+            platform=r.platform,
+            arch=r.arch,
+            build_type=r.build_type,
+            link=r.link,
+            org_slug=r.org_slug,
+            filename=(r.archive_url or "").rsplit("/", 1)[-1],
+            reason=reason,
+            nuked_by=nuked_by,
+            size_bytes=r.size_bytes,
+            sha256=r.sha256,
+            published_at=r.published_at,
+            yanked_at=r.yanked_at,
+        )
+        for r in rows
+    )
+
 
 class DbPackageIndex:
     """Package catalog backed by the ``packages`` table."""
+
+    async def get_archive_org(self, archive_name: str) -> str | None:
+        """org_slug of the package whose archive_url ends with '/<archive_name>'
+        (any yank state), or None when no package matches. LIKE wildcards in the
+        name are escaped so the suffix match stays exact (no truncation, unlike
+        scanning a capped get_bundles page)."""
+        esc = archive_name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        async with get_session() as session:
+            return (
+                await session.execute(
+                    select(PackageRow.org_slug)
+                    .where(PackageRow.archive_url.like(f"%/{esc}", escape="\\"))
+                    .limit(1)
+                )
+            ).scalar()
 
     async def get_bundles(
         self,
@@ -634,6 +822,8 @@ class DbPackageIndex:
         arch: str = "",
         build_type: str = "",
         link: str = "",
+        caller_token_name: str | None = None,
+        order: str = "version",
     ) -> tuple[list[PackageInfo], int]:
         async with get_session() as session:
             q = select(PackageRow, TokenRow.email.label("publisher_email")).outerjoin(
@@ -673,6 +863,28 @@ class DbPackageIndex:
             if org_slug:
                 q = q.where(PackageRow.org_slug == org_slug)
                 count_q = count_q.where(PackageRow.org_slug == org_slug)
+            if caller_token_name is not None:
+                # Visibility filter (opt-in): public base packages, packages in
+                # public orgs, and — for a named caller — packages in private
+                # orgs the caller is a member of.  Callers that pass None (the
+                # default) get no filtering (internal/admin paths).
+                visible = or_(
+                    PackageRow.org_slug == "",
+                    PackageRow.org_slug.in_(
+                        select(OrganizationRow.slug).where(
+                            OrganizationRow.is_private == False  # noqa: E712
+                        )
+                    ),
+                )
+                if caller_token_name:
+                    member_orgs = (
+                        select(OrganizationRow.slug)
+                        .join(OrgMemberRow, OrgMemberRow.org_id == OrganizationRow.id)
+                        .where(OrgMemberRow.token_name == caller_token_name)
+                    )
+                    visible = or_(visible, PackageRow.org_slug.in_(member_orgs))
+                q = q.where(visible)
+                count_q = count_q.where(visible)
             if recipe_version:
                 q = q.where(PackageRow.recipe_version == recipe_version)
                 count_q = count_q.where(PackageRow.recipe_version == recipe_version)
@@ -712,6 +924,7 @@ class DbPackageIndex:
                         archive_url=row.archive_url,
                         published_at=row.published_at,
                         yanked=row.yanked,
+                        yanked_at=row.yanked_at,
                         signature=row.signature,
                         key_fingerprint=row.key_fingerprint,
                         release_tag=row.release_tag,
@@ -724,8 +937,24 @@ class DbPackageIndex:
                         published_by=row.published_by,
                         published_by_email=pub_email,
                         org=row.org_slug,
+                        required_deps=json.loads(row.required_deps or "[]"),
                     )
                 )
+            if order == "version":
+                # SQL orders by (name, published_at DESC); re-order the versions
+                # WITHIN each name newest-first by the canonical key so callers
+                # don't get published-time order masquerading as version order.
+                # Name grouping/order is preserved exactly (first-seen = SQL
+                # order).  Callers wanting publish order (the RSS feed) pass
+                # order="published_at" to keep the SQL ordering untouched.
+                grouped: dict[str, list[PackageInfo]] = {}
+                for p in packages:
+                    grouped.setdefault(p.name, []).append(p)
+                reordered: list[PackageInfo] = []
+                for group in grouped.values():
+                    group.sort(key=lambda p: version_sort_key(p.version), reverse=True)
+                    reordered.extend(group)
+                packages = reordered
             return packages, total
 
     async def get_search_facets(
@@ -742,6 +971,7 @@ class DbPackageIndex:
         build_type: str = "",
         link: str = "",
         max_buckets: int = 50,
+        caller_token_name: str | None = None,
     ) -> tuple[dict[str, list[tuple[str, int]]], int, int, int]:
         """Return facet buckets for the same filter set as ``get_bundles``.
 
@@ -751,6 +981,26 @@ class DbPackageIndex:
         ``max_buckets`` caps the per-facet list length.
         """
         base_filters = []
+        if caller_token_name is not None:
+            # Visibility (mirrors get_bundles): public base + public orgs +
+            # private orgs the caller is a member of.  Keeps private packages —
+            # and private org names — out of facet buckets and totals.
+            visible = or_(
+                PackageRow.org_slug == "",
+                PackageRow.org_slug.in_(
+                    select(OrganizationRow.slug).where(
+                        OrganizationRow.is_private == False  # noqa: E712
+                    )
+                ),
+            )
+            if caller_token_name:
+                member_orgs = (
+                    select(OrganizationRow.slug)
+                    .join(OrgMemberRow, OrgMemberRow.org_id == OrganizationRow.id)
+                    .where(OrgMemberRow.token_name == caller_token_name)
+                )
+                visible = or_(visible, PackageRow.org_slug.in_(member_orgs))
+            base_filters.append(visible)
         if not include_yanked:
             base_filters.append(PackageRow.yanked == False)  # noqa: E712
         if name:
@@ -908,6 +1158,17 @@ class DbPackageIndex:
 
             q = q.order_by(PackageRow.name)
             result = await session.execute(q)
+            # SQL groups by name; order versions WITHIN each name newest-first by
+            # the canonical key, with PackageRow.id as a stable final tiebreak.
+            rows = list(result.scalars().all())
+            grouped_rows: dict[str, list[PackageRow]] = {}
+            for r in rows:
+                grouped_rows.setdefault(r.name, []).append(r)
+            ordered_rows: list[PackageRow] = []
+            for group in grouped_rows.values():
+                group.sort(key=lambda r: r.id)
+                group.sort(key=lambda r: version_sort_key(r.version), reverse=True)
+                ordered_rows.extend(group)
             bundles = [
                 {
                     "name": row.name,
@@ -934,7 +1195,7 @@ class DbPackageIndex:
                     "org": row.org_slug,
                     "required_deps": json.loads(row.required_deps or "[]"),
                 }
-                for row in result.scalars().all()
+                for row in ordered_rows
             ]
             count_result = await session.execute(select(sa_func.count(PackageRow.id)))
             revision = count_result.scalar() or 0
@@ -1036,9 +1297,16 @@ class DbPackageIndex:
     ) -> int:
         async with get_session() as session:
             stmt = (
-                update(PackageRow)
-                .where(PackageRow.name == name, PackageRow.version == version)
-                .values(yanked=True)
+                update(PackageRow).where(PackageRow.name == name, PackageRow.version == version)
+                # coalesce, not a bare now(): this UPDATE also matches rows that
+                # are ALREADY yanked (there is no yanked.is_(False) guard), so a
+                # re-yank with a wider scope would otherwise reset the retention
+                # clock and postpone expiry indefinitely.  A guard instead of
+                # coalesce would break rowcount, which the endpoint returns as
+                # `count` and the CLI's no-op refusal depends on.
+                .values(
+                    yanked=True, yanked_at=sa_func.coalesce(PackageRow.yanked_at, sa_func.now())
+                )
             )
             if platform is not None:
                 stmt = stmt.where(PackageRow.platform == platform)
@@ -1063,9 +1331,10 @@ class DbPackageIndex:
     ) -> int:
         async with get_session() as session:
             stmt = (
-                update(PackageRow)
-                .where(PackageRow.name == name, PackageRow.version == version)
-                .values(yanked=False)
+                update(PackageRow).where(PackageRow.name == name, PackageRow.version == version)
+                # Clearing yanked_at disarms retention: an unyanked bundle must
+                # not carry a stale clock that expires it later.
+                .values(yanked=False, yanked_at=None)
             )
             if platform is not None:
                 stmt = stmt.where(PackageRow.platform == platform)
@@ -1098,6 +1367,159 @@ class DbPackageIndex:
                 stmt = stmt.where(PackageRow.link == link)
             result = await session.execute(stmt)
             return result.rowcount
+
+    async def nuke_bundles(
+        self,
+        name: str,
+        version: str,
+        *,
+        platform: str | None = None,
+        arch: str | None = None,
+        link: str | None = None,
+        build_type: str | None = None,
+        require_yanked: bool = True,
+        storage_uri: str = "",
+        nuked_by: str = "",
+        reason: str = "manual",
+    ) -> dict:
+        """Irreversibly remove matching bundles: DB rows AND archive bytes.
+
+        The scope is the full four-tuple, unlike ``delete`` which only accepts
+        platform/link -- the missing arch/build_type there silently over-deleted
+        (``?arch=x86_64`` was ignored, so a request meant for one variant took
+        the others too), and for an irreversible op that is the worst failure.
+
+        With ``require_yanked`` (the default) every match must already be
+        yanked; otherwise raises ``ValueError`` naming the live variants, so
+        nuke only ever accelerates an existing retention clock rather than
+        destroying something consumers are actively resolving.
+
+        Returns ``{"nuked": [...], "count": N}``.  Row delete precedes archive
+        unlink so a crash mid-purge leaves a visible orphan row pointing at a
+        gone archive (recoverable) rather than an unreferenced blob (invisible).
+        An archive is unlinked only when no surviving row still references its
+        filename.
+        """
+        from sqlalchemy import delete as sa_delete
+
+        async with get_session() as session:
+            sel = select(PackageRow).where(PackageRow.name == name, PackageRow.version == version)
+            if platform is not None:
+                sel = sel.where(PackageRow.platform == platform)
+            if arch is not None:
+                sel = sel.where(PackageRow.arch == arch)
+            if link is not None:
+                sel = sel.where(PackageRow.link == link)
+            if build_type is not None:
+                sel = sel.where(PackageRow.build_type == build_type)
+            rows = (await session.execute(sel)).scalars().all()
+
+            if not rows:
+                return {"nuked": [], "count": 0}
+
+            if require_yanked:
+                live = [r for r in rows if not r.yanked]
+                if live:
+                    variants = ", ".join(
+                        f"{r.platform}/{r.arch}/{r.build_type}/{r.link}" for r in live
+                    )
+                    raise ValueError(
+                        f"{name}=={version}: not yanked: {variants}. "
+                        "Yank it first -- nuke only removes an already-yanked bundle."
+                    )
+
+            nuked = [
+                {
+                    "name": r.name,
+                    "version": r.version,
+                    "platform": r.platform,
+                    "arch": r.arch,
+                    "build_type": r.build_type,
+                    "link": r.link,
+                    "size_bytes": r.size_bytes,
+                    "org_slug": r.org_slug,
+                    "archive_url": r.archive_url,
+                }
+                for r in rows
+            ]
+            # Tombstone each variant BEFORE deleting the row, in the same
+            # transaction, so the record and the deletion commit atomically --
+            # a nuked bundle can never be gone without a tombstone explaining it.
+            _record_tombstones(session, rows, reason=reason, nuked_by=nuked_by)
+            ids = [r.id for r in rows]
+            await session.execute(sa_delete(PackageRow).where(PackageRow.id.in_(ids)))
+            await session.flush()
+
+            if storage_uri:
+                from cvcpkg.server import archive_store
+
+                for rec in nuked:
+                    fname = (rec.get("archive_url") or "").rsplit("/", 1)[-1]
+                    if not fname:
+                        continue
+                    # Unlink only when no surviving row references the file.
+                    still = (
+                        await session.execute(
+                            select(PackageRow.id)
+                            .where(PackageRow.archive_url.like(f"%/{fname}"))
+                            .limit(1)
+                        )
+                    ).first()
+                    rec["archive_deleted"] = (
+                        False if still else archive_store.delete(storage_uri, fname)
+                    )
+
+            return {"nuked": nuked, "count": len(nuked)}
+
+    async def get_tombstones(
+        self,
+        name: str,
+        version: str = "",
+        *,
+        platform: str = "",
+        arch: str = "",
+        build_type: str = "",
+        link: str = "",
+    ) -> list[dict]:
+        """Tombstones for *name*, newest first; narrow by version/variant.
+
+        Backs the per-package "what happened to it" view and the 410 Gone a
+        pinned consumer gets in place of a bare 404.
+        """
+        async with get_session() as session:
+            q = select(PackageTombstoneRow).where(PackageTombstoneRow.name == name)
+            if version:
+                q = q.where(PackageTombstoneRow.version == version)
+            if platform:
+                q = q.where(PackageTombstoneRow.platform == platform)
+            if arch:
+                q = q.where(PackageTombstoneRow.arch == arch)
+            if build_type:
+                q = q.where(PackageTombstoneRow.build_type == build_type)
+            if link:
+                q = q.where(PackageTombstoneRow.link == link)
+            q = q.order_by(PackageTombstoneRow.nuked_at.desc(), PackageTombstoneRow.id.desc())
+            rows = (await session.execute(q)).scalars().all()
+            return [_tombstone_dict(r) for r in rows]
+
+    async def get_tombstone_by_filename(self, filename: str) -> dict | None:
+        """The newest tombstone for an archive *filename*, or None.
+
+        Lets the download endpoint answer 410 Gone ("nuked, reason, when") for a
+        purged archive instead of a bare 404.
+        """
+        if not filename:
+            return None
+        async with get_session() as session:
+            r = (
+                await session.execute(
+                    select(PackageTombstoneRow)
+                    .where(PackageTombstoneRow.filename == filename)
+                    .order_by(PackageTombstoneRow.nuked_at.desc(), PackageTombstoneRow.id.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            return _tombstone_dict(r) if r is not None else None
 
     async def get_release_tags(self) -> list[dict]:
         """Distinct release tags with variant counts, most-populated first.
@@ -1208,6 +1630,99 @@ class DbPackageIndex:
                 ids = [r.id for r in rows]
                 await session.execute(sa_delete(PackageRow).where(PackageRow.id.in_(ids)))
             return deleted
+
+    async def purge_yanked(
+        self,
+        *,
+        older_than_days: int,
+        storage_uri: str = "",
+        dry_run: bool = False,
+        nuked_by: str = "retention-gc",
+    ) -> list[dict]:
+        """Permanently remove bundles yanked longer ago than *older_than_days*.
+
+        Unlike every other GC here this deletes the ARCHIVE as well as the row
+        -- a yank-retention sweep that dropped only rows would leak the bytes
+        forever and leave them downloadable (download_archive gates on the file
+        existing, never on the row).
+
+        Returns ``gc_by_age``'s dict shape plus ``archive_deleted``, so callers
+        can feed the org storage counters unchanged.
+
+        Never purges:
+          * ``yanked_at IS NULL`` -- either never yanked, or yanked before the
+            column existed (migration 018 deliberately does not backfill, so
+            historical yanks are exempt rather than instantly expired);
+          * tagged releases (``release_tag != ""``) -- immutable by this
+            codebase's convention, matching gc_by_age/gc_by_storage.  A yanked
+            tagged release therefore never ages out; `cvcpkg nuke` is the
+            explicit path for it.
+
+        *older_than_days* <= 0 means DISABLED and returns nothing.  It does not
+        mean "purge everything" -- unlike gc_by_storage(0), where 0 legitimately
+        means evict-all.  Overloading 0 here would turn a misread config into
+        total destruction of every yanked bundle.
+        """
+        import datetime as _dt
+
+        from sqlalchemy import delete as sa_delete
+
+        if older_than_days <= 0:
+            return []
+
+        cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=older_than_days)
+        async with get_session() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(PackageRow).where(
+                            PackageRow.yanked.is_(True),
+                            PackageRow.yanked_at.is_not(None),
+                            PackageRow.yanked_at < cutoff,
+                            PackageRow.release_tag == "",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            purged: list[dict] = []
+            for r in rows:
+                purged.append(
+                    {
+                        "name": r.name,
+                        "version": r.version,
+                        "size_bytes": r.size_bytes,
+                        "org_slug": r.org_slug,
+                        "platform": r.platform,
+                        "arch": r.arch,
+                        "build_type": r.build_type,
+                        "link": r.link,
+                        "yanked_at": r.yanked_at,
+                        "archive_deleted": False,
+                    }
+                )
+            if dry_run or not rows:
+                return purged
+
+            # Tombstone with reason="retention" before deleting -- a package that
+            # fell off the schedule is effectively nuked, and a consumer that
+            # pinned it should learn it was retired on a schedule, not that it
+            # never existed.
+            _record_tombstones(session, rows, reason=NUKE_REASON_RETENTION, nuked_by=nuked_by)
+            ids = [r.id for r in rows]
+            await session.execute(sa_delete(PackageRow).where(PackageRow.id.in_(ids)))
+
+            # Rows go first: if the archive delete fails we would rather serve
+            # 404 for a purged bundle than keep a row whose bytes are gone.
+            if storage_uri:
+                from cvcpkg.server import archive_store
+
+                for r, rec in zip(rows, purged, strict=True):
+                    fname = (r.archive_url or "").rsplit("/", 1)[-1]
+                    if fname:
+                        rec["archive_deleted"] = archive_store.delete(storage_uri, fname)
+            return purged
 
     async def gc_by_storage(self, max_bytes: int) -> list[dict]:
         """Evict oldest non-release packages until total storage <= *max_bytes*.
@@ -1365,11 +1880,24 @@ class DbOrgStore:
         limit: int = 100,
         offset: int = 0,
         include_private: bool = False,
+        caller_token_name: str = "",
     ) -> tuple[list[OrgInfo], int]:
         async with get_session() as session:
-            base_filter = (
-                True if include_private else OrganizationRow.is_private == False  # noqa: E712
-            )
+            if include_private:
+                base_filter = True  # admin: all orgs
+            elif caller_token_name:
+                # Public orgs + private orgs the caller is a member of.
+                member_slugs = (
+                    select(OrganizationRow.slug)
+                    .join(OrgMemberRow, OrgMemberRow.org_id == OrganizationRow.id)
+                    .where(OrgMemberRow.token_name == caller_token_name)
+                )
+                base_filter = or_(
+                    OrganizationRow.is_private == False,  # noqa: E712
+                    OrganizationRow.slug.in_(member_slugs),
+                )
+            else:
+                base_filter = OrganizationRow.is_private == False  # noqa: E712
             count_q = select(sa_func.count(OrganizationRow.id)).where(base_filter)
             total = (await session.execute(count_q)).scalar() or 0
 
@@ -1382,6 +1910,18 @@ class DbOrgStore:
             )
             result = await session.execute(q)
             return [self._row_to_info(r) for r in result.scalars().all()], total
+
+    async def member_org_slugs(self, token_name: str) -> set[str]:
+        """Return the set of org slugs *token_name* is a member of."""
+        if not token_name:
+            return set()
+        async with get_session() as session:
+            q = (
+                select(OrganizationRow.slug)
+                .join(OrgMemberRow, OrgMemberRow.org_id == OrganizationRow.id)
+                .where(OrgMemberRow.token_name == token_name)
+            )
+            return set((await session.execute(q)).scalars().all())
 
     async def update(
         self,
@@ -2458,6 +2998,7 @@ class DbBuildJobStore:
             config=row.config,
             link=row.link,
             builder_id=row.builder_id,
+            claimed_by=row.claimed_by or "",
             status=row.status,
             priority=row.priority,
             timeout_seconds=row.timeout_seconds,
@@ -2615,8 +3156,15 @@ class DbBuildJobStore:
         builder_id: int | None = None,
         limit: int = 100,
         offset: int = 0,
+        visible_to: str | None = None,
     ) -> tuple[list[BuildJobInfo], int]:
-        """List jobs with filters. Returns (jobs, total_count)."""
+        """List jobs with filters. Returns (jobs, total_count).
+
+        When *visible_to* is not None, results are restricted to public jobs,
+        jobs in public orgs, and — for a named caller — jobs in private orgs the
+        caller belongs to (so the total count can't leak a private org's job
+        count). None (default) means no visibility filtering (admin/internal).
+        """
         async with get_session() as session:
             q = select(BuildJobRow)
             count_q = select(sa_func.count(BuildJobRow.id))
@@ -2652,6 +3200,24 @@ class DbBuildJobStore:
             if builder_id is not None:
                 q = q.where(BuildJobRow.builder_id == builder_id)
                 count_q = count_q.where(BuildJobRow.builder_id == builder_id)
+            if visible_to is not None:
+                _vis = or_(
+                    BuildJobRow.org_slug == "",
+                    BuildJobRow.org_slug.in_(
+                        select(OrganizationRow.slug).where(
+                            OrganizationRow.is_private == False  # noqa: E712
+                        )
+                    ),
+                )
+                if visible_to:
+                    _member = (
+                        select(OrganizationRow.slug)
+                        .join(OrgMemberRow, OrgMemberRow.org_id == OrganizationRow.id)
+                        .where(OrgMemberRow.token_name == visible_to)
+                    )
+                    _vis = or_(_vis, BuildJobRow.org_slug.in_(_member))
+                q = q.where(_vis)
+                count_q = count_q.where(_vis)
 
             total = (await session.execute(count_q)).scalar() or 0
             q = (
@@ -2733,12 +3299,24 @@ class DbBuildJobStore:
             return results
 
     async def cancel_dag(self, dag_id: str) -> int:
-        """Cancel all pending/dispatched jobs in a DAG. Returns count cancelled."""
+        """Cancel all pending/dispatched jobs in a DAG. Returns count cancelled.
+
+        A trailing ``*`` makes it a prefix match, e.g. ``cancel_dag("pr-288-*")``
+        cancels every sub-DAG of a PR run -- submit-dag splits one logical DAG
+        into ``<base>-<platform>-<arch>-<config>-<link>`` sub-DAGs, and a
+        superseded CI run leaves several such orphans behind.
+        """
         now = datetime.datetime.now(datetime.timezone.utc)
         async with get_session() as session:
+            if dag_id.endswith("*"):
+                # escape LIKE metacharacters in the fixed prefix, then match.
+                prefix = dag_id[:-1].replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                dag_pred = BuildJobRow.dag_id.like(prefix + "%", escape="\\")
+            else:
+                dag_pred = BuildJobRow.dag_id == dag_id
             q = (
                 select(BuildJobRow)
-                .where(BuildJobRow.dag_id == dag_id)
+                .where(dag_pred)
                 .where(
                     BuildJobRow.status.in_(
                         [
@@ -2867,24 +3445,79 @@ class DbBuildJobStore:
                 "unschedulable": unschedulable,
             }
 
-    async def claim(self, job_id: int, builder_id: int) -> BuildJobInfo | None:
-        """Builder claims a dispatched job → running."""
+    async def claim(
+        self,
+        job_id: int,
+        builder_id: int | None,
+        *,
+        claimant: str = "",
+    ) -> BuildJobInfo | None:
+        """A worker claims a pending or dispatched job → running.
+
+        *builder_id* is None for an unregistered worker (a platform with no
+        persistent builder draining its own queue); *claimant* then records
+        who is building it so the job is still attributable.
+
+        The transition is a single conditional UPDATE, with the
+        pending/dispatched predicate in the WHERE clause.  When two workers
+        race for the same job the database serializes them: exactly one UPDATE
+        matches a row, and the loser matches zero and raises
+        BuildJobAlreadyClaimedError.
+
+        Reading the row and then writing it -- the previous shape -- let both
+        workers observe 'dispatched' and both write 'running'.  Worse, the old
+        code *returned the job info* to a worker that had not won, so the loser
+        went on to build a variant another worker was already building.  That
+        produced duplicate concurrent builds of one variant whose publishes
+        then collided, and (because the builder swallowed publish errors) two
+        jobs that both reported success while nothing reached the catalog.
+        """
         now = datetime.datetime.now(datetime.timezone.utc)
         async with get_session() as session:
-            row = (
-                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
-            ).scalar()
-            if row is None:
-                return None
-            if row.status not in (
-                BuildJobStatus.pending,
-                BuildJobStatus.dispatched,
-            ):
+            result = await session.execute(
+                update(BuildJobRow)
+                .where(
+                    BuildJobRow.id == job_id,
+                    BuildJobRow.status.in_((BuildJobStatus.pending, BuildJobStatus.dispatched)),
+                )
+                .values(
+                    status=BuildJobStatus.running,
+                    builder_id=builder_id,
+                    claimed_by=claimant,
+                    started_at=now,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if result.rowcount == 0:
+                # Nothing matched.  Distinguish *why*, because the two cases
+                # mean opposite things to a worker.
+                row = (
+                    await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
+                ).scalar()
+                if row is None:
+                    return None
+                if row.status == BuildJobStatus.running:
+                    # Somebody is building it right now.  Refuse: handing the
+                    # row back is what let a second worker build the same
+                    # variant.
+                    raise BuildJobAlreadyClaimedError(
+                        job_id, holder=row.claimed_by or "", builder_id=row.builder_id
+                    )
+                # Terminal or paused: not claimable, but nobody is building it
+                # either.  Hand the row back so the caller can see why
+                # (cancelled, already succeeded, ...) -- long-standing
+                # behaviour that callers rely on to skip the job quietly.
                 dep_ids = await self._load_dep_ids(session, job_id)
                 return self._row_to_info(row, dep_ids)
-            row.status = BuildJobStatus.running
-            row.builder_id = builder_id
-            row.started_at = now
+            # populate_existing: the UPDATE bypassed the ORM, so refresh the
+            # identity-mapped instance rather than reading back stale values.
+            row = (
+                await session.execute(
+                    select(BuildJobRow)
+                    .where(BuildJobRow.id == job_id)
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar()
             dep_ids = await self._load_dep_ids(session, job_id)
             return self._row_to_info(row, dep_ids)
 
@@ -3167,8 +3800,11 @@ class DbBuildJobStore:
                 log_sub = logs_dir / row.dag_id
             else:
                 log_sub = logs_dir / "standalone"
-            log_sub.mkdir(parents=True, exist_ok=True)
             log_path = log_sub / f"{job_id}.log"
+            # Defense in depth: a crafted dag_id must never escape logs_dir.
+            if logs_dir.resolve() not in log_path.resolve().parents:
+                raise ValueError(f"log path escapes logs_dir (dag_id={row.dag_id!r})")
+            log_sub.mkdir(parents=True, exist_ok=True)
 
             # Append data
             with open(log_path, "ab") as f:

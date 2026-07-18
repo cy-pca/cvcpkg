@@ -1,0 +1,66 @@
+schema_version: 1
+recipe:
+  name: numpy-cp312
+  upstream_version: "2.4.6"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://numpy.org/
+  license: BSD-3-Clause
+  tags: [math, python, wheel]
+  description: >-
+    NumPy 2.4.6 for CPython 3.12 (cp312) — the cp312 column of cvcpkg's
+    per-interpreter wheel matrix.  The wheel is pinned by filename + sha256
+    and installed into the python312 interpreter's own site-packages inside
+    the prefix, so one activatable prefix carries both the native C/C++
+    libraries and a complete, pinned Python environment.
+
+source:
+  type: python_wheel
+  artifacts:
+    linux-x86_64:
+      url: https://files.pythonhosted.org/packages/99/60/14115e6364fa676c5397c2ad3004e527e9aa487abf5d0706ec81bbd08529/numpy-2.4.6-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+      sha256: "90f9849678c75fe7afa2d348ac842c168b0a4d3d61919687216dfc547976d853"
+    linux-arm64:
+      url: https://files.pythonhosted.org/packages/c9/c6/50a46a6205feba2343f1d6d17438107c5dc491ed1c736e6ea68689fd906b/numpy-2.4.6-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl
+      sha256: "5f9fb9157b4ce2971008323afe46053787b526ef624fea915b261468a8421a0f"
+    macos-x86_64:
+      url: https://files.pythonhosted.org/packages/95/2a/3d7b5ac8aac24feaf9ad7ed58f45b0bbc06d37e4338ae84c9f2298b570f9/numpy-2.4.6-cp312-cp312-macosx_10_13_x86_64.whl
+      sha256: "001fbb8e08d942dd57599e781f2472269ee7f2755fae407b4f67b2f0b17da3f1"
+    macos-arm64:
+      url: https://files.pythonhosted.org/packages/ea/12/92c4c131527599e8288d6918e888d88726f84d805d784b771f32408aeaef/numpy-2.4.6-cp312-cp312-macosx_11_0_arm64.whl
+      sha256: "ebfb099f8dcf083deef3ac1ca4c1503f387cf76296fcb3816b66f5ecb5f54fdb"
+    windows-x86_64:
+      url: https://files.pythonhosted.org/packages/ab/ca/feab00bd44aa5fe1ad2c18f08b4d3bb92e26484b0b1d1443897809ed528c/numpy-2.4.6-cp312-cp312-win_amd64.whl
+      sha256: "d8e8286dd7cea7895157318d1b91cdacac64c479f3cbc8dce548331728484751"
+
+python:
+  interpreter: python312
+  abi: cp312
+  manylinux_min: manylinux_2_28
+
+patches: []
+
+depends:
+  build:
+    - name: python312
+  runtime:
+    - name: python312
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/python3.12*/site-packages/numpy/
+    - lib/python3.12*/site-packages/numpy-2.4.6.dist-info/
+    - Lib/site-packages/numpy/
+    - Lib/site-packages/numpy-2.4.6.dist-info/

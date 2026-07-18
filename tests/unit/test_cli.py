@@ -919,6 +919,74 @@ class TestBuildCrossPlatformDeps:
         for m in matrix:
             (d / m["script"]).write_text("#!/bin/sh\ntrue\n")
 
+    def test_any_source_dep_built_as_any_into_build_prefix(self, tmp_path):
+        """A `platform: any` source package consumed as a build dep must be
+        built ONCE as `any` and into the BUILD prefix — never "for" the target.
+
+        Regression (caught only by a real windows cross-build, not by the
+        linux-only e2e): building it with platform=windows from a WSL host sent
+        its build.sh to winhost delegation, which only runs .ps1 ->
+        "winhost delegation only supports .ps1 build scripts, got build.sh".
+        """
+        recipes_dir = tmp_path / "recipes"
+        # mysrc: a source package — platform-independent, files only
+        self._make_recipe(recipes_dir, "mysrc", matrix=[{"platform": "any", "script": "build.sh"}])
+        # app: the windows deliverable, consuming the source package as a BUILD dep
+        self._make_recipe(
+            recipes_dir,
+            "app",
+            matrix=[{"platform": "windows", "script": "build.ps1"}],
+            deps=["mysrc"],
+        )
+
+        calls = []
+
+        def mock_build_recipe(
+            recipe_dir,
+            *,
+            platform,
+            config,
+            link,
+            prefix,
+            keep_build_dir,
+            host_platform="",
+            cross_toolchain_env=None,
+            host_tools_prefix=None,
+            build_prefix=None,
+        ):
+            calls.append((recipe_dir.name, platform, str(prefix)))
+            return mock.MagicMock()
+
+        pfx = tmp_path / "pfx"
+        with (
+            mock.patch("cvcpkg.builder.build_recipe", side_effect=mock_build_recipe),
+            mock.patch("cvcpkg.platform.detect_platform", return_value="linux"),
+        ):
+            main(
+                [
+                    "build",
+                    "app",
+                    "--platform",
+                    "windows",
+                    "--prefix",
+                    str(pfx),
+                    "--local",
+                    "--recipes-dir",
+                    str(recipes_dir),
+                    "--no-default-recipes",
+                ]
+            )
+
+        by_name = {c[0]: c for c in calls}
+        assert "mysrc" in by_name, f"source dep never built: {calls}"
+        # THE bug: it must be built as `any`, not for the windows target.
+        assert by_name["mysrc"][1] == "any", f"source pkg built as {by_name['mysrc'][1]!r}"
+        # ...and staged into the build prefix, not the deliverable.
+        assert by_name["mysrc"][2] == str(pfx) + ".build", by_name["mysrc"][2]
+        # The deliverable itself still builds for the real target, into --prefix.
+        assert by_name["app"][1] == "windows"
+        assert by_name["app"][2] == str(pfx)
+
     def test_host_tool_built_before_wasm_target(self, tmp_path):
         """emsdk-like host tool is built with host platform, then wasm target."""
         recipes_dir = tmp_path / "recipes"
@@ -948,6 +1016,8 @@ class TestBuildCrossPlatformDeps:
             keep_build_dir,
             host_platform="",
             cross_toolchain_env=None,
+            host_tools_prefix=None,
+            build_prefix=None,
         ):
             build_calls.append((recipe_dir.name, platform))
             # Return a minimal mock context
@@ -1004,6 +1074,8 @@ class TestBuildCrossPlatformDeps:
             keep_build_dir,
             host_platform="",
             cross_toolchain_env=None,
+            host_tools_prefix=None,
+            build_prefix=None,
         ):
             build_calls.append((recipe_dir.name, platform))
             return mock.MagicMock()
@@ -1791,6 +1863,7 @@ class TestVariantExists:
                     "x86_64",
                     "release",
                     "shared",
+                    "",
                 )
                 is True
             )
@@ -1817,6 +1890,7 @@ class TestVariantExists:
                     "x86_64",
                     "release",
                     "shared",
+                    "",
                 )
                 is False
             )
@@ -1842,6 +1916,7 @@ class TestVariantExists:
                     "x86_64",
                     "release",
                     "shared",
+                    "",
                 )
                 is False
             )
@@ -1865,6 +1940,7 @@ class TestVariantExists:
                     "x86_64",
                     "release",
                     "shared",
+                    "",
                 )
                 is False
             )
@@ -1902,6 +1978,129 @@ class TestVariantExists:
                     "x86_64",
                     "release",
                     "shared",
+                    "",
+                )
+                is False
+            )
+
+    def test_variant_different_org_not_matched(self):
+        """A stale public (org='') artifact must not block a publish to an org."""
+        from cvcpkg.cli import _variant_exists
+
+        mock_resp = mock.MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "packages": [
+                {
+                    "version": "1.3.1+cvc.1",
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "build_type": "release",
+                    "link": "shared",
+                    "org": "",
+                    "yanked": False,
+                }
+            ]
+        }
+        mock_client = mock.MagicMock()
+        mock_client.__enter__ = mock.MagicMock(return_value=mock_client)
+        mock_client.__exit__ = mock.MagicMock(return_value=False)
+        mock_client.get.return_value = mock_resp
+
+        with mock.patch("httpx.Client", return_value=mock_client):
+            assert (
+                _variant_exists(
+                    "https://pkg.example.com",
+                    {"Authorization": "Bearer tok"},
+                    "zlib",
+                    "1.3.1+cvc.1",
+                    "linux",
+                    "x86_64",
+                    "release",
+                    "shared",
+                    "cvc-org",
+                )
+                is False
+            )
+        # The org must also be pushed down to the server as a query filter.
+        assert mock_client.get.call_args.kwargs["params"]["org"] == "cvc-org"
+
+    def test_variant_same_org_matched(self):
+        """A live same-variant bundle in the same org is a match."""
+        from cvcpkg.cli import _variant_exists
+
+        mock_resp = mock.MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "packages": [
+                {
+                    "version": "1.3.1+cvc.1",
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "build_type": "release",
+                    "link": "shared",
+                    "org": "cvc-org",
+                    "yanked": False,
+                }
+            ]
+        }
+        mock_client = mock.MagicMock()
+        mock_client.__enter__ = mock.MagicMock(return_value=mock_client)
+        mock_client.__exit__ = mock.MagicMock(return_value=False)
+        mock_client.get.return_value = mock_resp
+
+        with mock.patch("httpx.Client", return_value=mock_client):
+            assert (
+                _variant_exists(
+                    "https://pkg.example.com",
+                    {"Authorization": "Bearer tok"},
+                    "zlib",
+                    "1.3.1+cvc.1",
+                    "linux",
+                    "x86_64",
+                    "release",
+                    "shared",
+                    "cvc-org",
+                )
+                is True
+            )
+
+    def test_variant_yanked_not_matched(self):
+        """A yanked same-variant bundle is treated as absent (must republish)."""
+        from cvcpkg.cli import _variant_exists
+
+        mock_resp = mock.MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "packages": [
+                {
+                    "version": "3.2.4+cvc.1",
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "build_type": "release",
+                    "link": "shared",
+                    "org": "",
+                    "yanked": True,
+                }
+            ]
+        }
+        mock_client = mock.MagicMock()
+        mock_client.__enter__ = mock.MagicMock(return_value=mock_client)
+        mock_client.__exit__ = mock.MagicMock(return_value=False)
+        mock_client.get.return_value = mock_resp
+
+        with mock.patch("httpx.Client", return_value=mock_client):
+            assert (
+                _variant_exists(
+                    "https://pkg.example.com",
+                    {"Authorization": "Bearer tok"},
+                    "libcvc",
+                    "3.2.4+cvc.1",
+                    "linux",
+                    "x86_64",
+                    "release",
+                    "shared",
+                    "",
                 )
                 is False
             )
@@ -6040,6 +6239,8 @@ class TestFollowDagTermination:
             except StopIteration:
                 return 10_000.0
 
+        from cvcpkg.cli._builds import WAIT_TIMEOUT_EXIT_CODE
+
         ret = self._run_bounded(
             [
                 "builds",
@@ -6058,7 +6259,7 @@ class TestFollowDagTermination:
                 mock.patch("cvcpkg.cli._builds.time.monotonic", _monotonic),
             ],
         )
-        assert ret == 2
+        assert ret == WAIT_TIMEOUT_EXIT_CODE
         assert "still building" in capsys.readouterr().err
 
     def test_failure_outranks_timeout(self, capsys):
@@ -6073,6 +6274,8 @@ class TestFollowDagTermination:
                 return next(clock)
             except StopIteration:
                 return 10_000.0
+
+        from cvcpkg.cli._builds import WAIT_TIMEOUT_EXIT_CODE
 
         ret = self._run_bounded(
             [
@@ -6137,7 +6340,7 @@ class TestWaitForDagsBounds:
         assert "nothing to wait for" in capsys.readouterr().out
 
     def test_wait_timeout_raises_exit_2(self):
-        from cvcpkg.cli._builds import _EXIT_WAIT_TIMEOUT, _wait_for_dags
+        from cvcpkg.cli._builds import WAIT_TIMEOUT_EXIT_CODE, _wait_for_dags
 
         jobs = [{"id": 1, "status": "running", "recipe_name": "r", "platform": "p", "arch": "x"}]
         clock = iter([0.0, 10_000.0])
@@ -6154,8 +6357,8 @@ class TestWaitForDagsBounds:
             mock.patch("cvcpkg.cli._builds.time.monotonic", _monotonic),
         ):
             with pytest.raises(SystemExit) as exc:
-                _wait_for_dags("http://srv", "tok", ["dag-1"], wait_timeout=60)
-        assert exc.value.code == _EXIT_WAIT_TIMEOUT
+                _wait_for_dags("http://srv", "tok", ["dag-1"], wait_timeout=60.0)
+        assert exc.value.code == WAIT_TIMEOUT_EXIT_CODE
 
     def test_server_errors_do_not_count_as_an_empty_dag(self):
         """A persistently failing server must not be mistaken for "no jobs".
@@ -6164,7 +6367,7 @@ class TestWaitForDagsBounds:
         expired token into a clean exit 0, reporting a run that built
         nothing as green.
         """
-        from cvcpkg.cli._builds import _EXIT_WAIT_TIMEOUT, _wait_for_dags
+        from cvcpkg.cli._builds import WAIT_TIMEOUT_EXIT_CODE, _wait_for_dags
 
         def _get(url, headers=None, params=None):
             resp = mock.MagicMock()
@@ -6190,9 +6393,9 @@ class TestWaitForDagsBounds:
             mock.patch("cvcpkg.cli._builds.time.monotonic", _monotonic),
         ):
             with pytest.raises(SystemExit) as exc:
-                _wait_for_dags("http://srv", "tok", ["dag-1"], wait_timeout=60)
+                _wait_for_dags("http://srv", "tok", ["dag-1"], wait_timeout=60.0)
         # Timed out rather than falsely reporting "nothing to wait for".
-        assert exc.value.code == _EXIT_WAIT_TIMEOUT
+        assert exc.value.code == WAIT_TIMEOUT_EXIT_CODE
 
 
 class TestWaitForJobsBounds:
@@ -6201,7 +6404,7 @@ class TestWaitForJobsBounds:
     until the workflow timeout."""
 
     def test_wait_timeout_raises_exit_2(self):
-        from cvcpkg.cli._builds import _EXIT_WAIT_TIMEOUT, _wait_for_jobs
+        from cvcpkg.cli._builds import WAIT_TIMEOUT_EXIT_CODE, _wait_for_jobs
 
         def _get(url, headers=None, params=None):
             resp = mock.MagicMock()
@@ -6240,11 +6443,11 @@ class TestWaitForJobsBounds:
             mock.patch("cvcpkg.cli._builds.time.monotonic", _monotonic),
         ):
             with pytest.raises(SystemExit) as exc:
-                _wait_for_jobs("http://srv", "tok", [7], wait_timeout=60)
-        assert exc.value.code == _EXIT_WAIT_TIMEOUT
+                _wait_for_jobs("http://srv", "tok", [7], wait_timeout=60.0)
+        assert exc.value.code == WAIT_TIMEOUT_EXIT_CODE
 
     def test_no_timeout_preserves_existing_behaviour(self):
-        """Default (0) still waits for terminal states, as before."""
+        """Default (None) still waits for terminal states, as before."""
         from cvcpkg.cli._builds import _wait_for_jobs
 
         def _get(url, headers=None, params=None):

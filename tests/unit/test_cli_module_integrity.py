@@ -34,6 +34,7 @@ EXPECTED_SUBMODULES = [
     "_builds",
     "_cache",
     "_catalog",
+    "_cpkg",
     "_doctor",
     "_init",
     "_install",

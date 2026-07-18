@@ -1,0 +1,206 @@
+name: Package lifecycle (yank / unyank / nuke)
+
+# Drives the yank -> unyank -> nuke lifecycle against a cvcpkg server.
+#
+# This exists because those are admin/publisher-token operations and the token
+# lives only in repo secrets: without this workflow there is no way to yank or
+# nuke a bundle on cvcpkg.org at all, which made the lifecycle feature
+# unusable in production.
+#
+# `nuke` is IRREVERSIBLE -- it drops the row, deletes the archive bytes (when
+# no other row references them) and writes a tombstone, after which the
+# download endpoint answers 410 Gone.  It therefore requires `confirm` to
+# exactly equal "<package>==<version>", mirroring the CLI's typed prompt, so a
+# mis-typed dispatch fails instead of destroying the wrong bundle.
+#
+# Scope flags narrow which variants are touched.  Leave them empty to affect
+# EVERY variant of the version -- deliberate, but check the "before" summary.
+#
+# Required repo secrets:
+#   CVCPKG_ADMIN_TOKEN  — an admin-role token for the target server
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Lifecycle action"
+        required: true
+        type: choice
+        options:
+          - yank
+          - unyank
+          - nuke
+      package:
+        description: "Package name (e.g. readline)"
+        required: true
+        type: string
+      version:
+        description: "Full version including revision (e.g. 8.3+cvc.1)"
+        required: true
+        type: string
+      server:
+        description: "Target cvcpkg server"
+        required: true
+        default: "https://cvcpkg.org"
+        type: string
+      platform:
+        description: "Only this platform (blank = every platform)"
+        required: false
+        default: ""
+        type: string
+      arch:
+        description: "Only this arch (blank = every arch)"
+        required: false
+        default: ""
+        type: string
+      config:
+        description: "Only this build config (blank = every config)"
+        required: false
+        default: ""
+        type: choice
+        options: ["", "release", "debug"]
+      link:
+        description: "Only this link mode (blank = every link mode)"
+        required: false
+        default: ""
+        type: choice
+        options: ["", "shared", "static"]
+      confirm:
+        description: "REQUIRED for nuke — type exactly <package>==<version>"
+        required: false
+        default: ""
+        type: string
+
+# Serialize: two lifecycle mutations against one server must not interleave.
+concurrency:
+  group: package-lifecycle-${{ inputs.server }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    name: ${{ inputs.action }} ${{ inputs.package }} ${{ inputs.version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install cvcpkg
+        run: |
+          python3 -m pip install --quiet --user .
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Guard — nuke requires an exact confirmation
+        if: ${{ inputs.action == 'nuke' }}
+        run: |
+          set -euo pipefail
+          expected="${{ inputs.package }}==${{ inputs.version }}"
+          got="${{ inputs.confirm }}"
+          if [[ "$got" != "$expected" ]]; then
+            echo "::error::nuke refused. confirm must be exactly '$expected' (got '$got')."
+            exit 1
+          fi
+          echo "Confirmation matches: $expected"
+
+      - name: State before
+        env:
+          CVCPKG_SERVER_URL: ${{ inputs.server }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, urllib.request
+          srv = os.environ["CVCPKG_SERVER_URL"].rstrip("/")
+          pkg = "${{ inputs.package }}"
+          req = urllib.request.Request(
+              f"{srv}/v1/packages/{pkg}?include_yanked=true",
+              headers={"Authorization": "Bearer " + os.environ["CVCPKG_TOKEN"]},
+          )
+          with urllib.request.urlopen(req, timeout=30) as r:
+              data = json.load(r)
+          rows = data.get("packages", [])
+          print(f"{pkg}: {len(rows)} bundle(s) on {srv}")
+          for p in rows:
+              print(
+                  f"  {p.get('version')} {p.get('platform')}/{p.get('arch')} "
+                  f"{p.get('build_type')}/{p.get('link')} yanked={p.get('yanked')}"
+              )
+          PY
+
+      - name: Apply
+        env:
+          CVCPKG_SERVER_URL: ${{ inputs.server }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Only pass a scope flag when it was actually supplied; an empty
+          # value would otherwise narrow the match to the empty string.
+          SCOPE=()
+          [[ -n "${{ inputs.platform }}" ]] && SCOPE+=(--platform "${{ inputs.platform }}")
+          [[ -n "${{ inputs.arch }}"     ]] && SCOPE+=(--arch     "${{ inputs.arch }}")
+          [[ -n "${{ inputs.config }}"   ]] && SCOPE+=(--config   "${{ inputs.config }}")
+          [[ -n "${{ inputs.link }}"     ]] && SCOPE+=(--link     "${{ inputs.link }}")
+
+          case "${{ inputs.action }}" in
+            yank)
+              cvcpkg yank "${{ inputs.package }}" "${{ inputs.version }}" \
+                ${SCOPE[@]+"${SCOPE[@]}"} --yes
+              ;;
+            unyank)
+              cvcpkg unyank "${{ inputs.package }}" "${{ inputs.version }}" \
+                ${SCOPE[@]+"${SCOPE[@]}"}
+              ;;
+            nuke)
+              cvcpkg nuke "${{ inputs.package }}" "${{ inputs.version }}" \
+                ${SCOPE[@]+"${SCOPE[@]}"} \
+                --confirm "${{ inputs.package }}==${{ inputs.version }}"
+              ;;
+          esac
+
+      - name: State after
+        if: ${{ always() }}
+        env:
+          CVCPKG_SERVER_URL: ${{ inputs.server }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, urllib.request
+          srv = os.environ["CVCPKG_SERVER_URL"].rstrip("/")
+          pkg = "${{ inputs.package }}"
+          tok = os.environ["CVCPKG_TOKEN"]
+
+          def get(path):
+              req = urllib.request.Request(
+                  f"{srv}{path}", headers={"Authorization": "Bearer " + tok}
+              )
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return json.load(r)
+
+          rows = get(f"/v1/packages/{pkg}?include_yanked=true").get("packages", [])
+          print(f"{pkg}: {len(rows)} bundle(s) remain")
+          for p in rows:
+              print(
+                  f"  {p.get('version')} {p.get('platform')}/{p.get('arch')} "
+                  f"{p.get('build_type')}/{p.get('link')} yanked={p.get('yanked')}"
+              )
+
+          # A nuke leaves a tombstone behind; surface it so the run records
+          # exactly what went away and why.
+          try:
+              tombs = get(f"/v1/packages/{pkg}/tombstones").get("tombstones", [])
+              if tombs:
+                  print(f"\ntombstones for {pkg}: {len(tombs)}")
+                  for t in tombs:
+                      print(
+                          f"  {t.get('version')} {t.get('platform')}/{t.get('arch')} "
+                          f"reason={t.get('reason')} nuked_at={t.get('nuked_at')}"
+                      )
+          except Exception as e:  # noqa: BLE001 — reporting only, never fail here
+              print(f"(tombstone lookup skipped: {e})")
+          PY

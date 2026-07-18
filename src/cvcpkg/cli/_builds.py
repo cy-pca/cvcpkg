@@ -17,13 +17,14 @@ from cvcpkg.cli._server import _api_request
 # runs (dag pr-223 hung 91 min; pr-226 needed a manual cancel).
 _TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled", "timed_out", "unschedulable"})
 
-# Exit code for "gave up waiting while jobs were still building".  Distinct
-# from 1 ("a job did not succeed") so CI can retry a timeout without
-# treating it as a build failure.
-_EXIT_WAIT_TIMEOUT = 2
+# Exit code from `--wait --wait-timeout` when the budget elapses with jobs still
+# building and NONE failed.  Distinct from 0 (all succeeded) and 1 (a job
+# failed) so a caller can treat "submitted OK, still building" as a soft pass --
+# e.g. a heavy recipe (llvm) that cannot finish inside a CI window.
+WAIT_TIMEOUT_EXIT_CODE = 75
 
-# A DAG's jobs may not be queryable the instant follow-dag starts, so an
-# empty result is only conclusive after this many consecutive polls.
+# A DAG's jobs may not be queryable the instant a waiter starts, so an empty
+# result is only conclusive after this many consecutive polls.
 _EMPTY_POLL_GRACE = 24  # × 5s ≈ 2 min
 
 # Read timeout for a job's SSE log stream.  Must stay comfortably above the
@@ -204,8 +205,18 @@ def builds_cancel(job_id: int, force: bool, server: str, token: str):
     help="Bearer token.  [env: CVCPKG_TOKEN]",
 )
 def builds_cancel_dag(dag_id: str, server: str, token: str):
-    """Cancel all pending/dispatched jobs in a DAG."""
-    data = _api_request("post", f"{server.rstrip('/')}/v1/builds/dag/{dag_id}/cancel", token)
+    """Cancel all pending/dispatched jobs in a DAG.
+
+    A trailing ``*`` matches by prefix, e.g. ``cancel-dag 'pr-288-*'`` cancels
+    every sub-DAG of a PR run (submit-dag splits one DAG per platform/arch/
+    config/link), including orphans left by superseded CI runs.
+    """
+    from urllib.parse import quote
+
+    # dag_id goes in the path and may contain a '*' (prefix match); encode it.
+    data = _api_request(
+        "post", f"{server.rstrip('/')}/v1/builds/dag/{quote(dag_id, safe='')}/cancel", token
+    )
     click.echo(f"DAG {dag_id}: {data.get('cancelled', 0)} jobs cancelled")
 
 
@@ -376,13 +387,16 @@ def builds_log_delete(job_id: int, server: str, token: str):
 )
 @click.option(
     "--wait-timeout",
-    "wait_timeout",
-    type=int,
-    default=0,
+    type=float,
+    default=None,
     metavar="SECONDS",
-    help="Give up after SECONDS and exit 2 (0 = wait indefinitely).",
+    help=(
+        "Stop following after SECONDS.  A failed job is still reported; if jobs "
+        f"are merely still building, exit {WAIT_TIMEOUT_EXIT_CODE} (building) "
+        "instead of burning the caller's whole job budget."
+    ),
 )
-def builds_follow_dag(dag_id: str, server: str, token: str, wait_timeout: int):
+def builds_follow_dag(dag_id: str, server: str, token: str, wait_timeout: float | None):
     """Follow live build output for all jobs in a DAG.
 
     Multiplexes SSE log streams from every active job, interleaving
@@ -472,7 +486,7 @@ def builds_follow_dag(dag_id: str, server: str, token: str, wait_timeout: int):
         # Use prefix matching: append '*' so the server returns all
         # DAGs whose ID starts with the given string.
         query_dag = dag_id if "-" in dag_id and dag_id.count("-") >= 5 else f"{dag_id}*"
-        deadline = time.monotonic() + wait_timeout if wait_timeout > 0 else None
+        deadline = None if wait_timeout is None else time.monotonic() + wait_timeout
         empty_polls = 0
         while True:
             # Checked at the top so every `continue` below is bounded too —
@@ -511,13 +525,20 @@ def builds_follow_dag(dag_id: str, server: str, token: str, wait_timeout: int):
                 label = _make_label(j)
 
                 if status in terminal:
-                    if jid not in final_statuses:
+                    # Record on *change*, not just first sight.  A job can leave
+                    # a terminal state (a retried build re-runs and succeeds);
+                    # keying on "have we seen it at all" froze the first verdict
+                    # and reported a succeeded job as failed.
+                    if final_statuses.get(jid) != status:
                         final_statuses[jid] = status
                         icon = "\u2713" if status == "succeeded" else "\u2717"
                         with print_lock:
                             click.echo(f"  {icon} #{jid} {label}: {status}")
                 else:
                     all_terminal = False
+                    # Back to running: drop the earlier verdict so the summary
+                    # counts the outcome of the attempt that actually finishes.
+                    final_statuses.pop(jid, None)
 
                 # Start following active (non-pending) jobs we haven't seen
                 if jid not in seen_jobs and status not in ("pending", *terminal):
@@ -566,21 +587,23 @@ def builds_follow_dag(dag_id: str, server: str, token: str, wait_timeout: int):
         )
 
     # A real failure outranks the timeout: it is the more actionable signal,
-    # and exit 2 is reserved for "still building, nothing had failed yet".
+    # and the timeout code is reserved for "still building, nothing failed".
     if failed:
         raise SystemExit(1)
     if outcome == "timeout":
-        raise SystemExit(_EXIT_WAIT_TIMEOUT)
+        raise SystemExit(WAIT_TIMEOUT_EXIT_CODE)
 
 
 # ── Build-wait helpers ──────────────────────────────────────────────
 
 
-def _wait_for_jobs(server: str, token: str, job_ids: list[int], *, wait_timeout: int = 0) -> None:
+def _wait_for_jobs(
+    server: str, token: str, job_ids: list[int], *, wait_timeout: float | None = None
+) -> None:
     """Poll until all job IDs reach a terminal state, printing updates.
 
     ``wait_timeout`` bounds the wait (0 = indefinitely); exceeding it exits
-    ``_EXIT_WAIT_TIMEOUT`` rather than polling forever on a job that never
+    ``WAIT_TIMEOUT_EXIT_CODE`` rather than polling forever on a job that never
     reaches a terminal state.
     """
 
@@ -590,7 +613,7 @@ def _wait_for_jobs(server: str, token: str, job_ids: list[int], *, wait_timeout:
     headers = {"Authorization": f"Bearer {token}"}
     terminal = _TERMINAL_STATUSES
     pending = set(job_ids)
-    deadline = time.monotonic() + wait_timeout if wait_timeout > 0 else None
+    deadline = None if wait_timeout is None else time.monotonic() + wait_timeout
 
     click.echo(f"\nWaiting for {len(pending)} job(s)...")
     with httpx.Client(timeout=30) as client:
@@ -602,7 +625,7 @@ def _wait_for_jobs(server: str, token: str, job_ids: list[int], *, wait_timeout:
                     f"{len(pending)} job(s) still running: {sorted(pending)}",
                     err=True,
                 )
-                raise SystemExit(_EXIT_WAIT_TIMEOUT)
+                raise SystemExit(WAIT_TIMEOUT_EXIT_CODE)
             done_this_round = []
             for jid in list(pending):
                 resp = client.get(f"{base}/v1/builds/{jid}", headers=headers)
@@ -640,7 +663,7 @@ def _wait_for_dags(
     dag_ids: list[str],
     *,
     fail_on_unschedulable: bool = True,
-    wait_timeout: int = 0,
+    wait_timeout: float | None = None,
 ) -> None:
     """Poll until all jobs in the given DAGs reach terminal state.
 
@@ -648,9 +671,22 @@ def _wait_for_dags(
     --allow-unschedulable``), jobs the server reaped as unschedulable
     count as skipped rather than failed — the caller explicitly accepted
     submitting combos no registered builder serves.
+
+    With ``wait_timeout`` set, stop waiting after that many seconds.  A job that
+    has already FAILED is still reported (raise) -- a slow build never masks a
+    real failure.  If the only non-terminal jobs are still building, print them
+    and exit ``WAIT_TIMEOUT_EXIT_CODE`` so a CI caller can treat a heavy build
+    that outran its window as "submitted OK, building" rather than a
+    timeout-kill (which would orphan the queued jobs).
     """
 
     import httpx
+
+    if not dag_ids:
+        # e.g. --skip-existing dropped every recipe as already-published.
+        # Without this guard the poll loop below spins forever on an empty set.
+        click.echo("\nNo DAGs to wait for (nothing was submitted).")
+        return
 
     base = server.rstrip("/")
     headers = {"Authorization": f"Bearer {token}"}
@@ -659,20 +695,13 @@ def _wait_for_dags(
     click.echo(f"\nWaiting for {len(dag_ids)} DAG(s)...")
     all_job_ids: set[int] = set()
     finished: set[int] = set()
-    counts: dict[str, int] = {}
-    deadline = time.monotonic() + wait_timeout if wait_timeout > 0 else None
+    deadline = None if wait_timeout is None else time.monotonic() + wait_timeout
+    timed_out = False
     empty_polls = 0
 
     with httpx.Client(timeout=30) as client:
         while True:
             time.sleep(5)
-            if deadline is not None and time.monotonic() >= deadline:
-                click.echo(
-                    f"Timed out after {wait_timeout}s with "
-                    f"{len(all_job_ids) - len(finished)} job(s) still building.",
-                    err=True,
-                )
-                raise SystemExit(_EXIT_WAIT_TIMEOUT)
             still_running = False
             listed_ok = False
             for did in dag_ids:
@@ -697,11 +726,13 @@ def _wait_for_dags(
                                 f"  {icon} #{jid} {j['recipe_name']} "
                                 f"({j['platform']}/{j.get('arch', '?')}): {status}"
                             )
-                        counts[status] = counts.get(status, 0) + (1 if jid not in finished else 0)
                     else:
                         still_running = True
 
             if not still_running and all_job_ids:
+                break
+            if deadline is not None and time.monotonic() >= deadline:
+                timed_out = True
                 break
             # No jobs at all (e.g. --skip-existing dropped every recipe, or
             # the DAG IDs match nothing): there is nothing to wait for.
@@ -718,23 +749,48 @@ def _wait_for_dags(
                     err=True,
                 )
 
-    # Re-check final states
+    # Re-check final states.
     failed_ids: list[int] = []
     skipped_ids: list[int] = []
+    building: list[str] = []
     with httpx.Client(timeout=30) as client:
         for jid in all_job_ids:
             resp = client.get(f"{base}/v1/builds/{jid}", headers=headers)
-            if resp.status_code < 400:
-                info = resp.json()
-                status = info.get("status")
-                if status == "succeeded":
-                    continue
-                if status == "unschedulable" and not fail_on_unschedulable:
-                    skipped_ids.append(jid)
-                    continue
-                failed_ids.append(jid)
+            if resp.status_code >= 400:
+                continue
+            info = resp.json()
+            status = info.get("status")
+            if status == "succeeded":
+                continue
+            if status == "unschedulable" and not fail_on_unschedulable:
+                skipped_ids.append(jid)
+                continue
+            if status not in terminal:
+                # Still building -- only reachable when we stopped at the deadline.
+                building.append(f"#{jid} {info.get('recipe_name', '?')}")
+                continue
+            failed_ids.append(jid)
+
+    # A real failure is reported even if we timed out: a slow build alongside a
+    # failed one must not turn the failure into a pass.
     if failed_ids:
         raise click.ClickException(f"{len(failed_ids)} job(s) did not succeed: {failed_ids}")
+    if timed_out and not all_job_ids:
+        # Never saw a single job, so the listing never succeeded (unreachable
+        # server, expired token).  Falling through would print "All 0 job(s)
+        # succeeded" and exit 0 — a run that built nothing, reported green.
+        click.echo(
+            f"\nNo jobs could be listed within {wait_timeout:.0f}s — the server "
+            "never returned the submitted DAG(s).",
+            err=True,
+        )
+        raise SystemExit(WAIT_TIMEOUT_EXIT_CODE)
+    if timed_out and building:
+        click.echo(
+            f"\n{len(building)} job(s) still building after {wait_timeout:.0f}s "
+            f"(submitted OK, continuing on the cluster): {', '.join(sorted(building))}"
+        )
+        raise SystemExit(WAIT_TIMEOUT_EXIT_CODE)
     if skipped_ids:
         click.echo(
             f"\n{len(all_job_ids) - len(skipped_ids)} job(s) succeeded, "
@@ -761,7 +817,7 @@ def _wait_for_dags(
 )
 @click.option("--recipe", "recipe_name", required=True, help="Recipe name to build.")
 @click.option("--platform", required=True, help="Target platform (e.g. linux, macos, windows).")
-@click.option("--arch", required=True, help="Target architecture (e.g. x86_64, aarch64).")
+@click.option("--arch", required=True, help="Target architecture (e.g. x86_64, arm64).")
 @click.option("--config", default="release", help="Build config (release or debug).")
 @click.option("--link", default="shared", help="Link mode (shared or static).")
 @click.option("--org", "org_slug", default="", help="Organization scope.")
@@ -774,11 +830,14 @@ def _wait_for_dags(
 )
 @click.option(
     "--wait-timeout",
-    "wait_timeout",
-    type=int,
-    default=0,
+    type=float,
+    default=None,
     metavar="SECONDS",
-    help="With --wait, give up after SECONDS and exit 2 (0 = wait indefinitely).",
+    help=(
+        "With --wait, stop waiting after SECONDS.  A failed job is still "
+        f"reported; if the job is merely still building, exit "
+        f"{WAIT_TIMEOUT_EXIT_CODE} (submitted OK, building)."
+    ),
 )
 def builds_submit(
     server: str,
@@ -792,7 +851,7 @@ def builds_submit(
     priority: int,
     timeout_seconds: int | None,
     wait: bool,
-    wait_timeout: int,
+    wait_timeout: float | None,
 ):
     """Submit a single remote build job.
 
@@ -851,15 +910,19 @@ def builds_submit(
 @click.option("--org", "org_slug", default="", help="Organization scope.")
 @click.option("--dag-id", default=None, help="Custom DAG ID (auto-generated if omitted).")
 @click.option(
-    "--wait-timeout",
-    "wait_timeout",
-    type=int,
-    default=0,
-    metavar="SECONDS",
-    help="With --wait, give up after SECONDS and exit 2 (0 = wait indefinitely).",
+    "--wait", "-w", is_flag=True, help="Wait for all DAG jobs to finish, printing status updates."
 )
 @click.option(
-    "--wait", "-w", is_flag=True, help="Wait for all DAG jobs to finish, printing status updates."
+    "--wait-timeout",
+    type=float,
+    default=None,
+    metavar="SECONDS",
+    help=(
+        "With --wait, stop waiting after SECONDS.  A failed job is still "
+        f"reported; if jobs are merely still building, exit {WAIT_TIMEOUT_EXIT_CODE} "
+        "(submitted OK, building) instead of hanging until a CI/job timeout kills "
+        "the wait and orphans the queue."
+    ),
 )
 @click.option(
     "--recipes-dir",
@@ -907,7 +970,7 @@ def builds_submit_dag(
     org_slug: str,
     dag_id: str | None,
     wait: bool,
-    wait_timeout: int,
+    wait_timeout: float | None,
     recipes_dirs: tuple[str, ...],
     no_default_recipes: bool,
     allow_unschedulable: bool,

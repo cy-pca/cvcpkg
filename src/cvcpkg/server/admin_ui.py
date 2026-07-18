@@ -81,6 +81,7 @@ def _esc(s: object) -> str:
         .replace("<", "&lt;")
         .replace(">", "&gt;")
         .replace('"', "&quot;")
+        .replace("'", "&#x27;")
     )
 
 
@@ -143,14 +144,28 @@ def _table(headers: list[str], rows: list[list[str]], *, empty: str = "no data")
 # ── Pages ───────────────────────────────────────────────────────
 
 
-def login_html(*, error: str = "") -> str:
+def login_html(*, error: str = "", oidc_enabled: bool = False) -> str:
     error_html = (
         f'<div class="notification is-danger is-light">{_esc(error)}</div>' if error else ""
+    )
+    # OIDC (Phase 13) is offered only when the provider is fully configured;
+    # the token form always remains available for machine/break-glass access.
+    sso_html = (
+        """
+  <a class="button is-primary is-fullwidth mb-4" href="/admin/oidc/login">
+    <span class="icon mr-1"><i class="fas fa-right-to-bracket"></i></span>
+    Sign in with SSO
+  </a>
+  <p class="has-text-centered cvc-muted is-size-7 mb-4">or use an admin API token</p>
+"""
+        if oidc_enabled
+        else ""
     )
     body = f"""
 <div class="columns is-centered"><div class="column is-4">
   <h1 class="title is-4">Sign in</h1>
   {error_html}
+  {sso_html}
   <form method="post" action="/admin/login">
     <div class="field">
       <label class="label">Admin API token</label>

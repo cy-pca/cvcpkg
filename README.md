@@ -1,4 +1,8 @@
+<img src="src/cvcpkg/server/assets/cyberpc-angel-gears.png" alt="CyberPC Angel, LLC" width="72" align="left" />
+
 # cvcpkg
+
+A [CyberPC Angel, LLC](https://cyberpcangel.com) project.
 
 Component package manager for **libcvc-deps** prebuilt dependency bundles.
 
@@ -525,6 +529,10 @@ cvcpkg token create --name ci_reader --role reader
 cvcpkg token create --name another_publisher --role publisher --expires-in-days 90
 cvcpkg token list
 cvcpkg token revoke --name old_token
+
+# Rotate a secret in place (name/role/org memberships survive); the old
+# secret keeps working for an hour so CI secrets can be swapped calmly:
+cvcpkg token rotate --name another_publisher --grace-minutes 60
 ```
 
 ### 3. Push recipes to the server
@@ -854,34 +862,46 @@ for these recipes.
 
 ### Writing an `any` recipe
 
-Set `platform: any` in every `build_matrix` entry.  The builder
+Set `platform: any` in every `build.matrix` entry.  The builder
 automatically assigns `arch: noarch` and skips the CMake configure
 marker check:
 
 ```yaml
-name: my-data-bundle
-upstream_version: "1.0.0"
-cvc_revision: 1
-description: "Platform-independent data files"
+# recipe.yaml
+schema_version: 1
 
 recipe:
+  name: my-data-bundle
+  upstream_version: "1.0.0"
+  cvc_revision: 1
+  description: "Platform-independent data files"
   kind: data          # optional — hints: data | media | config | iso
 
 source:
+  type: tarball
   url: "https://example.com/data-v1.0.0.tar.gz"
   sha256: "<sha256>"
 
-build_matrix:
-  - platform: any
-
 build:
-  system: script
-  script: |
-    cp -r "$SRC_DIR"/* "$PREFIX/"
+  matrix:
+    - platform: any
+      script: build.sh
 
 package:
   files:
     - "share/**"
+```
+
+`script` names a file next to `recipe.yaml` (not inline shell).  The
+build script receives the staged source and install prefix via
+environment variables:
+
+```bash
+#!/bin/bash
+# build.sh
+set -e
+mkdir -p "$CVC_INSTALL_DIR/share/my-data-bundle"
+cp -r "$CVC_SOURCE_DIR"/* "$CVC_INSTALL_DIR/share/my-data-bundle/"
 ```
 
 ### How it works
@@ -892,7 +912,7 @@ package:
 | **Build** | Included in *every* platform's `build-all` run so it is always available |
 | **Cache key** | Uses `any/noarch` — the same artifact is shared across all platforms |
 | **Dependencies** | Other recipes can depend on `any` packages; they are included regardless of the consuming platform |
-| **CI workflow** | `recipe-build.yml` maps `platform: any` to `ARCH=noarch` and skips the cmake marker |
+| **Builder** | Maps `platform: any` to `ARCH=noarch` and skips the cmake marker |
 | **Recipe `kind`** | Optional `recipe.kind` field (e.g. `data`, `media`, `config`, `iso`) is emitted as `meta.kind` in the manifest for downstream tooling hints |
 
 ### `cvc-requirements.yaml` usage
@@ -1103,6 +1123,7 @@ Clients call `GET /v1/catalog` to receive the full bundle list, then
 | DELETE | `/v1/packages/{name}/{version}`        | admin         | Permanently delete a version       |
 | POST   | `/v1/tokens`                           | admin         | Create a new API token             |
 | DELETE | `/v1/tokens/{name}`                    | admin         | Revoke a token                     |
+| POST   | `/v1/tokens/{name}/rotate`             | admin/self    | Rotate a token's secret in place   |
 | GET    | `/v1/tokens`                           | admin         | List all tokens                    |
 | GET    | `/v1/audit`                            | admin         | Paginated audit log                |
 | GET    | `/v1/audit/verify`                     | admin         | Verify audit chain integrity       |

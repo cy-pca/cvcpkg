@@ -6,9 +6,63 @@ import platform
 import struct
 import sys
 
+# Canonical vocabularies for the package keyspace. The catalog is keyed by
+# these exact strings; every ingestion boundary (CLI detection, composite
+# actions, server publish endpoints) must normalize to them. Raw machine
+# names are per-OS-inconsistent (Linux 'aarch64' vs macOS 'arm64', BSD
+# 'amd64' vs 'x86_64'), so the canonical set — not uname output — is the
+# single source of truth.
+CANONICAL_PLATFORMS = frozenset(
+    {
+        "linux",
+        "macos",
+        "windows",
+        "windows-gnu",
+        "freebsd",
+        "openbsd",
+        "netbsd",
+        "dragonflybsd",
+        "wasm",
+        "wasi",
+        "cosmo",
+        "any",  # platform-independent bundles (builder.py 'any' fallback)
+    }
+)
+
+CANONICAL_ARCHES = frozenset(
+    {
+        "x86_64",
+        "arm64",
+        "riscv64",
+        "ppc64le",
+        "ppc64",
+        "s390x",
+        "wasm32",
+        "any",
+    }
+)
+
+# Common non-canonical spellings -> canonical (mirrors detect_arch's map).
+ARCH_ALIASES = {
+    "amd64": "x86_64",
+    "x64": "x86_64",
+    "aarch64": "arm64",
+}
+
+
+def normalize_arch(value: str) -> str:
+    """Map a possibly-raw arch spelling onto the canonical name."""
+    v = (value or "").strip().lower()
+    return ARCH_ALIASES.get(v, v)
+
 
 def detect_platform() -> str:
-    """Return 'linux', 'macos', 'windows', 'freebsd', 'openbsd', or 'netbsd'."""
+    """Return 'linux', 'macos', 'windows', 'freebsd', 'openbsd', 'netbsd', or 'dragonflybsd'.
+
+    GhostBSD note: GhostBSD's kernel identifies as FreeBSD (sys.platform
+    is ``freebsd*``), so GhostBSD hosts intentionally detect as
+    ``freebsd`` and consume the freebsd package channel (compat mode).
+    """
     s = sys.platform
     if s.startswith("linux"):
         return "linux"
@@ -22,6 +76,8 @@ def detect_platform() -> str:
         return "openbsd"
     if s.startswith("netbsd"):
         return "netbsd"
+    if s.startswith("dragonfly"):
+        return "dragonflybsd"
     raise RuntimeError(f"unsupported platform: {s}")
 
 
@@ -63,6 +119,8 @@ def detect_libc() -> str:
         return "openbsd-libc"
     if plat == "netbsd":
         return "netbsd-libc"
+    if plat == "dragonflybsd":
+        return "dragonfly-libc"
     # Linux: try to distinguish glibc vs musl.
     try:
         import ctypes

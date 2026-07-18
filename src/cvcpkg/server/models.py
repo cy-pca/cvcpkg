@@ -3,41 +3,15 @@
 from __future__ import annotations
 
 import datetime
-import re
 from enum import Enum
 
 from pydantic import BaseModel, Field
 
+# Moved to the dependency-free cvcpkg.orgs so the CLI can validate slugs
+# without the server extras; re-exported here for backward compatibility.
+from cvcpkg.orgs import validate_org_slug  # noqa: F401
+
 # ── Org slug validation (GitHub username rules) ─────────────────
-
-_ORG_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
-_CONSECUTIVE_HYPHENS_RE = re.compile(r"--")
-
-
-def validate_org_slug(slug: str) -> str | None:
-    """Validate an organization slug using GitHub username rules.
-
-    Rules (matching GitHub):
-    - 1–39 characters
-    - Only lowercase alphanumeric characters or hyphens
-    - Cannot start or end with a hyphen
-    - No consecutive hyphens
-
-    Returns ``None`` on success or an error message string on failure.
-    """
-    if not slug:
-        return "organization slug must not be empty"
-    if len(slug) > 39:
-        return f"organization slug must be at most 39 characters (got {len(slug)})"
-    if _CONSECUTIVE_HYPHENS_RE.search(slug):
-        return "organization slug must not contain consecutive hyphens"
-    if not _ORG_SLUG_RE.match(slug):
-        return (
-            "organization slug may only contain lowercase alphanumeric "
-            "characters or hyphens, and cannot start or end with a hyphen"
-        )
-    return None
-
 
 # ── Enums ───────────────────────────────────────────────────────
 
@@ -57,6 +31,10 @@ class AuditAction(str, Enum):
     yank = "yank"
     unyank = "unyank"
     delete = "delete"
+    # Irreversible removal of a yanked bundle's row AND archive bytes, whether
+    # by an admin's `cvcpkg nuke` or by the yank-retention GC (recorded with
+    # actor "retention-gc", which holds no token).
+    nuke = "nuke"
     token_create = "token_create"
     token_revoke = "token_revoke"
     catalog_rebuild = "catalog_rebuild"
@@ -78,6 +56,7 @@ class AuditAction(str, Enum):
     registration_deny = "registration_deny"
     token_update_email = "token_update_email"
     token_update_profile = "token_update_profile"
+    token_rotate = "token_rotate"
     builder_register = "builder_register"
     builder_unregister = "builder_unregister"
     builder_update = "builder_update"
@@ -114,6 +93,16 @@ class TokenRecord(BaseModel):
     )
     expires_at: datetime.datetime | None = None
     revoked: bool = False
+    # Rotation grace window: the pre-rotation secret's hash stays valid
+    # until previous_hash_expires_at so callers can swap stored secrets
+    # (CI variables, requirement files) without an outage.
+    previous_token_hash: str = ""
+    previous_hash_expires_at: datetime.datetime | None = None
+    # Transient (never persisted): True when this verification was
+    # satisfied by the pre-rotation grace hash rather than the current
+    # secret. Rotation is denied to such callers — otherwise a leaked
+    # old secret could re-rotate inside the window and steal the token.
+    via_previous_hash: bool = Field(default=False, exclude=True)
 
 
 class TokenCreateRequest(BaseModel):
@@ -130,6 +119,29 @@ class TokenCreateResponse(BaseModel):
     role: TokenRole
     token: str = Field(description="Bearer token — shown only once")
     expires_at: datetime.datetime | None = None
+
+
+class TokenRotateRequest(BaseModel):
+    grace_minutes: int = Field(
+        default=0,
+        ge=0,
+        le=10080,  # one week
+        description=(
+            "How long the pre-rotation secret keeps working after rotation. "
+            "0 kills it immediately."
+        ),
+    )
+
+
+class TokenRotateResponse(BaseModel):
+    name: str
+    role: TokenRole
+    token: str = Field(description="New bearer token — shown only once")
+    expires_at: datetime.datetime | None = None
+    previous_valid_until: datetime.datetime | None = Field(
+        default=None,
+        description="When the pre-rotation secret stops working (None = immediately)",
+    )
 
 
 class EmailUpdateRequest(BaseModel):
@@ -235,6 +247,9 @@ class PackageInfo(BaseModel):
     archive_url: str
     published_at: datetime.datetime
     yanked: bool = False
+    # Set when yanked, cleared on unyank.  Exposed so clients can show when a
+    # bundle was retired and when yank retention will purge it.
+    yanked_at: datetime.datetime | None = None
     signature: str = ""
     key_fingerprint: str = ""
     release_tag: str = Field(
@@ -270,6 +285,13 @@ class PackageInfo(BaseModel):
         default="",
         description=(
             "Organization slug that owns the package.  Empty for official/public base packages."
+        ),
+    )
+    required_deps: list = Field(
+        default_factory=list,
+        description=(
+            "Runtime dependencies as dicts [{name, version, org?, server?}, ...]. "
+            "`server` names a federated registry host (see cvcpkg.refs)."
         ),
     )
 
@@ -422,8 +444,10 @@ class OrgInfo(BaseModel):
     logo_url: str = ""
     homepage: str = ""
     is_private: bool = False
-    storage_limit_bytes: int = 10 * 1024 * 1024 * 1024
-    storage_used_bytes: int = 0
+    # Storage figures are member/super-admin-only; the API nulls them for
+    # non-members so the SPA simply omits the storage UI.
+    storage_limit_bytes: int | None = 10 * 1024 * 1024 * 1024
+    storage_used_bytes: int | None = 0
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
     )
@@ -704,6 +728,25 @@ class BuildJobStatus(str, Enum):
     unschedulable = "unschedulable"
 
 
+class BuildJobAlreadyClaimedError(Exception):
+    """A worker tried to claim a job another worker already holds.
+
+    Kept distinct from "job not found" so the API can answer 409 rather than
+    404 -- and, above all, rather than handing the loser the job anyway, which
+    is what let two workers build the same variant concurrently.
+
+    Lives here rather than in db_stores so app.py can catch it without pulling
+    in the SQLAlchemy layer, which it imports lazily.
+    """
+
+    def __init__(self, job_id: int, *, holder: str = "", builder_id: int | None = None):
+        self.job_id = job_id
+        self.holder = holder
+        self.builder_id = builder_id
+        who = holder or (f"builder #{builder_id}" if builder_id is not None else "another worker")
+        super().__init__(f"build job {job_id} is already claimed by {who}")
+
+
 class BuildJobInfo(BaseModel):
     """Public representation of a build job."""
 
@@ -718,6 +761,7 @@ class BuildJobInfo(BaseModel):
     config: str = "release"
     link: str = "shared"
     builder_id: int | None = None
+    claimed_by: str = ""
     status: str = BuildJobStatus.pending
     priority: int = 0
     timeout_seconds: int | None = None
@@ -824,11 +868,31 @@ class BuildJobListResponse(BaseModel):
 
 
 class BuildJobClaimRequest(BaseModel):
-    """Builder claims a dispatched job."""
+    """A worker claims a pending or dispatched job.
 
-    builder_id: int = Field(
-        ...,
-        description="ID of the builder claiming the job.",
+    ``builder_id`` is optional so a platform with no persistent builder can
+    still drain its queue.  macOS is the motivating case: GitHub-hosted
+    runners are ephemeral, and registering one as a builder per drain leaves
+    a dead registration behind for a machine that no longer exists.  Such a
+    worker claims anonymously and identifies itself with ``claimant``.
+    """
+
+    builder_id: int | None = Field(
+        None,
+        description=(
+            "ID of the registered builder claiming the job.  Omit for an "
+            "unregistered worker (e.g. an ephemeral CI runner draining the "
+            "queue); pass claimant instead."
+        ),
+    )
+    claimant: str = Field(
+        "",
+        max_length=255,
+        description=(
+            "Free-form identity of an unregistered worker, e.g. "
+            "'gha-run-29372085620'.  Recorded for traceability so a running "
+            "job is never anonymous."
+        ),
     )
 
 

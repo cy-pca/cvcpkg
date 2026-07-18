@@ -27,7 +27,9 @@ depends:
     - ninja
     - meson
     - pkg-config
-  runtime:
+    # build.sh sets -Denable-tools=false, and libxkbcommon itself does not link
+    # wayland -- the wayland bits only feed the (disabled) interactive-wayland
+    # tool and wayland-scanner codegen.  Build-time only; must not ship.
     - name: wayland
       version: "^1.23"
       platforms: [linux, freebsd]

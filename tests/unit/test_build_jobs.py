@@ -12,7 +12,7 @@ aiosqlite = pytest.importorskip("aiosqlite", reason="aiosqlite required for buil
 from fastapi.testclient import TestClient
 
 from cvcpkg.server.app import create_app
-from cvcpkg.server.models import BuildJobStatus, TokenRole
+from cvcpkg.server.models import BuildJobAlreadyClaimedError, BuildJobStatus, TokenRole
 
 # ── Fixtures ────────────────────────────────────────────────────
 
@@ -942,8 +942,14 @@ class TestDbBuildJobStore:
 
         self._run(_test())
 
-    def test_claim_running_job_noop(self):
-        """Claiming an already-running job should be a no-op."""
+    def test_claim_running_job_is_refused(self):
+        """Claiming a job another worker is running must be refused.
+
+        This used to assert a "no-op" that still returned the job info to the
+        second builder.  The row was not stolen, but the caller walked away
+        holding the job and built the same variant concurrently -- two builds
+        racing one publish.  A rival must be told no.
+        """
         from cvcpkg.server.db_stores import DbBuilderStore, DbBuildJobStore
 
         async def _test():
@@ -968,9 +974,13 @@ class TestDbBuildJobStore:
                 submitted_by="admin",
             )
             await store.claim(job.id, b1.id)
-            result = await store.claim(job.id, b2.id)
-            assert result.status == BuildJobStatus.running
-            assert result.builder_id == b1.id  # still b1
+            with pytest.raises(BuildJobAlreadyClaimedError):
+                await store.claim(job.id, b2.id)
+
+            # b1 keeps it.
+            still = await store.get(job.id)
+            assert still.status == BuildJobStatus.running
+            assert still.builder_id == b1.id
 
         self._run(_test())
 
@@ -1275,6 +1285,39 @@ class TestDbBuildJobStore:
             assert count == 2
             a = await store.get(infos[0].id)
             assert a.status == BuildJobStatus.succeeded  # unchanged
+
+        self._run(_test())
+
+    def test_cancel_dag_prefix_match(self):
+        """A trailing '*' cancels every sub-DAG of a PR run, not other PRs.
+
+        submit-dag splits one logical DAG into
+        ``pr-<n>-<run>-<platform>-<arch>-<config>-<link>`` sub-DAGs, and a
+        superseded CI run leaves several such orphans; the cleanup cancels them
+        by the ``pr-<n>-<run>-*`` prefix.  ``pr-288-*`` must NOT reach
+        ``pr-2881-*`` -- the trailing dash makes the prefix unambiguous.
+        """
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            one = lambda name: [  # noqa: E731
+                {"recipe_name": name, "platform": "linux", "arch": "x86_64", "depends_on": []}
+            ]
+            await store.create_dag(one("a"), "pr-288-run1-linux-x86_64-release-shared", "admin")
+            await store.create_dag(one("b"), "pr-288-run1-windows-x86_64-release-shared", "admin")
+            await store.create_dag(one("c"), "pr-288-run2-linux-x86_64-release-shared", "admin")
+            other = await store.create_dag(
+                one("d"), "pr-2881-run1-linux-x86_64-release-shared", "admin"
+            )
+
+            # Prefix cancels all three pr-288 sub-DAGs; pr-2881 is untouched.
+            count = await store.cancel_dag("pr-288-*")
+            assert count == 3
+            assert (await store.get(other[0].id)).status == BuildJobStatus.pending
+
+            # Exact match still works and is unaffected by the '*' path.
+            assert await store.cancel_dag("pr-2881-run1-linux-x86_64-release-shared") == 1
 
         self._run(_test())
 

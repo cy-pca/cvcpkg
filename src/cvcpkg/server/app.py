@@ -26,6 +26,7 @@ import secrets
 import signal
 import tempfile
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -55,6 +56,7 @@ from fastapi.responses import (
 )
 
 from cvcpkg import __version__
+from cvcpkg.server import archive_store
 from cvcpkg.server.audit import AuditLog
 from cvcpkg.server.auth import TokenStore
 from cvcpkg.server.models import (
@@ -65,6 +67,7 @@ from cvcpkg.server.models import (
     BuilderListResponse,
     BuilderRegisterRequest,
     BuilderUpdateRequest,
+    BuildJobAlreadyClaimedError,
     BuildJobClaimRequest,
     BuildJobCompleteRequest,
     BuildJobFailRequest,
@@ -111,6 +114,8 @@ from cvcpkg.server.models import (
     TokenRequestListResponse,
     TokenRequestStatus,
     TokenRole,
+    TokenRotateRequest,
+    TokenRotateResponse,
     UserListResponse,
     UserProfileResponse,
     WebhookInfo,
@@ -211,6 +216,60 @@ POPULATE_UPSTREAM = os.environ.get("CVCPKG_POPULATE_UPSTREAM", "")
 # Bearer token for the upstream (only needed for private upstreams).
 POPULATE_UPSTREAM_TOKEN = os.environ.get("CVCPKG_POPULATE_UPSTREAM_TOKEN", "")
 
+
+def _reject_noncanonical_platform_arch(platform: str, arch: str) -> None:
+    """422 on platform/arch values outside the canonical keyspace.
+
+    Prevents a misconfigured client (e.g. raw `uname -m` giving 'aarch64'
+    or BSD 'amd64') from silently minting an orphan catalog keyspace that
+    no canonical consumer will ever query. Empty strings remain allowed
+    for backward compatibility.
+    """
+    from cvcpkg.platform import ARCH_ALIASES, CANONICAL_ARCHES, CANONICAL_PLATFORMS
+
+    if platform and platform not in CANONICAL_PLATFORMS:
+        raise HTTPException(
+            422,
+            f"non-canonical platform '{platform}'; expected one of "
+            f"{sorted(CANONICAL_PLATFORMS)}",
+        )
+    if arch and arch not in CANONICAL_ARCHES:
+        hint = ARCH_ALIASES.get(arch.strip().lower())
+        suffix = f" (did you mean '{hint}'?)" if hint else ""
+        raise HTTPException(
+            422,
+            f"non-canonical arch '{arch}'; expected one of " f"{sorted(CANONICAL_ARCHES)}{suffix}",
+        )
+
+
+def _reject_public_publish_on_edge(org: str) -> None:
+    """Enforce upstream-canonical semantics on an edge/satellite cluster.
+
+    A cluster that populates its public catalog from an upstream primary
+    (``POPULATE_UPSTREAM`` set) treats the public namespace (``org_slug == ""``)
+    as canonical upstream: it may only *import* public packages, never accept a
+    local public publish (which would shadow the canonical upstream package).
+    Local publishes must target an organization.  Raises 409 otherwise.
+    """
+    if POPULATE_UPSTREAM and not org:
+        raise HTTPException(
+            409,
+            "this cluster mirrors its public catalog from an upstream primary "
+            f"({POPULATE_UPSTREAM}); the public namespace is canonical upstream "
+            "and cannot be published to locally. Publish into an organization "
+            "instead (pass --org / org=...).",
+        )
+
+
+def _redact_org_storage(org):
+    """Return a copy of *org* with the member/admin-only storage figures nulled.
+
+    Storage limit + usage are visible only to org members and super-admins; the
+    API nulls them for everyone else so the SPA simply omits the storage UI.
+    """
+    return org.model_copy(update={"storage_limit_bytes": None, "storage_used_bytes": None})
+
+
 # Seconds between populate syncs.
 POPULATE_INTERVAL = int(os.environ.get("CVCPKG_POPULATE_INTERVAL", "900"))
 
@@ -218,13 +277,22 @@ POPULATE_INTERVAL = int(os.environ.get("CVCPKG_POPULATE_INTERVAL", "900"))
 # cycle; the next cycle continues where this one stopped).
 POPULATE_MAX_PER_SYNC = int(os.environ.get("CVCPKG_POPULATE_MAX_PER_SYNC", "200"))
 
-# Optional platform allowlist for populate.  Comma-separated (e.g.
-# "linux,windows"); empty means import every platform.  Lets a dev
-# cluster mirror only the platforms it actually needs instead of the
-# whole upstream catalog.
-POPULATE_PLATFORMS = {
-    p.strip() for p in os.environ.get("CVCPKG_POPULATE_PLATFORMS", "").split(",") if p.strip()
-}
+
+# Selective-mirroring policy (Phase 12): package-name allow/deny lists,
+# the platform allowlist above, and a per-package size cap.  Built from
+# the CVCPKG_POPULATE_* environment; see server/mirror_policy.py.  The
+# default per-package cap is MAX_UPLOAD_BYTES.
+def _load_mirror_policy():
+    from cvcpkg.server.mirror_policy import MirrorPolicy
+
+    return MirrorPolicy.from_env(default_max_bytes=MAX_UPLOAD_BYTES)
+
+
+# Total-size budget for the upstream-mirrored cache (Phase 12).  When the
+# populate-origin public packages exceed this, the least-downloaded ones
+# are evicted after each sync (they re-populate on demand).  0 == unbounded.
+POPULATE_MAX_MIRROR_BYTES = int(os.environ.get("CVCPKG_POPULATE_MAX_MIRROR_BYTES", "0"))
+
 
 # Registration mode: "open" (default) or "admin-gated".
 REGISTRATION_MODE = RegistrationMode(os.environ.get("CVCPKG_REGISTRATION_MODE", "open"))
@@ -249,7 +317,13 @@ class ServerState:
         require_auth_for_reads: bool = False,
     ) -> None:
         self.state_dir = state_dir
-        self.storage_uri = storage_uri or f"file://{state_dir}"
+        # Precedence: explicit param (--storage) > persisted (a prior
+        # `storage migrate` writes storage.yaml) > default (local file://).
+        # Persisting means a migrated server keeps serving from the new
+        # backend across restarts without re-passing --storage.
+        self.storage_uri = storage_uri or archive_store.load_storage_uri(
+            state_dir, f"file://{state_dir}"
+        )
         self.require_auth_for_reads = require_auth_for_reads
         self.tokens = TokenStore(state_dir)
         self.audit = AuditLog(state_dir)
@@ -306,6 +380,82 @@ def _get_state() -> ServerState:
     return _state
 
 
+class _AuditCtx:
+    """Handle yielded by :func:`_audit_txn`.
+
+    ``detail``/``target`` may be updated inside the block for audit fields
+    that are only known after the mutation runs.  Set ``skip = True`` to
+    suppress the audit entry when the block turned out to be a no-op (e.g.
+    "already cancelled" paths that still return success but changed
+    nothing).  ``session`` is the shared unit-of-work session on the DB
+    backend (None on the YAML backend); handlers rarely need it because
+    store methods join the ambient session automatically.
+    """
+
+    __slots__ = ("target", "detail", "session", "skip")
+
+    def __init__(self, target: str, detail: str) -> None:
+        self.target = target
+        self.detail = detail
+        self.session = None
+        self.skip = False
+
+
+@asynccontextmanager
+async def _audit_txn(
+    action: AuditAction,
+    actor: str,
+    target: str,
+    detail: str = "",
+) -> AsyncIterator[_AuditCtx]:
+    """Run a mutation and its audit entry as one atomic unit.
+
+    On the DB backend the block body (store mutations) and the audit
+    append share a single transaction that commits once on clean exit and
+    rolls back on any exception — so a crash can no longer leave a
+    mutation applied but unlogged.  The audit-append lock is held across
+    the whole transaction (including commit) so concurrent audited writes
+    cannot fork the hash chain.  On the YAML backend the mutation persists
+    immediately and the audit entry is written right after, preserving the
+    original behaviour.
+
+    Tradeoff: holding the append lock across the whole transaction (rather
+    than only the audit row's read-last→insert→commit) serializes audited
+    *writes* within a worker.  Narrowing the window would reintroduce a
+    chain fork under SQLite's transaction-level snapshot isolation (a
+    read-last after a lock-free mutation could miss a concurrent commit),
+    so correctness wins here.  Audited writes are low-QPS; only rare bulk
+    operations (cache GC, large DAG submits) hold it long enough to matter,
+    and reads/downloads are never audited and never blocked.
+
+    Usage::
+
+        async with _audit_txn(AuditAction.token_revoke, actor.name, name) as ac:
+            if _use_db:
+                ok = await _db_tokens.revoke(name)
+            else:
+                ok = state.tokens.revoke(name)
+            if not ok:
+                raise HTTPException(404, ...)   # rolls back, no audit row
+            ac.detail = "..."                    # optional post-mutation detail
+    """
+    ctx = _AuditCtx(target=target, detail=detail)
+    if _use_db:
+        from cvcpkg.server.db import atomic_session, audit_append_lock
+
+        async with audit_append_lock():
+            async with atomic_session() as session:
+                ctx.session = session
+                yield ctx
+                if not ctx.skip:
+                    await _db_audit.record(action, actor, ctx.target, ctx.detail)
+            # atomic_session commits here, still holding the append lock.
+    else:
+        yield ctx
+        if not ctx.skip:
+            _get_state().audit.record(action, actor, ctx.target, ctx.detail)
+
+
 # ── Chunked upload session tracking ────────────────────────────
 
 
@@ -332,6 +482,7 @@ class UploadSession:
     maintainer: str = ""
     tags: str = ""
     required_deps: str = "[]"
+    org: str = ""
     hasher: hashlib._Hash = field(default_factory=lambda: hashlib.sha256())
     bytes_received: int = 0
     total_size: int = 0  # 0 = unknown
@@ -450,8 +601,19 @@ def _extract_token(authorization: str | None = Header(None)) -> str | None:
     return None
 
 
-def require_role(*roles: TokenRole):
-    """FastAPI dependency that requires one of the given roles."""
+def require_role(*roles: TokenRole, allow_grace: bool = False):
+    """FastAPI dependency that requires one of the given roles.
+
+    By default a pre-rotation *grace* secret (one still valid only because
+    it is inside a rotation grace window) is rejected: the grace window
+    exists so an automated consumer can keep *using* the credential (i.e.
+    publishing) while the secret is swapped, NOT so it can administer
+    tokens or org membership.  Allowing a grace secret to reach a
+    control-plane endpoint would let a leaked old secret mint a fresh
+    permanent credential or membership that outlives the window —
+    defeating rotation as a leak remediation.  Data-plane publish/upload
+    endpoints opt back in with ``allow_grace=True``.
+    """
 
     async def _dep(authorization: str | None = Header(None)) -> TokenRecord:
         state = _get_state()
@@ -468,6 +630,12 @@ def require_role(*roles: TokenRole):
             raise HTTPException(
                 403,
                 f"role '{record.role.value}' not in {[r.value for r in roles]}",
+            )
+        if record.via_previous_hash and not allow_grace:
+            raise HTTPException(
+                403,
+                "the pre-rotation (grace-window) secret cannot perform this "
+                "operation; use the current secret or an admin token",
             )
         return record
 
@@ -492,14 +660,21 @@ async def optional_reader_auth(authorization: str | None = Header(None)) -> Toke
 
 
 async def optional_token(authorization: str | None = Header(None)) -> TokenRecord | None:
-    """Try to resolve a bearer token if present, but never require it."""
+    """Resolve a bearer token if present to identify the caller for visibility
+    filtering.  Never requires one UNLESS the server sets ``require_auth_for_reads``
+    — in that case a missing/invalid token is rejected, so switching read
+    endpoints from ``optional_reader_auth`` to this dependency does not silently
+    open them on auth-required deployments."""
+    state = _get_state()
     raw = _extract_token(authorization)
     if raw is None:
+        if state.require_auth_for_reads:
+            raise HTTPException(401, "this server requires authentication for reads")
         return None
-    if _use_db:
-        return await _db_tokens.verify(raw)
-    state = _get_state()
-    return state.tokens.verify(raw)
+    record = await _db_tokens.verify(raw) if _use_db else state.tokens.verify(raw)
+    if record is None and state.require_auth_for_reads:
+        raise HTTPException(401, "invalid or expired token")
+    return record
 
 
 async def _authenticate_token(raw: str) -> TokenRecord | None:
@@ -510,9 +685,86 @@ async def _authenticate_token(raw: str) -> TokenRecord | None:
     return state.tokens.verify(raw)
 
 
+def _reject_grace_secret(actor: TokenRecord) -> None:
+    """Bar a pre-rotation grace secret from control-plane operations.
+
+    Mirror of ``require_role``'s grace check for the endpoints that
+    resolve the actor manually (token self-service, rotation).
+    """
+    if actor.via_previous_hash:
+        raise HTTPException(
+            403,
+            "the pre-rotation (grace-window) secret cannot perform this "
+            "operation; use the current secret or an admin token",
+        )
+
+
+# How often (seconds) an open build-log SSE stream re-verifies its token.  The
+# stream authenticates once at request start and can then tail for the whole
+# life of a build; without re-verification a token that is later revoked,
+# expired, or rotated keeps reading the log until the client disconnects.  Re-
+# checking on this cadence bounds that exposure without hitting the token store
+# on every poll, and — because it consults the shared token store — it works
+# across workers.  Tunable via ``CVCPKG_SSE_REAUTH_INTERVAL``.
+_SSE_REAUTH_INTERVAL_SECONDS = float(os.environ.get("CVCPKG_SSE_REAUTH_INTERVAL", "30"))
+
+# How often (seconds) that stream polls the job log for new data / a terminal
+# state.  Named so the re-auth cadence and tests can reason about the loop
+# period rather than a bare literal.
+_SSE_LOG_POLL_INTERVAL_SECONDS = 2.0
+
+
+def _sse_reauth_rejection(actor: TokenRecord | None) -> str | None:
+    """Reason an open build-log stream must end, or ``None`` to keep it.
+
+    Mirrors the connect-time auth in :func:`stream_build_log` so a credential
+    that is later revoked, expired, rotated (its secret now only a grace
+    secret), or demoted below publisher cannot keep tailing the log on an
+    already-open Server-Sent-Events stream.  Org-membership changes are checked
+    separately (they need the job) via :func:`_assert_build_visible`.
+    """
+    if actor is None:
+        return "token revoked or expired"
+    if actor.via_previous_hash:
+        return "pre-rotation secret not allowed"
+    if actor.role not in (TokenRole.publisher, TokenRole.admin):
+        return "insufficient role"
+    return None
+
+
 # ── Webhook delivery engine ────────────────────────────────────
 
 _WEBHOOK_RETRY_DELAYS = [10, 60, 300]  # seconds between retries
+
+
+def _url_target_allowed(url: str) -> bool:
+    """True if *url* is an http(s) URL not pointing at an obviously-internal
+    target. Blocks SSRF to IP-literal loopback / private / link-local / reserved
+    hosts, plus ``localhost`` and the cloud-metadata hostname. DNS names are
+    allowed (resolving them at check time is environment-fragile and webhook
+    config is admin-only — attacker-controlled-domain->internal-IP is a
+    documented residual). Network-free so behaviour is deterministic."""
+    import ipaddress
+    from urllib.parse import urlparse
+
+    p = urlparse(url)
+    if p.scheme not in ("http", "https") or not p.hostname:
+        return False
+    host = p.hostname.lower().rstrip(".")
+    if host == "localhost" or host.endswith(".localhost") or host == "metadata.google.internal":
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return True  # other DNS name — allowed
+    return not (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
 
 
 async def _deliver_webhook(
@@ -529,6 +781,14 @@ async def _deliver_webhook(
 
     import httpx
 
+    if not _url_target_allowed(url):
+        logger.warning(
+            "webhook %d delivery to %s blocked (non-public / non-http target)",
+            webhook_id,
+            url,
+        )
+        await _db_webhooks.record_failure(webhook_id)
+        return False
     sig = _hm.new(secret.encode(), payload.encode(), _h.sha256).hexdigest()
     delivery_id = str(uuid.uuid4())
     headers = {
@@ -621,6 +881,31 @@ async def emit_webhook_event(
 # Maps builder_id -> WebSocket for all connected builders.
 _ws_builders: dict[int, WebSocket] = {}
 
+# How often (seconds) an open builder WebSocket re-verifies its token.  A
+# builder socket authenticates once at connect and then lives for hours; without
+# re-verification a token that is later revoked, expired, or rotated keeps full
+# job-plane access until the builder happens to disconnect.  Re-checking on this
+# cadence bounds that exposure without hitting the token store on every frame.
+_WS_REAUTH_INTERVAL_SECONDS = float(os.environ.get("CVCPKG_WS_REAUTH_INTERVAL", "30"))
+
+
+def _ws_reauth_rejection(actor: TokenRecord | None) -> tuple[int, str] | None:
+    """Decide whether a re-verified builder-socket token may keep its socket.
+
+    Returns ``(close_code, reason)`` when the live socket must be torn down, or
+    ``None`` when the token is still a valid builder credential.  Mirrors the
+    connect-time checks in :func:`builder_ws` so a credential that is later
+    revoked, expired, rotated (its secret now only a grace secret), or demoted
+    below publisher cannot outlive its validity on an already-open socket.
+    """
+    if actor is None:
+        return (4001, "token revoked or expired")
+    if actor.via_previous_hash:
+        return (4003, "pre-rotation secret not allowed")
+    if actor.role not in (TokenRole.publisher, TokenRole.admin):
+        return (4003, "insufficient role")
+    return None
+
 
 async def _ws_send(builder_id: int, msg: dict) -> bool:
     """Send a JSON message to a connected builder.  Returns True on success."""
@@ -661,25 +946,47 @@ _UNSCHEDULABLE_TTL = int(os.environ.get("CVCPKG_UNSCHEDULABLE_TTL", "1800"))
 # (_FOLLOW_READ_TIMEOUT in cli/_builds.py).
 _SSE_KEEPALIVE_SECONDS = int(os.environ.get("CVCPKG_SSE_KEEPALIVE", "15"))
 
-# How often the build-log stream re-checks the job for new output.
-_SSE_POLL_SECONDS = 2.0
 
-
-async def _build_log_events(job_id: int, logs_dir):
+async def _build_log_events(job_id: int, logs_dir, raw: str, assert_visible):
     """Yield SSE frames for a build job's log until the job is terminal.
 
     Module-level (rather than a closure inside the endpoint) so the
-    heartbeat and terminal behaviour can be driven directly in tests
-    without opening a real stream — a client tailing a live stream cannot
-    be unwound from a test without wedging it.
+    heartbeat, re-auth and terminal behaviour can be driven directly in
+    tests without opening a real stream — a client tailing a live stream
+    cannot be unwound from a test without wedging it.  ``assert_visible``
+    is the endpoint's visibility check, which closes over request state.
     """
     offset = 0
     last_send = time.monotonic()
+    last_reauth = time.monotonic()
     while True:
         info = await _db_build_jobs.get(job_id)
         if info is None:
             yield "event: error\ndata: job not found\n\n"
             return
+
+        # Re-verify the token on a cadence.  The one-shot auth at request
+        # start is not enough for a tail that can run for the whole life of a
+        # build: a credential that is later revoked, expired, rotated
+        # (grace=0), demoted, or dropped from the job's private org must lose
+        # the stream here instead of reading the log until the client happens
+        # to disconnect.  Time-gated so a chatty log does not hit the token
+        # store on every poll.
+        now = time.monotonic()
+        if now - last_reauth >= _SSE_REAUTH_INTERVAL_SECONDS:
+            fresh = await _authenticate_token(raw)
+            reason = _sse_reauth_rejection(fresh)
+            if reason is not None:
+                yield f"event: error\ndata: {reason}\n\n"
+                return
+            try:
+                await assert_visible(fresh, info)
+            except HTTPException:
+                # Membership was revoked mid-stream; mask like the
+                # connect-time check rather than confirm the job exists.
+                yield "event: error\ndata: build job not found\n\n"
+                return
+            last_reauth = now
 
         path = await _db_build_jobs.get_log_path(job_id, logs_dir=logs_dir)
         if path is not None:
@@ -712,13 +1019,56 @@ async def _build_log_events(job_id: int, logs_dir):
             yield ": keepalive\n\n"
             last_send = time.monotonic()
 
-        await asyncio.sleep(_SSE_POLL_SECONDS)
+        await asyncio.sleep(_SSE_LOG_POLL_INTERVAL_SECONDS)
 
 
 # Log retention: 0 means disabled (no automatic GC)
 _LOG_RETENTION_DAYS = int(os.environ.get("CVCPKG_LOG_RETENTION_DAYS", "0"))
 # How often the log retention GC runs (seconds, default 1 hour)
 _LOG_GC_INTERVAL = int(os.environ.get("CVCPKG_LOG_GC_INTERVAL", "3600"))
+
+# Yank retention: a yanked package's row AND archive are permanently purged once
+# it has been yanked this many days.  0 disables (rows with yanked_at IS NULL
+# are exempt regardless).  Default 0 -- this is the first GC that destroys
+# ARTIFACTS rather than logs, and cvcpkg's other retention GCs also ship
+# disabled; 365 is the documented, recommended value, to be made the default in
+# a later release once the audit trail has been observed on a real deployment.
+_YANK_RETENTION_DAYS = int(os.environ.get("CVCPKG_YANK_RETENTION_DAYS", "0"))
+# How often the yank retention GC runs (seconds, default 6 hours)
+_YANK_GC_INTERVAL = int(os.environ.get("CVCPKG_YANK_GC_INTERVAL", "21600"))
+
+
+def _choose_builder(job, available):
+    """Pick a builder for *job*, or ``None``.
+
+    Enforces **org isolation** (a job runs only on a builder in the same org
+    namespace), matches platform/arch or a cross-platform capability, respects
+    per-builder capacity, and prefers affinity builders as a soft preference.
+    """
+    candidates = []
+    for b in available:
+        if b.current_jobs >= b.max_jobs:
+            continue
+        if b.org_slug != job.org_slug:
+            # Public jobs run on public builders; an org's (private) jobs only
+            # on that org's builders -- a private build never lands on a public
+            # builder, and a private builder never runs someone else's work.
+            continue
+        if b.platform == job.platform and b.arch == job.arch:
+            candidates.append(b)
+            continue
+        for cp in b.capabilities.get("cross_platforms", []):
+            if isinstance(cp, dict):
+                if cp.get("platform") == job.platform and cp.get("arch") == job.arch:
+                    candidates.append(b)
+                    break
+            elif cp == job.platform:  # legacy platform-only cross target
+                candidates.append(b)
+                break
+    if not candidates:
+        return None
+    affinity = [b for b in candidates if b.prefer_affinity]
+    return affinity[0] if affinity else candidates[0]
 
 
 async def _build_scheduler_loop() -> None:
@@ -837,29 +1187,9 @@ async def _build_scheduler_loop() -> None:
                     available.append(b)
 
             for job in ready_jobs:
-                # Find matching builder (platform + arch, or cross-platform)
-                candidates = []
-                for b in available:
-                    if b.current_jobs >= b.max_jobs:
-                        continue
-                    if b.platform == job.platform and b.arch == job.arch:
-                        candidates.append(b)
-                    else:
-                        for cp in b.capabilities.get("cross_platforms", []):
-                            if isinstance(cp, dict):
-                                if cp["platform"] == job.platform and cp["arch"] == job.arch:
-                                    candidates.append(b)
-                                    break
-                            elif cp == job.platform:
-                                # Legacy cross_targets compat (platform-only)
-                                candidates.append(b)
-                                break
-                if not candidates:
+                chosen = _choose_builder(job, available)
+                if chosen is None:
                     continue
-
-                # Prefer affinity builders (soft preference)
-                affinity = [b for b in candidates if b.prefer_affinity]
-                chosen = affinity[0] if affinity else candidates[0]
 
                 await _db_build_jobs.dispatch(job.id, chosen.id)
                 # Notify builder via WebSocket if connected
@@ -903,6 +1233,52 @@ async def _log_retention_gc_loop() -> None:
                 logger.info("log retention GC: purged %d old logs", purged)
         except Exception:
             logger.exception("log retention GC error")
+
+
+async def _yank_retention_gc_loop() -> None:
+    """Permanently purge packages yanked longer than the retention window.
+
+    Unlike the log GC this destroys ARTIFACTS: the DB row and the archive
+    bytes.  It is registered only when _YANK_RETENTION_DAYS > 0 and only off the
+    non-mirror scheduler block -- a mirror must never purge, since it may hold
+    the only surviving copy of a bundle an upstream retired (see the registration
+    guard).  Sleep-first so a restart storm cannot trigger a purge, and each
+    batch is written through _audit_txn so a deletion can never land unlogged.
+    """
+    import asyncio
+
+    while True:
+        await asyncio.sleep(_YANK_GC_INTERVAL)
+        if _YANK_RETENTION_DAYS <= 0:
+            continue
+        if not _use_db or _db_packages is None or _state is None:
+            continue
+        try:
+            target = f"older_than={_YANK_RETENTION_DAYS}d"
+            async with _audit_txn(AuditAction.nuke, "retention-gc", target) as ac:
+                purged = await _db_packages.purge_yanked(
+                    older_than_days=_YANK_RETENTION_DAYS,
+                    storage_uri=_state.storage_uri,
+                )
+                # Decrement each affected org's storage counter exactly once
+                # (yank never decremented, so purge is the sole adjustment) --
+                # same shape as the bulk-delete handler.
+                org_deltas: dict[str, int] = {}
+                for d in purged:
+                    slug = d.get("org_slug", "")
+                    if slug and _db_orgs is not None:
+                        org_deltas[slug] = org_deltas.get(slug, 0) + d["size_bytes"]
+                for slug, delta in org_deltas.items():
+                    await _db_orgs.update_storage_used(slug, -delta)
+                ac.detail = f"purged={len(purged)} {target}"
+            if purged:
+                logger.info(
+                    "yank retention GC: purged %d bundle(s) yanked over %d days ago",
+                    len(purged),
+                    _YANK_RETENTION_DAYS,
+                )
+        except Exception:
+            logger.exception("yank retention GC error")
 
 
 # ── Mirror background tasks ─────────────────────────────────────
@@ -1058,6 +1434,8 @@ _populate_stats: dict = {
     "last_imported": 0,
     "imported_total": 0,
     "last_error": "",
+    "last_evicted": 0,
+    "evicted_total": 0,
 }
 
 
@@ -1086,6 +1464,7 @@ async def _populate_sync_once() -> int:
 
     state = _get_state()
     upstream = POPULATE_UPSTREAM.rstrip("/")
+    mirror_policy = _load_mirror_policy()
     headers: dict[str, str] = {}
     if POPULATE_UPSTREAM_TOKEN:
         headers["Authorization"] = f"Bearer {POPULATE_UPSTREAM_TOKEN}"
@@ -1103,6 +1482,11 @@ async def _populate_sync_once() -> int:
                 include_yanked=True, limit=1000, offset=offset
             )
             for p in pkgs:
+                # Org packages are a separate namespace (the package unique key
+                # includes org_slug); they must never shadow a public upstream
+                # package in the populate diff, so only public packages count.
+                if p.org:
+                    continue
                 local.add((p.name, p.version, p.platform, p.arch, p.build_type, p.link))
             offset += len(pkgs)
             if not pkgs or offset >= total:
@@ -1121,21 +1505,22 @@ async def _populate_sync_once() -> int:
             )
             if not all(key) or key in local:
                 continue
-            if POPULATE_PLATFORMS and b.get("platform") not in POPULATE_PLATFORMS:
-                continue  # platform not in the allowlist for this mirror
             if b.get("yanked") or not b.get("archive_url"):
                 continue  # yanked upstream / placeholder without artifacts
             if b.get("org"):
                 continue  # only official/public packages are populated
             size = int(b.get("size_bytes", 0) or 0)
-            if size > MAX_UPLOAD_BYTES:
-                logger.warning(
-                    "populate: skipping %s==%s (%s/%s): %d bytes exceeds MAX_UPLOAD_BYTES",
+            # Selective-mirroring policy (Phase 12): name allow/deny lists,
+            # platform allowlist, and per-package size cap.
+            decision = mirror_policy.decide(name=key[0], platform=key[2], size_bytes=size)
+            if not decision.mirror:
+                logger.debug(
+                    "populate: skipping %s==%s (%s/%s): %s",
                     key[0],
                     key[1],
                     key[2],
                     key[3],
-                    size,
+                    decision.reason,
                 )
                 continue
             if imported >= POPULATE_MAX_PER_SYNC:
@@ -1233,6 +1618,92 @@ async def _populate_sync_once() -> int:
         return imported
 
 
+async def _enforce_mirror_budget() -> int:
+    """Evict least-downloaded mirrored packages to fit the size budget.
+
+    Only **populate-origin public** packages (``published_by`` starts with
+    ``populate:`` and no org) are eligible — org-local and locally-published
+    packages are never evicted.  Usage comes from the Phase 2 download
+    analytics (per package name); the least-downloaded packages are removed
+    (archive + DB row) until the mirror is under
+    ``POPULATE_MAX_MIRROR_BYTES``.  An evicted package simply re-populates on
+    the next sync if it is still upstream and wanted.  Returns the count
+    evicted.
+    """
+    from cvcpkg.server.mirror_policy import EvictionCandidate, select_evictions
+
+    budget = POPULATE_MAX_MIRROR_BYTES
+    if budget <= 0 or not _use_db or _db_packages is None:
+        return 0
+
+    state = _get_state()
+
+    # Enumerate populate-origin public packages, grouped at delete
+    # granularity (name, version, platform, link — arch/build_type variants
+    # share an archive-delete).  Sum sizes per group; use the package name's
+    # download count as the usage signal.
+    groups: dict[tuple[str, str, str, str], dict] = {}
+    dl_cache: dict[str, int] = {}
+    offset = 0
+    while True:
+        pkgs, total = await _db_packages.get_bundles(include_yanked=True, limit=1000, offset=offset)
+        for p in pkgs:
+            if p.org or not (p.published_by or "").startswith("populate:"):
+                continue
+            gkey = (p.name, p.version, p.platform, p.link)
+            if p.name not in dl_cache:
+                dl_cache[p.name] = (
+                    await _db_downloads.get_total_downloads(p.name)
+                    if _db_downloads is not None
+                    else 0
+                )
+            g = groups.setdefault(
+                gkey, {"size": 0, "downloads": dl_cache[p.name], "archives": set()}
+            )
+            g["size"] += int(p.size_bytes or 0)
+            if p.archive_url:
+                g["archives"].add(p.archive_url.rsplit("/", 1)[-1])
+        offset += len(pkgs)
+        if not pkgs or offset >= total:
+            break
+
+    if not groups:
+        return 0
+
+    candidates = [
+        EvictionCandidate(key=gkey, size_bytes=g["size"], downloads=g["downloads"])
+        for gkey, g in groups.items()
+    ]
+    to_evict = select_evictions(candidates, budget)
+
+    evicted = 0
+    for cand in to_evict:
+        name, version, platform, link = cand.key
+        await _db_packages.delete(name, version, platform=platform, link=link)
+        for fname in groups[cand.key]["archives"]:
+            (state.archives_dir() / fname).unlink(missing_ok=True)
+        if _db_audit is not None:
+            await _db_audit.record(
+                action=AuditAction.delete,
+                actor="mirror-evict",
+                target=f"{name}=={version}",
+                detail=(
+                    f"platform={platform} link={link} evicted "
+                    f"({cand.size_bytes} bytes, {cand.downloads} downloads) "
+                    f"to fit mirror budget {budget}"
+                ),
+            )
+        evicted += 1
+
+    if evicted:
+        logger.info(
+            "mirror budget: evicted %d least-used populate package group(s) " "to fit %d bytes",
+            evicted,
+            budget,
+        )
+    return evicted
+
+
 async def _populate_sync_loop() -> None:
     """Background task: keep importing missing packages from upstream."""
     import asyncio
@@ -1247,6 +1718,10 @@ async def _populate_sync_loop() -> None:
             _populate_stats["last_error"] = ""
             if n:
                 logger.info("populate sync: imported %d package(s) from %s", n, POPULATE_UPSTREAM)
+            # Enforce the mirror size budget after importing (Phase 12).
+            evicted = await _enforce_mirror_budget()
+            _populate_stats["last_evicted"] = evicted
+            _populate_stats["evicted_total"] = _populate_stats.get("evicted_total", 0) + evicted
         except Exception as exc:
             _populate_stats["last_error"] = str(exc)
             logger.exception("populate sync failed")
@@ -1352,6 +1827,11 @@ def create_app(
                 bg_tasks.append(asyncio.create_task(_build_scheduler_loop()))
                 if _LOG_RETENTION_DAYS > 0:
                     bg_tasks.append(asyncio.create_task(_log_retention_gc_loop()))
+                # Non-mirror only (the enclosing guard): a mirror may hold the
+                # last copy of a bundle its upstream retired, so it must never
+                # auto-purge.
+                if _YANK_RETENTION_DAYS > 0:
+                    bg_tasks.append(asyncio.create_task(_yank_retention_gc_loop()))
                 if POPULATE_UPSTREAM:
                     bg_tasks.append(asyncio.create_task(_populate_sync_loop()))
             if MIRROR_MODE and MIRROR_UPSTREAM:
@@ -1451,6 +1931,27 @@ def create_app(
         from cvcpkg.server.landing import landing_html
 
         return HTMLResponse(landing_html())
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    @app.get("/assets/cyberpc-angel-gears.png", include_in_schema=False)
+    async def brand_logo():
+        """Serve the site icon (favicon + social image).
+
+        Defaults to the bundled CyberPC Angel, LLC gears logo, self-hosted
+        so the brand mark needs no external CDN.  Operators can override it
+        with ``CVCPKG_SITE_LOGO``.  Cached — the asset is immutable for the
+        lifetime of the process.
+        """
+        from cvcpkg.server.landing import brand_logo_asset
+
+        data, media_type = brand_logo_asset()
+        if not data:
+            raise HTTPException(status_code=404, detail="logo asset unavailable")
+        return Response(
+            content=data,
+            media_type=media_type,
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
 
     @app.get("/package/{name}", response_class=HTMLResponse, include_in_schema=False)
     async def package_detail_page(
@@ -1591,7 +2092,7 @@ def create_app(
         from cvcpkg.server import admin_ui
 
         if not _has_admin_session(request):
-            return HTMLResponse(admin_ui.login_html())
+            return HTMLResponse(admin_ui.login_html(oidc_enabled=_oidc_enabled()))
         stats = await _gather_admin_stats()
         builders: list = []
         if _use_db and _db_builders is not None:
@@ -1603,7 +2104,7 @@ def create_app(
         from cvcpkg.server import admin_ui
 
         if not _has_admin_session(request):
-            return HTMLResponse(admin_ui.login_html())
+            return HTMLResponse(admin_ui.login_html(oidc_enabled=_oidc_enabled()))
         tags: list = []
         pkgs: list | None = None
         if _use_db and _db_packages is not None:
@@ -1758,6 +2259,7 @@ def create_app(
     ):
         """Return forward and reverse dependency maps derived from recipes."""
         from cvcpkg.builder import RecipeError, find_recipes_dir, list_recipes
+        from cvcpkg.refs import parse_dep_ref
 
         try:
             recipes = list_recipes(find_recipes_dir())
@@ -1775,12 +2277,14 @@ def create_app(
             raw_deps = depends_block.get("runtime", depends_block.get("build", []))
             names: list[str] = []
             for d in raw_deps:
-                if isinstance(d, str):
-                    names.append(d)
-                elif isinstance(d, dict):
-                    dep_org = d.get("org", "")
-                    dep_name = d["name"]
-                    names.append(f"{dep_org}/{dep_name}" if dep_org else dep_name)
+                try:
+                    ref = parse_dep_ref(d)
+                except ValueError:
+                    continue
+                key = ref.qualified_name
+                if ref.server:
+                    key = f"cvc://{ref.server}/{key}"
+                names.append(key)
             forward[r.name] = names
             meta[r.name] = {
                 "description": recipe_block.get("description", ""),
@@ -1864,7 +2368,7 @@ def create_app(
         include_yanked: bool = Query(False, description="Include yanked packages in results"),
         limit: int = Query(100, ge=1, le=1000),
         offset: int = Query(0, ge=0),
-        _auth: None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         if _use_db:
             # 'live' is a virtual tag meaning release_tag == ""
@@ -1882,6 +2386,7 @@ def create_app(
                 build_type=build_type,
                 link=link,
                 org_slug=org,
+                caller_token_name=(caller.name if caller else ""),
             )
             if release == "live":
                 # get_bundles with release="" returns all — filter to empty tag
@@ -1964,7 +2469,7 @@ def create_app(
             alias="facets",
             description="Compute facet buckets over the filtered result set.",
         ),
-        _auth: None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         """Search the package catalog with optional facets.
 
@@ -1997,6 +2502,7 @@ def create_app(
                 build_type=build_type,
                 link=link,
                 org_slug=org,
+                caller_token_name=(caller.name if caller else ""),
             )
             if release == "live":
                 packages = [p for p in packages if not p.release_tag]
@@ -2018,6 +2524,7 @@ def create_app(
                     build_type=build_type,
                     link=link,
                     org_slug=org,
+                    caller_token_name=(caller.name if caller else ""),
                 )
                 more = _apply_tag_filter(more)
                 total = len(more)
@@ -2042,6 +2549,7 @@ def create_app(
                     build_type=build_type,
                     link=link,
                     org_slug=org,
+                    caller_token_name=(caller.name if caller else ""),
                 )
                 if release == "live" or tag:
                     # Facets from get_search_facets don't know about 'live'
@@ -2175,11 +2683,14 @@ def create_app(
         name: str,
         org: str = Query("", description="Filter by organization slug"),
         include_yanked: bool = Query(False, description="Include yanked packages in results"),
-        _auth: None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         if _use_db:
             packages, total = await _db_packages.get_bundles(
-                name=name, org_slug=org, include_yanked=include_yanked
+                name=name,
+                org_slug=org,
+                include_yanked=include_yanked,
+                caller_token_name=(caller.name if caller else ""),
             )
             return PackageListResponse(total=total, packages=packages)
         state = _get_state()
@@ -2328,6 +2839,7 @@ def create_app(
                 include_yanked=False,
                 limit=limit,
                 offset=offset,
+                caller_token_name=(None if actor.role == TokenRole.admin else actor.name),
             )
             # get_bundles with release="" returns ALL; filter to empty release_tag
             packages = [p for p in packages if not p.release_tag]
@@ -2380,29 +2892,29 @@ def create_app(
             raise HTTPException(501, "Bulk cache deletion requires database backend")
 
         deleted: list[dict] = []
-        if older_than:
-            secs = _parse_duration(older_than)
-            deleted = await _db_packages.gc_by_age(secs)
-        else:
-            # Delete all non-release packages (max_storage_bytes=0 evicts
-            # everything down to zero).
-            deleted = await _db_packages.gc_by_storage(0)
+        async with _audit_txn(
+            AuditAction.cache_gc,
+            actor.name,
+            "cache",
+        ) as ac:
+            if older_than:
+                secs = _parse_duration(older_than)
+                deleted = await _db_packages.gc_by_age(secs)
+            else:
+                # Delete all non-release packages (max_storage_bytes=0 evicts
+                # everything down to zero).
+                deleted = await _db_packages.gc_by_storage(0)
 
-        # Update org storage counters.
-        org_deltas: dict[str, int] = {}
-        for d in deleted:
-            slug = d.get("org_slug", "")
-            if slug and _db_orgs is not None:
-                org_deltas[slug] = org_deltas.get(slug, 0) + d["size_bytes"]
-        for slug, delta in org_deltas.items():
-            await _db_orgs.update_storage_used(slug, -delta)
+            # Update org storage counters.
+            org_deltas: dict[str, int] = {}
+            for d in deleted:
+                slug = d.get("org_slug", "")
+                if slug and _db_orgs is not None:
+                    org_deltas[slug] = org_deltas.get(slug, 0) + d["size_bytes"]
+            for slug, delta in org_deltas.items():
+                await _db_orgs.update_storage_used(slug, -delta)
 
-        await _db_audit.record(
-            action=AuditAction.cache_gc,
-            actor=actor.name,
-            target="cache",
-            detail=f"bulk_delete deleted={len(deleted)} older_than={older_than!r}",
-        )
+            ac.detail = f"bulk_delete deleted={len(deleted)} older_than={older_than!r}"
         return {"deleted_count": len(deleted), "deleted": deleted}
 
     @app.get("/v1/cache/stats", tags=["cache"])
@@ -2420,7 +2932,16 @@ def create_app(
                 "total_size_bytes": total_bytes,
                 "orgs": {},
             }
-        return await _db_packages.cache_stats()
+        result = await _db_packages.cache_stats()
+        # Redact the per-org breakdown for non-admins: the full map would expose
+        # every org's name + storage, including private orgs. Members keep their
+        # own orgs; admins see all.
+        if actor.role != TokenRole.admin and isinstance(result, dict) and _db_orgs is not None:
+            member = await _db_orgs.member_org_slugs(actor.name)
+            orgs = result.get("orgs")
+            if isinstance(orgs, dict):
+                result = {**result, "orgs": {k: v for k, v in orgs.items() if k in member}}
+        return result
 
     @app.post("/v1/cache/gc", tags=["cache"])
     async def cache_gc(
@@ -2441,46 +2962,46 @@ def create_app(
         body = await request.json()
         deleted: list[dict] = []
 
-        if "max_age_seconds" in body:
-            age = float(body["max_age_seconds"])
-            if age <= 0:
-                raise HTTPException(422, "max_age_seconds must be > 0")
-            deleted.extend(await _db_packages.gc_by_age(age))
+        async with _audit_txn(
+            AuditAction.cache_gc,
+            actor.name,
+            "cache",
+        ) as ac:
+            if "max_age_seconds" in body:
+                age = float(body["max_age_seconds"])
+                if age <= 0:
+                    raise HTTPException(422, "max_age_seconds must be > 0")
+                deleted.extend(await _db_packages.gc_by_age(age))
 
-        if "max_storage_bytes" in body:
-            cap = int(body["max_storage_bytes"])
-            if cap < 0:
-                raise HTTPException(422, "max_storage_bytes must be >= 0")
-            deleted.extend(await _db_packages.gc_by_storage(cap))
+            if "max_storage_bytes" in body:
+                cap = int(body["max_storage_bytes"])
+                if cap < 0:
+                    raise HTTPException(422, "max_storage_bytes must be >= 0")
+                deleted.extend(await _db_packages.gc_by_storage(cap))
 
-        if "valid_chain_hashes" in body:
-            hashes = body["valid_chain_hashes"]
-            if not isinstance(hashes, list):
-                raise HTTPException(422, "valid_chain_hashes must be a list of strings")
-            deleted.extend(await _db_packages.gc_by_staleness(set(hashes)))
+            if "valid_chain_hashes" in body:
+                hashes = body["valid_chain_hashes"]
+                if not isinstance(hashes, list):
+                    raise HTTPException(422, "valid_chain_hashes must be a list of strings")
+                deleted.extend(await _db_packages.gc_by_staleness(set(hashes)))
 
-        if not body or not any(
-            k in body for k in ("max_age_seconds", "max_storage_bytes", "valid_chain_hashes")
-        ):
-            raise HTTPException(
-                422, "specify max_age_seconds, max_storage_bytes, and/or valid_chain_hashes"
-            )
+            if not body or not any(
+                k in body for k in ("max_age_seconds", "max_storage_bytes", "valid_chain_hashes")
+            ):
+                raise HTTPException(
+                    422, "specify max_age_seconds, max_storage_bytes, and/or valid_chain_hashes"
+                )
 
-        # Update org storage counters for deleted packages.
-        org_deltas: dict[str, int] = {}
-        for d in deleted:
-            org_slug = d.get("org_slug", "")
-            if org_slug and _db_orgs is not None:
-                org_deltas[org_slug] = org_deltas.get(org_slug, 0) + d["size_bytes"]
-        for org_slug, delta in org_deltas.items():
-            await _db_orgs.update_storage_used(org_slug, -delta)
+            # Update org storage counters for deleted packages.
+            org_deltas: dict[str, int] = {}
+            for d in deleted:
+                org_slug = d.get("org_slug", "")
+                if org_slug and _db_orgs is not None:
+                    org_deltas[org_slug] = org_deltas.get(org_slug, 0) + d["size_bytes"]
+            for org_slug, delta in org_deltas.items():
+                await _db_orgs.update_storage_used(org_slug, -delta)
 
-        await _db_audit.record(
-            action=AuditAction.cache_gc,
-            actor=actor.name,
-            target="cache",
-            detail=f"deleted={len(deleted)} params={body}",
-        )
+            ac.detail = f"deleted={len(deleted)} params={body}"
         return {
             "deleted_count": len(deleted),
             "deleted": deleted,
@@ -2488,36 +3009,73 @@ def create_app(
 
     # ── Download (read) ─────────────────────────────────────
 
+    async def _archive_is_visible(caller: TokenRecord | None, safe_name: str) -> bool:
+        """True if *caller* may download the archive *safe_name*. Private-org
+        archives require admin or membership; public/base archives are open.
+        Resolves via a direct, unbounded, yank-inclusive query (no truncation)."""
+        if not (_use_db and _db_packages is not None and _db_orgs is not None):
+            return True
+        org = await _db_packages.get_archive_org(safe_name)
+        if not org:  # None (no package row) or "" (public namespace)
+            return True
+        org_info = await _db_orgs.get(org)
+        if org_info is None or not org_info.is_private:
+            return True
+        return caller is not None and (
+            caller.role == TokenRole.admin or await _db_orgs.is_member(org, caller.name)
+        )
+
     @app.head("/v1/download/{filename}", tags=["packages"])
     async def head_download_archive(
         filename: str,
-        _auth: None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         """HEAD support so clients can check size before downloading."""
         state = _get_state()
         safe_name = Path(filename).name
-        archive_path = state.archives_dir() / safe_name
-        if not archive_path.is_file():
+        if not archive_store.exists(state.storage_uri, safe_name):
             raise HTTPException(404, f"archive not found: {safe_name}")
-        return Response(
-            status_code=200,
-            headers={
-                "Content-Length": str(archive_path.stat().st_size),
-                "Content-Type": "application/octet-stream",
-            },
-        )
+        if not await _archive_is_visible(caller, safe_name):
+            raise HTTPException(404, f"archive not found: {safe_name}")
+        headers = {"Content-Type": "application/octet-stream"}
+        archive_size = archive_store.size(state.storage_uri, safe_name)
+        if archive_size >= 0:
+            headers["Content-Length"] = str(archive_size)
+        return Response(status_code=200, headers=headers)
 
     @app.get("/v1/download/{filename}", tags=["packages"])
     async def download_archive(
         filename: str,
         request: Request,
-        _auth: None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         state = _get_state()
         # Sanitise filename to prevent path traversal
         safe_name = Path(filename).name
-        archive_path = state.archives_dir() / safe_name
-        if not archive_path.is_file():
+        # Resolve the archive through the configured storage backend: a local
+        # file for file:// (served straight from disk), or a streamed object
+        # for a remote backend (s3://…) after a storage migration.
+        if not archive_store.exists(state.storage_uri, safe_name):
+            # A nuked/purged archive gets 410 Gone (with why + when), not a bare
+            # 404 -- a consumer that pinned it should learn it was retired, not
+            # that it never existed.
+            if _use_db and _db_packages is not None:
+                ts = await _db_packages.get_tombstone_by_filename(safe_name)
+                if ts is not None:
+                    when = str(ts.get("nuked_at", ""))[:10]
+                    raise HTTPException(
+                        410,
+                        f"{ts['name']}=={ts['version']} was nuked "
+                        f"({ts['reason']}) on {when}; the archive is gone.",
+                    )
+            raise HTTPException(404, f"archive not found: {safe_name}")
+        archive_size = archive_store.size(state.storage_uri, safe_name)
+
+        # Enforce org visibility on the archive: a PRIVATE org's archive is
+        # downloadable only by a member (or admin). Resolve the archive to its
+        # package row, then gate on membership. 404 (not 403) so the endpoint
+        # never confirms a private archive's existence to an outsider.
+        if not await _archive_is_visible(caller, safe_name):
             raise HTTPException(404, f"archive not found: {safe_name}")
 
         # Record download event for analytics
@@ -2569,21 +3127,21 @@ def create_app(
                 client_ip_hash=ip_hash,
                 user_agent=user_agent,
                 cvcpkg_version=cvcpkg_version,
-                bytes_sent=archive_path.stat().st_size,
+                bytes_sent=archive_size,
             )
 
         def _stream():
-            with open(archive_path, "rb") as f:
+            with archive_store.open_stream(state.storage_uri, safe_name) as f:
                 while chunk := f.read(1 << 16):
                     yield chunk
 
+        headers = {"Content-Disposition": f'attachment; filename="{safe_name}"'}
+        if archive_size >= 0:
+            headers["Content-Length"] = str(archive_size)
         return StreamingResponse(
             _stream(),
             media_type="application/octet-stream",
-            headers={
-                "Content-Disposition": f'attachment; filename="{safe_name}"',
-                "Content-Length": str(archive_path.stat().st_size),
-            },
+            headers=headers,
         )
 
     # ── Publish (write) ─────────────────────────────────────
@@ -2623,13 +3181,17 @@ def create_app(
             "[]",
             description="JSON-encoded list of runtime dependency dicts [{name, version}, ...]",
         ),
-        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+        actor: TokenRecord = Depends(
+            require_role(TokenRole.publisher, TokenRole.admin, allow_grace=True)
+        ),
     ):
         if MIRROR_MODE:
             raise HTTPException(
                 403,
                 "this server is running in mirror mode and does not accept publishes",
             )
+        _reject_public_publish_on_edge(org)
+        _reject_noncanonical_platform_arch(platform, arch)
         _check_rate_limit(request)
         state = _get_state()
 
@@ -2660,7 +3222,8 @@ def create_app(
                 raise HTTPException(
                     409,
                     f"{name}=={version} ({platform}/{arch}/{build_type}/{link}) already published. "
-                    "Yank the existing version first, or use a new revision.",
+                    "Publish a new revision, or ask an admin to nuke the existing bundle "
+                    "first.",
                 )
         else:
             for b in state.index.get("bundles", []):
@@ -2676,7 +3239,8 @@ def create_app(
                         409,
                         f"{name}=={version} ({platform}/{arch}/{build_type}"
                         f"/{link}) already published. "
-                        "Yank the existing version first, or use a new revision.",
+                        "Publish a new revision, or ask an admin to nuke the "
+                        "existing bundle first.",
                     )
 
         # Read and hash the upload — stream to disk to avoid holding
@@ -2688,17 +3252,14 @@ def create_app(
             c if c in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-+" else "_"
             for c in safe_filename
         )
-        dest = state.archives_dir() / safe_filename
-
-        # Write to a temp file in the same directory.  The temp is renamed
-        # onto the final destination only AFTER the catalog row is
-        # committed: the DB unique index (or the file-backed dup check) is
-        # the arbiter between racing duplicate publishes, and the loser
-        # must never touch the destination file.  Historically the rename
-        # happened before add_package(), so a racing duplicate overwrote
-        # the winner's archive and then 409'd — leaving the stored bytes
-        # different from the row's sha256/size (7 catalog variants were
-        # corrupted this way in July 2026).
+        # Write to a temp file first.  It is committed to the storage backend
+        # (archive_store.store) only AFTER the catalog row is written: the DB
+        # unique index (or the file-backed dup check) is the arbiter between
+        # racing duplicate publishes, and the loser must never touch the
+        # stored archive.  Historically the rename happened before
+        # add_package(), so a racing duplicate overwrote the winner's archive
+        # and then 409'd — leaving the stored bytes different from the row's
+        # sha256/size (7 catalog variants were corrupted this way in July 2026).
         fd, tmp_path_str = tempfile.mkstemp(dir=state.archives_dir(), suffix=".upload")
         tmp_path = Path(tmp_path_str)
         try:
@@ -2741,57 +3302,60 @@ def create_app(
                     tmp_path.unlink(missing_ok=True)
                     raise HTTPException(413, f"organization '{org}' storage limit exceeded")
 
-            try:
-                await _db_packages.add_package(
-                    name=name,
-                    version=version,
-                    platform=platform,
-                    arch=arch,
-                    build_type=build_type,
-                    link=link,
-                    sha256=sha256,
-                    size_bytes=size_bytes,
-                    archive_url=archive_url,
-                    signature=signature,
-                    key_fingerprint=key_fingerprint,
-                    release_tag=release_tag,
-                    recipe_version=recipe_version,
-                    description=description,
-                    homepage=homepage,
-                    pkg_license=pkg_license,
-                    maintainer=maintainer,
-                    tags=pkg_tags,
-                    org_slug=org,
-                    published_by=actor.name,
-                    required_deps=required_deps,
-                )
-            except ValueError as exc:
-                # Lost the race to a concurrent publish of the same
-                # variant — discard our temp; the winner's archive stays.
-                tmp_path.unlink(missing_ok=True)
-                raise HTTPException(409, str(exc)) from exc
-
-            # Row committed — this request owns the variant; materialize
-            # the archive at its final name.
-            # Path.replace, not rename: on Windows rename() raises
-            # FileExistsError if dest exists (e.g. republish after delete);
-            # replace() has POSIX overwrite semantics on every platform.
-            tmp_path.replace(dest)
-
-            # Track org storage usage
-            if org and _db_orgs is not None:
-                await _db_orgs.update_storage_used(org, size_bytes)
-
-            await _db_audit.record(
-                action=AuditAction.publish,
-                actor=actor.name,
-                target=f"{name}=={version}",
-                detail=(
+            # Catalog row + org-storage stat + audit commit as one unit of
+            # work.  The archive itself is a non-transactional side effect
+            # and is materialized only AFTER that commit, so the DB row
+            # stays the sole arbiter between racing duplicate publishes and
+            # the loser never overwrites the winner's stored archive.
+            async with _audit_txn(
+                AuditAction.publish,
+                actor.name,
+                f"{name}=={version}",
+                (
                     f"platform={platform} arch={arch}"
                     f" sha256={sha256} release={release_tag or 'live'}"
                     f" org={org or 'public'}"
                 ),
-            )
+            ):
+                try:
+                    await _db_packages.add_package(
+                        name=name,
+                        version=version,
+                        platform=platform,
+                        arch=arch,
+                        build_type=build_type,
+                        link=link,
+                        sha256=sha256,
+                        size_bytes=size_bytes,
+                        archive_url=archive_url,
+                        signature=signature,
+                        key_fingerprint=key_fingerprint,
+                        release_tag=release_tag,
+                        recipe_version=recipe_version,
+                        description=description,
+                        homepage=homepage,
+                        pkg_license=pkg_license,
+                        maintainer=maintainer,
+                        tags=pkg_tags,
+                        org_slug=org,
+                        published_by=actor.name,
+                        required_deps=required_deps,
+                    )
+                except ValueError as exc:
+                    # Lost the race to a concurrent publish of the same
+                    # variant — roll back, discard our temp; winner's
+                    # archive stays.
+                    tmp_path.unlink(missing_ok=True)
+                    raise HTTPException(409, str(exc)) from exc
+
+                # Track org storage usage in the same transaction.
+                if org and _db_orgs is not None:
+                    await _db_orgs.update_storage_used(org, size_bytes)
+
+            # Row committed — this request owns the variant; materialize the
+            # archive in the configured storage backend (a local move for
+            # file://, an upload for a remote backend such as s3://).
+            archive_store.store(state.storage_uri, safe_filename, tmp_path)
         else:
             bundle = {
                 "name": name,
@@ -2813,22 +3377,23 @@ def create_app(
                 "org": org,
                 "required_deps": json.loads(required_deps),
             }
-            state.index.setdefault("bundles", []).append(bundle)
-            state.save_index()
-            # Index updated — materialize the archive at its final name.
-            # Path.replace, not rename: on Windows rename() raises
-            # FileExistsError if dest exists (e.g. republish after delete);
-            # replace() has POSIX overwrite semantics on every platform.
-            tmp_path.replace(dest)
-            state.audit.record(
-                action=AuditAction.publish,
-                actor=actor.name,
-                target=f"{name}=={version}",
-                detail=(
+            async with _audit_txn(
+                AuditAction.publish,
+                actor.name,
+                f"{name}=={version}",
+                (
                     f"platform={platform} arch={arch}"
                     f" sha256={sha256} release={release_tag or 'live'}"
                 ),
-            )
+            ):
+                state.index.setdefault("bundles", []).append(bundle)
+                state.save_index()
+                # YAML has no transaction, so materialize the archive INSIDE
+                # the block: a store failure must skip the audit rather than
+                # leave a publish entry claiming success with no archive
+                # (the audit fires at block exit). The DB path stores after
+                # commit because there the row is the race arbiter.
+                archive_store.store(state.storage_uri, safe_filename, tmp_path)
 
         _metrics["publishes_total"] += 1
         _metrics["bytes_uploaded_total"] += size_bytes
@@ -2874,7 +3439,13 @@ def create_app(
         maintainer: str = Query(""),
         pkg_tags: str = Query("", alias="tags"),
         required_deps: str = Query("[]", description="JSON-encoded runtime deps"),
-        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+        org: str = Query(
+            "",
+            description="Organization slug. Empty for official/public packages.",
+        ),
+        actor: TokenRecord = Depends(
+            require_role(TokenRole.publisher, TokenRole.admin, allow_grace=True)
+        ),
     ):
         """Initialise a chunked upload session.
 
@@ -2887,6 +3458,20 @@ def create_app(
                 403,
                 "this server is running in mirror mode and does not accept publishes",
             )
+        _reject_public_publish_on_edge(org)
+        _reject_noncanonical_platform_arch(platform, arch)
+        if org:
+            from cvcpkg.server.models import validate_org_slug
+
+            err = validate_org_slug(org)
+            if err:
+                raise HTTPException(422, err)
+            if _use_db and _db_orgs is not None:
+                org_info = await _db_orgs.get(org)
+                if org_info is None:
+                    raise HTTPException(404, f"organization '{org}' not found")
+                if not await _db_orgs.is_member(org, actor.name):
+                    raise HTTPException(403, f"you are not a member of organization '{org}'")
         _check_rate_limit(request)
         _purge_expired_sessions()
         state = _get_state()
@@ -2899,7 +3484,7 @@ def create_app(
         # Auto-create stub tag rows before the duplicate check so tags
         # are populated even when the package already exists.
         if _use_db and pkg_tags and _db_tags is not None:
-            await _db_tags.ensure_tags(tags_csv=pkg_tags, org_slug="", created_by=actor.name)
+            await _db_tags.ensure_tags(tags_csv=pkg_tags, org_slug=org, created_by=actor.name)
 
         # Check for duplicates
         if _use_db:
@@ -2950,6 +3535,7 @@ def create_app(
             actor_name=actor.name,
             temp_path=tmp_path,
             total_size=total_size,
+            org=org,
         )
 
         return JSONResponse(
@@ -2965,7 +3551,9 @@ def create_app(
     @app.get("/v1/upload/{upload_id}", tags=["upload"])
     async def upload_status(
         upload_id: str,
-        _actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+        _actor: TokenRecord = Depends(
+            require_role(TokenRole.publisher, TokenRole.admin, allow_grace=True)
+        ),
     ):
         """Return current status of a chunked upload (bytes received so far)."""
         session = _upload_sessions.get(upload_id)
@@ -2983,7 +3571,9 @@ def create_app(
     async def upload_chunk(
         upload_id: str,
         request: Request,
-        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+        actor: TokenRecord = Depends(
+            require_role(TokenRole.publisher, TokenRole.admin, allow_grace=True)
+        ),
     ):
         """Append a chunk to an in-progress upload.
 
@@ -3042,7 +3632,9 @@ def create_app(
         upload_id: str,
         request: Request,
         expected_sha256: str = Query("", description="Expected SHA-256 for verification"),
-        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+        actor: TokenRecord = Depends(
+            require_role(TokenRole.publisher, TokenRole.admin, allow_grace=True)
+        ),
     ):
         """Finalise a chunked upload — verify integrity and register the package."""
         _check_rate_limit(request)
@@ -3118,49 +3710,48 @@ def create_app(
 
         import datetime
 
+        _publish_detail = (
+            f"platform={session.platform} arch={session.arch} "
+            f"sha256={sha256} release={session.release_tag or 'live'} chunked=yes"
+        )
+        _publish_target = f"{session.name}=={session.version}"
         if _use_db:
-            try:
-                await _db_packages.add_package(
-                    name=session.name,
-                    version=session.version,
-                    platform=session.platform,
-                    arch=session.arch,
-                    build_type=session.build_type,
-                    link=session.link,
-                    sha256=sha256,
-                    size_bytes=size_bytes,
-                    archive_url=archive_url,
-                    signature=session.signature,
-                    key_fingerprint=session.key_fingerprint,
-                    release_tag=session.release_tag,
-                    recipe_version=session.recipe_version,
-                    description=session.description,
-                    homepage=session.homepage,
-                    pkg_license=session.pkg_license,
-                    maintainer=session.maintainer,
-                    tags=session.tags,
-                    published_by=actor.name,
-                    required_deps=session.required_deps,
-                )
-            except ValueError as exc:
-                # Lost the race to a concurrent publish — discard our
-                # temp; the winner's archive stays untouched.
-                session.temp_path.unlink(missing_ok=True)
-                _upload_sessions.pop(upload_id, None)
-                raise HTTPException(409, str(exc)) from exc
+            async with _audit_txn(
+                AuditAction.publish, actor.name, _publish_target, _publish_detail
+            ):
+                try:
+                    await _db_packages.add_package(
+                        name=session.name,
+                        version=session.version,
+                        platform=session.platform,
+                        arch=session.arch,
+                        build_type=session.build_type,
+                        link=session.link,
+                        sha256=sha256,
+                        size_bytes=size_bytes,
+                        archive_url=archive_url,
+                        signature=session.signature,
+                        key_fingerprint=session.key_fingerprint,
+                        release_tag=session.release_tag,
+                        recipe_version=session.recipe_version,
+                        description=session.description,
+                        homepage=session.homepage,
+                        pkg_license=session.pkg_license,
+                        maintainer=session.maintainer,
+                        tags=session.tags,
+                        org_slug=session.org,
+                        published_by=actor.name,
+                        required_deps=session.required_deps,
+                    )
+                except ValueError as exc:
+                    # Lost the race to a concurrent publish — roll back,
+                    # discard our temp; the winner's archive stays untouched.
+                    session.temp_path.unlink(missing_ok=True)
+                    _upload_sessions.pop(upload_id, None)
+                    raise HTTPException(409, str(exc)) from exc
 
             # Row committed — materialize the archive at its final name.
             session.temp_path.replace(dest)  # overwrite-safe on Windows
-
-            await _db_audit.record(
-                action=AuditAction.publish,
-                actor=actor.name,
-                target=f"{session.name}=={session.version}",
-                detail=(
-                    f"platform={session.platform} arch={session.arch} "
-                    f"sha256={sha256} release={session.release_tag or 'live'} chunked=yes"
-                ),
-            )
         else:
             bundle = {
                 "name": session.name,
@@ -3181,19 +3772,15 @@ def create_app(
                 "published_by": actor.name,
                 "required_deps": json.loads(session.required_deps),
             }
-            state.index.setdefault("bundles", []).append(bundle)
-            state.save_index()
-            # Index updated — materialize the archive at its final name.
-            session.temp_path.replace(dest)  # overwrite-safe on Windows
-            state.audit.record(
-                action=AuditAction.publish,
-                actor=actor.name,
-                target=f"{session.name}=={session.version}",
-                detail=(
-                    f"platform={session.platform} arch={session.arch} "
-                    f"sha256={sha256} release={session.release_tag or 'live'} chunked=yes"
-                ),
-            )
+            async with _audit_txn(
+                AuditAction.publish, actor.name, _publish_target, _publish_detail
+            ):
+                state.index.setdefault("bundles", []).append(bundle)
+                state.save_index()
+                # YAML has no transaction: materialize the archive inside the
+                # block so a failed move skips the audit (DB path replaces
+                # after commit, where the row is the arbiter).
+                session.temp_path.replace(dest)  # overwrite-safe on Windows
 
         _metrics["publishes_total"] += 1
         _metrics["bytes_uploaded_total"] += size_bytes
@@ -3220,7 +3807,9 @@ def create_app(
     @app.delete("/v1/upload/{upload_id}", tags=["upload"], status_code=204)
     async def upload_cancel(
         upload_id: str,
-        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+        actor: TokenRecord = Depends(
+            require_role(TokenRole.publisher, TokenRole.admin, allow_grace=True)
+        ),
     ):
         """Cancel and discard an in-progress upload session."""
         session = _upload_sessions.get(upload_id)
@@ -3247,6 +3836,24 @@ def create_app(
         ),
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
+        # Ownership: only the package's publisher, a member of its org, or an
+        # admin may yank it -- a publisher must not yank someone else's package.
+        if actor.role != TokenRole.admin and _use_db and _db_packages is not None:
+            _yk, _ = await _db_packages.get_bundles(name=name, include_yanked=True, limit=1)
+            if _yk:
+                _yp = _yk[0]
+                _owns = _yp.published_by == actor.name
+                _in_org = (
+                    bool(_yp.org)
+                    and _db_orgs is not None
+                    and await _db_orgs.is_member(_yp.org, actor.name)
+                )
+                if not (_owns or _in_org):
+                    raise HTTPException(
+                        403,
+                        "you may only yank packages you published or that belong "
+                        "to an organization you are a member of",
+                    )
         scope_parts = [
             f"{k}={v}"
             for k, v in (
@@ -3261,37 +3868,28 @@ def create_app(
         target = f"{name}=={version}"
         if scope_detail:
             target = f"{target} [{scope_detail}]"
-        if _use_db:
-            n = await _db_packages.yank(
-                name, version, platform=platform, arch=arch, link=link, build_type=build_type
-            )
-            await _db_audit.record(
-                action=AuditAction.yank,
-                actor=actor.name,
-                target=target,
-            )
-        else:
-            state = _get_state()
-            n = 0
-            for b in state.index.get("bundles", []):
-                if b["name"] != name or b["version"] != version:
-                    continue
-                if platform is not None and b.get("platform") != platform:
-                    continue
-                if arch is not None and b.get("arch") != arch:
-                    continue
-                if link is not None and b.get("link") != link:
-                    continue
-                if build_type is not None and b.get("build_type") != build_type:
-                    continue
-                b["yanked"] = True
-                n += 1
-            state.save_index()
-            state.audit.record(
-                action=AuditAction.yank,
-                actor=actor.name,
-                target=target,
-            )
+        async with _audit_txn(AuditAction.yank, actor.name, target):
+            if _use_db:
+                n = await _db_packages.yank(
+                    name, version, platform=platform, arch=arch, link=link, build_type=build_type
+                )
+            else:
+                state = _get_state()
+                n = 0
+                for b in state.index.get("bundles", []):
+                    if b["name"] != name or b["version"] != version:
+                        continue
+                    if platform is not None and b.get("platform") != platform:
+                        continue
+                    if arch is not None and b.get("arch") != arch:
+                        continue
+                    if link is not None and b.get("link") != link:
+                        continue
+                    if build_type is not None and b.get("build_type") != build_type:
+                        continue
+                    b["yanked"] = True
+                    n += 1
+                state.save_index()
         return {"message": f"yanked {target}", "count": n}
 
     @app.post("/v1/packages/{name}/{version}/unyank", tags=["publish"])
@@ -3318,38 +3916,139 @@ def create_app(
         target = f"{name}=={version}"
         if scope_detail:
             target = f"{target} [{scope_detail}]"
-        if _use_db:
-            n = await _db_packages.unyank(
-                name, version, platform=platform, arch=arch, link=link, build_type=build_type
-            )
-            await _db_audit.record(
-                action=AuditAction.unyank,
-                actor=actor.name,
-                target=target,
-            )
-        else:
-            state = _get_state()
-            n = 0
-            for b in state.index.get("bundles", []):
-                if b["name"] != name or b["version"] != version:
-                    continue
-                if platform is not None and b.get("platform") != platform:
-                    continue
-                if arch is not None and b.get("arch") != arch:
-                    continue
-                if link is not None and b.get("link") != link:
-                    continue
-                if build_type is not None and b.get("build_type") != build_type:
-                    continue
-                b["yanked"] = False
-                n += 1
-            state.save_index()
-            state.audit.record(
-                action=AuditAction.unyank,
-                actor=actor.name,
-                target=target,
-            )
+        async with _audit_txn(AuditAction.unyank, actor.name, target):
+            if _use_db:
+                n = await _db_packages.unyank(
+                    name, version, platform=platform, arch=arch, link=link, build_type=build_type
+                )
+            else:
+                state = _get_state()
+                n = 0
+                for b in state.index.get("bundles", []):
+                    if b["name"] != name or b["version"] != version:
+                        continue
+                    if platform is not None and b.get("platform") != platform:
+                        continue
+                    if arch is not None and b.get("arch") != arch:
+                        continue
+                    if link is not None and b.get("link") != link:
+                        continue
+                    if build_type is not None and b.get("build_type") != build_type:
+                        continue
+                    b["yanked"] = False
+                    n += 1
+                state.save_index()
         return {"message": f"unyanked {target}", "count": n}
+
+    @app.post("/v1/packages/{name}/{version}/nuke", tags=["publish"])
+    async def nuke(
+        name: str,
+        version: str,
+        platform: str | None = Query(None, description="Only nuke bundles for this platform"),
+        arch: str | None = Query(None, description="Only nuke bundles for this arch"),
+        link: str | None = Query(None, description="Only nuke bundles with this link mode"),
+        build_type: str | None = Query(None, description="Only nuke bundles for this build type"),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Irreversibly delete a yanked bundle's row AND archive bytes.
+
+        A new endpoint rather than a reshaping of DELETE, whose scope contract
+        (platform/link only) is already shipped and may have external callers.
+        This carries the safe semantics explicitly: full four-way scope, and it
+        refuses a bundle that is not yanked so nuke only accelerates retention.
+        Admin only, matching unyank and DELETE.
+        """
+        if not _use_db or _db_packages is None:
+            raise HTTPException(501, "nuke requires the database backend")
+
+        scope_parts = [
+            f"{k}={v}"
+            for k, v in (
+                ("platform", platform),
+                ("arch", arch),
+                ("link", link),
+                ("build_type", build_type),
+            )
+            if v is not None
+        ]
+        target = f"{name}=={version}"
+        if scope_parts:
+            target = f"{target} [{','.join(scope_parts)}]"
+
+        async with _audit_txn(AuditAction.nuke, actor.name, target) as ac:
+            try:
+                result = await _db_packages.nuke_bundles(
+                    name,
+                    version,
+                    platform=platform,
+                    arch=arch,
+                    link=link,
+                    build_type=build_type,
+                    require_yanked=True,
+                    storage_uri=_get_state().storage_uri,
+                    nuked_by=actor.name,
+                    reason="manual",
+                )
+            except ValueError as exc:
+                # Not yanked -> 409, the same class as the publish-conflict 409.
+                raise HTTPException(409, str(exc)) from exc
+
+            if result["count"] == 0:
+                raise HTTPException(404, f"{target} not found")
+
+            # Yank never decremented the org counter, so purge is the sole
+            # adjustment; decrement once per nuked bundle.
+            org_deltas: dict[str, int] = {}
+            for d in result["nuked"]:
+                slug = d.get("org_slug", "")
+                if slug and _db_orgs is not None:
+                    org_deltas[slug] = org_deltas.get(slug, 0) + d["size_bytes"]
+            for slug, delta in org_deltas.items():
+                await _db_orgs.update_storage_used(slug, -delta)
+            ac.detail = f"nuked={result['count']}"
+        return {"message": f"nuked {target}", "count": result["count"]}
+
+    @app.get("/v1/packages/{name}/tombstones", tags=["packages"])
+    async def package_tombstones(
+        name: str,
+        version: str = Query("", description="Narrow to one version."),
+        platform: str = Query(""),
+        arch: str = Query(""),
+        build_type: str = Query(""),
+        link: str = Query(""),
+        caller: TokenRecord | None = Depends(optional_token),
+    ):
+        """Records of variants of *name* that were nuked, newest first.
+
+        Each carries ``reason`` (``manual`` = an admin's ``cvcpkg nuke``,
+        ``retention`` = fell off the yank-retention schedule), ``nuked_by``,
+        ``nuked_at``, and forensic context.  This is how you learn a bundle was
+        retired-and-purged rather than never-published.
+        """
+        if not _use_db or _db_packages is None:
+            return {"tombstones": [], "count": 0}
+        tombstones = await _db_packages.get_tombstones(
+            name,
+            version,
+            platform=platform,
+            arch=arch,
+            build_type=build_type,
+            link=link,
+        )
+        # Private-org tombstones are visible only to a member or admin -- the
+        # same rule as the package itself, so a purge doesn't become an info leak.
+        visible = []
+        for t in tombstones:
+            org = t.get("org_slug", "")
+            if org and _db_orgs is not None:
+                org_info = await _db_orgs.get(org)
+                if org_info is not None and org_info.is_private:
+                    if caller is None or not (
+                        caller.role == TokenRole.admin or await _db_orgs.is_member(org, caller.name)
+                    ):
+                        continue
+            visible.append(t)
+        return {"tombstones": visible, "count": len(visible)}
 
     # ── Delete (admin only) ─────────────────────────────────
 
@@ -3361,76 +4060,65 @@ def create_app(
         link: str | None = Query(None, description="Only delete bundles with this link mode"),
         actor: TokenRecord = Depends(require_role(TokenRole.admin)),
     ):
-        if _use_db:
-            removed = await _db_packages.delete(name, version, platform=platform, link=link)
-            if removed == 0:
-                raise HTTPException(404, f"{name}=={version} not found")
-            await _db_audit.record(
-                action=AuditAction.delete,
-                actor=actor.name,
-                target=f"{name}=={version}",
-                detail=f"platform={platform} link={link}" if platform or link else "",
-            )
-            return {"message": f"deleted {name}=={version}", "removed": removed}
-        state = _get_state()
-        before = len(state.index.get("bundles", []))
+        async with _audit_txn(AuditAction.delete, actor.name, f"{name}=={version}") as ac:
+            if _use_db:
+                removed = await _db_packages.delete(name, version, platform=platform, link=link)
+                if removed == 0:
+                    raise HTTPException(404, f"{name}=={version} not found")
+                ac.detail = f"platform={platform} link={link}" if platform or link else ""
+            else:
+                state = _get_state()
+                before = len(state.index.get("bundles", []))
 
-        def _matches(b: dict) -> bool:
-            if b["name"] != name or b["version"] != version:
-                return False
-            if platform and b.get("platform") != platform:
-                return False
-            return not (link and b.get("link") != link)
+                def _matches(b: dict) -> bool:
+                    if b["name"] != name or b["version"] != version:
+                        return False
+                    if platform and b.get("platform") != platform:
+                        return False
+                    return not (link and b.get("link") != link)
 
-        state.index["bundles"] = [b for b in state.index.get("bundles", []) if not _matches(b)]
-        after = len(state.index["bundles"])
-        if before == after:
-            raise HTTPException(404, f"{name}=={version} not found")
-        state.save_index()
-        state.audit.record(
-            action=AuditAction.delete,
-            actor=actor.name,
-            target=f"{name}=={version}",
-        )
-        return {"message": f"deleted {name}=={version}", "removed": before - after}
+                state.index["bundles"] = [
+                    b for b in state.index.get("bundles", []) if not _matches(b)
+                ]
+                after = len(state.index["bundles"])
+                if before == after:
+                    raise HTTPException(404, f"{name}=={version} not found")
+                state.save_index()
+                removed = before - after
+        return {"message": f"deleted {name}=={version}", "removed": removed}
 
     @app.delete("/v1/packages/by-link/{platform}/{link}", tags=["publish"])
     async def delete_packages_by_link(
         platform: str,
         link: str,
-        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
     ):
         """Delete all bundles matching a platform and link mode (admin only)."""
-        if _use_db:
-            removed = await _db_packages.delete_by_link(platform, link)
-            if removed == 0:
-                raise HTTPException(404, f"no {platform}/{link} bundles found")
-            await _db_audit.record(
-                action=AuditAction.delete,
-                actor=actor.name,
-                target=f"platform={platform}/link={link}",
-                detail=f"{removed} bundles",
-            )
-            return {"message": f"deleted {platform}/{link} bundles", "removed": removed}
-        # File-based backend
-        state = _get_state()
-        before = len(state.index.get("bundles", []))
-        state.index["bundles"] = [
-            b
-            for b in state.index.get("bundles", [])
-            if not (b.get("platform") == platform and b.get("link") == link)
-        ]
-        after = len(state.index["bundles"])
-        if before == after:
-            raise HTTPException(404, f"no {platform}/{link} bundles found")
-        state.save_index()
-        state.audit.record(
-            action=AuditAction.delete,
-            actor=actor.name,
-            target=f"platform={platform}/link={link}",
-            detail=f"{before - after} bundles",
-        )
-        return {"message": f"deleted {platform}/{link} bundles", "removed": before - after}
+        async with _audit_txn(
+            AuditAction.delete,
+            actor.name,
+            f"platform={platform}/link={link}",
+        ) as ac:
+            if _use_db:
+                removed = await _db_packages.delete_by_link(platform, link)
+                if removed == 0:
+                    raise HTTPException(404, f"no {platform}/{link} bundles found")
+            else:
+                # File-based backend
+                state = _get_state()
+                before = len(state.index.get("bundles", []))
+                state.index["bundles"] = [
+                    b
+                    for b in state.index.get("bundles", [])
+                    if not (b.get("platform") == platform and b.get("link") == link)
+                ]
+                after = len(state.index["bundles"])
+                if before == after:
+                    raise HTTPException(404, f"no {platform}/{link} bundles found")
+                state.save_index()
+                removed = before - after
+            ac.detail = f"{removed} bundles"
+        return {"message": f"deleted {platform}/{link} bundles", "removed": removed}
 
     # ── Token management (admin) ────────────────────────────
 
@@ -3447,46 +4135,37 @@ def create_app(
                 " letters, digits, underscores, or hyphens)",
             )
         state = _get_state()
-        try:
-            if _use_db:
-                raw = await _db_tokens.create(
-                    name=req.name,
-                    role=req.role,
-                    expires_in_days=req.expires_in_days,
-                    email=req.email,
-                    description=req.description,
-                    metadata=req.metadata,
-                )
-            else:
-                raw = state.tokens.create(
-                    name=req.name,
-                    role=req.role,
-                    expires_in_days=req.expires_in_days,
-                    email=req.email,
-                    description=req.description,
-                    metadata=req.metadata,
-                )
-        except ValueError:
-            raise HTTPException(
-                409,
-                f"token name '{req.name}' is already taken",
-            ) from None
-        if _use_db:
-            await _db_audit.record(
-                action=AuditAction.token_create,
-                actor=actor.name,
-                target=req.name,
-                detail=f"role={req.role.value}",
-            )
-            record = await _db_tokens.verify(raw)
-        else:
-            state.audit.record(
-                action=AuditAction.token_create,
-                actor=actor.name,
-                target=req.name,
-                detail=f"role={req.role.value}",
-            )
-            record = state.tokens.verify(raw)
+        async with _audit_txn(
+            AuditAction.token_create,
+            actor.name,
+            req.name,
+            f"role={req.role.value}",
+        ):
+            try:
+                if _use_db:
+                    raw = await _db_tokens.create(
+                        name=req.name,
+                        role=req.role,
+                        expires_in_days=req.expires_in_days,
+                        email=req.email,
+                        description=req.description,
+                        metadata=req.metadata,
+                    )
+                else:
+                    raw = state.tokens.create(
+                        name=req.name,
+                        role=req.role,
+                        expires_in_days=req.expires_in_days,
+                        email=req.email,
+                        description=req.description,
+                        metadata=req.metadata,
+                    )
+            except ValueError:
+                raise HTTPException(
+                    409,
+                    f"token name '{req.name}' is already taken",
+                ) from None
+        record = await _db_tokens.verify(raw) if _use_db else state.tokens.verify(raw)
         return TokenCreateResponse(
             name=req.name,
             role=req.role,
@@ -3500,22 +4179,13 @@ def create_app(
         actor: TokenRecord = Depends(require_role(TokenRole.admin)),
     ):
         state = _get_state()
-        if _use_db:
-            if not await _db_tokens.revoke(name):
-                raise HTTPException(404, f"token '{name}' not found")
-            await _db_audit.record(
-                action=AuditAction.token_revoke,
-                actor=actor.name,
-                target=name,
-            )
-        else:
-            if not state.tokens.revoke(name):
-                raise HTTPException(404, f"token '{name}' not found")
-            state.audit.record(
-                action=AuditAction.token_revoke,
-                actor=actor.name,
-                target=name,
-            )
+        async with _audit_txn(AuditAction.token_revoke, actor.name, name):
+            if _use_db:
+                if not await _db_tokens.revoke(name):
+                    raise HTTPException(404, f"token '{name}' not found")
+            else:
+                if not state.tokens.revoke(name):
+                    raise HTTPException(404, f"token '{name}' not found")
         return {"message": f"revoked token '{name}'"}
 
     @app.get("/v1/tokens", tags=["tokens"])
@@ -3564,28 +4234,23 @@ def create_app(
             actor = state.tokens.verify(raw)
         if actor is None:
             raise HTTPException(401, "invalid or expired token")
+        _reject_grace_secret(actor)
         # Non-admins can only update their own email
         if actor.role != TokenRole.admin and actor.name != name:
             raise HTTPException(403, "you can only update your own token's email")
 
-        if _use_db:
-            if not await _db_tokens.update_email(name, req.email):
-                raise HTTPException(404, f"token '{name}' not found")
-            await _db_audit.record(
-                action=AuditAction.token_update_email,
-                actor=actor.name,
-                target=name,
-                detail=f"email={req.email}",
-            )
-        else:
-            if not state.tokens.update_email(name, req.email):
-                raise HTTPException(404, f"token '{name}' not found")
-            state.audit.record(
-                action=AuditAction.token_update_email,
-                actor=actor.name,
-                target=name,
-                detail=f"email={req.email}",
-            )
+        async with _audit_txn(
+            AuditAction.token_update_email,
+            actor.name,
+            name,
+            f"email={req.email}",
+        ):
+            if _use_db:
+                if not await _db_tokens.update_email(name, req.email):
+                    raise HTTPException(404, f"token '{name}' not found")
+            else:
+                if not state.tokens.update_email(name, req.email):
+                    raise HTTPException(404, f"token '{name}' not found")
         return {"message": f"email for '{name}' updated"}
 
     @app.patch("/v1/tokens/{name}/profile", tags=["tokens"])
@@ -3609,34 +4274,95 @@ def create_app(
             actor = state.tokens.verify(raw)
         if actor is None:
             raise HTTPException(401, "invalid or expired token")
+        _reject_grace_secret(actor)
         if actor.role != TokenRole.admin and actor.name != name:
             raise HTTPException(403, "you can only update your own profile")
 
-        if _use_db:
-            if not await _db_tokens.update_profile(
-                name, description=req.description, metadata=req.metadata
-            ):
-                raise HTTPException(404, f"token '{name}' not found")
-            await _db_audit.record(
-                action=AuditAction.token_update_profile,
-                actor=actor.name,
-                target=name,
-                detail=f"fields={'description' if req.description is not None else ''}"
-                f"{',metadata' if req.metadata is not None else ''}",
-            )
-        else:
-            if not state.tokens.update_profile(
-                name, description=req.description, metadata=req.metadata
-            ):
-                raise HTTPException(404, f"token '{name}' not found")
-            state.audit.record(
-                action=AuditAction.token_update_profile,
-                actor=actor.name,
-                target=name,
-                detail=f"fields={'description' if req.description is not None else ''}"
-                f"{',metadata' if req.metadata is not None else ''}",
-            )
+        async with _audit_txn(
+            AuditAction.token_update_profile,
+            actor.name,
+            name,
+            f"fields={'description' if req.description is not None else ''}"
+            f"{',metadata' if req.metadata is not None else ''}",
+        ):
+            if _use_db:
+                if not await _db_tokens.update_profile(
+                    name, description=req.description, metadata=req.metadata
+                ):
+                    raise HTTPException(404, f"token '{name}' not found")
+            else:
+                if not state.tokens.update_profile(
+                    name, description=req.description, metadata=req.metadata
+                ):
+                    raise HTTPException(404, f"token '{name}' not found")
         return {"message": f"profile for '{name}' updated"}
+
+    @app.post(
+        "/v1/tokens/{name}/rotate",
+        response_model=TokenRotateResponse,
+        tags=["tokens"],
+    )
+    async def rotate_token(
+        name: str,
+        req: TokenRotateRequest | None = None,
+        authorization: str | None = Header(None),
+    ):
+        """Rotate a token's secret in place.
+
+        The token keeps its name, role, expiry, and org memberships —
+        only the secret changes.  ``grace_minutes`` lets the old secret
+        keep working while stored copies are updated.  Admins can rotate
+        any token; non-admins can only rotate their own.
+        """
+        state = _get_state()
+        raw_actor = _extract_token(authorization)
+        if raw_actor is None:
+            raise HTTPException(401, "missing Authorization header")
+        if _use_db:
+            actor = await _db_tokens.verify(raw_actor)
+        else:
+            actor = state.tokens.verify(raw_actor)
+        if actor is None:
+            raise HTTPException(401, "invalid or expired token")
+        if actor.role != TokenRole.admin and actor.name != name:
+            raise HTTPException(403, "you can only rotate your own token")
+        # A pre-rotation grace secret must not rotate: a leaked old secret
+        # could otherwise re-rotate inside the window, mint itself a fresh
+        # permanent secret, and lock out the owner — defeating rotation as
+        # a leak remediation.
+        _reject_grace_secret(actor)
+
+        grace_minutes = req.grace_minutes if req is not None else 0
+        async with _audit_txn(
+            AuditAction.token_rotate,
+            actor.name,
+            name,
+        ) as ac:
+            if _use_db:
+                raw = await _db_tokens.rotate(name, grace_minutes=grace_minutes)
+            else:
+                raw = state.tokens.rotate(name, grace_minutes=grace_minutes)
+            if raw is None:
+                raise HTTPException(404, f"token '{name}' not found")
+
+            record = await _db_tokens.verify(raw) if _use_db else state.tokens.verify(raw)
+            # Record the EFFECTIVE window end (rotate() clamps it to the token's
+            # own expiry), not the requested minutes, so the audit trail shows
+            # how long the old secret actually lived.
+            previous_valid_until = (
+                record.previous_hash_expires_at if record and grace_minutes > 0 else None
+            )
+            window = (
+                previous_valid_until.isoformat() if previous_valid_until is not None else "none"
+            )
+            ac.detail = f"grace_minutes={grace_minutes} previous_valid_until={window}"
+        return TokenRotateResponse(
+            name=name,
+            role=record.role if record else actor.role,
+            token=raw,
+            expires_at=record.expires_at if record else None,
+            previous_valid_until=previous_valid_until,
+        )
 
     @app.get(
         "/v1/users",
@@ -3792,13 +4518,14 @@ def create_app(
     # ── Registration (public) ──────────────────────────────
 
     @app.post("/v1/register", response_model=RegistrationResponse, tags=["registration"])
-    async def register(req: RegistrationRequest):
+    async def register(req: RegistrationRequest, request: Request):
         """Self-service token registration.
 
         In ``open`` mode the token is created immediately and returned.
         In ``admin-gated`` mode a pending request is recorded for admin
         approval.
         """
+        _check_rate_limit(request)
         if not req.name or not req.name.strip():
             raise HTTPException(422, "name is required")
         if not _is_valid_identifier(req.name):
@@ -3812,42 +4539,34 @@ def create_app(
 
         if RegistrationMode.open == REGISTRATION_MODE:
             state = _get_state()
-            try:
-                if _use_db:
-                    raw = await _db_tokens.create(
-                        name=req.name,
-                        role=req.role,
-                        email=req.email,
-                        description=req.description,
-                        metadata=req.metadata,
-                    )
-                else:
-                    raw = state.tokens.create(
-                        name=req.name,
-                        role=req.role,
-                        email=req.email,
-                        description=req.description,
-                        metadata=req.metadata,
-                    )
-            except ValueError:
-                raise HTTPException(
-                    409,
-                    f"username '{req.name}' is already taken",
-                ) from None
-            if _use_db:
-                await _db_audit.record(
-                    action=AuditAction.registration_request,
-                    actor=req.name,
-                    target=req.name,
-                    detail=f"role={req.role.value} email={req.email} mode=open auto_approved",
-                )
-            else:
-                state.audit.record(
-                    action=AuditAction.registration_request,
-                    actor=req.name,
-                    target=req.name,
-                    detail=f"role={req.role.value} email={req.email} mode=open auto_approved",
-                )
+            async with _audit_txn(
+                AuditAction.registration_request,
+                req.name,
+                req.name,
+                f"role={req.role.value} email={req.email} mode=open auto_approved",
+            ):
+                try:
+                    if _use_db:
+                        raw = await _db_tokens.create(
+                            name=req.name,
+                            role=TokenRole.reader,  # open self-registration is reader-only
+                            email=req.email,
+                            description=req.description,
+                            metadata=req.metadata,
+                        )
+                    else:
+                        raw = state.tokens.create(
+                            name=req.name,
+                            role=TokenRole.reader,  # open self-registration is reader-only
+                            email=req.email,
+                            description=req.description,
+                            metadata=req.metadata,
+                        )
+                except ValueError:
+                    raise HTTPException(
+                        409,
+                        f"username '{req.name}' is already taken",
+                    ) from None
             return RegistrationResponse(
                 message="Token created. Save it — it will not be shown again.",
                 token=raw,
@@ -3859,18 +4578,18 @@ def create_app(
                     501,
                     "admin-gated registration requires a database backend",
                 )
-            request_record = await _db_token_requests.create(
-                name=req.name, email=req.email, role=req.role
-            )
-            await _db_audit.record(
-                action=AuditAction.registration_request,
-                actor=req.name,
-                target=req.name,
-                detail=(
+            async with _audit_txn(
+                AuditAction.registration_request,
+                req.name,
+                req.name,
+            ) as ac:
+                request_record = await _db_token_requests.create(
+                    name=req.name, email=req.email, role=req.role
+                )
+                ac.detail = (
                     f"role={req.role.value} email={req.email}"
                     f" mode=admin-gated request_id={request_record.id}"
-                ),
-            )
+                )
             return RegistrationResponse(
                 message="Registration request submitted. An admin will review it.",
                 request_id=request_record.id,
@@ -3904,17 +4623,17 @@ def create_app(
             raise HTTPException(404, f"token request {request_id} not found")
         if tr.status != TokenRequestStatus.pending:
             raise HTTPException(409, f"token request {request_id} already {tr.status.value}")
-        if not await _db_token_requests.resolve(
-            request_id, TokenRequestStatus.approved, actor.name
+        async with _audit_txn(
+            AuditAction.registration_approve,
+            actor.name,
+            tr.name,
+            f"request_id={request_id} role={tr.role.value}",
         ):
-            raise HTTPException(409, "request already resolved")
-        raw = await _db_tokens.create(name=tr.name, role=tr.role, email=tr.email)
-        await _db_audit.record(
-            action=AuditAction.registration_approve,
-            actor=actor.name,
-            target=tr.name,
-            detail=f"request_id={request_id} role={tr.role.value}",
-        )
+            if not await _db_token_requests.resolve(
+                request_id, TokenRequestStatus.approved, actor.name
+            ):
+                raise HTTPException(409, "request already resolved")
+            raw = await _db_tokens.create(name=tr.name, role=tr.role, email=tr.email)
         return {
             "message": f"approved request {request_id} — token created for '{tr.name}'",
             "token": raw,
@@ -3932,14 +4651,16 @@ def create_app(
             raise HTTPException(404, f"token request {request_id} not found")
         if tr.status != TokenRequestStatus.pending:
             raise HTTPException(409, f"token request {request_id} already {tr.status.value}")
-        if not await _db_token_requests.resolve(request_id, TokenRequestStatus.denied, actor.name):
-            raise HTTPException(409, "request already resolved")
-        await _db_audit.record(
-            action=AuditAction.registration_deny,
-            actor=actor.name,
-            target=tr.name,
-            detail=f"request_id={request_id}",
-        )
+        async with _audit_txn(
+            AuditAction.registration_deny,
+            actor.name,
+            tr.name,
+            f"request_id={request_id}",
+        ):
+            if not await _db_token_requests.resolve(
+                request_id, TokenRequestStatus.denied, actor.name
+            ):
+                raise HTTPException(409, "request already resolved")
         return {"message": f"denied token request {request_id}"}
 
     # ── Audit trail (admin) ─────────────────────────────────
@@ -3990,40 +4711,51 @@ def create_app(
         err = validate_org_slug(body.slug)
         if err:
             raise HTTPException(422, err)
+        for _field, _val in (("logo_url", body.logo_url), ("homepage", body.homepage)):
+            if _val and not _val.startswith(("http://", "https://", "/")):
+                raise HTTPException(422, f"{_field} must be an http(s) URL or a relative path")
 
-        try:
-            org = await _db_orgs.create(
-                slug=body.slug,
-                display_name=body.display_name,
-                description=body.description,
-                logo_url=body.logo_url,
-                homepage=body.homepage,
-                is_private=body.is_private,
-                created_by=actor.name,
-                storage_limit_bytes=ORG_STORAGE_LIMIT_BYTES,
-            )
-        except ValueError as exc:
-            raise HTTPException(409, str(exc)) from exc
-        await _db_audit.record(
-            action=AuditAction.org_create,
-            actor=actor.name,
-            target=body.slug,
-            detail=f"display_name={body.display_name}",
-        )
+        async with _audit_txn(
+            AuditAction.org_create,
+            actor.name,
+            body.slug,
+            f"display_name={body.display_name}",
+        ):
+            try:
+                org = await _db_orgs.create(
+                    slug=body.slug,
+                    display_name=body.display_name,
+                    description=body.description,
+                    logo_url=body.logo_url,
+                    homepage=body.homepage,
+                    is_private=body.is_private,
+                    created_by=actor.name,
+                    storage_limit_bytes=ORG_STORAGE_LIMIT_BYTES,
+                )
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from exc
         return org
 
     @app.get("/v1/orgs", response_model=OrgListResponse, tags=["organizations"])
     async def list_orgs(
         limit: int = Query(100, ge=1, le=1000),
         offset: int = Query(0, ge=0),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         if not _use_db or _db_orgs is None:
             return OrgListResponse(total=0, organizations=[])
+        is_admin = caller is not None and caller.role == TokenRole.admin
+        caller_name = caller.name if caller else ""
         orgs, total = await _db_orgs.list_orgs(
             limit=limit,
             offset=offset,
-            include_private=False,
+            include_private=is_admin,
+            caller_token_name=caller_name,
         )
+        # Storage figures are member/super-admin-only.
+        if not is_admin:
+            member_slugs = await _db_orgs.member_org_slugs(caller_name)
+            orgs = [o if o.slug in member_slugs else _redact_org_storage(o) for o in orgs]
         return OrgListResponse(total=total, organizations=orgs)
 
     @app.get("/v1/orgs/{slug}", response_model=OrgDetailResponse, tags=["organizations"])
@@ -4048,7 +4780,11 @@ def create_app(
             members = await _db_orgs.get_members(slug)
         else:
             members = []
-        packages, _ = await _db_packages.get_bundles(org_slug=slug)
+            # Storage figures are member/super-admin-only.
+            org = _redact_org_storage(org)
+        packages, _ = await _db_packages.get_bundles(
+            org_slug=slug, caller_token_name=(caller_name or "")
+        )
         return OrgDetailResponse(org=org, members=members, packages=packages)
 
     @app.patch("/v1/orgs/{slug}", response_model=OrgInfo, tags=["organizations"])
@@ -4064,22 +4800,25 @@ def create_app(
         # storage_limit_bytes is admin-only
         if body.storage_limit_bytes is not None and actor.role != TokenRole.admin:
             raise HTTPException(403, "only admins can change storage limits")
-        updated = await _db_orgs.update(
+        for _field, _val in (("logo_url", body.logo_url), ("homepage", body.homepage)):
+            if _val and not _val.startswith(("http://", "https://", "/")):
+                raise HTTPException(422, f"{_field} must be an http(s) URL or a relative path")
+        async with _audit_txn(
+            AuditAction.org_update,
+            actor.name,
             slug,
-            display_name=body.display_name,
-            description=body.description,
-            logo_url=body.logo_url,
-            homepage=body.homepage,
-            is_private=body.is_private,
-            storage_limit_bytes=body.storage_limit_bytes,
-        )
-        if updated is None:
-            raise HTTPException(404, f"organization '{slug}' not found")
-        await _db_audit.record(
-            action=AuditAction.org_update,
-            actor=actor.name,
-            target=slug,
-        )
+        ):
+            updated = await _db_orgs.update(
+                slug,
+                display_name=body.display_name,
+                description=body.description,
+                logo_url=body.logo_url,
+                homepage=body.homepage,
+                is_private=body.is_private,
+                storage_limit_bytes=body.storage_limit_bytes,
+            )
+            if updated is None:
+                raise HTTPException(404, f"organization '{slug}' not found")
         return updated
 
     @app.post("/v1/orgs/{slug}/logo", tags=["organizations"])
@@ -4128,13 +4867,13 @@ def create_app(
 
         # Update the org's logo_url to the serve endpoint
         logo_url = f"/v1/orgs/{slug}/logo"
-        await _db_orgs.update(slug, logo_url=logo_url)
-        await _db_audit.record(
-            action=AuditAction.org_update,
-            actor=actor.name,
-            target=slug,
-            detail="logo uploaded",
-        )
+        async with _audit_txn(
+            AuditAction.org_update,
+            actor.name,
+            slug,
+            "logo uploaded",
+        ):
+            await _db_orgs.update(slug, logo_url=logo_url)
         return {"message": "logo uploaded", "logo_url": logo_url}
 
     @app.get("/v1/orgs/{slug}/logo", tags=["organizations"])
@@ -4164,18 +4903,18 @@ def create_app(
             raise HTTPException(501, "organizations require database backend")
         if not await _db_orgs.is_owner(slug, actor.name) and actor.role != TokenRole.admin:
             raise HTTPException(403, "only org owners or admins can manage members")
-        try:
-            added = await _db_orgs.add_member(slug, token_name, role)
-        except ValueError as exc:
-            raise HTTPException(404, str(exc)) from exc
-        if not added:
-            raise HTTPException(409, f"'{token_name}' is already a member of '{slug}'")
-        await _db_audit.record(
-            action=AuditAction.org_add_member,
-            actor=actor.name,
-            target=slug,
-            detail=f"member={token_name} role={role.value}",
-        )
+        async with _audit_txn(
+            AuditAction.org_add_member,
+            actor.name,
+            slug,
+            f"member={token_name} role={role.value}",
+        ):
+            try:
+                added = await _db_orgs.add_member(slug, token_name, role)
+            except ValueError as exc:
+                raise HTTPException(404, str(exc)) from exc
+            if not added:
+                raise HTTPException(409, f"'{token_name}' is already a member of '{slug}'")
         return {"message": f"added '{token_name}' to '{slug}' as {role.value}"}
 
     @app.delete("/v1/orgs/{slug}/members/{token_name}", tags=["organizations"])
@@ -4188,18 +4927,18 @@ def create_app(
             raise HTTPException(501, "organizations require database backend")
         if not await _db_orgs.is_owner(slug, actor.name) and actor.role != TokenRole.admin:
             raise HTTPException(403, "only org owners or admins can manage members")
-        try:
-            removed = await _db_orgs.remove_member(slug, token_name)
-        except ValueError as exc:
-            raise HTTPException(404, str(exc)) from exc
-        if not removed:
-            raise HTTPException(404, f"'{token_name}' is not a member of '{slug}'")
-        await _db_audit.record(
-            action=AuditAction.org_remove_member,
-            actor=actor.name,
-            target=slug,
-            detail=f"member={token_name}",
-        )
+        async with _audit_txn(
+            AuditAction.org_remove_member,
+            actor.name,
+            slug,
+            f"member={token_name}",
+        ):
+            try:
+                removed = await _db_orgs.remove_member(slug, token_name)
+            except ValueError as exc:
+                raise HTTPException(404, str(exc)) from exc
+            if not removed:
+                raise HTTPException(404, f"'{token_name}' is not a member of '{slug}'")
         return {"message": f"removed '{token_name}' from '{slug}'"}
 
     # ── RSS Feed ────────────────────────────────────────────
@@ -4207,13 +4946,15 @@ def create_app(
     @app.get("/v1/feed.xml", tags=["feed"], response_class=Response)
     async def rss_feed(
         limit: int = Query(50, ge=1, le=200, description="Number of items in the feed"),
-        _auth: None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         """RSS 2.0 feed of the latest published packages."""
         import xml.etree.ElementTree as ET
 
         if _use_db:
-            packages, _ = await _db_packages.get_bundles(limit=limit, offset=0)
+            packages, _ = await _db_packages.get_bundles(
+                limit=limit, offset=0, caller_token_name=(caller.name if caller else "")
+            )
         else:
             state = _get_state()
             bundles = state.index.get("bundles", [])
@@ -4300,7 +5041,7 @@ def create_app(
             le=365,
             description="Number of days of history",
         ),
-        _auth: None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         """Get daily download counts for charting."""
         if not _use_db or _db_downloads is None:
@@ -4316,6 +5057,32 @@ def create_app(
                     },
                 }
             )
+        # A per-name query must not become an existence/volume oracle for a
+        # private package the caller cannot see.
+        if name and _db_packages is not None:
+            _vis, _ = await _db_packages.get_bundles(
+                name=name,
+                include_yanked=True,
+                limit=1,
+                caller_token_name=(
+                    None
+                    if (caller is not None and caller.role == TokenRole.admin)
+                    else (caller.name if caller is not None else "")
+                ),
+            )
+            if not _vis:
+                return JSONResponse(
+                    {
+                        "total": 0,
+                        "daily": [],
+                        "config": {
+                            "days": days,
+                            "color": DOWNLOAD_GRAPH_COLOR,
+                            "fill_color": DOWNLOAD_GRAPH_FILL_COLOR,
+                            "height": DOWNLOAD_GRAPH_HEIGHT,
+                        },
+                    }
+                )
         total = await _db_downloads.get_total_downloads(package_name=name)
         daily = await _db_downloads.get_daily_downloads(package_name=name, days=days)
         return JSONResponse(
@@ -4395,7 +5162,7 @@ def create_app(
         return {"filter_name": name, "days": days, "daily": daily}
 
     @app.post("/v1/telemetry", tags=["analytics"], status_code=204)
-    async def submit_telemetry(payload: TelemetryPayload):
+    async def submit_telemetry(payload: TelemetryPayload, request: Request):
         """Accept an opt-in, anonymous client telemetry ping.
 
         Clients only call this when CVCPKG_TELEMETRY=1 is set or the user
@@ -4403,6 +5170,7 @@ def create_app(
         identifying information and nothing is derived from the connection
         (no address hash) -- see the Phase 2 privacy notes.
         """
+        _check_rate_limit(request)
         if not _use_db or _db_telemetry is None:
             raise HTTPException(503, "telemetry requires the database backend")
         if len(payload.tools) > 16:
@@ -4430,16 +5198,28 @@ def create_app(
 
     # ── Admin dashboard UI (Phase 3) ────────────────────────
 
+    # Per-process random fallback: if no real HMAC key is configured we must NOT
+    # sign admin sessions with a publicly-known constant (that would let anyone
+    # forge an admin cookie). A random per-process key keeps sessions valid
+    # within a process while making forged cookies unverifiable.
+    _fallback_admin_key = secrets.token_bytes(32)
+
     def _admin_session_key() -> bytes:
         state = _get_state()
         key = getattr(getattr(state, "tokens", None), "_hmac_key", b"")
-        return key or b"cvcpkg-admin-session"
+        return key or _fallback_admin_key
 
     def _has_admin_session(request: Request) -> bool:
         from cvcpkg.server import admin_ui
 
         val = request.cookies.get(admin_ui._SESSION_COOKIE, "")
         return bool(val) and admin_ui.verify_session_value(_admin_session_key(), val)
+
+    def _oidc_enabled() -> bool:
+        """True when an OIDC provider is fully configured (Phase 13)."""
+        from cvcpkg.server.oidc import OidcConfig
+
+        return OidcConfig.from_env().is_enabled()
 
     @app.get("/admin", tags=["admin"], response_class=HTMLResponse)
     async def admin_dashboard(request: Request):
@@ -4448,7 +5228,7 @@ def create_app(
         from cvcpkg.server import admin_ui
 
         if not _has_admin_session(request):
-            return HTMLResponse(admin_ui.login_html())
+            return HTMLResponse(admin_ui.login_html(oidc_enabled=_oidc_enabled()))
 
         days = 30
         data: dict = {"days": days, "stats": {"version": _server_version, "packages_count": 0}}
@@ -4483,9 +5263,16 @@ def create_app(
             state = _get_state()
             record = state.tokens.verify(token)
 
-        if record is None or record.role != TokenRole.admin:
+        # A pre-rotation grace secret must not mint an admin session: the
+        # cookie is a durable control-plane credential that outlives the
+        # grace window, so accepting the old secret here would defeat
+        # rotation as a leak remediation (the bearer-token control-plane
+        # guards already reject grace secrets).
+        if record is None or record.role != TokenRole.admin or record.via_previous_hash:
             return HTMLResponse(
-                admin_ui.login_html(error="Invalid token or not an admin token."),
+                admin_ui.login_html(
+                    error="Invalid token or not an admin token.", oidc_enabled=_oidc_enabled()
+                ),
                 status_code=401,
             )
 
@@ -4508,6 +5295,137 @@ def create_app(
         )
         return resp
 
+    # ── OIDC login (Phase 13) ───────────────────────────────
+    #
+    # Human users authenticate against an external OIDC provider; the
+    # callback maps their claims onto a cvcpkg role and mints the same
+    # signed admin session cookie the token login uses.  HMAC tokens stay
+    # the mechanism for machines.
+
+    @app.get("/admin/oidc/login", tags=["admin"])
+    async def admin_oidc_login():
+        """Begin the OIDC authorization-code flow (state + nonce + PKCE)."""
+        import secrets as _secrets
+
+        from cvcpkg.server import oidc as _oidc
+
+        cfg = _oidc.OidcConfig.from_env()
+        if not cfg.is_enabled():
+            raise HTTPException(404, "OIDC is not configured on this server")
+
+        try:
+            doc = await _oidc.discover(cfg)
+        except Exception as exc:
+            raise HTTPException(502, f"OIDC discovery failed: {exc}") from exc
+        authorize = doc.get("authorization_endpoint")
+        if not authorize:
+            raise HTTPException(502, "OIDC discovery document has no authorization_endpoint")
+
+        verifier, challenge = _oidc.new_pkce_pair()
+        state = _secrets.token_urlsafe(16)
+        nonce = _secrets.token_urlsafe(16)
+        txn = _oidc.sign_txn(
+            _admin_session_key(), {"state": state, "verifier": verifier, "nonce": nonce}
+        )
+
+        url = _oidc.build_authorize_url(
+            authorize, cfg, state=state, nonce=nonce, challenge=challenge
+        )
+        resp = RedirectResponse(url, status_code=303)
+        # The PKCE verifier must never ride in `state` (visible to the IdP and
+        # the address bar) — keep it in an HttpOnly transaction cookie.
+        resp.set_cookie(
+            _oidc._TXN_COOKIE,
+            txn,
+            max_age=_oidc._TXN_TTL_SECONDS,
+            httponly=True,
+            samesite="lax",
+            path="/admin",
+        )
+        return resp
+
+    @app.get("/admin/oidc/callback", tags=["admin"], response_class=HTMLResponse)
+    async def admin_oidc_callback(
+        request: Request,
+        code: str = Query(""),
+        state: str = Query(""),
+        error: str = Query(""),
+    ):
+        """Complete the OIDC flow and establish an admin session."""
+        from cvcpkg.server import admin_ui
+        from cvcpkg.server import oidc as _oidc
+
+        cfg = _oidc.OidcConfig.from_env()
+        if not cfg.is_enabled():
+            raise HTTPException(404, "OIDC is not configured on this server")
+
+        if error:
+            return HTMLResponse(
+                admin_ui.login_html(error=f"identity provider returned: {error}"),
+                status_code=401,
+            )
+
+        txn = _oidc.verify_txn(_admin_session_key(), request.cookies.get(_oidc._TXN_COOKIE, ""))
+        if not txn:
+            return HTMLResponse(
+                admin_ui.login_html(error="login session expired — please try again."),
+                status_code=400,
+            )
+        # CSRF: the state echoed by the IdP must match the one we signed.
+        if not code or not state or not secrets.compare_digest(state, str(txn.get("state", ""))):
+            return HTMLResponse(
+                admin_ui.login_html(error="invalid OIDC state — login refused."),
+                status_code=400,
+            )
+
+        try:
+            doc = await _oidc.discover(cfg)
+            tokens = await _oidc.exchange_code(
+                doc["token_endpoint"], cfg, code=code, verifier=str(txn.get("verifier", ""))
+            )
+            claims = await _oidc.fetch_userinfo(
+                doc["userinfo_endpoint"], tokens.get("access_token", "")
+            )
+        except Exception as exc:
+            return HTMLResponse(
+                admin_ui.login_html(error=f"OIDC exchange failed: {exc}"),
+                status_code=502,
+            )
+
+        role = _oidc.map_claims_to_role(claims, cfg)
+        subject = _oidc.claims_subject(claims)
+        if role != "admin":
+            # Authenticated with the IdP but not entitled to the dashboard.
+            return HTMLResponse(
+                admin_ui.login_html(
+                    error=(
+                        f"{subject or 'this account'} is not authorized for the admin "
+                        "dashboard (no admin group/email mapping)."
+                    )
+                ),
+                status_code=403,
+            )
+
+        if _use_db and _db_audit is not None:
+            await _db_audit.record(
+                action=AuditAction.token_create,
+                actor=subject or "oidc-user",
+                target="admin-ui",
+                detail="admin dashboard login via OIDC",
+            )
+
+        resp = RedirectResponse("/admin", status_code=303)
+        resp.set_cookie(
+            admin_ui._SESSION_COOKIE,
+            admin_ui.make_session_value(_admin_session_key()),
+            max_age=admin_ui._SESSION_TTL_SECONDS,
+            httponly=True,
+            samesite="lax",
+            path="/admin",
+        )
+        resp.delete_cookie(_oidc._TXN_COOKIE, path="/admin")
+        return resp
+
     @app.post("/admin/logout", tags=["admin"])
     async def admin_logout():
         from cvcpkg.server import admin_ui
@@ -4521,7 +5439,7 @@ def create_app(
         from cvcpkg.server import admin_ui
 
         if not _has_admin_session(request):
-            return HTMLResponse(admin_ui.login_html())
+            return HTMLResponse(admin_ui.login_html(oidc_enabled=_oidc_enabled()))
         pkgs: list = []
         total = 0
         if _use_db and _db_packages is not None:
@@ -4552,25 +5470,26 @@ def create_app(
             build_type=build_type or None,
             link=link or None,
         )
-        if action == "yank":
-            await _db_packages.yank(name, version, **kwargs)
-        elif action == "unyank":
-            await _db_packages.unyank(name, version, **kwargs)
-        else:
-            # delete() narrows by platform/link only (matches /v1 delete API).
-            await _db_packages.delete(name, version, platform=platform or None, link=link or None)
-
-        if _db_audit is not None:
-            await _db_audit.record(
-                action={
-                    "yank": AuditAction.yank,
-                    "unyank": AuditAction.unyank,
-                    "delete": AuditAction.delete,
-                }[action],
-                actor="admin-ui",
-                target=f"{name}=={version}",
-                detail=f"{platform}/{arch}/{build_type}/{link} via /admin",
-            )
+        audit_action = {
+            "yank": AuditAction.yank,
+            "unyank": AuditAction.unyank,
+            "delete": AuditAction.delete,
+        }[action]
+        async with _audit_txn(
+            audit_action,
+            "admin-ui",
+            f"{name}=={version}",
+            f"{platform}/{arch}/{build_type}/{link} via /admin",
+        ):
+            if action == "yank":
+                await _db_packages.yank(name, version, **kwargs)
+            elif action == "unyank":
+                await _db_packages.unyank(name, version, **kwargs)
+            else:
+                # delete() narrows by platform/link only (matches /v1 delete API).
+                await _db_packages.delete(
+                    name, version, platform=platform or None, link=link or None
+                )
         return RedirectResponse("/admin/packages", status_code=303)
 
     @app.get("/admin/tokens", tags=["admin"], response_class=HTMLResponse)
@@ -4578,7 +5497,7 @@ def create_app(
         from cvcpkg.server import admin_ui
 
         if not _has_admin_session(request):
-            return HTMLResponse(admin_ui.login_html())
+            return HTMLResponse(admin_ui.login_html(oidc_enabled=_oidc_enabled()))
         tokens: list = []
         if _use_db and _db_tokens is not None:
             tokens = await _db_tokens.list_tokens()
@@ -4601,19 +5520,19 @@ def create_app(
         except ValueError:
             raise HTTPException(422, f"unknown role: {role}") from None
         try:
-            raw = await _db_tokens.create(name.strip(), role_val)
+            async with _audit_txn(
+                AuditAction.token_create,
+                "admin-ui",
+                name.strip(),
+                f"role={role_val.value} via /admin",
+            ):
+                raw = await _db_tokens.create(name.strip(), role_val)
         except Exception as exc:
+            # create (or its atomic audit) failed — nothing committed.
             tokens = await _db_tokens.list_tokens()
             return HTMLResponse(
                 admin_ui.tokens_html(tokens, error=f"create failed: {exc}"),
                 status_code=409,
-            )
-        if _db_audit is not None:
-            await _db_audit.record(
-                action=AuditAction.token_create,
-                actor="admin-ui",
-                target=name.strip(),
-                detail=f"role={role_val.value} via /admin",
             )
         tokens = await _db_tokens.list_tokens()
         return HTMLResponse(admin_ui.tokens_html(tokens, new_token=(name.strip(), raw)))
@@ -4624,14 +5543,10 @@ def create_app(
             raise HTTPException(403, "admin session required")
         if not _use_db or _db_tokens is None:
             raise HTTPException(503, "token management requires the database backend")
-        ok = await _db_tokens.revoke(name)
-        if ok and _db_audit is not None:
-            await _db_audit.record(
-                action=AuditAction.token_revoke,
-                actor="admin-ui",
-                target=name,
-                detail="via /admin",
-            )
+        async with _audit_txn(AuditAction.token_revoke, "admin-ui", name, "via /admin") as ac:
+            ok = await _db_tokens.revoke(name)
+            if not ok:
+                ac.skip = True  # nothing revoked → no audit entry (unchanged behaviour)
         return RedirectResponse("/admin/tokens", status_code=303)
 
     @app.get("/admin/audit", tags=["admin"], response_class=HTMLResponse)
@@ -4639,7 +5554,7 @@ def create_app(
         from cvcpkg.server import admin_ui
 
         if not _has_admin_session(request):
-            return HTMLResponse(admin_ui.login_html())
+            return HTMLResponse(admin_ui.login_html(oidc_enabled=_oidc_enabled()))
         entries: list = []
         total = 0
         chain = None
@@ -4682,26 +5597,26 @@ def create_app(
 
         body = await request.json()
         changed: dict[str, int] = {}
-        if "global_cache_storage_limit_bytes" in body:
-            val = int(body["global_cache_storage_limit_bytes"])
-            if val < 0:
-                raise HTTPException(422, "global_cache_storage_limit_bytes must be >= 0")
-            GLOBAL_CACHE_STORAGE_LIMIT_BYTES = val
-            changed["global_cache_storage_limit_bytes"] = val
-        if "org_storage_limit_bytes" in body:
-            val = int(body["org_storage_limit_bytes"])
-            if val < 0:
-                raise HTTPException(422, "org_storage_limit_bytes must be >= 0")
-            ORG_STORAGE_LIMIT_BYTES = val
-            changed["org_storage_limit_bytes"] = val
-        if not changed:
-            raise HTTPException(422, "no recognised settings in request body")
-        await _db_audit.record(
-            action=AuditAction.admin_settings_update,
-            actor=actor.name,
-            target="settings",
-            detail=str(changed),
-        )
+        async with _audit_txn(
+            AuditAction.admin_settings_update,
+            actor.name,
+            "settings",
+        ) as ac:
+            if "global_cache_storage_limit_bytes" in body:
+                val = int(body["global_cache_storage_limit_bytes"])
+                if val < 0:
+                    raise HTTPException(422, "global_cache_storage_limit_bytes must be >= 0")
+                GLOBAL_CACHE_STORAGE_LIMIT_BYTES = val
+                changed["global_cache_storage_limit_bytes"] = val
+            if "org_storage_limit_bytes" in body:
+                val = int(body["org_storage_limit_bytes"])
+                if val < 0:
+                    raise HTTPException(422, "org_storage_limit_bytes must be >= 0")
+                ORG_STORAGE_LIMIT_BYTES = val
+                changed["org_storage_limit_bytes"] = val
+            if not changed:
+                raise HTTPException(422, "no recognised settings in request body")
+            ac.detail = str(changed)
         return {"message": "settings updated", "updated": changed}
 
     # ── Org HTML pages ──────────────────────────────────────
@@ -4765,28 +5680,42 @@ def create_app(
         org: str = "",
         limit: int = 200,
         offset: int = 0,
-        _auth: TokenRecord | None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         """List curated tags with package counts."""
         if not _use_db or _db_tags is None:
             return TagListResponse(total=0, tags=[])
+        is_admin = caller is not None and caller.role == TokenRole.admin
         org_filter: str | None = org if org else None
-        # If the org is private, check access
+        # If a specific private org is requested, require membership.
         if org and _db_orgs is not None:
             org_info = await _db_orgs.get(org)
-            if org_info and org_info.is_private:
-                caller = _auth
-                if caller is None or (
-                    caller.role != TokenRole.admin
-                    and not await _db_orgs.is_member(org, caller.name)
-                ):
+            if org_info and org_info.is_private and not is_admin:
+                if caller is None or not await _db_orgs.is_member(org, caller.name):
                     raise HTTPException(403, "private organization -- access denied")
         tags, total = await _db_tags.list_tags(org_slug=org_filter, limit=limit, offset=offset)
+        # Unscoped listing must not leak private-org tag names to non-members.
+        if not org and not is_admin and _db_orgs is not None:
+            _priv: dict[str, bool] = {}
+            visible = []
+            for _t in tags:
+                slug = getattr(_t, "org_slug", "") or ""
+                if not slug:
+                    visible.append(_t)
+                    continue
+                if slug not in _priv:
+                    _oi = await _db_orgs.get(slug)
+                    _priv[slug] = bool(_oi and _oi.is_private)
+                if not _priv[slug] or (caller and await _db_orgs.is_member(slug, caller.name)):
+                    visible.append(_t)
+            if len(visible) != len(tags):
+                total = len(visible)
+            tags = visible
         return TagListResponse(total=total, tags=tags)
 
     @app.get("/v1/tags/all", tags=["tags"])
     async def list_all_tags(
-        _auth: TokenRecord | None = Depends(optional_reader_auth),
+        _auth: TokenRecord | None = Depends(optional_token),
     ):
         """Return all tag names (curated + ad-hoc) with package counts.
 
@@ -4830,23 +5759,24 @@ def create_app(
                         403,
                         "only org owners or global admins can create org-scoped tags",
                     )
-        try:
-            tag = await _db_tags.create(
-                name=body.name,
-                org_slug=body.org_slug,
-                display_name=body.display_name,
-                description=body.description,
-                logo_url=body.logo_url,
-                created_by=actor.name,
-            )
-        except ValueError as exc:
-            raise HTTPException(409, str(exc)) from None
-        await _db_audit.record(
-            action=AuditAction.tag_create,
-            actor=actor.name,
-            target=tag.qualified_name,
-            detail=f"display_name={tag.display_name}",
-        )
+        async with _audit_txn(
+            AuditAction.tag_create,
+            actor.name,
+            body.name,
+        ) as ac:
+            try:
+                tag = await _db_tags.create(
+                    name=body.name,
+                    org_slug=body.org_slug,
+                    display_name=body.display_name,
+                    description=body.description,
+                    logo_url=body.logo_url,
+                    created_by=actor.name,
+                )
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from None
+            ac.target = tag.qualified_name
+            ac.detail = f"display_name={tag.display_name}"
         return tag
 
     @app.put("/v1/tags/{tag_name}", response_model=TagInfo, tags=["tags"])
@@ -4868,20 +5798,21 @@ def create_app(
                         403,
                         "only org owners or global admins can edit org-scoped tags",
                     )
-        tag = await _db_tags.update(
-            name=tag_name,
-            org_slug=org,
-            display_name=body.display_name,
-            description=body.description,
-            logo_url=body.logo_url,
-        )
-        if tag is None:
-            raise HTTPException(404, "tag not found")
-        await _db_audit.record(
-            action=AuditAction.tag_update,
-            actor=actor.name,
-            target=tag.qualified_name,
-        )
+        async with _audit_txn(
+            AuditAction.tag_update,
+            actor.name,
+            tag_name,
+        ) as ac:
+            tag = await _db_tags.update(
+                name=tag_name,
+                org_slug=org,
+                display_name=body.display_name,
+                description=body.description,
+                logo_url=body.logo_url,
+            )
+            if tag is None:
+                raise HTTPException(404, "tag not found")
+            ac.target = tag.qualified_name
         return tag
 
     @app.delete("/v1/tags/{tag_name}", tags=["tags"])
@@ -4902,21 +5833,24 @@ def create_app(
                         403,
                         "only org owners or global admins can delete org-scoped tags",
                     )
-        deleted = await _db_tags.delete(name=tag_name, org_slug=org)
-        if not deleted:
-            raise HTTPException(404, "tag not found")
         qualified = f"{org}/{tag_name}" if org else tag_name
-        await _db_audit.record(
-            action=AuditAction.tag_delete,
-            actor=actor.name,
-            target=qualified,
-        )
+        async with _audit_txn(
+            AuditAction.tag_delete,
+            actor.name,
+            qualified,
+        ):
+            deleted = await _db_tags.delete(name=tag_name, org_slug=org)
+            if not deleted:
+                raise HTTPException(404, "tag not found")
         return {"message": f"tag '{qualified}' deleted"}
 
     # ── Mirror endpoints ────────────────────────────────────
 
     @app.post("/v1/mirrors/register", response_model=MirrorInfo, tags=["mirrors"])
-    async def register_mirror(body: MirrorRegisterRequest):
+    async def register_mirror(
+        body: MirrorRegisterRequest,
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
         """Register a mirror with the primary server.
 
         Mirrors call this endpoint to announce themselves.  The primary
@@ -4936,17 +5870,17 @@ def create_app(
         url = body.url.rstrip("/")
         if not url.startswith(("http://", "https://")):
             raise HTTPException(422, "mirror URL must start with http:// or https://")
-        info = await _db_mirrors.register(
-            url=url,
-            display_name=body.display_name,
-            contact=body.contact,
-        )
-        await _db_audit.record(
-            action=AuditAction.mirror_register,
-            actor="mirror",
-            target=url,
-            detail=body.display_name or "",
-        )
+        async with _audit_txn(
+            AuditAction.mirror_register,
+            actor.name,
+            url,
+            body.display_name or "",
+        ):
+            info = await _db_mirrors.register(
+                url=url,
+                display_name=body.display_name,
+                contact=body.contact,
+            )
         return info
 
     @app.get("/v1/mirrors", response_model=MirrorListResponse, tags=["mirrors"])
@@ -4987,14 +5921,14 @@ def create_app(
         """
         if not _use_db or _db_mirrors is None:
             raise HTTPException(501, "mirror registry requires a database backend")
-        found = await _db_mirrors.reject(url, actor.name)
-        if not found:
-            raise HTTPException(404, f"mirror not found: {url}")
-        await _db_audit.record(
-            action=AuditAction.mirror_reject,
-            actor=actor.name,
-            target=url,
-        )
+        async with _audit_txn(
+            AuditAction.mirror_reject,
+            actor.name,
+            url,
+        ):
+            found = await _db_mirrors.reject(url, actor.name)
+            if not found:
+                raise HTTPException(404, f"mirror not found: {url}")
         return {"message": "mirror rejected", "url": url}
 
     @app.delete("/v1/mirrors", tags=["mirrors"])
@@ -5005,14 +5939,14 @@ def create_app(
         """Permanently remove a mirror from the registry (admin-only)."""
         if not _use_db or _db_mirrors is None:
             raise HTTPException(501, "mirror registry requires a database backend")
-        found = await _db_mirrors.remove(url)
-        if not found:
-            raise HTTPException(404, f"mirror not found: {url}")
-        await _db_audit.record(
-            action=AuditAction.mirror_remove,
-            actor=actor.name,
-            target=url,
-        )
+        async with _audit_txn(
+            AuditAction.mirror_remove,
+            actor.name,
+            url,
+        ):
+            found = await _db_mirrors.remove(url)
+            if not found:
+                raise HTTPException(404, f"mirror not found: {url}")
         return {"message": "mirror removed", "url": url}
 
     # ── Builders ────────────────────────────────────────────
@@ -5030,23 +5964,23 @@ def create_app(
     ):
         """Register a new builder or re-register an existing one."""
         _require_db_builders()
-        info = await _db_builders.register(
-            name=body.name,
-            platform=body.platform,
-            arch=body.arch,
-            registered_by=actor.name,
-            org_slug=body.org_slug,
-            labels=body.labels,
-            capabilities=body.capabilities,
-            max_jobs=body.max_jobs,
-            prefer_affinity=body.prefer_affinity,
-        )
-        await _db_audit.record(
-            action=AuditAction.builder_register,
-            actor=actor.name,
-            target=f"{body.org_slug}/{body.name}" if body.org_slug else body.name,
-            detail=f"{body.platform}/{body.arch}",
-        )
+        async with _audit_txn(
+            AuditAction.builder_register,
+            actor.name,
+            f"{body.org_slug}/{body.name}" if body.org_slug else body.name,
+            f"{body.platform}/{body.arch}",
+        ):
+            info = await _db_builders.register(
+                name=body.name,
+                platform=body.platform,
+                arch=body.arch,
+                registered_by=actor.name,
+                org_slug=body.org_slug,
+                labels=body.labels,
+                capabilities=body.capabilities,
+                max_jobs=body.max_jobs,
+                prefer_affinity=body.prefer_affinity,
+            )
         await emit_webhook_event(
             "builder.online",
             {
@@ -5130,20 +6064,20 @@ def create_app(
     ):
         """Update mutable builder fields."""
         _require_db_builders()
-        info = await _db_builders.update(
-            builder_id,
-            labels=body.labels,
-            capabilities=body.capabilities,
-            max_jobs=body.max_jobs,
-            prefer_affinity=body.prefer_affinity,
-        )
-        if info is None:
-            raise HTTPException(404, f"builder {builder_id} not found")
-        await _db_audit.record(
-            action=AuditAction.builder_update,
-            actor=actor.name,
-            target=str(builder_id),
-        )
+        async with _audit_txn(
+            AuditAction.builder_update,
+            actor.name,
+            str(builder_id),
+        ):
+            info = await _db_builders.update(
+                builder_id,
+                labels=body.labels,
+                capabilities=body.capabilities,
+                max_jobs=body.max_jobs,
+                prefer_affinity=body.prefer_affinity,
+            )
+            if info is None:
+                raise HTTPException(404, f"builder {builder_id} not found")
         return info
 
     @app.post(
@@ -5184,12 +6118,12 @@ def create_app(
         info = await _db_builders.get(builder_id)
         if info is None:
             raise HTTPException(404, f"builder {builder_id} not found")
-        await _db_builders.unregister(builder_id)
-        await _db_audit.record(
-            action=AuditAction.builder_unregister,
-            actor=actor.name,
-            target=f"{info.org_slug}/{info.name}" if info.org_slug else info.name,
-        )
+        async with _audit_txn(
+            AuditAction.builder_unregister,
+            actor.name,
+            f"{info.org_slug}/{info.name}" if info.org_slug else info.name,
+        ):
+            await _db_builders.unregister(builder_id)
         await emit_webhook_event(
             "builder.offline",
             {
@@ -5215,30 +6149,33 @@ def create_app(
     ):
         """Submit a single build job."""
         _require_db_build_jobs()
+        if body.org_slug and actor.role != TokenRole.admin and _db_orgs is not None:
+            if not await _db_orgs.is_member(body.org_slug, actor.name):
+                raise HTTPException(403, "not a member of this organization")
         # wasm/wasi/cosmo only support static linking — enforce server-side.
         link = body.link
         if body.platform in ("wasm", "wasi", "cosmo") and link != "static":
             link = "static"
-        info = await _db_build_jobs.create(
-            recipe_name=body.recipe_name,
-            platform=body.platform,
-            arch=body.arch,
-            submitted_by=actor.name,
-            recipe_version=body.recipe_version,
-            recipe_hash=body.recipe_hash,
-            config=body.config,
-            link=link,
-            org_slug=body.org_slug,
-            priority=body.priority,
-            timeout_seconds=body.timeout_seconds,
-            depends_on=body.depends_on,
-        )
-        await _db_audit.record(
-            action=AuditAction.build_submit,
-            actor=actor.name,
-            target=f"{body.recipe_name}@{body.platform}/{body.arch}",
-            detail=f"job #{info.id}",
-        )
+        async with _audit_txn(
+            AuditAction.build_submit,
+            actor.name,
+            f"{body.recipe_name}@{body.platform}/{body.arch}",
+        ) as ac:
+            info = await _db_build_jobs.create(
+                recipe_name=body.recipe_name,
+                platform=body.platform,
+                arch=body.arch,
+                submitted_by=actor.name,
+                recipe_version=body.recipe_version,
+                recipe_hash=body.recipe_hash,
+                config=body.config,
+                link=link,
+                org_slug=body.org_slug,
+                priority=body.priority,
+                timeout_seconds=body.timeout_seconds,
+                depends_on=body.depends_on,
+            )
+            ac.detail = f"job #{info.id}"
         return info
 
     @app.post("/v1/builds/dag", response_model=DagSubmitResponse, tags=["builds"])
@@ -5254,7 +6191,15 @@ def create_app(
         import uuid as _uuid
 
         _require_db_build_jobs()
+        if actor.role != TokenRole.admin and _db_orgs is not None:
+            for _org in {j.org_slug for j in body.jobs if j.org_slug}:
+                if not await _db_orgs.is_member(_org, actor.name):
+                    raise HTTPException(403, f"not a member of organization '{_org}'")
         dag_id = body.dag_id or str(_uuid.uuid4())[:12]
+        import re as _re_dag
+
+        if not _re_dag.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", dag_id):
+            raise HTTPException(422, "invalid dag_id (allowed: letters, digits, . _ -)")
         jobs_dicts = [
             {
                 "recipe_name": j.recipe_name,
@@ -5272,24 +6217,54 @@ def create_app(
             }
             for j in body.jobs
         ]
-        try:
-            infos = await _db_build_jobs.create_dag(
-                jobs=jobs_dicts, dag_id=dag_id, submitted_by=actor.name
-            )
-        except Exception as exc:
-            import logging as _logging
+        async with _audit_txn(
+            AuditAction.build_submit,
+            actor.name,
+            f"dag:{dag_id}",
+        ) as ac:
+            try:
+                infos = await _db_build_jobs.create_dag(
+                    jobs=jobs_dicts, dag_id=dag_id, submitted_by=actor.name
+                )
+            except Exception as exc:
+                import logging as _logging
 
-            _logging.getLogger("cvcpkg.server").exception(
-                "create_dag failed for dag_id=%s (%d jobs)", dag_id, len(jobs_dicts)
-            )
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        await _db_audit.record(
-            action=AuditAction.build_submit,
-            actor=actor.name,
-            target=f"dag:{dag_id}",
-            detail=f"{len(infos)} jobs",
-        )
+                _logging.getLogger("cvcpkg.server").exception(
+                    "create_dag failed for dag_id=%s (%d jobs)", dag_id, len(jobs_dicts)
+                )
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
+            ac.detail = f"{len(infos)} jobs"
         return DagSubmitResponse(dag_id=dag_id, total=len(infos), jobs=infos)
+
+    async def _assert_build_visible(actor: TokenRecord, info) -> None:
+        """404 unless *actor* may see build job *info* (member of its private org)."""
+        if actor.role == TokenRole.admin or _db_orgs is None:
+            return
+        org = getattr(info, "org_slug", "") or ""
+        if not org:
+            return
+        org_info = await _db_orgs.get(org)
+        if org_info is not None and org_info.is_private:
+            if not await _db_orgs.is_member(org, actor.name):
+                raise HTTPException(404, "build job not found")
+
+    async def _assert_dag_visible(actor: TokenRecord, dag_id: str) -> None:
+        """404 unless *actor* may act on EVERY private org in DAG *dag_id* (a DAG
+        can span orgs; checking only jobs[0] would let a member of one org
+        cancel/pause another org's jobs in the same DAG)."""
+        if actor.role == TokenRole.admin or _db_orgs is None:
+            return
+        _jobs, _ = await _db_build_jobs.list_jobs(dag_id=dag_id, limit=1000, offset=0)
+        for _org in {(getattr(j, "org_slug", "") or "") for j in _jobs}:
+            if not _org:
+                continue
+            _oi = await _db_orgs.get(_org)
+            if (
+                _oi is not None
+                and _oi.is_private
+                and not await _db_orgs.is_member(_org, actor.name)
+            ):
+                raise HTTPException(404, "build job not found")
 
     @app.get("/v1/builds", response_model=BuildJobListResponse, tags=["builds"])
     async def list_builds(
@@ -5320,8 +6295,40 @@ def create_app(
             builder_id=builder_id,
             limit=limit,
             offset=offset,
+            visible_to=(None if actor.role == TokenRole.admin else actor.name),
         )
         return BuildJobListResponse(total=total, jobs=jobs)
+
+    @app.get("/v1/builds/next-claimable", tags=["builds"])
+    async def next_claimable_build(
+        platform: str = Query(..., description="Target platform, e.g. 'macos'"),
+        arch: str = Query("", description="Target arch; empty matches any"),
+        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+    ):
+        """Return the next pending job for *platform*, or 204 when none.
+
+        The builder-oriented ``/v1/builders/{id}/next-job`` requires a
+        registered builder to dispatch to.  A platform whose runners are
+        ephemeral (macOS on GitHub-hosted runners) has no such builder, and
+        registering one per CI run leaves a dead registration behind for a
+        machine that no longer exists.  This selects work by *platform*
+        instead, so a runner can drain the queue while staying anonymous.
+
+        Ordering matches the dispatcher: highest priority first, then oldest.
+        """
+        _require_db_build_jobs()
+        candidates, _total = await _db_build_jobs.list_jobs(
+            status=BuildJobStatus.pending,
+            platform=platform,
+            arch=arch or None,
+            limit=500,
+            # Never hand a private org's job to a caller who cannot see it.
+            visible_to=None if actor.role == TokenRole.admin else actor.name,
+        )
+        if not candidates:
+            return Response(status_code=204)
+        candidates.sort(key=lambda j: (-j.priority, j.submitted_at))
+        return candidates[0]
 
     @app.get("/v1/builds/{job_id}", response_model=BuildJobInfo, tags=["builds"])
     async def get_build(
@@ -5333,6 +6340,7 @@ def create_app(
         info = await _db_build_jobs.get(job_id)
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
+        await _assert_build_visible(actor, info)
         return info
 
     @app.post("/v1/builds/{job_id}/cancel", tags=["builds"])
@@ -5357,30 +6365,39 @@ def create_app(
         cascade-cancelled, and the builder is notified via WebSocket.
         """
         _require_db_build_jobs()
-        info = await _db_build_jobs.cancel(job_id, force=force)
-        if info is None:
+        _existing = await _db_build_jobs.get(job_id)
+        if _existing is None:
             raise HTTPException(404, f"build job {job_id} not found")
+        await _assert_build_visible(actor, _existing)
+        cascaded = 0
+        # Cancel + the force-cascade + audit commit as one unit; the no-op
+        # path (running-without-force / already-terminal) records nothing.
+        async with _audit_txn(
+            AuditAction.build_cancel,
+            actor.name,
+            str(job_id),
+            "force" if force else "",
+        ) as ac:
+            info = await _db_build_jobs.cancel(job_id, force=force)
+            if info is None:
+                raise HTTPException(404, f"build job {job_id} not found")
+            if info.status != BuildJobStatus.cancelled:
+                ac.skip = True
+            elif force:
+                cascaded = await _db_build_jobs.cancel_downstream(job_id)
         if info.status != BuildJobStatus.cancelled:
             # The store no-op'd (e.g. running without force, or already terminal)
             return {"message": "no-op", "id": job_id, "status": info.status}
-        await _db_audit.record(
-            action=AuditAction.build_cancel,
-            actor=actor.name,
-            target=str(job_id),
-            detail="force" if force else "",
-        )
-        cascaded = 0
-        if force:
-            cascaded = await _db_build_jobs.cancel_downstream(job_id)
-            if info.builder_id is not None:
-                await _ws_send(
-                    info.builder_id,
-                    {
-                        "type": "job.cancel",
-                        "job_id": job_id,
-                        "message": f"force-cancelled by {actor.name}",
-                    },
-                )
+        # Notify the builder + webhook subscribers after the commit.
+        if force and info.builder_id is not None:
+            await _ws_send(
+                info.builder_id,
+                {
+                    "type": "job.cancel",
+                    "job_id": job_id,
+                    "message": f"force-cancelled by {actor.name}",
+                },
+            )
         await emit_webhook_event(
             "build.cancelled",
             {
@@ -5407,13 +6424,14 @@ def create_app(
     ):
         """Cancel all pending/dispatched jobs in a DAG."""
         _require_db_build_jobs()
-        count = await _db_build_jobs.cancel_dag(dag_id)
-        await _db_audit.record(
-            action=AuditAction.build_cancel,
-            actor=actor.name,
-            target=f"dag:{dag_id}",
-            detail=f"{count} jobs cancelled",
-        )
+        await _assert_dag_visible(actor, dag_id)
+        async with _audit_txn(
+            AuditAction.build_cancel,
+            actor.name,
+            f"dag:{dag_id}",
+        ) as ac:
+            count = await _db_build_jobs.cancel_dag(dag_id)
+            ac.detail = f"{count} jobs cancelled"
         await emit_webhook_event(
             "build.cancelled",
             {
@@ -5431,6 +6449,10 @@ def create_app(
     ):
         """Pause a pending or dispatched build job."""
         _require_db_build_jobs()
+        _existing = await _db_build_jobs.get(job_id)
+        if _existing is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _assert_build_visible(actor, _existing)
         info = await _db_build_jobs.pause(job_id)
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
@@ -5443,6 +6465,10 @@ def create_app(
     ):
         """Resume a paused build job back to pending."""
         _require_db_build_jobs()
+        _existing = await _db_build_jobs.get(job_id)
+        if _existing is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _assert_build_visible(actor, _existing)
         info = await _db_build_jobs.resume(job_id)
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
@@ -5455,6 +6481,7 @@ def create_app(
     ):
         """Pause all pending/dispatched jobs in a DAG."""
         _require_db_build_jobs()
+        await _assert_dag_visible(actor, dag_id)
         count = await _db_build_jobs.pause_dag(dag_id)
         return {"message": "dag paused", "dag_id": dag_id, "paused": count}
 
@@ -5465,6 +6492,7 @@ def create_app(
     ):
         """Resume all paused jobs in a DAG back to pending."""
         _require_db_build_jobs()
+        await _assert_dag_visible(actor, dag_id)
         count = await _db_build_jobs.resume_dag(dag_id)
         return {"message": "dag resumed", "dag_id": dag_id, "resumed": count}
 
@@ -5478,17 +6506,68 @@ def create_app(
         body: BuildJobClaimRequest,
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
-        """Builder claims a dispatched job → running."""
+        """A worker claims a pending or dispatched job → running.
+
+        ``builder_id`` may be omitted by an unregistered worker draining a
+        queue for a platform with no persistent builder (macOS).  Such a
+        claim must still say who it is, so ``claimant`` is required in that
+        case — a running job is never anonymous.
+        """
         _require_db_build_jobs()
-        info = await _db_build_jobs.claim(job_id, body.builder_id)
-        if info is None:
+        if body.builder_id is None and not body.claimant.strip():
+            raise HTTPException(
+                422, "claim requires either builder_id or claimant (a job may not be anonymous)"
+            )
+        _existing = await _db_build_jobs.get(job_id)
+        if _existing is None:
             raise HTTPException(404, f"build job {job_id} not found")
-        await _db_audit.record(
-            action=AuditAction.build_claim,
-            actor=actor.name,
-            target=str(job_id),
-            detail=f"builder #{body.builder_id}",
-        )
+        await _assert_build_visible(actor, _existing)
+        # Refuse a *running* job that belongs to someone else.  ``claim``
+        # silently no-ops on a non-claimable job and hands the row back, so
+        # without this the loser of a race gets a 200 and builds a job another
+        # worker is already building.  That was unreachable while every job was
+        # dispatched to exactly one builder, but unregistered workers select by
+        # platform, so two of them can now reach the same job.
+        #
+        # Re-claiming a job you already hold stays idempotent: a builder whose
+        # claim response was lost to a network blip must be able to retry.
+        # Terminal states keep no-opping, as before.
+        if _existing.status == BuildJobStatus.running:
+            _claimant = body.claimant.strip()
+            mine = (body.builder_id is not None and _existing.builder_id == body.builder_id) or (
+                bool(_claimant) and _existing.claimed_by == _claimant
+            )
+            if not mine:
+                raise HTTPException(409, f"build job {job_id} is already running")
+        _who = f"builder #{body.builder_id}" if body.builder_id is not None else body.claimant
+        async with _audit_txn(
+            AuditAction.build_claim,
+            actor.name,
+            str(job_id),
+            _who,
+        ):
+            try:
+                info = await _db_build_jobs.claim(
+                    job_id, body.builder_id, claimant=body.claimant.strip()
+                )
+            except BuildJobAlreadyClaimedError:
+                # The pre-check above only sees a snapshot; between it and the
+                # claim another worker can win the job.  ``claim`` settles it
+                # atomically, so trust that verdict here.  Re-claiming a job we
+                # already hold stays idempotent (a builder whose claim response
+                # was lost must be able to retry); anything else means the other
+                # worker owns it and we must NOT build it too.
+                _held = await _db_build_jobs.get(job_id)
+                _claimant_now = body.claimant.strip()
+                _mine = _held is not None and (
+                    (body.builder_id is not None and _held.builder_id == body.builder_id)
+                    or (bool(_claimant_now) and _held.claimed_by == _claimant_now)
+                )
+                if not _mine:
+                    raise HTTPException(409, f"build job {job_id} is already running") from None
+                info = _held
+            if info is None:
+                raise HTTPException(404, f"build job {job_id} not found")
         await emit_webhook_event(
             "build.started",
             {
@@ -5497,6 +6576,7 @@ def create_app(
                 "platform": info.platform,
                 "arch": info.arch,
                 "builder_id": body.builder_id,
+                "claimed_by": info.claimed_by,
             },
             org_slug=info.org_slug,
         )
@@ -5514,14 +6594,14 @@ def create_app(
     ):
         """Report a build job as completed successfully."""
         _require_db_build_jobs()
-        info = await _db_build_jobs.complete(job_id, result_archive_url=body.result_archive_url)
-        if info is None:
+        _existing = await _db_build_jobs.get(job_id)
+        if _existing is None:
             raise HTTPException(404, f"build job {job_id} not found")
-        await _db_audit.record(
-            action=AuditAction.build_complete,
-            actor=actor.name,
-            target=str(job_id),
-        )
+        await _assert_build_visible(actor, _existing)
+        async with _audit_txn(AuditAction.build_complete, actor.name, str(job_id)):
+            info = await _db_build_jobs.complete(job_id, result_archive_url=body.result_archive_url)
+            if info is None:
+                raise HTTPException(404, f"build job {job_id} not found")
         await emit_webhook_event(
             "build.completed",
             {
@@ -5557,17 +6637,22 @@ def create_app(
     ):
         """Report a build job as failed."""
         _require_db_build_jobs()
-        info = await _db_build_jobs.fail(job_id, error_message=body.error_message)
-        if info is None:
+        _existing = await _db_build_jobs.get(job_id)
+        if _existing is None:
             raise HTTPException(404, f"build job {job_id} not found")
-        # Cascade-cancel downstream dependents (parity with the WS job.fail path).
-        cascaded = await _db_build_jobs.cancel_downstream(job_id)
-        await _db_audit.record(
-            action=AuditAction.build_fail,
-            actor=actor.name,
-            target=str(job_id),
-            detail=body.error_message[:200] if body.error_message else "",
-        )
+        await _assert_build_visible(actor, _existing)
+        async with _audit_txn(
+            AuditAction.build_fail,
+            actor.name,
+            str(job_id),
+            body.error_message[:200] if body.error_message else "",
+        ):
+            info = await _db_build_jobs.fail(job_id, error_message=body.error_message)
+            if info is None:
+                raise HTTPException(404, f"build job {job_id} not found")
+            # Cascade-cancel downstream dependents in the same transaction
+            # (parity with the WS job.fail path).
+            cascaded = await _db_build_jobs.cancel_downstream(job_id)
         await emit_webhook_event(
             "build.failed",
             {
@@ -5606,6 +6691,10 @@ def create_app(
     ):
         """Append a chunk of log data to a build job's log."""
         _require_db_build_jobs()
+        _existing = await _db_build_jobs.get(job_id)
+        if _existing is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _assert_build_visible(actor, _existing)
         state = _get_state()
         info = await _db_build_jobs.append_log(job_id, body.data, logs_dir=state.logs_dir())
         if info is None:
@@ -5622,6 +6711,10 @@ def create_app(
     ):
         """Download the full log for a build job."""
         _require_db_build_jobs()
+        _job = await _db_build_jobs.get(job_id)
+        if _job is None:
+            raise HTTPException(404, f"build job {job_id} not found")
+        await _assert_build_visible(actor, _job)
         state = _get_state()
         path = await _db_build_jobs.get_log_path(job_id, logs_dir=state.logs_dir())
         if path is None:
@@ -5676,10 +6769,18 @@ def create_app(
             raise HTTPException(401, "invalid or expired token")
         if record.role not in (TokenRole.publisher, TokenRole.admin):
             raise HTTPException(403, "insufficient role")
+        # Grace secrets are data-plane-only (publish/upload); privileged
+        # build-log access is not opted in, so reject them here too.
+        _reject_grace_secret(record)
+        # Enforce org membership when the job exists; a missing job falls through
+        # to the generator's existing "job not found" SSE event (preserved contract).
+        _job = await _db_build_jobs.get(job_id)
+        if _job is not None:
+            await _assert_build_visible(record, _job)
         state = _get_state()
 
         return StreamingResponse(
-            _build_log_events(job_id, state.logs_dir()),
+            _build_log_events(job_id, state.logs_dir(), raw, _assert_build_visible),
             media_type="text/event-stream",
         )
 
@@ -5733,6 +6834,13 @@ def create_app(
         if actor.role not in (TokenRole.publisher, TokenRole.admin):
             await websocket.close(code=4003, reason="insufficient role")
             return
+        # A pre-rotation grace secret must not open a long-lived builder
+        # session that outlives the grace window (grace secrets are
+        # data-plane-only; _reject_grace_secret can't be used here because
+        # it raises HTTP, not a WS close).
+        if actor.via_previous_hash:
+            await websocket.close(code=4003, reason="pre-rotation secret not allowed")
+            return
 
         # Validate builder exists
         if not _use_db or _db_builders is None:
@@ -5747,9 +6855,39 @@ def create_app(
         _ws_builders[builder_id] = websocket
         logger.info("builder %d connected via WebSocket", builder_id)
 
+        last_reauth = time.monotonic()
         try:
             while True:
-                data = await websocket.receive_json()
+                # Block for a frame, but wake at least once per re-auth interval
+                # so an idle socket is still re-verified promptly.
+                try:
+                    data = await asyncio.wait_for(
+                        websocket.receive_json(),
+                        timeout=_WS_REAUTH_INTERVAL_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    data = None
+
+                # Re-verify the token periodically: one-shot auth at connect is
+                # not enough for a long-lived socket, so a revoked, expired, or
+                # rotated credential loses job-plane access here instead of
+                # surviving until the builder happens to disconnect.
+                now = time.monotonic()
+                if data is None or now - last_reauth >= _WS_REAUTH_INTERVAL_SECONDS:
+                    rejection = _ws_reauth_rejection(await _authenticate_token(token_value))
+                    if rejection is not None:
+                        code, reason = rejection
+                        logger.info(
+                            "builder %d socket closed on re-auth: %s",
+                            builder_id,
+                            reason,
+                        )
+                        await websocket.close(code=code, reason=reason)
+                        break
+                    last_reauth = now
+                if data is None:
+                    continue
+
                 msg_type = data.get("type", "")
 
                 if msg_type == "heartbeat":
@@ -5896,6 +7034,20 @@ def create_app(
         if not _re_mod.match(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$", name):
             raise HTTPException(400, "invalid recipe name")
 
+        # Validate + authorize the org namespace: org_slug lands in a
+        # filesystem path (recipe_bundles/<org_slug>), so a bare length bound
+        # would allow traversal, and any publisher could otherwise write into
+        # another org's private recipe namespace.
+        if org_slug:
+            from cvcpkg.server.models import validate_org_slug
+
+            slug_err = validate_org_slug(org_slug)
+            if slug_err:
+                raise HTTPException(422, slug_err)
+            if actor.role != TokenRole.admin and _db_orgs is not None:
+                if not await _db_orgs.is_member(org_slug, actor.name):
+                    raise HTTPException(403, "not a member of this organization")
+
         state = _get_state()
         recipes_dir = state.state_dir / "recipe_bundles"
         if org_slug:
@@ -5905,24 +7057,39 @@ def create_app(
         dest = recipes_dir / f"{name}.tar.gz"
         # Write uploaded file
         content = await file.read()
+        # Reject bundles with path-traversal / link-escape members so a poisoned
+        # recipe can't write outside the extraction dir on a client that later
+        # unpacks it (defense in depth alongside safe_tar_extractall).
+        import io as _io_mod
+        import tarfile as _tf_mod
+
+        try:
+            from cvcpkg._archive import tar_has_unsafe_member
+
+            with _tf_mod.open(fileobj=_io_mod.BytesIO(content), mode="r:gz") as _chk:
+                _bad_member = tar_has_unsafe_member(_chk)
+        except _tf_mod.TarError as exc:
+            raise HTTPException(400, "recipe bundle is not a valid tar.gz") from exc
+        if _bad_member is not None:
+            raise HTTPException(400, f"unsafe recipe bundle member: {_bad_member!r}")
         dest.write_bytes(content)
         bundle_size = len(content)
 
-        info = await _db_recipes.upload(
-            name=name,
-            bundle_path=str(dest),
-            bundle_size=bundle_size,
-            uploaded_by=actor.name,
-            version=version,
-            recipe_hash=recipe_hash,
-            org_slug=org_slug,
-        )
-        await _db_audit.record(
-            action=AuditAction.recipe_upload,
-            actor=actor.name,
-            target=name,
-            detail=f"version={version} org={org_slug}" if org_slug else f"version={version}",
-        )
+        async with _audit_txn(
+            AuditAction.recipe_upload,
+            actor.name,
+            name,
+            f"version={version} org={org_slug}" if org_slug else f"version={version}",
+        ):
+            info = await _db_recipes.upload(
+                name=name,
+                bundle_path=str(dest),
+                bundle_size=bundle_size,
+                uploaded_by=actor.name,
+                version=version,
+                recipe_hash=recipe_hash,
+                org_slug=org_slug,
+            )
         # Notify connected builders of the new/updated recipe
         bundle_url = f"/v1/recipes/{name}"
         if org_slug:
@@ -5952,9 +7119,33 @@ def create_app(
     ):
         """List server-managed recipe bundles."""
         _require_db_recipes()
+        is_admin = actor.role == TokenRole.admin
+        allowed: set[str] | None = None
+        if not is_admin and _db_orgs is not None:
+            allowed = {""} | await _db_orgs.member_org_slugs(actor.name)
+            if org_slug is not None and org_slug not in allowed:
+                _o = await _db_orgs.get(org_slug)
+                if _o is not None and _o.is_private:
+                    raise HTTPException(403, "not a member of this organization")
         recipes, total = await _db_recipes.list_recipes(
             org_slug=org_slug, limit=limit, offset=offset
         )
+        if allowed is not None and org_slug is None:
+            _priv: dict[str, bool] = {}
+            visible = []
+            for r in recipes:
+                o = r.org_slug or ""
+                if o in allowed:
+                    visible.append(r)
+                    continue
+                if o not in _priv:
+                    _oi = await _db_orgs.get(o)
+                    _priv[o] = bool(_oi and _oi.is_private)
+                if not _priv[o]:
+                    visible.append(r)
+            if len(visible) != len(recipes):
+                total = len(visible)
+            recipes = visible
         return RecipeListResponse(total=total, recipes=recipes)
 
     @app.get(
@@ -5979,6 +7170,16 @@ def create_app(
 
         buf = io.BytesIO()
 
+        # Private-org recipe sets are visible only to members / admins.
+        if org_slug and _use_db and _db_orgs is not None:
+            _org = await _db_orgs.get(org_slug)
+            if _org is not None and _org.is_private:
+                _is_admin = _caller is not None and _caller.role == TokenRole.admin
+                if not _is_admin and (
+                    _caller is None or not await _db_orgs.is_member(org_slug, _caller.name)
+                ):
+                    raise HTTPException(404, "no recipes available")
+
         if _use_db and _db_recipes is not None:
             recipes_list, _ = await _db_recipes.list_recipes(
                 org_slug=org_slug or None, limit=10000, offset=0
@@ -5989,6 +7190,8 @@ def create_app(
                     if bundle_path and Path(bundle_path).is_file():
                         with tarfile.open(bundle_path, "r:gz") as inner:
                             for member in inner.getmembers():
+                                if member.name.startswith("/") or ".." in Path(member.name).parts:
+                                    continue
                                 f = inner.extractfile(member) if member.isfile() else None
                                 tar.addfile(member, f)
         else:
@@ -6038,6 +7241,14 @@ def create_app(
     ):
         """Download a recipe bundle (tar.gz)."""
         _require_db_recipes()
+        if org_slug and _db_orgs is not None and actor.role != TokenRole.admin:
+            _o = await _db_orgs.get(org_slug)
+            if (
+                _o is not None
+                and _o.is_private
+                and not await _db_orgs.is_member(org_slug, actor.name)
+            ):
+                raise HTTPException(404, f"recipe '{name}' not found")
         info = await _db_recipes.get(name, org_slug=org_slug)
         if info is None:
             raise HTTPException(404, f"recipe '{name}' not found")
@@ -6066,14 +7277,10 @@ def create_app(
         if bundle_path and Path(bundle_path).is_file():
             Path(bundle_path).unlink()
 
-        deleted = await _db_recipes.delete(name, org_slug=org_slug)
-        if not deleted:
-            raise HTTPException(404, f"recipe '{name}' not found")
-        await _db_audit.record(
-            action=AuditAction.recipe_delete,
-            actor=actor.name,
-            target=name,
-        )
+        async with _audit_txn(AuditAction.recipe_delete, actor.name, name):
+            deleted = await _db_recipes.delete(name, org_slug=org_slug)
+            if not deleted:
+                raise HTTPException(404, f"recipe '{name}' not found")
         return {"ok": True, "name": name}
 
     @app.post(
@@ -6161,18 +7368,20 @@ def create_app(
     ):
         """Register a new webhook (admin only)."""
         _require_db_webhooks()
-        info = await _db_webhooks.register(
-            url=body.url,
-            events=body.events,
-            registered_by=actor.name,
-            org_slug=body.org_slug,
-        )
-        await _db_audit.record(
-            action=AuditAction.webhook_register,
-            actor=actor.name,
-            target=str(info.id),
-            detail=f"url={body.url}",
-        )
+        if not _url_target_allowed(body.url):
+            raise HTTPException(
+                422, "webhook url must be an http(s) URL resolving to a public address"
+            )
+        async with _audit_txn(
+            AuditAction.webhook_register, actor.name, "", f"url={body.url}"
+        ) as ac:
+            info = await _db_webhooks.register(
+                url=body.url,
+                events=body.events,
+                registered_by=actor.name,
+                org_slug=body.org_slug,
+            )
+            ac.target = str(info.id)
         return info
 
     @app.get(
@@ -6223,19 +7432,15 @@ def create_app(
     ):
         """Update a webhook (admin only)."""
         _require_db_webhooks()
-        info = await _db_webhooks.update(
-            webhook_id,
-            url=body.url,
-            events=body.events,
-            active=body.active,
-        )
-        if info is None:
-            raise HTTPException(404, f"webhook {webhook_id} not found")
-        await _db_audit.record(
-            action=AuditAction.webhook_update,
-            actor=actor.name,
-            target=str(webhook_id),
-        )
+        async with _audit_txn(AuditAction.webhook_update, actor.name, str(webhook_id)):
+            info = await _db_webhooks.update(
+                webhook_id,
+                url=body.url,
+                events=body.events,
+                active=body.active,
+            )
+            if info is None:
+                raise HTTPException(404, f"webhook {webhook_id} not found")
         return info
 
     @app.delete(
@@ -6248,14 +7453,10 @@ def create_app(
     ):
         """Delete a webhook (admin only)."""
         _require_db_webhooks()
-        deleted = await _db_webhooks.delete(webhook_id)
-        if not deleted:
-            raise HTTPException(404, f"webhook {webhook_id} not found")
-        await _db_audit.record(
-            action=AuditAction.webhook_delete,
-            actor=actor.name,
-            target=str(webhook_id),
-        )
+        async with _audit_txn(AuditAction.webhook_delete, actor.name, str(webhook_id)):
+            deleted = await _db_webhooks.delete(webhook_id)
+            if not deleted:
+                raise HTTPException(404, f"webhook {webhook_id} not found")
         return {"ok": True, "id": webhook_id}
 
     @app.post(
@@ -6338,6 +7539,57 @@ def create_app(
             delete_logs=delete_logs,
         )
         return {"ok": True, "purged": purged}
+
+    @app.post(
+        "/v1/admin/gc/yanked",
+        tags=["admin"],
+    )
+    async def admin_gc_yanked(
+        older_than_days: int = Query(
+            _YANK_RETENTION_DAYS,
+            ge=1,
+            description="Purge bundles yanked more than this many days ago.",
+        ),
+        dry_run: bool = Query(
+            True,
+            description="Report what would be purged without deleting anything.",
+        ),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Run the yank-retention purge on demand (admin only).
+
+        The same operation as the background GC, exposed so an operator can
+        preview it (``dry_run=true``, the default -- artifact deletion should
+        never be the accidental default) and so it is synchronously testable.
+        Rows with ``yanked_at IS NULL`` and tagged releases are exempt, exactly
+        as the loop.
+        """
+        if not _use_db or _db_packages is None:
+            raise HTTPException(501, "yank retention GC requires the database backend")
+        state = _get_state()
+        purged = await _db_packages.purge_yanked(
+            older_than_days=older_than_days,
+            storage_uri=state.storage_uri,
+            dry_run=dry_run,
+        )
+        if not dry_run and purged:
+            org_deltas: dict[str, int] = {}
+            for d in purged:
+                slug = d.get("org_slug", "")
+                if slug and _db_orgs is not None:
+                    org_deltas[slug] = org_deltas.get(slug, 0) + d["size_bytes"]
+            for slug, delta in org_deltas.items():
+                await _db_orgs.update_storage_used(slug, -delta)
+            async with _audit_txn(
+                AuditAction.nuke, actor.name, f"gc/yanked older_than={older_than_days}d"
+            ) as ac:
+                ac.detail = f"purged={len(purged)}"
+        return {
+            "ok": True,
+            "dry_run": dry_run,
+            "count": len(purged),
+            "purged": [{k: v for k, v in p.items() if k != "yanked_at"} for p in purged],
+        }
 
     @app.post(
         "/v1/admin/purge/builds",

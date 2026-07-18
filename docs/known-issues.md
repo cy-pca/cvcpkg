@@ -45,8 +45,8 @@ ports/packages maintainers) before running `pip install cvcpkg`:
 | OpenBSD 7.7 | `pkg_add py3-cryptography` | 44.0.2 |
 | NetBSD 10.1 | `pkgin -y install py313-cryptography` | 46.0.5 |
 
-The CI workflow (`bsd-recipe-build.yml`) runs this step automatically
-before installing cvcpkg.
+The BSD remote builders run this step automatically before
+installing cvcpkg.
 
 ### OpenBSD disk requirements
 

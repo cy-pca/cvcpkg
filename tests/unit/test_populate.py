@@ -191,6 +191,43 @@ class TestPopulateSyncOnce:
 
         assert run(_test) == 0
 
+    def test_local_org_pkg_does_not_shadow_public_upstream(self, populate_env):
+        """A private org package must not shadow a public upstream package that
+        shares its variant key: org packages are a separate namespace, so
+        populate must still import the public one.  Regression for the
+        populate-diff collision bug (the diff set omitted org_slug)."""
+        run, _, monkeypatch = populate_env
+        import hashlib
+
+        sha = hashlib.sha256(b"data").hexdigest()
+        monkeypatch.setattr(
+            "httpx.AsyncClient", lambda **kw: _FakeAsyncClient([_bundle(sha256=sha)])
+        )
+
+        async def _test():
+            # Pre-existing LOCAL org package sharing the upstream variant key.
+            await app_mod._db_packages.add_package(
+                name="zlib",
+                version="1.3.1+cvc.3",
+                platform="windows",
+                arch="x86_64",
+                build_type="release",
+                link="shared",
+                sha256="localorg",
+                size_bytes=1,
+                archive_url="/v1/download/local-org.tar.zst",
+                org_slug="acme",
+            )
+            n = await app_mod._populate_sync_once()
+            pkgs, total = await app_mod._db_packages.get_bundles(limit=10)
+            return n, total, sorted((p.org, p.published_by) for p in pkgs)
+
+        n, total, rows = run(_test)
+        assert n == 1  # public upstream variant imported despite the org row
+        assert total == 2
+        assert ("", "populate:http://upstream.example") in rows  # public one landed
+        assert any(org == "acme" for org, _ in rows)  # org one untouched
+
     def test_skips_placeholders_orgs_and_sha_mismatch(self, populate_env):
         run, _, monkeypatch = populate_env
         bundles = [
@@ -245,7 +282,7 @@ class TestPopulateSyncOnce:
     def test_platform_allowlist(self, populate_env):
         """Only platforms in CVCPKG_POPULATE_PLATFORMS are imported."""
         run, _, monkeypatch = populate_env
-        monkeypatch.setattr(app_mod, "POPULATE_PLATFORMS", {"linux", "windows"})
+        monkeypatch.setenv("CVCPKG_POPULATE_PLATFORMS", "linux,windows")
         bundles = [
             _bundle(name="a", platform="linux"),
             _bundle(name="b", platform="windows"),
@@ -263,7 +300,7 @@ class TestPopulateSyncOnce:
 
     def test_empty_allowlist_imports_all_platforms(self, populate_env):
         run, _, monkeypatch = populate_env
-        monkeypatch.setattr(app_mod, "POPULATE_PLATFORMS", set())
+        monkeypatch.delenv("CVCPKG_POPULATE_PLATFORMS", raising=False)
         bundles = [
             _bundle(name="a", platform="linux"),
             _bundle(name="c", platform="macos"),
@@ -274,6 +311,42 @@ class TestPopulateSyncOnce:
             return await app_mod._populate_sync_once()
 
         assert run(_test) == 2
+
+    def test_mirror_exclude_denylist(self, populate_env):
+        """CVCPKG_POPULATE_EXCLUDE packages are never mirrored (Phase 12)."""
+        run, _, monkeypatch = populate_env
+        monkeypatch.setenv("CVCPKG_POPULATE_EXCLUDE", "qt6,vtk")
+        bundles = [
+            _bundle(name="boost", platform="linux"),
+            _bundle(name="qt6", platform="linux"),
+            _bundle(name="vtk", platform="linux"),
+        ]
+        monkeypatch.setattr("httpx.AsyncClient", lambda **kw: _FakeAsyncClient(bundles))
+
+        async def _test():
+            n = await app_mod._populate_sync_once()
+            pkgs, _ = await app_mod._db_packages.get_bundles(limit=10)
+            return n, sorted(p.name for p in pkgs)
+
+        assert run(_test) == (1, ["boost"])
+
+    def test_mirror_include_allowlist(self, populate_env):
+        """With CVCPKG_POPULATE_INCLUDE set, only listed packages mirror."""
+        run, _, monkeypatch = populate_env
+        monkeypatch.setenv("CVCPKG_POPULATE_INCLUDE", "boost,zlib")
+        bundles = [
+            _bundle(name="boost", platform="linux"),
+            _bundle(name="zlib", platform="linux"),
+            _bundle(name="qt6", platform="linux"),
+        ]
+        monkeypatch.setattr("httpx.AsyncClient", lambda **kw: _FakeAsyncClient(bundles))
+
+        async def _test():
+            n = await app_mod._populate_sync_once()
+            pkgs, _ = await app_mod._db_packages.get_bundles(limit=10)
+            return n, sorted(p.name for p in pkgs)
+
+        assert run(_test) == (2, ["boost", "zlib"])
 
 
 # ── builds submit-dag --skip-existing ───────────────────────────
@@ -497,3 +570,78 @@ class TestHealthzPopulateFields:
         assert data["populate_upstream"] == "http://upstream.example"
         assert data["populate_stats"]["imported_total"] == 2
         assert json.dumps(data)  # serializable
+
+
+# ── mirror size budget + usage-based eviction (Phase 12 increment 2) ──
+
+
+class TestMirrorEviction:
+    async def _add(self, name, size, *, published_by="populate:up", org_slug="", downloads=0):
+        await app_mod._db_packages.add_package(
+            name=name,
+            version="1.0.0",
+            platform="linux",
+            arch="x86_64",
+            build_type="release",
+            link="shared",
+            sha256="s" * 64,
+            size_bytes=size,
+            archive_url=f"/v1/download/{name}.tar.zst",
+            published_by=published_by,
+            org_slug=org_slug,
+        )
+        for _ in range(downloads):
+            await app_mod._db_downloads.record(name, "1.0.0", "linux")
+
+    def test_evicts_least_downloaded_over_budget(self, populate_env):
+        run, _, monkeypatch = populate_env
+        monkeypatch.setattr(app_mod, "POPULATE_MAX_MIRROR_BYTES", 250)
+
+        async def _test():
+            from cvcpkg.server.db_stores import DbDownloadStore
+
+            monkeypatch.setattr(app_mod, "_db_downloads", DbDownloadStore())
+            # 3 populate packages, 100 bytes each (total 300 > budget 250).
+            await self._add("popular", 100, downloads=50)
+            await self._add("rare", 100, downloads=0)
+            await self._add("medium", 100, downloads=5)
+            evicted = await app_mod._enforce_mirror_budget()
+            pkgs, _ = await app_mod._db_packages.get_bundles(limit=10)
+            return evicted, sorted(p.name for p in pkgs)
+
+        evicted, remaining = run(_test)
+        assert evicted == 1
+        assert "rare" not in remaining  # least-downloaded evicted
+        assert "popular" in remaining and "medium" in remaining
+
+    def test_never_evicts_org_or_local_packages(self, populate_env):
+        run, _, monkeypatch = populate_env
+        monkeypatch.setattr(app_mod, "POPULATE_MAX_MIRROR_BYTES", 50)
+
+        async def _test():
+            from cvcpkg.server.db_stores import DbDownloadStore
+
+            monkeypatch.setattr(app_mod, "_db_downloads", DbDownloadStore())
+            # Way over a tiny budget, but none of these are evictable:
+            await self._add("orgpkg", 100, org_slug="acme", downloads=0)
+            await self._add("localpub", 100, published_by="alice", downloads=0)
+            evicted = await app_mod._enforce_mirror_budget()
+            pkgs, _ = await app_mod._db_packages.get_bundles(limit=10)
+            return evicted, sorted(p.name for p in pkgs)
+
+        evicted, remaining = run(_test)
+        assert evicted == 0  # org + locally-published are never evicted
+        assert remaining == ["localpub", "orgpkg"]
+
+    def test_no_budget_evicts_nothing(self, populate_env):
+        run, _, monkeypatch = populate_env
+        monkeypatch.setattr(app_mod, "POPULATE_MAX_MIRROR_BYTES", 0)
+
+        async def _test():
+            from cvcpkg.server.db_stores import DbDownloadStore
+
+            monkeypatch.setattr(app_mod, "_db_downloads", DbDownloadStore())
+            await self._add("a", 10**9, downloads=0)
+            return await app_mod._enforce_mirror_budget()
+
+        assert run(_test) == 0

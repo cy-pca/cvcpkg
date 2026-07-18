@@ -104,10 +104,15 @@ class TestUriToPath:
         assert str(p) == "C:/Users/test" or str(p) == "C:\\Users\\test"
 
     def test_windows_triple_slash(self):
-        """file:///C:/Users/test — correct Windows URI."""
+        """file:///C:/Users/test — the RFC-canonical form Path.as_uri() emits.
+
+        The drive letter must start the path: a leading slash ("/C:/…") becomes
+        "\\C:\\…" on Windows, which is not a usable path (WinError 123).  This is
+        platform-independent string logic, so it is checked on Linux too.
+        """
         p = _uri_to_path("file:///C:/Users/test")
-        # On Linux this stays as-is (/C:/Users/test); on Windows it resolves
-        assert "C:" in str(p) or str(p).startswith("/C:")
+        assert str(p).replace("\\", "/") == "C:/Users/test"
+        assert not str(p).startswith(("/", "\\")), "drive letter must not be preceded by a slash"
 
     def test_backslash_netloc_fallback(self):
         """On some Python/OS combos, file://C:\\path puts C:\\path in netloc."""

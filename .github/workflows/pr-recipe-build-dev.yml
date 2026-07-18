@@ -63,25 +63,32 @@ jobs:
           # space-joined for the CLI, newline-joined for the report
           printf 'names=%s\n' "${names[*]:-}" >> "$GITHUB_OUTPUT"
 
-      - name: Resolve dev server URL
+      - name: Resolve dev server URL + DAG id
         id: dev
         if: steps.changed.outputs.names != ''
         run: |
           set -euo pipefail
           IP=$(incus list cvcpkg-server -c4 -fcsv | tr -d '"' | tr ',' '\n' | awk '{print $1}' | grep -E '^10\.' | head -1)
           test -n "$IP" || { echo "::error::could not resolve dev cvcpkg-server IP"; exit 1; }
-          echo "url=http://${IP}:8420" >> "$GITHUB_OUTPUT"
+          # Persist to $GITHUB_ENV (not just outputs) so the cancelled() cleanup
+          # step below still has them if a later step is mid-cancelled.
+          echo "DEV_URL=http://${IP}:8420" >> "$GITHUB_ENV"
+          # A per-RUN dag id (run_id, not a wall-clock stamp): the cleanup cancels
+          # exactly THIS run's sub-DAGs.  A PR-wide prefix would let a superseding
+          # run's cleanup cancel the fresh run's jobs (same PR number).
+          dag="pr-${{ github.event.pull_request.number }}-${{ github.run_id }}"
+          echo "DAG_BASE=${dag:0:50}" >> "$GITHUB_ENV"
 
       - name: Push + build changed recipes on dev
         id: build
         if: steps.changed.outputs.names != ''
         env:
-          CVCPKG_SERVER_URL: ${{ steps.dev.outputs.url }}
+          CVCPKG_SERVER_URL: ${{ env.DEV_URL }}
           CVCPKG_TOKEN: ${{ secrets.CVCPKG_ADMIN_TOKEN }}
           NAMES: ${{ steps.changed.outputs.names }}
         run: |
           set -uo pipefail
-          echo "Dev server: $CVCPKG_SERVER_URL"
+          echo "Dev server: $CVCPKG_SERVER_URL   DAG: $DAG_BASE"
 
           # 1. Push each changed recipe to the dev server.
           for r in $NAMES; do
@@ -98,10 +105,20 @@ jobs:
           #    add --allow-unschedulable: it force-submits those combos, whose
           #    jobs then sit pending until the server's 30-min unschedulable
           #    reap — that flag is for queues drained by ephemeral builders
-          #    (e.g. macos-drain), not for a --wait CI check.  This exact
-          #    combination wedged this workflow for its full timeout on every
-          #    recipe PR (pr-223, pr-226).
-          dag="pr-${{ github.event.pull_request.number }}-$(date +%H%M%S)"
+          #    (e.g. macos-drain), not for a --wait CI check (pr-223, pr-226).
+          #
+          # --skip-existing: a published variant is immutable, so never rebuild
+          #    one.  This is what makes a prose-only recipe edit a no-op (version
+          #    unchanged -> variant already published -> skipped) and stops stable
+          #    heavy recipes (llvm) rebuilding every time something in their
+          #    subtree changes.
+          # --wait-timeout: a genuinely NEW heavy recipe (a first llvm build, ~2h
+          #    at the cluster's -j2) cannot finish inside a CI window.  Rather than
+          #    let the 45-min job timeout SIGKILL the wait -- which orphans the
+          #    queued jobs -- stop waiting at 25 min.  A failure is still reported
+          #    (exit 1); "still building, nothing failed" exits 75, which we treat
+          #    as a soft pass (the build finishes on the cluster and is picked up
+          #    by --skip-existing next time).
           set +e
           cvcpkg builds submit-dag \
             --server "$CVCPKG_SERVER_URL" --token "$CVCPKG_TOKEN" \
@@ -109,13 +126,38 @@ jobs:
             --arch x86_64,wasm32 \
             --config release --link shared \
             --recipes-dir recipes \
-            --dag-id "${dag:0:60}" \
-            --wait \
+            --dag-id "$DAG_BASE" \
+            --skip-existing \
+            --wait --wait-timeout 1500 \
             $NAMES | tee build.log
           rc=$?
           set -e
           echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
-          exit $rc
+          # 75 = submitted OK, still building past the window -> soft pass.
+          if [ "$rc" = "75" ]; then
+            echo "status=building" >> "$GITHUB_OUTPUT"
+            exit 0
+          elif [ "$rc" = "0" ]; then
+            echo "status=passed" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+            exit "$rc"
+          fi
+
+      # Cancel THIS run's queued jobs when the run is cancelled (a new push
+      # supersedes it, or a manual cancel).  Scoped to $DAG_BASE so it never
+      # touches a superseding run's jobs.  Running jobs are left to finish (they
+      # publish and get reused).  Not needed on normal/soft-pass completion.
+      - name: Cancel superseded DAG jobs
+        if: cancelled() && steps.changed.outputs.names != ''
+        env:
+          CVCPKG_SERVER_URL: ${{ env.DEV_URL }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_ADMIN_TOKEN }}
+        run: |
+          set -uo pipefail
+          [ -n "${DAG_BASE:-}" ] && [ -n "${CVCPKG_SERVER_URL:-}" ] || exit 0
+          cvcpkg builds cancel-dag "${DAG_BASE}-*" \
+            --server "$CVCPKG_SERVER_URL" --token "$CVCPKG_TOKEN" || true
 
       - name: Comment result on PR
         if: always() && steps.changed.outputs.names != ''
@@ -123,8 +165,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -uo pipefail
-          status="✅ passed"
-          [ "${{ steps.build.outputs.exit_code || '1' }}" = "0" ] || status="❌ failed"
+          case "${{ steps.build.outputs.status || 'failed' }}" in
+            passed)   status="✅ passed" ;;
+            building) status="⏳ submitted — still building on the cluster (see log); not blocking" ;;
+            *)        status="❌ failed" ;;
+          esac
           {
             echo "### Dev-cluster recipe build — $status"
             echo ""

@@ -1,7 +1,7 @@
 schema_version: 1
 recipe:
   name: llvm-cbe
-  upstream_version: "0.0.0+git.2c21c57"
+  upstream_version: "0.0.0-git.2c21c57"
   cvc_revision: 1
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -20,7 +20,8 @@ recipe:
 
     The generated C is then compilable with any standards-conforming
     C compiler (gcc, tcc, cosmocc, etc.).  Tracks the head of the
-    JuliaHubOSS/llvm-cbe repository; currently supports LLVM 22.
+    JuliaHubOSS/llvm-cbe repository, which currently requires LLVM 20.1
+    — hence the dependency on the `llvm20` recipe rather than `llvm`.
 
 source:
   type: tarball
@@ -31,10 +32,20 @@ source:
 patches: []
 
 depends:
-  build:
-    - name: llvm
-      version: "^22"
-  runtime: []
+  runtime:
+    # llvm-cbe links LLVM's libraries, so LLVM must ship with it: the shipped
+    # binary/plugin resolves LLVM symbols at runtime.  Under edge-based
+    # placement a `build:`-filed llvm would be stripped from the deliverable.
+    #
+    # llvm20, not llvm: the pinned source does find_package(LLVM 20.1 REQUIRED
+    # CONFIG), and LLVM's config accepts only a matching major, so the main
+    # llvm recipe (22.x) is rejected outright:
+    #   Could not find a configuration file for package "LLVM" that is
+    #   compatible with requested version "20.1"
+    # Retarget this at `llvm` once upstream supports a newer major -- see the
+    # "LLVM version policy" note below.
+    - name: llvm20
+      version: "^20"
   host_tools: []
 
 build:
@@ -63,10 +74,15 @@ notes:
   - title: "LLVM version policy"
     platforms: [linux, macos, windows, freebsd]
     description: >-
-      The JuliaHubOSS/llvm-cbe project tracks the latest released LLVM
-      version (no formal releases; pinned here to commit 2c21c57 which
-      targets LLVM 22).  When upgrading LLVM, bump this recipe to a
-      new commit that is compatible with the new LLVM version.
+      JuliaHubOSS/llvm-cbe has no formal releases and supports exactly one
+      LLVM major at a time, moving in a single "upgrade to llvmNN" commit
+      that carries real source changes (CBackend.cpp, CTargetMachine.h) —
+      it is not just a version bump.  Pinned here to 2c21c57 (upstream
+      master), which requires LLVM 20.1; hence the dedicated `llvm20`
+      recipe.  Bumping the main `llvm` recipe does NOT make llvm-cbe build
+      against it: find_package matches on major, so it fails at configure.
+      When upstream adopts a newer major, bump this pin and retarget the
+      dependency at `llvm` (dropping llvm20 if nothing else needs it).
   - title: "Usage"
     platforms: [linux, macos, windows, freebsd]
     description: >-

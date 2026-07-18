@@ -459,7 +459,7 @@ class TestPlatformAny:
             patch("cvcpkg.builder.run_build") as mock_build,
             patch("cvcpkg.builder.fetch_source") as mock_fetch,
         ):
-            mock_fetch.side_effect = lambda r, w: w / "src"
+            mock_fetch.side_effect = lambda r, w, **kw: w / "src"
             mock_build.side_effect = lambda ctx, **kw: ctx.install_dir.mkdir(
                 parents=True, exist_ok=True
             )
@@ -724,7 +724,7 @@ class TestPlatformAny:
         )
         (win_dir / "build.ps1").write_text("Write-Output 'ok'\n")
 
-        mock_fetch.side_effect = lambda r, w: w / "src"
+        mock_fetch.side_effect = lambda r, w, **kw: w / "src"
         mock_build.side_effect = lambda ctx, **kw: ctx.install_dir.mkdir(
             parents=True, exist_ok=True
         )
@@ -765,7 +765,7 @@ class TestPlatformAny:
         )
         (linux_dir / "build.sh").write_text("#!/bin/bash\ntrue\n")
 
-        mock_fetch.side_effect = lambda r, w: w / "src"
+        mock_fetch.side_effect = lambda r, w, **kw: w / "src"
         mock_build.side_effect = lambda ctx, **kw: ctx.install_dir.mkdir(
             parents=True, exist_ok=True
         )
@@ -808,7 +808,7 @@ class TestPlatformAny:
         (app_dir / "build.sh").write_text("#!/bin/bash\ntrue\n")
 
         build_order = []
-        mock_fetch.side_effect = lambda r, w: w / "src"
+        mock_fetch.side_effect = lambda r, w, **kw: w / "src"
 
         def track_build(ctx, **kw):
             build_order.append(ctx.recipe.name)
@@ -835,7 +835,7 @@ class TestPlatformAny:
         _write_recipe(any_dir, ANY_RECIPE)
         (any_dir / "build.sh").write_text("#!/bin/bash\ntrue\n")
 
-        mock_fetch.side_effect = lambda r, w: w / "src"
+        mock_fetch.side_effect = lambda r, w, **kw: w / "src"
 
         def build_with_files(ctx, **kw):
             ctx.install_dir.mkdir(parents=True, exist_ok=True)
@@ -889,7 +889,7 @@ class TestPlatformAny:
         )
         (ok_dir / "build.sh").write_text("#!/bin/bash\ntrue\n")
 
-        mock_fetch.side_effect = lambda r, w: w / "src"
+        mock_fetch.side_effect = lambda r, w, **kw: w / "src"
 
         def selective_build(ctx, **kw):
             if ctx.recipe.name == "bad-data":
@@ -940,7 +940,7 @@ class TestPlatformAny:
         )
         (app_dir / "build.sh").write_text("#!/bin/bash\ntrue\n")
 
-        mock_fetch.side_effect = lambda r, w: w / "src"
+        mock_fetch.side_effect = lambda r, w, **kw: w / "src"
 
         def fail_data(ctx, **kw):
             if ctx.recipe.name == "shared-data":
@@ -2016,7 +2016,7 @@ class TestBuildAllKeepGoing:
         self._make_recipe(recipes_dir, "beta")
         self._make_recipe(recipes_dir, "gamma")
 
-        mock_fetch.side_effect = lambda r, w: w / "src"
+        mock_fetch.side_effect = lambda r, w, **kw: w / "src"
 
         def _build_side_effect(ctx, **kw):
             (ctx.source_dir).mkdir(parents=True, exist_ok=True)
@@ -2053,7 +2053,7 @@ class TestBuildAllKeepGoing:
         self._make_recipe(recipes_dir, "alpha")
         self._make_recipe(recipes_dir, "beta", deps=["alpha"])
 
-        mock_fetch.side_effect = lambda r, w: w / "src"
+        mock_fetch.side_effect = lambda r, w, **kw: w / "src"
 
         def _build_side_effect(ctx, **kw):
             (ctx.source_dir).mkdir(parents=True, exist_ok=True)
@@ -2088,7 +2088,7 @@ class TestBuildAllKeepGoing:
         self._make_recipe(recipes_dir, "alpha")
         self._make_recipe(recipes_dir, "beta")
 
-        mock_fetch.side_effect = lambda r, w: w / "src"
+        mock_fetch.side_effect = lambda r, w, **kw: w / "src"
         mock_build.side_effect = BuildError("alpha failed")
 
         with pytest.raises(BuildError, match="alpha failed"):
@@ -2555,7 +2555,7 @@ class TestWorkDirRoot:
         rd = self._make_recipe(recipes_dir)
         scratch = tmp_path / "scratch"
 
-        mock_fetch.side_effect = lambda r, w: w / "src"
+        mock_fetch.side_effect = lambda r, w, **kw: w / "src"
         mock_build.side_effect = lambda ctx, **kw: ctx.install_dir.mkdir(
             parents=True, exist_ok=True
         )
@@ -2578,7 +2578,7 @@ class TestWorkDirRoot:
         recipes_dir = tmp_path / "recipes"
         rd = self._make_recipe(recipes_dir)
 
-        mock_fetch.side_effect = lambda r, w: w / "src"
+        mock_fetch.side_effect = lambda r, w, **kw: w / "src"
         mock_build.side_effect = lambda ctx, **kw: ctx.install_dir.mkdir(
             parents=True, exist_ok=True
         )
@@ -2596,7 +2596,7 @@ class TestWorkDirRoot:
         self._make_recipe(recipes_dir, "beta")
         scratch = tmp_path / "scratch"
 
-        mock_fetch.side_effect = lambda r, w: w / "src"
+        mock_fetch.side_effect = lambda r, w, **kw: w / "src"
         mock_build.side_effect = lambda ctx, **kw: ctx.install_dir.mkdir(
             parents=True, exist_ok=True
         )
@@ -2621,7 +2621,7 @@ class TestWorkDirRoot:
         self._make_recipe(recipes_dir, "alpha")
         scratch = tmp_path / "scratch"
 
-        mock_fetch.side_effect = lambda r, w: w / "src"
+        mock_fetch.side_effect = lambda r, w, **kw: w / "src"
         mock_build.side_effect = lambda ctx, **kw: ctx.install_dir.mkdir(
             parents=True, exist_ok=True
         )

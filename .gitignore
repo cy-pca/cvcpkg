@@ -27,3 +27,8 @@ src/cvcpkg/recipes/
 .env.production
 backups/
 .venv
+
+# cvcpkg-server runtime state dir (default CVCPKG_SERVER_STATE_DIR).  Created on
+# first server run; holds the auto-generated hmac_key used to hash API tokens.
+# A stray copy was committed once (#212) -- never track this.
+cvcpkg-server-data/

@@ -1,0 +1,66 @@
+schema_version: 1
+recipe:
+  name: numpy-cp311
+  upstream_version: "2.4.6"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://numpy.org/
+  license: BSD-3-Clause
+  tags: [math, python, wheel]
+  description: >-
+    NumPy 2.4.6 for CPython 3.11 (cp311) — the cp311 column of cvcpkg's
+    per-interpreter wheel matrix.  The wheel is pinned by filename + sha256
+    and installed into the python311 interpreter's own site-packages inside
+    the prefix, so one activatable prefix carries both the native C/C++
+    libraries and a complete, pinned Python environment.
+
+source:
+  type: python_wheel
+  artifacts:
+    linux-x86_64:
+      url: https://files.pythonhosted.org/packages/02/03/74fe2a4cb3817d94d86402f2506554130a2f01414e299b5a843e5a8a957f/numpy-2.4.6-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+      sha256: "89cd468399cfd2504718f0ba50e410dca55a170b61a02ad92bb18c8a65186e93"
+    linux-arm64:
+      url: https://files.pythonhosted.org/packages/33/a8/6fa8c1a345a8c85dbb21932c447bee07c30a2c2a3f31e369c0a84b300147/numpy-2.4.6-cp311-cp311-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl
+      sha256: "0ab0a9c4ffb1a6d95ef519fe4247dba8eb6b18ad93999f76b7f657039acabd47"
+    macos-x86_64:
+      url: https://files.pythonhosted.org/packages/b3/49/ec46835a70be8fa6446c495126ac84fdb28cb2558e1620ffb87a10c8b64c/numpy-2.4.6-cp311-cp311-macosx_10_9_x86_64.whl
+      sha256: "0280e0356c0829a18d9de1cb7eee50ec22ca639878d7240307ca0943d73cd2c4"
+    macos-arm64:
+      url: https://files.pythonhosted.org/packages/0e/0d/f5957185c0ee2f3e12f78715aa9e3b353fd83633316c8532b38faa37e3f6/numpy-2.4.6-cp311-cp311-macosx_11_0_arm64.whl
+      sha256: "110f8b71aacb688ec69062bb7f6938a0f8acb01b7c1c4beb453c65b6d234584d"
+    windows-x86_64:
+      url: https://files.pythonhosted.org/packages/c5/31/7fc6239c12bce7e931463251cca4426c465e1876ba3cc785402ef4dd8f4e/numpy-2.4.6-cp311-cp311-win_amd64.whl
+      sha256: "1e254a00cdf42b1e4d5b3d68d33af63268d41340d8885df2ab6470f2e1500147"
+
+python:
+  interpreter: python311
+  abi: cp311
+  manylinux_min: manylinux_2_28
+
+patches: []
+
+depends:
+  build:
+    - name: python311
+  runtime:
+    - name: python311
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/python3.11*/site-packages/numpy/
+    - lib/python3.11*/site-packages/numpy-2.4.6.dist-info/
+    - Lib/site-packages/numpy/
+    - Lib/site-packages/numpy-2.4.6.dist-info/

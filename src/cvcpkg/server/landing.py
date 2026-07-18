@@ -7,6 +7,7 @@ and links to per-package detail pages.  Uses Bulma CSS for styling.
 
 from __future__ import annotations
 
+import functools
 import html as _html
 import json as _json
 import os
@@ -15,6 +16,78 @@ from cvcpkg import __version__
 
 _GITHUB_REPO = os.environ.get("CVCPKG_GITHUB_REPO", "transfix/libcvc-deps")
 _GITHUB_URL = f"https://github.com/{_GITHUB_REPO}"
+
+# CyberPC Angel, LLC gears logo — the project brand mark, served self-hosted
+# at /favicon.ico and /assets/cyberpc-angel-gears.png (see app.py).
+_BRAND_LOGO_PATH = "/assets/cyberpc-angel-gears.png"
+
+#: Operator override for the site icon.  Either an absolute ``http(s)://``
+#: URL (linked directly, not proxied) or a path to a local image file
+#: (served from the asset route).  Unset uses the bundled gears logo.
+_SITE_LOGO = os.environ.get("CVCPKG_SITE_LOGO", "").strip()
+
+_LOGO_MEDIA_TYPES = {
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
+
+
+def _logo_is_remote() -> bool:
+    """True when the configured logo is an external URL rather than a file."""
+    return _SITE_LOGO.startswith(("http://", "https://"))
+
+
+def brand_logo_href() -> str:
+    """URL used in ``<link rel="icon">`` and the social-image meta tags."""
+    return _SITE_LOGO if _logo_is_remote() else _BRAND_LOGO_PATH
+
+
+@functools.lru_cache(maxsize=1)
+def brand_logo_asset() -> tuple[bytes, str]:
+    """Return ``(image_bytes, media_type)`` for the served site icon.
+
+    Honors ``CVCPKG_SITE_LOGO`` when it names a local file; otherwise falls
+    back to the bundled CyberPC Angel gears PNG (package data, so it ships
+    in the wheel).  Returns empty bytes rather than raising so the site
+    still renders if an asset is missing or unreadable — a misconfigured
+    override degrades to the bundled default rather than breaking the page.
+    """
+    if _SITE_LOGO and not _logo_is_remote():
+        import pathlib
+
+        custom = pathlib.Path(_SITE_LOGO).expanduser()
+        try:
+            data = custom.read_bytes()
+            media = _LOGO_MEDIA_TYPES.get(custom.suffix.lower(), "image/png")
+            return data, media
+        except OSError:
+            pass  # fall through to the bundled default
+
+    try:
+        from importlib.resources import files as _res_files
+
+        data = (
+            _res_files("cvcpkg.server").joinpath("assets", "cyberpc-angel-gears.png").read_bytes()
+        )
+        return data, "image/png"
+    except (FileNotFoundError, ModuleNotFoundError, OSError):
+        return b"", "image/png"
+
+
+def brand_logo_bytes() -> bytes:
+    """Backwards-compatible accessor for just the icon bytes."""
+    return brand_logo_asset()[0]
+
+
+# Absolute site origin, used to build absolute URLs for social-preview
+# (Open Graph / Twitter) image tags, which require a full URL.
+_SITE_URL = os.environ.get("CVCPKG_SITE_URL", "https://cvcpkg.org").rstrip("/")
+
 _SITE_TITLE = os.environ.get("CVCPKG_SITE_TITLE", "cvcpkg")
 _SITE_TAGLINE = os.environ.get("CVCPKG_SITE_TAGLINE", "Package Archive")
 _SITE_HERO = os.environ.get(
@@ -61,6 +134,7 @@ th.is-sorted { color: #3273dc; }
 .platform-tag.freebsd { background-color: rgba(255, 56, 56, 0.15); color: #ff3838; }
 .platform-tag.netbsd { background-color: rgba(255, 145, 51, 0.15); color: #ff9133; }
 .platform-tag.openbsd { background-color: rgba(241, 196, 15, 0.15); color: #f1c40f; }
+.platform-tag.dragonflybsd { background-color: rgba(220, 60, 90, 0.15); color: #dc3c5a; }
 .platform-tag.wasm { background-color: rgba(155, 89, 182, 0.15); color: #9b59b6; }
 .platform-tag.wasi { background-color: rgba(230, 126, 34, 0.15); color: #e67e22; }
 
@@ -256,10 +330,21 @@ def _footer_html() -> str:
 
 
 def _head_html(title: str) -> str:
+    href = brand_logo_href()
+    # Social scrapers need an absolute URL; a configured remote logo already
+    # is one, a served asset gets the site origin prepended.
+    logo_url = href if _logo_is_remote() else f"{_SITE_URL}{href}"
     return f"""<head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{title}</title>
+  <link rel="icon" href="{href}" />
+  <link rel="apple-touch-icon" href="{href}" />
+  <meta property="og:title" content="{title}" />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="{logo_url}" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:image" content="{logo_url}" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.4/css/bulma.min.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
         integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA=="
@@ -287,6 +372,7 @@ function platformTag(platform) {
   else if (lp === 'freebsd') cls = 'freebsd';
   else if (lp === 'netbsd') cls = 'netbsd';
   else if (lp === 'openbsd') cls = 'openbsd';
+  else if (lp === 'dragonflybsd') cls = 'dragonflybsd';
   else if (lp === 'wasm') cls = 'wasm';
   else if (lp === 'wasi') cls = 'wasi';
   return '<span class="tag is-rounded platform-tag ' + cls + '">' + esc(platform) + '</span>';
@@ -465,6 +551,17 @@ function updateFilterOptions(facets) {
   _syncSelect('arch-filter', facets.archs || [], state.arch);
   _syncSelect('release-filter', facets.releases || [], state.release);
   _syncSelect('tag-filter', facets.tags || [], state.tag);
+}
+
+// Best-effort guess of the visitor's OS, to steer the copy-paste download
+// command toward an archive they can actually use.  Returns a cvcpkg platform
+// string ('linux'/'macos'/'windows') or '' when undetectable.
+function detectVisitorPlatform() {
+  const s = ((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
+  if (/Win/i.test(s)) return 'windows';
+  if (/Mac/i.test(s)) return 'macos';
+  if (/Linux|X11|Android/i.test(s)) return 'linux';
+  return '';
 }
 
 function groupBundlesByName(pkgs) {
@@ -939,8 +1036,18 @@ function renderDeps(forward, reverse, meta, recipeNames) {
     transitiveDeps(pkgName, allDeps);
     allDeps.delete(pkgName);
 
-    // Pick best build for first platform available
-    const firstBuild = allBuilds[0];
+    // Pick the build for the copy-paste command.  allBuilds arrives
+    // newest-version-first from the server (/v1/packages/{name} orders by
+    // version_sort_key), so we do NOT re-rank versions here -- a second
+    // ordering impl in JS is exactly how the server/CLI orderings diverged.
+    // We only steer PLATFORM: a Linux visitor must not be handed a Windows
+    // archive.  The first build matching the visitor's OS is therefore already
+    // its newest version; fall back to the newest overall if none matches.
+    const wantPlat = detectVisitorPlatform();
+    const firstBuild =
+      allBuilds.find(b => b.platform === wantPlat && b.arch === 'x86_64') ||
+      allBuilds.find(b => b.platform === wantPlat) ||
+      allBuilds[0];
 
     const depNames = [...allDeps].sort();
     let lines = ['mkdir -p /opt/cvcpkg', ''];
@@ -951,7 +1058,9 @@ function renderDeps(forward, reverse, meta, recipeNames) {
       });
       lines.push('');
     }
-    lines.push('# Download and extract ' + pkgName + ':');
+    lines.push('# Download and extract ' + pkgName +
+               ' (' + firstBuild.version + ', ' +
+               firstBuild.platform + '/' + firstBuild.arch + '):');
     const url = 'https://cvcpkg.org' + firstBuild.archive_url;
     const fname = firstBuild.archive_url.split('/').pop();
     lines.push('curl -LO ' + url);
@@ -1050,7 +1159,7 @@ function renderInfo() {
   }
   if (p.homepage) {
     const el = document.getElementById('pkg-homepage');
-    el.href = p.homepage;
+    if (new RegExp('^https?://', 'i').test(p.homepage || '')) el.href = p.homepage;
     el.textContent = p.homepage;
     el.parentElement.style.display = '';
   }
@@ -1335,8 +1444,13 @@ async function loadBuildJobs(name) {
 
 
 def _js_string_literal(s: str) -> str:
-    """Encode a Python string as a safe JavaScript string literal."""
-    return _json.dumps(s)
+    """Encode a Python string as a JS string literal that is safe inside HTML.
+
+    json.dumps leaves <, >, & (hence </script>) intact, which
+    would let a reflected value break out of the surrounding <script> block.
+    Each is emitted as a JS unicode escape.
+    """
+    return _json.dumps(s).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
 
 
 def package_detail_html(name: str, *, org: str = "") -> str:
@@ -1667,11 +1781,10 @@ function render(orgs) {{
             </div>
             <div class="media-content">
               <a href="/org/${{encodeURIComponent(o.slug)}}" class="title is-5 has-text-link">${{esc(o.display_name)}}</a>
+              ${{o.is_private ? '<span class="tag is-warning is-light ml-2"><span class="icon is-small"><i class="fas fa-lock"></i></span><span>private</span></span>' : ''}}
               <p class="is-size-7 has-text-grey-light">${{esc(o.slug)}}</p>
               ${{o.description ? '<p class="is-size-7 has-text-grey-lighter mt-2">' + esc(o.description) + '</p>' : ''}}
-              <p class="is-size-7 has-text-grey mt-2">
-                Storage: ${{fmtSize(o.storage_used_bytes)}} / ${{fmtSize(o.storage_limit_bytes)}}
-              </p>
+              ${{o.storage_limit_bytes != null ? '<p class="is-size-7 has-text-grey mt-2">Storage: ' + fmtSize(o.storage_used_bytes) + ' / ' + fmtSize(o.storage_limit_bytes) + '</p>' : ''}}
             </div>
           </article>
         </div>
@@ -1692,7 +1805,6 @@ document.addEventListener('DOMContentLoaded', init);
 def org_detail_html(slug: str) -> str:
     """Return the HTML for an organization detail page."""
     import html as _html
-    import json as _json
 
     safe_slug = _html.escape(slug, quote=True)
 
@@ -1724,7 +1836,9 @@ def org_detail_html(slug: str) -> str:
             <span class="icon is-large has-text-link"><i class="fas fa-building fa-2x"></i></span>
           </div>
           <div class="media-content">
-            <h1 class="title is-2 has-text-white" id="org-name">{safe_slug}</h1>
+            <h1 class="title is-2 has-text-white">
+              <span id="org-name">{safe_slug}</span><span id="org-private-badge" class="tag is-warning is-light is-medium ml-2" style="display:none"><span class="icon is-small"><i class="fas fa-lock"></i></span><span>private</span></span>
+            </h1>
             <p class="subtitle is-6 has-text-grey-lighter" id="org-desc"></p>
           </div>
         </div>
@@ -1740,7 +1854,7 @@ def org_detail_html(slug: str) -> str:
               <p class="title is-4 has-text-info" id="org-pkg-count">&mdash;</p>
               <p class="heading has-text-grey-light">Packages</p>
             </div>
-            <div class="column has-text-centered">
+            <div class="column has-text-centered" id="org-storage-col">
               <p class="title is-4 has-text-warning" id="org-storage">&mdash;</p>
               <p class="heading has-text-grey-light">Storage</p>
             </div>
@@ -1774,7 +1888,7 @@ def org_detail_html(slug: str) -> str:
 
 async function init() {{
   try {{
-    const resp = await fetch('/v1/orgs/' + encodeURIComponent({_json.dumps(slug)}));
+    const resp = await fetch('/v1/orgs/' + encodeURIComponent({_js_string_literal(slug)}));
     const data = await resp.json();
     renderOrg(data);
   }} catch (err) {{
@@ -1786,6 +1900,7 @@ async function init() {{
 function renderOrg(data) {{
   const o = data.org;
   document.getElementById('org-name').textContent = o.display_name;
+  if (o.is_private) document.getElementById('org-private-badge').style.display = '';
   if (o.description) document.getElementById('org-desc').textContent = o.description;
   if (o.logo_url) {{
     document.getElementById('org-logo').innerHTML =
@@ -1795,13 +1910,21 @@ function renderOrg(data) {{
     const el = document.getElementById('org-homepage');
     el.style.display = '';
     const link = document.getElementById('org-homepage-link');
-    link.href = o.homepage;
+    if (new RegExp('^https?://', 'i').test(o.homepage || '')) link.href = o.homepage;
     link.textContent = o.homepage;
   }}
 
-  document.getElementById('org-storage').textContent = fmtSize(o.storage_used_bytes);
-  const pct = o.storage_limit_bytes > 0 ? Math.round(o.storage_used_bytes / o.storage_limit_bytes * 100) : 0;
-  document.getElementById('org-storage-bar').value = pct;
+  if (o.storage_limit_bytes != null) {{
+    document.getElementById('org-storage').textContent = fmtSize(o.storage_used_bytes);
+    const pct = o.storage_limit_bytes > 0 ? Math.round(o.storage_used_bytes / o.storage_limit_bytes * 100) : 0;
+    document.getElementById('org-storage-bar').value = pct;
+  }} else {{
+    // Storage is member/super-admin-only — omit the storage UI entirely.
+    const col = document.getElementById('org-storage-col');
+    if (col) col.style.display = 'none';
+    const bar = document.getElementById('org-storage-bar');
+    if (bar) bar.style.display = 'none';
+  }}
 
   // Members
   const members = data.members || [];
@@ -1994,7 +2117,6 @@ document.addEventListener('DOMContentLoaded', () => {{
 
 def tag_detail_html(tag_name: str, org_slug: str = "") -> str:
     """Return the HTML for a tag detail page showing description + packages."""
-    import json as _json
 
     safe_name = _html.escape(tag_name, quote=True)
     safe_org = _html.escape(org_slug, quote=True)
@@ -2077,8 +2199,8 @@ def tag_detail_html(tag_name: str, org_slug: str = "") -> str:
 {_HELPERS_JS}
 {_NAVBAR_JS}
 
-const TAG_NAME = {_json.dumps(tag_name)};
-const TAG_ORG = {_json.dumps(org_slug)};
+const TAG_NAME = {_js_string_literal(tag_name)};
+const TAG_ORG = {_js_string_literal(org_slug)};
 
 async function init() {{
   // Load tag metadata (if curated)
@@ -2392,7 +2514,8 @@ def builds_html() -> str:
             <option value="freebsd">FreeBSD</option>
             <option value="netbsd">NetBSD</option>
             <option value="openbsd">OpenBSD</option>
-            <option value="darwin">macOS</option>
+            <option value="dragonflybsd">DragonflyBSD</option>
+            <option value="macos">macOS</option>
             <option value="windows">Windows</option>
             <option value="wasm">WASM</option>
             <option value="wasi">WASI</option>
@@ -3739,6 +3862,12 @@ cvcpkg builds list --server https://cvcpkg.org --token cvctok_...
           <code>CVCPKG_SITE_HERO</code>.
           Set <code>CVCPKG_GITHUB_REPO</code> to change the
           GitHub link (default: <code>transfix/libcvc-deps</code>).
+          <code>CVCPKG_SITE_LOGO</code> overrides the favicon and social
+          image &mdash; either an <code>https://</code> URL or a path to a
+          local image file (png/svg/ico/jpg/webp); unset serves the bundled
+          CyberPC Angel, LLC gears logo.  <code>CVCPKG_SITE_URL</code> sets
+          the origin used to build absolute social-image URLs
+          (default: <code>https://cvcpkg.org</code>).
         </p>
       </div>
     </div>

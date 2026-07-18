@@ -1,0 +1,12 @@
+# Incus/LXD image metadata for the HaikuOS builder image.
+# Used with:  incus image import metadata.yaml haiku-builder.qcow2 --alias haiku-builder
+# (see README-import.md). creation_date is a placeholder — set it at import
+# time if you need provenance.
+architecture: x86_64
+creation_date: 1735689600
+properties:
+  description: HaikuOS r1beta5 headless builder (OpenSSH + toolchain baked in)
+  os: Haiku
+  release: r1beta5
+  variant: builder
+  type: virtual-machine

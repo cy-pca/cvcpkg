@@ -19,6 +19,8 @@ Tables:
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import datetime
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -34,6 +36,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -66,6 +69,13 @@ class PackageRow(Base):
         server_default=func.now(),
     )
     yanked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # When the bundle was yanked; NULL when it never was, or once unyanked.
+    # The yank-retention GC keys on this and treats NULL as "never purge", so
+    # rows yanked before the column existed are exempt rather than instantly
+    # expired.  See migration 018.
+    yanked_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     signature: Mapped[str] = mapped_column(Text, nullable=False, default="")
     key_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     release_tag: Mapped[str] = mapped_column(
@@ -124,6 +134,57 @@ class PackageRow(Base):
     )
 
 
+class PackageTombstoneRow(Base):
+    """Record that a bundle variant was nuked, and why.
+
+    A nuked ``packages`` row is hard-deleted (freeing the slot for republish),
+    so this is the only lasting per-package trace.  ``reason`` distinguishes a
+    manual ``cvcpkg nuke`` ("manual") from a retention-schedule expiry
+    ("retention"); ``nuked_by`` is the admin token name or "retention-gc".  It
+    drives the 410 Gone a pinned consumer gets instead of a bare 404.
+    """
+
+    __tablename__ = "package_tombstones"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    version: Mapped[str] = mapped_column(String(128), nullable=False)
+    platform: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    arch: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    build_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="", server_default=""
+    )
+    link: Mapped[str] = mapped_column(String(32), nullable=False, default="", server_default="")
+    org_slug: Mapped[str] = mapped_column(
+        String(255), nullable=False, default="", server_default=""
+    )
+    filename: Mapped[str] = mapped_column(
+        String(512), nullable=False, default="", server_default=""
+    )
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    nuked_by: Mapped[str] = mapped_column(
+        String(255), nullable=False, default="", server_default=""
+    )
+    nuked_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    size_bytes: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    published_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    yanked_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        Index("ix_package_tombstones_name_version", "name", "version"),
+        Index("ix_package_tombstones_filename", "filename"),
+    )
+
+
 class OrganizationRow(Base):
     __tablename__ = "organizations"
 
@@ -176,7 +237,10 @@ class TokenRow(Base):
     __tablename__ = "tokens"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    # Uniqueness is enforced by uq_tokens_active_name (see __table_args__), not
+    # a column-level UNIQUE: a revoked name must be reusable (parity with the
+    # YAML TokenStore), which a full column UNIQUE forbids.
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     email: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
@@ -191,6 +255,29 @@ class TokenRow(Base):
         DateTime(timezone=True), nullable=True
     )
     revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Rotation grace window: pre-rotation secret hash, honored until
+    # previous_hash_expires_at (see DbTokenStore.rotate). Indexed: verify()
+    # falls back to this lookup for every failed current-hash match.
+    previous_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    previous_hash_expires_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        # "One *active* token per name" — a revoked name can be reissued, matching
+        # the YAML backend.  Postgres and SQLite support partial indexes, so the
+        # unique applies only to non-revoked rows.  MySQL ignores the dialect
+        # ``*_where`` kwargs and falls back to a full UNIQUE(name); there,
+        # DbTokenStore.create() converts the IntegrityError into a clean 409
+        # rather than silently reusing the name.  Kept in sync with migration 017.
+        Index(
+            "uq_tokens_active_name",
+            "name",
+            unique=True,
+            sqlite_where=text("revoked = 0"),
+            postgresql_where=text("revoked = false"),
+        ),
+    )
 
 
 class TokenRequestRow(Base):
@@ -409,6 +496,11 @@ class BuildJobRow(Base):
     builder_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("builders.id", ondelete="SET NULL"), nullable=True
     )
+    # Identity of an *unregistered* worker that claimed this job (e.g.
+    # "gha-run-29372085620").  Platforms with no persistent builder drain their
+    # queue anonymously, leaving builder_id NULL; this keeps such a job
+    # attributable to the run that is building it.
+    claimed_by: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     timeout_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -700,9 +792,29 @@ async def _run_dump(args: list, env: dict, dest) -> None:
         raise RuntimeError(f"dump command failed ({proc.returncode}): {detail}")
 
 
+# Request-scoped "ambient" session for the unit-of-work pattern.  When set
+# (by atomic_session), every get_session() in the same async context joins
+# that transaction instead of opening its own — so a store mutation and its
+# audit entry commit atomically.  Default None ⇒ unchanged standalone
+# behaviour for every existing caller.
+_current_session: contextvars.ContextVar[AsyncSession | None] = contextvars.ContextVar(
+    "cvcpkg_current_session", default=None
+)
+
+
 @asynccontextmanager
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
-    """Yield an async session for database operations."""
+    """Yield an async session for database operations.
+
+    If an ambient unit-of-work session is active (see ``atomic_session``),
+    yield it *without* committing — the owner of the unit of work commits
+    once at the end.  Otherwise open a fresh session that commits on
+    success and rolls back on error (the standalone behaviour).
+    """
+    ambient = _current_session.get()
+    if ambient is not None:
+        yield ambient
+        return
     if _session_factory is None:
         raise RuntimeError("call init_db() first")
     async with _session_factory() as session:
@@ -712,3 +824,73 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         except Exception:
             await session.rollback()
             raise
+
+
+@asynccontextmanager
+async def atomic_session() -> AsyncGenerator[AsyncSession, None]:
+    """Run a block as one transaction that every ``get_session()`` joins.
+
+    Store mutations and the audit write inside the block share a single
+    session and commit together (all-or-nothing): a crash between them can
+    no longer leave a mutation applied but unlogged.  On exception the
+    whole unit of work rolls back.
+    """
+    if _session_factory is None:
+        raise RuntimeError("call init_db() first")
+    async with _session_factory() as session:
+        token = _current_session.set(session)
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            _current_session.reset(token)
+
+
+def in_atomic_session() -> bool:
+    """True when an ambient unit-of-work session is active."""
+    return _current_session.get() is not None
+
+
+# ── Audit-append serialization ─────────────────────────────────
+#
+# The audit chain hashes each entry against the previous one, so the
+# read-last-row → insert step must be serialized: two concurrent appends
+# that both read the same "last" row fork the chain and make
+# verify_chain() report false tampering.  A process-local lock serializes
+# appends within a worker; a per-event-loop instance avoids the
+# "bound to a different event loop" error when tests spin up fresh loops
+# via asyncio.run().  Multi-worker Postgres additionally takes a
+# transaction-scoped advisory lock (see audit_advisory_lock).
+
+_AUDIT_ADVISORY_KEY = 0x63766361  # "cvca" — fixed key for pg_advisory
+_append_lock: asyncio.Lock | None = None
+_append_lock_loop: asyncio.AbstractEventLoop | None = None
+
+
+def audit_append_lock() -> asyncio.Lock:
+    """Return the audit-append lock bound to the running event loop."""
+    global _append_lock, _append_lock_loop
+    loop = asyncio.get_running_loop()
+    if _append_lock is None or _append_lock_loop is not loop:
+        _append_lock = asyncio.Lock()
+        _append_lock_loop = loop
+    return _append_lock
+
+
+async def audit_advisory_lock(session: AsyncSession) -> None:
+    """Take a transaction-scoped advisory lock on Postgres.
+
+    Serializes audit-chain appends across worker processes (the
+    process-local ``audit_append_lock`` only covers one worker).  Released
+    automatically when the transaction commits or rolls back.  A no-op on
+    SQLite/other backends, which are single-process in practice.
+    """
+    if _engine is None:
+        return
+    if _engine.url.get_backend_name() == "postgresql":
+        from sqlalchemy import text
+
+        await session.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _AUDIT_ADVISORY_KEY})

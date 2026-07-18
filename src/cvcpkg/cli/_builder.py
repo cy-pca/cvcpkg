@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 import time
 from collections.abc import Callable
@@ -12,14 +11,38 @@ from pathlib import Path
 
 import click
 
+from cvcpkg._archive import safe_tar_extractall
 from cvcpkg.cli import cli
 from cvcpkg.cli._publish import _publish_to_server
 from cvcpkg.cli._server import _api_request
+from cvcpkg.semver import version_sort_key
+
+
+def _newest_first(pkg: dict) -> tuple:
+    """Newest-first ordering key for a catalog entry (a dict with "version").
+
+    Delegates to the canonical ``version_sort_key`` so the builder's dep
+    selection agrees with the resolver, installer, and server -- one ordering,
+    not five.  The +cvc.N tiebreak is why this exists: SemVer ignores build
+    metadata, so ``8.3+cvc.2`` and ``8.3+cvc.1`` compare equal and a plain sort
+    left the winner to the server's list order.  That is how a libpq build
+    silently got the broken readline ``8.3+cvc.1`` (its libreadline.so predates
+    the SHLIB_LIBS fix, so it declares no libtinfo, leaving tgetent unresolvable
+    and failing both halves of libpq's readline probe).  The earlier local key
+    additionally collapsed every *unparseable* version to one sentinel, which
+    re-tied openssh/x264/llvm-cbe -- version_sort_key orders those too.
+    """
+    return version_sort_key(pkg.get("version", ""))
+
 
 # Exit code the builder uses to ask its supervisor wrapper to pull the latest
 # cvcpkg and relaunch it (Windows supervised self-update).  Kept in sync with
 # windows/cvcpkg-builder-supervisor.cmd in the vm-provisioning repo.
 _SUPERVISOR_RESTART_CODE = 90
+
+# How long an extracted recipe directory may sit before it is swept.  Well
+# above any job timeout so a sweep cannot delete a directory a build is using.
+_RECIPE_DIR_TTL_SECS = 24 * 60 * 60
 
 # -- Builder commands --------------------------------------------
 
@@ -174,6 +197,17 @@ def builder_status(builder_id: int, server: str, token: str):
     "must stay under a hard job timeout.",
 )
 @click.option(
+    "--no-register",
+    is_flag=True,
+    default=False,
+    help="Drain the queue without registering as a builder.  Selects work by "
+    "platform instead of waiting to be dispatched to, and never appears in "
+    "the builder list.  For platforms whose runners are ephemeral (macOS on "
+    "GitHub-hosted runners), where registering per CI run leaves a dead "
+    "builder behind.  --name is used as the claimant identity.  Implies "
+    "--exit-when-empty.",
+)
+@click.option(
     "--daemon",
     is_flag=True,
     help="Run as a background daemon (fork and detach).",
@@ -211,6 +245,7 @@ def builder_run(
     no_websocket: bool,
     exit_when_empty: bool,
     max_runtime: float | None,
+    no_register: bool,
     daemon: bool,
     pidfile: str,
     cross_platforms: tuple[str, ...],
@@ -230,6 +265,10 @@ def builder_run(
       6. Reports success or failure
 
     Press Ctrl-C to finish in-flight jobs, unregister, and exit.
+
+    With ``--no-register`` the builder never registers: it selects pending
+    jobs by platform, claims them under ``--name`` as the claimant, and
+    leaves no entry in the builder list.  Steps 2-6 are identical.
     """
     import shutil
     import signal
@@ -241,7 +280,7 @@ def builder_run(
 
     import httpx
 
-    from cvcpkg.builder import pack_recipe
+    from cvcpkg.builder import _rewrite_pc_prefixes, _rewrite_script_prefixes, pack_recipe
     from cvcpkg.platform import detect_arch, detect_platform
 
     if platform is None:
@@ -368,36 +407,46 @@ def builder_run(
         cross_entries.append({"platform": cp, "arch": ca})
 
     # -- Registration ----------------------------------------
-    caps: dict = {}
-    if cross_entries:
-        caps["cross_platforms"] = cross_entries
-    body = {
-        "name": name,
-        "platform": platform,
-        "arch": arch,
-        "org_slug": org_slug,
-        "max_jobs": max_jobs,
-        "labels": list(labels),
-        "capabilities": caps,
-    }
-    with httpx.Client(timeout=30) as client:
-        resp = client.post(f"{base}/v1/builders/register", headers=headers, json=body)
-    if resp.status_code >= 400:
-        detail = resp.text
-        try:
-            detail = resp.json().get("detail", detail)
-        except Exception:
-            pass
-        raise click.ClickException(f"registration failed ({resp.status_code}): {detail}")
-    info = resp.json()
-    builder_id = info["id"]
     if cross_entries:
         cross_msg = " [cross: {}]".format(
             ", ".join(f"{e['platform']}/{e['arch']}" for e in cross_entries)
         )
     else:
         cross_msg = ""
-    click.echo(f"Registered builder #{builder_id} ({name}) - {platform}/{arch}{cross_msg}")
+
+    builder_id: int | None
+    if no_register:
+        # Unregistered drain: no builder row, so nothing to leave behind when
+        # this runner evaporates.  Work is selected by platform rather than
+        # dispatched to us, and `name` becomes the claimant identity.
+        builder_id = None
+        exit_when_empty = True  # a drainer with nothing to drain must exit
+        click.echo(f"Draining as '{name}' (unregistered) - {platform}/{arch}{cross_msg}")
+    else:
+        caps: dict = {}
+        if cross_entries:
+            caps["cross_platforms"] = cross_entries
+        body = {
+            "name": name,
+            "platform": platform,
+            "arch": arch,
+            "org_slug": org_slug,
+            "max_jobs": max_jobs,
+            "labels": list(labels),
+            "capabilities": caps,
+        }
+        with httpx.Client(timeout=30) as client:
+            resp = client.post(f"{base}/v1/builders/register", headers=headers, json=body)
+        if resp.status_code >= 400:
+            detail = resp.text
+            try:
+                detail = resp.json().get("detail", detail)
+            except Exception:
+                pass
+            raise click.ClickException(f"registration failed ({resp.status_code}): {detail}")
+        info = resp.json()
+        builder_id = info["id"]
+        click.echo(f"Registered builder #{builder_id} ({name}) - {platform}/{arch}{cross_msg}")
 
     shutdown = False
     # ``current_jobs`` is derived from the set of in-flight job tokens so it
@@ -438,7 +487,12 @@ def builder_run(
     # -- Helpers ---------------------------------------------
 
     def _heartbeat():
-        """Send heartbeat to server."""
+        """Send heartbeat to server.
+
+        A no-op when unregistered — there is no builder row to keep alive.
+        """
+        if builder_id is None:
+            return
         with jobs_lock:
             jobs_now = current_jobs
         try:
@@ -453,18 +507,39 @@ def builder_run(
         except Exception as exc:
             click.echo(f"  heartbeat error: {exc}", err=True)
 
-    def _fetch_recipe(recipe_name: str) -> Path:
-        """Download recipe bundle and extract to a local directory.
+    def _sweep_stale_recipe_dirs() -> None:
+        """Drop extraction dirs left by long-finished fetches.
 
-        Returns the path to the extracted recipe directory.  Bundles
-        are cached in *cache_dir* so repeated builds of the same
-        recipe don't re-download.
+        Each fetch gets its own directory (see _fetch_recipe), so they would
+        otherwise accumulate for the life of the builder.  The TTL is far
+        beyond any job timeout, so this can never reap a dir still in use.
         """
-        # Serialize per recipe name - the job-execution thread and the
-        # recipe.push websocket handler thread can otherwise concurrently
-        # rmtree+mkdir+extractall the same directory, and Recipe.load()
-        # then observes a mid-extraction state ("recipe.yaml not found").
+        cutoff = time.time() - _RECIPE_DIR_TTL_SECS
+        for d in cache_dir.glob("*-*"):
+            try:
+                if d.is_dir() and d.stat().st_mtime < cutoff:
+                    shutil.rmtree(d, ignore_errors=True)
+            except OSError:
+                continue
+
+    def _fetch_recipe(recipe_name: str) -> Path:
+        """Download a recipe bundle and extract it to a private directory.
+
+        Returns the path to the extracted recipe directory.  Each call
+        extracts into its own directory: the caller keeps using that path
+        long after this function returns (``_execute_job`` builds out of it
+        for the whole job), so a shared, stable path is unsafe.  It used to be
+        ``cache_dir/<name>``, which any *other* fetch of the same recipe would
+        rmtree mid-build -- the job thread then hit "recipe.yaml not found" and
+        the job was recorded as failed.  That spurious failure also cancelled
+        the job's dependents, which is how a gtk4 build was cancelled with
+        "dependency 137 failed" 0.4s after glib started, while glib itself went
+        on to succeed and publish.
+        """
+        # The lock still serializes same-recipe fetches: bundle_path below is a
+        # shared path, and it is written and read entirely within this block.
         with _get_recipe_lock(recipe_name):
+            _sweep_stale_recipe_dirs()
             bundle_path = cache_dir / f"{recipe_name}.tar.gz"
 
             # Always re-download (server may have a newer version).
@@ -482,18 +557,13 @@ def builder_run(
             bundle_path.parent.mkdir(parents=True, exist_ok=True)
             bundle_path.write_bytes(resp.content)
 
-            # Extract
-            extract_dir = cache_dir / recipe_name
-            if extract_dir.exists():
-                shutil.rmtree(extract_dir, ignore_errors=True)
-            if extract_dir.exists():
-                # rmtree left remnants - force remove
-                import subprocess
-
-                subprocess.run(["rm", "-rf", str(extract_dir)], check=False)
-            extract_dir.mkdir(parents=True, exist_ok=True)
+            # Extract into a directory nobody else will touch.  mkdtemp both
+            # creates it and guarantees the name is unique, so there is no
+            # existing tree to rmtree and no window for a concurrent fetch to
+            # delete it out from under the build that is about to use it.
+            extract_dir = Path(tempfile.mkdtemp(prefix=f"{recipe_name}-", dir=cache_dir))
             with tarfile.open(bundle_path, "r:gz") as tar:
-                tar.extractall(path=extract_dir)  # noqa: S202
+                safe_tar_extractall(tar, extract_dir)
 
             # recipe_push stores recipe files under ``<name>/`` inside
             # the tar (with ``_common/`` alongside).  If that nested dir
@@ -618,7 +688,10 @@ def builder_run(
                     log_cb(f"  dep {dep_name}: not found on server (skipping)\n")
                     continue
 
-                pkgs = resp.json().get("packages", [])
+                # Newest first, so an exact match below picks the newest build
+                # of a dep rather than whichever the server happened to list
+                # first (see _newest_first).
+                pkgs = sorted(resp.json().get("packages", []), key=_newest_first, reverse=True)
                 # Find best match for platform/arch/config/link
                 match = None
                 for p in pkgs:
@@ -697,26 +770,20 @@ def builder_run(
                 finally:
                     tmp_archive.unlink(missing_ok=True)
 
-                # Fix up pkg-config .pc files: replace hardcoded build-time
-                # prefix with the actual install prefix so that downstream
-                # configure / cmake find_package calls work correctly.
-                pc_dir = prefix / "lib" / "pkgconfig"
-                if pc_dir.is_dir():
-                    prefix_str = str(prefix.resolve())
-                    for pc_file in pc_dir.glob("*.pc"):
-                        text = pc_file.read_text()
-                        # Use a lambda for the replacement so that backslashes
-                        # in Windows paths (e.g. C:\Users\...) are not treated
-                        # as regex group references / unknown escapes.
-                        fixed = re.sub(
-                            r"^prefix=.*$",
-                            lambda _m, p=prefix_str: f"prefix={p}",
-                            text,
-                            count=1,
-                            flags=re.MULTILINE,
-                        )
-                        if fixed != text:
-                            pc_file.write_text(fixed)
+        # Packages bake their build-time --prefix into the files they ship:
+        # .pc files carry it in ``prefix=``, and autotools utilities embed it
+        # at configure time (aclocal hardcodes @datadir@, so it looks for
+        # share/aclocal-X.Y under the temp dir it was built in).  Those paths
+        # are gone by the time a dependent job extracts the archive here, which
+        # is why swig failed with:
+        #   aclocal: error: couldn't open directory
+        #   '/tmp/cvcpkg-builder/cvcpkg-automake-g3spihed/install/share/aclocal-1.17'
+        # build_all() already repoints both when it merges into a shared prefix;
+        # reuse the same helpers so the builder agrees with local builds.
+        # Rewriting once after the loop (not per dep) keeps this O(prefix), and
+        # both helpers are idempotent.
+        _rewrite_pc_prefixes(prefix)
+        _rewrite_script_prefixes(prefix)
 
     def _install_cross_toolchains(
         target_platform: str,
@@ -1017,12 +1084,20 @@ def builder_run(
 
         # 1. Claim the job
         try:
+            claim_body: dict = (
+                {"builder_id": builder_id} if builder_id is not None else {"claimant": name}
+            )
             with httpx.Client(timeout=30) as client:
                 resp = client.post(
                     f"{base}/v1/builds/{job_id}/claim",
                     headers=headers,
-                    json={"builder_id": builder_id},
+                    json=claim_body,
                 )
+            if resp.status_code == 409:
+                # Someone else got there first (unregistered workers select by
+                # platform, so two can see the same job).  Not an error.
+                click.echo(f"  [{job_id}] already claimed elsewhere, skipping")
+                return
             if resp.status_code >= 400:
                 click.echo(
                     f"  [{job_id}] claim failed ({resp.status_code}), skipping",
@@ -1036,6 +1111,7 @@ def builder_run(
         error_message = ""
         archive_path: Path | None = None
         dep_prefix: Path | None = None
+        job_root: Path | None = None
         try:
             # 2. Download recipe
             _stream_log(job_id, f"Downloading recipe '{recipe_name}'...\n")
@@ -1065,8 +1141,17 @@ def builder_run(
             # mkdtemp(dir=work_root) raise FileNotFoundError and fail the job.
             if work_root is not None:
                 work_root.mkdir(parents=True, exist_ok=True)
+            # Per-job isolation root. A single `builds submit` fans out to
+            # several config/link variants of the SAME recipe that run
+            # concurrently (max-jobs>1). Everything this job creates — dep
+            # prefix, build work dir, output dir — lives under job_root so
+            # the finally-cleanup can remove exactly this job's trees. The
+            # previous cleanup globbed `cvcpkg-<recipe>-*` and deleted a
+            # sibling variant's still-in-use work dir mid-build, which raised
+            # FileNotFoundError at staging.mkdir() in the losing variant.
+            job_root = Path(tempfile.mkdtemp(prefix=f"cvcpkg-job-{recipe_name}-", dir=work_root))
             dep_prefix = Path(
-                tempfile.mkdtemp(prefix=f"cvcpkg-prefix-{recipe_name}-", dir=work_root)
+                tempfile.mkdtemp(prefix=f"cvcpkg-prefix-{recipe_name}-", dir=job_root)
             )
             log_cb = lambda text, _jid=job_id: _stream_log(_jid, text)  # noqa: E731
             _install_deps(
@@ -1085,8 +1170,8 @@ def builder_run(
                     cache_dir=work_root,
                 )
 
-            # 3b. Build + package
-            output_dir = Path(tempfile.mkdtemp(prefix=f"cvcpkg-out-{recipe_name}-"))
+            # 3b. Build + package (output dir under the per-job root)
+            output_dir = Path(tempfile.mkdtemp(prefix=f"cvcpkg-out-{recipe_name}-", dir=job_root))
             try:
                 archive_path, sha256, size = pack_recipe(
                     recipe_dir,
@@ -1096,7 +1181,7 @@ def builder_run(
                     link=job_link,
                     prefix=dep_prefix,
                     output_dir=output_dir,
-                    work_dir_root=work_root,
+                    work_dir_root=job_root,
                     log_callback=log_cb,
                     host_platform=host_plat,
                     cross_toolchain_env=cross_env or None,
@@ -1123,9 +1208,16 @@ def builder_run(
                 )
                 _stream_log(job_id, "Published successfully.\n")
             except click.ClickException as pub_exc:
-                # Publish may raise if variant already exists on server.
-                # The build itself succeeded - log the warning and continue.
-                _stream_log(job_id, f"Publish warning: {pub_exc.format_message()}\n")
+                # Do NOT swallow this.  An already-published variant never
+                # reaches here: _publish_to_server skips it up front via
+                # _variant_exists, and a 409 from either the simple or the
+                # chunked upload path returns "skipped" instead of raising.
+                # So a ClickException here is a genuine publish failure --
+                # auth, storage, a failed chunk -- and completing the job would
+                # advertise a bundle that is not in the catalog.  That is
+                # exactly how a "succeeded" build came to publish nothing.
+                _stream_log(job_id, f"Publish FAILED: {pub_exc.format_message()}\n")
+                raise
 
             result_url = f"{base}/v1/packages/{recipe_name}"
 
@@ -1154,16 +1246,13 @@ def builder_run(
             click.echo(f"  [{job_id}] Failed: {recipe_name} - {exc}", err=True)
 
         finally:
-            # Clean up output dir, dep prefix, and any leaked work dirs
-            if archive_path and archive_path.parent.is_dir():
-                shutil.rmtree(archive_path.parent, ignore_errors=True)
-            if dep_prefix and dep_prefix.is_dir():
-                shutil.rmtree(dep_prefix, ignore_errors=True)
-            # build_recipe creates cvcpkg-{name}-* work dirs that leak on failure
-            cleanup_root = work_root or Path(tempfile.gettempdir())
-            for stale in cleanup_root.glob(f"cvcpkg-{recipe_name}-*"):
-                if stale.is_dir():
-                    shutil.rmtree(stale, ignore_errors=True)
+            # Remove exactly this job's isolated tree (dep prefix, build work
+            # dir, and output dir all live under job_root). Do NOT glob
+            # cvcpkg-<recipe>-* across the shared work_root — concurrent
+            # variant jobs of the same recipe would delete each other's
+            # live work dirs (the FileNotFoundError-at-staging bug).
+            if job_root is not None and job_root.is_dir():
+                shutil.rmtree(job_root, ignore_errors=True)
             # NB: the slot count is released by _run_job_guarded's finally,
             # not here — so an early return from the claim step above (which
             # never reaches this try) still frees the slot.
@@ -1362,11 +1451,12 @@ def builder_run(
                         recipe = msg.get("recipe", {})
                         rname = recipe.get("name", "")
                         if rname:
+                            # Note only.  This used to eagerly _fetch_recipe() to
+                            # warm the cache, but every fetch re-downloads anyway
+                            # ("server may have a newer version"), so the warm-up
+                            # bought nothing while adding a second thread racing
+                            # the extraction directory of any in-flight build.
                             click.echo(f"  Recipe updated: {rname}")
-                            try:
-                                _fetch_recipe(rname)
-                            except Exception:
-                                pass
 
                     elif msg_type == "ping":
                         try:
@@ -1456,14 +1546,23 @@ def builder_run(
                 time.sleep(poll_interval)
                 continue
 
-            # Poll for next job (short timeout so we stay responsive)
+            # Poll for next job (short timeout so we stay responsive).  An
+            # unregistered drainer has nothing to be dispatched *to*, so it
+            # selects pending work by platform instead.
             try:
                 with httpx.Client(timeout=35) as client:
-                    resp = client.get(
-                        f"{base}/v1/builders/{builder_id}/next-job",
-                        headers=headers,
-                        params={"timeout": "5"},
-                    )
+                    if builder_id is None:
+                        resp = client.get(
+                            f"{base}/v1/builds/next-claimable",
+                            headers=headers,
+                            params={"platform": platform, "arch": arch},
+                        )
+                    else:
+                        resp = client.get(
+                            f"{base}/v1/builders/{builder_id}/next-job",
+                            headers=headers,
+                            params={"timeout": "5"},
+                        )
             except Exception as exc:
                 click.echo(f"  poll error: {exc}", err=True)
                 time.sleep(poll_interval)
@@ -1514,18 +1613,33 @@ def builder_run(
             click.echo(f"  Waiting for {current_jobs} in-flight job(s)...")
             time.sleep(5)
 
-        click.echo("Shutting down - unregistering builder...")
-        try:
-            with httpx.Client(timeout=10) as client:
-                client.delete(f"{base}/v1/builders/{builder_id}", headers=headers)
-            click.echo("Builder unregistered.")
-        except Exception:
-            click.echo("Warning: failed to unregister builder.", err=True)
-        finally:
+        if builder_id is None:
+            click.echo("Drain finished (nothing registered, nothing to clean up).")
+        else:
+            click.echo("Shutting down - unregistering builder...")
             try:
-                pid_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+                with httpx.Client(timeout=10) as client:
+                    resp = client.delete(f"{base}/v1/builders/{builder_id}", headers=headers)
+                # httpx does not raise on 4xx, so an unchecked delete reports
+                # success while leaving the registration behind — that is how
+                # ephemeral CI builders accumulated as dead entries (the
+                # endpoint is admin-only and CI runs with a publisher token).
+                if resp.status_code >= 400:
+                    click.echo(
+                        f"Warning: failed to unregister builder #{builder_id} "
+                        f"({resp.status_code}: {resp.text[:120]}). "
+                        "It will linger in the builder list.",
+                        err=True,
+                    )
+                else:
+                    click.echo("Builder unregistered.")
+            except Exception as exc:
+                click.echo(f"Warning: failed to unregister builder: {exc}", err=True)
+
+        try:
+            pid_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 @builder_group.command("unregister")

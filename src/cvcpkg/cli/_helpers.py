@@ -25,6 +25,7 @@ _VALID_PLATFORMS = [
     "freebsd",
     "openbsd",
     "netbsd",
+    "dragonflybsd",
 ]
 _VALID_ARCHES = [
     "auto",
@@ -137,7 +138,7 @@ def _validate_org_slug(ctx: click.Context, param: click.Parameter, value: str) -
     """Click callback that validates --org using GitHub username rules."""
     if not value:
         return value
-    from cvcpkg.server.models import validate_org_slug
+    from cvcpkg.orgs import validate_org_slug
 
     err = validate_org_slug(value)
     if err:

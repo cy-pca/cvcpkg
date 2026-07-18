@@ -342,7 +342,7 @@ class TestSearchEndpoint:
     def _seed(self, client, pub_tok):
         self._publish(client, pub_tok, name="boost", version="1.86", platform="linux")
         self._publish(
-            client, pub_tok, name="boost", version="1.86", platform="darwin", link="static"
+            client, pub_tok, name="boost", version="1.86", platform="macos", link="static"
         )
         self._publish(
             client, pub_tok, name="fftw3", version="3.3.10", platform="linux", link="static"
@@ -382,7 +382,7 @@ class TestSearchEndpoint:
     def test_query_matches_platform(self, server_env):
         client, _, pub_tok, _ = server_env
         self._seed(client, pub_tok)
-        resp = client.get("/v1/search", params={"q": "darwin"})
+        resp = client.get("/v1/search", params={"q": "macos"})
         assert resp.json()["total"] == 1
 
     def test_filter_platform(self, server_env):
@@ -403,11 +403,11 @@ class TestSearchEndpoint:
     def test_query_and_filter_combined(self, server_env):
         client, _, pub_tok, _ = server_env
         self._seed(client, pub_tok)
-        resp = client.get("/v1/search", params={"q": "boost", "platform": "darwin"})
+        resp = client.get("/v1/search", params={"q": "boost", "platform": "macos"})
         data = resp.json()
         assert data["total"] == 1
         assert data["packages"][0]["name"] == "boost"
-        assert data["packages"][0]["platform"] == "darwin"
+        assert data["packages"][0]["platform"] == "macos"
 
     def test_pagination(self, server_env):
         client, _, pub_tok, _ = server_env
@@ -436,7 +436,7 @@ class TestSearchEndpoint:
         data = client.get("/v1/search").json()
         f = data["facets"]
         platforms = {b["value"]: b["count"] for b in f["platforms"]}
-        assert platforms == {"linux": 3, "darwin": 1, "windows": 1}
+        assert platforms == {"linux": 3, "macos": 1, "windows": 1}
         links = {b["value"]: b["count"] for b in f["links"]}
         assert links == {"shared": 3, "static": 2}
 

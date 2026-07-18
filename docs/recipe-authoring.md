@@ -87,12 +87,48 @@ The authoritative schema is
   version is `"<upstream_version>+cvc.<cvc_revision>"`. Bump it when you
   change the build for the same upstream version; `cvcpkg upgrade` treats a
   higher `+cvc.N` as newer.
-- **`depends.runtime` vs `depends.build`** — runtime deps are recorded in
-  the package manifest and installed alongside the component; build-only
-  deps are not. `platforms: [linux, macos]` on a dep scopes it.
+- **`depends.runtime` vs `depends.build`** — this split decides **placement**,
+  so file deps carefully. Runtime deps are recorded in the manifest and
+  installed into the deliverable install prefix (they ship); build deps go to
+  the build prefix and are stripped on install unless `--keep-build-prefix`.
+  A build-only tool filed under `runtime` will wrongly ship; a linked library
+  filed under `build` will wrongly not ship. `platforms: [linux, macos]` on a
+  dep scopes it.
 - **`package.files`** — glob patterns selecting what ends up in the bundle.
   Use `lib/*/…` variants to catch Debian multiarch paths (e.g.
   `lib/x86_64-linux-gnu/`).
+
+### Cross-compilation host tools
+
+Two kinds of build-time tooling exist, and they are treated differently:
+
+- **`depends.host_tools`** — tools that must be on `PATH` during *this*
+  recipe's build (e.g. `cmake`, `ninja`). They are resolved and made
+  available for the build but are not part of the recipe's own output.
+- **`cross_toolchain`** — declared by a recipe that *is itself* a cross
+  toolchain (e.g. `emsdk`, a bazel-based toolchain). It lists the target
+  platforms it enables and any env vars to export into dependent builds:
+
+  ```yaml
+  cross_toolchain:
+    target_platforms: [wasm]        # targets this toolchain enables
+    env:
+      CVC_BAZEL_BIN: "${PREFIX}/bin/bazel"   # ${PREFIX} = the build prefix
+  ```
+
+A recipe with a `cross_toolchain` block is a **host tool**: its bundle
+manifest carries `bundle.host_tool: true`, and when it is auto-pulled to
+cross-build another package it installs into the **separate build prefix**,
+never into the deliverable `--prefix`.  More generally, **placement follows the
+dependency edge** — `depends.build`/`depends.host_tools` land in the build
+prefix (stripped on install unless `--keep-build-prefix`), `depends.runtime`
+lands in the install prefix and ships.  File deps accordingly: a build-only tool
+under `runtime` will now wrongly ship, and a linked library under `build` will
+wrongly not ship.  See
+[Build-time deps stay out of the deliverable](cvcpkg-builder-wsl-windows-cross.md#build-time-deps-stay-out-of-the-deliverable)
+in the cross-build guide for the `--build-prefix` / `--keep-build-prefix`
+CLI semantics and the `share/libcvc-deps/host-tools.yaml` record, and
+[source recipes](source-recipes.md) for source packages.
 
 ## Build scripts
 
@@ -103,7 +139,8 @@ Build scripts run with these environment variables set:
 | `CVC_SOURCE_DIR` | Extracted upstream source tree. |
 | `CVC_BUILD_DIR` | Out-of-tree build directory. |
 | `CVC_INSTALL_DIR` | Where to install (the staged prefix). |
-| `CVC_DEPS_PREFIX` | Prefix containing this recipe's dependencies. |
+| `CVC_DEPS_PREFIX` | Install prefix — this recipe's **runtime** deps (headers/libs you link). |
+| `CVC_BUILD_PREFIX` | Build prefix — the **build** closure: host tools on `PATH`, staged source packages at `src/<name>`. |
 | `CVC_JOBS` | Parallelism (`-j`). |
 | `CVC_PLATFORM` | `linux`, `macos`, `windows`, a BSD, `wasm`, … |
 

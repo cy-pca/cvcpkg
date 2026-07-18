@@ -25,7 +25,7 @@ from typing import Any
 import yaml
 
 from cvcpkg.errors import CvcpkgError
-from cvcpkg.platform import detect_platform
+from cvcpkg.platform import detect_arch, detect_platform
 
 # ── Errors ──────────────────────────────────────────────────────
 
@@ -73,7 +73,8 @@ def qualified_name(name: str, org: str = "") -> str:
 class SourceSpec:
     """Parsed ``source:`` block from recipe.yaml."""
 
-    type: str  # tarball | git | vcpkg | brew | apt | vendored
+    type: str  # tarball | git | vcpkg | brew | apt | vendored | prebuilt |
+    #            python_wheel | python_sdist
     url: str = ""
     mirror: str = ""
     sha256: str = ""
@@ -82,6 +83,8 @@ class SourceSpec:
     triplet: str = ""
     baseline: str = ""
     strip_components: int = 1
+    base_url: str = ""
+    artifacts: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> SourceSpec:
@@ -95,6 +98,66 @@ class SourceSpec:
             triplet=d.get("triplet", ""),
             baseline=d.get("baseline", ""),
             strip_components=d.get("strip_components", 1),
+            base_url=d.get("base_url", ""),
+            artifacts=d.get("artifacts", {}) or {},
+        )
+
+
+@dataclass
+class PythonSpec:
+    """Parsed ``python:`` block from recipe.yaml (Phase 7).
+
+    Declares which cvcpkg interpreter a wheel/sdist recipe targets.  The
+    ``abi`` is the CPython ABI tag the artifact is built for (``cp311`` …
+    ``cp313t``); a trailing ``t`` marks the free-threaded (no-GIL) ABI.
+    """
+
+    interpreter: str = ""  # cvcpkg recipe name, e.g. "python313t"
+    abi: str = ""  # wheel ABI tag, e.g. "cp313t", or "abi3"
+    manylinux_min: str = ""  # e.g. "manylinux_2_28"
+    build_isolation: bool = False
+    build_requires: list[str] = field(default_factory=list)
+
+    @property
+    def stable_abi(self) -> bool:
+        """True for a stable-ABI (``abi3``) wheel.
+
+        One abi3 wheel serves every interpreter from ``interpreter`` upwards,
+        so such a package collapses the matrix to a single column instead of
+        one recipe per interpreter.
+        """
+        return self.abi == "abi3"
+
+    @property
+    def free_threaded(self) -> bool:
+        """True for the GIL-disabled ABI (``cp313t``), which we test at -X gil=0.
+
+        Never true for abi3: the 3.13 free-threaded build does not implement
+        the stable ABI, so a stable-ABI wheel cannot cover cp313t.
+        """
+        return self.abi.endswith("t")
+
+    @property
+    def version_tag(self) -> str:
+        """``cp313t`` -> ``3.13``: the X.Y the interpreter reports.
+
+        Empty for abi3, which pins no single version by construction.
+        """
+        if self.stable_abi:
+            return ""
+        digits = "".join(c for c in self.abi if c.isdigit())
+        if len(digits) < 3:
+            return ""
+        return f"{digits[0]}.{digits[1:]}"
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> PythonSpec:
+        return cls(
+            interpreter=d.get("interpreter", ""),
+            abi=d.get("abi", ""),
+            manylinux_min=d.get("manylinux_min", ""),
+            build_isolation=bool(d.get("build_isolation", False)),
+            build_requires=list(d.get("build_requires", []) or []),
         )
 
 
@@ -136,6 +199,12 @@ class Recipe:
     cross_toolchain_targets: list[str] = field(default_factory=list)
     cross_toolchain_env: dict[str, str] = field(default_factory=dict)
     conflicts: list[str] = field(default_factory=list)
+    # Virtual slots this package fills.  Every provider of a slot is mutually
+    # exclusive with every other, so a group of n alternatives needs n
+    # declarations instead of n*(n-1) pairwise `conflicts` entries — and cannot
+    # be declared asymmetrically.
+    provides: list[str] = field(default_factory=list)
+    python: PythonSpec | None = None
 
     @property
     def full_version(self) -> str:
@@ -158,6 +227,7 @@ class Recipe:
         test_block = raw.get("test", {})
 
         ct_block = raw.get("cross_toolchain", {})
+        python_block = raw.get("python", {})
 
         return cls(
             name=recipe_block.get("name", recipe_dir.name),
@@ -175,6 +245,8 @@ class Recipe:
             cross_toolchain_targets=ct_block.get("target_platforms", []) or [],
             cross_toolchain_env=ct_block.get("env", {}) or {},
             conflicts=raw.get("conflicts", []) or [],
+            provides=raw.get("provides", []) or [],
+            python=PythonSpec.from_dict(python_block) if python_block else None,
         )
 
 
@@ -338,13 +410,108 @@ def _resolve_vendored(source: SourceSpec, recipe_dir: Path) -> Path:
     return src
 
 
-def fetch_source(recipe: Recipe, work_dir: Path) -> Path:
-    """Fetch or locate the source tree for a recipe."""
+def _resolve_artifact(source: SourceSpec, platform: str, arch: str) -> tuple[str, str, str]:
+    """Resolve the ``artifacts`` entry for *platform*/*arch*.
+
+    Returns ``(url, sha256, filename)``.  Entries may be a bare filename
+    (joined onto ``base_url``) or a mapping carrying its own ``url``/``file``
+    and ``sha256``.  A recipe with no ``artifacts`` map falls back to the
+    top-level ``url``/``sha256`` — that is the ``platform: any`` case (a pure
+    Python wheel is valid everywhere).
+    """
+    if not source.artifacts:
+        if not source.url:
+            raise RecipeError("no artifacts map and no source.url to fall back on")
+        return source.url, source.sha256, source.url.rsplit("/", 1)[-1]
+
+    key = f"{platform}-{arch}"
+    entry = source.artifacts.get(key)
+    if entry is None:
+        available = ", ".join(sorted(source.artifacts)) or "(none)"
+        raise RecipeError(f"no artifact for {key}; recipe provides: {available}")
+
+    if isinstance(entry, str):
+        filename = entry
+        url = f"{source.base_url.rstrip('/')}/{filename}" if source.base_url else filename
+        return url, source.sha256, filename
+
+    filename = entry.get("file", "")
+    url = entry.get("url", "")
+    if not url:
+        if not filename:
+            raise RecipeError(f"artifact {key} has neither 'url' nor 'file'")
+        if not source.base_url:
+            raise RecipeError(f"artifact {key} uses 'file' but recipe has no base_url")
+        url = f"{source.base_url.rstrip('/')}/{filename}"
+    if not filename:
+        filename = url.rsplit("/", 1)[-1]
+    return url, entry.get("sha256", ""), filename
+
+
+def _fetch_python_wheel(source: SourceSpec, dest: Path, platform: str, arch: str) -> Path:
+    """Download and sha256-verify a pinned wheel; do not unpack it.
+
+    pip parses the compatibility tags out of the wheel *filename*, so the
+    artifact keeps its upstream name.  Unlike the hand-rolled downloads in
+    ``prebuilt`` build scripts, the pin is enforced here in cvcpkg rather
+    than trusted to each recipe — Phase 7 requires every wheel to be
+    sha256-pinned, so a missing hash is an error, not a warning.
+    """
+    import urllib.error
+    import urllib.request
+
+    url, sha256, filename = _resolve_artifact(source, platform, arch)
+    if not sha256:
+        raise RecipeError(f"python_wheel artifact {filename} has no sha256 (pinning is required)")
+
+    source_dir = dest / "src"
+    source_dir.mkdir(exist_ok=True)
+    wheel_path = source_dir / filename
+
+    cache_dir = _source_cache_dir()
+    cached = cache_dir / f"{sha256}.whl" if cache_dir is not None else None
+    if cached is not None and cached.is_file() and _sha256_file(cached) == sha256:
+        shutil.copy2(str(cached), str(wheel_path))
+        return source_dir
+
+    try:
+        urllib.request.urlretrieve(url, wheel_path)  # noqa: S310
+    except (urllib.error.URLError, OSError) as e:
+        raise RecipeError(f"failed to download wheel from {url}: {e}") from e
+
+    actual = _sha256_file(wheel_path)
+    if actual != sha256:
+        raise RecipeError(f"SHA-256 mismatch for {filename}: expected {sha256}, got {actual}")
+
+    if cached is not None:
+        cache_dir.mkdir(parents=True, exist_ok=True)  # type: ignore[union-attr]
+        shutil.copy2(str(wheel_path), str(cached))
+    return source_dir
+
+
+def fetch_source(recipe: Recipe, work_dir: Path, *, platform: str = "", arch: str = "") -> Path:
+    """Fetch or locate the source tree for a recipe.
+
+    *platform*/*arch* select the entry from an ``artifacts`` map; they
+    default to the host, which is what a native build wants.
+    """
     src = recipe.source
     if src.type == "tarball":
         return _fetch_tarball(src, work_dir)
     if src.type == "vendored":
         return _resolve_vendored(src, recipe.recipe_dir)
+    if src.type == "python_wheel":
+        return _fetch_python_wheel(
+            src, work_dir, platform or detect_platform(), arch or detect_arch()
+        )
+    if src.type == "python_sdist":
+        # An sdist is just a tarball whose URL may be platform-resolved.
+        url, sha256, _ = _resolve_artifact(
+            src, platform or detect_platform(), arch or detect_arch()
+        )
+        if not sha256:
+            raise RecipeError("python_sdist requires a sha256 (pinning is required)")
+        return _fetch_tarball(replace(src, url=url, sha256=sha256, mirror=""), work_dir)
     if src.type in ("vcpkg", "brew", "apt", "prebuilt"):
         # These are handled by the build script itself; return a
         # dummy source directory.
@@ -457,6 +624,12 @@ class BuildContext:
     keep_build_dir: bool = False
     host_platform: str = ""
     cross_toolchain_env: dict[str, str] = field(default_factory=dict)
+    # Separate prefix for everything the build needs but the deliverable must
+    # not ship: build-dependency closure (host tools, cross-toolchains, staged
+    # source packages under ``src/<name>``).  Placement is decided by the
+    # dependency *edge* -- ``depends.build`` lands here, ``depends.runtime``
+    # lands in ``prefix``.  None => no separation (same as prefix).
+    build_prefix: Path | None = None
 
 
 def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
@@ -482,8 +655,25 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
     # can override via the prefix field.
     env["CVC_DEPS_PREFIX"] = str(ctx.prefix)
 
+    # Phase 7: wheel/sdist recipes tell _common/python-wheel.{sh,ps1} which
+    # interpreter in the prefix to install into and test under.
+    if ctx.recipe.python is not None:
+        env["CVC_PYTHON_ABI"] = ctx.recipe.python.abi
+        env["CVC_PYTHON_INTERPRETER"] = ctx.recipe.python.interpreter
+        if ctx.recipe.python.manylinux_min:
+            env["CVC_PYTHON_MANYLINUX_MIN"] = ctx.recipe.python.manylinux_min
+        if ctx.recipe.python.free_threaded:
+            # Belt and braces: a free-threaded child process must not silently
+            # re-enable the GIL just because some extension asked for it.
+            env["PYTHON_GIL"] = "0"
+
     build_type = "Release" if ctx.config == "release" else "Debug"
     env["CMAKE_BUILD_TYPE"] = build_type
+    # The _common/env-*.sh scripts (and env-windows.ps1 via winhost) key off
+    # CVC_BUILD_TYPE and re-derive CMAKE_BUILD_TYPE from it, defaulting to
+    # Release when unset — without this export every recipe sourcing them
+    # silently built Release regardless of --config.
+    env["CVC_BUILD_TYPE"] = build_type
     env.setdefault("BUILD_SHARED_LIBS", "ON" if ctx.link == "shared" else "OFF")
 
     # Cross-compilation: set CVC_HOST_PLATFORM when the matrix
@@ -499,27 +689,42 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
     # Always override — the builder may have stale values (e.g. from
     # a systemd Environment= line) that must not shadow the resolved
     # per-build prefix path.
+    # The build-dependency closure (host tools, cross-toolchains, staged source
+    # packages) may live in a separate build prefix so the deliverable --prefix
+    # ships only the runtime closure; fall back to the install prefix when the
+    # separation is disabled.
+    build_prefix = ctx.build_prefix or ctx.prefix
     if ctx.cross_toolchain_env:
         for var, tpl in ctx.cross_toolchain_env.items():
-            env[var] = tpl.replace("${PREFIX}", str(ctx.prefix))
+            env[var] = tpl.replace("${PREFIX}", str(build_prefix))
 
-    # Ensure host tools built into the prefix (cmake, ninja, protoc,
-    # etc.) are found before system versions.
-    bin_dirs = [
-        str((ctx.prefix / "bin").resolve()),
-        str((ctx.install_dir / "bin").resolve()),
-    ]
+    # Build scripts get two search roots: CVC_DEPS_PREFIX (above) is the
+    # install prefix holding the runtime closure (headers/libs to link);
+    # CVC_BUILD_PREFIX holds the build closure -- host tools on PATH and
+    # staged source packages at ``src/<name>`` (see _common/stage-source.sh).
+    env["CVC_BUILD_PREFIX"] = str(build_prefix.resolve())
+
+    # Ensure host tools (cmake, ninja, protoc, toolchains, ...) are found
+    # before system versions.  The build prefix's bin comes first.
+    bin_dirs: list[str] = []
+    for _d in ((build_prefix / "bin"), (ctx.prefix / "bin"), (ctx.install_dir / "bin")):
+        _s = str(_d.resolve())
+        if _s not in bin_dirs:
+            bin_dirs.append(_s)
     existing_path = env.get("PATH", "")
     env["PATH"] = os.pathsep.join(bin_dirs + ([existing_path] if existing_path else []))
 
     # Ensure shared-library dependencies installed in the prefix are
     # discoverable at build time.  Build steps may invoke tools (e.g.
     # gRPC running protoc) that link against shared libs from earlier
-    # recipes.
+    # recipes -- including build-closure tools living in the build prefix.
     lib_dirs = [
         str((ctx.prefix / "lib").resolve()),
         str((ctx.install_dir / "lib").resolve()),
     ]
+    _bp_lib = str((build_prefix / "lib").resolve())
+    if _bp_lib not in lib_dirs:
+        lib_dirs.insert(0, _bp_lib)
     if sys.platform == "darwin":
         existing = env.get("DYLD_LIBRARY_PATH", "")
         env["DYLD_LIBRARY_PATH"] = ":".join(lib_dirs + ([existing] if existing else []))
@@ -825,12 +1030,18 @@ def generate_manifest(
     maintainer: str = "",
     all_recipes: dict[str, Recipe] | None = None,
     org_slug: str = "",
+    host_tool: bool | None = None,
 ) -> dict[str, Any]:
     """Generate a bundle manifest.yaml from the recipe + installed tree.
 
     When *all_recipes* is provided, ``recipe_sha256`` is a transitive
     dependency chain hash instead of a single-file hash.  This makes the
     hash sensitive to changes anywhere in the dependency tree.
+
+    ``host_tool`` flags the bundle as a build-time host tool in the manifest.
+    When left as ``None`` it is derived from the recipe (a recipe that
+    declares ``cross_toolchain.target_platforms`` is a host tool); pass an
+    explicit bool to override.
     """
     files = _file_list(install_dir)
     cmake_packages = recipe.raw.get("package", {}).get("cmake_packages", [])
@@ -868,6 +1079,7 @@ def generate_manifest(
     recipe_block = recipe.raw.get("recipe", {})
     description = recipe_block.get("description", "")
     built_at = datetime.now(timezone.utc).isoformat()
+    is_host_tool = host_tool if host_tool is not None else bool(recipe.cross_toolchain_targets)
     manifest: dict[str, Any] = {
         "schema_version": 3,
         "bundle": {
@@ -881,12 +1093,16 @@ def generate_manifest(
             "link": link,
             "abi": abi,
             **({"org": org_slug} if org_slug else {}),
+            **({"host_tool": True} if is_host_tool else {}),
         },
         "contents": {
             "description": description,
             "files": files,
             "cmake_packages": cmake_packages,
             "pkg_config": pkg_config,
+            # Carry the recipe's exclusivity slots into the bundle so an
+            # installed prefix knows what it fills without needing the recipe.
+            **({"provides": list(recipe.provides)} if recipe.provides else {}),
         },
         "dependencies": {
             "required": dep_list,
@@ -1072,34 +1288,69 @@ def _rewrite_pc_prefixes(target_dir: Path) -> None:
 _TEMP_PREFIX_RE = re.compile(r"(?:/[^\s'\",:;)}\]]+)?/cvcpkg-[A-Za-z0-9_-]+-[A-Za-z0-9_]+/install")
 
 
+# Data files that commonly bake the configure-time --prefix.  bin/ is scanned
+# wholesale (interpreter scripts usually carry no extension), but elsewhere an
+# extension allowlist keeps the reads bounded rather than slurping every byte of
+# a multi-gigabyte prefix (llvm).  ``.pm`` matters because automake splits its
+# baked libdir out into share/automake-X.Y/Automake/Config.pm, and ``.la`` because
+# libtool archives carry an absolute ``libdir=``.
+_BAKED_PATH_SUFFIXES = frozenset(
+    {".pm", ".pl", ".la", ".pc", ".sh", ".m4", ".mk", ".am", ".in", ".cmake", ".py", ".conf"}
+)
+
+# Skip anything implausibly large for a script/data file; guards against reading
+# a big binary that happens to match the allowlist.
+_MAX_REWRITE_BYTES = 4 * 1024 * 1024
+
+
 def _rewrite_script_prefixes(target_dir: Path) -> None:
-    """Rewrite hardcoded temp-install paths in scripts under *target_dir*/bin.
+    """Rewrite hardcoded temp-install paths in text files under *target_dir*.
 
     Autotools utilities (``aclocal``, ``automake``, ``libtoolize``, etc.)
     embed absolute ``--prefix`` paths at ``configure`` time.  When
     recipes are built into isolated temp directories and then merged to
     a shared prefix, these embedded paths become stale.
 
-    This helper scans text files in ``bin/`` for paths that look like
-    cvcpkg temp install directories and replaces them with *target_dir*.
+    Scans ``bin/`` plus files whose extension is in ``_BAKED_PATH_SUFFIXES``
+    anywhere under *target_dir*, replacing cvcpkg temp install directories with
+    *target_dir*.  Such a path always points at a deleted directory, so
+    rewriting it is unambiguously correct.
+
+    Looking beyond ``bin/`` matters: rewriting only ``bin/aclocal`` fixes
+    aclocal but leaves ``automake`` broken, because its libdir lives in
+    ``share/automake-X.Y/Automake/Config.pm`` and it reads ``$libdir/am/*.am``
+    at runtime.
     """
     bin_dir = target_dir / "bin"
-    if not bin_dir.is_dir():
-        return
     target_str = str(target_dir)
-    for script in bin_dir.iterdir():
-        if not script.is_file():
+    for path in target_dir.rglob("*"):
+        if path.parent != bin_dir and path.suffix not in _BAKED_PATH_SUFFIXES:
+            continue
+        if not path.is_file():
             continue
         try:
-            text = script.read_text(encoding="utf-8", errors="replace")
+            if path.stat().st_size > _MAX_REWRITE_BYTES:
+                continue
+            data = path.read_bytes()
         except OSError:
             continue
-        # Quick check: skip binary files and files without temp paths.
-        if "\x00" in text[:512]:
+        # Never touch binaries: the replacement changes length, which would
+        # corrupt offsets.  Check the whole file -- a NUL can sit past any
+        # fixed-size sniff window.
+        if b"\x00" in data:
             continue
-        new_text = _TEMP_PREFIX_RE.sub(target_str, text)
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            # Decoding with errors="replace" and writing back would silently
+            # replace undecodable bytes with U+FFFD, corrupting the file.
+            continue
+        # Replace via a function, not a string: re treats backslashes in a
+        # replacement as escapes, so a Windows target_str (C:\Users\...) raises
+        # "bad escape \U".  A callable's return value is used literally.
+        new_text = _TEMP_PREFIX_RE.sub(lambda _m: target_str, text)
         if new_text != text:
-            script.write_text(new_text, encoding="utf-8")
+            path.write_text(new_text, encoding="utf-8")
 
 
 def build_recipe(
@@ -1113,6 +1364,8 @@ def build_recipe(
     host_platform: str = "",
     work_dir_root: Path | None = None,
     cross_toolchain_env: dict[str, str] | None = None,
+    build_prefix: Path | None = None,
+    host_tools_prefix: Path | None = None,
     log_callback: Callable[[str], None] | None = None,
 ) -> BuildContext:
     """Build a single recipe. Returns the BuildContext.
@@ -1120,7 +1373,15 @@ def build_recipe(
     *work_dir_root*, when given, is the parent directory in which the
     temporary work directory is created.  Otherwise the system temp
     directory (``$TMPDIR`` / ``/tmp``) is used.
+
+    *build_prefix* is the separate prefix holding the build-dependency
+    closure (host tools, cross-toolchains, staged source packages) so the
+    deliverable *prefix* ships only the runtime closure.  *host_tools_prefix*
+    is a deprecated alias retained for callers written against the earlier
+    host-tools-only separation.
     """
+    if build_prefix is None:
+        build_prefix = host_tools_prefix
     recipe = Recipe.load(recipe_dir)
     if not platform:
         platform = detect_platform()
@@ -1135,7 +1396,7 @@ def build_recipe(
     install_dir = work_dir / "install"
     build_dir = work_dir / "build"
 
-    source_dir = fetch_source(recipe, work_dir)
+    source_dir = fetch_source(recipe, work_dir, platform=platform)
     if recipe.patches:
         apply_patches(recipe, source_dir)
 
@@ -1152,6 +1413,7 @@ def build_recipe(
         keep_build_dir=keep_build_dir,
         host_platform=host_platform,
         cross_toolchain_env=cross_toolchain_env or {},
+        build_prefix=build_prefix,
     )
 
     run_build(ctx, log_callback=log_callback)
@@ -1223,7 +1485,11 @@ def pack_recipe(
     )
 
     staging = ctx.work_dir / "staging"
-    staging.mkdir()
+    # parents/exist_ok: defensive against a work_dir that a /tmp reaper (or,
+    # historically, a concurrent same-recipe job's over-broad cleanup) may
+    # have disturbed — fail later in stage_bundle with a clearer cause than a
+    # bare FileNotFoundError on mkdir.
+    staging.mkdir(parents=True, exist_ok=True)
     stage_bundle(ctx.install_dir, manifest, staging, recipe_dir=ctx.recipe.recipe_dir)
 
     archive_path, sha256, size = create_archive(
@@ -1400,6 +1666,96 @@ def _dep_names(recipe: Recipe, platform: str = "") -> list[str]:
         elif isinstance(t, dict):
             names.append(_dep_qualified_name(t))
     return names
+
+
+def _dep_names_for_role(recipe: Recipe, role: str, platform: str = "") -> set[str]:
+    """Dependency names of *recipe* for a single role.
+
+    *role* is one of ``build``, ``runtime`` or ``host_tools``.  Platform-scoped
+    entries (``platforms: [...]``) that exclude *platform* are skipped, matching
+    :func:`_dep_names`.
+    """
+    entries = recipe.raw.get("depends", {}).get(role, []) or []
+    names: set[str] = set()
+    for d in entries:
+        if isinstance(d, str):
+            names.add(d)
+        elif isinstance(d, dict):
+            plats = d.get("platforms")
+            if plats and platform and platform not in plats and "any" not in plats:
+                continue
+            names.add(_dep_qualified_name(d))
+    return names
+
+
+def resolve_dep_closures(
+    targets: list[str],
+    all_recipes: dict[str, Recipe],
+    platform: str = "",
+) -> tuple[set[str], set[str]]:
+    """Split the dependency graph of *targets* by placement role.
+
+    Placement is decided by the dependency *edge*, not by what a package is --
+    ``platform: any`` and "source" packages are not special.  Returns
+    ``(runtime_closure, build_closure)``:
+
+    - **runtime_closure** — reachable from a target through ``depends.runtime``
+      edges only.  These ship, so they belong in the install prefix.
+    - **build_closure** — reachable only by traversing at least one build edge
+      (``depends.build`` / ``depends.host_tools``), plus everything those deps
+      themselves need in order to function.  Build-time only, so they belong in
+      the build prefix and are stripped on install unless kept.
+
+    A package reachable both ways lands in the runtime closure (it ships
+    regardless) and stays visible to the build.  *targets* appear in neither
+    set: the caller builds them into the deliverable prefix.
+    """
+
+    def _runtime_of(name: str) -> set[str]:
+        r = all_recipes.get(name)
+        return _dep_names_for_role(r, "runtime", platform) if r else set()
+
+    def _buildish_of(name: str) -> set[str]:
+        r = all_recipes.get(name)
+        if not r:
+            return set()
+        return _dep_names_for_role(r, "build", platform) | _dep_names_for_role(
+            r, "host_tools", platform
+        )
+
+    # 1. Runtime closure: runtime edges only, from the targets.
+    runtime_closure: set[str] = set()
+    queue = [d for t in targets for d in _runtime_of(t)]
+    while queue:
+        n = queue.pop()
+        if n in runtime_closure:
+            continue
+        runtime_closure.add(n)
+        queue.extend(_runtime_of(n))
+
+    # 2. Build seeds: build edges out of the targets and of anything that ships
+    #    (a shipped package still has to be built).
+    seeds: set[str] = set()
+    for n in [*targets, *runtime_closure]:
+        seeds |= _buildish_of(n)
+
+    # 3. Build closure: everything reachable from a seed by any edge -- a build
+    #    dep needs its own runtime deps present to run, and may need build deps
+    #    of its own.
+    build_closure: set[str] = set()
+    queue = list(seeds)
+    while queue:
+        n = queue.pop()
+        if n in build_closure:
+            continue
+        build_closure.add(n)
+        queue.extend(_runtime_of(n) | _buildish_of(n))
+
+    # Anything that ships wins: it is in the install prefix and still visible to
+    # the build, so it must not be duplicated into the build prefix.
+    build_closure -= runtime_closure
+    build_closure -= set(targets)
+    return runtime_closure, build_closure
 
 
 def _discover_cross_toolchains(
@@ -1794,12 +2150,18 @@ def build_all(
     server_cache_org: str = "",
     work_dir_root: Path | None = None,
     cleanup_work_dirs: bool = True,
+    build_prefix: Path | None = None,
 ) -> list[BuildContext]:
     """Build every recipe in dependency order into a shared *prefix*.
 
     *recipes_dir* may be a single path or a list of paths.  When
     multiple directories are given, later directories override
     earlier ones on name collisions (with a warning).
+
+    *build_prefix*, when given, receives the build-dependency closure (host
+    tools / cross-toolchains, and source packages staged under ``src/<name>``)
+    instead of *prefix*, so the deliverable ships only the runtime closure.
+    Defaults to *prefix* (no separation).
 
     When *per_component* is ``True``, each recipe is built into its
     own isolated install directory while using the shared *prefix*
@@ -1920,6 +2282,30 @@ def build_all(
         prefix = _mkworkdir("cvcpkg-all-", work_dir_root)
     prefix = prefix.resolve()
 
+    # Destination for the build-dependency closure (host tools / toolchains and
+    # staged source packages).  Defaults to *prefix* -- i.e. no separation --
+    # so callers that do not opt in keep the historical single-prefix layout.
+    if build_prefix is not None:
+        build_prefix = build_prefix.resolve()
+    _bp = build_prefix or prefix
+    _bp.mkdir(parents=True, exist_ok=True)
+
+    # Placement by dependency edge applies here too.  build_all has no single
+    # target, so the roots are the recipes nothing else depends on; anything
+    # reachable from a root only via a build edge (e.g. a source package) is
+    # build-time only and is staged into the build prefix rather than the
+    # deliverable prefix.  With no separation this set is empty (legacy layout).
+    _build_closure_names: set[str] = set()
+    if build_prefix is not None and _bp != prefix:
+        _by_name_all = {r.name: r for r in all_recipes}
+        _depended: set[str] = set()
+        for _r in all_recipes:
+            _depended |= set(_dep_names(_r, platform))
+        _roots = [r.name for r in all_recipes if r.name not in _depended]
+        _, _build_closure_names = resolve_dep_closures(_roots, _by_name_all, platform)
+        if _build_closure_names:
+            print(f"cvcpkg: build closure -> {_bp}: {', '.join(sorted(_build_closure_names))}")
+
     # Prepare build cache (unless disabled).
     use_cache = not no_cache
     cache = None
@@ -2003,9 +2389,9 @@ def build_all(
                 cache_hits += 1
                 label = "server cache" if ht_server_hit else "cache"
                 print(f"  <- {label} hit ({ht_chain_hash[:12]}...)")
-                cache.restore(ht_cached, prefix)
-                _rewrite_pc_prefixes(prefix)
-                _rewrite_script_prefixes(prefix)
+                cache.restore(ht_cached, _bp)
+                _rewrite_pc_prefixes(_bp)
+                _rewrite_script_prefixes(_bp)
                 # Populate local cache from server download.
                 if ht_server_hit and cache is not None:
                     srv_restore = Path(tempfile.mkdtemp(prefix="cvcpkg-srv-restore-"))
@@ -2038,18 +2424,19 @@ def build_all(
                         platform=ht_platform,
                         config=config,
                         link=link,
-                        prefix=prefix,
+                        prefix=_bp,
                         source_dir=ht_source,
                         build_dir=ht_work / "build",
                         install_dir=ht_install,
                         work_dir=ht_work,
                         keep_build_dir=keep_build_dir,
+                        build_prefix=build_prefix,
                     )
                     run_build(ht_ctx)
                     if ht_install.is_dir():
-                        shutil.copytree(ht_install, prefix, dirs_exist_ok=True)
-                        _rewrite_pc_prefixes(prefix)
-                        _rewrite_script_prefixes(prefix)
+                        shutil.copytree(ht_install, _bp, dirs_exist_ok=True)
+                        _rewrite_pc_prefixes(_bp)
+                        _rewrite_script_prefixes(_bp)
                     # Store in local cache.
                     if cache is not None and ht_chain_hash and ht_install.is_dir():
                         cache.store(
@@ -2214,6 +2601,9 @@ def build_all(
                             finally:
                                 _shutil_srv.rmtree(srv_restore, ignore_errors=True)
 
+        # Build-closure recipes stage into the build prefix; everything else
+        # into the deliverable prefix.
+        _dest = _bp if recipe.name in _build_closure_names else prefix
         work_dir = prefix  # default; overridden for per_component builds
         try:
             if cached_archive is not None:
@@ -2238,15 +2628,16 @@ def build_all(
                         keep_build_dir=keep_build_dir,
                         host_platform=host_platform,
                         cross_toolchain_env=merged_toolchain_env,
+                        build_prefix=build_prefix,
                     )
                     if install_dir.is_dir():
-                        shutil.copytree(install_dir, prefix, dirs_exist_ok=True)
-                        _rewrite_pc_prefixes(prefix)
-                        _rewrite_script_prefixes(prefix)
+                        shutil.copytree(install_dir, _dest, dirs_exist_ok=True)
+                        _rewrite_pc_prefixes(_dest)
+                        _rewrite_script_prefixes(_dest)
                 else:
-                    cache.restore(cached_archive, prefix)
-                    _rewrite_pc_prefixes(prefix)
-                    _rewrite_script_prefixes(prefix)
+                    cache.restore(cached_archive, _dest)
+                    _rewrite_pc_prefixes(_dest)
+                    _rewrite_script_prefixes(_dest)
                     ctx = BuildContext(
                         recipe=recipe,
                         platform=platform,
@@ -2260,6 +2651,7 @@ def build_all(
                         keep_build_dir=keep_build_dir,
                         host_platform=host_platform,
                         cross_toolchain_env=merged_toolchain_env,
+                        build_prefix=build_prefix,
                     )
             elif per_component:
                 work_dir = _mkworkdir(f"cvcpkg-{recipe.name}-", work_dir_root)
@@ -2280,6 +2672,7 @@ def build_all(
                     keep_build_dir=keep_build_dir,
                     host_platform=host_platform,
                     cross_toolchain_env=merged_toolchain_env,
+                    build_prefix=build_prefix,
                 )
                 run_build(ctx)
                 if recipe.test_script:
@@ -2287,9 +2680,9 @@ def build_all(
                 # Merge this recipe's install into the shared prefix so
                 # subsequent recipes can find it via CVC_DEPS_PREFIX.
                 if install_dir.is_dir():
-                    shutil.copytree(install_dir, prefix, dirs_exist_ok=True)
-                    _rewrite_pc_prefixes(prefix)
-                    _rewrite_script_prefixes(prefix)
+                    shutil.copytree(install_dir, _dest, dirs_exist_ok=True)
+                    _rewrite_pc_prefixes(_dest)
+                    _rewrite_script_prefixes(_dest)
                 # Store in build cache.
                 if cache is not None and recipe_chain_hash and install_dir.is_dir():
                     cache.store(
@@ -2332,11 +2725,12 @@ def build_all(
                     platform=platform,
                     config=config,
                     link=link,
-                    prefix=prefix,
+                    prefix=_dest,
                     keep_build_dir=keep_build_dir,
                     host_platform=host_platform,
                     work_dir_root=work_dir_root,
                     cross_toolchain_env=merged_toolchain_env,
+                    build_prefix=build_prefix,
                 )
             # Only include assigned recipes in contexts (for packaging).
             if is_assigned:
@@ -2442,28 +2836,77 @@ def load_all_recipes(recipe_dirs: list[Path]) -> list[Recipe]:
     return sorted(by_name.values(), key=lambda r: r.name)
 
 
+def _slot_providers(slots: set[str], recipe_dirs: list[Path]) -> dict[str, set[str]]:
+    """Map each slot in *slots* to the package names providing it."""
+    providers: dict[str, set[str]] = {s: set() for s in slots}
+    for rdir in recipe_dirs:
+        if not rdir.is_dir():
+            continue
+        for child in sorted(rdir.iterdir()):
+            if not (child / "recipe.yaml").is_file():
+                continue
+            try:
+                r = Recipe.load(child)
+            except Exception:
+                continue
+            for slot in slots.intersection(r.provides):
+                providers[slot].add(r.name)
+    return providers
+
+
 def collect_recipe_conflicts(
     names: list[str],
     recipe_dirs: list[Path],
 ) -> dict[str, list[str]]:
     """Return a ``{package_name: [conflicting_package, ...]}`` mapping.
 
-    Only covers the packages named in *names*.  Packages whose recipe
-    cannot be found in *recipe_dirs* are silently skipped so the
-    function is safe to call when a recipe directory is not available.
+    Covers two sources:
+
+    * explicit ``conflicts:`` on the recipes named in *names*;
+    * ``provides:`` slots — every package providing a slot is mutually
+      exclusive with every other provider of that slot.
+
+    The slot form exists because explicit ``conflicts:`` must be declared
+    symmetrically (each of a pair naming the other), and nothing enforces
+    that.  A one-sided declaration only fires in one direction: this
+    function loads recipes for the packages *being installed*, so if A
+    declares B but B does not declare A, installing B onto an existing A
+    sails through.  For a mutually exclusive *group* of n packages, the
+    pairwise form needs n*(n-1) declarations all kept in sync by hand;
+    a slot needs n, and cannot be asymmetric by construction.
+
+    Packages whose recipe cannot be found in *recipe_dirs* are silently
+    skipped so the function is safe to call when a recipe directory is
+    not available.
     """
     conflicts: dict[str, list[str]] = {}
+    slots_of: dict[str, set[str]] = {}
+
     for rdir in recipe_dirs:
         for name in names:
             recipe_yaml = rdir / name / "recipe.yaml"
             if recipe_yaml.is_file():
                 try:
                     r = Recipe.load(rdir / name)
-                    if r.conflicts:
-                        conflicts.setdefault(name, []).extend(r.conflicts)
                 except Exception:
-                    pass
-    return conflicts
+                    continue
+                if r.conflicts:
+                    conflicts.setdefault(name, []).extend(r.conflicts)
+                if r.provides:
+                    slots_of.setdefault(name, set()).update(r.provides)
+
+    # Resolve slots to their other providers.  Only scan every recipe when
+    # something being installed actually claims a slot — most do not.
+    wanted = {s for slots in slots_of.values() for s in slots}
+    if wanted:
+        providers = _slot_providers(wanted, recipe_dirs)
+        for name, slots in slots_of.items():
+            for slot in slots:
+                for other in providers.get(slot, ()):
+                    if other != name:
+                        conflicts.setdefault(name, []).append(other)
+
+    return {k: sorted(set(v)) for k, v in conflicts.items()}
 
 
 # ── Revision bumping ───────────────────────────────────────────

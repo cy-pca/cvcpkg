@@ -1,0 +1,72 @@
+# Federation laboratory — a canonical upstream + three edge/satellite clusters,
+# each with its own org namespaces, on one network so they resolve each other by
+# hostname (upstream, edge-a, edge-b, edge-c).  Each edge populates its PUBLIC
+# catalog from `upstream` and hosts its own PRIVATE org packages locally.
+#
+#   docker compose -f docker-compose.federation.yml up --build -d
+#   # then seed + prove (from a client with a registries.yaml mapping the hosts):
+#   #   see lab/README.md  (or run the in-process proof: PYTHONPATH=src python3 lab/federation_lab.py)
+#
+# This is the realistic, multi-host mirror of the automated in-process lab
+# (lab/federation_lab.py + tests/integration/test_federation_lab.py).
+
+x-edge-env: &edge-env
+  CVCPKG_SERVER_STATE_DIR: /data
+  CVCPKG_MAX_UPLOAD_BYTES: "1073741824"
+  # Edge role: populate the PUBLIC catalog from the canonical upstream. The
+  # public namespace is then upstream-canonical (local public publishes are
+  # 409'd); org packages stay local + private.
+  CVCPKG_POPULATE_UPSTREAM: http://upstream:8420
+  CVCPKG_POPULATE_INTERVAL: "900"
+
+services:
+  upstream:
+    build: { context: ., dockerfile: Dockerfile.production }
+    image: cvcpkg-server:fed-lab
+    command: ["cvcpkg-server", "run", "--host", "0.0.0.0", "--port", "8420"]
+    environment:
+      CVCPKG_SERVER_STATE_DIR: /data
+      CVCPKG_DATABASE_URL: sqlite+aiosqlite:////data/srv.db
+    volumes: ["upstream-data:/data"]
+    ports: ["8420:8420"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx,sys; sys.exit(0 if httpx.get('http://localhost:8420/healthz').status_code==200 else 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  edge-a:
+    image: cvcpkg-server:fed-lab
+    command: ["cvcpkg-server", "run", "--host", "0.0.0.0", "--port", "8420"]
+    environment:
+      <<: *edge-env
+      CVCPKG_DATABASE_URL: sqlite+aiosqlite:////data/srv.db
+    volumes: ["edge-a-data:/data"]
+    ports: ["8531:8420"]
+    depends_on: { upstream: { condition: service_healthy } }
+
+  edge-b:
+    image: cvcpkg-server:fed-lab
+    command: ["cvcpkg-server", "run", "--host", "0.0.0.0", "--port", "8420"]
+    environment:
+      <<: *edge-env
+      CVCPKG_DATABASE_URL: sqlite+aiosqlite:////data/srv.db
+    volumes: ["edge-b-data:/data"]
+    ports: ["8532:8420"]
+    depends_on: { upstream: { condition: service_healthy } }
+
+  edge-c:
+    image: cvcpkg-server:fed-lab
+    command: ["cvcpkg-server", "run", "--host", "0.0.0.0", "--port", "8420"]
+    environment:
+      <<: *edge-env
+      CVCPKG_DATABASE_URL: sqlite+aiosqlite:////data/srv.db
+    volumes: ["edge-c-data:/data"]
+    ports: ["8533:8420"]
+    depends_on: { upstream: { condition: service_healthy } }
+
+volumes:
+  upstream-data:
+  edge-a-data:
+  edge-b-data:
+  edge-c-data:

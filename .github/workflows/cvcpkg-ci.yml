@@ -16,6 +16,12 @@ on:
       - 'Dockerfile.test'
       - 'Dockerfile.playwright'
       - 'cvcpkg_build_backend.py'
+      # Dependency changes must run the suite: the installed set is what the
+      # tests actually exercise, and adding/removing a dep can silently change
+      # which tests run at all (an importorskip'd test flipping between
+      # skipped and executed) or break the poetry install outright.
+      - 'pyproject.toml'
+      - 'poetry.lock'
       - '.github/workflows/cvcpkg-ci.yml'
   push:
     branches: [master, main]
@@ -28,6 +34,8 @@ on:
       - 'Dockerfile.test'
       - 'Dockerfile.playwright'
       - 'cvcpkg_build_backend.py'
+      - 'pyproject.toml'
+      - 'poetry.lock'
       - '.github/workflows/cvcpkg-ci.yml'
 
 concurrency:

@@ -26,8 +26,16 @@ $msvcRuntime = if ($env:CVC_LINK -eq 'static') {
     'MultiThreaded$<$<CONFIG:Debug>:Debug>DLL'
 }
 
-if ($env:CVC_DEPS_PREFIX) {
-    $env:CMAKE_PREFIX_PATH = $env:CVC_DEPS_PREFIX
+# CMAKE_PREFIX_PATH spans both dependency roots:
+#   CVC_DEPS_PREFIX  — the runtime closure (install prefix; these ship)
+#   CVC_BUILD_PREFIX — the build closure (build prefix; stripped on install)
+# Both are searchable at build time; only the former is part of the deliverable.
+# For legacy single-prefix layouts CVC_BUILD_PREFIX is unset or equal, so this
+# collapses to the old behaviour.
+$cvcRoots = @($env:CVC_DEPS_PREFIX, $env:CVC_BUILD_PREFIX) |
+    Where-Object { $_ } | Select-Object -Unique
+if ($cvcRoots) {
+    $env:CMAKE_PREFIX_PATH = ($cvcRoots -join ';')
 }
 
 # On Windows we ALWAYS build with MSVC (cl.exe).  A prior builder image

@@ -94,6 +94,23 @@ from cvcpkg.cli._helpers import (
 @_recipes_dir_opt
 @_no_default_recipes_opt
 @_local_opt
+@click.option(
+    "--keep-build-prefix/--strip-build-prefix",
+    default=False,
+    help=(
+        "Keep any build prefix recorded for this deliverable instead of "
+        "stripping it.  When a build separated the build-dependency closure "
+        "(host tools, cross-toolchains, staged source packages) into its own "
+        "prefix, install strips it by default -- it is a build-time byproduct. "
+        "Pass --keep-build-prefix to retain it, e.g. to ship the sources."
+    ),
+)
+@click.option(
+    "--keep-host-tools/--strip-host-tools",
+    default=None,
+    hidden=True,
+    help="Deprecated alias for --keep-build-prefix/--strip-build-prefix.",
+)
 def install(
     components: tuple[str, ...],
     from_file: str | None,
@@ -113,6 +130,8 @@ def install(
     recipes_dirs: tuple[str, ...],
     no_default_recipes: bool,
     local_mode: bool,
+    keep_build_prefix: bool,
+    keep_host_tools: bool | None,
 ) -> None:
     """Install component bundles into a prefix.
 
@@ -159,6 +178,15 @@ def install(
 
     ctx = click.get_current_context()
     prefix_path = Path(prefix).resolve()
+
+    if keep_host_tools is not None:
+        click.echo(
+            "cvcpkg: warning — --keep-host-tools/--strip-host-tools is deprecated; use "
+            "--keep-build-prefix/--strip-build-prefix (the prefix now also holds "
+            "staged source packages).",
+            err=True,
+        )
+        keep_build_prefix = keep_host_tools
 
     # --local implies --fallback-to-source and skips the catalog entirely
     if local_mode:
@@ -237,8 +265,17 @@ def install(
         try:
             if catalog_url and Path(catalog_url).is_file():
                 cat = load_catalog_from_file(catalog_url)
-            else:
+            elif catalog_url:
+                # Explicit --catalog / CVCPKG_CATALOG_URL override: use it as-is.
                 cat = fetch_catalog(catalog_url, cache_dir=default_cache_dir())
+            else:
+                # Default path: root-authoritative resolution (Phase 12) — the
+                # configured root is authoritative for public packages, the
+                # local/satellite server supplies org packages, with an offline
+                # fallback to the local mirror.  No-op when root == server.
+                from cvcpkg.catalog import fetch_authoritative_catalog
+
+                cat = fetch_authoritative_catalog(cache_dir=default_cache_dir())
         except Exception as exc:
             if not fallback_to_source:
                 raise
@@ -457,6 +494,27 @@ def install(
     except OSError as exc:
         click.echo(f"cvcpkg: warning — could not write activate scripts: {exc}", err=True)
 
+    # ── Strip the build prefix ──
+    #
+    # Prune a build-dependency closure (host tools, staged sources) that shipped
+    # *inside* this prefix: it is a build-time byproduct, not part of the
+    # deliverable.  --keep-build-prefix retains it, e.g. to ship sources.
+    #
+    # No owned_prefix is passed: install never creates a build prefix of its
+    # own (build_from_source_fallback builds straight into prefix_path), so the
+    # only prefix it may strip is one that arrived in the package.  The record
+    # ships inside the package and its `prefix:` is an absolute path from the
+    # BUILD machine -- strip_host_tools refuses anything outside this prefix,
+    # which previously let an install delete the builder's directory.
+    try:
+        from cvcpkg.host_tools import strip_host_tools
+
+        stripped = strip_host_tools(prefix_path, keep=keep_build_prefix)
+        if stripped is not None:
+            click.echo(f"cvcpkg: stripped build prefix {stripped}")
+    except OSError as exc:
+        click.echo(f"cvcpkg: warning — could not strip the build prefix: {exc}", err=True)
+
     click.echo(f"cvcpkg: done -- {len(picked)} component(s) installed to {prefix_path}")
 
     # Opt-in telemetry (Phase 2): fire-and-forget, only when the user set
@@ -616,9 +674,9 @@ def info(component: str) -> None:
     if not matches:
         raise click.ClickException(f"component '{component}' not found in catalog.")
 
-    from cvcpkg.semver import Version
+    from cvcpkg.semver import version_sort_key
 
-    matches.sort(key=lambda e: Version.parse(e.version), reverse=True)
+    matches.sort(key=lambda e: version_sort_key(e.version), reverse=True)
     latest = matches[0]
 
     click.echo(f"Name:             {latest.qualified_name}")
@@ -630,7 +688,10 @@ def info(component: str) -> None:
             f"{d.name}" + (f" {d.version}" if d.version else "") for d in latest.required_deps
         )
         click.echo(f"Dependencies:     {deps}")
-    click.echo(f"Available versions: {', '.join(sorted({e.version for e in matches}))}")
+    click.echo(
+        "Available versions: "
+        f"{', '.join(sorted({e.version for e in matches}, key=version_sort_key))}"
+    )
 
 
 # ── validate ────────────────────────────────────────────────────
@@ -826,18 +887,15 @@ def sync(prefix: str) -> None:
 def _version_is_newer(new_ver: str, old_ver: str) -> bool:
     """Return True if *new_ver* is a newer cvcpkg version than *old_ver*.
 
-    Compares on (SemVer, cvc_revision) so a newer ``+cvc.N`` rebuild of the
-    same upstream version counts as newer (Version.__lt__ ignores build
-    metadata on its own).
+    Uses the canonical ``version_sort_key`` so a newer ``+cvc.N`` rebuild of the
+    same upstream version counts as newer, ordering matches the resolver and
+    server, and unparseable versions never raise.  The key is a total order, so
+    this is antisymmetric: an unorderable/older pair means "not newer" and
+    ``cvcpkg upgrade`` never proposes a downgrade (openssh 10.4p1 -> 9.9p1).
     """
-    from cvcpkg.semver import Version
+    from cvcpkg.semver import version_sort_key
 
-    try:
-        nv = Version.parse(new_ver)
-        ov = Version.parse(old_ver)
-    except ValueError:
-        return new_ver != old_ver
-    return (nv, nv.cvc_revision) > (ov, ov.cvc_revision)
+    return version_sort_key(new_ver) > version_sort_key(old_ver)
 
 
 @cli.command("upgrade")

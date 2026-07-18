@@ -1,7 +1,12 @@
 name: Populate cvcpkg.org
 
-# Pushes all recipes to the server, then submits remote build DAGs
-# for the selected platforms.  Builders pick up jobs automatically.
+# Pushes recipes to the server, then submits remote build DAGs for the
+# selected platforms.  Builders pick up jobs automatically.
+#
+# By default this covers every recipe and skips variants the server has
+# already published, so a run fills in gaps rather than rebuilding the
+# world.  Set `recipes` to rebuild a specific few (e.g. after a version
+# normalization), or turn `skip_existing` off to force a rebuild.
 #
 # Required repo secrets:
 #   CVCPKG_PUBLISHER_TOKEN  — a publisher-role token for cvcpkg.org
@@ -47,6 +52,16 @@ on:
         required: false
         default: false
         type: boolean
+      recipes:
+        description: "Recipe names to build, space- or comma-separated (default: every recipe)"
+        required: false
+        default: ""
+        type: string
+      skip_existing:
+        description: "Skip variants already published on the server (leave on to fill gaps, off to force a rebuild)"
+        required: false
+        default: true
+        type: boolean
 
 concurrency:
   group: populate-server
@@ -90,20 +105,47 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Collect recipe names (skip _common and dirs without recipe.yaml)
+          # Collect recipe names.  With the `recipes` input set, build exactly
+          # those (validated against the tree, so a typo fails loudly instead of
+          # silently submitting nothing); otherwise every recipe.
+          REQUESTED="$(echo '${{ inputs.recipes }}' | tr ',' ' ' | xargs || true)"
           RECIPES=()
-          for dir in recipes/*/; do
-            name="$(basename "$dir")"
-            [[ "$name" == _* || "$name" == .* ]] && continue
-            [[ -f "$dir/recipe.yaml" ]] || continue
-            RECIPES+=("$name")
-          done
+          if [[ -n "$REQUESTED" ]]; then
+            MISSING=()
+            for name in $REQUESTED; do
+              if [[ -f "recipes/$name/recipe.yaml" ]]; then
+                RECIPES+=("$name")
+              else
+                MISSING+=("$name")
+              fi
+            done
+            if (( ${#MISSING[@]} )); then
+              echo "::error::no such recipe(s): ${MISSING[*]}"
+              exit 1
+            fi
+            echo "Targeting ${#RECIPES[@]} requested recipe(s): ${RECIPES[*]}"
+          else
+            for dir in recipes/*/; do
+              name="$(basename "$dir")"
+              [[ "$name" == _* || "$name" == .* ]] && continue
+              [[ -f "$dir/recipe.yaml" ]] || continue
+              RECIPES+=("$name")
+            done
+          fi
 
           echo "Submitting ${#RECIPES[@]} recipes for platforms: ${{ inputs.platforms }}"
           echo "Config: ${{ inputs.config }}, Link: ${{ inputs.link }}, Arch: ${{ inputs.arch }}"
 
           DAG_ID="populate-$(date +%Y%m%d-%H%M%S)"
           echo "dag_id=$DAG_ID" >> "$GITHUB_OUTPUT"
+
+          # A published variant is immutable, so rebuilding one is pure waste.
+          # Default on: "populate" means fill the gaps.  Turn it off to force a
+          # rebuild of variants that already exist.
+          SKIP_EXISTING=()
+          if [[ "${{ inputs.skip_existing }}" == "true" ]]; then
+            SKIP_EXISTING=(--skip-existing)
+          fi
 
           cvcpkg builds submit-dag \
             --platform "$(echo '${{ inputs.platforms }}' | tr ',' '\n' | grep -vx macos | paste -sd, || true)" \
@@ -112,6 +154,7 @@ jobs:
             --link "${{ inputs.link }}" \
             --dag-id "$DAG_ID" \
             --recipes-dir recipes \
+            ${SKIP_EXISTING[@]+"${SKIP_EXISTING[@]}"} \
             "${RECIPES[@]}"
 
       - name: Follow build output
@@ -125,14 +168,16 @@ jobs:
           # Follow all DAGs whose IDs start with the generated prefix.
           # submit-dag creates one DAG per platform/arch/config/link combo.
           DAG_PREFIX="${{ steps.submit.outputs.dag_id }}"
-          # Exit 2 means "timed out with jobs still building" — surface it as
-          # a distinct signal rather than a build failure.
+          # Exit 75 means "timed out with jobs still building" — the builds
+          # continue on the cluster, so surface it as a warning rather than
+          # failing the run.
           set +e
           cvcpkg builds follow-dag "$DAG_PREFIX" --wait-timeout 5400
           rc=$?
           set -e
-          if [[ $rc -eq 2 ]]; then
-            echo "::warning::follow-dag timed out with jobs still building"
+          if [[ $rc -eq 75 ]]; then
+            echo "::warning::follow-dag timed out; builds continue on the cluster"
+            exit 0
           fi
           exit $rc
 

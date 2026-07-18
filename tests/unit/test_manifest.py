@@ -96,6 +96,17 @@ class TestBundleManifestFromDict:
         m = BundleManifest.from_dict(d)
         assert m.link_actual == "hybrid"
 
+    def test_host_tool_defaults_false(self):
+        # A normal deliverable bundle is not a host tool.
+        m = BundleManifest.from_dict(self.MINIMAL)
+        assert m.host_tool is False
+
+    def test_host_tool_parsed(self):
+        d = {**self.MINIMAL}
+        d["bundle"] = {**d["bundle"], "host_tool": True}
+        m = BundleManifest.from_dict(d)
+        assert m.host_tool is True
+
     def test_contents_parsed(self):
         d = {
             **self.MINIMAL,
