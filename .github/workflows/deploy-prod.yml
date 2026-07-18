@@ -366,10 +366,23 @@ jobs:
   # already-successful deploy must not turn deploy-prod red.  The steps still
   # exit non-zero when NOT ONE host is reachable, so a fleet-wide outage shows
   # as a red step on a green job rather than as silence.
+  # NOT continue-on-error, unlike the other builder jobs.
+  #
+  # That flag exists so a wedged builder cannot report *the deploy itself* as
+  # failed. While these steps lived inside the deploy job that was the only way
+  # to separate the two; now that they are their own job, the separation is
+  # structural -- `deploy` still reports success on its own -- and the flag buys
+  # nothing but silence. It was doing real harm: at the job level it forces the
+  # conclusion to "success" no matter what the steps did, so a run that stopped
+  # four builders and could not restart them was reported green by the API.
+  #
+  # The thresholds below are deliberately asymmetric, so red still means
+  # something: the update step tolerates a partially reachable fleet and only
+  # fails when NOT ONE host could be reached, while the restart step fails on
+  # any host it stopped and could not bring back.
   update-bsd-builders:
     name: Update BSD builders
     needs: deploy
-    continue-on-error: true
     runs-on: [self-hosted, Linux, X64, star-00]
     timeout-minutes: 20
 
