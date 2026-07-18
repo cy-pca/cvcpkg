@@ -11,6 +11,7 @@ import os
 import platform as _platform_module
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -1252,6 +1253,38 @@ def _mkworkdir(prefix: str, root: Path | None = None) -> Path:
     return Path(tempfile.mkdtemp(prefix=prefix))
 
 
+def _write_text_preserving_mode(path: Path, text: str) -> None:
+    """Write *text* to *path* even when the file is read-only.
+
+    Dependency payloads legitimately ship read-only files -- perl installs
+    ``lib/<ver>/<arch>/Config.pm`` mode 444 -- and a bare ``write_text``
+    raises EACCES there.  Because prefix rewriting runs over a whole
+    installed dependency tree, one such file aborted the entire dep install
+    and took the build with it.
+
+    The original mode is restored afterwards, so rewriting a baked path
+    never silently leaves a file more writable than its package intended.
+    """
+    try:
+        path.write_text(text, encoding="utf-8")
+        return
+    except PermissionError:
+        pass
+
+    original = path.stat().st_mode
+    try:
+        path.chmod(original | stat.S_IWUSR)
+        path.write_text(text, encoding="utf-8")
+    finally:
+        try:
+            path.chmod(original)
+        except OSError:
+            # Restoring the mode is best-effort: losing it must not mask a
+            # successful write, and must not turn one unwritable file into a
+            # failed dependency install.
+            pass
+
+
 def _rewrite_pc_prefixes(target_dir: Path) -> None:
     """Rewrite ``prefix=`` lines in pkg-config ``.pc`` files under *target_dir*.
 
@@ -1277,7 +1310,7 @@ def _rewrite_pc_prefixes(target_dir: Path) -> None:
                     rewritten = True
                 break  # only the first prefix= line matters
         if rewritten:
-            pc_file.write_text("".join(lines), encoding="utf-8")
+            _write_text_preserving_mode(pc_file, "".join(lines))
 
 
 # Regex matching a cvcpkg per-component temp install directory, e.g.
@@ -1350,7 +1383,7 @@ def _rewrite_script_prefixes(target_dir: Path) -> None:
         # "bad escape \U".  A callable's return value is used literally.
         new_text = _TEMP_PREFIX_RE.sub(lambda _m: target_str, text)
         if new_text != text:
-            path.write_text(new_text, encoding="utf-8")
+            _write_text_preserving_mode(path, new_text)
 
 
 def build_recipe(
