@@ -17,11 +17,24 @@ from cvcpkg.cli._server import _api_request
 # runs (dag pr-223 hung 91 min; pr-226 needed a manual cancel).
 _TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled", "timed_out", "unschedulable"})
 
-# Exit code from `submit-dag --wait --wait-timeout` when the budget elapses with
-# jobs still building and NONE failed.  Distinct from 0 (all succeeded) and 1 (a
-# job failed) so a caller can treat "submitted OK, still building" as a soft
-# pass -- e.g. a heavy recipe (llvm) that cannot finish inside a CI window.
+# Exit code from `--wait --wait-timeout` when the budget elapses with jobs still
+# building and NONE failed.  Distinct from 0 (all succeeded) and 1 (a job
+# failed) so a caller can treat "submitted OK, still building" as a soft pass --
+# e.g. a heavy recipe (llvm) that cannot finish inside a CI window.
 WAIT_TIMEOUT_EXIT_CODE = 75
+
+# A DAG's jobs may not be queryable the instant a waiter starts, so an empty
+# result is only conclusive after this many consecutive polls.
+_EMPTY_POLL_GRACE = 24  # × 5s ≈ 2 min
+
+# Read timeout for a job's SSE log stream.  Must stay comfortably above the
+# server's keepalive interval (_SSE_KEEPALIVE_SECONDS in server/app.py), which
+# is what keeps a quiet build from tripping this.  Without any read timeout a
+# stream dropped by an intermediary blocks its thread forever.
+_FOLLOW_READ_TIMEOUT = 60.0
+
+# Max concurrent log streams (was ThreadPoolExecutor(max_workers=32)).
+_FOLLOW_MAX_STREAMS = 32
 
 # ── Build job commands ──────────────────────────────────────────
 
@@ -372,16 +385,28 @@ def builds_log_delete(job_id: int, server: str, token: str):
     required=True,
     help="Bearer token.  [env: CVCPKG_TOKEN]",
 )
-def builds_follow_dag(dag_id: str, server: str, token: str):
+@click.option(
+    "--wait-timeout",
+    type=float,
+    default=None,
+    metavar="SECONDS",
+    help=(
+        "Stop following after SECONDS.  A failed job is still reported; if jobs "
+        f"are merely still building, exit {WAIT_TIMEOUT_EXIT_CODE} (building) "
+        "instead of burning the caller's whole job budget."
+    ),
+)
+def builds_follow_dag(dag_id: str, server: str, token: str, wait_timeout: float | None):
     """Follow live build output for all jobs in a DAG.
 
     Multiplexes SSE log streams from every active job, interleaving
     lines with a [builder/recipe/platform/arch] prefix.  Useful in CI
     to get real-time build output from all remote builders.
 
-    Exits with code 0 when all jobs succeed, 1 if any fail.
+    Exits 0 when all jobs succeed (or when the DAG has no jobs at all),
+    1 if any job fails, and 2 if --wait-timeout elapses while jobs are
+    still building.
     """
-    import concurrent.futures
     import threading
 
     import httpx
@@ -390,6 +415,9 @@ def builds_follow_dag(dag_id: str, server: str, token: str):
     headers = {"Authorization": f"Bearer {token}"}
     terminal = _TERMINAL_STATUSES
     print_lock = threading.Lock()
+    stop_event = threading.Event()
+    stream_slots = threading.Semaphore(_FOLLOW_MAX_STREAMS)
+    followers: list[threading.Thread] = []
     seen_jobs: set[int] = set()
     final_statuses: dict[int, str] = {}
     # Cache builder_id → name so we only fetch once
@@ -419,15 +447,25 @@ def builds_follow_dag(dag_id: str, server: str, token: str):
 
     def _follow_job(job_id: int, label: str):
         """Tail a single job's SSE stream, printing prefixed lines."""
+        # Wait for a streaming slot, but stay responsive to shutdown.
+        while not stream_slots.acquire(timeout=0.5):
+            if stop_event.is_set():
+                return
         url = f"{base}/v1/builds/{job_id}/log/stream"
+        # A read timeout is essential: the server heartbeats the stream, so
+        # silence this long means the connection is dead (an intermediary
+        # dropped it).  timeout=None would block this thread forever.
+        timeout = httpx.Timeout(_FOLLOW_READ_TIMEOUT, connect=10.0)
         try:
-            with httpx.Client(timeout=None) as client:
+            with httpx.Client(timeout=timeout) as client:
                 with client.stream("GET", url, headers=headers) as resp:
                     if resp.status_code >= 400:
                         with print_lock:
                             click.echo(f"  [{label}] log stream unavailable ({resp.status_code})")
                         return
                     for line in resp.iter_lines():
+                        if stop_event.is_set():
+                            break
                         if line.startswith("data: "):
                             with print_lock:
                                 click.echo(f"[{label}] {line[6:]}")
@@ -435,13 +473,26 @@ def builds_follow_dag(dag_id: str, server: str, token: str):
                             break
         except Exception:
             pass  # best-effort
+        finally:
+            stream_slots.release()
 
-    def _poll_and_spawn(executor: concurrent.futures.ThreadPoolExecutor):
-        """Poll for new jobs in the DAG and spawn followers."""
+    def _poll_and_spawn() -> str:
+        """Poll for new jobs in the DAG and spawn followers.
+
+        Returns ``"complete"`` when every job reached a terminal state,
+        ``"empty"`` when the DAG never yielded any jobs, or ``"timeout"``
+        when ``--wait-timeout`` elapsed first.
+        """
         # Use prefix matching: append '*' so the server returns all
         # DAGs whose ID starts with the given string.
         query_dag = dag_id if "-" in dag_id and dag_id.count("-") >= 5 else f"{dag_id}*"
+        deadline = None if wait_timeout is None else time.monotonic() + wait_timeout
+        empty_polls = 0
         while True:
+            # Checked at the top so every `continue` below is bounded too —
+            # a persistently erroring server must not spin forever.
+            if deadline is not None and time.monotonic() >= deadline:
+                return "timeout"
             try:
                 with httpx.Client(timeout=30) as client:
                     resp = client.get(
@@ -456,6 +507,16 @@ def builds_follow_dag(dag_id: str, server: str, token: str):
             except Exception:
                 time.sleep(5)
                 continue
+
+            # An empty result is expected briefly at startup, but if it
+            # persists there is nothing to follow and waiting is pointless.
+            if not jobs:
+                empty_polls += 1
+                if empty_polls >= _EMPTY_POLL_GRACE:
+                    return "empty"
+                time.sleep(5)
+                continue
+            empty_polls = 0
 
             all_terminal = True
             for j in jobs:
@@ -484,17 +545,33 @@ def builds_follow_dag(dag_id: str, server: str, token: str):
                     seen_jobs.add(jid)
                     with print_lock:
                         click.echo(f"  \u25b6 #{jid} {label}: streaming log...")
-                    executor.submit(_follow_job, jid, label)
+                    # Daemon threads, not a ThreadPoolExecutor: pool threads
+                    # are non-daemon and joined at interpreter exit, so a
+                    # wedged stream would hold the process open even after
+                    # every job finished.  These we can abandon.
+                    t = threading.Thread(target=_follow_job, args=(jid, label), daemon=True)
+                    t.start()
+                    followers.append(t)
 
-            if all_terminal and jobs:
-                break
+            if all_terminal:
+                return "complete"
             time.sleep(5)
 
     click.echo(f"Following DAG: {dag_id}")
     click.echo("Waiting for jobs to appear...")
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=32) as executor:
-        _poll_and_spawn(executor)
+    outcome = _poll_and_spawn()
+
+    # Followers are pure log tailing; once polling is done their output no
+    # longer gates anything.  Give them a moment to flush, then abandon the
+    # stragglers rather than letting a stuck stream hold the process open.
+    stop_event.set()
+    for t in followers:
+        t.join(timeout=2.0)
+
+    if outcome == "empty":
+        click.echo(f"\nNo jobs found for DAG {dag_id} — nothing to follow.")
+        return
 
     # Summary
     succeeded = sum(1 for s in final_statuses.values() if s == "succeeded")
@@ -502,15 +579,33 @@ def builds_follow_dag(dag_id: str, server: str, token: str):
     total = len(final_statuses)
     click.echo(f"\nDAG {dag_id}: {succeeded}/{total} succeeded, {failed} failed")
 
+    if outcome == "timeout":
+        unfinished = len(seen_jobs - set(final_statuses))
+        click.echo(
+            f"Timed out after {wait_timeout}s with {unfinished} job(s) still building.",
+            err=True,
+        )
+
+    # A real failure outranks the timeout: it is the more actionable signal,
+    # and the timeout code is reserved for "still building, nothing failed".
     if failed:
         raise SystemExit(1)
+    if outcome == "timeout":
+        raise SystemExit(WAIT_TIMEOUT_EXIT_CODE)
 
 
 # ── Build-wait helpers ──────────────────────────────────────────────
 
 
-def _wait_for_jobs(server: str, token: str, job_ids: list[int]) -> None:
-    """Poll until all job IDs reach a terminal state, printing updates."""
+def _wait_for_jobs(
+    server: str, token: str, job_ids: list[int], *, wait_timeout: float | None = None
+) -> None:
+    """Poll until all job IDs reach a terminal state, printing updates.
+
+    ``wait_timeout`` bounds the wait (0 = indefinitely); exceeding it exits
+    ``WAIT_TIMEOUT_EXIT_CODE`` rather than polling forever on a job that never
+    reaches a terminal state.
+    """
 
     import httpx
 
@@ -518,11 +613,19 @@ def _wait_for_jobs(server: str, token: str, job_ids: list[int]) -> None:
     headers = {"Authorization": f"Bearer {token}"}
     terminal = _TERMINAL_STATUSES
     pending = set(job_ids)
+    deadline = None if wait_timeout is None else time.monotonic() + wait_timeout
 
     click.echo(f"\nWaiting for {len(pending)} job(s)...")
     with httpx.Client(timeout=30) as client:
         while pending:
             time.sleep(5)
+            if deadline is not None and time.monotonic() >= deadline:
+                click.echo(
+                    f"Timed out after {wait_timeout}s with "
+                    f"{len(pending)} job(s) still running: {sorted(pending)}",
+                    err=True,
+                )
+                raise SystemExit(WAIT_TIMEOUT_EXIT_CODE)
             done_this_round = []
             for jid in list(pending):
                 resp = client.get(f"{base}/v1/builds/{jid}", headers=headers)
@@ -594,11 +697,13 @@ def _wait_for_dags(
     finished: set[int] = set()
     deadline = None if wait_timeout is None else time.monotonic() + wait_timeout
     timed_out = False
+    empty_polls = 0
 
     with httpx.Client(timeout=30) as client:
         while True:
             time.sleep(5)
             still_running = False
+            listed_ok = False
             for did in dag_ids:
                 resp = client.get(
                     f"{base}/v1/builds",
@@ -607,6 +712,7 @@ def _wait_for_dags(
                 )
                 if resp.status_code >= 400:
                     continue
+                listed_ok = True
                 jobs = resp.json().get("jobs", [])
                 for j in jobs:
                     jid = j["id"]
@@ -628,6 +734,15 @@ def _wait_for_dags(
             if deadline is not None and time.monotonic() >= deadline:
                 timed_out = True
                 break
+            # No jobs at all (e.g. --skip-existing dropped every recipe, or
+            # the DAG IDs match nothing): there is nothing to wait for.
+            # Only conclusive when the server actually answered — otherwise a
+            # persistent 4xx/5xx would exit 0 and report a broken run green.
+            if not all_job_ids and listed_ok:
+                empty_polls += 1
+                if empty_polls >= _EMPTY_POLL_GRACE:
+                    click.echo("\nNo jobs found for the submitted DAG(s) — nothing to wait for.")
+                    return
             if all_job_ids:
                 click.echo(
                     f"  ... {len(all_job_ids) - len(finished)}/{len(all_job_ids)} job(s) remaining",
@@ -660,6 +775,16 @@ def _wait_for_dags(
     # failed one must not turn the failure into a pass.
     if failed_ids:
         raise click.ClickException(f"{len(failed_ids)} job(s) did not succeed: {failed_ids}")
+    if timed_out and not all_job_ids:
+        # Never saw a single job, so the listing never succeeded (unreachable
+        # server, expired token).  Falling through would print "All 0 job(s)
+        # succeeded" and exit 0 — a run that built nothing, reported green.
+        click.echo(
+            f"\nNo jobs could be listed within {wait_timeout:.0f}s — the server "
+            "never returned the submitted DAG(s).",
+            err=True,
+        )
+        raise SystemExit(WAIT_TIMEOUT_EXIT_CODE)
     if timed_out and building:
         click.echo(
             f"\n{len(building)} job(s) still building after {wait_timeout:.0f}s "
@@ -703,6 +828,17 @@ def _wait_for_dags(
 @click.option(
     "--wait", "-w", is_flag=True, help="Wait for the job to finish, printing status updates."
 )
+@click.option(
+    "--wait-timeout",
+    type=float,
+    default=None,
+    metavar="SECONDS",
+    help=(
+        "With --wait, stop waiting after SECONDS.  A failed job is still "
+        f"reported; if the job is merely still building, exit "
+        f"{WAIT_TIMEOUT_EXIT_CODE} (submitted OK, building)."
+    ),
+)
 def builds_submit(
     server: str,
     token: str,
@@ -715,6 +851,7 @@ def builds_submit(
     priority: int,
     timeout_seconds: int | None,
     wait: bool,
+    wait_timeout: float | None,
 ):
     """Submit a single remote build job.
 
@@ -749,7 +886,7 @@ def builds_submit(
         click.echo(f"  DAG:    {data['dag_id']}")
 
     if wait:
-        _wait_for_jobs(server, token, [data["id"]])
+        _wait_for_jobs(server, token, [data["id"]], wait_timeout=wait_timeout)
 
 
 @builds_group.command("submit-dag")
