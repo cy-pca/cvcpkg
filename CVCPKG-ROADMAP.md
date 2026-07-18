@@ -19,13 +19,13 @@ project going forward.
 - The GitHub repository will be renamed **`transfix/libcvc-deps` →
   `<cyberpcangel-org>/cvcpkg`** *before* the first PyPI publish — the rename
   now also moves the repo into the new CyberPC Angel org (see the Ownership
-  section above and Phase 20).
+  section above and Phase 23).
 - Backward compatibility is retained where downstream consumers depend on
   the old name — e.g. the `libcvc-depsConfig.cmake` compatibility wrapper
   stays so existing `find_package(libcvc-deps)` calls keep working.
 
 > **Release ordering:** the PyPI publish is the **final phase of the entire
-> roadmap** (Phase 20), not an early milestone.  It happens only after the
+> roadmap** (Phase 23), not an early milestone.  It happens only after the
 > rename (project + repo), the trusted publisher is configured, and **every
 > other roadmap phase — including the pre-release hardening phases 12–14 and
 > the v2.0.0 product phases 15–19 — is closed**.  Publishing to PyPI claims a
@@ -39,7 +39,7 @@ project going forward.
 work was 100% funded by the CyberPC Angel team, and CyberPC Angel, LLC owns
 the intellectual property.  All copyright and provenance branding across the
 project is being set to **CyberPC Angel, LLC**.  This effort is sequenced
-alongside the rename and the org move below, and lands **before** the Phase 20
+alongside the rename and the org move below, and lands **before** the Phase 23
 PyPI publish so the first public release carries the correct ownership.
 
 - [ ] **Copyright & provenance branding sweep → CyberPC Angel, LLC.**  Set
@@ -75,7 +75,7 @@ PyPI publish so the first public release carries the correct ownership.
 - [ ] **New GitHub organization for the CyberPC Angel team; cvcpkg lives
       under it.**  Create a dedicated **CyberPC Angel** GitHub org (slug TBD,
       e.g. `cyberpcangel`) and move cvcpkg into it.  This **changes the
-      Phase 20 rename target and the PyPI trusted-publisher owner** from
+      Phase 23 rename target and the PyPI trusted-publisher owner** from
       `transfix` to the new org, the `_GITHUB_REPO` default
       (`transfix/libcvc-deps`, env-overridable via `CVCPKG_GITHUB_REPO`), and
       all `transfix/libcvc-deps` URL references (**~53 occurrences across ~20
@@ -241,12 +241,15 @@ flowchart TD
 | 17 | Recipe Archives — Declared Artifacts & Package-Page UX | ⬜ Planned — schema-declared recipe artifacts, full recipe directories on the server, downloadable recipe archives, collapsible artifact viewer, package-list layout rework |
 | 18 | Server Backups & Restore | ⬜ Planned — first-class recipe/package backup + restore commands, admin-managed scheduled backup jobs to the storage backends |
 | 19 | Application Packaging & Desktop Delivery | ⬜ Planned — recipe entry points, desktop assets, exe/MSI + AppImage + dmg installer commands from a prefix, `cvcpkg bake` self-mounting prefix binaries (feasibility: native per-OS mechanisms + persistent state layers + cosmo APE variant, no Docker) |
-| 20 | **PyPI Release** | ⬜ **Final phase** — the project/repo rename, trusted-publisher config, and the gated publish. Deliberately last: `pip install cvcpkg` ships only after the roadmap is otherwise complete. |
+| 20 | First-Party & Featured Software Recipes | ⬜ Planned — org namespaces `cypca` (eiskaltdcpp, eiskaltdcpp-py, verlihub), `cvc` (TexMol alongside libcvc/volrover), `tfx` (ezquake); SDL2/SDL3 across platforms + satellites; the wheel recipes needed to self-host cvcpkg |
+| 21 | Package Visibility — Hidden Packages | ⬜ Planned — discoverability-only suppression (a third axis beside `yanked` and org `is_private`); upstream is authoritative; propagation through mirror + populate |
+| 22 | Federation Topology — Nested Authority & Network Introspection | ⬜ Planned — N-tier edge→mid→root authority, cross-tier consistency warnings, same-org override, permission-gated network statistics |
+| 23 | **PyPI Release** | ⬜ **Final phase** — the project/repo rename, trusted-publisher config, and the gated publish. Deliberately last: `pip install cvcpkg` ships only after the roadmap is otherwise complete. |
 
 **Road to PyPI (`pip install cvcpkg`):** the PyPI publish is the **last phase of the
-roadmap** (Phase 20), not an early step.  The *engineering* readiness for it (Phase 1.5)
+roadmap** (Phase 23), not an early step.  The *engineering* readiness for it (Phase 1.5)
 is done, but the release itself happens only after the remaining phases — including the
-pre-release hardening phases (12–14) and the v2.0.0 product phases (15–19) — are
+pre-release hardening phases (12–14) and the v2.0.0 product phases (15–22) — are
 closed.  This is a deliberate correction: publishing to PyPI is a one-way,
 name-claiming, community-facing commitment, so it comes at the very end.
 
@@ -292,7 +295,7 @@ work before a `pip install cvcpkg` is even buildable.  All of these are done
 hardening pass — private-data isolation, tenant scoping, tar-slip and
 reflected-XSS fixes).
 
-> **The actual PyPI publish is not here.**  It moved to **Phase 20 — PyPI
+> **The actual PyPI publish is not here.**  It moved to **Phase 23 — PyPI
 > Release**, the final phase of the roadmap.  The rename (project + repo),
 > trusted-publisher configuration, and the gated publish all happen there,
 > after every other phase is closed.  See the release-ordering note at the top
@@ -311,7 +314,7 @@ reflected-XSS fixes).
       installed wheel
 - [x] Publish workflow (`cvcpkg-publish.yml`) wired for PyPI trusted
       publishing (OIDC), gated behind the `CVCPKG_PUBLISH_TO_PYPI` repo
-      variable so a stable tag cannot publish until Phase 20 flips it on
+      variable so a stable tag cannot publish until Phase 23 flips it on
 
 #### Admin CLI Completeness
 
@@ -1770,7 +1773,285 @@ file, no network, no unpack).
 
 ---
 
-### Phase 20 — PyPI Release (Final Phase)
+### Phase 20 — First-Party & Featured Software Recipes
+
+**Status: Planned — required before the PyPI release**
+
+cvcpkg is not only infrastructure: it is how the organization ships its own
+software.  This phase populates three organization namespaces with
+first-party and flagship packages, and lands the wheel recipes cvcpkg needs
+to install *itself*.
+
+| org | scope |
+|---|---|
+| **`cypca`** | CyberPC Angel, LLC software — `eiskaltdcpp`, `eiskaltdcpp-py`, `verlihub`.  Not part of cvcpkg proper, but organization software we want featured on the archive.  (These repos move under the CyberPC Angel GitHub org alongside cvcpkg — see the Ownership section.) |
+| **`cvc`** | the CVC scientific stack — `libcvc`, `volrover`, and now `TexMol` |
+| **`tfx`** | personal builds — the `ezquake` client.  The org page links to the maintainer's GitHub profile. |
+
+#### Self-hosting Python wheel recipes
+
+- [ ] **Every wheel recipe needed to self-host cvcpkg.**  Completes the
+      Phase 8 `cvcpkg` self-install recipe, whose dependency survey is
+      already recorded there.  Required runtime closure: `PyYAML`, `click`,
+      `sqlalchemy`, `cryptography`, `httpx`, `greenlet`, plus the transitive
+      pure-Python set (`httpcore`, `h11`, `certifi`, `idna`, `anyio`,
+      `sniffio`, `typing_extensions`).  Server/DB extras add `fastapi`,
+      `uvicorn`, `pydantic`, `python-multipart`, `alembic`, `asyncpg`,
+      `aiosqlite`, `aiomysql`; `tqdm` for the progress extra.
+      Per the Phase 8 survey: `cryptography` is **one** `abi3` recipe rather
+      than a per-interpreter matrix, and `PyYAML`/`greenlet` publish no
+      free-threaded wheels — so the `python313t` self-install stays blocked
+      on building those two from sdist via `python_sdist`.
+
+#### `cypca` — CyberPC Angel software
+
+- [ ] **`eiskaltdcpp`** (Direct Connect / ADC client, C++20, CMake, GPL-3.0).
+      Required deps already in the catalog: `bzip2`, `zlib`, `openssl`,
+      `gettext`, `iconv`.  Default-on options pull `pcre2`, `libidn2`
+      (**not** libidn), `lua`, `miniupnpc`, `aspell`, and `protobuf`.  The
+      Qt6 frontend is **on by default** (`USE_QT6`), GTK3 off; separate
+      `-qt`, `-gtk`, `-daemon`, and `-cli` targets exist, so the recipe
+      should decide which frontends to ship as variants.
+      *Packaging landmines:* `LOCAL_ASPELL_DATA=ON` performs a
+      `file(DOWNLOAD …)` from SourceForge **at configure time** and must be
+      disabled for sandboxed/air-gapped builders (see Phase 15's offline
+      story); `BUILD_TESTS` fetches Catch2 from the network; and the root
+      `CMakeLists.txt` uses `CMAKE_SOURCE_DIR`, which breaks
+      `add_subdirectory`/FetchContent consumption.
+- [ ] **`eiskaltdcpp-py`** (Python bindings, GPL-3.0-or-later).  Build
+      backend is **`scikit-build-core`** with **SWIG ≥4.0** (not Poetry, not
+      pybind11/Cython) — a `python_sdist` recipe in Phase 7 terms, since it
+      compiles an extension against the `eiskaltdcpp` core.
+      Python ≥3.10 (cp310–cp313).  Its **runtime dependency is just
+      `click>=8.0`**; the heavier stack is opt-in extras — `api`
+      (`fastapi`, `uvicorn[standard]`, `python-jose[cryptography]`,
+      `bcrypt`, `pydantic`) and test extras (`pytest`, `pytest-asyncio`,
+      `pytest-timeout`, `httpx`).  Wheel recipes for those extras are the
+      concrete "wheel packages required for eiskaltdcpp-py" work item;
+      `click`, `httpx`, `pydantic`, and `cryptography` are already needed
+      for cvcpkg self-hosting above, so the marginal set is small
+      (`fastapi`, `uvicorn`, `python-jose`, `bcrypt`, pytest family).
+      *Critical ABI constraint:* the `LUA_SCRIPT` and `WITH_DHT` options
+      change the core's vtable/struct layout, and a mismatch **corrupts
+      memory at runtime rather than failing to link**.  The recipe must pin
+      and propagate those flags from the `eiskaltdcpp` recipe explicitly —
+      a natural fit for a declared inter-recipe option contract.
+- [ ] **`verlihub`** (NMDC hub server, CMake).  Deps: `openssl`, `zlib`,
+      `pcre` (**PCRE1**, unlike eiskaltdcpp's PCRE2), `icu`, `libmaxminddb`
+      (not legacy GeoIP), a MySQL/MariaDB client, libcrypt, `gettext`.
+      `icu` and `libmaxminddb` are **not yet in the catalog** — new recipes.
+      Optional: `protobuf`, `lua`, Perl/Python plugins; the TLS-proxy
+      feature requires a **Go toolchain** and should stay off by default.
+      Upstream classifiers are **Linux-only** — do not promise macOS or
+      Windows variants.
+      *Decision needed:* the fork is **16 commits ahead but 24 behind**
+      upstream Verlihub; pin only after deciding whether to rebase.
+
+#### `cvc` — the scientific stack
+
+- [ ] **`TexMol`** — finish adding it alongside `libcvc` and `volrover`
+      (Qt6 modernization fork, CMake, GPL-2.0).  It already ships a
+      **`cvc-requirements.yaml` that is effectively a cvcpkg manifest**
+      (`zlib`, `boost`, `cgal`, `fftw3`, `gsl`, `hdf5`, `tiff`,
+      `imagemagick`, `qt6`, `vtk`, `pthreads4w`) — a ready-made starting
+      point, and a good first consumer of Phase 15's recipe-from-project
+      generation.  Additional direct deps: `glew`, OpenGL, plus optional
+      CGAL/LAPACK/NFFT/PETSc features.  Its core dependency is **`libcvc`**
+      itself, so the two recipes land together.
+      *Watch:* several vendored trees (`glew`, `libCG`, `levmar`,
+      `contourtree`) can duplicate-symbol against catalog copies.
+
+#### `tfx` — personal builds
+
+- [ ] **`ezquake`** (QuakeWorld client, C, CMake, GPL-2.0).  Deps:
+      `zlib`, `pcre2`, `expat`, `libcurl`, `libpng`, `libjpeg-turbo`,
+      `libsndfile`, **SDL2**, OpenGL, plus `minizip` and `jansson` (new
+      recipes); optional `freetype`, `speex`/`speexdsp`.  Builds for
+      Windows, Linux, macOS, and BSD, with mingw cross presets.  Note it
+      vendors `src/qwprot` as a **submodule** — the recipe must fetch it
+      recursively or vendor it.
+      *Source decision:* the `transfix/ezquake-source` fork currently has
+      **zero divergence from upstream** (0 ahead / 153 behind; its `master`
+      HEAD SHA exists in `QW-Group/ezquake-source`), so the recipe should
+      track **upstream** unless the separate `hybrid-race-condition` branch
+      is the intended source.
+- [ ] **Org page links to the maintainer's GitHub profile** — extends the
+      organization page with an optional profile/website link field.
+
+#### SDL — broad platform and architecture coverage
+
+A deliberate catalog win: SDL unlocks games and multimedia software across
+the fleet.
+
+- [ ] **`sdl3`** (current line, 3.4.x) and **`sdl2`** (2.32.x — still
+      receiving fixes, and what `ezquake` and much existing software
+      require).  Ship both; default to SDL3.  Never package odd-minor
+      (3.3.x) prereleases.
+- [ ] **Maximize platform/arch coverage** — Linux, Windows, macOS, the BSDs,
+      Haiku, Emscripten/WASM, and QNX are all upstream-supported and map
+      onto existing or planned cvcpkg platforms.  Console targets (Switch,
+      PS4/PS5, Xbox) are **NDA-gated and explicitly out of scope** for a
+      public archive.  Upstream ships mingw and QNX CMake toolchain files
+      that compose with Phase 11's cross-toolchain work.
+- [ ] **Exploit `SDL_DEPS_SHARED` (default ON).**  SDL `dlopen`s its
+      backends (wayland, x11, pulseaudio, pipewire, alsa, …), so they are
+      **build-time header dependencies only** and the shipped binary carries
+      almost no hard link-time deps — ideal for portable packages, and it
+      degrades gracefully when a backend is absent at runtime.  Setting it
+      `OFF` explodes the dependency closure; keep it on.
+- [ ] **Companion libraries as separate recipes** — `SDL_image`,
+      `SDL_mixer`, `SDL_ttf`, `SDL_net`.  These version **independently of
+      SDL core and of each other** (e.g. SDL_image 3.4.x vs SDL_mixer 3.2.x
+      are unrelated numbers), and each drags its own codec tree
+      (png/jpeg/tiff/webp/avif; ogg/vorbis/opus/flac/mpg123; freetype/
+      harfbuzz) — so budget one item each, not a single "satellites" line.
+
+---
+
+### Phase 21 — Package Visibility: Hidden Packages
+
+**Status: Planned — required before the PyPI release**
+
+A package should be able to be **suppressed from discovery without being
+suppressed from use**: it does not appear in searches or listings unless
+explicitly asked for, but it remains fully present in dependency
+resolution and downloadable/usable in builds.  This is for system and glue
+packages that are necessary but visually ugly in an index.
+
+**Hidden is a third, orthogonal axis.**  Today there are two, and neither
+fits:
+
+| axis | scope | controls |
+|---|---|---|
+| `yanked` | per bundle variant | **resolvability** — the catalog *omits* yanked bundles entirely |
+| org `is_private` | per organization | **access** — who may see/download at all |
+| **`hidden`** (new) | per package/variant | **discoverability only** — everything still works |
+
+> **Do not copy `yanked` wholesale.**  `get_catalog_dict()` *omits* yanked
+> bundles from the catalog (and hard-writes `yanked: false` on what it
+> emits), which is precisely the behavior hidden packages must **not**
+> have.  Hidden filters listing and search surfaces while leaving the
+> catalog/resolution feed untouched.
+
+- [ ] **Schema + migration** — a `hidden` boolean on the package row
+      (migration **020**; `019` is the current head).  Must work for
+      public packages (`org_slug == ""`), org-scoped packages, and private
+      orgs alike.  Note public packages have **no** existing per-package
+      flag carrier other than `yanked`, so this is genuinely new ground.
+- [ ] **Suppress on every listing/search surface**, with an explicit
+      opt-in mirroring `--include-yanked`: `/v1/packages`, `/v1/search`
+      **and its facets** (a separate code path — otherwise facet counts
+      leak exactly what the listing hides), `/v1/packages/{name}`,
+      `/v1/feed.xml`, tag counts, and the package-count fields in
+      `/healthz`, `/metrics`, and admin stats.
+- [ ] **Keep resolution and download fully working** — `/v1/catalog` must
+      still carry hidden bundles (unlike yanked).  The resolver is pure and
+      needs no change; but `catalog_entries()` silently drops fields it does
+      not know, so `CatalogEntry` must learn to carry the flag if the client
+      is to report or filter on it.
+- [ ] **CLI** — `--include-hidden` / `--hidden-only` on `cvcpkg search`,
+      mirroring the existing yanked flags.  (There is no `cvcpkg list`
+      command; listing *is* `search` with an empty query — Phase 15's
+      prefix/UX work may add one, and it must honor this too.)
+- [ ] **Write path + roles** — hide/unhide endpoints modeled on the yank
+      endpoints: publisher-or-admin with the same ownership/org-membership
+      check, audit-logged.
+- [ ] **Centralize the visibility predicate.**  The org ACL is currently
+      duplicated in four places (`get_bundles`, `get_search_facets`,
+      `get_catalog_dict`, and the download path's `_archive_is_visible`).
+      Adding a third axis to four independent copies invites drift — fold
+      them into one helper as part of this work.
+
+#### Upstream is the authority on hidden-ness
+
+- [ ] **Propagation.**  Mirror-mode gets this for free — it copies the
+      upstream catalog document wholesale, so a new field rides along
+      verbatim.  **Populate/edge does not**: it re-publishes through an
+      explicit field allowlist that would silently drop `hidden`, *and* it
+      is **insert-only** — the diff skips any variant already present
+      locally, so a flag flipped upstream would never reach an
+      already-populated edge.  Both need fixing: add `hidden` to the
+      allowlist, and give populate a **metadata-refresh path** so flag
+      changes propagate to existing rows.
+- [ ] **Authority direction** — the most-upstream server is authoritative.
+      A downstream server may *additionally* hide something upstream shows
+      (local suppression is fine), but must not un-hide what upstream hid.
+- [ ] **Org-scoped hidden packages** — populate skips org packages
+      entirely on both sides today, so hidden org packages cannot ride the
+      populate path as-is.  Decide explicitly whether they propagate at all
+      or stay local-authoritative (this composes with the Phase 5 invariant
+      that org namespaces are locally authoritative).
+
+---
+
+### Phase 22 — Federation Topology: Nested Authority & Network Introspection
+
+**Status: Planned — required before the PyPI release**
+
+Phase 12 shipped top-down root-authoritative resolution for the **two-tier**
+case.  This phase generalizes it to arbitrary nesting (edge → mid → root),
+makes disagreement between tiers *visible* instead of silent, and adds
+permission-gated network introspection.
+
+**What already exists** (so this extends rather than invents):
+
+- `merge_root_authoritative(root, local)` takes **exactly two** catalogs and
+  merges by namespace — public bundles from root, org bundles from local.
+  It does **not** compare a package between tiers, **not** warn on
+  mismatch, and **not** record which tier a bundle came from.
+- `federation.py` already models cross-server refs *with provenance*
+  (`ResolvedNode.server` / `.base_url`) and walks a transitive closure using
+  `registries.yaml` as the trust allowlist — but it has **zero production
+  callers**.  It is a tested-but-unwired library, and the natural substrate
+  for this phase.
+- `refs.py`'s `cvc://host/org/name` parsing *is* in production (`/v1/deps`).
+- The mirror registry is a **flat list** — no parent, tier, or depth.  A
+  mirror is hard-blocked (403) from registering mirrors beneath it, while a
+  populate-edge is not — so edge → mid → root is reachable by
+  configuration today but is nowhere modeled, validated, or reported.
+- `CVCPKG_ROOT_URL` is **client-only**; the server never reads or reports
+  it.  `/healthz` reports `mirror_mode`, `populate_upstream`, and
+  `populate_stats` — **publicly, with no auth**.
+
+Work items:
+
+- [ ] **N-tier authority chain** — generalize resolution beyond two
+      catalogs so a client walks root → mid → edge with **higher servers
+      authoritative**, resolving top-down.
+- [ ] **Same-org override** — higher servers serving the same organizations
+      override lower ones and are never shadowed.  Today the merge hands
+      *all* org bundles to the local server unconditionally; that two-tier
+      simplification has to go.
+- [ ] **Cross-tier consistency checks + warnings** — when an edge or mirror
+      serves a different package (version / sha256 / size) than a higher
+      tier for the same key, warn the user.  This requires **provenance on
+      resolved entries**: `CatalogEntry` has no server field today, though
+      `ResolvedNode` does — another reason to wire `federation.py` in.
+- [ ] **Prefer higher, fall back only on unavailability** — keep the
+      existing offline fallback (root unreachable → local, with a notice)
+      but make the preference explicit and warn whenever a lower tier is
+      used because a higher one was unreachable.
+- [ ] **Model the topology server-side** — parent/upstream identity, tier
+      or depth, and *which organizations a server serves*, none of which
+      are represented today; then report them (e.g. on `/healthz` or a new
+      endpoint).  Decide deliberately whether a mirror may nest beneath a
+      mirror, which is currently a hard 403.
+- [ ] **Wire `federation.py` into the real resolution path** — it is fully
+      tested and completely unused; this phase is what it was built for.
+- [ ] **Network statistics commands (permission-gated)** — client commands
+      to enumerate the servers on a network: edge / mid-tier / root roles,
+      domains, and the cluster nodes serving a domain.  Nothing like this
+      exists — `cvcpkg server stats` is single-server and admin-gated.  Gate
+      on the existing `reader`/`publisher`/`admin` roles plus org
+      membership.
+      *Disclosure note:* `/healthz` and `/metrics` are currently **fully
+      public** and already leak `mirror_mode` and `populate_upstream`, so
+      topology disclosure needs a deliberate policy decision rather than an
+      accidental one.
+
+---
+
+### Phase 23 — PyPI Release (Final Phase)
 
 **Status: Blocked on all prior phases — deliberately last**
 
@@ -1842,6 +2123,9 @@ actions, not something CI does on its own.
 | **Shells** | bash, zsh (then fish, dash, …) | popular interactive shells for prefix environments — `powershell` is the only shell recipe in the tree today, and the dependencies are already recipes (readline for bash's `--with-installed-readline`, ncurses, pcre2 for zsh's pcre module). |
 | **Editors** | vim, emacs — terminal builds plus GTK and KDE/Qt GUI variants | no editor recipes exist yet.  The GUI variants need a new `gtk3` recipe (vim's and emacs's GTK front ends build against GTK3; the tree's `gtk4` satisfies neither) and `gnutls` for emacs (optional: `libgccjit` for native-comp, `tree-sitter`); the display stack is Wayland-first (emacs pgtk).  The KDE/Qt variants ride the KDE stack below. |
 | **KDE stack** | extra-cmake-modules, dbus, libxml2, libxslt, shared-mime-info, qtdeclarative, qtsvg, qttools, qtwayland, then KDE Frameworks 6 by tier — kcoreaddons, kconfig, karchive, ki18n, kwidgetsaddons, kguiaddons, kitemviews, sonnet, breeze-icons, kirigami (tier 1) up through kxmlgui, kservice, kio (tier 3) | KDE and related dependency recipes.  `qt6` is qtbase-only with a per-submodule recipe precedent (qtshadertools, qtmultimedia), so the extra Qt modules are separate recipes; `dbus` is absent and gates the QtDBus-dependent frameworks; much of the base (glib, wayland, xkbcommon, freetype/harfbuzz/cairo, gettext, aspell) is already in the tree.  Enables the KDE editor variants above and composes with Phase 19's desktop delivery. |
+| **SDL (Phase 20)** | sdl3 (3.4.x), sdl2 (2.32.x), SDL_image, SDL_mixer, SDL_ttf, SDL_net | broad platform/arch coverage unlocks games and multimedia across the fleet.  `SDL_DEPS_SHARED` (default on) `dlopen`s wayland/x11/pulseaudio/pipewire/alsa, so those are build-time headers only and the binary stays portable.  Satellites version independently of core and of each other — one recipe each, not a bundle. |
+| **Featured org software (Phase 20)** | `cypca`: eiskaltdcpp, eiskaltdcpp-py, verlihub · `cvc`: TexMol · `tfx`: ezquake | CyberPC Angel / CVC / personal flagship software featured on the archive.  New supporting recipes these need: `icu`, `libmaxminddb` (verlihub), `minizip`, `jansson` (ezquake), `glew` (TexMol). |
+| **Self-hosting wheels (Phase 8/20)** | PyYAML, click, sqlalchemy, cryptography (abi3), httpx, greenlet + httpcore, h11, certifi, idna, anyio, sniffio, typing_extensions; extras fastapi, uvicorn, pydantic, python-multipart, alembic, asyncpg, aiosqlite, aiomysql, tqdm | the wheel set required for `cvcpkg install cvcpkg`.  `cryptography` collapses to one abi3 recipe; PyYAML/greenlet have no free-threaded wheels, so `python313t` self-install needs `python_sdist` builds. |
 
 ### Recipe Categories
 
@@ -1915,7 +2199,7 @@ The project has been restructured for the **cvcpkg** identity:
 - [ ] **Owning entity = CyberPC Angel, LLC** — copyright/provenance branding,
   source headers, gears logo, and the org move (Ownership section)
 - [ ] **PyPI publication** — `pip install cvcpkg` (the final roadmap phase;
-  see Phase 20)
+  see Phase 23)
 
 ---
 
