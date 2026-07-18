@@ -67,7 +67,7 @@ from cvcpkg.server.models import (
     BuilderListResponse,
     BuilderRegisterRequest,
     BuilderUpdateRequest,
-    BuildJobAlreadyClaimed,
+    BuildJobAlreadyClaimedError,
     BuildJobClaimRequest,
     BuildJobCompleteRequest,
     BuildJobFailRequest,
@@ -6469,7 +6469,7 @@ def create_app(
                 info = await _db_build_jobs.claim(
                     job_id, body.builder_id, claimant=body.claimant.strip()
                 )
-            except BuildJobAlreadyClaimed:
+            except BuildJobAlreadyClaimedError:
                 # The pre-check above only sees a snapshot; between it and the
                 # claim another worker can win the job.  ``claim`` settles it
                 # atomically, so trust that verdict here.  Re-claiming a job we

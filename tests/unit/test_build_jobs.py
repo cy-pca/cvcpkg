@@ -12,7 +12,7 @@ aiosqlite = pytest.importorskip("aiosqlite", reason="aiosqlite required for buil
 from fastapi.testclient import TestClient
 
 from cvcpkg.server.app import create_app
-from cvcpkg.server.models import BuildJobAlreadyClaimed, BuildJobStatus, TokenRole
+from cvcpkg.server.models import BuildJobAlreadyClaimedError, BuildJobStatus, TokenRole
 
 # ── Fixtures ────────────────────────────────────────────────────
 
@@ -974,7 +974,7 @@ class TestDbBuildJobStore:
                 submitted_by="admin",
             )
             await store.claim(job.id, b1.id)
-            with pytest.raises(BuildJobAlreadyClaimed):
+            with pytest.raises(BuildJobAlreadyClaimedError):
                 await store.claim(job.id, b2.id)
 
             # b1 keeps it.

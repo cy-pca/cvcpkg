@@ -18,7 +18,7 @@ aiosqlite = pytest.importorskip("aiosqlite", reason="aiosqlite required for buil
 from fastapi.testclient import TestClient
 
 from cvcpkg.server.app import create_app
-from cvcpkg.server.models import BuildJobAlreadyClaimed, BuildJobStatus, TokenRole
+from cvcpkg.server.models import BuildJobAlreadyClaimedError, BuildJobStatus, TokenRole
 
 
 def _auth(token: str) -> dict:
@@ -53,12 +53,8 @@ class TestClaimExclusivity:
         from cvcpkg.server.db_stores import DbBuilderStore, DbBuildJobStore
 
         bstore = DbBuilderStore()
-        b1 = await bstore.register(
-            name="b1", platform="linux", arch="x86_64", registered_by="a"
-        )
-        b2 = await bstore.register(
-            name="b2", platform="linux", arch="x86_64", registered_by="a"
-        )
+        b1 = await bstore.register(name="b1", platform="linux", arch="x86_64", registered_by="a")
+        b2 = await bstore.register(name="b2", platform="linux", arch="x86_64", registered_by="a")
         store = DbBuildJobStore()
         job = await store.create(
             recipe_name="zlib",
@@ -84,7 +80,7 @@ class TestClaimExclusivity:
             assert first.status == BuildJobStatus.running
             assert first.builder_id == b1.id
 
-            with pytest.raises(BuildJobAlreadyClaimed) as excinfo:
+            with pytest.raises(BuildJobAlreadyClaimedError) as excinfo:
                 await store.claim(job.id, b2.id)
             assert excinfo.value.job_id == job.id
 
@@ -107,7 +103,7 @@ class TestClaimExclusivity:
                 return_exceptions=True,
             )
             winners = [r for r in results if not isinstance(r, Exception)]
-            losers = [r for r in results if isinstance(r, BuildJobAlreadyClaimed)]
+            losers = [r for r in results if isinstance(r, BuildJobAlreadyClaimedError)]
 
             assert len(winners) == 1, f"expected exactly one winner, got {results}"
             assert len(losers) == 1, f"expected exactly one refusal, got {results}"
@@ -130,7 +126,7 @@ class TestClaimExclusivity:
         async def _test():
             store, b1, _b2, job = await self._two_builders_and_job()
             await store.claim(job.id, b1.id)
-            with pytest.raises(BuildJobAlreadyClaimed):
+            with pytest.raises(BuildJobAlreadyClaimedError):
                 await store.claim(job.id, b1.id)
 
         self._run(_test())
@@ -298,6 +294,6 @@ class TestPublishFailureIsFatal:
             "the simple and chunked upload paths must both treat 409 "
             "(already published) as skipped, not as an error"
         )
-        assert "_variant_exists(" in src, (
-            "publish must pre-check for an existing variant and skip it"
-        )
+        assert (
+            "_variant_exists(" in src
+        ), "publish must pre-check for an existing variant and skip it"

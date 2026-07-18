@@ -728,7 +728,7 @@ class BuildJobStatus(str, Enum):
     unschedulable = "unschedulable"
 
 
-class BuildJobAlreadyClaimed(Exception):
+class BuildJobAlreadyClaimedError(Exception):
     """A worker tried to claim a job another worker already holds.
 
     Kept distinct from "job not found" so the API can answer 409 rather than

@@ -45,7 +45,7 @@ from cvcpkg.server.models import (
     AuditEntry,
     BuilderInfo,
     BuilderStatus,
-    BuildJobAlreadyClaimed,
+    BuildJobAlreadyClaimedError,
     BuildJobInfo,
     BuildJobStatus,
     MirrorInfo,
@@ -3462,7 +3462,7 @@ class DbBuildJobStore:
         pending/dispatched predicate in the WHERE clause.  When two workers
         race for the same job the database serializes them: exactly one UPDATE
         matches a row, and the loser matches zero and raises
-        BuildJobAlreadyClaimed.
+        BuildJobAlreadyClaimedError.
 
         Reading the row and then writing it -- the previous shape -- let both
         workers observe 'dispatched' and both write 'running'.  Worse, the old
@@ -3478,9 +3478,7 @@ class DbBuildJobStore:
                 update(BuildJobRow)
                 .where(
                     BuildJobRow.id == job_id,
-                    BuildJobRow.status.in_(
-                        (BuildJobStatus.pending, BuildJobStatus.dispatched)
-                    ),
+                    BuildJobRow.status.in_((BuildJobStatus.pending, BuildJobStatus.dispatched)),
                 )
                 .values(
                     status=BuildJobStatus.running,
@@ -3502,7 +3500,7 @@ class DbBuildJobStore:
                     # Somebody is building it right now.  Refuse: handing the
                     # row back is what let a second worker build the same
                     # variant.
-                    raise BuildJobAlreadyClaimed(
+                    raise BuildJobAlreadyClaimedError(
                         job_id, holder=row.claimed_by or "", builder_id=row.builder_id
                     )
                 # Terminal or paused: not claimable, but nobody is building it
