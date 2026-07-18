@@ -29,6 +29,17 @@ except ImportError:
 ROOT = Path(__file__).resolve().parent
 SCHEMAS = ROOT / "schemas"
 
+# Recipes whose minted version ("<upstream_version>+cvc.<rev>") is not valid
+# SemVer and so cannot be ordered by version_sort_key's parseable rank.  The gate
+# below RATCHETS: new recipes must parse, and this set may only shrink -- it is
+# now EMPTY, since the seven that predated the gate were normalized (openssh
+# 10.4p1->10.4.1, openssh-win 10.0.0.0->10.0.0, x264/x264-cli
+# 0.164.stable->0.164.0, jam/haiku-image r1beta5->1.0.0-beta.5, llvm-cbe
+# 0.0.0+git.<sha>->0.0.0-git.<sha>).  Do NOT add to it -- pick an
+# upstream_version that parses (dot-separated numeric components; a git hash or
+# tag goes in a "-<pre>" prerelease, never a second "+").
+_UNPARSEABLE_VERSION_GRANDFATHER: frozenset[str] = frozenset()
+
 
 def _load(path: Path) -> dict:
     with open(path) as f:
@@ -81,6 +92,35 @@ def validate_recipe(recipe_dir: Path) -> list[str]:
     for patch in doc.get("patches", []):
         if not (recipe_dir / patch).exists():
             errors.append(f"{recipe_file}: patch '{patch}' not found")
+
+    # The minted version must be orderable.  Everything that picks "the newest"
+    # -- resolver, installer, publish, the server catalog -- routes through
+    # semver.version_sort_key, which ranks unparseable versions BELOW every
+    # parseable one; a recipe that mints an unparseable version can therefore
+    # never be selected over any parseable sibling and silently loses.  Validate
+    # the exact string that gets published: "<upstream_version>+cvc.<rev>".
+    rec = doc.get("recipe", {})
+    name = rec.get("name", recipe_dir.name)
+    if (
+        "upstream_version" in rec
+        and "cvc_revision" in rec
+        and name not in (_UNPARSEABLE_VERSION_GRANDFATHER)
+    ):
+        full_version = f"{rec['upstream_version']}+cvc.{rec['cvc_revision']}"
+        try:
+            # Imported lazily so validate.py keeps running without cvcpkg on the
+            # path (it only needs pyyaml/jsonschema otherwise).
+            from cvcpkg.semver import Version
+
+            Version.parse(full_version)
+        except ImportError:
+            pass  # cvcpkg not importable here; the recipe-graph CI job covers it
+        except ValueError:
+            errors.append(
+                f"{recipe_file}: version {full_version!r} is not orderable SemVer "
+                "(version_sort_key would rank it below every parseable version). "
+                "Use a dot-separated, numeric upstream_version."
+            )
 
     return errors
 

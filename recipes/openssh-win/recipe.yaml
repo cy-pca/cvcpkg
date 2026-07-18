@@ -1,7 +1,7 @@
 schema_version: 1
 recipe:
   name: openssh-win
-  upstream_version: "10.0.0.0"
+  upstream_version: "10.0.0"
   cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"

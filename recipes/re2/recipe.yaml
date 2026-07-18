@@ -1,7 +1,12 @@
 schema_version: 1
 recipe:
   name: re2
-  upstream_version: "2024-07-02"
+  # Dot-separated, NOT the upstream "2024-07-02": a dash makes SemVer read
+  # "07-02" as a pre-release ("2024.0.0-07-02"), so every dated re2 sorted as a
+  # prerelease of 2024.0.0 -- below a plain 2024.  Dots parse as 2024.7.2 and
+  # order correctly, matching the dated-upstream convention (cf. vcglib
+  # "2025.07").  The source URL below keeps the real upstream tag "2024-07-02".
+  upstream_version: "2024.07.02"
   cvc_revision: 1
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
