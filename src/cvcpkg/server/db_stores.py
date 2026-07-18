@@ -45,6 +45,7 @@ from cvcpkg.server.models import (
     AuditEntry,
     BuilderInfo,
     BuilderStatus,
+    BuildJobAlreadyClaimed,
     BuildJobInfo,
     BuildJobStatus,
     MirrorInfo,
@@ -3456,24 +3457,69 @@ class DbBuildJobStore:
         *builder_id* is None for an unregistered worker (a platform with no
         persistent builder draining its own queue); *claimant* then records
         who is building it so the job is still attributable.
+
+        The transition is a single conditional UPDATE, with the
+        pending/dispatched predicate in the WHERE clause.  When two workers
+        race for the same job the database serializes them: exactly one UPDATE
+        matches a row, and the loser matches zero and raises
+        BuildJobAlreadyClaimed.
+
+        Reading the row and then writing it -- the previous shape -- let both
+        workers observe 'dispatched' and both write 'running'.  Worse, the old
+        code *returned the job info* to a worker that had not won, so the loser
+        went on to build a variant another worker was already building.  That
+        produced duplicate concurrent builds of one variant whose publishes
+        then collided, and (because the builder swallowed publish errors) two
+        jobs that both reported success while nothing reached the catalog.
         """
         now = datetime.datetime.now(datetime.timezone.utc)
         async with get_session() as session:
-            row = (
-                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
-            ).scalar()
-            if row is None:
-                return None
-            if row.status not in (
-                BuildJobStatus.pending,
-                BuildJobStatus.dispatched,
-            ):
+            result = await session.execute(
+                update(BuildJobRow)
+                .where(
+                    BuildJobRow.id == job_id,
+                    BuildJobRow.status.in_(
+                        (BuildJobStatus.pending, BuildJobStatus.dispatched)
+                    ),
+                )
+                .values(
+                    status=BuildJobStatus.running,
+                    builder_id=builder_id,
+                    claimed_by=claimant,
+                    started_at=now,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if result.rowcount == 0:
+                # Nothing matched.  Distinguish *why*, because the two cases
+                # mean opposite things to a worker.
+                row = (
+                    await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
+                ).scalar()
+                if row is None:
+                    return None
+                if row.status == BuildJobStatus.running:
+                    # Somebody is building it right now.  Refuse: handing the
+                    # row back is what let a second worker build the same
+                    # variant.
+                    raise BuildJobAlreadyClaimed(
+                        job_id, holder=row.claimed_by or "", builder_id=row.builder_id
+                    )
+                # Terminal or paused: not claimable, but nobody is building it
+                # either.  Hand the row back so the caller can see why
+                # (cancelled, already succeeded, ...) -- long-standing
+                # behaviour that callers rely on to skip the job quietly.
                 dep_ids = await self._load_dep_ids(session, job_id)
                 return self._row_to_info(row, dep_ids)
-            row.status = BuildJobStatus.running
-            row.builder_id = builder_id
-            row.claimed_by = claimant
-            row.started_at = now
+            # populate_existing: the UPDATE bypassed the ORM, so refresh the
+            # identity-mapped instance rather than reading back stale values.
+            row = (
+                await session.execute(
+                    select(BuildJobRow)
+                    .where(BuildJobRow.id == job_id)
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar()
             dep_ids = await self._load_dep_ids(session, job_id)
             return self._row_to_info(row, dep_ids)
 

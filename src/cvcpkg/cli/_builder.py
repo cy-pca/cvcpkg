@@ -1208,9 +1208,16 @@ def builder_run(
                 )
                 _stream_log(job_id, "Published successfully.\n")
             except click.ClickException as pub_exc:
-                # Publish may raise if variant already exists on server.
-                # The build itself succeeded - log the warning and continue.
-                _stream_log(job_id, f"Publish warning: {pub_exc.format_message()}\n")
+                # Do NOT swallow this.  An already-published variant never
+                # reaches here: _publish_to_server skips it up front via
+                # _variant_exists, and a 409 from either the simple or the
+                # chunked upload path returns "skipped" instead of raising.
+                # So a ClickException here is a genuine publish failure --
+                # auth, storage, a failed chunk -- and completing the job would
+                # advertise a bundle that is not in the catalog.  That is
+                # exactly how a "succeeded" build came to publish nothing.
+                _stream_log(job_id, f"Publish FAILED: {pub_exc.format_message()}\n")
+                raise
 
             result_url = f"{base}/v1/packages/{recipe_name}"
 
