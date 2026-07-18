@@ -19,13 +19,13 @@ project going forward.
 - The GitHub repository will be renamed **`transfix/libcvc-deps` →
   `<cyberpcangel-org>/cvcpkg`** *before* the first PyPI publish — the rename
   now also moves the repo into the new CyberPC Angel org (see the Ownership
-  section above and Phase 24).
+  section above and Phase 25).
 - Backward compatibility is retained where downstream consumers depend on
   the old name — e.g. the `libcvc-depsConfig.cmake` compatibility wrapper
   stays so existing `find_package(libcvc-deps)` calls keep working.
 
 > **Release ordering:** the PyPI publish is the **final phase of the entire
-> roadmap** (Phase 24), not an early milestone.  It happens only after the
+> roadmap** (Phase 25), not an early milestone.  It happens only after the
 > rename (project + repo), the trusted publisher is configured, and **every
 > other roadmap phase — including the pre-release hardening phases 12–14 and
 > the v2.0.0 product phases 15–19 — is closed**.  Publishing to PyPI claims a
@@ -39,7 +39,7 @@ project going forward.
 work was 100% funded by the CyberPC Angel team, and CyberPC Angel, LLC owns
 the intellectual property.  All copyright and provenance branding across the
 project is being set to **CyberPC Angel, LLC**.  This effort is sequenced
-alongside the rename and the org move below, and lands **before** the Phase 24
+alongside the rename and the org move below, and lands **before** the Phase 25
 PyPI publish so the first public release carries the correct ownership.
 
 - [ ] **Copyright & provenance branding sweep → CyberPC Angel, LLC.**  Set
@@ -75,7 +75,7 @@ PyPI publish so the first public release carries the correct ownership.
 - [ ] **New GitHub organization for the CyberPC Angel team; cvcpkg lives
       under it.**  Create a dedicated **CyberPC Angel** GitHub org (slug TBD,
       e.g. `cyberpcangel`) and move cvcpkg into it.  This **changes the
-      Phase 24 rename target and the PyPI trusted-publisher owner** from
+      Phase 25 rename target and the PyPI trusted-publisher owner** from
       `transfix` to the new org, the `_GITHUB_REPO` default
       (`transfix/libcvc-deps`, env-overridable via `CVCPKG_GITHUB_REPO`), and
       all `transfix/libcvc-deps` URL references (**~53 occurrences across ~20
@@ -239,18 +239,19 @@ flowchart TD
 | 15 | CLI UX & the Recipe-First Workflow | ⬜ Planned — deprecate `cvc-requirements.yaml`, `~/.cvcpkg/` defaults (settings/recipes/build/install/cache), install-prefix registry (`~/.cvcpkg/local.db`) with aliases + delete/inspect/modify, per-prefix state DB (`share/cvcpkg/prefix.db`: installed-file tracking, **first-class `uninstall`**, idempotent installs, hash-verify, ops journal), recipe generation from existing projects, clean/activate commands, terminal graphics, offline source cache, recipe-set export + source pre-seeding for air-gapped self-hosting |
 | 16 | Prefix Provenance & Server Seeding | ⬜ Planned — install prefixes carry catalog info + recipes in `share/cvcpkg/` so a prefix can seed a cvcpkg-server; org/private status explicit with warnings |
 | 17 | Recipe Archives — Declared Artifacts & Package-Page UX | ⬜ Planned — schema-declared recipe artifacts, full recipe directories on the server, downloadable recipe archives, collapsible artifact viewer, package-list layout rework |
-| 18 | Server Backups & Restore | ⬜ Planned — first-class recipe/package backup + restore commands, admin-managed scheduled backup jobs to the storage backends |
+| 18 | Server Backups, Scheduled Jobs & Quota Governance | ⬜ Planned — recipe/package backup + restore; a general admin job manager + scheduler (none exists today); quota governance (global default → infinite, reconciliation job, recipes count against org quota) |
 | 19 | Application Packaging & Desktop Delivery | ⬜ Planned — recipe entry points, desktop assets, exe/MSI + AppImage + dmg installer commands from a prefix, `cvcpkg bake` self-mounting prefix binaries (feasibility: native per-OS mechanisms + persistent state layers + cosmo APE variant, no Docker) |
 | 20 | First-Party & Featured Software Recipes | ⬜ Planned — org namespaces `cypca` (eiskaltdcpp, eiskaltdcpp-py, verlihub), `cvc` (TexMol alongside libcvc/volrover), `tfx` (ezquake); SDL2/SDL3 across platforms + satellites; the wheel recipes needed to self-host cvcpkg |
 | 21 | Package Visibility — Hidden Packages | ⬜ Planned — discoverability-only suppression (a third axis beside `yanked` and org `is_private`); upstream is authoritative; propagation through mirror + populate |
 | 22 | Federation Topology — Nested Authority & Network Introspection | ⬜ Planned — N-tier edge→mid→root authority, cross-tier consistency warnings, same-org override, permission-gated network statistics |
 | 23 | Build & Configuration-Management System | ⬜ Planned — recipes as state (Get/Test/Set, `check`/`apply`/`uninstall`), BYO non-redistributable assets, security (config-channel-is-C2), tamper-evident local forensic journal, per-machine generations |
-| 24 | **PyPI Release** | ⬜ **Final phase** — the project/repo rename, trusted-publisher config, and the gated publish. Deliberately last: `pip install cvcpkg` ships only after the roadmap is otherwise complete. |
+| 24 | Live Updates, Activity Feed & Build Transparency | ⬜ Planned — client WebSocket push + new-package notifications, a public visibility-filtered activity feed (recipes/builds/yanks/unyanks/nukes), public read for public build jobs+logs (private orgs stay private) |
+| 25 | **PyPI Release** | ⬜ **Final phase** — the project/repo rename, trusted-publisher config, and the gated publish. Deliberately last: `pip install cvcpkg` ships only after the roadmap is otherwise complete. |
 
 **Road to PyPI (`pip install cvcpkg`):** the PyPI publish is the **last phase of the
-roadmap** (Phase 24), not an early step.  The *engineering* readiness for it (Phase 1.5)
+roadmap** (Phase 25), not an early step.  The *engineering* readiness for it (Phase 1.5)
 is done, but the release itself happens only after the remaining phases — including the
-pre-release hardening phases (12–14) and the v2.0.0 product phases (15–23) — are
+pre-release hardening phases (12–14) and the v2.0.0 product phases (15–24) — are
 closed.  This is a deliberate correction: publishing to PyPI is a one-way,
 name-claiming, community-facing commitment, so it comes at the very end.
 
@@ -296,7 +297,7 @@ work before a `pip install cvcpkg` is even buildable.  All of these are done
 hardening pass — private-data isolation, tenant scoping, tar-slip and
 reflected-XSS fixes).
 
-> **The actual PyPI publish is not here.**  It moved to **Phase 24 — PyPI
+> **The actual PyPI publish is not here.**  It moved to **Phase 25 — PyPI
 > Release**, the final phase of the roadmap.  The rename (project + repo),
 > trusted-publisher configuration, and the gated publish all happen there,
 > after every other phase is closed.  See the release-ordering note at the top
@@ -315,7 +316,7 @@ reflected-XSS fixes).
       installed wheel
 - [x] Publish workflow (`cvcpkg-publish.yml`) wired for PyPI trusted
       publishing (OIDC), gated behind the `CVCPKG_PUBLISH_TO_PYPI` repo
-      variable so a stable tag cannot publish until Phase 24 flips it on
+      variable so a stable tag cannot publish until Phase 25 flips it on
 
 #### Admin CLI Completeness
 
@@ -1601,6 +1602,48 @@ package page.
       recipe directory** usable with the normal cvcpkg commands to build,
       install, and publish packages.
 
+#### Recipe storage accounting & publish governance
+
+**Current state (audited 2026-07-18).**  When a recipe is pushed to
+*announce* a package before it is built, the server **does** store the
+full recipe directory — `recipe.yaml` plus all scripts, patches, and any
+media present — as one `tar.gz` under
+`state_dir/recipe_bundles/[org]/<name>.tar.gz`.  But three things are
+missing, and they matter for private-org fairness and abuse resistance:
+
+- [ ] **Recipe bundles must count against the organization's storage
+      quota.**  Today recipe uploads count against **nothing** — the
+      per-org `storage_used_bytes` quota (default 10 GiB) and the global
+      cap are **package-only**; `upload_recipe` never calls
+      `check_storage_limit`.  A private org can therefore stage unlimited
+      recipe bytes for free.  Count org-scoped recipe bundles against the
+      org quota; **global/base recipes (an admin concern — see below) stay
+      exempt.**
+- [ ] **Gate global/base recipe publishing to admins.**  The premise that
+      a global recipe is "published by an admin" is **not currently
+      enforced** — `upload_recipe` requires only a `publisher` token, and
+      the admin/org-member check is **skipped entirely when `org_slug` is
+      empty**, so any publisher can push *or silently overwrite* a global
+      base recipe.  Require admin for the public namespace (matching
+      `DELETE /v1/recipes/{name}` and the register-placeholder endpoint,
+      which already do), so the exemption above is safe and the public
+      recipe set is admin-curated.
+- [ ] **A recipe-upload size cap.**  `upload_recipe` reads the entire body
+      into memory with **no `MAX_UPLOAD_BYTES` check** (unlike the
+      chunked, capped package-upload path) and there is no body-size
+      middleware — a recipe bundle can be arbitrarily large.  Add a cap and
+      stream to disk.
+- [ ] **Route recipe bundles through the pluggable storage backend.**
+      Recipe bundles are written directly to the server's local filesystem
+      and **bypass** the `StorageBackend` layer that package archives use,
+      so they cannot live on `s3://`/`gcs://`/etc. and are not covered by
+      the Phase 18 backups' backend targets.  Route them through the same
+      backend abstraction.
+
+> These compose with the **quota-reconciliation job** and the
+> **default-infinite global quota** in Phase 18 — recipe accounting is
+> only trustworthy once a job reconciles the materialized counters.
+
 #### Package-page recipe section
 
 - [ ] **Show the declared artifacts alongside the recipe** — in the recipe
@@ -1626,9 +1669,15 @@ package page.
 
 ---
 
-### Phase 18 — Server Backups & Restore
+### Phase 18 — Server Backups, Scheduled Jobs & Quota Governance
 
 **Status: Planned — required before the v2.0.0 PyPI release**
+
+Three related operator concerns: restorable backups, a way for admins to
+*manage and schedule* server jobs (which the scheduled backup needs and
+which does not exist today), and honest storage quotas.
+
+#### Backups & restore
 
 `cvcpkg server backup` today is a database dump.  Before 2.0.0 the server
 needs **first-class, restorable** backups of the things that actually matter:
@@ -1650,6 +1699,55 @@ the recipes and the packages.
       that handles regular backups to **various backend types** — reusing
       the Phase 5 storage-backend layer (`s3`, `gcs`, `azure`, `sftp`,
       `rsync`, `rclone`, `file`, `gh-release`) for offsite destinations.
+
+#### General admin job manager & scheduler
+
+**Current state (audited 2026-07-18): there is no general job scheduler.**
+All periodic server work — mirror sync, populate sync, mirror health,
+log/yank retention GC, build dispatch — is a set of **hardcoded
+fixed-interval `asyncio` loops** in the app lifespan, tunable only by env
+vars and **not addressable, pausable, or rescheduleable** at runtime.  The
+only *manageable* jobs are **build jobs** (submit/list/cancel/pause/resume,
+per-org scoped); there is no cron/`ScheduledJob`/job-queue abstraction, and
+the `/admin` dashboard's job surface is **view-only** (the Health tab shows
+counts and a builder table with no controls).  The scheduled backup above
+has nowhere to live.  This phase builds the missing substrate:
+
+- [ ] **A scheduled-task abstraction** — a jobs-with-schedule table + a
+      scheduler that runs registered jobs at admin-configured times/
+      intervals (backups, quota reconciliation, retention GC, populate/
+      mirror sync all become *registered jobs* instead of hardcoded loops).
+- [ ] **An admin job manager** — API + `/admin` dashboard + CLI to **list,
+      pause, resume, reschedule, trigger-now, and cancel** scheduled jobs
+      and view their run history/last-status, extending management beyond
+      build jobs to all server-internal work.  Every job action is
+      audit-logged (composes with Phase 23's forensic journal).
+- [ ] **Surface existing jobs** — bring the current hardcoded loops under
+      the manager as read-at-minimum (next-run, last-run, interval) so
+      operators can see and adjust them without redeploying.
+
+#### Quota governance
+
+**Current state (audited 2026-07-18): quotas exist but are incomplete.**
+There is a **per-org** quota (`storage_used_bytes` vs `storage_limit_bytes`,
+default 10 GiB) and a **global** cap
+(`CVCPKG_GLOBAL_CACHE_STORAGE_LIMIT_BYTES`) — but the global default is
+**100 GiB, not infinite**, the org counter is a materialized value that can
+**drift** (mutated incrementally on publish/delete/yank with no
+reconciliation), and neither counts recipe bundles (see Phase 17).
+
+- [ ] **Default the global quota to infinite.**  Keep the knob, but change
+      the default from 100 GiB to **unlimited (0 = infinite)** so a
+      self-hosted server does not silently reject publishes at 100 GiB;
+      operators opt *in* to a cap.
+- [ ] **Quota-reconciliation job** — a scheduled job (using the manager
+      above) that recomputes each org's `storage_used_bytes` from the true
+      `SUM(size_bytes)` — including recipe bundles once Phase 17 counts them
+      — so the materialized counter cannot drift from reality.
+- [ ] **Quota admin UI** — surface and edit the global and per-org limits
+      (and current usage) in the `/admin` dashboard; today they are only
+      reachable via the JSON API (`PATCH /v1/admin/settings`,
+      `PATCH /v1/orgs/{slug}`).
 
 ---
 
@@ -2824,7 +2922,88 @@ explicitly.**
 
 ---
 
-### Phase 24 — PyPI Release (Final Phase)
+### Phase 24 — Live Updates, Activity Feed & Build Transparency
+
+**Status: Planned — required before the PyPI release**
+
+Give users a **real-time view of the archive**: WebSocket push for new
+packages and notifications, a **live activity feed** of site events (new
+recipes, published builds, yanks / unyanks / nukes), and public visibility
+into how public packages are built — while keeping private organizations'
+builders and build logs strictly private.  Especially useful when a flood
+of packages is expected and users want to watch them land.
+
+**Current state (audited 2026-07-18).**  The SPA is **poll-based**
+(`setInterval` refreshes builders every 30s, jobs every 15s) with no client
+real-time.  The **only** WebSocket is builder-facing
+(`/v1/builders/{id}/ws`); the **only** client-facing stream is the
+per-build-log SSE (`/v1/builds/{id}/log/stream`), and it is
+publisher/admin-gated.  The **audit log already records the full event
+vocabulary** wanted here (`publish, yank, unyank, delete, nuke,
+recipe_upload, build_*`) — but `GET /v1/audit` is **admin-only**, and
+yank/unyank/nuke currently emit **no** event at all (only an audit row;
+today only `package.published` and the build/builder lifecycle fan out via
+the outbound webhook bus).
+
+#### Live updates & notifications
+
+- [ ] **A client-facing real-time channel** — a browser/CLI-facing
+      WebSocket (or SSE) carrying catalog events, net-new: the existing
+      builder WebSocket and the `emit_webhook_event` outbound bus are
+      server↔infra only and carry no client subscribers.  Reuse that
+      plumbing rather than inventing a parallel one.
+- [ ] **New-package push + notifications** — push `package.published`
+      (already emitted to webhooks) to subscribed clients as an in-page
+      notification; a live counter/toast when new packages land.
+- [ ] **User subscriptions** — "notify me on a new version of X / new
+      packages in org Y."  No user-facing subscribe/notify primitive exists
+      today (the only subscription is the admin-managed, org-scoped
+      server-to-server webhook); this is the per-user layer on top.
+
+#### Live activity feed
+
+- [ ] **Emit events for the whole lifecycle** — yank, unyank, nuke, and
+      recipe upload currently write only an audit row and fan out nothing.
+      Emit them (as webhook/bus events) so they can reach the feed.
+- [ ] **A public, filtered activity feed** — a live projection of the audit
+      stream (new recipes, published builds, yanks/unyanks/nukes) that the
+      SPA renders as a scrolling feed.  It must be a **visibility-filtered
+      public projection**, not the admin-only `GET /v1/audit`: exclude
+      private-org and hidden-package (Phase 21) events for unauthorized
+      viewers, exactly as `/v1/feed.xml` already excludes yanked/private
+      packages.  Extends that RSS feed (latest *published packages* only)
+      to the full event stream.
+
+#### Build transparency — public sausage-making, private stays private
+
+The org-privacy dimension is **already enforced** for builders (public and
+no-org builders are visible to everyone via `optional_reader_auth`;
+private-org builders 404 for non-members — implemented and covered by
+`test_builder_public_access.py`).  The gap is on the **build-job and
+build-log side**, which are publisher/admin-only with **no public read
+path even for public builds**:
+
+- [ ] **Make public build jobs and logs publicly readable** — add
+      `optional_reader_auth`-style public read to `GET /v1/builds`,
+      `/v1/builds/{id}`, `/v1/builds/{id}/log`, and the log SSE stream for
+      **public / no-org builds**, mirroring what `/v1/builders` already
+      does.  Let anyone watch how the public packages are built (logs and
+      all) — "see how the sausage is made."
+- [ ] **Keep private builders and logs strictly private** — preserve the
+      existing `_assert_build_visible` / `_assert_dag_visible` org checks so
+      **only authorized org members (or admins) can read a private org's
+      build logs, jobs, or builder details**; unauthorized callers get 404,
+      never a leak.  (Privacy is org-derived via `OrganizationRow.is_private`
+      today; no per-object visibility flag is needed unless a finer grain is
+      wanted later.)
+- [ ] **Close the test gap** — there is a public/private access test for
+      *builders* but **none for build jobs or logs**; add the parallel
+      suite asserting anonymous/reader can read public build logs and are
+      404'd on private-org ones, and that members/admins can.
+
+---
+
+### Phase 25 — PyPI Release (Final Phase)
 
 **Status: Blocked on all prior phases — deliberately last**
 
@@ -2972,7 +3151,7 @@ The project has been restructured for the **cvcpkg** identity:
 - [ ] **Owning entity = CyberPC Angel, LLC** — copyright/provenance branding,
   source headers, gears logo, and the org move (Ownership section)
 - [ ] **PyPI publication** — `pip install cvcpkg` (the final roadmap phase;
-  see Phase 24)
+  see Phase 25)
 
 ---
 
