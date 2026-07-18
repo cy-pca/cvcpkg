@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os as _os
+
 import click
 
 from cvcpkg.cli import cli
@@ -46,6 +48,16 @@ from cvcpkg.cli._helpers import _human_size
     is_flag=True,
     help="Print the raw JSON response instead of a formatted table.",
 )
+@click.option(
+    "--trust-mirror",
+    is_flag=True,
+    default=False,
+    help=(
+        "Accept a mirror's ruling over its upstream's. By default upstream "
+        "is authoritative, so a bundle the upstream retired is skipped even "
+        "if this mirror still serves it."
+    ),
+)
 def search(
     query: str,
     server: str,
@@ -62,6 +74,7 @@ def search(
     limit: int,
     offset: int,
     as_json: bool,
+    trust_mirror: bool,
 ) -> None:
     """Search the cvcpkg catalog by name, tag, description, and more.
 
@@ -75,6 +88,11 @@ def search(
       cvcpkg search --platform linux --tag scientific
       cvcpkg search fft --link static --release v1.3.0
     """
+    if trust_mirror:
+        # Consulted by cvcpkg.catalog.trust_mirror_default(); set here so
+        # every downstream resolution path sees it without threading a
+        # parameter through each one.
+        _os.environ["CVCPKG_TRUST_MIRROR"] = "1"
     import json as _json
 
     import httpx

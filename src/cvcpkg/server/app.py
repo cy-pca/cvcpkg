@@ -1473,7 +1473,10 @@ async def _populate_sync_once() -> int:
         headers["Authorization"] = f"Bearer {POPULATE_UPSTREAM_TOKEN}"
 
     async with httpx.AsyncClient(timeout=120, headers=headers, follow_redirects=True) as client:
-        resp = await client.get(f"{upstream}/v1/catalog")
+        # include_yanked: an upstream yank must arrive as a yank, not as an
+        # unexplained disappearance -- those mean different things and only
+        # the former is a verdict worth recording.
+        resp = await client.get(f"{upstream}/v1/catalog", params={"include_yanked": "true"})
         resp.raise_for_status()
         upstream_bundles = resp.json().get("bundles", [])
 
@@ -2307,9 +2310,16 @@ def create_app(
     @app.get("/v1/catalog", response_model=CatalogResponse, tags=["catalog"])
     async def get_catalog(
         request: Request,
+        include_yanked: bool = False,
         _auth: TokenRecord | None = Depends(optional_reader_auth),
         _caller: TokenRecord | None = Depends(optional_token),
     ):
+        """Serve the catalog.
+
+        ``include_yanked`` is for downstream mirrors: they need to tell a
+        deliberate upstream yank apart from a bundle that merely vanished, and
+        the default (filtered) view makes those two indistinguishable.
+        """
         if MIRROR_MODE:
             # Mirror sync loop writes the upstream catalog into state.index;
             # bypass the (empty) DB read path so /v1/catalog serves the mirror.
@@ -2321,6 +2331,7 @@ def create_app(
             cat = await _db_packages.get_catalog_dict(
                 caller_token_name=caller.name if caller else "",
                 is_admin=caller is not None and caller.role == TokenRole.admin,
+                include_yanked=include_yanked,
             )
             revision = cat.get("revision", 0)
             bundles = cat.get("bundles", [])

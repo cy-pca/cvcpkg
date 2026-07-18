@@ -90,7 +90,7 @@ class TestReconcileFromUpstream:
             local = [r for r in rows if r.name == "local-only"]
             assert len(local) == 1
             assert local[0].yanked is False, "a locally published package must survive"
-            assert counts == {"yanked": 0, "tombstoned": 0, "ambiguous": 0}
+            assert all(v == 0 for v in counts.values()), counts
 
         self._run(_t())
 
@@ -216,7 +216,7 @@ class TestReconcileFromUpstream:
 
             rows, _ = await store.get_bundles(include_yanked=True, limit=100, offset=0)
             assert next(r for r in rows if r.name == "boost").yanked is False
-            assert counts == {"yanked": 0, "tombstoned": 0, "ambiguous": 0}
+            assert all(v == 0 for v in counts.values()), counts
 
         self._run(_t())
 

@@ -163,6 +163,20 @@ def fetch_authoritative_catalog(
     return merge_root_authoritative(root_cat, local_cat)
 
 
+def trust_mirror_default() -> bool:
+    """Whether to accept a mirror's ruling over its upstream's.
+
+    False -- upstream wins.  A mirror may serve a bundle its upstream retired,
+    because the mirror operator unyanked it locally; taking that at face value
+    would silently reinstate a bundle that was withdrawn for being broken, or
+    for a CVE, on every machine pointed at that mirror.  Opting in is explicit:
+    ``--trust-mirror``, or CVCPKG_TRUST_MIRROR=1 for non-interactive use.
+    """
+    import os
+
+    return os.environ.get("CVCPKG_TRUST_MIRROR", "").strip().lower() in ("1", "true", "yes")
+
+
 def catalog_entries(
     catalog: dict,
     *,
@@ -170,8 +184,10 @@ def catalog_entries(
     arch: str = "",
     build_type: str = "",
     link: str = "",
+    trust_mirror: bool | None = None,
 ) -> list[CatalogEntry]:
     """Extract CatalogEntry objects from a catalog dict, optionally filtered."""
+    _trust = trust_mirror_default() if trust_mirror is None else trust_mirror
     entries: list[CatalogEntry] = []
     for b in catalog.get("bundles", []):
         if platform and b.get("platform", "") != platform:
@@ -181,6 +197,10 @@ def catalog_entries(
         if build_type and b.get("build_type", "") != build_type:
             continue
         if link and b.get("link", "") != link:
+            continue
+        # Upstream retired this bundle; the mirror serving it has overridden
+        # that locally.  Upstream is authoritative unless told otherwise.
+        if b.get("upstream_yanked") and not _trust:
             continue
         entries.append(
             CatalogEntry(
@@ -203,6 +223,7 @@ def catalog_entries(
                 mirror_urls=b.get("mirror_urls", []),
                 signature=b.get("signature", ""),
                 key_fingerprint=b.get("key_fingerprint", ""),
+                upstream_yanked=bool(b.get("upstream_yanked", False)),
                 org=b.get("org", ""),
             )
         )

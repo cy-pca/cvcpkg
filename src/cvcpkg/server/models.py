@@ -250,6 +250,11 @@ class PackageInfo(BaseModel):
     # Set when yanked, cleared on unyank.  Exposed so clients can show when a
     # bundle was retired and when yank retention will purge it.
     yanked_at: datetime.datetime | None = None
+    # What the upstream this bundle was mirrored from last said.  Normally
+    # equal to ``yanked``; they differ when a mirror operator deliberately
+    # unyanked something upstream still considers retired.  Clients honour
+    # upstream by default and need this to see the disagreement at all.
+    upstream_yanked: bool = False
     signature: str = ""
     key_fingerprint: str = ""
     release_tag: str = Field(

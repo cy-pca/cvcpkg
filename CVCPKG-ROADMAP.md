@@ -701,6 +701,27 @@ scaling and federation:
     Deleting on sight would let one upstream mistake — or one compromised
     upstream — destroy data across every mirror simultaneously, and an
     air-gapped edge may hold the last copy in existence.
+
+  Authority chains transitively: in `A <- B <- C`, a yank on `A` reaches `C` by
+  travelling each hop, since `C` never talks to `A`. For that to work the
+  catalog has to be able to *disclose* a yank — `/v1/catalog?include_yanked=1`
+  — because the default filtered view makes "upstream retired it" and "upstream
+  lost it" indistinguishable, and only the first is a verdict worth recording.
+
+  **A mirror may dissent.** An operator can `unyank` a bundle their upstream
+  still considers retired — they need it to unblock a build, or they know
+  something upstream does not. That decision has to survive: `upstream_yanked`
+  is tracked separately from the local `yanked` flag, so reconciliation can
+  tell "we have not enforced this yet" from "we enforced it and were
+  overridden", and stops re-yanking in the latter case. With one flag there was
+  nowhere to record the difference and every sync silently reverted the
+  operator.
+
+  The divergence is then **disclosed, not hidden**: the catalog reports
+  `upstream_yanked` on such a bundle, and clients resolve with upstream winning
+  by default — a bundle withdrawn for a CVE must not come back just because one
+  mirror still serves it. `--trust-mirror` (or `CVCPKG_TRUST_MIRROR=1`) opts
+  into the mirror operator's ruling instead.
 - **Federated registries** — multiple independent cvcpkg servers can
   cross-reference packages.  A client can query multiple registries
   with fallback.
