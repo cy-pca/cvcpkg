@@ -5887,3 +5887,309 @@ def test_python_dash_m_exits_nonzero_on_error():
         text=True,
     )
     assert proc.returncode != 0
+
+
+# ── follow-dag / _wait_for_dags unbounded-wait guards (regression) ──
+
+
+class TestFollowDagTermination:
+    """follow-dag must always terminate.
+
+    Regression for the populate-server runner burns (run 29630731633 sat
+    78 min in "Follow build output" and was cancelled; 29277276176 hit the
+    2 h job timeout).  All 12 jobs of 29630731633 had printed a terminal
+    status, so the poll loop had already broken — the process was wedged
+    afterwards in ThreadPoolExecutor.__exit__, joining a log-stream thread
+    whose client was built with timeout=None and so blocked forever on a
+    connection an intermediary had dropped.
+    """
+
+    def _stream(self, lines=(), block_on=None):
+        """A fake SSE stream.  With block_on set, iter_lines() hangs until
+        that event fires — standing in for a dropped connection."""
+
+        class FakeStream:
+            status_code = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def iter_lines(self):
+                yield from lines
+                if block_on is not None:
+                    block_on.wait()
+
+        return FakeStream()
+
+    def _client(self, jobs_by_poll, stream):
+        """Client serving a /v1/builds listing that advances per poll."""
+        import itertools
+
+        polls = itertools.count()
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                resp = mock.MagicMock()
+                resp.status_code = 200
+                if url.endswith("/v1/builds"):
+                    n = min(next(polls), len(jobs_by_poll) - 1)
+                    resp.json.return_value = {"jobs": jobs_by_poll[n]}
+                else:  # builder lookup
+                    resp.json.return_value = {"name": "b1"}
+                return resp
+
+            def stream(self, method, url, **kw):
+                return stream
+
+        return FakeClient
+
+    def _job(self, status, jid=1):
+        return {
+            "id": jid,
+            "recipe_name": "zlib",
+            "platform": "linux",
+            "arch": "x86_64",
+            "status": status,
+            "builder_id": None,
+        }
+
+    def _run_bounded(self, argv, patches, timeout=30):
+        """Invoke the CLI under a watchdog thread.
+
+        Every failure mode guarded here is "the command never returns", so
+        the tests must fail on a regression rather than wedge the suite —
+        which is the very pathology under test.
+        """
+        import contextlib
+        import threading
+
+        result = {}
+
+        def _run():
+            with contextlib.ExitStack() as stack:
+                for p in patches:
+                    stack.enter_context(p)
+                result["ret"] = main(argv)
+
+        runner = threading.Thread(target=_run, daemon=True)
+        runner.start()
+        runner.join(timeout=timeout)
+        assert not runner.is_alive(), f"follow-dag did not return within {timeout}s"
+        return result["ret"]
+
+    def test_returns_when_a_log_stream_never_ends(self, capsys):
+        """The exact 29630731633 shape: every job terminal, one stream stuck.
+
+        Before the fix the summary line never printed because the executor
+        shutdown joined the wedged follower.  Followers are now daemon
+        threads joined with a grace period, so the command completes.
+        """
+        import threading
+
+        stuck = threading.Event()
+        client = self._client(
+            [[self._job("running")], [self._job("succeeded")]],
+            self._stream(lines=["data: building..."], block_on=stuck),
+        )
+        try:
+            ret = self._run_bounded(
+                ["builds", "follow-dag", "d", "--server", "https://s.x", "--token", "t"],
+                [
+                    mock.patch("httpx.Client", client),
+                    mock.patch("cvcpkg.cli._builds.time.sleep"),
+                ],
+            )
+            assert ret == 0
+            assert "1/1 succeeded" in capsys.readouterr().out
+        finally:
+            stuck.set()  # release the parked daemon thread
+
+    def test_empty_job_set_exits_cleanly(self, capsys):
+        """A DAG that matches no jobs is a no-op, not an infinite wait."""
+        client = self._client([[]], self._stream())
+        ret = self._run_bounded(
+            ["builds", "follow-dag", "d", "--server", "https://s.x", "--token", "t"],
+            [
+                mock.patch("httpx.Client", client),
+                mock.patch("cvcpkg.cli._builds.time.sleep"),
+            ],
+        )
+        assert ret == 0
+        assert "nothing to follow" in capsys.readouterr().out
+
+    def test_wait_timeout_exits_2_while_still_building(self, capsys):
+        """--wait-timeout distinguishes "still building" from "job failed"."""
+        client = self._client([[self._job("running")]], self._stream())
+        clock = iter([0.0, 0.0, 10_000.0])
+
+        def _monotonic():
+            try:
+                return next(clock)
+            except StopIteration:
+                return 10_000.0
+
+        ret = self._run_bounded(
+            [
+                "builds",
+                "follow-dag",
+                "d",
+                "--server",
+                "https://s.x",
+                "--token",
+                "t",
+                "--wait-timeout",
+                "60",
+            ],
+            [
+                mock.patch("httpx.Client", client),
+                mock.patch("cvcpkg.cli._builds.time.sleep"),
+                mock.patch("cvcpkg.cli._builds.time.monotonic", _monotonic),
+            ],
+        )
+        assert ret == 2
+        assert "still building" in capsys.readouterr().err
+
+    def test_failure_outranks_timeout(self, capsys):
+        """One job failed, another still building when the timeout fires:
+        exit 1 (actionable failure) rather than 2."""
+        jobs = [self._job("failed", jid=1), self._job("running", jid=2)]
+        client = self._client([jobs], self._stream())
+        clock = iter([0.0, 0.0, 10_000.0])
+
+        def _monotonic():
+            try:
+                return next(clock)
+            except StopIteration:
+                return 10_000.0
+
+        ret = self._run_bounded(
+            [
+                "builds",
+                "follow-dag",
+                "d",
+                "--server",
+                "https://s.x",
+                "--token",
+                "t",
+                "--wait-timeout",
+                "60",
+            ],
+            [
+                mock.patch("httpx.Client", client),
+                mock.patch("cvcpkg.cli._builds.time.sleep"),
+                mock.patch("cvcpkg.cli._builds.time.monotonic", _monotonic),
+            ],
+        )
+        assert ret == 1
+
+
+class TestWaitForDagsBounds:
+    """_wait_for_dags shares follow-dag's unbounded-wait shape."""
+
+    def _client(self, jobs):
+        def _get(url, headers=None, params=None):
+            resp = mock.MagicMock()
+            resp.status_code = 200
+            if url.endswith("/v1/builds"):
+                resp.json.return_value = {"jobs": jobs}
+            else:
+                jid = int(url.rsplit("/", 1)[1])
+                resp.json.return_value = {"id": jid, "status": "running"}
+            return resp
+
+        client = mock.MagicMock()
+        client.__enter__ = mock.MagicMock(return_value=client)
+        client.__exit__ = mock.MagicMock(return_value=False)
+        client.get.side_effect = _get
+        return client
+
+    def _bounded_sleep(self, limit=200):
+        calls = {"n": 0}
+
+        def _sleep(_seconds):
+            calls["n"] += 1
+            if calls["n"] > limit:
+                raise AssertionError("wait loop did not terminate")
+
+        return _sleep
+
+    def test_empty_job_set_returns(self, capsys):
+        """--skip-existing can drop every recipe, leaving nothing to wait on."""
+        from cvcpkg.cli._builds import _wait_for_dags
+
+        with (
+            mock.patch("httpx.Client", return_value=self._client([])),
+            mock.patch("cvcpkg.cli._builds.time.sleep", side_effect=self._bounded_sleep()),
+        ):
+            _wait_for_dags("http://srv", "tok", ["dag-1"])
+        assert "nothing to wait for" in capsys.readouterr().out
+
+    def test_wait_timeout_raises_exit_2(self):
+        from cvcpkg.cli._builds import _EXIT_WAIT_TIMEOUT, _wait_for_dags
+
+        jobs = [{"id": 1, "status": "running", "recipe_name": "r", "platform": "p", "arch": "x"}]
+        clock = iter([0.0, 10_000.0])
+
+        def _monotonic():
+            try:
+                return next(clock)
+            except StopIteration:
+                return 10_000.0
+
+        with (
+            mock.patch("httpx.Client", return_value=self._client(jobs)),
+            mock.patch("cvcpkg.cli._builds.time.sleep", side_effect=self._bounded_sleep()),
+            mock.patch("cvcpkg.cli._builds.time.monotonic", _monotonic),
+        ):
+            with pytest.raises(SystemExit) as exc:
+                _wait_for_dags("http://srv", "tok", ["dag-1"], wait_timeout=60)
+        assert exc.value.code == _EXIT_WAIT_TIMEOUT
+
+    def test_server_errors_do_not_count_as_an_empty_dag(self):
+        """A persistently failing server must not be mistaken for "no jobs".
+
+        Otherwise the empty-set guard turns an unreachable server or an
+        expired token into a clean exit 0, reporting a run that built
+        nothing as green.
+        """
+        from cvcpkg.cli._builds import _EXIT_WAIT_TIMEOUT, _wait_for_dags
+
+        def _get(url, headers=None, params=None):
+            resp = mock.MagicMock()
+            resp.status_code = 500
+            return resp
+
+        client = mock.MagicMock()
+        client.__enter__ = mock.MagicMock(return_value=client)
+        client.__exit__ = mock.MagicMock(return_value=False)
+        client.get.side_effect = _get
+
+        clock = iter([0.0] + [0.0] * 60)
+
+        def _monotonic():
+            try:
+                return next(clock)
+            except StopIteration:
+                return 10_000.0  # eventually trips --wait-timeout
+
+        with (
+            mock.patch("httpx.Client", return_value=client),
+            mock.patch("cvcpkg.cli._builds.time.sleep", side_effect=self._bounded_sleep()),
+            mock.patch("cvcpkg.cli._builds.time.monotonic", _monotonic),
+        ):
+            with pytest.raises(SystemExit) as exc:
+                _wait_for_dags("http://srv", "tok", ["dag-1"], wait_timeout=60)
+        # Timed out rather than falsely reporting "nothing to wait for".
+        assert exc.value.code == _EXIT_WAIT_TIMEOUT

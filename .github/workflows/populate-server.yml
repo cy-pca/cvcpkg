@@ -115,6 +115,9 @@ jobs:
             "${RECIPES[@]}"
 
       - name: Follow build output
+        # Backstop below the job's 120 min budget: --wait-timeout exits
+        # cleanly with a diagnostic, this only fires if the CLI itself wedges.
+        timeout-minutes: 95
         env:
           CVCPKG_SERVER_URL: ${{ inputs.server }}
           CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISHER_TOKEN }}
@@ -122,7 +125,16 @@ jobs:
           # Follow all DAGs whose IDs start with the generated prefix.
           # submit-dag creates one DAG per platform/arch/config/link combo.
           DAG_PREFIX="${{ steps.submit.outputs.dag_id }}"
-          cvcpkg builds follow-dag "$DAG_PREFIX"
+          # Exit 2 means "timed out with jobs still building" — surface it as
+          # a distinct signal rather than a build failure.
+          set +e
+          cvcpkg builds follow-dag "$DAG_PREFIX" --wait-timeout 5400
+          rc=$?
+          set -e
+          if [[ $rc -eq 2 ]]; then
+            echo "::warning::follow-dag timed out with jobs still building"
+          fi
+          exit $rc
 
   # macOS has no persistent remote-builder service, so its bundles are
   # built via the macos-build.yml workflow on ephemeral GitHub-hosted

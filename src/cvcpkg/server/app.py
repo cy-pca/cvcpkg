@@ -656,6 +656,11 @@ _DEFAULT_BUILD_TIMEOUT = int(os.environ.get("CVCPKG_BUILD_TIMEOUT", "7200"))
 # ephemeral / just-restarted builder time to register after submission.
 _UNSCHEDULABLE_TTL = int(os.environ.get("CVCPKG_UNSCHEDULABLE_TTL", "1800"))
 
+# Heartbeat interval for the build-log SSE stream.  Must stay well below both
+# any fronting proxy's idle timeout and the client's stream read timeout
+# (_FOLLOW_READ_TIMEOUT in cli/_builds.py).
+_SSE_KEEPALIVE_SECONDS = int(os.environ.get("CVCPKG_SSE_KEEPALIVE", "15"))
+
 # Log retention: 0 means disabled (no automatic GC)
 _LOG_RETENTION_DAYS = int(os.environ.get("CVCPKG_LOG_RETENTION_DAYS", "0"))
 # How often the log retention GC runs (seconds, default 1 hour)
@@ -5622,6 +5627,7 @@ def create_app(
         async def _event_generator():
             logs_dir = state.logs_dir()
             offset = 0
+            last_send = time.monotonic()
             while True:
                 info = await _db_build_jobs.get(job_id)
                 if info is None:
@@ -5639,6 +5645,7 @@ def create_app(
                         # Escape newlines for SSE
                         for line in chunk.splitlines():
                             yield f"data: {line}\n\n"
+                        last_send = time.monotonic()
 
                 # Check terminal states
                 if info.status in (
@@ -5649,6 +5656,15 @@ def create_app(
                 ):
                     yield f"event: done\ndata: {info.status}\n\n"
                     return
+
+                # Heartbeat: a build can compile for minutes without emitting
+                # a line.  Without traffic an intermediary proxy drops the
+                # idle connection, and a client tailing it then blocks on a
+                # half-open socket.  SSE comment lines are inert to readers.
+                if time.monotonic() - last_send >= _SSE_KEEPALIVE_SECONDS:
+                    yield ": keepalive\n\n"
+                    last_send = time.monotonic()
+
                 await asyncio.sleep(2)
 
         return StreamingResponse(
