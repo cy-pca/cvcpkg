@@ -17,7 +17,11 @@ name: Package lifecycle (yank / unyank / nuke)
 # EVERY variant of the version -- deliberate, but check the "before" summary.
 #
 # Required repo secrets:
-#   CVCPKG_ADMIN_TOKEN  — an admin-role token for the target server
+# Required repo secrets (one per registry -- they have separate token stores,
+# so a single shared secret cannot be valid on both):
+#   CVCPKG_PROD_ADMIN_TOKEN  — admin token for cvcpkg.org
+#   CVCPKG_ADMIN_TOKEN       — admin token for the dev server (its long-standing
+#                              meaning; the dev CI workflows depend on it)
 
 on:
   workflow_dispatch:
@@ -109,7 +113,7 @@ jobs:
       - name: State before
         env:
           CVCPKG_SERVER_URL: ${{ inputs.server }}
-          CVCPKG_TOKEN: ${{ secrets.CVCPKG_ADMIN_TOKEN }}
+          CVCPKG_TOKEN: ${{ contains(inputs.server, 'cvcpkg.org') && secrets.CVCPKG_PROD_ADMIN_TOKEN || secrets.CVCPKG_ADMIN_TOKEN }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -134,7 +138,7 @@ jobs:
       - name: Apply
         env:
           CVCPKG_SERVER_URL: ${{ inputs.server }}
-          CVCPKG_TOKEN: ${{ secrets.CVCPKG_ADMIN_TOKEN }}
+          CVCPKG_TOKEN: ${{ contains(inputs.server, 'cvcpkg.org') && secrets.CVCPKG_PROD_ADMIN_TOKEN || secrets.CVCPKG_ADMIN_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -166,7 +170,7 @@ jobs:
         if: ${{ always() }}
         env:
           CVCPKG_SERVER_URL: ${{ inputs.server }}
-          CVCPKG_TOKEN: ${{ secrets.CVCPKG_ADMIN_TOKEN }}
+          CVCPKG_TOKEN: ${{ contains(inputs.server, 'cvcpkg.org') && secrets.CVCPKG_PROD_ADMIN_TOKEN || secrets.CVCPKG_ADMIN_TOKEN }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
