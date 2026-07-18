@@ -477,11 +477,23 @@ jobs:
           # start, so a builder whose files were refreshed but whose daemon was
           # never restarted keeps executing the OLD code indefinitely. Updating
           # without restarting is not a partial success, it is a no-op.
+          #
+          # EVERY pattern below is bracket-escaped -- '[c]vcpkg' rather than
+          # 'cvcpkg'. ssh runs this whole script as `sh -c '<script text>'`, so
+          # the literal pattern string appears in that shell's OWN argv, and BSD
+          # pkill -f matches full argv while excluding only itself, never its
+          # parent. An unescaped `pkill -f 'cvcpkg builder run'` therefore
+          # SIGTERMs the shell running the script: the daemon dies, the script
+          # dies at that same line, and the relaunch below never executes. That
+          # is what took netbsd-build, netbsd-build-2, openbsd-build and
+          # openbsd-build-2 down. `[c]vcpkg` does not match the literal text
+          # `[c]vcpkg` in argv, but does match a real `cvcpkg` process.
+          # The grep pattern must be escaped too -- it sits in the same argv.
           ok=0; failed=0
           for host in ${{ vars.BSD_BUILDER_SSH_HOSTS }}; do
             echo "--- $host ---"
             if $SSH "$host" "
-              CMD=\$(crontab -l 2>/dev/null | grep '@reboot.*cvcpkg builder run' | sed 's/@reboot //')
+              CMD=\$(crontab -l 2>/dev/null | grep '@reboot.*[c]vcpkg builder run' | sed 's/@reboot //')
               if [ -z \"\$CMD\" ]; then
                 echo \"::warning::\$(hostname): no @reboot cvcpkg entry found\"
                 exit 1
@@ -492,12 +504,28 @@ jobs:
               # working builder.
               WORKDIR=\$(echo \"\$CMD\" | sed -n 's/.*--work-dir \\([^ ]*\\).*/\\1/p')
               [ -n \"\$WORKDIR\" ] && mkdir -p \"\$WORKDIR\"
-              pkill -f 'cvcpkg builder run' 2>/dev/null || true
+              # Belt and braces: never signal our own process tree, even if a
+              # future edit reintroduces an unescaped pattern.
+              SELF=\$\$
+              for p in \$(pgrep -f '[c]vcpkg builder run' 2>/dev/null); do
+                [ \"\$p\" = \"\$SELF\" ] || kill \"\$p\" 2>/dev/null || true
+              done
               sleep 2
               # Keep stderr: when this fails, the reason is the whole point.
               eval \"\$CMD\" || echo \"\$(hostname): launch command exited non-zero\"
               sleep 3
-              pgrep -f 'cvcpkg builder run' >/dev/null 2>&1 && echo \"\$(hostname): builder restarted\" || { echo \"::warning::\$(hostname): builder failed to start\"; exit 1; }
+              # Verify against the pidfile the daemon actually wrote, and check
+              # that PID is alive. A bare 'pgrep -f' here reports success by
+              # matching this very shell, so it can never fail -- it would have
+              # called four dead builders 'restarted'.
+              PIDFILE=\"\${WORKDIR:-/tmp/cvcpkg-builder}/cvcpkg-builder.pid\"
+              DPID=\$(cat \"\$PIDFILE\" 2>/dev/null || true)
+              if [ -n \"\$DPID\" ] && kill -0 \"\$DPID\" 2>/dev/null; then
+                echo \"\$(hostname): builder restarted (pid \$DPID)\"
+              else
+                echo \"::warning::\$(hostname): builder failed to start (no live pid in \$PIDFILE)\"
+                exit 1
+              fi
             "; then
               ok=$((ok + 1))
             else
