@@ -604,3 +604,87 @@ class TestChunkedUpload:
             f"on-disk archive was clobbered: got sha={on_disk_sha}, "
             f"expected winner sha={winner_sha}"
         )
+
+
+# ── Org storage limit / accounting on the chunked path ──────────
+#
+# /v1/publish enforces the org (and global) storage limit before registering a
+# bundle and records the size against the org.  The chunked completion path
+# skipped both, so an org's large uploads (the >10 MB payloads that only exist
+# on this path) bypassed the quota and were never accounted — parity gap.
+
+
+def _bearer(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _chunked_publish(client, token, *, name, version, content, org=""):
+    """Run init → chunk → complete for one variant; return the complete response."""
+    hdrs = _bearer(token)
+    params = {"name": name, "version": version, "platform": "linux", "arch": "x86_64"}
+    if org:
+        params["org"] = org
+    resp = client.post("/v1/upload/init", params=params, headers=hdrs)
+    assert resp.status_code == 201, resp.text
+    upload_id = resp.json()["upload_id"]
+    resp = client.patch(
+        f"/v1/upload/{upload_id}",
+        content=content,
+        headers={**hdrs, "Content-Type": "application/octet-stream"},
+    )
+    assert resp.status_code == 200, resp.text
+    return client.post(
+        f"/v1/upload/{upload_id}/complete",
+        params={"expected_sha256": hashlib.sha256(content).hexdigest()},
+        headers=hdrs,
+    )
+
+
+class TestChunkedUploadOrgStorage:
+    def _make_org(self, client, pub_token, admin_token, slug, *, limit_bytes=None):
+        resp = client.post(
+            "/v1/orgs",
+            json={"slug": slug, "display_name": slug.title()},
+            headers=_bearer(pub_token),
+        )
+        assert resp.status_code in (200, 201), resp.text
+        if limit_bytes is not None:
+            resp = client.patch(
+                f"/v1/orgs/{slug}",
+                json={"storage_limit_bytes": limit_bytes},
+                headers=_bearer(admin_token),
+            )
+            assert resp.status_code == 200, resp.text
+
+    def test_over_limit_upload_rejected_with_413(self, db_server_env):
+        client, admin_token, pub_token, _, _ = db_server_env
+        self._make_org(client, pub_token, admin_token, "tinyorg", limit_bytes=5)
+        resp = _chunked_publish(
+            client,
+            pub_token,
+            name="big",
+            version="1.0.0",
+            content=b"this payload is well over five bytes",
+            org="tinyorg",
+        )
+        assert resp.status_code == 413, resp.text
+        assert "storage limit" in resp.text.lower()
+
+    def test_success_records_usage_and_consumes_quota(self, db_server_env):
+        # Limit == exactly one archive.  The first upload fits and must record
+        # its size against the org; a second variant then no longer fits — which
+        # only happens if the completion path called update_storage_used.
+        client, admin_token, pub_token, _, _ = db_server_env
+        content = b"exactly-this-many-bytes-of-archive-data!"
+        self._make_org(client, pub_token, admin_token, "quota", limit_bytes=len(content))
+
+        first = _chunked_publish(
+            client, pub_token, name="pkgA", version="1.0.0", content=content, org="quota"
+        )
+        assert first.status_code == 200, first.text
+
+        second = _chunked_publish(
+            client, pub_token, name="pkgB", version="1.0.0", content=b"x", org="quota"
+        )
+        assert second.status_code == 413, second.text
+        assert "storage limit" in second.text.lower()

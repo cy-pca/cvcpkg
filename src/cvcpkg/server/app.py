@@ -3869,6 +3869,22 @@ def create_app(
         )
         _publish_target = f"{session.name}=={session.version}"
         if _use_db:
+            # Enforce storage limits now that the real (assembled) size is
+            # known — parity with /v1/publish.  The chunked path previously
+            # skipped these, so large org uploads bypassed the org quota (and
+            # the global cap) and went unaccounted in org storage usage.
+            if GLOBAL_CACHE_STORAGE_LIMIT_BYTES > 0:
+                total_used = await _db_packages.total_storage_bytes()
+                if total_used + size_bytes > GLOBAL_CACHE_STORAGE_LIMIT_BYTES:
+                    session.temp_path.unlink(missing_ok=True)
+                    _upload_sessions.pop(upload_id, None)
+                    raise HTTPException(413, "global cache storage limit exceeded")
+            if session.org and _db_orgs is not None:
+                if not await _db_orgs.check_storage_limit(session.org, size_bytes):
+                    session.temp_path.unlink(missing_ok=True)
+                    _upload_sessions.pop(upload_id, None)
+                    raise HTTPException(413, f"organization '{session.org}' storage limit exceeded")
+
             async with _audit_txn(
                 AuditAction.publish, actor.name, _publish_target, _publish_detail
             ):
@@ -3902,6 +3918,11 @@ def create_app(
                     session.temp_path.unlink(missing_ok=True)
                     _upload_sessions.pop(upload_id, None)
                     raise HTTPException(409, str(exc)) from exc
+
+                # Track org storage usage in the same transaction (parity with
+                # /v1/publish).
+                if session.org and _db_orgs is not None:
+                    await _db_orgs.update_storage_used(session.org, size_bytes)
 
             # Row committed — materialize the archive at its final name.
             session.temp_path.replace(dest)  # overwrite-safe on Windows
