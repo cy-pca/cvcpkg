@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import os as _os
 import sys
 from pathlib import Path
 
@@ -111,6 +112,16 @@ from cvcpkg.cli._helpers import (
     hidden=True,
     help="Deprecated alias for --keep-build-prefix/--strip-build-prefix.",
 )
+@click.option(
+    "--trust-mirror",
+    is_flag=True,
+    default=False,
+    help=(
+        "Accept a mirror's ruling over its upstream's. By default upstream "
+        "is authoritative, so a bundle the upstream retired is skipped even "
+        "if this mirror still serves it."
+    ),
+)
 def install(
     components: tuple[str, ...],
     from_file: str | None,
@@ -132,6 +143,7 @@ def install(
     local_mode: bool,
     keep_build_prefix: bool,
     keep_host_tools: bool | None,
+    trust_mirror: bool,
 ) -> None:
     """Install component bundles into a prefix.
 
@@ -164,6 +176,11 @@ def install(
     and --link override the corresponding values in the requirements
     file if explicitly provided on the command line.
     """
+    if trust_mirror:
+        # Consulted by cvcpkg.catalog.trust_mirror_default(); set here so
+        # every downstream resolution path sees it without threading a
+        # parameter through each one.
+        _os.environ["CVCPKG_TRUST_MIRROR"] = "1"
     from cvcpkg.cache import default_cache_dir
     from cvcpkg.catalog import (
         catalog_entries,

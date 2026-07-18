@@ -15,6 +15,7 @@ from pathlib import Path
 
 from sqlalchemy import distinct, or_, select, update
 from sqlalchemy import func as sa_func
+from sqlalchemy import true as sa_true
 from sqlalchemy.exc import IntegrityError
 
 from cvcpkg.semver import version_sort_key
@@ -933,6 +934,7 @@ class DbPackageIndex:
                         published_at=row.published_at,
                         yanked=row.yanked,
                         yanked_at=row.yanked_at,
+                        upstream_yanked=row.upstream_yanked,
                         signature=row.signature,
                         key_fingerprint=row.key_fingerprint,
                         release_tag=row.release_tag,
@@ -1117,6 +1119,7 @@ class DbPackageIndex:
         *,
         caller_token_name: str = "",
         is_admin: bool = False,
+        include_yanked: bool = False,
     ) -> dict:
         """Return the full catalog as a dict (for /v1/catalog YAML response).
 
@@ -1129,12 +1132,16 @@ class DbPackageIndex:
             # Left-join so base packages (org_slug == "") still appear even
             # when there is no matching OrganizationRow.
             q = (
-                select(PackageRow)
-                .outerjoin(
+                select(PackageRow).outerjoin(
                     OrganizationRow,
                     PackageRow.org_slug == OrganizationRow.slug,
                 )
-                .where(PackageRow.yanked == False)  # noqa: E712
+                # A downstream mirror must be able to see that a bundle was
+                # *yanked* rather than merely absent: those mean different
+                # things (retired on purpose vs lost/nuked) and only the former
+                # should be recorded as an upstream verdict.  Ordinary clients
+                # still get the filtered view.
+                .where(sa_true() if include_yanked else PackageRow.yanked == False)  # noqa: E712
             )
 
             if is_admin:
@@ -1189,7 +1196,12 @@ class DbPackageIndex:
                     "size_bytes": row.size_bytes,
                     "archive_url": row.archive_url,
                     "published_at": row.published_at.isoformat(),
-                    "yanked": False,
+                    "yanked": bool(row.yanked),
+                    # A locally-served bundle whose upstream retired it: the
+                    # mirror operator overrode the yank.  Surfaced so a client
+                    # can honour upstream (the default) instead of silently
+                    # installing something upstream considers retired.
+                    "upstream_yanked": bool(row.upstream_yanked),
                     "signature": row.signature,
                     "key_fingerprint": row.key_fingerprint,
                     "release_tag": row.release_tag,
@@ -1383,10 +1395,18 @@ class DbPackageIndex:
           catalog, a truncated response or a transient upstream fault all look
           like this, so only yank (recoverable) and let the caller log it.
 
-        Returns counts keyed ``yanked`` / ``tombstoned`` / ``ambiguous``.
+        A mirror operator may deliberately unyank a bundle upstream still
+        considers retired.  Because ``upstream_yanked`` records that we already
+        enforced the verdict once, a later local unyank is recognisable as an
+        override and is left standing rather than reverted on every sync.  The
+        divergence stays visible (``upstream_yanked`` true, ``yanked`` false)
+        so clients can decide whose ruling to follow.
+
+        Returns counts keyed ``yanked`` / ``tombstoned`` / ``ambiguous`` /
+        ``overridden`` / ``unyanked``.
         """
         now = datetime.datetime.now(datetime.timezone.utc)
-        counts = {"yanked": 0, "tombstoned": 0, "ambiguous": 0}
+        counts = {"yanked": 0, "tombstoned": 0, "ambiguous": 0, "overridden": 0, "unyanked": 0}
         if not upstream:
             return counts
 
@@ -1405,13 +1425,35 @@ class DbPackageIndex:
             for r in rows:
                 key = (r.name, r.version, r.platform, r.arch, r.build_type, r.link)
                 if key in upstream_yanked:
-                    if not r.yanked:
-                        r.yanked = True
-                        r.yanked_at = r.yanked_at or now
-                        counts["yanked"] += 1
+                    # Record upstream's verdict regardless; it is what clients
+                    # consult to decide whose ruling to follow.
+                    already_told = r.upstream_yanked
+                    r.upstream_yanked = True
+                    if r.yanked:
+                        continue
+                    if already_told:
+                        # We enforced this yank on an earlier pass and the row
+                        # is un-yanked now, so an operator deliberately
+                        # overrode it.  Re-yanking would revert them on every
+                        # sync forever.  Leave the local decision standing and
+                        # let it be reported as a divergence.
+                        counts["overridden"] += 1
+                        continue
+                    r.yanked = True
+                    r.yanked_at = r.yanked_at or now
+                    counts["yanked"] += 1
                     continue
                 if key in upstream_present:
-                    continue  # upstream still serves it; nothing to do
+                    # Upstream serves it again.  Clear the recorded verdict so a
+                    # later re-yank is treated as new information rather than as
+                    # an override, and lift a yank we ourselves inherited.
+                    if r.upstream_yanked:
+                        r.upstream_yanked = False
+                        if r.yanked:
+                            r.yanked = False
+                            r.yanked_at = None
+                            counts["unyanked"] += 1
+                    continue
                 # Gone from upstream's catalog.
                 if key in upstream_tombstoned:
                     if not r.yanked:

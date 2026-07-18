@@ -35,6 +35,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
     func,
     text,
 )
@@ -130,6 +131,19 @@ class PackageRow(Base):
         default="",
         server_default="",
         index=True,
+    )
+
+    # Last-known yank state *upstream*, tracked separately from the local
+    # ``yanked`` flag so the two can legitimately disagree.  A mirror operator
+    # may unyank a bundle their upstream still considers retired (they know
+    # something upstream does not, or they need it to unblock a build); that
+    # divergence must survive the next sync instead of being silently reverted,
+    # and clients must be able to see it and decide whose ruling to follow.
+    upstream_yanked: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=false(),
     )
 
     __table_args__ = (

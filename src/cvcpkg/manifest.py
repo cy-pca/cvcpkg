@@ -203,6 +203,11 @@ class CatalogEntry:
     signature: str = ""  # base64url Ed25519 sig (empty = unsigned)
     key_fingerprint: str = ""  # SHA-256 of signing public key
     org: str = ""  # organization slug (empty = public/base package)
+    # True when the server serving this entry is a mirror whose upstream has
+    # retired the bundle, but whose operator unyanked it locally.  Resolution
+    # skips these by default: upstream is authoritative.  ``--trust-mirror``
+    # opts into the mirror operator's ruling instead.
+    upstream_yanked: bool = False
 
     @property
     def qualified_name(self) -> str:
@@ -250,6 +255,7 @@ class ReleaseIndex:
                         for dep in e.get("required_deps", [])
                     ],
                     mirror_urls=e.get("mirror_urls", []),
+                    upstream_yanked=bool(e.get("upstream_yanked", False)),
                 )
                 for e in d.get("bundles", [])
             ],
