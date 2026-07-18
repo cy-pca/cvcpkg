@@ -862,34 +862,46 @@ for these recipes.
 
 ### Writing an `any` recipe
 
-Set `platform: any` in every `build_matrix` entry.  The builder
+Set `platform: any` in every `build.matrix` entry.  The builder
 automatically assigns `arch: noarch` and skips the CMake configure
 marker check:
 
 ```yaml
-name: my-data-bundle
-upstream_version: "1.0.0"
-cvc_revision: 1
-description: "Platform-independent data files"
+# recipe.yaml
+schema_version: 1
 
 recipe:
+  name: my-data-bundle
+  upstream_version: "1.0.0"
+  cvc_revision: 1
+  description: "Platform-independent data files"
   kind: data          # optional — hints: data | media | config | iso
 
 source:
+  type: tarball
   url: "https://example.com/data-v1.0.0.tar.gz"
   sha256: "<sha256>"
 
-build_matrix:
-  - platform: any
-
 build:
-  system: script
-  script: |
-    cp -r "$SRC_DIR"/* "$PREFIX/"
+  matrix:
+    - platform: any
+      script: build.sh
 
 package:
   files:
     - "share/**"
+```
+
+`script` names a file next to `recipe.yaml` (not inline shell).  The
+build script receives the staged source and install prefix via
+environment variables:
+
+```bash
+#!/bin/bash
+# build.sh
+set -e
+mkdir -p "$CVC_INSTALL_DIR/share/my-data-bundle"
+cp -r "$CVC_SOURCE_DIR"/* "$CVC_INSTALL_DIR/share/my-data-bundle/"
 ```
 
 ### How it works

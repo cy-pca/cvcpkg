@@ -134,6 +134,38 @@ class TestProvidesSlots:
         assert Recipe.load(tmp_path / "widget").provides == ["cpython-3.13"]
 
 
+class TestRecipeKind:
+    """`recipe.kind` must be expressible — the builder reads it (Recipe.load),
+    the manifest emits it (meta.kind), and the docs advertise it, but the
+    schema's additionalProperties: false silently rejected it in recipes/."""
+
+    @pytest.mark.parametrize("kind", ["data", "media", "config", "iso"])
+    def test_documented_kinds_accepted(self, kind, schema):
+        r = _recipe()
+        r["recipe"]["kind"] = kind
+        assert _valid(schema, r), f"schema rejects recipe.kind: {kind}"
+
+    def test_bogus_kind_rejected(self, schema):
+        # kind is an enum of the documented hints, not a free-form string.
+        r = _recipe()
+        r["recipe"]["kind"] = "binary"
+        assert not _valid(schema, r)
+
+    def test_omitted_kind_still_accepted(self, schema):
+        assert _valid(schema, _recipe())
+
+    def test_builder_reads_what_the_schema_accepts(self, schema, tmp_path):
+        from cvcpkg.builder import Recipe
+
+        r = _recipe(build={"matrix": [{"platform": "any", "script": "build.sh"}]})
+        r["recipe"]["kind"] = "data"
+        assert _valid(schema, r)
+        (tmp_path / "widget").mkdir(parents=True)
+        with open(tmp_path / "widget" / "recipe.yaml", "w", encoding="utf-8") as f:
+            yaml.safe_dump(r, f)
+        assert Recipe.load(tmp_path / "widget").kind == "data"
+
+
 class TestShippedRecipesValidate:
     def test_every_shipped_recipe_matches_the_schema(self, schema):
         # Mirrors packaging/validate.py so schema drift fails the unit suite

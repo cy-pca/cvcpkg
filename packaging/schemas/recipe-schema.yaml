@@ -109,6 +109,12 @@ $defs:
       cvc_revision:
         type: integer
         minimum: 1
+      kind:
+        type: string
+        enum: [data, media, config, iso]
+        description: >
+          Optional content hint for platform-independent recipes, emitted
+          verbatim as `meta.kind` in the manifest for downstream tooling.
       maintainer:
         type: string
       maintainer_email:
