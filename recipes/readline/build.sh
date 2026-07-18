@@ -26,7 +26,7 @@ fi
 # provides tgetent/tgoto/tputs/etc.  Without this, downstream consumers
 # (e.g. libpq's psql) fail to link against our libreadline.so with
 # "undefined reference to `tgetent'" errors.  On modern Linux these
-# symbols live in libtinfo (split out from ncurses); BSD/macOS keep
+# symbols live in libtinfo (split out from ncurses); macOS and OpenBSD keep
 # them in libncurses itself.
 SHLIB_LIBS=""
 if command -v pkg-config >/dev/null 2>&1; then
@@ -41,6 +41,12 @@ fi
 if [[ -z "${SHLIB_LIBS}" ]]; then
     case "$(uname)" in
         Linux)  SHLIB_LIBS="-ltinfo" ;;
+        # NetBSD ships BSD curses plus a separate libterminfo and has NO
+        # libncurses at all, so the generic BSD fallback below fails at link
+        # time with "ld: cannot find -lncurses".  That is why readline had no
+        # NetBSD build: every attempt died linking a library the platform does
+        # not provide.  tgetent/tgoto/tputs live in libterminfo here.
+        NetBSD) SHLIB_LIBS="-lcurses -lterminfo" ;;
         *)      SHLIB_LIBS="-lncurses" ;;
     esac
 fi
