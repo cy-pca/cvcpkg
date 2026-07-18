@@ -37,26 +37,32 @@ def _mode(p) -> int:
 
 
 class TestWriteTextPreservingMode:
+    # The assertions compare against the mode the platform actually reports
+    # rather than the value passed to chmod.  Windows only tracks a read-only
+    # bit, so chmod(0o644) reads back as 0o666; the invariant under test is
+    # "the mode is unchanged", which holds on both.
+
     def test_writes_a_read_only_file_and_restores_its_mode(self, tmp_path):
         f = tmp_path / "Config.pm"
         f.write_text("old", encoding="utf-8")
         f.chmod(READ_ONLY)
-        assert _mode(f) == 0o444
+        before = _mode(f)
 
         _write_text_preserving_mode(f, "new")
 
         assert f.read_text(encoding="utf-8") == "new"
-        assert _mode(f) == 0o444, "the file must not be left more writable than it was"
+        assert _mode(f) == before, "the file must not be left more writable than it was"
 
     def test_ordinary_writable_file_is_untouched_in_mode(self, tmp_path):
         f = tmp_path / "plain.txt"
         f.write_text("old", encoding="utf-8")
         f.chmod(0o644)
+        before = _mode(f)
 
         _write_text_preserving_mode(f, "new")
 
         assert f.read_text(encoding="utf-8") == "new"
-        assert _mode(f) == 0o644
+        assert _mode(f) == before
 
 
 @pytest.mark.skipif(
