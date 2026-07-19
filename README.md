@@ -1795,6 +1795,16 @@ open htmlcov/index.html
 Coverage reports are also generated as CI artifacts on every push/PR —
 download them from the workflow run's Artifacts section.
 
+## Contributors
+
+cvcpkg is a **[CyberPC Angel, LLC](https://cyberpcangel.com)** project —
+designed, funded, and maintained by the CyberPC Angel team, who own the
+project's intellectual property.
+
+Community contributions are welcome via pull request; see the full list of
+everyone who has contributed on the
+[contributors page](https://github.com/transfix/libcvc-deps/graphs/contributors).
+
 ## License
 
 MIT — see [LICENSE](../../LICENSE).
