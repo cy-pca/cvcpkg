@@ -151,6 +151,17 @@ as an LTS snapshot:
 | **Downstream reproducibility** | Projects depending on a cvcpkg release can rebuild at any time and get identical binary artifacts. |
 | **Security patching** | Critical CVEs can trigger a point release (e.g. v1.3.1) that replaces only the affected package while keeping everything else identical. |
 
+### Recipe ownership
+
+**This repo's recipe set is the shared dependency ecosystem; a project owns
+the recipe for its own package, in its own repo.** `libcvc`, `volrover`, and
+`grl-snam` each carry their cvcpkg recipe under `cvcpkg/recipes/<name>/` in
+their own repository (with a publish workflow, publishing under the `cvc`
+org), and are consumed via the `--recipes-dir` overlay. Only the third-party
+dependency stack lives here. This keeps a package's build definition versioned
+with the package and owned by its maintainers. See
+[docs/recipe-authoring.md](docs/recipe-authoring.md#recipe-ownership--where-a-recipe-lives).
+
 ### Live Recipes
 
 Between releases, **updated and new recipes are available live** in the

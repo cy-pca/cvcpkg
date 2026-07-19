@@ -36,6 +36,15 @@ cvcpkg install --from cvc-requirements.yaml --prefix ./deps
 cvcpkg verify --prefix ./deps
 ```
 
+## Recipe ownership
+
+This repository's `recipes/` set is the **shared dependency ecosystem**
+(Boost, Qt6, VTK, CGAL, the CUDA-math libs, the Python interpreters, …).
+**A project owns the recipe for its own package, in its own repo** — `libcvc`,
+`volrover`, and `grl-snam` each keep their recipe under `cvcpkg/recipes/` in
+their own repository and publish under the `cvc` org. Don't add project
+packages here. See [docs/recipe-authoring.md](docs/recipe-authoring.md#recipe-ownership--where-a-recipe-lives).
+
 ## Build modes
 
 cvcpkg supports two primary modes: **server mode** (default) and

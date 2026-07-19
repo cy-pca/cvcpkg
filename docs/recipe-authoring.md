@@ -4,6 +4,27 @@ A **recipe** tells cvcpkg how to build one component from upstream source.
 Recipes live in `recipes/<name>/` and consist of a `recipe.yaml` plus one
 or more build scripts. This guide walks through creating one.
 
+## Recipe ownership — where a recipe lives
+
+**A project owns the cvcpkg recipe for its own package, in its own repository.**
+This repo's `recipes/` set is the **shared dependency ecosystem** — the
+third-party libraries and toolchains that many CVC projects consume (Boost,
+Qt6, VTK, CGAL, HDF5, the CUDA-math libs, the Python interpreters, …).
+
+- **First-party CVC packages carry their own recipe.** `libcvc`, `volrover`,
+  and `grl-snam` each keep their cvcpkg recipe under a `cvcpkg/recipes/<name>/`
+  directory in *their* repo, next to a publish workflow, and publish under the
+  `cvc` organization. Do **not** add them here.
+- **This repo holds the dependency stack** that those packages build against.
+- Consume a project-owned recipe with the `--recipes-dir` overlay
+  (`cvcpkg <cmd> --recipes-dir cvcpkg/recipes …`); cvcpkg merges overlays over
+  the shared set, later directories winning.
+
+Rationale: a package's build definition belongs with the package it builds, so
+it versions and releases together and its maintainers own it — the dependency
+ecosystem here stays a clean, shared foundation rather than a dumping ground
+for every downstream project.
+
 ## Scaffold with `cvcpkg init`
 
 The fastest start is the scaffolder:
