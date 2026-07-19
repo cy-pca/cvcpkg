@@ -240,6 +240,7 @@ flowchart TD
 | 5 | Federation & Scaling | 🔶 Partially Done — cluster roles (primary/mirror/edge), pull-only populate, and public-vs-org namespace invariants landed (2026-07); CDN/sharding/replicas still future |
 | 6 | Community & Governance | 🔶 Partially Done — org namespaces + private-visibility isolation shipped |
 | 7 | Python Ecosystem (hermetic wheels, no-GIL) | 🔶 Partially Done — `python_wheel`/`python_sdist` source types, the `python:` block, the GIL-disabled test harness, and the first full matrix (`numpy` × cp311/cp312/cp313/cp313t) landed; more wheels + CUDA-math recipes + manifest freeze remain |
+| 7.5 | Haskell Ecosystem (our GHC, our ABI) | ⬜ Planned — pin one GHC and build the closure against it (nixpkgs model); toolchain (ghc/cabal-install/HLS) + Haskell executables first; library distribution needs a Stackage snapshot; no cross-compilation, no BSD |
 | 8 | Self-Hosting & Universal Bootstrap (`cvpkg`) | ⬜ Planned — `mingw-w64` toolchain recipe is the first concrete step (landed 2026-07); single-binary `cvpkg`/`cvcpkg-sc` runs a full server (seed from built-in recipes, remote builders, ad-hoc push, air-gapped) |
 | 9 | Fleet & Platform Expansion (GhostBSD/DragonflyBSD, qemu) | 🔶 In Progress — DragonflyBSD platform + provisioning underway in a parallel track |
 | 10 | Peer Providers & Hardware-Aware Concretization | ⬜ Planned |
@@ -565,6 +566,9 @@ deliberately language-agnostic.  Future expansion:
 - **Python C extensions** — pre-compiled wheels for scientific packages that
   are notoriously hard to build (BLAS, LAPACK, HDF5 bindings).
 - **Julia artifacts** — native library packages for Julia's Pkg system.
+- **Haskell** — GHC toolchain plus Haskell packages, built against *our own*
+  pinned GHC and ABI.  Developed in full in **Phase 7.5**, because Haskell's
+  per-closure ABI hashing makes it a different (harder) problem than wheels.
 
 #### Recipe Ecosystem
 
@@ -931,6 +935,149 @@ See [docs/python-wheels.md](docs/python-wheels.md).
 
 ---
 
+### Phase 7.5 — Haskell Ecosystem Integration (Our GHC, Our ABI)
+
+**Status: Planned**
+
+Haskell support, structured like Phase 7 but with a fundamentally harder
+constraint.  Numbered 7.5 (precedent: Phase 1.5) so it sits beside the
+language-ecosystem phase it mirrors without renumbering the PyPI release
+off its terminal slot.
+
+> **The wheel analogy breaks — read this before planning anything.**
+> cvcpkg's CPython matrix is *interpreter × platform*: a `cp312` wheel is
+> reusable by every consumer on that interpreter regardless of what else
+> they installed.  A compiled Haskell library is keyed by a hash over
+> **GHC version × platform × the entire transitive dependency closure,
+> pinned to exact versions and Cabal flags**.  `aeson-2.2.3.0` built
+> against `text-2.1.1` is a *different, non-interchangeable artifact* from
+> the same `aeson` built against `text-2.1.2`.  That third axis is not a
+> dimension you enumerate — it is combinatorially unbounded.  Worse,
+> there is **no ABI stability even across identical GHC version numbers**
+> (two bindists of the same version can differ), so the compiler must be
+> keyed by **content hash, not version string**.
+
+**Design directive: build our own Haskell packages against our own
+Haskell ABI.**  Rather than chase upstream prebuilt artifacts or try to
+match Hackage's ABI, cvcpkg **pins one GHC per release and builds the
+package closure from source against that compiler**, owning the ABI end
+to end.  This is exactly how nixpkgs' `haskellPackages` works (one GHC
+per package set, the set and compiler "connected via the fixpoint and
+modified together"), and it *dissolves* the combinatorial problem rather
+than fighting it: the closure hash only bites when mixing binaries of
+different provenance.  If we own the compiler and the whole closure,
+every package in a release is coherent by construction — which is the
+same bargain cvcpkg's LTS snapshots already make.
+The honest cost, stated up front: **a GHC bump rebuilds the world**, and
+the builder fleet absorbs it as a scheduled event, not an incremental
+update.  Debian maintains a *permanent* Haskell transition tracker for
+precisely this reason.
+
+#### Toolchain first (high value, low risk)
+
+- [ ] **`ghc` recipes — repackage upstream bindists, do not build from
+      source.**  GHC is written in Haskell and needs a GHC to build
+      (multi-hour Hadrian bootstrap); repackaging also gives one
+      canonical bindist per platform, which is *safer* given the
+      same-version ABI divergence above.  **Key artifacts on the bindist
+      content hash.**  Target **GHC 9.14** — the first release with a
+      formal **LTS** designation, supported into 2028.
+- [ ] **Native dependency reconciliation** — GHC needs `gmp`, `libffi`,
+      `ncurses`/tinfo, `iconv`, `zlib`; cvcpkg already ships most.
+      Ncurses/tinfo ABI is the likeliest snag.  Ship both bignum variants
+      where upstream does and **document the libgmp LGPL implication**
+      (`ghc-bignum` native is the license-clean alternative).
+- [ ] **`cabal-install`** — the mainstream build driver and the priority.
+      **`stack` is optional/deprioritized**: the community recommendation
+      has moved decisively to GHCup + Cabal, and Stack is less actively
+      maintained with known HLS friction.
+- [ ] **`hls` (Haskell Language Server) — plan it as a GHC × platform
+      matrix, not one package.**  HLS links the *unstable GHC API*, so it
+      needs a build per GHC and **lags new GHC releases** (2.13.0.0 was
+      still landing 9.14 support).  High user value, real ongoing cost.
+- [ ] **Position relative to GHCup deliberately.**  cvcpkg would
+      substantially replace GHCup's install role; GHCup's distinct value
+      is fast multi-version toggling with the GHC↔HLS compatibility
+      matrix encoded.  Pick a lane and document it — a half-integration
+      where GHCup- and cvcpkg-managed toolchains can't see each other is
+      the bad outcome.
+
+#### Haskell executables as binary packages (the real win)
+
+- [ ] **Ship Haskell-written end-user tools** — pandoc, shellcheck,
+      hledger, postgrest, dhall, plus the toolchain binaries themselves.
+      **GHC statically links Haskell dependencies into executables by
+      default**, so the dependency-closure axis *disappears* and only the
+      C-library ABI axis remains — exactly the problem cvcpkg already
+      solves for every other language.  This is 80–90% of real demand and
+      is where cvcpkg's differentiation is strongest; **do it first.**
+- [ ] **Static-linking mechanics** — `cabal build
+      --enable-executable-static` paired with `cabal list-bin` (**not**
+      `cabal install`, which is buggy in that combination); prefer
+      **musl/Alpine over glibc**, which makes static linking unreliable.
+- [ ] **Bind cvcpkg's C libraries** — inject `--extra-lib-dirs` /
+      `--extra-include-dirs` / `PKG_CONFIG_PATH` at the prefix.  `.cabal`
+      declares native deps via `extra-libraries` (bare names, **no
+      location or version** — the badly-behaved common idiom),
+      `pkgconfig-depends` (versioned, preferred), `extra-lib-dirs`,
+      `include-dirs`, `build-tool-depends` (`alex`, `happy`, `c2hs`,
+      `hsc2hs`), and `frameworks` on macOS.  Expect per-package plumbing.
+
+#### Library distribution (scope hard — only on real demand)
+
+- [ ] **Adopt a snapshot as *the* package-set definition.**  One GHC, one
+      closure, following nixpkgs exactly.  **Stackage LTS** is the natural
+      fit — a curated, mutually-compatible, CI-tested pinned set is
+      precisely cvcpkg's LTS model, already done by people who run the
+      test suites.
+- [ ] **Resolve the GHC/Stackage version conflict in writing first.**
+      Live tension: **GHC LTS is 9.14, but Stackage LTS (`lts-24.x`) is
+      still on GHC 9.10 — a branch scheduled for retirement** (Nightly is
+      on 9.12).  Either take 9.10 + a curated set that exists today, or
+      9.14 + a hand-rolled freeze we curate ourselves, or pay for both.
+- [ ] **`cabal.project.freeze` is the recipe artifact and the cache key.**
+      It pins exact versions *and flags* for the whole transitive closure;
+      combined with an **index-state pin** and the **GHC bindist hash** it
+      is the complete reproducible input specification.  Stackage
+      publishes a Cabal-format constraint file per snapshot, so this works
+      **without Stack** (`import:` a snapshot's `cabal.config`, or freeze
+      it).
+- [ ] **A new `source.type` for Cabal packages** (e.g. `hackage_sdist`),
+      additive to `schema_version: 1` alongside `python_wheel`/
+      `python_sdist`, plus a top-level **`haskell:`** block (GHC series,
+      snapshot id, freeze file, flags, way) mirroring the `python:` block.
+- [ ] **Budget the per-package quirks file.**  nixpkgs'
+      `configuration-common.nix` — a large hand-maintained set of
+      overrides, `jailbreak`s (relaxing version bounds), test disables and
+      patches — is the honest forecast.  Generation gets ~90% of packages;
+      the last 10% is perpetual manual work.  `build-type: Custom` runs
+      arbitrary Haskell at build time (hostile to hermeticity) and is
+      concentrated in exactly the C-binding packages we care about most.
+- [ ] **Document out-of-snapshot as build-from-source.**  Stackage covers
+      ~1,400–3,000 of Hackage's ~19,000 packages; anything outside
+      reintroduces the full solver-and-rebuild problem.  "Build it
+      locally" is a legitimate, stated answer — never promise binary
+      artifacts for arbitrary dependency sets.
+
+#### Explicitly out of scope (say so up front)
+
+- [ ] **Cross-compilation — zero budget.**  GHC cross is painful for
+      structural reasons that are not going away (GHC needs a GHC;
+      **Template Haskell must *run* target code at compile time**,
+      requiring an external interpreter and a runnable target).  cvcpkg
+      has a real multi-platform fleet — **build natively, everywhere.**
+- [ ] **WASM/JS backends — not yet.**  GHC's own docs call the wasm
+      backend "a tech preview and not included in the official bindists";
+      single-threaded RTS only.  The JS backend emits bundles, not
+      binaries.
+- [ ] **BSD — explicitly unsupported for v1.**  There are **no official
+      OpenBSD or NetBSD bindists**, and upstream's FreeBSD entry has **no
+      files for 9.14.1**.  This would be net-new pain on a fleet that
+      already carries BSD pain, so scope Haskell to **Linux + macOS +
+      Windows** and say so rather than discovering it at integration time.
+
+---
+
 ### Phase 8 — Self-Hosting & Universal Bootstrap (`cvpkg`)
 
 **Status: Planned** — see also Phase 11, which develops the
@@ -1283,7 +1430,9 @@ Concrete recipe work queued for the v2.0.0 (pre-PyPI) window, building on the
       builder-provisioning dependency (not redistributable, per the table
       above); **Rust** — grow the existing `rust` recipe into a full toolchain
       story with first-class Rust *package* (cargo/crates) support (ties into
-      Phase 4's Rust language support).
+      Phase 4's Rust language support); **GHC/Haskell** — the one toolchain we
+      deliberately do **not** self-host from source (it needs a GHC to
+      bootstrap), repackaged from upstream bindists instead — see Phase 7.5.
 - [ ] **Assemblers beyond x86** — `nasm` covers x86; add recipes for
       assemblers targeting the other common CPUs — per-target GNU `as` via
       cross-`binutils` (aarch64, riscv64, …) and standalone retargetable
@@ -3224,6 +3373,7 @@ actions, not something CI does on its own.
 | **Bootstrap (Phase 8)** | cvcpkg (self-install prefix), cvcpkg-sc (full cvcpkg baked to one self-contained binary), cvpkg (trimmed cosmo APE) | cvcpkg installable by cvcpkg; single-binary zero-dependency bootstrap. Three distinct artifacts — hermetic prefix, full self-contained binary, trimmed portable APE. |
 | **C/C++ tooling** | cpkg ([getcpkg.net](https://getcpkg.net/)) | ship the Lua+Ninja project tool as a recipe, plus a cvcpkg Lua resolver helper so `cpkg.lua` scripts pull prebuilt cvcpkg binaries (see Phase 4 Interoperability). |
 | **Compilers (Phase 11)** | clang (→ existing `llvm`), clang20 (→ legacy `llvm20`); feasibility: gcc, gfortran, Intel oneAPI icx/ifx, rust toolchain + cargo package support | package the compiler front ends on the LLVM recipes already in the tree; survey the rest against the redistributable-vs-provisioning boundary (VS2022/MSVC stays provisioning-only). |
+| **Haskell (Phase 7.5)** | ghc (9.14 LTS, repackaged bindist), cabal-install, haskell-language-server (GHC × platform matrix), optional stack; then Haskell executables — pandoc, shellcheck, hledger, postgrest, dhall | GHC is **not** built from source (it needs a GHC to bootstrap; multi-hour build) and is keyed by **bindist content hash**, since same-version bindists can differ in ABI. Native deps `gmp`/`libffi`/`ncurses`/`iconv`/`zlib` are mostly already in the tree. Executables are the easy win — GHC statically links Haskell deps, collapsing the closure axis. |
 | **Assemblers (Phase 11)** | cross-binutils GNU `as` (aarch64, riscv64, …), vasm | assemblers for common CPUs beyond x86 (`nasm` already covers x86). |
 | **Shells** | bash, zsh (then fish, dash, …) | popular interactive shells for prefix environments — `powershell` is the only shell recipe in the tree today, and the dependencies are already recipes (readline for bash's `--with-installed-readline`, ncurses, pcre2 for zsh's pcre module). |
 | **Editors** | vim, emacs — terminal builds plus GTK and KDE/Qt GUI variants | no editor recipes exist yet.  The GUI variants need a new `gtk3` recipe (vim's and emacs's GTK front ends build against GTK3; the tree's `gtk4` satisfies neither) and `gnutls` for emacs (optional: `libgccjit` for native-comp, `tree-sitter`); the display stack is Wayland-first (emacs pgtk).  The KDE/Qt variants ride the KDE stack below. |
