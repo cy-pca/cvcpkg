@@ -1,0 +1,69 @@
+schema_version: 1
+recipe:
+  name: libxml2
+  upstream_version: "2.12.9"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://gitlab.gnome.org/GNOME/libxml2
+  license: MIT
+  tags: [libraries, xml]
+  description: >-
+    libxml2 — the XML C parser and toolkit developed for the GNOME project.
+    Required by ImageMagick (delegate for its configuration/SVG parsing).
+
+source:
+  type: tarball
+  url: https://download.gnome.org/sources/libxml2/2.12/libxml2-2.12.9.tar.xz
+  sha256: "59912db536ab56a3996489ea0299768c7bcffe57169f0235e7f962a91f483590"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+  runtime:
+    - name: zlib
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libxml2.*
+    - lib/cmake/libxml2*/
+    - lib/pkgconfig/libxml-2.0.pc
+    - include/libxml2/
+  cmake_packages:
+    - { name: LibXml2, targets: ["LibXml2::LibXml2"] }
+  pkg_config:
+    - libxml-2.0
+
+abi:
+  cxx_std: 17
