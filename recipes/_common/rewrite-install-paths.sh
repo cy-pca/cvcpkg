@@ -52,3 +52,50 @@ cvc_rewrite_install_paths() {
         echo "── cvc_rewrite_install_paths: normalized ${count} file(s) under ${root} ──"
     fi
 }
+
+# cvc_relocate_macos_dylibs — rewrite autotools/libtool dylib install names to
+# @rpath (macOS only; no-op elsewhere).
+#
+# cvc_cmake_build gives CMake-built libraries @loader_path rpaths, but GNU
+# autotools bakes the absolute --prefix (a per-build temp $CVC_INSTALL_DIR) into
+# every produced dylib: both its own id (LC_ID_DYLIB) and its load commands for
+# sibling libraries. Once the bundle is unpacked at a different prefix those
+# temp paths no longer exist, so dyld aborts at load time
+# ("Library not loaded: <build-temp>/lib/libFoo.dylib"). Rewrite the id and any
+# dependency that points back into our install prefix to @rpath/<name>;
+# consumers already add the real libdir to their rpath (-Wl,-rpath,.../lib).
+#
+# Operates on versioned real files (e.g. libgmpxx.4.dylib); the unversioned
+# symlinks (libgmpxx.dylib) resolve to them, so consumers that link the symlink
+# record the fixed @rpath id. Idempotent: entries already @rpath don't match the
+# temp prefix. No-op off macOS or when install_name_tool/otool are unavailable.
+cvc_relocate_macos_dylibs() {
+    [ "${CVC_PLATFORM:-}" = "macos" ] || return 0
+    command -v install_name_tool >/dev/null 2>&1 || return 0
+    command -v otool >/dev/null 2>&1 || return 0
+
+    local root="${CVC_INSTALL_DIR%/}"
+    local libdir="${root}/lib"
+    [ -d "$libdir" ] || return 0
+
+    local count=0 dylib base dep
+    while IFS= read -r -d '' dylib; do
+        base="$(basename "$dylib")"
+        chmod u+w "$dylib" 2>/dev/null || true
+        # Set the library's own id to @rpath first, so the otool pass below sees
+        # (and skips) the already-relocated id.
+        install_name_tool -id "@rpath/${base}" "$dylib" 2>/dev/null || true
+        while IFS= read -r dep; do
+            case "$dep" in
+                "${root}"/*)
+                    install_name_tool -change "$dep" "@rpath/$(basename "$dep")" "$dylib" 2>/dev/null || true
+                    ;;
+            esac
+        done < <(otool -L "$dylib" | awk 'NR>1 {print $1}')
+        count=$((count + 1))
+    done < <(find "$libdir" -type f -name '*.dylib' -print0)
+
+    if [ "$count" -gt 0 ]; then
+        echo "── cvc_relocate_macos_dylibs: relocated ${count} dylib(s) to @rpath under ${libdir} ──"
+    fi
+}

@@ -25,3 +25,7 @@ make install
 
 # Ensure installed .pc/.cmake files are relocatable.
 cvc_rewrite_install_paths
+# GMP is autotools, so libtool bakes the temp $CVC_INSTALL_DIR into the dylib
+# ids/deps (libgmp, libgmpxx). Rewrite them to @rpath so the relocated bundle
+# loads on macOS (no-op on other platforms).
+cvc_relocate_macos_dylibs

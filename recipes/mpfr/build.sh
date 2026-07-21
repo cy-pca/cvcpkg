@@ -22,3 +22,9 @@ fi
 
 make -j "${CVC_JOBS}"
 make install
+
+# Same autotools/libtool relocatability handling as gmp: normalize .pc/.cmake
+# text paths, then rewrite the baked-in temp $CVC_INSTALL_DIR dylib ids/deps
+# (libmpfr, plus its dependency on libgmp) to @rpath for macOS.
+cvc_rewrite_install_paths
+cvc_relocate_macos_dylibs
