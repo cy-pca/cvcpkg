@@ -77,6 +77,8 @@ class BundleManifest:
 
     # provides
     provides: list[str] = field(default_factory=list)
+    # host capabilities that must all be present for this bundle to be selectable
+    requires_capabilities: list[str] = field(default_factory=list)
 
     # integrity
     sha256: str = ""
@@ -160,6 +162,11 @@ class BundleManifest:
                     for dep in (deps.get("optional", []) if isinstance(deps, dict) else [])
                 ],
                 provides=d.get("provides", []),
+                # Prefer the top-level key (sibling of ``provides``); fall back
+                # to a nested ``bundle:`` placement for forward compatibility.
+                requires_capabilities=d.get(
+                    "requires_capabilities", b.get("requires_capabilities", [])
+                ),
                 sha256=integrity.get("sha256", ""),
                 size_bytes=integrity.get("size_bytes", 0),
                 built_at=integrity.get("built_at", meta.get("built_at", "")),
@@ -203,6 +210,12 @@ class CatalogEntry:
     signature: str = ""  # base64url Ed25519 sig (empty = unsigned)
     key_fingerprint: str = ""  # SHA-256 of signing public key
     org: str = ""  # organization slug (empty = public/base package)
+    # Virtual names this bundle satisfies (e.g. ``libcvc``); the resolver treats
+    # every provider of a virtual name as a candidate for it.
+    provides: list[str] = field(default_factory=list)
+    # Host capabilities that must ALL be present for this bundle to be
+    # selectable (e.g. ``[cuda]``).  Empty = universally selectable.
+    requires_capabilities: list[str] = field(default_factory=list)
     # True when the server serving this entry is a mirror whose upstream has
     # retired the bundle, but whose operator unyanked it locally.  Resolution
     # skips these by default: upstream is authoritative.  ``--trust-mirror``
@@ -256,6 +269,8 @@ class ReleaseIndex:
                     ],
                     mirror_urls=e.get("mirror_urls", []),
                     upstream_yanked=bool(e.get("upstream_yanked", False)),
+                    provides=e.get("provides", []),
+                    requires_capabilities=e.get("requires_capabilities", []),
                 )
                 for e in d.get("bundles", [])
             ],

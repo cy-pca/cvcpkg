@@ -325,8 +325,17 @@ def install(
         if entries:
             from cvcpkg.resolver import resolve
 
-            # Only resolve components that have candidates in the catalog.
-            resolvable = [c for c in reqs.components if c.name in candidates]
+            # Virtual names any candidate provides — a request may target one
+            # of these even though no bundle is literally named that.
+            virtual_names: set[str] = set()
+            for e in entries:
+                virtual_names.update(e.provides)
+
+            # Only resolve components that have candidates in the catalog,
+            # either by concrete name or as a virtual package provider.
+            resolvable = [
+                c for c in reqs.components if c.name in candidates or c.name in virtual_names
+            ]
             if resolvable:
                 result = resolve(resolvable, candidates)
                 picked = result.picked

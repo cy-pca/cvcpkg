@@ -205,6 +205,9 @@ class Recipe:
     # declarations instead of n*(n-1) pairwise `conflicts` entries — and cannot
     # be declared asymmetrically.
     provides: list[str] = field(default_factory=list)
+    # Host capabilities that must ALL be present for this package to be
+    # selectable by the resolver (e.g. ``[cuda]``).  Empty = universal.
+    requires_capabilities: list[str] = field(default_factory=list)
     python: PythonSpec | None = None
 
     @property
@@ -247,6 +250,7 @@ class Recipe:
             cross_toolchain_env=ct_block.get("env", {}) or {},
             conflicts=raw.get("conflicts", []) or [],
             provides=raw.get("provides", []) or [],
+            requires_capabilities=raw.get("requires_capabilities", []) or [],
             python=PythonSpec.from_dict(python_block) if python_block else None,
         )
 
@@ -1108,6 +1112,18 @@ def generate_manifest(
         "dependencies": {
             "required": dep_list,
         },
+        # Top-level virtual-package metadata (siblings of ``bundle:``): the
+        # names this bundle satisfies and the host capabilities it requires.
+        # Mirrors what BundleManifest.from_dict reads back, and is copied
+        # verbatim into each catalog/index entry for capability-ranked
+        # resolution.  ``contents.provides`` above is retained for the
+        # installed-prefix view.
+        **({"provides": list(recipe.provides)} if recipe.provides else {}),
+        **(
+            {"requires_capabilities": list(recipe.requires_capabilities)}
+            if recipe.requires_capabilities
+            else {}
+        ),
         "integrity": {
             "sha256": "",
             "size_bytes": 0,

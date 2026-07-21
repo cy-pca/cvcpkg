@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import platform
 import struct
 import sys
@@ -140,3 +141,73 @@ def default_tuple() -> dict[str, str]:
         "platform": detect_platform(),
         "arch": detect_arch(),
     }
+
+
+# ── Host capabilities ───────────────────────────────────────────
+#
+# A "capability" is an opt-in host feature (e.g. ``cuda``) that gates which
+# concrete provider of a virtual package the resolver may select.  A package
+# that declares ``requires_capabilities: [cuda]`` is only installable on a host
+# whose capability set contains ``cuda``.  New capabilities plug in by adding a
+# probe function to ``_CAPABILITY_PROBES`` below.
+
+# Cache only the (potentially expensive) host probe.  The CVCPKG_CAPABILITIES
+# override is cheap and authoritative, so it is re-read on every call rather
+# than cached — this keeps CI and tests, which inject via the environment,
+# free of cross-test state leakage.
+_probed_capabilities: set[str] | None = None
+
+
+def _probe_cuda() -> bool:
+    """Best-effort detection of a usable CUDA stack.  Never raises."""
+    try:
+        import ctypes.util
+
+        if ctypes.util.find_library("cuda"):
+            return True
+    except Exception:
+        pass
+    try:
+        import shutil
+
+        if shutil.which("nvidia-smi") or shutil.which("nvcc"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+# name -> zero-arg probe returning True when the capability is present.
+_CAPABILITY_PROBES = {
+    "cuda": _probe_cuda,
+}
+
+
+def host_capabilities() -> set[str]:
+    """Return the set of capabilities available on the current host.
+
+    Resolution order:
+
+    1. If ``CVCPKG_CAPABILITIES`` is set, its comma-separated value is returned
+       verbatim (authoritative — this is how CI and tests inject capabilities).
+       An empty string means "no capabilities".
+    2. Otherwise each registered probe in :data:`_CAPABILITY_PROBES` runs; the
+       result is cached in a module global so probing happens at most once.
+
+    A fresh copy is returned each call so callers cannot mutate the cache.
+    """
+    env = os.environ.get("CVCPKG_CAPABILITIES")
+    if env is not None:
+        return {c.strip() for c in env.split(",") if c.strip()}
+
+    global _probed_capabilities
+    if _probed_capabilities is None:
+        found: set[str] = set()
+        for cap, probe in _CAPABILITY_PROBES.items():
+            try:
+                if probe():
+                    found.add(cap)
+            except Exception:
+                pass
+        _probed_capabilities = found
+    return set(_probed_capabilities)

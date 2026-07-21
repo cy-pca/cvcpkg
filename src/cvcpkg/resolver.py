@@ -27,6 +27,7 @@ def resolve(
     candidates: dict[str, list[CatalogEntry]],
     *,
     recommended: dict[str, str] | None = None,
+    capabilities: set[str] | None = None,
 ) -> ResolveResult:
     """Resolve *requirements* against *candidates*.
 
@@ -40,16 +41,32 @@ def resolve(
     recommended:
         Optional ``{component: version}`` map from a pinned release's
         ``recommended:`` block. Used to prefer the baseline version.
+    capabilities:
+        Host capabilities used to filter and rank providers of virtual
+        packages.  Defaults to :func:`cvcpkg.platform.host_capabilities`
+        when ``None`` (probed lazily, never at import time).
 
     Returns
     -------
     ResolveResult with ``picked`` mapping component names to chosen entries.
+
+    A needed name ``N`` resolves against the union of (a) concrete entries
+    literally named ``N`` and (b) any entry whose ``provides`` lists ``N``
+    (a *virtual* package).  Candidates whose ``requires_capabilities`` are
+    not all met by *capabilities* are dropped; among the survivors, those
+    satisfying more required capabilities rank first (so a cuda provider
+    beats a plain one on a cuda host), falling back to the usual
+    version/recommended ordering.
 
     Raises
     ------
     ResolveError if no consistent assignment exists.
     """
     recommended = recommended or {}
+    if capabilities is None:
+        from cvcpkg.platform import host_capabilities
+
+        capabilities = host_capabilities()
 
     # Build initial constraint set from user requirements.
     constraints: dict[str, str] = {}  # name → version spec
@@ -61,12 +78,34 @@ def resolve(
             continue
         constraints[req.name] = req.version
 
-    # Sort candidates for each component by preference.
+    # Provider map: virtual name → entries whose ``provides`` lists it.
+    providers: dict[str, list[CatalogEntry]] = {}
+    for entries in candidates.values():
+        for entry in entries:
+            for virtual_name in entry.provides:
+                providers.setdefault(virtual_name, []).append(entry)
+
+    # Sort candidates for every resolvable name — concrete component names
+    # plus virtual provider names — applying the capability filter and rank.
     sorted_candidates: dict[str, list[CatalogEntry]] = {}
-    for name, entries in candidates.items():
+    # Names whose whole candidate pool was filtered out by capabilities, mapped
+    # to the capabilities the host would need, for a clear error message.
+    capability_blocked: dict[str, set[str]] = {}
+    for name in set(candidates) | set(providers):
         if name in excluded:
             continue
-        sorted_candidates[name] = _sort_candidates(entries, recommended.get(name, ""))
+        pool = _candidate_pool(name, candidates, providers)
+        selectable = [e for e in pool if set(e.requires_capabilities) <= capabilities]
+        if pool and not selectable:
+            missing: set[str] = set()
+            for e in pool:
+                missing |= set(e.requires_capabilities) - capabilities
+            capability_blocked[name] = missing
+        # Version/recommended order first, then a *stable* re-sort that floats
+        # providers meeting more required capabilities to the front.
+        ordered = _sort_candidates(selectable, recommended.get(name, ""))
+        ordered.sort(key=lambda e: len(e.requires_capabilities), reverse=True)
+        sorted_candidates[name] = ordered
 
     # Determine which components we need to resolve (user-requested + transitive).
     needed = {req.name for req in requirements if not req.exclude}
@@ -74,10 +113,31 @@ def resolve(
     picked: dict[str, CatalogEntry] = {}
     conflict_trail: list[str] = []
 
-    if not _backtrack(needed, constraints, sorted_candidates, picked, conflict_trail):
+    if not _backtrack(
+        needed, constraints, sorted_candidates, picked, conflict_trail, capability_blocked
+    ):
         raise ResolveError("cannot satisfy requirements:\n  " + "\n  ".join(conflict_trail[-10:]))
 
     return ResolveResult(picked=picked)
+
+
+def _candidate_pool(
+    name: str,
+    candidates: dict[str, list[CatalogEntry]],
+    providers: dict[str, list[CatalogEntry]],
+) -> list[CatalogEntry]:
+    """Union of concrete entries named *name* and providers of *name*.
+
+    De-duplicated by object identity (``CatalogEntry`` is unhashable) while
+    preserving order: concrete entries first, then providers.
+    """
+    pool: list[CatalogEntry] = []
+    seen: set[int] = set()
+    for entry in candidates.get(name, []) + providers.get(name, []):
+        if id(entry) not in seen:
+            seen.add(id(entry))
+            pool.append(entry)
+    return pool
 
 
 def _sort_candidates(entries: list[CatalogEntry], recommended_ver: str) -> list[CatalogEntry]:
@@ -138,8 +198,10 @@ def _backtrack(
     candidates: dict[str, list[CatalogEntry]],
     picked: dict[str, CatalogEntry],
     trail: list[str],
+    capability_blocked: dict[str, set[str]] | None = None,
 ) -> bool:
     """Recursive backtracking resolver."""
+    capability_blocked = capability_blocked or {}
     # Find the next unpicked component.
     unpicked = needed - picked.keys()
     if not unpicked:
@@ -180,13 +242,19 @@ def _backtrack(
                 else:
                     new_constraints[dep.name] = dep.version
 
-        if _backtrack(new_needed, new_constraints, candidates, picked, trail):
+        if _backtrack(new_needed, new_constraints, candidates, picked, trail, capability_blocked):
             return True
 
         # Backtrack.
         del picked[name]
 
-    trail.append(f"no candidate for '{name}' satisfies constraints (spec={spec!r})")
+    if not available and name in capability_blocked:
+        missing = ", ".join(sorted(capability_blocked[name]))
+        trail.append(
+            f"no provider for '{name}' meets required capabilities (host is missing: {missing})"
+        )
+    else:
+        trail.append(f"no candidate for '{name}' satisfies constraints (spec={spec!r})")
     return False
 
 
