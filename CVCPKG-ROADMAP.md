@@ -301,6 +301,8 @@ name-claiming, community-facing commitment, so it comes at the very end.
 
 ### Phase 1.5 — Release Engineering Readiness
 
+> **Native toolchain hermeticity (proposed):** recipes currently compile with the build box's system `gcc`/`g++` (`env-linux.sh: CXX=${CXX:-g++}`), so binaries drift between environments (e.g. fleet GCC 11 vs a dev box's GCC 13 — the exact issue that blocked publishing a local `vtk-python` against the fleet's `vtk`). Pin a native C/C++ toolchain like we already do for WASM/Haskell/Python. See [`docs/roadmap/hermetic-native-toolchain.md`](docs/roadmap/hermetic-native-toolchain.md).
+
 **Status: Complete**
 
 The *engineering* prerequisites for a wheel release — everything that has to

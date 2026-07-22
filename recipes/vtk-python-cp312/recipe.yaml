@@ -1,13 +1,13 @@
 schema_version: 1
 recipe:
-  name: vtk-python
+  name: vtk-python-cp312
   upstream_version: "9.5.0"
   cvc_revision: 1
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   description: >-
-    VTK 9.5 Python wrappers (cp311) — the importable `vtkmodules` package plus
+    VTK 9.5 Python wrappers (cp312) — the importable `vtkmodules` package plus
     the C++↔Python bridge (libvtkWrappingPythonCore / libvtkPythonInterpreter and
     the vtkPythonUtil.h / PyVTK* headers).  Rebuilt from the SAME pinned VTK
     source as the `vtk` package but with VTK_WRAP_PYTHON=ON, and packaged to ship
@@ -16,7 +16,7 @@ recipe:
     files) and depends on it for the libvtk*-9.5 C++ libraries and CMake config.
     Lets pycvc-gl and a VTK-Python host (VolRover) share the exact same VTK
     Python build so vtkPythonUtil can hand real vtkProp*/vtkActor objects across
-    the SWIG boundary.  Python-ABI-specific (cp311) — mirrors how pycvc/pycvc-gl
+    the SWIG boundary.  Python-ABI-specific (cp312) — mirrors how pycvc/pycvc-gl
     split the core and scene bindings.
   homepage: https://vtk.org/
   license: BSD-3-Clause
@@ -37,9 +37,9 @@ depends:
   build:
     - cmake
     - ninja
-    # Wrappers are built against the cvcpkg python311 interpreter (cp311), the
-    # same one pycvc / pycvc-gl / numpy-cp311 target — the ABI must match.
-    - name: python311
+    # Wrappers are built against the cvcpkg python312 interpreter (cp312), the
+    # same one pycvc / pycvc-gl / numpy-cp312 target — the ABI must match.
+    - name: python312
     # VTK is rebuilt in full from source, so its own C++ build dependencies must
     # be present in the build closure (kept identical to recipes/vtk).
     - name: qt6
@@ -57,11 +57,11 @@ depends:
     - name: vtk
       version: "9.5.0"
     # pycvc-gl / the host import these wrappers against this interpreter.
-    - name: python311
+    - name: python312
   host_tools:
     - cmake
     - ninja
-    - python311
+    - python312
 
 build:
   # cvcGL + VTK Python are consumed on linux + windows (the pycvc-gl platforms;
@@ -111,8 +111,8 @@ notes: >-
   and link the wrapping-core library explicitly, e.g.
   find_library(VTK_WRAPPING_PYTHONCORE
   NAMES vtkWrappingPythonCore<pyver>-9.5) — the lib carries the Python-ABI suffix
-  (e.g. libvtkWrappingPythonCore3.11-9.5.so); the vtkPythonUtil.h header is
-  already on the VTK include path. Python-ABI coupling: this recipe is cp311-only;
+  (e.g. libvtkWrappingPythonCore3.12-9.5.so); the vtkPythonUtil.h header is
+  already on the VTK include path. Python-ABI coupling: this recipe is cp312-only;
   a python312/313 host needs a parallel vtk-python variant.
 
   HERMETICITY / build model: this build.sh currently does a FULL VTK rebuild

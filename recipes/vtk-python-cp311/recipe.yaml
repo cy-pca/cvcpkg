@@ -1,0 +1,128 @@
+schema_version: 1
+recipe:
+  name: vtk-python-cp311
+  upstream_version: "9.5.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    VTK 9.5 Python wrappers (cp311) — the importable `vtkmodules` package plus
+    the C++↔Python bridge (libvtkWrappingPythonCore / libvtkPythonInterpreter and
+    the vtkPythonUtil.h / PyVTK* headers).  Rebuilt from the SAME pinned VTK
+    source as the `vtk` package but with VTK_WRAP_PYTHON=ON, and packaged to ship
+    ONLY the Python-specific artifacts: it installs side by side with the
+    C++-only `vtk` package (which builds WRAP_PYTHON=OFF and emits none of these
+    files) and depends on it for the libvtk*-9.5 C++ libraries and CMake config.
+    Lets pycvc-gl and a VTK-Python host (VolRover) share the exact same VTK
+    Python build so vtkPythonUtil can hand real vtkProp*/vtkActor objects across
+    the SWIG boundary.  Python-ABI-specific (cp311) — mirrors how pycvc/pycvc-gl
+    split the core and scene bindings.
+  homepage: https://vtk.org/
+  license: BSD-3-Clause
+  tags: [graphics, python, bindings]
+
+source:
+  # Same pinned tarball + sha256 as recipes/vtk — the Python wrappers MUST be
+  # generated from the identical C++ source so the wrapped ABI matches the `vtk`
+  # package's libvtk*-9.5 libraries at runtime.
+  type: tarball
+  url: https://www.vtk.org/files/release/9.5/VTK-9.5.0.tar.gz
+  sha256: "04ae86246b9557c6b61afbc534a6df099244fbc8f3937f82e6bc0570953af87d"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+    # Wrappers are built against the cvcpkg python311 interpreter (cp311), the
+    # same one pycvc / pycvc-gl / numpy-cp311 target — the ABI must match.
+    - name: python311
+    # VTK is rebuilt in full from source, so its own C++ build dependencies must
+    # be present in the build closure (kept identical to recipes/vtk).
+    - name: qt6
+      version: ">=6.7"
+    - name: hdf5
+      version: "^1.14"
+    - name: tiff
+      version: "^4.6"
+    - name: zlib
+      version: "^1.3"
+  runtime:
+    # The C++ libvtk*-9.5 libraries + VTK CMake config come from the `vtk`
+    # package; the wrapper .so's resolve against them by soname at load time.
+    # Pinned to the exact version so the ABI matches (bump in lockstep).
+    - name: vtk
+      version: "9.5.0"
+    # pycvc-gl / the host import these wrappers against this interpreter.
+    - name: python311
+  host_tools:
+    - cmake
+    - ninja
+    - python311
+
+build:
+  # cvcGL + VTK Python are consumed on linux + windows (the pycvc-gl platforms;
+  # no macOS VTK bundle yet). Add macos when the vtk package gains a macOS build
+  # that pycvc-gl consumes.
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: windows
+      script: build.ps1
+
+package:
+  # ONLY the Python-specific artifacts — the C++ libs, headers, and CMake config
+  # are owned by the `vtk` package, so the two install into one prefix with no
+  # file overlap (the WRAP_PYTHON=OFF `vtk` build produces none of the below).
+  files:
+    # Python wrapping libraries (libvtkWrappingPythonCore, libvtkPythonInterpreter,
+    # libvtkPythonContext2D) — linux/macOS .so, windows import .lib + bin .dll.
+    - lib/libvtk*Python*
+    - lib/vtk*Python*.lib
+    - bin/vtk*Python*
+    # The importable Python package (site-packages layout differs per platform).
+    - lib/python*/site-packages/vtkmodules/
+    - lib/python*/site-packages/vtk.py
+    - Lib/site-packages/vtkmodules/
+    - Lib/site-packages/vtk.py
+    # C++↔Python bridge headers (only emitted with VTK_WRAP_PYTHON=ON) — they land
+    # in the SAME include/vtk-9.5 dir the `vtk` package's VTK::CommonCore already
+    # puts on a consumer's include path, so `#include "vtkPythonUtil.h"` needs no
+    # extra include dir.
+    - include/vtk-9.5/*Python*.h
+    - include/vtk-9.5/PyVTK*.h
+    - include/vtk-9.5/vtkSmartPyObject.h
+
+abi:
+  cxx_std: 17
+
+notes: >-
+  vtk-python does NOT ship VTK's CMake config: VTK's config
+  (lib/cmake/vtk-9.5/VTK-targets.cmake, vtk-config.cmake) is monolithic and
+  regenerated per build, enumerating only the modules that build produced — so a
+  WRAP_PYTHON=OFF `vtk` config cannot expose VTK::WrappingPythonCore and a second
+  package cannot merge targets into it without clobbering. Consumers therefore
+  keep find_package(VTK COMPONENTS ...) from the `vtk` package for the C++ side
+  and link the wrapping-core library explicitly, e.g.
+  find_library(VTK_WRAPPING_PYTHONCORE
+  NAMES vtkWrappingPythonCore<pyver>-9.5) — the lib carries the Python-ABI suffix
+  (e.g. libvtkWrappingPythonCore3.11-9.5.so); the vtkPythonUtil.h header is
+  already on the VTK include path. Python-ABI coupling: this recipe is cp311-only;
+  a python312/313 host needs a parallel vtk-python variant.
+
+  HERMETICITY / build model: this build.sh currently does a FULL VTK rebuild
+  (WRAP_PYTHON=ON) and PRUNES to the python artifacts. The wrappers are therefore
+  built against this recipe's own C++ rebuild (ABI-matched to `vtk` on a
+  consistent toolchain, not byte-identical). The fully hermetic design — reuse
+  `vtk`'s exact installed binaries — IS possible: VTK 9.5's vtk_module_wrap_python
+  supports wrapping imported/installed modules (the `vtk` package already ships
+  the *-hierarchy.txt files + vtkModuleWrapPython.cmake), so a driver project can
+  wrap the installed modules without rebuilding the C++. It additionally requires
+  building VTK::WrappingPythonCore / PythonInterpreter from the wrapping sources
+  against the installed VTK — a follow-up. (An earlier version of this note
+  claimed installed VTK cannot be wrapped; that is incorrect.)
