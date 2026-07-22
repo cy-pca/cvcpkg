@@ -86,6 +86,19 @@ properties:
       symmetric by construction.  Use this when several packages install
       the same files (a clobber) or are otherwise interchangeable.
 
+  requires_capabilities:
+    type: array
+    items:
+      type: string
+      pattern: "^[a-z][a-z0-9-]*$"
+    description: >
+      Host capabilities this package's build/runtime requires, e.g. `cuda`.
+      The resolver only selects a candidate whose `requires_capabilities` are a
+      subset of the host's probed capabilities, and (among a `provides` group)
+      prefers the candidate requiring the most — so a `-cuda` variant that
+      `provides` the same slot as its CPU peer wins on a CUDA host and is
+      filtered out elsewhere.  See platform capability probing / resolver.
+
   cross_toolchain:
     $ref: "#/$defs/cross_toolchain_block"
 

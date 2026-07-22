@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Validate packaging YAML files against their JSON-Schema definitions.
+"""Validate packaging YAML files — thin CLI shim over ``cvcpkg.validation``.
+
+The validator and its JSON schemas now live INSIDE the installed cvcpkg package
+(``cvcpkg.validation`` + ``cvcpkg/schemas/``), so ``cvcpkg validate`` runs from
+any repo with no libcvc-deps checkout.  This script keeps
+``python packaging/validate.py [target]`` working for THIS repo's CI, binding
+the keyword targets to this checkout's ``recipes/`` and ``packaging/``.
 
 Usage:
     python packaging/validate.py                       # validate everything
@@ -7,134 +13,45 @@ Usage:
     python packaging/validate.py recipes                # validate all recipes
     python packaging/validate.py recipes/zlib           # validate one recipe
 
-Requires: pip install pyyaml jsonschema
+Requires: pip install pyyaml jsonschema  (and cvcpkg importable)
 """
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
-try:
-    import yaml
-except ImportError:
-    sys.exit("ERROR: PyYAML is required.  pip install pyyaml")
+from cvcpkg import validation
 
-try:
-    import jsonschema
-    from jsonschema import Draft202012Validator
-except ImportError:
-    sys.exit("ERROR: jsonschema is required.  pip install jsonschema")
+# Re-exported so back-compat callers / tests can read the canonical value.
+_UNPARSEABLE_VERSION_GRANDFATHER = validation._UNPARSEABLE_VERSION_GRANDFATHER
 
-
-ROOT = Path(__file__).resolve().parent
-SCHEMAS = ROOT / "schemas"
-
-# Recipes whose minted version ("<upstream_version>+cvc.<rev>") is not valid
-# SemVer and so cannot be ordered by version_sort_key's parseable rank.  The gate
-# below RATCHETS: new recipes must parse, and this set may only shrink -- it is
-# now EMPTY, since the seven that predated the gate were normalized (openssh
-# 10.4p1->10.4.1, openssh-win 10.0.0.0->10.0.0, x264/x264-cli
-# 0.164.stable->0.164.0, jam/haiku-image r1beta5->1.0.0-beta.5, llvm-cbe
-# 0.0.0+git.<sha>->0.0.0-git.<sha>).  Do NOT add to it -- pick an
-# upstream_version that parses (dot-separated numeric components; a git hash or
-# tag goes in a "-<pre>" prerelease, never a second "+").
-_UNPARSEABLE_VERSION_GRANDFATHER: frozenset[str] = frozenset()
-
-
-def _load(path: Path) -> dict:
-    with open(path) as f:
-        return yaml.safe_load(f)
-
-
-def validate_components() -> list[str]:
-    """Validate packaging/components.yaml."""
-    schema = _load(SCHEMAS / "components-schema.yaml")
-    doc = _load(ROOT / "components.yaml")
-    errors: list[str] = []
-    v = Draft202012Validator(schema)
-    for e in sorted(v.iter_errors(doc), key=lambda x: list(x.absolute_path)):
-        errors.append(f"components.yaml: {'.'.join(str(p) for p in e.absolute_path)}: {e.message}")
-
-    # Cross-check: every dependency name must reference a known component.
-    if "components" in doc:
-        names = set(doc["components"].keys())
-        for comp_name, comp in doc["components"].items():
-            for dep in comp.get("dependencies", []):
-                if dep["name"] not in names:
-                    errors.append(
-                        f"components.yaml: {comp_name}.dependencies: "
-                        f"references unknown component '{dep['name']}'"
-                    )
-    return errors
+ROOT = Path(__file__).resolve().parent  # packaging/
+REPO = ROOT.parent  # repo root
+RECIPES = REPO / "recipes"
+COMPONENTS = ROOT / "components.yaml"
 
 
 def validate_recipe(recipe_dir: Path) -> list[str]:
-    """Validate one recipe.yaml against the recipe schema."""
-    recipe_file = recipe_dir / "recipe.yaml"
-    if not recipe_file.exists():
-        return [f"{recipe_dir}: missing recipe.yaml"]
-
-    schema = _load(SCHEMAS / "recipe-schema.yaml")
-    doc = _load(recipe_file)
-    errors: list[str] = []
-    v = Draft202012Validator(schema)
-    for e in sorted(v.iter_errors(doc), key=lambda x: list(x.absolute_path)):
-        errors.append(f"{recipe_file}: {'.'.join(str(p) for p in e.absolute_path)}: {e.message}")
-
-    # Check that referenced scripts exist.
-    if "build" in doc and "matrix" in doc["build"]:
-        for entry in doc["build"]["matrix"]:
-            script = recipe_dir / entry.get("script", "")
-            if not script.exists():
-                errors.append(f"{recipe_file}: build script '{entry['script']}' not found")
-
-    # Check that referenced patches exist.
-    for patch in doc.get("patches", []):
-        if not (recipe_dir / patch).exists():
-            errors.append(f"{recipe_file}: patch '{patch}' not found")
-
-    # The minted version must be orderable.  Everything that picks "the newest"
-    # -- resolver, installer, publish, the server catalog -- routes through
-    # semver.version_sort_key, which ranks unparseable versions BELOW every
-    # parseable one; a recipe that mints an unparseable version can therefore
-    # never be selected over any parseable sibling and silently loses.  Validate
-    # the exact string that gets published: "<upstream_version>+cvc.<rev>".
-    rec = doc.get("recipe", {})
-    name = rec.get("name", recipe_dir.name)
-    if (
-        "upstream_version" in rec
-        and "cvc_revision" in rec
-        and name not in (_UNPARSEABLE_VERSION_GRANDFATHER)
-    ):
-        full_version = f"{rec['upstream_version']}+cvc.{rec['cvc_revision']}"
-        try:
-            # Imported lazily so validate.py keeps running without cvcpkg on the
-            # path (it only needs pyyaml/jsonschema otherwise).
-            from cvcpkg.semver import Version
-
-            Version.parse(full_version)
-        except ImportError:
-            pass  # cvcpkg not importable here; the recipe-graph CI job covers it
-        except ValueError:
-            errors.append(
-                f"{recipe_file}: version {full_version!r} is not orderable SemVer "
-                "(version_sort_key would rank it below every parseable version). "
-                "Use a dot-separated, numeric upstream_version."
-            )
-
-    return errors
+    """Validate one recipe dir (schema, scripts, patches, version order)."""
+    return validation.validate_recipe_dir(Path(recipe_dir))
 
 
 def validate_all_recipes() -> list[str]:
-    """Find and validate every recipe under recipes/."""
-    recipes_root = ROOT.parent / "recipes"
+    """Validate every recipe under this repo's recipes/, incl. cross-deps."""
+    if not RECIPES.is_dir():
+        return [f"No recipes/ directory found at {RECIPES}"]
+    rmap = validation.build_recipe_map([RECIPES])
+    universe = validation.known_targets(rmap)
     errors: list[str] = []
-    if not recipes_root.is_dir():
-        return [f"No recipes/ directory found at {recipes_root}"]
-    for d in sorted(recipes_root.iterdir()):
-        if d.is_dir() and not d.name.startswith("_"):
-            errors.extend(validate_recipe(d))
+    for name in sorted(rmap):
+        errors += validation.validate_recipe_dir(rmap[name])
+    errors += validation.validate_cross_deps(rmap, universe)
     return errors
+
+
+def validate_components() -> list[str]:
+    """Validate this repo's packaging/components.yaml."""
+    return validation.validate_components_file(COMPONENTS)
 
 
 def main() -> int:
@@ -142,24 +59,14 @@ def main() -> int:
     errors: list[str] = []
 
     if target in ("all", "components"):
-        errors.extend(validate_components())
+        errors += validate_components()
 
-    if target == "all" or target == "recipes":
-        errors.extend(validate_all_recipes())
+    if target in ("all", "recipes"):
+        errors += validate_all_recipes()
     elif target.startswith("recipes/"):
-        recipe_dir = ROOT.parent / target
-        errors.extend(validate_recipe(recipe_dir))
+        errors += validate_recipe(RECIPES / target.split("/", 1)[1])
 
-    if errors:
-        print(f"\n{'='*60}")
-        print(f"VALIDATION FAILED — {len(errors)} error(s):\n")
-        for e in errors:
-            print(f"  ✗ {e}")
-        print()
-        return 1
-    else:
-        print("✓ All validations passed.")
-        return 0
+    return validation.report(errors)
 
 
 if __name__ == "__main__":

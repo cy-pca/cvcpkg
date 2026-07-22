@@ -18,13 +18,16 @@ import yaml
 
 jsonschema = pytest.importorskip("jsonschema")
 
-SCHEMA_PATH = Path(__file__).resolve().parents[2] / "packaging" / "schemas" / "recipe-schema.yaml"
+# The recipe schema now ships inside the cvcpkg package; load it the same way
+# the validator does (importlib.resources), so this test tracks what ships.
+from cvcpkg.validation import load_schema  # noqa: E402
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture(scope="module")
 def schema():
-    with open(SCHEMA_PATH, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+    return load_schema("recipe")
 
 
 def _recipe(**over):
@@ -170,7 +173,7 @@ class TestShippedRecipesValidate:
     def test_every_shipped_recipe_matches_the_schema(self, schema):
         # Mirrors packaging/validate.py so schema drift fails the unit suite
         # too, not only the separate CI step.
-        recipes_dir = SCHEMA_PATH.parents[2] / "recipes"
+        recipes_dir = REPO_ROOT / "recipes"
         bad = []
         for d in sorted(recipes_dir.iterdir()):
             f = d / "recipe.yaml"
@@ -185,7 +188,7 @@ class TestShippedRecipesValidate:
         assert not bad, "recipes failing schema:\n  " + "\n  ".join(bad)
 
 
-README_PATH = SCHEMA_PATH.parents[2] / "README.md"
+README_PATH = REPO_ROOT / "README.md"
 
 # A dummy 64-hex digest so placeholder shas (e.g. "<sha256-of-tarball>") pass
 # the schema's ``^[0-9a-f]{64}$`` pattern; the README examples are structural,

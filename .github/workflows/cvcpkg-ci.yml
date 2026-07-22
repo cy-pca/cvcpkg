@@ -118,7 +118,12 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install pyyaml jsonschema
+        # packaging/validate.py is now a thin shim over cvcpkg.validation (the
+        # validator + schemas moved into the package), so cvcpkg must be
+        # importable here — install it editable alongside the runtime deps.
+        run: |
+          pip install pyyaml jsonschema
+          pip install -e .
 
       - name: Run validation
         run: python packaging/validate.py

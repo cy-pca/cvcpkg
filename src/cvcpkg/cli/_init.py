@@ -240,4 +240,4 @@ def init(
     click.echo("Next steps:")
     click.echo("  1. Set source.url and source.sha256 in recipe.yaml.")
     click.echo("  2. List dependencies under depends: and adjust package.files.")
-    click.echo(f"  3. Validate: python packaging/validate.py {target}")
+    click.echo(f"  3. Validate: cvcpkg validate {target}")

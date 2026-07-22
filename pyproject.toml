@@ -27,6 +27,9 @@ classifiers = [
 packages = [{ include = "cvcpkg", from = "src" }]
 include = [
     { path = "src/cvcpkg/recipes", format = ["sdist", "wheel"] },
+    # Packaging JSON-Schemas (recipe/components/manifest) ship in the wheel so
+    # `cvcpkg validate` loads them via importlib.resources from any repo's CI.
+    { path = "src/cvcpkg/schemas", format = ["sdist", "wheel"] },
     { path = "src/cvcpkg/server/assets", format = ["sdist", "wheel"] },
     { path = "cvcpkg_build_backend.py", format = "sdist" },
 ]

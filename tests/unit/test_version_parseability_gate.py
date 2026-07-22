@@ -29,10 +29,13 @@ def _load_validate():
     return mod
 
 
-validate = _load_validate()
+# packaging/validate.py is now a thin shim over cvcpkg.validation, so it needs
+# cvcpkg importable — skip the whole module (rather than error) when it is not.
 pytest.importorskip("cvcpkg.semver", reason="the gate needs cvcpkg on the path")
 from cvcpkg.builder import list_recipes  # noqa: E402
 from cvcpkg.semver import Version  # noqa: E402
+
+validate = _load_validate()
 
 
 def _actual_unparseable() -> set[str]:

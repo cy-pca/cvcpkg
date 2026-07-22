@@ -11,11 +11,12 @@ from cvcpkg.cli import main
 
 jsonschema = pytest.importorskip("jsonschema")
 
-_SCHEMA = Path(__file__).resolve().parents[2] / "packaging" / "schemas" / "recipe-schema.yaml"
+# The recipe schema now ships inside the cvcpkg package.
+from cvcpkg.validation import load_schema  # noqa: E402
 
 
 def _validate_recipe(recipe_yaml: Path) -> None:
-    schema = yaml.safe_load(_SCHEMA.read_text())
+    schema = load_schema("recipe")
     doc = yaml.safe_load(recipe_yaml.read_text())
     jsonschema.Draft202012Validator(schema).validate(doc)
 

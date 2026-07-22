@@ -1691,36 +1691,30 @@ the terminal experience worthy of the web front end.
       supported model: a project carries its recipes and the related
       scripts/media as part of its source tree, exactly like this repo's
       `recipes/` directory (composes with Phase 17's declared artifacts).
-- [ ] **`cvcpkg validate` accepts an arbitrary set of recipe
-      directories.**  Today `validate` takes only a fixed keyword
-      `TARGET` (`all | components | recipes | recipes/<name>`), carries
-      no `--recipes-dir` overlay, and delegates in-process to
-      `packaging/validate.py`, which hard-wires the recipe root to a
-      libcvc-deps checkout — so it errors with "cannot find
-      packaging/validate.py -- run from the libcvc-deps repo root"
-      anywhere else, and the validator plus its JSON schemas ship only
-      in this repo, never in the pip-installed `cvcpkg`.  A project
-      therefore cannot validate its own `cvcpkg/recipes/<name>/` in its
-      own CI without checking out libcvc-deps and co-locating the recipe
-      under `recipes/` — the very co-location the ownership policy
-      forbids
-      ([docs/recipe-authoring.md](docs/recipe-authoring.md#recipe-ownership--where-a-recipe-lives)).
-      Give `validate` the same recipe surface as `build`/`pack`:
-      repeatable `--recipes-dir` plus a path `TARGET` (a single
-      recipe dir or a whole `recipes/` dir), validated over the merged
-      set with later-dir-wins, and move the checking logic + schemas
-      into the installed package (loaded via `importlib.resources`,
-      dropping the `packaging/validate.py` walk-up) so it runs from any
-      repo's CI (composes with the `--recipes-dir` overlay and this
-      phase's `CVCPKG_RECIPES_PATH` discovery).  Acceptance: in a clean
-      venv with only `pip install cvcpkg` and no libcvc-deps checkout,
-      `cvcpkg validate ./cvcpkg/recipes/libcvc` and `cvcpkg validate
-      --recipes-dir cvcpkg/recipes --recipes-dir ../shared/recipes` each
-      validate the given dir(s) — schema, build-script/patch existence,
-      minted-version order, and cross-recipe missing-dependency — and
-      exit nonzero on any error; `--no-default-recipes` restricts to the
-      given dirs; and the existing keyword targets plus `python
-      packaging/validate.py` keep working unchanged for this repo's CI.
+- [x] ~~**`cvcpkg validate` accepts an arbitrary set of recipe
+      directories.**~~ — ✅ **Done** (#349). The checking logic and the
+      JSON schemas moved **into the installed package** (`cvcpkg/validation.py`
+      + `cvcpkg/schemas/`, loaded via `importlib.resources`), so `validate` no
+      longer walks up to a libcvc-deps checkout and now runs from any repo's CI
+      with `pip install cvcpkg` alone. `validate` gained the same recipe surface
+      as `build`/`pack`: repeatable `--recipes-dir` (merged, later-dir-wins),
+      `--no-default-recipes`, and a path `TARGET` — a single recipe dir or a
+      whole `recipes/` dir — alongside the existing keyword targets. It checks
+      schema, build-script/patch existence, minted-version order, and
+      **cross-recipe missing-dependency** over the merged set (a name must be a
+      recipe or a `provides` slot; a single-recipe path also resolves its
+      siblings). `packaging/validate.py` is now a thin shim over
+      `cvcpkg.validation`, so `python packaging/validate.py [target]` keeps
+      working for this repo's CI. Acceptance met: in a clean venv,
+      `cvcpkg validate ./cvcpkg/recipes/libcvc` and
+      `cvcpkg validate --recipes-dir cvcpkg/recipes --recipes-dir ../shared/recipes`
+      each validate the given dir(s) and exit nonzero on any error. Composes
+      with `--recipes-dir` today and with the `CVCPKG_RECIPES_PATH` discovery
+      once that lands. It immediately caught real defects that had been
+      unvalidatable in downstream libcvc: `-cuda` recipes using
+      `requires_capabilities` (a fully-wired field the recipe schema rejected —
+      now added) and three `-cuda` recipes declaring build scripts that did not
+      exist.
 - [ ] **Developer loop for downstream users** — an easy workflow to do a
       local build of a project, debug it, and generate + add recipe patches
       (`cvcpkg`-assisted patch generation rather than hand-maintained diffs).

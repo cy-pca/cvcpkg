@@ -99,8 +99,11 @@ package:
 ```
 
 The authoritative schema is
-[`packaging/schemas/recipe-schema.yaml`](../packaging/schemas/recipe-schema.yaml);
-`packaging/validate.py` enforces it in CI.
+[`src/cvcpkg/schemas/recipe-schema.yaml`](../src/cvcpkg/schemas/recipe-schema.yaml)
+(it ships inside the `cvcpkg` package); `cvcpkg validate` — and its shim
+`packaging/validate.py` — enforce it in CI. A downstream project can validate
+its own recipes with `cvcpkg validate ./cvcpkg/recipes/<name>` or
+`cvcpkg validate --recipes-dir cvcpkg/recipes`, no libcvc-deps checkout required.
 
 ### Key fields
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import os as _os
-import sys
 from pathlib import Path
 
 import click
@@ -899,47 +898,46 @@ def info(component: str) -> None:
 
 @cli.command()
 @click.argument("target", default="all")
-def validate(target: str) -> None:
+@_recipes_dir_opt
+@_no_default_recipes_opt
+def validate(target: str, recipes_dirs: tuple[str, ...], no_default_recipes: bool) -> None:
     """Validate packaging YAML files against their JSON Schemas.
 
-    Checks recipe.yaml files for schema conformance, verifies that
-    referenced build scripts and patches exist, and validates the
-    dependency graph for cycles or missing dependencies.
+    Checks recipe.yaml files for schema conformance, verifies that referenced
+    build scripts and patches exist, checks the minted version is orderable
+    SemVer, and checks every cross-recipe dependency resolves to a recipe (or a
+    provided slot) in the merged recipe set.
+
+    The validator and its schemas ship inside cvcpkg, so this runs from any
+    repo's CI with no libcvc-deps checkout — point it at your own recipes with
+    a path TARGET or --recipes-dir.
 
     \b
     TARGET can be:
-      all              Validate everything (default)
-      components       Validate components.yaml only
-      recipes          Validate all recipe.yaml files
-      recipes/<name>   Validate a single recipe
+      all               Validate everything (default)
+      components        Validate components.yaml only
+      recipes           Validate all recipes on the search path
+      recipes/<name>    Validate a single recipe by name
+      <path>            A recipe dir (has recipe.yaml) or a recipes/ dir
+
+    \b
+    The recipe search path is the default (bundled/discovered) recipes plus any
+    --recipes-dir overlays (later wins); --no-default-recipes drops the default
+    so only the given dirs are used.  Cross-recipe dependency checks run over the
+    merged set, so a downstream recipe's deps on this repo's packages resolve as
+    long as the default (or an overlay) provides them.
 
     \b
     Examples:
       cvcpkg validate
       cvcpkg validate recipes/grpc
+      cvcpkg validate ./cvcpkg/recipes/libcvc
+      cvcpkg validate --recipes-dir cvcpkg/recipes --recipes-dir ../shared/recipes
     """
-    import importlib.util
+    from cvcpkg import validation
 
-    pkg_dir = Path(__file__).resolve().parent
-    for ancestor in pkg_dir.parents:
-        validate_script = ancestor / "packaging" / "validate.py"
-        if validate_script.exists():
-            break
-    else:
-        validate_script = Path.cwd() / "packaging" / "validate.py"
-
-    if not validate_script.exists():
-        raise click.ClickException(
-            "cannot find packaging/validate.py -- run from the libcvc-deps repo root."
-        )
-
-    spec = importlib.util.spec_from_file_location("validate", validate_script)
-    if spec is None or spec.loader is None:
-        raise click.ClickException("cannot load packaging/validate.py")
-    mod = importlib.util.module_from_spec(spec)
-    sys.argv = ["cvcpkg-validate", target]
-    spec.loader.exec_module(mod)
-    ret = mod.main()
+    errors = validation.run(target, extra_dirs=recipes_dirs, no_default=no_default_recipes)
+    ret = validation.report(errors)
     if ret != 0:
         raise SystemExit(ret)
 

@@ -6,7 +6,7 @@
 # applies to, and the inter-component dependency edges consumed by the
 # resolver and the CI packaging stage.
 #
-# Schema: packaging/schemas/components-schema.yaml (JSON-Schema in YAML)
+# Schema: src/cvcpkg/schemas/components-schema.yaml (JSON-Schema in YAML)
 
 schema_version: 1
 
