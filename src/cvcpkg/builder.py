@@ -743,11 +743,21 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
 
 
 def _patch_linux_rpath(install_dir: Path) -> None:
-    """Set RPATH to $ORIGIN on all shared libraries in *install_dir*.
+    """Prepend ``$ORIGIN`` to the RPATH of shared libraries in *install_dir*.
 
-    This makes Linux shared-library bundles relocatable without
-    requiring LD_LIBRARY_PATH at runtime.  Only runs when patchelf
-    is available; silently skips otherwise.
+    This makes Linux shared-library bundles relocatable without requiring
+    LD_LIBRARY_PATH at runtime.  Only runs when patchelf is available;
+    silently skips otherwise.
+
+    Crucially it PRESERVES any pre-existing ``$ORIGIN``-relative RPATH
+    entries rather than clobbering them.  Python wheels bundle their native
+    dependencies in a sibling directory and point at it with an RPATH like
+    ``$ORIGIN/../../numpy.libs`` (numpy's OpenBLAS, scipy's libgfortran, …);
+    the old blind ``--remove-rpath`` + ``--set-rpath $ORIGIN`` destroyed that
+    link, so the bundled ``libscipy_openblas*.so`` became unreachable and
+    ``import numpy`` failed with "cannot open shared object file".  Absolute
+    (build-temp) RPATH entries are still dropped — only relocatable
+    ``$ORIGIN``-relative ones are kept.
     """
     patchelf = shutil.which("patchelf")
     if not patchelf:
@@ -758,12 +768,17 @@ def _patch_linux_rpath(install_dir: Path) -> None:
     for so in lib_dir.rglob("*.so*"):
         if not so.is_file() or so.is_symlink():
             continue
-        subprocess.run(
-            [patchelf, "--remove-rpath", str(so)],
+        existing = subprocess.run(
+            [patchelf, "--print-rpath", str(so)],
             capture_output=True,
-        )
+            text=True,
+        ).stdout.strip()
+        # Keep only relocatable ($ORIGIN-relative) entries, drop bare $ORIGIN
+        # (re-added first) and any absolute build-temp paths.
+        kept = [e for e in existing.split(":") if e.startswith("$ORIGIN") and e != "$ORIGIN"]
+        new_rpath = ":".join(["$ORIGIN", *kept])
         subprocess.run(
-            [patchelf, "--set-rpath", "$ORIGIN", str(so)],
+            [patchelf, "--set-rpath", new_rpath, str(so)],
             capture_output=True,
         )
 
