@@ -1408,6 +1408,61 @@ With `numpy`, `scipy`, and `F2Dock` all declaring `depends: [blas, lapack]`:
 - **Older x86-64 without AVX2:** mkl/blis pruned by `requires_isa` → **openblas** (the portable
   default always survives).
 
+#### Worked example — the libcvc CUDA variants (`libcvc-cuda`, `pycvc-cuda`, …)
+
+The same machinery selects the **CUDA/GPU build** of the CVC stack. Here the "peers" are not rival
+implementations of one library but the **same package built two ways** — a CPU build and a GPU
+build — gated on a **GPU** capability rather than a CPU ISA.
+
+Where CUDA lives, and which packages need a `-cuda` peer:
+
+- **`libcvc` / `libcvc-cuda`** — all CUDA code lives in libcvc *core* (`voxels_kernels.cu` +
+  `#ifdef CVC_USING_CUDA` in the volume headers). `CVC_USING_CUDA` is a **`PUBLIC` compile
+  definition on `cvc::cvc`**, so everything that links libcvc inherits it. Both recipes
+  `provides: [libcvc]`; `libcvc-cuda` adds `requires_capabilities: [cuda]`.
+- **`pycvc` / `pycvc-cuda`** — the SWIG bindings compile `pycvc_volume.cpp`, whose
+  `on_gpu()`/`cuda_ptr()`/`enable_cuda()` bodies are `#ifdef CVC_USING_CUDA` (real device pointers
+  vs host stubs). Built against `libcvc-cuda` the GPU bodies compile in; the public Python API is
+  identical. Same slot (`provides: [pycvc]`, `requires_capabilities: [cuda]`).
+- **`pycvc-gl` / `pycvc-gl-cuda`** — the scene bindings also compile `pycvc_volume.cpp`, so they
+  are variant-dependent for the same reason.
+- **`cvcgl`** — the C++ scene-graph library has **no CUDA code of its own**; it only links
+  `cvc::cvc`. It should ideally be a **single package** used with either libcvc variant (see the ABI
+  note).
+
+**Rule.** cvcpkg ships prebuilt bundles keyed by `(name, platform, config, link)` with **no CUDA
+axis**, so a `-cuda` peer (a distinct bundle) is needed for exactly those packages whose *compiled
+output* changes when `CVC_USING_CUDA` flips: `libcvc` (kernels), `pycvc` and `pycvc-gl` (the
+`#ifdef` facade bodies). A package with no CUDA-gated code needs **no** peer — *provided the libcvc
+ABI it consumes is identical in both variants* (next paragraph).
+
+**ABI-peer requirement (a real gotcha).** Phase 10 requires peers to honour one ABI contract. The
+CUDA switch currently **violates it**: `voxels`'s last member is `#ifdef CVC_USING_CUDA
+std::shared_ptr<void> _cuda_unified_ptr; #else void* …`, so `sizeof(voxels)` differs by 8 bytes
+between the CPU and GPU builds, which shifts `cvc::volume::_boundingBox` — read by cvcGL through the
+**inline** `boundingBox()`. So a CPU-built `cvcgl` is **not** ABI-compatible with `libcvc-cuda`. Two
+ways to satisfy the peer contract:
+  1. **Make `cvc::volume`'s ABI variant-invariant** — always reserve the `shared_ptr<void>` slot,
+     even in host-only builds (it stays empty). Then the CPU and GPU libcvc are true ABI peers,
+     `cvcgl` (and volrover3, any pure-C++ consumer) stays a **single package**, and only the
+     CUDA-code-bearing packages (`libcvc`, `pycvc`, `pycvc-gl`) get `-cuda` peers. **Recommended.**
+  2. Rebuild every C++ consumer per variant (`cvcgl-cuda`, …) purely to match the ABI —
+     combinatorial; avoid.
+
+**Today (pre–Phase 10).** `libcvc-cuda` and `pycvc-cuda` exist with `provides:` +
+`requires_capabilities: [cuda]`, and the CPU recipes now declare their `provides:` slot. But nothing
+reads `requires_capabilities` at resolve time and there is no GPU probe (the field currently only
+influences *builder* scheduling), so the `-cuda` variants are **installed explicitly** on GPU hosts.
+`pycvc-gl-cuda` is deferred pending resolution (1) so it can keep the single `cvcgl`.
+
+**After Phase 10.** A `capabilities/cuda.yaml` gates providers on the HardwareProfile's
+`gpu: {vendor: nvidia, arch}` (the profile already carries `gpu`) — the GPU analogue of
+`requires_isa`. Consumers depend on the **virtual** `libcvc` / `pycvc` / `pycvc-gl`; on an NVIDIA
+host the solver concretizes each to its `-cuda` peer (mutex-exclusive with the CPU build), on any
+other host to the CPU build. `--provider libcvc=libcvc-cuda` and `--hardware-profile` force or
+cross-target it, exactly like BLAS. With resolution (1) done, GPU selection touches only
+`libcvc`/`pycvc`/`pycvc-gl`; `cvcgl` is built once and works with both.
+
 #### Composition with the rest of the roadmap
 
 - **Phase 7 (Python).** A numpy/scipy `python_sdist` that `depends: [blas]` builds against whichever
