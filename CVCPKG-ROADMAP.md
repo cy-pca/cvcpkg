@@ -685,6 +685,29 @@ scaling and federation:
   *updates* (a re-published public variant, same key, new content) and
   multi-upstream fan-in are future work; the invariants above keep the public
   catalog safe in the meantime.
+- **Multi-tenant / shared builder fleet** — today the scheduler enforces strict
+  1:1 org isolation (`_choose_builder` in `server/app.py` skips any builder whose
+  `org_slug` differs from the job's, and a builder registers with a single
+  `--org`), so each machine is bound to exactly one namespace — the CVC dev
+  cluster can't use the *same* builders for public packages and `cvc`-org
+  packages. Keep the **package** namespaces separate (the invariants above) while
+  **pooling the builder fleet across them**:
+  - A builder advertises a SET of served namespaces instead of one `org_slug` —
+    e.g. `["", "cvc", "cypca"]` (the public namespace **plus** two orgs); the
+    scheduler matches a job to any builder whose served set contains the job's
+    `org_slug`. So dedicated org builders can also take public jobs, and one
+    machine can serve several groups at once.
+  - **Multi-server** — a builder can register with and poll more than one cvcpkg
+    server, so a single fleet serves multiple registries/groups (e.g. the primary
+    `cvcpkg.org` for public work and an org's edge cluster for its private work).
+  - **Isolation preserved** — pooling *execution* must not pool *secrets*: an
+    org's private sources/tokens and a job's build outputs are scoped per job, so
+    a builder that runs a `cvc` job then a public job never leaks one into the
+    other. The catalog invariants are unchanged (org packages never populate or
+    shadow the public namespace) — only build execution is shared.
+
+  Composes with the build-time capability routing (GPU/`cuda`) item: a job is
+  matched on (platform, arch, required capabilities, **served org/server**).
 - **Mirror protocol** — institutions can run local read-only mirrors
   (`--mirror-mode`) that sync from a primary. Useful for pure read-only
   air-gapped caches; the read-write variant is the *edge* role above.
