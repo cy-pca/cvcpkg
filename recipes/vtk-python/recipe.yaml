@@ -109,8 +109,20 @@ notes: >-
   package cannot merge targets into it without clobbering. Consumers therefore
   keep find_package(VTK COMPONENTS ...) from the `vtk` package for the C++ side
   and link the wrapping-core library explicitly, e.g.
-  find_library(VTK_WRAPPING_PYTHONCORE NAMES vtkWrappingPythonCore-9.5) — the
-  vtkPythonUtil.h header is already on the VTK include path. Python-ABI coupling:
-  this recipe is cp311-only; a python312/313 host needs a parallel vtk-python
-  variant. Build time is a FULL VTK rebuild (long) because VTK wraps its modules
-  in-tree — there is no way to wrap an already-installed VTK.
+  find_library(VTK_WRAPPING_PYTHONCORE
+  NAMES vtkWrappingPythonCore<pyver>-9.5) — the lib carries the Python-ABI suffix
+  (e.g. libvtkWrappingPythonCore3.11-9.5.so); the vtkPythonUtil.h header is
+  already on the VTK include path. Python-ABI coupling: this recipe is cp311-only;
+  a python312/313 host needs a parallel vtk-python variant.
+
+  HERMETICITY / build model: this build.sh currently does a FULL VTK rebuild
+  (WRAP_PYTHON=ON) and PRUNES to the python artifacts. The wrappers are therefore
+  built against this recipe's own C++ rebuild (ABI-matched to `vtk` on a
+  consistent toolchain, not byte-identical). The fully hermetic design — reuse
+  `vtk`'s exact installed binaries — IS possible: VTK 9.5's vtk_module_wrap_python
+  supports wrapping imported/installed modules (the `vtk` package already ships
+  the *-hierarchy.txt files + vtkModuleWrapPython.cmake), so a driver project can
+  wrap the installed modules without rebuilding the C++. It additionally requires
+  building VTK::WrappingPythonCore / PythonInterpreter from the wrapping sources
+  against the installed VTK — a follow-up. (An earlier version of this note
+  claimed installed VTK cannot be wrapped; that is incorrect.)

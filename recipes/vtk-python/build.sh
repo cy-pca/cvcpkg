@@ -61,3 +61,45 @@ cmake --install "${CVC_BUILD_DIR}"
 if command -v cvc_rewrite_install_paths >/dev/null 2>&1; then
     cvc_rewrite_install_paths || true
 fi
+
+# ── PRUNE to python-only artifacts (CRITICAL) ───────────────────────────────
+# stage_bundle (builder.py) ships the ENTIRE install tree — `package.files` is
+# NOT a filter (it is parsed but unused). Without this prune, vtk-python would
+# ship a full, divergent VTK that FILE-CONFLICTS with the `vtk` package and
+# defeats the whole point of the split. Keep ONLY the Python wrapper artifacts
+# (the `package.files` set); everything else is owned by the `vtk` package.
+#
+# HERMETICITY NOTE: even pruned, the wrappers here are compiled against THIS
+# recipe's from-scratch VTK C++ rebuild, not the exact `.so` bytes the `vtk`
+# package ships. On a consistent fleet toolchain they are ABI-matched, but the
+# fully hermetic design is to WRAP THE INSTALLED vtk (VTK 9.5 supports it:
+# vtk_module_wrap_python has an imported-target path and the vtk package already
+# ships the hierarchy files + vtkModuleWrapPython.cmake). That path additionally
+# requires building VTK::WrappingPythonCore / PythonInterpreter from the wrapping
+# sources against the installed VTK — a follow-up. (The recipe.yaml's earlier
+# claim that installed VTK cannot be wrapped is incorrect.)
+_keep() { # copy $1 (glob, relative to install dir) into the keep-stage if present
+  for _f in $1; do
+    [ -e "${_f}" ] || continue
+    mkdir -p "${_KEEP}/$(dirname "${_f}")"
+    cp -a "${_f}" "${_KEEP}/${_f}"
+  done
+}
+_KEEP="$(mktemp -d)"
+cd "${CVC_INSTALL_DIR}"
+_keep 'lib/libvtk*Python*'
+_keep 'lib/vtk*Python*.lib'
+_keep 'bin/vtk*Python*'
+_keep 'lib/python*/site-packages/vtkmodules'
+_keep 'lib/python*/site-packages/vtk.py'
+_keep 'Lib/site-packages/vtkmodules'
+_keep 'Lib/site-packages/vtk.py'
+_keep 'include/vtk-9.5/*Python*.h'
+_keep 'include/vtk-9.5/PyVTK*.h'
+_keep 'include/vtk-9.5/vtkSmartPyObject.h'
+# Replace the install tree with only the kept python artifacts.
+find "${CVC_INSTALL_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+cp -a "${_KEEP}/." "${CVC_INSTALL_DIR}/"
+rm -rf "${_KEEP}"
+echo "vtk-python: pruned to python-only artifacts:"
+find "${CVC_INSTALL_DIR}" -maxdepth 3 \( -name 'libvtk*Python*' -o -name 'vtkPythonUtil.h' -o -name 'vtkmodules' \) | head
