@@ -28,11 +28,21 @@ description: |
   the caller can fall back to building from source.
 
 inputs:
+  recipe:
+    description: >
+      Path (in the *consumer* repo) to a recipe — a recipe.yaml, a directory
+      containing one, or a recipe name — whose declared dependency closure
+      (build + runtime deps) is installed via `cvcpkg install-deps`. This is the
+      "just recipes" path: the recipe is the single source of truth for deps, so
+      no separate cvc-requirements.yaml is needed. Takes precedence over
+      `requirements` when both are set.
+    required: false
+    default: ''
   requirements:
     description: >
-      Path to the cvc-requirements.yaml file in the *consumer* repo.
-      If empty, uses the default cvc-requirements.yaml shipped with
-      libcvc-deps.
+      DEPRECATED (prefer `recipe`). Path to the cvc-requirements.yaml file in the
+      *consumer* repo. If empty (and `recipe` is unset), uses the default
+      cvc-requirements.yaml shipped with libcvc-deps.
     required: false
     default: ''
   build_type:
@@ -104,6 +114,7 @@ runs:
       id: install
       shell: bash
       env:
+        LCD_RECIPE:       ${{ inputs.recipe }}
         LCD_REQUIREMENTS: ${{ inputs.requirements }}
         LCD_BUILD_TYPE:   ${{ inputs.build_type }}
         LCD_LINK:         ${{ inputs.link }}
@@ -146,30 +157,46 @@ runs:
         fi
         mkdir -p "$prefix"
 
-        # --- Resolve requirements file ---
-        reqs="${LCD_REQUIREMENTS}"
-        if [ -z "$reqs" ]; then
-          reqs="_libcvc-deps/cvc-requirements.yaml"
-        fi
-
-        if [ ! -f "$reqs" ]; then
-          echo "cvcpkg-install: requirements file not found: $reqs"
-          echo "path=" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-
-        # --- Build cvcpkg arguments ---
         config=$(echo "${LCD_BUILD_TYPE}" | tr '[:upper:]' '[:lower:]')
 
-        cmd=(
-          cvcpkg install
-          --from "$reqs"
-          --prefix "$prefix"
-          --platform "$platform"
-          --arch "$arch"
-          --config "$config"
-          --link "${LCD_LINK}"
-        )
+        # --- Build cvcpkg arguments: recipe deps ("just recipes") or a
+        #     cvc-requirements.yaml (deprecated). `recipe` wins when both set. ---
+        if [ -n "${LCD_RECIPE}" ]; then
+          if [ ! -e "${LCD_RECIPE}" ]; then
+            # A bare name (resolved against the recipes dir) is also valid, but a
+            # path input that doesn't exist is almost always a mistake — surface it.
+            echo "cvcpkg-install: recipe path not found: ${LCD_RECIPE}"
+            echo "path=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cmd=(
+            cvcpkg install-deps "${LCD_RECIPE}"
+            --prefix "$prefix"
+            --platform "$platform"
+            --arch "$arch"
+            --config "$config"
+            --link "${LCD_LINK}"
+          )
+        else
+          reqs="${LCD_REQUIREMENTS}"
+          if [ -z "$reqs" ]; then
+            reqs="_libcvc-deps/cvc-requirements.yaml"
+          fi
+          if [ ! -f "$reqs" ]; then
+            echo "cvcpkg-install: requirements file not found: $reqs"
+            echo "path=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cmd=(
+            cvcpkg install
+            --from "$reqs"
+            --prefix "$prefix"
+            --platform "$platform"
+            --arch "$arch"
+            --config "$config"
+            --link "${LCD_LINK}"
+          )
+        fi
 
         if [ -n "${LCD_CATALOG_URL}" ]; then
           cmd+=(--catalog "${LCD_CATALOG_URL}")

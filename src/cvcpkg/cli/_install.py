@@ -611,6 +611,179 @@ def _check_conflicts(
                 )
 
 
+# ── install-deps ────────────────────────────────────────────────
+
+
+@cli.command("install-deps")
+@click.argument("recipe")
+@_prefix_opt
+@click.option(
+    "--release",
+    metavar="VER",
+    help="Pin to a specific libcvc-deps release version (e.g. 1.2.0).",
+)
+@_platform_opt
+@click.option(
+    "--arch",
+    type=click.Choice(_VALID_ARCHES, case_sensitive=False),
+    default="auto",
+    help="Target architecture.  'auto' detects the current CPU.",
+)
+@_config_opt
+@_link_opt
+@click.option(
+    "--catalog", metavar="URL", help="Override catalog URL or path to a local catalog YAML file."
+)
+@click.option(
+    "--catalog-revision", type=int, metavar="REV", help="Pin to a specific catalog revision number."
+)
+@click.option(
+    "--source",
+    type=click.Choice(["auto", "server", "github"], case_sensitive=False),
+    default="auto",
+    help="Catalog source strategy (see 'cvcpkg install').",
+)
+@click.option("--ignore-abi", is_flag=True, help="Skip ABI compatibility checks.")
+@click.option(
+    "--verify-signatures/--no-verify-signatures",
+    default=False,
+    help="Verify Ed25519 signatures on downloaded archives when present.",
+)
+@click.option(
+    "--require-signatures",
+    is_flag=True,
+    default=False,
+    help="Require a valid Ed25519 signature on every archive.",
+)
+@click.option(
+    "--fallback-to-source/--no-fallback-to-source",
+    default=False,
+    help="Build from source recipe when no prebuilt binary is available.",
+)
+@_recipes_dir_opt
+@_no_default_recipes_opt
+@_local_opt
+@click.option(
+    "--include-host-tools",
+    is_flag=True,
+    default=False,
+    help="Also install the recipe's host_tools deps (cmake/ninja/swig/…). Off by "
+    "default: those are build tools, normally provided by the system/CI.",
+)
+@click.option(
+    "--trust-mirror/--no-trust-mirror",
+    default=None,
+    help="Accept a mirror's ruling over its upstream's (see 'cvcpkg install').",
+)
+def install_deps(
+    recipe: str,
+    prefix: str,
+    release: str | None,
+    platform: str,
+    arch: str,
+    config: str,
+    link: str,
+    catalog: str | None,
+    catalog_revision: int | None,
+    source: str,
+    ignore_abi: bool,
+    verify_signatures: bool,
+    require_signatures: bool,
+    fallback_to_source: bool,
+    recipes_dirs: tuple[str, ...],
+    no_default_recipes: bool,
+    local_mode: bool,
+    include_host_tools: bool,
+    trust_mirror: bool | None,
+) -> None:
+    """Install a recipe's dependency closure into --prefix.
+
+    "Just recipes": instead of listing components in a cvc-requirements.yaml,
+    point at a recipe and cvcpkg installs the components it depends on — its
+    build + runtime deps, transitively resolved — into --prefix, so you can build
+    the recipe's own source (e.g. a CI checkout of it) against them.
+
+    RECIPE is a path to a recipe.yaml, a directory containing one, or a recipe
+    name resolved against the default / --recipes-dir recipes.
+
+    Host-tool deps (cmake/ninja/swig/…) are excluded by default — provide those
+    from the system/CI; pass --include-host-tools to install them too.  All other
+    flags mirror 'cvcpkg install' and are forwarded to it.
+
+    \b
+    Example — install libcvc's deps, then build libcvc against them:
+      cvcpkg install-deps cvcpkg/recipes/libcvc --prefix ./deps --config release
+      cvcpkg build libcvc --recipes-dir cvcpkg/recipes --no-deps --prefix ./deps
+      # (or drive CMake directly: -DCMAKE_PREFIX_PATH=$PWD/deps)
+    """
+    from cvcpkg.builder import Recipe, _dep_names_for_role, find_recipes_dir
+    from cvcpkg.platform import detect_platform
+
+    # ── Resolve RECIPE: a recipe.yaml path, a dir containing one, or a name ──
+    p = Path(recipe)
+    if p.is_file():
+        recipe_dir = p.parent
+    elif (p / "recipe.yaml").is_file():
+        recipe_dir = p
+    else:
+        recipe_dir = None
+        search = [Path(d) for d in _resolve_recipes_dirs(recipes_dirs, no_default_recipes)]
+        if not no_default_recipes:
+            try:
+                search.append(find_recipes_dir())
+            except Exception:
+                pass
+        for d in search:
+            if (d / recipe / "recipe.yaml").is_file():
+                recipe_dir = d / recipe
+                break
+        if recipe_dir is None:
+            raise click.ClickException(f"install-deps: recipe not found: {recipe!r}")
+
+    r = Recipe.load(recipe_dir)
+    plat = platform if platform != "auto" else detect_platform()
+
+    names = _dep_names_for_role(r, "build", plat) | _dep_names_for_role(r, "runtime", plat)
+    if include_host_tools:
+        names |= _dep_names_for_role(r, "host_tools", plat)
+    names_sorted = sorted(names)
+    if not names_sorted:
+        click.echo(f"cvcpkg: {r.name} declares no build/runtime deps for {plat} — nothing to do.")
+        return
+
+    click.echo(
+        f"cvcpkg: install-deps {r.name} → {len(names_sorted)} deps: {' '.join(names_sorted)}"
+    )
+
+    # Reuse the full 'install' resolution/installation path with the recipe's
+    # deps as the component set.
+    ctx = click.get_current_context()
+    ctx.invoke(
+        install,
+        components=tuple(names_sorted),
+        from_file=None,
+        prefix=prefix,
+        release=release,
+        platform=platform,
+        arch=arch,
+        config=config,
+        link=link,
+        catalog=catalog,
+        catalog_revision=catalog_revision,
+        source=source,
+        ignore_abi=ignore_abi,
+        verify_signatures=verify_signatures,
+        require_signatures=require_signatures,
+        fallback_to_source=fallback_to_source,
+        recipes_dirs=recipes_dirs,
+        no_default_recipes=no_default_recipes,
+        local_mode=local_mode,
+        keep_build_prefix=False,
+        keep_host_tools=None,
+        trust_mirror=trust_mirror,
+    )
+
+
 # ── list ────────────────────────────────────────────────────────
 
 
