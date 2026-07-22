@@ -8,7 +8,16 @@ recipe:
   # (_patch_macos_install_names) only rewrites NEWLY built bundles, and the
   # macos-arm64 +cvc.6 bundle is immutable, so a revision bump is required for
   # the corrected bundle to publish and be picked up by libcvc's macOS CI.
-  cvc_revision: 7
+  #
+  # Bumped 7 -> 8: build against the cvcpkg libxml2 (2.12.9, FTP client removed
+  # in 2.11) instead of the build host's system libxml2 (still has FTP).
+  # ImageMagick REQUIRES libxml2 (it parses its own delegates.xml/type.xml config
+  # at runtime), and configure previously auto-detected the SYSTEM libxml2 — so
+  # MagickCore baked in xmlNanoFTP* symbols the cvcpkg libxml2 no longer exports,
+  # breaking every consumer's link (libcvc: undefined reference to
+  # xmlNanoFTPClose@LIBXML2_2.4.30). Now declares libxml2 and points configure at
+  # it (see build.sh). The +cvc.7 bundle is immutable, so republishing needs +cvc.8.
+  cvc_revision: 8
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -34,6 +43,12 @@ depends:
       version: "^1.3"
     - name: tiff
       version: "^4.6"
+    # ImageMagick links libxml2 (config-file parsing) and ships referencing it.
+    # Pinned to the cvcpkg 2.12.x bundle, which has the FTP client removed — so
+    # MagickCore never references xmlNanoFTP*. build.sh forces configure to use
+    # THIS libxml2 rather than the build host's system one.
+    - name: libxml2
+      version: "^2.12"
   host_tools: []
 
 build:
