@@ -783,6 +783,64 @@ def _patch_linux_rpath(install_dir: Path) -> None:
         )
 
 
+def _patch_macos_install_names(install_dir: Path) -> None:
+    """Rewrite absolute build-tree install names to ``@rpath`` on macOS dylibs.
+
+    The macOS analog of :func:`_patch_linux_rpath`.  autotools/libtool builds
+    (e.g. ImageMagick) bake the absolute build-temp install prefix into a
+    dylib's own install name (``LC_ID_DYLIB``) and into its references to
+    sibling dylibs (``LC_LOAD_DYLIB``).  Once the bundle is unpacked elsewhere
+    that path no longer exists, so anything linking the dylib records the dead
+    path and fails under dyld ("Library not loaded:
+    .../cvcpkg-<recipe>-XXXX/install/lib/...").  CMake builds already default to
+    ``@rpath`` install names (``MACOSX_RPATH``), so this only rescues the
+    autotools/hand-rolled ones.
+
+    For every dylib in *install_dir*/lib it: sets the id to ``@rpath/<leaf>``;
+    adds a ``@loader_path`` RPATH so the dylib finds its siblings next to itself
+    (the ``$ORIGIN`` analog); and rewrites any absolute reference that points at
+    another dylib IN THIS BUNDLE to ``@rpath/<leaf>``.  System references
+    (/usr/lib, /System/...) are left untouched.  Only runs when
+    ``install_name_tool``/``otool`` are available (any macOS host); silently
+    skips otherwise.
+    """
+    install_name_tool = shutil.which("install_name_tool")
+    otool = shutil.which("otool")
+    if not install_name_tool or not otool:
+        return
+    lib_dir = install_dir / "lib"
+    if not lib_dir.is_dir():
+        return
+    # Leaf names of every dylib the bundle ships (incl. version symlinks), so we
+    # only rewrite references that resolve to one of OUR libraries.
+    bundle_leaves = {p.name for p in lib_dir.rglob("*.dylib")}
+    for dylib in lib_dir.rglob("*.dylib"):
+        if not dylib.is_file() or dylib.is_symlink():
+            continue
+        subprocess.run(
+            [install_name_tool, "-id", f"@rpath/{dylib.name}", str(dylib)],
+            capture_output=True,
+        )
+        # Idempotent: -add_rpath errors (harmlessly) if @loader_path is present.
+        subprocess.run(
+            [install_name_tool, "-add_rpath", "@loader_path", str(dylib)],
+            capture_output=True,
+        )
+        listing = subprocess.run(
+            [otool, "-L", str(dylib)],
+            capture_output=True,
+            text=True,
+        ).stdout
+        # First line is the file path itself; the rest are dependent libraries.
+        for line in listing.splitlines()[1:]:
+            ref = line.strip().split(" ", 1)[0]
+            if ref.startswith("/") and Path(ref).name in bundle_leaves:
+                subprocess.run(
+                    [install_name_tool, "-change", ref, f"@rpath/{Path(ref).name}", str(dylib)],
+                    capture_output=True,
+                )
+
+
 def run_build(
     ctx: BuildContext,
     log_callback: Callable[[str], None] | None = None,
@@ -871,9 +929,15 @@ def run_build(
     if returncode != 0:
         raise BuildError(f"Build script for {ctx.recipe.name} exited with code {returncode}")
 
-    # Patch RPATH on Linux shared builds so bundles are relocatable.
-    if ctx.platform == "linux" and ctx.link == "shared":
-        _patch_linux_rpath(ctx.install_dir)
+    # Make shared bundles relocatable: rewrite absolute build-tree paths so
+    # consumers load the libraries without LD_LIBRARY_PATH/DYLD_* — $ORIGIN
+    # RPATH on Linux, @rpath install names on macOS. (Windows resolves DLLs from
+    # the prefix bin dir on PATH, so it needs no rewrite here.)
+    if ctx.link == "shared":
+        if ctx.platform == "linux":
+            _patch_linux_rpath(ctx.install_dir)
+        elif ctx.platform == "macos":
+            _patch_macos_install_names(ctx.install_dir)
 
 
 # ── Test execution ──────────────────────────────────────────────
