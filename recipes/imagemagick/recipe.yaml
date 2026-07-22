@@ -2,7 +2,13 @@ schema_version: 1
 recipe:
   name: imagemagick
   upstream_version: "7.1.1"
-  cvc_revision: 6
+  # Bumped 6 -> 7 to republish the macOS bundle with @rpath install names (the
+  # autotools/libtool build baked an absolute build-temp install_name into
+  # libMagick++, breaking dyld for consumers — see libcvc-deps#345). The fix
+  # (_patch_macos_install_names) only rewrites NEWLY built bundles, and the
+  # macos-arm64 +cvc.6 bundle is immutable, so a revision bump is required for
+  # the corrected bundle to publish and be picked up by libcvc's macOS CI.
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

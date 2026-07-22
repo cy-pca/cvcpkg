@@ -742,12 +742,23 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
     return env
 
 
-def _patch_linux_rpath(install_dir: Path) -> None:
+# ELF platforms whose run-time linker expands ``$ORIGIN`` in RPATH, so the
+# $ORIGIN rewrite in _patch_elf_rpath makes their shared bundles relocatable.
+# OpenBSD is deliberately excluded: its ld.so does not implement $ORIGIN, so the
+# rewrite would be silently ignored — relocatable OpenBSD bundles need a
+# different mechanism if/when it becomes an active build target. macOS/Windows
+# are handled separately (install_name / PATH-relative DLLs).
+_ELF_RPATH_PLATFORMS = frozenset({"linux", "freebsd", "netbsd", "dragonflybsd"})
+
+
+def _patch_elf_rpath(install_dir: Path) -> None:
     """Prepend ``$ORIGIN`` to the RPATH of shared libraries in *install_dir*.
 
-    This makes Linux shared-library bundles relocatable without requiring
-    LD_LIBRARY_PATH at runtime.  Only runs when patchelf is available;
-    silently skips otherwise.
+    This makes ELF shared-library bundles relocatable without requiring
+    LD_LIBRARY_PATH at runtime.  Applies to Linux AND the ELF BSDs whose
+    run-time linker expands ``$ORIGIN`` (FreeBSD/GhostBSD, NetBSD,
+    DragonflyBSD) — see ``_ELF_RPATH_PLATFORMS``.  Only runs when patchelf is
+    available; silently skips otherwise.
 
     Crucially it PRESERVES any pre-existing ``$ORIGIN``-relative RPATH
     entries rather than clobbering them.  Python wheels bundle their native
@@ -786,7 +797,7 @@ def _patch_linux_rpath(install_dir: Path) -> None:
 def _patch_macos_install_names(install_dir: Path) -> None:
     """Rewrite absolute build-tree install names to ``@rpath`` on macOS dylibs.
 
-    The macOS analog of :func:`_patch_linux_rpath`.  autotools/libtool builds
+    The macOS analog of :func:`_patch_elf_rpath`.  autotools/libtool builds
     (e.g. ImageMagick) bake the absolute build-temp install prefix into a
     dylib's own install name (``LC_ID_DYLIB``) and into its references to
     sibling dylibs (``LC_LOAD_DYLIB``).  Once the bundle is unpacked elsewhere
@@ -931,13 +942,14 @@ def run_build(
 
     # Make shared bundles relocatable: rewrite absolute build-tree paths so
     # consumers load the libraries without LD_LIBRARY_PATH/DYLD_* — $ORIGIN
-    # RPATH on Linux, @rpath install names on macOS. (Windows resolves DLLs from
-    # the prefix bin dir on PATH, so it needs no rewrite here.)
+    # RPATH on ELF (Linux + the $ORIGIN-honouring BSDs), @rpath install names on
+    # macOS. (Windows resolves DLLs from the prefix bin dir on PATH, so it needs
+    # no rewrite here.)
     if ctx.link == "shared":
-        if ctx.platform == "linux":
-            _patch_linux_rpath(ctx.install_dir)
-        elif ctx.platform == "macos":
+        if ctx.platform == "macos":
             _patch_macos_install_names(ctx.install_dir)
+        elif ctx.platform in _ELF_RPATH_PLATFORMS:
+            _patch_elf_rpath(ctx.install_dir)
 
 
 # ── Test execution ──────────────────────────────────────────────

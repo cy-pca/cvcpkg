@@ -1,4 +1,4 @@
-"""_patch_linux_rpath must make bundles relocatable ($ORIGIN) WITHOUT
+"""_patch_elf_rpath must make bundles relocatable ($ORIGIN) WITHOUT
 destroying a wheel's bundled-native-lib RPATH (e.g. numpy's OpenBLAS in
 $ORIGIN/../../numpy.libs). Regression for: `import numpy` failing with
 "libscipy_openblas*.so: cannot open shared object file" after packaging."""
@@ -6,11 +6,11 @@ $ORIGIN/../../numpy.libs). Regression for: `import numpy` failing with
 import subprocess
 from unittest import mock
 
-from cvcpkg.builder import _patch_linux_rpath
+from cvcpkg.builder import _patch_elf_rpath
 
 
 def _run_patch(tmp_path, so_relpath, existing_rpath):
-    """Drop a fake .so with *existing_rpath*, run _patch_linux_rpath with a
+    """Drop a fake .so with *existing_rpath*, run _patch_elf_rpath with a
     mocked patchelf, and return the value passed to --set-rpath."""
     so = tmp_path / "lib" / so_relpath
     so.parent.mkdir(parents=True, exist_ok=True)
@@ -27,7 +27,7 @@ def _run_patch(tmp_path, so_relpath, existing_rpath):
         mock.patch("cvcpkg.builder.shutil.which", return_value="/usr/bin/patchelf"),
         mock.patch("cvcpkg.builder.subprocess.run", side_effect=fake_run),
     ):
-        _patch_linux_rpath(tmp_path)
+        _patch_elf_rpath(tmp_path)
 
     set_calls = [c for c in calls if "--set-rpath" in c]
     assert set_calls, "expected a --set-rpath call"
@@ -53,3 +53,14 @@ def test_drops_absolute_keeps_relative(tmp_path):
 def test_empty_and_bare_origin_are_just_origin(tmp_path):
     assert _run_patch(tmp_path, "libempty.so", "") == "$ORIGIN"
     assert _run_patch(tmp_path, "libo.so", "$ORIGIN") == "$ORIGIN"
+
+
+def test_elf_rpath_platforms_covers_bsd_but_not_openbsd():
+    # BSDs are ELF like Linux and must get the same $ORIGIN relocation — except
+    # OpenBSD, whose ld.so does not expand $ORIGIN.
+    from cvcpkg.builder import _ELF_RPATH_PLATFORMS
+
+    assert {"linux", "freebsd", "netbsd", "dragonflybsd"} <= _ELF_RPATH_PLATFORMS
+    assert "openbsd" not in _ELF_RPATH_PLATFORMS
+    assert "macos" not in _ELF_RPATH_PLATFORMS  # handled by install_name rewrite
+    assert "windows" not in _ELF_RPATH_PLATFORMS

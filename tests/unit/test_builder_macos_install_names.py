@@ -6,6 +6,7 @@ test_builder_rpath.py; the logic is exercised on Linux via mocked
 install_name_tool/otool."""
 
 import subprocess
+from pathlib import Path
 from unittest import mock
 
 from cvcpkg.builder import _patch_macos_install_names
@@ -40,7 +41,9 @@ def _patch_with_mocks(tmp_path):
     def fake_run(cmd, **kwargs):
         calls.append(list(cmd))
         if cmd[0].endswith("otool"):
-            leaf = cmd[-1].rsplit("/", 1)[-1]
+            # Portable leaf extraction: the target path is a real filesystem path
+            # (backslashes on Windows CI), so split with pathlib, not "/".
+            leaf = Path(cmd[-1]).name
             return subprocess.CompletedProcess(cmd, 0, stdout=_OTOOL[leaf], stderr="")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
