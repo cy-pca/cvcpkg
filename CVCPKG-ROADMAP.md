@@ -866,6 +866,30 @@ Highest cross-value is `cufft` (F2Dock's FFT-correlation docking; `libcufftw` is
 the existing `fftw3` recipe), then `cublas`/`cusolver`/`cusparse` for volrover/MolSurf dense &
 sparse solves.
 
+**Planned: GPU/CUDA build-time routing (scheduler capability).** The CUDA-math recipes above — and
+`libcvc-cuda` (recipe `requires_capabilities: [cuda]`) — must build on a host with an NVIDIA GPU +
+`nvcc`, never on the CPU builders (`star-00`/`star-01`). Today the scheduler's `_choose_builder`
+(`src/cvcpkg/server/app.py`) matches only `(platform, arch)` and the `cross_platforms` capability
+(wasm), so a CUDA build would wrongly land on any linux builder and fail on the missing toolchain.
+Add **build-time capability routing** — the build-side twin of the install-side capability selection
+(`requires_capabilities`/`provides` in the resolver):
+- A builder advertises capabilities at registration — `cvcpkg builder run --capability cuda`, plus
+  auto-detect via `nvidia-smi`/`nvcc`/`libcuda` — surfacing as `capabilities: {"cuda": true}` (stored
+  alongside the existing `cross_platforms`).
+- A recipe's top-level `requires_capabilities` propagates onto its build jobs (new `required_capabilities`
+  field end to end: submit-dag → job model/DB + migration → store).
+- `_choose_builder` skips any builder whose advertised capabilities don't satisfy **all** of a job's
+  `required_capabilities`; the unschedulable-reaper marks a job whose required capability is advertised
+  by no registered builder as unschedulable, rather than dispatching it to a builder where it would
+  fail on the missing toolchain.
+- Generalizes beyond CUDA (e.g. `avx512`, a specific driver/SDK) exactly as `cross_platforms` did for
+  wasm.
+
+First GPU builder: **`prettyhatemachine`** (NVIDIA GTX 1650 + CUDA 12.x); provisioning script +
+fleet docs land in `vm-provisioning` (`linux/setup-cuda-builder.sh`, `docs/CVCPKG-BUILDERS.md`). This
+routing is a prerequisite for building both the CUDA-math recipes above and the `libcvc-cuda` package
+on the fleet.
+
 #### Per-Interpreter Wheel Matrix (incl. Free-Threaded / No-GIL)
 
 cvcpkg ships **five** CPython interpreters as recipes — `python311`,
