@@ -43,6 +43,9 @@ The **native C/C++ compiler is the one ecosystem still floating to the system de
 ### Sequencing
 Fits alongside Phase 1.5 (Release Engineering Readiness) / the build-cache work. The toolchain recipe + `env-*.sh` switch is the bulk; recipes need no per-recipe changes (they inherit `CC`/`CXX`). Roll out by rebuilding the native packages once on the pinned toolchain so the published catalog is single-toolchain.
 
+## Implementation spec
+See [`native-toolchain-spec.md`](native-toolchain-spec.md) — GCC 14.2 / glibc-2.28-floor decision, `gcc-toolchain` recipe shape, `env-linux.sh` edits, and the catalog-rebuild rollout.
+
 ## Related
 - `docs/roadmap/build-cache-roadmap.md` (reproducibility feeds caching)
 - The multi-python `vtk-python-cpXXX` recipes assume ABI-matched `vtk` — they are only truly hermetic once the native toolchain is pinned.
