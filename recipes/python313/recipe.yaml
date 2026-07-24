@@ -2,7 +2,10 @@ schema_version: 1
 recipe:
   name: python313
   upstream_version: "3.13.3"
-  cvc_revision: 1
+  # Bumped 1 -> 2: extension-module RPATH fix (shared _common/build-python.sh) so
+  # lib-dynload/*.so (incl. _ssl/_hashlib) find the prefix lib/ instead of the
+  # system libs — a standalone interpreter's `import ssl` was failing. ABI-identical.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

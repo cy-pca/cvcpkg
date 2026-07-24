@@ -2,7 +2,13 @@ schema_version: 1
 recipe:
   name: python311
   upstream_version: "3.11.13"
-  cvc_revision: 1
+  # Bumped 1 -> 2: fix extension-module RPATH so the stdlib C extensions find the
+  # prefix's own shared libs. The +cvc.1 build shipped lib-dynload/*.so (incl.
+  # _ssl/_hashlib) with RUNPATH reduced to bare $ORIGIN (lib-dynload/), missing the
+  # ../.. hop to lib/, so a standalone interpreter loaded the SYSTEM libcrypto and
+  # `import ssl` failed with "OPENSSL_x.y.z not found". Fixed in _common/build-python.sh
+  # (per-file $ORIGIN-relative path to lib/). ABI-identical; a drop-in rebuild.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

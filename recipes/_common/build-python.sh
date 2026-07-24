@@ -134,9 +134,20 @@ if [ "$IS_CROSS" = false ]; then
             exit 1
         fi
         patchelf --set-rpath '$ORIGIN/../lib' "${PY_BIN}"
-        # Extension modules (lib/pythonX.Y/**): point them back at the prefix.
+        # Extension modules (lib/pythonX.Y/**): point each back at the prefix
+        # lib/ (where libssl/libcrypto/libffi/... live). The depth varies —
+        # stdlib C extensions sit at lib/pythonX.Y/lib-dynload/ (needs
+        # $ORIGIN/../..) while site-packages/<pkg>/**.so are deeper — so a single
+        # fixed relative path is WRONG for lib-dynload (a uniform
+        # $ORIGIN/../../.. lands on the prefix ROOT, not lib/, so _ssl.so then
+        # loads the system libcrypto -> "OPENSSL_x.y.z not found"). Compute the
+        # correct $ORIGIN-relative path to lib/ per file. (cvcpkg's own relocation
+        # pass later PREPENDS $ORIGIN and preserves these $ORIGIN-relative entries.)
         find "${CVC_INSTALL_DIR}/lib/python${PYTHON_MINOR}" -name '*.so' -print0 \
-            | xargs -0 -r -I{} patchelf --set-rpath '$ORIGIN/../../..' {} 2>/dev/null || true
+            | while IFS= read -r -d '' _so; do
+                _rel="$(realpath --relative-to="$(dirname "${_so}")" "${CVC_INSTALL_DIR}/lib")"
+                patchelf --set-rpath "\$ORIGIN/${_rel}" "${_so}" 2>/dev/null || true
+              done
     fi
 
     if [[ "${CVC_PLATFORM}" == "macos" ]]; then
