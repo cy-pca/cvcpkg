@@ -34,6 +34,20 @@ export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig${CVC_BUILD_PREFIX:+:${C
 export CPPFLAGS="-I${CVC_DEPS_PREFIX}/include ${CPPFLAGS:-}"
 export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib ${LDFLAGS:-}"
 
+# Explicitly link the codecs that are only *private* pkg-config deps of the
+# cvcpkg libwebp/libtiff (libwebp.pc: `Requires.private: libsharpyuv`;
+# libtiff-4.pc: `Requires.private: ... Lerc libzstd`). MagickCore references
+# SharpYuvInit / ZSTD_decompress / lerc_* DIRECTLY, but a dynamic
+# `pkg-config --libs` (no --static) drops Requires.private, so configure only
+# adds -lwebp / -ltiff and the final link fails on a HERMETIC builder with
+# `undefined reference to SharpYuvInit / ZSTD_decompress` (this is what broke the
+# cvc.9 debug fleet build). A dev box links only because its system libwebp still
+# bundles sharpyuv. autotools appends $LIBS at the END of every link line, which
+# is where these must go to satisfy the refs pulled in by -lMagickCore/-lwebp/
+# -ltiff. (--copy-dt-needed-entries does NOT fix it — the symbols are referenced
+# by MagickCore itself, not resolvable through a command-line lib's DT_NEEDED.)
+export LIBS="-lsharpyuv -lzstd -lLerc ${LIBS:-}"
+
 # xml2-config shim (only when pkg-config can resolve the cvcpkg libxml2). The
 # critical platform is Linux — where the system libxml2 has the FTP client and
 # pkg-config is always present — so this reliably pins it there; on a host with

@@ -24,7 +24,15 @@ recipe:
   # webp, tiff, zstd, lzma and bzlib ON, with each codec declared so the exposed
   # cvcpkg prefix is a complete link closure (this is also what puts -ljpeg/-lwebp
   # on the link line, resolving both MagickCore's coders and libtiff's codec refs).
-  cvc_revision: 9
+  #
+  # Bumped 9 -> 10: fix the hermetic link. cvc.9 RELEASE published but the DEBUG
+  # fleet build failed with `undefined reference to SharpYuvInit / ZSTD_decompress`
+  # — MagickCore references those directly but they are only *private* pkg-config
+  # deps of the cvcpkg libwebp/libtiff (Requires.private), which a dynamic
+  # `pkg-config --libs` drops. build.sh now links -lsharpyuv/-lzstd/-lLerc via
+  # $LIBS. (cvc.9 release linked only because that fleet job happened to see a
+  # system libwebp bundling sharpyuv; not reproducible/portable.)
+  cvc_revision: 10
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
