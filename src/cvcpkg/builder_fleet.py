@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Multi-homed builder fleet configuration.
 
 Implements the *multi-server* half of the roadmap's "Multi-tenant / shared

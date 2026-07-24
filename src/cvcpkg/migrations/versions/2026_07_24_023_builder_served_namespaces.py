@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """builders.served_namespaces: multi-tenant shared builder fleet
 
 Revision ID: 023
