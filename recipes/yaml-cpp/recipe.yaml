@@ -1,0 +1,47 @@
+schema_version: 1
+recipe:
+  name: yaml-cpp
+  upstream_version: "0.8.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "yaml-cpp — a YAML parser and emitter for C++ (jbeder/yaml-cpp). Used by volrover3 for ~/.volrover/settings.yaml."
+  homepage: https://github.com/jbeder/yaml-cpp
+  license: MIT
+  tags: [utils, cpp, yaml]
+
+source:
+  type: tarball
+  url: https://github.com/jbeder/yaml-cpp/archive/refs/tags/0.8.0.tar.gz
+  sha256: "fbe74bbdcee21d656715688706da3c8becfd946d92cd44705cc6098bb23b3a16"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+package:
+  files:
+    - lib/libyaml-cpp*
+    - lib/cmake/yaml-cpp/
+    - lib/pkgconfig/yaml-cpp*
+    - include/yaml-cpp/
+  cmake_packages:
+    - { name: yaml-cpp, targets: ["yaml-cpp::yaml-cpp"] }
+
+abi:
+  cxx_std: 17
