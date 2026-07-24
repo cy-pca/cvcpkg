@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Read and write lockfile.yaml (§5.4 of the roadmap)."""
 
 from __future__ import annotations

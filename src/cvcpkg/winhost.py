@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Delegate Windows-target builds to the Windows host of a WSL instance.
 
 A cvcpkg builder running inside WSL2 registers as ``linux/x86_64`` with

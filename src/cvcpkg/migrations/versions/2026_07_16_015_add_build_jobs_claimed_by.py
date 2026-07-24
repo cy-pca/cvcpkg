@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """add build_jobs.claimed_by (unregistered workers draining a queue)
 
 Revision ID: 015

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """ABI-tag compatibility checks (§3.2.1 of the roadmap)."""
 
 from __future__ import annotations

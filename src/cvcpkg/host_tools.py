@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Host-tools install record + strip logic.
 
 When cvcpkg builds for a target that needs cross-compilation, the build-time

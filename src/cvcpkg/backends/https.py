@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """HTTPS / HTTP storage backend (stdlib ``urllib``)."""
 
 from __future__ import annotations

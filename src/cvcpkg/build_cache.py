@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Content-addressed build cache for cvcpkg.
 
 Caches per-recipe build artifacts keyed by chain_hash — a transitive

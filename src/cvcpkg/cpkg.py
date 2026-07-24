@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """cpkg (getcpkg.net) integration — resolve cvcpkg prebuilt binaries for cpkg.lua.
 
 `cpkg <https://getcpkg.net/>`_ is a Lua + Ninja project/dependency tool for

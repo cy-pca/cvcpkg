@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """GitHub Release asset storage backend.
 
 Resolves ``gh-release://owner/repo/tag/asset`` URIs to the

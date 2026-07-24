@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Azure Blob Storage backend (requires ``azure-storage-blob``).
 
 Install: ``pip install cvcpkg[azure]``

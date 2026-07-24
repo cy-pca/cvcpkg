@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Add recipes table for server-managed recipe distribution.
 
 Revision ID: 011

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """cvcpkg — component package manager for libcvc-deps."""
 
 from importlib.metadata import version as _pkg_version

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Lightweight SemVer-range parser and matcher.
 
 Supports:  ==, >=, <=, >, <, ^, ~>, and comma-separated conjunctions.

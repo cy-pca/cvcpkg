@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """``cvcpkg telemetry`` — opt-in, anonymous environment telemetry.
 
 Phase 2 roadmap.  Strictly opt-in: nothing is ever sent unless the

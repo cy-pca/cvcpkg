@@ -42,36 +42,45 @@ project is being set to **CyberPC Angel, LLC**.  This effort is sequenced
 alongside the rename and the org move below, and lands **before** the Phase 25
 PyPI publish so the first public release carries the correct ownership.
 
-- [ ] **Copyright & provenance branding sweep → CyberPC Angel, LLC.**  Set
-      the owning entity to CyberPC Angel, LLC everywhere provenance is
-      asserted: `pyproject.toml` (`authors`, `homepage`/`repository`),
-      `README.md`, the server landing-page footer (currently
-      `cvcpkg — cross-platform binary package archive…`, no owner), the docs,
-      and the GitHub repo metadata/social preview.  *(The `LICENSE` file
-      already carries `Copyright (c) 2026 CyberPC Angel, LLC` — this
-      generalizes that to the rest of the project.)*
+- [x] **Copyright & provenance branding sweep → CyberPC Angel, LLC.**  Set
+      the owning entity to CyberPC Angel, LLC everywhere copyright/IP
+      ownership is asserted: `README.md`'s License section, the server
+      landing-page footer (currently
+      `cvcpkg — cross-platform binary package archive…`, no owner), and the
+      `cvcpkg --help` text.  *(The `LICENSE` file already carries
+      `Copyright (c) 2026 CyberPC Angel, LLC` — this generalizes that to the
+      rest of the project.)*  `pyproject.toml` `authors` stays `cvcpkg group
+      <info@cvcpkg.org>` — that field names the group that operates/
+      maintains the package, a distinct entity from CyberPC Angel, LLC,
+      which owns the underlying IP/copyright.  `pyproject.toml`
+      `homepage`/`repository` and the GitHub repo metadata/social preview
+      still point at `transfix/libcvc-deps` — those flip together with the
+      org move below, not before it exists.
   - **Do not rewrite per-recipe `maintainer` / `maintainer_email` fields.**
     Those name the **upstream package** maintainers (e.g. the zlib or boost
     packager), not cvcpkg's owner — they are legitimate third-party
     attribution and must survive the sweep untouched.
-- [ ] **Source-file headers (bonus).**  Add a CyberPC Angel, LLC copyright +
+- [x] **Source-file headers (bonus).**  Add a CyberPC Angel, LLC copyright +
       MIT notice header to every first-party source file — recommended form
       is an SPDX one-liner so it stays greppable and tooling-friendly:
       `# SPDX-License-Identifier: MIT` + `# Copyright (c) 2026 CyberPC Angel,
-      LLC`.  Today **0 of 93** first-party Python files carry any
-      copyright/license header, so this is a green-field sweep (a
-      `scripts/apply_headers.py` + a CI check to keep new files compliant).
-      Exclude vendored `third-party/` and per-recipe upstream sources.
-- [ ] **ASCII-art gears logo (double bonus).**  Add an ASCII-art rendition of
+      LLC`.  Landed via `scripts/apply_headers.py` (`--check` wired into the
+      `lint` job in `cvcpkg-ci.yml`) across all 97 first-party Python files
+      under `src/cvcpkg/`.  Excludes vendored `third-party/` and per-recipe
+      upstream sources.
+- [x] **ASCII-art gears logo (double bonus).**  Add an ASCII-art rendition of
       the CyberPC Angel, LLC **gears** logo to the source tree (e.g. a banner
       comment / the `cvcpkg` `--version` or no-arg splash) and to the top of
       `README.md`.  Keep it plain 7-bit ASCII so it renders in any terminal
-      and in the `landing.py` guide.
-- [ ] **Project logo = CyberPC Angel gears icon.**  Use the CyberPC Angel,
+      and in the `landing.py` guide.  *(Shipped in #303 — `branding.py`.)*
+- [x] **Project logo = CyberPC Angel gears icon.**  Use the CyberPC Angel,
       LLC gears icon as the project logo: a **favicon** and `og:image` on the
       server landing page (it has **neither** today — see `_head_html`), a
       logo in the README header, and the GitHub repo social-preview image.
       Ship the asset self-hosted (no external CDN) consistent with the CSP.
+      *(Shipped in #303 — favicon/`og:image`/README header; the GitHub
+      repo social-preview image itself is a repo-settings upload, still
+      open.)*
 - [ ] **New GitHub organization for the CyberPC Angel team; cvcpkg lives
       under it.**  Create a dedicated **CyberPC Angel** GitHub org (slug TBD,
       e.g. `cyberpcangel`) and move cvcpkg into it.  This **changes the

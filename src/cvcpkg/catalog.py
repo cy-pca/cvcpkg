@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Fetch, parse, and generate the libcvc-deps bundle catalog."""
 
 from __future__ import annotations

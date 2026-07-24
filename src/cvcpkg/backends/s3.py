@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """AWS S3 storage backend (requires ``boto3``).
 
 Install: ``pip install cvcpkg[s3]`` or ``pip install boto3``

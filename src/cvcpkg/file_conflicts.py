@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Detect packages that would clobber each other's files.
 
 Declared exclusivity (``conflicts:`` / ``provides:`` in a recipe) is what the

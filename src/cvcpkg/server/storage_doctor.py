@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Diagnose and heal a cvcpkg server's archive store.
 
 ``cvcpkg-server storage doctor`` checks that every catalog-referenced archive

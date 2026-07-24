@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Server-rendered admin dashboard (Phase 3).
 
 ``/admin`` — a lightweight, server-side-rendered administration UI.

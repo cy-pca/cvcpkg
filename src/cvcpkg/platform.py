@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Auto-detect platform, architecture, libc, and CRT metadata."""
 
 from __future__ import annotations

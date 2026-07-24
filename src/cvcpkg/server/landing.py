@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Landing page HTML for cvcpkg-server.
 
 Serves a self-contained single-page index at ``/`` that displays
@@ -324,6 +327,10 @@ def _footer_html() -> str:
         <span class="icon"><i class="fab fa-github"></i></span> cvcpkg
       </a>
       &mdash; cross-platform binary package archive for scientific computing
+    </p>
+    <p class="is-size-7 has-text-grey">
+      &copy; 2026 <a href="https://cyberpcangel.com" class="has-text-grey">CyberPC Angel, LLC</a>
+      &mdash; released under the <a href="{_GITHUB_URL}/blob/master/LICENSE" class="has-text-grey">MIT License</a>
     </p>
   </div>
 </footer>"""

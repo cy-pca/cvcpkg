@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """rsync subprocess backend.
 
 Requires ``rsync`` on PATH.  Best for intra-cluster mirrors

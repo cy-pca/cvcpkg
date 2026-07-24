@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """User and project configuration for cvcpkg.
 
 Configuration is loaded from three sources in increasing precedence:

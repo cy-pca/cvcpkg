@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """FastAPI application for cvcpkg-server.
 
 This module defines all REST API endpoints for package publishing,

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Recipe builder and packager for cvcpkg.
 
 Implements the ``cvcpkg build`` and ``cvcpkg pack`` workflow described

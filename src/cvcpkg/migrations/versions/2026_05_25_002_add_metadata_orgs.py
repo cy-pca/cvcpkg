@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """add package metadata columns, organizations, and org_members tables
 
 Revision ID: 002

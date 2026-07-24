@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Organization helpers usable by both client and server.
 
 Deliberately dependency-free: the CLI validates org slugs before publishing

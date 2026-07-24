@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Safe archive extraction — guards against tar-slip / zip-slip.
 
 A malicious (or poisoned upstream) recipe/package bundle can contain member

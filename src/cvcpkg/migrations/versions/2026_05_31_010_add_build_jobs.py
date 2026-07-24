@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Add build_jobs and build_job_deps tables for job queue and DAG scheduling.
 
 Revision ID: 010

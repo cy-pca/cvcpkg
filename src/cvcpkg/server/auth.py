@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Token-based authentication for cvcpkg-server.
 
 Tokens are HMAC-SHA256 hashes of random secrets.  Only the hash is

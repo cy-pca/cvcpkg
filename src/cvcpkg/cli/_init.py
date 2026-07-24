@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """``cvcpkg init`` — scaffold a new recipe from a template.
 
 Creates ``recipes/<name>/`` with a schema-valid ``recipe.yaml`` and the

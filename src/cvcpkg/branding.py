@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """CyberPC Angel, LLC brand splash for the cvcpkg CLI.
 
 Renders an ASCII-art rendition of the CyberPC Angel gears logo, optionally

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Schema + graph validation for cvcpkg packaging YAML, shipped in the package.
 
 Historically the validator lived in ``packaging/validate.py`` (this repo only)

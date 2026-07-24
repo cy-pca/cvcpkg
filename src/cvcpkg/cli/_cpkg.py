@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """``cvcpkg cpkg`` — resolve cvcpkg prebuilt binaries for cpkg.lua build scripts.
 
 Bridges cvcpkg to `cpkg <https://getcpkg.net/>`_ (a Lua + Ninja C/C++ project

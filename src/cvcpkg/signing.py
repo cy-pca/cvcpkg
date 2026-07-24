@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Ed25519 package signing and verification for cvcpkg.
 
 Provides key generation, archive signing (detached signatures), and

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """rclone subprocess backend.
 
 Requires ``rclone`` on PATH.  Supports 70+ remotes (B2,

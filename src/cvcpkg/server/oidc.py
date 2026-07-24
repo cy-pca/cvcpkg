@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """OIDC identity for human users (roadmap Phase 13).
 
 cvcpkg delegates **human** authentication to an external OIDC provider rather

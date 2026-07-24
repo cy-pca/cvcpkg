@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Structured JSON log formatter for cvcpkg-server."""
 
 from __future__ import annotations

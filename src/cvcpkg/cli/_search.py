@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """``cvcpkg search`` — full-text search against a cvcpkg server."""
 
 from __future__ import annotations

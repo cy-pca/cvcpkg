@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """SFTP / SSH storage backend (requires ``paramiko``).
 
 Install: ``pip install cvcpkg[sftp]`` or ``pip install paramiko``

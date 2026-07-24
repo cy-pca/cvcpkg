@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Generate a CMake package config into an installed cvcpkg prefix.
 
 `cvcpkg install` calls :func:`write_cmake_config` after populating a prefix

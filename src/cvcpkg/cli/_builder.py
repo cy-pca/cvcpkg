@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """CLI commands - auto-extracted from cli.py."""
 
 from __future__ import annotations

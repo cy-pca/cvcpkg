@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Selective-mirroring policy for edge/satellite populate (roadmap Phase 12).
 
 An edge/satellite server (``CVCPKG_POPULATE_UPSTREAM`` set) mirrors the public

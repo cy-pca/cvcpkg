@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Download, verify, and extract bundle archives into a prefix."""
 
 from __future__ import annotations

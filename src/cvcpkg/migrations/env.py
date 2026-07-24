@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Alembic environment configuration for cvcpkg-server.
 
 Uses the async engine directly so no synchronous driver (psycopg2)

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Shared CLI option decorators and utility functions."""
 
 from __future__ import annotations

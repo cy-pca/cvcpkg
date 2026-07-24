@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """AWS CLI (``aws s3``) subprocess backend.
 
 Fallback for environments that have the ``aws`` CLI but not

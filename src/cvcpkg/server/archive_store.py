@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Backend-aware archive storage for the cvcpkg server.
 
 The server keeps package archives in a storage backend selected by the

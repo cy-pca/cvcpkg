@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Database-backed stores for cvcpkg-server.
 
 These classes implement the same interfaces as the YAML-file-based

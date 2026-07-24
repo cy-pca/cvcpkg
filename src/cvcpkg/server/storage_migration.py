@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Offline migration of a cvcpkg server's archive store between backends.
 
 ``cvcpkg-server storage migrate --to <uri>`` copies every catalog-referenced

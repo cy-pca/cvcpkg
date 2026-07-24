@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Append-only audit log for cvcpkg-server.
 
 Every mutation (publish, yank, delete, token create/revoke) is

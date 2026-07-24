@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Root-authoritative, top-down catalog resolution (roadmap Phase 12).
 
 In a satellite/edge deployment a client talks to a nearby server that mirrors a

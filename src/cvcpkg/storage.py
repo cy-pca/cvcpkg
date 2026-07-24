@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Pluggable storage backends for fetching and pushing bundle archives.
 
 Backends are registered by URI scheme and dispatched automatically.

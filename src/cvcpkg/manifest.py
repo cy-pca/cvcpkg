@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Data models for bundle manifests, release indexes, and requirements files.
 
 Uses plain dataclasses (no pydantic dependency) so the package stays

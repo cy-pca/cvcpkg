@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Dependency reference parsing for federated cross-server dependencies.
 
 A dependency may be qualified by an organization and/or a federated **registry

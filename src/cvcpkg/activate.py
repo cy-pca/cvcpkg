@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Generate shell activation scripts for a cvcpkg prefix.
 
 Modeled on Python's ``venv`` — running::

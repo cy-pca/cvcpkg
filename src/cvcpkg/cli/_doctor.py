@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """``cvcpkg doctor`` — diagnose the local environment.
 
 Reports whether the tools cvcpkg needs for building and installing

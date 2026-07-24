@@ -160,6 +160,10 @@ jobs:
         working-directory: .
         run: poetry run black --check --diff src/ tests/
 
+      - name: Check license headers
+        working-directory: .
+        run: poetry run python scripts/apply_headers.py --check
+
   # ── Docker integration tests (self-hosted only) ─────────────
   #
   # Spins up a PostgreSQL + cvcpkg-server stack in Docker, then runs

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Backtracking SAT-style resolver for component bundles.
 
 See docs/roadmap/split-distribution.md §5.5 for the algorithm

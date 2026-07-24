@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """add description/metadata to tokens and published_by to packages
 
 Revision ID: 007

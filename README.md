@@ -4,15 +4,19 @@
 
 A [CyberPC Angel, LLC](https://cyberpcangel.com) project.
 
-Component package manager for **libcvc-deps** prebuilt dependency bundles.
+Cross-platform, language-agnostic package manager and binary archive for
+the scientific computing community.
 
-`cvcpkg` resolves a set of component requirements against the libcvc-deps
-bundle catalog, downloads the matching archives, verifies their integrity,
-and materializes a single `CMAKE_PREFIX_PATH`-compatible install prefix.
+`cvcpkg` resolves a set of component requirements against a package
+catalog, downloads the matching prebuilt bundles, verifies their integrity,
+and materializes a single `CMAKE_PREFIX_PATH`-compatible install prefix —
+or builds any component from source via versioned recipes when no prebuilt
+bundle fits. It also runs as a self-hostable archive server with its own
+build orchestration, multi-platform builders, and publishing pipeline.
 
-**Downstream projects should adopt `cvcpkg` instead of manually downloading
-and extracting the monolithic libcvc-deps archive.** Per-component bundles
-are smaller, cacheable, and version-locked — you only pull what you need.
+**Downstream projects should adopt `cvcpkg` instead of manually managing
+dependency archives by hand.** Per-component bundles are smaller,
+cacheable, and version-locked — you only pull what you need.
 
 ## Quick start
 
@@ -1816,4 +1820,5 @@ everyone who has contributed on the
 
 ## License
 
-MIT — see [LICENSE](../../LICENSE).
+MIT — Copyright (c) 2026 CyberPC Angel, LLC. See [LICENSE](LICENSE) for the
+full text.
