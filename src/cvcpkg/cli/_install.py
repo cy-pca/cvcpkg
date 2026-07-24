@@ -751,7 +751,7 @@ def install_deps(
         return
 
     click.echo(
-        f"cvcpkg: install-deps {r.name} → {len(names_sorted)} deps: {' '.join(names_sorted)}"
+        f"cvcpkg: install-deps {r.name} -> {len(names_sorted)} deps: {' '.join(names_sorted)}"
     )
 
     # Reuse the full 'install' resolution/installation path with the recipe's

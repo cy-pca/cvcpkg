@@ -44,6 +44,29 @@ def _restore_default_sigpipe() -> None:
         pass
 
 
+def _force_utf8_stdio() -> None:
+    """Emit UTF-8 regardless of the console's locale encoding.
+
+    Windows consoles default to a legacy code page (cp1252), so any non-ASCII in
+    cvcpkg's output — the ``install-deps`` arrow, ``validate``'s ✓/✗ marks, the
+    box-drawing in help — raises ``UnicodeEncodeError`` and aborts the command
+    (this is what broke ``cvcpkg install-deps`` on the Windows build runners).
+    Reconfigure stdout/stderr to UTF-8; ``errors="replace"`` keeps output flowing
+    even if a stream cannot switch.  No-op on streams that predate
+    ``reconfigure`` (< 3.7) or don't support it.
+    """
+    import sys
+
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            pass
+
+
 # ── Root group ──────────────────────────────────────────────────
 
 
@@ -67,6 +90,7 @@ def cli(ctx: click.Context) -> None:
       cvcpkg validate
     """
     _restore_default_sigpipe()
+    _force_utf8_stdio()
     if ctx.invoked_subcommand is None:
         from cvcpkg.branding import splash
 
