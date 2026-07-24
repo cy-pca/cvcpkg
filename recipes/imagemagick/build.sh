@@ -72,11 +72,15 @@ fi
     --enable-hdri \
     --with-magick-plus-plus \
     --with-xml=yes \
+    --with-jpeg=yes \
+    --with-png=yes \
+    --with-webp=yes \
+    --with-tiff=yes \
+    --with-zstd=yes \
+    --with-lzma=yes \
+    --with-bzlib=yes \
     --without-perl \
     --without-x \
-    --without-jpeg \
-    --without-png \
-    --without-webp \
     --without-jbig \
     --without-raw \
     --without-openjp2 \

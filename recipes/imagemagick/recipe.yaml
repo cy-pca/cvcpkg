@@ -17,7 +17,14 @@ recipe:
   # breaking every consumer's link (libcvc: undefined reference to
   # xmlNanoFTPClose@LIBXML2_2.4.30). Now declares libxml2 and points configure at
   # it (see build.sh). The +cvc.7 bundle is immutable, so republishing needs +cvc.8.
-  cvc_revision: 8
+  #
+  # Bumped 8 -> 9: enable the full image-codec delegate set. +cvc.8 shipped a
+  # minimal build (fontconfig/freetype/lzma/tiff/xml/zlib/zstd — no jpeg/png/webp)
+  # because the recipe passed --without-jpeg/png/webp. Now builds with jpeg, png,
+  # webp, tiff, zstd, lzma and bzlib ON, with each codec declared so the exposed
+  # cvcpkg prefix is a complete link closure (this is also what puts -ljpeg/-lwebp
+  # on the link line, resolving both MagickCore's coders and libtiff's codec refs).
+  cvc_revision: 9
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -38,28 +45,34 @@ depends:
   build:
     - cmake
     - ninja
-  runtime:
+    # Full delegate set — a hermetic ImageMagick built entirely against cvcpkg
+    # codecs (no fall-through to the build host's system libraries). build.sh
+    # exposes the deps prefix and enables each delegate (--with-jpeg/png/webp/…);
+    # declaring the libs here puts them in the prefix so both ImageMagick's own
+    # coders AND libtiff's codec references resolve at link time. (The earlier
+    # jpeg_std_error / ZSTD_* link failures were exactly this: libtiff pulled in
+    # jpeg/zstd but they were --without / undeclared, so nothing put -ljpeg
+    # -lzstd on the link line.) cvcpkg resolves each dep's own transitive closure
+    # (e.g. freetype→brotli/png, fontconfig→expat) into the prefix automatically.
     - name: zlib
       version: "^1.3"
+    - name: bzip2
     - name: tiff
       version: "^4.6"
-    # tiff's own delegate closure. Once build.sh exposes the cvcpkg deps prefix
-    # (for libxml2, below), ImageMagick links the cvcpkg libtiff instead of the
-    # build host's system one — and the cvcpkg libtiff pulls in these codecs
-    # (see the tiff recipe). Without declaring them the prefix is missing
-    # libjpeg/libzstd/xz/webp/lerc and MagickCore fails to link with undefined
-    # references to jpeg_std_error / ZSTD_isError / ZSTD_getErrorName. Declaring
-    # tiff's full closure makes the exposed prefix self-consistent (a hermetic
-    # build) rather than silently falling back to system codecs.
     - name: libjpeg-turbo
       version: "^3.1"
+    - name: libpng
+    - name: libwebp
+      version: "^1.5"
     - name: xz
       version: "^5.6"
     - name: zstd
       version: "^1.5"
-    - name: libwebp
-      version: "^1.5"
     - name: lerc
+    # (freetype/fontconfig are auto-detected from the builder as in +cvc.8; not
+    # declared here to avoid dragging in their heavy build closure — python3 via
+    # meson, expat, brotli — for a text-rendering delegate the image pipeline
+    # does not need. Enable them hermetically in a later revision if wanted.)
     # ImageMagick links libxml2 (config-file parsing) and ships referencing it.
     # Pinned to the cvcpkg 2.12.x bundle, which has the FTP client removed — so
     # MagickCore never references xmlNanoFTP*. build.sh forces configure to use

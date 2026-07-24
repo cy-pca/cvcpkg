@@ -2,7 +2,16 @@ schema_version: 1
 recipe:
   name: libxml2
   upstream_version: "2.12.9"
-  cvc_revision: 1
+  # Bumped 1 -> 2: rebuild on the fleet to restore the manylinux glibc floor.
+  # The +cvc.1 linux bundle was built on a too-new host (glibc >= 2.38) and baked
+  # in an fmod@GLIBC_2.38 reference, so it required glibc 2.38 at link time —
+  # above the fleet builders' glibc (<= 2.35) and the project's <= 2.28 floor
+  # (docs/roadmap/native-toolchain-spec.md). Every consumer that links the cvcpkg
+  # libxml2 then failed: `undefined reference to fmod@GLIBC_2.38` (blocked
+  # imagemagick +cvc.8, volrover3, libcvc #138). Rebuilding on a fleet builder
+  # re-references fmod@GLIBC_2.2.5 and restores portability. The +cvc.1 bundle is
+  # immutable, so the corrected build ships as +cvc.2.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
