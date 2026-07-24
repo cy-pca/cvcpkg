@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 import tarfile
 import zipfile
 from pathlib import Path
+from unittest import mock
 from unittest.mock import patch
 
 import pytest
@@ -18,13 +20,16 @@ from cvcpkg.builder import (
     Recipe,
     RecipeError,
     SourceSpec,
+    _bootstrap_host_tools,
     _cache_key,
     _collect_host_tools,
     _dep_names,
     _detect_arch_for_platform,
     _discover_cross_toolchains,
     _file_list,
+    _find_patchelf,
     _is_any_recipe,
+    _patch_elf_rpath,
     _select_matrix_entry,
     _sha256_file,
     _source_cache_dir,
@@ -1890,6 +1895,185 @@ class TestRunBuildInterpreter:
         )
         with pytest.raises(BuildError, match="Unknown script type"):
             run_build(ctx)
+
+
+# ── Self-hosted patchelf relocation ─────────────────────────────
+
+
+class TestFindPatchelf:
+    """_find_patchelf prefers the cvcpkg-built patchelf over a system one."""
+
+    def test_prefers_prefix_over_path(self, tmp_path):
+        prefix = tmp_path / "deps"
+        (prefix / "bin").mkdir(parents=True)
+        pe = prefix / "bin" / "patchelf"
+        pe.write_text("#!/bin/sh\n")
+        # Even with a system patchelf on PATH, the prefix copy wins.
+        with patch("cvcpkg.builder.shutil.which", return_value="/usr/bin/patchelf"):
+            assert _find_patchelf(prefix) == str(pe)
+
+    def test_build_prefix_beats_deps_prefix(self, tmp_path):
+        build_prefix = tmp_path / "bp"
+        deps_prefix = tmp_path / "pfx"
+        for p in (build_prefix, deps_prefix):
+            (p / "bin").mkdir(parents=True)
+            (p / "bin" / "patchelf").write_text("#!/bin/sh\n")
+        # First prefix given wins (build prefix is passed first by run_build).
+        assert _find_patchelf(build_prefix, deps_prefix) == str(build_prefix / "bin" / "patchelf")
+
+    def test_skips_none_and_missing(self, tmp_path):
+        prefix = tmp_path / "pfx"
+        (prefix / "bin").mkdir(parents=True)
+        (prefix / "bin" / "patchelf").write_text("#!/bin/sh\n")
+        assert _find_patchelf(None, tmp_path / "absent", prefix) == str(prefix / "bin" / "patchelf")
+
+    def test_falls_back_to_path(self, tmp_path):
+        with patch("cvcpkg.builder.shutil.which", return_value="/usr/bin/patchelf"):
+            assert _find_patchelf(tmp_path / "absent", None) == "/usr/bin/patchelf"
+
+    def test_none_when_nothing_available(self, tmp_path):
+        with patch("cvcpkg.builder.shutil.which", return_value=None):
+            assert _find_patchelf(tmp_path / "absent") is None
+
+
+class TestPatchElfRpath:
+    """_patch_elf_rpath uses the supplied patchelf, not the system one."""
+
+    def test_uses_given_patchelf(self, tmp_path):
+        lib = tmp_path / "install" / "lib"
+        lib.mkdir(parents=True)
+        (lib / "libx.so").write_bytes(b"\x7fELF fake")
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            return mock.MagicMock(stdout="", returncode=0)
+
+        # shutil.which must never be consulted when a patchelf is supplied.
+        with (
+            patch("cvcpkg.builder.subprocess.run", side_effect=fake_run),
+            patch("cvcpkg.builder.shutil.which", side_effect=AssertionError("system PATH used")),
+        ):
+            _patch_elf_rpath(tmp_path / "install", "/opt/cvcpkg/bin/patchelf")
+
+        assert calls, "patchelf was not invoked"
+        assert all(c[0] == "/opt/cvcpkg/bin/patchelf" for c in calls)
+        assert any("--set-rpath" in c for c in calls)
+        assert any(str(lib / "libx.so") in c for c in calls)
+
+    def test_none_patchelf_falls_back_to_which(self, tmp_path):
+        lib = tmp_path / "install" / "lib"
+        lib.mkdir(parents=True)
+        (lib / "libx.so").write_bytes(b"\x7fELF fake")
+        with (
+            patch("cvcpkg.builder.shutil.which", return_value=None) as which,
+            patch("cvcpkg.builder.subprocess.run") as run,
+        ):
+            _patch_elf_rpath(tmp_path / "install", None)
+        which.assert_called_once_with("patchelf")
+        run.assert_not_called()  # no patchelf resolved -> nothing to do
+
+    def test_no_lib_dir_is_noop(self, tmp_path):
+        (tmp_path / "install").mkdir()
+        with patch("cvcpkg.builder.subprocess.run") as run:
+            _patch_elf_rpath(tmp_path / "install", "/opt/cvcpkg/bin/patchelf")
+        run.assert_not_called()
+
+
+class TestBootstrapHostTools:
+    """patchelf is bootstrapped as a host tool for linux shared builds."""
+
+    def _recipes(self, tmp_path, names):
+        recipes_dir = tmp_path / "recipes"
+        for name in names:
+            d = {
+                **MINIMAL_RECIPE,
+                "recipe": {"name": name, "upstream_version": "1.0.0", "cvc_revision": 1},
+            }
+            _write_recipe(recipes_dir / name, d)
+        return load_all_recipes([recipes_dir])
+
+    def test_adds_patchelf_for_linux_shared(self, tmp_path):
+        recipes = self._recipes(tmp_path, ["patchelf", "foo"])
+        boot = _bootstrap_host_tools(recipes, "linux", "shared")
+        assert [r.name for r in boot] == ["patchelf"]
+
+    def test_none_for_static(self, tmp_path):
+        recipes = self._recipes(tmp_path, ["patchelf", "foo"])
+        assert _bootstrap_host_tools(recipes, "linux", "static") == []
+
+    def test_none_for_non_linux(self, tmp_path):
+        recipes = self._recipes(tmp_path, ["patchelf", "foo"])
+        assert _bootstrap_host_tools(recipes, "macos", "shared") == []
+
+    def test_none_when_patchelf_recipe_absent(self, tmp_path):
+        recipes = self._recipes(tmp_path, ["foo", "bar"])
+        assert _bootstrap_host_tools(recipes, "linux", "shared") == []
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="ELF RPATH self-host relocation is a Linux/BSD path; the fake "
+    "patchelf and build.sh are POSIX shell scripts Windows cannot exec.",
+)
+class TestRunBuildSelfHostRelocation:
+    """End-to-end: a linux shared build relocates via cvcpkg's own patchelf
+    with NO system patchelf present — the self-host acceptance path."""
+
+    def test_relocates_with_prefix_patchelf_no_system(self, tmp_path):
+        from cvcpkg.builder import run_build
+
+        # A fake cvcpkg-built patchelf in the build prefix that records the
+        # binary path and args it was called with (so we can prove it — and
+        # not a system patchelf — did the relocation).
+        build_prefix = tmp_path / "bp"
+        (build_prefix / "bin").mkdir(parents=True)
+        marker = tmp_path / "patchelf.log"
+        fake_pe = build_prefix / "bin" / "patchelf"
+        fake_pe.write_text(f'#!/bin/sh\necho "$0 $*" >> "{marker}"\nexit 0\n')
+        fake_pe.chmod(0o755)
+
+        # A recipe whose build.sh installs a shared library needing relocation.
+        recipe_dir = tmp_path / "recipes" / "demolib"
+        recipe_dir.mkdir(parents=True)
+        _write_recipe(recipe_dir, MINIMAL_RECIPE)
+        (recipe_dir / "build.sh").write_text(
+            '#!/usr/bin/env bash\nset -e\nmkdir -p "$CVC_INSTALL_DIR/lib"\n'
+            'printf "\\x7fELF" > "$CVC_INSTALL_DIR/lib/libdemo.so"\n'
+        )
+
+        recipe = Recipe.load(recipe_dir)
+        ctx = BuildContext(
+            recipe=recipe,
+            platform="linux",
+            config="release",
+            link="shared",
+            prefix=tmp_path / "prefix",
+            source_dir=tmp_path / "src",
+            build_dir=tmp_path / "build",
+            install_dir=tmp_path / "install",
+            work_dir=tmp_path / "work",
+            build_prefix=build_prefix,
+        )
+
+        # Simulate a box with NO system patchelf, without hiding bash (which
+        # run_build also resolves via shutil.which): only "patchelf" returns
+        # None, everything else resolves via the real which (captured before
+        # the patch, since shutil is a shared module).
+        import shutil as _shutil
+
+        _real_which = _shutil.which
+
+        def which_no_patchelf(name):
+            return None if name == "patchelf" else _real_which(name)
+
+        with patch("cvcpkg.builder.shutil.which", side_effect=which_no_patchelf):
+            run_build(ctx)
+
+        log = marker.read_text()
+        assert str(fake_pe) in log, "cvcpkg's build-prefix patchelf was not used"
+        assert "--set-rpath" in log
+        assert "libdemo.so" in log
 
 
 # ── Tags ────────────────────────────────────────────────────────

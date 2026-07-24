@@ -751,6 +751,32 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
     return env
 
 
+def _find_patchelf(*prefixes: Path | None) -> str | None:
+    """Find patchelf, preferring a cvcpkg-built copy under *prefixes*.
+
+    Packaging rewrites installed ``.so`` RPATHs to ``$ORIGIN`` with patchelf
+    (see :func:`_patch_elf_rpath`).  For the self-hosting goal — cvcpkg
+    bootstraps all of its own build tooling — prefer the ``patchelf`` that
+    cvcpkg built into the build/deps prefix (its ``bin/`` is populated when the
+    ``patchelf`` recipe is bootstrapped as a host tool, see
+    :func:`_bootstrap_host_tools`) over a system install.  Each prefix's
+    ``bin/patchelf`` is tried in order; falls back to ``PATH`` otherwise.
+
+    ``_patch_elf_rpath`` runs in the cvcpkg parent process, whose ``PATH``
+    does not include the build prefix's ``bin`` (only the build *subprocess*
+    gets that, via ``_build_env``), so the prefix must be probed explicitly.
+
+    Returns the resolved patchelf path, or ``None`` when none is available.
+    """
+    for prefix in prefixes:
+        if prefix is None:
+            continue
+        candidate = prefix / "bin" / "patchelf"
+        if candidate.is_file():
+            return str(candidate)
+    return shutil.which("patchelf")
+
+
 # ELF platforms whose run-time linker expands ``$ORIGIN`` in RPATH, so the
 # $ORIGIN rewrite in _patch_elf_rpath makes their shared bundles relocatable.
 # OpenBSD is deliberately excluded: its ld.so does not implement $ORIGIN, so the
@@ -760,7 +786,7 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
 _ELF_RPATH_PLATFORMS = frozenset({"linux", "freebsd", "netbsd", "dragonflybsd"})
 
 
-def _patch_elf_rpath(install_dir: Path) -> None:
+def _patch_elf_rpath(install_dir: Path, patchelf: str | None = None) -> None:
     """Prepend ``$ORIGIN`` to the RPATH of shared libraries in *install_dir*.
 
     This makes ELF shared-library bundles relocatable without requiring
@@ -768,6 +794,10 @@ def _patch_elf_rpath(install_dir: Path) -> None:
     run-time linker expands ``$ORIGIN`` (FreeBSD/GhostBSD, NetBSD,
     DragonflyBSD) — see ``_ELF_RPATH_PLATFORMS``.  Only runs when patchelf is
     available; silently skips otherwise.
+
+    *patchelf* is the resolved patchelf binary to use — callers pass the
+    cvcpkg-built one (via :func:`_find_patchelf`) so packaging does not depend
+    on a system install.  When ``None`` it is looked up on ``PATH``.
 
     Crucially it PRESERVES any pre-existing ``$ORIGIN``-relative RPATH
     entries rather than clobbering them.  Python wheels bundle their native
@@ -779,7 +809,8 @@ def _patch_elf_rpath(install_dir: Path) -> None:
     (build-temp) RPATH entries are still dropped — only relocatable
     ``$ORIGIN``-relative ones are kept.
     """
-    patchelf = shutil.which("patchelf")
+    if patchelf is None:
+        patchelf = shutil.which("patchelf")
     if not patchelf:
         return
     lib_dir = install_dir / "lib"
@@ -953,12 +984,15 @@ def run_build(
     # consumers load the libraries without LD_LIBRARY_PATH/DYLD_* — $ORIGIN
     # RPATH on ELF (Linux + the $ORIGIN-honouring BSDs), @rpath install names on
     # macOS. (Windows resolves DLLs from the prefix bin dir on PATH, so it needs
-    # no rewrite here.)
+    # no rewrite here.)  On ELF, prefer cvcpkg's own patchelf (bootstrapped into
+    # the build prefix as a host tool) over a system install, so packaging is
+    # self-hosting — see _find_patchelf and _bootstrap_host_tools.
     if ctx.link == "shared":
         if ctx.platform == "macos":
             _patch_macos_install_names(ctx.install_dir)
         elif ctx.platform in _ELF_RPATH_PLATFORMS:
-            _patch_elf_rpath(ctx.install_dir)
+            patchelf = _find_patchelf(ctx.build_prefix, ctx.prefix)
+            _patch_elf_rpath(ctx.install_dir, patchelf)
 
 
 # ── Test execution ──────────────────────────────────────────────
@@ -2026,6 +2060,28 @@ def _collect_host_tools(
     return toolchains
 
 
+def _bootstrap_host_tools(all_recipes: list[Recipe], platform: str, link: str) -> list[Recipe]:
+    """Host tools cvcpkg must build to package its own bundles for *platform*.
+
+    These are packaging-time tools the builder itself invokes (as opposed to
+    tools a recipe declares) and that cvcpkg should self-host rather than take
+    from the build machine.  Currently just ``patchelf`` for linux shared
+    builds: :func:`_patch_linux_rpath` rewrites every installed ``.so`` RPATH to
+    ``$ORIGIN`` so bundles are relocatable, and building patchelf ourselves
+    keeps that step from depending on a system install.
+
+    Returned recipes are appended to the host-tool set so they build into the
+    build prefix — ahead of the target recipes that get relocated.  Returns an
+    empty list when the platform/link needs no bootstrap tool or the recipe is
+    unavailable (relocation then falls back to a system patchelf, if any).
+    """
+    if platform == "linux" and link == "shared":
+        patchelf = next((r for r in all_recipes if r.name == "patchelf"), None)
+        if patchelf is not None:
+            return [patchelf]
+    return []
+
+
 def _detect_arch_for_platform(platform: str) -> str:
     """Return the architecture string for a given platform."""
     if platform == "any":
@@ -2422,6 +2478,15 @@ def build_all(
     # Identify host-tool recipes needed for cross-compilation.
     host_tool_recipes = _collect_host_tools(ordered, all_recipes, platform, host_platform)
 
+    # Bootstrap cvcpkg's own packaging host tools (e.g. patchelf for linux
+    # shared RPATH relocation) so packaging never depends on system installs.
+    # These build into the build prefix before the target recipes they relocate.
+    _existing_ht = {r.name for r in host_tool_recipes}
+    for _bt in _bootstrap_host_tools(all_recipes, platform, link):
+        if _bt.name not in _existing_ht:
+            host_tool_recipes.append(_bt)
+            _existing_ht.add(_bt.name)
+
     # Determine which recipes are assigned to this shard.
     if shard is not None:
         shard_idx, shard_total = shard
@@ -2497,9 +2562,7 @@ def build_all(
     # recipes but use the host platform for keys and build scripts.
     if host_tool_recipes:
         host_ordered = resolve_build_order(host_tool_recipes, host_platform)
-        print(
-            f"\ncvcpkg: building {len(host_ordered)} host tool(s) for {platform} cross-compilation"
-        )
+        print(f"\ncvcpkg: building {len(host_ordered)} host tool(s) into the build prefix")
         for ht_recipe in host_ordered:
             ht_platform = host_platform
             ht_arch = _detect_arch_for_platform(ht_platform)
