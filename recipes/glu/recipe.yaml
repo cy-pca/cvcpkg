@@ -14,7 +14,9 @@ recipe:
 
 source:
   type: tarball
-  url: https://mesa.freedesktop.org/archive/glu/glu-9.0.3.tar.xz
+  # Canonical mesa archive (mesa.freedesktop.org/archive/... 308-redirects here,
+  # and cvcpkg's urllib downloader doesn't follow it). Same tarball/sha256.
+  url: https://archive.mesa3d.org/glu/glu-9.0.3.tar.xz
   sha256: "bd43fe12f374b1192eb15fe20e45ff456b9bc26ab57f0eee919f96ca0f8a330f"
   strip_components: 1
 
@@ -38,4 +40,10 @@ package:
 build:
   matrix:
     - platform: linux
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
       script: build.sh

@@ -40,3 +40,9 @@ build:
   matrix:
     - platform: linux
       script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh

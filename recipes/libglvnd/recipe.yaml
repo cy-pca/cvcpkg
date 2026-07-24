@@ -27,8 +27,12 @@ depends:
     - pkg-config
     - name: xorgproto
     - name: python311
+    - name: libxext
   runtime:
+    # libGLX links libX11 + libXext (GLX protocol); the GL driver ICD is
+    # resolved from the system at runtime via the GLVND dispatch.
     - name: libx11
+    - name: libxext
   host_tools: []
 
 package:
@@ -40,4 +44,10 @@ package:
 build:
   matrix:
     - platform: linux
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
       script: build.sh

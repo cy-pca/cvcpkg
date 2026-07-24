@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: libice
   upstream_version: "1.1.2"
-  cvc_revision: 1
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -37,4 +37,10 @@ package:
 build:
   matrix:
     - platform: linux
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
       script: build.sh
