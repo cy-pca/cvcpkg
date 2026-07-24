@@ -376,6 +376,154 @@ build:
     return rdir
 
 
+def _write_any_recipe(tmp_path: Path, name: str, version="1.0.0", rev=1, deps=()):
+    """A platform-independent (`platform: any`) recipe."""
+    rdir = tmp_path / "recipes" / name
+    rdir.mkdir(parents=True)
+    deps_yaml = "".join(f"    - {d}\n" for d in deps)
+    (rdir / "recipe.yaml").write_text(
+        f"""schema_version: 1
+recipe:
+  name: {name}
+  upstream_version: "{version}"
+  cvc_revision: {rev}
+depends:
+  build:
+{deps_yaml if deps else ""}
+build:
+  matrix:
+    - platform: any
+      script: build.sh
+"""
+    )
+    return rdir
+
+
+class TestSubmitDagNoarch:
+    """A `platform: any` recipe is scheduled ONCE as any/noarch, not per host."""
+
+    def _fake_client(self, posted_bodies):
+        class FakeResp:
+            status_code = 200
+            text = ""
+
+            def __init__(self, payload):
+                self._payload = payload
+
+            def json(self):
+                return self._payload
+
+            def raise_for_status(self):
+                pass
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                if "/v1/builders" in url:
+                    return FakeResp(
+                        {
+                            "builders": [
+                                {
+                                    "platform": "linux",
+                                    "arch": "x86_64",
+                                    "capabilities": {
+                                        "cross_platforms": [
+                                            {"platform": "windows", "arch": "x86_64"}
+                                        ]
+                                    },
+                                }
+                            ]
+                        }
+                    )
+                if "/v1/packages" in url:
+                    return FakeResp({"total": 0, "packages": []})
+                raise AssertionError(f"unexpected GET {url}")
+
+            def post(self, url, json=None, **kw):
+                posted_bodies.append(json)
+                return FakeResp({"dag_id": "dag-t", "total": len(json["jobs"]), "jobs": []})
+
+        return FakeClient
+
+    def _submit(self, tmp_path, monkeypatch, posted, *recipes):
+        monkeypatch.setattr("httpx.Client", self._fake_client(posted))
+        return main(
+            [
+                "builds",
+                "submit-dag",
+                "--server",
+                "http://s.example",
+                "--token",
+                "tok",
+                "--platform",
+                "linux,windows",
+                "--arch",
+                "x86_64",
+                "--recipes-dir",
+                str(tmp_path / "recipes"),
+                "--no-default-recipes",
+                *recipes,
+            ]
+        )
+
+    def test_any_recipe_scheduled_once_as_noarch(self, tmp_path, monkeypatch):
+        _write_any_recipe(tmp_path, "idna")
+        # anyio (any) depends on idna (any) + python312 (concrete, not submitted)
+        _write_any_recipe(tmp_path, "anyio", deps=("idna", "python312"))
+        _write_recipe(tmp_path, "asyncpg-cp311", version="0.31.0", rev=1)
+
+        posted: list = []
+        ret = self._submit(tmp_path, monkeypatch, posted, "idna", "anyio", "asyncpg-cp311")
+        assert ret == 0
+
+        def _names(body):
+            return {j["recipe_name"] for j in body["jobs"]}
+
+        noarch_bodies = [b for b in posted if all(j["platform"] == "any" for j in b["jobs"])]
+        concrete_bodies = [b for b in posted if any(j["platform"] != "any" for j in b["jobs"])]
+
+        # The two 'any' recipes land in exactly ONE noarch DAG, not per host.
+        assert len(noarch_bodies) == 1
+        (noarch,) = noarch_bodies
+        assert _names(noarch) == {"idna", "anyio"}
+        for j in noarch["jobs"]:
+            assert (j["platform"], j["arch"]) == ("any", "noarch")
+
+        # Intra-'any' dependency edge preserved; the concrete build dep
+        # (python312, not in this DAG) is simply omitted rather than dangling.
+        idx = {j["recipe_name"]: i for i, j in enumerate(noarch["jobs"])}
+        anyio_job = noarch["jobs"][idx["anyio"]]
+        assert anyio_job["depends_on"] == [idx["idna"]]
+
+        # The 'any' recipes never appear in a per-host DAG.
+        for b in concrete_bodies:
+            assert not (_names(b) & {"idna", "anyio"})
+        # The concrete C-ext recipe fans out per host as before.
+        assert concrete_bodies, "expected per-host DAGs for the concrete recipe"
+        for b in concrete_bodies:
+            assert _names(b) == {"asyncpg-cp311"}
+
+    def test_only_any_recipes_submits_just_the_noarch_dag(self, tmp_path, monkeypatch):
+        _write_any_recipe(tmp_path, "certifi")
+        posted: list = []
+        ret = self._submit(tmp_path, monkeypatch, posted, "certifi")
+        assert ret == 0
+        # No concrete DAG at all — one noarch DAG carrying certifi.
+        assert len(posted) == 1
+        (body,) = posted
+        assert [(j["recipe_name"], j["platform"], j["arch"]) for j in body["jobs"]] == [
+            ("certifi", "any", "noarch")
+        ]
+
+
 class TestSubmitDagSkipExisting:
     def _fake_client(self, published, posted_bodies):
         class FakeResp:

@@ -463,6 +463,65 @@ class TestPlatformAnyManifest:
         dep_names = [d["name"] for d in manifest["dependencies"]["required"]]
         assert "base-theme" in dep_names
 
+    def test_pack_recipe_packages_any_recipe_as_noarch(self, tmp_path, monkeypatch):
+        """pack_recipe always tags a `platform: any` recipe's bundle any/noarch.
+
+        The build itself still runs on a concrete host (a build can't run "on
+        any"), so we stub the compile step and assert only the *identity* of the
+        produced bundle: filename stem and manifest both say any/noarch even
+        though we asked to build for linux/x86_64.  This is the single-bundle
+        publish that submit-dag/_choose_builder schedule once.
+        """
+        import tarfile
+
+        import cvcpkg.builder as builder_mod
+        from cvcpkg.builder import BuildContext, Recipe, pack_recipe
+
+        recipes_dir = tmp_path / "recipes"
+        recipes_dir.mkdir()
+        (recipes_dir / "_common").mkdir()
+        _create_any_recipe(recipes_dir, "widgets", files={"w.js": "console.log(1)"})
+        recipe_dir = recipes_dir / "widgets"
+
+        # Stand in for the real build: populate an install tree, skip compiling.
+        def _fake_build_recipe(rdir, *, platform, config, link, prefix, **kw):
+            r = Recipe.load(rdir)
+            work = tmp_path / "work"
+            install = work / "install"
+            (install / "share" / "widgets").mkdir(parents=True)
+            (install / "share" / "widgets" / "w.js").write_text("console.log(1)")
+            return BuildContext(
+                recipe=r,
+                platform=platform,  # concrete host, e.g. "linux"
+                config=config,
+                link=link,
+                prefix=prefix or install,
+                source_dir=work / "src",
+                build_dir=work / "build",
+                install_dir=install,
+                work_dir=work,
+            )
+
+        monkeypatch.setattr(builder_mod, "build_recipe", _fake_build_recipe)
+
+        out = tmp_path / "dist"
+        archive_path, _sha, size = pack_recipe(
+            recipe_dir, platform="linux", arch="x86_64", output_dir=out
+        )
+
+        # Built on linux/x86_64, but packaged noarch — no host in the stem.
+        assert "any-noarch" in archive_path.name
+        assert "linux" not in archive_path.name
+        assert archive_path.name.endswith(".tar.gz")
+        assert size > 0
+
+        # The manifest the publish path reads records the noarch identity.
+        with tarfile.open(archive_path) as tf:
+            raw = tf.extractfile("share/libcvc-deps/manifest.yaml").read()
+        manifest = yaml.safe_load(raw)
+        assert manifest["bundle"]["platform"] == "any"
+        assert manifest["bundle"]["arch"] == "noarch"
+
 
 # ── Cache key isolation tests ───────────────────────────────────
 

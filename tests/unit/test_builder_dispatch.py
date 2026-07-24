@@ -107,6 +107,33 @@ class TestMatchingUnchanged:
         assert _choose_builder(_job(), []) is None
 
 
+class TestNoarchDispatch:
+    """A platform-independent (any/noarch) job runs on any builder in namespace."""
+
+    def test_noarch_job_runs_on_any_platform_builder(self):
+        # A noarch job has no host of its own; a linux builder can build it.
+        b = _builder(platform="linux", arch="x86_64")
+        assert _choose_builder(_job(platform="any", arch="noarch"), [b]) is b
+
+    def test_noarch_job_runs_on_a_differently_named_host(self):
+        # Even a macOS/arm64 builder can produce the single noarch bundle.
+        b = _builder(platform="macos", arch="arm64")
+        assert _choose_builder(_job(platform="any", arch="noarch"), [b]) is b
+
+    def test_noarch_job_still_respects_namespace_isolation(self):
+        # Being noarch does not let it cross a namespace boundary.
+        assert (
+            _choose_builder(_job(org="shell", platform="any", arch="noarch"), [_builder(org="")])
+            is None
+        )
+
+    def test_noarch_job_respects_capacity(self):
+        assert _choose_builder(_job(platform="any", arch="noarch"), [_builder(cur=2, mx=2)]) is None
+
+    def test_noarch_job_with_no_builders_returns_none(self):
+        assert _choose_builder(_job(platform="any", arch="noarch"), []) is None
+
+
 class TestServedNamespaces:
     """Multi-tenant shared fleet: a builder serving a SET of namespaces."""
 

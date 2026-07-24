@@ -1039,6 +1039,17 @@ def builds_submit_dag(
         matrix = data.get("build", {}).get("matrix", [])
         return any(entry.get("platform") in (plat, "any") for entry in matrix)
 
+    def _is_any(name: str) -> bool:
+        """True if *name* is platform-independent (every matrix entry is 'any').
+
+        Such a recipe ships one noarch bundle valid on every host, so it is
+        scheduled once (platform=any/arch=noarch) instead of fanned out per
+        concrete platform.
+        """
+        data = recipe_data.get(name, {})
+        matrix = data.get("build", {}).get("matrix", [])
+        return bool(matrix) and all(entry.get("platform") == "any" for entry in matrix)
+
     # Valid platform→arch pairings.  wasm32 only pairs with wasm/wasi.
     _wasm_arches = {"wasm32"}
     _wasm_platforms = {"wasm", "wasi"}
@@ -1134,6 +1145,14 @@ def builds_submit_dag(
         rev = int(block.get("cvc_revision", 1))
         return f"{upstream_v}+cvc.{rev}"
 
+    # Partition the requested recipes: platform-independent ('any') recipes are
+    # scheduled once as a single noarch DAG (below); everything else fans out
+    # per concrete platform/arch.  Keeping the 'any' recipes out of the
+    # per-platform DAGs is what prevents the arch-pinned mispublish (one
+    # linux-x86_64 bundle, one macos-arm64 bundle, ...) of a noarch package.
+    any_names = [n for n in recipe_names if _is_any(n)]
+    concrete_names = [n for n in recipe_names if not _is_any(n)]
+
     dag_ids: list[str] = []
     for plat in platforms:
         for ar in arches:
@@ -1152,8 +1171,8 @@ def builds_submit_dag(
                     if plat in _static_only_platforms and lnk != "static":
                         continue
                     # Filter recipes: skip those with no matrix entry
-                    eligible = [n for n in recipe_names if _has_platform_entry(n, plat)]
-                    skipped = set(recipe_names) - set(eligible)
+                    eligible = [n for n in concrete_names if _has_platform_entry(n, plat)]
+                    skipped = set(concrete_names) - set(eligible)
                     if skipped:
                         click.echo(
                             f"  Skipping {len(skipped)} recipe(s) "
@@ -1217,6 +1236,81 @@ def builds_submit_dag(
                     dag_ids.append(data["dag_id"])
                     click.echo(
                         f"DAG {data['dag_id']}: {data['total']} jobs ({plat}/{ar}/{cfg}/{lnk})"
+                    )
+
+    # ── Schedule platform-independent (noarch) recipes ONCE ──────────
+    # A `platform: any` recipe builds one bundle valid everywhere, so it is
+    # submitted as a single any/noarch DAG (per config/link) rather than once
+    # per target platform.  The server dispatches these to any registered
+    # builder (see _choose_builder); the builder builds natively and publishes
+    # the result as platform=any/arch=noarch (see pack_recipe).
+    if any_names:
+        have_builders = bool(_supported_targets or _supported_platforms)
+        if _builder_check and not have_builders:
+            click.echo(
+                f"  Skipping {len(any_names)} noarch recipe(s): " "no registered builder available"
+            )
+        else:
+            for cfg in configs:
+                for lnk in links:
+                    eligible = list(any_names)
+
+                    # --skip-existing: drop noarch variants already published.
+                    if skip_existing and eligible:
+                        satisfied = [
+                            n
+                            for n in eligible
+                            if (n, _full_version(n), "any", "noarch", cfg, lnk) in _published
+                        ]
+                        if satisfied:
+                            click.echo(
+                                f"  Skipping {len(satisfied)} already-published noarch "
+                                f"recipe(s) for {cfg}/{lnk}: {', '.join(sorted(satisfied))}"
+                            )
+                            eligible = [n for n in eligible if n not in set(satisfied)]
+
+                    if not eligible:
+                        click.echo(f"  No eligible noarch recipes for {cfg}/{lnk}")
+                        continue
+
+                    name_to_idx = {name: idx for idx, name in enumerate(eligible)}
+                    jobs = []
+                    for name in eligible:
+                        # Only edges to other noarch recipes in this DAG are
+                        # expressed; a concrete build dep (e.g. python312) is
+                        # built elsewhere and fetched at build time.
+                        dep_indices = list(
+                            dict.fromkeys(
+                                name_to_idx[dep_name]
+                                for dep_name in _dep_names(name)
+                                if dep_name in name_to_idx
+                            )
+                        )
+                        jobs.append(
+                            {
+                                "recipe_name": name,
+                                "platform": "any",
+                                "arch": "noarch",
+                                "config": cfg,
+                                "link": lnk,
+                                "org_slug": org_slug,
+                                "depends_on": dep_indices,
+                            }
+                        )
+
+                    body: dict = {"jobs": jobs}
+                    if dag_id:
+                        body["dag_id"] = f"{dag_id}-any-noarch-{cfg}-{lnk}"
+
+                    data = _api_request(
+                        "post",
+                        f"{server.rstrip('/')}/v1/builds/dag",
+                        token,
+                        json=body,
+                    )
+                    dag_ids.append(data["dag_id"])
+                    click.echo(
+                        f"DAG {data['dag_id']}: {data['total']} jobs (any/noarch/{cfg}/{lnk})"
                     )
 
     if wait:

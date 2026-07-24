@@ -859,6 +859,14 @@ def builder_run(
                         if p.get("platform") == job_platform and p.get("arch") == job_arch:
                             match = p
                             break
+                # Final relax: a platform-independent (noarch) dependency — a
+                # pure-Python wheel — is valid on every host, so a concrete
+                # build resolves it to the single any/noarch variant.
+                if match is None:
+                    for p in pkgs:
+                        if p.get("platform") == "any" and p.get("arch") == "noarch":
+                            match = p
+                            break
                 if match is None:
                     log_cb(
                         f"  dep {dep_name}: no matching variant for "
@@ -1226,6 +1234,14 @@ def builder_run(
         job_arch = job.get("arch", arch)
         job_config = job.get("config", "release")
         job_link = job.get("link", "shared")
+        # A platform-independent (noarch) job produces a single any/noarch
+        # bundle. It is not a cross-compile: it builds natively on this builder
+        # and its build-time deps (e.g. the CPython interpreter) come from the
+        # host's own concrete packages, while pack_recipe tags the result
+        # any/noarch. Resolve deps + build against the builder's native target.
+        is_noarch = job_platform == "any" or job_arch == "noarch"
+        build_platform = platform if is_noarch else job_platform
+        build_arch = arch if is_noarch else job_arch
         # Scope this thread's recipe fetches + publish to the job's namespace.
         # A multi-namespace builder must never fetch/publish a job under its
         # home --org instead of the job's own org.
@@ -1277,7 +1293,7 @@ def builder_run(
             # Detect cross-compilation: job targets a different platform
             # than the builder's native platform (e.g. wasm on linux).
             host_plat = ""
-            if job_platform != platform:
+            if job_platform != platform and not is_noarch:
                 host_plat = platform
                 _stream_log(
                     job_id,
@@ -1310,7 +1326,7 @@ def builder_run(
             )
             log_cb = lambda text, _jid=job_id: _stream_log(_jid, text)  # noqa: E731
             _install_deps(
-                recipe_dir, dep_prefix, job_platform, job_arch, job_config, job_link, log_cb
+                recipe_dir, dep_prefix, build_platform, build_arch, job_config, job_link, log_cb
             )
 
             # 3a-2. Install cross-toolchains (e.g. emsdk for wasm)
@@ -1330,8 +1346,8 @@ def builder_run(
             try:
                 archive_path, sha256, size = pack_recipe(
                     recipe_dir,
-                    platform=job_platform,
-                    arch=job_arch,
+                    platform=build_platform,
+                    arch=build_arch,
                     config=job_config,
                     link=job_link,
                     prefix=dep_prefix,

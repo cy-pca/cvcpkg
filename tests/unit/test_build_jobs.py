@@ -170,6 +170,45 @@ class TestDbBuildJobStore:
 
         self._run(_test())
 
+    def test_reap_unschedulable_keeps_noarch_when_fleet_nonempty(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            # A noarch job registers no builder as ("any", "noarch"), yet any
+            # builder can serve it — so with a non-empty fleet it must NOT reap.
+            noarch = await store.create(
+                recipe_name="idna",
+                platform="any",
+                arch="noarch",
+                submitted_by="test-admin",
+                recipe_version="3.11",
+            )
+            reaped = await store.reap_unschedulable({("linux", "x86_64")}, set(), min_age_seconds=0)
+            assert noarch.id not in {j.id for j in reaped}
+            assert (await store.get(noarch.id)).status == BuildJobStatus.pending
+
+        self._run(_test())
+
+    def test_reap_unschedulable_reaps_noarch_when_no_builders(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            # With no registered builders at all, even a noarch job is stuck.
+            noarch = await store.create(
+                recipe_name="idna",
+                platform="any",
+                arch="noarch",
+                submitted_by="test-admin",
+                recipe_version="3.11",
+            )
+            reaped = await store.reap_unschedulable(set(), set(), min_age_seconds=0)
+            assert noarch.id in {j.id for j in reaped}
+            assert (await store.get(noarch.id)).status == BuildJobStatus.unschedulable
+
+        self._run(_test())
+
     def test_get_not_found(self):
         from cvcpkg.server.db_stores import DbBuildJobStore
 

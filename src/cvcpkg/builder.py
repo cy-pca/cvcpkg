@@ -435,6 +435,12 @@ def _resolve_artifact(source: SourceSpec, platform: str, arch: str) -> tuple[str
     key = f"{platform}-{arch}"
     entry = source.artifacts.get(key)
     if entry is None:
+        # Platform-independent ('any') fallback: a recipe whose only artifact is
+        # keyed ``any`` (a pure-Python ``py3-none-any`` wheel — valid on every
+        # host) resolves for any concrete platform/arch, and for the synthetic
+        # ``any``/``noarch`` build identity a noarch recipe is packaged under.
+        entry = source.artifacts.get("any")
+    if entry is None:
         available = ", ".join(sorted(source.artifacts)) or "(none)"
         raise RecipeError(f"no artifact for {key}; recipe provides: {available}")
 
@@ -1596,17 +1602,38 @@ def pack_recipe(
     host_platform: str = "",
     cross_toolchain_env: dict[str, str] | None = None,
 ) -> tuple[Path, str, int]:
-    """Build + package a recipe. Returns (archive_path, sha256, size)."""
-    from cvcpkg.platform import detect_arch
+    """Build + package a recipe. Returns (archive_path, sha256, size).
+
+    A platform-independent recipe (all matrix entries ``platform: any``) is
+    always packaged as a single ``any``/``noarch`` bundle, regardless of the
+    host it is built on and of the ``platform``/``arch`` the caller passes.  A
+    build can't literally run "on any", so it still compiles/installs on a
+    concrete host; only the resulting package's identity is noarch.  This is
+    what lets ``builds submit-dag`` schedule such a recipe once and publish it
+    once, rather than fanning out an arch-pinned bundle per host.
+    """
+    from cvcpkg.platform import detect_arch, detect_platform
+
+    recipe = Recipe.load(recipe_dir)
+    is_any = _is_any_recipe(recipe)
 
     if not arch:
         arch = detect_arch()
+    # The host we actually build on. "any" is not a real host, so fall back to
+    # the detected platform for the compile/install step.
+    build_platform = platform or detect_platform()
+    if build_platform == "any":
+        build_platform = detect_platform()
+    # The package identity: noarch for an 'any' recipe, else the build target.
+    pkg_platform = "any" if is_any else build_platform
+    pkg_arch = "noarch" if is_any else arch
+
     if output_dir is None:
         output_dir = Path.cwd() / "dist"
 
     ctx = build_recipe(
         recipe_dir,
-        platform=platform,
+        platform=build_platform,
         config=config,
         link=link,
         prefix=prefix,
@@ -1620,8 +1647,8 @@ def pack_recipe(
     manifest = generate_manifest(
         ctx.recipe,
         ctx.install_dir,
-        ctx.platform,
-        arch,
+        pkg_platform,
+        pkg_arch,
         ctx.config,
         ctx.link,
         maintainer=maintainer,
@@ -1640,8 +1667,8 @@ def pack_recipe(
         output_dir,
         ctx.recipe.name,
         ctx.recipe.full_version,
-        ctx.platform,
-        arch,
+        pkg_platform,
+        pkg_arch,
         ctx.config,
         ctx.link,
     )

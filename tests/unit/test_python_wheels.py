@@ -158,6 +158,44 @@ class TestResolveArtifact:
         with pytest.raises(RecipeError, match="no artifacts map"):
             _resolve_artifact(SourceSpec(type="python_wheel"), "linux", "x86_64")
 
+    def test_any_artifact_resolves_for_concrete_platform(self):
+        # A noarch recipe keys its single wheel under `any`; it must resolve on
+        # every concrete host (a py3-none-any wheel is valid everywhere).
+        s = SourceSpec(
+            type="python_wheel",
+            artifacts={"any": {"url": "https://e.invalid/pure-any.whl", "sha256": "f" * 64}},
+        )
+        for plat, arch in (("linux", "x86_64"), ("windows", "x86_64"), ("macos", "arm64")):
+            url, sha, name = _resolve_artifact(s, plat, arch)
+            assert url == "https://e.invalid/pure-any.whl"
+            assert sha == "f" * 64
+            assert name == "pure-any.whl"
+
+    def test_any_artifact_resolves_for_noarch_identity(self):
+        # The builder packages a noarch recipe under the synthetic any/noarch
+        # identity; `_resolve_artifact(..., "any", "noarch")` must find the wheel.
+        s = SourceSpec(
+            type="python_wheel",
+            artifacts={"any": {"url": "https://e.invalid/w.whl", "sha256": "a" * 64}},
+        )
+        url, _, name = _resolve_artifact(s, "any", "noarch")
+        assert name == "w.whl"
+
+    def test_concrete_key_preferred_over_any(self):
+        # When both a platform-specific and an `any` entry exist, the specific
+        # one wins for that platform; only unmatched platforms fall back to any.
+        s = SourceSpec(
+            type="python_wheel",
+            artifacts={
+                "linux-x86_64": {"url": "https://e.invalid/linux.whl", "sha256": "1" * 64},
+                "any": {"url": "https://e.invalid/any.whl", "sha256": "2" * 64},
+            },
+        )
+        url, _, _ = _resolve_artifact(s, "linux", "x86_64")
+        assert url == "https://e.invalid/linux.whl"
+        url2, _, _ = _resolve_artifact(s, "macos", "arm64")
+        assert url2 == "https://e.invalid/any.whl"
+
 
 class TestFetchPythonWheel:
     def _fake_urlretrieve(self, body=WHEEL_BODY):

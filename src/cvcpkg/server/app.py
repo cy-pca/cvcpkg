@@ -1068,6 +1068,12 @@ def _choose_builder(job, available):
             # that org, and a builder never runs work for a namespace it did
             # not opt into.
             continue
+        if job.platform == "any":
+            # A platform-independent (noarch) job produces one any/noarch
+            # bundle valid on every host, so any builder serving the namespace
+            # (with capacity) can build it -- it is scheduled once, not per host.
+            candidates.append(b)
+            continue
         if b.platform == job.platform and b.arch == job.arch:
             candidates.append(b)
             continue

@@ -3977,6 +3977,12 @@ class DbBuildJobStore:
                     submitted = submitted.replace(tzinfo=datetime.timezone.utc)
                 if submitted > cutoff:
                     continue  # still within the grace period
+                if row.platform == "any" and (schedulable_targets or schedulable_platforms):
+                    # A platform-independent (noarch) job runs on any registered
+                    # builder, so it is schedulable as long as the fleet is
+                    # non-empty -- never reap it merely for lacking an
+                    # ("any", "noarch") builder (no builder registers as that).
+                    continue
                 if (row.platform, row.arch) in schedulable_targets:
                     continue
                 if row.platform in schedulable_platforms:
