@@ -1,0 +1,42 @@
+schema_version: 1
+recipe:
+  name: libxfixes
+  upstream_version: "6.0.2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.x.org/
+  license: MIT
+  tags: [libraries, x11, graphics]
+  description: >-
+    X Fixes extension client library (Xfixes).
+
+source:
+  type: tarball
+  url: https://xorg.freedesktop.org/releases/individual/lib/libXfixes-6.0.2.tar.xz
+  sha256: "39f115d72d9c5f8111e4684164d3d68cc1fd21f9b27ff2401b08fddfc0f409ba"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - meson
+    - ninja
+    - pkg-config
+    - name: xorgproto
+  runtime:
+    - name: libx11
+  host_tools: []
+
+package:
+  files:
+    - lib/
+    - include/
+    - share/
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh

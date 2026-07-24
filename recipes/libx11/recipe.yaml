@@ -1,0 +1,41 @@
+schema_version: 1
+recipe:
+  name: libx11
+  upstream_version: "1.8.13"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.x.org/
+  license: MIT
+  tags: [libraries, x11, graphics]
+  description: >-
+    Xlib — the core X11 client library, layered on libxcb.
+
+source:
+  type: tarball
+  url: https://xorg.freedesktop.org/releases/individual/lib/libX11-1.8.13.tar.xz
+  sha256: "69606f485c2c07c14ef64f75b7bb326d48587af33795d9ab3e607c0b5f94f11c"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - pkg-config
+    - name: xorgproto
+    - name: xtrans
+  runtime:
+    - name: libxcb
+  host_tools: []
+
+package:
+  files:
+    - lib/
+    - include/
+    - share/
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh

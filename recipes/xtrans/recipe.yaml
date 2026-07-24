@@ -1,0 +1,38 @@
+schema_version: 1
+recipe:
+  name: xtrans
+  upstream_version: "1.6.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.x.org/
+  license: MIT
+  tags: [libraries, x11, graphics]
+  description: >-
+    X Transport abstraction — build-time headers/macros shared by X11/ICE servers and libraries.
+
+source:
+  type: tarball
+  url: https://xorg.freedesktop.org/releases/individual/lib/xtrans-1.6.0.tar.xz
+  sha256: "faafea166bf2451a173d9d593352940ec6404145c5d1da5c213423ce4d359e92"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - pkg-config
+  runtime: []
+  host_tools: []
+
+package:
+  files:
+    - lib/
+    - include/
+    - share/
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh

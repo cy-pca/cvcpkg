@@ -1,0 +1,43 @@
+schema_version: 1
+recipe:
+  name: libxcb
+  upstream_version: "1.17.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://xcb.freedesktop.org/
+  license: MIT
+  tags: [libraries, x11, graphics]
+  description: >-
+    X protocol C-language Binding (XCB) — the modern low-level X11 transport under libX11 and Qt's xcb platform plugin.
+
+source:
+  type: tarball
+  url: https://xorg.freedesktop.org/releases/individual/xcb/libxcb-1.17.0.tar.xz
+  sha256: "599ebf9996710fea71622e6e184f3a8ad5b43d0e5fa8c4e407123c88a59a6d55"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - pkg-config
+    - name: xcb-proto
+    - name: python311
+    - name: xorgproto
+  runtime:
+    - name: libxau
+    - name: libxdmcp
+  host_tools: []
+
+package:
+  files:
+    - lib/
+    - include/
+    - share/
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh

@@ -1,0 +1,42 @@
+schema_version: 1
+recipe:
+  name: libxi
+  upstream_version: "1.8.3"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.x.org/
+  license: MIT
+  tags: [libraries, x11, graphics]
+  description: >-
+    X Input Extension client library (Xi).
+
+source:
+  type: tarball
+  url: https://xorg.freedesktop.org/releases/individual/lib/libXi-1.8.3.tar.xz
+  sha256: "7ad60056f01af4f786cfe93b3a7707447711626fc8da2637bec71a90409babe5"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - pkg-config
+    - name: xorgproto
+  runtime:
+    - name: libx11
+    - name: libxext
+    - name: libxfixes
+  host_tools: []
+
+package:
+  files:
+    - lib/
+    - include/
+    - share/
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh

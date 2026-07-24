@@ -1,0 +1,39 @@
+schema_version: 1
+recipe:
+  name: xcb-proto
+  upstream_version: "1.17.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://xcb.freedesktop.org/
+  license: MIT
+  tags: [libraries, x11, graphics]
+  description: >-
+    XML-XCB protocol descriptions + the xcbgen Python codegen module that libxcb consumes at build time.
+
+source:
+  type: tarball
+  url: https://xorg.freedesktop.org/releases/individual/xcb/xcb-proto-1.17.0.tar.xz
+  sha256: "2c1bacd2110f4799f74de6ebb714b94cf6f80fb112316b1219480fd22562148c"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - pkg-config
+    - name: python311
+  runtime: []
+  host_tools: []
+
+package:
+  files:
+    - lib/
+    - include/
+    - share/
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh

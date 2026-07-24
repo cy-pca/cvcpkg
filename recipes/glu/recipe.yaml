@@ -1,0 +1,41 @@
+schema_version: 1
+recipe:
+  name: glu
+  upstream_version: "9.0.3"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://mesa3d.org/
+  license: SGI-B-2.0
+  tags: [libraries, x11, graphics]
+  description: >-
+    The OpenGL Utility library (GLU), linking the libglvnd loader.
+
+source:
+  type: tarball
+  url: https://mesa.freedesktop.org/archive/glu/glu-9.0.3.tar.xz
+  sha256: "bd43fe12f374b1192eb15fe20e45ff456b9bc26ab57f0eee919f96ca0f8a330f"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - meson
+    - ninja
+    - pkg-config
+  runtime:
+    - name: libglvnd
+  host_tools: []
+
+package:
+  files:
+    - lib/
+    - include/
+    - share/
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh

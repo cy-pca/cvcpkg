@@ -1,0 +1,43 @@
+schema_version: 1
+recipe:
+  name: libglvnd
+  upstream_version: "1.7.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://gitlab.freedesktop.org/glvnd/libglvnd
+  license: MIT
+  tags: [libraries, x11, graphics]
+  description: >-
+    The GL Vendor-Neutral Dispatch loader — ships libGL/libGLX/libEGL/libOpenGL/libGLdispatch + GL/GLX/EGL/GLES headers. The actual GPU driver ICD stays system-provided at runtime.
+
+source:
+  type: tarball
+  url: https://gitlab.freedesktop.org/glvnd/libglvnd/-/archive/v1.7.0/libglvnd-v1.7.0.tar.gz
+  sha256: "2b6e15b06aafb4c0b6e2348124808cbd9b291c647299eaaba2e3202f51ff2f3d"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - meson
+    - ninja
+    - pkg-config
+    - name: xorgproto
+    - name: python311
+  runtime:
+    - name: libx11
+  host_tools: []
+
+package:
+  files:
+    - lib/
+    - include/
+    - share/
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh

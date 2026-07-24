@@ -1,0 +1,40 @@
+schema_version: 1
+recipe:
+  name: xcb-util-image
+  upstream_version: "0.4.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://xcb.freedesktop.org/
+  license: MIT
+  tags: [libraries, x11, graphics]
+  description: >-
+    XCB image convenience library (xcb-image).
+
+source:
+  type: tarball
+  url: https://xorg.freedesktop.org/releases/individual/xcb/xcb-util-image-0.4.1.tar.xz
+  sha256: "ccad8ee5dadb1271fd4727ad14d9bd77a64e505608766c4e98267d9aede40d3d"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - pkg-config
+  runtime:
+    - name: libxcb
+    - name: xcb-util
+  host_tools: []
+
+package:
+  files:
+    - lib/
+    - include/
+    - share/
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh

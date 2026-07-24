@@ -1,0 +1,42 @@
+schema_version: 1
+recipe:
+  name: libxt
+  upstream_version: "1.3.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.x.org/
+  license: MIT
+  tags: [libraries, x11, graphics]
+  description: >-
+    X Toolkit Intrinsics (Xt) — required by VTK's X11 render window.
+
+source:
+  type: tarball
+  url: https://xorg.freedesktop.org/releases/individual/lib/libXt-1.3.1.tar.xz
+  sha256: "e0a774b33324f4d4c05b199ea45050f87206586d81655f8bef4dba434d931288"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - pkg-config
+    - name: xorgproto
+  runtime:
+    - name: libx11
+    - name: libice
+    - name: libsm
+  host_tools: []
+
+package:
+  files:
+    - lib/
+    - include/
+    - share/
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh

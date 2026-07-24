@@ -1,0 +1,39 @@
+schema_version: 1
+recipe:
+  name: xcb-util-renderutil
+  upstream_version: "0.3.10"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://xcb.freedesktop.org/
+  license: MIT
+  tags: [libraries, x11, graphics]
+  description: >-
+    XCB Render extension convenience library (xcb-render-util).
+
+source:
+  type: tarball
+  url: https://xorg.freedesktop.org/releases/individual/xcb/xcb-util-renderutil-0.3.10.tar.xz
+  sha256: "3e15d4f0e22d8ddbfbb9f5d77db43eacd7a304029bf25a6166cc63caa96d04ba"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - pkg-config
+  runtime:
+    - name: libxcb
+  host_tools: []
+
+package:
+  files:
+    - lib/
+    - include/
+    - share/
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
