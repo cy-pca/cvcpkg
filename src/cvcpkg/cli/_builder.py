@@ -145,6 +145,115 @@ def builder_status(builder_id: int, server: str, token: str):
     click.echo(f"  Registered:  {data.get('created_at', 'unknown')}")
 
 
+def _supervise_fleet(fleet, restart_delay: float) -> None:
+    """Run one `cvcpkg builder run` worker per configured server.
+
+    Each worker is a separate process holding only its own server's token, so
+    one server/org's credentials and build outputs never reach another
+    (isolation by construction). Crashed workers are restarted; SIGINT/SIGTERM
+    is forwarded so the whole fleet drains gracefully together.
+    """
+    import signal
+    import subprocess
+    import sys
+    import threading
+    import time
+
+    from cvcpkg.builder_fleet import worker_argv
+
+    stopping = threading.Event()
+    procs: dict[str, subprocess.Popen] = {}
+
+    def _spawn(fs):
+        argv = [sys.executable, "-m", "cvcpkg", *worker_argv(fs)]
+        return subprocess.Popen(argv)  # noqa: S603 - argv built from config
+
+    def _handle_signal(signum, _frame):
+        stopping.set()
+        for p in procs.values():
+            if p.poll() is None:
+                try:
+                    p.send_signal(signal.SIGINT)
+                except Exception:  # noqa: BLE001 - best effort
+                    pass
+
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+
+    for fs in fleet.servers:
+        procs[fs.name] = _spawn(fs)
+        click.echo(f"started worker {fs.name} (pid {procs[fs.name].pid}) -> {fs.server}")
+
+    while not stopping.is_set():
+        if stopping.wait(1.0):
+            break
+        for fs in fleet.servers:
+            p = procs[fs.name]
+            if p.poll() is not None and not stopping.is_set():
+                click.echo(
+                    f"worker {fs.name} exited (code {p.returncode}); "
+                    f"restarting in {restart_delay:g}s"
+                )
+                if stopping.wait(restart_delay):
+                    break
+                procs[fs.name] = _spawn(fs)
+
+    # Graceful drain: workers finish in-flight jobs on SIGINT.
+    deadline = time.time() + 120
+    for name, p in procs.items():
+        try:
+            p.wait(timeout=max(1.0, deadline - time.time()))
+        except subprocess.TimeoutExpired:
+            click.echo(f"worker {name} did not exit in time; terminating")
+            p.terminate()
+
+
+@builder_group.command("fleet")
+@click.option(
+    "--config",
+    "config_path",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Fleet config YAML: servers[].{server, token|token_env, serve[]}.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Print the worker command for each server and exit (no processes spawned).",
+)
+@click.option(
+    "--restart-delay",
+    type=float,
+    default=5.0,
+    help="Seconds to wait before restarting a crashed worker (default: 5).",
+)
+def builder_fleet(config_path: str, dry_run: bool, restart_delay: float) -> None:
+    """Supervise a multi-homed builder fleet across several cvcpkg servers.
+
+    Runs one ``cvcpkg builder run`` worker per server in the config file, so a
+    single machine (and a single service unit) serves multiple registries at
+    once — e.g. the public ``cvcpkg.org`` and an org's edge server — instead of
+    running a separate builder deployment per server. Each worker holds only
+    its own server's token, giving per-server secret isolation by construction.
+    """
+    from cvcpkg.builder_fleet import FleetConfigError, load_fleet_config, worker_argv
+
+    try:
+        fleet = load_fleet_config(config_path)
+    except FleetConfigError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(f"fleet '{fleet.name}': {len(fleet.servers)} server(s)")
+    if dry_run:
+        for fs in fleet.servers:
+            masked = ["***" if a == fs.token else a for a in worker_argv(fs)]
+            click.echo(f"  {fs.name} [{fs.server}] serves {list(fs.serve)}")
+            click.echo("    cvcpkg " + " ".join(masked))
+        return
+    _supervise_fleet(fleet, restart_delay)
+
+
 @builder_group.command("run")
 @click.option(
     "--server",
@@ -162,7 +271,16 @@ def builder_status(builder_id: int, server: str, token: str):
 @click.option("--name", required=True, help="Builder name (unique per org).")
 @click.option("--platform", default=None, help="Platform (default: auto-detect).")
 @click.option("--arch", default=None, help="Architecture (default: auto-detect).")
-@click.option("--org", "org_slug", default="", help="Organization scope.")
+@click.option("--org", "org_slug", default="", help="Home namespace / identity (empty = public).")
+@click.option(
+    "--serve",
+    "serve_namespaces",
+    multiple=True,
+    metavar="NS",
+    help="Additional namespace to accept jobs for (repeatable; '' = public). The "
+    "builder always serves its --org. e.g. --org cvc --serve '' serves both the "
+    "cvc org and public work on one machine.",
+)
 @click.option("--max-jobs", type=int, default=1, help="Max concurrent jobs.")
 @click.option("--label", "labels", multiple=True, help="Labels (repeatable).")
 @click.option(
@@ -241,6 +359,7 @@ def builder_run(
     platform: str | None,
     arch: str | None,
     org_slug: str,
+    serve_namespaces: tuple[str, ...],
     max_jobs: int,
     labels: tuple[str, ...],
     work_dir: str | None,
@@ -429,15 +548,26 @@ def builder_run(
         caps: dict = {}
         if cross_entries:
             caps["cross_platforms"] = cross_entries
+        # Served set: home org always included, plus any --serve namespaces,
+        # order-stable and de-duplicated ('' = public). Shared with the server
+        # so both sides compute the same set.
+        from cvcpkg.orgs import served_set
+
+        served = served_set(org_slug, serve_namespaces)
         body = {
             "name": name,
             "platform": platform,
             "arch": arch,
             "org_slug": org_slug,
+            "served_namespaces": served,
             "max_jobs": max_jobs,
             "labels": list(labels),
             "capabilities": caps,
         }
+        if len(served) > 1:
+            cross_msg += " [serves: {}]".format(
+                ", ".join(repr(ns) if ns == "" else ns for ns in served)
+            )
         with httpx.Client(timeout=30) as client:
             resp = client.post(f"{base}/v1/builders/register", headers=headers, json=body)
         if resp.status_code >= 400:
@@ -462,6 +592,16 @@ def builder_run(
     _job_seq = 0
     current_jobs = 0
     jobs_lock = threading.Lock()
+
+    # Per-job namespace context. A builder may serve several namespaces (see
+    # --serve), and jobs from different namespaces run concurrently in separate
+    # threads, so the namespace used to fetch recipes and publish results must
+    # be scoped to the running job's thread -- not the process-wide --org.
+    # _execute_job sets this at the top of each job thread.
+    _job_ctx = threading.local()
+
+    def _current_job_org() -> str:
+        return getattr(_job_ctx, "org", org_slug)
 
     def _claim_slot() -> int:
         """Reserve a slot; returns a unique id to release it with.
@@ -553,8 +693,11 @@ def builder_run(
             # A future optimisation can compare recipe_hash.
             url = f"{base}/v1/recipes/{recipe_name}"
             params: dict[str, str] = {}
-            if org_slug:
-                params["org_slug"] = org_slug
+            # Resolve the recipe in the running job's namespace (falls back to
+            # the builder's home --org outside a job).
+            fetch_org = _current_job_org()
+            if fetch_org:
+                params["org_slug"] = fetch_org
             with httpx.Client(timeout=120) as client:
                 resp = client.get(url, headers=headers, params=params)
             if resp.status_code >= 400:
@@ -1083,6 +1226,11 @@ def builder_run(
         job_arch = job.get("arch", arch)
         job_config = job.get("config", "release")
         job_link = job.get("link", "shared")
+        # Scope this thread's recipe fetches + publish to the job's namespace.
+        # A multi-namespace builder must never fetch/publish a job under its
+        # home --org instead of the job's own org.
+        job_org = job.get("org_slug", org_slug)
+        _job_ctx.org = job_org
 
         click.echo(
             f"  [{job_id}] Building {recipe_name} "
@@ -1211,7 +1359,7 @@ def builder_run(
                     archive_paths=[archive_path],
                     release_tag="",
                     chunked_threshold=10 * 1024 * 1024,
-                    org=org_slug,
+                    org=job_org,
                 )
                 _stream_log(job_id, "Published successfully.\n")
             except click.ClickException as pub_exc:

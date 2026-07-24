@@ -107,6 +107,53 @@ def test_every_model_table_has_a_create_table_migration():
     assert not missing, f"model tables with no create_table migration: {sorted(missing)}"
 
 
+def _alembic_upgrade(db: Path, revision: str) -> subprocess.CompletedProcess:
+    env = {
+        **os.environ,
+        "CVCPKG_DATABASE_URL": f"sqlite+aiosqlite:///{db.as_posix()}",
+        "PYTHONPATH": str(_ROOT / "src"),
+    }
+    return subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", revision],
+        cwd=_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_migration_023_backfills_served_namespaces(tmp_path):
+    """A builder that existed before migration 023 keeps working: the upgrade
+    backfills served_namespaces = [org_slug], preserving 1:1 scheduling until
+    the builder re-registers with a wider set."""
+    pytest.importorskip("aiosqlite", reason="aiosqlite required to migrate SQLite")
+    db = tmp_path / "backfill.db"
+
+    # Bring the schema to just before this migration.
+    p = _alembic_upgrade(db, "022")
+    assert p.returncode == 0, p.stderr
+
+    # Insert a builder under the OLD schema (no served_namespaces column yet).
+    con = sqlite3.connect(db)
+    con.execute(
+        "INSERT INTO builders "
+        "(name, org_slug, platform, arch, labels, capabilities, status, "
+        " current_jobs, max_jobs, prefer_affinity, registered_by) "
+        "VALUES ('b1', 'cvc', 'linux', 'x86_64', '[]', '{}', 'online', 0, 1, 0, 't')"
+    )
+    con.commit()
+    con.close()
+
+    # Apply migration 023.
+    p = _alembic_upgrade(db, "023")
+    assert p.returncode == 0, p.stderr
+
+    con = sqlite3.connect(db)
+    (served,) = con.execute("SELECT served_namespaces FROM builders WHERE name = 'b1'").fetchone()
+    con.close()
+    assert served == '["cvc"]', served
+
+
 @pytest.fixture(scope="module")
 def _sqlite_upgrade_head(tmp_path_factory):
     """Run ``alembic upgrade head`` once against an empty SQLite file.

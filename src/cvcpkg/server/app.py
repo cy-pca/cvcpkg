@@ -1047,18 +1047,26 @@ _YANK_GC_INTERVAL = int(os.environ.get("CVCPKG_YANK_GC_INTERVAL", "21600"))
 def _choose_builder(job, available):
     """Pick a builder for *job*, or ``None``.
 
-    Enforces **org isolation** (a job runs only on a builder in the same org
-    namespace), matches platform/arch or a cross-platform capability, respects
-    per-builder capacity, and prefers affinity builders as a soft preference.
+    Enforces **namespace isolation** (a job runs only on a builder that serves
+    the job's org namespace), matches platform/arch or a cross-platform
+    capability, respects per-builder capacity, and prefers affinity builders as
+    a soft preference.
+
+    Multi-tenant fleet: a builder advertises a *set* of served namespaces
+    (``served_namespaces``, always including its home ``org_slug``), so one
+    machine can serve the public namespace and one or more orgs at once. A job
+    matches any builder whose served set contains the job's ``org_slug``.
     """
     candidates = []
     for b in available:
         if b.current_jobs >= b.max_jobs:
             continue
-        if b.org_slug != job.org_slug:
-            # Public jobs run on public builders; an org's (private) jobs only
-            # on that org's builders -- a private build never lands on a public
-            # builder, and a private builder never runs someone else's work.
+        served = getattr(b, "served_namespaces", None) or [b.org_slug]
+        if job.org_slug not in served:
+            # A job only runs on a builder that serves its namespace -- a
+            # private org's build never lands on a builder that does not serve
+            # that org, and a builder never runs work for a namespace it did
+            # not opt into.
             continue
         if b.platform == job.platform and b.arch == job.arch:
             candidates.append(b)
@@ -6153,6 +6161,7 @@ def create_app(
                 arch=body.arch,
                 registered_by=actor.name,
                 org_slug=body.org_slug,
+                served_namespaces=body.served_namespaces,
                 labels=body.labels,
                 capabilities=body.capabilities,
                 max_jobs=body.max_jobs,
@@ -6252,6 +6261,7 @@ def create_app(
                 capabilities=body.capabilities,
                 max_jobs=body.max_jobs,
                 prefer_affinity=body.prefer_affinity,
+                served_namespaces=body.served_namespaces,
             )
             if info is None:
                 raise HTTPException(404, f"builder {builder_id} not found")

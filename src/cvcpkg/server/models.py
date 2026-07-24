@@ -629,6 +629,10 @@ class BuilderInfo(BaseModel):
     id: int
     name: str
     org_slug: str = ""
+    served_namespaces: list[str] = Field(
+        default_factory=list,
+        description="Namespaces this builder serves ('' = public); always contains org_slug.",
+    )
     platform: str
     arch: str
     labels: list[str] = Field(default_factory=list)
@@ -657,7 +661,14 @@ class BuilderRegisterRequest(BaseModel):
     org_slug: str = Field(
         default="",
         max_length=255,
-        description="Organization scope (empty = global builder).",
+        description="Home namespace / identity (empty = public global builder).",
+    )
+    served_namespaces: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Namespaces this builder accepts jobs for ('' = public). Empty means "
+            "just the home org_slug; org_slug is always included."
+        ),
     )
     platform: str = Field(
         ...,
@@ -698,6 +709,10 @@ class BuilderUpdateRequest(BaseModel):
     capabilities: dict | None = None
     max_jobs: int | None = Field(None, ge=1, le=256)
     prefer_affinity: bool | None = None
+    served_namespaces: list[str] | None = Field(
+        None,
+        description="Replace the served-namespace set ('' = public); org_slug stays included.",
+    )
 
 
 class BuilderHeartbeatRequest(BaseModel):

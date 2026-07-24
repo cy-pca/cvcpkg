@@ -45,6 +45,8 @@ cvcpkg builder run \
 | `--server URL` | Server to connect to (env: `CVCPKG_SERVER_URL`) |
 | `--token TOKEN` | Publisher-role auth token (env: `CVCPKG_TOKEN`) |
 | `--name NAME` | Unique builder name |
+| `--org SLUG` | Home namespace / identity (empty = public) |
+| `--serve NS` | Additional namespace to accept jobs for (repeatable; `''` = public) |
 | `--max-jobs N` | Maximum concurrent build jobs |
 | `--work-dir DIR` | Scratch directory for builds |
 | `--daemon` | Fork to background (Unix only) |
@@ -52,6 +54,38 @@ cvcpkg builder run \
 | `--platform` | Override auto-detected platform |
 | `--arch` | Override auto-detected architecture |
 | `--cross-platform` | Advertise a cross-compilation target (repeatable) |
+
+## Multi-tenant / shared fleet
+
+A builder can serve **several namespaces** and register with **several servers**
+at once, so one machine (and one service unit) replaces separate per-org or
+per-server builder deployments. See **[builder-fleet.md](builder-fleet.md)** for
+the full guide.
+
+- **Serve several namespaces on one server** — `--org` sets the home namespace
+  and each `--serve` adds another. The scheduler dispatches a job to any builder
+  whose served set contains the job's org. Each job's recipe fetch and publish
+  use the *job's* namespace, never the builder's home `--org`.
+
+  ```bash
+  # One builder on cvcpkg.org taking BOTH public and cvc-org jobs:
+  cvcpkg builder run --server https://cvcpkg.org --token $TOK \
+      --name $(hostname) --org "" --serve cvc
+  ```
+
+- **Serve several servers (fleet supervisor)** — `cvcpkg builder fleet --config
+  fleet.yaml` runs one worker per server listed in the config, under one
+  process. Each worker holds only its own server's token, so credentials and
+  build outputs stay isolated per server. This is how the previously separate
+  dev and prod fleets consolidate into one.
+
+  ```bash
+  cvcpkg builder fleet --config /etc/cvcpkg/fleet.yaml --dry-run   # inspect
+  cvcpkg builder fleet --config /etc/cvcpkg/fleet.yaml             # run
+  ```
+
+Org **package** namespaces remain fully isolated (org packages never populate or
+shadow the public catalogue) — only *build execution* is pooled.
 
 ## Boot Persistence
 

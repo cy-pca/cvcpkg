@@ -30,6 +30,25 @@ def _builder(org="", platform="linux", arch="x86_64", cross=None, cur=0, mx=2, a
     )
 
 
+def _mh_builder(served, org=None, platform="linux", arch="x86_64", cur=0, mx=2, id=1):
+    """A multi-homed builder that advertises an explicit served-namespace set.
+
+    ``org`` (home / identity) defaults to the first served namespace.
+    """
+    served = list(served)
+    return NS(
+        id=id,
+        org_slug=org if org is not None else (served[0] if served else ""),
+        served_namespaces=served,
+        platform=platform,
+        arch=arch,
+        capabilities={"cross_platforms": []},
+        current_jobs=cur,
+        max_jobs=mx,
+        prefer_affinity=False,
+    )
+
+
 def _job(org="", platform="linux", arch="x86_64"):
     return NS(org_slug=org, platform=platform, arch=arch)
 
@@ -86,3 +105,40 @@ class TestMatchingUnchanged:
 
     def test_no_builders_returns_none(self):
         assert _choose_builder(_job(), []) is None
+
+
+class TestServedNamespaces:
+    """Multi-tenant shared fleet: a builder serving a SET of namespaces."""
+
+    def test_builder_serving_public_and_org_takes_both(self):
+        b = _mh_builder(["", "cvc"])
+        assert _choose_builder(_job(org=""), [b]) is b
+        assert _choose_builder(_job(org="cvc"), [b]) is b
+
+    def test_served_set_still_refuses_unlisted_namespace(self):
+        b = _mh_builder(["", "cvc"])
+        assert _choose_builder(_job(org="acme"), [b]) is None
+
+    def test_org_only_builder_refuses_public(self):
+        # served == ["cvc"] (home cvc, does not opt into public)
+        b = _mh_builder(["cvc"])
+        assert _choose_builder(_job(org=""), [b]) is None
+        assert _choose_builder(_job(org="cvc"), [b]) is b
+
+    def test_multi_org_builder(self):
+        b = _mh_builder(["cvc", "cypca"], org="cvc")
+        assert _choose_builder(_job(org="cvc"), [b]) is b
+        assert _choose_builder(_job(org="cypca"), [b]) is b
+        assert _choose_builder(_job(org=""), [b]) is None
+
+    def test_mixed_fleet_routes_by_served_set(self):
+        pub_only = _mh_builder([""], id=1)
+        shared = _mh_builder(["", "cvc"], org="cvc", id=2)
+        # A cvc job can only go to the builder that serves cvc.
+        assert _choose_builder(_job(org="cvc"), [pub_only, shared]) is shared
+        # A public job could run on either; the first candidate wins.
+        assert _choose_builder(_job(org=""), [pub_only, shared]) is pub_only
+
+    def test_capacity_still_enforced_on_shared_builder(self):
+        b = _mh_builder(["", "cvc"], cur=2, mx=2)
+        assert _choose_builder(_job(org="cvc"), [b]) is None

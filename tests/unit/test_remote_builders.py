@@ -73,6 +73,47 @@ class TestDbBuilderStore:
     def _run(self, coro):
         return asyncio.run(coro)
 
+    def test_served_namespaces_default_is_home_only(self):
+        from cvcpkg.server.db_stores import DbBuilderStore
+
+        async def _test():
+            store = DbBuilderStore()
+            # No served_namespaces given → serves exactly its home org.
+            pub = await store.register(
+                name="pub", platform="linux", arch="x86_64", registered_by="t"
+            )
+            assert pub.served_namespaces == [""]
+            org = await store.register(
+                name="org", platform="linux", arch="x86_64", registered_by="t", org_slug="cvc"
+            )
+            assert org.served_namespaces == ["cvc"]
+
+        self._run(_test())
+
+    def test_served_namespaces_set_round_trip_and_update(self):
+        from cvcpkg.server.db_stores import DbBuilderStore
+
+        async def _test():
+            store = DbBuilderStore()
+            info = await store.register(
+                name="shared",
+                platform="linux",
+                arch="x86_64",
+                registered_by="t",
+                org_slug="cvc",
+                served_namespaces=["", "cvc"],
+            )
+            # Home org is always first + de-duplicated.
+            assert info.served_namespaces == ["cvc", ""]
+            # Round-trips through a fresh read.
+            again = await store.get(info.id)
+            assert again.served_namespaces == ["cvc", ""]
+            # Update can widen/replace the set; home org stays included.
+            updated = await store.update(info.id, served_namespaces=["cypca"])
+            assert updated.served_namespaces == ["cvc", "cypca"]
+
+        self._run(_test())
+
     def test_register_and_get(self):
         from cvcpkg.server.db_stores import DbBuilderStore
 
@@ -578,6 +619,38 @@ class TestBuilderEndpoints:
             json={"name": "b1", "platform": "linux", "arch": "x86_64"},
         )
         assert resp.status_code == 401
+
+    def test_register_and_patch_served_namespaces(self, db_server_env):
+        client, admin_tok, pub_tok, _ = db_server_env
+        # A default registration serves exactly its home namespace.
+        default = self._register(client, pub_tok, "plain").json()
+        assert default["served_namespaces"] == [""]
+
+        # A multi-homed registration serves its home org plus extras (home first).
+        resp = client.post(
+            "/v1/builders/register",
+            json={
+                "name": "shared",
+                "org_slug": "cvc",
+                "served_namespaces": ["", "cvc"],
+                "platform": "linux",
+                "arch": "x86_64",
+            },
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200, resp.text
+        info = resp.json()
+        assert info["org_slug"] == "cvc"
+        assert info["served_namespaces"] == ["cvc", ""]
+
+        # PATCH can widen the served set; the home org stays included.
+        patched = client.patch(
+            f"/v1/builders/{info['id']}",
+            json={"served_namespaces": ["cypca"]},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert patched.status_code == 200, patched.text
+        assert patched.json()["served_namespaces"] == ["cvc", "cypca"]
 
     def test_list_builders(self, db_server_env):
         client, admin_tok, pub_tok, _ = db_server_env

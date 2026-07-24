@@ -481,7 +481,12 @@ class BuilderRow(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Home namespace + identity (see uq_builder_name_org below).
     org_slug: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    # Multi-tenant shared fleet: the SET of namespaces this builder accepts
+    # jobs for, JSON-encoded list of org slugs ("" = public). Always contains
+    # org_slug. Empty/"[]" is read as [org_slug] for backward compatibility.
+    served_namespaces: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     platform: Mapped[str] = mapped_column(String(64), nullable=False)
     arch: Mapped[str] = mapped_column(String(64), nullable=False)
     labels: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
