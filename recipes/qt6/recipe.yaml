@@ -5,7 +5,12 @@ recipe:
   # Bumped 4 -> 5: build the xcb platform plugin against the hermetic X11/xcb +
   # OpenGL(GLVND) recipes on Linux instead of system libs (build.sh forces
   # -DINPUT_xcb=yes). Part of dropping the apt-get X11/GL line downstream.
-  cvc_revision: 5
+  # Bumped 5 -> 6: the qyieldcpu-arm-acle-include.patch now gates the arm_acle
+  # include on __ARM_ACLE. The +cvc.5 patch added a BARE `#if
+  # __has_include(<arm_acle.h>)` (for macOS aarch64), which broke x86 libclang
+  # parsers — clang ships arm_acle.h on x86 too and it #errors off-ARM (killed the
+  # shiboken generator building PySide6). Header-only, so ABI-identical.
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

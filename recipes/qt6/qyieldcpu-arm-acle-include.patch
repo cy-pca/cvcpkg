@@ -1,11 +1,15 @@
-Backport of an upstream Qt fix (in Qt 6.9) for qyieldcpu.h on
-aarch64 macOS.  Apple Clang recognises __has_builtin(__yield)
-as true on aarch64, but calling __yield() without <arm_acle.h>
-is an implicit-function-declaration warning that Qt promotes to
-an error with -Werror.  Include the ARM ACLE header when it's
-available so the __yield() intrinsic has a declaration in scope.
+Backport of the Qt 6.9 qyieldcpu.h fix, gating the <arm_acle.h> include on
+__ARM_ACLE.  Two problems it solves:
 
-Fixes qt6 macos/arm64 build failure:
+  * macOS/aarch64: Apple Clang sees __has_builtin(__yield) as true, but calling
+    __yield() without <arm_acle.h> is a -Werror implicit-declaration.
+  * x86, any libclang parser (e.g. shiboken building PySide6): clang's
+    multi-target resource dir ships arm_acle.h even on x86, and that header
+    #errors ("ACLE intrinsics support not enabled") off-ARM.  A BARE
+    `#if __has_include(<arm_acle.h>)` therefore breaks x86 clang parses; gating
+    on __ARM_ACLE includes it only where it is valid.
+
+Originally fixed the qt6 macos/arm64 build failure:
 
     src/corelib/thread/qyieldcpu.h:35:5: error: implicitly declaring
       library function '__yield' with type 'void ()'
@@ -19,11 +23,11 @@ Fixes qt6 macos/arm64 build failure:
  #include <QtCore/qprocessordetection.h>
  #include <QtCore/qtconfigmacros.h>
  
-+// ARM ACLE header declares __yield().  On Apple/aarch64 Clang
-+// __has_builtin(__yield) is true, but calling __yield() without this
-+// header is an implicit-function-declaration warning that becomes an
-+// error under -Werror.  Backport of an upstream fix (Qt 6.9).
-+#if __has_include(<arm_acle.h>)
++// ARM ACLE header declares __yield() — needed on Apple/aarch64 Clang where
++// calling __yield() without it is a -Werror implicit-declaration. Gate on
++// __ARM_ACLE (not a bare __has_include): clang ships arm_acle.h on x86 too,
++// where it #errors off-ARM and breaks libclang parsers like shiboken (Qt 6.9).
++#if defined(__ARM_ACLE) && __has_include(<arm_acle.h>)
 +#  include <arm_acle.h>
 +#endif
 +

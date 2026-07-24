@@ -50,20 +50,9 @@ export LD_LIBRARY_PATH="${LLVM_INSTALL_DIR}/lib:${CVC_DEPS_PREFIX:-}/lib:${CVC_B
 # Install the importable package into THIS prefix's site-packages.
 SITE_PACKAGES="${CVC_INSTALL_DIR}/lib/python3.11/site-packages"
 
-# ── Qt 6.8 + shiboken(libclang) arm_acle workaround ─────────────────────────
-# Qt 6.8's <QtCore/qyieldcpu.h> guards its ACLE include with a BARE
-# `#if __has_include(<arm_acle.h>)`. clang's multi-target resource dir ships
-# arm_acle.h on x86 too (GCC does not), and that header #errors ("ACLE intrinsics
-# support not enabled") off-ARM — so the shiboken generator, which parses the Qt
-# headers with libclang, dies on x86. Qt 6.9 fixed this by also gating on
-# __ARM_ACLE; apply that guard to the qt6 headers we parse (idempotent). This is
-# build-time only (a no-op for the already-compiled Qt libs). Drop it once the
-# qt6 recipe carries the 6.9 backport.
-_qyield="${CVC_DEPS_PREFIX}/include/QtCore/qyieldcpu.h"
-if [[ -f "${_qyield}" ]] && grep -q '^#if __has_include(<arm_acle.h>)' "${_qyield}"; then
-    sed -i 's/^#if __has_include(<arm_acle.h>)/#if defined(__ARM_ACLE) \&\& __has_include(<arm_acle.h>)/' "${_qyield}"
-    echo "pyside6: applied the Qt 6.9 arm_acle guard to ${_qyield} (shiboken/libclang x86 fix)"
-fi
+# (The Qt 6.8 arm_acle x86 workaround that used to live here is gone: qt6 +cvc.6
+# ships an __ARM_ACLE-gated qyieldcpu.h via qyieldcpu-arm-acle-include.patch, so
+# the shiboken generator parses the Qt headers cleanly on x86 with no patching.)
 
 # Module subset — ONLY modules the feature-lean cvcpkg qt6 provides
 # (Core, Gui, Widgets, OpenGL, OpenGLWidgets; no Qml/Quick/Sql, offscreen-only).
