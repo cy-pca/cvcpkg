@@ -1717,6 +1717,30 @@ the terminal experience worthy of the web front end.
       `requires_capabilities` (a fully-wired field the recipe schema rejected —
       now added) and three `-cuda` recipes declaring build scripts that did not
       exist.
+- [ ] **`cvcpkg build` prefers prebuilt dependency bundles by default.**
+      Today `build` resolves the target's dependency closure and rebuilds
+      **all of it from source** (`--with-deps`, the default) — so building one
+      recipe recompiles cmake, zlib, perl, openssl, … from scratch even though
+      every one is already published on cvcpkg.org.  The only escape is the
+      two-step `cvcpkg install <deps>` (fetch prebuilt) **+**
+      `cvcpkg build <recipe> --no-deps` (compile just the target against the
+      installed prefix) — non-obvious, and easy to forget, so users sit through
+      a full source rebuild of the world for a one-line recipe change.
+      Invert the default: `build` should **install prebuilt bundles for every
+      dependency available upstream** (honouring `--platform`/`--config`/
+      `--link`/version constraints) and build **only** the requested recipe(s)
+      from source; a dependency is built from source **only** when no matching
+      bundle exists upstream **or** the client is offline/`--local` — a natural
+      fallback to the available recipes, no flag required.  Add an opt-in
+      `--build-deps-from-source` (name TBD) for the current "recompile the whole
+      closure" behaviour (reproducibility, bisecting a dep, a locally-patched
+      recipe), and make `--no-deps` continue to mean "assume deps are already in
+      `--prefix`".  Acceptance: `cvcpkg build imagemagick --prefix ./p` on a box
+      with network access fetches the jpeg/png/tiff/… bundles and compiles only
+      ImageMagick (seconds-to-minutes, not the from-source closure); with
+      `--local` or no network it transparently builds the deps it cannot fetch;
+      `--build-deps-from-source` reproduces today's behaviour.  This is the
+      single biggest day-to-day friction in the `build` UX.
 - [ ] **Developer loop for downstream users** — an easy workflow to do a
       local build of a project, debug it, and generate + add recipe patches
       (`cvcpkg`-assisted patch generation rather than hand-maintained diffs).
