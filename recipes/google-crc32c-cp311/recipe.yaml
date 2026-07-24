@@ -7,7 +7,7 @@ recipe:
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   homepage: https://pypi.org/project/google-crc32c/
-  license: "NOASSERTION"
+  license: "Apache-2.0"
   tags: [python, wheel]
   description: >-
     google-crc32c 1.8.0 — cvcpkg-provisioned Python dependency

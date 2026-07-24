@@ -7,7 +7,7 @@ recipe:
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   homepage: https://pypi.org/project/azure-core/
-  license: "NOASSERTION"
+  license: "MIT"
   tags: [python, wheel]
   description: >-
     azure-core 1.41.0 — cvcpkg-provisioned Python dependency

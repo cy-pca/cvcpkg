@@ -7,7 +7,7 @@ recipe:
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   homepage: https://pypi.org/project/azure-identity/
-  license: "NOASSERTION"
+  license: "MIT"
   tags: [python, wheel]
   description: >-
     azure-identity 1.25.3 — cvcpkg-provisioned Python dependency

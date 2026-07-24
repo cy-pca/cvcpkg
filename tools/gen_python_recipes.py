@@ -76,6 +76,18 @@ def fetch_pypi(name: str, version: str) -> tuple[list[dict], str]:
     return wheels, _spdx(data.get("info", {}))
 
 
+# Authoritative overrides where PyPI metadata is absent/ambiguous (NOASSERTION
+# or a non-SPDX raw string). Keyed by normalized recipe base name.
+_LICENSE_OVERRIDE = {
+    "azure-core": "MIT",
+    "azure-identity": "MIT",
+    "azure-storage-blob": "MIT",
+    "google-crc32c": "Apache-2.0",
+    "protobuf": "BSD-3-Clause",
+    "paramiko": "LGPL-2.1-or-later",
+}
+
+
 def _spdx(info: dict) -> str:
     """Best-effort SPDX-ish license from PyPI metadata."""
     lic = (info.get("license_expression") or "").strip()
@@ -174,6 +186,7 @@ def main() -> int:
         if not wheels:
             print(f"  SKIP {base}: no wheels (sdist-only) at {info['version']}", file=sys.stderr)
             continue
+        lic = _LICENSE_OVERRIDE.get(base, lic)
         meta[base] = {**info, "wheels": wheels, "kind": classify(wheels), "license": lic}
 
     def dep_recipe_names(dep_base: str, consuming_interp: str | None) -> list[str]:

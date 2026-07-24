@@ -7,7 +7,7 @@ recipe:
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   homepage: https://pypi.org/project/protobuf/
-  license: "3-Clause BSD License"
+  license: "BSD-3-Clause"
   tags: [python, wheel]
   description: >-
     protobuf 7.35.1 — cvcpkg-provisioned Python dependency
