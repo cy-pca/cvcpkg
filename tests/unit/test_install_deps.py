@@ -68,3 +68,15 @@ def test_recipe_yaml_path_also_accepted(tmp_path):
     recipe = _write_recipe(tmp_path)
     comps = _run_capturing_install([str(recipe / "recipe.yaml"), "--platform", "linux"])
     assert comps == {"buildonlydep", "zlib", "boost"}
+
+
+def test_recipe_resolved_by_name_via_recipes_dir(tmp_path):
+    # Regression: resolving a recipe by NAME (not a path) routes through
+    # _resolve_recipes_dirs, which crashed with `TypeError: ... takes from 0 to 1
+    # positional arguments but 2 were given` because no_default (keyword-only) was
+    # passed positionally. The path-based tests above never exercised this branch.
+    _write_recipe(tmp_path)  # tmp_path/mylib/recipe.yaml
+    comps = _run_capturing_install(
+        ["mylib", "--recipes-dir", str(tmp_path), "--no-default-recipes", "--platform", "linux"]
+    )
+    assert comps == {"buildonlydep", "zlib", "boost"}

@@ -715,7 +715,7 @@ def install_deps(
       cvcpkg build libcvc --recipes-dir cvcpkg/recipes --no-deps --prefix ./deps
       # (or drive CMake directly: -DCMAKE_PREFIX_PATH=$PWD/deps)
     """
-    from cvcpkg.builder import Recipe, _dep_names_for_role, find_recipes_dir
+    from cvcpkg.builder import Recipe, _dep_names_for_role
     from cvcpkg.platform import detect_platform
 
     # ── Resolve RECIPE: a recipe.yaml path, a dir containing one, or a name ──
@@ -726,13 +726,10 @@ def install_deps(
         recipe_dir = p
     else:
         recipe_dir = None
-        search = [Path(d) for d in _resolve_recipes_dirs(recipes_dirs, no_default_recipes)]
-        if not no_default_recipes:
-            try:
-                search.append(find_recipes_dir())
-            except Exception:
-                pass
-        for d in search:
+        # _resolve_recipes_dirs already prepends the default (bundled/discovered)
+        # recipes unless --no-default-recipes, then appends the overlays. (Passing
+        # no_default positionally was a TypeError — it is keyword-only.)
+        for d in _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes):
             if (d / recipe / "recipe.yaml").is_file():
                 recipe_dir = d / recipe
                 break
