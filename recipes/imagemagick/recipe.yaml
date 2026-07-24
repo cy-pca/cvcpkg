@@ -43,6 +43,23 @@ depends:
       version: "^1.3"
     - name: tiff
       version: "^4.6"
+    # tiff's own delegate closure. Once build.sh exposes the cvcpkg deps prefix
+    # (for libxml2, below), ImageMagick links the cvcpkg libtiff instead of the
+    # build host's system one — and the cvcpkg libtiff pulls in these codecs
+    # (see the tiff recipe). Without declaring them the prefix is missing
+    # libjpeg/libzstd/xz/webp/lerc and MagickCore fails to link with undefined
+    # references to jpeg_std_error / ZSTD_isError / ZSTD_getErrorName. Declaring
+    # tiff's full closure makes the exposed prefix self-consistent (a hermetic
+    # build) rather than silently falling back to system codecs.
+    - name: libjpeg-turbo
+      version: "^3.1"
+    - name: xz
+      version: "^5.6"
+    - name: zstd
+      version: "^1.5"
+    - name: libwebp
+      version: "^1.5"
+    - name: lerc
     # ImageMagick links libxml2 (config-file parsing) and ships referencing it.
     # Pinned to the cvcpkg 2.12.x bundle, which has the FTP client removed — so
     # MagickCore never references xmlNanoFTP*. build.sh forces configure to use
