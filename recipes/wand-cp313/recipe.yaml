@@ -1,0 +1,62 @@
+schema_version: 1
+recipe:
+  name: wand-cp313
+  upstream_version: "0.7.2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    Wand (cp313) — the ctypes-based Python binding to ImageMagick's MagickWand C
+    API (http://wand-py.org/). Pure Python (a py3-none-any wheel), imported as
+    `wand`. Installs into the cvcpkg python313 site-packages and binds the cvcpkg
+    imagemagick's libMagickWand at runtime via a shipped MAGICK_HOME .pth (points
+    at the install prefix) — hermetic, so `import wand` resolves the cvcpkg
+    ImageMagick, not the system one, even from VolRover's embedded Python.
+  homepage: http://wand-py.org/
+  license: MIT
+  tags: [python, bindings, graphics, imaging]
+
+source:
+  type: python_wheel
+  # Wand is a py3-none-any wheel — the SAME artifact for every platform/arch/ABI
+  # (pure Python, ctypes). Listed per platform key that this recipe's matrix
+  # builds; the interpreter/imagemagick it binds to are the platform-specific
+  # pieces, resolved through the depends graph.
+  artifacts:
+    linux-x86_64:
+      url: https://files.pythonhosted.org/packages/fb/11/764bee6e793c01d6ce7b99f4872f9fd5ef89904b172cb9d8a0a1dae02f21/wand-0.7.2-py3-none-any.whl
+      sha256: "7db97c5e51862fdd5e58866dbf34e2dcae295245511147367690a3e17f459984"
+
+python:
+  interpreter: python313
+  abi: cp313
+
+patches: []
+
+depends:
+  build:
+    - name: python313
+  runtime:
+    # The interpreter this package installs into, plus ImageMagick — Wand
+    # dlopens its libMagickWand at import time via ctypes. Pinned to 7.1.x so it
+    # binds the full-codec cvcpkg build.
+    - name: python313
+    - name: imagemagick
+      version: "^7.1"
+  host_tools:
+    - python313
+
+build:
+  # Pure-Python wheel, but the build's self-check imports Wand and drives a real
+  # MagickWand op, so it runs where the cvcpkg imagemagick is published (linux
+  # today). Add macos/windows once imagemagick ships there.
+  matrix:
+    - platform: linux
+      script: build.sh
+
+package:
+  files:
+    - lib/python3.13*/site-packages/wand/
+    - lib/python3.13*/site-packages/wand-0.7.2.dist-info/
+    - lib/python3.13*/site-packages/wand_cvcpkg_magick_home.pth
