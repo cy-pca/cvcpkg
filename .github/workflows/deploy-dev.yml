@@ -84,6 +84,19 @@ jobs:
               exit 1
             fi
 
+            # The dev cluster is a SATELLITE of prod: its public catalog must
+            # mirror cvcpkg.org so it carries every global package (imported by
+            # the populate loop every CVCPKG_POPULATE_INTERVAL) instead of lagging
+            # on whatever was built locally. Enforce the upstream on every deploy
+            # so it survives host re-provisioning and cannot silently drift.
+            # Public mirroring needs NO token; org/private packages stay local.
+            # (Prod == cvcpkg.org is the ROOT and must NOT set this — that is why
+            # it lives here in deploy-dev.yml, not in docker-compose.production.yml.)
+            grep -v '^CVCPKG_POPULATE_UPSTREAM=' .env.production > .env.production.tmp || true
+            mv .env.production.tmp .env.production
+            echo 'CVCPKG_POPULATE_UPSTREAM=https://cvcpkg.org' >> .env.production
+            echo 'Dev cluster will mirror the public catalog from https://cvcpkg.org'
+
             DC='docker compose'
             COMPOSE=\"\$DC -f docker-compose.production.yml --env-file .env.production\"
 
