@@ -2,7 +2,10 @@ schema_version: 1
 recipe:
   name: qt6
   upstream_version: "6.8.2"
-  cvc_revision: 4
+  # Bumped 4 -> 5: build the xcb platform plugin against the hermetic X11/xcb +
+  # OpenGL(GLVND) recipes on Linux instead of system libs (build.sh forces
+  # -DINPUT_xcb=yes). Part of dropping the apt-get X11/GL line downstream.
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -42,6 +45,38 @@ depends:
       version: "^1.3"
     - name: pcre2
       version: "^10.0"
+    # Hermetic X11/xcb + OpenGL for the xcb QPA platform plugin (Linux only;
+    # macOS uses cocoa, Windows uses its native QPA). xkbcommon here is the base
+    # keymap lib; xkbcommon-x11 (enable-x11) is a follow-up for full X keyboard
+    # handling under xcb.
+    - name: libxcb
+      platforms: [linux]
+    - name: xcb-util
+      platforms: [linux]
+    - name: xcb-util-image
+      platforms: [linux]
+    - name: xcb-util-keysyms
+      platforms: [linux]
+    - name: xcb-util-renderutil
+      platforms: [linux]
+    - name: xcb-util-wm
+      platforms: [linux]
+    - name: xcb-util-cursor
+      platforms: [linux]
+    - name: libx11
+      platforms: [linux]
+    - name: libxi
+      platforms: [linux]
+    - name: libxext
+      platforms: [linux]
+    - name: libxfixes
+      platforms: [linux]
+    - name: libxrender
+      platforms: [linux]
+    - name: libglvnd
+      platforms: [linux]
+    - name: xkbcommon
+      platforms: [linux]
   host_tools: []
 
 build:

@@ -6,6 +6,16 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 
 cd "${CVC_SOURCE_DIR}"
 
+# Linux: build the xcb QPA platform plugin against the hermetic X11/xcb recipes.
+# Qt finds them via pkg-config; the protocol .pc files (xproto, …) live in
+# share/pkgconfig. -DINPUT_xcb=yes makes a missing xcb a hard error (so we never
+# silently ship a Qt with no platform plugin). macOS uses cocoa — skip all this.
+CMAKE_EXTRA=()
+if [[ "${CVC_PLATFORM}" == "linux" ]]; then
+    export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig:${CVC_DEPS_PREFIX}/share/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+    CMAKE_EXTRA+=(-DINPUT_xcb=yes)
+fi
+
 cmake -G Ninja \
     -S "${CVC_SOURCE_DIR}" \
     -B "${CVC_BUILD_DIR}" \
@@ -19,7 +29,8 @@ cmake -G Ninja \
     -DFEATURE_icu=OFF \
     -DFEATURE_sql_mysql=OFF \
     -DFEATURE_sql_psql=OFF \
-    -DFEATURE_system_pcre2=ON
+    -DFEATURE_system_pcre2=ON \
+    "${CMAKE_EXTRA[@]}"
 cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 cmake --install "${CVC_BUILD_DIR}"
 
