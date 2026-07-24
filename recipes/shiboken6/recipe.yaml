@@ -1,0 +1,123 @@
+schema_version: 1
+recipe:
+  name: shiboken6
+  upstream_version: "6.8.2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://doc.qt.io/qtforpython/shiboken6/
+  # Qt-for-Python is tri-licensed LGPL-3.0-only / GPL-2.0-only / GPL-3.0-only
+  # (plus a commercial option). We consume it under LGPL-3.0-only, same as qt6.
+  license: LGPL-3.0-only
+  tags: [python, bindings, codegen]
+  description: >-
+    Shiboken6 6.8.2 (cp311) — the CPython<->C++ binding layer of Qt for Python,
+    built from the Qt `pyside-setup` v6.8.2 source tree (sources/shiboken6).
+    Ships THREE things used by the rest of the stack: (1) `libshiboken6` — the
+    runtime C++ support library that PySide6's per-module bindings link against;
+    (2) the importable `shiboken6` Python package (cp311) that exposes
+    `wrapInstance(addr, PyType)` / `getCppPointer()` — the exact API a volrover3
+    embedded interpreter uses to adopt the app's live cvcpkg-Qt QMainWindow; and
+    (3) the `shiboken6` code generator (bin/shiboken6, links QtCore) plus the
+    Shiboken6 CMake config that the `pyside6` recipe consumes to generate its
+    bindings. Built against the cvcpkg python311 interpreter and the cvcpkg qt6
+    6.8.2 — the SAME Qt PySide6 and the host app link, so there is one
+    libQt6Core in-process. The ApiExtractor parser links the hermetic cvcpkg llvm18
+    (see the CLANG COUPLING note below); the cvcpkg `llvm` recipe is deliberately NOT used
+    because it is LLVM 22, newer than shiboken 6.8.2 supports. Python-ABI
+    specific (cp311); a python312/313 host needs a parallel variant.
+
+source:
+  # Qt for Python is released as one `pyside-setup` source tarball that contains
+  # BOTH sources/shiboken6 and sources/pyside6. This recipe configures only the
+  # sources/shiboken6 CMake sub-project; the `pyside6` recipe uses the same
+  # pinned tarball + sha256 and configures sources/pyside6.
+  type: tarball
+  url: https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-6.8.2-src/pyside-setup-everywhere-src-6.8.2.tar.xz
+  sha256: "8422e9aa403f4119e3192853e9b0cfa09e57e3e0a1a3393e7fdf394179c112f8"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+    # Bindings + libshiboken are built against the cvcpkg python311 interpreter
+    # (cp311); the ABI must match pycvc / numpy-cp311 / the embedded host.
+    - name: python311
+    # The `shiboken6` generator links QtCore, and libshiboken is built against
+    # the same Qt headers the host app uses. Pin to the exact in-process Qt.
+    - name: qt6
+      version: "6.8.2"
+    # Hermetic libclang 18 for shiboken's ApiExtractor: find_package(Clang CONFIG)
+    # (ClangConfig.cmake), libclang the generator links, and the Clang builtin
+    # (resource) headers under lib/clang/<ver>/include the parser needs at
+    # generation time. Pinned to 18 — the top-level `llvm` recipe (LLVM 22) is too
+    # new for shiboken 6.8.2. Replaces the former SYSTEM libclang-18 requirement.
+    - name: llvm18
+      version: "18.1.8"
+  runtime:
+    # The shiboken6 Python module (wrapInstance) imports against this cp311.
+    - name: python311
+    # The shipped generator binary loads libQt6Core; pin to the exact ABI so it
+    # matches PySide6 and the in-process host Qt.
+    - name: qt6
+      version: "6.8.2"
+    # bin/shiboken6 links libclang — keep it resolvable when a consumer (pyside6)
+    # runs the generator.
+    - name: llvm18
+      version: "18.1.8"
+  host_tools:
+    - cmake
+    - ninja
+    - python311
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
+
+package:
+  files:
+    # Code generator (used at pyside6 build time) + its CMake export.
+    - bin/shiboken6*
+    # Runtime C++ support library PySide6 bindings link against.
+    - lib/libshiboken6*
+    # Importable cp311 Python package: exposes wrapInstance / getCppPointer.
+    - lib/python3.11*/site-packages/shiboken6/
+    - lib/python3.11*/site-packages/shiboken6_generator/
+    # CMake config consumed by the `pyside6` recipe: find_package(Shiboken6).
+    - lib/cmake/Shiboken6*/
+    # Public headers for anything that links libshiboken directly.
+    - include/shiboken6*/
+  cmake_packages:
+    - {
+        name: Shiboken6,
+        targets: ["Shiboken6::libshiboken", "Shiboken6::shiboken6"],
+      }
+
+abi:
+  cxx_std: 17
+
+notes: >-
+  SINGLE-QT / NO-BUNDLE CONTRACT: this recipe builds the sources/shiboken6 CMake
+  project directly (route b), NOT via setup.py --standalone. The direct CMake
+  path does not copy Qt or libclang into the install tree, so shiboken6 links
+  the cvcpkg qt6 by soname and there is one libQt6Core in-process. Never enable
+  STANDALONE here.
+
+  CLANG COUPLING: the generator is validated against LLVM/Clang 18, provided
+  hermetically by the cvcpkg `llvm18` dependency. shiboken 6.8.2's setup_clang()
+  runs find_package(Clang CONFIG REQUIRED) and warns below 18.0 (hard-fails below
+  14.0); the runtime parser additionally needs the Clang builtin/resource headers
+  (lib/clang/18/include), which llvm18 packages. build.sh sets LLVM_INSTALL_DIR to
+  the dependency prefix (where llvm18 installs ClangConfig.cmake + libclang + the
+  resource headers), falling back to a system /usr/lib/llvm-18 only if absent.
+
+  LIMITED API: built with FORCE_LIMITED_API=yes (upstream default → stable-ABI
+  .abi3.so). pyside6 MUST be built with the same setting. Set FORCE_LIMITED_API=no
+  in build.sh if a strict cp311-tagged (non-abi3) build is wanted instead.

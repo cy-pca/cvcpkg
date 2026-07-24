@@ -1,0 +1,115 @@
+schema_version: 1
+recipe:
+  name: llvm18
+  upstream_version: "18.1.8"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://llvm.org
+  license: Apache-2.0
+  tags: [compiler, toolchain, llvm, clang, development]
+  description: >-
+    LLVM 18 — the LLVM/Clang/LLD toolchain built from the LLVM monorepo, pinned
+    to the 18.1.x series.  Provides clang, clang++, libclang, the LLVM
+    libraries/headers, the LLD linker, the Clang builtin (resource) headers, and
+    the LLVM/Clang CMake configs.  Targets: X86, AArch64, WebAssembly.
+
+    Exists specifically because some consumers CMake-require Clang/libclang 18
+    and cannot use the newer top-level `llvm` recipe (currently LLVM 22): notably
+    the `shiboken6` generator (Qt for Python 6.8), whose ApiExtractor links
+    libclang and rejects an incompatible major.
+
+source:
+  type: tarball
+  url: https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/llvm-project-18.1.8.src.tar.xz
+  sha256: "0b58557a6d32ceee97c8d533a59b9212d87e0fc4d2833924eb6c611247db2f2a"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: zlib
+      version: "^1.3"
+    - name: ncurses
+      version: "^6.0"
+  runtime:
+    - name: zlib
+      version: "^1.3"
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - bin/clang*
+    - bin/lld*
+    - bin/ld.lld
+    - bin/ld64.lld
+    - bin/llvm-*
+    - bin/opt
+    - bin/llc
+    - bin/lli
+    - lib/libLLVM*
+    - lib/libclang*
+    - lib/liblld*
+    - lib/cmake/llvm/
+    - lib/cmake/clang/
+    - lib/cmake/lld/
+    # Clang builtin/resource headers (lib/clang/<ver>/include — stddef.h,
+    # arm_acle.h, immintrin.h, …). REQUIRED by any libclang parser (e.g.
+    # shiboken's ApiExtractor); the top-level `llvm` recipe omits these.
+    - lib/clang/
+    - include/llvm/
+    - include/llvm-c/
+    - include/clang/
+    - include/clang-c/
+    - include/lld/
+  cmake_packages:
+    - { name: LLVM, targets: ["LLVM"] }
+    - { name: Clang, targets: ["clang", "clangTooling"] }
+
+abi:
+  cxx_std: 17
+
+notes:
+  - title: "Build time"
+    platforms: [linux, macos, windows, freebsd]
+    description: >-
+      LLVM is a very large project.  Expect 30–90 minutes to compile
+      depending on hardware.  The build uses -j${CVC_JOBS} parallelism.
+      LLVM_PARALLEL_LINK_JOBS is capped at 2 to avoid OOM during linking.
+  - title: "Included sub-projects"
+    platforms: [linux, macos, windows, freebsd]
+    description: >-
+      Built with LLVM_ENABLE_PROJECTS="clang;lld".  This provides clang,
+      clang++, clang-format, clang-tidy, the lld linker, and all LLVM
+      tools (opt, llc, lli, llvm-dis, llvm-link, llvm-nm, etc.).
+      Targets: X86, AArch64, WebAssembly.
+  - title: "Shared library"
+    platforms: [linux, macos, freebsd]
+    description: >-
+      LLVM_BUILD_LLVM_DYLIB=ON produces a single libLLVM.so/.dylib that
+      all LLVM tools link against, keeping the total install size smaller.
+      Downstream consumers can also link against it.
+  - title: "llvm-cbe C backend"
+    platforms: [linux, macos, windows, freebsd]
+    description: >-
+      llvm-cbe converts LLVM bitcode to C, but does NOT build against this
+      recipe: upstream requires LLVM 20.1 and CMake's find_package matches
+      on major, so it depends on `llvm20` instead.  Use this recipe's clang
+      to produce the bitcode:
+        clang++ -std=c++20 -O2 -emit-llvm -c main.cpp -o main.bc
+        llvm-cbe main.bc -o main.c
