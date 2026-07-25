@@ -490,6 +490,6 @@ class TestCMakeIntegration:
             timeout=30,
         )
         assert result.returncode == 0, f"downstream cmake configure failed:\n{result.stderr}"
-        assert "cvcpkg version: 2.0.1" in result.stdout
+        assert "cvcpkg version: 2.0.2" in result.stdout
         assert "cvcpkg root:" in result.stdout
-        assert "libcvc-deps version: 2.0.1" in result.stdout
+        assert "libcvc-deps version: 2.0.2" in result.stdout
