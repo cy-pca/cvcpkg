@@ -3,4 +3,4 @@
 set -euo pipefail
 . "$(dirname "$0")/../_common/python-wheel.sh"
 cvc_pip_install_wheel
-cvc_python_check "import google.rpc.status_pb2"
+cvc_python_check "import googleapis_common_protos"

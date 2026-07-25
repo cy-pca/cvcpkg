@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: azure-storage-blob
   upstream_version: "12.30.0"
-  cvc_revision: 2
+  cvc_revision: 3
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -33,9 +33,7 @@ depends:
   runtime:
     - name: python312
     - name: azure-core
-    - name: cryptography-cp311
-    - name: cryptography-cp312
-    - name: cryptography-cp313
+    - name: cryptography
     - name: isodate
     - name: typing-extensions
 

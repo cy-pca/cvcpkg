@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: google-api-core
   upstream_version: "2.31.0"
-  cvc_revision: 2
+  cvc_revision: 3
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -35,7 +35,7 @@ depends:
     - name: google-auth
     - name: googleapis-common-protos
     - name: proto-plus
-    - name: protobuf-python
+    - name: protobuf
     - name: requests
 
 build:

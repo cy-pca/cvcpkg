@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: msal
   upstream_version: "1.37.0"
-  cvc_revision: 2
+  cvc_revision: 3
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -32,9 +32,7 @@ depends:
     - name: python312
   runtime:
     - name: python312
-    - name: cryptography-cp311
-    - name: cryptography-cp312
-    - name: cryptography-cp313
+    - name: cryptography
     - name: pyjwt
     - name: requests
 

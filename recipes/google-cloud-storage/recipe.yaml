@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: google-cloud-storage
   upstream_version: "3.13.0"
-  cvc_revision: 2
+  cvc_revision: 3
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -35,9 +35,7 @@ depends:
     - name: google-api-core
     - name: google-auth
     - name: google-cloud-core
-    - name: google-crc32c-cp311
-    - name: google-crc32c-cp312
-    - name: google-crc32c-cp313
+    - name: google-crc32c
     - name: google-resumable-media
     - name: requests
 
