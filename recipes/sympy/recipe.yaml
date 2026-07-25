@@ -1,0 +1,49 @@
+schema_version: 1
+recipe:
+  name: sympy
+  upstream_version: "1.13.3"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/sympy/
+  license: "MIT"
+  tags: [python, wheel]
+  description: >-
+    sympy 1.13.3 (noarch py3-none-any) for all cvcpkg interpreters (noarch, fanned) — a runtime
+    dependency of torch-cp311 (the GRL-SNAM / cvcpkg Python stack), installed into
+    the interpreter's site-packages.
+
+source:
+  type: python_wheel
+  artifacts:
+    any:
+      url: https://files.pythonhosted.org/packages/99/ff/c87e0622b1dadea79d2fb0b25ade9ed98954c9033722eb707053d310d4f3/sympy-1.13.3-py3-none-any.whl
+      sha256: "54612cf55a62755ee71824ce692986f23c88ffa77207b30c1368eda4a7060f73"
+
+python:
+  interpreter: python312
+  abi: cp312
+
+patches: []
+
+depends:
+  build:
+    - name: python312
+  runtime:
+    - name: python312
+    - name: mpmath
+  host_tools:
+    - python311
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - lib/python3.*/site-packages/sympy/
+    - lib/python3.*/site-packages/isympy.py
+    - lib/python3.*/site-packages/sympy-*.dist-info/
