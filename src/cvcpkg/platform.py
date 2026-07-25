@@ -42,6 +42,12 @@ CANONICAL_ARCHES = frozenset(
         "ppc64",
         "s390x",
         "wasm32",
+        # Platform-independent (noarch) bundles. A `platform: any` recipe is
+        # packaged and published as platform=any / arch=noarch (see
+        # builder._detect_arch_for_platform + pack_recipe), so "noarch" must be
+        # a canonical arch or the publish endpoint 422s every noarch bundle.
+        # "any" is kept as a historical alias some callers still emit.
+        "noarch",
         "any",
     }
 )

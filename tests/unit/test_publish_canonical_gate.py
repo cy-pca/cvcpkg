@@ -26,7 +26,11 @@ from cvcpkg.server.app import _reject_noncanonical_platform_arch  # noqa: E402
         ("windows-gnu", "x86_64"),  # Phase-8 cross-toolchain target
         ("dragonflybsd", "x86_64"),  # detect_platform already emits it
         ("wasm", "wasm32"),
-        ("any", "any"),  # platform-independent bundles
+        ("any", "noarch"),  # platform-independent bundles: the REAL noarch tuple
+        # every noarch bundle is published as platform=any/arch=noarch, so this
+        # is the combination pack_recipe/_detect_arch_for_platform actually emit;
+        # the gate previously 422'd it because "noarch" was not a canonical arch.
+        ("any", "any"),  # historical alias some callers still emit
         ("", ""),  # back-compat: empty stays allowed
         ("freebsd", ""),
     ],
