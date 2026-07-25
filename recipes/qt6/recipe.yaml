@@ -10,7 +10,9 @@ recipe:
   # __has_include(<arm_acle.h>)` (for macOS aarch64), which broke x86 libclang
   # parsers — clang ships arm_acle.h on x86 too and it #errors off-ARM (killed the
   # shiboken generator building PySide6). Header-only, so ABI-identical.
-  cvc_revision: 6
+  # Bumped 6 -> 7: add xkbcommon-x11 (X keyboard handling for the xcb QPA plugin)
+  # now that the recipe exists, and pick up libxcb +cvc.3 (pthread-stubs).
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -51,9 +53,9 @@ depends:
     - name: pcre2
       version: "^10.0"
     # Hermetic X11/xcb + OpenGL for the xcb QPA platform plugin (Linux only;
-    # macOS uses cocoa, Windows uses its native QPA). xkbcommon here is the base
-    # keymap lib; xkbcommon-x11 (enable-x11) is a follow-up for full X keyboard
-    # handling under xcb.
+    # macOS uses cocoa, Windows uses its native QPA). xkbcommon is the base
+    # keymap lib; xkbcommon-x11 gives the xcb plugin full X keyboard handling
+    # (keymaps from the X server over xcb-xkb).
     - name: libxcb
       platforms: [linux]
     - name: xcb-util
@@ -81,6 +83,8 @@ depends:
     - name: libglvnd
       platforms: [linux]
     - name: xkbcommon
+      platforms: [linux]
+    - name: xkbcommon-x11
       platforms: [linux]
   host_tools: []
 

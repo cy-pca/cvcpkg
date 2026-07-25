@@ -1,0 +1,55 @@
+schema_version: 1
+recipe:
+  name: xkbcommon-x11
+  upstream_version: "1.7.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://xkbcommon.org/
+  license: MIT
+  tags: [libraries, x11, graphics]
+  description: >-
+    libxkbcommon-x11 — the X11 (xcb) support library for libxkbcommon, built
+    from the same libxkbcommon source with -Denable-x11=true. Lets Qt's xcb QPA
+    plugin get keymaps from the X server over xcb-xkb for full keyboard
+    handling. Ships only the x11 delta (libxkbcommon-x11 + its .pc/header) and
+    depends on the base `xkbcommon` for libxkbcommon itself.
+
+source:
+  type: tarball
+  url: https://xkbcommon.org/download/libxkbcommon-1.7.0.tar.xz
+  sha256: "65782f0a10a4b455af9c6baab7040e2f537520caa2ec2092805cdfd36863b247"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - ninja
+    - meson
+    - pkg-config
+    - name: xkbcommon
+    - name: libxcb
+  runtime:
+    # libxkbcommon-x11 links the core libxkbcommon (base recipe) + libxcb/xcb-xkb.
+    - name: xkbcommon
+    - name: libxcb
+  host_tools: []
+
+package:
+  files:
+    - lib/libxkbcommon-x11*
+    - lib/pkgconfig/xkbcommon-x11.pc
+    - include/xkbcommon/xkbcommon-x11.h
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh

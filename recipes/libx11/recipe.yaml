@@ -2,7 +2,9 @@ schema_version: 1
 recipe:
   name: libx11
   upstream_version: "1.8.13"
-  cvc_revision: 2
+  # Bumped 2 -> 3: add xorgproto as a RUNTIME dep so the X protocol headers
+  # (X11/X.h etc.) are transitive for downstream X11 builds (see depends).
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -27,6 +29,13 @@ depends:
     - name: xtrans
   runtime:
     - name: libxcb
+    # xorgproto: libX11's public Xlib.h #includes X11/X.h, and its extension
+    # headers pull X11/extensions/*proto.h — all shipped by xorgproto (one
+    # package = every X protocol header). Make it a RUNTIME dep so anything
+    # building against X11 (e.g. VTK's FindX11 needs X11/X.h) gets the protocol
+    # headers transitively via `cvcpkg install <thing that pulls libx11>`,
+    # instead of having to install xorgproto explicitly.
+    - name: xorgproto
   host_tools: []
 
 package:
