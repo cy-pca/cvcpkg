@@ -104,7 +104,13 @@ class MirrorPolicy:
             return MirrorDecision(False, "excluded by CVCPKG_POPULATE_EXCLUDE")
         if self.include and name not in self.include:
             return MirrorDecision(False, "not in CVCPKG_POPULATE_INCLUDE allowlist")
-        if self.platforms and platform and platform not in self.platforms:
+        # A noarch package (platform "any") is platform-independent: it is used
+        # by *every* concrete platform, including the ones an operator did
+        # allowlist, so a platform allowlist must never filter it out. Excluding
+        # it silently starves the entire pure-Python (py3-none-any) closure on a
+        # cluster that mirrors, say, only linux/windows — exactly the failure
+        # that left the dev cluster with 0 of typing-extensions/click/... .
+        if self.platforms and platform and platform != "any" and platform not in self.platforms:
             return MirrorDecision(False, "platform not in CVCPKG_POPULATE_PLATFORMS")
         if self.max_package_bytes and size_bytes > self.max_package_bytes:
             return MirrorDecision(

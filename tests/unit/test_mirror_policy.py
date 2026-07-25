@@ -44,6 +44,17 @@ class TestDecide:
         # Empty platform on the bundle is not filtered out by the platform rule.
         assert p.decide(name="boost", platform="").mirror is True
 
+    def test_platform_allowlist_never_excludes_noarch(self):
+        # A noarch package (platform "any") is platform-independent and used by
+        # every allowed concrete platform, so a platform allowlist must NOT
+        # filter it out — otherwise a linux/windows cluster silently mirrors 0
+        # of the pure-Python (py3-none-any) closure. Regression: the dev cluster.
+        p = MirrorPolicy(platforms=frozenset({"linux", "windows"}))
+        assert p.decide(name="typing-extensions", platform="any").mirror is True
+        # A denylist still overrides, and the size cap still applies to noarch.
+        p2 = MirrorPolicy(platforms=frozenset({"linux"}), exclude=frozenset({"typing-extensions"}))
+        assert p2.decide(name="typing-extensions", platform="any").mirror is False
+
     def test_size_cap(self):
         p = MirrorPolicy(max_package_bytes=1000)
         assert p.decide(name="boost", size_bytes=999).mirror is True
