@@ -1,0 +1,47 @@
+schema_version: 1
+recipe:
+  name: filelock
+  upstream_version: "3.16.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/filelock/
+  license: "MIT"
+  tags: [python, wheel]
+  description: >-
+    filelock 3.16.1 (noarch py3-none-any) for all cvcpkg interpreters (noarch, fanned) — a runtime
+    dependency of torch-cp311 (the GRL-SNAM / cvcpkg Python stack), installed into
+    the interpreter's site-packages.
+
+source:
+  type: python_wheel
+  artifacts:
+    any:
+      url: https://files.pythonhosted.org/packages/b9/f8/feced7779d755758a52d1f6635d990b8d98dc0a29fa568bbe0625f18fdf3/filelock-3.16.1-py3-none-any.whl
+      sha256: "2082e5703d51fbf98ea75855d9d5527e33d8ff23099bec374a134febee6946b0"
+
+python:
+  interpreter: python312
+  abi: cp312
+
+patches: []
+
+depends:
+  build:
+    - name: python312
+  runtime:
+    - name: python312
+  host_tools:
+    - python311
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - lib/python3.*/site-packages/filelock/
+    - lib/python3.*/site-packages/filelock-*.dist-info/
