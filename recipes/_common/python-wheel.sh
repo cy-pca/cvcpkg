@@ -82,9 +82,15 @@ cvc_pip_install_wheel() {
     --no-deps \
     --no-index \
     --no-compile \
+    --ignore-installed \
     --prefix "${CVC_INSTALL_DIR}" \
     "${wheel}"
 }
+# --ignore-installed: stage the wheel into CVC_INSTALL_DIR unconditionally. Without
+# it, pip skips a package that is already present on the interpreter's path at the
+# same version ("already installed with the same version ... Use --force-reinstall"),
+# leaving CVC_INSTALL_DIR/site-packages empty so cvc_python_check then fails with
+# "no site-packages found". We always want the pinned wheel in the staged prefix.
 
 # Run a Python snippet under the target interpreter, with the wheel we just
 # installed importable.
