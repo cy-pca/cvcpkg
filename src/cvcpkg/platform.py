@@ -78,6 +78,28 @@ def noarch_build_target() -> tuple[str, str]:
     )
 
 
+def platform_matches(bundle_platform: str, requested: str) -> bool:
+    """True when a bundle's ``platform`` satisfies a host's *requested* platform.
+
+    A platform-independent bundle (``platform: any``) is valid on every host, so
+    it matches any concrete request; a concrete bundle matches only its own
+    platform.  An empty *requested* means "no filter" and matches everything.
+    Without this, a host querying ``linux`` would filter out a noarch bundle
+    (``any``) and could never resolve/install it.
+    """
+    return not requested or bundle_platform == requested or bundle_platform == "any"
+
+
+def arch_matches(bundle_arch: str, requested: str) -> bool:
+    """True when a bundle's ``arch`` satisfies a host's *requested* arch.
+
+    ``noarch`` (the arch of a ``platform: any`` bundle) is valid on every arch,
+    so it matches any concrete request; a concrete bundle matches only its own
+    arch.  An empty *requested* means "no filter".
+    """
+    return not requested or bundle_arch == requested or bundle_arch == "noarch"
+
+
 def normalize_arch(value: str) -> str:
     """Map a possibly-raw arch spelling onto the canonical name."""
     v = (value or "").strip().lower()

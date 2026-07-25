@@ -2554,10 +2554,14 @@ def create_app(
             bundles = [b for b in bundles if not b.get("yanked", False)]
         if name:
             bundles = [b for b in bundles if b.get("name") == name]
+        # A noarch bundle (platform=any/arch=noarch) is valid on every host, so a
+        # platform/arch query must still surface it (platform_matches/arch_matches).
+        from cvcpkg.platform import arch_matches, platform_matches
+
         if platform:
-            bundles = [b for b in bundles if b.get("platform") == platform]
+            bundles = [b for b in bundles if platform_matches(b.get("platform", ""), platform)]
         if arch:
-            bundles = [b for b in bundles if b.get("arch") == arch]
+            bundles = [b for b in bundles if arch_matches(b.get("arch", ""), arch)]
         if build_type:
             bundles = [b for b in bundles if b.get("build_type") == build_type]
         if link:
@@ -2748,10 +2752,13 @@ def create_app(
         bundles = list(state.index.get("bundles", []))
         if not include_yanked:
             bundles = [b for b in bundles if not b.get("yanked", False)]
+        # noarch bundles (platform=any/arch=noarch) are valid on every host.
+        from cvcpkg.platform import arch_matches, platform_matches
+
         if platform:
-            bundles = [b for b in bundles if b.get("platform") == platform]
+            bundles = [b for b in bundles if platform_matches(b.get("platform", ""), platform)]
         if arch:
-            bundles = [b for b in bundles if b.get("arch") == arch]
+            bundles = [b for b in bundles if arch_matches(b.get("arch", ""), arch)]
         if build_type:
             bundles = [b for b in bundles if b.get("build_type") == build_type]
         if link:

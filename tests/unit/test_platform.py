@@ -5,12 +5,47 @@ from __future__ import annotations
 import pytest
 
 from cvcpkg.platform import (
+    arch_matches,
     default_tuple,
     detect_arch,
     detect_libc,
     detect_platform,
     detect_pointer_size,
+    noarch_build_target,
+    platform_matches,
 )
+
+
+class TestNoarchMatching:
+    """platform=any / arch=noarch bundles must resolve on every host."""
+
+    def test_platform_any_matches_every_host(self):
+        for host in ("linux", "macos", "windows", "freebsd"):
+            assert platform_matches("any", host) is True
+
+    def test_concrete_platform_matches_only_itself(self):
+        assert platform_matches("linux", "linux") is True
+        assert platform_matches("linux", "macos") is False
+
+    def test_arch_noarch_matches_every_arch(self):
+        for host in ("x86_64", "arm64", "wasm32"):
+            assert arch_matches("noarch", host) is True
+
+    def test_concrete_arch_matches_only_itself(self):
+        assert arch_matches("x86_64", "x86_64") is True
+        assert arch_matches("x86_64", "arm64") is False
+
+    def test_empty_request_matches_anything(self):
+        assert platform_matches("linux", "") is True
+        assert arch_matches("x86_64", "") is True
+
+    def test_noarch_build_target_default_and_override(self, monkeypatch):
+        monkeypatch.delenv("CVCPKG_NOARCH_BUILD_PLATFORM", raising=False)
+        monkeypatch.delenv("CVCPKG_NOARCH_BUILD_ARCH", raising=False)
+        assert noarch_build_target() == ("linux", "x86_64")
+        monkeypatch.setenv("CVCPKG_NOARCH_BUILD_PLATFORM", "macos")
+        monkeypatch.setenv("CVCPKG_NOARCH_BUILD_ARCH", "arm64")
+        assert noarch_build_target() == ("macos", "arm64")
 
 
 class TestDetectPlatform:

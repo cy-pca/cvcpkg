@@ -156,6 +156,49 @@ class TestCatalogEntries:
         assert catalog_entries({}) == []
         assert catalog_entries({"bundles": []}) == []
 
+    # A noarch bundle (platform=any/arch=noarch) is valid on every host, so a
+    # concrete-host query must surface it — otherwise it publishes but never
+    # resolves/installs.
+    NOARCH_CATALOG = {
+        "bundles": [
+            {
+                "name": "idna",
+                "version": "3.16+cvc.1",
+                "platform": "any",
+                "arch": "noarch",
+                "build_type": "release",
+                "link": "shared",
+                "sha256": "f" * 64,
+                "archive_url": "https://example.com/idna-noarch.tar.gz",
+            },
+            {
+                "name": "numpy-cp311",
+                "version": "2.2.0+cvc.1",
+                "platform": "linux",
+                "arch": "x86_64",
+                "build_type": "release",
+                "link": "shared",
+                "sha256": "e" * 64,
+                "archive_url": "https://example.com/numpy-linux.tar.gz",
+            },
+        ],
+    }
+
+    def test_noarch_matches_concrete_linux_host(self):
+        entries = catalog_entries(self.NOARCH_CATALOG, platform="linux", arch="x86_64")
+        names = {e.name for e in entries}
+        assert names == {"idna", "numpy-cp311"}  # noarch idna surfaces alongside the concrete one
+
+    def test_noarch_matches_a_different_host(self):
+        # Same noarch bundle is valid on windows/arm64 too; the concrete
+        # linux/x86_64 numpy is not.
+        entries = catalog_entries(self.NOARCH_CATALOG, platform="windows", arch="arm64")
+        assert {e.name for e in entries} == {"idna"}
+
+    def test_noarch_query_still_finds_noarch(self):
+        entries = catalog_entries(self.NOARCH_CATALOG, platform="any", arch="noarch")
+        assert {e.name for e in entries} == {"idna"}
+
 
 # ── generate_catalog ────────────────────────────────────────────
 

@@ -190,12 +190,17 @@ def catalog_entries(
     trust_mirror: bool | None = None,
 ) -> list[CatalogEntry]:
     """Extract CatalogEntry objects from a catalog dict, optionally filtered."""
+    from cvcpkg.platform import arch_matches, platform_matches
+
     _trust = trust_mirror_default() if trust_mirror is None else trust_mirror
     entries: list[CatalogEntry] = []
     for b in catalog.get("bundles", []):
-        if platform and b.get("platform", "") != platform:
+        # A noarch bundle (platform=any/arch=noarch) is valid on every host, so
+        # it must match a concrete platform/arch request -- otherwise it would
+        # publish but never resolve.
+        if platform and not platform_matches(b.get("platform", ""), platform):
             continue
-        if arch and b.get("arch", "") != arch:
+        if arch and not arch_matches(b.get("arch", ""), arch):
             continue
         if build_type and b.get("build_type", "") != build_type:
             continue
