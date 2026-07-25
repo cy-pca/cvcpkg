@@ -26,8 +26,6 @@ import sys
 import urllib.request
 from pathlib import Path
 
-import tomllib
-
 # cvcpkg's five concrete build platforms and the wheel-tag fragments that map to
 # each. First match wins.
 PLATFORM_TAGS = {
@@ -125,7 +123,13 @@ def marker_ok(dep_spec) -> bool:
 
 
 def load_runtime_packages(lock_path: Path) -> dict[str, dict]:
-    lock = tomllib.load(open(lock_path, "rb"))
+    # tomllib is 3.11+ stdlib; import it lazily so this module still imports
+    # under Python 3.10 (the classifier is unit-tested there — only lock parsing,
+    # which is never exercised on 3.10, needs it).
+    import tomllib
+
+    with open(lock_path, "rb") as fh:
+        lock = tomllib.load(fh)
     out = {}
     for p in lock["package"]:
         groups = p.get("groups") or ["main"]
