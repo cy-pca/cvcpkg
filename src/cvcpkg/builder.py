@@ -31,6 +31,14 @@ import yaml
 from cvcpkg.errors import CvcpkgError
 from cvcpkg.platform import detect_arch, detect_platform
 
+# Interpreter versions cvcpkg ships. A noarch (py3-none-any) wheel is valid on
+# every interpreter, so _common/python-wheel.sh fans a noarch install out into
+# each of these interpreters' site-packages (see _build_env). Override with
+# CVCPKG_NOARCH_FANOUT_VERSIONS (space-separated) if the interpreter set changes.
+_PYTHON_NOARCH_FANOUT_VERSIONS = os.environ.get(
+    "CVCPKG_NOARCH_FANOUT_VERSIONS", "3.11 3.12 3.13 3.13t"
+)
+
 # ── Errors ──────────────────────────────────────────────────────
 
 
@@ -680,6 +688,15 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
             # Belt and braces: a free-threaded child process must not silently
             # re-enable the GIL just because some extension asked for it.
             env["PYTHON_GIL"] = "0"
+        # Noarch (py3-none-any) recipes: a pure-Python wheel is valid on every
+        # interpreter, but pip installs it only under its own version dir. Tell
+        # _common/python-wheel.sh to fan the install out into every cvcpkg
+        # interpreter's site-packages so python3.11/3.13/... can import it too
+        # (a noarch dep must be visible to a cp311/cp313 build; and the package
+        # must be usable from any interpreter at runtime). Concrete C-extension
+        # recipes are per-interpreter, so they never fan out.
+        if _is_any_recipe(ctx.recipe):
+            env["CVC_PYTHON_NOARCH_FANOUT"] = _PYTHON_NOARCH_FANOUT_VERSIONS
 
     build_type = "Release" if ctx.config == "release" else "Debug"
     env["CMAKE_BUILD_TYPE"] = build_type

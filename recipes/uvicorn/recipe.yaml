@@ -2,7 +2,8 @@ schema_version: 1
 recipe:
   name: uvicorn
   upstream_version: "0.47.0"
-  cvc_revision: 1
+  cvc_revision: 2
+
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -42,5 +43,5 @@ build:
 
 package:
   files:
-    - lib/python3.12*/site-packages/uvicorn/
-    - lib/python3.12*/site-packages/*.dist-info/
+    - lib/python3.*/site-packages/uvicorn/
+    - lib/python3.*/site-packages/*.dist-info/

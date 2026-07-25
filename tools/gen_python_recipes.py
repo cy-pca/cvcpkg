@@ -255,9 +255,13 @@ def _emit_pure(out, base, m, dep_bases, dep_names, interps):
         + "".join(f"    - name: {r}\n" for r in dict.fromkeys(runtime))
         + "\nbuild:\n  build_type_independent: true\n  matrix:\n"
         "    - platform: any\n      script: build.sh\n\n"
+        # A noarch (py3-none-any) wheel is fanned out into every cvcpkg
+        # interpreter's site-packages by _common/python-wheel.sh (so python3.11/
+        # 3.13/... can import it), so the file globs span all versions, not just
+        # the build interpreter's 3.12.
         "package:\n  files:\n"
-        f"    - lib/python3.12*/site-packages/{_toppkg(base)}/\n"
-        f"    - lib/python3.12*/site-packages/*.dist-info/\n"
+        f"    - lib/python3.*/site-packages/{_toppkg(base)}/\n"
+        f"    - lib/python3.*/site-packages/*.dist-info/\n"
     )
     (d / "recipe.yaml").write_text(body)
     (d / "build.sh").write_text(_PURE_BUILD_SH.format(name=base, top=_toppkg(base)))

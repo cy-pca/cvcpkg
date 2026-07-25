@@ -85,6 +85,40 @@ cvc_pip_install_wheel() {
     --ignore-installed \
     --prefix "${CVC_INSTALL_DIR}" \
     "${wheel}"
+
+  cvc_noarch_fanout
+}
+
+# Cross-interpreter fan-out for noarch (py3-none-any) wheels.
+#
+# pip installs a wheel only under its own interpreter's version dir
+# (lib/pythonX.Y/site-packages). A py3-none-any wheel is valid on EVERY
+# interpreter, but a package placed only in lib/python3.12 is invisible to
+# python3.11/3.13 — so a noarch dependency can't be imported by a cp311/cp313
+# build, and at runtime the package only works from python3.12.
+#
+# For a noarch recipe (builder sets CVC_PYTHON_NOARCH_FANOUT to the space-
+# separated interpreter versions cvcpkg ships, e.g. "3.11 3.12 3.13 3.13t"),
+# copy the just-installed package into every one of those interpreters'
+# site-packages so it imports from all of them. A no-op for concrete
+# (C-extension) recipes, where CVC_PYTHON_NOARCH_FANOUT is unset.
+cvc_noarch_fanout() {
+  [ -n "${CVC_PYTHON_NOARCH_FANOUT:-}" ] || return 0
+  : "${CVC_INSTALL_DIR:?}"
+
+  local src_sp v dst_sp
+  src_sp="$(find "${CVC_INSTALL_DIR}" -maxdepth 3 -type d -name site-packages -print -quit)"
+  if [ -z "${src_sp}" ]; then
+    echo "cvc_noarch_fanout: no site-packages under ${CVC_INSTALL_DIR}" >&2
+    return 1
+  fi
+  for v in ${CVC_PYTHON_NOARCH_FANOUT}; do
+    dst_sp="${CVC_INSTALL_DIR}/lib/python${v}/site-packages"
+    [ "${dst_sp}" = "${src_sp}" ] && continue
+    mkdir -p "${dst_sp}"
+    cp -a "${src_sp}/." "${dst_sp}/"
+  done
+  echo "noarch fan-out: staged into python ${CVC_PYTHON_NOARCH_FANOUT}"
 }
 # --ignore-installed: stage the wheel into CVC_INSTALL_DIR unconditionally. Without
 # it, pip skips a package that is already present on the interpreter's path at the

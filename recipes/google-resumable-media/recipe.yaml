@@ -2,7 +2,8 @@ schema_version: 1
 recipe:
   name: google-resumable-media
   upstream_version: "2.10.0"
-  cvc_revision: 1
+  cvc_revision: 2
+
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -43,5 +44,5 @@ build:
 
 package:
   files:
-    - lib/python3.12*/site-packages/google_resumable_media/
-    - lib/python3.12*/site-packages/*.dist-info/
+    - lib/python3.*/site-packages/google_resumable_media/
+    - lib/python3.*/site-packages/*.dist-info/

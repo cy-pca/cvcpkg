@@ -2,7 +2,8 @@ schema_version: 1
 recipe:
   name: requests
   upstream_version: "2.34.2"
-  cvc_revision: 1
+  cvc_revision: 2
+
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -44,5 +45,5 @@ build:
 
 package:
   files:
-    - lib/python3.12*/site-packages/requests/
-    - lib/python3.12*/site-packages/*.dist-info/
+    - lib/python3.*/site-packages/requests/
+    - lib/python3.*/site-packages/*.dist-info/
