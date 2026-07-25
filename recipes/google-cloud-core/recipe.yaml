@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: google-cloud-core
   upstream_version: "2.6.0"
-  cvc_revision: 2
+  cvc_revision: 3
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -30,6 +30,8 @@ patches: []
 depends:
   build:
     - name: python312
+    - name: google-api-core
+    - name: google-auth
   runtime:
     - name: python312
     - name: google-api-core
@@ -43,5 +45,5 @@ build:
 
 package:
   files:
-    - lib/python3.*/site-packages/google_cloud_core/
+    - lib/python3.*/site-packages/google/cloud/
     - lib/python3.*/site-packages/*.dist-info/

@@ -23,31 +23,46 @@
 
 set -euo pipefail
 
-# Echo the target interpreter's executable inside $CVC_DEPS_PREFIX.
+# Map a cvcpkg interpreter recipe name to the X.Y[t] version it reports.
 #
-# The free-threaded build installs as `python3.13t`; the ordinary build as
-# `python3.13`.  We resolve against the *prefix* interpreter, never the host's
-# — the whole point is that the wheel lands in cvcpkg's Python, not the
-# system's.
-cvc_python_exe() {
-  : "${CVC_DEPS_PREFIX:?CVC_DEPS_PREFIX must be set}"
-  : "${CVC_PYTHON_ABI:?CVC_PYTHON_ABI must be set (recipe python.abi)}"
-
-  local digits ver suffix exe
-  digits="${CVC_PYTHON_ABI#cp}"      # cp313t -> 313t
-  suffix=""
+#   python311  -> 3.11      python313t -> 3.13t
+#
+# This is authoritative even for an abi3 recipe, whose `abi` tag (abi3) carries
+# no version: the interpreter a wheel is *installed under* is named by the
+# recipe's `interpreter:` field, not by the ABI tag.
+cvc_interp_version() {
+  local interp="${1:?usage: cvc_interp_version <pythonNNN[t]>}"
+  local digits="${interp#python}"    # python313t -> 313t
+  local suffix=""
   case "${digits}" in
     *t) suffix="t"; digits="${digits%t}" ;;
   esac
-  ver="${digits:0:1}.${digits:1}"    # 313 -> 3.13
+  echo "${digits:0:1}.${digits:1}${suffix}"   # 313 -> 3.13(t)
+}
 
-  exe="${CVC_DEPS_PREFIX}/bin/python${ver}${suffix}"
+# Echo the prefix interpreter executable for an X.Y[t] version.
+cvc_python_exe_for() {
+  local ver="${1:?usage: cvc_python_exe_for <X.Y[t]>}"
+  : "${CVC_DEPS_PREFIX:?CVC_DEPS_PREFIX must be set}"
+  local exe="${CVC_DEPS_PREFIX}/bin/python${ver}"
   if [ ! -x "${exe}" ]; then
-    echo "cvc_python_exe: interpreter not found: ${exe}" >&2
-    echo "  (does this recipe depend on ${CVC_PYTHON_INTERPRETER:-the interpreter}?)" >&2
+    echo "cvc_python_exe_for: interpreter not found: ${exe}" >&2
+    echo "  (does this recipe depend on python${ver//./}?)" >&2
     return 1
   fi
   echo "${exe}"
+}
+
+# Echo the target interpreter's executable inside $CVC_DEPS_PREFIX.
+#
+# The interpreter to install *under* is the recipe's `interpreter:` field
+# (CVC_PYTHON_INTERPRETER) — resolved against the *prefix* interpreter, never
+# the host's. For an ordinary cpNN recipe this equals the ABI's version; for an
+# abi3 recipe (abi tag carries no version) it is the min interpreter the recipe
+# builds under, from which cvc_noarch_fanout stages the stable-ABI .so upward.
+cvc_python_exe() {
+  : "${CVC_PYTHON_INTERPRETER:?CVC_PYTHON_INTERPRETER must be set (recipe python.interpreter)}"
+  cvc_python_exe_for "$(cvc_interp_version "${CVC_PYTHON_INTERPRETER}")"
 }
 
 # True when the target ABI is the GIL-disabled one.
@@ -119,6 +134,91 @@ cvc_noarch_fanout() {
     cp -a "${src_sp}/." "${dst_sp}/"
   done
   echo "noarch fan-out: staged into python ${CVC_PYTHON_NOARCH_FANOUT}"
+}
+
+# Echo the X.Y[t] version a wheel's ABI tag targets, from its filename.
+#
+#   foo-1.0-cp311-cp311-manylinux…whl  -> 3.11
+#   foo-1.0-cp313-cp313t-manylinux…whl -> 3.13t   (free-threaded ABI)
+#
+# The ABI tag (the field after the Python tag) is authoritative: it, not the
+# Python tag, distinguishes the free-threaded build.
+cvc_wheel_abi_version() {
+  local fn abi digits suffix
+  fn="$(basename "${1:?usage: cvc_wheel_abi_version <wheel>}")"
+  # Every cpNN-cpNN pair in the name is identical except free-threaded
+  # (cp313-cp313t); take the last match so the trailing `t` wins.
+  abi="$(printf '%s\n' "${fn}" | grep -oE 'cp3[0-9]{2}t?' | tail -1)"
+  [ -n "${abi}" ] || { echo "cvc_wheel_abi_version: no cpNN tag in ${fn}" >&2; return 1; }
+  digits="${abi#cp}"
+  suffix=""
+  case "${digits}" in
+    *t) suffix="t"; digits="${digits%t}" ;;
+  esac
+  echo "${digits:0:1}.${digits:1}${suffix}"
+}
+
+# Per-version binary fan-out for a true per-interpreter C-extension package.
+#
+# Unlike a noarch (or stable-ABI) wheel — one payload copied into every
+# interpreter's site-packages by cvc_noarch_fanout — a per-version extension
+# ships a *distinct* binary per ABI (cp311 ≠ cp312 ≠ cp313), so a cp312 .so
+# cannot load under 3.11. This installs EACH pinned wheel present in
+# CVC_SOURCE_DIR into the site-packages of the interpreter matching its own ABI
+# tag, so one package works from every interpreter cvcpkg ships.
+#
+# The recipe must depend (build) on each interpreter it carries a wheel for.
+cvc_pip_install_wheels_fanout() {
+  : "${CVC_SOURCE_DIR:?CVC_SOURCE_DIR must be set}"
+  : "${CVC_INSTALL_DIR:?CVC_INSTALL_DIR must be set}"
+
+  local wheel ver py n=0
+  shopt -s nullglob
+  for wheel in "${CVC_SOURCE_DIR}"/*.whl; do
+    ver="$(cvc_wheel_abi_version "${wheel}")" || return 1
+    py="$(cvc_python_exe_for "${ver}")" || return 1
+    echo "installing $(basename "${wheel}") into ${CVC_INSTALL_DIR} using ${py}"
+    "${py}" -m pip install \
+      --no-deps \
+      --no-index \
+      --no-compile \
+      --ignore-installed \
+      --prefix "${CVC_INSTALL_DIR}" \
+      "${wheel}"
+    n=$((n + 1))
+  done
+  if [ "${n}" -eq 0 ]; then
+    echo "cvc_pip_install_wheels_fanout: no .whl in ${CVC_SOURCE_DIR}" >&2
+    return 1
+  fi
+  echo "per-version fan-out: installed ${n} wheel(s)"
+}
+
+# Run a snippet under EVERY interpreter a per-version fan-out installed into,
+# each with only its own staged site-packages importable. Proves the right ABI
+# landed in the right interpreter's tree.
+cvc_python_check_each() {
+  local snippet="${1:?usage: cvc_python_check_each <python-snippet>}"
+  : "${CVC_SOURCE_DIR:?}"; : "${CVC_INSTALL_DIR:?}"
+
+  local wheel ver py sp n=0
+  shopt -s nullglob
+  for wheel in "${CVC_SOURCE_DIR}"/*.whl; do
+    ver="$(cvc_wheel_abi_version "${wheel}")" || return 1
+    py="$(cvc_python_exe_for "${ver}")" || return 1
+    sp="${CVC_INSTALL_DIR}/lib/python${ver}/site-packages"
+    if [ ! -d "${sp}" ]; then
+      echo "cvc_python_check_each: expected staged site-packages ${sp}" >&2
+      return 1
+    fi
+    echo "verifying cp${ver//./} under ${py}"
+    PYTHONPATH="${sp}" "${py}" -c "
+${snippet}
+print('cp${ver//./} check OK')
+"
+    n=$((n + 1))
+  done
+  [ "${n}" -gt 0 ] || { echo "cvc_python_check_each: no wheels to check" >&2; return 1; }
 }
 # --ignore-installed: stage the wheel into CVC_INSTALL_DIR unconditionally. Without
 # it, pip skips a package that is already present on the interpreter's path at the

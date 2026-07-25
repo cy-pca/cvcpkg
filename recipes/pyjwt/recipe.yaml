@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: pyjwt
   upstream_version: "2.13.0"
-  cvc_revision: 2
+  cvc_revision: 4
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -30,11 +30,10 @@ patches: []
 depends:
   build:
     - name: python312
+    - name: cryptography
   runtime:
     - name: python312
-    - name: cryptography-cp311
-    - name: cryptography-cp312
-    - name: cryptography-cp313
+    - name: cryptography
 
 build:
   build_type_independent: true

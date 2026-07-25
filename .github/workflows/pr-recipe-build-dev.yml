@@ -53,12 +53,21 @@ jobs:
         run: |
           set -euo pipefail
           git fetch -q origin "${{ github.base_ref }}"
-          mapfile -t names < <(
+          mapfile -t touched < <(
             git diff --name-only "origin/${{ github.base_ref }}...HEAD" -- recipes/ \
               | grep -E '^recipes/[^/]+/' | cut -d/ -f2 | grep -v '^_' | sort -u
           )
           # _common/ and other _-prefixed dirs are shared helpers, not
           # recipes — they ship inside every recipe bundle instead.
+          #
+          # git diff lists deleted paths too, so a PR that removes or renames a
+          # recipe (e.g. collapsing per-interpreter -cpNNN wheels into one) would
+          # otherwise try to build a directory that no longer exists. Keep only
+          # recipes still present in the tree.
+          names=()
+          for r in "${touched[@]}"; do
+            [ -d "recipes/$r" ] && names+=("$r")
+          done
           echo "Changed recipes: ${names[*]:-<none>}"
           # space-joined for the CLI, newline-joined for the report
           printf 'names=%s\n' "${names[*]:-}" >> "$GITHUB_OUTPUT"

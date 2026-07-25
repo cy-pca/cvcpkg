@@ -14,10 +14,15 @@ import pytest
 import yaml
 
 from cvcpkg.builder import (
+    _PYTHON_ABI3_FANOUT_VERSIONS,
+    _PYTHON_NOARCH_FANOUT_VERSIONS,
+    BuildContext,
     PythonSpec,
     Recipe,
     RecipeError,
     SourceSpec,
+    _build_env,
+    _platform_wheel_keys,
     _resolve_artifact,
     fetch_source,
 )
@@ -348,3 +353,153 @@ class TestWheelMatrixRecipes:
         # interpreter on some builder.
         keys = {abi: set(self._load(abi).source.artifacts) for abi in self.ABIS}
         assert len({frozenset(v) for v in keys.values()}) == 1, keys
+
+
+class TestPlatformWheelKeys:
+    """A per-version fan-out recipe carries several wheels for one platform,
+    keyed ``{plat}-{arch}`` plus ``{plat}-{arch}-cpNN`` siblings; all must be
+    collected for the build, and never bleed across platforms."""
+
+    def _src(self, *keys):
+        return SourceSpec(
+            type="python_wheel",
+            artifacts={k: {"url": f"https://e.invalid/{k}.whl", "sha256": "a" * 64} for k in keys},
+        )
+
+    def test_single_wheel_yields_exact_key(self):
+        s = self._src("linux-x86_64", "macos-arm64")
+        assert _platform_wheel_keys(s, "linux", "x86_64") == ["linux-x86_64"]
+
+    def test_fanout_collects_all_siblings_sorted(self):
+        s = self._src("linux-x86_64", "linux-x86_64-cp311", "linux-x86_64-cp313", "linux-arm64")
+        assert _platform_wheel_keys(s, "linux", "x86_64") == [
+            "linux-x86_64",
+            "linux-x86_64-cp311",
+            "linux-x86_64-cp313",
+        ]
+
+    def test_no_cross_platform_bleed(self):
+        # `linux-x86_64` must not swallow `linux-x86_64-...` when resolving a
+        # different platform, nor match `linux-arm64` / `macos-x86_64`.
+        s = self._src("linux-x86_64", "linux-x86_64-cp311", "macos-x86_64", "linux-arm64")
+        assert _platform_wheel_keys(s, "macos", "x86_64") == ["macos-x86_64"]
+        assert _platform_wheel_keys(s, "linux", "arm64") == ["linux-arm64"]
+
+    def test_noarch_recipe_has_no_platform_keys(self):
+        # A pure/noarch recipe keys only `any`; there is no platform wheel set,
+        # so the fetch falls back to the single-wheel path.
+        assert _platform_wheel_keys(self._src("any"), "linux", "x86_64") == []
+
+
+class TestFanoutFetch:
+    """_fetch_python_wheel must download EVERY per-interpreter wheel for the
+    target platform, so the build can install each into its own interpreter."""
+
+    def test_downloads_every_interpreter_wheel(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CVCPKG_SOURCE_CACHE_DIR", "")
+        names = {
+            "linux-x86_64": "asyncpg-0.31.0-cp312-cp312-manylinux_2_28_x86_64.whl",
+            "linux-x86_64-cp311": "asyncpg-0.31.0-cp311-cp311-manylinux_2_28_x86_64.whl",
+            "linux-x86_64-cp313": "asyncpg-0.31.0-cp313-cp313-manylinux_2_28_x86_64.whl",
+            # a different platform's wheel must NOT be fetched
+            "macos-arm64": "asyncpg-0.31.0-cp312-cp312-macosx_11_0_arm64.whl",
+        }
+        bodies = {n: n.encode() for n in names.values()}
+        arts = {
+            key: {
+                "url": f"https://e.invalid/{n}",
+                "sha256": hashlib.sha256(bodies[n]).hexdigest(),
+            }
+            for key, n in names.items()
+        }
+        d = {
+            "schema_version": 1,
+            "recipe": {"name": "asyncpg", "upstream_version": "0.31.0", "cvc_revision": 1},
+            "source": {"type": "python_wheel", "artifacts": arts},
+            "python": {"interpreter": "python312", "abi": "cp312"},
+            "build": {"matrix": [{"platform": "linux", "script": "build.sh"}]},
+            "package": {"files": ["lib/"]},
+        }
+        _write_recipe(tmp_path / "r", d)
+        r = Recipe.load(tmp_path / "r")
+        work = tmp_path / "w"
+        work.mkdir()
+
+        import urllib.request
+
+        def _r(url, dest):
+            Path(dest).write_bytes(bodies[url.rsplit("/", 1)[-1]])
+
+        monkeypatch.setattr(urllib.request, "urlretrieve", _r)
+        src = fetch_source(r, work, platform="linux", arch="x86_64")
+
+        got = sorted(p.name for p in src.glob("*.whl"))
+        assert got == sorted(
+            names[k] for k in ("linux-x86_64", "linux-x86_64-cp311", "linux-x86_64-cp313")
+        )
+        # the macos wheel must not have leaked in
+        assert not any("macos" in n for n in got)
+
+
+class TestBuildEnvFanout:
+    """_build_env decides the fan-out mode from the recipe's python block."""
+
+    def _env(self, tmp_path, *, python, matrix, artifacts):
+        d = {
+            "schema_version": 1,
+            "recipe": {"name": "tp", "upstream_version": "1.0.0", "cvc_revision": 1},
+            "source": {"type": "python_wheel", "artifacts": artifacts},
+            "python": python,
+            "build": {"matrix": matrix},
+            "package": {"files": ["lib/"]},
+        }
+        rd = tmp_path / "recipes" / "tp"
+        rd.mkdir(parents=True)
+        (rd / "recipe.yaml").write_text(yaml.safe_dump(d))
+        r = Recipe.load(rd)
+        work = tmp_path / "work"
+        ctx = BuildContext(
+            recipe=r,
+            platform=r.build_matrix[0].platform,
+            config="release",
+            link="shared",
+            prefix=tmp_path / "prefix",
+            source_dir=work / "src",
+            build_dir=work / "build",
+            install_dir=work / "install",
+            work_dir=work,
+        )
+        return _build_env(ctx, r.build_matrix[0])
+
+    def test_noarch_recipe_fans_into_every_interpreter(self, tmp_path):
+        env = self._env(
+            tmp_path,
+            python={"interpreter": "python312", "abi": "cp312"},
+            matrix=[{"platform": "any", "script": "build.sh"}],
+            artifacts={"any": {"url": "https://e.invalid/a.whl", "sha256": "a" * 64}},
+        )
+        assert env["CVC_PYTHON_NOARCH_FANOUT"] == _PYTHON_NOARCH_FANOUT_VERSIONS
+        assert "3.13t" in env["CVC_PYTHON_NOARCH_FANOUT"]  # noarch covers free-threaded
+
+    def test_abi3_recipe_fans_excluding_free_threaded(self, tmp_path):
+        env = self._env(
+            tmp_path,
+            python={"interpreter": "python311", "abi": "abi3"},
+            matrix=[{"platform": "linux", "script": "build.sh"}],
+            artifacts={"linux-x86_64": {"url": "https://e.invalid/a.whl", "sha256": "a" * 64}},
+        )
+        assert env["CVC_PYTHON_NOARCH_FANOUT"] == _PYTHON_ABI3_FANOUT_VERSIONS
+        # abi3 is not implemented on the free-threaded build.
+        assert "3.13t" not in env["CVC_PYTHON_NOARCH_FANOUT"]
+        assert "3.11" in env["CVC_PYTHON_NOARCH_FANOUT"]
+
+    def test_per_version_cext_never_fans_out(self, tmp_path):
+        # A concrete cpNN recipe installs one distinct wheel per interpreter via
+        # cvc_pip_install_wheels_fanout — it must NOT copy-fan a single payload.
+        env = self._env(
+            tmp_path,
+            python={"interpreter": "python312", "abi": "cp312"},
+            matrix=[{"platform": "linux", "script": "build.sh"}],
+            artifacts={"linux-x86_64": {"url": "https://e.invalid/a.whl", "sha256": "a" * 64}},
+        )
+        assert "CVC_PYTHON_NOARCH_FANOUT" not in env

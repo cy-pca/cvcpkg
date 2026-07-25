@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: alembic
   upstream_version: "1.18.4"
-  cvc_revision: 2
+  cvc_revision: 3
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -30,6 +30,9 @@ patches: []
 depends:
   build:
     - name: python312
+    - name: mako
+    - name: sqlalchemy
+    - name: typing-extensions
   runtime:
     - name: python312
     - name: mako

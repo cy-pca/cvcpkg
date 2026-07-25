@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: fastapi
   upstream_version: "0.136.1"
-  cvc_revision: 2
+  cvc_revision: 3
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -30,6 +30,11 @@ patches: []
 depends:
   build:
     - name: python312
+    - name: annotated-doc
+    - name: pydantic
+    - name: starlette
+    - name: typing-extensions
+    - name: typing-inspection
   runtime:
     - name: python312
     - name: annotated-doc

@@ -39,6 +39,15 @@ _PYTHON_NOARCH_FANOUT_VERSIONS = os.environ.get(
     "CVCPKG_NOARCH_FANOUT_VERSIONS", "3.11 3.12 3.13 3.13t"
 )
 
+# A stable-ABI (abi3) wheel is one binary valid on every interpreter from its
+# build interpreter upward, so it copy-fans like a noarch wheel — but never into
+# a free-threaded (…t) interpreter, whose ABI the stable ABI does not implement.
+# (Our abi3 recipes build under python311, the floor, so the whole non-free set
+# is valid.)
+_PYTHON_ABI3_FANOUT_VERSIONS = " ".join(
+    v for v in _PYTHON_NOARCH_FANOUT_VERSIONS.split() if not v.endswith("t")
+)
+
 # ── Errors ──────────────────────────────────────────────────────
 
 
@@ -426,6 +435,40 @@ def _resolve_vendored(source: SourceSpec, recipe_dir: Path) -> Path:
     return src
 
 
+def _resolve_artifact_entry(source: SourceSpec, key: str, entry: Any) -> tuple[str, str, str]:
+    """Turn one ``artifacts`` map entry (bare filename or mapping) into
+    ``(url, sha256, filename)``."""
+    if isinstance(entry, str):
+        filename = entry
+        url = f"{source.base_url.rstrip('/')}/{filename}" if source.base_url else filename
+        return url, source.sha256, filename
+
+    filename = entry.get("file", "")
+    url = entry.get("url", "")
+    if not url:
+        if not filename:
+            raise RecipeError(f"artifact {key} has neither 'url' nor 'file'")
+        if not source.base_url:
+            raise RecipeError(f"artifact {key} uses 'file' but recipe has no base_url")
+        url = f"{source.base_url.rstrip('/')}/{filename}"
+    if not filename:
+        filename = url.rsplit("/", 1)[-1]
+    return url, entry.get("sha256", ""), filename
+
+
+def _platform_wheel_keys(source: SourceSpec, platform: str, arch: str) -> list[str]:
+    """Artifact keys carrying a wheel for *platform*/*arch*, in stable order.
+
+    A single-wheel recipe has just the exact ``{platform}-{arch}`` key. A
+    per-version fan-out recipe adds one ``{platform}-{arch}-cpNN`` sibling per
+    extra interpreter (e.g. ``linux-x86_64``, ``linux-x86_64-cp311``,
+    ``linux-x86_64-cp313``); every one is fetched so the build can install each
+    ABI into its own interpreter. Empty when only ``any``/top-level applies.
+    """
+    prefix = f"{platform}-{arch}"
+    return sorted(k for k in source.artifacts if k == prefix or k.startswith(f"{prefix}-"))
+
+
 def _resolve_artifact(source: SourceSpec, platform: str, arch: str) -> tuple[str, str, str]:
     """Resolve the ``artifacts`` entry for *platform*/*arch*.
 
@@ -452,49 +495,27 @@ def _resolve_artifact(source: SourceSpec, platform: str, arch: str) -> tuple[str
         available = ", ".join(sorted(source.artifacts)) or "(none)"
         raise RecipeError(f"no artifact for {key}; recipe provides: {available}")
 
-    if isinstance(entry, str):
-        filename = entry
-        url = f"{source.base_url.rstrip('/')}/{filename}" if source.base_url else filename
-        return url, source.sha256, filename
-
-    filename = entry.get("file", "")
-    url = entry.get("url", "")
-    if not url:
-        if not filename:
-            raise RecipeError(f"artifact {key} has neither 'url' nor 'file'")
-        if not source.base_url:
-            raise RecipeError(f"artifact {key} uses 'file' but recipe has no base_url")
-        url = f"{source.base_url.rstrip('/')}/{filename}"
-    if not filename:
-        filename = url.rsplit("/", 1)[-1]
-    return url, entry.get("sha256", ""), filename
+    return _resolve_artifact_entry(source, key, entry)
 
 
-def _fetch_python_wheel(source: SourceSpec, dest: Path, platform: str, arch: str) -> Path:
-    """Download and sha256-verify a pinned wheel; do not unpack it.
+def _download_pinned_wheel(url: str, sha256: str, filename: str, source_dir: Path) -> Path:
+    """Download one pinned wheel into *source_dir*, sha256-verified, via cache.
 
-    pip parses the compatibility tags out of the wheel *filename*, so the
-    artifact keeps its upstream name.  Unlike the hand-rolled downloads in
-    ``prebuilt`` build scripts, the pin is enforced here in cvcpkg rather
-    than trusted to each recipe — Phase 7 requires every wheel to be
-    sha256-pinned, so a missing hash is an error, not a warning.
+    Phase 7 requires every wheel to be sha256-pinned, so a missing hash is an
+    error, not a warning.
     """
     import urllib.error
     import urllib.request
 
-    url, sha256, filename = _resolve_artifact(source, platform, arch)
     if not sha256:
         raise RecipeError(f"python_wheel artifact {filename} has no sha256 (pinning is required)")
 
-    source_dir = dest / "src"
-    source_dir.mkdir(exist_ok=True)
     wheel_path = source_dir / filename
-
     cache_dir = _source_cache_dir()
     cached = cache_dir / f"{sha256}.whl" if cache_dir is not None else None
     if cached is not None and cached.is_file() and _sha256_file(cached) == sha256:
         shutil.copy2(str(cached), str(wheel_path))
-        return source_dir
+        return wheel_path
 
     try:
         urllib.request.urlretrieve(url, wheel_path)  # noqa: S310
@@ -508,6 +529,33 @@ def _fetch_python_wheel(source: SourceSpec, dest: Path, platform: str, arch: str
     if cached is not None:
         cache_dir.mkdir(parents=True, exist_ok=True)  # type: ignore[union-attr]
         shutil.copy2(str(wheel_path), str(cached))
+    return wheel_path
+
+
+def _fetch_python_wheel(source: SourceSpec, dest: Path, platform: str, arch: str) -> Path:
+    """Download and sha256-verify the pinned wheel(s) for platform/arch; do not
+    unpack them.
+
+    pip parses the compatibility tags out of the wheel *filename*, so each
+    artifact keeps its upstream name.  A per-version fan-out recipe carries
+    several wheels for one platform (one per interpreter ABI, keyed
+    ``{plat}-{arch}-cpNN``); all are fetched into ``src/`` so the build can
+    install each into its own interpreter.  A single-wheel or noarch recipe
+    resolves to exactly one — unchanged behaviour.
+    """
+    source_dir = dest / "src"
+    source_dir.mkdir(exist_ok=True)
+
+    keys = _platform_wheel_keys(source, platform, arch)
+    if keys:
+        for key in keys:
+            url, sha256, filename = _resolve_artifact_entry(source, key, source.artifacts[key])
+            _download_pinned_wheel(url, sha256, filename, source_dir)
+    else:
+        # No platform-specific key: the ``any`` (noarch) or top-level single-wheel
+        # fallback that _resolve_artifact already encodes.
+        url, sha256, filename = _resolve_artifact(source, platform, arch)
+        _download_pinned_wheel(url, sha256, filename, source_dir)
     return source_dir
 
 
@@ -697,6 +745,14 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
         # recipes are per-interpreter, so they never fan out.
         if _is_any_recipe(ctx.recipe):
             env["CVC_PYTHON_NOARCH_FANOUT"] = _PYTHON_NOARCH_FANOUT_VERSIONS
+        elif ctx.recipe.python.stable_abi:
+            # A stable-ABI (abi3) recipe ships one binary wheel valid on every
+            # non-free-threaded interpreter from its build interpreter upward.
+            # Copy-fan it like noarch (same mechanism), just excluding the
+            # free-threaded build. A true per-version C-extension has no
+            # NOARCH_FANOUT and instead installs a distinct wheel per interpreter
+            # (cvc_pip_install_wheels_fanout).
+            env["CVC_PYTHON_NOARCH_FANOUT"] = _PYTHON_ABI3_FANOUT_VERSIONS
 
     build_type = "Release" if ctx.config == "release" else "Debug"
     env["CMAKE_BUILD_TYPE"] = build_type
