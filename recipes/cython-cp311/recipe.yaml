@@ -1,0 +1,53 @@
+schema_version: 1
+recipe:
+  name: cython-cp311
+  upstream_version: "3.1.6"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/Cython/
+  license: "MIT"
+  tags: [python, wheel, build-tool]
+  description: >-
+    Cython 3.1.6 (noarch py3-none-any) for the python311 interpreter — a
+    BUILD-TIME backend for cvcpkg from-source Python packages (numpy, h5py).
+    Declared as a depends.build edge, so it lands in the build prefix and is
+    stripped from the deliverable; never shipped to users.
+
+# Pure-Python noarch wheel: one platform-independent artifact, but tied to the
+# python311 interpreter (installs into ITS site-packages, where --no-build-
+# isolation backends must be importable). The -cp311 suffix names that target.
+source:
+  type: python_wheel
+  artifacts:
+    any:
+      url: https://files.pythonhosted.org/packages/18/d5/7a04640bf559bb890455ffb28978daf7d44f667c3f04a4d422c655c1ba92/cython-3.1.6-py3-none-any.whl
+      sha256: "91dcf7eb9b6a089ce4e9e1140e571d84c3bca834afb77ec269be7aa9d31a8157"
+
+python:
+  interpreter: python311
+  abi: cp311
+
+patches: []
+
+depends:
+  build:
+    - name: python311
+  runtime:
+    - name: python311
+  host_tools:
+    - python311
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - lib/python3.11*/site-packages/Cython/
+    - lib/python3.11*/site-packages/cython.py
+    - lib/python3.11*/site-packages/cython-*.dist-info/
+    - lib/python3.11*/site-packages/pyximport/

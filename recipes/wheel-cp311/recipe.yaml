@@ -1,0 +1,51 @@
+schema_version: 1
+recipe:
+  name: wheel-cp311
+  upstream_version: "0.45.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/wheel/
+  license: "MIT"
+  tags: [python, wheel, build-tool]
+  description: >-
+    wheel 0.45.1 (noarch py3-none-any) for the python311 interpreter — a
+    BUILD-TIME backend for cvcpkg from-source Python packages (numpy, h5py).
+    Declared as a depends.build edge, so it lands in the build prefix and is
+    stripped from the deliverable; never shipped to users.
+
+# Pure-Python noarch wheel: one platform-independent artifact, but tied to the
+# python311 interpreter (installs into ITS site-packages, where --no-build-
+# isolation backends must be importable). The -cp311 suffix names that target.
+source:
+  type: python_wheel
+  artifacts:
+    any:
+      url: https://files.pythonhosted.org/packages/0b/2c/87f3254fd8ffd29e4c02732eee68a83a1d3c346ae39bc6822dcbcb697f2b/wheel-0.45.1-py3-none-any.whl
+      sha256: "708e7481cc80179af0e556bbf0cc00b8444c7321e2700b8d8580231d13017248"
+
+python:
+  interpreter: python311
+  abi: cp311
+
+patches: []
+
+depends:
+  build:
+    - name: python311
+  runtime:
+    - name: python311
+  host_tools:
+    - python311
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - lib/python3.11*/site-packages/wheel/
+    - lib/python3.11*/site-packages/wheel-*.dist-info/
