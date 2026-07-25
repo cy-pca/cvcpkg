@@ -34,7 +34,7 @@ depends:
     - name: google-auth
     - name: googleapis-common-protos
     - name: proto-plus
-    - name: protobuf
+    - name: protobuf-python
     - name: requests
 
 build:

@@ -31,7 +31,7 @@ depends:
     - name: python312
   runtime:
     - name: python312
-    - name: protobuf
+    - name: protobuf-python
 
 build:
   build_type_independent: true
