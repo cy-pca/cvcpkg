@@ -55,12 +55,12 @@ depends:
     # under --no-build-isolation (see build.sh). Provisioned as their own cvcpkg
     # recipes into the prefix interpreter's site-packages; referenced here, not
     # re-solved. (Base python311 already ships pip + setuptools.)
-    - name: cython-cp311
-    - name: pkgconfig-cp311
-    - name: wheel-cp311
-    - name: packaging-cp311
+    - name: cython
+    - name: pkgconfig
+    - name: wheel
+    - name: packaging
     # base python311 ships setuptools 65.5; h5py's backend needs >=77.0.1.
-    - name: setuptools-cp311
+    - name: setuptools
   runtime:
     # At import, h5py loads its compiled extensions (which pull in libhdf5.so.310
     # from the merged prefix) and imports numpy. No separate h5py.libs/ — the HDF5
