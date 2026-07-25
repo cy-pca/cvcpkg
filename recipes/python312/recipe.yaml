@@ -5,7 +5,12 @@ recipe:
   # Bumped 1 -> 2: extension-module RPATH fix (shared _common/build-python.sh) so
   # lib-dynload/*.so (incl. _ssl/_hashlib) find the prefix lib/ instead of the
   # system libs — a standalone interpreter's `import ssl` was failing. ABI-identical.
-  cvc_revision: 2
+  # Bumped 2 -> 3: rebuild on the glibc-2.35 fleet.  The +cvc.2 artifact was
+  # published from a manual off-fleet build (glibc 2.38) and would not run on the
+  # fleet builders or on users with glibc < 2.38 (every python build failed at
+  # `import` with "GLIBC_2.38 not found").  Content-identical to +cvc.2; only the
+  # build host's glibc baseline differs.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
