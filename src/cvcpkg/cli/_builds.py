@@ -1241,14 +1241,20 @@ def builds_submit_dag(
     # ── Schedule platform-independent (noarch) recipes ONCE ──────────
     # A `platform: any` recipe builds one bundle valid everywhere, so it is
     # submitted as a single any/noarch DAG (per config/link) rather than once
-    # per target platform.  The server dispatches these to any registered
-    # builder (see _choose_builder); the builder builds natively and publishes
-    # the result as platform=any/arch=noarch (see pack_recipe).
+    # per target platform.  The server routes these to a builder on the noarch
+    # build target (see _choose_builder) -- the reference platform that has the
+    # interpreter/toolchain deps -- which builds natively and publishes the
+    # result as platform=any/arch=noarch (see pack_recipe).
     if any_names:
-        have_builders = bool(_supported_targets or _supported_platforms)
-        if _builder_check and not have_builders:
+        from cvcpkg.platform import noarch_build_target
+
+        _noarch_target = noarch_build_target()
+        # Only skip when we positively know no builder can build noarch (the
+        # reference target is unserved); fail open if the registry was unread.
+        if _builder_check and _noarch_target not in _supported_targets:
             click.echo(
-                f"  Skipping {len(any_names)} noarch recipe(s): " "no registered builder available"
+                f"  Skipping {len(any_names)} noarch recipe(s): no registered builder "
+                f"for the noarch build target {_noarch_target[0]}/{_noarch_target[1]}"
             )
         else:
             for cfg in configs:

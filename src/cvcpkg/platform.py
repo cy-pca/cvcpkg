@@ -54,6 +54,24 @@ ARCH_ALIASES = {
 }
 
 
+def noarch_build_target() -> tuple[str, str]:
+    """The concrete ``(platform, arch)`` a noarch job is *built* on.
+
+    A ``platform: any`` recipe publishes one noarch bundle valid everywhere, but
+    it still has to compile on a real host that provides its build deps — for a
+    Python wheel, the CPython interpreter recipes, which are published for one
+    reference platform only.  Dispatching a noarch job to a host that lacks that
+    interpreter fails the build (and, with no cross-builder retry, cascade-
+    cancels the whole noarch DAG), so the scheduler routes noarch jobs to a
+    builder on this target.  Defaults to ``linux``/``x86_64``; override per
+    fleet with ``CVCPKG_NOARCH_BUILD_PLATFORM`` / ``CVCPKG_NOARCH_BUILD_ARCH``.
+    """
+    return (
+        os.environ.get("CVCPKG_NOARCH_BUILD_PLATFORM", "linux"),
+        os.environ.get("CVCPKG_NOARCH_BUILD_ARCH", "x86_64"),
+    )
+
+
 def normalize_arch(value: str) -> str:
     """Map a possibly-raw arch spelling onto the canonical name."""
     v = (value or "").strip().lower()

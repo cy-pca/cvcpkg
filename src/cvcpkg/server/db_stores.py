@@ -3977,12 +3977,17 @@ class DbBuildJobStore:
                     submitted = submitted.replace(tzinfo=datetime.timezone.utc)
                 if submitted > cutoff:
                     continue  # still within the grace period
-                if row.platform == "any" and (schedulable_targets or schedulable_platforms):
-                    # A platform-independent (noarch) job runs on any registered
-                    # builder, so it is schedulable as long as the fleet is
-                    # non-empty -- never reap it merely for lacking an
-                    # ("any", "noarch") builder (no builder registers as that).
-                    continue
+                if row.platform == "any":
+                    # A platform-independent (noarch) job is built on the
+                    # reference build platform (it needs that host's interpreter/
+                    # toolchain), so it is schedulable iff a builder for that
+                    # target is registered -- never reap it merely for lacking an
+                    # ("any", "noarch") builder (no builder registers as that),
+                    # but DO reap it when nothing can actually build it.
+                    from cvcpkg.platform import noarch_build_target
+
+                    if noarch_build_target() in schedulable_targets:
+                        continue
                 if (row.platform, row.arch) in schedulable_targets:
                     continue
                 if row.platform in schedulable_platforms:

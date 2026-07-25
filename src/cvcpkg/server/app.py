@@ -1057,6 +1057,8 @@ def _choose_builder(job, available):
     machine can serve the public namespace and one or more orgs at once. A job
     matches any builder whose served set contains the job's ``org_slug``.
     """
+    from cvcpkg.platform import noarch_build_target
+
     candidates = []
     for b in available:
         if b.current_jobs >= b.max_jobs:
@@ -1069,10 +1071,15 @@ def _choose_builder(job, available):
             # not opt into.
             continue
         if job.platform == "any":
-            # A platform-independent (noarch) job produces one any/noarch
-            # bundle valid on every host, so any builder serving the namespace
-            # (with capacity) can build it -- it is scheduled once, not per host.
-            candidates.append(b)
+            # A platform-independent (noarch) job publishes one any/noarch
+            # bundle, but it still has to be BUILT on a concrete host that
+            # provides its interpreter/toolchain build deps (published for the
+            # reference build platform only).  Route it to a builder on that
+            # target -- NOT to any host: a non-capable host would fail the build
+            # and, with no cross-builder retry, cascade-cancel the noarch DAG.
+            _np, _na = noarch_build_target()
+            if b.platform == _np and b.arch == _na:
+                candidates.append(b)
             continue
         if b.platform == job.platform and b.arch == job.arch:
             candidates.append(b)

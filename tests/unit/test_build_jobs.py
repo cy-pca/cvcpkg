@@ -170,13 +170,14 @@ class TestDbBuildJobStore:
 
         self._run(_test())
 
-    def test_reap_unschedulable_keeps_noarch_when_fleet_nonempty(self):
+    def test_reap_unschedulable_keeps_noarch_when_capable_builder_present(self):
         from cvcpkg.server.db_stores import DbBuildJobStore
 
         async def _test():
             store = DbBuildJobStore()
-            # A noarch job registers no builder as ("any", "noarch"), yet any
-            # builder can serve it — so with a non-empty fleet it must NOT reap.
+            # No builder registers as ("any", "noarch"); a noarch job is built on
+            # the noarch build target (linux/x86_64), so it must NOT be reaped
+            # while a builder for that target exists.
             noarch = await store.create(
                 recipe_name="idna",
                 platform="any",
@@ -187,6 +188,28 @@ class TestDbBuildJobStore:
             reaped = await store.reap_unschedulable({("linux", "x86_64")}, set(), min_age_seconds=0)
             assert noarch.id not in {j.id for j in reaped}
             assert (await store.get(noarch.id)).status == BuildJobStatus.pending
+
+        self._run(_test())
+
+    def test_reap_unschedulable_reaps_noarch_when_no_capable_builder(self):
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            noarch = await store.create(
+                recipe_name="idna",
+                platform="any",
+                arch="noarch",
+                submitted_by="test-admin",
+                recipe_version="3.11",
+            )
+            # A fleet of only non-capable builders (no linux/x86_64) cannot build
+            # noarch, so the job IS reaped rather than sitting pending forever.
+            reaped = await store.reap_unschedulable(
+                {("windows", "x86_64"), ("macos", "arm64")}, set(), min_age_seconds=0
+            )
+            assert noarch.id in {j.id for j in reaped}
+            assert (await store.get(noarch.id)).status == BuildJobStatus.unschedulable
 
         self._run(_test())
 

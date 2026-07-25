@@ -108,30 +108,68 @@ class TestMatchingUnchanged:
 
 
 class TestNoarchDispatch:
-    """A platform-independent (any/noarch) job runs on any builder in namespace."""
+    """A platform-independent (any/noarch) job is routed to a *capable* builder:
+    one on the noarch build target (default linux/x86_64), where the interpreter/
+    toolchain build deps are published. It must NOT land on a host that can't
+    build it (which would fail and cascade-cancel the noarch DAG)."""
 
-    def test_noarch_job_runs_on_any_platform_builder(self):
-        # A noarch job has no host of its own; a linux builder can build it.
+    def test_noarch_job_runs_on_the_noarch_build_target(self):
+        # Default target is linux/x86_64 — the platform with published interpreters.
         b = _builder(platform="linux", arch="x86_64")
         assert _choose_builder(_job(platform="any", arch="noarch"), [b]) is b
 
-    def test_noarch_job_runs_on_a_differently_named_host(self):
-        # Even a macOS/arm64 builder can produce the single noarch bundle.
-        b = _builder(platform="macos", arch="arm64")
-        assert _choose_builder(_job(platform="any", arch="noarch"), [b]) is b
+    def test_noarch_job_not_dispatched_to_incapable_host(self):
+        # A macOS or Windows builder lacks the linux interpreter, so a noarch
+        # job must NOT be routed there (the regression that produced 0 published
+        # noarch: non-linux builders claimed noarch jobs and failed them).
+        assert (
+            _choose_builder(
+                _job(platform="any", arch="noarch"), [_builder(platform="macos", arch="arm64")]
+            )
+            is None
+        )
+        assert (
+            _choose_builder(
+                _job(platform="any", arch="noarch"), [_builder(platform="windows", arch="x86_64")]
+            )
+            is None
+        )
+
+    def test_noarch_picks_the_linux_builder_from_a_mixed_fleet(self):
+        win = _builder(platform="windows", arch="x86_64", id=1)
+        lin = _builder(platform="linux", arch="x86_64", id=2)
+        bsd = _builder(platform="freebsd", arch="x86_64", id=3)
+        assert _choose_builder(_job(platform="any", arch="noarch"), [win, lin, bsd]) is lin
 
     def test_noarch_job_still_respects_namespace_isolation(self):
         # Being noarch does not let it cross a namespace boundary.
         assert (
-            _choose_builder(_job(org="shell", platform="any", arch="noarch"), [_builder(org="")])
+            _choose_builder(
+                _job(org="shell", platform="any", arch="noarch"),
+                [_builder(org="", platform="linux", arch="x86_64")],
+            )
             is None
         )
 
     def test_noarch_job_respects_capacity(self):
-        assert _choose_builder(_job(platform="any", arch="noarch"), [_builder(cur=2, mx=2)]) is None
+        assert (
+            _choose_builder(
+                _job(platform="any", arch="noarch"),
+                [_builder(platform="linux", arch="x86_64", cur=2, mx=2)],
+            )
+            is None
+        )
 
     def test_noarch_job_with_no_builders_returns_none(self):
         assert _choose_builder(_job(platform="any", arch="noarch"), []) is None
+
+    def test_noarch_build_target_is_configurable(self, monkeypatch):
+        # A fleet whose interpreters live on macos/arm64 can retarget noarch.
+        monkeypatch.setenv("CVCPKG_NOARCH_BUILD_PLATFORM", "macos")
+        monkeypatch.setenv("CVCPKG_NOARCH_BUILD_ARCH", "arm64")
+        mac = _builder(platform="macos", arch="arm64")
+        lin = _builder(platform="linux", arch="x86_64")
+        assert _choose_builder(_job(platform="any", arch="noarch"), [lin, mac]) is mac
 
 
 class TestServedNamespaces:
