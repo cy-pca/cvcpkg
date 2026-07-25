@@ -100,6 +100,45 @@ This makes a public-vs-upstream collision impossible: public packages arrive
 > org package can never shadow a public upstream package that happens to share
 > its name/version.
 
+#### Concurrency — a local build racing a mirror import
+
+A natural worry on a cluster that both **builds** packages and **mirrors** an
+upstream: what if the populate loop imports a variant from upstream at the same
+moment a local builder is finishing a build of that same variant — who wins,
+the build or the mirror?
+
+Variants are **immutable and first-committer-wins**. A published
+`(name, version, platform, arch, config, link)` tuple is never overwritten:
+`add_package` raises on a duplicate, which the API surfaces as `409`. The two
+writers that can target one variant — a **builder publishing a freshly-built
+package** and the **populate loop importing that variant from upstream** —
+therefore resolve deterministically, and *nothing is ever clobbered*:
+
+- **On an edge, for a public package there is no race at all.** A public local
+  publish is rejected up front with `409` (see above), so a builder can never
+  write a public variant on an edge. The public namespace is populated *only*
+  from upstream, so the upstream/mirror copy is always the one that lands. This
+  is the case for the dev cluster (`CVCPKG_POPULATE_UPSTREAM=https://cvcpkg.org`):
+  a dev builder that builds a *public* package cannot publish it there — public
+  packages must be published to the canonical primary (cvcpkg.org) and reach the
+  dev server by mirroring.
+
+- **Where both writers are legal** — the canonical primary, or an *org*-scoped
+  variant — it is **first-committer-wins**:
+  - If the **build publishes first**, the populate loop sees the variant already
+    exists and **discards its download and keeps the local build** — it
+    explicitly yields (*"a concurrent local publish won the race — keep
+    theirs"*, `server/app.py`); it does not overwrite.
+  - If **populate imports first**, the builder's later publish of the same
+    variant hits the immutable-duplicate check and gets `409`; that build output
+    is discarded. Builds run with `--skip-existing`, so the scheduler avoids
+    even dispatching a variant already present — the `409` is only the backstop
+    for the narrow window between that check and the publish.
+
+Either way exactly one of {the build, the import} wins — whichever committed to
+the catalog first — and no published variant ever diverges from what a client
+would get from upstream.
+
 ## Local-only organization packages
 
 Organizations are a **separate namespace** — the package identity includes the
