@@ -21,6 +21,30 @@ from cvcpkg.cli._server import _api_request
 from cvcpkg.semver import version_sort_key
 
 
+def _symlink_merge_into(src_root: Path, dst_root: Path) -> None:
+    """Symlink the contents of *src_root* into *dst_root*, merging directories.
+
+    A cross-toolchain is linked into a build prefix that may ALREADY contain
+    top-level dirs (bin/, include/, lib/, share/) from dependency packages
+    installed into the same prefix.  Symlinking a toolchain's same-named
+    top-level dir is then skipped, silently dropping everything the toolchain
+    ships beneath it -- e.g. wasi-sdk's ``share/wasi-sysroot`` and
+    ``share/cmake/wasi-sdk.cmake``, so the compiler cannot find libc headers or
+    the CMake toolchain file and the build fails deep into configure/compile.
+    Recurse on directory collisions and symlink at the first level that is not
+    already occupied.
+    """
+    for child in src_root.iterdir():
+        dst = dst_root / child.name
+        if not (dst.exists() or dst.is_symlink()):
+            dst.symlink_to(child)
+        elif child.is_dir() and dst.is_dir() and not dst.is_symlink():
+            # Real directory on both sides -- merge their contents so neither
+            # the dependency's nor the toolchain's subtree is lost.
+            _symlink_merge_into(child, dst)
+        # else: a real file or symlink already occupies dst -- keep it.
+
+
 def _newest_first(pkg: dict) -> tuple:
     """Newest-first ordering key for a catalog entry (a dict with "version").
 
@@ -1046,11 +1070,9 @@ def builder_run(
                         log_cb(
                             f"  Toolchain {tc_name} ({tc_version}) cached, symlinking into prefix\n"
                         )
-                        # Symlink cached contents into the build prefix
-                        for child in tc_cache_path.iterdir():
-                            dst = prefix / child.name
-                            if not dst.exists():
-                                dst.symlink_to(child)
+                        # Merge cached toolchain contents into the build prefix
+                        # (recursing on dir collisions with deps already there).
+                        _symlink_merge_into(tc_cache_path, prefix)
                         # Resolve env and skip download
                         for var, tpl in ct_env.items():
                             merged_env[var] = tpl.replace("${PREFIX}", str(prefix))
@@ -1119,12 +1141,10 @@ def builder_run(
                 finally:
                     tmp_archive.unlink(missing_ok=True)
 
-            # If we extracted into the cache, symlink into prefix now
+            # If we extracted into the cache, merge into prefix now
+            # (recursing on dir collisions with deps already there).
             if tc_cache_path and extract_target != prefix:
-                for child in tc_cache_path.iterdir():
-                    dst = prefix / child.name
-                    if not dst.exists():
-                        dst.symlink_to(child)
+                _symlink_merge_into(tc_cache_path, prefix)
 
             # 3. Resolve env templates
             for var, tpl in ct_env.items():
