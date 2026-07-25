@@ -207,6 +207,46 @@ they do not require `cvcpkg` at activation time.
 
 ---
 
+## Python packages & interpreter selection
+
+A cvcpkg prefix can carry **several CPython interpreters side by side** —
+`python311`, `python312`, `python313`, and the free-threaded `python313t` —
+each installed as its own `<prefix>/bin/pythonX.Y` with its own
+`<prefix>/lib/pythonX.Y/site-packages`. There is no global "the" Python; you
+pick one.
+
+**Selecting an interpreter** — just run the version you want:
+
+```bash
+source ./deps/bin/activate       # puts <prefix>/bin on PATH
+python3.12 -c "import numpy; print(numpy.__version__)"
+python3.11 my_script.py
+python3        # bare python3 / python -> the prefix's DEFAULT interpreter (a symlink)
+```
+
+`python3` and `python` symlink to the prefix's default interpreter; call a
+specific `python3.X` to use another. (An **embedding host** like volrover3 does
+*not* choose at runtime — it links `libpython3.11` at build time, so its embedded
+interpreter is fixed to that version, and its recipe pins the matching columns.)
+
+**Which packages a given interpreter can import** depends on how the package's
+wheel is built:
+
+| Package kind | Recipe name | Installed into | `import` works from |
+|---|---|---|---|
+| **pure-Python** (noarch `py3-none-any`) — e.g. `jinja2`, `sympy`, `certifi` | bare `name` | **every** interpreter (fanned) | any `python3.X` |
+| **stable-ABI** (`abi3`) — e.g. `cryptography`, `bcrypt` | bare `name` | every non-free-threaded interpreter | `python3.11/12/13` |
+| **per-version C-extension** — e.g. `numpy`, `torch`, `h5py` | `name-cpNNN` | **only** the interpreter matching its ABI tag | that `python3.X` only |
+
+So a bare-named package (fanned) is importable from whatever interpreter you run;
+a per-version package such as `numpy-cp311` is importable **only from
+`python3.11`**, `numpy-cp312` only from `python3.12`, and so on. To use `numpy`
+from `python3.12`, the prefix's closure must include `numpy-cp312` (install it, or
+depend on it). A `requirements.yaml`/recipe therefore lists the `-cpNNN` column(s)
+it needs; the bare noarch deps come along automatically for every interpreter.
+
+---
+
 ## Recipe management
 
 Recipes define how to build each component from source.  They live in
