@@ -3,4 +3,4 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\..\_common\python-wheel.ps1"
 Invoke-CvcPipInstallWheel
-Invoke-CvcPythonCheck 'import pynacl'
+Invoke-CvcPythonCheck 'import nacl'

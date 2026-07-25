@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: botocore
   upstream_version: "1.43.49"
-  cvc_revision: 2
+  cvc_revision: 3
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -30,6 +30,9 @@ patches: []
 depends:
   build:
     - name: python312
+    - name: jmespath
+    - name: python-dateutil
+    - name: urllib3
   runtime:
     - name: python312
     - name: jmespath

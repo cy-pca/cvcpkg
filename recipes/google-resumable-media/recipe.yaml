@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: google-resumable-media
   upstream_version: "2.10.0"
-  cvc_revision: 3
+  cvc_revision: 4
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -30,6 +30,7 @@ patches: []
 depends:
   build:
     - name: python312
+    - name: google-crc32c
   runtime:
     - name: python312
     - name: google-crc32c
@@ -42,5 +43,5 @@ build:
 
 package:
   files:
-    - lib/python3.*/site-packages/google_resumable_media/
+    - lib/python3.*/site-packages/google/resumable_media/
     - lib/python3.*/site-packages/*.dist-info/

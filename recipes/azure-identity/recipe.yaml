@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: azure-identity
   upstream_version: "1.25.3"
-  cvc_revision: 3
+  cvc_revision: 4
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -30,6 +30,11 @@ patches: []
 depends:
   build:
     - name: python312
+    - name: azure-core
+    - name: cryptography
+    - name: msal
+    - name: msal-extensions
+    - name: typing-extensions
   runtime:
     - name: python312
     - name: azure-core

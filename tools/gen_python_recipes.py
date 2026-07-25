@@ -327,14 +327,20 @@ def _write_recipe(recipe_dir: Path, body_with_rev: str) -> None:
 def _emit_pure(out, base, m, dep_bases, interps):
     d = out / base
     wheel = pure_wheel(m["wheels"])
-    runtime = ["python312", *dep_bases]
+    # Runtime deps are ALSO build deps: the post-install `import <pkg>` check
+    # imports the package for real, and many packages eagerly import a runtime
+    # dep at module load (sqlalchemy -> typing_extensions), so it must be staged
+    # in the build prefix or the check fails.
+    deps = ["python312", *dep_bases]
     body = _common_meta(base, m).replace("{name}", base)
     body += (
         "\nsource:\n  type: python_wheel\n  artifacts:\n    any:\n"
         + _artifact_block(wheel["url"], wheel["digests"]["sha256"], "      ")
         + "\npython:\n  interpreter: python312\n  abi: cp312\n\npatches: []\n\n"
-        "depends:\n  build:\n    - name: python312\n  runtime:\n"
-        + "".join(f"    - name: {r}\n" for r in dict.fromkeys(runtime))
+        "depends:\n  build:\n"
+        + "".join(f"    - name: {b}\n" for b in dict.fromkeys(deps))
+        + "  runtime:\n"
+        + "".join(f"    - name: {r}\n" for r in dict.fromkeys(deps))
         + "\nbuild:\n  build_type_independent: true\n  matrix:\n"
         "    - platform: any\n      script: build.sh\n\n"
         # A noarch (py3-none-any) wheel is fanned out into every cvcpkg
@@ -342,7 +348,7 @@ def _emit_pure(out, base, m, dep_bases, interps):
         # 3.13/... can import it), so the file globs span all versions, not just
         # the build interpreter's 3.12.
         "package:\n  files:\n"
-        f"    - lib/python3.*/site-packages/{_toppkg(base)}/\n"
+        f"    - lib/python3.*/site-packages/{_toppath(base)}/\n"
         f"    - lib/python3.*/site-packages/*.dist-info/\n"
     )
     _write_recipe(d, body)
@@ -361,9 +367,11 @@ def _emit_abi3(out, base, m, dep_bases):
         return
     d = out / base
     top = _toppkg(base)
+    toppath = _toppath(base)
     # Built under the floor interpreter (python311); _build_env copy-fans the
     # stable-ABI .so up into 3.12/3.13 (see _PYTHON_ABI3_FANOUT_VERSIONS).
-    runtime = ["python311", *dep_bases]
+    # Runtime deps double as build deps so the import check can load the package.
+    deps = ["python311", *dep_bases]
     body = _common_meta(base, m).replace("{name}", base)
     body += "\nsource:\n  type: python_wheel\n  artifacts:\n"
     for platform, w in arts.items():
@@ -371,16 +379,18 @@ def _emit_abi3(out, base, m, dep_bases):
     body += (
         "\npython:\n  interpreter: python311\n  abi: abi3\n"
         "  manylinux_min: manylinux_2_28\n\npatches: []\n\n"
-        "depends:\n  build:\n    - name: python311\n  runtime:\n"
-        + "".join(f"    - name: {r}\n" for r in dict.fromkeys(runtime))
+        "depends:\n  build:\n"
+        + "".join(f"    - name: {b}\n" for b in dict.fromkeys(deps))
+        + "  runtime:\n"
+        + "".join(f"    - name: {r}\n" for r in dict.fromkeys(deps))
         + "\nbuild:\n  build_type_independent: true\n  matrix:\n"
         "    - platform: linux\n      script: build.sh\n"
         "    - platform: macos\n      script: build.sh\n"
         "    - platform: windows\n      script: build.ps1\n\n"
         "package:\n  files:\n"
-        f"    - lib/python3.*/site-packages/{top}/\n"
+        f"    - lib/python3.*/site-packages/{toppath}/\n"
         f"    - lib/python3.*/site-packages/*.dist-info/\n"
-        f"    - Lib/site-packages/{top}/\n"
+        f"    - Lib/site-packages/{toppath}/\n"
         f"    - Lib/site-packages/*.dist-info/\n"
     )
     _write_recipe(d, body)
@@ -410,6 +420,7 @@ def _emit_cext_fanout(out, base, m, dep_bases, interps):
     carried = [i for i in interps if any(i in g for g in per_platform.values())]
     d = out / base
     top = _toppkg(base)
+    toppath = _toppath(base)
     runtime = [f"python{primary}", *dep_bases]
     body = _common_meta(base, m).replace("{name}", base)
     body += "\nsource:\n  type: python_wheel\n  artifacts:\n"
@@ -426,8 +437,11 @@ def _emit_cext_fanout(out, base, m, dep_bases, interps):
     body += (
         f"\npython:\n  interpreter: python{primary}\n  abi: cp{primary}\n"
         "  manylinux_min: manylinux_2_28\n\npatches: []\n\n"
+        # Build deps: every interpreter we install a wheel under, plus the
+        # runtime deps (so the per-interpreter import check can load the package).
         "depends:\n  build:\n"
         + "".join(f"    - name: python{i}\n" for i in carried)
+        + "".join(f"    - name: {b}\n" for b in dict.fromkeys(dep_bases))
         + "  runtime:\n"
         + "".join(f"    - name: {r}\n" for r in dict.fromkeys(runtime))
         + "\nbuild:\n  build_type_independent: true\n  matrix:\n"
@@ -435,9 +449,9 @@ def _emit_cext_fanout(out, base, m, dep_bases, interps):
         "    - platform: macos\n      script: build.sh\n"
         "    - platform: windows\n      script: build.ps1\n\n"
         "package:\n  files:\n"
-        f"    - lib/python3.*/site-packages/{top}/\n"
+        f"    - lib/python3.*/site-packages/{toppath}/\n"
         f"    - lib/python3.*/site-packages/*.dist-info/\n"
-        f"    - Lib/site-packages/{top}/\n"
+        f"    - Lib/site-packages/{toppath}/\n"
         f"    - Lib/site-packages/*.dist-info/\n"
     )
     _write_recipe(d, body)
@@ -446,7 +460,10 @@ def _emit_cext_fanout(out, base, m, dep_bases, interps):
     (d / "build.ps1").write_text(_FANOUT_BUILD_PS1.format(name=base, top=top))
 
 
-# Import name != distribution name for a few packages.
+# Import module != distribution name for many packages. Used by the post-install
+# `import <module>` check, so it must be the *real* importable module — for the
+# google.* namespace packages that means the dotted subpackage, not the
+# dist-name-with-underscores (which is not importable and fails the check).
 _TOPPKG = {
     "pyyaml": "yaml",
     "sqlalchemy": "sqlalchemy",
@@ -454,18 +471,32 @@ _TOPPKG = {
     "typing-extensions": "typing_extensions",
     "python-multipart": "multipart",
     "python-dateutil": "dateutil",
-    "google-cloud-storage": "google",
+    "pynacl": "nacl",
+    "protobuf": "google.protobuf",
+    "proto-plus": "proto",
+    "google-crc32c": "google_crc32c",
+    "google-auth": "google.auth",
+    "google-api-core": "google.api_core",
+    "google-resumable-media": "google.resumable_media",
+    "googleapis-common-protos": "google.rpc",
+    "google-cloud-core": "google.cloud",
+    "google-cloud-storage": "google.cloud.storage",
     "azure-storage-blob": "azure",
     "azure-identity": "azure",
     "azure-core": "azure",
     "pyjwt": "jwt",
-    "google-crc32c": "google_crc32c",
-    "proto-plus": "proto",
 }
 
 
 def _toppkg(base: str) -> str:
+    """Importable module name for the post-install check (may be dotted)."""
     return _TOPPKG.get(base, base.replace("-", "_"))
+
+
+def _toppath(base: str) -> str:
+    """Installed directory for package.files globs — the module as a path, so a
+    dotted namespace module (``google.protobuf``) globs ``google/protobuf/``."""
+    return _toppkg(base).replace(".", "/")
 
 
 _PURE_BUILD_SH = """#!/usr/bin/env bash

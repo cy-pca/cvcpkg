@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: google-auth
   upstream_version: "2.56.0"
-  cvc_revision: 3
+  cvc_revision: 4
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -30,6 +30,8 @@ patches: []
 depends:
   build:
     - name: python312
+    - name: cryptography
+    - name: pyasn1-modules
   runtime:
     - name: python312
     - name: cryptography
@@ -43,5 +45,5 @@ build:
 
 package:
   files:
-    - lib/python3.*/site-packages/google_auth/
+    - lib/python3.*/site-packages/google/auth/
     - lib/python3.*/site-packages/*.dist-info/
