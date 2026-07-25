@@ -331,15 +331,25 @@ class TestWheelMatrixRecipes:
             assert interp in names, f"{abi} {kind} deps missing {interp}"
 
     @pytest.mark.parametrize("abi", ABIS)
-    def test_every_wheel_is_pinned(self, abi):
+    def test_every_matrix_recipe_is_pinned(self, abi):
+        # numpy is migrating from prebuilt wheels to from-source (tarball) builds
+        # one interpreter column at a time; either way the source must be PINNED.
         r = self._load(abi)
-        assert r.source.type == "python_wheel"
-        assert r.source.artifacts, f"numpy-{abi} pins no artifacts"
-        for pkey, entry in r.source.artifacts.items():
-            assert len(entry["sha256"]) == 64, f"{abi}/{pkey} sha256 malformed"
-            assert entry["url"].startswith("https://"), f"{abi}/{pkey} not https"
-            # The wheel's own ABI tag must match the column it sits in.
-            assert f"-{abi}-" in entry["url"], f"{abi}/{pkey} url is not a {abi} wheel"
+        if r.source.type == "python_wheel":
+            assert r.source.artifacts, f"numpy-{abi} pins no artifacts"
+            for pkey, entry in r.source.artifacts.items():
+                assert len(entry["sha256"]) == 64, f"{abi}/{pkey} sha256 malformed"
+                assert entry["url"].startswith("https://"), f"{abi}/{pkey} not https"
+                # The wheel's own ABI tag must match the column it sits in.
+                assert f"-{abi}-" in entry["url"], f"{abi}/{pkey} url is not a {abi} wheel"
+        else:
+            # From-source sdist: a single pinned tarball, compiled per platform via
+            # the build matrix (see the from-source python-packages plan).
+            assert r.source.type == "tarball", f"numpy-{abi}: unexpected source {r.source.type}"
+            src = r.raw["source"]
+            assert src.get("url", "").startswith("https://"), f"numpy-{abi} sdist not https"
+            assert len(src.get("sha256", "")) == 64, f"numpy-{abi} sdist sha256 malformed"
+            assert r.build_matrix, f"numpy-{abi} from-source has no build matrix"
 
     def test_free_threaded_column_exists_and_is_marked(self):
         r = self._load("cp313t")
@@ -349,10 +359,18 @@ class TestWheelMatrixRecipes:
             assert self._load(abi).python.free_threaded is False
 
     def test_matrix_covers_same_platforms(self):
-        # A matrix with ragged platform coverage would silently drop an
-        # interpreter on some builder.
-        keys = {abi: set(self._load(abi).source.artifacts) for abi in self.ABIS}
-        assert len({frozenset(v) for v in keys.values()}) == 1, keys
+        # A prebuilt-wheel matrix with ragged platform coverage would silently
+        # drop an interpreter on some builder. Compare within the wheel columns
+        # only: from-source columns use a different platform vocabulary
+        # (build.matrix "linux" vs artifacts "linux-x86_64") and are validated by
+        # their build matrix in test_every_matrix_recipe_is_pinned above.
+        wheel_keys = {
+            abi: frozenset(self._load(abi).source.artifacts or ())
+            for abi in self.ABIS
+            if self._load(abi).source.type == "python_wheel"
+        }
+        if wheel_keys:
+            assert len(set(wheel_keys.values())) == 1, wheel_keys
 
 
 class TestPlatformWheelKeys:

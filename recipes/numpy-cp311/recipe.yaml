@@ -2,65 +2,108 @@ schema_version: 1
 recipe:
   name: numpy-cp311
   upstream_version: "2.4.6"
-  cvc_revision: 1
+  # Bumped to a FROM-SOURCE build (was: prebuilt PyPI wheel). numpy is now
+  # compiled with meson-python against cvcpkg's own OpenBLAS so the extensions
+  # link libopenblas.so.0 by soname (no vendored numpy.libs/) and so the package
+  # is available on the BSDs, for which PyPI ships no wheel.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   homepage: https://numpy.org/
   license: BSD-3-Clause
-  tags: [math, python, wheel]
+  tags: [math, python]
   description: >-
-    NumPy 2.4.6 for CPython 3.11 (cp311) — the cp311 column of cvcpkg's
-    per-interpreter wheel matrix.  The wheel is pinned by filename + sha256
-    and installed into the python311 interpreter's own site-packages inside
-    the prefix, so one activatable prefix carries both the native C/C++
-    libraries and a complete, pinned Python environment.
+    NumPy 2.4.6 for CPython 3.11 (cp311), BUILT FROM SOURCE with meson-python
+    against cvcpkg's own OpenBLAS (LP64). The compiled extensions link
+    libopenblas.so.0 by soname — no auditwheel-vendored numpy.libs/ copy —
+    resolved at runtime out of the SAME activated prefix via an $ORIGIN RUNPATH.
+    Building from the sdist is also the only option on the BSDs (no PyPI wheel).
+    Installed as a proper wheel (real dist-info/RECORD/METADATA) via pip, so a
+    user's later `pip install <other>` coexists and pip's resolver sees numpy as
+    satisfied.
 
+# From-source sdist (NOT source.type python_wheel): cvcpkg fetches + sha256-
+# verifies this tarball and extracts it (strip_components) to CVC_SOURCE_DIR;
+# build.sh compiles it with meson-python against the prefix's OpenBLAS.
 source:
-  type: python_wheel
-  artifacts:
-    linux-x86_64:
-      url: https://files.pythonhosted.org/packages/02/03/74fe2a4cb3817d94d86402f2506554130a2f01414e299b5a843e5a8a957f/numpy-2.4.6-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
-      sha256: "89cd468399cfd2504718f0ba50e410dca55a170b61a02ad92bb18c8a65186e93"
-    linux-arm64:
-      url: https://files.pythonhosted.org/packages/33/a8/6fa8c1a345a8c85dbb21932c447bee07c30a2c2a3f31e369c0a84b300147/numpy-2.4.6-cp311-cp311-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl
-      sha256: "0ab0a9c4ffb1a6d95ef519fe4247dba8eb6b18ad93999f76b7f657039acabd47"
-    macos-x86_64:
-      url: https://files.pythonhosted.org/packages/b3/49/ec46835a70be8fa6446c495126ac84fdb28cb2558e1620ffb87a10c8b64c/numpy-2.4.6-cp311-cp311-macosx_10_9_x86_64.whl
-      sha256: "0280e0356c0829a18d9de1cb7eee50ec22ca639878d7240307ca0943d73cd2c4"
-    macos-arm64:
-      url: https://files.pythonhosted.org/packages/0e/0d/f5957185c0ee2f3e12f78715aa9e3b353fd83633316c8532b38faa37e3f6/numpy-2.4.6-cp311-cp311-macosx_11_0_arm64.whl
-      sha256: "110f8b71aacb688ec69062bb7f6938a0f8acb01b7c1c4beb453c65b6d234584d"
-    windows-x86_64:
-      url: https://files.pythonhosted.org/packages/c5/31/7fc6239c12bce7e931463251cca4426c465e1876ba3cc785402ef4dd8f4e/numpy-2.4.6-cp311-cp311-win_amd64.whl
-      sha256: "1e254a00cdf42b1e4d5b3d68d33af63268d41340d8885df2ab6470f2e1500147"
+  type: tarball
+  url: https://files.pythonhosted.org/packages/d0/ad/fed0499ce6a338d2a03ebae59cd15093910c8875328855781952abf6c2fe/numpy-2.4.6.tar.gz
+  sha256: "f3a3570c4a2a16746ac2c31a7c7c7b0c186b95ce902e33db6f28094ed7387dda"
+  strip_components: 1
 
+# Interpreter/ABI metadata: exported to build.sh as CVC_PYTHON_ABI /
+# CVC_PYTHON_INTERPRETER so cvc_python_exe resolves the prefix's python3.11 and
+# the wheel lands in ITS site-packages.
 python:
   interpreter: python311
   abi: cp311
-  manylinux_min: manylinux_2_28
 
 patches: []
 
 depends:
   build:
     - name: python311
+    # Native CLIs meson-python shells out to (on PATH in the build prefix).
+    - name: pkg-config
+    - name: meson
+    - name: ninja
+    # PEP-517 backend + cythonizer, imported by the build interpreter under
+    # --no-build-isolation (bridged from the build prefix via PYTHONPATH in
+    # build.sh). meson-python-cp311 pulls packaging-cp311 + pyproject-metadata-cp311.
+    - name: cython
+    - name: meson-python
+    # OpenBLAS headers + openblas.pc at compile time (linux/BSD; macOS uses
+    # Accelerate and does not resolve this edge — see the platform note below).
+    - name: openblas
+      version: ">=0.3.28"
   runtime:
     - name: python311
+    # libopenblas.so.0 resolved from the merged prefix at import (linux/BSD).
+    - name: openblas
+      version: ">=0.3.28"
+  host_tools:
+    - python311
+    - pkg-config
+    - meson
+    - ninja
+    # Stamps the relocatable $ORIGIN RUNPATH into the extension .so on ELF
+    # platforms (Linux/BSD).
+    - patchelf
 
 build:
+  # The Python ABI is stable across cvcpkg build types; build once, optimized.
   build_type_independent: true
+  # openblas builds on linux/BSD/windows; macOS uses Accelerate (build.sh picks
+  # -Dblas=accelerate there). windows is a deliberate delta: meson + MSVC + DLL
+  # discovery differ enough to need its own build.ps1 (currently a loud stub —
+  # until the port lands, windows numpy is unavailable from this recipe).
+  # wasm/wasi/cosmo are excluded: static interpreter, no extension-module ABI.
   matrix:
     - platform: linux
       script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
     - platform: macos
       script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.3"   # Accelerate new-LAPACK floor
     - platform: windows
       script: build.ps1
 
 package:
+  # DOCUMENTATION ONLY — stage_bundle ships the whole CVC_INSTALL_DIR tree;
+  # build.sh keeps it pure by pip-installing --prefix into an empty dir. There is
+  # NO numpy.libs/: the OpenBLAS runtime is the cvcpkg openblas package.
   files:
-    - lib/python3.11*/site-packages/numpy/
-    - lib/python3.11*/site-packages/numpy-2.4.6.dist-info/
+    - lib/python3.11/site-packages/numpy/
+    - lib/python3.11/site-packages/numpy-2.4.6.dist-info/
     - Lib/site-packages/numpy/
     - Lib/site-packages/numpy-2.4.6.dist-info/
+
+abi:
+  cxx_std: 17

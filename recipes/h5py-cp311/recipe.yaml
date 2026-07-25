@@ -1,0 +1,133 @@
+schema_version: 1
+recipe:
+  name: h5py-cp311
+  upstream_version: "3.16.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.h5py.org/
+  license: BSD-3-Clause
+  tags: [io, hdf5, python, scientific]
+  description: >-
+    h5py 3.16.0 for CPython 3.11 (cp311) — the cp311 column of cvcpkg's
+    per-interpreter matrix, BUILT FROM SOURCE against cvcpkg's own HDF5 rather
+    than installed from the PyPI wheel. The Cython extensions are compiled here
+    so they link cvcpkg's UNMANGLED libhdf5.so.310 by soname and resolve it, at
+    runtime, out of the SAME activated prefix — no auditwheel-vendored
+    h5py.libs/libhdf5-<hash>.so, no mangled-soname copy, and no collision with an
+    libhdf5 loaded elsewhere in the process (e.g. volrover's embedded
+    interpreter). Building from the sdist is also the ONLY option on the BSDs,
+    for which PyPI ships no h5py wheel at all. The build still emits a proper
+    wheel (real dist-info/RECORD/METADATA) installed via pip, so a user's later
+    `pip install <other>` coexists and pip's resolver sees h5py as satisfied.
+
+# From-source sdist (NOT source.type python_wheel). cvcpkg fetches + sha256-
+# verifies this tarball and extracts it (strip_components: 1) to CVC_SOURCE_DIR;
+# build.sh compiles it against HDF5_DIR=$CVC_DEPS_PREFIX.
+source:
+  type: tarball
+  url: https://files.pythonhosted.org/packages/db/33/acd0ce6863b6c0d7735007df01815403f5589a21ff8c2e1ee2587a38f548/h5py-3.16.0.tar.gz
+  sha256: "a0dbaad796840ccaa67a4c144a0d0c8080073c34c76d5a6941d6818678ef2738"
+  strip_components: 1
+
+# Interpreter/ABI metadata: the builder exports these to build.sh as
+# CVC_PYTHON_INTERPRETER / CVC_PYTHON_ABI so cvc_python_exe resolves the prefix's
+# python3.11 and the wheel lands in ITS site-packages.
+python:
+  interpreter: python311
+  abi: cp311
+
+patches: []
+
+depends:
+  build:
+    # The interpreter the extensions are compiled against and installed into.
+    - name: python311
+    # HDF5 headers + libhdf5.so.310 to link against (HDF5_DIR=$CVC_DEPS_PREFIX).
+    # Pinned to the ^1.14 series that yields the .310 soname build.sh asserts.
+    - name: hdf5
+      version: "^1.14"
+    # numpy is BOTH a build requirement (h5py compiles against the numpy C API)
+    # and an import-time runtime dep; pin the matching cp311 column.
+    - name: numpy-cp311
+    # From-source python build-tool cluster — h5py's PEP-517 backend imports these
+    # under --no-build-isolation (see build.sh). Provisioned as their own cvcpkg
+    # recipes into the prefix interpreter's site-packages; referenced here, not
+    # re-solved. (Base python311 already ships pip + setuptools.)
+    - name: cython
+    - name: pkgconfig
+    - name: wheel
+    - name: packaging
+    # base python311 ships setuptools 65.5; h5py's backend needs >=77.0.1.
+    - name: setuptools
+  runtime:
+    # At import, h5py loads its compiled extensions (which pull in libhdf5.so.310
+    # from the merged prefix) and imports numpy. No separate h5py.libs/ — the HDF5
+    # runtime IS the cvcpkg hdf5 package, pinned to the built-against series.
+    - name: python311
+    - name: hdf5
+      version: "^1.14"
+    - name: numpy-cp311
+  host_tools:
+    # Native tools that must run on the BUILDER: the interpreter (to drive pip and
+    # the compile), and patchelf to stamp the relocatable $ORIGIN rpath into the
+    # extension .so on ELF platforms (Linux/BSD) — see build.sh step 5.
+    - python311
+    - patchelf
+
+build:
+  # h5py links a native library, so unlike a pure-wheel install it is NOT
+  # build_type_independent — the extensions are compiled per platform/toolchain.
+  #
+  # linux + macos + the three BSDs all build from this one build.sh (each sources
+  # its _common/env-<platform>.sh). Windows is a deliberate delta: MSVC + the
+  # vcpkg HDF5 layout differ enough that it needs its own build.ps1 (currently a
+  # stub — until it lands, Windows consumers fall back to the prebuilt wheel
+  # column). wasi/wasm are out of scope: no HDF5 filter pipeline / no runnable
+  # extension host yet.
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    # Windows delta — build.ps1 is a stub pending the MSVC/HDF5_DIR port.
+    - platform: windows
+      script: build.ps1
+
+package:
+  # DOCUMENTATION ONLY. cvcpkg's stage_bundle ships the ENTIRE CVC_INSTALL_DIR
+  # tree — package.files is parsed but NOT applied as a filter. build.sh keeps the
+  # staged tree pure by pip-installing --prefix into an initially empty per-recipe
+  # CVC_INSTALL_DIR, so exactly the two entries below (h5py/ and its dist-info)
+  # under the interpreter's site-packages are what gets shipped. There is NO
+  # h5py.libs/: the HDF5 runtime is the cvcpkg hdf5 package in the merged prefix.
+  files:
+    - lib/python3.11/site-packages/h5py/
+    - lib/python3.11/site-packages/h5py-3.16.0.dist-info/
+    # Windows (build.ps1) site-packages scheme, for when that port lands.
+    - Lib/site-packages/h5py/
+    - Lib/site-packages/h5py-3.16.0.dist-info/
+
+abi:
+  # The extensions embed numpy's C-API ABI and link libhdf5.so.310; bump
+  # cvc_revision in lockstep with the hdf5 and numpy-cp311 recipes they build
+  # against so a consumer never mixes a stale h5py with a moved HDF5 soname.
+  cxx_std: 17
