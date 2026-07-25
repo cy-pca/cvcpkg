@@ -3,4 +3,4 @@
 set -euo pipefail
 . "$(dirname "$0")/../_common/python-wheel.sh"
 cvc_pip_install_wheel
-cvc_python_check "import google_resumable_media"
+cvc_python_check "import google.resumable_media"
