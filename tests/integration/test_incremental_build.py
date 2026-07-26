@@ -19,6 +19,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from cvcpkg.platform import detect_platform
+
 # Build scripts are POSIX .sh — skip on Windows.
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32",
@@ -35,7 +37,15 @@ def _write_recipe(recipes_dir: Path, name: str) -> Path:
         "recipe": {"name": name, "upstream_version": "0.1.0", "cvc_revision": 1},
         "source": {"type": "vendored", "path": "."},
         "patches": [],
-        "build": {"matrix": [{"platform": "linux", "script": "build.sh"}]},
+        # Cover "linux" (tests pass platform="linux" explicitly) and the host
+        # platform (the CLI-driven test builds for detect_platform(), e.g. "macos").
+        # build.sh is POSIX and this module skips Windows, so any host is covered.
+        "build": {
+            "matrix": [
+                {"platform": p, "script": "build.sh"}
+                for p in dict.fromkeys(["linux", detect_platform()])
+            ]
+        },
         "package": {"files": ["lib/*", "include/*"], "cmake_packages": []},
     }
     (rd / "recipe.yaml").write_text(yaml.dump(recipe, default_flow_style=False))
