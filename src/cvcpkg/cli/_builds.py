@@ -1181,6 +1181,16 @@ def builds_submit_dag(
         rev = int(block.get("cvc_revision", 1))
         return f"{upstream_v}+cvc.{rev}"
 
+    def _job_timeout(name: str) -> int | None:
+        """Per-recipe build timeout (``build.timeout_seconds``), if declared.
+
+        The server reaper honours a per-job ``timeout_seconds``; propagating
+        the recipe's value lets a genuinely long build (e.g. llvm) exceed the
+        server's default reap timeout without a global change.
+        """
+        t = recipe_data.get(name, {}).get("build", {}).get("timeout_seconds")
+        return int(t) if t is not None else None
+
     def _closure(seeds: list[str]) -> set[str]:
         """Transitive dependency closure of *seeds* (runtime + build +
         host_tools edges), following only recipes we can see.
@@ -1341,17 +1351,19 @@ def builds_submit_dag(
                                 if dep_name in name_to_idx
                             )
                         )
-                        jobs.append(
-                            {
-                                "recipe_name": name,
-                                "platform": plat,
-                                "arch": ar,
-                                "config": cfg,
-                                "link": lnk,
-                                "org_slug": org_slug,
-                                "depends_on": dep_indices,
-                            }
-                        )
+                        job: dict = {
+                            "recipe_name": name,
+                            "platform": plat,
+                            "arch": ar,
+                            "config": cfg,
+                            "link": lnk,
+                            "org_slug": org_slug,
+                            "depends_on": dep_indices,
+                        }
+                        _t = _job_timeout(name)
+                        if _t is not None:
+                            job["timeout_seconds"] = _t
+                        jobs.append(job)
 
                     body: dict = {"jobs": jobs}
                     if dag_id:
@@ -1422,17 +1434,19 @@ def builds_submit_dag(
                                 if dep_name in name_to_idx
                             )
                         )
-                        jobs.append(
-                            {
-                                "recipe_name": name,
-                                "platform": "any",
-                                "arch": "noarch",
-                                "config": cfg,
-                                "link": lnk,
-                                "org_slug": org_slug,
-                                "depends_on": dep_indices,
-                            }
-                        )
+                        job: dict = {
+                            "recipe_name": name,
+                            "platform": "any",
+                            "arch": "noarch",
+                            "config": cfg,
+                            "link": lnk,
+                            "org_slug": org_slug,
+                            "depends_on": dep_indices,
+                        }
+                        _t = _job_timeout(name)
+                        if _t is not None:
+                            job["timeout_seconds"] = _t
+                        jobs.append(job)
 
                     body: dict = {"jobs": jobs}
                     if dag_id:

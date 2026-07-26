@@ -40,6 +40,10 @@ depends:
   host_tools: []
 
 build:
+  # A full LLVM+Clang+LLD build exceeds the server's default 2h reap timeout on
+  # the fleet (it reached ~76% compile in 2h on a modest builder). Give it 5h so
+  # it can finish, link, install and publish. submit-dag propagates this per job.
+  timeout_seconds: 18000
   matrix:
     - platform: linux
       script: build.sh

@@ -352,10 +352,11 @@ class TestPopulateSyncOnce:
 # ── builds submit-dag --skip-existing ───────────────────────────
 
 
-def _write_recipe(tmp_path: Path, name: str, version="1.0.0", rev=2, deps=()):
+def _write_recipe(tmp_path: Path, name: str, version="1.0.0", rev=2, deps=(), timeout=None):
     rdir = tmp_path / "recipes" / name
     rdir.mkdir(parents=True)
     deps_yaml = "".join(f"    - {d}\n" for d in deps)
+    timeout_line = f"  timeout_seconds: {timeout}\n" if timeout is not None else ""
     (rdir / "recipe.yaml").write_text(
         f"""schema_version: 1
 recipe:
@@ -366,7 +367,7 @@ depends:
   build:
 {deps_yaml if deps else ""}
 build:
-  matrix:
+{timeout_line}  matrix:
     - platform: linux
       script: build.sh
     - platform: windows
@@ -1025,3 +1026,28 @@ class TestSubmitDagAutoDeps:
         assert "noarch dependency" in out and "certifi" in out
         (body,) = posted
         assert [j["recipe_name"] for j in body["jobs"]] == ["foo"]
+
+    def test_recipe_timeout_propagated_to_jobs(self, tmp_path, monkeypatch):
+        # A recipe declaring build.timeout_seconds propagates it into its job;
+        # a recipe without one omits the field (server applies its default).
+        _write_recipe(tmp_path, "llvm18", version="18.1.8", rev=1, timeout=18000)
+        _write_recipe(tmp_path, "zlib", version="1.3.1", rev=3)
+        posted: list = []
+        ret = self._submit(tmp_path, monkeypatch, [], posted, "llvm18", "zlib")
+        assert ret == 0
+        (body,) = posted
+        jobs = {j["recipe_name"]: j for j in body["jobs"]}
+        assert jobs["llvm18"]["timeout_seconds"] == 18000
+        assert "timeout_seconds" not in jobs["zlib"]
+
+    def test_auto_added_dep_carries_its_timeout(self, tmp_path, monkeypatch):
+        # An unpublished dep auto-added into the DAG keeps its own recipe timeout.
+        _write_recipe(tmp_path, "llvm18", version="18.1.8", rev=1, timeout=18000)
+        _write_recipe(tmp_path, "shiboken6", version="6.8.2", rev=1, deps=("llvm18",))
+        posted: list = []
+        ret = self._submit(tmp_path, monkeypatch, [], posted, "shiboken6")
+        assert ret == 0
+        (body,) = posted
+        jobs = {j["recipe_name"]: j for j in body["jobs"]}
+        assert set(jobs) == {"shiboken6", "llvm18"}  # llvm18 auto-added
+        assert jobs["llvm18"]["timeout_seconds"] == 18000
