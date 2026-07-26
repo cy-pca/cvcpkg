@@ -1,7 +1,15 @@
 schema_version: 1
 recipe:
   name: libffi
-  upstream_version: "3.4.6"
+  upstream_version: "3.7.1"
+  # Bumped upstream 3.4.6 -> 3.7.1 (new version, so cvc_revision resets to 1):
+  # 3.4.6's hand-written aarch64 src/sysv.S emits non-local labels between
+  # .cfi_startproc/.cfi_endproc, which the clang-17+ integrated assembler rejects
+  # on Mach-O ("invalid CFI advance_loc expression") — breaking every macOS build
+  # on the Xcode 26.5 / clang 21 runners (and cascading to python ->
+  # numpy/pydantic/qt6/vtk...). Upstream fixed this (per-format local-label
+  # prefix); see libffi#852. 3.7.1 keeps libtool version-info 12:1:4 -> soname
+  # libffi.so.8, identical to 3.4.x, so the ABI is unchanged.
   cvc_revision: 1
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -16,8 +24,8 @@ recipe:
 
 source:
   type: tarball
-  url: https://github.com/libffi/libffi/releases/download/v3.4.6/libffi-3.4.6.tar.gz
-  sha256: "b0dea9df23c863a7a50e825440f3ebffabd65df1497108e5d437747843895a4e"
+  url: https://github.com/libffi/libffi/releases/download/v3.7.1/libffi-3.7.1.tar.gz
+  sha256: "d5e9a6638ddbd2513ddb54518eb67e4bbe6fa707bcc01c10f6212f0a088d819d"
   strip_components: 1
 
 patches: []

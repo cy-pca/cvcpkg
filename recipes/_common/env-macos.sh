@@ -18,6 +18,16 @@ export CC="${CC:-clang}"
 export CXX="${CXX:-clang++}"
 export MACOSX_DEPLOYMENT_TARGET
 
+# clang 16+ promotes several legacy-C diagnostics to hard errors by default
+# (-Werror=implicit-function-declaration, -Werror=implicit-int,
+# -Werror=int-conversion).  The Xcode 26.5 / clang 21 toolchain on the current
+# macOS runners then fails many pre-C99 autotools packages: their configure
+# probes misdetect features and old sources won't compile.  Relax those back to
+# warnings so legacy code builds as it did on older clang.  We APPEND, so
+# recipe- and configure-supplied flags still take effect.
+_macos_legacy_c_compat="-Wno-implicit-function-declaration -Wno-implicit-int -Wno-int-conversion"
+export CFLAGS="${CFLAGS:-} ${_macos_legacy_c_compat}"
+
 _build_type_lc=$(echo "$CVC_BUILD_TYPE" | tr '[:upper:]' '[:lower:]')
 case "$_build_type_lc" in
     release) CMAKE_BUILD_TYPE=Release  ;;
