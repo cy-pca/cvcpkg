@@ -117,10 +117,19 @@ def _resolve_recipes_dirs(
     """Return the canonical list of recipe directories.
 
     Unless *no_default* is ``True``, starts with the bundled/default
-    recipes from ``find_recipes_dir()`` and appends any extra overlay
-    directories.  Later entries win on name conflicts.
+    recipes from ``find_recipes_dir()`` and appends any explicit ``extra``
+    overlay directories.  Then, still unless *no_default*, appends the
+    current working directory's ``./recipes`` when it holds at least one
+    ``*/recipe.yaml`` and isn't already listed — so a one-shot
+    ``cvcpkg build <name>`` from a repo root finds the repo-local recipe with
+    no ``--recipes-dir``.  Later entries win on name conflicts, so this CWD
+    overlay (added last) overrides a same-named bundled recipe.
+
+    ``--no-default-recipes`` suppresses BOTH the bundled default and the CWD
+    auto-overlay (they are both auto-detected); only explicit ``--recipes-dir``
+    paths are then used.
     """
-    from cvcpkg.builder import RecipeError, find_recipes_dir
+    from cvcpkg.builder import RecipeError, cwd_recipes_overlay, find_recipes_dir
 
     dirs: list[Path] = []
     if not no_default:
@@ -132,6 +141,10 @@ def _resolve_recipes_dirs(
         p = Path(d).resolve()
         if p not in dirs:
             dirs.append(p)
+    if not no_default:
+        cwd_overlay = cwd_recipes_overlay(dirs)
+        if cwd_overlay is not None:
+            dirs.append(cwd_overlay)
     if not dirs:
         raise click.ClickException("could not find recipes directory")
     return dirs

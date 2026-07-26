@@ -20,7 +20,7 @@ import sys
 import tarfile
 import tempfile
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1476,6 +1476,39 @@ def _mkworkdir(prefix: str, root: Path | None = None) -> Path:
     return Path(tempfile.mkdtemp(prefix=prefix))
 
 
+def _incremental_root() -> Path:
+    """Root directory for persisted incremental build trees.
+
+    Used by ``cvcpkg build --incremental`` (see :func:`build_recipe`).  Honours
+    ``CVCPKG_INCREMENTAL_DIR`` then ``XDG_CACHE_HOME``, defaulting to
+    ``~/.cache/cvcpkg/incremental``.
+    """
+    env = os.environ.get("CVCPKG_INCREMENTAL_DIR")
+    if env:
+        return Path(env)
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    if xdg:
+        return Path(xdg) / "cvcpkg" / "incremental"
+    return Path.home() / ".cache" / "cvcpkg" / "incremental"
+
+
+def _incremental_work_dir(
+    name: str, platform: str, config: str, link: str, root: Path | None = None
+) -> Path:
+    """Stable, reusable work dir keyed by (name, platform, config, link).
+
+    Re-running a build with the same key reuses the persisted build tree so
+    CMake recompiles only changed translation units.  The key includes
+    platform/config/link so a mismatched build (e.g. a debug build after a
+    release one) never reuses the wrong tree — it gets its own directory.
+
+    *root* is the parent directory (``--work-dir`` when set); it defaults to
+    :func:`_incremental_root`.
+    """
+    base = root if root is not None else _incremental_root()
+    return base / f"{name}-{platform}-{config}-{link}"
+
+
 def _write_text_preserving_mode(path: Path, text: str) -> None:
     """Write *text* to *path* even when the file is read-only.
 
@@ -1622,6 +1655,7 @@ def build_recipe(
     cross_toolchain_env: dict[str, str] | None = None,
     build_prefix: Path | None = None,
     host_tools_prefix: Path | None = None,
+    incremental: bool = False,
     log_callback: Callable[[str], None] | None = None,
 ) -> BuildContext:
     """Build a single recipe. Returns the BuildContext.
@@ -1629,6 +1663,14 @@ def build_recipe(
     *work_dir_root*, when given, is the parent directory in which the
     temporary work directory is created.  Otherwise the system temp
     directory (``$TMPDIR`` / ``/tmp``) is used.
+
+    *incremental* keeps a STABLE work/build tree keyed by (recipe name,
+    platform, config, link) under *work_dir_root* (or :func:`_incremental_root`
+    when unset) and does NOT wipe the build dir afterwards, so a re-run
+    recompiles only changed translation units.  An already-staged source tree
+    is reused as-is (no re-fetch, no re-patch).  The default (non-incremental)
+    path uses a fresh temp dir and cleans the build tree for a reproducible
+    from-scratch build.
 
     *build_prefix* is the separate prefix holding the build-dependency
     closure (host tools, cross-toolchains, staged source packages) so the
@@ -1648,13 +1690,31 @@ def build_recipe(
     if platform in ("wasm", "wasi", "cosmo"):
         link = "static"
 
-    work_dir = _mkworkdir(f"cvcpkg-{recipe.name}-", work_dir_root)
+    if incremental:
+        work_dir = _incremental_work_dir(recipe.name, platform, config, link, work_dir_root)
+        work_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        work_dir = _mkworkdir(f"cvcpkg-{recipe.name}-", work_dir_root)
     install_dir = work_dir / "install"
     build_dir = work_dir / "build"
 
-    source_dir = fetch_source(recipe, work_dir, platform=platform)
-    if recipe.patches:
-        apply_patches(recipe, source_dir)
+    # Incremental re-runs reuse an already-staged source tree (recorded in a
+    # marker) rather than re-fetching/re-extracting and re-patching — the latter
+    # would fail (extract into an existing dir, patch an already-patched tree).
+    # Vendored/local sources always build in place: fetch_source returns the
+    # repo tree itself, never a copy, so this is a no-op re-fetch for them.
+    source_marker = work_dir / ".cvcpkg-source"
+    source_dir: Path | None = None
+    if incremental and source_marker.is_file():
+        staged = Path(source_marker.read_text(encoding="utf-8").strip())
+        if staged.is_dir():
+            source_dir = staged
+    if source_dir is None:
+        source_dir = fetch_source(recipe, work_dir, platform=platform)
+        if recipe.patches:
+            apply_patches(recipe, source_dir)
+        if incremental:
+            source_marker.write_text(str(source_dir), encoding="utf-8")
 
     ctx = BuildContext(
         recipe=recipe,
@@ -1685,8 +1745,9 @@ def build_recipe(
         prefix.mkdir(parents=True, exist_ok=True)
         shutil.copytree(install_dir, prefix, dirs_exist_ok=True)
 
-    if not keep_build_dir:
-        # Clean up build dir but keep install
+    if not keep_build_dir and not incremental:
+        # Clean up build dir but keep install.  Incremental builds deliberately
+        # keep it so the next run recompiles only what changed.
         if build_dir.is_dir():
             shutil.rmtree(build_dir, ignore_errors=True)
 
@@ -3112,6 +3173,33 @@ def find_recipes_dir() -> Path:
     if candidate.is_dir():
         return candidate
     raise RecipeError("Cannot locate recipes/ directory")
+
+
+def cwd_recipes_overlay(existing: Iterable[Path] = ()) -> Path | None:
+    """Return ``$CWD/recipes`` when it is a usable recipe overlay, else None.
+
+    A repo root that carries a ``recipes/`` directory with at least one
+    ``*/recipe.yaml`` is treated as an implicit ``--recipes-dir`` overlay, so a
+    one-shot ``cvcpkg build <name>`` (or ``validate``) run from that root finds
+    the repo-local recipe with no flag.  Placed LAST on the search path, it wins
+    over the bundled default on name conflicts (later dirs win).
+
+    Returns None when there is no such directory, it holds no recipe, or it is
+    already present in *existing* (compared resolved, so it is never added
+    twice — e.g. when ``find_recipes_dir()`` already resolved to it via its
+    step-2 walk-up or step-3 CWD fallback).
+    """
+    cwd_recipes = (Path.cwd() / "recipes").resolve()
+    if not cwd_recipes.is_dir():
+        return None
+    has_recipe = any(
+        (child / "recipe.yaml").is_file() for child in cwd_recipes.iterdir() if child.is_dir()
+    )
+    if not has_recipe:
+        return None
+    if cwd_recipes in {Path(p).resolve() for p in existing}:
+        return None
+    return cwd_recipes
 
 
 def list_recipes(recipes_dir: Path | None = None) -> list[Recipe]:

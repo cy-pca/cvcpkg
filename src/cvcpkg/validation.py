@@ -110,8 +110,11 @@ def resolve_recipe_dirs(
     extra_dirs: Iterable[str | Path] = (), *, no_default: bool = False
 ) -> list[Path]:
     """The recipe search path: the default (bundled/repo) recipes unless
-    *no_default*, then the *extra_dirs* overlays.  Mirrors the CLI's
-    ``_resolve_recipes_dirs`` but without importing click."""
+    *no_default*, then the *extra_dirs* overlays, then (still unless
+    *no_default*) the CWD ``./recipes`` auto-overlay when it holds a recipe and
+    isn't already listed.  Later entries win on name conflicts.  Mirrors the
+    CLI's ``_resolve_recipes_dirs`` (keeping ``cvcpkg validate`` consistent with
+    ``build``) but without importing click."""
     dirs: list[Path] = []
     if not no_default:
         try:
@@ -124,6 +127,12 @@ def resolve_recipe_dirs(
         p = Path(d).resolve()
         if p not in dirs:
             dirs.append(p)
+    if not no_default:
+        from cvcpkg.builder import cwd_recipes_overlay
+
+        cwd_overlay = cwd_recipes_overlay(dirs)
+        if cwd_overlay is not None:
+            dirs.append(cwd_overlay)
     return dirs
 
 

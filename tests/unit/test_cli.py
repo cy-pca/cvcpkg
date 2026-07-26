@@ -953,6 +953,7 @@ class TestBuildCrossPlatformDeps:
             cross_toolchain_env=None,
             host_tools_prefix=None,
             build_prefix=None,
+            incremental=False,
         ):
             calls.append((recipe_dir.name, platform, str(prefix)))
             return mock.MagicMock()
@@ -966,6 +967,7 @@ class TestBuildCrossPlatformDeps:
                 [
                     "build",
                     "app",
+                    "--with-deps",
                     "--platform",
                     "windows",
                     "--prefix",
@@ -1018,6 +1020,7 @@ class TestBuildCrossPlatformDeps:
             cross_toolchain_env=None,
             host_tools_prefix=None,
             build_prefix=None,
+            incremental=False,
         ):
             build_calls.append((recipe_dir.name, platform))
             # Return a minimal mock context
@@ -1031,6 +1034,7 @@ class TestBuildCrossPlatformDeps:
                 [
                     "build",
                     "wasmlib",
+                    "--with-deps",
                     "--platform",
                     "wasm",
                     "--prefix",
@@ -1076,6 +1080,7 @@ class TestBuildCrossPlatformDeps:
             cross_toolchain_env=None,
             host_tools_prefix=None,
             build_prefix=None,
+            incremental=False,
         ):
             build_calls.append((recipe_dir.name, platform))
             return mock.MagicMock()
@@ -1088,6 +1093,7 @@ class TestBuildCrossPlatformDeps:
                 [
                     "build",
                     "libb",
+                    "--with-deps",
                     "--platform",
                     "linux",
                     "--prefix",
