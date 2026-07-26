@@ -1,0 +1,52 @@
+schema_version: 1
+recipe:
+  name: pytokens
+  upstream_version: "0.4.1"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/pytokens/
+  license: "MIT"
+  tags: [python, wheel, build-tool]
+  description: >-
+    pytokens 0.4.1 (noarch py3-none-any) — the fast tokenizer black 26.x parses source with. A BUILD-TIME
+    lint/test tool for cvcpkg recipes: it lands in the build prefix as a
+    depends.build edge (so a recipe `test:` block can run it) and is stripped
+    from the deliverable — never shipped to users.
+
+# Pure-Python noarch wheel (py3-none-any): one platform-independent artifact.
+# platform: any + a reference interpreter -> the builder fans it into EVERY
+# interpreter's site-packages, so one bare recipe serves all.
+source:
+  type: python_wheel
+  artifacts:
+    any:
+      url: https://files.pythonhosted.org/packages/c6/78/397db326746f0a342855b81216ae1f0a32965deccfd7c830a2dbc66d2483/pytokens-0.4.1-py3-none-any.whl
+      sha256: "26cef14744a8385f35d0e095dc8b3a7583f6c953c2e3d269c7f82484bf5ad2de"
+
+python:
+  interpreter: python312
+  abi: cp312
+
+patches: []
+
+depends:
+  build:
+    - name: python312
+  runtime:
+    - name: python312
+  host_tools:
+    - python311
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - lib/python3.*/site-packages/pytokens/
+    - lib/python3.*/site-packages/pytokens-*.dist-info/
