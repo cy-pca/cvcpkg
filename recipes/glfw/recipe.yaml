@@ -29,6 +29,12 @@ depends:
     - ninja
     - pkg-config
   runtime:
+    # OpenGL/GLES/EGL/GLX headers + GL loader (Linux/BSD). GLFW compiles
+    # glx_context.c / egl_context.c against GL/glx.h, EGL/egl.h, KHR/khrplatform.h,
+    # which live in libglvnd — the hermetic build prefix has no system GL headers.
+    # (macOS/Windows use their native GL, so no dep there.)
+    - name: libglvnd
+      platforms: [linux, freebsd, openbsd, netbsd]
     # X11 backend (Linux/BSD only).
     - name: libx11
       platforms: [linux, freebsd, openbsd, netbsd]

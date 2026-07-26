@@ -31,6 +31,12 @@ depends:
     - ninja
     - pkg-config
   runtime:
+    # OpenGL/GLES/EGL/GLX headers + GL loader (Linux/BSD). SDL's video
+    # backends compile against GL/gl.h, GL/glx.h, EGL/egl.h, KHR/khrplatform.h
+    # from libglvnd — the hermetic prefix has no system GL headers.
+    # (macOS/Windows use their native GL.)
+    - name: libglvnd
+      platforms: [linux, freebsd, openbsd, netbsd]
     # X11 backend (Linux + BSD only).
     - name: libx11
       platforms: [linux, freebsd, openbsd, netbsd]
