@@ -65,9 +65,7 @@ class TestIncrementalBuild:
         scratch = tmp_path / "scratch"
         rd = _write_recipe(recipes_dir, "mytool")
 
-        ctx1 = build_recipe(
-            rd, platform="linux", incremental=True, work_dir_root=scratch
-        )
+        ctx1 = build_recipe(rd, platform="linux", incremental=True, work_dir_root=scratch)
 
         # Keyed, stable work dir under the scratch root (not a random temp).
         assert ctx1.work_dir == scratch / "mytool-linux-release-shared"
@@ -78,9 +76,7 @@ class TestIncrementalBuild:
         sentinel = ctx1.build_dir / "SENTINEL"
         sentinel.write_text("keep me")
 
-        ctx2 = build_recipe(
-            rd, platform="linux", incremental=True, work_dir_root=scratch
-        )
+        ctx2 = build_recipe(rd, platform="linux", incremental=True, work_dir_root=scratch)
 
         assert ctx2.work_dir == ctx1.work_dir
         assert ctx2.build_dir == ctx1.build_dir

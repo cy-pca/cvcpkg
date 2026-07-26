@@ -6281,8 +6281,6 @@ class TestFollowDagTermination:
             except StopIteration:
                 return 10_000.0
 
-        from cvcpkg.cli._builds import WAIT_TIMEOUT_EXIT_CODE
-
         ret = self._run_bounded(
             [
                 "builds",
