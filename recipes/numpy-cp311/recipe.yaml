@@ -6,7 +6,13 @@ recipe:
   # compiled with meson-python against cvcpkg's own OpenBLAS so the extensions
   # link libopenblas.so.0 by soname (no vendored numpy.libs/) and so the package
   # is available on the BSDs, for which PyPI ships no wheel.
-  cvc_revision: 2
+  # Bumped 2 -> 3: the from-source build never actually succeeded, so +cvc.1/+cvc.2
+  # were stale PyPI wheels whose vendored libscipy_openblas64_*.so isn't found at
+  # runtime (broken `import numpy`). build.sh now works around two build-prefix
+  # relocation bugs (cython's non-relocatable console-script shebang; python311's
+  # stale sysconfig INCLUDEPY) so meson builds from source and links cvcpkg's
+  # libopenblas.so.0 via $ORIGIN. This republishes a genuinely importable numpy.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

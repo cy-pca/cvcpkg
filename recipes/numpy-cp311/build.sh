@@ -29,6 +29,36 @@ _D="${CVC_PYTHON_ABI#cp}"; _D="${_D%t}"; _PYMM="${_D:0:1}.${_D:1}"
 export PATH="${BLD}/bin:${DEPS}/bin:${PATH}"
 export PYTHONPATH="${BLD}/lib/python${_PYMM}/site-packages${PYTHONPATH:+:${PYTHONPATH}}"
 
+# ── Working `cython` for meson ──────────────────────────────────────────────
+# numpy's meson build discovers Cython as a *compiler* by running the `cython`
+# executable off PATH. The staged cython console script's shebang is a hardcoded
+# absolute path to its own (ephemeral) build prefix's interpreter — unlike meson,
+# whose recipe rewrites the shebang to `/usr/bin/env python3` — so the staged
+# `cython` "cannot execute" and meson fails with
+#   ERROR: Unknown compiler(s): [['cython'], ['cython3']]
+# and numpy silently never builds from source. Shim a `cython` that runs the
+# Cython module under THIS interpreter (module import works fine — only the
+# script shebang is broken), and put it first on PATH.
+CYTHON_SHIM="${CVC_BUILD_DIR}/cython-shim"
+mkdir -p "${CYTHON_SHIM}"
+cat > "${CYTHON_SHIM}/cython" <<EOF
+#!/bin/sh
+exec "${PY}" -m cython "\$@"
+EOF
+chmod +x "${CYTHON_SHIM}/cython"
+export PATH="${CYTHON_SHIM}:${PATH}"
+
+# ── Python headers for meson ────────────────────────────────────────────────
+# meson's dependency('python') probes Python.h using sysconfig's INCLUDEPY,
+# which in the staged interpreter is a stale (unrelocated) build-prefix path,
+# so meson fails with "Cannot compile `Python.h`". sysconfig.get_path('include')
+# IS relocated correctly (it derives from the running interpreter's prefix), so
+# add it to the C search path as a fallback the stale -I can't override.
+PYINC="$("${PY}" -c 'import sysconfig; print(sysconfig.get_path("include"))')"
+if [ -n "${PYINC}" ] && [ -f "${PYINC}/Python.h" ]; then
+  export CPATH="${PYINC}${CPATH:+:${CPATH}}"
+fi
+
 # ── BLAS selection ──────────────────────────────────────────────────────────
 BLAS_ARGS=()
 case "${CVC_PLATFORM}" in
