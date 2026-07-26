@@ -1,0 +1,75 @@
+schema_version: 1
+recipe:
+  name: flac
+  upstream_version: "1.5.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://xiph.org/flac/
+  license: BSD-3-Clause
+  tags: [libraries, audio, multimedia]
+  description: >-
+    FLAC — the Free Lossless Audio Codec.  Provides the libFLAC and
+    libFLAC++ encoding/decoding libraries.  Used by the allegro5 audio
+    addon (acodec) and many audio applications.
+
+source:
+  type: tarball
+  url: https://downloads.xiph.org/releases/flac/flac-1.5.0.tar.xz
+  sha256: "f2c1c76592a82ffff8413ba3c4a1299b6c7ab06c734dee03fd88630485c2b920"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+    - pkg-config
+  runtime:
+    - name: libogg
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libFLAC*
+    - lib/libFLAC++*
+    - lib/pkgconfig/flac.pc
+    - lib/pkgconfig/flac++.pc
+    - lib/cmake/FLAC/
+    - include/FLAC/
+    - include/FLAC++/
+  pkg_config:
+    - flac
+    - flac++
+  cmake_packages:
+    - { name: FLAC, targets: ["FLAC::FLAC", "FLAC::FLAC++"] }
+
+abi:
+  cxx_std: 17

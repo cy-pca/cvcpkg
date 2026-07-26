@@ -1,0 +1,66 @@
+schema_version: 1
+recipe:
+  name: physfs
+  upstream_version: "3.2.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://icculus.org/physfs/
+  license: Zlib
+  tags: [libraries, game]
+  description: >-
+    PhysicsFS (PhysFS) — a portable, flexible file I/O abstraction that
+    provides access to various archives (ZIP, 7z, etc.) through a single
+    filesystem-like API.  Used by the allegro5 physfs addon.
+
+source:
+  type: tarball
+  url: https://github.com/icculus/physfs/archive/refs/tags/release-3.2.0.tar.gz
+  sha256: "1991500eaeb8d5325e3a8361847ff3bf8e03ec89252b7915e1f25b3f8ab5d560"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libphysfs*
+    - lib/pkgconfig/physfs.pc
+    - lib/cmake/PhysFS/
+    - include/physfs.h
+  pkg_config:
+    - physfs
+  cmake_packages:
+    - { name: PhysFS, targets: ["PhysFS::PhysFS", "PhysFS::PhysFS-static"] }

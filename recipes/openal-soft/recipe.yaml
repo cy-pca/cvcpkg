@@ -1,0 +1,76 @@
+schema_version: 1
+recipe:
+  name: openal-soft
+  upstream_version: "1.25.2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/kcat/openal-soft
+  license: LGPL-2.0-or-later
+  tags: [libraries, audio]
+  description: >-
+    OpenAL Soft — a software implementation of the OpenAL 3D audio API.
+    Provides positional audio for games and multimedia applications.
+    Audio backends (ALSA, PulseAudio, PipeWire, CoreAudio, WASAPI, ...)
+    are dlopen'd at runtime, so the library carries no hard external
+    link dependencies.
+
+source:
+  type: tarball
+  url: https://github.com/kcat/openal-soft/archive/refs/tags/1.25.2.tar.gz
+  sha256: "fb27e5839aa11f0e5b9d33756965291fad5d6909ab928ea1f796f4a1a6877894"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+    - pkg-config
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    # Unix static + shared artifacts (.a / .so / .so.N / .dylib).
+    - lib/libopenal*
+    # Windows static/import lib + runtime DLL (MSVC).
+    - lib/OpenAL*
+    - bin/OpenAL*
+    - lib/pkgconfig/openal.pc
+    - lib/cmake/OpenAL/
+    - include/AL/
+  pkg_config:
+    - openal
+  cmake_packages:
+    - { name: OpenAL, targets: ["OpenAL::OpenAL"] }
+
+abi:
+  cxx_std: 20

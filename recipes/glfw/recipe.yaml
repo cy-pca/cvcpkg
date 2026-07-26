@@ -1,0 +1,94 @@
+schema_version: 1
+recipe:
+  name: glfw
+  upstream_version: "3.4"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.glfw.org/
+  license: Zlib
+  tags: [libraries, graphics, gui]
+  description: >-
+    GLFW — a multi-platform library for OpenGL, OpenGL ES and Vulkan
+    application development.  Provides a simple API for creating windows,
+    contexts and surfaces, and receiving input and events.  Builds the X11
+    and Wayland backends on Linux/BSD and the Cocoa backend on macOS.
+
+source:
+  type: tarball
+  url: https://github.com/glfw/glfw/archive/refs/tags/3.4.tar.gz
+  sha256: "c038d34200234d071fae9345bc455e4a8f2f544ab60150765d7704e08f3dac01"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+    - pkg-config
+  runtime:
+    # X11 backend (Linux/BSD only).
+    - name: libx11
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxrandr
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxinerama
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxcursor
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxi
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxext
+      platforms: [linux, freebsd, openbsd, netbsd]
+    # Wayland backend (Linux + FreeBSD).
+    - name: xkbcommon
+      platforms: [linux, freebsd]
+    - name: wayland
+      platforms: [linux, freebsd]
+    - name: wayland-protocols
+      platforms: [linux, freebsd]
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libglfw*
+    - lib/glfw3*
+    - bin/glfw3*
+    - lib/pkgconfig/glfw3.pc
+    - lib/cmake/glfw3/
+    - include/GLFW/
+  pkg_config:
+    - glfw3
+  cmake_packages:
+    - name: glfw3
+      targets: ["glfw"]
+
+abi:
+  cxx_std: 17

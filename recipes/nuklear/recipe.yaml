@@ -1,0 +1,51 @@
+schema_version: 1
+recipe:
+  name: nuklear
+  upstream_version: "4.13.3"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/Immediate-Mode-UI/Nuklear
+  license: MIT
+  tags: [libraries, gui, graphics]
+  description: >-
+    Nuklear — a single-header ANSI C immediate-mode graphical user interface
+    toolkit.  No dependencies, no build step: the consumer defines
+    NK_IMPLEMENTATION in one translation unit and includes nuklear.h.  This
+    recipe installs the amalgamated header into the include prefix.
+
+source:
+  type: tarball
+  url: https://github.com/Immediate-Mode-UI/Nuklear/archive/refs/tags/v4.13.3.tar.gz
+  sha256: "834bf30974a294e996f7b1222aa59f1eb4ee259bd8d7d7967e8a2fb213d82dde"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - include/nuklear.h
+
+abi:
+  cxx_std: 17

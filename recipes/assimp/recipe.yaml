@@ -1,0 +1,76 @@
+schema_version: 1
+recipe:
+  name: assimp
+  upstream_version: "6.0.5"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/assimp/assimp
+  license: BSD-3-Clause
+  tags: [libraries]
+  description: >-
+    Open Asset Import Library (assimp) — a portable library to import and
+    export a wide variety of 3D model/scene/mesh file formats through a
+    single uniform data structure.  Provides geometry and mesh I/O.  Uses
+    the cvcpkg zlib; other contrib dependencies (rapidjson, utf8cpp,
+    minizip, poly2tri, etc.) remain vendored/bundled.
+
+source:
+  type: tarball
+  url: https://github.com/assimp/assimp/archive/refs/tags/v6.0.5.tar.gz
+  sha256: "edf3749559c2b7d1f758ffb66fc5bec62186221e623b7f2e8969f17ee46ecb6f"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+    - pkg-config
+  runtime:
+    - name: zlib
+      version: "^1.3"
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libassimp*
+    - lib/assimp*
+    - bin/assimp*
+    - lib/pkgconfig/assimp.pc
+    - lib/cmake/assimp*/
+    - include/assimp/
+  pkg_config:
+    - assimp
+  cmake_packages:
+    - { name: assimp, targets: ["assimp::assimp"] }
+
+abi:
+  cxx_std: 17
