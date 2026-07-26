@@ -3073,7 +3073,11 @@ def build_all(
                 # Merge this recipe's install into the shared prefix so
                 # subsequent recipes can find it via CVC_DEPS_PREFIX.
                 if install_dir.is_dir():
-                    shutil.copytree(install_dir, _dest, dirs_exist_ok=True)
+                    # symlinks=True: preserve version/convenience symlinks and
+                    # don't choke on dangling ones (e.g. ncurses' lib/libpanel on
+                    # macOS). Matches the other copytree sites. This is the
+                    # build_all/pack-all path that #407 missed.
+                    shutil.copytree(install_dir, _dest, symlinks=True, dirs_exist_ok=True)
                     _rewrite_pc_prefixes(_dest)
                     _rewrite_script_prefixes(_dest)
                 # Store in build cache.
