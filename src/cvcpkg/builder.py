@@ -3082,10 +3082,21 @@ def find_recipes_dir() -> Path:
     """Locate the recipes/ directory.
 
     Search order:
+    0. A frozen single-binary bundle (PyInstaller/onefile): recipes are shipped
+       as data alongside the extracted package under ``sys._MEIPASS``.
     1. Bundled recipes shipped inside the installed package.
     2. Walk up from the package source to find a repo checkout.
     3. Fallback: recipes/ in the current working directory.
     """
+    # 0. Frozen single-binary (PyInstaller extracts data to sys._MEIPASS). The
+    #    bundle carries the standard recipes so a self-contained `cvcpkg` binary
+    #    discovers them with no --recipes-dir. Both layouts are accepted:
+    #    <_MEIPASS>/cvcpkg/recipes (data mirrors the package) and <_MEIPASS>/recipes.
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        for cand in (Path(meipass) / "cvcpkg" / "recipes", Path(meipass) / "recipes"):
+            if cand.is_dir() and (cand / "_common").is_dir():
+                return cand
     # 1. Bundled recipes (installed via pip)
     bundled = Path(__file__).resolve().parent / "recipes"
     if bundled.is_dir() and (bundled / "_common").is_dir():

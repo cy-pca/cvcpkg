@@ -1,0 +1,86 @@
+# Build the self-contained single-file `cvcpkg` binary (PyInstaller) per OS.
+#
+# Two variants (see packaging/cvcpkg.spec):
+#   client   — lean CLI (install/build/validate); no server extra.
+#   combined — ONE multi-call binary that is both `cvcpkg` and `cvcpkg-server`,
+#              dispatched by argv[0] (busybox-style). Ship the binary + a
+#              `cvcpkg-server` symlink, or set CVCPKG_ENTRY=server.
+#
+# Both bundle the STANDARD RECIPES, so the binary discovers recipes with no
+# --recipes-dir. One binary per OS; a single cross-OS binary is the cosmo/APE
+# track.
+name: build-cli-binary
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        variant: [client, combined]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build deps
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.variant }}" = "combined" ]; then
+            pip install -e ".[production]" jsonschema pyinstaller
+          else
+            pip install -e . jsonschema pyinstaller
+          fi
+
+      - name: Build binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.variant }}" = "combined" ]; then
+            CVCPKG_BUNDLE_SERVER=1 pyinstaller --clean --noconfirm packaging/cvcpkg.spec
+          else
+            pyinstaller --clean --noconfirm packaging/cvcpkg.spec
+          fi
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXT=""; [ "${{ runner.os }}" = "Windows" ] && EXT=".exe"
+          BIN="$PWD/dist/cvcpkg$EXT"
+          "$BIN" --version
+          # Recipe discovery must work from a dir with no recipes/ (bundle only).
+          work="$(mktemp -d)"; ( cd "$work" && "$BIN" validate recipes/asyncpg && "$BIN" validate recipes )
+          if [ "${{ matrix.variant }}" = "combined" ]; then
+            # Second entry point via argv[0]: cvcpkg-server.
+            cp "$BIN" "$PWD/dist/cvcpkg-server$EXT"
+            "$PWD/dist/cvcpkg-server$EXT" --version
+            "$PWD/dist/cvcpkg-server$EXT" run --help >/dev/null
+          fi
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXT=""; [ "${{ runner.os }}" = "Windows" ] && EXT=".exe"
+          mkdir -p out
+          tag="${{ matrix.variant }}-${{ runner.os }}-${{ runner.arch }}"
+          cp "dist/cvcpkg$EXT" "out/cvcpkg-$tag$EXT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cvcpkg-${{ matrix.variant }}-${{ matrix.os }}
+          path: out/*
+          if-no-files-found: error
