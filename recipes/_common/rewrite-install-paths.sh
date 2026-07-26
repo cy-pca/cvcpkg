@@ -15,13 +15,33 @@ cvc_rewrite_install_paths() {
     [ -n "$root" ] || return 0
     [ -d "$root" ] || return 0
 
-    local root_esc
+    # Also relocate the DEPS prefix. An installed .pc/.cmake can bake an absolute
+    # path to a dependency that lived under $CVC_DEPS_PREFIX at build time — e.g. a
+    # CMake target export whose INTERFACE_LINK_LIBRARIES carries ${ZLIB_LIBRARIES}
+    # (an absolute path emitted by the classic FindZLIB module) instead of the
+    # relocatable ZLIB::ZLIB target. That path exists on no consumer machine, so a
+    # downstream find_package()+target_link fails everywhere. In cvcpkg's FLAT
+    # install every dependency co-locates with the package at the consumer prefix,
+    # so a $CVC_DEPS_PREFIX path resolves to the SAME per-file anchor as a
+    # $CVC_INSTALL_DIR path. This only fires where such an absolute dep path
+    # literally appears (a no-op for recipes whose exports are already clean —
+    # CMake normally emits its OWN paths via ${_IMPORT_PREFIX}; the leak is
+    # external-dep absolute paths it does not relocate).
+    local deps="${CVC_DEPS_PREFIX:-}"
+    deps="${deps%/}"
+
+    local root_esc deps_esc
     root_esc=$(printf '%s' "$root" | sed 's/[]\/$*.^[]/\\&/g')
+    [ -n "$deps" ] && deps_esc=$(printf '%s' "$deps" | sed 's/[]\/$*.^[]/\\&/g')
 
     local count=0
-    local f dir remainder depth rel i anchor prefix
+    local f dir remainder depth rel i anchor prefix has_root has_deps
     while IFS= read -r -d '' f; do
-        grep -q -F -- "$root" "$f" 2>/dev/null || continue
+        has_root=0
+        has_deps=0
+        grep -q -F -- "$root" "$f" 2>/dev/null && has_root=1
+        [ -n "$deps" ] && grep -q -F -- "$deps" "$f" 2>/dev/null && has_deps=1
+        [ "$has_root" -eq 1 ] || [ "$has_deps" -eq 1 ] || continue
         dir="$(dirname "$f")"
         remainder="${dir#$root}"
         remainder="${remainder#/}"
@@ -42,8 +62,11 @@ cvc_rewrite_install_paths() {
             *)       continue ;;
         esac
         prefix="${anchor}/${rel}"
-        # -i.bak keeps us portable across GNU and BSD sed.
-        sed -i.bak "s|${root_esc}|${prefix}|g" "$f"
+        # -i.bak keeps us portable across GNU and BSD sed. Rewrite the install
+        # prefix first (it is the more specific match when the two prefixes
+        # overlap), then the deps prefix.
+        [ "$has_root" -eq 1 ] && sed -i.bak "s|${root_esc}|${prefix}|g" "$f"
+        [ "$has_deps" -eq 1 ] && sed -i.bak "s|${deps_esc}|${prefix}|g" "$f"
         rm -f "${f}.bak"
         count=$((count + 1))
     done < <(find "$root" \( -name '*.pc' -o -name '*.cmake' \) -type f -print0)
