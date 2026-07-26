@@ -1,31 +1,34 @@
 schema_version: 1
 recipe:
-  name: libopus
-  upstream_version: "1.6.1"
-  cvc_revision: 2
+  name: flac
+  upstream_version: "1.5.0"
+  cvc_revision: 1
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
-  homepage: https://opus-codec.org/
+  homepage: https://xiph.org/flac/
   license: BSD-3-Clause
-  tags: [libraries, multimedia, audio]
+  tags: [libraries, audio, multimedia]
   description: >-
-    Opus — a totally open, royalty-free, highly versatile audio codec.
-    Standardised as RFC 6716.  Used by FFmpeg (--enable-libopus),
-    WebRTC, and many streaming applications.
+    FLAC — the Free Lossless Audio Codec.  Provides the libFLAC and
+    libFLAC++ encoding/decoding libraries.  Used by the allegro5 audio
+    addon (acodec) and many audio applications.
 
 source:
   type: tarball
-  url: https://ftp.osuosl.org/pub/xiph/releases/opus/opus-1.6.1.tar.gz
-  sha256: "6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1"
+  url: https://downloads.xiph.org/releases/flac/flac-1.5.0.tar.xz
+  sha256: "f2c1c76592a82ffff8413ba3c4a1299b6c7ab06c734dee03fd88630485c2b920"
   strip_components: 1
 
 patches: []
 
 depends:
   build:
+    - cmake
+    - ninja
     - pkg-config
-  runtime: []
+  runtime:
+    - name: libogg
   host_tools: []
 
 build:
@@ -55,9 +58,18 @@ build:
 
 package:
   files:
-    - lib/libopus*
-    - lib/pkgconfig/opus.pc
-    - include/opus/
-    - bin/opus-*.dll
+    - lib/libFLAC*
+    - lib/libFLAC++*
+    - lib/pkgconfig/flac.pc
+    - lib/pkgconfig/flac++.pc
+    - lib/cmake/FLAC/
+    - include/FLAC/
+    - include/FLAC++/
   pkg_config:
-    - opus
+    - flac
+    - flac++
+  cmake_packages:
+    - { name: FLAC, targets: ["FLAC::FLAC", "FLAC::FLAC++"] }
+
+abi:
+  cxx_std: 17

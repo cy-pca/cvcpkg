@@ -26,7 +26,7 @@ $sharedFlag = if ($env:CVC_LINK -eq 'static') {
     '--enable-shared --enable-static'
 }
 
-$cmd = "$depsFlag cd '$msysSource' && ./configure --prefix='$msysPrefix' --host=x86_64-w64-mingw32 $sharedFlag --disable-dependency-tracking --disable-extra-programs --disable-doc && make -j $jobs && make install"
+$cmd = "$depsFlag cd '$msysSource' && ./configure --prefix='$msysPrefix' --host=x86_64-w64-mingw32 $sharedFlag --disable-dependency-tracking --disable-extra-programs --disable-doc --enable-custom-modes && make -j $jobs && make install"
 Write-Host "cvcpkg: bash -lc `"$cmd`""
 & $bash -lc $cmd
 if ($LASTEXITCODE -ne 0) { throw 'libopus build failed' }

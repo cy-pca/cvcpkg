@@ -1,0 +1,75 @@
+schema_version: 1
+recipe:
+  name: portaudio
+  upstream_version: "19.7.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/PortAudio/portaudio
+  license: MIT
+  tags: [libraries, audio]
+  description: >-
+    PortAudio — a free, cross-platform, open-source audio I/O library.
+    Provides a simple callback/blocking API for recording and playing
+    sound.  Host APIs per platform: ALSA on Linux, CoreAudio on macOS,
+    and WMME / DirectSound / WASAPI / WDM-KS on Windows.
+
+source:
+  type: tarball
+  url: https://github.com/PortAudio/portaudio/archive/refs/tags/v19.7.0.tar.gz
+  sha256: "5af29ba58bbdbb7bbcefaaecc77ec8fc413f0db6f4c4e286c40c3e1b83174fa0"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+    - pkg-config
+  runtime:
+    # ALSA host API backend.  Only Linux links a real audio backend from
+    # the cvcpkg closure; macOS uses CoreAudio and Windows uses native
+    # WMME/DirectSound/WASAPI/WDM-KS, none of which need external deps.
+    - name: alsa-lib
+      platforms: [linux]
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libportaudio*
+    - lib/portaudio*.lib
+    - bin/portaudio*.dll
+    - lib/pkgconfig/portaudio-2.0.pc
+    - lib/cmake/portaudio/
+    - include/portaudio.h
+    # Platform-specific host-API headers (pa_linux_alsa.h on Linux,
+    # pa_mac_core.h on macOS, pa_win_*.h on Windows).
+    - include/pa_*.h
+  pkg_config:
+    - portaudio-2.0
+  cmake_packages:
+    - { name: portaudio, targets: ["portaudio", "portaudio_static"] }
+
+notes:
+  - title: "CMake build supports Linux/macOS/Windows only (no BSD backend)"
+    platforms: [freebsd, openbsd, netbsd]
+    description: >-
+      PortAudio's CMake build only wires ALSA/JACK on generic UNIX and
+      CoreAudio on Apple.  On the BSDs a working backend needs OSS or
+      sndio, which PortAudio only exposes through its autotools build,
+      not CMake.  Rather than ship a backend-less library the BSD
+      platforms are omitted.  JACK is deliberately left OFF on Linux to
+      keep the closure small (no hard jack runtime dep).

@@ -1,0 +1,114 @@
+schema_version: 1
+recipe:
+  name: sdl3
+  upstream_version: "3.4.12"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.libsdl.org/
+  license: Zlib
+  tags: [libraries, graphics, gui, game, audio]
+  description: >-
+    SDL 3.x (Simple DirectMedia Layer) — a cross-platform development
+    library providing low-level access to audio, keyboard, mouse,
+    joystick, and graphics hardware via OpenGL/Vulkan/Direct3D/Metal.
+    Most platform backends (X11, Wayland, PulseAudio, PipeWire, ...) are
+    dlopen'd at runtime; the dependency libraries below supply the build
+    headers.
+
+source:
+  type: tarball
+  url: https://github.com/libsdl-org/SDL/releases/download/release-3.4.12/SDL3-3.4.12.tar.gz
+  sha256: "f07b958a9ac5020fb7a44cadb957f658b2149c3c8abb4f63145fac9303249db7"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+    - pkg-config
+  runtime:
+    # OpenGL/GLES/EGL/GLX headers + GL loader (Linux/BSD). SDL's video
+    # backends compile against GL/gl.h, GL/glx.h, EGL/egl.h, KHR/khrplatform.h
+    # from libglvnd — the hermetic prefix has no system GL headers.
+    # (macOS/Windows use their native GL.)
+    - name: libglvnd
+      platforms: [linux, freebsd, openbsd, netbsd]
+    # X11 backend (Linux + BSD only).
+    - name: libx11
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxext
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxrandr
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxcursor
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxi
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxfixes
+      platforms: [linux, freebsd, openbsd, netbsd]
+    # Wayland backend (Linux + FreeBSD; the wayland recipes stop there).
+    - name: wayland
+      platforms: [linux, freebsd]
+    - name: wayland-protocols
+      platforms: [linux, freebsd]
+    - name: xkbcommon
+      platforms: [linux, freebsd]
+    # Audio backends.
+    - name: alsa-lib
+      platforms: [linux]
+    - name: libpulse
+      platforms: [linux]
+    - name: pipewire
+      platforms: [linux]
+    - name: jack
+      platforms: [linux, freebsd]
+    - name: sndio
+      platforms: [linux, freebsd, openbsd, netbsd]
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    # Unix static + shared artifacts (.a / .so / .so.N / .dylib).
+    - lib/libSDL3*
+    - lib/pkgconfig/sdl3.pc
+    - lib/cmake/SDL3/
+    - include/SDL3/
+    # Windows static + shared artifacts (import/static .lib + runtime .dll).
+    - lib/SDL3*.lib
+    - bin/SDL3*.dll
+  pkg_config:
+    - sdl3
+  cmake_packages:
+    - { name: SDL3, targets: ["SDL3::SDL3"] }
+
+abi:
+  cxx_std: 17

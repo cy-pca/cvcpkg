@@ -15,6 +15,11 @@ CONFIGURE_ARGS=(
     --disable-dependency-tracking
     --disable-extra-programs
     --disable-doc
+    # Export the opus_custom_* API (custom frame sizes / non-standard sample
+    # rates).  Off by default upstream, but opus_custom.h is installed either
+    # way, so consumers that probe only the header (e.g. jack2's NetJack) enable
+    # the code path and then fail to link without these symbols.
+    --enable-custom-modes
 )
 
 if [[ "${CVC_LINK:-shared}" == "static" ]]; then

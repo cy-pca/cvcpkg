@@ -1,23 +1,24 @@
 schema_version: 1
 recipe:
-  name: libopus
-  upstream_version: "1.6.1"
-  cvc_revision: 2
+  name: opusfile
+  upstream_version: "0.12"
+  cvc_revision: 1
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   homepage: https://opus-codec.org/
   license: BSD-3-Clause
-  tags: [libraries, multimedia, audio]
+  tags: [libraries, audio, multimedia]
   description: >-
-    Opus — a totally open, royalty-free, highly versatile audio codec.
-    Standardised as RFC 6716.  Used by FFmpeg (--enable-libopus),
-    WebRTC, and many streaming applications.
+    opusfile — a high-level API for decoding and seeking within .opus
+    files (Ogg-encapsulated Opus streams).  Used by the allegro5 audio
+    addon (acodec).  Built with --disable-http to avoid an OpenSSL
+    dependency.
 
 source:
   type: tarball
-  url: https://ftp.osuosl.org/pub/xiph/releases/opus/opus-1.6.1.tar.gz
-  sha256: "6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1"
+  url: https://downloads.xiph.org/releases/opus/opusfile-0.12.tar.gz
+  sha256: "118d8601c12dd6a44f52423e68ca9083cc9f2bfe72da7a8c1acb22a80ae3550b"
   strip_components: 1
 
 patches: []
@@ -25,7 +26,9 @@ patches: []
 depends:
   build:
     - pkg-config
-  runtime: []
+  runtime:
+    - name: libopus
+    - name: libogg
   host_tools: []
 
 build:
@@ -50,14 +53,11 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
-    - platform: windows
-      script: build.ps1
 
 package:
   files:
-    - lib/libopus*
-    - lib/pkgconfig/opus.pc
+    - lib/libopusfile*
+    - lib/pkgconfig/opusfile.pc
     - include/opus/
-    - bin/opus-*.dll
   pkg_config:
-    - opus
+    - opusfile

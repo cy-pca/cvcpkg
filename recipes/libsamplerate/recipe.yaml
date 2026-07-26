@@ -1,0 +1,64 @@
+schema_version: 1
+recipe:
+  name: libsamplerate
+  upstream_version: "0.2.2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/libsndfile/libsamplerate
+  license: BSD-2-Clause
+  tags: [libraries, audio]
+  description: >-
+    libsamplerate (Secret Rabbit Code) — a high-quality audio
+    sample-rate conversion library.  Provides the src_* API for
+    converting audio streams between arbitrary sample rates with
+    several selectable quality/speed presets.
+
+source:
+  type: tarball
+  url: https://github.com/libsndfile/libsamplerate/releases/download/0.2.2/libsamplerate-0.2.2.tar.xz
+  sha256: "3258da280511d24b49d6b08615bbe824d0cacc9842b0e4caf11c52cf2b043893"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+    - pkg-config
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libsamplerate*
+    - lib/samplerate*
+    - bin/libsamplerate*
+    - lib/pkgconfig/samplerate.pc
+    - lib/cmake/SampleRate/
+    - include/samplerate.h
+  pkg_config:
+    - samplerate
+  cmake_packages:
+    - { name: SampleRate, targets: ["SampleRate::samplerate"] }

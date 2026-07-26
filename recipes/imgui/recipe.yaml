@@ -1,0 +1,56 @@
+schema_version: 1
+recipe:
+  name: imgui
+  upstream_version: "1.92.9"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/ocornut/imgui
+  license: MIT
+  tags: [libraries, gui, graphics]
+  description: >-
+    Dear ImGui — a bloat-free immediate-mode graphical user interface library
+    for C++.  This recipe compiles the platform-agnostic core (imgui.cpp,
+    imgui_draw.cpp, imgui_tables.cpp, imgui_widgets.cpp, imgui_demo.cpp) into
+    libimgui (static or shared per CVC_LINK) and ships the public headers plus
+    the full backends/ directory as source so consumers can wire their own
+    GLFW/SDL/OpenGL/Vulkan/etc. integration.
+    TODO windows: no build.ps1 yet — the core would need to be compiled with
+    cl.exe into imgui.lib/imgui.dll; omitted until a working script is written.
+
+source:
+  type: tarball
+  url: https://github.com/ocornut/imgui/archive/refs/tags/v1.92.9.tar.gz
+  sha256: "af97ed649182c39314320514a672b82008ab462b9293fe23d37b30bfa5d05519"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+
+package:
+  files:
+    - lib/libimgui*
+    - include/imgui/
+
+abi:
+  cxx_std: 17
