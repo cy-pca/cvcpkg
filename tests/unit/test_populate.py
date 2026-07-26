@@ -352,10 +352,23 @@ class TestPopulateSyncOnce:
 # ── builds submit-dag --skip-existing ───────────────────────────
 
 
-def _write_recipe(tmp_path: Path, name: str, version="1.0.0", rev=2, deps=()):
+def _write_recipe(
+    tmp_path: Path,
+    name: str,
+    version="1.0.0",
+    rev=2,
+    deps=(),
+    timeout=None,
+    platforms=("linux", "windows"),
+):
     rdir = tmp_path / "recipes" / name
     rdir.mkdir(parents=True)
     deps_yaml = "".join(f"    - {d}\n" for d in deps)
+    timeout_line = f"  timeout_seconds: {timeout}\n" if timeout is not None else ""
+    matrix = "".join(
+        f"    - platform: {p}\n      script: {'build.ps1' if p == 'windows' else 'build.sh'}\n"
+        for p in platforms
+    )
     (rdir / "recipe.yaml").write_text(
         f"""schema_version: 1
 recipe:
@@ -366,12 +379,8 @@ depends:
   build:
 {deps_yaml if deps else ""}
 build:
-  matrix:
-    - platform: linux
-      script: build.sh
-    - platform: windows
-      script: build.ps1
-"""
+{timeout_line}  matrix:
+{matrix}"""
     )
     return rdir
 
@@ -620,6 +629,85 @@ class TestSubmitDagSkipExisting:
         assert names == ["libpng"]  # zlib skipped, dependent still builds
         assert body["jobs"][0]["depends_on"] == []  # dep satisfied by package
 
+    def test_skip_existing_on_by_default(self, tmp_path, capsys, monkeypatch):
+        # No --skip-existing flag: default-on skips the already-published
+        # variant, so a bare submit "fills the gaps" instead of rebuilding.
+        _write_recipe(tmp_path, "zlib", version="1.3.1", rev=3)
+        published = [
+            {
+                "name": "zlib",
+                "version": "1.3.1+cvc.3",
+                "platform": "windows",
+                "arch": "x86_64",
+                "build_type": "release",
+                "link": "shared",
+                "archive_url": "/v1/download/zlib.tar.zst",
+            }
+        ]
+        posted: list = []
+        monkeypatch.setattr("httpx.Client", self._fake_client(published, posted))
+        ret = main(
+            [
+                "builds",
+                "submit-dag",
+                "--server",
+                "http://s.example",
+                "--token",
+                "tok",
+                "--platform",
+                "windows",
+                "--arch",
+                "x86_64",
+                "--recipes-dir",
+                str(tmp_path / "recipes"),
+                "--no-default-recipes",
+                "zlib",
+            ]
+        )
+        assert ret == 0
+        assert "already-published" in capsys.readouterr().out
+        assert posted == []  # nothing to build — the variant already exists
+
+    def test_no_skip_existing_forces_rebuild(self, tmp_path, monkeypatch):
+        # --no-skip-existing overrides the default and rebuilds the published
+        # variant.
+        _write_recipe(tmp_path, "zlib", version="1.3.1", rev=3)
+        published = [
+            {
+                "name": "zlib",
+                "version": "1.3.1+cvc.3",
+                "platform": "windows",
+                "arch": "x86_64",
+                "build_type": "release",
+                "link": "shared",
+                "archive_url": "/v1/download/zlib.tar.zst",
+            }
+        ]
+        posted: list = []
+        monkeypatch.setattr("httpx.Client", self._fake_client(published, posted))
+        ret = main(
+            [
+                "builds",
+                "submit-dag",
+                "--server",
+                "http://s.example",
+                "--token",
+                "tok",
+                "--platform",
+                "windows",
+                "--arch",
+                "x86_64",
+                "--recipes-dir",
+                str(tmp_path / "recipes"),
+                "--no-default-recipes",
+                "--no-skip-existing",
+                "zlib",
+            ]
+        )
+        assert ret == 0
+        (body,) = posted
+        assert [j["recipe_name"] for j in body["jobs"]] == ["zlib"]
+
     def test_placeholder_rows_do_not_satisfy(self, tmp_path, capsys, monkeypatch):
         _write_recipe(tmp_path, "zlib", version="1.3.1", rev=3)
         published = [
@@ -793,3 +881,214 @@ class TestMirrorEviction:
             return await app_mod._enforce_mirror_budget()
 
         assert run(_test) == 0
+
+
+# ── builds submit-dag auto-deps (auto-add unpublished dependencies) ──
+
+
+class TestSubmitDagAutoDeps:
+    """submit-dag pulls UNpublished, buildable deps into the DAG (default on).
+
+    A dependency that is a catalog gap builds first instead of failing the
+    dependent late at install/configure; an already-published dep is left for
+    the builder to fetch; an unpublished dep with no recipe is a hard error.
+    """
+
+    def _fake_client(self, published, posted_bodies):
+        class FakeResp:
+            status_code = 200
+            text = ""
+
+            def __init__(self, payload):
+                self._payload = payload
+
+            def json(self):
+                return self._payload
+
+            def raise_for_status(self):
+                pass
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                if "/v1/builders" in url:
+                    return FakeResp({"builders": [{"platform": "linux", "arch": "x86_64"}]})
+                if "/v1/packages" in url:
+                    return FakeResp({"total": len(published), "packages": published})
+                raise AssertionError(f"unexpected GET {url}")
+
+            def post(self, url, json=None, **kw):
+                posted_bodies.append(json)
+                return FakeResp({"dag_id": "dag-t", "total": len(json["jobs"]), "jobs": []})
+
+        return FakeClient
+
+    def _submit(self, tmp_path, monkeypatch, published, posted, *args):
+        monkeypatch.setattr("httpx.Client", self._fake_client(published, posted))
+        return main(
+            [
+                "builds",
+                "submit-dag",
+                "--server",
+                "http://s.example",
+                "--token",
+                "tok",
+                "--platform",
+                "linux",
+                "--arch",
+                "x86_64",
+                "--recipes-dir",
+                str(tmp_path / "recipes"),
+                "--no-default-recipes",
+                *args,
+            ]
+        )
+
+    @staticmethod
+    def _pub(name, version, plat="linux", arch="x86_64", link="shared"):
+        return {
+            "name": name,
+            "version": version,
+            "platform": plat,
+            "arch": arch,
+            "build_type": "release",
+            "link": link,
+            "archive_url": f"/v1/download/{name}.tar.zst",
+        }
+
+    def test_unpublished_dep_is_auto_added(self, tmp_path, capsys, monkeypatch):
+        # libpng build-deps zlib; neither is published → both build, zlib first.
+        _write_recipe(tmp_path, "zlib", version="1.3.1", rev=3)
+        _write_recipe(tmp_path, "libpng", version="1.6.43", rev=1, deps=("zlib",))
+        posted: list = []
+        ret = self._submit(tmp_path, monkeypatch, [], posted, "libpng")
+        assert ret == 0
+        assert "Auto-added" in capsys.readouterr().out
+        (body,) = posted
+        idx = {j["recipe_name"]: i for i, j in enumerate(body["jobs"])}
+        assert set(idx) == {"libpng", "zlib"}
+        assert body["jobs"][idx["libpng"]]["depends_on"] == [idx["zlib"]]
+        assert body["jobs"][idx["zlib"]]["depends_on"] == []
+
+    def test_transitive_gap_is_auto_added(self, tmp_path, monkeypatch):
+        # libpng → zlib → lzma; all unpublished → all build, in order.
+        _write_recipe(tmp_path, "lzma", version="5.6.0", rev=1)
+        _write_recipe(tmp_path, "zlib", version="1.3.1", rev=3, deps=("lzma",))
+        _write_recipe(tmp_path, "libpng", version="1.6.43", rev=1, deps=("zlib",))
+        posted: list = []
+        ret = self._submit(tmp_path, monkeypatch, [], posted, "libpng")
+        assert ret == 0
+        (body,) = posted
+        idx = {j["recipe_name"]: i for i, j in enumerate(body["jobs"])}
+        assert set(idx) == {"libpng", "zlib", "lzma"}
+        assert body["jobs"][idx["zlib"]]["depends_on"] == [idx["lzma"]]
+        assert body["jobs"][idx["libpng"]]["depends_on"] == [idx["zlib"]]
+
+    def test_published_dep_not_added(self, tmp_path, monkeypatch):
+        _write_recipe(tmp_path, "zlib", version="1.3.1", rev=3)
+        _write_recipe(tmp_path, "libpng", version="1.6.43", rev=1, deps=("zlib",))
+        published = [self._pub("zlib", "1.3.1+cvc.3")]
+        posted: list = []
+        ret = self._submit(tmp_path, monkeypatch, published, posted, "libpng")
+        assert ret == 0
+        (body,) = posted
+        # zlib is in the catalog → builder fetches it, not rebuilt.
+        assert [j["recipe_name"] for j in body["jobs"]] == ["libpng"]
+        assert body["jobs"][0]["depends_on"] == []
+
+    def test_no_deps_flag_disables_autoadd(self, tmp_path, monkeypatch):
+        _write_recipe(tmp_path, "zlib", version="1.3.1", rev=3)
+        _write_recipe(tmp_path, "libpng", version="1.6.43", rev=1, deps=("zlib",))
+        posted: list = []
+        ret = self._submit(tmp_path, monkeypatch, [], posted, "--no-deps", "libpng")
+        assert ret == 0
+        (body,) = posted
+        assert [j["recipe_name"] for j in body["jobs"]] == ["libpng"]
+
+    def test_unbuildable_gap_is_hard_error(self, tmp_path, capsys, monkeypatch):
+        # libpng deps 'mysterylib' — no recipe, not published → fail up front.
+        _write_recipe(tmp_path, "libpng", version="1.6.43", rev=1, deps=("mysterylib",))
+        posted: list = []
+        ret = self._submit(tmp_path, monkeypatch, [], posted, "libpng")
+        assert ret == 1
+        assert "mysterylib" in capsys.readouterr().err
+        assert not posted  # nothing submitted
+
+    def test_cross_noarch_dep_warned_not_added(self, tmp_path, capsys, monkeypatch):
+        # A concrete recipe depending on an UNpublished 'any' recipe: the noarch
+        # dep can't be scheduled in the concrete DAG → warn, don't add.
+        _write_any_recipe(tmp_path, "certifi", version="2024.2.2", rev=1)
+        _write_recipe(tmp_path, "foo", version="1.0.0", rev=1, deps=("certifi",))
+        posted: list = []
+        ret = self._submit(tmp_path, monkeypatch, [], posted, "foo")
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "noarch dependency" in out and "certifi" in out
+        (body,) = posted
+        assert [j["recipe_name"] for j in body["jobs"]] == ["foo"]
+
+    def test_recipe_timeout_propagated_to_jobs(self, tmp_path, monkeypatch):
+        # A recipe declaring build.timeout_seconds propagates it into its job;
+        # a recipe without one omits the field (server applies its default).
+        _write_recipe(tmp_path, "llvm18", version="18.1.8", rev=1, timeout=18000)
+        _write_recipe(tmp_path, "zlib", version="1.3.1", rev=3)
+        posted: list = []
+        ret = self._submit(tmp_path, monkeypatch, [], posted, "llvm18", "zlib")
+        assert ret == 0
+        (body,) = posted
+        jobs = {j["recipe_name"]: j for j in body["jobs"]}
+        assert jobs["llvm18"]["timeout_seconds"] == 18000
+        assert "timeout_seconds" not in jobs["zlib"]
+
+    def test_dep_without_platform_matrix_is_skipped_not_error(self, tmp_path, monkeypatch):
+        # A dep with a recipe but no build for the target platform (e.g. a
+        # unix-only ncurses under a windows build) is skipped, NOT a hard error
+        # — the recipe's own cross-platform deps are its concern.  Regression
+        # for a submit-dag abort that broke build-on-dev.
+        _write_recipe(tmp_path, "ncurses", version="6.4", rev=1, platforms=("linux",))
+        _write_recipe(tmp_path, "llvm18", version="18.1.8", rev=1, deps=("ncurses",))
+        posted: list = []
+        monkeypatch.setattr("httpx.Client", self._fake_client([], posted))
+        ret = main(
+            [
+                "builds",
+                "submit-dag",
+                "--server",
+                "http://s.example",
+                "--token",
+                "tok",
+                "--platform",
+                "windows",
+                "--arch",
+                "x86_64",
+                "--allow-unschedulable",
+                "--recipes-dir",
+                str(tmp_path / "recipes"),
+                "--no-default-recipes",
+                "llvm18",
+            ]
+        )
+        assert ret == 0
+        (body,) = posted
+        # llvm18 builds for windows; unix-only ncurses is skipped, not an error.
+        assert [j["recipe_name"] for j in body["jobs"]] == ["llvm18"]
+
+    def test_auto_added_dep_carries_its_timeout(self, tmp_path, monkeypatch):
+        # An unpublished dep auto-added into the DAG keeps its own recipe timeout.
+        _write_recipe(tmp_path, "llvm18", version="18.1.8", rev=1, timeout=18000)
+        _write_recipe(tmp_path, "shiboken6", version="6.8.2", rev=1, deps=("llvm18",))
+        posted: list = []
+        ret = self._submit(tmp_path, monkeypatch, [], posted, "shiboken6")
+        assert ret == 0
+        (body,) = posted
+        jobs = {j["recipe_name"]: j for j in body["jobs"]}
+        assert set(jobs) == {"shiboken6", "llvm18"}  # llvm18 auto-added
+        assert jobs["llvm18"]["timeout_seconds"] == 18000

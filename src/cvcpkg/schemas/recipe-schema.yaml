@@ -299,6 +299,15 @@ $defs:
       build_type_independent:
         type: boolean
         description: "If true, only one config (Release) is built"
+      timeout_seconds:
+        type: integer
+        minimum: 1
+        description: >
+          Per-job build timeout in seconds, overriding the server's default
+          reap timeout (CVCPKG_BUILD_TIMEOUT, 2h).  For genuinely long builds
+          (e.g. LLVM/GCC) that exceed the default.  submit-dag propagates this
+          into each build job; the server reaper honours per-job
+          timeout_seconds.
       matrix:
         type: array
         items:

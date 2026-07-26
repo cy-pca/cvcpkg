@@ -141,10 +141,13 @@ jobs:
 
           # A published variant is immutable, so rebuilding one is pure waste.
           # Default on: "populate" means fill the gaps.  Turn it off to force a
-          # rebuild of variants that already exist.
-          SKIP_EXISTING=()
+          # rebuild of variants that already exist.  submit-dag now defaults to
+          # --skip-existing, so pass the flag explicitly either way to honour an
+          # explicit skip_existing=false input.
           if [[ "${{ inputs.skip_existing }}" == "true" ]]; then
             SKIP_EXISTING=(--skip-existing)
+          else
+            SKIP_EXISTING=(--no-skip-existing)
           fi
 
           cvcpkg builds submit-dag \
