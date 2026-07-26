@@ -41,6 +41,16 @@ $MAKE -j "${CVC_JOBS}" CC="${CC:-cc}"
 
 $MAKE install PREFIX="${CVC_INSTALL_DIR}"
 
+# bzip2's Makefile installs bzcmp/bzegrep/bzfgrep/bzless as ABSOLUTE symlinks
+# (`ln -s $(PREFIX)/bin/...`). Those aren't relocatable, and cvcpkg's extraction
+# filter rejects absolute-target links (tarfile.AbsoluteLinkError), aborting the
+# whole pack. Rewrite them relative. (Only surfaced once bzip2 actually built on
+# macOS; harmless elsewhere.)
+( cd "${CVC_INSTALL_DIR}/bin" 2>/dev/null &&
+  for l in bzcmp:bzdiff bzegrep:bzgrep bzfgrep:bzgrep bzless:bzmore; do
+      [ -L "${l%%:*}" ] && ln -sf "${l##*:}" "${l%%:*}"
+  done ) || true
+
 # The Makefile-libbz2_so target produces libbz2.so.1.0.8 in the source
 # dir; install and symlink it.
 case "$(uname -s)" in
