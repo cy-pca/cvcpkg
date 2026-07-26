@@ -40,13 +40,13 @@ case "${CVC_PLATFORM}" in
     linux) _backend_opts+=( --alsa ) ;;
 esac
 
-# NetJack2 audio compression codecs (opus, celt) are OFF.  jack2 auto-enables
-# opus when it finds opus/opus_custom.h + opus.pc, but the cvcpkg opus library
-# is built WITHOUT custom modes, so the opus_custom_* symbols the NetJack path
-# calls are absent and serverlib fails to link (undefined reference to
-# opus_custom_mode_create, ...).  We don't need NetJack's lossy network
-# transport, so disable the codecs rather than rebuild opus with custom modes.
-_backend_opts+=( --no-opus --no-celt )
+# NetJack2 audio compression codecs.  opus is ENABLED (forced on with --opus so
+# the build fails loudly if libopus is ever absent from the closure): jack2's
+# NetJack path calls the opus_custom_* API, which the cvcpkg libopus recipe
+# exports via --enable-custom-modes (>= 1.6.1+cvc.2 — earlier revisions shipped
+# opus_custom.h but not the symbols, so serverlib failed to link).  celt is a
+# distinct obsolete codec with no cvcpkg recipe, so keep it explicitly off.
+_backend_opts+=( --opus --no-celt )
 
 python3 ./waf configure \
     --prefix="${CVC_INSTALL_DIR}" \

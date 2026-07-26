@@ -33,6 +33,9 @@ depends:
     - python3
   runtime:
     - name: alsa-lib
+    # NetJack2 opus network codec (build.sh forces --opus).  Requires libopus
+    # built with custom modes (>= 1.6.1+cvc.2) for the opus_custom_* symbols.
+    - name: libopus
   host_tools:
     - python3
 
