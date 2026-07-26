@@ -1541,6 +1541,33 @@ def _write_text_preserving_mode(path: Path, text: str) -> None:
             pass
 
 
+def _merge_tree(src: Path, dst: Path) -> None:
+    """Recursively merge *src* into *dst*, robust to symlinks and collisions.
+
+    ``shutil.copytree`` cannot merge an install tree into a shared prefix:
+    ``symlinks=False`` FOLLOWS links and dies on a dangling one (e.g. ncurses'
+    ``lib/libpanel`` on macOS); ``symlinks=True`` recreates links with
+    ``os.symlink`` and dies when the link ALREADY exists in *dst* (e.g.
+    python311's ``bin/2to3`` after python312 installed it first). Handle both:
+    copy symlinks *as* symlinks, replacing any existing dst entry; overwrite
+    regular files; recurse into real directories.
+    """
+    dst.mkdir(parents=True, exist_ok=True)
+    for entry in src.iterdir():
+        target = dst / entry.name
+        if entry.is_symlink():
+            if target.is_symlink() or target.exists():
+                if target.is_dir() and not target.is_symlink():
+                    shutil.rmtree(target)
+                else:
+                    target.unlink()
+            os.symlink(os.readlink(entry), target)
+        elif entry.is_dir():
+            _merge_tree(entry, target)
+        else:
+            shutil.copy2(entry, target)
+
+
 def _rewrite_pc_prefixes(target_dir: Path) -> None:
     """Rewrite ``prefix=`` lines in pkg-config ``.pc`` files under *target_dir*.
 
@@ -1747,7 +1774,7 @@ def build_recipe(
         # version symlinks (libfoo.dylib -> libfoo.N.dylib) and occasionally a
         # dangling one; following them duplicates content and crashes on broken
         # links. Matches the staging copy above.
-        shutil.copytree(install_dir, prefix, symlinks=True, dirs_exist_ok=True)
+        _merge_tree(install_dir, prefix)
 
     if not keep_build_dir and not incremental:
         # Clean up build dir but keep install.  Incremental builds deliberately
@@ -2824,7 +2851,7 @@ def build_all(
                     )
                     run_build(ht_ctx)
                     if ht_install.is_dir():
-                        shutil.copytree(ht_install, _bp, symlinks=True, dirs_exist_ok=True)
+                        _merge_tree(ht_install, _bp)
                         _rewrite_pc_prefixes(_bp)
                         _rewrite_script_prefixes(_bp)
                     # Store in local cache.
@@ -3024,7 +3051,7 @@ def build_all(
                         # symlinks=True: preserve version/convenience symlinks and
                         # don't choke on dangling ones (e.g. ncurses' lib/libpanel
                         # on macOS). Matches the staging copy.
-                        shutil.copytree(install_dir, _dest, symlinks=True, dirs_exist_ok=True)
+                        _merge_tree(install_dir, _dest)
                         _rewrite_pc_prefixes(_dest)
                         _rewrite_script_prefixes(_dest)
                 else:
@@ -3073,11 +3100,10 @@ def build_all(
                 # Merge this recipe's install into the shared prefix so
                 # subsequent recipes can find it via CVC_DEPS_PREFIX.
                 if install_dir.is_dir():
-                    # symlinks=True: preserve version/convenience symlinks and
-                    # don't choke on dangling ones (e.g. ncurses' lib/libpanel on
-                    # macOS). Matches the other copytree sites. This is the
-                    # build_all/pack-all path that #407 missed.
-                    shutil.copytree(install_dir, _dest, symlinks=True, dirs_exist_ok=True)
+                    # Merge, not copytree: robust to dangling AND already-existing
+                    # symlinks in the shared prefix (ncurses lib/libpanel;
+                    # python bin/2to3 shared across python3xx versions).
+                    _merge_tree(install_dir, _dest)
                     _rewrite_pc_prefixes(_dest)
                     _rewrite_script_prefixes(_dest)
                 # Store in build cache.
