@@ -24,6 +24,13 @@ recipe:
 # publishing runs on a [self-hosted, linux, cuda] runner — see torch-cp311 for
 # the CPU column that builds anywhere.
 provides: ["torch-cp311"]
+# Build/verify requires an NVIDIA GPU + CUDA runtime (the import loads CUDA and
+# torch.cuda.is_available() is exercised), so this must be scheduled onto a
+# CUDA-capable builder — same contract as libcvc-cuda. Build-time capability
+# routing (a builder advertising `cuda`, the scheduler matching it) is on the
+# cvcpkg roadmap (CVCPKG-ROADMAP.md "GPU/CUDA build-time routing"); until it
+# lands these are published from a GPU host by hand.
+requires_capabilities: ["cuda"]
 
 source:
   type: python_wheel
