@@ -1,0 +1,60 @@
+schema_version: 1
+recipe:
+  name: ruff
+  upstream_version: "0.16.0"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/ruff/
+  license: "MIT"
+  tags: [python, wheel, build-tool, linter]
+  description: >-
+    ruff 0.16.0 — the Rust linter/formatter cvcpkg recipe `test:` blocks run
+    `ruff check` with. Distributed only as a per-platform binary wheel
+    (py3-none-manylinux) — there is no pure-Python fallback — so this is a
+    concrete linux recipe (the macOS/Windows columns are a follow-up, like
+    torch). A BUILD-TIME tool: a depends.build edge staged into the build
+    prefix (the `ruff` binary lands in bin/), stripped from the deliverable.
+
+# Prebuilt binary wheel from PyPI. The wheel is Python-version-agnostic
+# (py3-none) but platform-specific (the Rust binary ships in .data/scripts/ruff,
+# installed to <prefix>/bin/ruff); pip installs the `ruff` proxy module into the
+# python311 site-packages and the binary into bin/.
+source:
+  type: python_wheel
+  artifacts:
+    linux-x86_64:
+      url: https://files.pythonhosted.org/packages/91/66/6bd3cf90500653d55dc0ffc8507aa8300bd49d0214b2e8cb4d3fef2943ba/ruff-0.16.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+      sha256: "4f11a8d11010301d0a398a2fdef67691feca7294da6aef55e2150e8fa2cd520b"
+
+python:
+  interpreter: python311
+  abi: cp311
+  manylinux_min: manylinux_2_17
+
+patches: []
+
+depends:
+  build:
+    - name: python311
+  runtime:
+    - name: python311
+  host_tools:
+    - python311
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    # macOS (arm64/x86_64) + Windows columns are a follow-up (ruff ships wheels
+    # for them); linux is what the recipe `test:` blocks + GRL-SNAM CI need now.
+
+package:
+  files:
+    - lib/python3.11*/site-packages/ruff/
+    - lib/python3.11*/site-packages/ruff-*.dist-info/
+    # the actual Rust binary (pip installs .data/scripts/ruff here)
+    - bin/ruff

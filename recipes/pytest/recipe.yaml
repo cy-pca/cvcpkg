@@ -1,0 +1,62 @@
+schema_version: 1
+recipe:
+  name: pytest
+  upstream_version: "9.1.1"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/pytest/
+  license: "MIT"
+  tags: [python, wheel, build-tool]
+  description: >-
+    pytest 9.1.1 (noarch py3-none-any) — the test runner cvcpkg recipe `test:` blocks invoke (`pytest -q`). A BUILD-TIME
+    lint/test tool for cvcpkg recipes: it lands in the build prefix as a
+    depends.build edge (so a recipe `test:` block can run it) and is stripped
+    from the deliverable — never shipped to users.
+
+# Pure-Python noarch wheel (py3-none-any): one platform-independent artifact.
+# platform: any + a reference interpreter -> the builder fans it into EVERY
+# interpreter's site-packages, so one bare recipe serves all.
+source:
+  type: python_wheel
+  artifacts:
+    any:
+      url: https://files.pythonhosted.org/packages/24/25/1de2678b631f5a49215c6c96fff41ba892b0a34df68d6d80292b1b48aa7f/pytest-9.1.1-py3-none-any.whl
+      sha256: "37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c"
+
+python:
+  interpreter: python312
+  abi: cp312
+
+patches: []
+
+depends:
+  build:
+    - name: python312
+    - name: iniconfig
+    - name: packaging
+    - name: pluggy
+    - name: pygments
+  runtime:
+    - name: python312
+    - name: iniconfig
+    - name: packaging
+    - name: pluggy
+    - name: pygments
+  host_tools:
+    - python311
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - lib/python3.*/site-packages/_pytest/
+    - lib/python3.*/site-packages/pytest/
+    - lib/python3.*/site-packages/py.py
+    - lib/python3.*/site-packages/pytest-*.dist-info/
