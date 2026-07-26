@@ -4654,7 +4654,11 @@ class TestBuildsSubmitDagCLI:
                 pass
 
             def get(self, url, **kw):
-                calls["get"] += 1
+                # Only the builder-registry query is gated by
+                # --allow-unschedulable; the /v1/packages query that powers
+                # dependency auto-add is a separate call and always runs.
+                if "/v1/builders" in url:
+                    calls["get"] += 1
                 return FakeResp()
 
             def post(self, url, **kw):

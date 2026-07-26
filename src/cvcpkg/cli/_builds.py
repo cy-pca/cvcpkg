@@ -962,6 +962,20 @@ def builds_submit(
         "package as a dependency."
     ),
 )
+@click.option(
+    "--deps/--no-deps",
+    "auto_deps",
+    default=True,
+    help=(
+        "Auto-add unpublished, buildable dependencies of the named recipes "
+        "as jobs so a dependency that is a catalog gap builds first "
+        "(default on).  A dependency that is already published is left for "
+        "the builder to install from the catalog, not rebuilt; an "
+        "unpublished dependency with no buildable recipe is a hard error "
+        "surfaced up front.  Use --no-deps to submit only the named recipes "
+        "(assumes every dependency is already published)."
+    ),
+)
 @click.argument("recipe_names", nargs=-1, required=True)
 def builds_submit_dag(
     server: str,
@@ -978,6 +992,7 @@ def builds_submit_dag(
     no_default_recipes: bool,
     allow_unschedulable: bool,
     skip_existing: bool,
+    auto_deps: bool,
     recipe_names: tuple[str, ...],
 ):
     """Submit a DAG of remote build jobs.
@@ -986,6 +1001,13 @@ def builds_submit_dag(
     Use --config all / --link all to expand the build matrix.
     Dependencies are resolved from recipe.yaml files and jobs are
     ordered so that each recipe builds after its dependencies.
+
+    By default (auto-deps) an UNpublished dependency that is a catalog
+    gap is pulled into the DAG and built first, so naming just the leaf
+    recipes is enough; already-published deps are installed from the
+    catalog, not rebuilt.  An unpublished dep with no buildable recipe
+    is reported up front instead of failing a build minutes later.  Pass
+    --no-deps to submit only the named recipes.
 
     Example:
 
@@ -1096,11 +1118,15 @@ def builds_submit_dag(
     def _has_builder(plat: str, ar: str) -> bool:
         return (plat, ar) in _supported_targets or plat in _supported_platforms
 
-    # ── Published-variant set for --skip-existing ────────────────
+    # ── Published-variant set for --skip-existing / auto-deps ────
     # One paged listing up front; yanked packages are excluded by the
     # server default, so a yanked variant is rebuilt rather than skipped.
+    # Both --skip-existing (drop already-published named recipes) and
+    # auto-deps (only pull UNpublished deps into the DAG) need to know
+    # what the catalog already carries, so fetch it for either.
     _published: set[tuple[str, str, str, str, str, str]] = set()
-    if skip_existing:
+    _published_ok = False
+    if skip_existing or auto_deps:
         import httpx as _httpx
 
         try:
@@ -1131,12 +1157,15 @@ def builds_submit_dag(
                     _offset += len(_batch)
                     if not _batch or _offset >= int(_data.get("total", 0)):
                         break
+            _published_ok = True
         except Exception as _e:  # noqa: BLE001 — best-effort, must not block submit
             click.echo(
                 f"  Warning: could not read published packages ({_e}); "
-                "submitting without --skip-existing filtering."
+                "submitting the named recipes only (no --skip-existing "
+                "filtering, no dependency auto-add)."
             )
             skip_existing = False
+            auto_deps = False
 
     def _full_version(name: str) -> str:
         """The version this recipe builds to (matches manifest/publish form)."""
@@ -1144,6 +1173,26 @@ def builds_submit_dag(
         upstream_v = str(block.get("upstream_version", "0.0.0"))
         rev = int(block.get("cvc_revision", 1))
         return f"{upstream_v}+cvc.{rev}"
+
+    def _closure(seeds: list[str]) -> set[str]:
+        """Transitive dependency closure of *seeds* (runtime + build +
+        host_tools edges), following only recipes we can see.
+
+        Returns the dependency names, excluding the seeds themselves.  A dep
+        with no recipe of its own is returned (so the caller can flag an
+        unbuildable gap) but not traversed further.
+        """
+        seen: set[str] = set()
+        queue = [d for s in seeds for d in _dep_names(s)]
+        while queue:
+            n = queue.pop()
+            if n in seen:
+                continue
+            seen.add(n)
+            if n in recipe_data:
+                queue.extend(_dep_names(n))
+        seen.difference_update(seeds)
+        return seen
 
     # Partition the requested recipes: platform-independent ('any') recipes are
     # scheduled once as a single noarch DAG (below); everything else fans out
@@ -1198,6 +1247,80 @@ def builds_submit_dag(
                     if not eligible:
                         click.echo(f"  No eligible recipes for {plat}/{ar}/{cfg}/{lnk}")
                         continue
+
+                    # ── Auto-add unpublished, buildable dependencies ─────
+                    # submit-dag otherwise builds ONLY the recipes it is
+                    # given and assumes every dependency is already published
+                    # (the builder installs deps from the catalog at build
+                    # time).  When a dependency is an unpublished catalog GAP
+                    # there is no bundle to install, so the dependent fails
+                    # late at install/configure.  Pull each such dep into the
+                    # DAG so it builds first (ordered ahead via depends_on).
+                    # A dep that is already published is left for the builder
+                    # to fetch; an unpublished dep with no buildable recipe is
+                    # a hard error surfaced up front.
+                    if auto_deps and _published_ok:
+                        being_built = set(eligible)
+                        added: list[str] = []
+                        cross_noarch: list[str] = []
+                        unbuildable: list[str] = []
+                        for dep in sorted(_closure(eligible)):
+                            if dep in being_built:
+                                continue
+                            has_recipe = dep in recipe_data
+                            # Already in the catalog → builder installs it.
+                            if has_recipe and (
+                                (dep, _full_version(dep), plat, ar, cfg, lnk) in _published
+                                or (dep, _full_version(dep), "any", "noarch", cfg, lnk)
+                                in _published
+                            ):
+                                continue
+                            if not has_recipe:
+                                # No recipe to build it with: satisfiable only
+                                # if the catalog already carries it for this
+                                # target (its version is unknown without a
+                                # recipe, so match on name + platform + arch).
+                                if not any(
+                                    p[0] == dep and p[2] in (plat, "any") and p[3] in (ar, "noarch")
+                                    for p in _published
+                                ):
+                                    unbuildable.append(dep)
+                                continue
+                            if _is_any(dep):
+                                # A noarch dep belongs in a separate any/noarch
+                                # DAG; its edge is not expressible here, so flag
+                                # it rather than silently mis-order.
+                                cross_noarch.append(dep)
+                                continue
+                            if not _has_platform_entry(dep, plat):
+                                unbuildable.append(dep)
+                                continue
+                            eligible.append(dep)
+                            being_built.add(dep)
+                            added.append(dep)
+                        if added:
+                            click.echo(
+                                f"  Auto-added {len(added)} unpublished "
+                                f"dependency(ies) for {plat}/{ar}/{cfg}/{lnk}: "
+                                f"{', '.join(added)}"
+                            )
+                        if cross_noarch:
+                            uniq = sorted(set(cross_noarch))
+                            click.echo(
+                                f"  Warning: {len(uniq)} unpublished noarch "
+                                f"dependency(ies) cannot be scheduled inside this "
+                                f"concrete DAG — submit them explicitly so they "
+                                f"build in a separate any/noarch DAG: "
+                                f"{', '.join(uniq)}"
+                            )
+                        if unbuildable:
+                            uniq = sorted(set(unbuildable))
+                            raise click.ClickException(
+                                f"{plat}/{ar}: unpublished dependency(ies) with no "
+                                f"buildable recipe: {', '.join(uniq)}. Publish them, "
+                                f"add a recipe, or pass --no-deps to submit only the "
+                                f"named recipes."
+                            )
 
                     # Build name→index mapping for depends_on resolution
                     name_to_idx: dict[str, int] = {name: idx for idx, name in enumerate(eligible)}
