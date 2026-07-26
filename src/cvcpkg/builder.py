@@ -1743,7 +1743,11 @@ def build_recipe(
     # --prefix X` and the source-fallback install path leave X empty.
     if prefix is not None and prefix != install_dir and install_dir.is_dir():
         prefix.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(install_dir, prefix, dirs_exist_ok=True)
+        # Preserve symlinks (don't follow them): install trees contain relative
+        # version symlinks (libfoo.dylib -> libfoo.N.dylib) and occasionally a
+        # dangling one; following them duplicates content and crashes on broken
+        # links. Matches the staging copy above.
+        shutil.copytree(install_dir, prefix, symlinks=True, dirs_exist_ok=True)
 
     if not keep_build_dir and not incremental:
         # Clean up build dir but keep install.  Incremental builds deliberately
@@ -2820,7 +2824,7 @@ def build_all(
                     )
                     run_build(ht_ctx)
                     if ht_install.is_dir():
-                        shutil.copytree(ht_install, _bp, dirs_exist_ok=True)
+                        shutil.copytree(ht_install, _bp, symlinks=True, dirs_exist_ok=True)
                         _rewrite_pc_prefixes(_bp)
                         _rewrite_script_prefixes(_bp)
                     # Store in local cache.
@@ -3017,7 +3021,10 @@ def build_all(
                         build_prefix=build_prefix,
                     )
                     if install_dir.is_dir():
-                        shutil.copytree(install_dir, _dest, dirs_exist_ok=True)
+                        # symlinks=True: preserve version/convenience symlinks and
+                        # don't choke on dangling ones (e.g. ncurses' lib/libpanel
+                        # on macOS). Matches the staging copy.
+                        shutil.copytree(install_dir, _dest, symlinks=True, dirs_exist_ok=True)
                         _rewrite_pc_prefixes(_dest)
                         _rewrite_script_prefixes(_dest)
                 else:
