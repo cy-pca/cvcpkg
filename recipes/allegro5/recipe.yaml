@@ -34,6 +34,12 @@ depends:
     - ninja
     - pkg-config
   runtime:
+    # Audio backends — ALSA + PulseAudio drivers (OpenAL is declared below).
+    # Linux only; macOS uses CoreAudio, Windows DirectSound.
+    - name: alsa-lib
+      platforms: [linux]
+    - name: libpulse
+      platforms: [linux]
     # Image addon.
     - name: libpng
     - name: libjpeg-turbo

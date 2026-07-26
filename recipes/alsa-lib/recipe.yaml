@@ -1,0 +1,45 @@
+schema_version: 1
+recipe:
+  name: alsa-lib
+  upstream_version: "1.2.16"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.alsa-project.org/
+  license: LGPL-2.1-or-later
+  tags: [libraries, audio, linux]
+  description: >-
+    ALSA (Advanced Linux Sound Architecture) userspace library (libasound).
+    The base Linux audio backend: PCM, mixer, sequencer, control and UCM
+    APIs used by higher-level audio libraries (openal-soft, sdl3, portaudio,
+    jack, allegro5). Linux only — ALSA is a Linux kernel API.
+
+source:
+  type: tarball
+  url: https://www.alsa-project.org/files/pub/lib/alsa-lib-1.2.16.tar.bz2
+  sha256: "122b1e3166d55fe19bcde656535d7a36f2ab10e66c72c6ad2f43f20ffded0a96"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - pkg-config
+  runtime: []
+  host_tools: []
+
+package:
+  files:
+    - lib/libasound*
+    - lib/pkgconfig/alsa.pc
+    - include/alsa/
+    - include/asoundlib.h
+    - include/sys/asoundlib.h
+    - share/alsa/
+  pkg_config: [alsa]
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh

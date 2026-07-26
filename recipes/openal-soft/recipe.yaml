@@ -29,7 +29,20 @@ depends:
     - cmake
     - ninja
     - pkg-config
-  runtime: []
+  runtime:
+    # Audio backends. OpenAL-Soft compiles these in and dlopen's them at
+    # runtime, so their headers must be present at build time. Linux/BSD only —
+    # macOS uses CoreAudio and Windows WASAPI/DirectSound (native, no deps).
+    - name: alsa-lib
+      platforms: [linux]
+    - name: libpulse
+      platforms: [linux]
+    - name: pipewire
+      platforms: [linux]
+    - name: jack
+      platforms: [linux, freebsd]
+    - name: sndio
+      platforms: [linux, freebsd, openbsd, netbsd]
   host_tools: []
 
 build:

@@ -57,11 +57,17 @@ depends:
       platforms: [linux, freebsd]
     - name: xkbcommon
       platforms: [linux, freebsd]
-    # Audio backends (Linux only recipes).
+    # Audio backends.
+    - name: alsa-lib
+      platforms: [linux]
     - name: libpulse
       platforms: [linux]
     - name: pipewire
       platforms: [linux]
+    - name: jack
+      platforms: [linux, freebsd]
+    - name: sndio
+      platforms: [linux, freebsd, openbsd, netbsd]
   host_tools: []
 
 build:

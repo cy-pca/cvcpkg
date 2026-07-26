@@ -1,0 +1,50 @@
+schema_version: 1
+recipe:
+  name: sndio
+  upstream_version: "1.10.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://sndio.org
+  license: ISC
+  tags: [libraries, audio]
+  description: >-
+    sndio — the OpenBSD audio and MIDI framework's portable client
+    library (libsndio).  Exposes the sio_* / mio_* / sioctl_* API for
+    playing, recording and controlling audio and MIDI through the
+    sndiod server.  This package builds the libsndio client library
+    only (not the sndiod daemon or the aucat/midicat/sndioctl tools).
+
+source:
+  type: tarball
+  url: https://sndio.org/sndio-1.10.0.tar.gz
+  sha256: "bebd3bfd01c50c9376cf3e7814b9379bed9e17d0393b5113b7eb7a3d0d038c54"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - pkg-config
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+
+package:
+  files:
+    - lib/libsndio*
+    - lib/pkgconfig/sndio.pc
+    - include/sndio.h
+  pkg_config:
+    - sndio
