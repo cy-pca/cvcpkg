@@ -1,0 +1,52 @@
+schema_version: 1
+recipe:
+  name: iniconfig
+  upstream_version: "2.3.0"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/iniconfig/
+  license: "MIT"
+  tags: [python, wheel, build-tool]
+  description: >-
+    iniconfig 2.3.0 (noarch py3-none-any) — the tiny INI parser pytest reads its config with. A BUILD-TIME
+    lint/test tool for cvcpkg recipes: it lands in the build prefix as a
+    depends.build edge (so a recipe `test:` block can run it) and is stripped
+    from the deliverable — never shipped to users.
+
+# Pure-Python noarch wheel (py3-none-any): one platform-independent artifact.
+# platform: any + a reference interpreter -> the builder fans it into EVERY
+# interpreter's site-packages, so one bare recipe serves all.
+source:
+  type: python_wheel
+  artifacts:
+    any:
+      url: https://files.pythonhosted.org/packages/cb/b1/3846dd7f199d53cb17f49cba7e651e9ce294d8497c8c150530ed11865bb8/iniconfig-2.3.0-py3-none-any.whl
+      sha256: "f631c04d2c48c52b84d0d0549c99ff3859c98df65b3101406327ecc7d53fbf12"
+
+python:
+  interpreter: python312
+  abi: cp312
+
+patches: []
+
+depends:
+  build:
+    - name: python312
+  runtime:
+    - name: python312
+  host_tools:
+    - python311
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - lib/python3.*/site-packages/iniconfig/
+    - lib/python3.*/site-packages/iniconfig-*.dist-info/

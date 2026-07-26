@@ -471,6 +471,8 @@ def _publish_simple(base: str, headers: dict, params: dict, archive_path: Path) 
     if resp.status_code == 200:
         data = resp.json()
         click.echo(f"  published: sha256={data['sha256']}")
+        if data.get("warning"):
+            click.echo(f"  warning: {data['warning']}")
         return "published"
     elif resp.status_code == 409:
         click.echo(f"  skipped (already published): {resp.json().get('detail', '')}")
@@ -604,6 +606,8 @@ def _publish_chunked(
     if resp.status_code == 200:
         data = resp.json()
         click.echo(f"  published (chunked): sha256={data['sha256']}")
+        if data.get("warning"):
+            click.echo(f"  warning: {data['warning']}")
         return "published"
     elif resp.status_code == 409:
         # The variant pre-check and the init-time 409 only close the window

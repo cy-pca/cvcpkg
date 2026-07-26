@@ -957,6 +957,7 @@ class DbPackageIndex:
                         yanked=row.yanked,
                         yanked_at=row.yanked_at,
                         upstream_yanked=row.upstream_yanked,
+                        diverges_upstream=row.diverges_upstream,
                         signature=row.signature,
                         key_fingerprint=row.key_fingerprint,
                         release_tag=row.release_tag,
@@ -1224,6 +1225,10 @@ class DbPackageIndex:
                     # can honour upstream (the default) instead of silently
                     # installing something upstream considers retired.
                     "upstream_yanked": bool(row.upstream_yanked),
+                    # A locally-published public bundle that shadows an upstream
+                    # coordinate with different bytes: the local build diverges
+                    # from — and disagrees with — the canonical upstream package.
+                    "diverges_upstream": bool(row.diverges_upstream),
                     "signature": row.signature,
                     "key_fingerprint": row.key_fingerprint,
                     "release_tag": row.release_tag,
@@ -1543,6 +1548,46 @@ class DbPackageIndex:
                     nuked_by=nuked_by,
                 )
         return counts
+
+    async def reconcile_public_divergence(
+        self,
+        divergent_keys: set[tuple[str, str, str, str, str, str]],
+    ) -> int:
+        """Flag locally-published public bundles that shadow a *different* upstream.
+
+        A public bundle (``org_slug == ""``) that this server built itself
+        (``origin_upstream == ""``) can shadow an upstream coordinate.  The
+        populate sync compares sha256s and passes the keys where the local bytes
+        differ from upstream's in *divergent_keys*.  This sets
+        ``diverges_upstream`` True on exactly those rows and clears it on every
+        other public-local row, so a divergence that re-converges — or that
+        upstream later drops — stops warning on the next sync.  Populated rows
+        (``origin_upstream`` set) can never diverge (their bytes are upstream's)
+        and are left untouched.  Returns the number of rows whose flag changed.
+        """
+        changed = 0
+        async with get_session() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(PackageRow).where(
+                            PackageRow.org_slug == "",
+                            PackageRow.origin_upstream == "",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for r in rows:
+                key = (r.name, r.version, r.platform, r.arch, r.build_type, r.link)
+                desired = key in divergent_keys
+                if bool(r.diverges_upstream) != desired:
+                    r.diverges_upstream = desired
+                    changed += 1
+            if changed:
+                await session.commit()
+        return changed
 
     async def unyank(
         self,

@@ -219,6 +219,18 @@ POPULATE_UPSTREAM = os.environ.get("CVCPKG_POPULATE_UPSTREAM", "")
 # Bearer token for the upstream (only needed for private upstreams).
 POPULATE_UPSTREAM_TOKEN = os.environ.get("CVCPKG_POPULATE_UPSTREAM_TOKEN", "")
 
+# When set, an edge/satellite cluster (POPULATE_UPSTREAM set) restores the
+# strict rule that its public namespace is a read-only mirror of upstream:
+# local public publishes are rejected (409).  Default (unset): an edge accepts
+# local public publishes and instead WARNS that the build diverges from — and
+# locally shadows — the canonical upstream package (the populate loop already
+# never overwrites a local publish, so local precedence holds either way).
+EDGE_STRICT_PUBLIC = os.environ.get("CVCPKG_EDGE_STRICT_PUBLIC", "").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+
 
 def _reject_noncanonical_platform_arch(platform: str, arch: str) -> None:
     """422 on platform/arch values outside the canonical keyspace.
@@ -245,23 +257,40 @@ def _reject_noncanonical_platform_arch(platform: str, arch: str) -> None:
         )
 
 
-def _reject_public_publish_on_edge(org: str) -> None:
-    """Enforce upstream-canonical semantics on an edge/satellite cluster.
+def _edge_public_publish_warning(org: str) -> str:
+    """Advise (or, in strict mode, forbid) a local public publish on an edge.
 
     A cluster that populates its public catalog from an upstream primary
-    (``POPULATE_UPSTREAM`` set) treats the public namespace (``org_slug == ""``)
-    as canonical upstream: it may only *import* public packages, never accept a
-    local public publish (which would shadow the canonical upstream package).
-    Local publishes must target an organization.  Raises 409 otherwise.
+    (``POPULATE_UPSTREAM`` set) mirrors the public namespace (``org_slug == ""``)
+    from upstream.  A *local* publish into that namespace diverges from — and
+    locally shadows — the canonical upstream package of the same coordinates.
+
+    By default this is allowed: the populate loop already skips any variant that
+    exists locally, so the local build keeps precedence and is never overwritten
+    by a later sync.  This returns a human-readable warning describing the
+    divergence (empty string when there is nothing to warn about), which the
+    publish endpoints surface to the publisher and log server-side.
+
+    In strict mode (``CVCPKG_EDGE_STRICT_PUBLIC``) the public namespace is
+    treated as read-only and the publish is rejected with 409 instead.
     """
-    if POPULATE_UPSTREAM and not org:
+    if not (POPULATE_UPSTREAM and not org):
+        return ""
+    if EDGE_STRICT_PUBLIC:
         raise HTTPException(
             409,
             "this cluster mirrors its public catalog from an upstream primary "
-            f"({POPULATE_UPSTREAM}); the public namespace is canonical upstream "
-            "and cannot be published to locally. Publish into an organization "
-            "instead (pass --org / org=...).",
+            f"({POPULATE_UPSTREAM}) and runs in strict mode "
+            "(CVCPKG_EDGE_STRICT_PUBLIC); the public namespace is read-only. "
+            "Publish into an organization instead (pass --org / org=...).",
         )
+    return (
+        "publishing to the public namespace on a cluster that mirrors "
+        f"{POPULATE_UPSTREAM}: this local build diverges from and shadows the "
+        "canonical upstream package. It takes local precedence and the populate "
+        "loop will not overwrite it. Publish into an organization (--org) if you "
+        "did not intend to shadow upstream."
+    )
 
 
 def _redact_org_storage(org):
@@ -1511,8 +1540,11 @@ async def _populate_sync_once() -> int:
         resp.raise_for_status()
         upstream_bundles = resp.json().get("bundles", [])
 
-        # Local variant set — include yanked so we don't re-import them.
+        # Local variant set — include yanked so we don't re-import them.  Keep
+        # each variant's sha256 too so we can tell a local build that merely
+        # mirrors upstream from one that *shadows* upstream with different bytes.
         local: set[tuple[str, str, str, str, str, str]] = set()
+        local_sha: dict[tuple[str, str, str, str, str, str], str] = {}
         offset = 0
         while True:
             pkgs, total = await _db_packages.get_bundles(
@@ -1524,10 +1556,16 @@ async def _populate_sync_once() -> int:
                 # package in the populate diff, so only public packages count.
                 if p.org:
                     continue
-                local.add((p.name, p.version, p.platform, p.arch, p.build_type, p.link))
+                pkey = (p.name, p.version, p.platform, p.arch, p.build_type, p.link)
+                local.add(pkey)
+                local_sha[pkey] = p.sha256
             offset += len(pkgs)
             if not pkgs or offset >= total:
                 break
+
+        # Public coordinates a local build shadows with *different* bytes than
+        # upstream serves — flagged for the SPA + admin resolution (nuke).
+        divergent_keys: set[tuple[str, str, str, str, str, str]] = set()
 
         imported = 0
         skipped_capacity = 0
@@ -1540,7 +1578,18 @@ async def _populate_sync_once() -> int:
                 b.get("build_type", ""),
                 b.get("link", ""),
             )
-            if not all(key) or key in local:
+            if not all(key):
+                continue
+            if key in local:
+                # A local variant already occupies this coordinate.  If upstream
+                # serves it (present, not yanked) with a different sha256, the
+                # local build diverges from — and shadows — the canonical
+                # upstream package.
+                if not b.get("org") and not b.get("yanked") and b.get("archive_url"):
+                    up_sha = b.get("sha256", "")
+                    loc_sha = local_sha.get(key, "")
+                    if up_sha and loc_sha and up_sha != loc_sha:
+                        divergent_keys.add(key)
                 continue
             if b.get("yanked") or not b.get("archive_url"):
                 continue  # yanked upstream / placeholder without artifacts
@@ -1654,6 +1703,21 @@ async def _populate_sync_once() -> int:
                 "deferred to the next cycle",
                 POPULATE_MAX_PER_SYNC,
                 skipped_capacity,
+            )
+
+        # ── Flag local public bundles that diverge from upstream ──
+        # A local build may shadow an upstream coordinate with different bytes
+        # (allowed by default — see _edge_public_publish_warning).  Record which
+        # ones so the SPA can warn and an admin can nuke the local bundle to let
+        # upstream re-populate.  Clears the flag where it no longer applies.
+        divergence_changed = await _db_packages.reconcile_public_divergence(divergent_keys)
+        if divergence_changed:
+            logger.info(
+                "populate: %d local public bundle(s) changed upstream-divergence state "
+                "(%d currently diverging from %s)",
+                divergence_changed,
+                len(divergent_keys),
+                upstream,
             )
 
         # ── Follow upstream's yank/nuke decisions ────────────────
@@ -3374,7 +3438,9 @@ def create_app(
                 403,
                 "this server is running in mirror mode and does not accept publishes",
             )
-        _reject_public_publish_on_edge(org)
+        edge_warning = _edge_public_publish_warning(org)
+        if edge_warning:
+            logger.warning("publish %s==%s (public): %s", name, version, edge_warning)
         _reject_noncanonical_platform_arch(platform, arch)
         _check_rate_limit(request)
         state = _get_state()
@@ -3599,6 +3665,7 @@ def create_app(
             version=version,
             sha256=sha256,
             archive_url=archive_url,
+            warning=edge_warning,
         )
 
     # ── Chunked / resumable upload ──────────────────────────
@@ -3642,7 +3709,9 @@ def create_app(
                 403,
                 "this server is running in mirror mode and does not accept publishes",
             )
-        _reject_public_publish_on_edge(org)
+        # Strict-mode edges reject here (fail before the upload); non-strict
+        # edges accept and surface the divergence warning at /complete.
+        _edge_public_publish_warning(org)
         _reject_noncanonical_platform_arch(platform, arch)
         if org:
             from cvcpkg.server.models import validate_org_slug
@@ -4002,11 +4071,21 @@ def create_app(
             },
         )
 
+        edge_warning = _edge_public_publish_warning(getattr(session, "org", "") or "")
+        if edge_warning:
+            logger.warning(
+                "publish %s==%s (public, chunked): %s",
+                session.name,
+                session.version,
+                edge_warning,
+            )
+
         return PublishResponse(
             name=session.name,
             version=session.version,
             sha256=sha256,
             archive_url=archive_url,
+            warning=edge_warning,
         )
 
     @app.delete("/v1/upload/{upload_id}", tags=["upload"], status_code=204)

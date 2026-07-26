@@ -14,7 +14,7 @@ A server's role is defined entirely by how it treats the **public namespace**
 |------|------------------|--------------|-----------|
 | **Primary** (e.g. `cvcpkg.org`) | canonical source of truth | — | accepts public publishes |
 | **Mirror** (`--mirror-mode`) | read-only replica of a primary | — | rejects **all** publishes |
-| **Edge / Satellite** (`CVCPKG_POPULATE_UPSTREAM` set) | **populated from an upstream primary — upstream is canonical** | **local + private-capable, never propagate** | **org-scoped only** |
+| **Edge / Satellite** (`CVCPKG_POPULATE_UPSTREAM` set) | **populated from an upstream primary — upstream is the default source** | **local + private-capable, never propagate** | **org + public (public warns it diverges from upstream; `CVCPKG_EDGE_STRICT_PUBLIC=1` makes public read-only)** |
 
 The **edge/satellite** role is the enterprise / air-gapped shape: a read-write
 server that keeps its **public** catalog in sync with a canonical upstream while
@@ -81,24 +81,73 @@ locally-published packages are never evicted**.  Eviction is audit-logged
 
 `GET /healthz` reports `populate_upstream` and `populate_stats`.
 
-### Upstream is canonical for public packages
+### Local public publishes diverge from upstream (warn, don't reject)
 
-Because upstream is the source of truth for the public namespace, an edge server
-**rejects local publishes into the public namespace** (HTTP 409):
+Upstream is the *default* source of truth for the public namespace, but an edge
+server is read-write: a local publish into the public namespace is **accepted**
+and carries a **divergence warning**. The local build shadows the canonical
+upstream package of the same coordinates, takes local precedence, and the
+populate loop never overwrites it:
 
 ```
 $ cvcpkg publish zlib ...            # no org -> public
-409  this cluster mirrors its public catalog from an upstream primary (...);
-     the public namespace is canonical upstream and cannot be published to
-     locally. Publish into an organization instead (pass --org / org=...).
+  published: sha256=...
+  warning: publishing to the public namespace on a cluster that mirrors
+     https://cvcpkg.org: this local build diverges from and shadows the canonical
+     upstream package. It takes local precedence and the populate loop will not
+     overwrite it. Publish into an organization (--org) if you did not intend to
+     shadow upstream.
 ```
 
-This makes a public-vs-upstream collision impossible: public packages arrive
-**only** via populate. Local publishes must target an organization.
+This is what lets a build-and-mirror cluster (e.g. the dev cluster) build its own
+packages — including a multi-recipe DAG whose dependencies are also freshly
+built — while still tracking upstream for everything it did **not** build locally.
 
-> Internally, the populate diff is scoped to the public namespace, so a private
-> org package can never shadow a public upstream package that happens to share
-> its name/version.
+**Strict mode.** Set `CVCPKG_EDGE_STRICT_PUBLIC=1` to make the public namespace
+read-only again: a local public publish is then rejected with HTTP 409
+(`...the public namespace is read-only. Publish into an organization instead`).
+Use this when the edge must be a pure mirror of upstream.
+
+> Internally, the populate diff is scoped to the public namespace and skips any
+> variant that already exists locally, so a local public build is never clobbered
+> by a later sync — and a private org package can never shadow a public upstream
+> package that happens to share its name/version.
+
+#### Detecting and resolving a divergent shadow
+
+A local public build usually shadows a coordinate upstream *doesn't* have (a new
+recipe, a new `+cvc.N` revision) — harmless, that is the whole point. It becomes
+a **divergent shadow** only when upstream *also* publishes that exact coordinate
+(same `name/version/platform/arch/config/link`) with **different bytes**. The
+local copy keeps serving; a client resolving against the edge gets different
+bytes than one resolving against upstream.
+
+The populate loop detects this on every sync: for each public coordinate it holds
+locally, it compares the local `sha256` against upstream's and sets
+`packages.diverges_upstream` (exposed as `diverges_upstream` on
+`GET /v1/packages`). The SPA renders a **⚠ warning symbol** next to the affected
+build and a **"diverges from upstream"** badge on the package page. The flag
+clears automatically once the divergence is gone (the coordinate re-converges, or
+upstream drops it).
+
+**Admin resolution.** When the intent is to *track* upstream for that coordinate,
+nuke the local (shadowing) bundle so the next populate sync imports upstream's:
+
+```
+# inspect the divergent coordinate on the SPA (⚠) or the API, then:
+$ cvcpkg nuke <name> <version> --platform <p> --arch <a> \
+      --config <release|debug> --link <shared|static> \
+      --server <edge-url> --token <admin-token> --confirm <name>==<version>
+# the next populate cycle re-imports upstream's copy at that coordinate
+```
+
+`nuke` is irreversible (it drops the row + archive bytes and writes a tombstone).
+Use `yank` instead if you only want to stop serving the local copy while keeping
+it recoverable — but a yanked local variant still occupies the coordinate, so
+populate will not import upstream's until the local row is nuked. To *keep* the
+local build and accept the divergence, leave it: the warning is advisory. The
+`Package lifecycle` workflow (`package-lifecycle.yml`) drives yank/nuke against a
+server when the token lives only in CI secrets.
 
 #### Concurrency — a local build racing a mirror import
 
@@ -114,12 +163,17 @@ writers that can target one variant — a **builder publishing a freshly-built
 package** and the **populate loop importing that variant from upstream** —
 therefore resolve deterministically, and *nothing is ever clobbered*:
 
-- **On an edge, for a public package there is no race at all.** A public local
-  publish is rejected up front with `409` (see above), so a builder can never
-  write a public variant on an edge. The public namespace is populated *only*
-  from upstream, so the upstream/mirror copy is always the one that lands. This
-  is the case for the dev cluster (`CVCPKG_POPULATE_UPSTREAM=https://cvcpkg.org`):
-  a dev builder that builds a *public* package cannot publish it there — public
+- **On an edge, a public local publish and a mirror import are
+  first-committer-wins.** Both target the same immutable
+  `(name, version, platform, arch, config, link)` tuple; whichever commits first
+  wins and the other is a no-op (the populate loop skips a variant that already
+  exists locally; a racing publisher gets a `409` duplicate). A local build that
+  lands first therefore keeps precedence and is never overwritten by a later
+  upstream import. This is the dev cluster case
+  (`CVCPKG_POPULATE_UPSTREAM=https://cvcpkg.org`): a dev builder **can** publish a
+  *public* package locally (with a divergence warning), which is what lets it
+  build a DAG whose deps are also freshly built. Under `CVCPKG_EDGE_STRICT_PUBLIC=1`
+  the public namespace is read-only instead, so public
   packages must be published to the canonical primary (cvcpkg.org) and reach the
   dev server by mirroring.
 
