@@ -1,6 +1,8 @@
 # Revision Bump & Cascade Rebuild Roadmap
 
-**Status:** Planning  
+**Status:** Partially implemented — pack-time auto-bump shipped 2026-07-26 (see
+[Implemented](#implemented-2026-07)); content-hash-driven cascade *detection* and
+catalog provenance fields (`supersedes` / `rebuild_reason`) still planned.  
 **Author:** Copilot + Joe  
 **Date:** 2026-05-27
 
@@ -40,9 +42,44 @@ does not trigger rebuilds or revision bumps.
 | Publish duplicate detection | 409 on exact `(name,ver,plat,arch,cfg,link)` | `server/app.py`, `db.py` |
 | Dependency graph extraction | `_dep_names()`, `resolve_build_order()` | `builder.py` |
 | Resolver transitive deps | Backtracking with constraint merging | `resolver.py` |
-| `--revision-bump` CLI flag | **Does not exist** | — |
-| Cascade rebuild command | **Does not exist** | — |
-| `chain_hash` unit tests | **None** | — |
+| `pack --bump` / `next-revision` | **Implemented** (2026-07) | `revisions.py`, `cli/_build.py` |
+| `rev-bump` / `cascade-bump` | **Implemented** | `builder.py:rev_bump()`, `cli/_build.py` |
+| `chain_hash` unit tests | Implemented | `tests/integration/test_rev_bump.py` |
+| Content-hash cascade *detection* | **Does not exist** | — |
+| Catalog `supersedes` / `rebuild_reason` | **Does not exist** | — |
+
+---
+
+## Implemented (2026-07)
+
+Pack-time auto-bump landed as the first slice, automating the manual "family
+revision bump" (e.g. libcvc → PR #152 republish).  Surface:
+
+- **`cvcpkg pack --bump`** / **`pack-all --bump`** — at pack time, query the
+  publish server for the highest published `+cvc.N` of the package (on its
+  current upstream version) and stamp the bundle one above it, never below the
+  recipe's committed revision (`revision_of` / `next_revision` /
+  `compute_pack_revision` in `revisions.py`).  Guarantees a republish never
+  409s, with no recipe edit.  `--bump-scope name` (default) keeps a family
+  uniform across platforms/configs; `--bump-scope variant` bumps per-tuple.
+- **Decision — stamp-only, not committed.** `--bump` stamps only the bundle
+  manifest + archive name; `recipe.yaml` is untouched.  The published catalog is
+  the source of truth for the live revision, and the recipe's `cvc_revision` is a
+  *floor*.  This keeps CI free of git write-backs and makes republish idempotent.
+  Opt in to persistence with **`--bump-write`** (rewrites `cvc_revision` on disk
+  to commit), or pin an explicit value with **`--cvc-revision N`**.
+- **`cvcpkg next-revision <name>`** — prints the integer `--bump` would use, so a
+  CI coordinator step can compute one revision and pin it across a build matrix
+  with `--cvc-revision` (keeps every platform/config on the same number).
+- **`cvcpkg cascade-bump <name>`** — published-aware recipe-editing cascade:
+  rewrites `cvc_revision` for a recipe *and its transitive dependents* in
+  dependency order, each one above what is published, for a maintainer to commit.
+  Automates the manual family-bump commit.  `--offline` falls back to plain `+1`
+  (identical to `rev-bump`).
+
+Still planned below: using `chain_hash` to *detect* which downstream actually
+changed (vs. bumping the whole subtree), and recording `supersedes` /
+`rebuild_reason` provenance in the catalog.
 
 ---
 

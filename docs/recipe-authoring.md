@@ -110,7 +110,12 @@ its own recipes with `cvcpkg validate ./cvcpkg/recipes/<name>` or
 - **`cvc_revision`** — the cvcpkg-specific build revision. The published
   version is `"<upstream_version>+cvc.<cvc_revision>"`. Bump it when you
   change the build for the same upstream version; `cvcpkg upgrade` treats a
-  higher `+cvc.N` as newer.
+  higher `+cvc.N` as newer. You rarely need to edit this by hand for a
+  republish: `cvcpkg pack --bump` stamps the next free revision above what is
+  already published at pack time (leaving the recipe untouched), and
+  `cvcpkg cascade-bump <name>` rewrites it for a package and its dependents when
+  you *do* want the bump committed. See
+  [revision-bump-cascade.md](roadmap/revision-bump-cascade.md).
 - **`depends.runtime` vs `depends.build`** — this split decides **placement**,
   so file deps carefully. Runtime deps are recorded in the manifest and
   installed into the deliverable install prefix (they ship); build deps go to

@@ -3512,6 +3512,58 @@ class TestPackFromPrefix:
         assert manifest["bundle"]["version"] == "2.5.7+cvc.1"
         assert manifest["bundle"]["upstream_version"] == "2.5.7"
 
+    def test_cvc_revision_override_stamps_manifest_and_name(self, tmp_path):
+        """--bump's cvc_revision override flows into the archive name + manifest."""
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, MINIMAL_RECIPE)
+        prefix = tmp_path / "stage"
+        self._write_prefix(prefix)
+        out = tmp_path / "dist"
+
+        archive, _, _ = pack_from_prefix(
+            recipe_dir,
+            prefix,
+            platform="linux",
+            arch="x86_64",
+            output_dir=out,
+            cvc_revision=7,
+        )
+
+        assert archive.name.startswith("testpkg-1.0.0+cvc.7-linux-x86_64-release-shared")
+        with tarfile.open(archive, "r:*") as tf:
+            manifest_entry = next(m for m in tf.getmembers() if m.name.endswith("manifest.yaml"))
+            manifest = yaml.safe_load(tf.extractfile(manifest_entry).read())
+        assert manifest["bundle"]["version"] == "1.0.0+cvc.7"
+        assert manifest["bundle"]["cvc_revision"] == 7
+        # The recipe on disk is NOT modified (stamp-only).
+        assert Recipe.load(recipe_dir).cvc_revision == 1
+
+    def test_cvc_revision_composes_with_version_override(self, tmp_path):
+        """cvc_revision and version_override set the two halves independently."""
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, MINIMAL_RECIPE)
+        prefix = tmp_path / "stage"
+        self._write_prefix(prefix)
+        out = tmp_path / "dist"
+
+        archive, _, _ = pack_from_prefix(
+            recipe_dir,
+            prefix,
+            platform="linux",
+            arch="x86_64",
+            version_override="2.5.7",
+            output_dir=out,
+            cvc_revision=9,
+        )
+
+        assert archive.name.startswith("testpkg-2.5.7+cvc.9-linux-x86_64-release-shared")
+        with tarfile.open(archive, "r:*") as tf:
+            manifest_entry = next(m for m in tf.getmembers() if m.name.endswith("manifest.yaml"))
+            manifest = yaml.safe_load(tf.extractfile(manifest_entry).read())
+        assert manifest["bundle"]["version"] == "2.5.7+cvc.9"
+        assert manifest["bundle"]["upstream_version"] == "2.5.7"
+        assert manifest["bundle"]["cvc_revision"] == 9
+
     def test_missing_prefix_raises(self, tmp_path):
         recipe_dir = tmp_path / "recipes" / "testpkg"
         _write_recipe(recipe_dir, MINIMAL_RECIPE)

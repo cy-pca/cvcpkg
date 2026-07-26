@@ -1708,8 +1708,13 @@ def pack_recipe(
     log_callback: Callable[[str], None] | None = None,
     host_platform: str = "",
     cross_toolchain_env: dict[str, str] | None = None,
+    cvc_revision: int | None = None,
 ) -> tuple[Path, str, int]:
     """Build + package a recipe. Returns (archive_path, sha256, size).
+
+    *cvc_revision*, when set, overrides the recipe's committed revision for
+    this bundle's manifest and archive name (``cvcpkg pack --bump``).  The
+    recipe on disk is not modified.
 
     A platform-independent recipe (all matrix entries ``platform: any``) is
     always packaged as a single ``any``/``noarch`` bundle, regardless of the
@@ -1750,6 +1755,12 @@ def pack_recipe(
         host_platform=host_platform,
         cross_toolchain_env=cross_toolchain_env,
     )
+
+    # Stamp the bundle at the caller-chosen revision (``--bump``).  Recipe is a
+    # mutable dataclass, and full_version derives from cvc_revision, so this one
+    # assignment flows into both the manifest and the archive filename below.
+    if cvc_revision is not None:
+        ctx.recipe.cvc_revision = cvc_revision
 
     manifest = generate_manifest(
         ctx.recipe,
@@ -1802,6 +1813,7 @@ def pack_from_prefix(
     output_dir: Path | None = None,
     maintainer: str = "",
     org_slug: str = "",
+    cvc_revision: int | None = None,
 ) -> tuple[Path, str, int]:
     """Package an already-installed prefix as if built by :func:`pack_recipe`.
 
@@ -1829,6 +1841,10 @@ def pack_from_prefix(
         output_dir: Where to write the archive. Defaults to ``./dist``.
         maintainer: Overrides ``recipe.maintainer`` in the manifest.
         org_slug: Organisation slug recorded in the manifest.
+        cvc_revision: If set, overrides the recipe's committed revision for
+            this bundle (``cvcpkg pack --bump``).  Composes with
+            ``version_override``: the upstream part is replaced and the
+            revision is set independently.  The recipe on disk is untouched.
 
     Returns:
         ``(archive_path, sha256, size_bytes)`` — same shape as
@@ -1846,6 +1862,9 @@ def pack_from_prefix(
         # archive name and manifest stay consistent with the rest of the
         # ecosystem.
         recipe = replace(recipe, upstream_version=str(version_override))
+
+    if cvc_revision is not None:
+        recipe = replace(recipe, cvc_revision=cvc_revision)
 
     if not platform:
         platform = detect_platform()
@@ -3302,6 +3321,7 @@ def rev_bump(
     *,
     platform: str = "",
     cascade: bool = True,
+    revision_for: Callable[[Recipe], int] | None = None,
 ) -> list[tuple[str, int, int]]:
     """Bump ``cvc_revision`` for a recipe and its downstream dependents.
 
@@ -3311,6 +3331,13 @@ def rev_bump(
     When *cascade* is ``True`` (the default), all transitive
     dependents also have their revisions bumped so that consumers
     pick up the patched dependency tree.
+
+    By default each target is bumped by one.  Pass *revision_for* to choose
+    the new revision per recipe — e.g. a published-aware resolver that returns
+    ``max(recipe_floor, highest_published + 1)`` (``cvcpkg cascade-bump``).
+    A target whose resolved revision does not exceed its current one is left
+    untouched and omitted from the result (its committed revision is already
+    unpublished, so no bump is needed to republish it).
     """
     recipes = list_recipes(recipes_dir)
     by_name = {r.name: r for r in recipes}
@@ -3326,7 +3353,13 @@ def rev_bump(
     for target_name in targets:
         recipe = by_name[target_name]
         old_rev = recipe.cvc_revision
-        new_rev = old_rev + 1
+        if revision_for is None:
+            new_rev = old_rev + 1
+        else:
+            new_rev = revision_for(recipe)
+            if new_rev <= old_rev:
+                # Already unpublished at its committed revision — nothing to do.
+                continue
         recipe_yaml = recipe.recipe_dir / "recipe.yaml"
         _bump_revision_in_yaml(recipe_yaml, new_rev)
         bumped.append((target_name, old_rev, new_rev))

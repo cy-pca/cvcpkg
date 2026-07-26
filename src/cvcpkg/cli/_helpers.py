@@ -109,6 +109,67 @@ _local_opt = click.option(
 )
 
 
+def _bump_core_opts(f):  # type: ignore[no-untyped-def]
+    """Attach the shared ``--bump`` family of options to a pack command.
+
+    Produces the kwargs ``bump``, ``bump_write``, ``cvc_revision``,
+    ``bump_scope``, ``server`` and ``token``.  ``--org`` is intentionally not
+    included here because ``pack-all`` already defines its own; callers that
+    need it add ``--org`` separately.
+    """
+    opts = [
+        click.option(
+            "--bump",
+            is_flag=True,
+            default=False,
+            help="Auto-increment cvc_revision at pack time: query the server for "
+            "the highest published +cvc.N and pack one above it (never below the "
+            "recipe's committed revision).  recipe.yaml is not modified.",
+        ),
+        click.option(
+            "--bump-write",
+            is_flag=True,
+            default=False,
+            help="With --bump (or --cvc-revision), also write the resolved "
+            "cvc_revision back into recipe.yaml so it can be committed.",
+        ),
+        click.option(
+            "--cvc-revision",
+            type=int,
+            default=None,
+            help="Pack at this exact cvc_revision (overrides the recipe).  "
+            "Mutually exclusive with --bump; use it to pin a revision computed "
+            "once by 'cvcpkg next-revision' across a build matrix.",
+        ),
+        click.option(
+            "--bump-scope",
+            type=click.Choice(["name", "variant"], case_sensitive=False),
+            default="name",
+            help="What counts as 'already published' when bumping: 'name' (default) "
+            "considers every variant of the package so a family stays uniform "
+            "across platforms/configs; 'variant' only the exact "
+            "platform/arch/config/link tuple.",
+        ),
+        click.option(
+            "--server",
+            envvar="CVCPKG_SERVER_URL",
+            default="",
+            metavar="URL",
+            help="Server queried by --bump (defaults to CVCPKG_SERVER_URL / "
+            "cvcpkg.org).  [env: CVCPKG_SERVER_URL]",
+        ),
+        click.option(
+            "--token",
+            envvar="CVCPKG_TOKEN",
+            default="",
+            help="Bearer token for --bump queries against a private org.  " "[env: CVCPKG_TOKEN]",
+        ),
+    ]
+    for opt in reversed(opts):
+        f = opt(f)
+    return f
+
+
 def _resolve_recipes_dirs(
     extra: tuple[str, ...] = (),
     *,

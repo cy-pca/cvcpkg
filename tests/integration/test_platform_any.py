@@ -522,6 +522,53 @@ class TestPlatformAnyManifest:
         assert manifest["bundle"]["platform"] == "any"
         assert manifest["bundle"]["arch"] == "noarch"
 
+    def test_pack_recipe_cvc_revision_override(self, tmp_path, monkeypatch):
+        """pack_recipe stamps a --bump cvc_revision into the manifest + name."""
+        import tarfile
+
+        import cvcpkg.builder as builder_mod
+        from cvcpkg.builder import BuildContext, Recipe, pack_recipe
+
+        recipes_dir = tmp_path / "recipes"
+        recipes_dir.mkdir()
+        (recipes_dir / "_common").mkdir()
+        _create_any_recipe(recipes_dir, "widgets", files={"w.js": "console.log(1)"})
+        recipe_dir = recipes_dir / "widgets"
+
+        def _fake_build_recipe(rdir, *, platform, config, link, prefix, **kw):
+            r = Recipe.load(rdir)
+            work = tmp_path / "work"
+            install = work / "install"
+            (install / "share" / "widgets").mkdir(parents=True)
+            (install / "share" / "widgets" / "w.js").write_text("console.log(1)")
+            return BuildContext(
+                recipe=r,
+                platform=platform,
+                config=config,
+                link=link,
+                prefix=prefix or install,
+                source_dir=work / "src",
+                build_dir=work / "build",
+                install_dir=install,
+                work_dir=work,
+            )
+
+        monkeypatch.setattr(builder_mod, "build_recipe", _fake_build_recipe)
+
+        out = tmp_path / "dist"
+        archive_path, _sha, _size = pack_recipe(
+            recipe_dir, platform="linux", arch="x86_64", output_dir=out, cvc_revision=6
+        )
+
+        assert "+cvc.6" in archive_path.name
+        with tarfile.open(archive_path) as tf:
+            raw = tf.extractfile("share/libcvc-deps/manifest.yaml").read()
+        bundle = yaml.safe_load(raw)["bundle"]
+        assert bundle["cvc_revision"] == 6
+        assert bundle["version"].endswith("+cvc.6")
+        # stamp-only: the recipe on disk keeps its committed revision
+        assert Recipe.load(recipe_dir).cvc_revision == 1
+
 
 # ── Cache key isolation tests ───────────────────────────────────
 

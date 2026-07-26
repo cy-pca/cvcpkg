@@ -13,6 +13,7 @@ import click
 from cvcpkg._archive import safe_tar_extractall
 from cvcpkg.cli import cli
 from cvcpkg.cli._helpers import (
+    _bump_core_opts,
     _config_opt,
     _keep_build_opt,
     _link_opt,
@@ -524,6 +525,47 @@ def build(
 # ── pack ────────────────────────────────────────────────────────
 
 
+def _resolve_bump_revision(
+    recipe,  # cvcpkg.builder.Recipe
+    *,
+    bump: bool,
+    cvc_revision: int | None,
+    bump_scope: str,
+    server: str,
+    org: str,
+    token: str,
+    platform: str,
+    arch: str,
+    build_type: str,
+    link: str,
+) -> int | None:
+    """Resolve the cvc_revision override for a pack, or None to keep the recipe's.
+
+    ``--cvc-revision`` pins an explicit value; ``--bump`` resolves one from the
+    server (falling back to the recipe floor when the server is empty or
+    unreachable).
+    """
+    if cvc_revision is not None:
+        return cvc_revision
+    if not bump:
+        return None
+    from cvcpkg.config import default_server_url
+    from cvcpkg.revisions import compute_pack_revision
+
+    return compute_pack_revision(
+        recipe,
+        server=server or default_server_url(),
+        org=org,
+        token=token,
+        platform=platform,
+        arch=arch,
+        build_type=build_type,
+        link=link,
+        scope=bump_scope,
+        log=click.echo,
+    )
+
+
 @cli.command()
 @click.argument("recipe", nargs=-1, required=True)
 @_platform_opt
@@ -571,6 +613,24 @@ def build(
     help="Host platform for cross-compilation (e.g. linux, macos, windows). "
     "Selects the matching build script when multiple host_platform entries exist.",
 )
+@_bump_core_opts
+@click.option(
+    "--org",
+    default="",
+    callback=_validate_org_slug,
+    expose_value=True,
+    is_eager=False,
+    help="Organization slug to scope --bump queries and embed in manifests.",
+)
+@click.option(
+    "--bump-downstream",
+    is_flag=True,
+    default=False,
+    help="After packing each RECIPE, also pack every recipe that transitively "
+    "depends on it, in dependency order (each --bump'd).  Requires building the "
+    "dependents, so it is incompatible with --from-prefix; for a recipe-editing "
+    "cascade use 'cvcpkg cascade-bump'.",
+)
 def pack(
     recipe: tuple[str, ...],
     platform: str,
@@ -587,6 +647,14 @@ def pack(
     from_prefix: str | None,
     version_override: str,
     host_platform: str,
+    bump: bool,
+    bump_write: bool,
+    cvc_revision: int | None,
+    bump_scope: str,
+    server: str,
+    token: str,
+    org: str,
+    bump_downstream: bool,
 ) -> None:
     """Build and archive one or more recipes.
 
@@ -600,16 +668,29 @@ def pack(
     mode; the RECIPE arg may also be a filesystem path to a directory
     containing recipe.yaml.
 
+    With --bump the packed bundle's cvc_revision is auto-incremented above
+    whatever is already published (see 'cvcpkg next-revision'), so a
+    republish never collides — no recipe editing required.
+
     \b
     Example:
       cvcpkg pack zlib boost --output-dir ./dist
       cvcpkg pack zlib --local --output-dir ./dist
       cvcpkg pack ./cvcpkg/recipe.yaml --from-prefix ./stage \\
           --version-override 2.0.0 --output-dir ./dist
+      cvcpkg pack cvcpkg/recipes/libcvc --from-prefix stage \\
+          --bump --server https://cvcpkg.org --org cvc --output-dir dist
     """
-    from cvcpkg.builder import pack_from_prefix, pack_recipe
+    from cvcpkg.builder import Recipe, pack_from_prefix, pack_recipe
+    from cvcpkg.platform import detect_arch
 
     plat = _auto_platform(platform)
+    arch = detect_arch()
+
+    if bump and cvc_revision is not None:
+        raise click.UsageError("--bump and --cvc-revision are mutually exclusive.")
+    if bump_write and not (bump or cvc_revision is not None):
+        raise click.UsageError("--bump-write requires --bump or --cvc-revision.")
 
     if from_prefix:
         if len(recipe) != 1:
@@ -619,6 +700,12 @@ def pack(
                 "--prefix and --from-prefix are mutually exclusive. "
                 "--from-prefix is the already-installed tree to package."
             )
+        if bump_downstream:
+            raise click.UsageError(
+                "--bump-downstream is incompatible with --from-prefix (dependents "
+                "must be built, not staged). Use 'cvcpkg cascade-bump' to bump the "
+                "recipes and let your build pipeline repack each member."
+            )
 
     if not local_mode and not recipes_dirs:
         recipes_dirs = _try_pull_server_recipes()
@@ -626,8 +713,51 @@ def pack(
     prefix_path = Path(prefix).resolve() if prefix else None
     output = Path(output_dir).resolve()
 
+    # Build the ordered, de-duplicated list of recipe dirs to pack.  With
+    # --bump-downstream each named recipe is followed by its transitive
+    # dependents (dependency-first), so a consumer picks up the rebuilt tree.
+    work_dirs: list[Path] = []
+    seen: set[Path] = set()
+
+    def _add(rd: Path) -> None:
+        rd = rd.resolve()
+        if rd not in seen:
+            seen.add(rd)
+            work_dirs.append(rd)
+
     for name in recipe:
-        recipe_dir = _resolve_recipe_dir(name, recipes_dirs, no_default=no_default_recipes)
+        base_dir = _resolve_recipe_dir(name, recipes_dirs, no_default=no_default_recipes)
+        _add(base_dir)
+        if bump_downstream:
+            from cvcpkg.builder import get_downstream, list_recipes, load_all_recipes
+
+            rdirs = _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes)
+            all_recipes = load_all_recipes(rdirs) if len(rdirs) > 1 else list_recipes(rdirs[0])
+            base_name = Recipe.load(base_dir).name
+            for dep_name in get_downstream(base_name, all_recipes, plat):
+                _add(_resolve_recipe_dir(dep_name, recipes_dirs, no_default=no_default_recipes))
+
+    for recipe_dir in work_dirs:
+        loaded = Recipe.load(recipe_dir)
+        override = _resolve_bump_revision(
+            loaded,
+            bump=bump,
+            cvc_revision=cvc_revision,
+            bump_scope=bump_scope,
+            server=server,
+            org=org,
+            token=token,
+            platform=plat,
+            arch=arch,
+            build_type=config,
+            link=link,
+        )
+        if bump_write and override is not None:
+            from cvcpkg.builder import _bump_revision_in_yaml
+
+            _bump_revision_in_yaml(recipe_dir / "recipe.yaml", override)
+            click.echo(f"  wrote cvc_revision: {override} -> {recipe_dir / 'recipe.yaml'}")
+
         if from_prefix:
             archive, sha, size = pack_from_prefix(
                 recipe_dir,
@@ -638,6 +768,8 @@ def pack(
                 version_override=version_override,
                 output_dir=output,
                 maintainer=maintainer,
+                org_slug=org,
+                cvc_revision=override,
             )
         else:
             archive, sha, size = pack_recipe(
@@ -650,6 +782,7 @@ def pack(
                 keep_build_dir=keep_build_dir,
                 maintainer=maintainer,
                 host_platform=host_platform,
+                cvc_revision=override,
             )
         click.echo(f"  {archive} ({size:,} bytes, sha256={sha})")
         if signing_key:
@@ -822,6 +955,7 @@ def build_all_cmd(
 @_no_default_recipes_opt
 @_local_opt
 @_maintainer_opt
+@_bump_core_opts
 @click.option(
     "--signing-key",
     type=click.Path(exists=True),
@@ -922,6 +1056,12 @@ def pack_all_cmd(
     no_default_recipes: bool,
     local_mode: bool,
     maintainer: str,
+    bump: bool,
+    bump_write: bool,
+    cvc_revision: int | None,
+    bump_scope: str,
+    server: str,
+    token: str,
     signing_key: str | None,
     work_dir: str | None,
     host_platform: str,
@@ -969,6 +1109,11 @@ def pack_all_cmd(
     prefix_path = Path(prefix).resolve() if prefix else None
     work_dir_root = Path(work_dir).resolve() if work_dir else None
     output = Path(output_dir).resolve()
+
+    if bump and cvc_revision is not None:
+        raise click.UsageError("--bump and --cvc-revision are mutually exclusive.")
+    if bump_write and not (bump or cvc_revision is not None):
+        raise click.UsageError("--bump-write requires --bump or --cvc-revision.")
 
     if not local_mode and not recipes_dirs:
         recipes_dirs = _try_pull_server_recipes()
@@ -1025,6 +1170,28 @@ def pack_all_cmd(
         # actual target platform and arch, not the host's.
         ctx_plat = ctx.platform
         ctx_arch = "wasm32" if ctx_plat == "wasm" else arch
+        # Stamp the caller-chosen revision (--bump / --cvc-revision).  Recipe is
+        # mutable and full_version derives from it, so this flows into both the
+        # manifest and the archive name below.
+        override = _resolve_bump_revision(
+            ctx.recipe,
+            bump=bump,
+            cvc_revision=cvc_revision,
+            bump_scope=bump_scope,
+            server=server,
+            org=org,
+            token=token,
+            platform=ctx_plat,
+            arch=ctx_arch,
+            build_type=config,
+            link=link,
+        )
+        if override is not None:
+            if bump_write:
+                from cvcpkg.builder import _bump_revision_in_yaml
+
+                _bump_revision_in_yaml(ctx.recipe.recipe_dir / "recipe.yaml", override)
+            ctx.recipe.cvc_revision = override
         manifest = generate_manifest(
             ctx.recipe,
             ctx.install_dir,
@@ -1207,3 +1374,202 @@ def rev_bump_cmd(
     for name, old_rev, new_rev in bumped:
         click.echo(f"  {name}: cvc_revision {old_rev} \u2192 {new_rev}")
     click.echo(f"\n{len(bumped)} recipe(s) bumped.")
+
+
+# ── next-revision ─────────────────────────────────────────────────────
+
+
+@cli.command("next-revision")
+@click.argument("recipe_name")
+@_recipes_dir_opt
+@_no_default_recipes_opt
+@_platform_opt
+@_config_opt
+@_link_opt
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    default="",
+    metavar="URL",
+    help="Server to query (defaults to CVCPKG_SERVER_URL / cvcpkg.org).",
+)
+@click.option(
+    "--org",
+    default="",
+    callback=_validate_org_slug,
+    help="Organization slug to scope the query.",
+)
+@click.option(
+    "--token", envvar="CVCPKG_TOKEN", default="", help="Bearer token. [env: CVCPKG_TOKEN]"
+)
+@click.option(
+    "--bump-scope",
+    type=click.Choice(["name", "variant"], case_sensitive=False),
+    default="name",
+    help="'name' (default) considers every variant; 'variant' only the exact "
+    "platform/arch/config/link tuple.",
+)
+def next_revision_cmd(
+    recipe_name: str,
+    recipes_dirs: tuple[str, ...],
+    no_default_recipes: bool,
+    platform: str,
+    config: str,
+    link: str,
+    server: str,
+    org: str,
+    token: str,
+    bump_scope: str,
+) -> None:
+    """Print the cvc_revision that --bump would pack RECIPE_NAME at.
+
+    Queries the server for the highest published +cvc.N of RECIPE_NAME on its
+    current upstream version and prints one above it (never below the recipe's
+    committed revision).  Prints just the integer, so CI can compute a revision
+    once and pin it across a build matrix:
+
+    \b
+      REV=$(cvcpkg next-revision libcvc --server https://cvcpkg.org --org cvc)
+      cvcpkg pack cvcpkg/recipes/libcvc --from-prefix stage --cvc-revision "$REV" ...
+    """
+    from cvcpkg.builder import Recipe
+    from cvcpkg.config import default_server_url
+    from cvcpkg.platform import detect_arch
+    from cvcpkg.revisions import compute_pack_revision
+
+    recipe_dir = _resolve_recipe_dir(recipe_name, recipes_dirs, no_default=no_default_recipes)
+    recipe = Recipe.load(recipe_dir)
+    rev = compute_pack_revision(
+        recipe,
+        server=server or default_server_url(),
+        org=org,
+        token=token,
+        platform=_auto_platform(platform),
+        arch=detect_arch(),
+        build_type=config,
+        link=link,
+        scope=bump_scope,
+        log=None,
+    )
+    click.echo(rev)
+
+
+# ── cascade-bump ──────────────────────────────────────────────────────
+
+
+@cli.command("cascade-bump")
+@click.argument("recipe_name")
+@_recipes_dir_opt
+@_no_default_recipes_opt
+@_platform_opt
+@_config_opt
+@_link_opt
+@click.option(
+    "--no-cascade",
+    is_flag=True,
+    default=False,
+    help="Only bump the named recipe; do not bump downstream dependents.",
+)
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    default="",
+    metavar="URL",
+    help="Server to query (defaults to CVCPKG_SERVER_URL / cvcpkg.org).",
+)
+@click.option(
+    "--org",
+    default="",
+    callback=_validate_org_slug,
+    help="Organization slug to scope the query.",
+)
+@click.option(
+    "--token", envvar="CVCPKG_TOKEN", default="", help="Bearer token. [env: CVCPKG_TOKEN]"
+)
+@click.option(
+    "--bump-scope",
+    type=click.Choice(["name", "variant"], case_sensitive=False),
+    default="name",
+    help="'name' (default) considers every variant; 'variant' only the exact "
+    "platform/arch/config/link tuple.",
+)
+@click.option(
+    "--offline",
+    is_flag=True,
+    default=False,
+    help="Do not query the server; bump each recipe by +1 (same as 'rev-bump').",
+)
+def cascade_bump_cmd(
+    recipe_name: str,
+    recipes_dirs: tuple[str, ...],
+    no_default_recipes: bool,
+    platform: str,
+    config: str,
+    link: str,
+    no_cascade: bool,
+    server: str,
+    org: str,
+    token: str,
+    bump_scope: str,
+    offline: bool,
+) -> None:
+    """Published-aware family bump: rewrite recipe.yaml for RECIPE_NAME and its
+    dependents so each lands one revision above what is already published, in
+    dependency order.
+
+    This automates the manual "family revision bump" commit (e.g. bumping
+    libcvc/cvcgl/pycvc/pycvc-gl together for a republish): run it, review the
+    edited recipe.yaml files, and commit.  Unlike 'rev-bump' (which always adds
+    one), a recipe still unpublished at its committed revision is left as-is \u2014
+    it can be published fresh without a bump.
+
+    \b
+    Examples:
+      cvcpkg cascade-bump libcvc --server https://cvcpkg.org --org cvc
+      cvcpkg cascade-bump libcvc --offline          # plain +1, no server
+    """
+    from cvcpkg.builder import Recipe, rev_bump
+    from cvcpkg.config import default_server_url
+    from cvcpkg.platform import detect_arch
+    from cvcpkg.revisions import compute_pack_revision
+
+    rdirs = _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes)
+    recipes_dir = rdirs[0]
+    for rd in rdirs:
+        if (rd / recipe_name).is_dir():
+            recipes_dir = rd
+
+    srv = "" if offline else (server or default_server_url())
+    arch = detect_arch()
+    plat = _auto_platform(platform)
+
+    def _revision_for(recipe: Recipe) -> int:
+        if not srv:
+            return recipe.cvc_revision + 1
+        return compute_pack_revision(
+            recipe,
+            server=srv,
+            org=org,
+            token=token,
+            platform=plat,
+            arch=arch,
+            build_type=config,
+            link=link,
+            scope=bump_scope,
+            log=None,
+        )
+
+    bumped = rev_bump(
+        recipe_name,
+        recipes_dir,
+        platform=platform or "",
+        cascade=not no_cascade,
+        revision_for=_revision_for,
+    )
+
+    for name, old_rev, new_rev in bumped:
+        click.echo(f"  {name}: cvc_revision {old_rev} \u2192 {new_rev}")
+    if bumped:
+        click.echo(f"\n{len(bumped)} recipe(s) bumped. Review and commit the recipe.yaml edits.")
+    else:
+        click.echo("Nothing to bump: every affected recipe is already unpublished at its revision.")
