@@ -1,10 +1,13 @@
-"""Edge/satellite cluster semantics: the public namespace is upstream-canonical.
+"""Edge/satellite cluster semantics: local public publishes diverge from upstream.
 
 A cluster that populates its public catalog from an upstream primary
-(``POPULATE_UPSTREAM`` set) treats the public namespace (``org_slug == ""``) as
-canonical upstream: local publishes into it are rejected (409); only org-scoped
-publishes are accepted, and those stay local.  The chunked upload path is
-org-aware too, so large private packages can be published.
+(``POPULATE_UPSTREAM`` set) mirrors the public namespace (``org_slug == ""``)
+from upstream.  By default a *local* public publish is ACCEPTED but carries a
+divergence warning (it shadows the canonical upstream package and the populate
+loop never overwrites it).  In strict mode (``CVCPKG_EDGE_STRICT_PUBLIC``) the
+public namespace is read-only and local public publishes are rejected (409).
+Org-scoped publishes are always accepted and stay local; the chunked upload path
+is org-aware too, so large private packages can be published.
 """
 
 from __future__ import annotations
@@ -76,7 +79,7 @@ def edge_server(tmp_path, monkeypatch):
 
 
 class TestEdgePublishPolicy:
-    def test_public_publish_rejected_on_edge(self, edge_server):
+    def test_public_publish_allowed_with_warning_on_edge(self, edge_server):
         client, pub_token, _ = edge_server
         r = client.post(
             "/v1/publish",
@@ -84,8 +87,27 @@ class TestEdgePublishPolicy:
             files={"file": ("f.tar.zst", b"data", "application/octet-stream")},
             headers=_hdr(pub_token),
         )
+        assert r.status_code in (200, 201), r.text
+        body = r.json()
+        # Divergence warning is surfaced to the publisher...
+        assert "diverges from" in body.get("warning", "")
+        assert UPSTREAM in body["warning"]
+        # ...and the package really lands in the public namespace (org empty).
+        got = client.get("/v1/packages", params={"name": "libfoo"}, headers=_hdr(pub_token)).json()
+        bundles = _bundles(got)
+        assert bundles and all(not b.get("org") for b in bundles)
+
+    def test_public_publish_rejected_in_strict_mode(self, edge_server, monkeypatch):
+        client, pub_token, _ = edge_server
+        monkeypatch.setattr(app_mod, "EDGE_STRICT_PUBLIC", True)
+        r = client.post(
+            "/v1/publish",
+            params={"name": "libfoo", "version": "1.0.0", "platform": "linux", "arch": "x86_64"},
+            files={"file": ("f.tar.zst", b"data", "application/octet-stream")},
+            headers=_hdr(pub_token),
+        )
         assert r.status_code == 409
-        assert "canonical upstream" in r.json()["detail"]
+        assert "read-only" in r.json()["detail"]
 
     def test_org_publish_allowed_on_edge(self, edge_server):
         client, pub_token, _ = edge_server
@@ -106,15 +128,42 @@ class TestEdgePublishPolicy:
         bundles = _bundles(got)
         assert bundles and all(b.get("org") == "shell" for b in bundles)
 
-    def test_chunked_public_rejected_on_edge(self, edge_server):
+    def test_chunked_public_allowed_with_warning_on_edge(self, edge_server):
         client, pub_token, _ = edge_server
+        hdrs = _hdr(pub_token)
+        payload = b"Y" * 1024
+        sha = hashlib.sha256(payload).hexdigest()
+        # init is accepted (no strict mode) ...
+        r = client.post(
+            "/v1/upload/init",
+            params={"name": "bigfoo", "version": "1.0.0", "platform": "linux", "arch": "x86_64"},
+            headers=hdrs,
+        )
+        assert r.status_code == 201, r.text
+        upload_id = r.json()["upload_id"]
+        r = client.patch(
+            f"/v1/upload/{upload_id}",
+            content=payload,
+            headers={**hdrs, "Content-Type": "application/octet-stream"},
+        )
+        assert r.status_code == 200
+        # ... and /complete surfaces the divergence warning.
+        r = client.post(
+            f"/v1/upload/{upload_id}/complete", params={"expected_sha256": sha}, headers=hdrs
+        )
+        assert r.status_code == 200, r.text
+        assert "diverges from" in r.json().get("warning", "")
+
+    def test_chunked_public_rejected_in_strict_mode(self, edge_server, monkeypatch):
+        client, pub_token, _ = edge_server
+        monkeypatch.setattr(app_mod, "EDGE_STRICT_PUBLIC", True)
         r = client.post(
             "/v1/upload/init",
             params={"name": "bigfoo", "version": "1.0.0", "platform": "linux", "arch": "x86_64"},
             headers=_hdr(pub_token),
         )
         assert r.status_code == 409
-        assert "canonical upstream" in r.json()["detail"]
+        assert "read-only" in r.json()["detail"]
 
     def test_chunked_org_upload_publishes_privately(self, edge_server):
         client, pub_token, _ = edge_server
@@ -170,20 +219,29 @@ class TestEdgePublishPolicy:
         assert r.status_code == 404
 
 
-class TestEdgeRejectHelper:
-    def test_helper_rejects_public_on_edge(self, monkeypatch):
+class TestEdgePublishWarningHelper:
+    def test_helper_warns_on_public_edge(self, monkeypatch):
         monkeypatch.setattr(app_mod, "POPULATE_UPSTREAM", UPSTREAM)
+        monkeypatch.setattr(app_mod, "EDGE_STRICT_PUBLIC", False)
+        warning = app_mod._edge_public_publish_warning("")  # must not raise
+        assert warning and "diverges from" in warning and UPSTREAM in warning
+
+    def test_helper_strict_rejects_public_on_edge(self, monkeypatch):
+        monkeypatch.setattr(app_mod, "POPULATE_UPSTREAM", UPSTREAM)
+        monkeypatch.setattr(app_mod, "EDGE_STRICT_PUBLIC", True)
         with pytest.raises(HTTPException) as ei:
-            app_mod._reject_public_publish_on_edge("")
+            app_mod._edge_public_publish_warning("")
         assert ei.value.status_code == 409
 
-    def test_helper_allows_org_on_edge(self, monkeypatch):
+    def test_helper_no_warning_for_org_on_edge(self, monkeypatch):
         monkeypatch.setattr(app_mod, "POPULATE_UPSTREAM", UPSTREAM)
-        app_mod._reject_public_publish_on_edge("shell")  # must not raise
+        monkeypatch.setattr(app_mod, "EDGE_STRICT_PUBLIC", True)
+        # An org publish is local by design — no warning, no reject even in strict.
+        assert app_mod._edge_public_publish_warning("shell") == ""
 
-    def test_helper_allows_public_off_edge(self, monkeypatch):
+    def test_helper_no_warning_off_edge(self, monkeypatch):
         monkeypatch.setattr(app_mod, "POPULATE_UPSTREAM", "")
-        app_mod._reject_public_publish_on_edge("")  # must not raise
+        assert app_mod._edge_public_publish_warning("") == ""
 
 
 class TestPrivatePackageVisibility:

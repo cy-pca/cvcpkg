@@ -315,6 +315,10 @@ class PublishResponse(BaseModel):
     sha256: str
     archive_url: str
     message: str = "published"
+    # Non-fatal advisory returned to the publisher — e.g. a local public
+    # publish on an edge/satellite cluster that diverges from and shadows the
+    # canonical upstream package.  Empty when there is nothing to warn about.
+    warning: str = ""
 
 
 class CatalogResponse(BaseModel):
