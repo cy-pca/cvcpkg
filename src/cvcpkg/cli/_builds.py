@@ -1310,7 +1310,12 @@ def builds_submit_dag(
                                 cross_noarch.append(dep)
                                 continue
                             if not _has_platform_entry(dep, plat):
-                                unbuildable.append(dep)
+                                # Has a recipe but no build for this platform:
+                                # the dep doesn't apply here (a recipe's own
+                                # cross-platform deps are its concern, e.g. a
+                                # unix-only ncurses under a windows build), so
+                                # skip it rather than block the whole submit —
+                                # matching the behaviour before auto-deps.
                                 continue
                             eligible.append(dep)
                             being_built.add(dep)

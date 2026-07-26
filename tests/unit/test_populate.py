@@ -352,11 +352,23 @@ class TestPopulateSyncOnce:
 # ── builds submit-dag --skip-existing ───────────────────────────
 
 
-def _write_recipe(tmp_path: Path, name: str, version="1.0.0", rev=2, deps=(), timeout=None):
+def _write_recipe(
+    tmp_path: Path,
+    name: str,
+    version="1.0.0",
+    rev=2,
+    deps=(),
+    timeout=None,
+    platforms=("linux", "windows"),
+):
     rdir = tmp_path / "recipes" / name
     rdir.mkdir(parents=True)
     deps_yaml = "".join(f"    - {d}\n" for d in deps)
     timeout_line = f"  timeout_seconds: {timeout}\n" if timeout is not None else ""
+    matrix = "".join(
+        f"    - platform: {p}\n      script: {'build.ps1' if p == 'windows' else 'build.sh'}\n"
+        for p in platforms
+    )
     (rdir / "recipe.yaml").write_text(
         f"""schema_version: 1
 recipe:
@@ -368,11 +380,7 @@ depends:
 {deps_yaml if deps else ""}
 build:
 {timeout_line}  matrix:
-    - platform: linux
-      script: build.sh
-    - platform: windows
-      script: build.ps1
-"""
+{matrix}"""
     )
     return rdir
 
@@ -1039,6 +1047,39 @@ class TestSubmitDagAutoDeps:
         jobs = {j["recipe_name"]: j for j in body["jobs"]}
         assert jobs["llvm18"]["timeout_seconds"] == 18000
         assert "timeout_seconds" not in jobs["zlib"]
+
+    def test_dep_without_platform_matrix_is_skipped_not_error(self, tmp_path, monkeypatch):
+        # A dep with a recipe but no build for the target platform (e.g. a
+        # unix-only ncurses under a windows build) is skipped, NOT a hard error
+        # — the recipe's own cross-platform deps are its concern.  Regression
+        # for a submit-dag abort that broke build-on-dev.
+        _write_recipe(tmp_path, "ncurses", version="6.4", rev=1, platforms=("linux",))
+        _write_recipe(tmp_path, "llvm18", version="18.1.8", rev=1, deps=("ncurses",))
+        posted: list = []
+        monkeypatch.setattr("httpx.Client", self._fake_client([], posted))
+        ret = main(
+            [
+                "builds",
+                "submit-dag",
+                "--server",
+                "http://s.example",
+                "--token",
+                "tok",
+                "--platform",
+                "windows",
+                "--arch",
+                "x86_64",
+                "--allow-unschedulable",
+                "--recipes-dir",
+                str(tmp_path / "recipes"),
+                "--no-default-recipes",
+                "llvm18",
+            ]
+        )
+        assert ret == 0
+        (body,) = posted
+        # llvm18 builds for windows; unix-only ncurses is skipped, not an error.
+        assert [j["recipe_name"] for j in body["jobs"]] == ["llvm18"]
 
     def test_auto_added_dep_carries_its_timeout(self, tmp_path, monkeypatch):
         # An unpublished dep auto-added into the DAG keeps its own recipe timeout.
