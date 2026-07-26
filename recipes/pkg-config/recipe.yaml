@@ -1,38 +1,40 @@
 schema_version: 1
 recipe:
   name: pkg-config
-  upstream_version: "0.29.2"
+  # Provided by pkgconf (the maintained pkg-config implementation) rather than
+  # freedesktop pkg-config 0.29.2. 0.29.2 bundles an ancient glib whose sources
+  # (gatomic.c int->pointer conversions) and libtool (`-print-multi-os-directory`)
+  # don't build under Xcode 26.5 / clang 21. pkgconf is standalone C with no glib
+  # and builds cleanly on modern toolchains. It's argument-compatible and ships
+  # pkg.m4; we install both `pkgconf` and a `pkg-config` name. No recipe pins a
+  # pkg-config version, so the 0.29.2 -> 3.0.4 jump is safe.
+  upstream_version: "3.0.4"
   cvc_revision: 1
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
-  homepage: https://www.freedesktop.org/wiki/Software/pkg-config/
-  license: GPL-2.0-or-later
+  homepage: https://github.com/pkgconf/pkgconf
+  license: ISC
   tags: [tools, build-system]
   description: >-
-    pkg-config — helper tool for querying installed library compile
-    and link flags.  Required as a host tool by autotools- and
-    Meson-based recipes that use PKG_CHECK_MODULES or
-    --pkg-config-path.  Built with --with-internal-glib so it has
-    no external dependencies.
+    pkg-config (provided by pkgconf) — helper tool for querying installed
+    library compile and link flags.  Required as a host tool by autotools- and
+    Meson-based recipes that use PKG_CHECK_MODULES.  Installed as both
+    ``pkgconf`` and a ``pkg-config`` compatibility name.
 
 source:
   type: tarball
-  url: https://pkgconfig.freedesktop.org/releases/pkg-config-0.29.2.tar.gz
-  sha256: "6fc69c01688c9458a57eb9a1664c9aba372ccda420a02bf4429fe610e7e7d591"
+  url: https://github.com/pkgconf/pkgconf/releases/download/pkgconf-3.0.4/pkgconf-3.0.4.tar.xz
+  sha256: "91ce346b47f46b87d680c6928e6c43240b9cdc7a31afbea19f2298de4dbe266d"
   strip_components: 1
 
 patches: []
 
 depends:
-  runtime:
-    # OpenBSD has no iconv in libc; the bundled internal glib *links* GNU
-    # libiconv, so the shipped bin/pkg-config carries a DT_NEEDED on
-    # libiconv.so -- a runtime dep.  Filing it under `build:` would strip it
-    # from the deliverable and leave pkg-config unable to start on OpenBSD.
-    - name: iconv
-      version: ">=1.17"
-      platforms: [openbsd]
+  # pkgconf is standalone C — no external deps (unlike 0.29.2's bundled glib,
+  # which linked libiconv on OpenBSD).
+  build: []
+  runtime: []
   host_tools: []
 
 build:
@@ -54,4 +56,5 @@ build:
 package:
   files:
     - bin/pkg-config*
+    - bin/pkgconf*
     - share/aclocal/pkg.m4

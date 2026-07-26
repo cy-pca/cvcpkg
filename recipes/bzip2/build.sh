@@ -29,8 +29,14 @@ if command -v gmake >/dev/null 2>&1; then
     MAKE=gmake
 fi
 
-$MAKE -f Makefile-libbz2_so -j "${CVC_JOBS}" CC="${CC:-cc}"
-$MAKE clean
+# Makefile-libbz2_so links the shared lib with ELF `-shared -Wl,-soname`, which
+# macOS's ld64 rejects ("cannot open -soname"). Skip it on macOS — the Darwin
+# branch below builds a proper .dylib from the objects the default `make`
+# produces. Elsewhere it yields libbz2.so.1.0.8, installed below.
+if [ "$(uname -s)" != "Darwin" ]; then
+    $MAKE -f Makefile-libbz2_so -j "${CVC_JOBS}" CC="${CC:-cc}"
+    $MAKE clean
+fi
 $MAKE -j "${CVC_JOBS}" CC="${CC:-cc}"
 
 $MAKE install PREFIX="${CVC_INSTALL_DIR}"

@@ -1,8 +1,9 @@
-# recipes/pkg-config/build.ps1 — build pkg-config from source via MSYS2/MinGW64.
+# recipes/pkg-config/build.ps1 — build pkgconf (the pkg-config replacement)
+# via MSYS2/MinGW64.
 #
-# Produces a native Windows pkg-config.exe (MinGW64, no MSYS2 DLLs) so
-# it can be called directly by meson and other native Windows tools.
-# --with-internal-glib removes the only external dependency.
+# Produces a native Windows pkgconf.exe (MinGW64, no MSYS2 DLLs) and copies it
+# to pkg-config.exe, so meson/cmake can call either name directly. pkgconf is
+# standalone C (no bundled glib), so no --with-internal-glib is needed.
 $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\..\_common\env-windows.ps1"
@@ -19,9 +20,10 @@ $env:MSYSTEM          = 'MINGW64'
 $env:MSYS_NO_PATHCONV = '1'
 $env:CHERE_INVOKING   = '1'
 
-$cmd = "cd '$msysSource' && ./configure --prefix='$msysPrefix' --host=x86_64-w64-mingw32 --with-internal-glib --disable-dependency-tracking --disable-nls && make -j $jobs && make install"
+# Symlinks are unreliable on Windows, so copy pkgconf.exe to pkg-config.exe.
+$cmd = "cd '$msysSource' && ./configure --prefix='$msysPrefix' --host=x86_64-w64-mingw32 --disable-shared --enable-static --disable-dependency-tracking && make -j $jobs && make install && cp '$msysPrefix/bin/pkgconf.exe' '$msysPrefix/bin/pkg-config.exe'"
 Write-Host "cvcpkg: bash -lc `"$cmd`""
 & $bash -lc $cmd
-if ($LASTEXITCODE -ne 0) { throw 'pkg-config build failed' }
+if ($LASTEXITCODE -ne 0) { throw 'pkgconf build failed' }
 
-& $bash -lc "$msysPrefix/bin/pkg-config --version" | Select-Object -First 1
+& $bash -lc "$msysPrefix/bin/pkg-config.exe --version" | Select-Object -First 1
