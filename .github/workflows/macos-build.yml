@@ -47,6 +47,11 @@ on:
           - "4"
           - "5"
           - "6"
+      ref:
+        description: "Git ref to build recipes from (default: prod)"
+        required: false
+        default: "prod"
+        type: string
   workflow_call:
     inputs:
       config:
@@ -62,6 +67,10 @@ on:
         required: false
         type: string
         default: "4"
+      ref:
+        required: false
+        type: string
+        default: "prod"
 
 permissions:
   contents: read
@@ -94,7 +103,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: prod
+          # Defaults to prod (production recipe set); override to validate a
+          # branch/master on macOS before promoting it to prod.
+          ref: ${{ inputs.ref || 'prod' }}
 
       - uses: actions/setup-python@v5
         with:

@@ -14,6 +14,13 @@ set -euo pipefail
 cd "${CVC_SOURCE_DIR}"
 
 CFLAGS_ALL="${CFLAGS:-} -D_FILE_OFFSET_BITS=64"
+# bzip2's build.sh is self-contained (doesn't source _common/env-*.sh), so the
+# shared macOS clang-16+ legacy-C relaxation doesn't reach it. Add it here for
+# macOS/Xcode 26.5 (clang 21), where implicit-function-declaration/implicit-int
+# are errors by default. Harmless on other platforms' compilers.
+if [ "$(uname -s)" = "Darwin" ]; then
+    CFLAGS_ALL="${CFLAGS_ALL} -Wno-implicit-function-declaration -Wno-implicit-int -Wno-int-conversion"
+fi
 export CFLAGS="${CFLAGS_ALL}"
 
 # BSD/macOS make sometimes needs GNU make; use gmake if present.
