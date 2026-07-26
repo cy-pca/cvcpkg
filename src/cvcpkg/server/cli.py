@@ -785,7 +785,21 @@ def migrate_history() -> None:
 
 def _alembic_config():
     """Build an Alembic Config pointing at our migrations."""
+    import sys
+
     from alembic.config import Config
+
+    # Frozen single-binary (PyInstaller): alembic.ini + migrations are bundled as
+    # data under sys._MEIPASS; the source-tree relative paths below do not exist.
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        base = Path(meipass)
+        ini = base / "alembic.ini"
+        cfg = Config(str(ini)) if ini.is_file() else Config()
+        # Override to the bundled migrations regardless of what the ini says
+        # (its script_location is a source-relative path).
+        cfg.set_main_option("script_location", str(base / "cvcpkg" / "migrations"))
+        return cfg
 
     cfg_path = Path(__file__).resolve().parents[3] / "alembic.ini"
     if not cfg_path.is_file():
