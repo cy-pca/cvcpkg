@@ -246,8 +246,25 @@ def _try_pull_server_recipes() -> tuple[str, ...]:
 @_local_opt
 @click.option(
     "--with-deps/--no-deps",
-    default=True,
-    help="Also build dependencies in order (default: --with-deps).",
+    default=False,
+    help=(
+        "--with-deps also builds the full dependency closure from source, in "
+        "topological order, first.  The default --no-deps builds only the named "
+        "recipe(s) and assumes their dependencies are already installed in "
+        "--prefix (fast; the one-shot dev path)."
+    ),
+)
+@click.option(
+    "--incremental",
+    is_flag=True,
+    default=False,
+    help=(
+        "Reuse a stable build tree keyed by (recipe, platform, config, link) "
+        "instead of a fresh temp dir wiped after the build, so a re-run "
+        "recompiles only what changed (CMake incremental).  A different "
+        "config/link/platform uses its own tree.  For dev iteration; the "
+        "default is a clean from-scratch build."
+    ),
 )
 @click.option(
     "--host-platform",
@@ -300,6 +317,7 @@ def build(
     no_default_recipes: bool,
     local_mode: bool,
     with_deps: bool,
+    incremental: bool,
     host_platform: str,
     build_prefix: str | None,
     host_tools_prefix: str | None,
@@ -316,16 +334,26 @@ def build(
     CVCPKG_SERVER_URL, default: cvcpkg.org).  Use --local to build
     from bundled/local recipes only.
 
-    Dependencies are automatically resolved and built first unless
-    --no-deps is specified.
+    A ``./recipes`` directory in the current working directory is
+    auto-overlaid on the recipe search path (later wins), so from a repo
+    root that has one, ``cvcpkg build <name>`` finds the repo-local recipe
+    with no --recipes-dir.
+
+    By default (--no-deps) only the named recipe(s) are built; their
+    dependencies are assumed already installed in --prefix.  Pass
+    --with-deps to also build the whole dependency closure from source
+    first (topological order).  Add --incremental to reuse a stable build
+    tree so re-runs recompile only what changed.
 
     \b
     Examples:
-      cvcpkg build zlib --prefix ./prefix
+      # One-shot from a repo root with ./recipes (no --recipes-dir):
+      cvcpkg build myapp --prefix ./deps
       cvcpkg build zlib --local --prefix ./prefix
       cvcpkg build grpc protobuf --config debug --link static
       cvcpkg build mypkg --recipes-dir ./my-recipes --recipes-dir recipes
-      cvcpkg build vtk --no-deps --prefix ./prefix
+      cvcpkg build vtk --with-deps --prefix ./prefix   # also build the closure
+      cvcpkg build myapp --incremental --prefix ./deps  # fast dev re-build
     """
     from cvcpkg.builder import build_recipe, resolve_build_order
 
@@ -471,6 +499,7 @@ def build(
                 host_platform=host_plat,
                 cross_toolchain_env=merged_toolchain_env,
                 build_prefix=build_prefix_path,
+                incremental=incremental,
             )
 
         # ── Build-prefix separation: record + strip ──
@@ -519,6 +548,7 @@ def build(
                 prefix=prefix_path,
                 keep_build_dir=keep_build_dir,
                 host_platform=host_platform,
+                incremental=incremental,
             )
 
 
