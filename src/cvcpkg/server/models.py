@@ -258,6 +258,12 @@ class PackageInfo(BaseModel):
     # unyanked something upstream still considers retired.  Clients honour
     # upstream by default and need this to see the disagreement at all.
     upstream_yanked: bool = False
+    # True when this locally-published public bundle diverges from the populate
+    # upstream: its coordinates exist upstream with a different sha256, so the
+    # local build shadows and disagrees with the canonical upstream package.
+    # The SPA shows a warning symbol; an admin resolves it by nuking the local
+    # bundle so upstream re-populates.
+    diverges_upstream: bool = False
     signature: str = ""
     key_fingerprint: str = ""
     release_tag: str = Field(

@@ -245,6 +245,89 @@ class TestPopulateSyncOnce:
 
         assert run(_test) == (0, 0)
 
+    def test_local_shadow_flagged_and_cleared(self, populate_env):
+        """A LOCAL public build that shadows an upstream coordinate with
+        *different* bytes is flagged ``diverges_upstream``; the flag clears on a
+        later sync once local and upstream agree again."""
+        run, _, monkeypatch = populate_env
+
+        async def _test():
+            # LOCAL public build (origin_upstream="") at the upstream coordinate.
+            await app_mod._db_packages.add_package(
+                name="zlib",
+                version="1.3.1+cvc.3",
+                platform="windows",
+                arch="x86_64",
+                build_type="release",
+                link="shared",
+                sha256="localsha",
+                size_bytes=1,
+                archive_url="/v1/download/local.tar.zst",
+            )
+            # (1) upstream serves the same coordinate with DIFFERENT bytes.
+            monkeypatch.setattr(
+                "httpx.AsyncClient",
+                lambda **kw: _FakeAsyncClient([_bundle(sha256="upstreamsha")]),
+            )
+            n1 = await app_mod._populate_sync_once()
+            pkgs1, _ = await app_mod._db_packages.get_bundles(limit=10)
+            # (2) upstream now agrees (same sha) -> divergence clears.
+            monkeypatch.setattr(
+                "httpx.AsyncClient",
+                lambda **kw: _FakeAsyncClient([_bundle(sha256="localsha")]),
+            )
+            n2 = await app_mod._populate_sync_once()
+            pkgs2, _ = await app_mod._db_packages.get_bundles(limit=10)
+            return n1, pkgs1[0].diverges_upstream, n2, pkgs2[0].diverges_upstream
+
+        n1, div1, n2, div2 = run(_test)
+        assert n1 == 0 and div1 is True  # shadow with different bytes -> flagged
+        assert n2 == 0 and div2 is False  # re-converged -> cleared
+
+    def test_local_only_and_org_not_flagged(self, populate_env):
+        """No false positives: a local build at a coordinate upstream does NOT
+        serve is not a shadow, and an org build is a separate namespace — neither
+        is flagged even though upstream serves an unrelated public package."""
+        run, _, monkeypatch = populate_env
+        monkeypatch.setattr(
+            "httpx.AsyncClient",
+            lambda **kw: _FakeAsyncClient([_bundle(name="zlib", sha256="upsha")]),
+        )
+
+        async def _test():
+            # Local public build upstream has no coordinate for.
+            await app_mod._db_packages.add_package(
+                name="mytool",
+                version="9.9.9",
+                platform="windows",
+                arch="x86_64",
+                build_type="release",
+                link="shared",
+                sha256="localonly",
+                size_bytes=1,
+                archive_url="/v1/download/mytool.tar.zst",
+            )
+            # Org build sharing zlib's coordinate (separate namespace).
+            await app_mod._db_packages.add_package(
+                name="zlib",
+                version="1.3.1+cvc.3",
+                platform="windows",
+                arch="x86_64",
+                build_type="release",
+                link="shared",
+                sha256="orgsha",
+                size_bytes=1,
+                archive_url="/v1/download/zlib-org.tar.zst",
+                org_slug="acme",
+            )
+            await app_mod._populate_sync_once()
+            pkgs, _ = await app_mod._db_packages.get_bundles(limit=10)
+            return {(p.name, p.org): p.diverges_upstream for p in pkgs}
+
+        flags = run(_test)
+        assert flags[("mytool", "")] is False  # local-only, not a shadow
+        assert flags[("zlib", "acme")] is False  # org namespace, never a shadow
+
     def test_per_sync_cap(self, populate_env):
         run, _, monkeypatch = populate_env
         monkeypatch.setattr(app_mod, "POPULATE_MAX_PER_SYNC", 2)

@@ -1540,8 +1540,11 @@ async def _populate_sync_once() -> int:
         resp.raise_for_status()
         upstream_bundles = resp.json().get("bundles", [])
 
-        # Local variant set — include yanked so we don't re-import them.
+        # Local variant set — include yanked so we don't re-import them.  Keep
+        # each variant's sha256 too so we can tell a local build that merely
+        # mirrors upstream from one that *shadows* upstream with different bytes.
         local: set[tuple[str, str, str, str, str, str]] = set()
+        local_sha: dict[tuple[str, str, str, str, str, str], str] = {}
         offset = 0
         while True:
             pkgs, total = await _db_packages.get_bundles(
@@ -1553,10 +1556,16 @@ async def _populate_sync_once() -> int:
                 # package in the populate diff, so only public packages count.
                 if p.org:
                     continue
-                local.add((p.name, p.version, p.platform, p.arch, p.build_type, p.link))
+                pkey = (p.name, p.version, p.platform, p.arch, p.build_type, p.link)
+                local.add(pkey)
+                local_sha[pkey] = p.sha256
             offset += len(pkgs)
             if not pkgs or offset >= total:
                 break
+
+        # Public coordinates a local build shadows with *different* bytes than
+        # upstream serves — flagged for the SPA + admin resolution (nuke).
+        divergent_keys: set[tuple[str, str, str, str, str, str]] = set()
 
         imported = 0
         skipped_capacity = 0
@@ -1569,7 +1578,18 @@ async def _populate_sync_once() -> int:
                 b.get("build_type", ""),
                 b.get("link", ""),
             )
-            if not all(key) or key in local:
+            if not all(key):
+                continue
+            if key in local:
+                # A local variant already occupies this coordinate.  If upstream
+                # serves it (present, not yanked) with a different sha256, the
+                # local build diverges from — and shadows — the canonical
+                # upstream package.
+                if not b.get("org") and not b.get("yanked") and b.get("archive_url"):
+                    up_sha = b.get("sha256", "")
+                    loc_sha = local_sha.get(key, "")
+                    if up_sha and loc_sha and up_sha != loc_sha:
+                        divergent_keys.add(key)
                 continue
             if b.get("yanked") or not b.get("archive_url"):
                 continue  # yanked upstream / placeholder without artifacts
@@ -1683,6 +1703,21 @@ async def _populate_sync_once() -> int:
                 "deferred to the next cycle",
                 POPULATE_MAX_PER_SYNC,
                 skipped_capacity,
+            )
+
+        # ── Flag local public bundles that diverge from upstream ──
+        # A local build may shadow an upstream coordinate with different bytes
+        # (allowed by default — see _edge_public_publish_warning).  Record which
+        # ones so the SPA can warn and an admin can nuke the local bundle to let
+        # upstream re-populate.  Clears the flag where it no longer applies.
+        divergence_changed = await _db_packages.reconcile_public_divergence(divergent_keys)
+        if divergence_changed:
+            logger.info(
+                "populate: %d local public bundle(s) changed upstream-divergence state "
+                "(%d currently diverging from %s)",
+                divergence_changed,
+                len(divergent_keys),
+                upstream,
             )
 
         # ── Follow upstream's yank/nuke decisions ────────────────

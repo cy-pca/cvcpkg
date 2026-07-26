@@ -149,6 +149,20 @@ class PackageRow(Base):
         server_default=false(),
     )
 
+    # True when this is a locally-published public bundle (``org_slug == ""``,
+    # ``origin_upstream == ""``) whose coordinates ALSO exist on the populate
+    # upstream with a *different* sha256 — i.e. the local build shadows and
+    # diverges from the canonical upstream package.  Set/cleared by the populate
+    # sync (see ``reconcile_public_divergence``); surfaced so the SPA can warn
+    # and an admin can nuke the local bundle to let upstream re-populate.  See
+    # migration 024.
+    diverges_upstream: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=false(),
+    )
+
     __table_args__ = (
         Index(
             "ix_packages_unique_variant",

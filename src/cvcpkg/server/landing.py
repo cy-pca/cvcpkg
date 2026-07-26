@@ -1160,6 +1160,12 @@ function renderInfo() {
   document.getElementById('pkg-title').textContent = p.name;
   document.getElementById('pkg-version').textContent = p.version;
 
+  // Warn when any build of this package shadows a different upstream package.
+  if (allBuilds.some(b => b.diverges_upstream)) {
+    const dv = document.getElementById('pkg-diverge-badge');
+    if (dv) dv.style.display = '';
+  }
+
   if (p.description) {
     document.getElementById('pkg-description').textContent = p.description;
     document.getElementById('pkg-description').style.display = '';
@@ -1241,7 +1247,7 @@ function renderBuilds() {
     <tr>
       <td>${platformTag(b.platform)}</td>
       <td><span class="is-size-7">${esc(b.arch)}</span></td>
-      <td><code class="is-size-7">${esc(b.version || '')}</code></td>
+      <td><code class="is-size-7">${esc(b.version || '')}</code>${b.diverges_upstream ? ' <span class="icon is-small has-text-warning" title="Diverges from upstream: this local build shadows a different package published upstream at these coordinates. An admin can nuke this bundle to let the upstream copy re-populate."><i class="fas fa-exclamation-triangle"></i></span>' : ''}</td>
       <td><span class="is-size-7">${esc(b.build_type)}</span></td>
       <td><span class="is-size-7">${esc(b.link)}</span></td>
       <td><span class="is-family-monospace is-size-7 has-text-grey-light">${fmtSize(b.size_bytes)}</span></td>
@@ -1499,6 +1505,7 @@ def package_detail_html(name: str, *, org: str = "") -> str:
           <span class="tag is-link is-rounded is-medium ml-3" id="pkg-version">&hellip;</span>
           <span class="tag is-warning is-rounded is-medium ml-2" id="pkg-license" style="display:none"></span>
           <span id="pkg-source-badge" class="ml-2" style="display:none"></span>
+          <span id="pkg-diverge-badge" class="tag is-warning is-medium ml-2" style="display:none" title="One or more builds of this package diverge from upstream: a local build shadows a different package published upstream at the same coordinates. An admin can nuke the divergent build(s) to let the upstream copy re-populate."><span class="icon is-small"><i class="fas fa-exclamation-triangle"></i></span><span>diverges from upstream</span></span>
         </h1>
         <p class="subtitle is-5 has-text-grey-lighter" id="pkg-description" style="display:none"></p>
 

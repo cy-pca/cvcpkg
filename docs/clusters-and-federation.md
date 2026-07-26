@@ -113,6 +113,42 @@ Use this when the edge must be a pure mirror of upstream.
 > by a later sync — and a private org package can never shadow a public upstream
 > package that happens to share its name/version.
 
+#### Detecting and resolving a divergent shadow
+
+A local public build usually shadows a coordinate upstream *doesn't* have (a new
+recipe, a new `+cvc.N` revision) — harmless, that is the whole point. It becomes
+a **divergent shadow** only when upstream *also* publishes that exact coordinate
+(same `name/version/platform/arch/config/link`) with **different bytes**. The
+local copy keeps serving; a client resolving against the edge gets different
+bytes than one resolving against upstream.
+
+The populate loop detects this on every sync: for each public coordinate it holds
+locally, it compares the local `sha256` against upstream's and sets
+`packages.diverges_upstream` (exposed as `diverges_upstream` on
+`GET /v1/packages`). The SPA renders a **⚠ warning symbol** next to the affected
+build and a **"diverges from upstream"** badge on the package page. The flag
+clears automatically once the divergence is gone (the coordinate re-converges, or
+upstream drops it).
+
+**Admin resolution.** When the intent is to *track* upstream for that coordinate,
+nuke the local (shadowing) bundle so the next populate sync imports upstream's:
+
+```
+# inspect the divergent coordinate on the SPA (⚠) or the API, then:
+$ cvcpkg nuke <name> <version> --platform <p> --arch <a> \
+      --config <release|debug> --link <shared|static> \
+      --server <edge-url> --token <admin-token> --confirm <name>==<version>
+# the next populate cycle re-imports upstream's copy at that coordinate
+```
+
+`nuke` is irreversible (it drops the row + archive bytes and writes a tombstone).
+Use `yank` instead if you only want to stop serving the local copy while keeping
+it recoverable — but a yanked local variant still occupies the coordinate, so
+populate will not import upstream's until the local row is nuked. To *keep* the
+local build and accept the divergence, leave it: the warning is advisory. The
+`Package lifecycle` workflow (`package-lifecycle.yml`) drives yank/nuke against a
+server when the token lives only in CI secrets.
+
 #### Concurrency — a local build racing a mirror import
 
 A natural worry on a cluster that both **builds** packages and **mirrors** an
