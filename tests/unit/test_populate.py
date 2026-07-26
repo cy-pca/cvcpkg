@@ -620,6 +620,85 @@ class TestSubmitDagSkipExisting:
         assert names == ["libpng"]  # zlib skipped, dependent still builds
         assert body["jobs"][0]["depends_on"] == []  # dep satisfied by package
 
+    def test_skip_existing_on_by_default(self, tmp_path, capsys, monkeypatch):
+        # No --skip-existing flag: default-on skips the already-published
+        # variant, so a bare submit "fills the gaps" instead of rebuilding.
+        _write_recipe(tmp_path, "zlib", version="1.3.1", rev=3)
+        published = [
+            {
+                "name": "zlib",
+                "version": "1.3.1+cvc.3",
+                "platform": "windows",
+                "arch": "x86_64",
+                "build_type": "release",
+                "link": "shared",
+                "archive_url": "/v1/download/zlib.tar.zst",
+            }
+        ]
+        posted: list = []
+        monkeypatch.setattr("httpx.Client", self._fake_client(published, posted))
+        ret = main(
+            [
+                "builds",
+                "submit-dag",
+                "--server",
+                "http://s.example",
+                "--token",
+                "tok",
+                "--platform",
+                "windows",
+                "--arch",
+                "x86_64",
+                "--recipes-dir",
+                str(tmp_path / "recipes"),
+                "--no-default-recipes",
+                "zlib",
+            ]
+        )
+        assert ret == 0
+        assert "already-published" in capsys.readouterr().out
+        assert posted == []  # nothing to build — the variant already exists
+
+    def test_no_skip_existing_forces_rebuild(self, tmp_path, monkeypatch):
+        # --no-skip-existing overrides the default and rebuilds the published
+        # variant.
+        _write_recipe(tmp_path, "zlib", version="1.3.1", rev=3)
+        published = [
+            {
+                "name": "zlib",
+                "version": "1.3.1+cvc.3",
+                "platform": "windows",
+                "arch": "x86_64",
+                "build_type": "release",
+                "link": "shared",
+                "archive_url": "/v1/download/zlib.tar.zst",
+            }
+        ]
+        posted: list = []
+        monkeypatch.setattr("httpx.Client", self._fake_client(published, posted))
+        ret = main(
+            [
+                "builds",
+                "submit-dag",
+                "--server",
+                "http://s.example",
+                "--token",
+                "tok",
+                "--platform",
+                "windows",
+                "--arch",
+                "x86_64",
+                "--recipes-dir",
+                str(tmp_path / "recipes"),
+                "--no-default-recipes",
+                "--no-skip-existing",
+                "zlib",
+            ]
+        )
+        assert ret == 0
+        (body,) = posted
+        assert [j["recipe_name"] for j in body["jobs"]] == ["zlib"]
+
     def test_placeholder_rows_do_not_satisfy(self, tmp_path, capsys, monkeypatch):
         _write_recipe(tmp_path, "zlib", version="1.3.1", rev=3)
         published = [

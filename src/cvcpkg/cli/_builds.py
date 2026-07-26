@@ -951,15 +951,17 @@ def builds_submit(
     ),
 )
 @click.option(
-    "--skip-existing",
-    is_flag=True,
-    default=False,
+    "--skip-existing/--no-skip-existing",
+    default=True,
     help=(
         "Skip jobs whose exact variant (name, current recipe version, "
         "platform, arch, config, link) is already published on the server "
         "— e.g. imported from upstream by the populate loop.  Dependents "
         "of a skipped recipe still build; they fetch the published "
-        "package as a dependency."
+        "package as a dependency.  On by default ('fill the gaps'): a "
+        "published variant is immutable, so rebuilding one is pure waste.  "
+        "Pass --no-skip-existing to force a rebuild of variants that "
+        "already exist."
     ),
 )
 @click.option(
@@ -1008,6 +1010,11 @@ def builds_submit_dag(
     catalog, not rebuilt.  An unpublished dep with no buildable recipe
     is reported up front instead of failing a build minutes later.  Pass
     --no-deps to submit only the named recipes.
+
+    --skip-existing is also on by default: a named recipe (or auto-added
+    dep) whose exact variant is already published is not rebuilt, so a
+    run fills the gaps rather than rebuilding the world.  Pass
+    --no-skip-existing to force a rebuild of variants that already exist.
 
     Example:
 
