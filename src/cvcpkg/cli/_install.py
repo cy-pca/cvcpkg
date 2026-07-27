@@ -387,7 +387,11 @@ def install(
         if not c.exclude and c.name not in picked and c.name not in source_only
     ]
     if unresolved:
-        hint = "" if fallback_to_source else " (pass --fallback-to-source to build it from source instead)"
+        hint = (
+            ""
+            if fallback_to_source
+            else " (pass --fallback-to-source to build it from source instead)"
+        )
         raise click.ClickException(
             "requested component(s) not found in the catalog for this platform tuple: "
             + ", ".join(unresolved)
