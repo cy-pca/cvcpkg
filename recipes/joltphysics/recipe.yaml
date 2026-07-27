@@ -2,7 +2,11 @@ schema_version: 1
 recipe:
   name: joltphysics
   upstream_version: "5.6.0"
-  cvc_revision: 1
+  # cvc.2: disable Jolt's ENABLE_ALL_WARNINGS (-Werror). +cvc.1 built on the BSD
+  # (clang) builders but failed on the prod linux (GCC) builder — a
+  # -Wuninitialized false positive in Jolt/Core/HashTable.h was fatal under
+  # -Werror. Rebuild all platforms coherently without upstream's -Werror.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
