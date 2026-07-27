@@ -1,0 +1,80 @@
+schema_version: 1
+recipe:
+  name: joltphysics
+  upstream_version: "5.6.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/jrouwe/JoltPhysics
+  license: MIT
+  tags: [libraries, physics, game]
+  description: >-
+    Jolt Physics — a fast, multi-core-friendly rigid-body physics and
+    collision-detection library for games and VR, written in C++17.  Builds the
+    core Jolt library (static + shared) only; the samples, viewer, unit tests,
+    and the DX12/Vulkan/Metal debug-renderer backends are disabled, so the
+    package is dependency-free and headless.  The x86_64 build targets a
+    portable SSE4.2 baseline (AVX/AVX2/AVX-512/BMI off) so the binary runs on
+    generic x86_64; ARM uses NEON.  IMPORTANT: Jolt is ABI-sensitive to its
+    configuration — a consumer MUST be compiled with the same JPH_* settings as
+    the library.  Use find_package(Jolt) + link Jolt::Jolt: Jolt attaches those
+    settings (SSE level, object-layer bits, shared-library import, profiler /
+    debug-renderer flags) as PUBLIC compile definitions, so a CMake consumer of
+    the exported target inherits the matching defines automatically.
+
+source:
+  type: tarball
+  url: https://github.com/jrouwe/JoltPhysics/archive/refs/tags/v5.6.0.tar.gz
+  sha256: "6e069ee0172478cc78182047aac87e5310ba14a67a53348ae14cc37801fd3f8e"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    # Unix static + shared artifacts (.a / .so / .so.N / .dylib).
+    - lib/libJolt*
+    # Windows import/static lib + runtime DLL (MSVC).
+    - lib/Jolt.lib
+    - bin/Jolt.dll
+    # Relocatable CMake package export (Jolt::Jolt) + headers.
+    - lib/cmake/Jolt/
+    - include/Jolt/
+  cmake_packages:
+    - { name: Jolt, targets: ["Jolt::Jolt"] }
+
+abi:
+  cxx_std: 17
