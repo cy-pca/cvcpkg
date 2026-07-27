@@ -26,9 +26,14 @@ release into a CMake build.
    ```sh
    cmake -S libcvc -B build -G Ninja \
      -DCMAKE_PREFIX_PATH="$PWD/libcvc-deps-1.0.0-linux-x86_64-release-shared" \
-     -DCMAKE_BUILD_TYPE=Release \
-     -DCVC_BUILD_VOLROVER3=ON
+     -DCMAKE_BUILD_TYPE=Release
    ```
+
+   (`-DCVC_BUILD_VOLROVER3=ON` no longer applies here — volrover3 was
+   extracted out of the `libcvc` tree into its own `volrover` repo, where it
+   consumes `libcvc` as an external SDK package rather than an in-tree
+   `add_subdirectory`. See `volrover/volrover3/README.md` for its own build
+   instructions, e.g. `cvcpkg build volrover3 --prefix ./deps`.)
 
 ## Matching archive to build config
 
@@ -38,7 +43,10 @@ release into a CMake build.
 | `libcvc` Debug shared       | `debug-shared`                          |
 | `libcvc` Release static     | `release-static` *(best-effort — see caveats)* |
 | `libcvc` Debug static       | `debug-static` *(best-effort — see caveats)*   |
-| `volrover3` Release         | `release-shared` (Qt does not support static linking gratis) |
+
+`volrover3` no longer builds from this archive — it lives in the `volrover`
+repo now and consumes `libcvc`/`qt6`/`vtk` as published cvcpkg packages (see
+above), not this GitHub-Releases bundle.
 
 On Windows the build type **must** match: a Release archive uses
 the `/MD` runtime and ships release-only DLLs; a Debug archive
