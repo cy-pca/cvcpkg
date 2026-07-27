@@ -2,7 +2,10 @@ schema_version: 1
 recipe:
   name: sdl3
   upstream_version: "3.4.12"
-  cvc_revision: 1
+  # cvc.2: declare libxscrnsaver. +cvc.1 failed on the hermetic linux builder —
+  # SDL's CMake requires the X11 XScreenSaver headers (SDL_X11_XSCRNSAVER) and
+  # aborted when they were absent from the prefix.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -49,6 +52,11 @@ depends:
     - name: libxi
       platforms: [linux, freebsd, openbsd, netbsd]
     - name: libxfixes
+      platforms: [linux, freebsd, openbsd, netbsd]
+    # X11 screen-saver extension (SDL_X11_XSCRNSAVER). Without it SDL's CMake
+    # aborts: "Couldn't find dependency package for XSCRNSAVER". The header is
+    # absent on the hermetic builder even though it exists on a dev desktop.
+    - name: libxscrnsaver
       platforms: [linux, freebsd, openbsd, netbsd]
     # Wayland backend (Linux + FreeBSD; the wayland recipes stop there).
     - name: wayland
