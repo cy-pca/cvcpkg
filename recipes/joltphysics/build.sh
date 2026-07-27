@@ -6,6 +6,12 @@
 # tests, HelloWorld, performance test, samples and viewer (all default ON) —
 # which pull in a test framework and GPU/rendering deps — so every TARGET_* app
 # is turned off and only the core library is built.
+#
+# ENABLE_ALL_WARNINGS is turned OFF: it enables -Werror (and MSVC /WX), which
+# gates OUR build on upstream's warning-cleanliness across every compiler in the
+# fleet.  Jolt is warning-clean on its own tested compilers, but a stricter
+# builder GCC trips a -Wuninitialized false positive in Jolt/Core/HashTable.h
+# and fails the build; a distributed package must not be -Werror-gated that way.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -43,6 +49,7 @@ cmake -G Ninja \
     -DGENERATE_DEBUG_SYMBOLS=OFF \
     -DFLOATING_POINT_EXCEPTIONS_ENABLED=OFF \
     -DINTERPROCEDURAL_OPTIMIZATION=OFF \
+    -DENABLE_ALL_WARNINGS=OFF \
     -DJPH_USE_DX12=OFF \
     -DJPH_USE_VK=OFF \
     -DJPH_USE_MTL=OFF \

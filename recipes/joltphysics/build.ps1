@@ -24,6 +24,9 @@ Invoke-CvcCMakeBuild @(
     '-DGENERATE_DEBUG_SYMBOLS=OFF',
     '-DFLOATING_POINT_EXCEPTIONS_ENABLED=OFF',
     '-DINTERPROCEDURAL_OPTIMIZATION=OFF',
+    # -Werror / MSVC /WX off: don't gate our build on upstream warning cleanliness
+    # across the whole builder fleet (a stricter compiler otherwise fails it).
+    '-DENABLE_ALL_WARNINGS=OFF',
     '-DUSE_STATIC_MSVC_RUNTIME_LIBRARY=OFF',
     '-DJPH_USE_DX12=OFF',
     '-DJPH_USE_VK=OFF',
