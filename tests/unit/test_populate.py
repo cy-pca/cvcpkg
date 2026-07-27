@@ -1087,6 +1087,23 @@ class TestSubmitDagAutoDeps:
         assert [j["recipe_name"] for j in body["jobs"]] == ["libpng"]
         assert body["jobs"][0]["depends_on"] == []
 
+    def test_published_dep_not_traversed_for_its_build_deps(self, tmp_path, monkeypatch):
+        # A target depends on a PUBLISHED qt-like recipe whose OWN unpublished
+        # build-dep must NOT be dragged into the DAG: the published bundle is
+        # installed as-is, so its build-deps are irrelevant.  Regression for the
+        # over-collection that spuriously added python3 via the published qt6.
+        _write_recipe(tmp_path, "py3like", version="3.13", rev=1)  # unpublished build-tool
+        _write_recipe(tmp_path, "qtlike", version="6.8.2", rev=1, deps=("py3like",))  # published
+        _write_recipe(tmp_path, "app", version="1.0.0", rev=1, deps=("qtlike",))
+        published = [self._pub("qtlike", "6.8.2+cvc.1")]
+        posted: list = []
+        ret = self._submit(tmp_path, monkeypatch, published, posted, "app")
+        assert ret == 0
+        (body,) = posted
+        names = [j["recipe_name"] for j in body["jobs"]]
+        assert names == ["app"]  # qtlike published (skipped); py3like NOT pulled in
+        assert "py3like" not in names
+
     def test_no_deps_flag_disables_autoadd(self, tmp_path, monkeypatch):
         _write_recipe(tmp_path, "zlib", version="1.3.1", rev=3)
         _write_recipe(tmp_path, "libpng", version="1.6.43", rev=1, deps=("zlib",))

@@ -1191,14 +1191,40 @@ def builds_submit_dag(
         t = recipe_data.get(name, {}).get("build", {}).get("timeout_seconds")
         return int(t) if t is not None else None
 
-    def _closure(seeds: list[str]) -> set[str]:
+    def _closure(
+        seeds: list[str],
+        plat: str = "",
+        ar: str = "",
+        cfg: str = "",
+        lnk: str = "",
+    ) -> set[str]:
         """Transitive dependency closure of *seeds* (runtime + build +
         host_tools edges), following only recipes we can see.
 
         Returns the dependency names, excluding the seeds themselves.  A dep
         with no recipe of its own is returned (so the caller can flag an
         unbuildable gap) but not traversed further.
+
+        When a platform tuple is given, an ALREADY-PUBLISHED dep is recorded
+        but NOT traversed into: its bundle is installed as-is, never rebuilt,
+        so its own build-deps are irrelevant.  This keeps a published dep from
+        dragging its unpublished build-tools (e.g. a published qt6's build-time
+        python3) into the DAG as spurious jobs.
         """
+
+        def _published_for_combo(n: str) -> bool:
+            if not (plat and n in recipe_data):
+                return False
+            ver = _full_version(n)
+            return (n, ver, plat, ar, cfg, lnk) in _published or (
+                n,
+                ver,
+                "any",
+                "noarch",
+                cfg,
+                lnk,
+            ) in _published
+
         seen: set[str] = set()
         queue = [d for s in seeds for d in _dep_names(s)]
         while queue:
@@ -1206,7 +1232,7 @@ def builds_submit_dag(
             if n in seen:
                 continue
             seen.add(n)
-            if n in recipe_data:
+            if n in recipe_data and not _published_for_combo(n):
                 queue.extend(_dep_names(n))
         seen.difference_update(seeds)
         return seen
@@ -1281,7 +1307,7 @@ def builds_submit_dag(
                         added: list[str] = []
                         cross_noarch: list[str] = []
                         unbuildable: list[str] = []
-                        for dep in sorted(_closure(eligible)):
+                        for dep in sorted(_closure(eligible, plat, ar, cfg, lnk)):
                             if dep in being_built:
                                 continue
                             has_recipe = dep in recipe_data
