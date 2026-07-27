@@ -250,6 +250,51 @@ def _make_catalog(tmp_path: Path) -> Path:
     return p
 
 
+def _make_org_catalog(tmp_path: Path) -> Path:
+    """A catalog with the SAME name published under two different orgs, to
+    test that an org-qualified spec ("cvc/libcvc") resolves to the right one
+    and does not silently match — or silently miss — the wrong org."""
+    catalog = {
+        "schema_version": 1,
+        "revision": 1,
+        "bundles": [
+            {
+                "name": "libcvc",
+                "org": "cvc",
+                "version": "3.2.4+cvc.5",
+                "upstream_version": "3.2.4",
+                "cvc_revision": 5,
+                "platform": "linux",
+                "arch": "x86_64",
+                "build_type": "release",
+                "link": "shared",
+                "sha256": "cvcabc",
+                "size_bytes": 100000,
+                "archive_url": "",
+                "source_release": "v1.1.0",
+            },
+            {
+                "name": "libcvc",
+                "org": "someone-else",
+                "version": "9.9.9+cvc.1",
+                "upstream_version": "9.9.9",
+                "cvc_revision": 1,
+                "platform": "linux",
+                "arch": "x86_64",
+                "build_type": "release",
+                "link": "shared",
+                "sha256": "otherabc",
+                "size_bytes": 100000,
+                "archive_url": "",
+                "source_release": "v1.1.0",
+            },
+        ],
+    }
+    p = tmp_path / "org-catalog.yaml"
+    p.write_text(yaml.dump(catalog, default_flow_style=False))
+    return p
+
+
 class TestInstallWithCatalog:
     """Test install against a local catalog file."""
 
@@ -273,6 +318,84 @@ class TestInstallWithCatalog:
                 ]
             )
         assert ret == 0
+
+    def test_install_partial_miss_is_an_error(self, tmp_path, capsys):
+        """Regression test: a resolvable + an unresolvable component together
+        must NOT report success. Previously, `resolvable = [c for c in
+        reqs.components if c.name in candidates or ...]` silently dropped any
+        component with no catalog match, and the final check only fired when
+        *everything* failed — so `cvcpkg install zlib typo-name` exited 0
+        having installed only zlib, with no indication "typo-name" vanished.
+        (Discovered via `cvcpkg install cvc/libcvc vtk`, which dropped
+        "cvc/libcvc" for the same reason before org-qualified specs existed.)
+        """
+        cat = _make_catalog(tmp_path)
+        prefix = tmp_path / "prefix"
+        with mock.patch("cvcpkg.installer.install_entry"):
+            ret = main(
+                [
+                    "install",
+                    "zlib",
+                    "typo-name",
+                    "--catalog",
+                    str(cat),
+                    "--prefix",
+                    str(prefix),
+                    "--platform",
+                    "linux",
+                    "--arch",
+                    "x86_64",
+                ]
+            )
+        assert ret != 0
+        captured = capsys.readouterr()
+        assert "typo-name" in (captured.out + captured.err)
+
+    def test_install_org_qualified_component_resolves(self, tmp_path, capsys):
+        """cvcpkg install cvc/libcvc must actually install libcvc, scoped to
+        the "cvc" org — not silently install nothing (the original bug)."""
+        cat = _make_org_catalog(tmp_path)
+        prefix = tmp_path / "prefix"
+        with mock.patch("cvcpkg.installer.install_entry"):
+            ret = main(
+                [
+                    "install",
+                    "cvc/libcvc",
+                    "--catalog",
+                    str(cat),
+                    "--prefix",
+                    str(prefix),
+                    "--platform",
+                    "linux",
+                    "--arch",
+                    "x86_64",
+                ]
+            )
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "libcvc" in out
+
+    def test_install_wrong_org_qualifier_is_an_error(self, tmp_path, capsys):
+        """cvcpkg install other-org/libcvc must fail loudly (no candidate in
+        that org), not silently succeed by matching a different org's libcvc."""
+        cat = _make_org_catalog(tmp_path)
+        prefix = tmp_path / "prefix"
+        with mock.patch("cvcpkg.installer.install_entry"):
+            ret = main(
+                [
+                    "install",
+                    "other-org/libcvc",
+                    "--catalog",
+                    str(cat),
+                    "--prefix",
+                    str(prefix),
+                    "--platform",
+                    "linux",
+                    "--arch",
+                    "x86_64",
+                ]
+            )
+        assert ret != 0
 
 
 # ── Hardening: invalid platform/arch Choice validation ──────────

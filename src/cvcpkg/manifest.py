@@ -288,6 +288,28 @@ class ComponentReq:
     name: str
     version: str = ""
     exclude: bool = False
+    org: str = ""  # organization slug ("" = unqualified, matches any org)
+
+    @property
+    def display_name(self) -> str:
+        """``org/name`` when org-qualified, plain ``name`` otherwise (for messages)."""
+        return f"{self.org}/{self.name}" if self.org else self.name
+
+
+def parse_component_spec(spec: str) -> ComponentReq:
+    """Parse a CLI/requirements-file component spec: ``[org/]name[==version]``.
+
+    Examples: ``zlib``, ``zlib==1.3.1+cvc.1``, ``cvc/libcvc``,
+    ``cvc/libcvc==3.2.4+cvc.5``. Mirrors the org/name split ``cvcpkg info``
+    already did for its own catalog lookup (manifest.py historically had no
+    home for it, so each CLI command reimplemented an org-blind version of
+    this — see the ``install``/``download`` bugfix that added this function).
+    """
+    body, _, version = spec.partition("==")
+    org, sep, name = body.partition("/")
+    if not sep:
+        org, name = "", body
+    return ComponentReq(name=name, version=f"=={version}" if version else "", org=org)
 
 
 @dataclass
@@ -306,23 +328,33 @@ class Requirements:
         components: list[ComponentReq] = []
         for c in d.get("components", []):
             if isinstance(c, str):
-                components.append(ComponentReq(name=c))
+                components.append(parse_component_spec(c))
             else:
+                org = c.get("org", "")
+                name = c["name"]
+                if not org and "/" in name:
+                    org, name = name.split("/", 1)
                 components.append(
                     ComponentReq(
-                        name=c["name"],
+                        name=name,
                         version=c.get("version", ""),
                         exclude=c.get("exclude", False),
+                        org=org,
                     )
                 )
 
         overrides: list[ComponentReq] = []
         for o in d.get("overrides", []):
+            org = o.get("org", "")
+            name = o["name"]
+            if not org and "/" in name:
+                org, name = name.split("/", 1)
             overrides.append(
                 ComponentReq(
-                    name=o["name"],
+                    name=name,
                     version=o.get("version", ""),
                     exclude=o.get("exclude", False),
+                    org=org,
                 )
             )
 

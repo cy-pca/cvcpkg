@@ -337,7 +337,7 @@ def download(
     from cvcpkg.cache import default_cache_dir
     from cvcpkg.catalog import catalog_entries, fetch_catalog, load_catalog_from_file
     from cvcpkg.installer import download_bundle
-    from cvcpkg.manifest import CatalogEntry, ComponentReq
+    from cvcpkg.manifest import CatalogEntry, ComponentReq, parse_component_spec
     from cvcpkg.platform import detect_arch, detect_platform
 
     plat = platform if platform != "auto" else detect_platform()
@@ -347,14 +347,9 @@ def download(
 
     click.echo(f"cvcpkg: resolving for {plat}/{arc}/{config}/{link}")
 
-    # Parse component specs (name or name==version).
-    reqs: list[ComponentReq] = []
-    for c in components:
-        if "==" in c:
-            name, ver = c.split("==", 1)
-            reqs.append(ComponentReq(name=name, version=f"=={ver}"))
-        else:
-            reqs.append(ComponentReq(name=c))
+    # Parse component specs: name, name==version, or org/name[==version].
+    reqs: list[ComponentReq] = [parse_component_spec(c) for c in components]
+    requested_org: dict[str, str] = {c.name: c.org for c in reqs if c.org}
 
     # Fetch catalog.
     catalog_url = catalog or ""
@@ -369,6 +364,9 @@ def download(
     entries = catalog_entries(cat, platform=plat, arch=arc, build_type=config, link=link)
     candidates: dict[str, list[CatalogEntry]] = {}
     for e in entries:
+        wanted_org = requested_org.get(e.name)
+        if wanted_org and e.org != wanted_org:
+            continue
         candidates.setdefault(e.name, []).append(e)
 
     if not entries:
