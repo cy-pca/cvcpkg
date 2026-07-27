@@ -1488,6 +1488,61 @@ cross-target it, exactly like BLAS. With resolution (1) done, GPU selection touc
 - **Releases.** An LTS release records the resolved provider per `HardwareProfile`, keeping
   cross-platform reproducibility while letting each target get its best-available implementation.
 
+#### Open question — single-binary runtime GPU dispatch (logged 2026-07-27, not designed)
+
+Everything above — including "After Phase 10" — selects the CPU/`-cuda` peer at **install/resolve
+time** (a `cvcpkg install` on a probed or forced `HardwareProfile`, mutex-exclusive between the two
+bundles). That model extends cleanly down the application stack: `volrover3-cuda` alongside
+`volrover3`, following the same `provides: [volrover3]` + `requires_capabilities: [cuda]` shape as
+`libcvc`/`pycvc`/`pycvc-gl` today (and, if the [Phase 7 Python
+axis](#phase-7--python-ecosystem-integration-hermetic-python--native-prefixes) grows a CUDA column
+too — e.g. a hypothetical `torch-cp311-cuda` — the combinatorics compound: interpreter × CUDA
+× the existing platform/config/link axes).
+
+A **different** question was raised separately (modernization planning, 2026-07-27) and is *not*
+answered by the install-time model: can a **single installed `volrover3`** probe the host for a
+CUDA-capable GPU/driver **at process runtime** and load the right rendering/compute backend itself,
+rather than requiring the operator to choose `volrover3` vs `volrover3-cuda` at install time? This
+would let one distributed artifact serve both a plain workstation and a GPU box without a
+re-install, which matters for a client who may not know their target hardware in advance or who
+images CPU and GPU machines from the same package set.
+
+This is **flagged as an open investigation, not a design** — it looks genuinely hard under cvcpkg's
+current hermetic model, for reasons the peer-provider mechanism above doesn't have to deal with:
+
+- **The ABI-peer gotcha compounds.** The "make `cvc::volume` variant-invariant" fix (recommendation
+  1 above) makes the CPU and `-cuda` builds of `libcvc` ABI-*compatible*, but a single `volrover3`
+  binary dynamically choosing between them at runtime is a stronger requirement than "linkable" —
+  it needs BOTH variants' `.so`s present and a dispatch point that never lets a CPU-built call site
+  see a GPU-shaped object or vice versa.
+  cvcGL/volrover3 stay a single package under variant-invariant ABI *only because they link one
+  variant, decided at build time*; runtime dispatch reopens exactly the object-layout question that
+  fix closed.
+- **`CVC_USING_CUDA` is compile-time by construction.** It is a `PUBLIC` compile definition (not a
+  runtime flag) on `cvc::cvc` — every `#ifdef`-gated code path (kernels, `pycvc_volume.cpp`'s
+  `on_gpu()`/`cuda_ptr()`) is baked into the object file at compile time, not switchable by an
+  environment check. Runtime dispatch would mean either (a) loading one of two prebuilt `libcvc`
+  `.so`s at `dlopen` time behind a stable C ABI boundary, or (b) compiling both code paths into one
+  binary gated by a runtime branch instead of `#ifdef` — a real refactor of the CUDA integration,
+  not a packaging change.
+- **Hermeticity cuts against it.** cvcpkg's whole model is `$ORIGIN`-relative RPATH into a closure
+  resolved and pinned at install time, with no system-library leakage — the opposite of "probe the
+  host and pick a shared object at process start." A runtime-dispatch `volrover3` would need to ship
+  BOTH the CPU and CUDA closures side by side (roughly doubling the CUDA-relevant part of the
+  install) and would still need the NVIDIA driver/CUDA runtime *itself* resolvable at runtime on a
+  GPU host — the one piece cvcpkg deliberately does not vendor (`cuda-cudart` et al. redistribute
+  NVIDIA's own binaries; the kernel driver is never cvcpkg's to ship).
+
+**Recommended next step (not started):** a short spike, separate from Phase 10 proper, that answers
+just one question empirically — can `libcvc`'s CUDA surface be restructured behind a stable
+`dlopen`-able boundary (a small C ABI vtable a CPU host loads two ways) cheaply enough to be worth
+it, or does the `#ifdef`-baked design make (a) above impractical, leaving install-time peer selection
+(this Phase) as the right answer for volrover3 too? Until that spike runs, the Phase 10 model above
+(operator- or profile-selected `-cuda` peer at install time) is the recommended path for
+`volrover3-cuda` / `cvcgl-cuda`* / `pycvc-cuda` / `pycvc-gl-cuda` — not runtime auto-discovery.
+(*`cvcgl` itself stays single-package once the ABI-invariance fix lands — see above; the `-cuda`
+suffix only applies to packages with real CUDA-gated code.)
+
 ---
 
 ### Phase 11 — Self-Hosting Toolchains + `cvpkg` (Zero-System-Dependency Deploys)
