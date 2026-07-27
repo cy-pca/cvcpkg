@@ -13,6 +13,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck disable=SC1090
 source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
+# shellcheck disable=SC1090
+source "${SCRIPT_DIR}/../_common/python-wheel.sh"
 
 # ── Locate the cvcpkg python3.11 interpreter in the dependency closure ───────
 PY_EXE=""
@@ -80,3 +82,8 @@ cmake --install "${CVC_BUILD_DIR}"
 
 # Make .pc/.cmake files relocatable (rewrite absolute install-dir paths).
 cvc_rewrite_install_paths
+
+# abi3 fan-out: copy the just-built cp311 site-packages tree (PySide6) into
+# every other fanned interpreter's site-packages. CVC_PYTHON_NOARCH_FANOUT is
+# set by the builder from this recipe's `python: {abi: abi3}` block.
+cvc_noarch_fanout
