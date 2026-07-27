@@ -1499,13 +1499,13 @@ axis](#phase-7--python-ecosystem-integration-hermetic-python--native-prefixes) g
 too — e.g. a hypothetical `torch-cp311-cuda` — the combinatorics compound: interpreter × CUDA
 × the existing platform/config/link axes).
 
-A **different** question was raised separately (CN 2026_6701 modernization discussion, 2026-07-27)
-and is *not* answered by the install-time model: can a **single installed `volrover3`** probe the
-host for a CUDA-capable GPU/driver **at process runtime** and load the right rendering/compute
-backend itself, rather than requiring the operator to choose `volrover3` vs `volrover3-cuda` at
-install time? This would let one distributed artifact serve both a plain workstation and a GPU box
-without a re-install, which matters for an Army client who may not know their target hardware in
-advance or who images CPU and GPU machines from the same package set.
+A **different** question was raised separately (modernization planning, 2026-07-27) and is *not*
+answered by the install-time model: can a **single installed `volrover3`** probe the host for a
+CUDA-capable GPU/driver **at process runtime** and load the right rendering/compute backend itself,
+rather than requiring the operator to choose `volrover3` vs `volrover3-cuda` at install time? This
+would let one distributed artifact serve both a plain workstation and a GPU box without a
+re-install, which matters for a client who may not know their target hardware in advance or who
+images CPU and GPU machines from the same package set.
 
 This is **flagged as an open investigation, not a design** — it looks genuinely hard under cvcpkg's
 current hermetic model, for reasons the peer-provider mechanism above doesn't have to deal with:
