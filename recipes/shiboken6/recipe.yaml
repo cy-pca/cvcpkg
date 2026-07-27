@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: shiboken6
   upstream_version: "6.8.2"
-  cvc_revision: 1
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -25,8 +25,10 @@ recipe:
     6.8.2 — the SAME Qt PySide6 and the host app link, so there is one
     libQt6Core in-process. The ApiExtractor parser links the hermetic cvcpkg llvm18
     (see the CLANG COUPLING note below); the cvcpkg `llvm` recipe is deliberately NOT used
-    because it is LLVM 22, newer than shiboken 6.8.2 supports. Python-ABI
-    specific (cp311); a python312/313 host needs a parallel variant.
+    because it is LLVM 22, newer than shiboken 6.8.2 supports. Built with
+    FORCE_LIMITED_API against cp311, then abi3-fanned into every cvcpkg
+    interpreter (cp311/cp312/cp313) — see the `python:` block below — so a
+    single build covers the whole non-free-threaded matrix.
 
 source:
   # Qt for Python is released as one `pyside-setup` source tarball that contains
@@ -37,6 +39,14 @@ source:
   url: https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-6.8.2-src/pyside-setup-everywhere-src-6.8.2.tar.xz
   sha256: "8422e9aa403f4119e3192853e9b0cfa09e57e3e0a1a3393e7fdf394179c112f8"
   strip_components: 1
+
+# FORCE_LIMITED_API=yes (build.sh) makes the compiled .so's abi3, so one cp311
+# build is valid on cp312/cp313 too — same stable-ABI collapse as bcrypt/
+# cryptography/pynacl. build.sh calls cvc_noarch_fanout to copy the built
+# site-packages tree into every fanned interpreter after `cmake --install`.
+python:
+  interpreter: python311
+  abi: abi3
 
 patches: []
 
@@ -87,9 +97,10 @@ package:
     - bin/shiboken6*
     # Runtime C++ support library PySide6 bindings link against.
     - lib/libshiboken6*
-    # Importable cp311 Python package: exposes wrapInstance / getCppPointer.
-    - lib/python3.11*/site-packages/shiboken6/
-    - lib/python3.11*/site-packages/shiboken6_generator/
+    # Importable abi3 Python package, fanned into every interpreter
+    # (cp311/cp312/cp313): exposes wrapInstance / getCppPointer.
+    - lib/python3.*/site-packages/shiboken6/
+    - lib/python3.*/site-packages/shiboken6_generator/
     # CMake config consumed by the `pyside6` recipe: find_package(Shiboken6).
     - lib/cmake/Shiboken6*/
     # Public headers for anything that links libshiboken directly.
@@ -120,4 +131,16 @@ notes: >-
 
   LIMITED API: built with FORCE_LIMITED_API=yes (upstream default → stable-ABI
   .abi3.so). pyside6 MUST be built with the same setting. Set FORCE_LIMITED_API=no
-  in build.sh if a strict cp311-tagged (non-abi3) build is wanted instead.
+  in build.sh if a strict cp311-tagged (non-abi3) build is wanted instead — but
+  note that also disables the abi3 fan-out below (a non-abi3 build is only
+  valid under the exact interpreter it was built against).
+
+  ABI3 FAN-OUT: this recipe's `python:` block (`abi: abi3`) tells the builder
+  to set CVC_PYTHON_NOARCH_FANOUT for build.sh, which calls cvc_noarch_fanout
+  (recipes/_common/python-wheel.sh) after `cmake --install` to copy the built
+  cp311 site-packages tree into every fanned interpreter's site-packages
+  (cp312, cp313 — never cp313t, which has no stable ABI). Before this, the
+  recipe was hard-pinned to python311 with no `-cp311` naming and no fan-out,
+  so a python312/313 host silently couldn't `import shiboken6` — see the
+  parallel fix in the `pyside6` recipe, which must stay in lockstep (same
+  FORCE_LIMITED_API setting, bumped cvc_revision together).
