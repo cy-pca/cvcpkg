@@ -1,7 +1,16 @@
 schema_version: 1
 recipe:
   name: openal-soft
-  upstream_version: "1.25.2"
+  # TEMPORARY downgrade 1.25.2 -> 1.24.3.  1.25.x's alc.cpp uses C++20
+  # `std::views::split` with contiguous_range subranges (the P2210 split_view),
+  # which only compiles on GCC >= 13; the prod linux builders run an older GCC
+  # and failed with "no match for std::ranges::__for_each_fn(split_view, ...)".
+  # 1.24.3 is the last release free of views::split (verified tree-wide) and
+  # builds on GCC 11+.  Revert to 1.25.x once the prod linux builders are on
+  # GCC >= 13 (matching the dev builders / local).  Nothing was published for
+  # 1.25.2 (it failed on every platform), so this is not a downgrade over an
+  # existing bundle.
+  upstream_version: "1.24.3"
   cvc_revision: 1
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -18,8 +27,8 @@ recipe:
 
 source:
   type: tarball
-  url: https://github.com/kcat/openal-soft/archive/refs/tags/1.25.2.tar.gz
-  sha256: "fb27e5839aa11f0e5b9d33756965291fad5d6909ab928ea1f796f4a1a6877894"
+  url: https://github.com/kcat/openal-soft/archive/refs/tags/1.24.3.tar.gz
+  sha256: "7e1fecdeb45e7f78722b776c5cf30bd33934b961d7fd2a11e0494e064cc631ce"
   strip_components: 1
 
 patches: []
