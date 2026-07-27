@@ -8,6 +8,15 @@ set -euo pipefail
 
 cvc_pip_install_wheel
 
+# torch loads the CUDA runtime .so's shipped by the nvidia-*-cu12 packages (in
+# the deps prefix, under nvidia/<pkg>/lib). torch's install tree is isolated
+# during the build, so its RUNPATH-relative path to those libs doesn't resolve
+# and its preloader doesn't cover every lib (e.g. cudnn -> cublas). Put every
+# nvidia/<pkg>/lib on the loader path so `import torch` resolves them all.
+_nv_libdirs="$(find "${CVC_DEPS_PREFIX}"/lib/python3.11*/site-packages/nvidia \
+    -maxdepth 2 -type d -name lib 2>/dev/null | paste -sd:)"
+export LD_LIBRARY_PATH="${_nv_libdirs}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+
 # Import loads the CUDA runtime; assert this is the CUDA build. torch imports
 # fine on a GPU-less builder (cuda.is_available() may be False without a driver),
 # so gate the check on the build string, not device availability.
