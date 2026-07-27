@@ -8,8 +8,10 @@ from cvcpkg.errors import SchemaError
 from cvcpkg.manifest import (
     BundleManifest,
     CatalogEntry,
+    ComponentReq,
     ReleaseIndex,
     Requirements,
+    parse_component_spec,
 )
 
 # ── BundleManifest ──────────────────────────────────────────────
@@ -379,6 +381,66 @@ class TestRequirements:
         assert r.components[0].version == ""
         assert r.components[1].name == "boost"
         assert r.components[1].version == "^1.80"
+
+    def test_org_qualified_string_component(self):
+        r = Requirements.from_dict({"components": ["cvc/libcvc"]})
+        assert r.components[0].name == "libcvc"
+        assert r.components[0].org == "cvc"
+        assert r.components[0].version == ""
+
+    def test_org_qualified_string_component_with_version(self):
+        r = Requirements.from_dict({"components": ["cvc/libcvc==3.2.4+cvc.5"]})
+        assert r.components[0].name == "libcvc"
+        assert r.components[0].org == "cvc"
+        assert r.components[0].version == "==3.2.4+cvc.5"
+
+    def test_org_qualified_dict_component_via_name(self):
+        r = Requirements.from_dict({"components": [{"name": "cvc/libcvc"}]})
+        assert r.components[0].name == "libcvc"
+        assert r.components[0].org == "cvc"
+
+    def test_org_qualified_dict_component_via_org_field(self):
+        r = Requirements.from_dict({"components": [{"name": "libcvc", "org": "cvc"}]})
+        assert r.components[0].name == "libcvc"
+        assert r.components[0].org == "cvc"
+
+    def test_unqualified_component_has_empty_org(self):
+        r = Requirements.from_dict({"components": ["zlib"]})
+        assert r.components[0].org == ""
+
+
+# ── parse_component_spec ─────────────────────────────────────────
+
+
+class TestParseComponentSpec:
+    """Regression coverage for the org/name==version CLI spec parser.
+
+    Guards against the bug where ``cvcpkg install cvc/libcvc vtk`` silently
+    installed nothing for ``cvc/libcvc`` (ComponentReq had no org field, so
+    the literal string "cvc/libcvc" never matched any catalog entry's bare
+    name, and the miss was dropped without error) — see the "install"
+    command's new unresolved-component check for the other half of the fix.
+    """
+
+    def test_bare_name(self):
+        req = parse_component_spec("zlib")
+        assert req == ComponentReq(name="zlib", version="", org="")
+
+    def test_bare_name_with_version(self):
+        req = parse_component_spec("zlib==1.3.1+cvc.1")
+        assert req == ComponentReq(name="zlib", version="==1.3.1+cvc.1", org="")
+
+    def test_org_qualified_name(self):
+        req = parse_component_spec("cvc/libcvc")
+        assert req == ComponentReq(name="libcvc", version="", org="cvc")
+
+    def test_org_qualified_name_with_version(self):
+        req = parse_component_spec("cvc/libcvc==3.2.4+cvc.5")
+        assert req == ComponentReq(name="libcvc", version="==3.2.4+cvc.5", org="cvc")
+
+    def test_display_name_round_trips(self):
+        assert parse_component_spec("cvc/libcvc").display_name == "cvc/libcvc"
+        assert parse_component_spec("zlib").display_name == "zlib"
 
 
 # ── Hardening: error paths ──────────────────────────────────────

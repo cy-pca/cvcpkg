@@ -193,7 +193,7 @@ def install(
     from cvcpkg.errors import InstallError, IntegrityError
     from cvcpkg.installer import build_from_source_fallback, install_entry
     from cvcpkg.lockfile import LockEntry, Lockfile
-    from cvcpkg.manifest import CatalogEntry, ComponentReq, Requirements
+    from cvcpkg.manifest import CatalogEntry, ComponentReq, Requirements, parse_component_spec
     from cvcpkg.platform import detect_arch, detect_platform
 
     ctx = click.get_current_context()
@@ -222,13 +222,7 @@ def install(
     if from_file:
         reqs = Requirements.from_yaml(from_file)
     else:
-        comp_list: list[ComponentReq] = []
-        for c in components:
-            if "==" in c:
-                name, ver = c.split("==", 1)
-                comp_list.append(ComponentReq(name=name, version=f"=={ver}"))
-            else:
-                comp_list.append(ComponentReq(name=c))
+        comp_list: list[ComponentReq] = [parse_component_spec(c) for c in components]
         reqs = Requirements(
             platform=platform,
             arch=arch,
@@ -307,6 +301,14 @@ def install(
     source_only: list[str] = []
     requested_names = [c.name for c in reqs.components]
 
+    # Component requests qualified with an org (e.g. "cvc/libcvc") scope
+    # candidate selection to that org for that name — see the org-qualified
+    # spec bugfix below: without this, "cvc/libcvc" and "libcvc" were
+    # indistinguishable to the resolver (ComponentReq carried no org), and if
+    # multiple orgs (or the public catalog) ever published the same name, an
+    # org-qualified request could silently resolve against the wrong one.
+    requested_org: dict[str, str] = {c.name: c.org for c in reqs.components if c.org}
+
     if not catalog_failed:
         entries = catalog_entries(
             cat,
@@ -316,9 +318,13 @@ def install(
             link=reqs.link,
         )
 
-        # Group candidate entries by component name for the resolver.
+        # Group candidate entries by component name for the resolver, scoping
+        # to the requested org where one was specified for that name.
         candidates: dict[str, list] = {}
         for e in entries:
+            wanted_org = requested_org.get(e.name)
+            if wanted_org and e.org != wanted_org:
+                continue
             candidates.setdefault(e.name, []).append(e)
 
         if not entries and not fallback_to_source:
@@ -367,6 +373,30 @@ def install(
         )
     if not picked and not source_only:
         raise click.ClickException("no bundles found in catalog for this platform tuple.")
+
+    # Every explicitly requested (non-excluded) component must have landed in
+    # either `picked` or `source_only` — otherwise it was silently dropped
+    # upstream (unresolvable name, org mismatch, ...) while OTHER requested
+    # components still resolved, which used to report overall success anyway.
+    # This is the actual safety net; don't remove it even if a future change
+    # makes the org-qualified case above unreachable — a plain typo hits the
+    # same gap.
+    unresolved = [
+        c.display_name
+        for c in reqs.components
+        if not c.exclude and c.name not in picked and c.name not in source_only
+    ]
+    if unresolved:
+        hint = (
+            ""
+            if fallback_to_source
+            else " (pass --fallback-to-source to build it from source instead)"
+        )
+        raise click.ClickException(
+            "requested component(s) not found in the catalog for this platform tuple: "
+            + ", ".join(unresolved)
+            + hint
+        )
 
     # ── Conflict check ──
     #
