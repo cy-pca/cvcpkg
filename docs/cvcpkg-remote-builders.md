@@ -55,6 +55,45 @@ cvcpkg builder run \
 | `--arch` | Override auto-detected architecture |
 | `--cross-platform` | Advertise a cross-compilation target (repeatable) |
 
+## Ephemeral / drain builds (no persistent builder)
+
+Sometimes you don't want a standing builder — you want to spin one up, have it
+**consume the pending jobs for a platform, publish their packages, and exit**.
+This is how macOS packages are built today: there is no persistent macOS builder
+(GitHub-hosted runners are ephemeral), so macOS jobs sit *pending* on the server
+until an ephemeral worker drains them. `.github/workflows/macos-drain.yml`
+automates it (scheduled every 2 h + `workflow_dispatch`); you can also run it by
+hand on any Mac:
+
+```bash
+cvcpkg builder run \
+  --server https://cvcpkg.org --token "$CVCPKG_TOKEN" \
+  --name "drain-$(hostname)-$(date +%s)" \
+  --platform macos --max-jobs 2 --work-dir /tmp/cvcpkg-builder \
+  --no-register --exit-when-empty --max-runtime 5400
+```
+
+| Option | Why it matters for draining |
+|--------|------------------------------|
+| `--no-register` | Claim, build, and publish jobs **without** joining the builder fleet. An ephemeral worker has no business appearing in the fleet — and can't clean itself up (unregister is admin-only, and it holds a publisher token). It is a *publisher that happens to consume queue items*, not a registered builder. |
+| `--exit-when-empty` | Exit `0` as soon as the queue has no claimable jobs left (drain mode; forces HTTP long-poll instead of the persistent WebSocket). Omit it to keep polling forever. |
+| `--max-runtime SEC` | Wall-clock budget: stop claiming new jobs after this many seconds and exit — bounds a CI run so it can't hang. |
+| `--name NAME` | A run-scoped claimant name (e.g. `gha-run-$RUN_ID`) so each claim is attributable. |
+
+Each job is built and **published under the job's own namespace**, at the recipe
+revision it was submitted for — so draining only builds what is actually queued and
+never rebuilds packages that already exist. (Contrast `macos-build.yml`, which
+rebuilds the *whole* macOS recipe DAG via `pack-all` regardless of the queue.)
+
+Trigger the automated drainer instead of running locally:
+
+```bash
+gh workflow run macos-drain.yml -R transfix/libcvc-deps   # drain the macOS queue now
+```
+
+The same pattern drains any platform's queue — pass the matching `--platform` and
+run it on (or cross-compiling to) that platform.
+
 ## Multi-tenant / shared fleet
 
 A builder can serve **several namespaces** and register with **several servers**
