@@ -19,6 +19,12 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 
 # Make the dependency closure discoverable by find_package / pkg-config.
 export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig:${CVC_DEPS_PREFIX}/share/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+# Put the dependency lib dir on the link path. Allegro's ALSA/PulseAudio audio
+# drivers link the bare names -lasound / -lpulse / -lpulse-simple, so without
+# -L${prefix}/lib the hermetic builder's linker can't find them (they live in
+# the cvcpkg prefix, not a system dir). CMake folds $LDFLAGS into the linker
+# flags at configure time.
+export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib -Wl,-rpath,\$ORIGIN -Wl,-rpath,\$ORIGIN/../lib${LDFLAGS:+ ${LDFLAGS}}"
 
 if [[ "${CVC_LINK:-shared}" == "static" ]]; then
     _shared=OFF

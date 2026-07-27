@@ -2,10 +2,13 @@ schema_version: 1
 recipe:
   name: sdl3
   upstream_version: "3.4.12"
-  # cvc.2: declare libxscrnsaver. +cvc.1 failed on the hermetic linux builder —
-  # SDL's CMake requires the X11 XScreenSaver headers (SDL_X11_XSCRNSAVER) and
-  # aborted when they were absent from the prefix.
-  cvc_revision: 2
+  # cvc.2: declare libxscrnsaver (SDL_X11_XSCRNSAVER).
+  # cvc.3: declare libxtst too. SDL's CheckX11 probes a CHAIN of X11 extension
+  # packages and aborts on the first one missing from the hermetic prefix; after
+  # XSCRNSAVER it stopped on XTEST (the last check in the chain). libxtst closes
+  # the set (XEXT/XCURSOR/XDBE/XINPUT/XFIXES/XSYNC/XRANDR/XSCRNSAVER/XSHAPE/XTEST
+  # are now all satisfied).
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -57,6 +60,9 @@ depends:
     # aborts: "Couldn't find dependency package for XSCRNSAVER". The header is
     # absent on the hermetic builder even though it exists on a dev desktop.
     - name: libxscrnsaver
+      platforms: [linux, freebsd, openbsd, netbsd]
+    # X11 Test extension (SDL_X11_XTEST — global mouse warp / synthetic input).
+    - name: libxtst
       platforms: [linux, freebsd, openbsd, netbsd]
     # Wayland backend (Linux + FreeBSD; the wayland recipes stop there).
     - name: wayland
