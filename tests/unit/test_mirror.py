@@ -481,6 +481,82 @@ class TestMirrorModeGuards:
             assert "mirror mode" in resp.json()["detail"].lower()
 
 
+class TestMirrorReadsServeIndex:
+    """A DB-backed mirror must serve reads from the sync-maintained index.
+
+    pkg.tx.wtf regression (2026-08-02): the mirror runs the production
+    compose stack, so a database is configured and ``_use_db`` is true —
+    /v1/packages, /v1/search and /v1/packages/{name} then queried the empty
+    DB and listed 0 packages, while /healthz and /v1/catalog correctly
+    served the full synced index (1748 bundles).
+    """
+
+    def test_listing_search_detail_use_index_in_mirror_mode(self, tmp_path, monkeypatch):
+        import yaml as _yaml
+
+        import cvcpkg.server.app as app_mod
+
+        db_path = tmp_path / "test.db"
+        db_url = f"sqlite+aiosqlite:///{db_path}"
+        monkeypatch.setenv("CVCPKG_DATABASE_URL", db_url)
+        monkeypatch.setenv("CVCPKG_MIRROR_MODE", "1")
+        monkeypatch.setenv("CVCPKG_MIRROR_UPSTREAM", "https://primary.example.com")
+        monkeypatch.setattr(app_mod, "MIRROR_MODE", True)
+        monkeypatch.setattr(app_mod, "MIRROR_UPSTREAM", "https://primary.example.com")
+
+        # The DB exists but is EMPTY — a mirror's catalog rows live in the
+        # index maintained by the sync loop, not the DB.
+        from cvcpkg.server.db import create_tables, dispose_engine, init_db
+
+        async def _seed():
+            init_db(db_url)
+            await create_tables()
+            await dispose_engine()
+
+        asyncio.run(_seed())
+
+        (tmp_path / "index.yaml").write_text(
+            _yaml.safe_dump(
+                {
+                    "schema_version": 1,
+                    "revision": 1,
+                    "bundles": [
+                        {
+                            "name": "zlib",
+                            "version": "1.3.1+cvc.1",
+                            "platform": "linux",
+                            "arch": "x86_64",
+                            "build_type": "release",
+                            "link": "shared",
+                        },
+                        {
+                            "name": "libcvc-cuda",
+                            "version": "1.0.0+cvc.1",
+                            "platform": "linux",
+                            "arch": "x86_64",
+                            "build_type": "release",
+                            "link": "shared",
+                        },
+                    ],
+                }
+            )
+        )
+
+        app = create_app(state_dir=tmp_path)
+        with TestClient(app) as client:
+            listed = client.get("/v1/packages").json()
+            assert listed["total"] == 2
+            assert {p["name"] for p in listed["packages"]} == {"zlib", "libcvc-cuda"}
+
+            found = client.get("/v1/search", params={"q": "zlib"}).json()
+            assert found["total"] == 1
+            assert found["packages"][0]["name"] == "zlib"
+
+            detail = client.get("/v1/packages/zlib").json()
+            assert detail["total"] == 1
+            assert detail["packages"][0]["version"] == "1.3.1+cvc.1"
+
+
 class TestMirrorAudit:
     """Verify mirror actions are properly audited."""
 
