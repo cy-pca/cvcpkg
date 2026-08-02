@@ -17,6 +17,8 @@ import asyncio
 
 import pytest
 
+aiosqlite = pytest.importorskip("aiosqlite", reason="aiosqlite required for provides catalog tests")
+
 from cvcpkg.catalog import catalog_entries
 
 
