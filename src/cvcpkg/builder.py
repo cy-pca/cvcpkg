@@ -442,11 +442,12 @@ def _resolve_artifact_entry(source: SourceSpec, key: str, entry: Any) -> tuple[s
 def _platform_wheel_keys(source: SourceSpec, platform: str, arch: str) -> list[str]:
     """Artifact keys carrying a wheel for *platform*/*arch*, in stable order.
 
-    A single-wheel recipe has just the exact ``{platform}-{arch}`` key. A
-    per-version fan-out recipe adds one ``{platform}-{arch}-cpNN`` sibling per
-    extra interpreter (e.g. ``linux-x86_64``, ``linux-x86_64-cp311``,
-    ``linux-x86_64-cp313``); every one is fetched so the build can install each
-    ABI into its own interpreter. Empty when only ``any``/top-level applies.
+    A column recipe pins exactly one wheel per platform, so this is the bare
+    ``{platform}-{arch}`` key (or empty when only ``any``/top-level applies).
+    ``{platform}-{arch}-cpNN`` sibling keys were the retired per-version
+    fan-out shape — they are still collected here so the fetch layer can
+    reject them loudly instead of silently installing an arbitrary one
+    (recipes/_common only installs a single wheel now).
     """
     prefix = f"{platform}-{arch}"
     return sorted(k for k in source.artifacts if k == prefix or k.startswith(f"{prefix}-"))
@@ -516,24 +517,29 @@ def _download_pinned_wheel(url: str, sha256: str, filename: str, source_dir: Pat
 
 
 def _fetch_python_wheel(source: SourceSpec, dest: Path, platform: str, arch: str) -> Path:
-    """Download and sha256-verify the pinned wheel(s) for platform/arch; do not
-    unpack them.
+    """Download and sha256-verify THE pinned wheel for platform/arch; do not
+    unpack it.
 
-    pip parses the compatibility tags out of the wheel *filename*, so each
-    artifact keeps its upstream name.  A per-version fan-out recipe carries
-    several wheels for one platform (one per interpreter ABI, keyed
-    ``{plat}-{arch}-cpNN``); all are fetched into ``src/`` so the build can
-    install each into its own interpreter.  A single-wheel or noarch recipe
-    resolves to exactly one — unchanged behaviour.
+    pip parses the compatibility tags out of the wheel *filename*, so the
+    artifact keeps its upstream name.  Every python package is a
+    per-interpreter column recipe pinning exactly one wheel per platform;
+    ``{plat}-{arch}-cpNN`` sibling keys (the retired per-version fan-out
+    shape) are a hard error — the single-wheel install helper would
+    otherwise silently pick an arbitrary one.
     """
     source_dir = dest / "src"
     source_dir.mkdir(exist_ok=True)
 
     keys = _platform_wheel_keys(source, platform, arch)
+    if len(keys) > 1:
+        raise RecipeError(
+            f"python_wheel artifacts carry per-interpreter sibling keys "
+            f"{keys!r}: the per-version fan-out recipe shape is retired — "
+            f"split the package into one -cpNN column recipe per interpreter"
+        )
     if keys:
-        for key in keys:
-            url, sha256, filename = _resolve_artifact_entry(source, key, source.artifacts[key])
-            _download_pinned_wheel(url, sha256, filename, source_dir)
+        url, sha256, filename = _resolve_artifact_entry(source, keys[0], source.artifacts[keys[0]])
+        _download_pinned_wheel(url, sha256, filename, source_dir)
     else:
         # No platform-specific key: the ``any`` (noarch) or top-level single-wheel
         # fallback that _resolve_artifact already encodes.

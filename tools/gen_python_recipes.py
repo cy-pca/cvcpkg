@@ -78,9 +78,10 @@ SCRIPT_PACKAGES = {
     "alembic": ["alembic"],
     "black": ["black", "blackd"],
     "charset-normalizer": ["normalizer"],
-    "cython": ["cython", "cythonize"],
+    "cython": ["cython", "cythonize", "cygdb"],
     "fastapi": ["fastapi"],
     "httpx": ["httpx"],
+    "idna": ["idna"],
     "invoke": ["invoke", "inv"],
     "jmespath": ["jp.py"],
     "mako": ["mako-render"],
@@ -374,19 +375,30 @@ def marker_ok(dep_spec, interp: str) -> bool:
     free-threaded column evaluates as its base version (3.13t -> 3.13)."""
     if not isinstance(dep_spec, dict):
         return True
+    # An optional (extras-gated) dependency is not a hard edge: the consumer
+    # that requires the extra (msal -> pyjwt[crypto]) also carries its own
+    # direct dependency on the extra's payload, so the closure stays correct
+    # and a pure package is not pruned from a column by an extra it never
+    # needs (pyjwt-cp313t exists even though cryptography has no cp313t).
+    if dep_spec.get("optional") or "extra ==" in dep_spec.get("markers", ""):
+        return False
     marker = dep_spec.get("markers", "")
     if not marker or " or " in marker:
         return True
     ver = tuple(int(p) for p in col_version(interp).rstrip("t").split("."))
     for op, rhs in _MARKER_CMP.findall(marker):
         want = tuple(int(p) for p in rhs.split("."))
+        # PEP 440: 3.11 == 3.11.0 — zero-pad both sides for the ordered
+        # comparisons so a marker like < "3.11.0" excludes the 3.11 column.
+        n = max(len(ver), len(want))
+        vp, wp = ver + (0,) * (n - len(ver)), want + (0,) * (n - len(want))
         ok = {
-            "<": ver < want,
-            "<=": ver <= want,
-            ">": ver > want,
-            ">=": ver >= want,
-            "==": ver[: len(want)] == want,
-            "!=": ver[: len(want)] != want,
+            "<": vp < wp,
+            "<=": vp <= wp,
+            ">": vp > wp,
+            ">=": vp >= wp,
+            "==": vp == wp,
+            "!=": vp != wp,
         }[op]
         if not ok:
             return False
@@ -428,6 +440,12 @@ def classify(wheels: list[dict], interps: list[str]) -> str:
     (see wheel_for_column), so an abi3 package with an extra exact cp313t
     wheel still gets its free-threaded column.
     """
+    # A none-any wheel wins even when binary wheels also exist (black,
+    # charset-normalizer, cython, protobuf, pytokens, sqlalchemy, tomli):
+    # the pure fallback trades speed (no mypyc / C speedups / upb) for a
+    # build-once noarch artifact and full-column coverage incl. cp313t.
+    # Flip a package to its binary wheels only as a deliberate, per-package
+    # decision (a PREFER_BINARY set would slot in here).
     if any(w["filename"].endswith("none-any.whl") for w in wheels):
         return "pure"
     return "abi3" if _is_abi3(wheels, interps) else "cext"
@@ -559,6 +577,7 @@ def main() -> int:
 
     pkgs = load_runtime_packages(Path(args.lock))
     print(f"runtime packages: {len(pkgs)} + {len(SEED_PACKAGES)} seeds", file=sys.stderr)
+    skipped: list[str] = []
 
     # Pass 1: fetch wheels + classify every package (needed for dep mapping).
     meta: dict[str, dict] = {}
@@ -567,9 +586,11 @@ def main() -> int:
             wheels, lic = fetch_pypi(info["pypi_name"], info["version"])
         except Exception as e:  # noqa: BLE001
             print(f"  SKIP {base} {info['version']}: PyPI fetch failed: {e}", file=sys.stderr)
+            skipped.append(base)
             continue
         if not wheels:
             print(f"  SKIP {base}: no wheels (sdist-only) at {info['version']}", file=sys.stderr)
+            skipped.append(base)
             continue
         lic = _LICENSE_OVERRIDE.get(base, lic)
         meta[base] = {**info, "wheels": wheels, "kind": classify(wheels, interps), "license": lic}
@@ -581,9 +602,11 @@ def main() -> int:
             wheels, lic = fetch_pypi(base, seed["version"])
         except Exception as e:  # noqa: BLE001
             print(f"  SKIP seed {base} {seed['version']}: PyPI fetch failed: {e}", file=sys.stderr)
+            skipped.append(base)
             continue
         if not wheels:
             print(f"  SKIP seed {base}: no wheels at {seed['version']}", file=sys.stderr)
+            skipped.append(base)
             continue
         meta[base] = {
             "pypi_name": base,
@@ -596,6 +619,18 @@ def main() -> int:
             "check": seed.get("check"),
             "seed": True,
         }
+
+    if skipped:
+        # A skipped package silently disappears from every dependent's dep
+        # list and from pruning decisions — a transient PyPI 500 must not
+        # masquerade as a legitimate regeneration. Full-regen tool: any skip
+        # is fatal, nothing is emitted.
+        print(
+            f"FATAL: {len(skipped)} package(s) could not be resolved: "
+            f"{', '.join(sorted(skipped))} — nothing emitted.",
+            file=sys.stderr,
+        )
+        return 1
 
     cols = compute_columns(meta, interps)
 
@@ -639,6 +674,24 @@ def _prune_stale(out: Path, meta: dict, cols: dict[str, list[str]], interps: lis
                 continue
             shutil.rmtree(d)
             removed += 1
+    # Orphan sweep: a package that left poetry.lock (or a deleted seed) must
+    # not leave generator-owned column dirs behind — they would keep
+    # validating and publishing forever. Only dirs whose description carries
+    # the generator marker are touched; hand-written -cpNNN recipes (numpy,
+    # torch, wand, ...) never carry it.
+    marker = "generated by tools/gen_python_recipes.py"
+    suffixes = tuple(f"-cp{i}" for i in interps)
+    for d in sorted(out.iterdir()):
+        if not d.is_dir() or not d.name.endswith(suffixes):
+            continue
+        base = re.sub(r"-cp3[0-9]{2}t?$", "", d.name)
+        if base in meta:
+            continue
+        y = d / "recipe.yaml"
+        if y.is_file() and marker in y.read_text():
+            shutil.rmtree(d)
+            removed += 1
+            print(f"  orphan {d.name}: base '{base}' left the closure", file=sys.stderr)
     if removed:
         print(f"pruned {removed} superseded recipe dir(s)", file=sys.stderr)
 

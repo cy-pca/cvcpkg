@@ -5933,8 +5933,13 @@ class TestInstallConflictGating:
             )
         assert ret == 0
 
-    def test_install_without_recipes_dir_skips_check(self, tmp_path, capsys):
-        """Without --recipes-dir the conflict check is silently skipped."""
+    def test_install_without_recipes_dir_uses_default_recipes(self, tmp_path, capsys):
+        """Without --recipes-dir the DEFAULT (bundled / cwd-overlay) recipes
+        still feed the conflict check — declared exclusions like
+        python313 vs python313t (or pytest-cp311 vs pytest-cp313 sharing the
+        `pytest` provides slot) are enforced on plain installs, not only when
+        the caller passes --recipes-dir. Degrades to a skip only when no
+        recipe dir can be found at all."""
         cat = _make_conflict_catalog(tmp_path)
         prefix = tmp_path / "prefix"
         with mock.patch("cvcpkg.installer.install_entry"):
@@ -5951,11 +5956,11 @@ class TestInstallConflictGating:
                     "linux",
                     "--arch",
                     "x86_64",
-                    # no --recipes-dir: conflict check should be skipped
+                    # no --recipes-dir: defaults resolve, conflict fires
                 ]
             )
-        # Should succeed (or at least not fail on conflicts)
-        assert ret == 0
+        assert ret != 0
+        assert "conflict" in capsys.readouterr().err.lower()
 
 
 class TestConflictErrorMessages:

@@ -308,6 +308,15 @@ class PackageInfo(BaseModel):
             "`server` names a federated registry host (see cvcpkg.refs)."
         ),
     )
+    provides: list = Field(
+        default_factory=list,
+        description=(
+            "Virtual slots this package fills (e.g. ['pytest'] on every "
+            "pytest-cpNNN column). Providers of a slot are mutually "
+            "exclusive; an install request for the slot name resolves to a "
+            "provider."
+        ),
+    )
 
     @property
     def qualified_name(self) -> str:

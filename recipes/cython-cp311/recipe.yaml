@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: cython-cp311
   upstream_version: "3.1.6"
-  cvc_revision: 1
+  cvc_revision: 2
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -51,3 +51,4 @@ package:
     - lib/python3.11/site-packages/cython-*.dist-info/
     - bin/cython
     - bin/cythonize
+    - bin/cygdb

@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: idna-cp312
   upstream_version: "3.16"
-  cvc_revision: 1
+  cvc_revision: 2
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -34,6 +34,9 @@ depends:
   runtime:
     - name: python312
 
+provides:
+  - idna
+
 build:
   build_type_independent: true
   matrix:
@@ -44,3 +47,4 @@ package:
   files:
     - lib/python3.12/site-packages/idna/
     - lib/python3.12/site-packages/*.dist-info/
+    - bin/idna

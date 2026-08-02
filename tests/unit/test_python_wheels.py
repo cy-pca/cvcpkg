@@ -386,7 +386,8 @@ class TestPlatformWheelKeys:
         s = self._src("linux-x86_64", "macos-arm64")
         assert _platform_wheel_keys(s, "linux", "x86_64") == ["linux-x86_64"]
 
-    def test_fanout_collects_all_siblings_sorted(self):
+    def test_sibling_keys_still_collected_for_rejection(self):
+        # The retired per-version fan-out shape; the fetch layer rejects it.
         s = self._src("linux-x86_64", "linux-x86_64-cp311", "linux-x86_64-cp313", "linux-arm64")
         assert _platform_wheel_keys(s, "linux", "x86_64") == [
             "linux-x86_64",
@@ -407,16 +408,26 @@ class TestPlatformWheelKeys:
         assert _platform_wheel_keys(self._src("any"), "linux", "x86_64") == []
 
 
-class TestFanoutFetch:
-    """_fetch_python_wheel must download EVERY per-interpreter wheel for the
-    target platform, so the build can install each into its own interpreter."""
+class TestWheelFetch:
+    """_fetch_python_wheel downloads exactly ONE wheel per platform; the
+    retired per-version sibling-key shape is a hard error."""
 
-    def test_downloads_every_interpreter_wheel(self, tmp_path, monkeypatch):
+    def _recipe(self, tmp_path, arts):
+        d = {
+            "schema_version": 1,
+            "recipe": {"name": "asyncpg", "upstream_version": "0.31.0", "cvc_revision": 1},
+            "source": {"type": "python_wheel", "artifacts": arts},
+            "python": {"interpreter": "python312", "abi": "cp312"},
+            "build": {"matrix": [{"platform": "linux", "script": "build.sh"}]},
+            "package": {"files": ["lib/"]},
+        }
+        _write_recipe(tmp_path / "r", d)
+        return Recipe.load(tmp_path / "r")
+
+    def test_downloads_exactly_the_platform_wheel(self, tmp_path, monkeypatch):
         monkeypatch.setenv("CVCPKG_SOURCE_CACHE_DIR", "")
         names = {
             "linux-x86_64": "asyncpg-0.31.0-cp312-cp312-manylinux_2_28_x86_64.whl",
-            "linux-x86_64-cp311": "asyncpg-0.31.0-cp311-cp311-manylinux_2_28_x86_64.whl",
-            "linux-x86_64-cp313": "asyncpg-0.31.0-cp313-cp313-manylinux_2_28_x86_64.whl",
             # a different platform's wheel must NOT be fetched
             "macos-arm64": "asyncpg-0.31.0-cp312-cp312-macosx_11_0_arm64.whl",
         }
@@ -428,16 +439,7 @@ class TestFanoutFetch:
             }
             for key, n in names.items()
         }
-        d = {
-            "schema_version": 1,
-            "recipe": {"name": "asyncpg", "upstream_version": "0.31.0", "cvc_revision": 1},
-            "source": {"type": "python_wheel", "artifacts": arts},
-            "python": {"interpreter": "python312", "abi": "cp312"},
-            "build": {"matrix": [{"platform": "linux", "script": "build.sh"}]},
-            "package": {"files": ["lib/"]},
-        }
-        _write_recipe(tmp_path / "r", d)
-        r = Recipe.load(tmp_path / "r")
+        r = self._recipe(tmp_path, arts)
         work = tmp_path / "w"
         work.mkdir()
 
@@ -448,13 +450,19 @@ class TestFanoutFetch:
 
         monkeypatch.setattr(urllib.request, "urlretrieve", _r)
         src = fetch_source(r, work, platform="linux", arch="x86_64")
-
         got = sorted(p.name for p in src.glob("*.whl"))
-        assert got == sorted(
-            names[k] for k in ("linux-x86_64", "linux-x86_64-cp311", "linux-x86_64-cp313")
-        )
-        # the macos wheel must not have leaked in
-        assert not any("macos" in n for n in got)
+        assert got == [names["linux-x86_64"]]
+
+    def test_sibling_keys_are_rejected(self, tmp_path):
+        arts = {
+            "linux-x86_64": {"url": "https://e.invalid/a.whl", "sha256": "a" * 64},
+            "linux-x86_64-cp311": {"url": "https://e.invalid/b.whl", "sha256": "b" * 64},
+        }
+        r = self._recipe(tmp_path, arts)
+        work = tmp_path / "w"
+        work.mkdir()
+        with pytest.raises(RecipeError, match="sibling keys"):
+            fetch_source(r, work, platform="linux", arch="x86_64")
 
 
 class TestBuildEnvPython:
@@ -463,6 +471,12 @@ class TestBuildEnvPython:
     Every python package is a per-interpreter column recipe installing only
     into its own interpreter's site-packages; the cross-interpreter copy
     fan-out (CVC_PYTHON_NOARCH_FANOUT) is retired."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_python_gil(self, monkeypatch):
+        # PYTHON_GIL is a real CPython env var a developer may have exported;
+        # _build_env copies os.environ, so scrub it for deterministic asserts.
+        monkeypatch.delenv("PYTHON_GIL", raising=False)
 
     def _env(self, tmp_path, *, python, matrix, artifacts):
         d = {

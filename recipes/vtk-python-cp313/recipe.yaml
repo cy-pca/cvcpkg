@@ -2,6 +2,9 @@ schema_version: 1
 recipe:
   name: vtk-python-cp313
   upstream_version: "9.5.0"
+  # Deliberately NOT bumped for the -cpXX matrix change (python: block added):
+  # build-environment-only edit — the packed artifact and its runtime manifest
+  # are byte-identical to the published bundle.
   cvc_revision: 1
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"

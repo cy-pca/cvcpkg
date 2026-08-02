@@ -12,6 +12,9 @@ recipe:
   # relocation bugs (cython's non-relocatable console-script shebang; python311's
   # stale sysconfig INCLUDEPY) so meson builds from source and links cvcpkg's
   # libopenblas.so.0 via $ORIGIN. This republishes a genuinely importable numpy.
+  # Deliberately NOT bumped for the -cpXX matrix change (build-tool deps renamed to their -cp311 columns):
+  # build-environment-only edit — the packed artifact and its runtime manifest
+  # are byte-identical to the published bundle.
   cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"

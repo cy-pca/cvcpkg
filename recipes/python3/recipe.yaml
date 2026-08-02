@@ -64,13 +64,14 @@ notes:
     platforms: [windows]
     description: >-
       On Windows, consumers depend on the versioned python recipe directly;
-      a Windows build for this meta (creating python3/python shims) is a
+      a Windows build for this meta (creating python3/pip3 shims) is a
       follow-up.
   - title: "Meta-package — never depend on this from a versioned python (cycle risk)"
     description: >-
       python3 depends on a single versioned CPython (python313) and owns the
-      generic python3/python/pip aliases. The dependency only ever flows
-      python3 -> pythonNNN. A versioned python recipe must NEVER depend on
+      generic python3/pip3/python3-config aliases (the bare python/pip names
+      belong to the `python` meta layered on top). The dependency only ever
+      flows python -> python3 -> pythonNNN. A versioned python recipe must NEVER depend on
       python3, and this meta must not be swept into the versioned recipes'
       deps by a future host_tools -> depends.build relocation — either would
       create a cycle.
