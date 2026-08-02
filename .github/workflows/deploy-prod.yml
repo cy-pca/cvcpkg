@@ -746,3 +746,77 @@ jobs:
           echo "--- Restarting Windows builder ---"
           $SSH "$WIN" "schtasks /run /tn cvcpkg-builder 2>NUL && echo windows: builder restarted || echo windows: no scheduled task found" \
             || echo "::warning::Failed to restart the Windows builder ($WIN)"
+
+  # ── Update CUDA builder (prettyhatemachine) ────────────────────
+  # The GPU builder (capability routing: `builder run --capability cuda`)
+  # has no Actions runner of its own; like the BSD guests and the Windows
+  # builder it is updated over SSH from star-00, which shares its LAN —
+  # the cvcpkg-prod runner has no route to 10.66.77.0/24 (see the
+  # sandipaws note in vm-provisioning/docs/CVCPKG-BUILDERS.md).
+  #
+  # The builder host keeps a dedicated clone at ~/cvcpkg-builder/repo
+  # (separate from any development checkout, mirroring the Windows
+  # supervisor's REPO pattern); the update pins it to the deployed SHA.
+  # Its systemd unit is managed by vm-provisioning's
+  # linux/setup-cuda-builder.sh — only restart it here, never patch it.
+  #
+  # continue-on-error: same rationale as update-linux-builders — an
+  # unreachable builder is a connectivity problem to warn about, not a
+  # failure of the deploy that already succeeded.
+  update-cuda-builder:
+    name: Update builder (prettyhatemachine)
+    needs: deploy
+    continue-on-error: true
+    runs-on: [self-hosted, Linux, X64, star-00]
+    timeout-minutes: 10
+
+    steps:
+      - name: Update and restart the CUDA builder
+        run: |
+          # NB: no `set -e` — an unreachable builder must warn, not fail.
+          set -uo pipefail
+          SHA="${{ needs.deploy.outputs.sha }}"
+          SSH="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15"
+          CUDA="${{ vars.CUDA_BUILDER_SSH }}"
+
+          if [ -z "$CUDA" ]; then
+            echo "::warning::vars.CUDA_BUILDER_SSH is unset — skipping the CUDA builder update"
+            exit 0
+          fi
+
+          if ! $SSH -o BatchMode=yes "$CUDA" "echo ok" >/dev/null 2>&1; then
+            echo "::warning::CUDA builder ($CUDA) is unreachable over SSH — skipping its update. It may still be online and building jobs with a stale cvcpkg."
+            exit 0
+          fi
+
+          echo "--- Updating the CUDA builder ---"
+          $SSH "$CUDA" "
+            set -e
+            REPO=\$HOME/cvcpkg-builder/repo
+            git -C \"\$REPO\" fetch -q origin
+            git -C \"\$REPO\" checkout -qf $SHA
+            # PEP 668: Ubuntu 24.04 rejects a bare user install on the system
+            # python; older pips lack the flag, hence the fallback.
+            python3 -m pip install --user --quiet --upgrade --break-system-packages \"\$REPO\" \
+              || python3 -m pip install --user --quiet --upgrade \"\$REPO\"
+            \$HOME/.local/bin/cvcpkg --version
+          " || { echo "::error::CUDA builder ($CUDA) update to $SHA failed"; exit 1; }
+
+          echo "--- Cleaning up stale build artifacts ---"
+          # -not -name 'cvcpkg-builder': never delete the work dir itself
+          # (the always-older-than-an-hour trap documented in
+          # vm-provisioning/docs/CVCPKG-BUILDERS.md).
+          $SSH "$CUDA" "find /tmp -maxdepth 1 -name 'cvcpkg-*' -not -name 'cvcpkg-builder' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null; df -h / | awk 'NR==2{print \"disk \" \$4 \" free\"}'" || true
+
+          echo "--- Restarting the CUDA builder ---"
+          $SSH "$CUDA" "
+            sudo -n systemctl restart cvcpkg-builder
+            sleep 3
+            if systemctl is-active --quiet cvcpkg-builder; then
+              echo \"\$(hostname): builder restarted successfully\"
+            else
+              echo 'builder failed to start'
+              journalctl -u cvcpkg-builder --no-pager -n 10
+              exit 1
+            fi
+          " || { echo "::error::CUDA builder ($CUDA) failed to restart"; exit 1; }
