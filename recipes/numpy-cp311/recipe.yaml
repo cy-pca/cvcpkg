@@ -57,8 +57,8 @@ depends:
     # PEP-517 backend + cythonizer, imported by the build interpreter under
     # --no-build-isolation (bridged from the build prefix via PYTHONPATH in
     # build.sh). meson-python-cp311 pulls packaging-cp311 + pyproject-metadata-cp311.
-    - name: cython
-    - name: meson-python
+    - name: cython-cp311
+    - name: meson-python-cp311
     # OpenBLAS headers + openblas.pc at compile time (linux/BSD; macOS uses
     # Accelerate and does not resolve this edge — see the platform note below).
     - name: openblas

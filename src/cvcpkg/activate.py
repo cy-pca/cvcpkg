@@ -584,66 +584,6 @@ def render_cmd_deactivate() -> str:
     return _CMD_DEACTIVATE_TEMPLATE
 
 
-def _ensure_python_aliases(bin_dir: Path) -> list[Path]:
-    """Materialize generic python/pip commands in *bin_dir* when missing.
-
-    Version-specific python recipes ship only versioned binaries
-    (``python3.13``, ``pip3.13``, ``python3.13-config``) so that several
-    minor versions can be installed into one prefix side by side without
-    fighting over the generic names. At install time we surface the
-    conventional commands users expect on PATH — ``python3``, ``python``,
-    ``pip3``, ``pip``, ``python3-config`` — as relative symlinks to the
-    highest installed version, but ONLY when the name is not already provided
-    (e.g. by the ``python3`` meta-package or the user). That keeps the build
-    graph collision-free while making activated install trees ergonomic.
-
-    Returns the list of alias paths created.
-    """
-    import re
-
-    if not bin_dir.is_dir():
-        return []
-
-    ver_re = re.compile(r"^python(\d+)\.(\d+)$")  # python3.13
-    cfg_re = re.compile(r"^python(\d+)\.(\d+)-config$")  # python3.13-config
-    pip_re = re.compile(r"^pip(\d+)\.(\d+)$")  # pip3.13
-
-    def _highest(rx: re.Pattern[str]) -> str | None:
-        best_name, best_key = None, None
-        for entry in bin_dir.iterdir():
-            m = rx.match(entry.name)
-            if not m:
-                continue
-            key = (int(m.group(1)), int(m.group(2)))
-            if best_key is None or key > best_key:
-                best_key, best_name = key, entry.name
-        return best_name
-
-    py = _highest(ver_re)
-    cfg = _highest(cfg_re)
-    pip = _highest(pip_re)
-
-    plan: list[tuple[str, str]] = []
-    if py:
-        plan += [("python3", py), ("python", py)]
-    if cfg:
-        plan.append(("python3-config", cfg))
-    if pip:
-        plan += [("pip3", pip), ("pip", pip)]
-
-    created: list[Path] = []
-    for name, target in plan:
-        dst = bin_dir / name
-        if dst.exists() or dst.is_symlink():
-            continue  # respect an existing meta-package / user-provided command
-        try:
-            dst.symlink_to(target)  # relative link, resolves within bin/
-        except OSError:
-            continue
-        created.append(dst)
-    return created
-
-
 def write_activate_scripts(
     prefix: Path,
     *,
@@ -686,10 +626,11 @@ def write_activate_scripts(
     else:
         bin_dir = prefix / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
-        # Surface the conventional python3/python/pip commands for install
-        # trees whose python was staged as versioned-only binaries (so multiple
-        # minor versions can coexist). Create-if-missing; never clobber.
-        _ensure_python_aliases(bin_dir)
+        # The generic python/python3/pip commands are owned by the `python` /
+        # `python3` meta packages, never synthesized here: a prefix that only
+        # installed python313 exposes python3.13 and nothing else, exactly as
+        # its dependency graph says. (An implicit highest-version-wins alias
+        # used to be created here; it second-guessed the meta packages.)
         bash_path = bin_dir / "activate"
         bash_path.write_text(
             render_bash(prefix, prompt=prompt, platform=platform), encoding="utf-8"

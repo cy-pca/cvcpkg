@@ -180,4 +180,11 @@ if [ "${PYTHON_LDVERSION}" != "${PYTHON_MINOR}" ]; then
     # Free-threaded (t) build: keep a short pythonXt alias (e.g. python3t).
     MAJOR="${PYTHON_MINOR%%.*}"
     ln -sf "python${PYTHON_LDVERSION}" "python${MAJOR}t" 2>/dev/null || true
+    # ensurepip names its console script pip3.X even in the free-threaded
+    # build; give it the t-suffixed name (pip3.13t) so it can never collide
+    # with the non-t interpreter's bin/pip3.X in a shared prefix. (Its
+    # shebang already runs the t interpreter — ensurepip ran under it.)
+    if [ -f "pip${PYTHON_MINOR}" ]; then
+        mv -f "pip${PYTHON_MINOR}" "pip${PYTHON_LDVERSION}"
+    fi
 fi

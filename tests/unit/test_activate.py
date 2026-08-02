@@ -219,40 +219,31 @@ def _can_symlink() -> bool:
     not _can_symlink(),
     reason="symlink creation not permitted (Windows without elevation/Developer Mode)",
 )
-class TestPythonAliasReconcile:
-    """write_activate_scripts surfaces generic python/pip commands for
-    install trees whose python was staged as versioned-only binaries."""
+class TestNoPythonAliasSynthesis:
+    """write_activate_scripts must NOT synthesize generic python/pip commands.
+
+    The unversioned aliases are owned by the `python` / `python3` meta
+    packages (recipes/python, recipes/python3); a prefix that only installed
+    a versioned interpreter exposes exactly the versioned binaries its
+    dependency graph declares. (An implicit highest-version-wins alias used
+    to be created here; it second-guessed the meta packages.)"""
 
     def _versioned(self, bin_dir, *names):
         bin_dir.mkdir(parents=True, exist_ok=True)
         for n in names:
             (bin_dir / n).write_text("#!/bin/sh\n")
 
-    def test_creates_generic_commands(self, tmp_path):
+    def test_versioned_only_prefix_stays_versioned_only(self, tmp_path):
         bin_dir = tmp_path / "bin"
         self._versioned(bin_dir, "python3.13", "python3.13-config", "pip3.13")
         act.write_activate_scripts(tmp_path, platform="linux")
         for name in ("python3", "python", "python3-config", "pip3", "pip"):
-            assert (bin_dir / name).is_symlink(), f"{name} should be created"
-        assert (bin_dir / "python3").resolve() == (bin_dir / "python3.13")
-        assert (bin_dir / "pip").resolve() == (bin_dir / "pip3.13")
+            assert not (bin_dir / name).exists(), f"{name} must not be synthesized"
 
-    def test_picks_highest_version(self, tmp_path):
-        bin_dir = tmp_path / "bin"
-        self._versioned(bin_dir, "python3.11", "python3.13", "python3.9")
-        act.write_activate_scripts(tmp_path, platform="linux")
-        assert (bin_dir / "python3").resolve() == (bin_dir / "python3.13")
-
-    def test_respects_existing_alias(self, tmp_path):
+    def test_meta_shipped_aliases_untouched(self, tmp_path):
         bin_dir = tmp_path / "bin"
         self._versioned(bin_dir, "python3.11", "python3.13")
-        (bin_dir / "python3").symlink_to("python3.11")  # meta/user pinned 3.11
+        (bin_dir / "python3").symlink_to("python3.11")  # the python3 meta's link
         act.write_activate_scripts(tmp_path, platform="linux")
-        assert (bin_dir / "python3").resolve() == (bin_dir / "python3.11")  # not clobbered
-        assert (bin_dir / "python").resolve() == (bin_dir / "python3.13")  # bare created -> highest
-
-    def test_ignores_free_threaded_for_generic(self, tmp_path):
-        bin_dir = tmp_path / "bin"
-        self._versioned(bin_dir, "python3.13t")  # free-threaded only
-        act.write_activate_scripts(tmp_path, platform="linux")
-        assert not (bin_dir / "python3").exists()  # 't' build never becomes generic python3
+        assert (bin_dir / "python3").resolve() == (bin_dir / "python3.11")
+        assert not (bin_dir / "python").exists()  # only the `python` meta adds it

@@ -34,6 +34,34 @@ Major release: production daemon with database backend, the
 `cvcpkg.org` registry, distributed build infrastructure, and wasi
 support.
 
+### Python packaging: uniform per-interpreter columns (2026-08-02)
+
+Every Python package is now a **per-interpreter column recipe** —
+`<name>-cp311 / -cp312 / -cp313 / -cp313t` — pure wheels included; the
+bare-name + cross-interpreter copy-fanout model (#389/#390) is retired.
+Each column depends on *its* interpreter and its deps' matching columns
+and installs only into its own `lib/pythonX.Y[t]/site-packages`, so the
+dependency graph is honest (no more `python312` dragged in by every pure
+wheel next to `python311` from every abi3 one), the free-threaded
+(no-GIL) column exists wherever the whole closure ships cp313t wheels,
+and adding a future `python314` is a new column, not a global republish.
+`tools/gen_python_recipes.py` emits the entire matrix (poetry.lock
+closure + curated seeds: pytest, black, setuptools, sympy, ...), prunes
+non-viable columns transitively, and script-shipping tools declare
+`provides: [<base>]` (mutually exclusive per prefix; bare-name install
+sugar). The C++ `protobuf` recipe, clobbered by the generated Python
+wheel of the same name, is restored — the Python columns are
+`protobuf-cpNNN`. `pyside6`/`shiboken6`/`triton`/`nvidia-*-cu12` are
+renamed to their explicit `-cp311` columns; `ruff` is a plain tool (no
+runtime interpreter dep); `python313t` finally packages pip (as
+`pip3.13t`). A new `python` meta owns `bin/python`/`bin/pip`; the
+`python3` meta keeps `python3`/`pip3`/`python3-config`; activate no
+longer synthesizes interpreter aliases behind the metas' back. The
+concrete matrices grew to match: torch-cp312/-cp313/-cp313t (CPU wheels;
+the cp313t column is gated by the build's no-GIL assertion),
+h5py-cp312/-cp313 (from source vs cvcpkg hdf5), pyside6/shiboken6
+-cp312/-cp313 (from source vs cvcpkg qt6), and wand-cp313t.
+
 > **The project is now named `cvcpkg`.**  The `libcvc-deps` name is
 > retired; the PyPI distribution, CLI, server, and recipe archive are all
 > `cvcpkg`.  Backward-compat shims remain where downstream depends on the

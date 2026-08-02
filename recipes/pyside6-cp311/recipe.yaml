@@ -1,0 +1,134 @@
+schema_version: 1
+recipe:
+  name: pyside6-cp311
+  upstream_version: "6.8.2"
+  cvc_revision: 2
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://doc.qt.io/qtforpython/
+  # Tri-licensed LGPL-3.0-only / GPL-2.0-only / GPL-3.0-only (+ commercial);
+  # consumed under LGPL-3.0-only, same as qt6.
+  license: LGPL-3.0-only
+  tags: [gui, python, bindings]
+  description: >-
+    PySide6 6.8.2 (cp311) — the official Qt-for-Python bindings, built from the
+    Qt `pyside-setup` v6.8.2 source tree (sources/pyside6) against the SAME
+    cvcpkg qt6 6.8.2 the host application links, so an embedded CPython in a
+    Qt6 app (volrover3) can `shiboken6.wrapInstance(addr, QtWidgets.QMainWindow)`
+    to drive the app's live cvcpkg-Qt QMainWindow with ONE libQt6Core
+    in-process. Built as a NON-standalone CMake project: it does NOT bundle Qt —
+    the PySide6 module libraries resolve libQt6Core/Gui/Widgets by soname from
+    the cvcpkg qt6 package. Module subset restricted to Core, Gui, Widgets,
+    OpenGL, OpenGLWidgets (the modules the feature-lean cvcpkg qt6 provides;
+    icu OFF, offscreen-only, no Qml/Quick/Sql). Depends on the `shiboken6`
+    recipe for the generator + libshiboken + the wrapInstance runtime. Bindings
+    are generated with the hermetic cvcpkg llvm18 via shiboken6. Built with
+    FORCE_LIMITED_API against cp311, then abi3-fanned into every cvcpkg
+    interpreter (cp311/cp312/cp313) — see the `python:` block below — so a
+    single build covers the whole non-free-threaded matrix.
+
+source:
+  # SAME pinned pyside-setup tarball + sha256 as the `shiboken6` recipe — one
+  # source tree carries both sub-projects. This recipe configures
+  # sources/pyside6 and consumes the already-installed shiboken6.
+  type: tarball
+  url: https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-6.8.2-src/pyside-setup-everywhere-src-6.8.2.tar.xz
+  sha256: "8422e9aa403f4119e3192853e9b0cfa09e57e3e0a1a3393e7fdf394179c112f8"
+  strip_components: 1
+
+# FORCE_LIMITED_API=yes (build.sh) makes the compiled .so's abi3, matching
+# shiboken6 — but this recipe is the explicit cp311 COLUMN of the matrix: the
+# modules link libpython3.11 and install only into python3.11's site-packages.
+# A pyside6-cp312/-cp313 column is a copy of this recipe against its own
+# interpreter (cheap because the abi3 source build is identical).
+python:
+  interpreter: python311
+  abi: cp311
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+    # cp311 — bindings must match the host interpreter ABI.
+    - name: python311
+    # The in-process Qt. Pin EXACT: PySide6 links the Qt ABI directly.
+    - name: qt6
+      version: "6.8.2"
+    # Generator + libshiboken + Shiboken6 CMake config used to build the
+    # bindings; find_package(Shiboken6 6 CONFIG REQUIRED) resolves it from the
+    # build closure. Pin exact so shiboken/pyside limited-API + ABI agree.
+    - name: shiboken6-cp311
+      version: "6.8.2"
+    # Hermetic libclang 18 — the shiboken6 generator invoked during THIS build
+    # parses the Qt headers with it (also reached transitively via shiboken6, but
+    # declared here since this build runs the generator directly). Pinned to 18;
+    # the top-level `llvm` recipe (LLVM 22) is too new for 6.8.2.
+    - name: llvm18
+      version: "18.1.8"
+  runtime:
+    # PySide6 is imported against this cp311.
+    - name: python311
+    # PySide6 module libs link libQt6Core/Gui/Widgets/OpenGL by soname — the
+    # single shared Qt with the host. Pin exact.
+    - name: qt6
+      version: "6.8.2"
+    # wrapInstance / libshiboken6 live in the shiboken6 package; PySide6 loads
+    # libshiboken6 at import time and the host calls shiboken6.wrapInstance.
+    - name: shiboken6-cp311
+      version: "6.8.2"
+  host_tools:
+    - cmake
+    - ninja
+    - python311
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
+
+package:
+  files:
+    # PySide6 runtime support library (libpyside6) linked by every module.
+    - lib/libpyside6*
+    # Importable abi3 package, fanned into every interpreter (cp311/cp312/
+    # cp313): QtCore/QtGui/QtWidgets/QtOpenGL(.Widgets) .so's, typesystems,
+    # and Qt-for-Python glue.
+    - lib/python3.*/site-packages/PySide6/
+    # CMake config for C++ consumers that embed/extend PySide6.
+    - lib/cmake/PySide6*/
+    # Public headers (libpyside).
+    - include/PySide6*/
+    # Typesystem XML shipped for downstream binding generation.
+    - share/PySide6/
+  cmake_packages:
+    - { name: PySide6, targets: ["PySide6::pyside6"] }
+
+abi:
+  cxx_std: 17
+
+notes: >-
+  SINGLE-QT / NO-BUNDLE CONTRACT (the whole point): built with -DSTANDALONE=0 so
+  the sources/pyside6 CMake project links the cvcpkg qt6 by soname and copies NO
+  Qt libraries into the install tree. The embedded interpreter therefore shares
+  the host's one libQt6Core, which is what makes wrapInstance on the app's live
+  QMainWindow valid. Never set STANDALONE=1.
+
+  MODULE SUBSET: -DMODULES="Core;Gui;Widgets;OpenGL;OpenGLWidgets". The cvcpkg
+  qt6 is feature-lean (no Qml/Quick, Sql drivers off, offscreen-only). Adding a
+  module here requires that Qt6<Module> exist in the cvcpkg qt6 build.
+
+  LIMITED API: must match shiboken6 (FORCE_LIMITED_API=yes → abi3). Keep both in
+  lockstep; bump both cvc_revisions together on any ABI-affecting change.
+
+  PER-INTERPRETER COLUMN: this is pyside6's cp311 column — the modules link
+  libpython3.11 and install only into python3.11's site-packages, and the
+  recipe depends on python311 alone (the honest edge; the earlier abi3
+  copy-fanout model made a python312 host *appear* to have PySide6 while the
+  dependency graph said nothing about it). A pyside6-cp312/-cp313 column is
+  this recipe rebuilt against its interpreter; cp313t is impossible while
+  FORCE_LIMITED_API=yes (no stable ABI on the free-threaded build).

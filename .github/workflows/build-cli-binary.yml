@@ -62,7 +62,7 @@ jobs:
           BIN="$PWD/dist/cvcpkg$EXT"
           "$BIN" --version
           # Recipe discovery must work from a dir with no recipes/ (bundle only).
-          work="$(mktemp -d)"; ( cd "$work" && "$BIN" validate recipes/asyncpg && "$BIN" validate recipes )
+          work="$(mktemp -d)"; ( cd "$work" && "$BIN" validate recipes/asyncpg-cp312 && "$BIN" validate recipes )
           if [ "${{ matrix.variant }}" = "combined" ]; then
             # Second entry point via argv[0]: cvcpkg-server.
             cp "$BIN" "$PWD/dist/cvcpkg-server$EXT"

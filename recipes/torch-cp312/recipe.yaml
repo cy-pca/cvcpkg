@@ -1,0 +1,74 @@
+schema_version: 1
+recipe:
+  name: torch-cp312
+  upstream_version: "2.8.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pytorch.org/
+  license: BSD-3-Clause
+  tags: [python, wheel, ml, tensor, scientific]
+  description: >-
+    PyTorch 2.8.0 (CPU build) for CPython 3.12 (cp312) — the pinned prebuilt
+    manylinux_2_28 CPU wheel from the official PyTorch index, installed into the
+    python312 interpreter's site-packages. torch is NOT built from source (an
+    impractical multi-hour MKL/CUDA build); it is the roadmap's canonical
+    "ship-good-manylinux-wheels" package. This is the CPU variant (no CUDA / no
+    nvidia-* deps) — sufficient for the GRL-SNAM surrogate-dynamics numerics and
+    the grl-snam-selftest correctness demo. A CUDA torch-cp312-cuda variant + the
+    macOS/Windows columns are follow-ups.
+
+# Prebuilt CPU wheel from download.pytorch.org (not PyPI — PyPI's linux torch is
+# the ~2GB CUDA build). cvcpkg fetches + sha256-verifies it, then build.sh
+# pip-installs it offline into the prefix interpreter's site-packages.
+source:
+  type: python_wheel
+  artifacts:
+    linux-x86_64:
+      url: https://download.pytorch.org/whl/cpu/torch-2.8.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl
+      sha256: "cb9a8ba8137ab24e36bf1742cb79a1294bd374db570f09fc15a5e1318160db4e"
+
+python:
+  interpreter: python312
+  abi: cp312
+  manylinux_min: manylinux_2_28
+
+patches: []
+
+depends:
+  build:
+    - name: python312
+  runtime:
+    # torch's Requires-Dist (CPU build) — each resolved to the cp312 column.
+    - name: python312
+    - name: numpy-cp312
+    - name: typing-extensions-cp312
+    - name: setuptools-cp312
+    - name: sympy-cp312
+    - name: networkx-cp312
+    - name: jinja2-cp312
+    - name: fsspec-cp312
+    - name: filelock-cp312
+  host_tools:
+    - python312
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    # macOS (CPU) + Windows (CPU) columns are a follow-up; the CUDA variant is a
+    # separate torch-cp312-cuda recipe (pulls nvidia-*-cu wheels).
+
+package:
+  files:
+    # torch bundles its own libs under torch/lib/ (auditwheel-vendored); the whole
+    # package tree ships. The dist-info dir is "torch-2.8.0+cpu.dist-info".
+    - lib/python3.12*/site-packages/torch/
+    - lib/python3.12*/site-packages/torchgen/
+    - lib/python3.12*/site-packages/functorch/
+    - lib/python3.12*/site-packages/torch-2.8.0*.dist-info/
+
+abi:
+  cxx_std: 17

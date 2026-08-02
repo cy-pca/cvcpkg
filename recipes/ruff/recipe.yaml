@@ -2,7 +2,9 @@ schema_version: 1
 recipe:
   name: ruff
   upstream_version: "0.16.0"
-  cvc_revision: 1
+  # Bumped 1 -> 2: dropped the bogus runtime dependency on python311 — the
+  # shipped bin/ruff is a self-contained binary; only the BUILD needs pip.
+  cvc_revision: 2
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -38,9 +40,12 @@ patches: []
 
 depends:
   build:
+    # pip (from the build interpreter) unpacks the wheel; nothing of python311
+    # is needed at runtime — bin/ruff is a self-contained Rust binary. The
+    # site-packages proxy module ships for `python3.11 -m ruff` convenience
+    # but carries no runtime dependency edge.
     - name: python311
-  runtime:
-    - name: python311
+  runtime: []
   host_tools:
     - python311
 

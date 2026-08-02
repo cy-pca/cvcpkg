@@ -64,8 +64,9 @@ RUN mkdir -p /opt/pydeps && \
       pip install --no-cache-dir . && \
       CVCPKG_SERVER_URL="$CVCPKG_SERVER_URL" cvcpkg install \
         python312 \
-        pyyaml click cryptography greenlet httpx sqlalchemy \
-        fastapi uvicorn pydantic python-multipart asyncpg alembic \
+        pyyaml-cp312 click-cp312 cryptography-cp312 greenlet-cp312 \
+        httpx-cp312 sqlalchemy-cp312 fastapi-cp312 uvicorn-cp312 \
+        pydantic-cp312 python-multipart-cp312 asyncpg-cp312 alembic-cp312 \
         --prefix /opt/pydeps --platform linux --arch x86_64 && \
       /opt/pydeps/bin/python3.12 -m pip install --no-deps --no-cache-dir . ; \
     fi

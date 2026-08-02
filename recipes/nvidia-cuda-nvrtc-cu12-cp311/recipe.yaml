@@ -1,0 +1,50 @@
+schema_version: 1
+recipe:
+  name: nvidia-cuda-nvrtc-cu12-cp311
+  upstream_version: "12.8.93"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/nvidia-cuda-nvrtc-cu12/
+  license: "LicenseRef-NVIDIA-Proprietary"
+  tags: [python, wheel, cuda, nvidia, gpu]
+  description: >-
+    nvidia-cuda-nvrtc-cu12 12.8.93 — prebuilt NVIDIA CUDA 12.8 runtime component (py3-none
+    linux x86_64 wheel), a runtime dependency of torch-cp311-cuda. Installs its
+    bundled CUDA .so libraries into the python311 site-packages `nvidia/`
+    namespace; torch loads them at import. NOT built from source (proprietary
+    NVIDIA redistributable). CUDA torch is GPU-only — see torch-cp311-cuda.
+source:
+  type: python_wheel
+  artifacts:
+    linux-x86_64:
+      url: https://files.pythonhosted.org/packages/05/6b/32f747947df2da6994e999492ab306a903659555dddc0fbdeb9d71f75e52/nvidia_cuda_nvrtc_cu12-12.8.93-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl
+      sha256: "a7756528852ef889772a84c6cd89d41dfa74667e24cca16bb31f8f061e3e9994"
+
+python:
+  interpreter: python311
+  abi: cp311
+  manylinux_min: manylinux_2_12
+
+patches: []
+
+depends:
+  build:
+    - name: python311
+  runtime:
+    - name: python311
+  host_tools:
+    - python311
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+
+package:
+  files:
+    - lib/python3.11*/site-packages/nvidia/
+    - lib/python3.11*/site-packages/nvidia_cuda_nvrtc_cu12-*.dist-info/

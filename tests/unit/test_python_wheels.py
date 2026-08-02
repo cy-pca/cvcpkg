@@ -14,8 +14,6 @@ import pytest
 import yaml
 
 from cvcpkg.builder import (
-    _PYTHON_ABI3_FANOUT_VERSIONS,
-    _PYTHON_NOARCH_FANOUT_VERSIONS,
     BuildContext,
     PythonSpec,
     Recipe,
@@ -459,8 +457,12 @@ class TestFanoutFetch:
         assert not any("macos" in n for n in got)
 
 
-class TestBuildEnvFanout:
-    """_build_env decides the fan-out mode from the recipe's python block."""
+class TestBuildEnvPython:
+    """_build_env exports the python block verbatim — and NEVER a fan-out.
+
+    Every python package is a per-interpreter column recipe installing only
+    into its own interpreter's site-packages; the cross-interpreter copy
+    fan-out (CVC_PYTHON_NOARCH_FANOUT) is retired."""
 
     def _env(self, tmp_path, *, python, matrix, artifacts):
         d = {
@@ -489,35 +491,36 @@ class TestBuildEnvFanout:
         )
         return _build_env(ctx, r.build_matrix[0])
 
-    def test_noarch_recipe_fans_into_every_interpreter(self, tmp_path):
+    def test_pure_column_recipe_exports_python_env_without_fanout(self, tmp_path):
         env = self._env(
             tmp_path,
-            python={"interpreter": "python312", "abi": "cp312"},
+            python={"interpreter": "python313t", "abi": "cp313t"},
             matrix=[{"platform": "any", "script": "build.sh"}],
             artifacts={"any": {"url": "https://e.invalid/a.whl", "sha256": "a" * 64}},
         )
-        assert env["CVC_PYTHON_NOARCH_FANOUT"] == _PYTHON_NOARCH_FANOUT_VERSIONS
-        assert "3.13t" in env["CVC_PYTHON_NOARCH_FANOUT"]  # noarch covers free-threaded
+        assert env["CVC_PYTHON_INTERPRETER"] == "python313t"
+        assert env["CVC_PYTHON_ABI"] == "cp313t"
+        assert env["PYTHON_GIL"] == "0"  # free-threaded column pins the GIL off
+        assert "CVC_PYTHON_NOARCH_FANOUT" not in env
 
-    def test_abi3_recipe_fans_excluding_free_threaded(self, tmp_path):
+    def test_abi3_column_recipe_never_fans_out(self, tmp_path):
         env = self._env(
             tmp_path,
-            python={"interpreter": "python311", "abi": "abi3"},
+            python={"interpreter": "python312", "abi": "abi3"},
             matrix=[{"platform": "linux", "script": "build.sh"}],
             artifacts={"linux-x86_64": {"url": "https://e.invalid/a.whl", "sha256": "a" * 64}},
         )
-        assert env["CVC_PYTHON_NOARCH_FANOUT"] == _PYTHON_ABI3_FANOUT_VERSIONS
-        # abi3 is not implemented on the free-threaded build.
-        assert "3.13t" not in env["CVC_PYTHON_NOARCH_FANOUT"]
-        assert "3.11" in env["CVC_PYTHON_NOARCH_FANOUT"]
+        assert env["CVC_PYTHON_INTERPRETER"] == "python312"
+        assert env["CVC_PYTHON_ABI"] == "abi3"
+        assert "PYTHON_GIL" not in env
+        assert "CVC_PYTHON_NOARCH_FANOUT" not in env
 
-    def test_per_version_cext_never_fans_out(self, tmp_path):
-        # A concrete cpNN recipe installs one distinct wheel per interpreter via
-        # cvc_pip_install_wheels_fanout — it must NOT copy-fan a single payload.
+    def test_cext_column_recipe_never_fans_out(self, tmp_path):
         env = self._env(
             tmp_path,
             python={"interpreter": "python312", "abi": "cp312"},
             matrix=[{"platform": "linux", "script": "build.sh"}],
             artifacts={"linux-x86_64": {"url": "https://e.invalid/a.whl", "sha256": "a" * 64}},
         )
+        assert env["CVC_PYTHON_ABI"] == "cp312"
         assert "CVC_PYTHON_NOARCH_FANOUT" not in env

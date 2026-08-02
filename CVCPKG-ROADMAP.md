@@ -1210,6 +1210,22 @@ runtime closure against PyPI turned up two constraints that shape this work:
 1. **abi3 collapses the matrix.**  A stable-ABI wheel is version-independent,
    so `cryptography` is *one* recipe, not four.  The `python:` block accepts
    `abi: abi3` for exactly this case.
+
+   > **Superseded (2026-08-02).** The bare-name/fan-out model this survey led
+   > to (#389/#390) is retired. In practice the collapsed recipes made the
+   > dependency graph dishonest — every pure wheel pinned `python312` while
+   > the abi3 recipes pinned `python311` (installing `azure-identity` dragged
+   > *two* interpreters into the prefix), the multi-wheel recipes carried
+   > cp311/312/313 payloads while declaring only `python312` at runtime, and
+   > no free-threaded column could exist at all (the fan-out cannot express
+   > one and abi3 has no cp313t). **Every Python package is now a
+   > per-interpreter column recipe** (`<name>-cp311/-cp312/-cp313/-cp313t`,
+   > pure wheels included): each column depends on its own interpreter and on
+   > its deps' matching columns; an abi3 wheel simply *backs* several columns
+   > with identical bytes; a column exists only when its whole closure exists
+   > for that interpreter (tools/gen_python_recipes.py computes and logs the
+   > pruning). The `python`/`python3` metas own the unversioned commands.
+   > See docs/python-wheels.md.
 2. **cvcpkg cannot yet self-install onto `python313t`.**  PyYAML and greenlet
    publish no free-threaded wheels, and the 3.13 free-threaded build does not
    implement the stable ABI, so `cryptography`'s abi3 wheel does not cover it
@@ -2586,7 +2602,9 @@ to install *itself*.
       `sniffio`, `typing_extensions`).  Server/DB extras add `fastapi`,
       `uvicorn`, `pydantic`, `python-multipart`, `alembic`, `asyncpg`,
       `aiosqlite`, `aiomysql`; `tqdm` for the progress extra.
-      Per the Phase 8 survey: `cryptography` is **one** `abi3` recipe rather
+      Per the Phase 8 survey (superseded 2026-08-02 — every Python package
+      is now a per-interpreter `-cpNNN` column; the abi3 wheel just backs
+      several columns): `cryptography` was **one** `abi3` recipe rather
       than a per-interpreter matrix, and `PyYAML`/`greenlet` publish no
       free-threaded wheels — so the `python313t` self-install stays blocked
       on building those two from sdist via `python_sdist`.
@@ -3603,7 +3621,7 @@ actions, not something CI does on its own.
 | **KDE stack** | extra-cmake-modules, dbus, libxml2, libxslt, shared-mime-info, qtdeclarative, qtsvg, qttools, qtwayland, then KDE Frameworks 6 by tier — kcoreaddons, kconfig, karchive, ki18n, kwidgetsaddons, kguiaddons, kitemviews, sonnet, breeze-icons, kirigami (tier 1) up through kxmlgui, kservice, kio (tier 3) | KDE and related dependency recipes.  `qt6` is qtbase-only with a per-submodule recipe precedent (qtshadertools, qtmultimedia), so the extra Qt modules are separate recipes; `dbus` is absent and gates the QtDBus-dependent frameworks; much of the base (glib, wayland, xkbcommon, freetype/harfbuzz/cairo, gettext, aspell) is already in the tree.  Enables the KDE editor variants above and composes with Phase 19's desktop delivery. |
 | **SDL (Phase 20)** | sdl3 (3.4.x), sdl2 (2.32.x), SDL_image, SDL_mixer, SDL_ttf, SDL_net | broad platform/arch coverage unlocks games and multimedia across the fleet.  `SDL_DEPS_SHARED` (default on) `dlopen`s wayland/x11/pulseaudio/pipewire/alsa, so those are build-time headers only and the binary stays portable.  Satellites version independently of core and of each other — one recipe each, not a bundle. |
 | **Featured org software (Phase 20)** | `cypca`: eiskaltdcpp, eiskaltdcpp-py, verlihub · `cvc`: TexMol · `tfx`: ezquake | CyberPC Angel / CVC / personal flagship software featured on the archive.  New supporting recipes these need: `icu`, `libmaxminddb` (verlihub), `minizip`, `jansson` (ezquake), `glew` (TexMol). |
-| **Self-hosting wheels (Phase 8/20)** | PyYAML, click, sqlalchemy, cryptography (abi3), httpx, greenlet + httpcore, h11, certifi, idna, anyio, sniffio, typing_extensions; extras fastapi, uvicorn, pydantic, python-multipart, alembic, asyncpg, aiosqlite, aiomysql, tqdm | the wheel set required for `cvcpkg install cvcpkg`.  `cryptography` collapses to one abi3 recipe; PyYAML/greenlet have no free-threaded wheels, so `python313t` self-install needs `python_sdist` builds. |
+| **Self-hosting wheels (Phase 8/20)** | PyYAML, click, sqlalchemy, cryptography (abi3), httpx, greenlet + httpcore, h11, certifi, idna, anyio, sniffio, typing_extensions; extras fastapi, uvicorn, pydantic, python-multipart, alembic, asyncpg, aiosqlite, aiomysql, tqdm | the wheel set required for `cvcpkg install cvcpkg`.  `cryptography` is per-interpreter columns backed by one abi3 wheel (2026-08-02 model); PyYAML/greenlet have no free-threaded wheels, so `python313t` self-install needs `python_sdist` builds. |
 
 ### Recipe Categories
 

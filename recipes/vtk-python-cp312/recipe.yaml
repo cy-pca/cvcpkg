@@ -31,6 +31,10 @@ source:
   sha256: "04ae86246b9557c6b61afbc534a6df099244fbc8f3937f82e6bc0570953af87d"
   strip_components: 1
 
+python:
+  interpreter: python312
+  abi: cp312
+
 patches: []
 
 depends:

@@ -31,6 +31,18 @@ flowchart LR
 Each column resolves through the ordinary `depends` graph — there is no special
 "wheel" machinery in the resolver. `numpy-cp313t` simply depends on `python313t`.
 
+The matrix rule is **uniform**: every Python package — pure wheels included —
+is a set of `-cp311/-cp312/-cp313/-cp313t` column recipes, each depending on
+its interpreter and on its dependencies' matching columns, each installing
+only into its own `lib/pythonX.Y[t]/site-packages`. What varies per package is
+only which wheel backs a column (pure / abi3 / exact `cpNN` / from-source). A
+column is emitted **only when its whole dependency closure has that column**
+(`tools/gen_python_recipes.py` computes the fixpoint and logs every pruned
+column), so the catalog never promises an import that cannot work. There is no
+cross-interpreter copy fan-out: the graph, not a build-time copy step, decides
+what each interpreter can import — and adding a future `python314` is a new
+column, never a rebuild of existing ones.
+
 ## Source types
 
 Two `source.type` values, additive to `schema_version: 1`:
@@ -65,16 +77,19 @@ python:
 The builder exports `CVC_PYTHON_ABI`, `CVC_PYTHON_INTERPRETER`, and (for
 free-threaded ABIs) `PYTHON_GIL=0` into the build environment.
 
-### Stable-ABI (`abi3`) packages collapse the matrix
+### Stable-ABI (`abi3`) wheels share one artifact across columns
 
-`abi` also accepts **`abi3`**. A stable-ABI wheel is version-independent, so
-one artifact serves every interpreter from `interpreter` upwards and the
-package needs a *single* recipe rather than one per column. `cryptography` is
-the motivating case — it ships `cp311-abi3` wheels covering cp311/cp312/cp313.
+`abi` also accepts **`abi3`**. A stable-ABI wheel is version-independent from
+its `cpNN` floor upward, so the *same artifact* backs the `cryptography-cp311`,
+`-cp312` and `-cp313` columns — the columns still exist as separate recipes
+(each with the honest `pythonNNN` dependency), they just pin identical bytes.
 
 `abi3` is never free-threaded: **the 3.13 free-threaded build does not
-implement the stable ABI**, so an abi3 wheel must not be read as cp313t
-coverage. `PythonSpec.free_threaded` is correspondingly false for it.
+implement the stable ABI**, so an abi3 wheel never backs a `-cp313t` column.
+That column exists only when upstream ships an exact `cp313-cp313t` wheel
+(`bcrypt` does; `cryptography` at our pin does not, so there is no
+`cryptography-cp313t` — and everything depending on it prunes its `cp313t`
+column too). `PythonSpec.free_threaded` is correspondingly false for `abi3`.
 
 ## Platform-keyed artifacts
 
@@ -93,9 +108,11 @@ source:
       sha256: "…"
 ```
 
-A recipe with **no** `artifacts` map falls back to the top-level `url`/`sha256` —
-that is the pure-Python case, where the wheel is valid everywhere and the recipe is
-`platform: any` / `noarch` (see [source-recipes.md](source-recipes.md)).
+A pure-Python column pins the single `py3-none-any` wheel under the `any` key
+and builds as `platform: any` / `noarch` (see [source-recipes.md](source-recipes.md)) —
+built once, installable on every platform, but still one recipe **per
+interpreter column**, because its dependency edge (`python312` vs `python313t`)
+and its install dir (`lib/python3.12/` vs `lib/python3.13t/`) are per-column.
 
 ## Writing a wheel recipe
 
