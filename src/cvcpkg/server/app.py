@@ -2628,7 +2628,12 @@ def create_app(
         offset: int = Query(0, ge=0),
         caller: TokenRecord | None = Depends(optional_token),
     ):
-        if _use_db:
+        # A mirror's catalog lives in the sync-maintained state.index, not the
+        # DB (which mirror mode leaves empty even when one is configured) —
+        # same split /healthz and /v1/catalog already make.  Without this
+        # guard a DB-backed mirror lists 0 packages while serving a full
+        # catalog (pkg.tx.wtf, 2026-08-02).
+        if _use_db and not MIRROR_MODE:
             # 'live' is a virtual tag meaning release_tag == ""
             db_release = "" if release == "live" else release
             packages, total = await _db_packages.get_bundles(
@@ -2751,7 +2756,8 @@ def create_app(
                 if needle in {t.strip().lower() for t in (p.tags or "").split(",") if t.strip()}
             ]
 
-        if _use_db:
+        # Mirror mode: serve from the sync-maintained index, like /v1/packages.
+        if _use_db and not MIRROR_MODE:
             packages, total = await _db_packages.get_bundles(
                 platform=platform,
                 release=db_release,
@@ -2950,7 +2956,8 @@ def create_app(
         include_yanked: bool = Query(False, description="Include yanked packages in results"),
         caller: TokenRecord | None = Depends(optional_token),
     ):
-        if _use_db:
+        # Mirror mode: serve from the sync-maintained index, like /v1/packages.
+        if _use_db and not MIRROR_MODE:
             packages, total = await _db_packages.get_bundles(
                 name=name,
                 org_slug=org,
