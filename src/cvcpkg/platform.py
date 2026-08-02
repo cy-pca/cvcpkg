@@ -223,6 +223,20 @@ def _probe_cuda() -> bool:
             return True
     except Exception:
         pass
+    try:
+        # Windows CUDA toolkit installs set CUDA_PATH but a service account
+        # (schtasks SYSTEM builder) may not have %CUDA_PATH%\bin on PATH, so
+        # shutil.which() misses nvcc there.  Same variable is honoured on any
+        # platform for a non-PATH toolkit install.
+        cuda_home = os.environ.get("CUDA_PATH") or os.environ.get("CUDA_HOME")
+        if cuda_home:
+            from pathlib import Path
+
+            bin_dir = Path(cuda_home) / "bin"
+            if (bin_dir / "nvcc").exists() or (bin_dir / "nvcc.exe").exists():
+                return True
+    except Exception:
+        pass
     return False
 
 

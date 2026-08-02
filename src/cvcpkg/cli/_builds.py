@@ -138,6 +138,8 @@ def builds_info(job_id: int, server: str, token: str):
     click.echo(f"  Platform:    {data['platform']}/{data['arch']}")
     click.echo(f"  Config:      {data['config']}")
     click.echo(f"  Link:        {data['link']}")
+    if data.get("required_capabilities"):
+        click.echo(f"  Requires:    {', '.join(data['required_capabilities'])}")
     click.echo(f"  Status:      {data['status']}")
     click.echo(f"  DAG:         {data.get('dag_id') or '-'}")
     click.echo(f"  Builder:     {data.get('builder_id') or 'unassigned'}")
@@ -1079,6 +1081,15 @@ def builds_submit_dag(
         matrix = data.get("build", {}).get("matrix", [])
         return bool(matrix) and all(entry.get("platform") == "any" for entry in matrix)
 
+    def _required_caps(name: str) -> list[str]:
+        """A recipe's top-level requires_capabilities (e.g. ['cuda']).
+
+        Propagated onto its build jobs so the scheduler routes them only to
+        builders advertising every listed capability.
+        """
+        caps = recipe_data.get(name, {}).get("requires_capabilities", []) or []
+        return [c for c in caps if isinstance(c, str)]
+
     # Valid platform→arch pairings.  wasm32 only pairs with wasm/wasi.
     _wasm_arches = {"wasm32"}
     _wasm_platforms = {"wasm", "wasi"}
@@ -1095,6 +1106,10 @@ def builds_submit_dag(
     # read we submit everything and let the server's reaper clean up.
     _supported_targets: set[tuple[str, str]] = set()
     _supported_platforms: set[str] = set()  # legacy platform-only cross targets
+    # Per-builder (targets, platforms, capability flags) so recipes with
+    # requires_capabilities are checked against a SINGLE builder that both
+    # covers the target and advertises the capability.
+    _builder_offers: list[tuple[set[tuple[str, str]], set[str], set[str]]] = []
     _builder_check = not allow_unschedulable
     if _builder_check:
         import httpx as _httpx
@@ -1107,14 +1122,24 @@ def builds_submit_dag(
                 )
             _resp.raise_for_status()
             for _b in _resp.json().get("builders", []):
+                _b_targets: set[tuple[str, str]] = set()
+                _b_platforms: set[str] = set()
                 _bp, _ba = _b.get("platform"), _b.get("arch")
                 if _bp and _ba:
-                    _supported_targets.add((_bp, _ba))
+                    _b_targets.add((_bp, _ba))
                 for _cp in (_b.get("capabilities") or {}).get("cross_platforms", []) or []:
                     if isinstance(_cp, dict) and _cp.get("platform") and _cp.get("arch"):
-                        _supported_targets.add((_cp["platform"], _cp["arch"]))
+                        _b_targets.add((_cp["platform"], _cp["arch"]))
                     elif isinstance(_cp, str):
-                        _supported_platforms.add(_cp)
+                        _b_platforms.add(_cp)
+                _b_caps = {
+                    _k
+                    for _k, _v in (_b.get("capabilities") or {}).items()
+                    if _k != "cross_platforms" and _v
+                }
+                _supported_targets |= _b_targets
+                _supported_platforms |= _b_platforms
+                _builder_offers.append((_b_targets, _b_platforms, _b_caps))
         except Exception as _e:  # noqa: BLE001 — best-effort, must not block submit
             click.echo(
                 f"  Warning: could not read builder registry ({_e}); submitting all "
@@ -1122,8 +1147,14 @@ def builds_submit_dag(
             )
             _builder_check = False
 
-    def _has_builder(plat: str, ar: str) -> bool:
-        return (plat, ar) in _supported_targets or plat in _supported_platforms
+    def _has_builder(plat: str, ar: str, required_caps: list[str] | None = None) -> bool:
+        req = set(required_caps or [])
+        if not req:
+            return (plat, ar) in _supported_targets or plat in _supported_platforms
+        return any(
+            req <= _caps and ((plat, ar) in _targets or plat in _plats)
+            for _targets, _plats, _caps in _builder_offers
+        )
 
     # ── Published-variant set for --skip-existing / auto-deps ────
     # One paged listing up front; yanked packages are excluded by the
@@ -1370,6 +1401,30 @@ def builds_submit_dag(
                                 f"named recipes."
                             )
 
+                    # Drop recipes whose required capabilities no registered
+                    # builder covering this target advertises (e.g. a
+                    # requires_capabilities: [cuda] recipe with no cuda
+                    # builder) — their jobs would only sit pending until the
+                    # server's unschedulable reaper failed them.
+                    if _builder_check:
+                        _uncapable = [
+                            n
+                            for n in eligible
+                            if _required_caps(n) and not _has_builder(plat, ar, _required_caps(n))
+                        ]
+                        if _uncapable:
+                            click.echo(
+                                f"  Skipping {len(_uncapable)} recipe(s) for {plat}/{ar}: no "
+                                f"registered builder advertises the required capability: "
+                                + ", ".join(
+                                    f"{n} ({', '.join(_required_caps(n))})"
+                                    for n in sorted(_uncapable)
+                                )
+                            )
+                            eligible = [n for n in eligible if n not in set(_uncapable)]
+                    if not eligible:
+                        continue
+
                     # Build name→index mapping for depends_on resolution
                     name_to_idx: dict[str, int] = {name: idx for idx, name in enumerate(eligible)}
 
@@ -1391,6 +1446,9 @@ def builds_submit_dag(
                             "org_slug": org_slug,
                             "depends_on": dep_indices,
                         }
+                        _rc = _required_caps(name)
+                        if _rc:
+                            job["required_capabilities"] = _rc
                         _t = _job_timeout(name)
                         if _t is not None:
                             job["timeout_seconds"] = _t
@@ -1474,6 +1532,9 @@ def builds_submit_dag(
                             "org_slug": org_slug,
                             "depends_on": dep_indices,
                         }
+                        _rc = _required_caps(name)
+                        if _rc:
+                            job["required_capabilities"] = _rc
                         _t = _job_timeout(name)
                         if _t is not None:
                             job["timeout_seconds"] = _t

@@ -793,6 +793,10 @@ class BuildJobInfo(BaseModel):
     arch: str
     config: str = "release"
     link: str = "shared"
+    required_capabilities: list[str] = Field(
+        default_factory=list,
+        description="Builder capabilities this job needs (e.g. ['cuda']).",
+    )
     builder_id: int | None = None
     claimed_by: str = ""
     status: str = BuildJobStatus.pending
@@ -849,6 +853,15 @@ class BuildJobSubmitRequest(BaseModel):
     link: str = Field(
         default="shared",
         description="Link mode (shared or static).",
+    )
+    required_capabilities: list[str] = Field(
+        default_factory=list,
+        max_length=16,
+        description=(
+            "Builder capabilities this job needs, from the recipe's top-level "
+            "requires_capabilities (e.g. ['cuda']).  The scheduler dispatches "
+            "the job only to a builder advertising ALL of them."
+        ),
     )
     org_slug: str = Field(
         default="",

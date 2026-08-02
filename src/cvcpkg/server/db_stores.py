@@ -3286,6 +3286,16 @@ class DbBuildJobStore:
     """DB-backed store for build job queue and DAG scheduling."""
 
     @staticmethod
+    def _decode_required_caps(row: BuildJobRow) -> list[str]:
+        try:
+            caps = json.loads(row.required_capabilities or "[]")
+        except (json.JSONDecodeError, TypeError):
+            return []
+        if not isinstance(caps, list):
+            return []
+        return [c for c in caps if isinstance(c, str)]
+
+    @staticmethod
     def _row_to_info(row: BuildJobRow, dep_ids: list[int] | None = None) -> BuildJobInfo:
         return BuildJobInfo(
             id=row.id,
@@ -3298,6 +3308,7 @@ class DbBuildJobStore:
             arch=row.arch,
             config=row.config,
             link=row.link,
+            required_capabilities=DbBuildJobStore._decode_required_caps(row),
             builder_id=row.builder_id,
             claimed_by=row.claimed_by or "",
             status=row.status,
@@ -3331,6 +3342,7 @@ class DbBuildJobStore:
         recipe_hash: str = "",
         config: str = "release",
         link: str = "shared",
+        required_capabilities: list[str] | None = None,
         org_slug: str = "",
         dag_id: str | None = None,
         priority: int = 0,
@@ -3349,6 +3361,7 @@ class DbBuildJobStore:
                 arch=arch,
                 config=config,
                 link=link,
+                required_capabilities=json.dumps(required_capabilities or []),
                 status=BuildJobStatus.pending,
                 priority=priority,
                 timeout_seconds=timeout_seconds,
@@ -3394,6 +3407,7 @@ class DbBuildJobStore:
                     arch=job["arch"],
                     config=job.get("config", "release"),
                     link=job.get("link", "shared"),
+                    required_capabilities=json.dumps(job.get("required_capabilities") or []),
                     status=BuildJobStatus.pending,
                     priority=job.get("priority", 0),
                     timeout_seconds=job.get("timeout_seconds"),
@@ -3987,6 +4001,7 @@ class DbBuildJobStore:
         schedulable_platforms: set[str],
         *,
         min_age_seconds: int,
+        builder_offers: list[tuple[set[tuple[str, str]], set[str], set[str]]] | None = None,
     ) -> list[BuildJobInfo]:
         """Mark long-pending jobs that no registered builder can serve.
 
@@ -4002,6 +4017,15 @@ class DbBuildJobStore:
         targets (any arch).  Both are derived purely from builders
         registered with this server — the server has no other notion of
         what can be built.
+
+        A job with ``required_capabilities`` additionally needs a single
+        builder that covers its target AND advertises every required
+        capability; target coverage and the capability may not be pieced
+        together from different builders.  ``builder_offers`` carries the
+        per-builder view needed for that joint check — one
+        ``(targets, platforms, capabilities)`` triple per registered builder.
+        When it is ``None`` (legacy callers), capability requirements are
+        not evaluated and only target coverage is checked.
 
         Returns the jobs that were reaped so the caller can cancel their
         downstream dependents and emit events.
@@ -4022,6 +4046,24 @@ class DbBuildJobStore:
                     submitted = submitted.replace(tzinfo=datetime.timezone.utc)
                 if submitted > cutoff:
                     continue  # still within the grace period
+                required_caps = set(self._decode_required_caps(row))
+                if required_caps and builder_offers is not None:
+                    # Joint check: one builder must cover the target AND all
+                    # required capabilities.
+                    if any(
+                        required_caps <= caps and self._offer_covers_target(row, targets, platforms)
+                        for targets, platforms, caps in builder_offers
+                    ):
+                        continue
+                    row.status = BuildJobStatus.unschedulable
+                    row.finished_at = now
+                    row.error_message = (
+                        f"no registered builder for {row.platform}/{row.arch} "
+                        f"with capability {', '.join(sorted(required_caps))}"
+                    )
+                    dep_ids = await self._load_dep_ids(session, row.id)
+                    reaped.append(self._row_to_info(row, dep_ids))
+                    continue
                 if row.platform == "any":
                     # A platform-independent (noarch) job is built on the
                     # reference build platform (it needs that host's interpreter/
@@ -4043,6 +4085,27 @@ class DbBuildJobStore:
                 dep_ids = await self._load_dep_ids(session, row.id)
                 reaped.append(self._row_to_info(row, dep_ids))
             return reaped
+
+    @staticmethod
+    def _offer_covers_target(
+        row: BuildJobRow,
+        targets: set[tuple[str, str]],
+        platforms: set[str],
+    ) -> bool:
+        """True when one builder's offered targets cover *row*'s target.
+
+        Mirrors the target matching in ``reap_unschedulable``'s legacy path
+        (exact pair, legacy platform-only cross target, noarch build target)
+        but scoped to a single builder so it can be combined with that same
+        builder's capability set.
+        """
+        if row.platform == "any":
+            from cvcpkg.platform import noarch_build_target
+
+            return noarch_build_target() in targets
+        if (row.platform, row.arch) in targets:
+            return True
+        return row.platform in platforms
 
     async def cancel_downstream(self, failed_job_id: int) -> int:
         """Cancel all pending/dispatched jobs that depend (transitively) on a failed job.

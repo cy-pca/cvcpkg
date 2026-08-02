@@ -1073,13 +1073,32 @@ _YANK_RETENTION_DAYS = int(os.environ.get("CVCPKG_YANK_RETENTION_DAYS", "0"))
 _YANK_GC_INTERVAL = int(os.environ.get("CVCPKG_YANK_GC_INTERVAL", "21600"))
 
 
+def _satisfies_capabilities(builder, job) -> bool:
+    """True when *builder* advertises every capability *job* requires.
+
+    A job's ``required_capabilities`` (from the recipe's top-level
+    ``requires_capabilities``, e.g. ``["cuda"]``) must ALL be advertised as
+    truthy flags in the builder's ``capabilities`` dict
+    (``{"cuda": true, ...}``).  A job with no requirements matches every
+    builder — a capability only *adds* eligibility, it never reserves the
+    builder for capability jobs.
+    """
+    required = getattr(job, "required_capabilities", None) or []
+    if not required:
+        return True
+    caps = getattr(builder, "capabilities", None) or {}
+    return all(bool(caps.get(c)) for c in required)
+
+
 def _choose_builder(job, available):
     """Pick a builder for *job*, or ``None``.
 
     Enforces **namespace isolation** (a job runs only on a builder that serves
     the job's org namespace), matches platform/arch or a cross-platform
-    capability, respects per-builder capacity, and prefers affinity builders as
-    a soft preference.
+    capability, requires every capability in the job's
+    ``required_capabilities`` (e.g. ``cuda``) to be advertised by the builder,
+    respects per-builder capacity, and prefers affinity builders as a soft
+    preference.
 
     Multi-tenant fleet: a builder advertises a *set* of served namespaces
     (``served_namespaces``, always including its home ``org_slug``), so one
@@ -1098,6 +1117,10 @@ def _choose_builder(job, available):
             # private org's build never lands on a builder that does not serve
             # that org, and a builder never runs work for a namespace it did
             # not opt into.
+            continue
+        if not _satisfies_capabilities(b, job):
+            # e.g. a cuda job never lands on a CPU-only builder, where it
+            # would only fail on the missing GPU toolchain.
             continue
         if job.platform == "any":
             # A platform-independent (noarch) job publishes one any/noarch
@@ -1202,17 +1225,32 @@ async def _build_scheduler_loop() -> None:
             all_builders = await _db_builders.list_builders()
             schedulable_targets: set[tuple[str, str]] = set()
             schedulable_platforms: set[str] = set()
+            # Per-builder (targets, platforms, capabilities) so a job's
+            # required_capabilities are checked against the SAME builder that
+            # covers its target (a cuda job is unschedulable when the only
+            # cuda builder serves a different platform).
+            builder_offers: list[tuple[set[tuple[str, str]], set[str], set[str]]] = []
             for b in all_builders:
-                schedulable_targets.add((b.platform, b.arch))
+                b_targets: set[tuple[str, str]] = {(b.platform, b.arch)}
+                b_platforms: set[str] = set()
                 for cp in b.capabilities.get("cross_platforms", []) or []:
                     if isinstance(cp, dict):
-                        schedulable_targets.add((cp["platform"], cp["arch"]))
+                        b_targets.add((cp["platform"], cp["arch"]))
                     elif isinstance(cp, str):
-                        schedulable_platforms.add(cp)
+                        b_platforms.add(cp)
+                b_caps = {
+                    name
+                    for name, val in b.capabilities.items()
+                    if name != "cross_platforms" and val
+                }
+                schedulable_targets |= b_targets
+                schedulable_platforms |= b_platforms
+                builder_offers.append((b_targets, b_platforms, b_caps))
             unschedulable = await _db_build_jobs.reap_unschedulable(
                 schedulable_targets,
                 schedulable_platforms,
                 min_age_seconds=_UNSCHEDULABLE_TTL,
+                builder_offers=builder_offers,
             )
             for job in unschedulable:
                 await _db_build_jobs.cancel_downstream(job.id)
@@ -1223,7 +1261,8 @@ async def _build_scheduler_loop() -> None:
                         "recipe_name": job.recipe_name,
                         "platform": job.platform,
                         "arch": job.arch,
-                        "error_message": f"no registered builder for {job.platform}/{job.arch}",
+                        "error_message": job.error_message
+                        or f"no registered builder for {job.platform}/{job.arch}",
                         "reason": "no_registered_builder",
                     },
                     org_slug=job.org_slug,
@@ -6456,6 +6495,7 @@ def create_app(
                 recipe_hash=body.recipe_hash,
                 config=body.config,
                 link=link,
+                required_capabilities=body.required_capabilities,
                 org_slug=body.org_slug,
                 priority=body.priority,
                 timeout_seconds=body.timeout_seconds,
@@ -6496,6 +6536,7 @@ def create_app(
                 "config": j.config,
                 # wasm/wasi/cosmo only support static linking — enforce server-side.
                 "link": "static" if j.platform in ("wasm", "wasi", "cosmo") else j.link,
+                "required_capabilities": j.required_capabilities,
                 "org_slug": j.org_slug,
                 "priority": j.priority,
                 "timeout_seconds": j.timeout_seconds,
@@ -6589,6 +6630,14 @@ def create_app(
     async def next_claimable_build(
         platform: str = Query(..., description="Target platform, e.g. 'macos'"),
         arch: str = Query("", description="Target arch; empty matches any"),
+        capabilities: str = Query(
+            "",
+            description=(
+                "Comma-separated capabilities the caller's host provides "
+                "(e.g. 'cuda').  Jobs requiring a capability not listed here "
+                "are never returned."
+            ),
+        ),
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
         """Return the next pending job for *platform*, or 204 when none.
@@ -6611,6 +6660,11 @@ def create_app(
             # Never hand a private org's job to a caller who cannot see it.
             visible_to=None if actor.role == TokenRole.admin else actor.name,
         )
+        # Capability gate, mirroring _choose_builder: an anonymous drainer
+        # states what its host provides; a job requiring anything more is
+        # skipped rather than handed to a host where it would fail.
+        have = {c.strip() for c in capabilities.split(",") if c.strip()}
+        candidates = [j for j in candidates if set(j.required_capabilities or []) <= have]
         if not candidates:
             return Response(status_code=204)
         candidates.sort(key=lambda j: (-j.priority, j.submitted_at))
