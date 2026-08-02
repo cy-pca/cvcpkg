@@ -124,12 +124,22 @@ def builder_list(
     if not builders:
         click.echo("No builders registered.")
         return
-    click.echo(f"{'ID':>5}  {'Name':<24} {'Platform':<10} {'Arch':<10} {'Status':<8} {'Jobs':>4}")
-    click.echo("-" * 72)
+    click.echo(
+        f"{'ID':>5}  {'Name':<24} {'Platform':<10} {'Arch':<10} {'Status':<8} "
+        f"{'Jobs':>4}  Capabilities"
+    )
+    click.echo("-" * 86)
     for b in builders:
+        # Flag-style capabilities (cuda, ...); cross_platforms is a list with
+        # its own display in `builder status`, not a flag.
+        flags = ", ".join(
+            sorted(
+                k for k, v in (b.get("capabilities") or {}).items() if k != "cross_platforms" and v
+            )
+        )
         click.echo(
             f"{b['id']:>5}  {b['name']:<24} {b['platform']:<10} {b['arch']:<10} "
-            f"{b['status']:<8} {b['current_jobs']}/{b['max_jobs']:>3}"
+            f"{b['status']:<8} {b['current_jobs']}/{b['max_jobs']:>3}  {flags}"
         )
 
 
@@ -164,6 +174,11 @@ def builder_status(builder_id: int, server: str, token: str):
         else:
             cross_strs = cross
         click.echo(f"  Cross:       {', '.join(cross_strs)}")
+    cap_flags = sorted(
+        k for k, v in (data.get("capabilities") or {}).items() if k != "cross_platforms" and v
+    )
+    if cap_flags:
+        click.echo(f"  Capabilities: {', '.join(cap_flags)}")
     click.echo(f"  Affinity:    {'yes' if data.get('prefer_affinity') else 'no'}")
     click.echo(f"  Last HB:     {data.get('last_heartbeat') or 'never'}")
     click.echo(f"  Registered:  {data.get('created_at', 'unknown')}")
@@ -376,6 +391,23 @@ def builder_fleet(config_path: str, dry_run: bool, restart_delay: float) -> None
     help="Architecture for each --cross-platform (positional pairing). "
     "Defaults: wasm->wasm32, wasi->wasm32, others->host arch.",
 )
+@click.option(
+    "--capability",
+    "capabilities",
+    multiple=True,
+    help="Host capability to advertise (repeatable, e.g. --capability cuda). "
+    "The scheduler routes jobs whose recipe declares requires_capabilities "
+    "only to builders advertising ALL of them.  Merged with auto-detected "
+    "capabilities (see --no-auto-capabilities).",
+)
+@click.option(
+    "--no-auto-capabilities",
+    is_flag=True,
+    default=False,
+    help="Advertise only the explicit --capability flags; skip host probing "
+    "(nvidia-smi/nvcc/libcuda for cuda).  The CVCPKG_CAPABILITIES env var, "
+    "when set, overrides probing either way.",
+)
 def builder_run(
     server: str,
     token: str,
@@ -396,6 +428,8 @@ def builder_run(
     pidfile: str,
     cross_platforms: tuple[str, ...],
     cross_archs: tuple[str, ...],
+    capabilities: tuple[str, ...],
+    no_auto_capabilities: bool,
 ):
     """Register as a builder, poll for jobs, and execute builds.
 
@@ -552,6 +586,20 @@ def builder_run(
             ca = _cross_arch_defaults.get(cp, arch or "x86_64")
         cross_entries.append({"platform": cp, "arch": ca})
 
+    # -- Advertised capabilities -----------------------------
+    # Explicit --capability flags, merged with the host probe (same probes as
+    # the install-side resolver gating: nvidia-smi/nvcc/libcuda for cuda)
+    # unless --no-auto-capabilities.  CVCPKG_CAPABILITIES, when set, is
+    # authoritative inside host_capabilities() itself.  The scheduler routes a
+    # job whose recipe declares requires_capabilities only to a builder
+    # advertising all of them; advertising a capability never *reserves* the
+    # builder — it only adds eligibility.
+    advertised_caps: set[str] = {c.strip() for c in capabilities if c.strip()}
+    if not no_auto_capabilities:
+        from cvcpkg.platform import host_capabilities
+
+        advertised_caps |= host_capabilities()
+
     # -- Registration ----------------------------------------
     if cross_entries:
         cross_msg = " [cross: {}]".format(
@@ -559,6 +607,8 @@ def builder_run(
         )
     else:
         cross_msg = ""
+    if advertised_caps:
+        cross_msg += " [capabilities: {}]".format(", ".join(sorted(advertised_caps)))
 
     builder_id: int | None
     if no_register:
@@ -572,6 +622,8 @@ def builder_run(
         caps: dict = {}
         if cross_entries:
             caps["cross_platforms"] = cross_entries
+        for _cap in sorted(advertised_caps):
+            caps[_cap] = True
         # Served set: home org always included, plus any --serve namespaces,
         # order-stable and de-duplicated ('' = public). Shared with the server
         # so both sides compute the same set.
@@ -1748,7 +1800,14 @@ def builder_run(
                         resp = client.get(
                             f"{base}/v1/builds/next-claimable",
                             headers=headers,
-                            params={"platform": platform, "arch": arch},
+                            params={
+                                "platform": platform,
+                                "arch": arch,
+                                # A drainer is anonymous, so it states its host
+                                # capabilities per request; the server never
+                                # hands it a job requiring anything more.
+                                "capabilities": ",".join(sorted(advertised_caps)),
+                            },
                         )
                     else:
                         resp = client.get(

@@ -21,6 +21,10 @@ Config schema (``fleet.yaml``)::
     max_jobs: 4              # optional default, overridable per server
     work_dir: /var/lib/cvcpkg-builder   # optional base; each worker gets a
                                         # per-server subdirectory
+    capabilities: [cuda]     # optional; host capabilities to advertise
+                             # (merged with the worker's auto-detected set;
+                             # see auto_capabilities), overridable per server
+    auto_capabilities: true  # optional; false passes --no-auto-capabilities
     servers:
       - server: https://cvcpkg.org
         token_env: CVCPKG_TOKEN_PROD    # or `token: <literal>`
@@ -57,6 +61,8 @@ class FleetServer:
     labels: tuple[str, ...] = ()
     platform: str | None = None
     arch: str | None = None
+    capabilities: tuple[str, ...] = ()
+    auto_capabilities: bool = True
 
     @property
     def host(self) -> str:
@@ -126,6 +132,8 @@ def parse_fleet_config(data: dict) -> FleetConfig:
     default_max_jobs = int(data.get("max_jobs", 1) or 1)
     base_work_dir = data.get("work_dir")
     default_labels = tuple(str(x) for x in (data.get("labels") or []))
+    default_capabilities = tuple(str(x) for x in (data.get("capabilities") or []))
+    default_auto_caps = bool(data.get("auto_capabilities", True))
 
     servers_raw = data.get("servers")
     if not isinstance(servers_raw, list) or not servers_raw:
@@ -163,6 +171,10 @@ def parse_fleet_config(data: dict) -> FleetConfig:
                 labels=tuple(str(x) for x in (entry.get("labels") or default_labels)),
                 platform=(str(entry["platform"]) if entry.get("platform") else None),
                 arch=(str(entry["arch"]) if entry.get("arch") else None),
+                capabilities=tuple(
+                    str(x) for x in (entry.get("capabilities") or default_capabilities)
+                ),
+                auto_capabilities=bool(entry.get("auto_capabilities", default_auto_caps)),
             )
         )
     return FleetConfig(name=fleet_name, servers=servers)
@@ -207,6 +219,10 @@ def worker_argv(fs: FleetServer) -> list[str]:
         argv += ["--serve", ns]
     for label in fs.labels:
         argv += ["--label", label]
+    for cap in fs.capabilities:
+        argv += ["--capability", cap]
+    if not fs.auto_capabilities:
+        argv += ["--no-auto-capabilities"]
     if fs.platform:
         argv += ["--platform", fs.platform]
     if fs.arch:

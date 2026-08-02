@@ -107,7 +107,7 @@ Three actors:
 | `platform` | TEXT | Detected platform (linux, macos, windows, freebsd, …) |
 | `arch` | TEXT | Detected architecture (x86_64, arm64, riscv64, …) |
 | `labels` | JSON | Arbitrary labels (e.g. `["gpu", "high-mem"]`) |
-| `capabilities` | JSON | Supported link modes, configs, max parallel jobs |
+| `capabilities` | JSON | Cross-build targets (`cross_platforms`) + host capability flags (e.g. `{"cuda": true}`, advertised via `builder run --capability cuda`/auto-detect; jobs whose recipe declares `requires_capabilities` route only to builders advertising them) |
 | `status` | TEXT | `online`, `offline`, `busy` |
 | `current_jobs` | INT | Number of currently running jobs |
 | `max_jobs` | INT | Configurable max parallel jobs (default: CPU count) |

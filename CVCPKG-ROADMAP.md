@@ -902,29 +902,34 @@ Highest cross-value is `cufft` (F2Dock's FFT-correlation docking; `libcufftw` is
 the existing `fftw3` recipe), then `cublas`/`cusolver`/`cusparse` for volrover/MolSurf dense &
 sparse solves.
 
-**Planned: GPU/CUDA build-time routing (scheduler capability).** The CUDA-math recipes above — and
-`libcvc-cuda` (recipe `requires_capabilities: [cuda]`) — must build on a host with an NVIDIA GPU +
-`nvcc`, never on the CPU builders (`star-00`/`star-01`). Today the scheduler's `_choose_builder`
-(`src/cvcpkg/server/app.py`) matches only `(platform, arch)` and the `cross_platforms` capability
-(wasm), so a CUDA build would wrongly land on any linux builder and fail on the missing toolchain.
-Add **build-time capability routing** — the build-side twin of the install-side capability selection
-(`requires_capabilities`/`provides` in the resolver):
-- A builder advertises capabilities at registration — `cvcpkg builder run --capability cuda`, plus
-  auto-detect via `nvidia-smi`/`nvcc`/`libcuda` — surfacing as `capabilities: {"cuda": true}` (stored
-  alongside the existing `cross_platforms`).
-- A recipe's top-level `requires_capabilities` propagates onto its build jobs (new `required_capabilities`
-  field end to end: submit-dag → job model/DB + migration → store).
+**DONE (2026-08-02): GPU/CUDA build-time routing (scheduler capability).** The CUDA-math recipes
+above — and `libcvc-cuda` (recipe `requires_capabilities: [cuda]`) — must build on a host with an
+NVIDIA GPU + `nvcc`, never on the CPU builders (`star-00`/`star-01`). **Build-time capability
+routing** — the build-side twin of the install-side capability selection
+(`requires_capabilities`/`provides` in the resolver) — is implemented end to end:
+- A builder advertises capabilities at registration — `cvcpkg builder run --capability cuda`
+  (repeatable), merged with auto-detect via the same host probes the resolver uses
+  (`nvidia-smi`/`nvcc`/`libcuda`/`CUDA_PATH`, `cvcpkg.platform.host_capabilities`; opt out with
+  `--no-auto-capabilities`, override with `CVCPKG_CAPABILITIES`) — surfacing as
+  `capabilities: {"cuda": true}` alongside the existing `cross_platforms`, shown in
+  `cvcpkg builder list`/`status`.
+- A recipe's top-level `requires_capabilities` propagates onto its build jobs (`required_capabilities`
+  end to end: submit-dag → `BuildJobSubmitRequest`/`BuildJobInfo` → `build_jobs` column, migration
+  025 → store), and submit-dag pre-skips recipes no registered builder can serve (same fail-open
+  registry check as the platform/arch skip).
 - `_choose_builder` skips any builder whose advertised capabilities don't satisfy **all** of a job's
-  `required_capabilities`; the unschedulable-reaper marks a job whose required capability is advertised
-  by no registered builder as unschedulable, rather than dispatching it to a builder where it would
-  fail on the missing toolchain.
+  `required_capabilities`; the unschedulable-reaper marks a job unschedulable when no single
+  registered builder covers its target AND advertises its required capabilities (target and
+  capability may not be pieced together from different builders). The anonymous drain path
+  (`/v1/builds/next-claimable`) gates on a `capabilities` query param the same way.
 - Generalizes beyond CUDA (e.g. `avx512`, a specific driver/SDK) exactly as `cross_platforms` did for
-  wasm.
+  wasm: any `--capability <name>` flag matches any recipe `requires_capabilities: [<name>]`.
 
 First GPU builder: **`prettyhatemachine`** (NVIDIA GTX 1650 + CUDA 12.x); provisioning script +
-fleet docs land in `vm-provisioning` (`linux/setup-cuda-builder.sh`, `docs/CVCPKG-BUILDERS.md`). This
-routing is a prerequisite for building both the CUDA-math recipes above and the `libcvc-cuda` package
-on the fleet.
+fleet docs live in `vm-provisioning` (`linux/setup-cuda-builder.sh`, `docs/CVCPKG-BUILDERS.md`);
+a Windows CUDA builder follows the same shape (`--capability cuda` in the supervisor CONFIG, or
+auto-detect via `CUDA_PATH`). This routing is the prerequisite for building both the CUDA-math
+recipes above and the `libcvc-cuda` package on the fleet.
 
 #### Per-Interpreter Wheel Matrix (incl. Free-Threaded / No-GIL)
 

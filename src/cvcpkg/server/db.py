@@ -542,6 +542,11 @@ class BuildJobRow(Base):
     arch: Mapped[str] = mapped_column(String(64), nullable=False)
     config: Mapped[str] = mapped_column(String(32), nullable=False, default="release")
     link: Mapped[str] = mapped_column(String(32), nullable=False, default="shared")
+    # Capabilities a builder must advertise to take this job (JSON-encoded
+    # list, e.g. '["cuda"]').  Propagated from the recipe's top-level
+    # ``requires_capabilities`` at submit time — the build-side twin of the
+    # resolver's install-side capability gating.
+    required_capabilities: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     builder_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("builders.id", ondelete="SET NULL"), nullable=True
     )
