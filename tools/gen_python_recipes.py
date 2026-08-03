@@ -236,7 +236,9 @@ SEED_PACKAGES = {
     "pyproject-metadata": {
         "version": "0.9.1",
         "license": "MIT",
-        "deps": [],
+        # pyproject_metadata/__init__.py does 'import packaging.requirements' at
+        # import time, so the import check fails without it in the prefix.
+        "deps": ["packaging"],
         "files": ["pyproject_metadata/", "pyproject_metadata-*.dist-info/"],
         "check": "import pyproject_metadata",
     },

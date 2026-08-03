@@ -31,8 +31,10 @@ patches: []
 depends:
   build:
     - name: python312
+    - name: packaging-cp312
   runtime:
     - name: python312
+    - name: packaging-cp312
 
 build:
   build_type_independent: true

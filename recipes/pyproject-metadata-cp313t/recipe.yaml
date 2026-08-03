@@ -33,8 +33,10 @@ patches: []
 depends:
   build:
     - name: python313t
+    - name: packaging-cp313t
   runtime:
     - name: python313t
+    - name: packaging-cp313t
 
 build:
   build_type_independent: true
