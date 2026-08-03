@@ -34,6 +34,21 @@ Major release: production daemon with database backend, the
 `cvcpkg.org` registry, distributed build infrastructure, and wasi
 support.
 
+### Upload cap is a setting, default 4 GiB (2026-08-02)
+
+The server's maximum bundle size is now a first-class setting —
+`cvcpkg server run --max-upload-bytes 8GB` or `CVCPKG_MAX_UPLOAD_BYTES` —
+and defaults to **4 GiB**, up from a hard-coded 1 GiB (documented as
+512 MiB; the docs had drifted from the code). Sizes accept a byte count
+or a human suffix (`4GB`, `512MB`, `2TB`; units are binary), shared with
+`CVCPKG_POPULATE_MAX_PACKAGE_BYTES`, which previously crashed on any
+suffixed value. The old cap was below the largest bundles we publish —
+the CUDA runtime wheels unpack to ~2 GiB. Parsing lives in
+`cvcpkg.server.limits` so the CLI can validate the flag without importing
+`server.app` (which would freeze its cap before uvicorn loads it); an
+unparseable env var falls back to the default rather than refusing to
+boot, while a bad CLI flag is a startup error.
+
 ### Python packaging: uniform per-interpreter columns (2026-08-02)
 
 Every Python package is now a **per-interpreter column recipe** —

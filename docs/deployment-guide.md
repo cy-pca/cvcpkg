@@ -52,7 +52,7 @@ curl http://localhost:8420/healthz
 | `REQUIRE_AUTH_READS` | *(empty)* | Set `1` to require tokens for reads |
 | `CVCPKG_RELEASE` | `dev` | Release tag for OCI labels |
 | `TIMEZONE` | `UTC` | Container timezone |
-| `CVCPKG_MAX_UPLOAD_BYTES` | `536870912` | Max upload size (512 MiB) |
+| `CVCPKG_MAX_UPLOAD_BYTES` | `4294967296` | Max bundle upload size (4 GiB). Accepts `8GB`/`512MB`; same as `cvcpkg server run --max-upload-bytes`. |
 | `CVCPKG_RATE_LIMIT_RPM` | `60` | Rate limit: requests/min for writes |
 | `CVCPKG_CORS_ORIGINS` | *(empty)* | Comma-separated allowed CORS origins |
 | `CVCPKG_LOG_JSON` | *(empty)* | Set `1` for structured JSON logs |

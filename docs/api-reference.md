@@ -172,7 +172,7 @@ Upload and publish a package bundle.
 
 **Rate Limited**: Yes (configurable via `CVCPKG_RATE_LIMIT_RPM`).
 
-**Size Limited**: Yes (configurable via `CVCPKG_MAX_UPLOAD_BYTES`, default 512 MiB).
+**Size Limited**: Yes — `cvcpkg server run --max-upload-bytes` / `CVCPKG_MAX_UPLOAD_BYTES`, default 4 GiB.  Accepts a byte count or a human size (`8GB`, `512MB`); units are binary.
 
 **Query Parameters**:
 

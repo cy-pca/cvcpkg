@@ -94,6 +94,13 @@ def server_cli() -> None:
     help="Seconds between catalog syncs from upstream.  [default: 3600]",
 )
 @click.option(
+    "--max-upload-bytes",
+    default="",
+    envvar="CVCPKG_MAX_UPLOAD_BYTES",
+    help="Maximum size of a published bundle: a byte count or a human size "
+    "such as 8GB / 512MB (binary units).  [default: 4GB]",
+)
+@click.option(
     "--registration-mode",
     type=click.Choice(["open", "admin-gated"], case_sensitive=False),
     default="open",
@@ -125,6 +132,7 @@ def run(
     mirror_upstream: str,
     mirror_token: str,
     mirror_sync_interval: int,
+    max_upload_bytes: str,
     registration_mode: str,
     daemon: bool,
     pidfile: str,
@@ -152,6 +160,17 @@ def run(
         os.environ["CVCPKG_MIRROR_SYNC_INTERVAL"] = str(mirror_sync_interval)
     if registration_mode != "open":
         os.environ["CVCPKG_REGISTRATION_MODE"] = registration_mode
+    if max_upload_bytes:
+        # Validate here, where a typo is a startup error the operator sees,
+        # rather than in the app module, which falls back to the default so a
+        # bad env var can never stop an already-deployed server from booting.
+        from cvcpkg.server.limits import parse_size
+
+        try:
+            _cap = parse_size(max_upload_bytes)
+        except ValueError as exc:
+            raise click.ClickException(f"--max-upload-bytes: {exc}") from None
+        os.environ["CVCPKG_MAX_UPLOAD_BYTES"] = str(_cap)
 
     try:
         import uvicorn
@@ -173,6 +192,19 @@ def run(
     if mirror_mode:
         click.echo(f"cvcpkg-server: MIRROR MODE — upstream: {mirror_upstream}")
     click.echo(f"cvcpkg-server: registration mode: {registration_mode}")
+    # Read straight from limits (never from server.app): importing the app here
+    # would freeze its MAX_UPLOAD_BYTES before uvicorn loads it.
+    from cvcpkg.server.limits import DEFAULT_MAX_UPLOAD_BYTES, format_size, parse_size
+
+    click.echo(
+        "cvcpkg-server: max upload size: "
+        + format_size(
+            parse_size(
+                os.environ.get("CVCPKG_MAX_UPLOAD_BYTES", ""),
+                default=DEFAULT_MAX_UPLOAD_BYTES,
+            )
+        )
+    )
     click.echo(f"cvcpkg-server: docs at http://{host}:{port}/docs")
 
     # Resolve PID file path

@@ -60,6 +60,10 @@ from fastapi.responses import (
 
 from cvcpkg import __version__
 from cvcpkg.server import archive_store
+from cvcpkg.server.limits import (
+    DEFAULT_MAX_UPLOAD_BYTES,
+    parse_size,
+)
 from cvcpkg.server.audit import AuditLog
 from cvcpkg.server.auth import TokenStore
 from cvcpkg.server.models import (
@@ -136,8 +140,13 @@ _START_TIME = 0.0
 
 # ── Configurable limits ────────────────────────────────────────
 
-# Maximum upload size in bytes (default 512 MiB)
-MAX_UPLOAD_BYTES = int(os.environ.get("CVCPKG_MAX_UPLOAD_BYTES", str(1024 * 1024 * 1024)))
+
+# Maximum upload size (default 4 GiB, see server.limits).  Settable with
+# `cvcpkg server run --max-upload-bytes 8GB` or CVCPKG_MAX_UPLOAD_BYTES; an
+# unparseable value falls back to the default rather than refusing to boot.
+MAX_UPLOAD_BYTES = parse_size(
+    os.environ.get("CVCPKG_MAX_UPLOAD_BYTES", ""), default=DEFAULT_MAX_UPLOAD_BYTES
+)
 
 # Chunked upload chunk size (default 8 MiB)
 CHUNK_SIZE = int(os.environ.get("CVCPKG_CHUNK_SIZE", str(8 * 1024 * 1024)))

@@ -12,7 +12,7 @@
 
 x-edge-env: &edge-env
   CVCPKG_SERVER_STATE_DIR: /data
-  CVCPKG_MAX_UPLOAD_BYTES: "1073741824"
+  CVCPKG_MAX_UPLOAD_BYTES: "4294967296"
   # Edge role: populate the PUBLIC catalog from the canonical upstream. The
   # public namespace is then upstream-canonical (local public publishes are
   # 409'd); org packages stay local + private.
