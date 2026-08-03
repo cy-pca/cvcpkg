@@ -4692,16 +4692,20 @@ class TestBuildsSubmitDagCLI:
         out = capsys.readouterr().out
         assert "dag-001" in out.lower() or "2 jobs" in out
 
-    def test_submit_dag_stages_concrete_behind_noarch(self, tmp_path, capsys, monkeypatch):
-        """A concrete job whose dep is a noarch recipe in the same submission
-        must not dispatch until that noarch DAG has finished.
+    def test_submit_dag_orders_concrete_behind_its_noarch_dep(self, tmp_path, capsys, monkeypatch):
+        """A concrete job whose dep is a noarch recipe must not dispatch until
+        that dep has been built.
 
-        depends_on is an index into the submitting job list, so the edge from
-        a concrete recipe to a noarch one cannot be expressed inside the
-        concrete DAG. Before staging, the concrete job dispatched immediately
-        and raced its own dependency, failing at install time with the dep
-        simply unpublished (libcvc-deps#425: pydantic-core-cpNNN vs
-        typing-extensions-cpNNN)."""
+        depends_on is an index into the submitting job list, so this edge used
+        to be inexpressible: the concrete recipe and the noarch one went into
+        SEPARATE DAGs, and the concrete job dispatched immediately, raced its
+        own dependency and failed at install time with the dep simply
+        unpublished (libcvc-deps#425: pydantic-core-cpNNN vs
+        typing-extensions-cpNNN).
+
+        Both kinds now go into ONE submission (#429), so the ordering is a real
+        dependency edge the server enforces — no client-side wait needed, and it
+        holds for fire-and-forget submits too."""
         rd = tmp_path / "recipes"
         # noarch dep ...
         (rd / "typing-extensions-cp311").mkdir(parents=True)
@@ -4730,6 +4734,7 @@ class TestBuildsSubmitDagCLI:
         (rd / "pydantic-core-cp311" / "build.sh").write_text("#!/bin/sh\n")
 
         events: list[str] = []
+        submitted: list[dict] = []
 
         class FakeResp:
             status_code = 200
@@ -4757,9 +4762,9 @@ class TestBuildsSubmitDagCLI:
             def post(self, url, **kw):
                 body = kw.get("json") or {}
                 names = [j["recipe_name"] for j in body.get("jobs", [])]
-                kind = "noarch" if "typing-extensions-cp311" in names else "concrete"
-                events.append(f"submit:{kind}")
-                return FakeResp({"dag_id": f"dag-{kind}", "total": len(names), "jobs": []})
+                submitted.append(body)
+                events.append("submit")
+                return FakeResp({"dag_id": "dag-1", "total": len(names), "jobs": []})
 
             def get(self, url, **kw):
                 if url.endswith("/v1/packages"):
@@ -4815,11 +4820,24 @@ class TestBuildsSubmitDagCLI:
             ]
         )
         assert ret == 0
-        # The noarch DAG is submitted first, then WAITED ON, and only then is
-        # the dependent concrete DAG submitted.
-        assert events[0] == "submit:noarch"
-        assert "wait:noarch" in events
-        assert events.index("wait:noarch") < events.index("submit:concrete")
+        # Both recipes land in ONE submission — that is what makes the edge
+        # expressible at all.
+        assert len(submitted) == 1, "concrete and noarch must share a submission"
+        jobs = submitted[0]["jobs"]
+        by_name = {j["recipe_name"]: j for j in jobs}
+        assert set(by_name) == {"pydantic-core-cp311", "typing-extensions-cp311"}
+
+        # The concrete job depends on the noarch one, so the server holds it
+        # until the dep succeeds instead of dispatching both at once.
+        dep_names = [jobs[i]["recipe_name"] for i in by_name["pydantic-core-cp311"]["depends_on"]]
+        assert dep_names == ["typing-extensions-cp311"]
+        # ...and the dependency itself waits on nothing.
+        assert by_name["typing-extensions-cp311"]["depends_on"] == []
+        # The noarch dep is scheduled once, as noarch — not fanned out to linux.
+        assert (
+            by_name["typing-extensions-cp311"]["platform"],
+            by_name["typing-extensions-cp311"]["arch"],
+        ) == ("any", "noarch")
 
     def test_submit_dag_skips_unschedulable_combos(self, capsys, monkeypatch):
         """Combos no registered builder can serve are skipped, not submitted."""
