@@ -1276,146 +1276,35 @@ def builds_submit_dag(
     any_names = [n for n in recipe_names if _is_any(n)]
     concrete_names = [n for n in recipe_names if not _is_any(n)]
 
-    _noarch_waited = [False]
-
-    def _stage_noarch(deps: list[str]) -> None:
-        """Block until the already-submitted noarch DAG(s) finish.
-
-        Called at most once, the first time a concrete DAG is about to be
-        submitted whose dependency closure includes a noarch recipe we just
-        scheduled.  Waiting here is what keeps the two DAG kinds correctly
-        ordered: the noarch bundle must be published before a dependent
-        concrete build starts, and cross-DAG edges cannot be expressed.
-
-        Without ``--wait`` the caller asked for a fire-and-forget submit, so
-        we only warn: blocking a non-waiting submit for the length of a build
-        would be a surprise.
-        """
-        if _noarch_waited[0] or not noarch_dag_ids:
-            return
-        if not wait:
-            click.echo(
-                f"  Warning: this DAG depends on {len(deps)} noarch recipe(s) "
-                f"building in {', '.join(noarch_dag_ids)} "
-                f"({', '.join(deps)}); without --wait they are submitted "
-                f"concurrently and the dependent build may start first. "
-                f"Re-run with --wait, or submit the noarch DAG separately."
-            )
-            _noarch_waited[0] = True
-            return
-        click.echo(
-            f"\n  Staging: waiting for {len(noarch_dag_ids)} noarch DAG(s) before "
-            f"submitting concrete builds that depend on them "
-            f"({len(deps)} dep(s), e.g. {', '.join(deps[:5])}"
-            f"{', ...' if len(deps) > 5 else ''})"
-        )
-        _wait_for_dags(
-            server,
-            token,
-            noarch_dag_ids,
-            fail_on_unschedulable=not allow_unschedulable,
-            wait_timeout=wait_timeout,
-        )
-        _noarch_waited[0] = True
-
     dag_ids: list[str] = []
-    # Noarch recipes are scheduled FIRST, and any concrete job that depends on
-    # one of them stages behind that DAG (see _stage_noarch below).  A noarch
-    # dep's edge cannot be expressed inside a concrete DAG -- depends_on is an
-    # index into the submitting job list, and the noarch jobs live in their own
-    # any/noarch DAG -- so without staging the concrete job dispatches
-    # immediately and races its own dependency (it then fails at install time
-    # with the dep simply unpublished).
-    noarch_dag_ids: list[str] = []
-    noarch_submitted: set[str] = set()
 
-    # ── Schedule platform-independent (noarch) recipes ONCE ──────────
-    # A `platform: any` recipe builds one bundle valid everywhere, so it is
-    # submitted as a single any/noarch DAG (per config/link) rather than once
-    # per target platform.  The server routes these to a builder on the noarch
-    # build target (see _choose_builder) -- the reference platform that has the
-    # interpreter/toolchain deps -- which builds natively and publishes the
-    # result as platform=any/arch=noarch (see pack_recipe).
-    if any_names:
-        from cvcpkg.platform import noarch_build_target
+    # ── One DAG per (config, link), spanning every platform AND noarch ──
+    #
+    # `depends_on` is resolved as indices INTO THE SUBMITTED BODY, so an edge
+    # can only be expressed between jobs in the same submission. Emitting a DAG
+    # per platform plus a separate noarch DAG therefore dropped every edge that
+    # crossed that boundary, and the two DAGs then raced: h5py-cp312 (linux)
+    # started before its cython/pkgconfig/wheel build tools (noarch) existed and
+    # died in its PEP-517 backend, while jinja2-cp313t (noarch) started before
+    # markupsafe-cp313t (linux) and died on the missing import. Both directions
+    # occur, so no ordering of two separate DAGs can fix it — the jobs have to
+    # be submitted TOGETHER so the edges are expressible.
+    #
+    # Accumulate per (config, link) and resolve edges once at the end.
+    # `_slot` identifies a job for dep lookup: concrete jobs by their own
+    # platform/arch, noarch jobs by ("any", "noarch").
+    pending_jobs: dict[tuple[str, str], list[dict]] = {}
+    pending_index: dict[tuple[str, str], dict[tuple[str, str, str], int]] = {}
 
-        _noarch_target = noarch_build_target()
-        # Only skip when we positively know no builder can build noarch (the
-        # reference target is unserved); fail open if the registry was unread.
-        if _builder_check and _noarch_target not in _supported_targets:
-            click.echo(
-                f"  Skipping {len(any_names)} noarch recipe(s): no registered builder "
-                f"for the noarch build target {_noarch_target[0]}/{_noarch_target[1]}"
-            )
-        else:
-            for cfg in configs:
-                for lnk in links:
-                    eligible = list(any_names)
-
-                    # --skip-existing: drop noarch variants already published.
-                    if skip_existing and eligible:
-                        satisfied = [
-                            n
-                            for n in eligible
-                            if (n, _full_version(n), "any", "noarch", cfg, lnk) in _published
-                        ]
-                        if satisfied:
-                            click.echo(
-                                f"  Skipping {len(satisfied)} already-published noarch "
-                                f"recipe(s) for {cfg}/{lnk}: {', '.join(sorted(satisfied))}"
-                            )
-                            eligible = [n for n in eligible if n not in set(satisfied)]
-
-                    if not eligible:
-                        click.echo(f"  No eligible noarch recipes for {cfg}/{lnk}")
-                        continue
-
-                    name_to_idx = {name: idx for idx, name in enumerate(eligible)}
-                    jobs = []
-                    for name in eligible:
-                        # Only edges to other noarch recipes in this DAG are
-                        # expressed; a concrete build dep (e.g. python312) is
-                        # built elsewhere and fetched at build time.
-                        dep_indices = list(
-                            dict.fromkeys(
-                                name_to_idx[dep_name]
-                                for dep_name in _dep_names(name)
-                                if dep_name in name_to_idx
-                            )
-                        )
-                        job: dict = {
-                            "recipe_name": name,
-                            "platform": "any",
-                            "arch": "noarch",
-                            "config": cfg,
-                            "link": lnk,
-                            "org_slug": org_slug,
-                            "depends_on": dep_indices,
-                        }
-                        _rc = _required_caps(name)
-                        if _rc:
-                            job["required_capabilities"] = _rc
-                        _t = _job_timeout(name)
-                        if _t is not None:
-                            job["timeout_seconds"] = _t
-                        jobs.append(job)
-
-                    body: dict = {"jobs": jobs}
-                    if dag_id:
-                        body["dag_id"] = f"{dag_id}-any-noarch-{cfg}-{lnk}"
-
-                    data = _api_request(
-                        "post",
-                        f"{server.rstrip('/')}/v1/builds/dag",
-                        token,
-                        json=body,
-                    )
-                    dag_ids.append(data["dag_id"])
-                    noarch_dag_ids.append(data["dag_id"])
-                    noarch_submitted.update(eligible)
-                    click.echo(
-                        f"DAG {data['dag_id']}: {data['total']} jobs (any/noarch/{cfg}/{lnk})"
-                    )
+    def _stage(cfg: str, lnk: str, job: dict) -> None:
+        key = (cfg, lnk)
+        jobs_for_key = pending_jobs.setdefault(key, [])
+        index_for_key = pending_index.setdefault(key, {})
+        slot = (job["recipe_name"], job["platform"], job["arch"])
+        if slot in index_for_key:  # same recipe/target twice — keep the first
+            return
+        index_for_key[slot] = len(jobs_for_key)
+        jobs_for_key.append(job)
 
     for plat in platforms:
         for ar in arches:
@@ -1501,10 +1390,16 @@ def builds_submit_dag(
                                     unbuildable.append(dep)
                                 continue
                             if _is_any(dep):
-                                # A noarch dep belongs in a separate any/noarch
-                                # DAG; its edge is not expressible here, so flag
-                                # it rather than silently mis-order.
-                                cross_noarch.append(dep)
+                                # A noarch dep is scheduled in the noarch pass
+                                # below, and now lands in the SAME submitted DAG
+                                # as this job — so pull it in and let the edge
+                                # resolve, instead of warning that it cannot be
+                                # ordered (it used to go in a separate DAG and
+                                # race: h5py started before its cython/wheel/
+                                # pkgconfig build tools existed).
+                                if dep not in any_names:
+                                    any_names.append(dep)
+                                    cross_noarch.append(dep)
                                 continue
                             if not _has_platform_entry(dep, plat):
                                 # Has a recipe but no build for this platform:
@@ -1525,21 +1420,11 @@ def builds_submit_dag(
                             )
                         if cross_noarch:
                             uniq = sorted(set(cross_noarch))
-                            staged = [n for n in uniq if n in noarch_submitted]
-                            if staged:
-                                # Their edges are not expressible here, so wait
-                                # for the noarch DAG to land before dispatching
-                                # this one.
-                                _stage_noarch(staged)
-                            missing = [n for n in uniq if n not in noarch_submitted]
-                            if missing:
-                                click.echo(
-                                    f"  Warning: {len(missing)} unpublished noarch "
-                                    f"dependency(ies) are not part of this submission "
-                                    f"and cannot be scheduled inside a concrete DAG — "
-                                    f"submit them so they build in an any/noarch DAG: "
-                                    f"{', '.join(missing)}"
-                                )
+                            click.echo(
+                                f"  Auto-added {len(uniq)} unpublished noarch "
+                                f"dependency(ies), ordered ahead of this platform's "
+                                f"jobs: {', '.join(uniq)}"
+                            )
                         if unbuildable:
                             uniq = sorted(set(unbuildable))
                             raise click.ClickException(
@@ -1573,18 +1458,9 @@ def builds_submit_dag(
                     if not eligible:
                         continue
 
-                    # Build name→index mapping for depends_on resolution
-                    name_to_idx: dict[str, int] = {name: idx for idx, name in enumerate(eligible)}
-
-                    jobs = []
+                    # Stage the jobs; edges are resolved after every platform
+                    # and the noarch set have been collected (see _stage).
                     for name in eligible:
-                        dep_indices = list(
-                            dict.fromkeys(
-                                name_to_idx[dep_name]
-                                for dep_name in _dep_names(name)
-                                if dep_name in name_to_idx
-                            )
-                        )
                         job: dict = {
                             "recipe_name": name,
                             "platform": plat,
@@ -1592,7 +1468,7 @@ def builds_submit_dag(
                             "config": cfg,
                             "link": lnk,
                             "org_slug": org_slug,
-                            "depends_on": dep_indices,
+                            "depends_on": [],
                         }
                         _rc = _required_caps(name)
                         if _rc:
@@ -1600,22 +1476,112 @@ def builds_submit_dag(
                         _t = _job_timeout(name)
                         if _t is not None:
                             job["timeout_seconds"] = _t
-                        jobs.append(job)
+                        _stage(cfg, lnk, job)
+                    click.echo(f"  Staged {len(eligible)} job(s) for {plat}/{ar}/{cfg}/{lnk}")
 
-                    body: dict = {"jobs": jobs}
-                    if dag_id:
-                        body["dag_id"] = f"{dag_id}-{plat}-{ar}-{cfg}-{lnk}"
+    # ── Schedule platform-independent (noarch) recipes ONCE ──────────
+    # A `platform: any` recipe builds one bundle valid everywhere, so it is
+    # submitted as a single any/noarch DAG (per config/link) rather than once
+    # per target platform.  The server routes these to a builder on the noarch
+    # build target (see _choose_builder) -- the reference platform that has the
+    # interpreter/toolchain deps -- which builds natively and publishes the
+    # result as platform=any/arch=noarch (see pack_recipe).
+    if any_names:
+        from cvcpkg.platform import noarch_build_target
 
-                    data = _api_request(
-                        "post",
-                        f"{server.rstrip('/')}/v1/builds/dag",
-                        token,
-                        json=body,
-                    )
-                    dag_ids.append(data["dag_id"])
-                    click.echo(
-                        f"DAG {data['dag_id']}: {data['total']} jobs ({plat}/{ar}/{cfg}/{lnk})"
-                    )
+        _noarch_target = noarch_build_target()
+        # Only skip when we positively know no builder can build noarch (the
+        # reference target is unserved); fail open if the registry was unread.
+        if _builder_check and _noarch_target not in _supported_targets:
+            click.echo(
+                f"  Skipping {len(any_names)} noarch recipe(s): no registered builder "
+                f"for the noarch build target {_noarch_target[0]}/{_noarch_target[1]}"
+            )
+        else:
+            for cfg in configs:
+                for lnk in links:
+                    eligible = list(any_names)
+
+                    # --skip-existing: drop noarch variants already published.
+                    if skip_existing and eligible:
+                        satisfied = [
+                            n
+                            for n in eligible
+                            if (n, _full_version(n), "any", "noarch", cfg, lnk) in _published
+                        ]
+                        if satisfied:
+                            click.echo(
+                                f"  Skipping {len(satisfied)} already-published noarch "
+                                f"recipe(s) for {cfg}/{lnk}: {', '.join(sorted(satisfied))}"
+                            )
+                            eligible = [n for n in eligible if n not in set(satisfied)]
+
+                    if not eligible:
+                        click.echo(f"  No eligible noarch recipes for {cfg}/{lnk}")
+                        continue
+
+                    for name in eligible:
+                        job: dict = {
+                            "recipe_name": name,
+                            "platform": "any",
+                            "arch": "noarch",
+                            "config": cfg,
+                            "link": lnk,
+                            "org_slug": org_slug,
+                            "depends_on": [],
+                        }
+                        _rc = _required_caps(name)
+                        if _rc:
+                            job["required_capabilities"] = _rc
+                        _t = _job_timeout(name)
+                        if _t is not None:
+                            job["timeout_seconds"] = _t
+                        _stage(cfg, lnk, job)
+                    click.echo(f"  Staged {len(eligible)} noarch job(s) for {cfg}/{lnk}")
+
+    # ── Resolve edges across the whole submission, then submit ───────
+    # Every job for a (config, link) now lives in one list, so an edge can be
+    # expressed no matter which side of the concrete/noarch split it crosses.
+    #
+    # A noarch job is BUILT on the reference build target (see _choose_builder),
+    # so its concrete deps must resolve to the jobs for THAT platform — not to
+    # some other platform's copy of the same recipe.
+    from cvcpkg.platform import noarch_build_target
+
+    _noarch_plat, _noarch_arch = noarch_build_target()
+
+    for (cfg, lnk), jobs in pending_jobs.items():
+        index = pending_index[(cfg, lnk)]
+        for idx, job in enumerate(jobs):
+            if job["platform"] == "any":
+                # noarch: prefer another noarch job, else the reference target.
+                lookups = [("any", "noarch"), (_noarch_plat, _noarch_arch)]
+            else:
+                # concrete: prefer the same target, else a noarch build tool.
+                lookups = [(job["platform"], job["arch"]), ("any", "noarch")]
+            dep_indices: list[int] = []
+            for dep_name in _dep_names(job["recipe_name"]):
+                for plat_key, arch_key in lookups:
+                    dep_idx = index.get((dep_name, plat_key, arch_key))
+                    if dep_idx is not None:
+                        if dep_idx != idx and dep_idx not in dep_indices:
+                            dep_indices.append(dep_idx)
+                        break
+            job["depends_on"] = dep_indices
+
+        body: dict = {"jobs": jobs}
+        if dag_id:
+            body["dag_id"] = f"{dag_id}-{cfg}-{lnk}"
+
+        data = _api_request(
+            "post",
+            f"{server.rstrip('/')}/v1/builds/dag",
+            token,
+            json=body,
+        )
+        dag_ids.append(data["dag_id"])
+        _edges = sum(len(j["depends_on"]) for j in jobs)
+        click.echo(f"DAG {data['dag_id']}: {data['total']} jobs, {_edges} edges ({cfg}/{lnk})")
 
     if wait:
         _wait_for_dags(

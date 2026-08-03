@@ -184,6 +184,73 @@ def builder_status(builder_id: int, server: str, token: str):
     click.echo(f"  Registered:  {data.get('created_at', 'unknown')}")
 
 
+@builder_group.command("gc")
+@click.option(
+    "--work-dir",
+    type=click.Path(),
+    default="/tmp/cvcpkg-builder",
+    show_default=True,
+    help="Builder work dir to sweep for orphaned job scratch trees.",
+)
+@click.option(
+    "--cache-dir",
+    type=click.Path(),
+    default="",
+    help="Download cache to prune.  [default: the resolved cvcpkg cache dir]",
+)
+@click.option(
+    "--max-age",
+    type=float,
+    default=21600,
+    show_default=True,
+    help="Only remove job dirs older than this many seconds.  0 removes ALL of "
+    "them — correct only when no builder is running against this work dir.",
+)
+@click.option(
+    "--cache-max-age",
+    type=float,
+    default=1209600,
+    show_default=True,
+    help="Prune cache entries older than this many seconds (0 disables).",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Report what would be reclaimed without deleting anything.",
+)
+def builder_gc(
+    work_dir: str,
+    cache_dir: str,
+    max_age: float,
+    cache_max_age: float,
+    dry_run: bool,
+):
+    """Reclaim disk from orphaned build scratch dirs and the download cache.
+
+    A running builder already does this itself — it sweeps orphans at startup
+    and on an interval — so this command is for hosts that want an explicit
+    cron/timer, for one-off recovery on a full builder, and for inspecting the
+    damage with ``--dry-run``.
+
+    Job dirs are stranded when a builder is killed mid-build (a deploy restart,
+    SIGKILL, OOM): the in-process cleanup never runs.  They are safe to remove
+    once no builder is working in them, which ``--max-age`` approximates.
+    """
+    from cvcpkg.builder_gc import sweep_cache, sweep_work_dir
+    from cvcpkg.cache import default_cache_dir
+
+    cdir = Path(cache_dir) if cache_dir else default_cache_dir()
+    work = sweep_work_dir(work_dir, max_age_seconds=max_age, dry_run=dry_run)
+    cache = sweep_cache(cdir, max_age_seconds=cache_max_age, dry_run=dry_run)
+
+    verb = "would reclaim" if dry_run else "reclaimed"
+    click.echo(f"work dir {work_dir}: {verb} {work.removed} dir(s), {work.freed_mib:.0f} MiB")
+    click.echo(f"cache {cdir}: {verb} {cache.removed} entr(ies), {cache.freed_mib:.0f} MiB")
+    total_mib = work.freed_mib + cache.freed_mib
+    click.echo(f"total: {verb} {total_mib:.0f} MiB")
+
+
 def _supervise_fleet(fleet, restart_delay: float) -> None:
     """Run one `cvcpkg builder run` worker per configured server.
 
@@ -478,6 +545,21 @@ def builder_run(
         # daily clean, tmpwatch) can later delete it out from under us; each job
         # re-ensures it before mkdtemp (see _execute_job).
         work_root.mkdir(parents=True, exist_ok=True)
+        # Reclaim job dirs stranded by a PREVIOUS incarnation.  _execute_job
+        # removes its own tree in a finally, but that never runs when the
+        # builder is killed mid-job -- which is what every deploy restart does,
+        # so the leak grows until a build dies with ENOSPC (28 GiB on the dev
+        # cluster, 2026-08-02).  Anything here at startup is an orphan: the
+        # single-instance pidfile guard means no other builder shares this work
+        # dir, and this process owns nothing yet -- so no age heuristic.
+        from cvcpkg.builder_gc import sweep_work_dir
+
+        _startup_gc = sweep_work_dir(work_root)
+        if _startup_gc:
+            click.echo(
+                f"cvcpkg-builder: reclaimed {_startup_gc.removed} orphaned job "
+                f"dir(s), {_startup_gc.freed_mib:.0f} MiB"
+            )
     cache_dir = (
         Path(recipe_cache_dir)
         if recipe_cache_dir
@@ -665,6 +747,10 @@ def builder_run(
     # counter previously leaked a slot whenever the claim step returned early,
     # wedging the builder at max capacity forever.
     active_jobs: set[int] = set()
+    # Job roots of in-flight builds, so the periodic GC can never delete a live
+    # tree.  Guarded by jobs_lock; added when the root is created and removed in
+    # the same finally that rmtree's it.
+    active_job_roots: set[Path] = set()
     _job_seq = 0
     current_jobs = 0
     jobs_lock = threading.Lock()
@@ -1393,6 +1479,8 @@ def builder_run(
             # sibling variant's still-in-use work dir mid-build, which raised
             # FileNotFoundError at staging.mkdir() in the losing variant.
             job_root = Path(tempfile.mkdtemp(prefix=f"cvcpkg-job-{recipe_name}-", dir=work_root))
+            with jobs_lock:
+                active_job_roots.add(job_root)
             dep_prefix = Path(
                 tempfile.mkdtemp(prefix=f"cvcpkg-prefix-{recipe_name}-", dir=job_root)
             )
@@ -1496,8 +1584,11 @@ def builder_run(
             # cvcpkg-<recipe>-* across the shared work_root — concurrent
             # variant jobs of the same recipe would delete each other's
             # live work dirs (the FileNotFoundError-at-staging bug).
-            if job_root is not None and job_root.is_dir():
-                shutil.rmtree(job_root, ignore_errors=True)
+            if job_root is not None:
+                with jobs_lock:
+                    active_job_roots.discard(job_root)
+                if job_root.is_dir():
+                    shutil.rmtree(job_root, ignore_errors=True)
             # NB: the slot count is released by _run_job_guarded's finally,
             # not here — so an early return from the claim step above (which
             # never reaches this try) still frees the slot.
@@ -1626,7 +1717,7 @@ def builder_run(
         dispatched jobs and recipe pushes.  Falls back to HTTP
         long-poll on any connection failure.
         """
-        nonlocal shutdown, current_jobs, last_heartbeat
+        nonlocal shutdown, current_jobs, last_heartbeat, last_gc
         try:
             import websockets.sync.client as ws_sync
         except ImportError:
@@ -1664,6 +1755,10 @@ def builder_run(
                             last_heartbeat = now
                         except Exception:
                             break  # connection lost
+
+                    if gc_interval > 0 and now - last_gc >= gc_interval:
+                        _run_periodic_gc()
+                        last_gc = now
 
                     # Try to receive a message
                     try:
@@ -1739,6 +1834,38 @@ def builder_run(
     heartbeat_interval = 60.0
     poll_interval = 5.0  # seconds between next-job polls
 
+    # Periodic disk reclamation.  The startup sweep above catches orphans from
+    # a previous incarnation; this is the safety net for a builder that stays
+    # up for weeks (a job thread wedged before its finally).  Age-gated well
+    # past the longest real build (llvm ~2h) and skipping in-flight roots, so
+    # it can never touch a live build.
+    last_gc = time.time()  # not at 0: startup already swept
+    gc_interval = float(os.environ.get("CVCPKG_BUILDER_GC_INTERVAL", "3600"))
+    gc_max_age = float(os.environ.get("CVCPKG_BUILDER_GC_MAX_AGE", "21600"))  # 6h
+    # Download cache: content-addressed, so pruning only ever costs a
+    # re-download.  0 disables (matches the server's retention knobs).
+    gc_cache_max_age = float(os.environ.get("CVCPKG_BUILDER_GC_CACHE_MAX_AGE", "1209600"))  # 14d
+
+    def _run_periodic_gc() -> None:
+        """Best-effort sweep; never let disk hygiene break the build loop."""
+        from cvcpkg.builder_gc import sweep_cache, sweep_work_dir
+        from cvcpkg.cache import default_cache_dir
+
+        if work_root is None:
+            return
+        try:
+            with jobs_lock:
+                live = list(active_job_roots)
+            total = sweep_work_dir(work_root, max_age_seconds=gc_max_age, keep=live)
+            total.merge(sweep_cache(default_cache_dir(), max_age_seconds=gc_cache_max_age))
+            if total:
+                click.echo(
+                    f"cvcpkg-builder: gc reclaimed {total.removed} item(s), "
+                    f"{total.freed_mib:.0f} MiB"
+                )
+        except Exception as exc:  # noqa: BLE001 - hygiene must never kill the loop
+            click.echo(f"cvcpkg-builder: gc error (ignored): {exc}", err=True)
+
     # Time-boxed / drain-mode controls for ephemeral (CI) runners.
     run_deadline = (time.time() + max_runtime) if max_runtime else None
 
@@ -1783,6 +1910,10 @@ def builder_run(
             if now - last_heartbeat >= heartbeat_interval:
                 _heartbeat()
                 last_heartbeat = now
+
+            if gc_interval > 0 and now - last_gc >= gc_interval:
+                _run_periodic_gc()
+                last_gc = now
 
             # Check capacity
             with jobs_lock:

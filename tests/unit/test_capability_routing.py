@@ -495,3 +495,200 @@ class TestFleetCapabilities:
         argv = worker_argv(cfg.servers[0])
         assert "--capability" not in argv
         assert "--no-auto-capabilities" not in argv
+
+
+# ── submit-dag: recipe requires_capabilities → job required_capabilities ──
+#
+# The CLI half of the feature: reading the recipe's top-level
+# requires_capabilities, stamping it onto every job it submits, and
+# pre-skipping recipes no registered builder can serve.  Mocked-httpx
+# style, matching the other submit-dag tests (tests/unit/test_populate.py).
+
+
+def _write_cap_recipe(tmp_path, name, caps=(), platforms=("linux",)):
+    """A minimal recipe, optionally declaring requires_capabilities."""
+    rdir = tmp_path / "recipes" / name
+    rdir.mkdir(parents=True)
+    caps_line = (
+        "requires_capabilities: [" + ", ".join(f'"{c}"' for c in caps) + "]\n" if caps else ""
+    )
+    matrix = "".join(f"    - platform: {p}\n      script: build.sh\n" for p in platforms)
+    (rdir / "recipe.yaml").write_text(
+        f"""schema_version: 1
+recipe:
+  name: {name}
+  upstream_version: "1.0.0"
+  cvc_revision: 1
+{caps_line}build:
+  matrix:
+{matrix}"""
+    )
+    return rdir
+
+
+def _cap_fake_client(posted_bodies, builders):
+    """httpx.Client stub serving *builders* from /v1/builders."""
+
+    class FakeResp:
+        status_code = 200
+        text = ""
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            pass
+
+    class FakeClient:
+        def __init__(self, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+        def get(self, url, **kw):
+            if "/v1/builders" in url:
+                return FakeResp({"builders": builders})
+            if "/v1/packages" in url:
+                return FakeResp({"total": 0, "packages": []})
+            raise AssertionError(f"unexpected GET {url}")
+
+        def post(self, url, json=None, **kw):
+            posted_bodies.append(json)
+            return FakeResp({"dag_id": "dag-t", "total": len(json["jobs"]), "jobs": []})
+
+    return FakeClient
+
+
+_PLAIN_BUILDER = {"platform": "linux", "arch": "x86_64", "capabilities": {}}
+_CUDA_BUILDER = {"platform": "linux", "arch": "x86_64", "capabilities": {"cuda": True}}
+
+
+def _submit_dag(tmp_path, monkeypatch, posted, builders, *recipes):
+    from cvcpkg.cli import main
+
+    monkeypatch.setattr("httpx.Client", _cap_fake_client(posted, builders))
+    return main(
+        [
+            "builds",
+            "submit-dag",
+            "--server",
+            "http://s.example",
+            "--token",
+            "tok",
+            "--platform",
+            "linux",
+            "--arch",
+            "x86_64",
+            "--recipes-dir",
+            str(tmp_path / "recipes"),
+            "--no-default-recipes",
+            "--no-deps",
+            *recipes,
+        ]
+    )
+
+
+class TestSubmitDagCapabilityPropagation:
+    def test_recipe_requirement_lands_on_the_job(self, tmp_path, monkeypatch):
+        _write_cap_recipe(tmp_path, "libcvc-cuda", caps=("cuda",))
+        posted: list = []
+        assert _submit_dag(tmp_path, monkeypatch, posted, [_CUDA_BUILDER], "libcvc-cuda") == 0
+        jobs = [j for b in posted for j in b["jobs"]]
+        assert len(jobs) == 1
+        assert jobs[0]["required_capabilities"] == ["cuda"]
+
+    def test_plain_recipe_carries_no_requirement(self, tmp_path, monkeypatch):
+        # Absent (not empty-list) so an OLD server ignoring the field behaves
+        # exactly as before this feature.
+        _write_cap_recipe(tmp_path, "zlib")
+        posted: list = []
+        assert _submit_dag(tmp_path, monkeypatch, posted, [_PLAIN_BUILDER], "zlib") == 0
+        jobs = [j for b in posted for j in b["jobs"]]
+        assert len(jobs) == 1
+        assert "required_capabilities" not in jobs[0]
+
+    def test_skipped_when_no_builder_advertises_the_capability(self, tmp_path, monkeypatch):
+        # Only a CPU builder is registered: the cuda recipe must not be
+        # submitted at all (it would sit pending until the reaper failed it).
+        _write_cap_recipe(tmp_path, "libcvc-cuda", caps=("cuda",))
+        posted: list = []
+        assert _submit_dag(tmp_path, monkeypatch, posted, [_PLAIN_BUILDER], "libcvc-cuda") == 0
+        assert [j for b in posted for j in b["jobs"]] == []
+
+    def test_capable_builder_must_also_cover_the_target(self, tmp_path, monkeypatch):
+        # A cuda builder on a DIFFERENT platform must not make a linux cuda
+        # recipe look schedulable (target and capability from one builder).
+        _write_cap_recipe(tmp_path, "libcvc-cuda", caps=("cuda",))
+        win_cuda = {"platform": "windows", "arch": "x86_64", "capabilities": {"cuda": True}}
+        posted: list = []
+        assert (
+            _submit_dag(tmp_path, monkeypatch, posted, [_PLAIN_BUILDER, win_cuda], "libcvc-cuda")
+            == 0
+        )
+        assert [j for b in posted for j in b["jobs"]] == []
+
+    def test_plain_recipes_still_submit_alongside_a_skipped_cuda_one(self, tmp_path, monkeypatch):
+        _write_cap_recipe(tmp_path, "libcvc-cuda", caps=("cuda",))
+        _write_cap_recipe(tmp_path, "zlib")
+        posted: list = []
+        assert (
+            _submit_dag(tmp_path, monkeypatch, posted, [_PLAIN_BUILDER], "libcvc-cuda", "zlib") == 0
+        )
+        names = {j["recipe_name"] for b in posted for j in b["jobs"]}
+        assert names == {"zlib"}
+
+
+# ── CUDA host probe ─────────────────────────────────────────────
+
+
+class TestProbeCuda:
+    """The probe backing --capability auto-detect (and resolver gating)."""
+
+    def _clear(self, monkeypatch):
+        import cvcpkg.platform as plat_mod
+
+        monkeypatch.setattr(plat_mod, "_probed_capabilities", None)
+        monkeypatch.delenv("CVCPKG_CAPABILITIES", raising=False)
+        monkeypatch.delenv("CUDA_PATH", raising=False)
+        monkeypatch.delenv("CUDA_HOME", raising=False)
+        monkeypatch.setattr("ctypes.util.find_library", lambda _n: None)
+        monkeypatch.setattr("shutil.which", lambda _n: None)
+        return plat_mod
+
+    def test_no_cuda_anywhere(self, monkeypatch):
+        plat_mod = self._clear(monkeypatch)
+        assert plat_mod._probe_cuda() is False
+
+    def test_nvcc_on_path(self, monkeypatch):
+        plat_mod = self._clear(monkeypatch)
+        monkeypatch.setattr("shutil.which", lambda n: "/usr/bin/nvcc" if n == "nvcc" else None)
+        assert plat_mod._probe_cuda() is True
+
+    def test_cuda_path_env_without_nvcc_on_path(self, tmp_path, monkeypatch):
+        # The Windows service-account case: the toolkit sets CUDA_PATH
+        # system-wide but a schtasks /RU SYSTEM builder's PATH lacks bin/.
+        plat_mod = self._clear(monkeypatch)
+        (tmp_path / "bin").mkdir()
+        (tmp_path / "bin" / "nvcc.exe").write_text("")
+        monkeypatch.setenv("CUDA_PATH", str(tmp_path))
+        assert plat_mod._probe_cuda() is True
+
+    def test_cuda_path_env_pointing_nowhere(self, tmp_path, monkeypatch):
+        plat_mod = self._clear(monkeypatch)
+        monkeypatch.setenv("CUDA_PATH", str(tmp_path / "does-not-exist"))
+        assert plat_mod._probe_cuda() is False
+
+    def test_env_override_wins_over_probe(self, monkeypatch):
+        plat_mod = self._clear(monkeypatch)
+        monkeypatch.setattr("shutil.which", lambda n: "/usr/bin/nvcc" if n == "nvcc" else None)
+        monkeypatch.setenv("CVCPKG_CAPABILITIES", "")
+        assert plat_mod.host_capabilities() == set()
+        monkeypatch.setenv("CVCPKG_CAPABILITIES", "cuda,avx512")
+        assert plat_mod.host_capabilities() == {"cuda", "avx512"}
