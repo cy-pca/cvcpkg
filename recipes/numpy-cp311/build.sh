@@ -101,13 +101,31 @@ esac
 WHEELOUT="${CVC_BUILD_DIR}/wheelhouse"; mkdir -p "${WHEELOUT}"
 
 # ── Build from source (offline, no isolation) ───────────────────────────────
-"${PY}" -m pip wheel \
+# meson's own log says WHY a dependency probe failed (the exact pkg-config
+# invocation and its output); pip only relays meson's terse "not found".
+# Without this, a BLAS miss on a builder is undebuggable from the job log —
+# the build dir is deleted with the job.
+_dump_meson_log() {
+    local _log="${CVC_BUILD_DIR}/meson/meson-logs/meson-log.txt"
+    echo "----- meson-log.txt (${_log}) -----" >&2
+    if [ -f "${_log}" ]; then tail -n 200 "${_log}" >&2; else echo "(no meson log)" >&2; fi
+    echo "----- pkg-config view -----" >&2
+    echo "PKG_CONFIG=${PKG_CONFIG:-<unset>}" >&2
+    echo "PKG_CONFIG_LIBDIR=${PKG_CONFIG_LIBDIR:-<unset>}" >&2
+    "${PKG_CONFIG:-pkg-config}" --debug --exists openblas >&2 2>&1 | tail -n 40 || true
+    echo "-----------------------------------" >&2
+}
+
+if ! "${PY}" -m pip wheel \
   --no-build-isolation --no-deps --no-index --no-cache-dir \
   --wheel-dir "${WHEELOUT}" \
   "${BLAS_ARGS[@]}" \
   -C builddir="${CVC_BUILD_DIR}/meson" \
   -C compile-args=-j"${CVC_JOBS:-4}" \
-  "${CVC_SOURCE_DIR}"
+  "${CVC_SOURCE_DIR}"; then
+    _dump_meson_log
+    exit 1
+fi
 
 WHEEL="$(find "${WHEELOUT}" -maxdepth 1 -name 'numpy-*.whl' -print -quit)"
 [ -n "${WHEEL}" ] || { echo "numpy-cp311: no wheel produced" >&2; exit 1; }
