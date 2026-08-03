@@ -25,6 +25,7 @@ class TestDefault:
         assert DEFAULT_MAX_UPLOAD_BYTES == 4 * GIB
 
     def test_app_uses_the_default_when_unset(self, monkeypatch):
+        pytest.importorskip("fastapi", reason="server extras not installed")
         monkeypatch.delenv("CVCPKG_MAX_UPLOAD_BYTES", raising=False)
         import importlib
 
@@ -34,6 +35,7 @@ class TestDefault:
         assert app_mod.MAX_UPLOAD_BYTES == 4 * GIB
 
     def test_app_honours_the_env_override(self, monkeypatch):
+        pytest.importorskip("fastapi", reason="server extras not installed")
         monkeypatch.setenv("CVCPKG_MAX_UPLOAD_BYTES", "8GB")
         import importlib
 
@@ -96,6 +98,8 @@ class TestCliWiring:
         handed 'cvcpkg.server.app:create_app' as a string and reuses whatever
         is already in sys.modules.
         """
+        pytest.importorskip("uvicorn", reason="server extras not installed")
+
         import click
         from click.testing import CliRunner
 
