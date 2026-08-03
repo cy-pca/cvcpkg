@@ -806,7 +806,17 @@ jobs:
           # -not -name 'cvcpkg-builder': never delete the work dir itself
           # (the always-older-than-an-hour trap documented in
           # vm-provisioning/docs/CVCPKG-BUILDERS.md).
-          $SSH "$CUDA" "find /tmp -maxdepth 1 -name 'cvcpkg-*' -not -name 'cvcpkg-builder' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null; df -h / | awk 'NR==2{print \"disk \" \$4 \" free\"}'" || true
+          # Two layouts: a single-server builder keeps job dirs directly in
+          # /tmp/cvcpkg-*, while the fleet supervisor puts them under
+          # /var/lib/cvcpkg-builder/<server-slug>/ (so the /tmp sweep alone
+          # silently cleans nothing on a converted host).  In both cases
+          # -mindepth 1 keeps `find` from testing — and deleting — the work
+          # root itself, which is always older than an hour.
+          $SSH "$CUDA" "
+            find /tmp -maxdepth 1 -name 'cvcpkg-*' -not -name 'cvcpkg-builder' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null
+            find /var/lib/cvcpkg-builder -mindepth 2 -maxdepth 2 -name 'cvcpkg-*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null
+            df -h / | awk 'NR==2{print \"disk \" \$4 \" free\"}'
+          " || true
 
           echo "--- Restarting the CUDA builder ---"
           $SSH "$CUDA" "
