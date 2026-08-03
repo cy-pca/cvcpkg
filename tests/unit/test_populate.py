@@ -576,32 +576,28 @@ class TestSubmitDagNoarch:
         ret = self._submit(tmp_path, monkeypatch, posted, "idna", "anyio", "asyncpg-cp311")
         assert ret == 0
 
-        def _names(body):
-            return {j["recipe_name"] for j in body["jobs"]}
+        # Concrete and noarch jobs now share ONE submission per config/link, so
+        # an edge between them is expressible (they used to be separate DAGs
+        # that raced).  The invariant under test is unchanged: an 'any' recipe
+        # is scheduled EXACTLY ONCE as any/noarch, never fanned out per host.
+        all_jobs = [j for b in posted for j in b["jobs"]]
 
-        noarch_bodies = [b for b in posted if all(j["platform"] == "any" for j in b["jobs"])]
-        concrete_bodies = [b for b in posted if any(j["platform"] != "any" for j in b["jobs"])]
+        for name in ("idna", "anyio"):
+            targets = [(j["platform"], j["arch"]) for j in all_jobs if j["recipe_name"] == name]
+            assert targets == [("any", "noarch")], f"{name} must be scheduled once as noarch"
 
-        # The two 'any' recipes land in exactly ONE noarch DAG, not per host.
-        assert len(noarch_bodies) == 1
-        (noarch,) = noarch_bodies
-        assert _names(noarch) == {"idna", "anyio"}
-        for j in noarch["jobs"]:
-            assert (j["platform"], j["arch"]) == ("any", "noarch")
+        # Intra-'any' dependency edge preserved.
+        body = next(b for b in posted if any(j["recipe_name"] == "anyio" for j in b["jobs"]))
+        jobs = body["jobs"]
+        idx = {j["recipe_name"]: i for i, j in enumerate(jobs)}
+        anyio_job = jobs[idx["anyio"]]
+        assert [jobs[i]["recipe_name"] for i in anyio_job["depends_on"]] == ["idna"]
 
-        # Intra-'any' dependency edge preserved; the concrete build dep
-        # (python312, not in this DAG) is simply omitted rather than dangling.
-        idx = {j["recipe_name"]: i for i, j in enumerate(noarch["jobs"])}
-        anyio_job = noarch["jobs"][idx["anyio"]]
-        assert anyio_job["depends_on"] == [idx["idna"]]
-
-        # The 'any' recipes never appear in a per-host DAG.
-        for b in concrete_bodies:
-            assert not (_names(b) & {"idna", "anyio"})
-        # The concrete C-ext recipe fans out per host as before.
-        assert concrete_bodies, "expected per-host DAGs for the concrete recipe"
-        for b in concrete_bodies:
-            assert _names(b) == {"asyncpg-cp311"}
+        # The concrete C-ext recipe still fans out per host.
+        concrete_targets = {
+            (j["platform"], j["arch"]) for j in all_jobs if j["recipe_name"] == "asyncpg-cp311"
+        }
+        assert concrete_targets == {("linux", "x86_64"), ("windows", "x86_64")}
 
     def test_only_any_recipes_submits_just_the_noarch_dag(self, tmp_path, monkeypatch):
         _write_any_recipe(tmp_path, "certifi")
@@ -1122,9 +1118,12 @@ class TestSubmitDagAutoDeps:
         assert "mysterylib" in capsys.readouterr().err
         assert not posted  # nothing submitted
 
-    def test_cross_noarch_dep_warned_not_added(self, tmp_path, capsys, monkeypatch):
-        # A concrete recipe depending on an UNpublished 'any' recipe: the noarch
-        # dep can't be scheduled in the concrete DAG → warn, don't add.
+    def test_cross_noarch_dep_is_added_and_ordered(self, tmp_path, capsys, monkeypatch):
+        # A concrete recipe depending on an UNpublished 'any' recipe.  These
+        # used to go in SEPARATE DAGs, where the edge was inexpressible, so the
+        # dep was merely warned about and left out — and the concrete job then
+        # raced its own build tool.  Now both land in one submission and the
+        # edge orders them.
         _write_any_recipe(tmp_path, "certifi", version="2024.2.2", rev=1)
         _write_recipe(tmp_path, "foo", version="1.0.0", rev=1, deps=("certifi",))
         posted: list = []
@@ -1133,7 +1132,10 @@ class TestSubmitDagAutoDeps:
         out = capsys.readouterr().out
         assert "noarch dependency" in out and "certifi" in out
         (body,) = posted
-        assert [j["recipe_name"] for j in body["jobs"]] == ["foo"]
+        jobs = body["jobs"]
+        assert {j["recipe_name"] for j in jobs} == {"foo", "certifi"}
+        foo = next(j for j in jobs if j["recipe_name"] == "foo")
+        assert [jobs[i]["recipe_name"] for i in foo["depends_on"]] == ["certifi"]
 
     def test_recipe_timeout_propagated_to_jobs(self, tmp_path, monkeypatch):
         # A recipe declaring build.timeout_seconds propagates it into its job;
