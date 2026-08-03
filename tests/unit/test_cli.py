@@ -4692,6 +4692,153 @@ class TestBuildsSubmitDagCLI:
         out = capsys.readouterr().out
         assert "dag-001" in out.lower() or "2 jobs" in out
 
+    def test_submit_dag_orders_concrete_behind_its_noarch_dep(self, tmp_path, capsys, monkeypatch):
+        """A concrete job whose dep is a noarch recipe must not dispatch until
+        that dep has been built.
+
+        depends_on is an index into the submitting job list, so this edge used
+        to be inexpressible: the concrete recipe and the noarch one went into
+        SEPARATE DAGs, and the concrete job dispatched immediately, raced its
+        own dependency and failed at install time with the dep simply
+        unpublished (libcvc-deps#425: pydantic-core-cpNNN vs
+        typing-extensions-cpNNN).
+
+        Both kinds now go into ONE submission (#429), so the ordering is a real
+        dependency edge the server enforces — no client-side wait needed, and it
+        holds for fire-and-forget submits too."""
+        rd = tmp_path / "recipes"
+        # noarch dep ...
+        (rd / "typing-extensions-cp311").mkdir(parents=True)
+        (rd / "typing-extensions-cp311" / "recipe.yaml").write_text(
+            "schema_version: 1\n"
+            "recipe:\n  name: typing-extensions-cp311\n"
+            "  upstream_version: '4.15.0'\n  cvc_revision: 1\n"
+            "source:\n  type: python_wheel\n  artifacts:\n    any:\n"
+            "      url: https://e.invalid/a.whl\n      sha256: '" + "a" * 64 + "'\n"
+            "build:\n  matrix:\n    - platform: any\n      script: build.sh\n"
+            "package:\n  files: [lib/]\n"
+        )
+        (rd / "typing-extensions-cp311" / "build.sh").write_text("#!/bin/sh\n")
+        # ... and the concrete recipe that depends on it.
+        (rd / "pydantic-core-cp311").mkdir(parents=True)
+        (rd / "pydantic-core-cp311" / "recipe.yaml").write_text(
+            "schema_version: 1\n"
+            "recipe:\n  name: pydantic-core-cp311\n"
+            "  upstream_version: '2.46.4'\n  cvc_revision: 1\n"
+            "source:\n  type: python_wheel\n  artifacts:\n    linux-x86_64:\n"
+            "      url: https://e.invalid/b.whl\n      sha256: '" + "b" * 64 + "'\n"
+            "depends:\n  runtime:\n    - name: typing-extensions-cp311\n"
+            "build:\n  matrix:\n    - platform: linux\n      script: build.sh\n"
+            "package:\n  files: [lib/]\n"
+        )
+        (rd / "pydantic-core-cp311" / "build.sh").write_text("#!/bin/sh\n")
+
+        events: list[str] = []
+        submitted: list[dict] = []
+
+        class FakeResp:
+            status_code = 200
+            text = ""
+
+            def __init__(self, payload):
+                self._payload = payload
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._payload
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def post(self, url, **kw):
+                body = kw.get("json") or {}
+                names = [j["recipe_name"] for j in body.get("jobs", [])]
+                submitted.append(body)
+                events.append("submit")
+                return FakeResp({"dag_id": "dag-1", "total": len(names), "jobs": []})
+
+            def get(self, url, **kw):
+                if url.endswith("/v1/packages"):
+                    # Empty catalog: nothing published, so auto-deps must pull
+                    # the noarch dep in and stage behind it.
+                    return FakeResp({"packages": [], "total": 0})
+                if "/v1/builds/" in url and url.rstrip("/").split("/")[-1].isdigit():
+                    return FakeResp(
+                        {
+                            "id": 1,
+                            "status": "succeeded",
+                            "recipe_name": "typing-extensions-cp311",
+                            "platform": "any",
+                            "arch": "noarch",
+                        }
+                    )
+                events.append("wait:noarch")
+                return FakeResp(
+                    {
+                        "jobs": [
+                            {
+                                "id": 1,
+                                "status": "succeeded",
+                                "recipe_name": "typing-extensions-cp311",
+                                "platform": "any",
+                                "arch": "noarch",
+                            }
+                        ]
+                    }
+                )
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(
+            [
+                "builds",
+                "submit-dag",
+                "--platform",
+                "linux",
+                "--arch",
+                "x86_64",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+                "--recipes-dir",
+                str(rd),
+                "--allow-unschedulable",
+                "--wait",
+                "--wait-timeout",
+                "5",
+                "pydantic-core-cp311",
+                "typing-extensions-cp311",
+            ]
+        )
+        assert ret == 0
+        # Both recipes land in ONE submission — that is what makes the edge
+        # expressible at all.
+        assert len(submitted) == 1, "concrete and noarch must share a submission"
+        jobs = submitted[0]["jobs"]
+        by_name = {j["recipe_name"]: j for j in jobs}
+        assert set(by_name) == {"pydantic-core-cp311", "typing-extensions-cp311"}
+
+        # The concrete job depends on the noarch one, so the server holds it
+        # until the dep succeeds instead of dispatching both at once.
+        dep_names = [jobs[i]["recipe_name"] for i in by_name["pydantic-core-cp311"]["depends_on"]]
+        assert dep_names == ["typing-extensions-cp311"]
+        # ...and the dependency itself waits on nothing.
+        assert by_name["typing-extensions-cp311"]["depends_on"] == []
+        # The noarch dep is scheduled once, as noarch — not fanned out to linux.
+        assert (
+            by_name["typing-extensions-cp311"]["platform"],
+            by_name["typing-extensions-cp311"]["arch"],
+        ) == ("any", "noarch")
+
     def test_submit_dag_skips_unschedulable_combos(self, capsys, monkeypatch):
         """Combos no registered builder can serve are skipped, not submitted."""
         posted: list[str] = []
@@ -5933,8 +6080,13 @@ class TestInstallConflictGating:
             )
         assert ret == 0
 
-    def test_install_without_recipes_dir_skips_check(self, tmp_path, capsys):
-        """Without --recipes-dir the conflict check is silently skipped."""
+    def test_install_without_recipes_dir_uses_default_recipes(self, tmp_path, capsys):
+        """Without --recipes-dir the DEFAULT (bundled / cwd-overlay) recipes
+        still feed the conflict check — declared exclusions like
+        python313 vs python313t (or pytest-cp311 vs pytest-cp313 sharing the
+        `pytest` provides slot) are enforced on plain installs, not only when
+        the caller passes --recipes-dir. Degrades to a skip only when no
+        recipe dir can be found at all."""
         cat = _make_conflict_catalog(tmp_path)
         prefix = tmp_path / "prefix"
         with mock.patch("cvcpkg.installer.install_entry"):
@@ -5951,11 +6103,11 @@ class TestInstallConflictGating:
                     "linux",
                     "--arch",
                     "x86_64",
-                    # no --recipes-dir: conflict check should be skipped
+                    # no --recipes-dir: defaults resolve, conflict fires
                 ]
             )
-        # Should succeed (or at least not fail on conflicts)
-        assert ret == 0
+        assert ret != 0
+        assert "conflict" in capsys.readouterr().err.lower()
 
 
 class TestConflictErrorMessages:

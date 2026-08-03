@@ -143,11 +143,26 @@ if [ "$IS_CROSS" = false ]; then
         # loads the system libcrypto -> "OPENSSL_x.y.z not found"). Compute the
         # correct $ORIGIN-relative path to lib/ per file. (cvcpkg's own relocation
         # pass later PREPENDS $ORIGIN and preserves these $ORIGIN-relative entries.)
-        find "${CVC_INSTALL_DIR}/lib/python${PYTHON_MINOR}" -name '*.so' -print0 \
-            | while IFS= read -r -d '' _so; do
-                _rel="$(realpath --relative-to="$(dirname "${_so}")" "${CVC_INSTALL_DIR}/lib")"
-                patchelf --set-rpath "\$ORIGIN/${_rel}" "${_so}" 2>/dev/null || true
-              done
+        # The FREE-THREADED build installs its stdlib under the LDVERSION name
+        # (lib/python3.13t/), not lib/python3.13/ — so keying this off
+        # PYTHON_MINOR pointed `find` at a directory that does not exist. Under
+        # `set -o pipefail` that non-zero find failed the whole build, which is
+        # why python313t could not be rebuilt (and cascade-cancelled every
+        # -cp313t consumer); when it did not fail, the extension rpaths were
+        # simply never patched. Resolve the real directory, and guard with -d so
+        # a layout we do not expect degrades to "nothing to patch" instead of
+        # killing the build.
+        _STDLIB_DIR="${CVC_INSTALL_DIR}/lib/python${PYTHON_LDVERSION}"
+        [ -d "${_STDLIB_DIR}" ] || _STDLIB_DIR="${CVC_INSTALL_DIR}/lib/python${PYTHON_MINOR}"
+        if [ -d "${_STDLIB_DIR}" ]; then
+            find "${_STDLIB_DIR}" -name '*.so' -print0 \
+                | while IFS= read -r -d '' _so; do
+                    _rel="$(realpath --relative-to="$(dirname "${_so}")" "${CVC_INSTALL_DIR}/lib")"
+                    patchelf --set-rpath "\$ORIGIN/${_rel}" "${_so}" 2>/dev/null || true
+                  done
+        else
+            echo "build-python.sh: no stdlib dir under ${CVC_INSTALL_DIR}/lib — skipping rpath pass" >&2
+        fi
     fi
 
     if [[ "${CVC_PLATFORM}" == "macos" ]]; then
@@ -180,4 +195,11 @@ if [ "${PYTHON_LDVERSION}" != "${PYTHON_MINOR}" ]; then
     # Free-threaded (t) build: keep a short pythonXt alias (e.g. python3t).
     MAJOR="${PYTHON_MINOR%%.*}"
     ln -sf "python${PYTHON_LDVERSION}" "python${MAJOR}t" 2>/dev/null || true
+    # ensurepip names its console script pip3.X even in the free-threaded
+    # build; give it the t-suffixed name (pip3.13t) so it can never collide
+    # with the non-t interpreter's bin/pip3.X in a shared prefix. (Its
+    # shebang already runs the t interpreter — ensurepip ran under it.)
+    if [ -f "pip${PYTHON_MINOR}" ]; then
+        mv -f "pip${PYTHON_MINOR}" "pip${PYTHON_LDVERSION}"
+    fi
 fi

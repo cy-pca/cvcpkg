@@ -2,6 +2,9 @@ schema_version: 1
 recipe:
   name: vtk-python-cp313
   upstream_version: "9.5.0"
+  # Deliberately NOT bumped for the -cpXX matrix change (python: block added):
+  # build-environment-only edit — the packed artifact and its runtime manifest
+  # are byte-identical to the published bundle.
   cvc_revision: 1
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -30,6 +33,10 @@ source:
   url: https://www.vtk.org/files/release/9.5/VTK-9.5.0.tar.gz
   sha256: "04ae86246b9557c6b61afbc534a6df099244fbc8f3937f82e6bc0570953af87d"
   strip_components: 1
+
+python:
+  interpreter: python313
+  abi: cp313
 
 patches: []
 

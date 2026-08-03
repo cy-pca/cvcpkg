@@ -327,7 +327,7 @@ See `lab/README.md`.
 | `CVCPKG_POPULATE_PLATFORMS` | edge | Optional platform allowlist for imports. |
 | `CVCPKG_POPULATE_INCLUDE` | edge | Optional package-name allowlist (mirror only these). |
 | `CVCPKG_POPULATE_EXCLUDE` | edge | Optional package-name denylist (never mirror these); wins over the allowlist. |
-| `CVCPKG_POPULATE_MAX_PACKAGE_BYTES` | edge | Per-package size cap for mirroring (default: `CVCPKG_MAX_UPLOAD_BYTES`). |
+| `CVCPKG_POPULATE_MAX_PACKAGE_BYTES` | edge | Per-package size cap for mirroring (default: `CVCPKG_MAX_UPLOAD_BYTES`, 4 GiB). Accepts `8GB`/`512MB`. |
 | `CVCPKG_POPULATE_MAX_MIRROR_BYTES` | edge | Total mirror-cache size budget; least-downloaded populate packages are evicted over it (0 = unbounded). |
 | `CVCPKG_ROOT_URL` | client | Authoritative root server for public packages (default `cvcpkg.org`); resolution is top-down when it differs from `CVCPKG_SERVER_URL`. |
 | `CVCPKG_ROOT_CATALOG_URL` | client | Override the root's catalog URL directly. |

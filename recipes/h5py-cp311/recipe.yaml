@@ -2,6 +2,9 @@ schema_version: 1
 recipe:
   name: h5py-cp311
   upstream_version: "3.16.0"
+  # Deliberately NOT bumped for the -cpXX matrix change (build-tool deps renamed to their -cp311 columns):
+  # build-environment-only edit — the packed artifact and its runtime manifest
+  # are byte-identical to the published bundle.
   cvc_revision: 1
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -55,12 +58,12 @@ depends:
     # under --no-build-isolation (see build.sh). Provisioned as their own cvcpkg
     # recipes into the prefix interpreter's site-packages; referenced here, not
     # re-solved. (Base python311 already ships pip + setuptools.)
-    - name: cython
-    - name: pkgconfig
-    - name: wheel
-    - name: packaging
+    - name: cython-cp311
+    - name: pkgconfig-cp311
+    - name: wheel-cp311
+    - name: packaging-cp311
     # base python311 ships setuptools 65.5; h5py's backend needs >=77.0.1.
-    - name: setuptools
+    - name: setuptools-cp311
   runtime:
     # At import, h5py loads its compiled extensions (which pull in libhdf5.so.310
     # from the merged prefix) and imports numpy. No separate h5py.libs/ — the HDF5

@@ -53,19 +53,6 @@ function Test-CvcPythonFreeThreaded {
     return $env:CVC_PYTHON_ABI.EndsWith('t')
 }
 
-# Echo the X.Y[t] version a wheel's ABI tag targets, from its filename.
-#   foo-1.0-cp311-cp311-...whl -> 3.11 ; foo-1.0-cp313-cp313t-...whl -> 3.13t
-function Get-CvcWheelAbiVersion {
-    param([Parameter(Mandatory = $true)][string]$WheelName)
-    $tags = [regex]::Matches($WheelName, 'cp3[0-9]{2}t?')
-    if ($tags.Count -eq 0) { throw "Get-CvcWheelAbiVersion: no cpNN tag in $WheelName" }
-    $abi = $tags[$tags.Count - 1].Value   # last match: abitag (trailing `t` wins)
-    $digits = $abi -replace '^cp', ''
-    $suffix = ''
-    if ($digits.EndsWith('t')) { $suffix = 't'; $digits = $digits.TrimEnd('t') }
-    return "$($digits.Substring(0,1)).$($digits.Substring(1))$suffix"
-}
-
 # Install the verified wheel into the prefix interpreter's site-packages.
 # --no-deps / --no-index: see python-wheel.sh.
 function Invoke-CvcPipInstallWheel {
@@ -81,73 +68,6 @@ function Invoke-CvcPipInstallWheel {
     & $py -m pip install --no-deps --no-index --no-compile --ignore-installed `
         --prefix $env:CVC_INSTALL_DIR $wheel.FullName
     if ($LASTEXITCODE -ne 0) { throw "pip install failed ($LASTEXITCODE)" }
-
-    Invoke-CvcNoarchFanout
-}
-
-# Cross-interpreter copy fan-out for a noarch (py3-none-any) or stable-ABI
-# (abi3) install — one payload valid on every listed interpreter. See
-# cvc_noarch_fanout in python-wheel.sh. A no-op for a true per-version
-# extension, where CVC_PYTHON_NOARCH_FANOUT is unset.
-function Invoke-CvcNoarchFanout {
-    if (-not $env:CVC_PYTHON_NOARCH_FANOUT) { return }
-    if (-not $env:CVC_INSTALL_DIR) { throw 'CVC_INSTALL_DIR must be set' }
-
-    $srcSp = Get-ChildItem -Path $env:CVC_INSTALL_DIR -Filter 'site-packages' `
-                           -Recurse -Directory -Depth 3 -ErrorAction SilentlyContinue |
-             Select-Object -First 1
-    if (-not $srcSp) { throw "Invoke-CvcNoarchFanout: no site-packages under $env:CVC_INSTALL_DIR" }
-    foreach ($v in ($env:CVC_PYTHON_NOARCH_FANOUT -split '\s+' | Where-Object { $_ })) {
-        $dst = Join-Path $env:CVC_INSTALL_DIR "lib\python$v\site-packages"
-        if ($dst -eq $srcSp.FullName) { continue }
-        New-Item -ItemType Directory -Force -Path $dst | Out-Null
-        Copy-Item -Path (Join-Path $srcSp.FullName '*') -Destination $dst -Recurse -Force
-    }
-    Write-Output "noarch fan-out: staged into python $env:CVC_PYTHON_NOARCH_FANOUT"
-}
-
-# Per-version binary fan-out: install each pinned wheel present in
-# CVC_SOURCE_DIR into the interpreter matching its own ABI tag. See
-# cvc_pip_install_wheels_fanout in python-wheel.sh.
-function Invoke-CvcPipInstallWheelsFanout {
-    if (-not $env:CVC_SOURCE_DIR)  { throw 'CVC_SOURCE_DIR must be set' }
-    if (-not $env:CVC_INSTALL_DIR) { throw 'CVC_INSTALL_DIR must be set' }
-
-    $wheels = Get-ChildItem -Path $env:CVC_SOURCE_DIR -Filter '*.whl' -File
-    if (-not $wheels) { throw "Invoke-CvcPipInstallWheelsFanout: no .whl in $env:CVC_SOURCE_DIR" }
-    foreach ($wheel in $wheels) {
-        $ver = Get-CvcWheelAbiVersion $wheel.Name
-        $py  = Get-CvcPythonExeFor $ver
-        Write-Output "installing $($wheel.Name) into $env:CVC_INSTALL_DIR using $py"
-        & $py -m pip install --no-deps --no-index --no-compile --ignore-installed `
-            --prefix $env:CVC_INSTALL_DIR $wheel.FullName
-        if ($LASTEXITCODE -ne 0) { throw "pip install failed for $($wheel.Name) ($LASTEXITCODE)" }
-    }
-    Write-Output "per-version fan-out: installed $($wheels.Count) wheel(s)"
-}
-
-# Run a snippet under EVERY interpreter a per-version fan-out installed into,
-# each with only its own staged site-packages importable.
-function Invoke-CvcPythonCheckEach {
-    param([Parameter(Mandatory = $true)][string]$Snippet)
-    if (-not $env:CVC_SOURCE_DIR)  { throw 'CVC_SOURCE_DIR must be set' }
-    if (-not $env:CVC_INSTALL_DIR) { throw 'CVC_INSTALL_DIR must be set' }
-
-    foreach ($wheel in (Get-ChildItem -Path $env:CVC_SOURCE_DIR -Filter '*.whl' -File)) {
-        $ver = Get-CvcWheelAbiVersion $wheel.Name
-        $py  = Get-CvcPythonExeFor $ver
-        $sp  = Join-Path $env:CVC_INSTALL_DIR "lib\python$ver\site-packages"
-        if (-not (Test-Path $sp)) {
-            $sp = Join-Path $env:CVC_INSTALL_DIR 'Lib\site-packages'
-        }
-        Write-Output "verifying cp$($ver -replace '\.', '') under $py"
-        $env:PYTHONPATH = $sp
-        & $py -c @"
-$Snippet
-print('cp$($ver -replace '\.', '') check OK')
-"@
-        if ($LASTEXITCODE -ne 0) { throw "python check failed for python$ver ($LASTEXITCODE)" }
-    }
 }
 
 # Run a snippet under the target interpreter with the staged wheel importable.

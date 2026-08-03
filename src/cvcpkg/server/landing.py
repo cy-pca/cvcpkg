@@ -3820,9 +3820,12 @@ cvcpkg builds list --server https://cvcpkg.org --token cvctok_...
                     <span class="is-size-7 has-text-grey">--storage</span></td>
                 <td><code>file://&lt;state-dir&gt;</code></td>
                 <td>Storage backend URI (file, S3, etc.)</td></tr>
-            <tr><td><code>CVCPKG_MAX_UPLOAD_BYTES</code></td>
-                <td>1 GiB</td>
-                <td>Maximum upload size per file</td></tr>
+            <tr><td><code>CVCPKG_MAX_UPLOAD_BYTES</code><br>
+                    <span class="is-size-7 has-text-grey">--max-upload-bytes</span></td>
+                <td>4 GiB</td>
+                <td>Maximum bundle upload size.  Accepts a byte count or a
+                    human size (<code>8GB</code>, <code>512MB</code>);
+                    units are binary.</td></tr>
             <tr><td><code>CVCPKG_CHUNK_SIZE</code></td>
                 <td>8 MiB</td>
                 <td>Chunk size for chunked uploads</td></tr>

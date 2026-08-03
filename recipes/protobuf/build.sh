@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
-# recipes/protobuf/build.sh — install the pinned pure-Python wheel (generated).
 set -euo pipefail
-. "$(dirname "$0")/../_common/python-wheel.sh"
-cvc_pip_install_wheel
-cvc_python_check "import google.protobuf"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
+
+cvc_cmake_build \
+    -Dprotobuf_BUILD_TESTS=OFF \
+    -Dprotobuf_BUILD_EXAMPLES=OFF \
+    -Dprotobuf_BUILD_PROTOC_BINARIES=ON \
+    -Dprotobuf_BUILD_LIBPROTOC=ON \
+    -Dprotobuf_ABSL_PROVIDER=package \
+    -DCMAKE_CXX_STANDARD=17

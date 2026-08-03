@@ -224,43 +224,47 @@ python3.11 my_script.py
 python3        # bare python3 / python -> the prefix's DEFAULT interpreter (a symlink)
 ```
 
-`python3` and `python` symlink to the prefix's default interpreter; call a
-specific `python3.X` to use another. (An **embedding host** like volrover3 does
-*not* choose at runtime — it links `libpython3.11` at build time, so its embedded
-interpreter is fixed to that version, and its recipe pins the matching columns.)
+`python3` / `pip3` come from the `python3` meta package and `python` / `pip`
+from the `python` meta package — both resolve to the prefix's DEFAULT
+interpreter (currently python313). Install `python` when you want the
+conventional commands; a prefix that only installed `python312` exposes
+`python3.12` and nothing else, exactly as its dependency graph says. (An
+**embedding host** like volrover3 does *not* choose at runtime — it links
+`libpython3.11` at build time, so its embedded interpreter is fixed to that
+version, and its recipe pins the matching columns.)
 
-**Which packages a given interpreter can import** depends on how the package's
-wheel is built:
+**Every Python package is a per-interpreter column recipe** —
+`<name>-cp311`, `-cp312`, `-cp313`, `-cp313t` — one per interpreter cvcpkg
+ships. A column depends on *its* interpreter (and on its deps' matching
+columns) and installs only into that interpreter's own
+`lib/pythonX.Y[t]/site-packages`. The dependency graph is the whole story:
+installing `fastapi-cp313` gives `python3.13` a working fastapi and touches
+nothing else; `numpy-cp313t` serves the free-threaded build and its import
+check runs with the GIL genuinely disabled. How the *wheel* behind a column
+is sourced varies, but the naming and import rules do not:
 
-| Package kind | Recipe name | Installed into | `import` works from |
-|---|---|---|---|
-| **pure-Python** (noarch `py3-none-any`) — e.g. `jinja2`, `sympy`, `certifi` | bare `name` | **every** interpreter (fanned) | any `python3.X` |
-| **stable-ABI** (`abi3`) — e.g. `cryptography`, `bcrypt`, `pyside6`/`shiboken6` | bare `name` | every non-free-threaded interpreter | `python3.11/12/13` |
-| **multi-wheel fan-out** — one recipe pins a *distinct pinned wheel per interpreter* and installs each into its matching `site-packages` — e.g. `cffi`, `asyncpg`, `pyyaml`, `markupsafe`, `pydantic-core`, `greenlet`, `google-crc32c` | bare `name` | every interpreter it carries a wheel for | `python3.11/12/13` (whichever columns are pinned) |
-| **per-version C-extension** (single recipe, built once, no fan-out) — e.g. `numpy`, `torch`, `h5py`, `vtk-python`, `wand` | `name-cpNNN` | **only** the interpreter matching its ABI tag | that `python3.X` only |
+| Wheel kind | Columns that exist | Notes |
+|---|---|---|
+| **pure-Python** (`py3-none-any`) — e.g. `click`, `jinja2`, `sympy` | all four | same wheel in every column |
+| **stable-ABI** (`abi3`) — e.g. `cryptography`, `bcrypt` | `cp311/312/313` (+ `cp313t` only if an exact free-threaded wheel exists) | the free-threaded build has no stable ABI |
+| **per-version wheel** — e.g. `pydantic-core`, `markupsafe`, `cffi` | wherever upstream ships a wheel | `markupsafe-cp313t` exists; `pydantic-core-cp313t` does not (no wheel) |
+| **built from source** — e.g. `numpy-cp311`, `h5py-cp311`, `vtk-python-cp31x`, `pyside6-cp311` | the columns we have built | extend by adding a column recipe |
 
-So a bare-named package (fanned, or multi-wheel-fanned) is importable from
-whatever interpreter you run; a per-version package such as `numpy-cp311` is
-importable **only from `python3.11`**, `numpy-cp312` only from `python3.12`, and
-so on. To use `numpy` from `python3.12`, the prefix's closure must include
-`numpy-cp312` (install it, or depend on it). A `requirements.yaml`/recipe
-therefore lists the `-cpNNN` column(s) it needs; the bare noarch/abi3/multi-wheel
-deps come along automatically for every interpreter.
+A column exists **only if its whole dependency closure exists for that
+interpreter**: `pydantic-core` ships no `cp313t` wheel, so there is no
+`pydantic-cp313t` and no `fastapi-cp313t` — the catalog never promises an
+import that cannot work. Adding a future `python314` is a new column, not a
+rebuild of the existing ones.
 
-The "multi-wheel fan-out" row is easy to mistake for a landmine (a bare name
-with no `-cpNNN` suffix, same as a pure-Python or abi3 package) — the tell is
-`source.type: python_wheel` with a **distinct wheel per `cpNN` tag** under
-`source.artifacts`/`wheels`, built via `cvc_pip_install_wheels_fanout`
-(`recipes/_common/python-wheel.sh`) rather than the single-wheel
-`cvc_pip_install_wheel` + `cvc_noarch_fanout` path stable-ABI/noarch recipes use.
-A genuine landmine looks different from all four rows above: a recipe that
-compiles a real per-interpreter C extension but ships bare-named with **no**
-`python:` block at all, so none of cvcpkg's fan-out machinery ever engages —
-that recipe is silently importable from only whichever one interpreter it was
-built against. If you find one, either give it the true per-version `-cpNNN`
-treatment or opt it into the abi3 fan-out (add a `python: {abi: abi3}` block
-and a `cvc_noarch_fanout` call at the end of `build.sh`) if its extension is
-already built against the Limited API.
+`import numpy` from `python3.12` therefore means: the prefix's closure must
+include `numpy-cp312` (install it, or depend on it). Requirements files and
+recipes always name the `-cpNNN` column matching their interpreter.
+
+Packages whose wheels install **console scripts** (`pytest`, `black`,
+`uvicorn`, ...) declare `provides: [<base>]`: their columns clobber the same
+`bin/` entry points, so the slot makes them mutually exclusive per prefix —
+and lets `cvcpkg install pytest` resolve a column by its bare name. Library
+columns coexist freely (their payloads live in disjoint site-packages).
 
 ---
 

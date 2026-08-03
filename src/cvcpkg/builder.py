@@ -31,23 +31,6 @@ import yaml
 from cvcpkg.errors import CvcpkgError
 from cvcpkg.platform import detect_arch, detect_platform
 
-# Interpreter versions cvcpkg ships. A noarch (py3-none-any) wheel is valid on
-# every interpreter, so _common/python-wheel.sh fans a noarch install out into
-# each of these interpreters' site-packages (see _build_env). Override with
-# CVCPKG_NOARCH_FANOUT_VERSIONS (space-separated) if the interpreter set changes.
-_PYTHON_NOARCH_FANOUT_VERSIONS = os.environ.get(
-    "CVCPKG_NOARCH_FANOUT_VERSIONS", "3.11 3.12 3.13 3.13t"
-)
-
-# A stable-ABI (abi3) wheel is one binary valid on every interpreter from its
-# build interpreter upward, so it copy-fans like a noarch wheel — but never into
-# a free-threaded (…t) interpreter, whose ABI the stable ABI does not implement.
-# (Our abi3 recipes build under python311, the floor, so the whole non-free set
-# is valid.)
-_PYTHON_ABI3_FANOUT_VERSIONS = " ".join(
-    v for v in _PYTHON_NOARCH_FANOUT_VERSIONS.split() if not v.endswith("t")
-)
-
 # ── Errors ──────────────────────────────────────────────────────
 
 
@@ -459,11 +442,12 @@ def _resolve_artifact_entry(source: SourceSpec, key: str, entry: Any) -> tuple[s
 def _platform_wheel_keys(source: SourceSpec, platform: str, arch: str) -> list[str]:
     """Artifact keys carrying a wheel for *platform*/*arch*, in stable order.
 
-    A single-wheel recipe has just the exact ``{platform}-{arch}`` key. A
-    per-version fan-out recipe adds one ``{platform}-{arch}-cpNN`` sibling per
-    extra interpreter (e.g. ``linux-x86_64``, ``linux-x86_64-cp311``,
-    ``linux-x86_64-cp313``); every one is fetched so the build can install each
-    ABI into its own interpreter. Empty when only ``any``/top-level applies.
+    A column recipe pins exactly one wheel per platform, so this is the bare
+    ``{platform}-{arch}`` key (or empty when only ``any``/top-level applies).
+    ``{platform}-{arch}-cpNN`` sibling keys were the retired per-version
+    fan-out shape — they are still collected here so the fetch layer can
+    reject them loudly instead of silently installing an arbitrary one
+    (recipes/_common only installs a single wheel now).
     """
     prefix = f"{platform}-{arch}"
     return sorted(k for k in source.artifacts if k == prefix or k.startswith(f"{prefix}-"))
@@ -533,24 +517,29 @@ def _download_pinned_wheel(url: str, sha256: str, filename: str, source_dir: Pat
 
 
 def _fetch_python_wheel(source: SourceSpec, dest: Path, platform: str, arch: str) -> Path:
-    """Download and sha256-verify the pinned wheel(s) for platform/arch; do not
-    unpack them.
+    """Download and sha256-verify THE pinned wheel for platform/arch; do not
+    unpack it.
 
-    pip parses the compatibility tags out of the wheel *filename*, so each
-    artifact keeps its upstream name.  A per-version fan-out recipe carries
-    several wheels for one platform (one per interpreter ABI, keyed
-    ``{plat}-{arch}-cpNN``); all are fetched into ``src/`` so the build can
-    install each into its own interpreter.  A single-wheel or noarch recipe
-    resolves to exactly one — unchanged behaviour.
+    pip parses the compatibility tags out of the wheel *filename*, so the
+    artifact keeps its upstream name.  Every python package is a
+    per-interpreter column recipe pinning exactly one wheel per platform;
+    ``{plat}-{arch}-cpNN`` sibling keys (the retired per-version fan-out
+    shape) are a hard error — the single-wheel install helper would
+    otherwise silently pick an arbitrary one.
     """
     source_dir = dest / "src"
     source_dir.mkdir(exist_ok=True)
 
     keys = _platform_wheel_keys(source, platform, arch)
+    if len(keys) > 1:
+        raise RecipeError(
+            f"python_wheel artifacts carry per-interpreter sibling keys "
+            f"{keys!r}: the per-version fan-out recipe shape is retired — "
+            f"split the package into one -cpNN column recipe per interpreter"
+        )
     if keys:
-        for key in keys:
-            url, sha256, filename = _resolve_artifact_entry(source, key, source.artifacts[key])
-            _download_pinned_wheel(url, sha256, filename, source_dir)
+        url, sha256, filename = _resolve_artifact_entry(source, keys[0], source.artifacts[keys[0]])
+        _download_pinned_wheel(url, sha256, filename, source_dir)
     else:
         # No platform-specific key: the ``any`` (noarch) or top-level single-wheel
         # fallback that _resolve_artifact already encodes.
@@ -736,23 +725,9 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
             # Belt and braces: a free-threaded child process must not silently
             # re-enable the GIL just because some extension asked for it.
             env["PYTHON_GIL"] = "0"
-        # Noarch (py3-none-any) recipes: a pure-Python wheel is valid on every
-        # interpreter, but pip installs it only under its own version dir. Tell
-        # _common/python-wheel.sh to fan the install out into every cvcpkg
-        # interpreter's site-packages so python3.11/3.13/... can import it too
-        # (a noarch dep must be visible to a cp311/cp313 build; and the package
-        # must be usable from any interpreter at runtime). Concrete C-extension
-        # recipes are per-interpreter, so they never fan out.
-        if _is_any_recipe(ctx.recipe):
-            env["CVC_PYTHON_NOARCH_FANOUT"] = _PYTHON_NOARCH_FANOUT_VERSIONS
-        elif ctx.recipe.python.stable_abi:
-            # A stable-ABI (abi3) recipe ships one binary wheel valid on every
-            # non-free-threaded interpreter from its build interpreter upward.
-            # Copy-fan it like noarch (same mechanism), just excluding the
-            # free-threaded build. A true per-version C-extension has no
-            # NOARCH_FANOUT and instead installs a distinct wheel per interpreter
-            # (cvc_pip_install_wheels_fanout).
-            env["CVC_PYTHON_NOARCH_FANOUT"] = _PYTHON_ABI3_FANOUT_VERSIONS
+        # Every python package is a per-interpreter column recipe
+        # (<name>-cpNNN[t]) installing only into its own interpreter's
+        # site-packages — there is no cross-interpreter fan-out.
 
     build_type = "Release" if ctx.config == "release" else "Debug"
     env["CMAKE_BUILD_TYPE"] = build_type

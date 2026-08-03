@@ -123,6 +123,19 @@ class PackageRow(Base):
         server_default="[]",
     )
 
+    # Virtual slots this package fills (JSON-encoded list of names, e.g.
+    # ["pytest"] on every pytest-cpNNN column). Providers of one slot are
+    # mutually exclusive per prefix; the resolver also matches an install
+    # request for the slot name against its providers, which is what keeps
+    # `cvcpkg install pytest` working after the bare-name packages are
+    # yanked.
+    provides: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="[]",
+        server_default="[]",
+    )
+
     # Base URL of the upstream this bundle was imported from, or "" when it was
     # published here.  Populate reconciliation follows upstream's yank/nuke
     # decisions, and it must only ever act on rows it imported: an edge hosts

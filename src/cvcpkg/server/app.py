@@ -60,6 +60,10 @@ from fastapi.responses import (
 
 from cvcpkg import __version__
 from cvcpkg.server import archive_store
+from cvcpkg.server.limits import (
+    DEFAULT_MAX_UPLOAD_BYTES,
+    parse_size,
+)
 from cvcpkg.server.audit import AuditLog
 from cvcpkg.server.auth import TokenStore
 from cvcpkg.server.models import (
@@ -136,8 +140,13 @@ _START_TIME = 0.0
 
 # ── Configurable limits ────────────────────────────────────────
 
-# Maximum upload size in bytes (default 512 MiB)
-MAX_UPLOAD_BYTES = int(os.environ.get("CVCPKG_MAX_UPLOAD_BYTES", str(1024 * 1024 * 1024)))
+
+# Maximum upload size (default 4 GiB, see server.limits).  Settable with
+# `cvcpkg server run --max-upload-bytes 8GB` or CVCPKG_MAX_UPLOAD_BYTES; an
+# unparseable value falls back to the default rather than refusing to boot.
+MAX_UPLOAD_BYTES = parse_size(
+    os.environ.get("CVCPKG_MAX_UPLOAD_BYTES", ""), default=DEFAULT_MAX_UPLOAD_BYTES
+)
 
 # Chunked upload chunk size (default 8 MiB)
 CHUNK_SIZE = int(os.environ.get("CVCPKG_CHUNK_SIZE", str(8 * 1024 * 1024)))
@@ -514,6 +523,7 @@ class UploadSession:
     maintainer: str = ""
     tags: str = ""
     required_deps: str = "[]"
+    provides: str = "[]"
     org: str = ""
     hasher: hashlib._Hash = field(default_factory=lambda: hashlib.sha256())
     bytes_received: int = 0
@@ -1715,6 +1725,7 @@ async def _populate_sync_once() -> int:
                     tags=b.get("tags", "") or "",
                     published_by=f"populate:{upstream}",
                     required_deps=json.dumps(b.get("required_deps") or []),
+                    provides=json.dumps(b.get("provides") or []),
                     # Provenance, so reconciliation may later follow upstream's
                     # yank/nuke decisions for this row -- and only this row.
                     origin_upstream=upstream,
@@ -3475,6 +3486,10 @@ def create_app(
             "[]",
             description="JSON-encoded list of runtime dependency dicts [{name, version}, ...]",
         ),
+        provides: str = Query(
+            "[]",
+            description="JSON-encoded list of virtual slot names this package fills",
+        ),
         actor: TokenRecord = Depends(
             require_role(TokenRole.publisher, TokenRole.admin, allow_grace=True)
         ),
@@ -3636,6 +3651,7 @@ def create_app(
                         org_slug=org,
                         published_by=actor.name,
                         required_deps=required_deps,
+                        provides=provides,
                     )
                 except ValueError as exc:
                     # Lost the race to a concurrent publish of the same
@@ -3736,6 +3752,7 @@ def create_app(
         maintainer: str = Query(""),
         pkg_tags: str = Query("", alias="tags"),
         required_deps: str = Query("[]", description="JSON-encoded runtime deps"),
+        provides: str = Query("[]", description="JSON-encoded virtual slot names"),
         org: str = Query(
             "",
             description="Organization slug. Empty for official/public packages.",
@@ -3831,6 +3848,7 @@ def create_app(
             maintainer=maintainer,
             tags=pkg_tags,
             required_deps=required_deps,
+            provides=provides,
             actor_name=actor.name,
             temp_path=tmp_path,
             total_size=total_size,
@@ -4057,6 +4075,7 @@ def create_app(
                         org_slug=session.org,
                         published_by=actor.name,
                         required_deps=session.required_deps,
+                        provides=session.provides,
                     )
                 except ValueError as exc:
                     # Lost the race to a concurrent publish — roll back,
@@ -4091,6 +4110,7 @@ def create_app(
                 "recipe_version": session.recipe_version,
                 "published_by": actor.name,
                 "required_deps": json.loads(session.required_deps),
+                "provides": json.loads(session.provides),
             }
             async with _audit_txn(
                 AuditAction.publish, actor.name, _publish_target, _publish_detail

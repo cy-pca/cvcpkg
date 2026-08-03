@@ -971,6 +971,7 @@ class DbPackageIndex:
                         published_by_email=pub_email,
                         org=row.org_slug,
                         required_deps=json.loads(row.required_deps or "[]"),
+                        provides=json.loads(row.provides or "[]"),
                     )
                 )
             if order == "version":
@@ -1241,6 +1242,7 @@ class DbPackageIndex:
                     "published_by": row.published_by,
                     "org": row.org_slug,
                     "required_deps": json.loads(row.required_deps or "[]"),
+                    "provides": json.loads(row.provides or "[]"),
                 }
                 for row in ordered_rows
             ]
@@ -1288,6 +1290,7 @@ class DbPackageIndex:
         org_slug: str = "",
         published_by: str = "",
         required_deps: str = "[]",
+        provides: str = "[]",
         origin_upstream: str = "",
     ) -> None:
         async with get_session() as session:
@@ -1330,6 +1333,7 @@ class DbPackageIndex:
                 org_slug=org_slug,
                 published_by=published_by,
                 required_deps=required_deps,
+                provides=provides,
                 origin_upstream=origin_upstream,
             )
             session.add(row)

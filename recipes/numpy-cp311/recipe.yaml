@@ -12,6 +12,9 @@ recipe:
   # relocation bugs (cython's non-relocatable console-script shebang; python311's
   # stale sysconfig INCLUDEPY) so meson builds from source and links cvcpkg's
   # libopenblas.so.0 via $ORIGIN. This republishes a genuinely importable numpy.
+  # Deliberately NOT bumped for the -cpXX matrix change (build-tool deps renamed to their -cp311 columns):
+  # build-environment-only edit — the packed artifact and its runtime manifest
+  # are byte-identical to the published bundle.
   cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -57,8 +60,8 @@ depends:
     # PEP-517 backend + cythonizer, imported by the build interpreter under
     # --no-build-isolation (bridged from the build prefix via PYTHONPATH in
     # build.sh). meson-python-cp311 pulls packaging-cp311 + pyproject-metadata-cp311.
-    - name: cython
-    - name: meson-python
+    - name: cython-cp311
+    - name: meson-python-cp311
     # OpenBLAS headers + openblas.pc at compile time (linux/BSD; macOS uses
     # Accelerate and does not resolve this edge — see the platform note below).
     - name: openblas

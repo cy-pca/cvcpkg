@@ -1,0 +1,71 @@
+schema_version: 1
+recipe:
+  name: python
+  upstream_version: "3.13"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.python.org/
+  license: PSF-2.0
+  tags: [tools, scripting, meta]
+  description: >-
+    Meta-recipe that installs the DEFAULT Python and owns the generic
+    `python` / `pip` commands in the prefix. It pulls in the `python3` meta
+    (which owns `python3` / `pip3` / `python3-config` and pins the default
+    CPython — currently python313) and adds the unversioned aliases on top.
+    This is the one package that controls what `python` means in an
+    activated cvcpkg prefix; the versioned interpreter recipes (python311,
+    python312, python313, python313t) ship versioned binaries only and never
+    fight over it. Want a specific interpreter instead? Depend on its
+    versioned recipe and call `python3.11` / `python3.13t` explicitly.
+
+source:
+  type: vendored
+  path: third-party/python-meta
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - python3
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+
+package:
+  files:
+    - bin/python
+    - bin/pip
+
+notes:
+  - title: "Default interpreter"
+    platforms: [linux, macos, freebsd, openbsd, netbsd]
+    description: >-
+      The default is whatever `python3` points at (currently python313). To
+      change the default Python for both metas, repoint python3's runtime
+      dependency and symlink targets; this recipe's symlinks chain through
+      the python3/pip3 aliases, so it needs no edit of its own.
+  - title: "Windows deferred"
+    platforms: [windows]
+    description: >-
+      On Windows, consumers depend on the versioned python recipe directly;
+      a Windows build for this meta (creating python/pip shims) is a
+      follow-up alongside the python3 meta's.
+  - title: "Meta-package — never depend on this from a versioned python (cycle risk)"
+    description: >-
+      Dependency flows python -> python3 -> pythonNNN only. A versioned
+      python recipe must NEVER depend on `python` or `python3`; either would
+      create a cycle.

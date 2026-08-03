@@ -66,12 +66,31 @@ case "${CVC_PLATFORM}" in
     # openblas has no macOS build (Accelerate is the platform BLAS).
     BLAS_ARGS+=( -C setup-args=-Dblas=accelerate -C setup-args=-Dlapack=accelerate ) ;;
   *)
-    # Hermetic pkg-config: ONLY our prefix's openblas.pc visible (module name is
-    # `openblas`, LP64, no symbol suffix). PKG_CONFIG_LIBDIR *replaces* the system
-    # search path so no stray/system .pc leaks in.
-    export PKG_CONFIG="${BLD}/bin/pkg-config"
-    export PKG_CONFIG_PATH="${DEPS}/lib/pkgconfig"
-    export PKG_CONFIG_LIBDIR="${DEPS}/lib/pkgconfig"
+    # Hermetic pkg-config: ONLY our prefixes' .pc files visible (openblas's
+    # module name is `openblas`, LP64, no symbol suffix). PKG_CONFIG_LIBDIR
+    # *replaces* the system search path so no stray/system .pc leaks in.
+    #
+    # Resolve the binary rather than assuming ${BLD}/bin/pkg-config: when it is
+    # absent, meson cannot run pkg-config at all and reports the dependency as
+    # simply "not found", which surfaces as the very confusing
+    # "No BLAS library detected!" even though openblas IS installed.
+    for _pc in "${BLD}/bin/pkg-config" "${DEPS}/bin/pkg-config" "$(command -v pkg-config 2>/dev/null || true)"; do
+        if [ -x "${_pc}" ]; then export PKG_CONFIG="${_pc}"; break; fi
+    done
+    [ -n "${PKG_CONFIG:-}" ] || { echo "numpy-cp311: no pkg-config found in ${BLD}/bin, ${DEPS}/bin or PATH" >&2; exit 1; }
+    # Search BOTH prefixes: openblas is declared as a build AND a runtime dep,
+    # and which prefix its .pc lands in depends on how the closure was staged.
+    export PKG_CONFIG_PATH="${DEPS}/lib/pkgconfig:${BLD}/lib/pkgconfig"
+    export PKG_CONFIG_LIBDIR="${DEPS}/lib/pkgconfig:${BLD}/lib/pkgconfig"
+    # Fail HERE, with the search path in hand, instead of 200 lines later inside
+    # meson's generic no-BLAS message.
+    if ! "${PKG_CONFIG}" --exists openblas; then
+        echo "numpy-cp311: openblas.pc not found by ${PKG_CONFIG}" >&2
+        echo "  PKG_CONFIG_LIBDIR=${PKG_CONFIG_LIBDIR}" >&2
+        ls -la "${DEPS}/lib/pkgconfig" "${BLD}/lib/pkgconfig" 2>&1 | head -40 >&2
+        exit 1
+    fi
+    echo "numpy-cp311: openblas $("${PKG_CONFIG}" --modversion openblas) via ${PKG_CONFIG}"
     BLAS_ARGS+=(
       -C setup-args=-Dblas=openblas
       -C setup-args=-Dlapack=openblas
@@ -82,13 +101,31 @@ esac
 WHEELOUT="${CVC_BUILD_DIR}/wheelhouse"; mkdir -p "${WHEELOUT}"
 
 # ── Build from source (offline, no isolation) ───────────────────────────────
-"${PY}" -m pip wheel \
+# meson's own log says WHY a dependency probe failed (the exact pkg-config
+# invocation and its output); pip only relays meson's terse "not found".
+# Without this, a BLAS miss on a builder is undebuggable from the job log —
+# the build dir is deleted with the job.
+_dump_meson_log() {
+    local _log="${CVC_BUILD_DIR}/meson/meson-logs/meson-log.txt"
+    echo "----- meson-log.txt (${_log}) -----" >&2
+    if [ -f "${_log}" ]; then tail -n 200 "${_log}" >&2; else echo "(no meson log)" >&2; fi
+    echo "----- pkg-config view -----" >&2
+    echo "PKG_CONFIG=${PKG_CONFIG:-<unset>}" >&2
+    echo "PKG_CONFIG_LIBDIR=${PKG_CONFIG_LIBDIR:-<unset>}" >&2
+    "${PKG_CONFIG:-pkg-config}" --debug --exists openblas >&2 2>&1 | tail -n 40 || true
+    echo "-----------------------------------" >&2
+}
+
+if ! "${PY}" -m pip wheel \
   --no-build-isolation --no-deps --no-index --no-cache-dir \
   --wheel-dir "${WHEELOUT}" \
   "${BLAS_ARGS[@]}" \
   -C builddir="${CVC_BUILD_DIR}/meson" \
   -C compile-args=-j"${CVC_JOBS:-4}" \
-  "${CVC_SOURCE_DIR}"
+  "${CVC_SOURCE_DIR}"; then
+    _dump_meson_log
+    exit 1
+fi
 
 WHEEL="$(find "${WHEELOUT}" -maxdepth 1 -name 'numpy-*.whl' -print -quit)"
 [ -n "${WHEEL}" ] || { echo "numpy-cp311: no wheel produced" >&2; exit 1; }

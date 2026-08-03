@@ -2,7 +2,11 @@ schema_version: 1
 recipe:
   name: python313t
   upstream_version: "3.13.3"
-  cvc_revision: 1
+  # Bumped 1 -> 2: package pip under its own t-suffixed name. ensurepip left an
+  # UNSUFFIXED bin/pip3.13 in the staged tree (a latent collision with
+  # python313's pip3.13, and undeclared in files); _common/build-python.sh now
+  # renames it to pip3.13t and it is declared here.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -106,6 +110,7 @@ build:
 package:
   files:
     - bin/python3.13t*
+    - bin/pip3.13t*
     - bin/python3t
     - lib/libpython3.13t*
     - lib/python3.13/

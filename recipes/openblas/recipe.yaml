@@ -2,7 +2,17 @@ schema_version: 1
 recipe:
   name: openblas
   upstream_version: "0.3.28"
-  cvc_revision: 3
+  # Bumped 3 -> 5: drop the Fortran LAPACK on Linux (NOFORTRAN/C_LAPACK, as the
+  # BSDs already did). The shared
+  # libopenblas.so carried a DT_NEEDED on libgfortran.so.5, which cvcpkg does
+  # not ship, so linking against this package failed on any host without
+  # gfortran installed — and failed as "No BLAS library detected", because a
+  # consumer's pkg-config probe resolves openblas.pc and only then fails its
+  # link check. Blocked the from-source numpy build fleet-wide. The optimized
+  # assembly BLAS kernels are unaffected; only LAPACK falls back to the
+  # bundled C reference. See build.sh for the rejected -static-libgfortran
+  # attempt and the Phase-10 follow-up.
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

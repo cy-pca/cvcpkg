@@ -232,6 +232,12 @@ def _publish_to_server(
             if isinstance(legacy, list):
                 required_deps = legacy
 
+        # Virtual slots (manifest top-level `provides`, written by the
+        # builder from the recipe's provides: list).
+        provides = manifest.get("provides", [])
+        if not isinstance(provides, list):
+            provides = []
+
         if not name or not version:
             raise click.ClickException(f"{p.name}: manifest missing name or version")
 
@@ -261,6 +267,7 @@ def _publish_to_server(
             "tags": meta.get("tags", ""),
             "org": org,
             "required_deps": json.dumps(required_deps),
+            "provides": json.dumps(provides),
         }
 
         try:

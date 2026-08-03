@@ -2,7 +2,10 @@ schema_version: 1
 recipe:
   name: python3
   upstream_version: "3.13"
-  cvc_revision: 1
+  # Bumped 1 -> 2: the bare `python` / `pip` aliases moved to the new `python`
+  # meta-recipe; this meta now owns exactly the *3 names (python3 / pip3 /
+  # python3-config).
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -10,12 +13,14 @@ recipe:
   license: PSF-2.0
   tags: [tools, scripting, meta]
   description: >-
-    Meta-recipe providing the generic `python3` / `python` (and `pip3` /
-    `pip`) commands, pointing at a single default CPython — currently
-    python313. Depend on this when a build just needs "a python3". Depend on
-    a versioned recipe (python312, python313, ...) only when a specific
-    interpreter version is required; the versioned recipes ship versioned
-    binaries only, so several can be installed side by side without colliding.
+    Meta-recipe providing the generic `python3` / `pip3` / `python3-config`
+    commands, pointing at a single default CPython — currently python313.
+    Depend on this when a build just needs "a python3". The unversioned
+    `python` / `pip` commands are owned by the `python` meta, which layers
+    on top of this one. Depend on a versioned recipe (python312, python313,
+    ...) only when a specific interpreter version is required; the versioned
+    recipes ship versioned binaries only, so several can be installed side
+    by side without colliding.
 
 source:
   type: vendored
@@ -45,10 +50,8 @@ build:
 package:
   files:
     - bin/python3
-    - bin/python
     - bin/python3-config
     - bin/pip3
-    - bin/pip
 
 notes:
   - title: "Default interpreter"
@@ -61,13 +64,14 @@ notes:
     platforms: [windows]
     description: >-
       On Windows, consumers depend on the versioned python recipe directly;
-      a Windows build for this meta (creating python3/python shims) is a
+      a Windows build for this meta (creating python3/pip3 shims) is a
       follow-up.
   - title: "Meta-package — never depend on this from a versioned python (cycle risk)"
     description: >-
       python3 depends on a single versioned CPython (python313) and owns the
-      generic python3/python/pip aliases. The dependency only ever flows
-      python3 -> pythonNNN. A versioned python recipe must NEVER depend on
+      generic python3/pip3/python3-config aliases (the bare python/pip names
+      belong to the `python` meta layered on top). The dependency only ever
+      flows python -> python3 -> pythonNNN. A versioned python recipe must NEVER depend on
       python3, and this meta must not be swept into the versioned recipes'
       deps by a future host_tools -> depends.build relocation — either would
       create a cycle.

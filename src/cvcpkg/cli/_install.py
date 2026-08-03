@@ -405,11 +405,13 @@ def install(
     #   (a) another package in the current install set, or
     #   (b) a package already present in the prefix (via lockfile).
     #
-    # Conflict data comes from local recipe files.  When recipe dirs
-    # are not available the check is skipped gracefully.
-    rdirs = (
-        _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes) if recipes_dirs else None
-    )
+    # Conflict data comes from local recipe files.  Resolve the recipe dirs
+    # unconditionally: pip and frozen-binary installs bundle the recipes, so
+    # the default lookup usually succeeds and declared conflicts/provides
+    # slots (e.g. pytest-cp311 vs pytest-cp313 both owning bin/pytest) are
+    # actually enforced. When no recipe dir can be found the check still
+    # degrades to a no-op inside _check_conflicts.
+    rdirs = _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes)
     _check_conflicts(
         list(picked.keys()) + list(source_only),
         prefix_path,

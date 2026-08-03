@@ -16,7 +16,8 @@ Config (env, comma-separated where applicable):
   never mirrored (evaluated before the allowlist).
 - ``CVCPKG_POPULATE_PLATFORMS`` — platform allowlist (existing knob).
 - ``CVCPKG_POPULATE_MAX_PACKAGE_BYTES`` — per-package size cap; defaults to
-  ``CVCPKG_MAX_UPLOAD_BYTES``.  A bundle larger than this is skipped.
+  ``CVCPKG_MAX_UPLOAD_BYTES`` (default 4 GiB).  A bundle larger than
+  this is skipped.
 
 The policy is a pure value object so the decision logic is unit-testable in
 isolation from the populate loop.
@@ -84,8 +85,12 @@ class MirrorPolicy:
     @classmethod
     def from_env(cls, default_max_bytes: int = 0) -> MirrorPolicy:
         """Build a policy from the ``CVCPKG_POPULATE_*`` environment."""
+        from cvcpkg.server.limits import parse_size
+
+        # Same size grammar as CVCPKG_MAX_UPLOAD_BYTES ("4GB", "512MB", or a
+        # plain byte count); a bare int() here rejected every suffixed value.
         raw_max = os.environ.get("CVCPKG_POPULATE_MAX_PACKAGE_BYTES", "").strip()
-        max_bytes = int(raw_max) if raw_max else default_max_bytes
+        max_bytes = parse_size(raw_max, default=default_max_bytes)
         return cls(
             include=frozenset(_csv_set(os.environ.get("CVCPKG_POPULATE_INCLUDE", ""))),
             exclude=frozenset(_csv_set(os.environ.get("CVCPKG_POPULATE_EXCLUDE", ""))),
