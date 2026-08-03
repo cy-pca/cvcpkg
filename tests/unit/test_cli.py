@@ -4692,6 +4692,135 @@ class TestBuildsSubmitDagCLI:
         out = capsys.readouterr().out
         assert "dag-001" in out.lower() or "2 jobs" in out
 
+    def test_submit_dag_stages_concrete_behind_noarch(self, tmp_path, capsys, monkeypatch):
+        """A concrete job whose dep is a noarch recipe in the same submission
+        must not dispatch until that noarch DAG has finished.
+
+        depends_on is an index into the submitting job list, so the edge from
+        a concrete recipe to a noarch one cannot be expressed inside the
+        concrete DAG. Before staging, the concrete job dispatched immediately
+        and raced its own dependency, failing at install time with the dep
+        simply unpublished (libcvc-deps#425: pydantic-core-cpNNN vs
+        typing-extensions-cpNNN)."""
+        rd = tmp_path / "recipes"
+        # noarch dep ...
+        (rd / "typing-extensions-cp311").mkdir(parents=True)
+        (rd / "typing-extensions-cp311" / "recipe.yaml").write_text(
+            "schema_version: 1\n"
+            "recipe:\n  name: typing-extensions-cp311\n"
+            "  upstream_version: '4.15.0'\n  cvc_revision: 1\n"
+            "source:\n  type: python_wheel\n  artifacts:\n    any:\n"
+            "      url: https://e.invalid/a.whl\n      sha256: '" + "a" * 64 + "'\n"
+            "build:\n  matrix:\n    - platform: any\n      script: build.sh\n"
+            "package:\n  files: [lib/]\n"
+        )
+        (rd / "typing-extensions-cp311" / "build.sh").write_text("#!/bin/sh\n")
+        # ... and the concrete recipe that depends on it.
+        (rd / "pydantic-core-cp311").mkdir(parents=True)
+        (rd / "pydantic-core-cp311" / "recipe.yaml").write_text(
+            "schema_version: 1\n"
+            "recipe:\n  name: pydantic-core-cp311\n"
+            "  upstream_version: '2.46.4'\n  cvc_revision: 1\n"
+            "source:\n  type: python_wheel\n  artifacts:\n    linux-x86_64:\n"
+            "      url: https://e.invalid/b.whl\n      sha256: '" + "b" * 64 + "'\n"
+            "depends:\n  runtime:\n    - name: typing-extensions-cp311\n"
+            "build:\n  matrix:\n    - platform: linux\n      script: build.sh\n"
+            "package:\n  files: [lib/]\n"
+        )
+        (rd / "pydantic-core-cp311" / "build.sh").write_text("#!/bin/sh\n")
+
+        events: list[str] = []
+
+        class FakeResp:
+            status_code = 200
+            text = ""
+
+            def __init__(self, payload):
+                self._payload = payload
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._payload
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def post(self, url, **kw):
+                body = kw.get("json") or {}
+                names = [j["recipe_name"] for j in body.get("jobs", [])]
+                kind = "noarch" if "typing-extensions-cp311" in names else "concrete"
+                events.append(f"submit:{kind}")
+                return FakeResp({"dag_id": f"dag-{kind}", "total": len(names), "jobs": []})
+
+            def get(self, url, **kw):
+                if url.endswith("/v1/packages"):
+                    # Empty catalog: nothing published, so auto-deps must pull
+                    # the noarch dep in and stage behind it.
+                    return FakeResp({"packages": [], "total": 0})
+                if "/v1/builds/" in url and url.rstrip("/").split("/")[-1].isdigit():
+                    return FakeResp(
+                        {
+                            "id": 1,
+                            "status": "succeeded",
+                            "recipe_name": "typing-extensions-cp311",
+                            "platform": "any",
+                            "arch": "noarch",
+                        }
+                    )
+                events.append("wait:noarch")
+                return FakeResp(
+                    {
+                        "jobs": [
+                            {
+                                "id": 1,
+                                "status": "succeeded",
+                                "recipe_name": "typing-extensions-cp311",
+                                "platform": "any",
+                                "arch": "noarch",
+                            }
+                        ]
+                    }
+                )
+
+        monkeypatch.setattr("httpx.Client", FakeClient)
+        ret = main(
+            [
+                "builds",
+                "submit-dag",
+                "--platform",
+                "linux",
+                "--arch",
+                "x86_64",
+                "--server",
+                "https://s.example.com",
+                "--token",
+                "tok",
+                "--recipes-dir",
+                str(rd),
+                "--allow-unschedulable",
+                "--wait",
+                "--wait-timeout",
+                "5",
+                "pydantic-core-cp311",
+                "typing-extensions-cp311",
+            ]
+        )
+        assert ret == 0
+        # The noarch DAG is submitted first, then WAITED ON, and only then is
+        # the dependent concrete DAG submitted.
+        assert events[0] == "submit:noarch"
+        assert "wait:noarch" in events
+        assert events.index("wait:noarch") < events.index("submit:concrete")
+
     def test_submit_dag_skips_unschedulable_combos(self, capsys, monkeypatch):
         """Combos no registered builder can serve are skipped, not submitted."""
         posted: list[str] = []
