@@ -120,10 +120,10 @@ jobs:
       - name: Install dependencies
         # packaging/validate.py is now a thin shim over cvcpkg.validation (the
         # validator + schemas moved into the package), so cvcpkg must be
-        # importable here — install it editable alongside the runtime deps.
-        run: |
-          pip install pyyaml jsonschema
-          pip install -e .
+        # importable here — install it editable, with the extra its one command
+        # needs.  [validate] is jsonschema, which used to be hand-installed
+        # here because it was declared nowhere but the dev group.
+        run: pip install -e '.[validate]'
 
       - name: Run validation
         run: python packaging/validate.py

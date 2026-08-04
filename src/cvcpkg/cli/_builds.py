@@ -12,6 +12,7 @@ import click
 
 from cvcpkg.cli import cli
 from cvcpkg.cli._server import _api_request
+from cvcpkg.optional import require_httpx
 
 # Build-job states that never change again.  "unschedulable" IS terminal:
 # the server reaps a pending job to it when no registered builder covers
@@ -76,7 +77,7 @@ def builds_list(
     limit: int,
 ):
     """List build jobs."""
-    import httpx
+    httpx = require_httpx()
 
     params: dict[str, str | int] = {"limit": limit}
     if status:
@@ -327,7 +328,7 @@ def builds_resume_dag(dag_id: str, server: str, token: str):
 @click.option("--follow", "-f", is_flag=True, help="Follow log output (SSE stream).")
 def builds_log(job_id: int, server: str, token: str, follow: bool):
     """View or follow the build log for a job."""
-    import httpx
+    httpx = require_httpx()
 
     base = server.rstrip("/")
     headers = {"Authorization": f"Bearer {token}"}
@@ -414,7 +415,7 @@ def builds_follow_dag(dag_id: str, server: str, token: str, wait_timeout: float 
     """
     import threading
 
-    import httpx
+    httpx = require_httpx()
 
     base = server.rstrip("/")
     headers = {"Authorization": f"Bearer {token}"}
@@ -612,7 +613,7 @@ def _wait_for_jobs(
     reaches a terminal state.
     """
 
-    import httpx
+    httpx = require_httpx()
 
     base = server.rstrip("/")
     headers = {"Authorization": f"Bearer {token}"}
@@ -685,7 +686,7 @@ def _wait_for_dags(
     timeout-kill (which would orphan the queued jobs).
     """
 
-    import httpx
+    httpx = require_httpx()
 
     if not dag_ids:
         # e.g. --skip-existing dropped every recipe as already-published.
@@ -1112,7 +1113,7 @@ def builds_submit_dag(
     _builder_offers: list[tuple[set[tuple[str, str]], set[str], set[str]]] = []
     _builder_check = not allow_unschedulable
     if _builder_check:
-        import httpx as _httpx
+        _httpx = require_httpx("publish")
 
         try:
             with _httpx.Client(timeout=30) as _c:
@@ -1165,7 +1166,7 @@ def builds_submit_dag(
     _published: set[tuple[str, str, str, str, str, str]] = set()
     _published_ok = False
     if skip_existing or auto_deps:
-        import httpx as _httpx
+        _httpx = require_httpx("publish")
 
         try:
             with _httpx.Client(timeout=60) as _c:
@@ -1637,7 +1638,7 @@ def builds_purge(
     """
     import re
 
-    import httpx
+    httpx = require_httpx()
 
     m = re.match(r"^(\d+)d$", older_than)
     if not m:
@@ -1707,7 +1708,7 @@ def builds_monitor(server: str, token: str, interval: float, dag_id: str | None)
     """
     import shutil
 
-    import httpx
+    httpx = require_httpx()
 
     base = server.rstrip("/")
     headers = {"Authorization": f"Bearer {token}"}

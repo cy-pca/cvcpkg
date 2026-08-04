@@ -75,8 +75,9 @@ jobs:
             cd ${CVCPKG_DIR}
             export CVCPKG_RELEASE='${RELEASE_TAG}'
 
-            # Install CLI update
-            pip install --break-system-packages --quiet . 2>/dev/null || true
+            # Install CLI update ([remote]: the host CLI drives the server's
+            # HTTP API, which lives behind the httpx extra)
+            pip install --break-system-packages --quiet '.[remote]' 2>/dev/null || true
 
             # Check for env file
             if [[ ! -f .env.production ]]; then
@@ -160,7 +161,7 @@ jobs:
               git fetch origin
               git checkout -f ${SHA}
               cd ${CVCPKG_DIR}
-              pip install --break-system-packages --quiet . 2>/dev/null || true
+              pip install --break-system-packages --quiet '.[builder]' 2>/dev/null || true
               echo \"$VM: \$(cvcpkg --version)\"
             "
           done
@@ -217,7 +218,7 @@ jobs:
           SHA="${{ steps.target.outputs.sha }}"
           echo "=== Updating sandipaws-wsl (WSL windows-cross builder) ==="
           ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new tfx@10.100.0.10 \
-            "set -e; cd ~/src/cvc/libcvc-deps && git fetch origin && git checkout -f ${SHA} && ~/.venv-cvcpkg/bin/pip install -q -e . && sudo systemctl restart cvcpkg-builder && systemctl is-active cvcpkg-builder" \
+            "set -e; cd ~/src/cvc/libcvc-deps && git fetch origin && git checkout -f ${SHA} && ~/.venv-cvcpkg/bin/pip install -q -e '.[builder]' && sudo systemctl restart cvcpkg-builder && systemctl is-active cvcpkg-builder" \
             && echo "sandipaws-wsl updated and restarted." \
             || echo "::warning::sandipaws-wsl unreachable or update failed (offline?)"
 

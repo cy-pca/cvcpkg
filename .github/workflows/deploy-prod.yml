@@ -337,7 +337,7 @@ jobs:
             echo "::warning::CVCPKG_PUBLISHER_TOKEN not set — skipping recipe push"
             exit 0
           fi
-          python3 -m pip install --quiet --user . || true
+          python3 -m pip install --quiet --user '.[publish]' || true
           # Prefer the freshly-checked-out package script over any installed copy.
           CVCPKG="python3 -m cvcpkg"
           ok=0
@@ -460,8 +460,8 @@ jobs:
               # OpenBSD needs --break-system-packages (PEP 668); NetBSD does not
               # mind it being absent. Try with, fall back to without, and fail
               # the host if neither works -- do NOT swallow the error.
-              if ! \$PY -m pip install --break-system-packages --quiet . >/tmp/cvcpkg-pip.log 2>&1; then
-                if ! \$PY -m pip install --quiet . >>/tmp/cvcpkg-pip.log 2>&1; then
+              if ! \$PY -m pip install --break-system-packages --quiet '.[builder]' >/tmp/cvcpkg-pip.log 2>&1; then
+                if ! \$PY -m pip install --quiet '.[builder]' >>/tmp/cvcpkg-pip.log 2>&1; then
                   echo \"::warning::\$(hostname): pip install FAILED\"
                   tail -15 /tmp/cvcpkg-pip.log
                   exit 1
@@ -634,8 +634,8 @@ jobs:
       - name: Install cvcpkg
         working-directory: .
         run: |
-          pip install --break-system-packages --quiet . 2>/dev/null || \
-          pip install --quiet .
+          pip install --break-system-packages --quiet '.[builder]' 2>/dev/null || \
+          pip install --quiet '.[builder]'
           echo "$(hostname): $(cvcpkg --version)"
 
       - name: Clean up stale build artifacts
@@ -738,7 +738,7 @@ jobs:
             git fetch origin &&
             git checkout -f $SHA &&
             cd . &&
-            pip install --quiet . 2>NUL &&
+            pip install --quiet .[builder] 2>NUL &&
             set PYTHONIOENCODING=utf-8 &&
             cvcpkg --version
           " || echo "::warning::Failed to update the Windows builder ($WIN) to $SHA — it may be running a stale cvcpkg"
@@ -797,8 +797,8 @@ jobs:
             git -C \"\$REPO\" checkout -qf $SHA
             # PEP 668: Ubuntu 24.04 rejects a bare user install on the system
             # python; older pips lack the flag, hence the fallback.
-            python3 -m pip install --user --quiet --upgrade --break-system-packages \"\$REPO\" \
-              || python3 -m pip install --user --quiet --upgrade \"\$REPO\"
+            python3 -m pip install --user --quiet --upgrade --break-system-packages \"\$REPO[builder]\" \
+              || python3 -m pip install --user --quiet --upgrade \"\$REPO[builder]\"
             \$HOME/.local/bin/cvcpkg --version
           " || { echo "::error::CUDA builder ($CUDA) update to $SHA failed"; exit 1; }
 

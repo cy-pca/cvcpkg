@@ -27,6 +27,7 @@ from cvcpkg.cli._helpers import (
     _validate_org_slug,
 )
 from cvcpkg.cli._install import validate
+from cvcpkg.optional import MissingDependencyError, require_httpx
 
 # ── world ───────────────────────────────────────────────────────
 
@@ -186,8 +187,14 @@ def _try_pull_server_recipes() -> tuple[str, ...]:
     server = default_server_url()
     token = os.environ.get("CVCPKG_TOKEN", "")
     try:
-        import httpx
-
+        httpx = require_httpx()
+    except MissingDependencyError as exc:
+        # The server's recipe set is an OPTIMIZATION — `cvcpkg build` works
+        # from the recipes on disk — so a core install (click + PyYAML, no
+        # httpx) must fall through here rather than fail the build.
+        click.echo(f"cvcpkg: {exc}  Falling back to local recipes.", err=True)
+        return ()
+    try:
         headers: dict[str, str] = {}
         if token:
             headers["Authorization"] = f"Bearer {token}"

@@ -14,6 +14,7 @@ for maintainability:
 - ``_build``     — world, build, pack, build-all, pack-all, recipes, rev-bump
 - ``_signing``   — key management, sign, verify-sig
 - ``_cache``     — cache subcommand group
+- ``_haiku``     — HaikuPorts recipe drafting (``cvcpkg haiku``)
 - ``_doctor``    — environment diagnostics (``cvcpkg doctor``)
 - ``_init``      — recipe scaffolding (``cvcpkg init``)
 - ``_server``    — token, user, registration, server, org management
@@ -120,6 +121,7 @@ from cvcpkg.cli import (  # noqa: E402, F401
     _catalog,
     _cpkg,
     _doctor,
+    _haiku,
     _init,
     _install,
     _publish,

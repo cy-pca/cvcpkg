@@ -45,7 +45,9 @@ jobs:
 
       - name: Install cvcpkg
         run: |
-          pip install --user .
+          # [publish]: this job runs `recipe push` and `builds submit-dag`,
+          # both of which talk to the dev server over HTTP (httpx).
+          pip install --user '.[publish]'
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Detect changed recipes

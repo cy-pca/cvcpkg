@@ -36,6 +36,7 @@ EXPECTED_SUBMODULES = [
     "_catalog",
     "_cpkg",
     "_doctor",
+    "_haiku",
     "_init",
     "_install",
     "_publish",

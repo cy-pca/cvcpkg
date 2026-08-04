@@ -5,13 +5,18 @@
 
 The Windows analogue of this module is :mod:`cvcpkg.winhost`, and the
 split is the same: source fetch, patching, packaging, and publishing stay
-on the Linux builder, only the compile runs elsewhere.  What differs is
-*why* the compile has to move.  For Windows it is the toolchain; for
-Haiku it is cvcpkg itself — HaikuPorts has no pip, no greenlet/httpx, and
-only cryptography 3.4.8 against cvcpkg's ``>=41.0`` floor, so a native
-``cvcpkg`` install on Haiku is currently impossible.  A Haiku box can
-therefore never be a self-hosting builder; it can only be a build
-*target* driven from a machine that does run cvcpkg.
+on the Linux builder, only the compile runs elsewhere.  For both, the
+reason is that the target toolchain does not exist on the Linux builder.
+
+This module does **not** exist because cvcpkg cannot run on Haiku.  It
+can: the client path (``install``, ``build``, ``haiku draft-recipe``)
+imports only ``click`` and ``PyYAML``, both of which HaikuPorts ships,
+and since 2.0.2 those two ARE the core install — ``cryptography``,
+``sqlalchemy``, ``greenlet`` and ``httpx`` (signing-, server- and
+builder-agent-only) moved to extras, so a plain ``pip install cvcpkg``
+works there with no flags.  See ``docs/haikuports-integration.md``.  A
+Haiku box driven from here is therefore the *convenient* topology for a
+Linux CI fleet, not the only possible one.
 
 The transport is plain OpenSSH (Haiku ships sshd), which also rules the
 mode out of the winhost-style "direct" file sharing: there is no shared

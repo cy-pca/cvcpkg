@@ -66,7 +66,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
-          pip install .
+          # [remote,signing]: a standalone binary is a fixed closure, so httpx
+          # and cryptography must be in the build env to be bundled at all.
+          pip install '.[remote,signing]'
 
       - name: Bundle recipes into package
         shell: bash
@@ -220,8 +222,8 @@ jobs:
           ssh ${SSH_OPTS} "${VM}" "cd ${remote_dir} && \
             TMPDIR=/usr/local/tmp ${PYTHON} -m pip install --break-system-packages pyinstaller 2>/dev/null \
               || ${PYTHON} -m pip install pyinstaller && \
-            TMPDIR=/usr/local/tmp ${PYTHON} -m pip install --break-system-packages . 2>/dev/null \
-              || ${PYTHON} -m pip install . && \
+            TMPDIR=/usr/local/tmp ${PYTHON} -m pip install --break-system-packages '.[remote,signing]' 2>/dev/null \
+              || ${PYTHON} -m pip install '.[remote,signing]' && \
             rm -f src/cvcpkg/recipes/.gitignore && \
             cp -r recipes/* src/cvcpkg/recipes/ 2>/dev/null || true && \
             cd . && \

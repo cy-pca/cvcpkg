@@ -33,8 +33,13 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pyyaml jsonschema pytest 'black==24.10.0'
-          pip install -e .
+          pip install pytest 'black==24.10.0'
+          # [all]: the unit suite imports the optional deps directly (httpx for
+          # the server/API tests, cryptography for signing, sqlalchemy for the
+          # db layer, jsonschema for the schema checks).  A core-only install
+          # does not FAIL the suite, it silently skips those tests — the extras
+          # are what keeps this check honest.
+          pip install -e '.[all]'
 
       - name: Black format check
         run: black --check --diff src/ tests/

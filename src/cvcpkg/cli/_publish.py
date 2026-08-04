@@ -20,6 +20,7 @@ from cvcpkg.cli._helpers import (
     _validate_org_slug,
 )
 from cvcpkg.cli._server import _api_request
+from cvcpkg.optional import require_httpx
 
 # ── publish ─────────────────────────────────────────────────────
 
@@ -432,7 +433,7 @@ def _variant_exists(
     artifact, or an identical variant under a different org, must not
     suppress the upload.
     """
-    import httpx
+    httpx = require_httpx("publish")
 
     try:
         with httpx.Client(timeout=30) as client:
@@ -464,7 +465,7 @@ def _variant_exists(
 
 def _publish_simple(base: str, headers: dict, params: dict, archive_path: Path) -> str:
     """Upload a small archive in a single POST request.  Returns 'published' or 'skipped'."""
-    import httpx
+    httpx = require_httpx("publish")
 
     with httpx.Client(timeout=300) as client:
         with open(archive_path, "rb") as f:
@@ -502,7 +503,7 @@ def _publish_chunked(
     """
     import hashlib
 
-    import httpx
+    httpx = require_httpx("publish")
 
     # 1. Init upload session
     with httpx.Client(timeout=60) as client:

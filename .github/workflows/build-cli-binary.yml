@@ -38,10 +38,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # The extras must be PRESENT IN THE BUILD ENV for PyInstaller to
+          # bundle them (see packaging/cvcpkg.spec's hiddenimports): the binary
+          # is a fixed closure, so anything left out here is missing for good.
           if [ "${{ matrix.variant }}" = "combined" ]; then
-            pip install -e ".[production]" jsonschema pyinstaller
+            pip install -e ".[production,signing,validate]" pyinstaller
           else
-            pip install -e . jsonschema pyinstaller
+            pip install -e ".[remote,signing,validate]" pyinstaller
           fi
 
       - name: Build binary

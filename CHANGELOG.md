@@ -34,6 +34,87 @@ Major release: production daemon with database backend, the
 `cvcpkg.org` registry, distributed build infrastructure, and wasi
 support.
 
+### Packaging: the client installs on click + PyYAML alone (2026-08-03)
+
+`pip install cvcpkg` now pulls **two** third-party packages, `click` and
+`PyYAML`, and nothing else. `sqlalchemy`, `cryptography`, `httpx` and
+`greenlet` were declared mandatory but are never imported by the client:
+HTTP on the install path is `urllib.request` (`cvcpkg.storage`), integrity
+is `hashlib.sha256`, signing is opt-in and lazily imported, and the ORM is
+server-side. The four are now extras, named after the **entry point** that
+needs them rather than the wheel they pull — `remote` (any command that
+talks to a registry: search, `recipe pull`, `builds list/log/monitor`,
+webhooks, token/user/org admin, `doctor --server`), `publish` (`publish`,
+`recipe push`, `builds submit-dag`), `builder` (the agent), `signing`
+(`key`/`sign`/`verify-sig`, `install --verify-signatures`), and `server`
+(the ASGI stack plus SQLAlchemy and greenlet). The first three resolve to
+the same `httpx`; the separate names exist so the error a user gets names
+their own command's extra.
+
+Reaching a command whose extra is missing is a single line — `httpx is
+required to talk to a cvcpkg server over HTTP. Install it with: pip install
+'cvcpkg[publish]'` — not a `ModuleNotFoundError` traceback; the guards live
+in the new `cvcpkg.optional` and follow the shape `cvcpkg-server run` has
+always used for a missing uvicorn. That covers the server's own
+state-directory commands too — `cvcpkg-server bootstrap`, `token create`,
+`audit log`/`verify` reach `cvcpkg.server.models` for its enums without ever
+opening a database, so `pydantic` is guarded there alongside the SQLAlchemy
+guards in `db.py`/`db_stores.py`. Two callers degrade instead: `cvcpkg
+doctor --server` reports it as one failed check rather than aborting the
+whole report, and `cvcpkg build`'s optional pull of the server recipe set
+says so and falls back to the local recipes, since fetching them is an
+optimization and not the command's job. `cvcpkg/__init__.py` also gained
+a `PackageNotFoundError` fallback for `__version__`, so a source checkout on
+`PYTHONPATH` imports at all — the pip-free install route.
+
+`jsonschema` joins them as the `validate` extra. It was never a declared
+runtime dependency at all — only a dev dependency, hand-installed by each
+workflow that validates — so `cvcpkg validate` on any other install died with
+a bare `ModuleNotFoundError: No module named 'jsonschema'` at
+`validation.py`, the last such traceback on a core install. That is the
+command `cvcpkg init` ends by telling you to run, and the one `cvcpkg --help`
+advertises in its recipe-maintainer quick start; it now says `jsonschema is
+required to validate recipes against their schema. Install it with: pip
+install 'cvcpkg[validate]'`, and `init`'s step 3 names the extra up front
+when it is missing. Recipe *installation* is untouched — nothing on the
+catalog, resolve, download or lockfile path reads a schema — so the core stays
+`click` + `PyYAML`.
+
+**What this changes for existing users:** nothing installs itself that you
+did not ask for any more, so an environment that publishes, runs a builder,
+signs, or hosts the server must name its extra —
+`pip install 'cvcpkg[publish]' / '[builder]' / '[signing]' / '[server,db]'`.
+`pip install 'cvcpkg[all]'` is the one-word migration: a superset of what
+the old mandatory list gave you.
+
+**Every in-repo workflow that installs cvcpkg now names the extra its own
+commands need**, because a bare `pip install .` on a host that then makes an
+HTTP call is exactly the regression this split invites. Builder hosts take
+`[builder]` (`deploy-dev.yml`, `deploy-prod.yml`); the jobs that run `recipe
+push`/`push-all`, `builds submit-dag`/`follow-dag` or `publish` take
+`[publish]` (`deploy-prod.yml`, `populate-server.yml` — the workflow that
+populates the public catalog — `populate-dev.yml`, `pr-recipe-build-dev.yml`,
+`windows-build.yml`); registry admin (`yank`/`unyank`/`nuke`) takes `[remote]`
+(`package-lifecycle.yml`); `ci.yml` installs `[all]` so the unit suite's
+httpx/cryptography/sqlalchemy tests actually run instead of silently skipping.
+The PyInstaller binaries take `[remote,signing,validate]`
+(`[production,signing,validate]` for the combined build) — those bundle a
+fixed closure, so the now-guarded imports have to be present at build time and
+are named explicitly in the spec. Jobs that only validate recipes or the
+dependency graph take `[validate]` and nothing else (`cvcpkg-ci.yml`),
+replacing the ad-hoc `pip install jsonschema` they each carried.
+`docs/pypi-install.md` is the extras reference;
+`docs/ci-cd-pipeline.md`, `docs/cvcpkg-remote-builders.md` and
+`docs/cvcpkg-builder-wsl-debian.md` carry the same rule for hand-provisioned
+hosts.
+
+The point of the exercise is **minority platforms**: HaikuPorts ships
+`click` 8.1.3 and `pyyaml` 6.0 but pins `cryptography` at 3.4.8 against a
+`>=41` floor, `sqlalchemy` at 1.3.24 against `^2.0`, and has no `greenlet`
+or `httpx` port at all — so four packages the client never imported were the
+entire reason `pip install cvcpkg` failed there. It no longer does. See
+`docs/haikuports-integration.md`.
+
 ### Upload cap is a setting, default 4 GiB (2026-08-02)
 
 The server's maximum bundle size is now a first-class setting —

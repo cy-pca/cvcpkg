@@ -19,7 +19,15 @@ This document describes the automated deployment pipelines for cvcpkg.
 
 1. **Deploy to cvcpkg.org** — rsync code to cvcpkg-00 (10.10.10.134), rebuild Docker container, run migrations, health check
 2. **Deploy to pkg.tx.wtf** — rebuild locally on catx-03, run migrations, health check
-3. **Update builder agents** — SSH to all builder machines, `git checkout` + `pip install` to update the cvcpkg CLI
+3. **Update builder agents** — SSH to all builder machines, `git checkout` + `pip install '.[builder]'` to update the cvcpkg CLI
+
+> **Extras matter on every host these pipelines touch.** Since 2.0.2 a bare
+> `pip install .` gets the core client only (`click` + `PyYAML`). Each workflow
+> installs the extra its own commands need — `[builder]` on builder hosts,
+> `[publish]` where it runs `recipe push` / `builds submit-dag` / `publish`,
+> `[remote]` for registry admin. Dropping the extra back to a bare `.` silently
+> breaks that host at the first HTTP call. See
+> [pypi-install.md](pypi-install.md).
 
 ### Deploying to Production
 
