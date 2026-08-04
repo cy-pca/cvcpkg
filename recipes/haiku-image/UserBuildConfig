@@ -49,11 +49,28 @@ switch $(HAIKU_BUILD_PROFILE) {
         # openssh is in the default profile too; the Development optional
         # package below brings gcc/binutils/make/autotools, which is what
         # env-haiku.sh's CC=gcc/CXX=g++ resolve to.
+        # perl is NOT decorative: the Development optional package below
+        # pulls tools that require it, but nothing puts perl in the
+        # *activated* set, so image assembly dies at the very last step
+        # (after the ~1.5h cross-toolchain build) with
+        #
+        #   ERROR: Some of the unactivated (i.e. optional) packages have
+        #   the following unmet dependencies:
+        #   perl-5.40.0-4-x86_64.hpkg
+        #
+        # That message reads as "perl has unmet deps", which is backwards
+        # and cost real debugging time: build_haiku_image prints the
+        # *return value* of getPackageDependencies, i.e. the deps that are
+        # still MISSING. perl is the missing one. perl itself requires only
+        # haiku>=r1~beta5_hrev57937_5-1, which the tree already provides —
+        # so the fix is simply to activate it here rather than to chase a
+        # phantom version conflict or a mirror problem.
         AddHaikuImageSystemPackages
             openssh
             git
             python3
             nano
+            perl
             ;
 
         AddOptionalHaikuImagePackages
