@@ -570,7 +570,7 @@ _PLAIN_BUILDER = {"platform": "linux", "arch": "x86_64", "capabilities": {}}
 _CUDA_BUILDER = {"platform": "linux", "arch": "x86_64", "capabilities": {"cuda": True}}
 
 
-def _submit_dag(tmp_path, monkeypatch, posted, builders, *recipes):
+def _submit_dag(tmp_path, monkeypatch, posted, builders, *recipes, platform="linux"):
     from cvcpkg.cli import main
 
     monkeypatch.setattr("httpx.Client", _cap_fake_client(posted, builders))
@@ -583,7 +583,7 @@ def _submit_dag(tmp_path, monkeypatch, posted, builders, *recipes):
             "--token",
             "tok",
             "--platform",
-            "linux",
+            platform,
             "--arch",
             "x86_64",
             "--recipes-dir",
@@ -602,14 +602,30 @@ class TestSubmitDagCapabilityPropagation:
         assert _submit_dag(tmp_path, monkeypatch, posted, [_CUDA_BUILDER], "libcvc-cuda") == 0
         jobs = [j for b in posted for j in b["jobs"]]
         assert len(jobs) == 1
-        assert jobs[0]["required_capabilities"] == ["cuda"]
+        # The recipe's own requirement, alongside the platform's glibc floor
+        # (every linux job carries one — see cvcpkg/glibc.py).
+        assert "cuda" in jobs[0]["required_capabilities"]
 
-    def test_plain_recipe_carries_no_requirement(self, tmp_path, monkeypatch):
-        # Absent (not empty-list) so an OLD server ignoring the field behaves
-        # exactly as before this feature.
+    def test_linux_job_carries_only_the_glibc_floor_when_recipe_asks_for_nothing(
+        self, tmp_path, monkeypatch
+    ):
+        from cvcpkg.glibc import capability_name, target_floor
+
         _write_cap_recipe(tmp_path, "zlib")
         posted: list = []
         assert _submit_dag(tmp_path, monkeypatch, posted, [_PLAIN_BUILDER], "zlib") == 0
+        jobs = [j for b in posted for j in b["jobs"]]
+        assert len(jobs) == 1
+        assert jobs[0]["required_capabilities"] == [capability_name(target_floor())]
+
+    def test_non_linux_job_carries_no_requirement(self, tmp_path, monkeypatch):
+        # Absent (not empty-list) so an OLD server ignoring the field behaves
+        # exactly as before this feature.  Only linux has a glibc floor, so
+        # this is where that property is still observable.
+        _write_cap_recipe(tmp_path, "zlib", platforms=("windows",))
+        win = {"platform": "windows", "arch": "x86_64", "capabilities": {}}
+        posted: list = []
+        assert _submit_dag(tmp_path, monkeypatch, posted, [win], "zlib", platform="windows") == 0
         jobs = [j for b in posted for j in b["jobs"]]
         assert len(jobs) == 1
         assert "required_capabilities" not in jobs[0]

@@ -1081,6 +1081,17 @@ def builds_submit_dag(
         matrix = data.get("build", {}).get("matrix", [])
         return bool(matrix) and all(entry.get("platform") == "any" for entry in matrix)
 
+    # Linux bundles must run on the fleet's OLDEST glibc, not merely on the
+    # machine that happened to build them: glibc is backward- but not
+    # forward-compatible, so a bundle built on 2.39 will not start on a 2.35
+    # host. Requiring the floor as a capability routes the job to a builder
+    # that can actually produce it (see cvcpkg/glibc.py).
+    from cvcpkg.glibc import capability_name as _glibc_cap
+    from cvcpkg.glibc import target_floor as _glibc_floor
+
+    def _platform_caps(plat: str) -> list[str]:
+        return [_glibc_cap(_glibc_floor())] if plat == "linux" else []
+
     def _required_caps(name: str) -> list[str]:
         """A recipe's top-level requires_capabilities (e.g. ['cuda']).
 
@@ -1470,9 +1481,9 @@ def builds_submit_dag(
                             "org_slug": org_slug,
                             "depends_on": [],
                         }
-                        _rc = _required_caps(name)
+                        _rc = _required_caps(name) + _platform_caps(plat)
                         if _rc:
-                            job["required_capabilities"] = _rc
+                            job["required_capabilities"] = sorted(set(_rc))
                         _t = _job_timeout(name)
                         if _t is not None:
                             job["timeout_seconds"] = _t
@@ -1530,9 +1541,12 @@ def builds_submit_dag(
                             "org_slug": org_slug,
                             "depends_on": [],
                         }
-                        _rc = _required_caps(name)
+                        # A noarch job is built on the reference target, so it
+                        # inherits THAT platform's floor even though the bundle
+                        # itself is platform-independent.
+                        _rc = _required_caps(name) + _platform_caps(_noarch_target[0])
                         if _rc:
-                            job["required_capabilities"] = _rc
+                            job["required_capabilities"] = sorted(set(_rc))
                         _t = _job_timeout(name)
                         if _t is not None:
                             job["timeout_seconds"] = _t
