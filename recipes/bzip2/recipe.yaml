@@ -2,7 +2,22 @@ schema_version: 1
 recipe:
   name: bzip2
   upstream_version: "1.0.8"
-  cvc_revision: 2
+  # Bumped 2 -> 3 to actually SHIP the relative-symlink fix from #404.
+  #
+  # #404 rewrote bzcmp/bzegrep/bzfgrep/bzless from absolute to relative symlinks
+  # in build.sh but did not bump this field — and the macOS bundle had been
+  # published 57 minutes earlier (2026-07-26 03:00 vs the fix at 03:57). Since
+  # published variants are immutable, a republish at revision 2 silently
+  # no-ops, so macOS 1.0.8+cvc.2 is still live with links into the builder's
+  # scratch dir:
+  #     bin/bzcmp -> /private/var/folders/.../cvcpkg-bzip2-5de_csjx/install/bin/bzdiff
+  # Verified by downloading the published artifact and listing the tar.
+  #
+  # Consuming that bundle aborts the whole install with
+  # tarfile.AbsoluteLinkError, so it is not merely cosmetic: it blocks any
+  # recipe that declares bzip2 on macOS. libMagickCore and libfreetype both
+  # link libbz2, which is why libcvc's macOS build needs this.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
