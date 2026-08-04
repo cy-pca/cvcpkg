@@ -12,6 +12,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -21,6 +22,16 @@ from cvcpkg import haikuhost
 from cvcpkg.builder import BuildContext, MatrixEntry, PythonSpec, Recipe, SourceSpec
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# env-haiku.sh is a bash build-time helper (``[[ … ]]``, so /bin/sh will not do)
+# that only ever runs on a Haiku host.  Windows has no usable bash — `bash` on
+# the GitHub runner is the WSL launcher, which exits 1 with a UTF-16 "no
+# installed distributions" banner — and windows recipes use build.ps1 and never
+# source it.  Same guard as tests/unit/test_rewrite_deps_prefix.py.
+_NEEDS_BASH = pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("bash") is None,
+    reason="POSIX-only build-time helper (bash); windows recipes use build.ps1",
+)
 
 
 def _extract_block(text: str, start: str, end: str) -> str:
@@ -762,7 +773,7 @@ class TestLibraryPathDefaults:
         script.write_text(self._runner(tmp_path, monkeypatch))
         assert subprocess.run(["sh", "-n", str(script)]).returncode == 0
 
-    def test_env_haiku_sh_agrees_on_the_ordering(self, tmp_path, monkeypatch):
+    def test_env_haiku_sh_agrees_on_the_ordering(self):
         """The runner and env-haiku.sh both build LIBRARY_PATH, in that order,
         and must agree on the layering: cvcpkg's prefixes first, Haiku's own
         directories last (same rule as PATH and PKG_CONFIG_PATH, and the reason
@@ -770,13 +781,16 @@ class TestLibraryPathDefaults:
         value LAST, which put /boot/system/develop/lib ahead of the build
         prefix and the component's own install dir — the exact inversion.
         """
-        env_sh = _REPO_ROOT / "recipes" / "_common" / "env-haiku.sh"
-        text = env_sh.read_text()
+        text = (_REPO_ROOT / "recipes" / "_common" / "env-haiku.sh").read_text()
         export = next(ln for ln in text.splitlines() if ln.startswith("export LIBRARY_PATH="))
         assert export.index("_HAIKU_LIBS") < export.index("_HAIKU_SYS_LIBS")
 
-        # ...and behaviourally: source the file's layering with a runner-shaped
-        # LIBRARY_PATH and check nothing of Haiku's overtakes ours.
+    @_NEEDS_BASH
+    def test_env_haiku_sh_layers_that_ordering_when_run(self, tmp_path):
+        """The same ordering, behaviourally: run env-haiku.sh's layering with a
+        runner-shaped LIBRARY_PATH and check nothing of Haiku's overtakes ours.
+        Split from its textual sibling because only this half needs a shell."""
+        text = (_REPO_ROOT / "recipes" / "_common" / "env-haiku.sh").read_text()
         runner_value = "/j/bp/lib:/j/deps/lib:/j/install/lib:/boot/system/lib"
         script = tmp_path / "layer.sh"
         script.write_text(
