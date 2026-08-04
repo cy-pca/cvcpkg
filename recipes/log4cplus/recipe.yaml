@@ -2,7 +2,13 @@ schema_version: 1
 recipe:
   name: log4cplus
   upstream_version: "2.1.2"
-  cvc_revision: 4
+  # Bumped 4 -> 5: all four linux +cvc.4 variants reference GLIBC_2.38 and so
+  # fail to load on the 2.35 fleet floor (2026-08-03 catalog audit). Nothing in
+  # this recipe is wrong — it needs a rebuild on a correct builder. Published
+  # variants are immutable, so republishing at the same revision silently
+  # no-ops; the bump is what actually retires the bad bytes. pack_recipe now
+  # verifies the floor (#432), so this cannot recur silently.
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
