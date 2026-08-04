@@ -208,18 +208,32 @@ _probed_capabilities: set[str] | None = None
 
 
 def _probe_cuda() -> bool:
-    """Best-effort detection of a usable CUDA stack.  Never raises."""
-    try:
-        import ctypes.util
+    """Detect a CUDA stack that can COMPILE.  Never raises.
 
-        if ctypes.util.find_library("cuda"):
-            return True
-    except Exception:
-        pass
-    try:
-        import shutil
+    The capability gates *builds* (recipes declare ``requires_capabilities:
+    [cuda]``), so the question is "can this host compile CUDA code?", not "does
+    this host have a GPU?".  Only nvcc answers that.
 
-        if shutil.which("nvidia-smi") or shutil.which("nvcc"):
+    This deliberately does NOT accept ``nvidia-smi`` or a loadable libcuda:
+    both ship with the *driver*, so any machine with an NVIDIA GPU advertised
+    the capability and then failed at compile time once a job was routed to it.
+    That is exactly what sandipaws did — an RTX 3050 Ti laptop with the driver,
+    Visual Studio 2022 and no CUDA Toolkit — and because it is the only
+    windows+cuda builder, every windows CUDA job would have been routed to the
+    one host guaranteed to fail it.  A missing capability leaves a job queued
+    (visible, diagnosable); a falsely advertised one burns a build and reports
+    a confusing compiler error.
+
+    The runtime/driver signals are still worth having, but as a SEPARATE
+    capability (e.g. ``cuda-runtime``) for recipes that need to *execute* CUDA
+    during a build — add that probe when a recipe actually needs it rather than
+    conflating the two here.
+    """
+    import shutil
+    from pathlib import Path
+
+    try:
+        if shutil.which("nvcc"):
             return True
     except Exception:
         pass
@@ -230,13 +244,17 @@ def _probe_cuda() -> bool:
         # platform for a non-PATH toolkit install.
         cuda_home = os.environ.get("CUDA_PATH") or os.environ.get("CUDA_HOME")
         if cuda_home:
-            from pathlib import Path
-
             bin_dir = Path(cuda_home) / "bin"
             if (bin_dir / "nvcc").exists() or (bin_dir / "nvcc.exe").exists():
                 return True
     except Exception:
         pass
+    # Deliberately no /usr/local/cuda* filesystem glob: it cannot be mocked the
+    # way PATH and the env vars can, so it would make this probe depend on real
+    # host state and fail test_no_cuda_anywhere on any machine with a toolkit
+    # installed at the default prefix. A toolkit there but absent from both PATH
+    # and CUDA_PATH/CUDA_HOME is a misconfigured host — set CUDA_HOME (or
+    # CVCPKG_CAPABILITIES) rather than widening detection.
     return False
 
 

@@ -701,6 +701,36 @@ class TestProbeCuda:
         monkeypatch.setenv("CUDA_PATH", str(tmp_path / "does-not-exist"))
         assert plat_mod._probe_cuda() is False
 
+    # ── driver present, toolkit absent ──────────────────────────
+    # The capability gates BUILDS, so it has to mean "can compile CUDA", not
+    # "has a GPU". sandipaws (RTX 3050 Ti + driver + VS2022, no toolkit)
+    # advertised cuda on the strength of nvidia-smi alone; being the only
+    # windows+cuda builder, it would have attracted every windows CUDA job to
+    # the one host guaranteed to fail them at nvcc.
+
+    def test_nvidia_smi_alone_is_not_enough(self, monkeypatch):
+        plat_mod = self._clear(monkeypatch)
+        monkeypatch.setattr(
+            "shutil.which", lambda n: "/usr/bin/nvidia-smi" if n == "nvidia-smi" else None
+        )
+        assert plat_mod._probe_cuda() is False
+
+    def test_loadable_libcuda_alone_is_not_enough(self, monkeypatch):
+        # libcuda ships with the driver too, so it says nothing about nvcc.
+        plat_mod = self._clear(monkeypatch)
+        monkeypatch.setattr("ctypes.util.find_library", lambda _n: "libcuda.so.1")
+        assert plat_mod._probe_cuda() is False
+
+    def test_driver_plus_toolkit_is_enough(self, monkeypatch):
+        # The real CUDA-builder shape: driver AND toolkit both present.
+        plat_mod = self._clear(monkeypatch)
+        monkeypatch.setattr("ctypes.util.find_library", lambda _n: "libcuda.so.1")
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda n: {"nvcc": "/usr/bin/nvcc", "nvidia-smi": "/usr/bin/nvidia-smi"}.get(n),
+        )
+        assert plat_mod._probe_cuda() is True
+
     def test_env_override_wins_over_probe(self, monkeypatch):
         plat_mod = self._clear(monkeypatch)
         monkeypatch.setattr("shutil.which", lambda n: "/usr/bin/nvcc" if n == "nvcc" else None)
