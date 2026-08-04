@@ -117,3 +117,55 @@ class TestSelection:
         # A revision bump must not outrank an actual upstream upgrade.
         es = _entries([_bundle("0.3.28+cvc.9"), _bundle("0.3.29+cvc.1")])
         assert _pick(es).version == "0.3.29+cvc.1"
+
+
+# ── Defence: detect a stale/newer revision at install time ──────
+#
+# The original openblas mis-pick was never reproduced, so rather than guess at
+# a cause these pin the DETECTION: if a newer revision of the same variant is
+# sitting in the catalog we resolved from, install says so instead of quietly
+# handing back the old one.
+
+
+class TestNewerRevisionDetection:
+    def test_flags_a_newer_revision_of_the_same_variant(self):
+        from cvcpkg.catalog import newer_revision_available
+
+        es = _entries([_bundle("0.3.28+cvc.3"), _bundle("0.3.28+cvc.5")])
+        stale = next(e for e in es if e.version.endswith("cvc.3"))
+        found = newer_revision_available(es, stale)
+        assert found is not None and found.version == "0.3.28+cvc.5"
+
+    def test_silent_when_the_newest_was_picked(self):
+        from cvcpkg.catalog import newer_revision_available
+
+        es = _entries([_bundle("0.3.28+cvc.3"), _bundle("0.3.28+cvc.5")])
+        newest = next(e for e in es if e.version.endswith("cvc.5"))
+        assert newer_revision_available(es, newest) is None
+
+    def test_a_different_variant_is_not_a_newer_revision(self):
+        # A newer windows build says nothing about the linux pick; comparing
+        # across coordinates would fire on every multi-platform catalog.
+        from cvcpkg.catalog import newer_revision_available
+
+        linux = _bundle("0.3.28+cvc.3")
+        win = dict(_bundle("0.3.28+cvc.9"), platform="windows")
+        es = catalog_entries(
+            {"bundles": [linux, win]},
+            platform="linux",
+            arch="x86_64",
+            build_type="release",
+            link="shared",
+        )
+        picked = next(e for e in es if e.platform == "linux")
+        assert newer_revision_available(es, picked) is None
+
+    def test_uses_the_same_ordering_as_selection(self):
+        # cvc.10 > cvc.9: the detector must not disagree with the resolver
+        # about what "newer" means, or it would fire spuriously.
+        from cvcpkg.catalog import newer_revision_available
+
+        es = _entries([_bundle("0.3.28+cvc.9"), _bundle("0.3.28+cvc.10")])
+        picked = _pick(es)
+        assert picked.version == "0.3.28+cvc.10"
+        assert newer_revision_available(es, picked) is None

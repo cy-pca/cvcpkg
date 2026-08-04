@@ -189,6 +189,7 @@ def install(
         catalog_entries,
         fetch_catalog,
         load_catalog_from_file,
+        newer_revision_available,
     )
     from cvcpkg.errors import InstallError, IntegrityError
     from cvcpkg.installer import build_from_source_fallback, install_entry
@@ -362,10 +363,36 @@ def install(
 
     if picked:
         click.echo(f"cvcpkg: resolved {len(picked)} component(s) from catalog:")
+        # Stale-revision defence.  A report that `install openblas` resolved
+        # +cvc.3 while +cvc.4/+cvc.5 were published could not be reproduced:
+        # ordering tested correct, so the likely cause was a stale client-side
+        # catalog — but the evidence was gone before that could be confirmed,
+        # and "probably the cache" is not a fix.
+        #
+        # So instead of guessing, make the next occurrence diagnose itself: if
+        # a strictly newer revision of the SAME variant is sitting in the very
+        # catalog we resolved from, say so, loudly, at the moment it happens.
+        # Under correct ordering this is silent unless the user pinned a
+        # version — which they can see in their own command line — so it costs
+        # nothing in the normal case and turns a vague bug report into a
+        # one-line reproduction.
+        _constrained = {c.name for c in reqs.components if c.version}
         for name in sorted(picked):
             entry = picked[name]
             display = entry.qualified_name if hasattr(entry, "qualified_name") else name
             click.echo(f"  {display} == {entry.version}")
+            if not catalog_failed and name not in _constrained:
+                newer = newer_revision_available(entries, entry)
+                if newer is not None:
+                    click.echo(
+                        f"cvcpkg: WARNING: resolved {display} == {entry.version} but the "
+                        f"catalog also lists {newer.version}, which is newer. No version "
+                        f"was requested for {display}, so this should not happen: the "
+                        f"catalog may be stale (a mirror or satellite lagging its "
+                        f"upstream), or revision selection is wrong. Re-run with a fresh "
+                        f"cache and report BOTH versions plus the catalog source below.",
+                        err=True,
+                    )
     if source_only:
         click.echo(
             f"cvcpkg: {len(source_only)} component(s) will be built from source: "

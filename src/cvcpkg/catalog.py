@@ -343,3 +343,50 @@ def generate_catalog(
     )
 
     return catalog
+
+
+def newer_revision_available(
+    entries: list[CatalogEntry],
+    picked: CatalogEntry,
+) -> CatalogEntry | None:
+    """Return an entry for the SAME variant that outranks *picked*, if any.
+
+    A safety net for a report we could not reproduce: `cvcpkg install openblas`
+    returned +cvc.3 while +cvc.4 and +cvc.5 were published.  Selection itself
+    tested correct, so the likely cause was a stale client-side catalog rather
+    than bad ordering — but "likely" is not "known", and the evidence was
+    destroyed before it could be confirmed.
+
+    Rather than guess at the cause, make a recurrence self-diagnosing: compare
+    what was picked against every candidate for the identical coordinates
+    (name/platform/arch/build_type/link/org) and report anything strictly
+    newer.  Under correct ordering and an unconstrained request this returns
+    None, so a hit means EITHER a genuine selection bug OR a version
+    constraint pinning an older revision — the caller knows which of those it
+    asked for and phrases the message accordingly.
+
+    Deliberately compares with the same key the resolver sorts by, so this can
+    never disagree with selection about what "newer" means.
+    """
+    from cvcpkg.semver import version_sort_key
+
+    def _coords(e: CatalogEntry) -> tuple:
+        return (
+            e.name,
+            getattr(e, "org", "") or "",
+            e.platform,
+            e.arch,
+            e.build_type,
+            e.link,
+        )
+
+    picked_key = version_sort_key(picked.version, picked.cvc_revision)
+    best: CatalogEntry | None = None
+    best_key = picked_key
+    for e in entries:
+        if _coords(e) != _coords(picked):
+            continue
+        k = version_sort_key(e.version, e.cvc_revision)
+        if k > best_key:
+            best, best_key = e, k
+    return best
