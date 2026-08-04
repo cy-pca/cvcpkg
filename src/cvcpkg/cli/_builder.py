@@ -682,6 +682,21 @@ def builder_run(
 
         advertised_caps |= host_capabilities()
 
+        # glibc floors this machine can PRODUCE for (linux only).  Deliberately
+        # not part of host_capabilities(): that set is also the install-side
+        # gate, where the comparison runs the other way — a consumer can RUN a
+        # bundle whose floor is <= its glibc, while a builder can BUILD one
+        # whose floor is >= its glibc.  Same version, opposite direction, so
+        # merging them into one set would silently mean the wrong thing on one
+        # side.  See cvcpkg/glibc.py.
+        if platform == "linux":
+            from cvcpkg.glibc import builder_capabilities, format_version, host_glibc
+
+            _g = host_glibc()
+            advertised_caps |= builder_capabilities(_g)
+            if _g is not None:
+                click.echo(f"cvcpkg-builder: host glibc {format_version(_g)}")
+
     # -- Registration ----------------------------------------
     if cross_entries:
         cross_msg = " [cross: {}]".format(

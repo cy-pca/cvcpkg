@@ -1829,6 +1829,26 @@ def pack_recipe(
     if cvc_revision is not None:
         ctx.recipe.cvc_revision = cvc_revision
 
+    # ── glibc floor gate (linux) ────────────────────────────────────────
+    # glibc is backward- but not forward-compatible, so a bundle built on a
+    # newer glibc than a consumer's simply refuses to start:
+    #     version `GLIBC_2.38' not found (required by libpython3.13t.so.1.0)
+    # On a heterogeneous fleet that is decided by WHICH BUILDER picked the job,
+    # which makes it intermittent and very hard to attribute — it silently
+    # broke the cp313t python column (built on the one 2.39 host, unusable on
+    # the four 2.35 ones). Verify here, where the artifact and the cause are
+    # both in hand, rather than at some consumer months later. This is the
+    # auditwheel step of cvcpkg's manylinux analogue; the routing half lives in
+    # submit-dag (jobs require a glibc<floor> builder capability).
+    if pkg_platform == "linux":
+        from cvcpkg import glibc as _glibc
+
+        _ok, _req, _msg = _glibc.check_floor(ctx.install_dir)
+        if not _ok:
+            raise BuildError(f"{ctx.recipe.name}: glibc floor violation — {_msg}")
+        if _req is not None:
+            print(f"cvcpkg: glibc floor OK — {_msg}")
+
     manifest = generate_manifest(
         ctx.recipe,
         ctx.install_dir,
