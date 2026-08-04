@@ -250,11 +250,11 @@ jobs:
           set -euo pipefail
           VM="root@${{ steps.vm.outputs.host }}"
 
-          ssh ${SSH_OPTS} "${VM}" "cd ${remote_dir. && \
+          ssh ${SSH_OPTS} "${VM}" "cd ${remote_dir} && \
             chmod +x dist/cvcpkg && ./dist/cvcpkg --version"
 
           mkdir -p dist
-          scp ${SSH_OPTS} "${VM}:${remote_dir./dist/cvcpkg" \
+          scp ${SSH_OPTS} "${VM}:${remote_dir}/dist/cvcpkg" \
             "dist/${{ matrix.artifact }}"
 
       - name: Clean up BSD VM
