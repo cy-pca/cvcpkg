@@ -28,6 +28,7 @@ _VALID_PLATFORMS = [
     "freebsd",
     "openbsd",
     "netbsd",
+    "haiku",
 ]
 _VALID_ARCHES = [
     "auto",
