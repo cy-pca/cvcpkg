@@ -410,8 +410,18 @@ def install(
     # the default lookup usually succeeds and declared conflicts/provides
     # slots (e.g. pytest-cp311 vs pytest-cp313 both owning bin/pytest) are
     # actually enforced. When no recipe dir can be found the check still
-    # degrades to a no-op inside _check_conflicts.
-    rdirs = _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes)
+    # degrades to a no-op inside _check_conflicts -- but only because we catch
+    # here: _resolve_recipes_dirs RAISES rather than returning empty. Without
+    # the catch, a plain `cvcpkg install <pkg>` run outside a checkout resolved
+    # the entire dependency set and THEN aborted with "could not find recipes
+    # directory", failing an advisory check that _check_conflicts is explicitly
+    # willing to skip.
+    try:
+        rdirs: list[Path] | None = _resolve_recipes_dirs(
+            recipes_dirs, no_default=no_default_recipes
+        )
+    except click.ClickException:
+        rdirs = None
     _check_conflicts(
         list(picked.keys()) + list(source_only),
         prefix_path,

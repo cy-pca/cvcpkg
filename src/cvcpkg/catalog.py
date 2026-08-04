@@ -13,6 +13,7 @@ import yaml
 from cvcpkg.config import default_catalog_url
 from cvcpkg.errors import CatalogError, IntegrityError
 from cvcpkg.manifest import CatalogEntry, Dependency
+from cvcpkg.revisions import revision_of
 
 GITHUB_CATALOG_URL = "https://transfix.github.io/libcvc-deps/catalog/latest.yaml"
 
@@ -215,7 +216,16 @@ def catalog_entries(
                 name=b["name"],
                 version=b["version"],
                 upstream_version=b.get("upstream_version", ""),
-                cvc_revision=b.get("cvc_revision", 1),
+                # Prefer an explicit field, else recover the revision from the
+                # version string.  /v1/catalog ships "0.3.28+cvc.5" and NO
+                # cvc_revision field, so a bare .get() defaulted EVERY entry to
+                # 1: revision selection then worked only because
+                # version_sort_key independently re-parses the string.  A
+                # producer that omits the suffix (the server catalog is
+                # documented as doing exactly that) would tie every revision
+                # and hand back an arbitrary one — the "install picked a stale
+                # revision" symptom.  Derive it so both inputs agree.
+                cvc_revision=b.get("cvc_revision") or revision_of(b.get("version", "")) or 1,
                 platform=b.get("platform", ""),
                 arch=b.get("arch", ""),
                 build_type=b.get("build_type", ""),
