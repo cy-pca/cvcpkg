@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify a built cvcpkg wheel (or sdist) is fit to publish to PyPI.
+r"""Verify a built cvcpkg wheel (or sdist) is fit to publish to PyPI.
 
 Checks the archive *contents* without installing it:
 
@@ -16,6 +16,11 @@ Checks the archive *contents* without installing it:
   A recipe's scripts are resolved as ``recipe_dir / <script>`` on the
   builder, so one that did not ride along is a build/test that dies at the
   point of use;
+- every DATA file a bundled recipe's scripts read out of their own recipe
+  directory (``${RECIPE_DIR}/x``, ``$(dirname "$0")/x``, ``$PSScriptRoot\x``)
+  is bundled too.  Nothing declares these -- they are just files a build
+  script cp's, sources or patches -- so an extension allowlist drops them
+  silently and the build dies at the point of use, arbitrarily late;
 - core metadata is sane (Name == cvcpkg, a version, Requires-Python).
 
 Exits non-zero and prints every problem found, so it can gate CI before a
@@ -70,28 +75,107 @@ SCRIPT_REF_RE = re.compile(
     r'(?m)^[ \t]*script:[ \t]*["\']?([A-Za-z0-9_.\-/]+\.(?:sh|ps1|bat|cmd|py))["\']?[ \t]*(?:#.*)?$'
 )
 
+# A reference, inside a recipe script, to a file in the script's OWN recipe
+# directory.  Every idiom the recipe corpus uses to name "the directory this
+# script lives in":
+#
+#     ${RECIPE_DIR}/x  $RECIPE_DIR/x        (haiku-image)
+#     ${CVC_RECIPE_DIR}/x                   (exported by builder.run_build)
+#     ${SCRIPT_DIR}/x                       (SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)")
+#     $(dirname "$0")/x
+#     $PSScriptRoot\x                       (build.ps1)
+#
+# These are DATA references -- the files a build script cp's, sources, patches
+# or reads -- as opposed to the `script:` keys above, which a recipe.yaml
+# declares.  Nothing declares these, so packaging cannot know them without
+# reading the scripts; that is exactly how an extension allowlist dropped
+# haiku-image's README-import.md / UserBuildConfig / UserBootscript.
+_OWN_DIR = (
+    r"(?:"
+    r"\$\{(?:CVC_)?RECIPE_DIR\}|\$(?:CVC_)?RECIPE_DIR(?![A-Za-z0-9_])"
+    r"|\$\{SCRIPT_DIR\}|\$SCRIPT_DIR(?![A-Za-z0-9_])"
+    r"|\$\(\s*dirname\s+\"?\$0\"?\s*\)"
+    r"|\$PSScriptRoot(?![A-Za-z0-9_])"
+    r")"
+)
+# The path tail stops at anything that ends a shell word.  `$` and glob
+# metacharacters are allowed INTO the capture so that an interpolated path
+# (e.g. env-${CVC_PLATFORM}.sh) is caught and discarded whole, rather than
+# truncated into a bogus prefix.
+OWN_DIR_REF_RE = re.compile(_OWN_DIR + r"[/\\]([^\s\"'`;:|&<>)]+)")
+
+
+def recipe_dir_file_refs(script_text: str) -> set[str]:
+    """Return the paths a script names relative to its own recipe directory.
+
+    Paths keep any leading ``..`` (a sibling recipe, e.g.
+    ``../_common/python-wheel.sh``); join them onto the recipe directory with
+    :func:`resolve_recipe_ref`.  References that cannot be resolved by reading
+    alone -- ones built from a variable, or containing a glob -- are dropped
+    rather than guessed at.
+    """
+    refs: set[str] = set()
+    for raw in OWN_DIR_REF_RE.findall(script_text):
+        ref = raw.replace("\\", "/").rstrip("/")
+        if not ref or "$" in ref or any(c in ref for c in "*?[]"):
+            continue
+        parts = [p for p in ref.split("/") if p not in ("", ".")]
+        if parts:
+            refs.add("/".join(parts))
+    return refs
+
+
+def resolve_recipe_ref(recipe_dir: str, ref: str) -> str | None:
+    """Join ``ref`` onto ``recipe_dir`` lexically; None if it escapes recipes/.
+
+    ``recipe_dir`` is a bundle path like ``cvcpkg/recipes/haiku-image``.  A ref
+    that climbs above ``cvcpkg/recipes`` is not something packaging can be
+    asked to preserve, so it is dropped.
+    """
+    root = recipe_dir.rsplit("/", 1)[0]  # cvcpkg/recipes
+    parts = recipe_dir.split("/")
+    for part in ref.split("/"):
+        if part == "..":
+            if not parts:
+                return None
+            parts.pop()
+        else:
+            parts.append(part)
+    out = "/".join(parts)
+    return out if out.startswith(f"{root}/") else None
+
+
+def _is_wanted(name: str) -> bool:
+    """Should this archive member be read into memory for inspection?"""
+    base = name.rsplit("/", 1)[-1]
+    if base in ("entry_points.txt", "METADATA", "PKG-INFO", "recipe.yaml"):
+        return True
+    # Recipe scripts, for the own-directory data-reference scan below.  ~1 MB
+    # across the whole corpus, so this stays cheap.
+    return "/recipes/" in name and base.endswith((".sh", ".ps1"))
+
 
 def _list_archive(path: Path) -> tuple[list[str], dict[str, bytes]]:
     """Return (member names, {suffix-matched member: bytes}) for wheel or sdist.
 
     Only the small text members we inspect (entry_points.txt, METADATA/
-    PKG-INFO and every recipe.yaml) are read into memory -- never the
-    payloads, so this stays cheap on a distribution carrying 500+ recipes.
+    PKG-INFO, every recipe.yaml and every recipe script) are read into memory
+    -- never the payloads, so this stays cheap on a distribution carrying
+    500+ recipes.
     """
     names: list[str] = []
     text: dict[str, bytes] = {}
-    wanted = ("entry_points.txt", "METADATA", "PKG-INFO", "recipe.yaml")
     if path.suffix == ".whl" or path.name.endswith(".zip"):
         with zipfile.ZipFile(path) as zf:
             names = zf.namelist()
             for n in names:
-                if n.rsplit("/", 1)[-1] in wanted:
+                if _is_wanted(n):
                     text[n] = zf.read(n)
     else:  # sdist tarball
         with tarfile.open(path) as tf:
             for m in tf.getmembers():
                 names.append(m.name)
-                if m.isfile() and m.name.rsplit("/", 1)[-1] in wanted:
+                if m.isfile() and _is_wanted(m.name):
                     f = tf.extractfile(m)
                     if f is not None:
                         text[m.name] = f.read()
@@ -109,7 +193,24 @@ def _strip_top(names: list[str]) -> list[str]:
     return [_strip_top_one(n) for n in names]
 
 
-def verify(path: Path, *, min_recipes: int = 50) -> list[str]:
+RECIPE_PREFIX = "cvcpkg/recipes/"
+
+
+def source_recipes_root() -> Path | None:
+    """The repo's ``recipes/`` directory, when run from a checkout.
+
+    Both workflows run this script from the checkout that produced the
+    archive, which is what lets the own-directory scan below tell a PACKAGING
+    failure (a file that exists in recipes/ and did not survive) apart from a
+    BROKEN RECIPE (a script naming a file that exists nowhere -- not something
+    packaging can fix, and not this gate's business).  Outside a checkout the
+    scan is skipped rather than guessed at.
+    """
+    cand = Path(__file__).resolve().parent.parent / "recipes"
+    return cand if (cand / "_common").is_dir() else None
+
+
+def verify(path: Path, *, min_recipes: int = 50, recipes_root: Path | None = None) -> list[str]:
     """Return a list of problems (empty means the archive looks publishable)."""
     problems: list[str] = []
     raw_names, text = _list_archive(path)
@@ -171,6 +272,30 @@ def verify(path: Path, *, min_recipes: int = 50) -> list[str]:
             if f"{rdir}/{ref}" not in normed:
                 problems.append(f"recipe script not bundled: {rdir}/{ref} (named by {member})")
 
+    # DATA files a recipe script READS out of its own recipe directory.
+    # Nothing declares these -- they are just files the script cp's, sources
+    # or patches -- so packaging has to read the scripts to know they matter.
+    # An extension allowlist in the build backend dropped haiku-image's
+    # README-import.md, UserBuildConfig and UserBootscript, and because they
+    # are read AFTER the Haiku cross-toolchain is built, the wheel-installed
+    # failure came an hour into an otherwise-good build.
+    #
+    # Only files that EXIST in the source tree are required to survive: a
+    # script naming a file that is in no tree at all is a broken recipe, which
+    # a packaging gate can neither diagnose nor fix.
+    src_root = recipes_root if recipes_root is not None else source_recipes_root()
+    if src_root is not None:
+        for member, blob in sorted(normed_text.items()):
+            if not (member.startswith(RECIPE_PREFIX) and member.endswith((".sh", ".ps1"))):
+                continue
+            rdir = member.rsplit("/", 1)[0]
+            for ref in sorted(recipe_dir_file_refs(blob.decode("utf-8", "replace"))):
+                target = resolve_recipe_ref(rdir, ref)
+                if target is None or target in normed:
+                    continue
+                if (src_root / target[len(RECIPE_PREFIX) :]).is_file():
+                    problems.append(f"recipe data file not bundled: {target} (read by {member})")
+
     # Core metadata.
     md_blob = b"".join(v for k, v in text.items() if k.endswith(("METADATA", "PKG-INFO")))
     md = md_blob.decode("utf-8", "replace")
@@ -188,13 +313,20 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Verify a cvcpkg wheel/sdist is publishable.")
     ap.add_argument("archive", type=Path, help="Path to a .whl or .tar.gz")
     ap.add_argument("--min-recipes", type=int, default=50)
+    ap.add_argument(
+        "--recipes-dir",
+        type=Path,
+        default=None,
+        help="Source recipes/ tree to compare against (default: the checkout "
+        "this script lives in; the data-file scan is skipped without one)",
+    )
     args = ap.parse_args(argv)
 
     if not args.archive.is_file():
         print(f"ERROR: no such file: {args.archive}", file=sys.stderr)
         return 2
 
-    problems = verify(args.archive, min_recipes=args.min_recipes)
+    problems = verify(args.archive, min_recipes=args.min_recipes, recipes_root=args.recipes_dir)
     if problems:
         print(f"✗ {args.archive.name} is NOT publishable:", file=sys.stderr)
         for p in problems:

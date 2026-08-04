@@ -349,5 +349,13 @@ Concretely, `haiku-image`'s `test.vm` **skips everywhere today** — no builder 
 the fleet advertises `incus` yet, and `HAIKU_BUILDER_SSH_KEY` is not plumbed
 into CI. Wiring one builder with Incus plus that secret is what turns this from
 a seam into a signal, and `vm-test.sh`'s Haiku-specific assertions (gcc/make
-present, `UserBootscript` installed) are written from the recipe's own build
-script and get their first real check on that run.
+present and able to compile and run a binary; a boot-time sshd hook installed
+on disk) are written from the recipe's own build script and get their first
+real check on that run.
+
+That last assertion is deliberately mechanism-agnostic: it accepts either the
+`launch_daemon` job at `/boot/system/settings/launch/sshd` or a
+`~/config/settings/boot/UserBootscript`, and logs which one it found. Only the
+former runs on a headless boot, and the boot-repair work replaces the latter
+with it — naming just one would make the test fail on the very change that
+fixes what it is testing.
