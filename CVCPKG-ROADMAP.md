@@ -721,6 +721,37 @@ scaling and federation:
 
   Composes with the build-time capability routing (GPU/`cuda`) item: a job is
   matched on (platform, arch, required capabilities, **served org/server**).
+- **Org-scoped builder administration** — the item above pools *job routing*
+  across orgs; this is its administrative counterpart, and today there is none.
+
+  `POST /v1/admin/update-builders` (`server/app.py`) iterates **every** connected
+  builder with **no `org_slug` filter**, gated only on `TokenRole.admin` — which
+  is server-wide. And `TokenRole` is exactly `{reader, publisher, admin}`: there
+  is **no org-admin role**, so this is not "delegated to org admins" either. An
+  org that registers its own hardware cannot update its own builders, while a
+  server admin can restart all of them. Centralised by omission rather than by
+  design — and the codebase *is* org-aware elsewhere (several endpoints gate on
+  `org_slug` vs `actor.role != TokenRole.admin`); this endpoint just skipped it.
+
+  Not a privilege escalation to fix in a hurry: builders already execute
+  arbitrary recipe build scripts fetched from the server, so the trust boundary
+  is pre-existing and far broader than this endpoint. The update message also
+  carries only a **version string** — the builder self-updates from *its own*
+  configured repo, so the server cannot hand it code — and it is version-gated,
+  so builders already current no-op. What is missing is **blast radius and
+  ergonomics**: a server admin can restart an org's machines, interrupting that
+  org's in-flight jobs, with no opt-in and no notification.
+
+  - Add an **org-admin role** (or an org-membership check) so an org can
+    administer the builders serving its namespace.
+  - Scope `update-builders` by `org_slug` — default to the actor's org; require
+    an explicit all-orgs flag for a server admin to fan out fleet-wide.
+  - Pairs with the served-namespace set above: a builder serving `["", "cvc"]`
+    should be administrable by public *and* `cvc` admins, which makes "whose
+    builder is this?" a set-membership question rather than a single owner.
+  - Prefer **drain-then-update** over restart-now, so an update never cancels a
+    running job — the failure mode that cascade-cancelled roughly a third of a
+    363-job DAG when a builder went down mid-run.
 - **Mirror protocol** — institutions can run local read-only mirrors
   (`--mirror-mode`) that sync from a primary. Useful for pure read-only
   air-gapped caches; the read-write variant is the *edge* role above.
