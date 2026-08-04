@@ -472,7 +472,8 @@ def builder_fleet(config_path: str, dry_run: bool, restart_delay: float) -> None
     is_flag=True,
     default=False,
     help="Advertise only the explicit --capability flags; skip host probing "
-    "(nvidia-smi/nvcc/libcuda for cuda).  The CVCPKG_CAPABILITIES env var, "
+    "(cvcpkg.platform._CAPABILITY_PROBES: nvcc for cuda; a reachable and "
+    "permitted daemon for incus and lxd).  The CVCPKG_CAPABILITIES env var, "
     "when set, overrides probing either way.",
 )
 def builder_run(
@@ -670,7 +671,9 @@ def builder_run(
 
     # -- Advertised capabilities -----------------------------
     # Explicit --capability flags, merged with the host probe (same probes as
-    # the install-side resolver gating: nvidia-smi/nvcc/libcuda for cuda)
+    # the install-side resolver gating: nvcc for cuda; a reachable+permitted
+    # daemon for incus and lxd, each proving WHICH server answered so an `lxc`
+    # compatibility shim fronting Incus is never advertised as lxd)
     # unless --no-auto-capabilities.  CVCPKG_CAPABILITIES, when set, is
     # authoritative inside host_capabilities() itself.  The scheduler routes a
     # job whose recipe declares requires_capabilities only to a builder

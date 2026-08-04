@@ -23,20 +23,42 @@ def _make_wheel(
     recipes=("zlib", "boost", "openssl"),
     scripts=True,
     modules=True,
+    data=True,
+    vm_test_recipe=False,
+    vm_test_script=True,
     entry_points=("cvcpkg", "cvcpkg-server"),
     name="cvcpkg",
     version="2.0.0",
     requires_python=True,
 ):
     with zipfile.ZipFile(path, "w") as z:
+        # Drive the fixture off the checker's own lists, so adding a required
+        # module/data file to verify_wheel.py cannot make these tests fail for
+        # the uninteresting reason that the FIXTURE is out of date.
+        vw = _load()
         if modules:
-            z.writestr("cvcpkg/__init__.py", "")
-            z.writestr("cvcpkg/cli/__init__.py", "")
-            z.writestr("cvcpkg/server/app.py", "")
+            for m in vw.REQUIRED_MODULES:
+                z.writestr(m, "")
+        if data:
+            for d in vw.REQUIRED_DATA:
+                z.writestr(d, "type: object\n")
         for r in recipes:
             z.writestr(f"cvcpkg/recipes/{r}/recipe.yaml", "schema_version: 1\n")
             if scripts:
                 z.writestr(f"cvcpkg/recipes/{r}/build.sh", "#!/usr/bin/env bash\n")
+        if vm_test_recipe:
+            # An image recipe naming a guest-side script the bundle may or may
+            # not carry — the exact shape that let haiku-image's vm-test.sh be
+            # left out of a declared file list.
+            z.writestr(
+                "cvcpkg/recipes/some-image/recipe.yaml",
+                "schema_version: 1\nbuild:\n  matrix:\n"
+                "    - platform: linux\n      script: build.sh\n"
+                "test:\n  vm:\n    script: vm-test.sh\n",
+            )
+            z.writestr("cvcpkg/recipes/some-image/build.sh", "#!/usr/bin/env bash\n")
+            if vm_test_script:
+                z.writestr("cvcpkg/recipes/some-image/vm-test.sh", "#!/bin/sh\n")
         dist = f"{name}-{version}.dist-info"
         ep = "[console_scripts]\n" + "".join(f"{e}=cvcpkg.x:y\n" for e in entry_points)
         z.writestr(f"{dist}/entry_points.txt", ep)
@@ -76,6 +98,39 @@ def test_missing_module_flagged(tmp_path):
     whl = tmp_path / "cvcpkg-2.0.0-py3-none-any.whl"
     _make_wheel(whl, modules=False)
     assert any("missing module" in p for p in mod.verify(whl, min_recipes=1))
+
+
+def test_missing_schema_data_flagged(tmp_path):
+    """A wheel with every .py but no schemas/*.yaml is NOT publishable.
+
+    The schemas ship only because pyproject names them and are read through
+    importlib.resources, so this is the failure that imports cleanly and then
+    blows up on the first `cvcpkg validate`.
+    """
+    mod = _load()
+    whl = tmp_path / "cvcpkg-2.0.0-py3-none-any.whl"
+    _make_wheel(whl, data=False)
+    problems = mod.verify(whl, min_recipes=1)
+    assert any("missing data file" in p for p in problems)
+    assert any("image-schema.yaml" in p for p in problems)
+
+
+def test_recipe_script_reference_must_be_bundled(tmp_path):
+    """`test.vm.script: vm-test.sh` with no vm-test.sh beside it is flagged.
+
+    cvcpkg resolves a recipe's scripts as ``recipe_dir / <script>`` on the
+    builder, so a bundle that carries build.sh but not the guest-side script
+    builds and then dies at the test step.
+    """
+    mod = _load()
+    good = tmp_path / "good.whl"
+    _make_wheel(good, vm_test_recipe=True, vm_test_script=True)
+    assert [p for p in mod.verify(good, min_recipes=1) if "vm-test.sh" in p] == []
+
+    bad = tmp_path / "bad.whl"
+    _make_wheel(bad, vm_test_recipe=True, vm_test_script=False)
+    problems = mod.verify(bad, min_recipes=1)
+    assert any("recipe script not bundled" in p and "vm-test.sh" in p for p in problems)
 
 
 def test_wrong_metadata_name_flagged(tmp_path):

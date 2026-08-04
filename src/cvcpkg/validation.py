@@ -48,8 +48,9 @@ _UNPARSEABLE_VERSION_GRANDFATHER: frozenset[str] = frozenset()
 def load_schema(kind: str) -> dict:
     """Load a bundled packaging schema by *kind*.
 
-    *kind* is ``"recipe"``, ``"components"`` or ``"manifest"``.  The schema
-    ships inside the ``cvcpkg`` package (``cvcpkg/schemas/<kind>-schema.yaml``)
+    *kind* is ``"recipe"``, ``"components"``, ``"manifest"`` or ``"image"``.
+    The schema ships inside the ``cvcpkg`` package
+    (``cvcpkg/schemas/<kind>-schema.yaml``)
     and is read via :mod:`importlib.resources`, so it resolves in a wheel
     install with no source checkout.
     """
@@ -139,6 +140,76 @@ def resolve_recipe_dirs(
 # ── individual validators ───────────────────────────────────────────────
 
 
+def _validate_image_recipe(recipe_file: Path, doc: dict) -> list[str]:
+    """Static ``kind: image`` layout check over a recipe's ``package.files``.
+
+    Enforces the two invariants that make image packages co-installable:
+    everything is declared under ``share/<recipe.name>/``, and the descriptor
+    ``share/<recipe.name>/image.yaml`` is among the declared files.
+    """
+    name = doc.get("recipe", {}).get("name", recipe_file.parent.name)
+    files = (doc.get("package") or {}).get("files") or []
+    root = f"share/{name}/"
+    errors: list[str] = []
+
+    stray = [f for f in files if not str(f).replace("\\", "/").startswith(root)]
+    if stray:
+        shown = ", ".join(str(s) for s in stray[:8]) + (" ..." if len(stray) > 8 else "")
+        errors.append(
+            f"{recipe_file}: package.files: kind 'image' must declare every file "
+            f"under '{root}' — found {shown}.  Files staged at the prefix root "
+            "collide with the next image package (generic names like "
+            "metadata.yaml / README.md are not guest-specific)."
+        )
+    if files and f"{root}image.yaml" not in [str(f).replace("\\", "/") for f in files]:
+        errors.append(
+            f"{recipe_file}: package.files: kind 'image' must ship the descriptor "
+            f"'{root}image.yaml' — it is what `cvcpkg image` discovers and what "
+            "makes the disk path derivable from the package name."
+        )
+    return errors
+
+
+def _validate_test_scripts(recipe_dir: Path, recipe_file: Path, doc: dict) -> list[str]:
+    """Both test hooks' scripts must exist, and ``test.vm`` must be coherent.
+
+    ``test.script`` runs on the builder; ``test.vm.script`` runs inside an
+    ephemeral VM booted from the artifact (see :mod:`cvcpkg.vmtest`).  Both are
+    paths relative to the recipe directory, and a typo in either is otherwise
+    only discovered by the builder that runs it.
+
+    ``test.vm.image: self`` additionally requires ``kind: image``: "boot the
+    image this recipe produced" is meaningless for a recipe that produces a
+    library, and silently doing nothing there would be worse than saying so.
+    """
+    test = doc.get("test") or {}
+    if not isinstance(test, dict):
+        return []
+    errors: list[str] = []
+
+    for label, script in (("test.script", test.get("script")),):
+        if script and not (recipe_dir / str(script)).is_file():
+            errors.append(f"{recipe_file}: {label} '{script}' not found")
+
+    vm = test.get("vm")
+    # Absent (or empty) means "no VM test" — not "a VM test that defaults to
+    # image: self", which would flag every library recipe in the tree.
+    if not vm or not isinstance(vm, dict):
+        return errors
+
+    vm_script = vm.get("script")
+    if vm_script and not (recipe_dir / str(vm_script)).is_file():
+        errors.append(f"{recipe_file}: test.vm.script '{vm_script}' not found")
+
+    if vm.get("image", "self") == "self" and doc.get("recipe", {}).get("kind") != "image":
+        errors.append(
+            f"{recipe_file}: test.vm.image is 'self' but recipe.kind is not 'image' — "
+            "there is no image for this recipe to boot.  Set kind: image, or name "
+            "another image package in test.vm.image."
+        )
+    return errors
+
+
 def validate_recipe_dir(recipe_dir: Path, *, schema: dict | None = None) -> list[str]:
     """Validate one recipe: schema, script/patch existence, version order."""
     recipe_dir = Path(recipe_dir)
@@ -168,6 +239,30 @@ def validate_recipe_dir(recipe_dir: Path, *, schema: dict | None = None) -> list
     for patch in doc.get("patches") or []:
         if not (recipe_dir / patch).exists():
             errors.append(f"{recipe_file}: patch '{patch}' not found")
+
+    # Referenced test scripts must exist — the host-side hook and the
+    # guest-side one alike.  A `test.vm.script` typo is otherwise invisible
+    # until a builder with a hypervisor picks the job up, 90 minutes into an
+    # image build, having already imported and booted the VM.
+    errors.extend(_validate_test_scripts(recipe_dir, recipe_file, doc))
+
+    # A `kind: image` recipe owns exactly one directory, named after itself.
+    #
+    # cvcpkg merges a bundle's staged tree into the prefix preserving relative
+    # paths, so a file staged at the root of CVC_INSTALL_DIR lands at the ROOT
+    # of the shared prefix.  The first image recipe did that with
+    # `metadata.yaml` and `README-import.md` — names that describe no
+    # particular guest — and a second image package would have collided with it
+    # on both.  Confining every image package to `share/<name>/` makes
+    # collisions impossible by construction (package names are unique in the
+    # catalog keyspace) AND makes the payload path derivable from the package
+    # name alone, which is what a provisioning script needs.
+    #
+    # `package.files` is declarative — staging is what actually decides — so
+    # this is the static half of the check; `cvcpkg pack` re-checks the real
+    # staged tree (see images.check_staged_image_tree).
+    if doc.get("recipe", {}).get("kind") == "image":
+        errors.extend(_validate_image_recipe(recipe_file, doc))
 
     # The minted version must be orderable SemVer.  Everything that picks "the
     # newest" routes through semver.version_sort_key, which ranks unparseable

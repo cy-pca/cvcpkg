@@ -2,20 +2,40 @@ schema_version: 1
 recipe:
   name: haiku-image
   upstream_version: "1.0.0-beta.5"
+  # NOT yet published (verified: /v1/packages?name=haiku-image is empty on
+  # cvcpkg.org), so the prefix layout below could still change for free.  After
+  # the first publish an artifact is immutable: any change to it costs a
+  # cvc_revision bump AND breaks every consumer's hardcoded fallback path.
   cvc_revision: 1
+  # Enforced, not decorative: a `kind: image` recipe must stage everything
+  # under share/<name>/ and nothing else, and must ship a schema-valid
+  # share/<name>/image.yaml.  `cvcpkg validate` checks package.files below;
+  # `cvcpkg pack` checks the real staged tree.
+  kind: image
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   homepage: https://www.haiku-os.org/
   license: MIT
   tags: [tools, images, haiku]
+  # This string is PUBLISHED — it is what `cvcpkg search`/`cvcpkg info` print,
+  # for someone who has not downloaded the package and so cannot have read
+  # README-import.md.  It therefore states the DESIGN, and points at the one
+  # place that tracks what has actually been observed, rather than asserting a
+  # boot.  It used to say "Boots with NO VGA/GUI interaction" flatly, which was
+  # never demonstrated.  Do not re-assert a boot here; update the status block
+  # in README-import.md and let this keep pointing at it.
   description: >-
     A headless, self-configuring HaikuOS builder image, built from source
-    (configure + jam) with OpenSSH, a build toolchain, and a builder user
-    baked in.  Boots with NO VGA/GUI interaction — Haiku's Installer is
+    (configure + jam) with OpenSSH, a build toolchain, and a login account
+    baked in.  DESIGNED to need NO VGA/GUI interaction — Haiku's Installer is
     graphical-only, so this image is pre-installed and pre-configured at
-    build time.  Ships a qcow2 (portable) plus an anyboot image and import
-    docs for Incus, LXD, Proxmox, and plain QEMU/libvirt.
+    build time.  See README-import.md's status block for how much of that has
+    been observed; do not assume it boots or that a key is trusted, and read
+    the login account from the descriptor (access.ssh_user), never from prose.
+    Installs into share/haiku-image/ as a portable qcow2 plus an
+    image.yaml/image.env descriptor pair, SHA256SUMS, Incus/LXD import
+    metadata, and docs for Proxmox and plain QEMU/libvirt.
 
 source:
   # build.sh clones the Haiku source + buildtools at pinned refs and builds a
@@ -44,14 +64,98 @@ build:
         HAIKU_BUILDER_SSH_PUBKEY: ""
 
 package:
+  # Everything lives under share/<package-name>/ with ROLE-based filenames.
+  # The directory is the package name (unique in the catalog keyspace), so N
+  # image packages can be installed side by side; the filenames carry no guest
+  # arch and no version, so a provisioning script can derive
+  # "$PREFIX/share/haiku-image/disk.qcow2" from the package name alone.
+  # Guest axes live in the package NAME and in image.yaml, never in a filename.
+  #
+  # Declarative only — build.sh's staging is what actually decides — but
+  # `cvcpkg validate` cross-checks this list against the kind: image rule.
   files:
-    - haiku-builder.qcow2
-    - haiku-builder-anyboot.iso
-    - metadata.yaml
-    - README-import.md
+    - share/haiku-image/image.yaml
+    - share/haiku-image/image.env
+    - share/haiku-image/disk.qcow2
+    - share/haiku-image/SHA256SUMS
+    - share/haiku-image/README.md
+    - share/haiku-image/incus/metadata.yaml
+    - share/haiku-image/incus/metadata.tar.xz
 
-notes: >-
+test:
+  # There is deliberately NO host-side `script:` here.  A bash script on the
+  # Linux builder can prove that disk.qcow2 exists and that `qemu-img info`
+  # parses it — which is precisely the "trust me, it boots" that shipped a
+  # descriptor claiming disk_bus: virtio-blk, a value that general-protection-
+  # faults this guest before userland.  The only assertion worth anything for
+  # an image package is booting it.
+  vm:
+    # Gate.  A builder without Incus SKIPS (reported, green) — it is never a
+    # red build on a machine that was never going to be able to run this.
+    # Incus specifically, not [incus, lxd]: the boot facts in image.yaml were
+    # bisected under Incus/QEMU, and an untested LXD path would be a claim of
+    # the same kind this whole block exists to stop making.
+    requires_capabilities: [incus]
+    hypervisors: [incus]
+    # Boot the image THIS build just staged, not whatever is installed.
+    image: self
+    # Haiku runs no incus agent, so the hypervisor's exec channel does not
+    # exist here; SSH is the only way in, which is also why the build makes
+    # the key injection fatal and reads the key back to confirm it.
+    connect: ssh
+    ssh:
+      # Private half of HAIKU_BUILDER_SSH_PUBKEY (build.matrix env, above).
+      # Read from the BUILDER PROCESS's environment, not from build.matrix.env
+      # — it is a fleet secret, so it is injected once where the builder is
+      # launched rather than written into a recipe that lives in git.  Absent
+      # or empty (a public builder) -> SKIP with that reason, resolved before
+      # any hypervisor state is created.
+      key_env: HAIKU_BUILDER_SSH_KEY
+    script: vm-test.sh
+    # Haiku's first boot writes its BFS index and runs UserBootscript, so it
+    # is slower than a Linux guest; 12 minutes is generous but bounded, and a
+    # hung boot must cost minutes, not a builder.
+    boot_timeout_seconds: 720
+    timeout_seconds: 1800
+
+notes: |
   Building Haiku from source builds a cross-toolchain first and takes
   roughly 45-90 minutes on a modern multi-core Linux host with ~30 GB of
   free disk.  The recipe installs its own host build dependencies on
   Debian/Ubuntu builders (git, nasm, xorriso, qemu-utils, ...).
+
+  BOOTING THE PRODUCED IMAGE — these are the authoritative facts, bisected
+  live against Haiku r1/beta5 under Incus/QEMU on 2026-08-03.  They are the
+  source for share/haiku-image/image.yaml's boot: block, so a consumer should
+  read them from there ($CVCPKG_IMAGE_DISK_BUS etc.) rather than retype them.
+
+  SCOPE, because the disk-bus row below has been over-read once already:
+  every bullet here is a statement about what the HAIKU GUEST OS can drive
+  under Incus/QEMU.  None of them is a statement that an image built by this
+  recipe boots to userland — no such boot has been observed.  Picking the
+  right bus removes the bus from the list of suspects, nothing more.  See the
+  status block at the top of README-import.md for what is actually known.
+
+    * Disk bus MUST be nvme.  virtio-blk general-protection-faults (vector
+      0xd) in virtio_pci notify_queue() and never reaches userland;
+      virtio-scsi -- the usual hypervisor default -- has no Haiku driver at
+      all, so the disk never appears and the boot loader dies in
+      vfs_mount_boot_file_system.  nvme is the only bus that gets anywhere:
+      the disk enumerates and Haiku reaches userland.  An earlier revision of
+      this recipe said virtio-blk, inferred from "Haiku panics on
+      virtio-scsi" without anyone checking that virtio-blk works.  It does
+      not.
+    * The NIC needs NO special model.  A stock virtio NIC works and holds a
+      DHCP lease.  The older claim that virtio_net page-faults is RETRACTED:
+      it was a symptom of the disk bug above, seen only in an already-degraded
+      boot with no usable root device.
+    * Firmware stays the hypervisor's default UEFI/OVMF with
+      security.csm=false and security.secureboot=false -- that is the
+      combination the bus bisection was carried out under.  Haiku is not
+      signed for the Microsoft keys, and CSM swaps OVMF for SeaBIOS.
+    * There is NO out-of-band admin channel (boot.console: none -- Haiku's
+      serial port is kernel-debug only), so networking and SSH access have to
+      be right before a headless deploy.  Do NOT assume a key is baked in:
+      read access.ssh_pubkey_baked out of image.yaml, and read the account
+      name from access.ssh_user, which the build OMITS rather than guesses
+      when it cannot establish one.

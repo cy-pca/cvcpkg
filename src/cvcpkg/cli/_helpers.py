@@ -64,7 +64,12 @@ _prefix_opt = click.option(
     "--prefix",
     type=click.Path(),
     default="./deps",
-    help="Install prefix directory (will contain bin/, lib/, include/).",
+    envvar="CVCPKG_PREFIX",
+    help=(
+        "Install prefix directory (will contain bin/, lib/, include/).  "
+        "Set CVCPKG_PREFIX once instead of threading --prefix through a "
+        "provisioning script whose prefix is not ./deps.  [env: CVCPKG_PREFIX]"
+    ),
 )
 _keep_build_opt = click.option(
     "--keep-build-dir",

@@ -85,6 +85,16 @@ jobs:
           SEP=":"
           if [[ "$RUNNER_OS" == "Windows" ]]; then SEP=";"; fi
 
+          # NOTE on --add-data: a .py is a package member because it is a .py;
+          # a .yaml is not.  cvcpkg/schemas/*.yaml are read through
+          # importlib.resources (cvcpkg.validation.load_schema), so a binary
+          # built without them starts, prints --version and lists recipes, and
+          # then dies with an unhandled FileNotFoundError on
+          # `_MEIPASS/cvcpkg/schemas/recipe-schema.yaml` the first time anyone
+          # runs `cvcpkg validate` / `cvcpkg pack`.  Reproduced by building
+          # this exact flag set (2026-08-04); packaging/cvcpkg.spec has always
+          # carried the schemas, these two inline invocations had drifted.
+
           pyinstaller \
             --onefile \
             --name cvcpkg \
@@ -92,6 +102,7 @@ jobs:
             --noconfirm \
             --clean \
             --add-data "src/cvcpkg/recipes${SEP}cvcpkg/recipes" \
+            --add-data "src/cvcpkg/schemas${SEP}cvcpkg/schemas" \
             --add-data "src/cvcpkg/migrations${SEP}cvcpkg/migrations" \
             --hidden-import cvcpkg.backends \
             --hidden-import cvcpkg.server \
@@ -109,11 +120,18 @@ jobs:
         working-directory: .
         run: |
           if [[ "${{ matrix.os }}" == windows-* ]]; then
-            ./dist/cvcpkg.exe --version
+            BIN=./dist/cvcpkg.exe
           else
             chmod +x ./dist/cvcpkg
-            ./dist/cvcpkg --version
+            BIN=./dist/cvcpkg
           fi
+          "$BIN" --version
+          # --version proves nothing about the BUNDLED DATA: a binary with no
+          # cvcpkg/schemas/ in _MEIPASS passes it and then dies on the first
+          # `validate`/`pack`.  Exercise a command that actually opens a
+          # schema, so a dropped --add-data is a red build here instead of a
+          # traceback on a customer's airgapped box.
+          "$BIN" validate recipes/zlib
 
       - name: Rename artifact
         shell: bash
@@ -232,6 +250,7 @@ jobs:
               --noconfirm \
               --clean \
               --add-data 'src/cvcpkg/recipes:cvcpkg/recipes' \
+              --add-data 'src/cvcpkg/schemas:cvcpkg/schemas' \
               --add-data 'src/cvcpkg/migrations:cvcpkg/migrations' \
               --hidden-import cvcpkg.backends \
               --hidden-import cvcpkg.server \

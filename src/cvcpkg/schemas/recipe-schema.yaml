@@ -124,10 +124,18 @@ $defs:
         minimum: 1
       kind:
         type: string
-        enum: [data, media, config, iso]
+        enum: [data, media, config, iso, image]
         description: >
           Optional content hint for platform-independent recipes, emitted
           verbatim as `meta.kind` in the manifest for downstream tooling.
+          `image` is ENFORCED, not just a label: such a recipe must stage
+          everything under `share/<recipe.name>/` and nothing else, and that
+          directory must hold a schema-valid `image.yaml` naming every disk it
+          ships.  That is what keeps the Nth image package from dropping a
+          generically-named `metadata.yaml`/`README.md` at the prefix root and
+          colliding with the previous one.  Checked statically by
+          `cvcpkg validate` (against `package.files`) and against the real
+          staged tree by `cvcpkg pack`.
       maintainer:
         type: string
       maintainer_email:
@@ -386,6 +394,98 @@ $defs:
     properties:
       script:
         type: string
+        description: >
+          Shell script run ON THE BUILDER after the build and before packing,
+          with CVC_PREFIX/CVC_INSTALL_DIR set.  Right for a library; useless
+          for an image package, whose artifact is an opaque guest disk.
+      vm:
+        $ref: "#/$defs/vm_test_block"
+
+  vm_test_block:
+    type: object
+    additionalProperties: false
+    description: >
+      Run this recipe's tests INSIDE a throwaway VM booted from the image the
+      recipe just produced.  cvcpkg owns the lifecycle: import, create, boot,
+      assert, and destroy on every exit path including timeout and SIGTERM.
+
+      Skipped — never failed — on a builder with no hypervisor.  Note this
+      block has its OWN `requires_capabilities`, separate from the recipe-level
+      key: an image package must stay INSTALLABLE on a host with no hypervisor
+      (carrying the image to such a host is the entire point), so the
+      capability may gate the test and must not gate the install.
+    properties:
+      requires_capabilities:
+        type: array
+        maxItems: 16
+        items:
+          type: string
+          pattern: "^[a-z][a-z0-9-]*$"
+        description: >
+          Capabilities the builder must ALL advertise before this test runs at
+          all; otherwise it is skipped with a reason.  Typically [incus].
+      hypervisors:
+        type: array
+        minItems: 1
+        items:
+          type: string
+          enum: [incus, lxd]
+        description: >
+          Ordered preference of hypervisors to drive, default [incus, lxd].
+          Only these two can boot a virtual machine: classic LXC (capability
+          `lxc`) is daemonless and containers-only, so it is not accepted here.
+      image:
+        type: string
+        pattern: "^(self|[a-z][a-z0-9-]*)$"
+        description: >
+          Which image package to boot.  `self` (the default) means the image
+          this recipe just staged, which is what makes an image recipe
+          self-testing rather than trust-me.
+      script:
+        type: string
+        description: >
+          Path, relative to the recipe directory, of a script executed INSIDE
+          the guest.  Omit it to assert only that the guest boots and becomes
+          reachable — already the assertion that catches a wrong disk_bus.
+      connect:
+        type: string
+        enum: [ssh, agent]
+        description: >
+          How to reach the guest.  `agent` uses the hypervisor's exec channel
+          and needs the incus agent running in the guest, which non-Linux
+          guests (Haiku, the BSDs) do not have; `ssh` needs the private half of
+          the key baked into the image and works for any guest with sshd.
+      ssh:
+        type: object
+        additionalProperties: false
+        properties:
+          user:
+            type: string
+            description: "Defaults to image.yaml's access.ssh_user."
+          key_env:
+            type: string
+            pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+            description: >
+              Environment variable holding the PRIVATE key material.  Absent or
+              empty on a builder without the fleet secret, which is a SKIP.
+          key_file:
+            type: string
+            description: "Path to a private key file; wins over key_env."
+      timeout_seconds:
+        type: integer
+        minimum: 1
+        maximum: 86400
+        description: "Hard wall-clock ceiling for the whole VM phase."
+      boot_timeout_seconds:
+        type: integer
+        minimum: 1
+        maximum: 86400
+        description: "Ceiling for 'the guest became reachable' specifically."
+      step_timeout_seconds:
+        type: integer
+        minimum: 1
+        maximum: 86400
+        description: "Ceiling for one hypervisor CLI call (import is the slow one)."
 
   cross_toolchain_block:
     type: object
