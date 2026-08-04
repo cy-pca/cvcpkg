@@ -349,8 +349,10 @@ bring `sandipaws` (and/or the local `win11` incus VM at
   exclusions added for the work-dir, `%TEMP%`, `pwsh.exe`,
   `bash.exe`, and `cvcpkg.exe`. WebSocket transport falls back to
   HTTP long-poll (server returns 404 for the WS upgrade route).
-- Builder fleet token (from `creds.txt`):
-  `cvctok_z2-N1_Km6dzn-1TFNtQ-QDi4pEp7r1j2rHgBY3R5W2A`.
+- Builder fleet token: held in `creds.txt` (never in this repo).  The token
+  that was pasted here was leaked publicly and has been REVOKED; the fleet now
+  runs on a replacement.  Do not paste credentials into docs -- CI scans for
+  `cvctok_` and will fail the build.
 
 After the linux/freebsd gapfill DAGs finish and the Windows
 workflow completes, re-run the gap script at the bottom of this
