@@ -66,10 +66,49 @@ $defs:
         type: string
       platform:
         type: string
-        enum: [linux, macos, windows, freebsd, openbsd, netbsd, cosmo]
+        # Must stay a superset of cvcpkg.platform.CANONICAL_PLATFORMS — a
+        # manifest records what was actually installed, so every tag the
+        # publisher can mint (including `any` for noarch bundles) has to be
+        # spellable here.  Guarded by tests/unit/test_platform_schema_drift.py.
+        enum:
+          [
+            any,
+            linux,
+            macos,
+            windows,
+            windows-gnu,
+            wasm,
+            wasi,
+            cosmo,
+            freebsd,
+            openbsd,
+            netbsd,
+            dragonflybsd,
+            haiku,
+          ]
       arch:
         type: string
-        enum: [x86_64, arm64]
+        # Must stay a superset of cvcpkg.platform.CANONICAL_ARCHES — the same
+        # rule, and the same drift class, as the platform enum above: a
+        # manifest records what was actually installed, so every arch the
+        # publisher can mint has to be spellable here.  This was
+        # [x86_64, arm64] while CANONICAL_ARCHES already carried
+        # riscv64/ppc64le/ppc64/s390x/wasm32 and the noarch sentinel, so
+        # validating the manifest of a `platform: any` bundle (arch=noarch) or
+        # of any non-x86/arm build failed.  Guarded by
+        # tests/unit/test_platform_schema_drift.py.
+        enum:
+          [
+            any,
+            noarch,
+            x86_64,
+            arm64,
+            riscv64,
+            ppc64le,
+            ppc64,
+            s390x,
+            wasm32,
+          ]
       build_type:
         type: string
         enum: [release, debug, none]

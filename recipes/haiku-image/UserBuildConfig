@@ -2,9 +2,16 @@
 #
 # Copied into haiku/build/jam/UserBuildConfig by build.sh. Defines a
 # "builder-anyboot" jam build profile that produces a headless HaikuOS
-# builder image: a large disk, a build toolchain, OpenSSH, and a fixed
-# hostname. SSH keys and the first-boot script are injected afterward by
-# build.sh (via bfs_shell) so no secret material lives in this file.
+# builder image: a right-sized disk, a build toolchain, OpenSSH, and a
+# fixed hostname. SSH keys, sshd_config and the boot script are injected
+# afterward by build.sh (via bfs_shell) so no secret material lives in
+# this file.
+#
+# build.sh APPENDS a second `switch` block to its copy of this file when
+# HAIKU_IMAGE_SIZE_MB / HAIKU_EXTRA_PACKAGES are set, overriding the size
+# and adding packages. Jam takes the last assignment, so this file stays
+# valid and buildable on its own — copy it into a Haiku tree and
+# `jam -q @builder-anyboot` works with the defaults below.
 #
 # See: https://www.haiku-os.org/guides/building/userbuildconfig/
 #      https://github.com/haiku/haiku/blob/master/build/jam/UserBuildConfig.ReadMe
@@ -15,17 +22,33 @@ DefineBuildProfile builder-anyboot : anyboot-image : "haiku-builder-anyboot.iso"
 
 switch $(HAIKU_BUILD_PROFILE) {
     case "builder-anyboot" : {
-        # A 50 GB image so the builder has room for source trees + output.
-        # (The anyboot BFS partition cannot be grown after the fact.)
-        HAIKU_IMAGE_SIZE = 51200 ;
+        # 10 GiB of BFS. This used to be 51200 (50 GiB), which produced a
+        # 50 GiB raw anyboot plus a same-size copy in the install dir —
+        # more than the fleet builders have free, and far over the
+        # server's publish cap.
+        #
+        # The budget: ~1.2 GiB base Haiku, ~1.5 GiB for the Development
+        # optional package and the build tools below, leaving ~7 GiB for
+        # the source tree + build dir + deps prefix that cvcpkg.haikuhost
+        # stages under /boot/home/cvcpkg-build for each job. BFS cannot be
+        # grown after the image is written, so a job that needs more gets a
+        # second BFS disk attached (README-import.md) rather than every
+        # consumer paying for the headroom in download size.
+        HAIKU_IMAGE_SIZE = 10240 ;
 
         # Stable identity for the fleet.
         HAIKU_IMAGE_HOST_NAME = haiku-builder ;
 
-        # Remote access + build toolchain baked into the image. openssh is in
-        # the default profile too; the Development optional package brings
-        # gcc/binutils/make/autotools. Keep the explicit list small and
-        # known-good — a missing package name fails the image build.
+        # Remote access + build toolchain baked into the image, so a booted
+        # VM is a usable haikuhost target with no network round trip. The
+        # image build FAILS on an unknown package name — after the hour-long
+        # cross-toolchain step — so this list stays small and known-good and
+        # anything speculative goes through HAIKU_EXTRA_PACKAGES instead,
+        # where a rebuild can drop it without editing the recipe.
+        #
+        # openssh is in the default profile too; the Development optional
+        # package below brings gcc/binutils/make/autotools, which is what
+        # env-haiku.sh's CC=gcc/CXX=g++ resolve to.
         AddHaikuImageSystemPackages
             openssh
             git

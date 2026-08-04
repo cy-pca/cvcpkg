@@ -10,17 +10,20 @@ recipe:
   license: MIT
   tags: [tools, images, haiku]
   description: >-
-    A headless, self-configuring HaikuOS builder image, built from source
-    (configure + jam) with OpenSSH, a build toolchain, and a builder user
-    baked in.  Boots with NO VGA/GUI interaction — Haiku's Installer is
-    graphical-only, so this image is pre-installed and pre-configured at
-    build time.  Ships a qcow2 (portable) plus an anyboot image and import
-    docs for Incus, LXD, Proxmox, and plain QEMU/libvirt.
+    A headless, PRE-INSTALLED HaikuOS build-target image, built from source
+    (configure + jam) with OpenSSH keyed, a build toolchain, and cvcpkg's
+    haikuhost work dir baked in.  Boots with NO VGA/GUI interaction — Haiku's
+    Installer is graphical-only, so the userland is installed and configured
+    at build time rather than by a first-boot installer — and comes up on
+    DHCP with sshd listening, which is all a Linux builder needs to drive it
+    through cvcpkg.haikuhost.  Ships one compressed, directly-bootable qcow2
+    plus import docs for Incus, LXD, Proxmox and plain QEMU/libvirt.
 
 source:
-  # build.sh clones the Haiku source + buildtools at pinned refs and builds a
-  # custom anyboot image via a dedicated jam build profile.  There is no
-  # single upstream tarball.
+  # build.sh clones the Haiku source + buildtools at the refs pinned below and
+  # builds a custom anyboot image via a dedicated jam build profile.  There is
+  # no single upstream tarball, so `prebuilt` (a no-op fetch in builder.py)
+  # hands the whole job to the script.
   type: prebuilt
   url: https://github.com/haiku/haiku
 
@@ -31,27 +34,141 @@ depends:
   host_tools: []
 
 build:
-  # A Linux-host recipe that PRODUCES a Haiku VM image (the recipe itself is
-  # not a Haiku package).  Runs only on Linux x86_64 builders.
+  # ── THIS RECIPE RUNS ON LINUX AND PRODUCES A HAIKU IMAGE ─────────────────
+  # It is not a Haiku package and must never grow a `platform: haiku` sibling.
+  # Two independent reasons, either one sufficient: Haiku's own build is
+  # Linux-hosted (configure --build-cross-tools builds a GCC/binutils cross
+  # toolchain FOR Haiku, on Linux), and cvcpkg cannot run on Haiku at all —
+  # HaikuPorts has no pip, no greenlet/httpx, and cryptography 3.4.8 against
+  # cvcpkg's >=41.0 floor (see cvcpkg.haikuhost's module docstring).  A Haiku
+  # matrix entry would be asking a Haiku box to build the image that creates
+  # Haiku boxes.  Linux x86_64 only, forever.
   build_type_independent: true
-    # Linux x86_64 host only (builds a Haiku cross-toolchain + x86_64 image).
+  # `configure --build-cross-tools` builds a whole cross GCC + binutils before
+  # jam ever touches the image; the observed end-to-end cost is 45-90 minutes
+  # on a modern multi-core builder.  That is uncomfortably close to the
+  # server's default 2h reaper and over it on a cold git cache or a busy box,
+  # and being reaped at 95% wastes the entire toolchain build.  4h covers the
+  # clone, the toolchain, the image, the qcow2 compression pass and a slow
+  # apt-get, without this ever being the reason a build dies.  submit-dag
+  # propagates timeout_seconds into each build job and the reaper honours it.
+  timeout_seconds: 14400
   matrix:
     - platform: linux
       script: build.sh
       env:
+        # ── Source pin ───────────────────────────────────────────────────
+        # Pinned HERE rather than left to build.sh's `${HAIKU_REF:-…}`
+        # defaults so the ref that produced a published image is auditable
+        # from the recipe alone.
+        #
+        # RECOMMENDATION, DELIBERATELY NOT APPLIED — this pin should move off
+        # r1beta5, but as its own change with a boot test behind it:
+        #
+        #   R1/beta5's virtio_block faults inside virtio_pci `notify_queue()`
+        #   under Incus/QEMU: a general protection fault (vector 0xd) that
+        #   drops to kdebug before userland.  virtio_net is NOT affected —
+        #   a page fault seen in that driver earlier came from a boot that had
+        #   already failed to find a root device, and the live haiku-build VM
+        #   holds a DHCP lease over a stock Incus virtio NIC.
+        #
+        #   Upstream ad747ccb1c6e ("virtio_pci: Fix index out of bounds",
+        #   2024-09-30) is a direct fix for that function's inputs: init_bus()
+        #   sized registersArea[] inconsistently with its loop counters and
+        #   populated registers[]/registersArea[] without using the index, so
+        #   the notification register pointer notify_queue() dereferences is
+        #   the wrong one.  74b5b25f7741 ("accept any pci revision for modern
+        #   devices", 2025-02-14) relaxes a second Incus/QEMU-relevant check.
+        #   NEITHER is on r1beta5 — verified against the mirror: ad747ccb is
+        #   an ancestor of r1beta6 (behind_by 0) and has *diverged* from
+        #   r1beta5, whose only virtio_pci backport is the Dec-2024
+        #   setup_queue one.  This is precisely why the nvme workaround in the
+        #   notes below is needed at all.
+        #
+        #   Blockers on moving: r1beta6 is a MOVING branch that currently
+        #   tracks master, so adopting it means pinning a commit SHA, not the
+        #   name; and it invalidates build.sh's HAIKU_REVISION fallback, which
+        #   is hard-coded to the revision r1beta5's HaikuPorts packages
+        #   require.  Both have to be handled together.
+        HAIKU_REF: "r1beta5"
+        BUILDTOOLS_REF: "r1beta5"
+
+        # ── Artifact size ────────────────────────────────────────────────
+        # BFS size in MiB — the single biggest lever on the artifact, and the
+        # reason this recipe was previously unbuildable on the fleet.  The old
+        # value was 51200 (50 GiB), which meant a 50 GiB raw anyboot plus a
+        # 50 GiB copy of it in the install dir on builders that do not have
+        # that much free, and an artifact far over the server's publish cap.
+        #
+        # 10 GiB budget: ~1.2 GiB base Haiku + ~1.5 GiB Development/toolchain
+        # packages leaves ~7 GiB of working room, which comfortably holds the
+        # source tree + build dir + deps prefix haikuhost stages per job under
+        # /boot/home/cvcpkg-build.  BFS cannot be grown after the fact, so
+        # jobs that need more attach a second disk (README-import.md) rather
+        # than pushing everyone's download up.  Sparse qcow2 + in-file
+        # compression takes the ~3 GiB of *used* blocks down to roughly a
+        # gigabyte, which lands under the 4 GiB publish cap.
+        HAIKU_IMAGE_SIZE_MB: "10240"
+
+        # Extra HaikuPorts packages baked into the image on top of
+        # UserBuildConfig's known-good list, space-separated.  Lives in env
+        # rather than in UserBuildConfig because a package name that has
+        # vanished from the HaikuPorts repo FAILS the whole image build after
+        # the hour-long toolchain step — an env override lets a rebuild drop
+        # the bad name without a recipe round trip.
+        HAIKU_EXTRA_PACKAGES: "cmake ninja patchelf rsync"
+
         # Set by the fleet's CI from a secret so the image trusts the builder
         # key; empty in public builds (import then inject a key — see README).
         HAIKU_BUILDER_SSH_PUBKEY: ""
 
 package:
+  # Descriptive only — pack tars everything build.sh leaves in CVC_INSTALL_DIR,
+  # so the staging step, not this list, is what keeps the raw anyboot out.
   files:
     - haiku-builder.qcow2
-    - haiku-builder-anyboot.iso
+    - haiku-builder.qcow2.sha256
     - metadata.yaml
     - README-import.md
 
 notes: >-
-  Building Haiku from source builds a cross-toolchain first and takes
-  roughly 45-90 minutes on a modern multi-core Linux host with ~30 GB of
-  free disk.  The recipe installs its own host build dependencies on
-  Debian/Ubuntu builders (git, nasm, xorriso, qemu-utils, ...).
+  Runs on Linux, produces a Haiku disk image; see the build block for why
+  there is no haiku matrix entry.  Roughly 45-90 minutes and ~35 GiB of free
+  space in CVC_BUILD_DIR (the Haiku tree, buildtools, and the generated
+  cross-toolchain and object tree dominate — the image itself is only 10 GiB
+  and the staged artifact ~1 GiB).  build.sh preflights that free space and
+  fails immediately with the numbers rather than dying at 90%.  It also
+  installs its own host build dependencies on Debian/Ubuntu builders (git,
+  nasm, xorriso, qemu-utils, zstd, ...).
+
+  DISK BUS MUST BE NVMe.  Haiku R1/beta5's virtio_block panics with a general
+  protection fault in virtio_pci notify_queue() against Incus/QEMU and never
+  reaches userland; virtio-scsi has no Haiku driver at all, so the disk is
+  simply invisible.  Bisected on a live VM: io.bus=nvme is the only setting
+  that boots into userland.  README-import.md uses nvme in every example.
+
+  NETWORKING IS NOT.  The NIC needs no special model: the live haiku-build VM
+  holds a DHCP lease over the standard Incus virtio NIC.  An earlier revision
+  of these notes called an emulated NIC mandatory on the strength of a
+  virtio_net page fault, but that was observed in a boot that had already
+  failed to find a root device — i.e. a symptom of the disk bug above, not a
+  second bug.  Incus could not have honoured the advice anyway: its nic device
+  only takes io.bus=virtio|usb, and the NIC is hot-plugged over QMP after the
+  VM starts, so raw.qemu.conf has no device to override.  The disk fault is
+  expected to disappear on a post-beta5 ref — see the HAIKU_REF comment.
+
+  FIRMWARE stays at the Incus default: UEFI/OVMF, security.csm=false,
+  security.secureboot=false.  That is the configuration the image is verified
+  to boot under (BdsDxe loads the NVMe device); enabling CSM moves away from
+  it, not towards it.
+
+  PUBLISH CAP.  The artifact is a VM disk, not a library, so it is orders of
+  magnitude larger than anything else in the catalog.  build.sh compresses the
+  qcow2 in-file (zstd clusters where qemu-img supports them, zlib otherwise)
+  and prints the staged size against the server's cap, which is now the
+  configurable CVCPKG_MAX_UPLOAD_BYTES / `cvcpkg server run
+  --max-upload-bytes` setting defaulting to 4 GiB
+  (cvcpkg.server.limits.DEFAULT_MAX_UPLOAD_BYTES).  If a future variant does
+  exceed it, raise the cap on the server rather than shrinking the image below
+  a usable builder — or drop HAIKU_EXTRA_PACKAGES and let UserBootscript's
+  first-boot pkgman top-up fetch the toolchain instead.

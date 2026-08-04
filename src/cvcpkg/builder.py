@@ -29,7 +29,7 @@ from typing import Any
 import yaml
 
 from cvcpkg.errors import CvcpkgError
-from cvcpkg.platform import detect_arch, detect_platform
+from cvcpkg.platform import detect_arch, detect_platform, lib_path_var
 
 # ── Errors ──────────────────────────────────────────────────────
 
@@ -791,8 +791,12 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
         existing = env.get("DYLD_LIBRARY_PATH", "")
         env["DYLD_LIBRARY_PATH"] = ":".join(lib_dirs + ([existing] if existing else []))
     elif ctx.platform != "wasm":
-        existing = env.get("LD_LIBRARY_PATH", "")
-        env["LD_LIBRARY_PATH"] = ":".join(lib_dirs + ([existing] if existing else []))
+        # Not always LD_LIBRARY_PATH: Haiku's runtime_loader reads LIBRARY_PATH
+        # and ignores LD_LIBRARY_PATH outright, so the wrong name here would
+        # leave the prefix's shared libs invisible to every build step.
+        lib_var = lib_path_var(ctx.platform)
+        existing = env.get(lib_var, "")
+        env[lib_var] = ":".join(lib_dirs + ([existing] if existing else []))
 
     # Merge matrix-entry env overrides
     env.update(matrix.env)
@@ -831,7 +835,10 @@ def _find_patchelf(*prefixes: Path | None) -> str | None:
 # rewrite would be silently ignored — relocatable OpenBSD bundles need a
 # different mechanism if/when it becomes an active build target. macOS/Windows
 # are handled separately (install_name / PATH-relative DLLs).
-_ELF_RPATH_PLATFORMS = frozenset({"linux", "freebsd", "netbsd", "dragonflybsd"})
+# Haiku qualifies too: its images are plain ELF, its runtime_loader honours
+# DT_RPATH/DT_RUNPATH and expands $ORIGIN, and HaikuPorts ships the same
+# patchelf 0.18.0 this rewrite drives.
+_ELF_RPATH_PLATFORMS = frozenset({"linux", "freebsd", "netbsd", "dragonflybsd", "haiku"})
 
 
 def _patch_elf_rpath(install_dir: Path, patchelf: str | None = None) -> None:
@@ -940,6 +947,29 @@ def _patch_macos_install_names(install_dir: Path) -> None:
                 )
 
 
+def _make_relocatable(ctx: BuildContext) -> None:
+    """Rewrite the installed tree so the shared bundle is relocatable.
+
+    Consumers must load the libraries without LD_LIBRARY_PATH/DYLD_* —
+    ``$ORIGIN`` RPATH on ELF (Linux + the ``$ORIGIN``-honouring BSDs + Haiku),
+    ``@rpath`` install names on macOS.  (Windows resolves DLLs from the prefix
+    bin dir on PATH, so it needs no rewrite.)  On ELF, prefer cvcpkg's own
+    patchelf (bootstrapped into the build prefix as a host tool) over a system
+    install, so packaging is self-hosting — see _find_patchelf and
+    _bootstrap_host_tools.
+
+    Split out of :func:`run_build` because it has to run for DELEGATED builds
+    too, and those return early.
+    """
+    if ctx.link != "shared":
+        return
+    if ctx.platform == "macos":
+        _patch_macos_install_names(ctx.install_dir)
+    elif ctx.platform in _ELF_RPATH_PLATFORMS:
+        patchelf = _find_patchelf(ctx.build_prefix, ctx.prefix)
+        _patch_elf_rpath(ctx.install_dir, patchelf)
+
+
 def run_build(
     ctx: BuildContext,
     log_callback: Callable[[str], None] | None = None,
@@ -964,6 +994,35 @@ def run_build(
 
     if winhost.should_delegate(ctx.platform, ctx.host_platform):
         winhost.run_winhost_build(ctx, matrix, script, log_callback=log_callback)
+        return
+
+    # Haiku-target builds are delegated over SSH to a Haiku host — cvcpkg
+    # cannot run natively on Haiku (HaikuPorts has no pip and only
+    # cryptography 3.4.8 against our >=41 floor), so the Haiku box is a
+    # build target, never a builder.  See cvcpkg.haikuhost.  Both hooks sit
+    # ahead of everything below because the local path would otherwise hand
+    # the recipe's Haiku build.sh to the LOCAL toolchain and "succeed" —
+    # producing Linux binaries in a haiku/x86_64 package.
+    from cvcpkg import haikuhost
+
+    if haikuhost.should_delegate(ctx.platform, ctx.host_platform):
+        # run_haiku_build refuses (loudly) when no Haiku host is configured; it
+        # never falls back to the local toolchain.
+        haikuhost.run_haiku_build(ctx, matrix, script, log_callback=log_callback)
+        # The delegated build ends with the install tree copied BACK here, and
+        # a non-CMake recipe (no -DCMAKE_INSTALL_RPATH=$ORIGIN) leaves absolute
+        # build-tree RPATHs in it, so the bundle is not relocatable until this
+        # pass runs.  It runs on the Linux side, over the synced-back tree,
+        # because patchelf edits ELF as data rather than executing it and Haiku
+        # images are plain ELF64 — so the rewrite is identical wherever it is
+        # performed, while staying in ONE place (the same _find_patchelf that
+        # every other ELF platform uses) and requiring nothing of the Haiku box.
+        # Doing it remotely would instead need patchelf installed there, an
+        # extra round trip, and a second copy of this policy.
+        # [unverified] patchelf's handling of Haiku-produced ELF has not been
+        # exercised against a real Haiku host; _patch_elf_rpath is best-effort
+        # (it ignores patchelf failures), so the worst case is the status quo.
+        _make_relocatable(ctx)
         return
 
     env = _build_env(ctx, matrix)
@@ -1029,18 +1088,8 @@ def run_build(
         raise BuildError(f"Build script for {ctx.recipe.name} exited with code {returncode}")
 
     # Make shared bundles relocatable: rewrite absolute build-tree paths so
-    # consumers load the libraries without LD_LIBRARY_PATH/DYLD_* — $ORIGIN
-    # RPATH on ELF (Linux + the $ORIGIN-honouring BSDs), @rpath install names on
-    # macOS. (Windows resolves DLLs from the prefix bin dir on PATH, so it needs
-    # no rewrite here.)  On ELF, prefer cvcpkg's own patchelf (bootstrapped into
-    # the build prefix as a host tool) over a system install, so packaging is
-    # self-hosting — see _find_patchelf and _bootstrap_host_tools.
-    if ctx.link == "shared":
-        if ctx.platform == "macos":
-            _patch_macos_install_names(ctx.install_dir)
-        elif ctx.platform in _ELF_RPATH_PLATFORMS:
-            patchelf = _find_patchelf(ctx.build_prefix, ctx.prefix)
-            _patch_elf_rpath(ctx.install_dir, patchelf)
+    # consumers load the libraries without LD_LIBRARY_PATH/DYLD_*.
+    _make_relocatable(ctx)
 
 
 # ── Test execution ──────────────────────────────────────────────
@@ -1106,6 +1155,17 @@ def run_test(
     if not test_path.is_file():
         raise BuildError(f"Test script not found: {test_path}")
 
+    # SSH-delegated Haiku builds: the install tree that came back holds Haiku
+    # binaries this Linux-side process cannot execute, so running the test
+    # script HERE would test nothing (or, worse, test the builder's own Linux
+    # tools and pass).  The Haiku host is still reachable, so the test runs
+    # where the artifact runs — and refuses loudly if it cannot.
+    from cvcpkg import haikuhost as _haikuhost
+
+    if _haikuhost.should_delegate(ctx.platform, ctx.host_platform):
+        _haikuhost.run_haiku_test(ctx, test_path, log_callback=log_callback)
+        return
+
     env = os.environ.copy()
     env["CVC_PREFIX"] = ctx.install_dir.as_posix()
     env["CVC_INSTALL_DIR"] = ctx.install_dir.as_posix()
@@ -1147,8 +1207,10 @@ def run_test(
         existing = env.get("DYLD_LIBRARY_PATH", "")
         env["DYLD_LIBRARY_PATH"] = ":".join(lib_dirs + ([existing] if existing else []))
     else:
-        existing = env.get("LD_LIBRARY_PATH", "")
-        env["LD_LIBRARY_PATH"] = ":".join(lib_dirs + ([existing] if existing else []))
+        # Haiku reads LIBRARY_PATH, not LD_LIBRARY_PATH — see lib_path_var.
+        lib_var = lib_path_var(ctx.platform)
+        existing = env.get(lib_var, "")
+        env[lib_var] = ":".join(lib_dirs + ([existing] if existing else []))
 
     bash = _find_bash()
     header = f"cvcpkg: running test for {ctx.recipe.name}"
@@ -1685,6 +1747,15 @@ def build_recipe(
     recipe = Recipe.load(recipe_dir)
     if not platform:
         platform = detect_platform()
+
+    # Fail fast on a haiku job this builder cannot delegate.  run_build checks
+    # again (it is the last line of defence, and other callers reach it
+    # directly), but by then the source has been downloaded, extracted and
+    # patched — minutes of work and a multi-gigabyte tree for a job whose
+    # outcome was already decided by a missing CVCPKG_HAIKU_SSH.
+    from cvcpkg import haikuhost as _haikuhost
+
+    _haikuhost.ensure_delegatable(platform, host_platform)
 
     # wasm/wasi/cosmo only support static linking — shared libraries are
     # impossible in these environments.  Cosmopolitan produces one-file
@@ -2626,6 +2697,13 @@ def build_all(
     native_platform = detect_platform()
     if not host_platform:
         host_platform = native_platform
+
+    # Fail fast, before the first fetch: a haiku target this builder cannot
+    # delegate fails EVERY recipe in the run, so finding that out after
+    # downloading and patching the first one wastes the whole difference.
+    from cvcpkg import haikuhost as _haikuhost
+
+    _haikuhost.ensure_delegatable(platform, host_platform)
 
     recipes = [
         r

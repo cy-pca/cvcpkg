@@ -31,6 +31,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from cvcpkg.platform import lib_path_var
+
 # ── template payloads ──────────────────────────────────────────────
 #
 # Each template uses a small set of substitutions:
@@ -515,12 +517,15 @@ set "CVCPKG_ACTIVE_PREFIX="
 
 
 def _lib_var_for_platform(platform: str) -> str:
-    """Return the dynamic-loader environment variable for *platform*."""
-    if platform == "macos":
-        return "DYLD_LIBRARY_PATH"
-    # Linux + all BSDs + wasi use LD_LIBRARY_PATH.  Windows uses PATH
-    # (handled directly in the templates) and doesn't need a separate var.
-    return "LD_LIBRARY_PATH"
+    """Return the dynamic-loader environment variable for *platform*.
+
+    Linux + all BSDs + wasi use LD_LIBRARY_PATH; macOS uses DYLD_LIBRARY_PATH
+    and Haiku uses LIBRARY_PATH.  Windows uses PATH (handled directly in the
+    templates) and doesn't need a separate var.  The mapping itself lives in
+    :func:`cvcpkg.platform.lib_path_var` so the activation scripts and the
+    builder's build/test environments cannot disagree about it.
+    """
+    return lib_path_var(platform)
 
 
 # ── public rendering / writing API ────────────────────────────────

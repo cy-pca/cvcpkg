@@ -287,7 +287,21 @@ $defs:
         type: array
         items:
           type: string
-          enum: [linux, macos, windows, windows-gnu, wasm, wasi, cosmo, freebsd, openbsd, netbsd]
+          enum:
+            [
+              linux,
+              macos,
+              windows,
+              windows-gnu,
+              wasm,
+              wasi,
+              cosmo,
+              freebsd,
+              openbsd,
+              netbsd,
+              dragonflybsd,
+              haiku,
+            ]
         minItems: 1
         description: "Platforms this dependency applies to (omit for all)"
 
@@ -334,13 +348,15 @@ $defs:
             freebsd,
             openbsd,
             netbsd,
+            dragonflybsd,
+            haiku,
           ]
         description: >
           `any` marks a platform-independent recipe (Phase 14 source recipes
           and pure-Python wheels): built once, valid everywhere, arch noarch.
       host_platform:
         type: string
-        enum: [linux, macos, windows, freebsd, openbsd, netbsd]
+        enum: [linux, macos, windows, freebsd, openbsd, netbsd, dragonflybsd, haiku]
         description: "Host platform for cross-compilation (e.g. linux for wasm builds)"
       script:
         type: string
@@ -395,7 +411,21 @@ $defs:
         type: array
         items:
           type: string
-          enum: [linux, macos, windows, windows-gnu, wasm, wasi, cosmo, freebsd, openbsd, netbsd]
+          enum:
+            [
+              linux,
+              macos,
+              windows,
+              windows-gnu,
+              wasm,
+              wasi,
+              cosmo,
+              freebsd,
+              openbsd,
+              netbsd,
+              dragonflybsd,
+              haiku,
+            ]
         minItems: 1
         description: "Target platforms this toolchain can cross-compile for"
       env:

@@ -41,7 +41,26 @@ $defs:
         type: array
         items:
           type: string
-          enum: [linux, macos, windows, freebsd, openbsd, netbsd, cosmo]
+          # Must stay a superset of cvcpkg.platform.CANONICAL_PLATFORMS —
+          # detect_platform() can emit any of these, and a tag missing here
+          # makes an otherwise-correct component table unvalidatable.  The
+          # drift is guarded by tests/unit/test_platform_schema_drift.py.
+          enum:
+            [
+              any,
+              linux,
+              macos,
+              windows,
+              windows-gnu,
+              wasm,
+              wasi,
+              cosmo,
+              freebsd,
+              openbsd,
+              netbsd,
+              dragonflybsd,
+              haiku,
+            ]
         minItems: 1
         uniqueItems: true
       cmake_packages:

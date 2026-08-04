@@ -2,10 +2,17 @@
 # Used with:  incus image import metadata.yaml haiku-builder.qcow2 --alias haiku-builder
 # (see README-import.md). creation_date is a placeholder — set it at import
 # time if you need provenance.
+#
+# NOTE: image metadata cannot express the one setting this image requires —
+# disk io.bus=nvme, because Haiku R1/beta5's virtio_block faults in
+# virtio_pci notify_queue() and virtio-scsi has no Haiku driver. It has to be
+# applied to each instance after `incus init`; README-import.md has the command.
+# The NIC needs nothing: a stock virtio NIC gets a DHCP lease (an earlier
+# revision of this file wrongly called an e1000 mandatory).
 architecture: x86_64
 creation_date: 1735689600
 properties:
-  description: HaikuOS r1beta5 headless builder (OpenSSH + toolchain baked in)
+  description: HaikuOS r1beta5 headless build target (OpenSSH + toolchain baked in; requires a nvme disk bus)
   os: Haiku
   release: r1beta5
   variant: builder

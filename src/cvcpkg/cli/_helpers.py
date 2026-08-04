@@ -29,6 +29,7 @@ _VALID_PLATFORMS = [
     "openbsd",
     "netbsd",
     "dragonflybsd",
+    "haiku",
 ]
 _VALID_ARCHES = [
     "auto",

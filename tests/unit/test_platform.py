@@ -11,6 +11,7 @@ from cvcpkg.platform import (
     detect_libc,
     detect_platform,
     detect_pointer_size,
+    lib_path_var,
     noarch_build_target,
     platform_matches,
 )
@@ -98,8 +99,19 @@ class TestDetectPlatform:
         monkeypatch.setattr("sys.platform", "freebsd15")
         assert detect_platform() == "freebsd"
 
+    # Haiku's sys.platform is tri-valued and depends on which CPython is
+    # running: upstream CPython appends the major version ("haiku1"),
+    # HaikuPorts' python3 carries a MACHDEP patch that reports the bare
+    # "haiku", and some builds report the full ABI string ("haikuR1~beta5").
+    # detect_platform() must collapse all three, so all three are pinned here.
+    @pytest.mark.parametrize("sys_platform", ["haiku", "haiku1", "haikuR1~beta5"])
+    def test_haiku(self, monkeypatch, sys_platform):
+        monkeypatch.setattr("sys.platform", sys_platform)
+        assert detect_platform() == "haiku"
+
     def test_unsupported(self, monkeypatch):
-        monkeypatch.setattr("sys.platform", "haiku1")
+        # A genuinely unsupported kernel — not Haiku, which is now first-class.
+        monkeypatch.setattr("sys.platform", "aix7")
         with pytest.raises(RuntimeError, match="unsupported platform"):
             detect_platform()
 
@@ -156,6 +168,31 @@ class TestDetectLibc:
         monkeypatch.setattr("sys.platform", "dragonfly6")
         assert detect_libc() == "dragonfly-libc"
 
+    def test_haiku_libroot(self, monkeypatch):
+        # Regression: with no haiku branch, Haiku fell through to the Linux
+        # glibc probe, CDLL("libc.so.6") raised, and the host was reported as
+        # "musl" — a wrong ABI tuple that silently mismatches every bundle.
+        monkeypatch.setattr("sys.platform", "haiku1")
+        assert detect_libc() == "haiku-libroot"
+
+
+class TestLibPathVar:
+    """The loader variable is per-platform and Haiku is the odd one out."""
+
+    def test_macos_uses_dyld(self):
+        assert lib_path_var("macos") == "DYLD_LIBRARY_PATH"
+
+    def test_haiku_uses_library_path(self):
+        # Haiku's runtime_loader reads LIBRARY_PATH and ignores
+        # LD_LIBRARY_PATH; getting this wrong fails silently at link time.
+        assert lib_path_var("haiku") == "LIBRARY_PATH"
+
+    @pytest.mark.parametrize(
+        "plat", ["linux", "freebsd", "openbsd", "netbsd", "dragonflybsd", "wasi"]
+    )
+    def test_everything_else_uses_ld_library_path(self, plat):
+        assert lib_path_var(plat) == "LD_LIBRARY_PATH"
+
 
 class TestDefaultTuple:
     def test_returns_dict(self):
@@ -170,5 +207,6 @@ class TestDefaultTuple:
             "openbsd",
             "netbsd",
             "dragonflybsd",
+            "haiku",
         )
         assert t["arch"] in ("x86_64", "arm64")

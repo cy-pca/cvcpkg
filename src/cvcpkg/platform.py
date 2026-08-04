@@ -26,6 +26,7 @@ CANONICAL_PLATFORMS = frozenset(
         "openbsd",
         "netbsd",
         "dragonflybsd",
+        "haiku",
         "wasm",
         "wasi",
         "cosmo",
@@ -107,7 +108,10 @@ def normalize_arch(value: str) -> str:
 
 
 def detect_platform() -> str:
-    """Return 'linux', 'macos', 'windows', 'freebsd', 'openbsd', 'netbsd', or 'dragonflybsd'.
+    """Return the canonical platform tag for the current host.
+
+    One of 'linux', 'macos', 'windows', 'freebsd', 'openbsd', 'netbsd',
+    'dragonflybsd', or 'haiku'.
 
     GhostBSD note: GhostBSD's kernel identifies as FreeBSD (sys.platform
     is ``freebsd*``), so GhostBSD hosts intentionally detect as
@@ -128,6 +132,14 @@ def detect_platform() -> str:
         return "netbsd"
     if s.startswith("dragonfly"):
         return "dragonflybsd"
+    if s.startswith("haiku"):
+        # Haiku's sys.platform is tri-valued and depends on which CPython the
+        # host happens to run: upstream CPython reports "haiku1" (the
+        # MACHDEP autoconf default appends the major version), HaikuPorts'
+        # python3 carries a MACHDEP patch that reports the bare "haiku", and
+        # some builds report the full ABI string "haikuR1~beta5".  Prefix
+        # matching is the only spelling-independent test — never compare ==.
+        return "haiku"
     raise RuntimeError(f"unsupported platform: {s}")
 
 
@@ -148,7 +160,29 @@ def detect_arch() -> str:
     if arch:
         return arch
     # Accept any machine string rather than crashing on new architectures.
+    # (Haiku x86_64 reports "x86_64" and needs no special case; only its
+    # 32-bit port reports the legacy "BePC", and 32-bit x86 is not a
+    # canonical arch here — no Haiku x86 builder exists.)
     return machine
+
+
+def lib_path_var(plat: str) -> str:
+    """Return the run-time linker's library-search environment variable.
+
+    Every POSIX platform we build for uses ``LD_LIBRARY_PATH`` except two:
+    macOS's dyld reads ``DYLD_LIBRARY_PATH``, and Haiku's ``runtime_loader``
+    reads ``LIBRARY_PATH`` (it ignores ``LD_LIBRARY_PATH`` entirely — exporting
+    the wrong name there fails silently, and the build only dies later with an
+    unresolvable symbol from a dependency the prefix definitely contains).
+
+    Windows has no such variable (DLLs resolve from ``PATH``), so callers that
+    care handle it separately; this returns the POSIX default for it.
+    """
+    if plat == "macos":
+        return "DYLD_LIBRARY_PATH"
+    if plat == "haiku":
+        return "LIBRARY_PATH"
+    return "LD_LIBRARY_PATH"
 
 
 def detect_pointer_size() -> int:
@@ -171,6 +205,12 @@ def detect_libc() -> str:
         return "netbsd-libc"
     if plat == "dragonflybsd":
         return "dragonfly-libc"
+    if plat == "haiku":
+        # Haiku's C library is libroot.so — there is no libc.so.6, so without
+        # this branch Haiku fell through to the Linux probe below, the
+        # ctypes.CDLL("libc.so.6") raised OSError, and every Haiku host was
+        # mislabelled "musl" in the ABI tuple.
+        return "haiku-libroot"
     # Linux: try to distinguish glibc vs musl.
     try:
         import ctypes

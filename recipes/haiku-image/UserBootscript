@@ -2,22 +2,99 @@
 # Haiku ~/config/settings/boot/UserBootscript — runs (as the boot user)
 # after every boot. Injected into the image by build.sh.
 #
-# Haiku already brings interfaces up with DHCP and socket-activates sshd via
-# the launch_daemon, so this is mostly belt-and-suspenders + a one-time
-# first-boot toolchain top-up. Long-running commands must be backgrounded.
+# This is the ONLY recurring hook the image has. Haiku ships no cron, so the
+# `@reboot` crontab that supervises every BSD builder does not port; anything
+# that has to survive a reboot lands here.
+#
+# What it supervises is deliberately NOT a `cvcpkg builder run` loop. cvcpkg
+# cannot run on Haiku (no pip, no greenlet/httpx, cryptography 3.4.8 against a
+# >=41.0 floor — see cvcpkg.haikuhost), so this box is never a self-hosting
+# builder: it is a build TARGET that a Linux builder drives over SSH. The
+# thing that must be up, therefore, is the SSH surface and the work dir
+# haikuhost stages jobs into. Everything else is first-boot top-up.
+#
+# Long-running commands must be backgrounded — the boot script blocks the
+# desktop session until it returns.
 
-# Belt-and-suspenders: make sure host keys exist and sshd is running.
-ssh-keygen -A 2>/dev/null
-if ! ps | grep -q '[s]shd'; then
-    /bin/sshd 2>/dev/null &
-fi
-
-# One-time first-boot setup (guarded by a marker in the writable home).
+WORKDIR=/boot/home/cvcpkg-build          # cvcpkg.haikuhost DEFAULT_WORKDIR
+LOG=/boot/home/cvcpkg-boot.log
 MARKER=/boot/home/.cvcpkg-firstboot-done
-if [ ! -e "$MARKER" ]; then
-    # Top up the build toolchain from HaikuPorts (needs the network, which
-    # DHCP brings up). Kept out of the image to keep the build reliable;
-    # failures here are non-fatal and can be retried over SSH.
-    pkgman install -y cmake ninja make gcc git python3 pip 2>/dev/null &
-    touch "$MARKER"
+
+# Truncate rather than append: this file is the first thing anyone reads over
+# SSH when a VM misbehaves, and an unbounded log on a 10 GiB disk is its own
+# outage. One boot's worth is what is diagnostic.
+: > "$LOG"
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG" 2>/dev/null; }
+
+log "UserBootscript start (host $(hostname 2>/dev/null))"
+
+# ── SSH ─────────────────────────────────────────────────────────────────
+# Host keys are generated on FIRST boot, not baked in, so every clone of the
+# image gets its own identity. Haiku socket-activates sshd via the
+# launch_daemon; the explicit start is for the case where that has not caught
+# up (or has been disabled), because with no serial getty and no
+# virtio-console an sshd that is down means an unreachable VM.
+ssh-keygen -A 2>>"$LOG"
+if ! ps | grep -q '[s]shd'; then
+    log "sshd not running — starting it directly"
+    /bin/sshd 2>>"$LOG" &
 fi
+
+# ── haikuhost work dir ──────────────────────────────────────────────────
+# haikuhost mkdir -p's its own job dirs, but creating the root here means a
+# fresh VM is a valid target before the first job rather than after it, and
+# gives the GC below something stable to sweep.
+mkdir -p "$WORKDIR/jobs" 2>>"$LOG"
+
+# haikuhost KEEPS the remote work dir when a build fails, on purpose, so the
+# wreckage can be inspected. On a 10 GiB disk those corpses are what fills the
+# volume. A week is long enough to debug a failure and short enough that
+# nobody has to remember to clean up. Guarded: find is not guaranteed present
+# on a minimal image, and a missing GC must not break the boot.
+if command -v find >/dev/null 2>&1; then
+    find "$WORKDIR/jobs" -maxdepth 1 -mindepth 1 -type d -mtime +7 \
+        -exec rm -rf {} + 2>>"$LOG" &
+fi
+
+# ── First-boot toolchain top-up ─────────────────────────────────────────
+# The image already carries the toolchain (UserBuildConfig bakes it in), so
+# this is a repair path, not the primary one: it covers a package that had to
+# be dropped from HAIKU_EXTRA_PACKAGES to get the image to build at all.
+#
+# The marker is set only when pkgman actually SUCCEEDS. The previous version
+# touched it unconditionally, which turned "the network was not up yet" into a
+# permanently half-provisioned image that looked fine.
+if [ ! -e "$MARKER" ]; then
+    (
+        # Wait for DHCP before touching the network. Bounded, because on this
+        # image a hang here is invisible — see the reachability note below.
+        i=0
+        while [ "$i" -lt 30 ]; do
+            ping -c 1 -w 2 depot.haiku-os.org >/dev/null 2>&1 && break
+            i=$((i + 1))
+            sleep 2
+        done
+        if [ "$i" -ge 30 ]; then
+            log "no network after ~60s — skipping the pkgman top-up (retries next boot)"
+            exit 0
+        fi
+        log "first boot: topping up the build toolchain from HaikuPorts"
+        if pkgman install -y cmake ninja make gcc git python3 patchelf >>"$LOG" 2>&1; then
+            touch "$MARKER"
+            log "first-boot top-up complete"
+        else
+            log "pkgman top-up FAILED — will retry on the next boot"
+        fi
+    ) &
+fi
+
+# NOTE on reachability: if this VM never appears on the network, do NOT start by
+# swapping the NIC model. Haiku R1/beta5 drives a plain virtio NIC fine — the
+# haiku-build VM on star-00 holds a DHCP lease over a stock Incus one. (An
+# earlier note here said virtio_net page-faults before it can DHCP; that fault
+# came from a boot that had already failed to find a root device, not a healthy
+# one.) The setting that IS mandatory is the disk bus: io.bus=nvme — see
+# README-import.md. A VM whose disk never came up looks exactly like a VM whose
+# network never came up, because both are silent: there is no serial console.
+
+log "UserBootscript done"

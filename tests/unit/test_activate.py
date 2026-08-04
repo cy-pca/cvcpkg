@@ -11,7 +11,14 @@ class TestLibVarSelection:
     def test_macos_uses_dyld(self):
         assert act._lib_var_for_platform("macos") == "DYLD_LIBRARY_PATH"
 
-    @pytest.mark.parametrize("plat", ["linux", "freebsd", "openbsd", "netbsd", "wasi"])
+    def test_haiku_uses_library_path(self):
+        # Haiku's runtime_loader reads LIBRARY_PATH and ignores LD_LIBRARY_PATH,
+        # so an activated Haiku prefix would resolve nothing without this.
+        assert act._lib_var_for_platform("haiku") == "LIBRARY_PATH"
+
+    @pytest.mark.parametrize(
+        "plat", ["linux", "freebsd", "openbsd", "netbsd", "dragonflybsd", "wasi"]
+    )
     def test_posix_uses_ld(self, plat):
         assert act._lib_var_for_platform(plat) == "LD_LIBRARY_PATH"
 
