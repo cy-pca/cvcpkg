@@ -66,54 +66,41 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
+          # jsonschema arrives via `pip install .` — it is a runtime dependency,
+          # pinned below the Rust rewrite (see pyproject.toml). Do not install it
+          # explicitly: an unbounded `pip install jsonschema` resolves to >=4.18
+          # and drags rpds-py/cargo in, which does not build on the BSD VMs.
           pip install .
-
-      - name: Bundle recipes into package
-        shell: bash
-        run: |
-          # Copy repo-level recipes so PyInstaller can bundle them
-          rm -rf src/cvcpkg/recipes/*
-          cp -r recipes/* src/cvcpkg/recipes/ 2>/dev/null || true
-          # Remove the gitignore that hides them
-          rm -f src/cvcpkg/recipes/.gitignore
 
       - name: Build standalone binary
         shell: bash
         working-directory: .
         run: |
-          # PyInstaller data separator: ";" on Windows, ":" elsewhere
-          SEP=":"
-          if [[ "$RUNNER_OS" == "Windows" ]]; then SEP=";"; fi
-
-          pyinstaller \
-            --onefile \
-            --name cvcpkg \
-            --console \
-            --noconfirm \
-            --clean \
-            --add-data "src/cvcpkg/recipes${SEP}cvcpkg/recipes" \
-            --add-data "src/cvcpkg/migrations${SEP}cvcpkg/migrations" \
-            --hidden-import cvcpkg.backends \
-            --hidden-import cvcpkg.server \
-            --hidden-import cvcpkg.server.cli \
-            --hidden-import yaml \
-            --hidden-import click \
-            --hidden-import sqlalchemy \
-            --hidden-import httpx \
-            --hidden-import cryptography \
-            --collect-submodules cvcpkg \
-            src/cvcpkg/__main__.py
+          # Build from packaging/cvcpkg.spec — the single source of truth for
+          # what goes into the binary. It reads ./recipes directly, bundles the
+          # schemas, and copies cvcpkg's .dist-info metadata. Do NOT reintroduce
+          # an inline flag list here: the previous one had silently drifted from
+          # the spec and produced a binary that could not be built at all.
+          pyinstaller --clean --noconfirm packaging/cvcpkg.spec
 
       - name: Verify binary runs
         shell: bash
         working-directory: .
         run: |
           if [[ "${{ matrix.os }}" == windows-* ]]; then
-            ./dist/cvcpkg.exe --version
+            BIN="$PWD/dist/cvcpkg.exe"
           else
             chmod +x ./dist/cvcpkg
-            ./dist/cvcpkg --version
+            BIN="$PWD/dist/cvcpkg"
           fi
+          "$BIN" --version
+          # --version alone proves nothing about the BUNDLED DATA. Validate a
+          # bundled recipe from a directory with no ./recipes, so the recipes,
+          # the schemas and the metadata all have to come out of sys._MEIPASS —
+          # a dropped data file is a red build here, not a traceback on a
+          # customer's airgapped box.
+          cd "$RUNNER_TEMP"
+          "$BIN" validate recipes/zlib
 
       - name: Rename artifact
         shell: bash
@@ -217,32 +204,20 @@ jobs:
           VM="root@${{ steps.vm.outputs.host }}"
           PYTHON="${{ matrix.python }}"
 
-          ssh ${SSH_OPTS} "${VM}" "cd ${remote_dir} && \
+          # Build from packaging/cvcpkg.spec, exactly as the hosted runners do.
+          # The spec reads ./recipes directly, bundles the schemas and copies
+          # cvcpkg's .dist-info — keep this in step with the `build` job rather
+          # than maintaining a second, drifting flag list here.
+          #
+          # jsonschema comes from `pip install .` (a runtime dependency pinned
+          # below the Rust rewrite). Installing it explicitly would resolve to
+          # >=4.18, whose rpds-py needs cargo — which these VMs do not have.
+          ssh ${SSH_OPTS} "${VM}" "set -e; cd ${remote_dir} && \
             TMPDIR=/usr/local/tmp ${PYTHON} -m pip install --break-system-packages pyinstaller 2>/dev/null \
-              || ${PYTHON} -m pip install pyinstaller && \
+              || ${PYTHON} -m pip install pyinstaller; \
             TMPDIR=/usr/local/tmp ${PYTHON} -m pip install --break-system-packages . 2>/dev/null \
-              || ${PYTHON} -m pip install . && \
-            rm -f src/cvcpkg/recipes/.gitignore && \
-            cp -r recipes/* src/cvcpkg/recipes/ 2>/dev/null || true && \
-            cd . && \
-            ${PYTHON} -m PyInstaller \
-              --onefile \
-              --name cvcpkg \
-              --console \
-              --noconfirm \
-              --clean \
-              --add-data 'src/cvcpkg/recipes:cvcpkg/recipes' \
-              --add-data 'src/cvcpkg/migrations:cvcpkg/migrations' \
-              --hidden-import cvcpkg.backends \
-              --hidden-import cvcpkg.server \
-              --hidden-import cvcpkg.server.cli \
-              --hidden-import yaml \
-              --hidden-import click \
-              --hidden-import sqlalchemy \
-              --hidden-import httpx \
-              --hidden-import cryptography \
-              --collect-submodules cvcpkg \
-              src/cvcpkg/__main__.py"
+              || ${PYTHON} -m pip install .; \
+            ${PYTHON} -m PyInstaller --clean --noconfirm packaging/cvcpkg.spec"
 
       - name: Verify + retrieve binary
         shell: bash
@@ -250,8 +225,11 @@ jobs:
           set -euo pipefail
           VM="root@${{ steps.vm.outputs.host }}"
 
-          ssh ${SSH_OPTS} "${VM}" "cd ${remote_dir} && \
-            chmod +x dist/cvcpkg && ./dist/cvcpkg --version"
+          # Validate a bundled recipe from a directory with no ./recipes, so the
+          # recipes, schemas and metadata all have to resolve out of _MEIPASS.
+          ssh ${SSH_OPTS} "${VM}" "set -e; cd ${remote_dir} && \
+            chmod +x dist/cvcpkg && ./dist/cvcpkg --version && \
+            BIN=\$(pwd)/dist/cvcpkg && cd /tmp && \$BIN validate recipes/zlib"
 
           mkdir -p dist
           scp ${SSH_OPTS} "${VM}:${remote_dir}/dist/cvcpkg" \
