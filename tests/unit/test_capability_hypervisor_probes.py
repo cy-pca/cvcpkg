@@ -32,25 +32,20 @@ from __future__ import annotations
 
 import re
 import subprocess
-import sys
 
 import pytest
 
 from cvcpkg import platform as plat_mod
 
-# Incus, LXD and classic LXC are Linux products, so this whole module simulates
-# a Linux host -- the unprivileged-delegation cases monkeypatch ``os.geteuid``,
-# which does not exist on Windows and so cannot be patched there.
-#
-# The PRODUCTION code is already right on Windows: platform.py reaches the
-# delegation check through ``getattr(os, "geteuid", None)`` and skips it when
-# absent, so the capability just reports "not present".  Nothing is being
-# suppressed here -- there is no Windows behaviour to simulate, because the
-# capability can never be available there.
-pytestmark = pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="incus/lxd/lxc are Linux-only; this module simulates a Linux host",
-)
+# NOTE: this module deliberately does NOT skip on Windows, even though incus,
+# LXD and classic LXC are Linux products.  Everything here is mocked, and what
+# is under test is the probes' DISAMBIGUATION LOGIC, which is ordinary
+# platform-independent Python.  The synthetic host defines `os.geteuid` via
+# `raising=False` (see _fake_host), so the logic is exercised everywhere and
+# the extra coverage is real.  The production code is separately correct on
+# Windows: platform.py reaches the delegation check through
+# `getattr(os, "geteuid", None)` and reports the capability absent when it is
+# missing.
 
 # ── Fake host harness ───────────────────────────────────────────
 
