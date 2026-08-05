@@ -12,7 +12,7 @@ CERT_SHA256="86a1f3366afac7c6f8ae9f3c779ac221129328c43f0ab2b8817eb2f362a5025c"
 SSL_DIR="${CVC_INSTALL_DIR}/etc/ssl"
 SHARE_DIR="${CVC_INSTALL_DIR}/share/ca-bundle"
 
-mkdir -p "${SSL_DIR}/certs" "${SHARE_DIR}"
+mkdir -p "${SSL_DIR}" "${SHARE_DIR}"
 
 # Download and verify the CA bundle.
 curl -fsSL --retry 5 --retry-delay 3 -o "${SSL_DIR}/cert.pem" "${CERT_URL}"
@@ -34,26 +34,13 @@ if [ "${ACTUAL_SHA256}" != "${CERT_SHA256}" ]; then
     exit 1
 fi
 
-# One symlink per certificate in the bundle, populating etc/ssl/certs/.
-# The targets are RELATIVE on purpose: cvcpkg's extraction filter rejects
-# absolute link targets (tarfile.AbsoluteLinkError) and aborts the pack —
-# see the same fix in recipes/bzip2/build.sh.
-#
-# NOTE: these are numbered (1.pem, 2.pem, ...), not subject-hash named, so
-# OpenSSL's SSL_CERT_DIR hashed-directory lookup does not actually consult
-# them; SSL_CERT_FILE (the bundle itself) is what makes verification work.
-# Naming them properly needs c_rehash/`openssl x509 -hash`, i.e. an openssl
-# build-time dependency this recipe does not declare.  Behaviour preserved
-# from the original script; see the follow-up issue.
 CERT_COUNT="$(grep -c '^-----BEGIN CERTIFICATE-----' "${SSL_DIR}/cert.pem")"
-(
-    cd "${SSL_DIR}/certs"
-    i=1
-    while [ "${i}" -le "${CERT_COUNT}" ]; do
-        ln -sf ../cert.pem "${i}.pem"
-        i=$((i + 1))
-    done
-)
+
+# No etc/ssl/certs/ directory is produced, on purpose -- see the "Usage"
+# note in recipe.yaml.  SSL_CERT_DIR resolves certificates only through
+# OpenSSL's hashed-directory lookup (<subject-hash>.<seq>), which requires
+# c_rehash and therefore an openssl binary at build time; SSL_CERT_FILE
+# covers the use case with the single bundle.
 
 # Convenience env hook.  Quoted heredoc: nothing is expanded at build time.
 # The hook derives the prefix from its OWN path (<prefix>/share/ca-bundle/
@@ -62,10 +49,11 @@ CERT_COUNT="$(grep -c '^-----BEGIN CERTIFICATE-----' "${SSL_DIR}/cert.pem")"
 # rewrite-install-paths.sh only rewrites .pc/.cmake files, never .sh.
 cat > "${SHARE_DIR}/env.sh" << 'EOF'
 # ca-bundle environment hook -- source this to point OpenSSL at the bundled certs
+# SSL_CERT_DIR is deliberately not set: this package ships only the single-file
+# bundle, and an unhashed directory would never be read by OpenSSL anyway.
 _ca_bundle_self="${BASH_SOURCE[0]:-$0}"
 _ca_bundle_prefix="$(cd "$(dirname "${_ca_bundle_self}")/../.." && pwd)"
 export SSL_CERT_FILE="${_ca_bundle_prefix}/etc/ssl/cert.pem"
-export SSL_CERT_DIR="${_ca_bundle_prefix}/etc/ssl/certs"
 unset _ca_bundle_self _ca_bundle_prefix
 EOF
 

@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: ca-bundle
   upstream_version: "2026.05.14"
-  cvc_revision: 2
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -12,10 +12,10 @@ recipe:
   description: >-
     Mozilla CA certificate bundle — the same root CA set used by Firefox,
     extracted from Mozilla's NSS certdata.txt and maintained by the curl
-    project.  Installs cert.pem and a certs/ directory into etc/ssl/ inside
-    the cvcpkg prefix so that tools loading cvcpkg OpenSSL via
-    LD_LIBRARY_PATH in minimal/container environments (no system /etc/ssl)
-    can verify TLS certificates by setting SSL_CERT_FILE.
+    project.  Installs cert.pem into etc/ssl/ inside the cvcpkg prefix so
+    that tools loading cvcpkg OpenSSL via LD_LIBRARY_PATH in minimal/
+    container environments (no system /etc/ssl) can verify TLS certificates
+    by setting SSL_CERT_FILE.
     Updated per Mozilla's CA schedule (~4-6 times per year).
 
 source:
@@ -49,7 +49,6 @@ build:
 package:
   files:
     - etc/ssl/cert.pem
-    - etc/ssl/certs/
     - share/ca-bundle/
 
 abi:
@@ -63,12 +62,24 @@ notes:
       (and tools like curl, Python, git) at the bundled certs by exporting:
 
         export SSL_CERT_FILE="${CVC_DEPS_PREFIX}/etc/ssl/cert.pem"
-        export SSL_CERT_DIR="${CVC_DEPS_PREFIX}/etc/ssl/certs"
 
-      These environment variables override OpenSSL's compiled-in openssldir
-      path (/etc/ssl) at runtime — no recompilation needed.
-      A convenience env hook is installed at
-      share/ca-bundle/env.sh that you can source directly.
+      This overrides OpenSSL's compiled-in openssldir path (/etc/ssl) at
+      runtime — no recompilation needed.  A convenience env hook is
+      installed at share/ca-bundle/env.sh that you can source directly.
+
+      This package deliberately ships only the single-file bundle, not an
+      SSL_CERT_DIR directory.  SSL_CERT_DIR uses OpenSSL's hashed-directory
+      lookup (X509_LOOKUP_hash_dir), which finds a certificate only by
+      opening <dir>/<subject-hash>.<seq> — e.g. 3513523f.0.  Populating such
+      a directory correctly requires c_rehash behaviour
+      (`openssl x509 -subject_hash`), i.e. an openssl binary at build time,
+      which would make this zero-dependency data package depend on building
+      openssl (plus perl and nasm) first.  SSL_CERT_FILE loads the entire
+      root set in one read and fully covers the use case, so the directory
+      buys nothing.  Do not re-add a certs/ directory with numbered or
+      otherwise non-hashed filenames: OpenSSL silently never reads them, so
+      it looks like it works while verification actually falls back to
+      whatever else is configured.
   - title: "Update cadence"
     platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     description: >-
