@@ -169,8 +169,46 @@ satisfies structurally or does not.
 - **Feeds Phase 23** (cvcpkg as a build & configuration-management system), where
   containers are the natural build substrate rather than an optional extra.
 
+## Blocker: `host_tools` cannot express a version
+
+Everything above assumes a recipe can say *"build against Incus 6.x"*. It cannot,
+and the gap is wider than it first looks. Pinning is the entire point of this
+work — an unpinned hermetic Incus is just the capability model with extra steps —
+so this is a prerequisite, not a nice-to-have.
+
+**The schema is the cheap half.** `depends.host_tools` is a bare
+`array[string]`, while `depends.build` and `depends.runtime` accept a `dep_entry`
+(`name`, `version`, `platforms`). Curiously the *code* already reads dict entries
+— `builder.py::_dep_names` and `validation.py` both branch on
+`isinstance(entry, dict)` — so only the schema rejects them, and `cvcpkg validate`
+would today fail a recipe the builder would happily accept. Letting `host_tools`
+take a `dep_entry` also buys `platforms`, which a Linux-only `incus` needs.
+
+**There is a latent bug next door.** In `builder.py::_dep_names`, the
+build/runtime loop skips entries whose `platforms` exclude the target; the
+`host_tools` loop immediately beneath it does not. A dict host tool carrying
+`platforms` would be requested on every platform.
+
+**Enforcement is the substantive half.** Phase 1.5 §8 records dependency version
+ranges as done, and they are — on the **install** path: recipe `depends.runtime`
+→ manifest → resolver `satisfies()`, with constraint intersection and conflict
+rejection. Host tools are on the **build** path, which has no equivalent. The
+manifest carries `depends.runtime` only (host tools are stripped on install), so
+a host tool resolves purely **by name** and the build gets whatever version that
+builder last built. Two builders can satisfy the same recipe with different
+Incus versions and nothing notices — which is precisely the non-determinism this
+document set out to remove.
+
+**And a pin needs provenance to be verifiable.** If the artifact does not record
+which host tool built it, the pin cannot be audited after the fact — the same
+argument `hermetic-native-toolchain.md` makes for the compiler, and a natural fit
+with Phase 16.
+
 ## Sequencing
 
+0. **`host_tools` version constraints** — the prerequisite above. Schema plus the
+   platform-filter fix is small; build-time constraint enforcement is the real
+   work and gates any meaningful pin.
 1. **Layer 1 (`go` recipe) is independent** — it needs nothing from Phase 7.5 and
    can land whenever. It immediately unblocks the Phase 20 verlihub note.
 2. **`liblxc` + the five C libraries** are ordinary recipes, parallel to Layer 1.
@@ -186,10 +224,8 @@ satisfies structurally or does not.
   decompose further (`subuid-delegation`, `cgroup-delegation`, `kernel-netns`)?
   The classic-LXC probe already distinguishes delegation from presence, so the
   finer split may already be half-built.
-- Does `incus` belong in `host_tools` (build/test tooling) or is a VM-test
-  substrate a third kind of dependency? `host_tools` is currently a bare
-  `array[string]` with no version constraints — pinning Incus *by version* may
-  need the schema to grow.
+- Does `incus` belong in `host_tools` (build/test tooling), or is a VM-test
+  substrate a third kind of dependency alongside build and runtime?
 - Should the client/daemon split into separate packages, so macOS and Windows can
   install an `incus-client` that talks to a remote Linux daemon?
 

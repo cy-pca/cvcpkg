@@ -428,6 +428,12 @@ release.  These are the gaps to close **before** the final publish step.
    version ranges (e.g. `^3.0`, `==1.3.0`) in the recipe/catalog, and the
    resolver enforces them — user + transitive constraints, with
    intersection and conflict rejection (see test_resolver.py).
+   *Scope note:* this is the **install** path (`depends.runtime` →
+   manifest → resolver).  **Build-time host tools are not covered**:
+   `depends.host_tools` is a bare `array[string]`, never reaches the
+   manifest, and resolves by name — so a build gets whatever version of a
+   host tool that builder last built.  Tracked in **Phase 7.6**, where
+   pinning a hermetic `incus` is the first thing that needs it.
 
 ### Phase 2 — Analytics & Telemetry
 
@@ -1214,9 +1220,35 @@ closes for GHC, and `hermetic-native-toolchain.md` raises for `CC`/`CXX`.
       only the host can attest).  The capability stops meaning "did an
       admin install a container manager" and starts meaning "can this
       kernel host containers".
-- [ ] **Schema question:** `host_tools` is currently a bare
-      `array[string]` with no version constraints — pinning Incus *by
-      version* may need it to grow.
+- [ ] **`host_tools` needs version constraints.**  Pinning Incus *by
+      version* is currently impossible, and the gap is wider than the
+      schema.  Four distinct pieces:
+      - **Schema.**  `depends.host_tools` is a bare `array[string]`,
+        while `depends.build` / `depends.runtime` accept a `dep_entry`
+        (`name`, `version`, `platforms`).  The *code* already reads dict
+        entries (`builder.py::_dep_names`, `validation.py`), so only the
+        schema rejects them — `cvcpkg validate` currently fails a recipe
+        the builder would happily accept.  Making `host_tools` accept
+        `dep_entry` is the cheap half and buys `platforms` for free.
+      - **Platform filter — latent bug.**  In `builder.py::_dep_names`
+        the build/runtime loop skips entries whose `platforms` exclude
+        the target; the `host_tools` loop directly beneath it does not.
+        A dict host tool carrying `platforms` would be requested on
+        *every* platform — which bites immediately for a Linux-only
+        `incus`.
+      - **Enforcement is the substantive half.**  Phase 1.5 §8's version
+        ranges are enforced on the **install** path (recipe
+        `depends.runtime` → manifest → resolver `satisfies()`).  Host
+        tools never reach the manifest — it carries `depends.runtime`
+        only, and host tools are stripped on install — so there is no
+        build-time equivalent: a host tool resolves **by name**, and the
+        build gets whatever version that builder last built.  Pinning
+        needs build-time constraint resolution, not just a richer schema.
+      - **Provenance.**  Once a host tool is pinned, the built artifact
+        should record *which* one built it, or the pin is unverifiable
+        after the fact.  Relates to Phase 16 (Prefix Provenance) and to
+        the reproducibility argument in
+        [`hermetic-native-toolchain.md`](docs/roadmap/hermetic-native-toolchain.md).
 
 ---
 
