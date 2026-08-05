@@ -30,6 +30,9 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import re
+import shutil
+import sys
 import tarfile
 import zipfile
 from pathlib import Path
@@ -302,6 +305,23 @@ class TestPruneStale:
         gen._prune_stale(tmp_path, meta, {"numpy": ["311"]}, ["311", "312"])
         assert d.is_dir()
 
+    def test_prose_denial_of_python_wheel_is_not_ownership(self, tmp_path):
+        # The sentence every hand-converted from-source recipe carries.  A
+        # substring test for "python_wheel" reads this DENIAL as a declaration
+        # and deletes the recipe; only a line-anchored source.type match is
+        # ownership.  cffi/markupsafe/pyyaml/greenlet's bases are all managed,
+        # so this test is the only thing between them and shutil.rmtree.
+        d = tmp_path / "cffi-cp313"
+        d.mkdir()
+        (d / "recipe.yaml").write_text(
+            "# From-source sdist (NOT source.type python_wheel): cvcpkg fetches and\n"
+            "# sha256-verifies this tarball and extracts it to CVC_SOURCE_DIR.\n"
+            "source:\n  type: tarball\n"
+        )
+        meta = {"cffi": {"kind": "cext", "wheels": ASYNCPG, "deps": {}}}
+        gen._prune_stale(tmp_path, meta, {"cffi": ["311", "312"]}, ["311", "312", "313"])
+        assert d.is_dir()
+
     def test_deletes_superseded_bare_wheel_dir(self, tmp_path):
         d = tmp_path / "click"
         d.mkdir()
@@ -369,6 +389,228 @@ class TestGeneratorOwnership:
             d = recipes / name
             if d.is_dir():
                 assert not gen.is_generator_owned(d), name
+
+
+# ── Hand-written families whose base IS in the managed set ──────────────────
+#
+# numpy-cp311 and h5py-cp311 survive a regeneration partly by accident: their
+# bases are absent from poetry.lock, so the emit loop and _prune_stale never
+# reach them at all.  These four have no such luck -- cffi, markupsafe, pyyaml
+# and greenlet are all in poetry.lock's `main` group, so a full run walks
+# straight through them and the ownership tests are the ONLY thing holding.
+#
+# What a regeneration would silently destroy, none of which the generator can
+# infer from a pyproject's [build-system] requires:
+#   cffi       libffi edge (build+runtime, `platforms:`-restricted to non-Windows
+#              because MSVC compiles the libffi subset vendored in cffi's own
+#              sdist), an $ORIGIN/@loader_path rpath pass, and a pkg-config
+#              hermeticity probe -- without which setup.py falls through to a
+#              hardcoded /usr/include/ffi and links the SYSTEM libffi, no error.
+#   pyyaml     yaml (libyaml) edge, the same rpath pass, and
+#              PYYAML_FORCE_LIBYAML=1: without it a build with no reachable
+#              yaml.h still "succeeds" and emits a platform-tagged wheel with no
+#              yaml/_yaml extension in it -- no CLoader, no error, no warning.
+#   markupsafe CIBUILDWHEEL=1: its setup.py catches a failed C compile and
+#              re-runs setup() with ext_modules=[], shipping a slow pure-Python
+#              wheel that looks perfectly fine.
+#   greenlet   hand-written platform/compiler wiring.
+# Plus the freebsd/openbsd/netbsd matrix columns, which a default run would
+# narrow back to SDIST_PLATFORMS' linux/macos/windows.
+_HAND_WRITTEN_COLUMNS = (
+    "cffi-cp311",
+    "cffi-cp312",
+    "cffi-cp313",
+    "markupsafe-cp311",
+    "markupsafe-cp312",
+    "markupsafe-cp313",
+    "markupsafe-cp313t",
+    "pyyaml-cp311",
+    "pyyaml-cp312",
+    "pyyaml-cp313",
+    "greenlet-cp311",
+    "greenlet-cp312",
+    "greenlet-cp313",
+)
+
+_REPO = Path(__file__).resolve().parents[2]
+
+
+def _shipped_columns() -> dict[str, list[str]]:
+    """base -> the interpreter columns actually shipped, derived from the
+    directory names so the map cannot drift from the tuple above."""
+    cols: dict[str, list[str]] = {}
+    for name in _HAND_WRITTEN_COLUMNS:
+        base, _, interp = name.rpartition("-cp")
+        cols.setdefault(base, []).append(interp)
+    return cols
+
+
+class TestHandWrittenColumnsSurviveAFullRun:
+    """A FULL generator run must leave these recipes byte-identical.
+
+    Not a ``--only`` run and not a unit call on one helper: ``main()`` end to
+    end, because that is the shape with both hazards in it -- the emit loop
+    (overwrite) and _prune_stale (deletion).  Preservation from one is not
+    preservation from the other, and these families need both.
+
+    PyPI is stubbed so the test is hermetic and fast; every other code path is
+    the real one, and the files compared are the real shipped recipes.
+    """
+
+    def _run(self, tmp_path, monkeypatch, columns, extra_argv=()):
+        """Seed an out/ with the real recipes, stub PyPI, run main().
+
+        *columns* is base -> the interpreter columns PyPI is pretended to
+        publish wheels for.  It drives compute_columns, hence which directories
+        _prune_stale then considers superseded.
+        """
+        src = _REPO / "recipes"
+        out = tmp_path / "recipes"
+        out.mkdir()
+        for name in _HAND_WRITTEN_COLUMNS:
+            shutil.copytree(src / name, out / name)
+        # The PEP-517 backend must resolve, or every column falls back to a
+        # prebuilt wheel and the emit path under test is never reached.
+        for i in INTERPS:
+            (out / f"setuptools-cp{i}").mkdir()
+
+        versions = {b: _upstream_version(src, b) for b in columns}
+        lock = tmp_path / "poetry.lock"
+        lock.write_text(
+            "".join(
+                f'[[package]]\nname = "{b}"\nversion = "{v}"\ngroups = ["main"]\n\n'
+                for b, v in sorted(versions.items())
+            )
+        )
+
+        def _fetch(name, version):
+            base = gen.norm(name)
+            return (
+                _w(
+                    *[
+                        f"{base}-{version}-cp{gen.col_digits(i)}-cp{i}-{tag}.whl"
+                        for i in columns[base]
+                        for tag in ("manylinux_2_28_x86_64", "macosx_11_0_arm64", "win_amd64")
+                    ]
+                ),
+                _sd(f"{base}-{version}.tar.gz"),
+                "MIT",
+            )
+
+        monkeypatch.setattr(gen, "fetch_pypi", _fetch)
+        monkeypatch.setattr(gen, "sdist_build_requires", lambda sd, cache: ["setuptools"])
+        monkeypatch.setattr(gen, "SEED_PACKAGES", {})
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "gen_python_recipes.py",
+                "--lock",
+                str(lock),
+                "--out",
+                str(out),
+                "--sdist-cache",
+                str(tmp_path / "cache"),
+                *extra_argv,
+            ],
+        )
+        assert gen.main() == 0
+        return out
+
+    def _diffs(self, out) -> list[str]:
+        """Names of shipped files a run deleted or rewrote."""
+        src = _REPO / "recipes"
+        bad = []
+        for name in _HAND_WRITTEN_COLUMNS:
+            if not (out / name).is_dir():
+                bad.append(f"{name}: DELETED")
+                continue
+            for f in sorted(p.name for p in (src / name).iterdir() if p.is_file()):
+                if not (out / name / f).is_file():
+                    bad.append(f"{name}/{f}: DELETED")
+                elif (out / name / f).read_bytes() != (src / name / f).read_bytes():
+                    bad.append(f"{name}/{f}: REWRITTEN")
+        return bad
+
+    def test_full_run_leaves_them_byte_identical(self, tmp_path, monkeypatch):
+        out = self._run(tmp_path, monkeypatch, _shipped_columns())
+        assert self._diffs(out) == []
+
+    def test_a_column_leaving_the_matrix_does_not_delete_it(self, tmp_path, monkeypatch):
+        # The realistic trigger: a column stops being viable -- upstream drops
+        # a wheel for it, a dependency loses the column and prunes it
+        # transitively, or the package goes abi3-only (which has no stable ABI
+        # for cp313t).  _prune_stale then reaches the directory -- and every one
+        # of these recipes contains the literal string "python_wheel" in the
+        # comment DENYING that it is one, which a substring ownership test reads
+        # as a licence to rmtree.
+        columns = _shipped_columns()
+        columns["markupsafe"] = ["311", "312", "313"]  # cp313t leaves
+        columns["cffi"] = ["311", "312"]  # cp313 leaves
+        out = self._run(tmp_path, monkeypatch, columns)
+        assert self._diffs(out) == []
+
+    def test_the_guard_is_what_holds_not_the_harness(self, tmp_path, monkeypatch):
+        # Negative control: with --overwrite-hand-written the same run DOES
+        # rewrite them.  Without this, a broken guard could still pass the two
+        # tests above if the harness never reached the emit loop at all.
+        out = self._run(
+            tmp_path, monkeypatch, _shipped_columns(), extra_argv=["--overwrite-hand-written"]
+        )
+        assert self._diffs(out), "emit loop was never reached — the tests above prove nothing"
+
+
+def _upstream_version(recipes: Path, base: str) -> str:
+    """The version a shipped column pins, so the synthetic poetry.lock tracks
+    the real recipes instead of going stale on the next version bump."""
+    text = (recipes / f"{base}-cp311" / "recipe.yaml").read_text(encoding="utf-8")
+    return re.search(r'upstream_version:\s*"([^"]+)"', text).group(1)
+
+
+class TestPruneOwnership:
+    """``source.type: python_wheel`` as a field, never as a substring."""
+
+    def test_real_declaration_is_ownership(self):
+        assert gen._declares_python_wheel("source:\n  type: python_wheel\n")
+
+    def test_prose_denial_is_not(self):
+        assert not gen._declares_python_wheel(
+            "# From-source sdist (NOT source.type python_wheel): cvcpkg fetches\n"
+            "source:\n  type: tarball\n"
+        )
+
+    def test_trailing_comment_after_the_field_still_counts(self):
+        assert gen._declares_python_wheel("source:\n  type: python_wheel  # historical\n")
+
+    def test_a_url_fragment_is_not_a_comment(self):
+        # The comment stripper must require a boundary before '#', or it would
+        # eat half a URL and could corrupt the field it is about to match.
+        assert gen._declares_python_wheel(
+            "source:\n  url: https://example.invalid/x.whl#sha256=abc\n  type: python_wheel\n"
+        )
+
+    def test_missing_recipe_yaml_is_nobody_s_to_delete(self, tmp_path):
+        (tmp_path / "empty-cp311").mkdir()
+        assert not gen.is_prunable(tmp_path / "empty-cp311")
+
+    def test_marker_makes_it_deletable(self, tmp_path):
+        d = tmp_path / "click-cp311"
+        d.mkdir()
+        (d / "recipe.yaml").write_text(f"description: {gen.GENERATOR_MARKER}\n")
+        assert gen.is_prunable(d)
+
+    def test_every_shipped_hand_written_column_is_undeletable(self):
+        # Content-based, so a NEW hand-written family is covered the day it
+        # lands -- no allowlist to remember to update.
+        recipes = _REPO / "recipes"
+        for d in sorted(recipes.iterdir()):
+            y = d / "recipe.yaml"
+            if not y.is_file():
+                continue
+            text = y.read_text(encoding="utf-8")
+            if gen.GENERATOR_MARKER in text or gen._declares_python_wheel(text):
+                continue
+            assert not gen.is_prunable(d), f"{d.name} is hand-written but prunable"
 
 
 class TestPrebuiltOnlyAllowlist:
