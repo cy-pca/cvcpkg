@@ -36,7 +36,7 @@ env:
   # One PyInstaller for every column, so all six binaries are built by the same
   # version. NetBSD cannot use the PyPI release (no 'netbsd' in the bootloader
   # platform tables), so it builds this exact tag from source with
-  # packaging/patches/pyinstaller-netbsd.patch applied.
+  # recipes/pyinstaller-cp313/netbsd-platform-tables.patch applied.
   PYINSTALLER_VERSION: '6.21.0'
 
 concurrency:
@@ -227,15 +227,17 @@ jobs:
           #   File ".../bootloader/wscript", line 456, in configure
           #   KeyError: 'netbsd'
           #
-          # packaging/patches/pyinstaller-netbsd.patch fixes that. It is pinned
-          # to the same PyInstaller the other five platforms get from PyPI, so
-          # every column ships the same version. Submitted upstream; drop this
-          # branch once a release carries the fix.
+          # The patch lives with the recipe it belongs to, so it travels in the
+          # recipe archive (the build backend collects *.patch from recipe
+          # dirs). It is applied to the same PyInstaller the other five
+          # platforms get from PyPI, so every column ships the same version.
+          # Submitted upstream; drop this branch once a release carries it.
+          PYI_PATCH=recipes/pyinstaller-cp313/netbsd-platform-tables.patch
           if [ "${{ matrix.os }}" = "netbsd-x86_64" ]; then
             ssh ${SSH_OPTS} "${VM}" "set -e; rm -rf /tmp/pyi-src; \
               git clone --quiet --branch v${{ env.PYINSTALLER_VERSION }} --depth 1 \
                 https://github.com/pyinstaller/pyinstaller /tmp/pyi-src; \
-              cd /tmp/pyi-src && patch -p1 < ${remote_dir}/packaging/patches/pyinstaller-netbsd.patch; \
+              cd /tmp/pyi-src && patch -p1 < ${remote_dir}/${PYI_PATCH}; \
               TMPDIR=/usr/local/tmp ${PYTHON} -m pip install --break-system-packages . 2>/dev/null \
                 || ${PYTHON} -m pip install ."
           else
