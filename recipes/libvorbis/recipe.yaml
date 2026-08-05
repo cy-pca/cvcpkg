@@ -2,13 +2,20 @@ schema_version: 1
 recipe:
   name: libvorbis
   upstream_version: "1.3.7"
-  cvc_revision: 1
+  # Added wasm/wasi/cosmo entries.  The codec is portable floating-point DSP —
+  # MDCT, codebooks, psychoacoustics — with no threads, sockets or assembly and
+  # no runtime CPU dispatch to disable; the only platform call is
+  # libvorbisfile's ov_open(FILE *), and all three targets have stdio (consumers
+  # that want to avoid it entirely already have ov_open_callbacks).  This became
+  # legal only once libogg gained the same three targets in its cvc.2 — the
+  # closure check rejects a target the runtime dependency cannot build for.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   homepage: https://www.xiph.org/vorbis/
   license: BSD-3-Clause
-  tags: [libraries, multimedia, audio]
+  tags: [libraries, multimedia, audio, wasm, wasi]
   description: >-
     libvorbis — the Ogg Vorbis audio compression library.  Provides
     Vorbis encoding and decoding for FFmpeg (--enable-libvorbis).
@@ -54,6 +61,15 @@ build:
         CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: cosmo
+      host_platform: linux
+      script: build-cosmo.sh
 
 package:
   files:

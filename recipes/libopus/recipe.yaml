@@ -2,13 +2,22 @@ schema_version: 1
 recipe:
   name: libopus
   upstream_version: "1.6.1"
-  cvc_revision: 2
+  # cvc.3: added wasm/wasi/cosmo entries.  Opus is buffers-in/buffers-out with
+  # no files, threads or sockets; the only thing that blocked a cross target was
+  # its architecture-specific code, and configure exposes exactly the switches
+  # to drop it — --disable-asm, --disable-rtcd, --disable-intrinsics.  rtcd is
+  # the important one: runtime CPU dispatch reaches for `cpuid` on x86 and
+  # getauxval(AT_HWCAP) on ARM, neither of which exists in a wasm module.  Those
+  # switches are also off on cosmo, where they *would* work — an APE is supposed
+  # to be the run-anywhere artefact, and opus's x86 path compiles per-ISA
+  # translation units with -msse4.1/-mavx2 (same call recipes/libpng makes).
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   homepage: https://opus-codec.org/
   license: BSD-3-Clause
-  tags: [libraries, multimedia, audio]
+  tags: [libraries, multimedia, audio, wasm, wasi]
   description: >-
     Opus — a totally open, royalty-free, highly versatile audio codec.
     Standardised as RFC 6716.  Used by FFmpeg (--enable-libopus),
@@ -52,6 +61,15 @@ build:
         CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: cosmo
+      host_platform: linux
+      script: build-cosmo.sh
 
 package:
   files:

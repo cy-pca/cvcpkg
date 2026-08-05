@@ -5,14 +5,22 @@ recipe:
   # Bumped 1 -> 2: added the BSD builds. yaml-cpp is a plain CMake C++ library
   # with no platform-specific code and is packaged by all three BSDs; the
   # linux+macos scoping was an oversight rather than a portability limit.
-  cvc_revision: 2
+  #
+  # Bumped 2 -> 3: added wasm/wasi/cosmo.  Same argument carried to the cross
+  # targets — parsing YAML is pure computation over a std::istream, with no
+  # threads, sockets, dlopen or fork, and the library never opens a file itself.
+  # It does throw, which is the one thing worth checking on wasip1; libgeos and
+  # libspatialindex, both exception-driven C++, already build at that target.
+  # The cross scripts must pass YAML_BUILD_SHARED_LIBS=OFF: build.sh forces it
+  # ON, and all three cross targets are static-only.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   description: "yaml-cpp — a YAML parser and emitter for C++ (jbeder/yaml-cpp). Used by volrover3 for ~/.volrover/settings.yaml."
   homepage: https://github.com/jbeder/yaml-cpp
   license: MIT
-  tags: [utils, cpp, yaml]
+  tags: [utils, cpp, yaml, wasm, wasi]
 
 source:
   type: tarball
@@ -48,6 +56,15 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: cosmo
+      host_platform: linux
+      script: build-cosmo.sh
 
 package:
   files:
