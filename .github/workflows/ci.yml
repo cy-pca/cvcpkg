@@ -92,6 +92,15 @@ jobs:
           print('All recipes valid.')
           "
 
+      # Schema + the dependency-closure invariant: a recipe declaring
+      # `platform: P` must have every dependency that applies on P buildable on
+      # P.  Without this gate a recipe can advertise a platform it is incapable
+      # of building, and nothing notices until a builder claims the job and
+      # fails — 95 such (recipe, platform) pairs had accumulated before the
+      # check existed.
+      - name: Validate recipe schema & dependency closure
+        run: python scripts/validate_all_recipes.py
+
   # ────────────────────── Per-commit dep bundle build ─────────────
   #
   # DISABLED — Package building has migrated to the cvcpkg remote

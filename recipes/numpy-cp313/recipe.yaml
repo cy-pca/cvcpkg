@@ -11,7 +11,11 @@ recipe:
   # the sdist links cvcpkg's own libopenblas.so.0 by soname instead, so ONE
   # OpenBLAS is shared across the prefix, and it is the only option on the
   # BSDs (no PyPI wheel).
-  cvc_revision: 2
+  # Bumped 2 -> 3: link cvcpkg's own OpenBLAS on macOS instead of the
+  # system Accelerate framework. openblas had no macOS build when this recipe was
+  # written, so macOS was the one column linking a BLAS we neither build nor ship;
+  # openblas+cvc.6 added it. The macOS payload's BLAS changes, hence the bump.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -58,13 +62,13 @@ depends:
     # build.sh). meson-python-cp313 pulls packaging-cp313 + pyproject-metadata-cp313.
     - name: cython-cp313
     - name: meson-python-cp313
-    # OpenBLAS headers + openblas.pc at compile time (linux/BSD; macOS uses
-    # Accelerate and does not resolve this edge — see the platform note below).
+    # OpenBLAS headers + openblas.pc at compile time, on every platform
+    # including macOS (openblas gained a macOS build in openblas+cvc.6).
     - name: openblas
       version: ">=0.3.28"
   runtime:
     - name: python313
-    # libopenblas.so.0 resolved from the merged prefix at import (linux/BSD).
+    # libopenblas resolved from the merged prefix at import, every platform.
     - name: openblas
       version: ">=0.3.28"
   host_tools:
@@ -79,8 +83,8 @@ depends:
 build:
   # The Python ABI is stable across cvcpkg build types; build once, optimized.
   build_type_independent: true
-  # openblas builds on linux/BSD/windows; macOS uses Accelerate (build.sh picks
-  # -Dblas=accelerate there). windows is a deliberate delta: meson + MSVC + DLL
+  # openblas now builds on every native platform including macOS, so every
+  # column links the same BLAS. windows is a deliberate delta: meson + MSVC + DLL
   # discovery differ enough to need its own build.ps1 (currently a loud stub —
   # until the port lands, windows numpy is unavailable from this recipe).
   # wasm/wasi/cosmo are excluded: static interpreter, no extension-module ABI.
@@ -96,7 +100,7 @@ build:
     - platform: macos
       script: build.sh
       env:
-        MACOSX_DEPLOYMENT_TARGET: "13.3"   # Accelerate new-LAPACK floor
+        MACOSX_DEPLOYMENT_TARGET: "13.0"   # matches the openblas recipe
     - platform: windows
       script: build.ps1
 

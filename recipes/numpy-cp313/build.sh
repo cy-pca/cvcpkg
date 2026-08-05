@@ -62,10 +62,13 @@ fi
 # ── BLAS selection ──────────────────────────────────────────────────────────
 BLAS_ARGS=()
 case "${CVC_PLATFORM}" in
-  macos)
-    # openblas has no macOS build (Accelerate is the platform BLAS).
-    BLAS_ARGS+=( -C setup-args=-Dblas=accelerate -C setup-args=-Dlapack=accelerate ) ;;
   *)
+    # macOS takes this path too, deliberately. It used to select Accelerate
+    # (-Dblas=accelerate) because openblas had no macOS build; it does now, and
+    # Accelerate is a SYSTEM framework, so linking it made the macOS bundle
+    # depend on a library cvcpkg neither builds nor ships — the exact
+    # non-hermeticity this recipe exists to avoid. One BLAS on every platform
+    # also means one set of numerical results to reason about.
     # Hermetic pkg-config: ONLY our prefixes' .pc files visible (openblas's
     # module name is `openblas`, LP64, no symbol suffix). PKG_CONFIG_LIBDIR
     # *replaces* the system search path so no stray/system .pc leaks in.
