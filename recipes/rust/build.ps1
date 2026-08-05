@@ -6,9 +6,11 @@
 # Git-Bash directly and run install.sh under it to stage rustc/cargo/std.
 $ErrorActionPreference = 'Stop'
 
-$ver = '1.84.0'
+# Keep $ver/$expected in step with build.sh's RUST_VER/sha_for() and with
+# recipe.yaml's source.artifacts — three places, one release.
+$ver = '1.90.0'
 $triple = 'x86_64-pc-windows-msvc'
-$expected = '39cb7059ebfc88b79be8341f84bfef4a356ba0f38f41017fffe62ccbe2402a85'
+$expected = '1aa997bcda4258795ea9eee1430843928dc185fad40067b180593456057a9126'
 
 $tarball = "rust-$ver-$triple.tar.gz"
 $archive = Join-Path $env:CVC_BUILD_DIR $tarball
@@ -47,3 +49,5 @@ if ($LASTEXITCODE -ne 0) { throw "rust install.sh failed ($LASTEXITCODE)" }
 
 & (Join-Path $env:CVC_INSTALL_DIR 'bin\rustc.exe') --version
 if ($LASTEXITCODE -ne 0) { throw "staged rustc failed to run" }
+& (Join-Path $env:CVC_INSTALL_DIR 'bin\cargo.exe') --version
+if ($LASTEXITCODE -ne 0) { throw "staged cargo failed to run" }

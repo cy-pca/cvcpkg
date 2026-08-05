@@ -1,0 +1,95 @@
+schema_version: 1
+recipe:
+  name: setuptools-scm-cp313
+  upstream_version: "8.3.1"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/setuptools-scm/
+  license: "MIT"
+  tags: [python, wheel]
+  description: >-
+    setuptools_scm 8.3.1 for CPython 3.13 — the cp313 column of cvcpkg's
+    per-interpreter wheel matrix, BUILT FROM SOURCE from the PyPI sdist.
+    Deliberately pinned to the 8.x line, NOT 10.x: 10.x moved its own build
+    requirement to `vcs-versioning`, which has no cvcpkg recipe and would extend
+    the chain by another package for no benefit here. 8.3.1 needs only
+    setuptools, which the matrix already has. Present because setuptools-rust
+    build-requires it.
+
+# From-source sdist (NOT source.type python_wheel): cvcpkg fetches and
+# sha256-verifies this tarball and extracts it (strip_components: 1) to
+# CVC_SOURCE_DIR; build.sh builds it there with pip + the PEP-517 backend already
+# present in the build prefix. The sha256 was recomputed from the downloaded
+# tarball and matches upstream's own sdist digest in the PyPI JSON API.
+source:
+  type: tarball
+  url: https://files.pythonhosted.org/packages/b9/19/7ae64b70b2429c48c3a7a4ed36f50f94687d3bfcd0ae2f152367b6410dff/setuptools_scm-8.3.1.tar.gz
+  sha256: "3d555e92b75dacd037d32bafdf94f97af51ea29ae8c7b234cf94b7a5bd242a63"
+  strip_components: 1
+
+# Interpreter/ABI metadata: the builder exports these to build.sh as
+# CVC_PYTHON_INTERPRETER / CVC_PYTHON_ABI so cvc_python_exe resolves the prefix's
+# python3.13 and the wheel lands in ITS site-packages.
+python:
+  interpreter: python313
+  abi: cp313
+
+patches: []
+
+depends:
+  build:
+    # The interpreter this pure-Python package installs under.
+    - name: python313
+    # PEP-517 backend (pyproject requires setuptools>=61); the in-tree
+    # _own_version_helper backend re-exports setuptools.build_meta.
+    - name: setuptools-cp313
+    # BUILD-time, not merely runtime: the self-hosting backend imports the
+    # setuptools_scm package it is building, and setuptools_scm._version_cls
+    # imports packaging.version at module scope.
+    - name: packaging-cp313
+    # pip refuses a --no-build-isolation build whose declared build requirements
+    # are not importable; keep `wheel` present rather than tracking which
+    # setuptools release stopped naming it.
+    - name: wheel-cp313
+  runtime:
+    # The interpreter.
+    - name: python313
+    # Declared runtime dependency (`setuptools`) — setuptools_scm is a
+    # setuptools plugin and is imported by other packages' builds.
+    - name: setuptools-cp313
+    # Declared runtime dependency (`packaging>=20`), imported at module scope.
+    # The other declared deps — tomli, typing-extensions, importlib-metadata —
+    # are all `python_version < 3.10/3.11` markers, so none applies to a cp311+
+    # column.
+    - name: packaging-cp313
+  host_tools:
+    # Must run on the BUILDER: the interpreter drives pip and the PEP-517
+    # backend. Nothing native is involved — this package compiles nothing.
+    - python313
+
+build:
+  # Pure Python: no compiled artifact, so nothing varies with cvcpkg's
+  # Release/Debug build type.
+  build_type_independent: true
+  # `platform: any` — the wheel this produces is py3-none-any, valid on every
+  # platform cvcpkg targets, so the recipe is built once and published noarch,
+  # exactly like the other pure-Python columns (setuptools, packaging, wheel).
+  # That also means there is no build.ps1: one build.sh serves the single job.
+  matrix:
+    - platform: any
+      script: build.sh
+
+package:
+  # DOCUMENTATION ONLY. cvcpkg's stage_bundle ships the ENTIRE CVC_INSTALL_DIR
+  # tree — package.files is parsed but NOT applied as a filter. build.sh keeps
+  # the staged tree pure by pip-installing --prefix into an initially empty
+  # per-recipe CVC_INSTALL_DIR, so the entries below are exactly what ships.
+  files:
+    - lib/python3.13/site-packages/setuptools_scm/
+    - lib/python3.13/site-packages/setuptools_scm-*.dist-info/
+    # Windows (Lib\site-packages) scheme, for a prefix staged on that host.
+    - Lib/site-packages/setuptools_scm/
+    - Lib/site-packages/setuptools_scm-*.dist-info/
