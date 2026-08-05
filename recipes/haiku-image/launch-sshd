@@ -1,0 +1,3 @@
+service x-vnd.openssh-sshd {
+	launch /boot/system/settings/ssh/cvcpkg-start-sshd.sh
+}
