@@ -78,8 +78,6 @@ package:
     - cosmocc/
   cmake_packages: []
 
-abi:
-  cxx_std: 17
 
 notes:
   - title: "Toolchain, not a library"
