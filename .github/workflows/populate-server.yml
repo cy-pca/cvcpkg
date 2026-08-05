@@ -202,6 +202,26 @@ jobs:
       shards: "4"
     secrets: inherit
 
+  # macOS x86_64. macos-latest is Apple Silicon, so the job above only ever
+  # produced macos/arm64 — the catalog has ZERO macos/x86_64 bundles. Intel
+  # macOS users therefore source-build their entire closure.
+  #
+  # macos-15-intel is the last x86_64 macOS image GitHub offers and is retired
+  # in August 2027, so this lane has a definite shelf life. It is worth having
+  # anyway: it is the only way to serve Intel Mac users before then.
+  populate-macos-intel:
+    name: Build & publish macOS x86_64 packages
+    needs: populate
+    if: contains(inputs.platforms, 'macos') && contains(inputs.arch, 'x86_64') && contains(fromJSON('["release","debug"]'), inputs.config) && contains(fromJSON('["shared","static"]'), inputs.link)
+    uses: ./.github/workflows/macos-build.yml
+    with:
+      config: ${{ inputs.config }}
+      link: ${{ inputs.link }}
+      server: ${{ inputs.server }}
+      shards: "4"
+      runner: "macos-15-intel"
+    secrets: inherit
+
   # linux/arm64 has the same shape of problem as macOS: the builder fleet is
   # x86_64-only, so `builds submit-dag` has nothing to schedule an arm64 job
   # onto and those variants simply never get built — the catalog currently has

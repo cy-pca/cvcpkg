@@ -52,6 +52,17 @@ on:
         required: false
         default: "prod"
         type: string
+      runner:
+        description: >-
+          Runner image. macos-latest is Apple Silicon (arm64); macos-15-intel
+          is the LAST x86_64 macOS image GitHub offers and disappears in
+          August 2027.
+        required: false
+        default: "macos-latest"
+        type: choice
+        options:
+          - "macos-latest"
+          - "macos-15-intel"
   workflow_call:
     inputs:
       config:
@@ -71,6 +82,10 @@ on:
         required: false
         type: string
         default: "prod"
+      runner:
+        required: false
+        type: string
+        default: "macos-latest"
 
 permissions:
   contents: read
@@ -91,9 +106,13 @@ jobs:
           echo "shards=$SHARDS" >> "$GITHUB_OUTPUT"
 
   build-shard:
-    name: macOS shard ${{ matrix.shard }}/${{ inputs.shards || '4' }} (${{ inputs.config }}/${{ inputs.link }})
+    name: macOS ${{ inputs.runner || 'macos-latest' }} shard ${{ matrix.shard }}/${{ inputs.shards || '4' }} (${{ inputs.config }}/${{ inputs.link }})
     needs: setup
-    runs-on: macos-latest
+    # Parameterised so the same, already-proven pipeline serves both macOS
+    # architectures — they differ only in the runner label, since pack-all
+    # detects the host arch. macos-latest is arm64; macos-15-intel is x86_64
+    # and is the last Intel image GitHub offers (retired August 2027).
+    runs-on: ${{ inputs.runner || 'macos-latest' }}
     timeout-minutes: 300
     strategy:
       fail-fast: false
@@ -185,7 +204,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: macos-packages-shard${{ matrix.shard }}-${{ inputs.config }}-${{ inputs.link }}
+          # Runner is part of the name: populate-server can invoke this workflow
+          # twice in one run (arm64 + intel), and upload-artifact fails on a
+          # duplicate name.
+          name: macos-packages-${{ inputs.runner || 'macos-latest' }}-shard${{ matrix.shard }}-${{ inputs.config }}-${{ inputs.link }}
           path: dist/
           if-no-files-found: warn
           retention-days: 7
