@@ -130,7 +130,8 @@ if ! "${PY}" -m pip wheel \
     exit 1
 fi
 
-WHEEL="$(find "${WHEELOUT}" -maxdepth 1 -name 'numpy-*.whl' -print -quit)"
+readarray -t _wheel_matches < <(find "${WHEELOUT}" -maxdepth 1 -name 'numpy-*.whl')
+WHEEL="${_wheel_matches[0]:-}"
 [ -n "${WHEEL}" ] || { echo "numpy-cp313: no wheel produced" >&2; exit 1; }
 echo "numpy-cp313: built $(basename "${WHEEL}")"
 
@@ -140,7 +141,8 @@ echo "numpy-cp313: built $(basename "${WHEEL}")"
 "${PY}" -m pip install --no-deps --no-index --no-compile \
   --prefix "${CVC_INSTALL_DIR}" "${WHEEL}"
 
-NP_DIR="$(find "${CVC_INSTALL_DIR}" -maxdepth 4 -type d -name numpy -print -quit)"
+readarray -t _np_dir_matches < <(find "${CVC_INSTALL_DIR}" -maxdepth 4 -type d -name numpy)
+NP_DIR="${_np_dir_matches[0]:-}"
 [ -n "${NP_DIR}" ] || { echo "numpy-cp313: staged numpy/ not found" >&2; exit 1; }
 
 # ── Relocatable RUNPATH per-file (meson strips the build rpath on install) ──
@@ -151,7 +153,7 @@ NP_DIR="$(find "${CVC_INSTALL_DIR}" -maxdepth 4 -type d -name numpy -print -quit
 if [ "${CVC_PLATFORM}" != "macos" ]; then
   command -v patchelf >/dev/null 2>&1 || { echo "numpy-cp313: patchelf missing" >&2; exit 1; }
   while IFS= read -r -d '' so; do
-    rel="$(realpath --relative-to="$(dirname "${so}")" "${CVC_INSTALL_DIR}/lib")"
+    rel="$("${PY}" -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "${CVC_INSTALL_DIR}/lib" "$(dirname "${so}")")"
     patchelf --set-rpath "\$ORIGIN:\$ORIGIN/${rel}" "${so}"
   done < <(find "${NP_DIR}" -name '*.so' -print0)
 fi
