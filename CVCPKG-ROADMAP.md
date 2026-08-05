@@ -1500,6 +1500,23 @@ parallel track (matching the Status Snapshot above).
 - [ ] **Emulated-arch pilot** — once qemu recipes land, trial a
       qemu-system-aarch64 Linux builder VM to extend the fleet beyond
       x86_64 without new hardware.
+- [ ] **Redeploy the dev cluster on merge, and make its version legible** —
+      the dev server runs whatever was last deployed, which can be many hours
+      behind `master`, so a merged fix silently does not apply and gets
+      re-diagnosed as a live bug.  On 2026-08-05 disk-aware scheduling
+      (#440, merged 03:39Z) was absent from a dev server started
+      2026-08-04T13:54Z, ~14 h earlier: two `haiku-image` jobs routed to a
+      34 GiB builder and failed on the recipe's own disk preflight, while an
+      idle 87 GiB builder — the only one advertising `incus`, and therefore
+      the only one that could have run the recipe's `test.vm` — was never
+      offered the work (#469).  The same class of lag produced the catalog
+      drift that `CVCPKG_POPULATE_UPSTREAM` fixed in #366.  Two parts:
+      (a) have `deploy-dev.yml` redeploy and migrate on every merge to
+      `master`, so dev is by construction not behind; and (b) report the
+      deployed commit in `cvcpkg server status` — it currently prints only
+      `Version: 2.0.2`, which is the same string before and after any merge,
+      so "is this server current?" is today answerable only by comparing
+      uptime against a merge timestamp.
 
 ---
 
