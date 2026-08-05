@@ -201,3 +201,24 @@ jobs:
       server: ${{ inputs.server }}
       shards: "4"
     secrets: inherit
+
+  # linux/arm64 has the same shape of problem as macOS: the builder fleet is
+  # x86_64-only, so `builds submit-dag` has nothing to schedule an arm64 job
+  # onto and those variants simply never get built — the catalog currently has
+  # ZERO linux/arm64 packages. Same remedy: build on ephemeral GitHub-hosted
+  # arm64 runners and publish directly.
+  #
+  # Keyed off `arch` rather than `platforms`, because arm64 is an architecture
+  # of the linux platform, not a platform of its own.
+  populate-linux-arm64:
+    name: Build & publish linux/arm64 packages
+    needs: populate
+    if: contains(inputs.arch, 'arm64') && contains(fromJSON('["release","debug"]'), inputs.config) && contains(fromJSON('["shared","static"]'), inputs.link)
+    uses: ./.github/workflows/linux-arm-build.yml
+    with:
+      config: ${{ inputs.config }}
+      link: ${{ inputs.link }}
+      server: ${{ inputs.server }}
+      shards: "4"
+      recipes: ${{ inputs.recipes }}
+    secrets: inherit

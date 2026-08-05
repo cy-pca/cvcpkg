@@ -1,0 +1,234 @@
+# Build and publish all linux/arm64 recipes to cvcpkg.org.
+#
+# The builder fleet is x86_64-only, so arm64 has the same problem macOS has:
+# no persistent builder to schedule remote jobs onto. The solution is the same
+# — build the full recipe DAG on ephemeral GitHub-hosted runners in parallel
+# shards and publish each package directly. This file is deliberately a close
+# sibling of macos-build.yml; keep them in sync.
+#
+# GitHub's arm64 Linux runners are recent (public preview Jan 2025, then
+# generally available), which is why this lane never existed before.
+#
+# Triggered manually via workflow_dispatch, or by populate-server when 'arm64'
+# is in the arch list.
+#
+# Required repo secrets:
+#   CVCPKG_PUBLISHER_TOKEN  — a publisher-role token for cvcpkg.org
+
+name: Linux arm64 Package Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      config:
+        description: "Build config"
+        required: true
+        default: "release"
+        type: choice
+        options:
+          - release
+          - debug
+      link:
+        description: "Link mode"
+        required: true
+        default: "shared"
+        type: choice
+        options:
+          - shared
+          - static
+      server:
+        description: "cvcpkg server URL"
+        required: true
+        default: "https://cvcpkg.org"
+        type: string
+      shards:
+        description: "Number of parallel shards"
+        required: true
+        default: "4"
+        type: choice
+        options:
+          - "2"
+          - "3"
+          - "4"
+          - "5"
+          - "6"
+      recipes:
+        description: "Recipe names to build (space/comma separated; default: every recipe)"
+        required: false
+        default: ""
+        type: string
+      ref:
+        description: "Git ref to build recipes from (default: prod)"
+        required: false
+        default: "prod"
+        type: string
+  workflow_call:
+    inputs:
+      config:
+        required: true
+        type: string
+      link:
+        required: true
+        type: string
+      server:
+        required: true
+        type: string
+      shards:
+        required: false
+        type: string
+        default: "4"
+      recipes:
+        required: false
+        type: string
+        default: ""
+      ref:
+        required: false
+        type: string
+        default: "prod"
+
+permissions:
+  contents: read
+
+jobs:
+  # Generate the shard matrix dynamically based on inputs.shards
+  setup:
+    name: Setup matrix
+    runs-on: ubuntu-latest
+    outputs:
+      shards: ${{ steps.gen.outputs.shards }}
+    steps:
+      - id: gen
+        run: |
+          TOTAL="${{ inputs.shards || '4' }}"
+          # Generate JSON array [0, 1, ..., TOTAL-1]
+          SHARDS=$(python3 -c "import json; print(json.dumps(list(range(int('$TOTAL')))))")
+          echo "shards=$SHARDS" >> "$GITHUB_OUTPUT"
+
+  build-shard:
+    name: linux-arm64 shard ${{ matrix.shard }}/${{ inputs.shards || '4' }} (${{ inputs.config }}/${{ inputs.link }})
+    needs: setup
+    # ubuntu-22.04-arm, NOT 24.04: 22.04 is glibc 2.35, which IS the fleet
+    # floor. Building on 24.04-arm (glibc 2.39) would emit GLIBC_2.38+
+    # references and `cvcpkg pack` would reject them outright (#432) — the same
+    # trap the linux CUDA job hits, where the fix was to pin the build
+    # environment's glibc rather than the host's.
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.setup.outputs.shards) }}
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Defaults to prod (production recipe set); override to validate a
+          # branch/master on arm64 before promoting it to prod.
+          ref: ${{ inputs.ref || 'prod' }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install system build tools
+        run: |
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update
+          # Autotools/meson toolchain the recipes expect from the host. X11 and
+          # OpenGL are deliberately absent: those come hermetically from the
+          # cvcpkg recipes (libx11/libglvnd/...), not from apt.
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ninja-build autoconf automake libtool \
+            pkg-config meson flex bison texinfo gettext file rsync zstd
+          # cmake from PyPI, pinned <4 — Boost 1.86's cmake files are
+          # incompatible with cmake 4.x (same pin as macos-build.yml), and it
+          # keeps every lane on one cmake generation.
+          pip install --no-cache-dir "cmake>=3.31,<4"
+          cmake --version && ninja --version
+
+      - name: Install cvcpkg
+        run: |
+          set -euo pipefail
+          pip install .
+          cvcpkg --version
+
+      - name: Build shard ${{ matrix.shard }} (pack-all)
+        env:
+          CVCPKG_SERVER_URL: ${{ inputs.server }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISHER_TOKEN }}
+        run: |
+          set -euo pipefail
+          SHARDS="${{ inputs.shards || '4' }}"
+          mkdir -p "${{ github.workspace }}/prefix"
+          mkdir -p "${{ github.workspace }}/dist"
+
+          # --arch is intentionally not passed: pack-all detects the host arch,
+          # and this runner IS arm64, which is exactly how macos-build.yml ends
+          # up producing macos/arm64 archives.
+          RECIPES="$(echo '${{ inputs.recipes }}' | tr ',' ' ' | xargs || true)"
+          cvcpkg pack-all \
+            --keep-going \
+            --platform linux \
+            --config "${{ inputs.config }}" \
+            --link "${{ inputs.link }}" \
+            --prefix "${{ github.workspace }}/prefix" \
+            --output-dir "${{ github.workspace }}/dist" \
+            --recipes-dir recipes \
+            --shard "${{ matrix.shard }}/${SHARDS}" \
+            --server-cache "$CVCPKG_SERVER_URL" \
+            --server-cache-token "$CVCPKG_TOKEN" \
+            --server-cache-push \
+            ${RECIPES}
+
+      - name: List built packages
+        if: always()
+        run: |
+          echo "Built packages (shard ${{ matrix.shard }}):"
+          ls -lh "${{ github.workspace }}/dist/" 2>/dev/null || echo "(no packages)"
+          echo ""
+          COUNT=$(ls "${{ github.workspace }}/dist/"*.tar.zst 2>/dev/null | wc -l || echo 0)
+          echo "Count: $COUNT archives"
+
+      - name: Verify the glibc floor before publishing
+        if: always()
+        run: |
+          set -euo pipefail
+          # `cvcpkg pack` enforces this too (#432), but say it out loud here:
+          # the whole reason this job pins ubuntu-22.04-arm is the 2.35 floor,
+          # and a silent bump of the runner image would otherwise only surface
+          # as a confusing pack failure much later.
+          echo "runner glibc: $(ldd --version | head -1)"
+
+      - name: Publish to cvcpkg.org
+        if: always()
+        env:
+          CVCPKG_SERVER_URL: ${{ inputs.server }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISHER_TOKEN }}
+        run: |
+          set -euo pipefail
+          DIST="${{ github.workspace }}/dist"
+
+          ARCHIVES=($(ls "$DIST"/*.tar.zst 2>/dev/null || true))
+          if [ ${#ARCHIVES[@]} -eq 0 ]; then
+            echo "::warning::No archives found in dist/ — nothing to publish"
+            exit 0
+          fi
+
+          echo "Publishing ${#ARCHIVES[@]} packages to $CVCPKG_SERVER_URL"
+          cvcpkg publish --all \
+            --server "$CVCPKG_SERVER_URL" \
+            --token "$CVCPKG_TOKEN" \
+            --output-dir "$DIST" \
+            --platform linux \
+            --config "${{ inputs.config }}" \
+            --link "${{ inputs.link }}"
+
+      - name: Upload dist artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64-packages-shard${{ matrix.shard }}-${{ inputs.config }}-${{ inputs.link }}
+          path: dist/
+          if-no-files-found: warn
+          retention-days: 7
