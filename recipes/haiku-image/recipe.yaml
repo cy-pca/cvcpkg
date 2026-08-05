@@ -78,10 +78,21 @@ build:
   matrix:
     - platform: linux
       script: build.sh
-      env:
-        # Set by the fleet's CI from a secret so the image trusts the builder
-        # key; empty in public builds (import then inject a key — see README).
-        HAIKU_BUILDER_SSH_PUBKEY: ""
+      # HAIKU_BUILDER_SSH_PUBKEY is deliberately NOT declared here.  It is
+      # supplied from the BUILDER PROCESS's environment (a fleet secret in CI,
+      # or an operator's own key for a local build), and build.sh reads it as
+      # ${HAIKU_BUILDER_SSH_PUBKEY:-}, so an unset variable is already the
+      # "public build, no key" case.
+      #
+      # It used to be declared here as "".  matrix env is applied LAST and
+      # unconditionally (cvcpkg/builder.py: `env.update(matrix.env)`), so that
+      # empty default silently CLOBBERED whatever the environment supplied —
+      # including CI's secret.  The key could therefore never be baked in by
+      # anyone: every build produced access.ssh_pubkey_baked: false, and
+      # test.vm could never authenticate.  Confirmed by the first end-to-end
+      # run of this recipe (2026-08-05), which passed a real key and still
+      # logged "no HAIKU_BUILDER_SSH_PUBKEY set".  Do not re-add a default
+      # value here for any variable that is meant to come from the environment.
 
 package:
   # Everything lives under share/<package-name>/ with ROLE-based filenames.
