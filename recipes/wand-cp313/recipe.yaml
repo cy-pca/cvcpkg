@@ -2,7 +2,12 @@ schema_version: 1
 recipe:
   name: wand-cp313
   upstream_version: "0.7.2"
-  cvc_revision: 1
+  # Bumped 1 -> 2: publish on macOS and the BSDs too. This was scoped to
+  # linux because the self-check needs a cvcpkg imagemagick to bind, and that was
+  # linux-only at the time; imagemagick now covers every native platform. The
+  # artifact is also re-keyed from linux-x86_64 to `any` — it is a py3-none-any
+  # wheel, the same file for every column and platform.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -24,7 +29,12 @@ source:
   # builds; the interpreter/imagemagick it binds to are the platform-specific
   # pieces, resolved through the depends graph.
   artifacts:
-    linux-x86_64:
+    # Keyed `any`, not `linux-x86_64`: this is a py3-none-any wheel, so a
+    # platform-shaped key implied an artifact that does not exist. The builder
+    # resolves an `any` key for every concrete platform/arch
+    # (_resolve_artifact), which is what lets the non-linux columns below fetch
+    # this same file.
+    any:
       url: https://files.pythonhosted.org/packages/fb/11/764bee6e793c01d6ce7b99f4872f9fd5ef89904b172cb9d8a0a1dae02f21/wand-0.7.2-py3-none-any.whl
       sha256: "7db97c5e51862fdd5e58866dbf34e2dcae295245511147367690a3e17f459984"
 
@@ -49,10 +59,22 @@ depends:
 
 build:
   # Pure-Python wheel, but the build's self-check imports Wand and drives a real
-  # MagickWand op, so it runs where the cvcpkg imagemagick is published (linux
-  # today). Add macos/windows once imagemagick ships there.
+  # MagickWand op, so it can only run where the cvcpkg imagemagick is published.
+  # That is now every native platform, so the linux-only scoping is lifted.
+  # windows is the one holdout: build.sh is a shell script and the self-check
+  # matches a POSIX prefix path, so it needs a build.ps1 first.
   matrix:
     - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
       script: build.sh
 
 package:
