@@ -428,6 +428,12 @@ release.  These are the gaps to close **before** the final publish step.
    version ranges (e.g. `^3.0`, `==1.3.0`) in the recipe/catalog, and the
    resolver enforces them — user + transitive constraints, with
    intersection and conflict rejection (see test_resolver.py).
+   *Scope note:* this is the **install** path (`depends.runtime` →
+   manifest → resolver).  **Build-time host tools are not covered**:
+   `depends.host_tools` is a bare `array[string]`, never reaches the
+   manifest, and resolves by name — so a build gets whatever version of a
+   host tool that builder last built.  Tracked in **Phase 7.6**, where
+   pinning a hermetic `incus` is the first thing that needs it.
 
 ### Phase 2 — Analytics & Telemetry
 
@@ -582,6 +588,10 @@ deliberately language-agnostic.  Future expansion:
 - **Haskell** — GHC toolchain plus Haskell packages, built against *our own*
   pinned GHC and ABI.  Developed in full in **Phase 7.5**, because Haskell's
   per-closure ABI hashing makes it a different (harder) problem than wheels.
+- **Go** — a pinned toolchain plus offline (vendored) module resolution.
+  Developed in full in **Phase 7.6**; it is the *easiest* of these, not the
+  hardest, and it gates the hermetic container runtime (Incus) and the
+  Phase 20 `verlihub` TLS proxy.
 
 #### Recipe Ecosystem
 
@@ -1200,6 +1210,105 @@ precisely this reason.
       files for 9.14.1**.  This would be net-new pain on a fleet that
       already carries BSD pain, so scope Haskell to **Linux + macOS +
       Windows** and say so rather than discovering it at integration time.
+
+---
+
+### Phase 7.6 — Go Ecosystem Integration (Our Go, Our Modules)
+
+**Status: Proposed** — full design in
+[`docs/roadmap/hermetic-container-runtime.md`](docs/roadmap/hermetic-container-runtime.md).
+
+Numbered 7.6 for the same reason as 7.5: it sits beside the other
+language-ecosystem phases without renumbering the PyPI release off its
+terminal slot.  **Go is much easier than Haskell and should not be
+sequenced behind it** — Phase 7.5's hard part (per-closure ABI hashing)
+has no Go equivalent, and upstream ships official per-platform binary
+tarballs, so there is no bootstrap dance.
+
+Today the word "Go" appears **once** in this roadmap: the Phase 20
+`verlihub` entry, where the TLS-proxy feature "requires a **Go
+toolchain** and should stay off by default".  That is a feature already
+deferred because of this gap, and Phase 4's language list omits Go
+entirely.
+
+- [ ] **`go` recipe** — pin an official upstream toolchain tarball per
+      platform, SHA256-pinned and mirrored, exactly as
+      `new-dependencies.md` §1 does for the Emscripten SDK.  Consumers
+      declare it through `depends.host_tools`.
+- [ ] **Offline module resolution** — `go build` wants
+      `proxy.golang.org`; cvcpkg builds must be offline.  Standardize on
+      `GOFLAGS=-mod=vendor` + `GOPROXY=off` against a vendored tree (the
+      Go analogue of the `python_sdist` offline problem).
+- [ ] **`CGO_ENABLED` composes with the native toolchain** — a cgo build
+      is only as hermetic as its C compiler, so this inherits whatever
+      [`hermetic-native-toolchain.md`](docs/roadmap/hermetic-native-toolchain.md)
+      decides.
+- [ ] **Unblock Phase 20's `verlihub` TLS proxy** — the first consumer
+      that already exists in the roadmap.
+
+#### The driving consumer — Incus as a dependency, not a capability
+
+`incus` / `lxd` / `lxc` are currently **host capabilities**: `platform.py`
+probes them and `test.vm.requires_capabilities` gates on the result.  The
+probes are good at what they do (they prove usability, not mere presence,
+and disambiguate the overloaded `lxc` name), but a capability cannot pin a
+**version** and cannot **cause** provisioning — a builder runs VM tests
+only because an admin ran `apt install incus` out of band.  That is the
+same "floats to the system default" gap Phase 7 closed for Python, 7.5
+closes for GHC, and `hermetic-native-toolchain.md` raises for `CC`/`CXX`.
+
+- [ ] **`liblxc` (≥ 5.0.0) + `libcap`, `libacl`, `libattr`, `libudev`,
+      `libuv`** — ~6 new C recipes; `sqlite`, `lz4`, `xz`, `zstd`,
+      `libtool` and `pkg-config` are already in the catalog.
+- [ ] **`incus` recipe** — build from the **release tarball**, which
+      bundles the Go dependency tree plus local `libraft`/`libcowsql`,
+      removing two otherwise-painful recipes.  Requires Go ≥ **1.25.12**.
+- [ ] **Incus only — not LXD.**  Incus is Apache-2.0; LXD was relicensed
+      to **AGPLv3 under a Canonical CLA** (Dec 2023) and is now a mix of
+      AGPLv3 and Apache-2.0 **with no per-file metadata** saying which is
+      which.  For a catalog that redistributes binaries that is an
+      unresolvable provenance question.  Debian is deprecating LXD in
+      favour of Incus for trixie.  Keep the `lxd` *probe* regardless —
+      detecting a runtime we do not ship costs nothing.
+- [ ] **Narrow the capability; do not delete it.**  A hermetic Incus
+      cannot ship the parts the capability attests: the daemon is
+      **Linux-only**, it needs contiguous **sub-UID/sub-GID ranges ≥ 10M**
+      for root, kernel namespaces and cgroup delegation, and a running
+      privileged daemon.  So `requires_capabilities: [incus]` becomes
+      `host_tools: [incus]` (shippable, pinned) **plus**
+      `requires_capabilities: [linux-containers]` (the substrate, which
+      only the host can attest).  The capability stops meaning "did an
+      admin install a container manager" and starts meaning "can this
+      kernel host containers".
+- [ ] **`host_tools` needs version constraints.**  Pinning Incus *by
+      version* is currently impossible, and the gap is wider than the
+      schema.  Four distinct pieces:
+      - **Schema.**  `depends.host_tools` is a bare `array[string]`,
+        while `depends.build` / `depends.runtime` accept a `dep_entry`
+        (`name`, `version`, `platforms`).  The *code* already reads dict
+        entries (`builder.py::_dep_names`, `validation.py`), so only the
+        schema rejects them — `cvcpkg validate` currently fails a recipe
+        the builder would happily accept.  Making `host_tools` accept
+        `dep_entry` is the cheap half and buys `platforms` for free.
+      - **Platform filter — latent bug.**  In `builder.py::_dep_names`
+        the build/runtime loop skips entries whose `platforms` exclude
+        the target; the `host_tools` loop directly beneath it does not.
+        A dict host tool carrying `platforms` would be requested on
+        *every* platform — which bites immediately for a Linux-only
+        `incus`.
+      - **Enforcement is the substantive half.**  Phase 1.5 §8's version
+        ranges are enforced on the **install** path (recipe
+        `depends.runtime` → manifest → resolver `satisfies()`).  Host
+        tools never reach the manifest — it carries `depends.runtime`
+        only, and host tools are stripped on install — so there is no
+        build-time equivalent: a host tool resolves **by name**, and the
+        build gets whatever version that builder last built.  Pinning
+        needs build-time constraint resolution, not just a richer schema.
+      - **Provenance.**  Once a host tool is pinned, the built artifact
+        should record *which* one built it, or the pin is unverifiable
+        after the fact.  Relates to Phase 16 (Prefix Provenance) and to
+        the reproducibility argument in
+        [`hermetic-native-toolchain.md`](docs/roadmap/hermetic-native-toolchain.md).
 
 ---
 

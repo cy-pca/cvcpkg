@@ -34,6 +34,135 @@ Major release: production daemon with database backend, the
 `cvcpkg.org` registry, distributed build infrastructure, and wasi
 support.
 
+### Recipes can run their tests inside a throwaway VM (`test.vm`) (2026-08-04)
+
+cvcpkg already had a test hook: `test.script`, a shell script run **on the
+builder** after the build and before packing. That is right for a library and
+worth nothing for an image package, whose artifact is an opaque guest disk — a
+builder-side script can prove the file exists and `qemu-img info` parses it,
+which is exactly the "trust me, it boots" that shipped a descriptor claiming
+`disk_bus: virtio-blk`, a value that general-protection-faults the Haiku guest
+before userland.
+
+New `test.vm` block, additive alongside `test.script`: cvcpkg boots the image
+the recipe just staged in an ephemeral VM, asserts, and destroys it.
+
+```yaml
+test:
+  vm:
+    requires_capabilities: [incus]   # skipped (green) without it
+    hypervisors: [incus]             # incus | lxd; classic lxc cannot boot a VM
+    image: self                      # the image THIS build produced
+    connect: ssh                     # ssh | agent
+    ssh: {key_env: HAIKU_BUILDER_SSH_KEY}
+    script: vm-test.sh               # runs INSIDE the guest
+    boot_timeout_seconds: 720
+```
+
+cvcpkg owns the lifecycle: reap stale `cvcpkg-vmtest-*` instances *and images*,
+`image import` the importer metadata + disk, `init` a VM sized from the
+descriptor's `boot:` block, pin the root device to `boot.disk_bus`, start, wait
+for reachability, run the guest script, destroy both.
+
+* **Skip, never fail.** Both gates (`requires_capabilities`, "any hypervisor
+  present") and a missing SSH key resolve to a reported SKIP *before* any
+  hypervisor state exists. `lxc` alone also skips, saying why: classic LXC is
+  daemonless and containers-only, so it can never boot a VM.
+* **The VM and its imported image are always destroyed** — pass, guest failure,
+  boot timeout, a hypervisor CLI that throws, `SystemExit`, Ctrl-C and SIGTERM
+  (converted to an exception so the `finally` runs at all). The teardown itself
+  runs with SIGINT/SIGTERM *deferred and re-delivered afterwards*, because it is
+  two deletes and a signal landing between them would strand the expensive half;
+  it never raises, so a broken log callback cannot abort it midway. Teardown
+  draws a *fresh* budget, so an expired deadline never means a leaked VM; a
+  failed delete is reported, not swallowed.
+* **The imported image is reaped, not just the instance.** Instances and images
+  are separate namespaces — `incus list` never mentions an image — so cleanup
+  asks twice (`incus list` **and** `incus image list`). Each run copies a
+  multi-gigabyte qcow2 into the daemon's store; a reaper that knew only about
+  instances would fill a builder's disk one image per killed run. A
+  partially-failed import counts too: teardown asks the daemon whether the alias
+  exists rather than trusting the exit code, which also keeps a bad metadata
+  tarball (where nothing was created) from printing a false leak warning.
+* **A SIGKILL is covered by the next run's reaper** — instances and image
+  aliases are both named `cvcpkg-vmtest-<pkg>-<owning-pid>-<random>`, instances
+  are reaped before images (a daemon refuses to delete an image an instance
+  still uses), the prefix is the only handle so a pre-existing instance or image
+  can never be touched, and something is only reaped when its owning process is
+  gone — so two builds sharing a daemon cannot destroy each other's live VM or
+  the image it booted from.
+* **Bounded time.** One wall-clock deadline covers the phase and every
+  subprocess call draws its timeout from it.
+
+`test.vm.requires_capabilities` is deliberately NOT the recipe-level key: that
+one gates whether the resolver will *select* the package, and an image must stay
+installable on a host with no hypervisor.
+
+Also new: `cvcpkg image test <name>` runs the same engine by hand against an
+installed image (exit 0 on pass or skip, 6 on failure), and `haiku-image` now
+ships `vm-test.sh`, which checks the guest is Haiku on x86_64, has a writable
+BFS root, and can actually compile and run a binary.
+
+### Image packages live in `share/<name>/`, and `cvcpkg image` finds them (2026-08-04)
+
+The first image recipe (`haiku-image`, still unpublished) staged four files at
+the ROOT of `CVC_INSTALL_DIR`. Because cvcpkg merges a staged tree into the
+prefix preserving relative paths, `cvcpkg install haiku-image` dropped
+`$PREFIX/metadata.yaml` and `$PREFIX/README-import.md` at the prefix root —
+generic names that the *second* image package would have collided with on both.
+
+An image package now owns exactly one directory, named after itself, with
+**role-based** filenames:
+
+```
+<prefix>/share/haiku-image/image.yaml            canonical descriptor
+<prefix>/share/haiku-image/image.env             POSIX KEY=value shim
+<prefix>/share/haiku-image/disk.qcow2            the payload
+<prefix>/share/haiku-image/SHA256SUMS            `sha256sum -c` format
+<prefix>/share/haiku-image/README.md
+<prefix>/share/haiku-image/incus/metadata.yaml
+<prefix>/share/haiku-image/incus/metadata.tar.xz
+```
+
+The directory is the package name (unique in the catalog keyspace), so N images
+co-install; the filenames carry no version and no guest arch, so
+`$CVCPKG_PREFIX/share/<package>/disk.qcow2` is derivable from the package name
+alone. Guest axes live in the package NAME and in `image.yaml`, never in a
+filename. Only one payload format ships — the duplicate anyboot `.iso` is gone
+(recover it with `qemu-img convert -f qcow2 -O raw`).
+
+New `recipe.kind: image` is **enforced, not a label**: `cvcpkg validate` checks
+`package.files` and `cvcpkg pack` checks the real staged tree, refusing any
+image recipe that stages outside `share/<name>/` or ships no schema-valid
+`image.yaml` (new bundled `image-schema.yaml`).
+
+New `cvcpkg image` command group (core, no extra) — `ls`, `path`, `dir`,
+`info`, `env`, `verify`, `export`. Discovery is a glob over
+`<prefix>/share/*/image.yaml`: no index, no server call, no new state file.
+`image path` prints one absolute path and exits 3 (not installed) or 4 (no such
+role) so a `/bin/sh` provisioner can branch without parsing output; `image
+verify` re-hashes the bytes **on disk**, which the installer's download-time
+sha256 does not cover. `--prefix` now honours `CVCPKG_PREFIX` everywhere, and
+build scripts get `CVC_FULL_VERSION`/`CVC_REVISION`.
+
+```sh
+export CVCPKG_PREFIX=/srv/cvcpkg/images
+cvcpkg install haiku-image && cvcpkg image verify haiku-image
+DISK=$(cvcpkg image path haiku-image)
+META=$(cvcpkg image path haiku-image --role incus-metadata)
+eval "$(cvcpkg image env haiku-image)"
+incus image import "$META" "$DISK" --alias haiku-builder
+incus config device set haiku-b1 root io.bus="$CVCPKG_IMAGE_DISK_BUS"
+```
+
+**Scope, so this entry is not read as more than it is:** what landed is the
+*packaging* layer — layout, descriptor, schema, `cvcpkg image`, `test.vm`.
+`haiku-image` itself is still unpublished **and does not yet boot** (truncated
+anyboot partition table, an SSH key that was never actually injected, no
+`sshd` launch job); repair is on a separate branch. The command lines above
+are the contract, not a transcript of a working deployment — see
+`docs/image-packages.md` and `recipes/haiku-image/README-import.md`.
+
 ### Upload cap is a setting, default 4 GiB (2026-08-02)
 
 The server's maximum bundle size is now a first-class setting —

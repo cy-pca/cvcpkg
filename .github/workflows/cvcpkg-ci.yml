@@ -15,7 +15,7 @@ on:
       - 'docker-compose.test.yml'
       - 'Dockerfile.test'
       - 'Dockerfile.playwright'
-      - 'cvcpkg_build_backend.py'
+      - 'pep517-backend/**'
       # Dependency changes must run the suite: the installed set is what the
       # tests actually exercise, and adding/removing a dep can silently change
       # which tests run at all (an importorskip'd test flipping between
@@ -33,7 +33,7 @@ on:
       - 'docker-compose.test.yml'
       - 'Dockerfile.test'
       - 'Dockerfile.playwright'
-      - 'cvcpkg_build_backend.py'
+      - 'pep517-backend/**'
       - 'pyproject.toml'
       - 'poetry.lock'
       - '.github/workflows/cvcpkg-ci.yml'

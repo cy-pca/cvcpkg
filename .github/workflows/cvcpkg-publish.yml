@@ -83,23 +83,10 @@ jobs:
       - name: Install build tools
         run: pip install build twine
 
-      - name: Bundle recipes into package
-        run: |
-          # src/cvcpkg/recipes/ is gitignored and absent from a fresh
-          # checkout, so the target directory must be created first —
-          # `cp -r recipes/* <missing-dir>/` otherwise fails and, when
-          # errors are swallowed, silently ships a wheel with no recipes.
-          mkdir -p src/cvcpkg/recipes
-          rm -rf src/cvcpkg/recipes/*
-          cp -r recipes/. src/cvcpkg/recipes/
-          rm -f src/cvcpkg/recipes/.gitignore
-          count=$(find src/cvcpkg/recipes -name recipe.yaml | wc -l)
-          echo "Bundled ${count} recipe(s) into the package"
-          if [ "${count}" -eq 0 ]; then
-            echo "ERROR: no recipes were bundled" >&2
-            exit 1
-          fi
-
+      # Recipes are bundled by the in-tree PEP 517 backend (pep517-backend/),
+      # which pyproject's [build-system] selects — no hand-rolled `cp -r` step.
+      # The "Verify wheel + sdist contents" gate below asserts the recipes
+      # actually landed, in the ARTIFACT rather than in a staging directory.
       - name: Build sdist and wheel
         working-directory: .
         run: python -m build
