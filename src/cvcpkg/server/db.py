@@ -522,6 +522,12 @@ class BuilderRow(Base):
     current_jobs: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_jobs: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     prefer_affinity: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Free space (whole GiB) on the volume holding this builder's work dir,
+    # refreshed on every heartbeat.  NULLABLE on purpose: NULL means "this
+    # builder never told us", which the scheduler reads as unknown and lets
+    # through.  A NOT NULL DEFAULT 0 would read as "no space" and strand every
+    # min_disk_gb job on every builder that predates this column.
+    free_disk_gb: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_heartbeat: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -560,6 +566,11 @@ class BuildJobRow(Base):
     # ``requires_capabilities`` at submit time — the build-side twin of the
     # resolver's install-side capability gating.
     required_capabilities: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    # Free scratch disk (whole GiB) a builder must have on its work volume to
+    # take this job.  Propagated from the recipe's ``build.min_disk_gb`` at
+    # submit time — the quantitative sibling of required_capabilities above.
+    # NULL for the overwhelming majority of jobs (no requirement).
+    min_disk_gb: Mapped[int | None] = mapped_column(Integer, nullable=True)
     builder_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("builders.id", ondelete="SET NULL"), nullable=True
     )

@@ -34,6 +34,13 @@ build:
   # A Linux-host recipe that PRODUCES a Haiku VM image (the recipe itself is
   # not a Haiku package).  Runs only on Linux x86_64 builders.
   build_type_independent: true
+  # The Haiku source clone (full history — see build.sh), the GCC/binutils
+  # cross-toolchain jam builds first, the generated objects, the anyboot
+  # image and the qcow2 conversion all live on the builder's work volume at
+  # once: ~35 GiB at peak.  Declared so the scheduler refuses a builder that
+  # cannot finish it — a 26 GiB dev-cluster builder took the job on
+  # 2026-08-03 and only discovered the shortfall inside build.sh.
+  min_disk_gb: 35
     # Linux x86_64 host only (builds a Haiku cross-toolchain + x86_64 image).
   matrix:
     - platform: linux

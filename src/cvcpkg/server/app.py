@@ -1100,6 +1100,59 @@ def _satisfies_capabilities(builder, job) -> bool:
     return all(bool(caps.get(c)) for c in required)
 
 
+def _satisfies_disk(builder, job) -> bool:
+    """True when *builder* has enough free scratch disk for *job*.
+
+    The quantitative sibling of :func:`_satisfies_capabilities`: a job's
+    ``min_disk_gb`` (from the recipe's ``build.min_disk_gb``) must be covered
+    by the builder's ``free_disk_gb``, re-measured on its work volume at every
+    heartbeat.  A job with no requirement matches every builder.
+
+    A builder whose ``free_disk_gb`` is ``None`` matches too.  ``None`` means
+    "this builder never told us" — every agent that predates disk-aware
+    scheduling, plus any host where the probe failed — and reading that as
+    "0 GiB free" would make those builders ineligible for every disk-bearing
+    job, stranding the job on an all-legacy fleet instead of merely failing to
+    optimise.  Unknown fails OPEN; the recipe's own ``df`` preflight is what
+    catches the case this filter could not.
+
+    The figure can be up to one heartbeat interval (~60s) stale, and it does
+    not account for space the builder's own in-flight jobs are about to
+    consume.  That is accepted: this filter exists to stop the *gross*
+    mispairing (35 GiB job onto a 26 GiB builder), not to be an allocator.
+    """
+    need = getattr(job, "min_disk_gb", None)
+    if not need:
+        return True
+    have = getattr(builder, "free_disk_gb", None)
+    if have is None:
+        return True
+    return have >= need
+
+
+def _debit_disk(builder, job) -> None:
+    """Charge *job*'s ``min_disk_gb`` against *builder*'s advertised free space.
+
+    In-memory only, for the remainder of one scheduler tick — the builder's
+    next heartbeat reports the truth.  But that heartbeat is up to a minute
+    away and one tick can dispatch several jobs to the same builder: without
+    this, two 35 GiB jobs both pass against the same 40 GiB figure and the
+    second still lands on a volume that cannot hold it.  The in-memory twin of
+    ``chosen.current_jobs += 1`` right above the call site.
+
+    Pessimistic on purpose: it never credits back the space a finishing job
+    releases, which can only cost a scheduling round, never a failed build.  A
+    builder advertising nothing stays at ``None`` (unknown), not 0.
+    """
+    need = getattr(job, "min_disk_gb", None)
+    if not need:
+        return
+    have = getattr(builder, "free_disk_gb", None)
+    if have is None:
+        return
+    builder.free_disk_gb = max(0, have - need)
+
+
 def _choose_builder(job, available):
     """Pick a builder for *job*, or ``None``.
 
@@ -1107,8 +1160,9 @@ def _choose_builder(job, available):
     the job's org namespace), matches platform/arch or a cross-platform
     capability, requires every capability in the job's
     ``required_capabilities`` (e.g. ``cuda``) to be advertised by the builder,
-    respects per-builder capacity, and prefers affinity builders as a soft
-    preference.
+    requires the builder to have the job's ``min_disk_gb`` free on its work
+    volume, respects per-builder capacity, and prefers affinity builders as a
+    soft preference.
 
     Multi-tenant fleet: a builder advertises a *set* of served namespaces
     (``served_namespaces``, always including its home ``org_slug``), so one
@@ -1131,6 +1185,12 @@ def _choose_builder(job, available):
         if not _satisfies_capabilities(b, job):
             # e.g. a cuda job never lands on a CPU-only builder, where it
             # would only fail on the missing GPU toolchain.
+            continue
+        if not _satisfies_disk(b, job):
+            # e.g. a 35 GiB haiku-image job never lands on a builder with
+            # 26 GiB free, where it would run for an hour and then ENOSPC.
+            # Unlike a capability this is transient: the builder stays a
+            # candidate for the same job once its GC sweep frees space.
             continue
         if job.platform == "any":
             # A platform-independent (noarch) job publishes one any/noarch
@@ -1314,6 +1374,7 @@ async def _build_scheduler_loop() -> None:
                     current_jobs=chosen.current_jobs + 1,
                 )
                 chosen.current_jobs += 1  # update in-memory for this loop iteration
+                _debit_disk(chosen, job)
 
         except Exception:
             logger.exception("build scheduler loop error")
@@ -6331,6 +6392,7 @@ def create_app(
                 capabilities=body.capabilities,
                 max_jobs=body.max_jobs,
                 prefer_affinity=body.prefer_affinity,
+                free_disk_gb=body.free_disk_gb,
             )
         await emit_webhook_event(
             "builder.online",
@@ -6427,6 +6489,7 @@ def create_app(
                 max_jobs=body.max_jobs,
                 prefer_affinity=body.prefer_affinity,
                 served_namespaces=body.served_namespaces,
+                free_disk_gb=body.free_disk_gb,
             )
             if info is None:
                 raise HTTPException(404, f"builder {builder_id} not found")
@@ -6448,6 +6511,10 @@ def create_app(
         dispatched/running jobs in the database, ignoring the
         client-reported value.  This prevents drift after builder
         restarts or lost heartbeats.
+
+        ``free_disk_gb`` rides along so the scheduler's disk filter matches
+        against a live measurement rather than whatever was true at
+        registration; omitting it leaves the stored value alone.
         """
         _require_db_builders()
         info = await _db_builders.heartbeat(
@@ -6455,6 +6522,7 @@ def create_app(
             status=body.status,
             current_jobs=body.current_jobs,
             reconcile=True,
+            free_disk_gb=body.free_disk_gb,
         )
         if info is None:
             raise HTTPException(404, f"builder {builder_id} not found")
@@ -6523,6 +6591,7 @@ def create_app(
                 config=body.config,
                 link=link,
                 required_capabilities=body.required_capabilities,
+                min_disk_gb=body.min_disk_gb,
                 org_slug=body.org_slug,
                 priority=body.priority,
                 timeout_seconds=body.timeout_seconds,
@@ -6564,6 +6633,7 @@ def create_app(
                 # wasm/wasi/cosmo only support static linking — enforce server-side.
                 "link": "static" if j.platform in ("wasm", "wasi", "cosmo") else j.link,
                 "required_capabilities": j.required_capabilities,
+                "min_disk_gb": j.min_disk_gb,
                 "org_slug": j.org_slug,
                 "priority": j.priority,
                 "timeout_seconds": j.timeout_seconds,
@@ -6665,6 +6735,16 @@ def create_app(
                 "are never returned."
             ),
         ),
+        free_disk_gb: int | None = Query(
+            None,
+            ge=0,
+            description=(
+                "Free scratch disk (whole GiB) on the caller's work volume.  "
+                "Jobs needing more are never returned.  Omit it and no job is "
+                "excluded — unknown fails open, as it does for a registered "
+                "builder that advertises nothing."
+            ),
+        ),
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
         """Return the next pending job for *platform*, or 204 when none.
@@ -6692,6 +6772,10 @@ def create_app(
         # skipped rather than handed to a host where it would fail.
         have = {c.strip() for c in capabilities.split(",") if c.strip()}
         candidates = [j for j in candidates if set(j.required_capabilities or []) <= have]
+        # Disk gate, same shape: a drainer that reports its free space is never
+        # handed a job it cannot fit.  One that reports nothing is unchanged.
+        if free_disk_gb is not None:
+            candidates = [j for j in candidates if (j.min_disk_gb or 0) <= free_disk_gb]
         if not candidates:
             return Response(status_code=204)
         candidates.sort(key=lambda j: (-j.priority, j.submitted_at))
@@ -7265,6 +7349,9 @@ def create_app(
                         status=status,
                         current_jobs=current_jobs,
                         reconcile=True,
+                        # Absent from an older agent's frame -> None -> the
+                        # stored figure is left alone (never zeroed).
+                        free_disk_gb=data.get("free_disk_gb"),
                     )
                     await websocket.send_json({"type": "heartbeat_ack"})
 

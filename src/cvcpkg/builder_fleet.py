@@ -25,6 +25,9 @@ Config schema (``fleet.yaml``)::
                              # (merged with the worker's auto-detected set;
                              # see auto_capabilities), overridable per server
     auto_capabilities: true  # optional; false passes --no-auto-capabilities
+    advertise_free_disk: true  # optional; false passes --no-free-disk, so the
+                               # scheduler treats this host's work-volume
+                               # capacity as unknown
     servers:
       - server: https://cvcpkg.org
         token_env: CVCPKG_TOKEN_PROD    # or `token: <literal>`
@@ -63,6 +66,7 @@ class FleetServer:
     arch: str | None = None
     capabilities: tuple[str, ...] = ()
     auto_capabilities: bool = True
+    advertise_free_disk: bool = True
 
     @property
     def host(self) -> str:
@@ -134,6 +138,7 @@ def parse_fleet_config(data: dict) -> FleetConfig:
     default_labels = tuple(str(x) for x in (data.get("labels") or []))
     default_capabilities = tuple(str(x) for x in (data.get("capabilities") or []))
     default_auto_caps = bool(data.get("auto_capabilities", True))
+    default_free_disk = bool(data.get("advertise_free_disk", True))
 
     servers_raw = data.get("servers")
     if not isinstance(servers_raw, list) or not servers_raw:
@@ -175,6 +180,7 @@ def parse_fleet_config(data: dict) -> FleetConfig:
                     str(x) for x in (entry.get("capabilities") or default_capabilities)
                 ),
                 auto_capabilities=bool(entry.get("auto_capabilities", default_auto_caps)),
+                advertise_free_disk=bool(entry.get("advertise_free_disk", default_free_disk)),
             )
         )
     return FleetConfig(name=fleet_name, servers=servers)
@@ -223,6 +229,8 @@ def worker_argv(fs: FleetServer) -> list[str]:
         argv += ["--capability", cap]
     if not fs.auto_capabilities:
         argv += ["--no-auto-capabilities"]
+    if not fs.advertise_free_disk:
+        argv += ["--no-free-disk"]
     if fs.platform:
         argv += ["--platform", fs.platform]
     if fs.arch:

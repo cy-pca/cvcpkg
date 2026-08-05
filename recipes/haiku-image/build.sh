@@ -24,6 +24,31 @@ BUILDTOOLS_REF="${BUILDTOOLS_REF:-r1beta5}"
 HAIKU_REPO="${HAIKU_REPO:-https://github.com/haiku/haiku.git}"
 BUILDTOOLS_REPO="${BUILDTOOLS_REPO:-https://github.com/haiku/buildtools.git}"
 
+# ── 0. Disk preflight ───────────────────────────────────────────────────
+# DEFENCE IN DEPTH, not the primary mechanism.  The primary one is
+# `build.min_disk_gb: 35` in recipe.yaml, which the scheduler matches against
+# each builder's advertised free space so this job is never dispatched
+# somewhere it cannot fit.  This check stays because the scheduler can be
+# wrong: its figure is up to one heartbeat old, a co-tenant job can eat the
+# volume between dispatch and here, a builder predating disk-aware scheduling
+# advertises nothing at all (unknown fails open by design), and --work-dir may
+# point at a different volume than the one `df` sees here.  Failing in the
+# first second with a legible message beats failing at 90% with ENOSPC from
+# jam.  Keep the number in sync with recipe.yaml's min_disk_gb.
+HAIKU_MIN_DISK_GB="${HAIKU_MIN_DISK_GB:-35}"
+if [[ -z "${HAIKU_SKIP_SPACE_CHECK:-}" ]]; then
+    # -P: POSIX output, so a long device name cannot wrap onto its own line
+    # and shift the field we read.  Column 4 is available (not total) KiB.
+    _avail_kb="$(df -Pk "${CVC_BUILD_DIR}" 2>/dev/null | awk 'NR==2 {print $4}')"
+    _avail_gb=$(( ${_avail_kb:-0} / 1024 / 1024 ))
+    if [[ -n "${_avail_kb}" ]] && (( _avail_gb < HAIKU_MIN_DISK_GB )); then
+        echo "ERROR: ${CVC_BUILD_DIR} has ${_avail_gb} GiB free, need ~${HAIKU_MIN_DISK_GB} GiB." >&2
+        echo "       Point CVC_BUILD_DIR at a larger volume, or set HAIKU_SKIP_SPACE_CHECK=1" >&2
+        exit 1
+    fi
+    echo "cvcpkg: disk preflight OK - ${_avail_gb} GiB free (need ~${HAIKU_MIN_DISK_GB} GiB)"
+fi
+
 # ── 1. Host build dependencies (Debian/Ubuntu) ──────────────────────────
 # Haiku's build needs a specific host toolchain plus xorriso/mtools for the
 # image and qemu-img for the qcow2 conversion. Best-effort; if apt or sudo

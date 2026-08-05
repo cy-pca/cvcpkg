@@ -962,6 +962,35 @@ a Windows CUDA builder follows the same shape (`--capability cuda` in the superv
 auto-detect via `CUDA_PATH`). This routing is the prerequisite for building both the CUDA-math
 recipes above and the `libcvc-cuda` package on the fleet.
 
+**DONE (2026-08-04): disk-aware scheduling (`build.min_disk_gb`).** The quantitative sibling of the
+capability routing above, built on the same bones. `haiku-image` needs ~35 GiB of scratch (a Haiku
+cross-toolchain, the object tree, an anyboot image and a qcow2 conversion, all on the work volume);
+on 2026-08-03 it was dispatched to a dev-cluster builder with 26 GiB free and failed only because
+that recipe hand-rolls a `df` preflight in its `build.sh`. The scheduler itself had no notion of
+disk at all:
+- A recipe declares `build.min_disk_gb` (integer, alongside `build.timeout_seconds`): `haiku-image`
+  35, `llvm18` 25. The overwhelming majority of recipes declare nothing.
+- A builder advertises `free_disk_gb`, measured on the volume holding its **work dir**
+  (`--work-dir`, else the system temp dir jobs `mkdtemp` into) via `cvcpkg.platform.free_disk_gb`.
+  Unlike a capability this is a *measurement*, so it is re-taken on every heartbeat (REST and
+  WebSocket) rather than probed once, bounding staleness at one heartbeat interval (~60s).
+  `--no-free-disk` (fleet: `advertise_free_disk: false`) opts out; shown in `cvcpkg builder
+  list`/`status`.
+- The requirement propagates end to end (submit-dag → `BuildJobSubmitRequest`/`BuildJobInfo` →
+  `build_jobs.min_disk_gb`, migration 027 → store); `_choose_builder` skips a builder advertising
+  less; `/v1/builds/next-claimable` gates anonymous drainers on a `free_disk_gb` query param; and
+  submit-dag reports it before the operator waits — *"Skipping 1 recipe(s) for linux/x86_64: no
+  registered builder has enough free disk: haiku-image (35 GiB)"*. Within one scheduler tick the
+  dispatched job's requirement is debited from the builder's in-memory figure (the twin of
+  `current_jobs += 1`), so two 35 GiB jobs cannot both pass against the same 40 GiB reading.
+- **Unknown fails open.** A builder that advertises nothing (an agent predating this, or one run
+  with `--no-free-disk`) stays eligible: reading "no figure" as "0 GiB free" would strand every
+  disk-bearing job on every un-upgraded builder, turning an occasional mispairing into a permanent
+  outage. The recipe's own `df` preflight stays as defence in depth for exactly that gap.
+- **Not reaped as unschedulable**, deliberately — unlike a capability, free disk comes back (a GC
+  sweep, a neighbouring job finishing), and reaping would cancel the job's whole downstream chain
+  because the fleet was momentarily full. Such a job stays `pending`.
+
 #### Per-Interpreter Wheel Matrix (incl. Free-Threaded / No-GIL)
 
 cvcpkg ships **five** CPython interpreters as recipes — `python311`,

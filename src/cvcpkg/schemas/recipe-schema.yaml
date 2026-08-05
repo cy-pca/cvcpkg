@@ -308,6 +308,21 @@ $defs:
           (e.g. LLVM/GCC) that exceed the default.  submit-dag propagates this
           into each build job; the server reaper honours per-job
           timeout_seconds.
+      min_disk_gb:
+        type: integer
+        minimum: 1
+        description: >
+          Free scratch disk (GiB) this build needs on the builder's work
+          volume.  The disk twin of `requires_capabilities`: builders
+          advertise the free space on their work volume and the scheduler
+          never dispatches this recipe's jobs to a builder advertising less,
+          so an oversized build is refused up front by submit-dag instead of
+          dying on ENOSPC an hour in.  Declare it only for genuinely heavy
+          builds (a VM image, a full LLVM tree); the overwhelming majority
+          of recipes need nothing.  A builder that advertises no figure at
+          all — an agent older than this field, or one started with
+          `cvcpkg builder run --no-free-disk` — counts as eligible, so the
+          recipe's own preflight stays worth keeping.
       matrix:
         type: array
         items:

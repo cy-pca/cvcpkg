@@ -292,3 +292,48 @@ def host_capabilities() -> set[str]:
                 pass
         _probed_capabilities = found
     return set(_probed_capabilities)
+
+
+# ── Free scratch disk ───────────────────────────────────────────
+#
+# The quantitative sibling of a capability: a recipe declares
+# ``build.min_disk_gb`` and a builder advertises how much its work volume has
+# free, so the scheduler can refuse the pairing instead of letting the build
+# discover it an hour in.  Unlike a capability this is a *measurement*, so the
+# builder re-takes it on every heartbeat rather than once at registration.
+
+
+def free_disk_gb(path: str | os.PathLike[str] | None) -> int | None:
+    """Free space in whole GiB on the volume holding *path*, or ``None``.
+
+    *path* is the builder's work-dir root — the volume that actually holds the
+    per-job build trees — not the CWD or the install prefix, which routinely
+    live on a different filesystem.  ``None`` (no work dir configured) measures
+    the system temp dir, because that is where ``_execute_job``'s ``mkdtemp``
+    lands when ``--work-dir`` is unset.
+
+    A path that does not exist yet walks up to its nearest existing ancestor:
+    the answer is a property of the *volume*, and the builder measures before
+    the first job has created anything.  ``None`` is returned when even that
+    fails (an unreadable mount, a platform where ``statvfs`` is unavailable) —
+    "unknown", which callers must not confuse with "zero free" (see
+    ``_satisfies_disk`` in the server).
+
+    Truncating rather than rounding is deliberate: 34.9 GiB free must not
+    report as 35 and satisfy a 35 GiB requirement.
+    """
+    import shutil
+    from pathlib import Path
+
+    try:
+        import tempfile
+
+        probe = Path(path) if path is not None else Path(tempfile.gettempdir())
+        probe = probe.resolve()
+        # Walk up to the nearest existing ancestor; on any sane layout that is
+        # still the same filesystem, and at worst it is the mount point above.
+        while not probe.exists() and probe != probe.parent:
+            probe = probe.parent
+        return int(shutil.disk_usage(probe).free // (1024**3))
+    except Exception:
+        return None

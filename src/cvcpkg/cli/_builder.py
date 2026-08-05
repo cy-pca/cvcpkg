@@ -126,9 +126,9 @@ def builder_list(
         return
     click.echo(
         f"{'ID':>5}  {'Name':<24} {'Platform':<10} {'Arch':<10} {'Status':<8} "
-        f"{'Jobs':>4}  Capabilities"
+        f"{'Jobs':>4}  {'Disk':>8}  Capabilities"
     )
-    click.echo("-" * 86)
+    click.echo("-" * 96)
     for b in builders:
         # Flag-style capabilities (cuda, ...); cross_platforms is a list with
         # its own display in `builder status`, not a flag.
@@ -137,9 +137,14 @@ def builder_list(
                 k for k, v in (b.get("capabilities") or {}).items() if k != "cross_platforms" and v
             )
         )
+        # '?' rather than '0' for a builder that advertises nothing: the
+        # scheduler treats it as unknown, and the column must not read as an
+        # out-of-space host.
+        _disk = b.get("free_disk_gb")
+        disk = f"{_disk} GiB" if _disk is not None else "?"
         click.echo(
             f"{b['id']:>5}  {b['name']:<24} {b['platform']:<10} {b['arch']:<10} "
-            f"{b['status']:<8} {b['current_jobs']}/{b['max_jobs']:>3}  {flags}"
+            f"{b['status']:<8} {b['current_jobs']}/{b['max_jobs']:>3}  {disk:>8}  {flags}"
         )
 
 
@@ -179,6 +184,13 @@ def builder_status(builder_id: int, server: str, token: str):
     )
     if cap_flags:
         click.echo(f"  Capabilities: {', '.join(cap_flags)}")
+    _disk = data.get("free_disk_gb")
+    _disk_str = (
+        f"{_disk} GiB on the work volume (as of the last heartbeat)"
+        if _disk is not None
+        else "not advertised (treated as unknown, never as full)"
+    )
+    click.echo(f"  Free disk:   {_disk_str}")
     click.echo(f"  Affinity:    {'yes' if data.get('prefer_affinity') else 'no'}")
     click.echo(f"  Last HB:     {data.get('last_heartbeat') or 'never'}")
     click.echo(f"  Registered:  {data.get('created_at', 'unknown')}")
@@ -475,6 +487,15 @@ def builder_fleet(config_path: str, dry_run: bool, restart_delay: float) -> None
     "(nvidia-smi/nvcc/libcuda for cuda).  The CVCPKG_CAPABILITIES env var, "
     "when set, overrides probing either way.",
 )
+@click.option(
+    "--no-free-disk",
+    is_flag=True,
+    default=False,
+    help="Do not advertise free disk on the work volume.  The scheduler then "
+    "treats this builder's capacity as unknown and stops filtering it out of "
+    "jobs that declare build.min_disk_gb — use only when the measurement is "
+    "wrong (a bind-mounted or network work dir whose statvfs lies).",
+)
 def builder_run(
     server: str,
     token: str,
@@ -497,6 +518,7 @@ def builder_run(
     cross_archs: tuple[str, ...],
     capabilities: tuple[str, ...],
     no_auto_capabilities: bool,
+    no_free_disk: bool,
 ):
     """Register as a builder, poll for jobs, and execute builds.
 
@@ -697,6 +719,30 @@ def builder_run(
             if _g is not None:
                 click.echo(f"cvcpkg-builder: host glibc {format_version(_g)}")
 
+    # -- Advertised free disk --------------------------------
+    # A capability is a yes/no property of the host, so it is probed once.
+    # Free disk is a *measurement* that one job can move by tens of GiB, so it
+    # is re-taken on every heartbeat (see _heartbeat) and only seeded here.
+    #
+    # WHICH volume: work_root — the directory every job tree is mkdtemp'd into
+    # (see _execute_job) — and NOT the CWD, the install prefix or the recipe
+    # cache, which routinely sit on a different filesystem.  With --work-dir
+    # unset, jobs land in the system temp dir, which is what free_disk_gb(None)
+    # measures.
+    #
+    # --no-free-disk advertises nothing, which the scheduler reads as "unknown"
+    # and lets every job through — deliberately the same treatment as an agent
+    # too old to have this field, so opting out never routes a builder
+    # differently from the rest of a mixed-version fleet.
+    def _measure_free_disk() -> int | None:
+        if no_free_disk:
+            return None
+        from cvcpkg.platform import free_disk_gb as _free_disk_gb
+
+        return _free_disk_gb(work_root)
+
+    advertised_disk = _measure_free_disk()
+
     # -- Registration ----------------------------------------
     if cross_entries:
         cross_msg = " [cross: {}]".format(
@@ -706,6 +752,8 @@ def builder_run(
         cross_msg = ""
     if advertised_caps:
         cross_msg += " [capabilities: {}]".format(", ".join(sorted(advertised_caps)))
+    if advertised_disk is not None:
+        cross_msg += f" [free disk: {advertised_disk} GiB]"
 
     builder_id: int | None
     if no_register:
@@ -737,6 +785,10 @@ def builder_run(
             "labels": list(labels),
             "capabilities": caps,
         }
+        if advertised_disk is not None:
+            # Omitted rather than sent as null when unknown, so an older
+            # server that does not know the field is unaffected.
+            body["free_disk_gb"] = advertised_disk
         if len(served) > 1:
             cross_msg += " [serves: {}]".format(
                 ", ".join(repr(ns) if ns == "" else ns for ns in served)
@@ -814,17 +866,27 @@ def builder_run(
         """Send heartbeat to server.
 
         A no-op when unregistered — there is no builder row to keep alive.
+
+        Carries a FRESH free-disk measurement, not the one taken at
+        registration: a long-lived builder's work volume moves constantly (a
+        running job, the periodic GC sweep, a co-tenant), and the scheduler's
+        disk filter is only as good as the number it matches against.  Worst
+        case the server's figure is one heartbeat interval old.
         """
         if builder_id is None:
             return
         with jobs_lock:
             jobs_now = current_jobs
+        payload: dict = {"status": "online", "current_jobs": jobs_now}
+        _free = _measure_free_disk()
+        if _free is not None:
+            payload["free_disk_gb"] = _free
         try:
             with httpx.Client(timeout=30) as client:
                 resp = client.post(
                     f"{base}/v1/builders/{builder_id}/heartbeat",
                     headers=headers,
-                    json={"status": "online", "current_jobs": jobs_now},
+                    json=payload,
                 )
             if resp.status_code >= 400:
                 click.echo(f"  heartbeat failed: {resp.status_code}", err=True)
@@ -1757,16 +1819,19 @@ def builder_run(
                     # Send heartbeat if due
                     now = time.time()
                     if now - last_heartbeat >= heartbeat_interval:
+                        _hb: dict = {
+                            "type": "heartbeat",
+                            "status": "online",
+                            "current_jobs": current_jobs,
+                        }
+                        # Re-measured per beat, same as the REST path — the
+                        # WebSocket loop is the one a long-lived builder
+                        # actually uses, so it must not carry a stale figure.
+                        _free = _measure_free_disk()
+                        if _free is not None:
+                            _hb["free_disk_gb"] = _free
                         try:
-                            ws.send(
-                                json.dumps(
-                                    {
-                                        "type": "heartbeat",
-                                        "status": "online",
-                                        "current_jobs": current_jobs,
-                                    }
-                                )
-                            )
+                            ws.send(json.dumps(_hb))
                             last_heartbeat = now
                         except Exception:
                             break  # connection lost
@@ -1943,17 +2008,23 @@ def builder_run(
             try:
                 with httpx.Client(timeout=35) as client:
                     if builder_id is None:
+                        _params = {
+                            "platform": platform,
+                            "arch": arch,
+                            # A drainer is anonymous, so it states its host
+                            # capabilities per request; the server never
+                            # hands it a job requiring anything more.
+                            "capabilities": ",".join(sorted(advertised_caps)),
+                        }
+                        # Same story for disk, and re-measured per poll since a
+                        # drainer has no heartbeat to carry it.
+                        _free = _measure_free_disk()
+                        if _free is not None:
+                            _params["free_disk_gb"] = str(_free)
                         resp = client.get(
                             f"{base}/v1/builds/next-claimable",
                             headers=headers,
-                            params={
-                                "platform": platform,
-                                "arch": arch,
-                                # A drainer is anonymous, so it states its host
-                                # capabilities per request; the server never
-                                # hands it a job requiring anything more.
-                                "capabilities": ",".join(sorted(advertised_caps)),
-                            },
+                            params=_params,
                         )
                     else:
                         resp = client.get(

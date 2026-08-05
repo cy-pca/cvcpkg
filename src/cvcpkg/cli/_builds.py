@@ -140,6 +140,8 @@ def builds_info(job_id: int, server: str, token: str):
     click.echo(f"  Link:        {data['link']}")
     if data.get("required_capabilities"):
         click.echo(f"  Requires:    {', '.join(data['required_capabilities'])}")
+    if data.get("min_disk_gb"):
+        click.echo(f"  Min disk:    {data['min_disk_gb']} GiB")
     click.echo(f"  Status:      {data['status']}")
     click.echo(f"  DAG:         {data.get('dag_id') or '-'}")
     click.echo(f"  Builder:     {data.get('builder_id') or 'unassigned'}")
@@ -1101,6 +1103,16 @@ def builds_submit_dag(
         caps = recipe_data.get(name, {}).get("requires_capabilities", []) or []
         return [c for c in caps if isinstance(c, str)]
 
+    def _min_disk(name: str) -> int | None:
+        """A recipe's ``build.min_disk_gb`` (e.g. 35 for haiku-image).
+
+        Propagated onto its build jobs so the scheduler routes them only to a
+        builder with that much free on its work volume, instead of letting the
+        build discover the shortfall an hour in.
+        """
+        d = recipe_data.get(name, {}).get("build", {}).get("min_disk_gb")
+        return int(d) if d else None
+
     # Valid platform→arch pairings.  wasm32 only pairs with wasm/wasi.
     _wasm_arches = {"wasm32"}
     _wasm_platforms = {"wasm", "wasi"}
@@ -1117,10 +1129,12 @@ def builds_submit_dag(
     # read we submit everything and let the server's reaper clean up.
     _supported_targets: set[tuple[str, str]] = set()
     _supported_platforms: set[str] = set()  # legacy platform-only cross targets
-    # Per-builder (targets, platforms, capability flags) so recipes with
-    # requires_capabilities are checked against a SINGLE builder that both
-    # covers the target and advertises the capability.
-    _builder_offers: list[tuple[set[tuple[str, str]], set[str], set[str]]] = []
+    # Per-builder (targets, platforms, capability flags, free disk GiB) so
+    # recipes with requires_capabilities / build.min_disk_gb are checked
+    # against a SINGLE builder that covers the target AND advertises the
+    # capability AND has the space — never pieced together from three hosts.
+    # The free-disk element is None for a builder that advertises nothing.
+    _builder_offers: list[tuple[set[tuple[str, str]], set[str], set[str], int | None]] = []
     _builder_check = not allow_unschedulable
     if _builder_check:
         import httpx as _httpx
@@ -1148,9 +1162,10 @@ def builds_submit_dag(
                     for _k, _v in (_b.get("capabilities") or {}).items()
                     if _k != "cross_platforms" and _v
                 }
+                _b_disk = _b.get("free_disk_gb")
                 _supported_targets |= _b_targets
                 _supported_platforms |= _b_platforms
-                _builder_offers.append((_b_targets, _b_platforms, _b_caps))
+                _builder_offers.append((_b_targets, _b_platforms, _b_caps, _b_disk))
         except Exception as _e:  # noqa: BLE001 — best-effort, must not block submit
             click.echo(
                 f"  Warning: could not read builder registry ({_e}); submitting all "
@@ -1158,13 +1173,26 @@ def builds_submit_dag(
             )
             _builder_check = False
 
-    def _has_builder(plat: str, ar: str, required_caps: list[str] | None = None) -> bool:
+    def _has_builder(
+        plat: str,
+        ar: str,
+        required_caps: list[str] | None = None,
+        min_disk: int | None = None,
+    ) -> bool:
         req = set(required_caps or [])
-        if not req:
+        if not req and not min_disk:
             return (plat, ar) in _supported_targets or plat in _supported_platforms
         return any(
-            req <= _caps and ((plat, ar) in _targets or plat in _plats)
-            for _targets, _plats, _caps in _builder_offers
+            req <= _caps
+            # A builder advertising no free-disk figure (_disk is None) is an
+            # agent older than disk-aware scheduling, or one run with
+            # --no-free-disk.  Unknown fails OPEN here exactly as it does in
+            # the server's _satisfies_disk: reading it as 0 GiB would make
+            # submit-dag refuse to submit anything with a min_disk_gb until
+            # the whole fleet had been upgraded.
+            and (not min_disk or _disk is None or _disk >= min_disk)
+            and ((plat, ar) in _targets or plat in _plats)
+            for _targets, _plats, _caps, _disk in _builder_offers
         )
 
     # ── Published-variant set for --skip-existing / auto-deps ────
@@ -1466,6 +1494,29 @@ def builds_submit_dag(
                                 )
                             )
                             eligible = [n for n in eligible if n not in set(_uncapable)]
+
+                        # Same treatment for build.min_disk_gb: tell the
+                        # operator NOW that nothing in the fleet has room for
+                        # haiku-image, instead of after an hour of build.
+                        # The recipe's capabilities ride along so the space and
+                        # the capability have to come from ONE builder, exactly
+                        # as the server's _choose_builder requires — a roomy
+                        # CPU box must not make a cuda recipe look placeable.
+                        _undersized = [
+                            n
+                            for n in eligible
+                            if _min_disk(n)
+                            and not _has_builder(plat, ar, _required_caps(n), _min_disk(n))
+                        ]
+                        if _undersized:
+                            click.echo(
+                                f"  Skipping {len(_undersized)} recipe(s) for {plat}/{ar}: no "
+                                f"registered builder has enough free disk: "
+                                + ", ".join(
+                                    f"{n} ({_min_disk(n)} GiB)" for n in sorted(_undersized)
+                                )
+                            )
+                            eligible = [n for n in eligible if n not in set(_undersized)]
                     if not eligible:
                         continue
 
@@ -1484,6 +1535,9 @@ def builds_submit_dag(
                         _rc = _required_caps(name) + _platform_caps(plat)
                         if _rc:
                             job["required_capabilities"] = sorted(set(_rc))
+                        _d = _min_disk(name)
+                        if _d is not None:
+                            job["min_disk_gb"] = _d
                         _t = _job_timeout(name)
                         if _t is not None:
                             job["timeout_seconds"] = _t
@@ -1527,6 +1581,26 @@ def builds_submit_dag(
                             )
                             eligible = [n for n in eligible if n not in set(satisfied)]
 
+                    # A noarch job is BUILT on the reference target, so its
+                    # disk requirement is checked against the builders that
+                    # cover that target, not against the fleet at large.
+                    if _builder_check and eligible:
+                        _undersized = [
+                            n
+                            for n in eligible
+                            if _min_disk(n)
+                            and not _has_builder(*_noarch_target, _required_caps(n), _min_disk(n))
+                        ]
+                        if _undersized:
+                            click.echo(
+                                f"  Skipping {len(_undersized)} noarch recipe(s): no "
+                                f"registered builder has enough free disk: "
+                                + ", ".join(
+                                    f"{n} ({_min_disk(n)} GiB)" for n in sorted(_undersized)
+                                )
+                            )
+                            eligible = [n for n in eligible if n not in set(_undersized)]
+
                     if not eligible:
                         click.echo(f"  No eligible noarch recipes for {cfg}/{lnk}")
                         continue
@@ -1547,6 +1621,9 @@ def builds_submit_dag(
                         _rc = _required_caps(name) + _platform_caps(_noarch_target[0])
                         if _rc:
                             job["required_capabilities"] = sorted(set(_rc))
+                        _d = _min_disk(name)
+                        if _d is not None:
+                            job["min_disk_gb"] = _d
                         _t = _job_timeout(name)
                         if _t is not None:
                             job["timeout_seconds"] = _t
