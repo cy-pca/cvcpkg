@@ -194,6 +194,43 @@ ppc64le. Covered by [`cvcpkg-2.0.md` §4 / Phase 8](cvcpkg-2.0.md);
 not blocking a PyPI cut at x86_64/arm64-only coverage of the three
 major desktop OSes.
 
+### W11 — No Rust toolchain: Rust-backed wheels are unbuildable off the tier-1 platforms
+
+A growing share of the Python ecosystem compiles Rust. PyPI ships no
+BSD wheels for any of it, so those packages can only be built from
+source — and the BSD VMs have no `cargo`:
+
+```
+Collecting rpds-py>=0.25.0 (from jsonschema)
+  Collecting maturin<2.0,>=1.9
+    Rust not found, installing into a temporary directory
+```
+
+Hit first by `jsonschema` >= 4.18, which replaced the pure-Python
+`pyrsistent` with `rpds-py` ("Python bindings to Rust's persistent
+data structures"). That single transitive edge made `pip install
+cvcpkg` unsatisfiable on freebsd/openbsd/netbsd, which is why
+`pyproject.toml` pins `jsonschema >=4.0,<4.18` — a deliberate hold at
+the last Rust-free release, not a stale bound. `pydantic-core` blocks
+the cosmo/APE track the same way (see
+[`static-single-binary-python.md`](static-single-binary-python.md)),
+and `cryptography`, `tokenizers`, `orjson` and `polars` are all on the
+far side of the same wall.
+
+Same shape as the [hermetic native
+toolchain](hermetic-native-toolchain.md) work, one language over: a
+`rust-toolchain` recipe (rustc + cargo, pinned, per-platform) that
+`requires_capabilities`-style routing can hand to any recipe declaring
+it, so a Rust-backed wheel builds on the BSD builders instead of being
+pruned from the matrix.
+
+Until that lands, the honest rule is: **a Python package whose
+closure touches Rust is tier-1-only** (linux/macOS/windows, where PyPI
+wheels exist). The `-cpXX` generator already encodes half of this —
+`PLATFORM_TAGS` in `tools/gen_python_recipes.py` lists exactly five
+platforms and no BSD — so such columns are silently absent rather than
+broken. Removing the `jsonschema` pin is gated on this item.
+
 ## Suggested workflow
 
 1. Stand up a "windows-gap" branch and submit per-recipe rebuilds
