@@ -4,6 +4,28 @@ Copies ./recipes into src/cvcpkg/recipes/ before building so that recipe
 files are included in the wheel/sdist.  The copy is wholesale: a recipe
 directory is an opaque bundle of build inputs, and packaging decides only
 that it ships, never which of its files matter.  See _sync_recipes.
+
+WHY THIS FILE LIVES IN ITS OWN DIRECTORY
+----------------------------------------
+pyproject.toml sets ``backend-path = ["build-backend"]``, and pyproject_hooks
+resolves EVERY top-level import against that path first (via a _BackendPathFinder
+it puts at the front of sys.meta_path) -- not just the backend module.  So any
+directory named on backend-path shadows same-named distributions for the whole
+build.
+
+With ``backend-path = ["."]`` the repo root is what gets exposed, and the repo
+root contains ``packaging/``.  poetry.core.factory does
+``from packaging.licenses import InvalidLicenseExpression``, which then resolves
+to this repo's packaging/ directory as a namespace package and dies with
+``No module named 'packaging.licenses'`` -- surfacing only as the opaque
+``BackendUnavailable: Cannot import 'cvcpkg_build_backend'``.  That is what made
+an earlier attempt at an in-tree backend "fail in pip's build isolation"
+(commit 7c67153) and get reverted to plain poetry-core plus hand-rolled
+``cp -r recipes/.`` steps in the workflows.
+
+Keeping this module alone in build-backend/ means the only name that directory
+can shadow is this module itself.  The directory name is deliberately NOT a
+valid Python identifier, so it can never be imported as a package either.
 """
 
 import shutil
@@ -29,7 +51,11 @@ __all__ = [
     "prepare_metadata_for_build_wheel",
 ]
 
-_HERE = Path(__file__).resolve().parent
+# The source tree root -- this file is <root>/build-backend/<this>.  PEP 517
+# also guarantees hooks run with CWD set to the source tree root, but deriving
+# it from __file__ keeps _sync_recipes() callable (and testable) regardless of
+# where the caller happens to be standing.
+_ROOT = Path(__file__).resolve().parent.parent
 
 # Recipe directories are copied WHOLESALE -- deliberately not through an
 # extension allowlist.
@@ -73,8 +99,8 @@ def _sync_recipes(repo_recipes: Path | None = None, src_recipes: Path | None = N
     Arguments exist so tests can exercise the real copy against a scratch
     destination; the defaults are the in-repo paths used by the build hooks.
     """
-    src_recipes = src_recipes or _HERE / "src" / "cvcpkg" / "recipes"
-    repo_recipes = repo_recipes or _HERE / "recipes"
+    src_recipes = src_recipes or _ROOT / "src" / "cvcpkg" / "recipes"
+    repo_recipes = repo_recipes or _ROOT / "recipes"
 
     if not repo_recipes.is_dir():
         return  # Building from sdist or outside repo — skip

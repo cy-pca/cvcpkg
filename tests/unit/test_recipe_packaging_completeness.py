@@ -34,6 +34,10 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 RECIPES = REPO / "recipes"
+# The in-tree PEP 517 backend.  It sits in its own directory because
+# pyproject's ``backend-path`` shadows same-named top-level imports for the
+# whole build -- see the module's own docstring.
+BACKEND_MODULE = REPO / "pep517-backend" / "cvcpkg_build_backend.py"
 SCRIPT_SUFFIXES = (".sh", ".ps1")
 
 # poetry-core hooks the backend re-exports at import time.
@@ -67,7 +71,7 @@ def _load_backend():
     try:
         import poetry.core.masonry.api  # noqa: F401
 
-        return _load(REPO / "cvcpkg_build_backend.py", "cvcpkg_build_backend")
+        return _load(BACKEND_MODULE, "cvcpkg_build_backend")
     except ImportError:
         pass
 
@@ -83,7 +87,7 @@ def _load_backend():
     added = [n for n in stubs if n not in sys.modules]
     sys.modules.update({n: m for n, m in stubs.items() if n in added})
     try:
-        return _load(REPO / "cvcpkg_build_backend.py", "cvcpkg_build_backend")
+        return _load(BACKEND_MODULE, "cvcpkg_build_backend")
     finally:
         for n in added:
             sys.modules.pop(n, None)
@@ -262,3 +266,79 @@ def test_sync_outside_a_checkout_is_a_no_op(tmp_path, backend):
     dest = tmp_path / "out"
     backend._sync_recipes(tmp_path / "absent", dest)
     assert not dest.exists()
+
+
+def _build_system() -> dict:
+    """pyproject's [build-system] table."""
+    raw = (REPO / "pyproject.toml").read_bytes()
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # py3.10
+        import re
+
+        text = raw.decode()
+        block = re.search(r"(?ms)^\[build-system\]\s*$(.*?)(?=^\[|\Z)", text).group(1)
+        out: dict = {}
+        for key in ("build-backend", "backend-path"):
+            m = re.search(rf"(?m)^{key}\s*=\s*(.+?)\s*(?:#.*)?$", block)
+            if m:
+                val = m.group(1).strip()
+                out[key] = (
+                    [v.strip().strip("\"'") for v in val[1:-1].split(",") if v.strip()]
+                    if val.startswith("[")
+                    else val.strip("\"'")
+                )
+        return out
+    return tomllib.loads(raw.decode())["build-system"]
+
+
+def test_pyproject_actually_selects_the_in_tree_backend():
+    """The backend must be WIRED UP, not merely present in the repo.
+
+    It sat unwired for a month: ``build-backend`` pointed at
+    ``poetry.core.masonry.api`` while the workflows hand-rolled
+    ``cp -r recipes/. src/cvcpkg/recipes/`` before ``python -m build``.  The
+    effect was invisible in CI and brutal outside it -- a plain
+    ``python -m build`` or ``pip install .`` shipped ZERO recipes, and the
+    allowlist bug this file exists for could not be hit through the route CI
+    exercised, so nothing caught either problem.
+    """
+    bs = _build_system()
+    assert bs.get("build-backend") == "cvcpkg_build_backend", (
+        "pyproject no longer selects the in-tree backend — a plain "
+        "`python -m build` will ship a distribution with no recipes"
+    )
+    assert BACKEND_MODULE.is_file()
+
+
+def test_backend_path_does_not_expose_the_repo_root():
+    """``backend-path`` must name the backend's own directory, never ``.``.
+
+    pyproject_hooks installs a meta-path finder that resolves EVERY top-level
+    import against backend-path first, so whatever directory is listed there
+    shadows same-named distributions for the entire build.  With
+    ``backend-path = ["."]`` the repo root is exposed, and this repo has a
+    ``packaging/`` directory: poetry.core.factory's
+    ``from packaging.licenses import InvalidLicenseExpression`` then resolves
+    to it and dies with ``No module named 'packaging.licenses'`` -- surfacing
+    only as ``BackendUnavailable: Cannot import 'cvcpkg_build_backend'``.
+
+    That is the failure that got an earlier in-tree backend reverted, so this
+    pins the shape of the fix: the directory holds the backend and nothing
+    that could shadow anything.
+    """
+    paths = _build_system().get("backend-path")
+    assert paths == [BACKEND_MODULE.parent.name], f"unexpected backend-path: {paths}"
+
+    # __pycache__ appears the moment anything imports the backend and is not a
+    # name any build step resolves; everything else in there is suspect.
+    shadowable = {p.name for p in BACKEND_MODULE.parent.iterdir()} - {
+        BACKEND_MODULE.name,
+        "__pycache__",
+    }
+    assert not shadowable, (
+        f"{BACKEND_MODULE.parent.name}/ must hold only the backend module; "
+        f"anything else there shadows that top-level import for the whole build: {shadowable}"
+    )
+    # A directory whose name is not an identifier cannot itself be imported.
+    assert not BACKEND_MODULE.parent.name.isidentifier()
