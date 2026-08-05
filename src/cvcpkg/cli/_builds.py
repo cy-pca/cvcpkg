@@ -26,6 +26,15 @@ _TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled", "timed_out",
 # e.g. a heavy recipe (llvm) that cannot finish inside a CI window.
 WAIT_TIMEOUT_EXIT_CODE = 75
 
+# Non-terminal statuses that mean NO builder has the job yet.  A job sitting
+# here when the wait budget elapses was never claimed -- that is a scheduling
+# or capacity problem, not a slow build, and it must not be reported as
+# "still building".  Conflating the two made the pr-recipe-build-dev check
+# green while it had verified nothing: ca-bundle (a 190 KB download) sat
+# unclaimed for the full 25-minute window on both pr-447 and pr-457 and the
+# check passed each time.
+_UNCLAIMED_STATUSES = frozenset({"pending", "dispatched"})
+
 # A DAG's jobs may not be queryable the instant a waiter starts, so an empty
 # result is only conclusive after this many consecutive polls.
 _EMPTY_POLL_GRACE = 24  # × 5s ≈ 2 min
@@ -760,6 +769,7 @@ def _wait_for_dags(
     failed_ids: list[int] = []
     skipped_ids: list[int] = []
     building: list[str] = []
+    unclaimed: list[str] = []
     with httpx.Client(timeout=30) as client:
         for jid in all_job_ids:
             resp = client.get(f"{base}/v1/builds/{jid}", headers=headers)
@@ -773,8 +783,16 @@ def _wait_for_dags(
                 skipped_ids.append(jid)
                 continue
             if status not in terminal:
-                # Still building -- only reachable when we stopped at the deadline.
-                building.append(f"#{jid} {info.get('recipe_name', '?')}")
+                # Only reachable when we stopped at the deadline.  Split by
+                # whether a builder ever picked the job up: "running" is a
+                # genuinely slow build and a legitimate soft pass, while
+                # pending/dispatched means nothing claimed it and the run
+                # verified nothing at all.
+                label = f"#{jid} {info.get('recipe_name', '?')} ({status})"
+                if status in _UNCLAIMED_STATUSES:
+                    unclaimed.append(label)
+                else:
+                    building.append(label)
                 continue
             failed_ids.append(jid)
 
@@ -792,6 +810,16 @@ def _wait_for_dags(
             err=True,
         )
         raise SystemExit(WAIT_TIMEOUT_EXIT_CODE)
+    if timed_out and unclaimed:
+        # Not a slow build: no builder ever took these.  Soft-passing here is
+        # what let a green check mean nothing was verified, so this is a hard
+        # failure regardless of any genuinely-running jobs alongside it.
+        raise click.ClickException(
+            f"{len(unclaimed)} job(s) were never claimed by a builder within "
+            f"{wait_timeout:.0f}s: {', '.join(sorted(unclaimed))}. "
+            "Nothing was verified — check that a registered builder can serve this "
+            "platform/arch and is online (`cvcpkg builds monitor`)."
+        )
     if timed_out and building:
         click.echo(
             f"\n{len(building)} job(s) still building after {wait_timeout:.0f}s "

@@ -150,3 +150,61 @@ def test_unschedulable_is_terminal_and_only_fails_when_strict(monkeypatch):
 
     with pytest.raises(click.ClickException):
         _wait_for_dags("http://s", "t", ["dag"], fail_on_unschedulable=True)
+
+
+# ── Unclaimed jobs are not "still building" ─────────────────────────
+#
+# The soft pass exists for a heavy recipe that outruns the CI window while a
+# builder is genuinely compiling it.  It must NOT cover a job no builder ever
+# picked up: that means the run verified nothing, and reporting it green is
+# how ca-bundle's dev-cluster check passed twice (pr-447, pr-457) while a
+# 190 KB download sat unclaimed for the full 25-minute window.
+
+
+def test_timeout_with_an_unclaimed_job_fails(monkeypatch):
+    # "pending" = never dispatched to any builder.  Nothing was verified, so
+    # this is a hard failure, not the soft pass a slow build gets.
+    import click
+
+    _patch_httpx(monkeypatch, {1: "pending"})
+    with pytest.raises(click.ClickException) as exc:
+        _wait_for_dags("http://s", "t", ["dag"], wait_timeout=30)
+    assert "never claimed" in str(exc.value)
+
+
+def test_timeout_with_a_dispatched_job_fails(monkeypatch):
+    # "dispatched" means assigned but never started -- still nothing built.
+    import click
+
+    _patch_httpx(monkeypatch, {1: "dispatched"})
+    with pytest.raises(click.ClickException):
+        _wait_for_dags("http://s", "t", ["dag"], wait_timeout=30)
+
+
+def test_unclaimed_outranks_a_genuinely_running_job(monkeypatch):
+    # One job compiling does not excuse another that was never claimed; the
+    # unclaimed one means that part of the DAG went unverified.
+    import click
+
+    _patch_httpx(monkeypatch, {1: "running", 2: "pending"})
+    with pytest.raises(click.ClickException) as exc:
+        _wait_for_dags("http://s", "t", ["dag"], wait_timeout=30)
+    assert "never claimed" in str(exc.value)
+
+
+def test_a_real_failure_still_outranks_an_unclaimed_job(monkeypatch):
+    # Failure remains the most actionable signal: report it, not the stall.
+    import click
+
+    _patch_httpx(monkeypatch, {1: "failed", 2: "pending"})
+    with pytest.raises(click.ClickException) as exc:
+        _wait_for_dags("http://s", "t", ["dag"], wait_timeout=30)
+    assert "did not succeed" in str(exc.value)
+
+
+def test_running_only_is_still_a_soft_pass(monkeypatch):
+    # The llvm case the soft pass was built for must keep working.
+    _patch_httpx(monkeypatch, {1: "running", 2: "running"})
+    with pytest.raises(SystemExit) as exc:
+        _wait_for_dags("http://s", "t", ["dag"], wait_timeout=30)
+    assert exc.value.code == WAIT_TIMEOUT_EXIT_CODE
