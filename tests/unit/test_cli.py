@@ -1164,6 +1164,12 @@ class TestBuildCrossPlatformDeps:
                     str(tmp_path / "pfx"),
                     "--recipes-dir",
                     str(recipes_dir),
+                    # --recipes-dir OVERLAYS the default set rather than
+                    # replacing it, and `emsdk` is a real recipe.  Without
+                    # this the fixture collides with the catalog whenever the
+                    # generated src/cvcpkg/recipes/ happens to exist, and the
+                    # assertions below describe the real emsdk, not the fake.
+                    "--no-default-recipes",
                 ]
             )
 
@@ -4811,6 +4817,9 @@ class TestBuildsSubmitDagCLI:
                 "tok",
                 "--recipes-dir",
                 str(rd),
+                # As above: the fixture's recipe names are real catalog names,
+                # so the default set must be excluded or they collide.
+                "--no-default-recipes",
                 "--allow-unschedulable",
                 "--wait",
                 "--wait-timeout",
