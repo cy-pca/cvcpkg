@@ -22,9 +22,6 @@ Wheel selection per column:
     free-threaded build does not implement the stable ABI).
   * cext  (``cpNN-cpNN[t]``)  -> the exact wheel for that column, per
     platform; the column exists only where wheels exist.
-  * noabi (``py3-none-<plat>``) -> platform-specific but interpreter-
-    independent: a precompiled non-Python payload (PyInstaller's
-    bootloaders), so the platform's wheel serves every column.
 
 A column is emitted only when EVERY python dependency also has that column
 (transitive pruning): a package without a cp313t wheel prunes the cp313t
@@ -89,14 +86,6 @@ SCRIPT_PACKAGES = {
     "jmespath": ["jp.py"],
     "mako": ["mako-render"],
     "pygments": ["pygmentize"],
-    "pyinstaller": [
-        "pyinstaller",
-        "pyi-makespec",
-        "pyi-archive_viewer",
-        "pyi-bindepend",
-        "pyi-grab_version",
-        "pyi-set_version",
-    ],
     "pytest": ["pytest", "py.test"],
     "sympy": ["isympy"],
     "tqdm": ["tqdm"],
@@ -138,6 +127,53 @@ SEED_PACKAGES = {
         "deps": [],
         "files": ["altgraph/", "altgraph-*.dist-info/"],
         "check": "import altgraph",
+    },
+    "hatchling": {
+        # PyInstaller's PEP-517 backend: a BUILD dep of the from-source
+        # pyinstaller recipes, which use --no-build-isolation.
+        "version": "1.31.0",
+        "license": "MIT",
+        "deps": ["packaging", "pathspec", "pluggy", "trove-classifiers"],
+        "files": ["hatchling/", "hatchling-*.dist-info/"],
+        "check": "import hatchling",
+    },
+    "macholib": {
+        "version": "1.16.4",
+        "license": "MIT",
+        "deps": ["altgraph"],
+        "files": ["macholib/", "macholib-*.dist-info/"],
+        "check": "import macholib",
+    },
+    "pefile": {
+        "version": "2024.8.26",
+        "license": "MIT",
+        "deps": [],
+        "files": ["pefile.py", "peutils.py", "ordlookup/", "pefile-*.dist-info/"],
+        "check": "import pefile",
+    },
+    "pyinstaller-hooks-contrib": {
+        "version": "2026.6",
+        "license": "Apache-2.0 OR GPL-2.0-or-later",
+        "deps": ["packaging", "setuptools"],
+        "files": [
+            "_pyinstaller_hooks_contrib/",
+            "pyinstaller_hooks_contrib-*.dist-info/",
+        ],
+        "check": "import _pyinstaller_hooks_contrib",
+    },
+    "pywin32-ctypes": {
+        "version": "0.2.3",
+        "license": "BSD-3-Clause",
+        "deps": [],
+        "files": ["win32ctypes/", "pywin32_ctypes-*.dist-info/"],
+        "check": "import win32ctypes",
+    },
+    "trove-classifiers": {
+        "version": "2024.10.16",
+        "license": "Apache-2.0",
+        "deps": [],
+        "files": ["trove_classifiers/", "trove_classifiers-*.dist-info/"],
+        "check": "import trove_classifiers",
     },
     "black": {
         "version": "26.5.1",
@@ -181,13 +217,6 @@ SEED_PACKAGES = {
         "files": ["jinja2/", "jinja2-*.dist-info/"],
         "check": "import jinja2",
     },
-    "macholib": {
-        "version": "1.16.4",
-        "license": "MIT",
-        "deps": ["altgraph"],
-        "files": ["macholib/", "macholib-*.dist-info/"],
-        "check": "import macholib",
-    },
     "meson-python": {
         "version": "0.18.0",
         "license": "MIT",
@@ -230,13 +259,6 @@ SEED_PACKAGES = {
         "files": ["pathspec/", "pathspec-*.dist-info/"],
         "check": "import pathspec",
     },
-    "pefile": {
-        "version": "2024.8.26",
-        "license": "MIT",
-        "deps": [],
-        "files": ["pefile.py", "peutils.py", "ordlookup/", "pefile-*.dist-info/"],
-        "check": "import pefile",
-    },
     "pkgconfig": {
         "version": "1.5.5",
         "license": "MIT",
@@ -265,30 +287,6 @@ SEED_PACKAGES = {
         "files": ["pygments/", "pygments-*.dist-info/"],
         "check": "import pygments",
     },
-    "pyinstaller": {
-        # noabi: ships py3-none-<plat> wheels carrying precompiled bootloaders,
-        # so one wheel per platform serves every interpreter column.
-        "version": "6.21.0",
-        "license": "GPL-2.0-or-later WITH Bootloader-exception",
-        "deps": [
-            "altgraph",
-            "packaging",
-            "pyinstaller-hooks-contrib",
-            "setuptools",
-        ],
-        "files": ["PyInstaller/", "pyinstaller-*.dist-info/"],
-        "check": "import PyInstaller",
-    },
-    "pyinstaller-hooks-contrib": {
-        "version": "2026.6",
-        "license": "Apache-2.0 OR GPL-2.0-or-later",
-        "deps": ["packaging", "setuptools"],
-        "files": [
-            "_pyinstaller_hooks_contrib/",
-            "pyinstaller_hooks_contrib-*.dist-info/",
-        ],
-        "check": "import _pyinstaller_hooks_contrib",
-    },
     "pyproject-metadata": {
         "version": "0.9.1",
         "license": "MIT",
@@ -311,13 +309,6 @@ SEED_PACKAGES = {
         "deps": [],
         "files": ["pytokens/", "pytokens-*.dist-info/"],
         "check": "import pytokens",
-    },
-    "pywin32-ctypes": {
-        "version": "0.2.3",
-        "license": "BSD-3-Clause",
-        "deps": [],
-        "files": ["win32ctypes/", "pywin32_ctypes-*.dist-info/"],
-        "check": "import win32ctypes",
     },
     "setuptools": {
         "version": "80.9.0",
@@ -500,9 +491,6 @@ def classify(wheels: list[dict], interps: list[str]) -> str:
       wheels and no per-version ``cpNN-cpNN`` build for our non-free-threaded
       targets: one binary serves every non-free-threaded column.
     * ``cext`` — a distinct ``cpNN-cpNN[t]`` binary per interpreter.
-    * ``noabi`` — platform-specific wheels with no ABI tag
-      (``py3-none-<plat>``): a precompiled non-Python payload, so one wheel
-      per platform serves every interpreter column.
 
     Classification is per-package bookkeeping; wheel selection is per column
     (see wheel_for_column), so an abi3 package with an extra exact cp313t
@@ -516,25 +504,7 @@ def classify(wheels: list[dict], interps: list[str]) -> str:
     # decision (a PREFER_BINARY set would slot in here).
     if any(w["filename"].endswith("none-any.whl") for w in wheels):
         return "pure"
-    if _is_noabi(wheels):
-        return "noabi"
     return "abi3" if _is_abi3(wheels, interps) else "cext"
-
-
-def _is_noabi(wheels: list[dict]) -> bool:
-    """True when the wheels are platform-specific but carry no ABI tag
-    (``py3-none-<plat>``).
-
-    The payload is a precompiled *non-Python* artifact rather than a CPython
-    extension — PyInstaller ships its bootloaders this way — so one wheel per
-    platform serves every interpreter column, yet there is no ``none-any``
-    wheel to make the package noarch.  Without this case such a package falls
-    through to ``cext``, and wheel_for_column then hunts for a ``cpNN-cpNN``
-    wheel that does not exist, pruning every column."""
-    names = [w["filename"] for w in wheels]
-    plat_noabi = any(re.search(r"-none-(?!any\.whl)", n) for n in names)
-    has_abi_tag = any("-abi3-" in n or re.search(r"-cp\d+-cp\d+t?-", n) for n in names)
-    return plat_noabi and not has_abi_tag
 
 
 def _is_abi3(wheels: list[dict], interps: list[str]) -> bool:
@@ -597,13 +567,6 @@ def wheel_for_column(m: dict, interp: str) -> dict[str, dict]:
     if m["kind"] == "pure":
         return {"any": pure_wheel(m["wheels"])}
     arts: dict[str, dict] = {}
-    if m["kind"] == "noabi":
-        # No ABI tag to match: the platform wheel serves every column.
-        for platform in PLATFORM_TAGS:
-            w = noabi_wheel_for(m["wheels"], platform)
-            if w:
-                arts[platform] = w
-        return arts
     for platform in PLATFORM_TAGS:
         w = cext_wheel_for(m["wheels"], interp, platform) or abi3_wheel_for(
             m["wheels"], platform, interp
@@ -611,35 +574,6 @@ def wheel_for_column(m: dict, interp: str) -> dict[str, dict]:
         if w:
             arts[platform] = w
     return arts
-
-
-def _manylinux_floor(arts: dict[str, dict]) -> str:
-    """The manylinux floor the selected linux wheels actually carry."""
-    for key, w in arts.items():
-        if not key.startswith("linux"):
-            continue
-        fn = w["filename"]
-        m = re.search(r"manylinux_(\d+)_(\d+)", fn)
-        if m:
-            return f"manylinux_{m.group(1)}_{m.group(2)}"
-        if "manylinux2014" in fn:
-            return "manylinux_2_17"
-        if "manylinux2010" in fn:
-            return "manylinux_2_12"
-    return "manylinux_2_28"
-
-
-def noabi_wheel_for(wheels: list[dict], platform: str) -> dict | None:
-    """The ``py3-none-<plat>`` wheel for *platform*, if one exists."""
-    for w in wheels:
-        fn = w["filename"]
-        if (
-            re.search(r"-none-(?!any\.whl)", fn)
-            and "-abi3-" not in fn
-            and wheel_matches_platform(fn, platform)
-        ):
-            return w
-    return None
 
 
 def column_abi(m: dict, interp: str, arts: dict[str, dict]) -> str:
@@ -756,7 +690,7 @@ def main() -> int:
 
     cols = compute_columns(meta, interps)
 
-    counts = {"pure": 0, "abi3": 0, "cext": 0, "noabi": 0}
+    counts = {"pure": 0, "abi3": 0, "cext": 0}
     emitted = 0
     for base, m in sorted(meta.items()):
         for interp in cols[base]:
@@ -766,8 +700,7 @@ def main() -> int:
             counts[m["kind"]] += 1
     print(
         f"emitted {emitted} column recipes across {len(meta)} packages "
-        f"({counts['pure']} pure, {counts['abi3']} abi3, {counts['cext']} per-version, "
-        f"{counts['noabi']} noabi)",
+        f"({counts['pure']} pure, {counts['abi3']} abi3, {counts['cext']} per-version)",
         file=sys.stderr,
     )
     _prune_stale(out, meta, cols, interps)
@@ -865,7 +798,6 @@ def _emit_column(out, base, m, interp, meta, cols):
         "pure": "pure-Python wheel, same artifact in every column",
         "abi3": "stable-ABI abi3 wheel",
         "cext": f"cp{interp} C-extension wheel",
-        "noabi": "platform wheel with no ABI tag, same artifact in every column",
     }[kind if abi != "abi3" else "abi3"]
     free_threaded_note = (
         "    The cp313t column installs under the free-threaded (no-GIL)\n"
@@ -899,11 +831,7 @@ def _emit_column(out, base, m, interp, meta, cols):
             body += f"    {key}:\n" + _artifact_block(w["url"], w["digests"]["sha256"], "      ")
 
     body += f"\npython:\n  interpreter: python{interp}\n  abi: {abi}\n"
-    if kind == "noabi":
-        # Declare the floor these wheels actually carry rather than the
-        # cext default; PyInstaller, for one, still ships manylinux2014.
-        body += f"  manylinux_min: {_manylinux_floor(arts)}\n"
-    elif kind != "pure":
+    if kind != "pure":
         body += "  manylinux_min: manylinux_2_28\n"
     body += "\npatches: []\n\n"
 
