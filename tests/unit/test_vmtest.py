@@ -28,6 +28,7 @@ import contextlib
 import os
 import signal
 import stat
+import sys
 import threading
 from pathlib import Path
 
@@ -820,7 +821,22 @@ class TestDeadline:
 
 @pytest.fixture
 def dead_pid() -> int:
-    """A pid that is definitely not running: a child we started and reaped."""
+    """A pid that is definitely not running: a child we started and reaped.
+
+    POSIX-only, and the skip is deliberate rather than an unported test.
+    :func:`vmtest._process_alive` asks ``os.kill(pid, 0)`` and treats every
+    ambiguous answer as "alive", because sparing a dead run's VM costs a reap
+    cycle while destroying a live run's VM destroys someone's build.  On
+    Windows a reaped pid does not raise ProcessLookupError, so EVERY pid reads
+    as alive -- which means a reaper test here would not fail, it would pass
+    vacuously, asserting that nothing was collected because nothing ever looks
+    collectable.  That is worse than not running it.  (``true`` is also not a
+    Windows binary.)  The engine drives Incus/LXD, so there is no Windows
+    behaviour being left untested.
+    """
+    if sys.platform == "win32":
+        pytest.skip("dead-pid detection is POSIX-only; see the fixture docstring")
+
     import subprocess
 
     proc = subprocess.Popen(["true"])
@@ -1146,7 +1162,13 @@ class TestSshKeyHandling:
         fake = FakeHypervisor(on_call=on_call)
         result = _run(image, fake)
         assert result.status == vmtest.PASSED
-        assert seen["mode"] == 0o600, "ssh refuses a group/world-readable key anyway"
+        # Only the MODE is POSIX-only: os.chmod on Windows toggles read-only and
+        # nothing else, so a permission bit means nothing there.  The lifetime
+        # assertion below is the security property and is checked everywhere --
+        # skipping the whole test would stop checking that a private key gets
+        # cleaned up, which has nothing to do with the platform.
+        if sys.platform != "win32":
+            assert seen["mode"] == 0o600, "ssh refuses a group/world-readable key anyway"
         assert not seen["key"].exists(), "the private key must not outlive the run"
 
     def test_key_file_is_used_verbatim(self, image, tmp_path):

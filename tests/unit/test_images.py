@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 import textwrap
 from pathlib import Path
 
@@ -509,6 +510,11 @@ class TestImageCLI:
         res = run("info", "haiku-image", "--prefix", str(prefix), "--json")
         assert json.loads(res.output)["boot"]["disk_bus"] == "virtio-blk"
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="`image env` emits POSIX-shell-evalable output; shlex.quote wraps "
+        "a backslash path in quotes that no Windows shell would strip",
+    )
     def test_env_is_evalable(self, prefix):
         root = make_image(prefix, "haiku-image")
         res = run("env", "haiku-image", "--prefix", str(prefix))
