@@ -419,3 +419,73 @@ for plat in sorted({p for ps in declared.values() for p in ps}):
     print(f'{plat}: {len(miss)} missing — {", ".join(miss) if miss else "(none)"}')
 EOF
 ```
+
+---
+
+## Addendum — first-contact failures on the newly-opened platforms (2026-08-05)
+
+Two platforms went from **zero** published packages to a populated catalog on
+2026-08-05, each via a new sharded GitHub-hosted build lane (there is no
+persistent builder for either):
+
+| platform | lane | packages after first run |
+|---|---|---|
+| linux/arm64 | `linux-arm-build.yml` (#451), `ubuntu-22.04-arm` | 177 |
+| macos/x86_64 | `macos-build.yml` + `runner` input (#453), `macos-15-intel` | 29 |
+
+Both were run with `--keep-going`, so each shard published what succeeded. The
+failures below are catalogued for a later phase rather than fixed inline.
+
+### Not real failures — already fixed
+
+The first arm64 run reported ~14 `FAILED: nvidia-*-cu12-cp311 -- no artifact
+for linux-arm64` per affected shard. Those recipes wrap **prebuilt x86_64**
+CUDA redistributables and can never build on arm64. #456 makes `build_all`
+skip recipes whose `source.artifacts` do not cover the target arch, so they no
+longer appear as failures. The same change taught artifact lookup that
+`aarch64` and `arm64` name the same machine — which *gained* a package:
+`wasmer` ships `linux-aarch64` and had been excluded over a spelling.
+
+### linux/arm64 — real failures, by blast radius
+
+Four of six shards completed: **296 succeeded, 104 failed**. The failures are
+not 104 independent problems; a handful of roots gate the rest, and a root
+recurs once per shard that builds it as a transitive dep.
+
+| root | shards hit | blocks |
+|---|---|---|
+| `wayland` | 3 | `wayland-protocols` → `xkbcommon` → `qt6`, `sdl3` |
+| `cffi-cp313` | 3 | `cryptography-cp313` → `msal*`, `google-auth-cp313` → `google-api-core-cp313` |
+| `x265` | 2 | `ffmpeg` |
+| `libepoxy` | 2 | — |
+| `greenlet-cp313` | 2 | — |
+| `google-crc32c-cp313` | 2 | — |
+
+Singletons: `skia`, `slint`, `ruff`, `pydantic-core-cp313`, `markupsafe-cp313`,
+`asyncpg-cp313`, `hdf5`, `libpq`, `postgresql-server`, `lua`, `vpx-tools`,
+`haiku-image`.
+
+**Fixing `wayland`, `cffi-cp313` and `x265` first is disproportionately
+valuable** — those three unblock qt6, sdl3, ffmpeg and the whole
+cryptography/google-auth chain.
+
+Notes for whoever picks this up:
+
+- `python311`, `python312` and `python313` all build fine on arm64, so the
+  `*-cp313` extension failures are per-package, not a broken interpreter.
+- One narrow toolchain issue seen in cairo:
+  `cc1: error: unknown value 'armv9-a+i8mm+sve2' for '-march'` — the runner's
+  GCC emitting a `-march` value its own frontend rejects. Only ~2 occurrences
+  per shard; **not** a systemic `-march=native` problem (no `-march=native` in
+  any log).
+
+### macos/x86_64
+
+Run still in flight at time of writing; 29 packages published so far. Failures
+to be catalogued on completion.
+
+### Shelf life
+
+`macos-15-intel` is the **last x86_64 macOS image GitHub offers and is retired
+in August 2027**; Apple has discontinued the architecture. Weigh effort on
+macos/x86_64 gaps against that date — the lane is a bridge, not a destination.
