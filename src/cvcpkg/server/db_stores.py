@@ -3081,6 +3081,7 @@ class DbBuilderStore:
             current_jobs=row.current_jobs,
             max_jobs=row.max_jobs,
             prefer_affinity=row.prefer_affinity,
+            free_disk_gb=row.free_disk_gb,
             last_heartbeat=row.last_heartbeat,
             registered_by=row.registered_by,
             created_at=row.created_at,
@@ -3099,6 +3100,7 @@ class DbBuilderStore:
         capabilities: dict | None = None,
         max_jobs: int = 1,
         prefer_affinity: bool = False,
+        free_disk_gb: int | None = None,
     ) -> BuilderInfo:
         """Register a new builder or re-register an existing one."""
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -3120,6 +3122,11 @@ class DbBuilderStore:
                 row.capabilities = json.dumps(capabilities or {})
                 row.max_jobs = max_jobs
                 row.prefer_affinity = prefer_affinity
+                # A re-registering builder that advertises nothing (older
+                # agent, or --no-free-disk) clears any figure a previous
+                # incarnation left: a stale number is worse than none, since
+                # "unknown" fails open while a stale one can mispair.
+                row.free_disk_gb = free_disk_gb
                 row.status = BuilderStatus.online
                 row.last_heartbeat = now
                 row.registered_by = registered_by
@@ -3136,6 +3143,7 @@ class DbBuilderStore:
                 current_jobs=0,
                 max_jobs=max_jobs,
                 prefer_affinity=prefer_affinity,
+                free_disk_gb=free_disk_gb,
                 last_heartbeat=now,
                 registered_by=registered_by,
             )
@@ -3182,6 +3190,7 @@ class DbBuilderStore:
         max_jobs: int | None = None,
         prefer_affinity: bool | None = None,
         served_namespaces: list[str] | None = None,
+        free_disk_gb: int | None = None,
     ) -> BuilderInfo | None:
         """Update mutable fields. Returns updated info or None if not found."""
         async with get_session() as session:
@@ -3198,6 +3207,8 @@ class DbBuilderStore:
                 row.max_jobs = max_jobs
             if prefer_affinity is not None:
                 row.prefer_affinity = prefer_affinity
+            if free_disk_gb is not None:
+                row.free_disk_gb = free_disk_gb
             if served_namespaces is not None:
                 # Re-anchor on the row's home org so it always stays served.
                 row.served_namespaces = json.dumps(
@@ -3212,6 +3223,7 @@ class DbBuilderStore:
         status: str = BuilderStatus.online,
         current_jobs: int = 0,
         reconcile: bool = False,
+        free_disk_gb: int | None = None,
     ) -> BuilderInfo | None:
         """Record a heartbeat from a builder. Returns updated info or None.
 
@@ -3219,6 +3231,12 @@ class DbBuilderStore:
         actual number of dispatched/running jobs in the database rather
         than trusting the client-reported value.  This prevents the
         counter from drifting after builder restarts or lost heartbeats.
+
+        *free_disk_gb* is the builder's freshly measured free space on its
+        work volume; ``None`` leaves the stored value alone.  It has to be
+        "leave alone" rather than "clear", because the scheduler itself calls
+        this to bump ``current_jobs`` after a dispatch and must not wipe the
+        figure it just matched against.
         """
         now = datetime.datetime.now(datetime.timezone.utc)
         async with get_session() as session:
@@ -3229,6 +3247,8 @@ class DbBuilderStore:
                 return None
             row.last_heartbeat = now
             row.status = status
+            if free_disk_gb is not None:
+                row.free_disk_gb = free_disk_gb
             if reconcile:
                 db_count = (
                     await session.execute(
@@ -3313,6 +3333,7 @@ class DbBuildJobStore:
             config=row.config,
             link=row.link,
             required_capabilities=DbBuildJobStore._decode_required_caps(row),
+            min_disk_gb=row.min_disk_gb,
             builder_id=row.builder_id,
             claimed_by=row.claimed_by or "",
             status=row.status,
@@ -3347,6 +3368,7 @@ class DbBuildJobStore:
         config: str = "release",
         link: str = "shared",
         required_capabilities: list[str] | None = None,
+        min_disk_gb: int | None = None,
         org_slug: str = "",
         dag_id: str | None = None,
         priority: int = 0,
@@ -3366,6 +3388,7 @@ class DbBuildJobStore:
                 config=config,
                 link=link,
                 required_capabilities=json.dumps(required_capabilities or []),
+                min_disk_gb=min_disk_gb,
                 status=BuildJobStatus.pending,
                 priority=priority,
                 timeout_seconds=timeout_seconds,
@@ -3412,6 +3435,7 @@ class DbBuildJobStore:
                     config=job.get("config", "release"),
                     link=job.get("link", "shared"),
                     required_capabilities=json.dumps(job.get("required_capabilities") or []),
+                    min_disk_gb=job.get("min_disk_gb"),
                     status=BuildJobStatus.pending,
                     priority=job.get("priority", 0),
                     timeout_seconds=job.get("timeout_seconds"),
@@ -4030,6 +4054,16 @@ class DbBuildJobStore:
         ``(targets, platforms, capabilities)`` triple per registered builder.
         When it is ``None`` (legacy callers), capability requirements are
         not evaluated and only target coverage is checked.
+
+        A job's ``min_disk_gb`` is deliberately NOT part of this check, even
+        though it gates dispatch the same way a capability does.  A capability
+        is a property of the host and does not come back; free disk is
+        transient — the builder's own GC sweep, or a neighbouring job
+        finishing, can make an "impossible" job possible minutes later.
+        Reaping on it would cancel the job's whole downstream dependency chain
+        because the fleet was momentarily full.  Such a job stays ``pending``;
+        ``builds submit-dag`` is where an operator is told up front that no
+        builder has the space.
 
         Returns the jobs that were reaped so the caller can cancel their
         downstream dependents and emit events.

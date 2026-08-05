@@ -660,6 +660,15 @@ class BuilderInfo(BaseModel):
     current_jobs: int = 0
     max_jobs: int = 1
     prefer_affinity: bool = False
+    free_disk_gb: int | None = Field(
+        default=None,
+        description=(
+            "Free space (whole GiB) on this builder's work volume, re-measured "
+            "on every heartbeat.  None = the builder never advertised one (an "
+            "agent older than this field), which is treated as 'unknown', NOT "
+            "as zero."
+        ),
+    )
     last_heartbeat: datetime.datetime | None = None
     registered_by: str = ""
     created_at: datetime.datetime = Field(
@@ -719,6 +728,15 @@ class BuilderRegisterRequest(BaseModel):
         default=False,
         description="Prefer this builder for recipes it has previously built.",
     )
+    free_disk_gb: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Free space (whole GiB) on the work volume.  Omitted by builders "
+            "older than disk-aware scheduling; the scheduler reads that as "
+            "'unknown' and lets the job through rather than stranding it."
+        ),
+    )
 
 
 class BuilderUpdateRequest(BaseModel):
@@ -728,6 +746,7 @@ class BuilderUpdateRequest(BaseModel):
     capabilities: dict | None = None
     max_jobs: int | None = Field(None, ge=1, le=256)
     prefer_affinity: bool | None = None
+    free_disk_gb: int | None = Field(None, ge=0)
     served_namespaces: list[str] | None = Field(
         None,
         description="Replace the served-namespace set ('' = public); org_slug stays included.",
@@ -745,6 +764,17 @@ class BuilderHeartbeatRequest(BaseModel):
         default=0,
         ge=0,
         description="Number of jobs currently running.",
+    )
+    free_disk_gb: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Free space (whole GiB) on the work volume, re-measured for this "
+            "beat.  Carried on the heartbeat rather than only at registration "
+            "so the figure the scheduler matches against tracks reality: a "
+            "long build, a GC sweep or a co-tenant all move it.  Omitted "
+            "leaves the stored value untouched."
+        ),
     )
 
 
@@ -805,6 +835,10 @@ class BuildJobInfo(BaseModel):
     required_capabilities: list[str] = Field(
         default_factory=list,
         description="Builder capabilities this job needs (e.g. ['cuda']).",
+    )
+    min_disk_gb: int | None = Field(
+        default=None,
+        description="Free scratch disk (GiB) this job needs on the builder's work volume.",
     )
     builder_id: int | None = None
     claimed_by: str = ""
@@ -870,6 +904,16 @@ class BuildJobSubmitRequest(BaseModel):
             "Builder capabilities this job needs, from the recipe's top-level "
             "requires_capabilities (e.g. ['cuda']).  The scheduler dispatches "
             "the job only to a builder advertising ALL of them."
+        ),
+    )
+    min_disk_gb: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Free scratch disk (GiB) this job needs, from the recipe's "
+            "build.min_disk_gb.  The scheduler dispatches the job only to a "
+            "builder advertising at least this much free on its work volume; "
+            "a builder advertising nothing at all is not excluded."
         ),
     )
     org_slug: str = Field(

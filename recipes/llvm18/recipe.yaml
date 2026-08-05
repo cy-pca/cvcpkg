@@ -44,6 +44,13 @@ build:
   # the fleet (it reached ~76% compile in 2h on a modest builder). Give it 5h so
   # it can finish, link, install and publish. submit-dag propagates this per job.
   timeout_seconds: 18000
+  # The monorepo source (~4 GiB unpacked) plus a Release Ninja tree for
+  # llvm+clang+lld with three targets and the LLVM dylib runs ~20 GiB of
+  # objects and archives before the install prefix is even staged.  20 GiB
+  # is the floor; declare 25 so the link stage is not the thing that
+  # discovers the volume was full.  The same long build the timeout above
+  # protects is exactly the one worth not starting on a too-small builder.
+  min_disk_gb: 25
   matrix:
     - platform: linux
       script: build.sh

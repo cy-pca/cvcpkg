@@ -48,7 +48,9 @@ permissions:
 jobs:
   test:
     name: Test (Python ${{ matrix.python }}, ${{ matrix.os }})
-    if: github.event_name == 'push' || contains(vars.CI_ALLOWED_ACTORS, github.actor)
+    if: >-
+      github.event_name == 'push' ||
+      contains(format(',{0},', vars.CI_ALLOWED_ACTORS), format(',{0},', github.actor))
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -106,9 +108,33 @@ jobs:
           name: coverage-${{ matrix.os }}-py${{ matrix.python }}
           path: coverage.xml
 
+  secrets-scan:
+    name: Secret scan
+    # Cheap, always-on, and runs for forks too: this is the control that would
+    # have caught a publisher token pasted into a roadmap doc, where it sat
+    # publicly readable for five weeks (audit 2026-08-03).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Reject committed cvcpkg tokens
+        run: |
+          set -uo pipefail
+          # A minted token is `cvctok_` + 43 url-safe base64 chars. Match 20+ so
+          # truncated pastes are caught too, while `cvctok_FILL_ME_IN` style
+          # placeholders and `cvctok_<REDACTED>` stay legal.
+          if git grep -nIE 'cvctok_[A-Za-z0-9_-]{20,}' -- . ':(exclude).github/workflows/cvcpkg-ci.yml'; then
+            echo "::error::A cvcpkg API token appears to be committed. Revoke it, then remove it from the tree AND from history."
+            exit 1
+          fi
+          echo "No committed cvcpkg tokens found."
+
   validate:
     name: Validate schemas & recipes
-    if: github.event_name == 'push' || contains(vars.CI_ALLOWED_ACTORS, github.actor)
+    if: >-
+      github.event_name == 'push' ||
+      contains(format(',{0},', vars.CI_ALLOWED_ACTORS), format(',{0},', github.actor))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -130,7 +156,9 @@ jobs:
 
   lint:
     name: Lint & type-check
-    if: github.event_name == 'push' || contains(vars.CI_ALLOWED_ACTORS, github.actor)
+    if: >-
+      github.event_name == 'push' ||
+      contains(format(',{0},', vars.CI_ALLOWED_ACTORS), format(',{0},', github.actor))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -173,7 +201,17 @@ jobs:
   # available.
   integration:
     name: Integration tests (Docker)
-    if: github.event_name == 'push' || contains(vars.CI_ALLOWED_ACTORS, github.actor)
+    # Self-hosted runner safety.  For `pull_request`, GitHub evaluates the
+    # workflow definition from the PR's own merge ref, so a fork PR can edit
+    # this gate and these steps and run arbitrary code on the runner.  This
+    # runner is the PRODUCTION host: it holds the Docker socket and the
+    # deploy SSH keys used by deploy-prod.yml.  Restrict it to pushes and
+    # same-repository PRs -- the guard pr-recipe-build-dev.yml already uses.
+    # The actor allowlist stays as a second factor, not the only one.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(format(',{0},', vars.CI_ALLOWED_ACTORS), format(',{0},', github.actor)))
     needs: [test, validate, lint]
     runs-on: [self-hosted, Linux, cvcpkg-prod]
     timeout-minutes: 30

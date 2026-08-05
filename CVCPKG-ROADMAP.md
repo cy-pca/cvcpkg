@@ -731,6 +731,37 @@ scaling and federation:
 
   Composes with the build-time capability routing (GPU/`cuda`) item: a job is
   matched on (platform, arch, required capabilities, **served org/server**).
+- **Org-scoped builder administration** — the item above pools *job routing*
+  across orgs; this is its administrative counterpart, and today there is none.
+
+  `POST /v1/admin/update-builders` (`server/app.py`) iterates **every** connected
+  builder with **no `org_slug` filter**, gated only on `TokenRole.admin` — which
+  is server-wide. And `TokenRole` is exactly `{reader, publisher, admin}`: there
+  is **no org-admin role**, so this is not "delegated to org admins" either. An
+  org that registers its own hardware cannot update its own builders, while a
+  server admin can restart all of them. Centralised by omission rather than by
+  design — and the codebase *is* org-aware elsewhere (several endpoints gate on
+  `org_slug` vs `actor.role != TokenRole.admin`); this endpoint just skipped it.
+
+  Not a privilege escalation to fix in a hurry: builders already execute
+  arbitrary recipe build scripts fetched from the server, so the trust boundary
+  is pre-existing and far broader than this endpoint. The update message also
+  carries only a **version string** — the builder self-updates from *its own*
+  configured repo, so the server cannot hand it code — and it is version-gated,
+  so builders already current no-op. What is missing is **blast radius and
+  ergonomics**: a server admin can restart an org's machines, interrupting that
+  org's in-flight jobs, with no opt-in and no notification.
+
+  - Add an **org-admin role** (or an org-membership check) so an org can
+    administer the builders serving its namespace.
+  - Scope `update-builders` by `org_slug` — default to the actor's org; require
+    an explicit all-orgs flag for a server admin to fan out fleet-wide.
+  - Pairs with the served-namespace set above: a builder serving `["", "cvc"]`
+    should be administrable by public *and* `cvc` admins, which makes "whose
+    builder is this?" a set-membership question rather than a single owner.
+  - Prefer **drain-then-update** over restart-now, so an update never cancels a
+    running job — the failure mode that cascade-cancelled roughly a third of a
+    363-job DAG when a builder went down mid-run.
 - **Mirror protocol** — institutions can run local read-only mirrors
   (`--mirror-mode`) that sync from a primary. Useful for pure read-only
   air-gapped caches; the read-write variant is the *edge* role above.
@@ -940,6 +971,35 @@ fleet docs live in `vm-provisioning` (`linux/setup-cuda-builder.sh`, `docs/CVCPK
 a Windows CUDA builder follows the same shape (`--capability cuda` in the supervisor CONFIG, or
 auto-detect via `CUDA_PATH`). This routing is the prerequisite for building both the CUDA-math
 recipes above and the `libcvc-cuda` package on the fleet.
+
+**DONE (2026-08-04): disk-aware scheduling (`build.min_disk_gb`).** The quantitative sibling of the
+capability routing above, built on the same bones. `haiku-image` needs ~35 GiB of scratch (a Haiku
+cross-toolchain, the object tree, an anyboot image and a qcow2 conversion, all on the work volume);
+on 2026-08-03 it was dispatched to a dev-cluster builder with 26 GiB free and failed only because
+that recipe hand-rolls a `df` preflight in its `build.sh`. The scheduler itself had no notion of
+disk at all:
+- A recipe declares `build.min_disk_gb` (integer, alongside `build.timeout_seconds`): `haiku-image`
+  35, `llvm18` 25. The overwhelming majority of recipes declare nothing.
+- A builder advertises `free_disk_gb`, measured on the volume holding its **work dir**
+  (`--work-dir`, else the system temp dir jobs `mkdtemp` into) via `cvcpkg.platform.free_disk_gb`.
+  Unlike a capability this is a *measurement*, so it is re-taken on every heartbeat (REST and
+  WebSocket) rather than probed once, bounding staleness at one heartbeat interval (~60s).
+  `--no-free-disk` (fleet: `advertise_free_disk: false`) opts out; shown in `cvcpkg builder
+  list`/`status`.
+- The requirement propagates end to end (submit-dag → `BuildJobSubmitRequest`/`BuildJobInfo` →
+  `build_jobs.min_disk_gb`, migration 027 → store); `_choose_builder` skips a builder advertising
+  less; `/v1/builds/next-claimable` gates anonymous drainers on a `free_disk_gb` query param; and
+  submit-dag reports it before the operator waits — *"Skipping 1 recipe(s) for linux/x86_64: no
+  registered builder has enough free disk: haiku-image (35 GiB)"*. Within one scheduler tick the
+  dispatched job's requirement is debited from the builder's in-memory figure (the twin of
+  `current_jobs += 1`), so two 35 GiB jobs cannot both pass against the same 40 GiB reading.
+- **Unknown fails open.** A builder that advertises nothing (an agent predating this, or one run
+  with `--no-free-disk`) stays eligible: reading "no figure" as "0 GiB free" would strand every
+  disk-bearing job on every un-upgraded builder, turning an occasional mispairing into a permanent
+  outage. The recipe's own `df` preflight stays as defence in depth for exactly that gap.
+- **Not reaped as unschedulable**, deliberately — unlike a capability, free disk comes back (a GC
+  sweep, a neighbouring job finishing), and reaping would cancel the job's whole downstream chain
+  because the fleet was momentarily full. Such a job stays `pending`.
 
 #### Per-Interpreter Wheel Matrix (incl. Free-Threaded / No-GIL)
 

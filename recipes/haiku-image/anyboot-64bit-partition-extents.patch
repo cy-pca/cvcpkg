@@ -1,0 +1,188 @@
+anyboot: compute MBR partition extents in 64 bit
+
+src/tools/anyboot/anyboot.cpp's createPartition() took its byte offset and
+byte size as uint32_t, but main() passes off_t values taken straight from
+fstat().  Any anyboot image whose BFS partition is 4 GiB or larger therefore
+had its extents silently truncated modulo 2^32 before they were divided down
+to sectors and written into the MBR.
+
+Observed on a 10 GiB builder image (HAIKU_IMAGE_SIZE = 10240):
+
+  imageSize   = 10737418240 bytes
+  (uint32_t)    10737418240 % 2^32 = 2147483648
+  / 512       = 4194304 sectors  <- what landed in MBR entry 1
+  correct     = 20971520 sectors
+
+Entry 2 (the EFI FAT partition) is passed the 64 bit efiOffset, so its data
+is written at the right place in the file, but the entry recorded the
+truncated offset and so pointed 8 GiB too early -- inside the BFS.  The
+resulting table describes a 2 GiB "BFS" overlapped by an "EFI" partition
+that is really BFS content, which is fatal both to firmware and to
+`losetup -P` (used to inject the SSH key at build time).
+
+The MBR format itself is not the limit: its LBA fields are 32 bit *sector*
+counts, i.e. 2 TiB at 512 bytes/sector.  Only the tool was wrong.
+
+This widens createPartition()'s offset/size to uint64_t, does the
+byte->sector division in 64 bit, and narrows to uint32_t only when filling
+the on-disk fields -- behind an explicit check that errors out instead of
+wrapping again if a partition ever really does exceed the MBR's 2 TiB reach.
+The same widening is applied coherently to every arithmetic site involved:
+the CHS helper chsAddressFor() (which takes a sector number), the bootable
+back-patch pwrite() offset, the TRACE format specifiers (%u against a 64 bit
+value is undefined behaviour and printed garbage), and both call sites in
+main().  The partition entry fields are also filled via memcpy() rather than
+through a misaligned uint32_t* cast over a uint8_t array.
+
+--- a/src/tools/anyboot/anyboot.cpp
++++ b/src/tools/anyboot/anyboot.cpp
+@@ -34,6 +34,10 @@
+ static size_t sCopyBufferSize = 2 * 1024 * 1024;
+ static const size_t kBlockSize = 512;
+ 
++// The MBR partition entry stores the start LBA and the length as 32 bit
++// *sector* counts, i.e. it can describe up to 2 TiB with 512 byte sectors.
++static const uint64_t kMaxSectorCount = 0xffffffffULL;
++
+ 
+ // Haiku Anyboot Image:
+ //   (MBR Table + Boot Sector)
+@@ -66,12 +70,29 @@
+ }
+ 
+ 
++// Like checkError(), but for our own constraint violations, where errno
++// carries no meaning.
++static void
++checkLimit(bool failed, const char *message)
++{
++	if (!failed)
++		return;
++
++	printf("anyboot: %s\n", message);
++	free(sCopyBuffer);
++	exit(1);
++}
++
++
+ #if 0
++// "sectorOffset" is an LBA sector number, which may exceed 32 bit for the
++// callers below even though everything that is actually CHS encodable fits
++// comfortably into 32 bit.
+ static void
+-chsAddressFor(uint32_t offset, uint8_t *address, uint32_t sectorsPerTrack,
++chsAddressFor(uint64_t sectorOffset, uint8_t *address, uint32_t sectorsPerTrack,
+ 	uint32_t headsPerCylinder)
+ {
+-	if (offset >= 1024 * sectorsPerTrack * headsPerCylinder) {
++	if (sectorOffset >= (uint64_t)1024 * sectorsPerTrack * headsPerCylinder) {
+ 		// not encodable, force LBA
+ 		address[0] = 0xff;
+ 		address[1] = 0xff;
+@@ -79,6 +100,9 @@
+ 		return;
+ 	}
+ 
++	// The bounds check above guarantees this narrowing is lossless.
++	uint32_t offset = (uint32_t)sectorOffset;
++
+ 	uint32_t cylinders = 0;
+ 	uint32_t heads = 0;
+ 	uint32_t sectors = 0;
+@@ -103,9 +127,12 @@
+ #endif
+ 
+ 
++// "offset" and "size" are in bytes and must be 64 bit: images larger than
++// 4 GiB are routine, and truncating them here used to silently produce a
++// partition table describing the wrong (wrapped) extents.
+ static void
+ createPartition(int handle, int index, bool active, uint8_t type,
+-	uint32_t offset, uint32_t size)
++	uint64_t offset, uint64_t size)
+ {
+ 	uint8_t bootable = active ? 0x80 : 0x0;
+ 	uint8_t partition[16] = {
+@@ -117,14 +144,31 @@
+ 		0x00, 0x00, 0x00, 0x00	// imageSize in blocks (written below)
+ 	};
+ 
++	// Convert to sectors in 64 bit and only narrow to the 32 bit on-disk
++	// fields afterwards. An MBR entry addresses 2 TiB with 512 byte
++	// sectors, which is plenty -- but refuse to write a wrapped-around
++	// table if we are ever handed more than that.
++	uint64_t offsetSectors = offset / kBlockSize;
++	uint64_t sizeSectors = size / kBlockSize;
++
++	checkLimit(offsetSectors > kMaxSectorCount,
++		"partition start is beyond the 2 TiB addressable by an MBR entry");
++	checkLimit(sizeSectors > kMaxSectorCount,
++		"partition is larger than the 2 TiB addressable by an MBR entry");
++	checkLimit(offsetSectors + sizeSectors > kMaxSectorCount,
++		"partition end is beyond the 2 TiB addressable by an MBR entry");
++
+ 	// fill in LBA values
+-	uint32_t partitionOffset = (uint32_t)(offset / kBlockSize);
+-	((uint32_t *)partition)[2] = partitionOffset;
+-	((uint32_t *)partition)[3] = (uint32_t)(size / kBlockSize);
+-
+-	TRACE("%s: #%d %c bytes: %u-%u, sectors: %u-%u\n", __func__, index,
+-		active ? 'b' : '-', offset, offset + size, partitionOffset,
+-		partitionOffset + uint32_t(size / kBlockSize));
++	uint32_t partitionOffset = (uint32_t)offsetSectors;
++	uint32_t partitionSize = (uint32_t)sizeSectors;
++	memcpy(&partition[8], &partitionOffset, sizeof(partitionOffset));
++	memcpy(&partition[12], &partitionSize, sizeof(partitionSize));
++
++	TRACE("%s: #%d %c bytes: %llu-%llu, sectors: %llu-%llu\n", __func__, index,
++		active ? 'b' : '-', (unsigned long long)offset,
++		(unsigned long long)(offset + size),
++		(unsigned long long)offsetSectors,
++		(unsigned long long)(offsetSectors + sizeSectors));
+ #if 0
+ 	// while this should basically work, it makes the boot code needlessly
+ 	// use chs which has a high potential of failure due to the geometry
+@@ -134,10 +178,10 @@
+ 	uint32_t headsPerCylinder = 255;
+ 
+ 	// fill in CHS values
+-	chsAddressFor(partitionOffset, &partition[1], sectorsPerTrack,
++	chsAddressFor(offsetSectors, &partition[1], sectorsPerTrack,
++		headsPerCylinder);
++	chsAddressFor(offsetSectors + sizeSectors, &partition[5], sectorsPerTrack,
+ 		headsPerCylinder);
+-	chsAddressFor(partitionOffset + (uint32_t)(size / kBlockSize),
+-		&partition[5], sectorsPerTrack, headsPerCylinder);
+ #endif
+ 
+ 	ssize_t written = pwrite(handle, partition, 16, 512 - 2 - 16 * (4 - index));
+@@ -145,7 +189,8 @@
+ 
+ 	if (active) {
+ 		// make it bootable
+-		written = pwrite(handle, &partitionOffset, 4, offset + 512 - 2 - 4);
++		written = pwrite(handle, &partitionOffset, 4,
++			(off_t)offset + 512 - 2 - 4);
+ 		checkError(written != 4, "failed to make image bootable");
+ 	}
+ 	return;
+@@ -281,7 +326,8 @@
+ 	// Haiku Image Partition
+ 	alignment = kBlockSize - 1;
+ 	imageSize = (imageSize + alignment) & ~alignment;
+-	createPartition(outputFileHandle, 0, true, 0xeb, imageOffset, imageSize);
++	createPartition(outputFileHandle, 0, true, 0xeb, (uint64_t)imageOffset,
++		(uint64_t)imageSize);
+ 
+ 	// Optional EFI Filesystem
+ 	if (efiFile != NULL) {
+@@ -289,7 +335,8 @@
+ 		efiSize = (efiSize + alignment) & ~alignment;
+ 		result = copyLoop(efiFileHandle, outputFileHandle, efiOffset);
+ 		checkError(result != 0, "failed to copy EFI filesystem image to output");
+-		createPartition(outputFileHandle, 1, false, 0xef, efiOffset, efiSize);
++		createPartition(outputFileHandle, 1, false, 0xef, (uint64_t)efiOffset,
++			(uint64_t)efiSize);
+ 	}
+ 
+ 	// TODO: MacEFI (HFS) maybe someday

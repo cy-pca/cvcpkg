@@ -2,10 +2,17 @@ schema_version: 1
 recipe:
   name: haiku-image
   upstream_version: "1.0.0-beta.5"
-  # NOT yet published (verified: /v1/packages?name=haiku-image is empty on
-  # cvcpkg.org), so the prefix layout below could still change for free.  After
-  # the first publish an artifact is immutable: any change to it costs a
-  # cvc_revision bump AND breaks every consumer's hardcoded fallback path.
+  # NOT bumped -- for the boot fixes or for the prefix layout below -- because
+  # haiku-image has never been published: `cvcpkg info haiku-image` answers
+  # "component 'haiku-image' not found in catalog", and /v1/packages?name=
+  # haiku-image is empty on cvcpkg.org. There is no immutable published
+  # variant for revision 1 to collide with, so there is nothing to supersede
+  # and the layout below can still change for free.
+  #
+  # This stops being true the moment it IS published. Published variants are
+  # immutable, so from then on every recipe change needs a cvc_revision bump
+  # or it silently no-ops against the already-published artifact -- and a
+  # layout change would additionally break consumers' hardcoded paths.
   cvc_revision: 1
   # Enforced, not decorative: a `kind: image` recipe must stage everything
   # under share/<name>/ and nothing else, and must ship a schema-valid
@@ -44,6 +51,12 @@ source:
   type: prebuilt
   url: https://github.com/haiku/haiku
 
+# Intentionally empty — do NOT list the .patch files in this directory here.
+# cvcpkg applies `patches:` to whatever fetch_source() returns, and for
+# `source.type: prebuilt` (above) that is an EMPTY dummy dir, not the Haiku
+# checkout — every patch would fail to apply and abort the build.  build.sh
+# applies recipes/haiku-image/*.patch to the tree it clones itself, right
+# after the clone.  See the "2b. Patch the haiku source tree" block there.
 patches: []
 
 depends:
@@ -54,6 +67,13 @@ build:
   # A Linux-host recipe that PRODUCES a Haiku VM image (the recipe itself is
   # not a Haiku package).  Runs only on Linux x86_64 builders.
   build_type_independent: true
+  # The Haiku source clone (full history — see build.sh), the GCC/binutils
+  # cross-toolchain jam builds first, the generated objects, the anyboot
+  # image and the qcow2 conversion all live on the builder's work volume at
+  # once: ~35 GiB at peak.  Declared so the scheduler refuses a builder that
+  # cannot finish it — a 26 GiB dev-cluster builder took the job on
+  # 2026-08-03 and only discovered the shortfall inside build.sh.
+  min_disk_gb: 35
     # Linux x86_64 host only (builds a Haiku cross-toolchain + x86_64 image).
   matrix:
     - platform: linux
@@ -112,29 +132,50 @@ test:
       # any hypervisor state is created.
       key_env: HAIKU_BUILDER_SSH_KEY
     script: vm-test.sh
-    # Haiku's first boot writes its BFS index and runs UserBootscript, so it
-    # is slower than a Linux guest; 12 minutes is generous but bounded, and a
-    # hung boot must cost minutes, not a builder.
+    # Haiku's first boot writes its BFS index and starts the launch_daemon
+    # sshd job, so it is slower than a Linux guest; 12 minutes is generous but
+    # bounded, and a hung boot must cost minutes, not a builder.
     boot_timeout_seconds: 720
     timeout_seconds: 1800
+notes: |-
+  Build cost: Haiku is built from source, cross-toolchain first, so budget
+  roughly 90 minutes on a modern multi-core Linux host. Disk is the tighter
+  constraint than the old "~30 GB" note claimed: the tree carries the
+  cross-toolchain and object dirs (~15 GB) AND two full-size copies of a
+  10 GiB image (generated/haiku.image plus the anyboot), and then stages a
+  third into CVC_INSTALL_DIR alongside the qcow2. Budget ~50 GB free. The
+  recipe installs its own host build dependencies on Debian/Ubuntu builders
+  (git, nasm, xorriso, qemu-utils, ...).
 
-notes: |
-  Building Haiku from source builds a cross-toolchain first and takes
-  roughly 45-90 minutes on a modern multi-core Linux host with ~30 GB of
-  free disk.  The recipe installs its own host build dependencies on
-  Debian/Ubuntu builders (git, nasm, xorriso, qemu-utils, ...).
+  BUILDERS MUST NOT REAP /tmp UNDER THIS RECIPE. A cvcpkg janitor of the
+  form `find /tmp -maxdepth 1 -name 'cvcpkg-*' -type d -mmin +60 -exec rm
+  -rf {} +` will delete this recipe's work dir out from under it: the build
+  takes ~90 minutes and the janitor fires at 60. That is not hypothetical —
+  it destroyed a completed toolchain plus the built ISO mid-run during the
+  boot debugging. Exclude cvcpkg-haiku-image-*, raise the threshold past the
+  build time, or build outside /tmp.
 
-  BOOTING THE PRODUCED IMAGE — these are the authoritative facts, bisected
-  live against Haiku r1/beta5 under Incus/QEMU on 2026-08-03.  They are the
-  source for share/haiku-image/image.yaml's boot: block, so a consumer should
-  read them from there ($CVCPKG_IMAGE_DISK_BUS etc.) rather than retype them.
+  Boot status: the four boot blockers this recipe fixes (anyboot 32-bit
+  partition overflow, the `baron`/`user` account name, a toolchain staged
+  unactivated in /boot/_packages_, and pkgman's missing TLS) were each
+  verified on a booted VM — it gets DHCP, accepts SSH for `user`, and
+  compiles and runs a C program against Haiku's own headers. Two further
+  defects found during that work are fixed here too: the authorized_keys
+  path is Haiku's config/settings/ssh, not ~/.ssh, and nothing in Haiku
+  starts sshd headlessly, so the image ships a launch_daemon SYSTEM job.
+
+
+  BOOTING THE PRODUCED IMAGE -- authoritative guest facts, bisected live
+  against Haiku r1/beta5 under Incus/QEMU on 2026-08-03. They are the source
+  for share/haiku-image/image.yaml's boot: block, so a consumer should read
+  them from there ($CVCPKG_IMAGE_DISK_BUS etc.) rather than retype them.
 
   SCOPE, because the disk-bus row below has been over-read once already:
-  every bullet here is a statement about what the HAIKU GUEST OS can drive
-  under Incus/QEMU.  None of them is a statement that an image built by this
-  recipe boots to userland — no such boot has been observed.  Picking the
-  right bus removes the bus from the list of suspects, nothing more.  See the
-  status block at the top of README-import.md for what is actually known.
+  every bullet is a statement about what the HAIKU GUEST OS can drive under
+  Incus/QEMU. None is a claim that a CLEAN RUN of this recipe produces an
+  image that boots -- see "What is NOT yet verified" below, which still
+  stands. Picking the right bus removes the bus from the list of suspects,
+  nothing more.
 
     * Disk bus MUST be nvme.  virtio-blk general-protection-faults (vector
       0xd) in virtio_pci notify_queue() and never reaches userland;
@@ -159,3 +200,34 @@ notes: |
       read access.ssh_pubkey_baked out of image.yaml, and read the account
       name from access.ssh_user, which the build OMITS rather than guesses
       when it cannot establish one.
+
+  Independently re-verified against pristine upstream r1beta5 sources, off
+  the build host: the anyboot patch applies with no fuzz to the r1beta5
+  anyboot.cpp and, compiled and run on a real 10 GiB image, turns MBR entry 1
+  from 4194304 sectors (2 GiB, wrapped) into 20971520 (exactly 10 GiB) and
+  moves the EFI entry from inside the BFS payload to the BFS end. The package
+  preflight was run against the real r1beta5 repository manifests: all 27
+  requested names resolve, and it correctly rejects cmake/ninja/patchelf/
+  rsync/python3 with a "did you mean python3.10" hint.
+
+  What is NOT yet verified: this recipe has never been run start to finish.
+  The boot verification above was done by injecting these exact artifacts
+  into an already-built image — and specifically into a RESCUED diagnostic
+  copy that had been through roughly ten boots of debugging, not into a clean
+  build artifact — because the /tmp janitor destroyed the source tree before a
+  clean re-run was possible. The preflight and patch checks were likewise run
+  standalone rather than in situ. build.sh's clone/configure/jam path in
+  particular is unexercised since these edits, and cvcpkg.haikuhost has never
+  driven a real build against the image. Treat the first CI run as the real
+  proof.
+
+  Toolchain: gcc 13.3.0, binutils 2.42, make, jam, autotools, git, perl and
+  python3.10 are baked in and activated. `ninja` is NOT available at this
+  Haiku version — HaikuPorts builds it against r1~beta6 and this image is
+  beta5. cmake, patchelf and rsync are not baked in but do install at
+  runtime via `pkgman install -y cmake patchelf rsync`. That is a MANUAL
+  step: there is deliberately no first-boot top-up automation. A
+  launch_daemon job that would have run it on first boot was tried and failed
+  reproducibly, so it is not shipped — the only launch job in the image is
+  the sshd one. Getting ninja (and a newer python) means moving HAIKU_REF off
+  r1beta5, which is a new cross-toolchain build and a full revalidation.

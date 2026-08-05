@@ -2,9 +2,26 @@
 #
 # Copied into haiku/build/jam/UserBuildConfig by build.sh. Defines a
 # "builder-anyboot" jam build profile that produces a headless HaikuOS
-# builder image: a large disk, a build toolchain, OpenSSH, and a fixed
-# hostname. SSH keys and the first-boot script are injected afterward by
-# build.sh (via bfs_shell) so no secret material lives in this file.
+# builder image: a right-sized disk, an ACTIVATED build toolchain, OpenSSH
+# with working TLS, and a fixed hostname. The SSH key and the sshd launch job
+# are injected afterward by build.sh (via bfs_shell) so no secret material
+# lives in this file.
+#
+# READ THIS BEFORE EDITING THE PACKAGE LISTS BELOW.
+#
+# Jamrules includes this file at line ~120: AFTER build/jam/repositories/* has
+# populated HAIKU_AVAILABLE_PACKAGES (line ~96), but BEFORE
+# DefineDefaultBuildProfiles (line ~136) and before the Jamfile tree (which is
+# what pulls in build/jam/BuildFeatures and build/jam/OptionalPackages).
+# That ordering is load-bearing three times over:
+#
+#   * IsPackageAvailable works here, so AddHaikuImageSystemPackages resolves.
+#   * We run before BuildFeatures, so adding openssl3 here turns Haiku's own
+#     TLS on (see HAIKU_BUILD_FEATURE_SSL below).
+#   * AddHaikuImagePackages (build/jam/ImageRules) guards on HAIKU_PACKAGE_ADDED,
+#     so whoever names a package FIRST wins its directory. We run before
+#     OptionalPackages, so listing a package here puts it in system/packages
+#     even if an optional-package block would later have put it in _packages_.
 #
 # See: https://www.haiku-os.org/guides/building/userbuildconfig/
 #      https://github.com/haiku/haiku/blob/master/build/jam/UserBuildConfig.ReadMe
@@ -15,26 +32,167 @@ DefineBuildProfile builder-anyboot : anyboot-image : "haiku-builder-anyboot.iso"
 
 switch $(HAIKU_BUILD_PROFILE) {
     case "builder-anyboot" : {
-        # A 50 GB image so the builder has room for source trees + output.
-        # (The anyboot BFS partition cannot be grown after the fact.)
-        HAIKU_IMAGE_SIZE = 51200 ;
+        # 10 GiB of BFS. This used to be 51200 (50 GiB), which produced a
+        # 50 GiB raw anyboot plus a same-size copy in the install dir — more
+        # than the fleet builders have free, and far over the server's
+        # publish cap.
+        #
+        # The budget: ~1.2 GiB base Haiku, ~1.5 GiB for the toolchain below,
+        # leaving ~7 GiB for the source tree + build dir + deps prefix that
+        # cvcpkg.haikuhost stages under /boot/home/cvcpkg-build per job. BFS
+        # cannot be grown after the image is written, so a job that needs more
+        # gets a second BFS disk attached (README-import.md) rather than every
+        # consumer paying for the headroom in download size.
+        HAIKU_IMAGE_SIZE = 10240 ;
 
         # Stable identity for the fleet.
         HAIKU_IMAGE_HOST_NAME = haiku-builder ;
 
-        # Remote access + build toolchain baked into the image. openssh is in
-        # the default profile too; the Development optional package brings
-        # gcc/binutils/make/autotools. Keep the explicit list small and
-        # known-good — a missing package name fails the image build.
+        # ── The login account ────────────────────────────────────────────
+        # Haiku creates exactly ONE account, named by
+        # build/jam/images/definitions/common-tail:62
+        #
+        #   AddUserToHaikuImage $(HAIKU_ROOT_USER_NAME:E=baron) : 0 : 0
+        #       : /boot/home : /bin/bash
+        #       : $(HAIKU_ROOT_USER_REAL_NAME:E="Root User") ;
+        #
+        # "user" is NOT the upstream fallback — "baron" is. `user` is set by
+        # build/jam/DefaultBuildProfiles, but only inside its `release-*` and
+        # `nightly-*` cases. "builder-anyboot" matches neither, so without the
+        # two lines below the image's sole account is `baron` and sshd rejects
+        # every fleet login with "Invalid user user".
+        #
+        # Set it explicitly rather than leaning on either upstream default:
+        # `user` is the name README-import.md documents and the one the fleet's
+        # CVCPKG_HAIKU_SSH=user@haiku-builder uses, and pinning it here keeps
+        # that true whatever a future Haiku does to the fallback. The account
+        # is uid 0 / gid 0 with home /boot/home either way, so build.sh's key
+        # injection stays name-independent.
+        HAIKU_ROOT_USER_NAME = user ;
+        HAIKU_ROOT_USER_REAL_NAME = "Builder" ;
+
+        # ── Haiku's own TLS ──────────────────────────────────────────────
+        # WITHOUT THIS, pkgman CANNOT REFRESH ANY REPOSITORY: it dies with
+        # "*** failed! : Operation not supported" (B_UNSUPPORTED) on the very
+        # first https fetch. That makes the image a dead end — anything not
+        # baked in at build time (cmake, patchelf, rsync) can never be
+        # installed, on this boot or any later one.
+        #
+        # build/jam/BuildFeatures:18 only auto-enables the feature when
+        # openssl3 has ALREADY been added to the image at the moment the
+        # top-level Jamfile includes BuildFeatures (Jamfile:7), and only the
+        # stock release-*/nightly-*/minimum-* cases in DefaultBuildProfiles do
+        # that. A custom profile name matches none of them, so the feature
+        # stayed off, src/kits/network/libnetapi built into .../no-ssl/, and
+        # libbnetapi.so shipped the no-SSL stub of BSecureSocket whose
+        # Connect() unconditionally returns B_UNSUPPORTED. BHttpRequest returns
+        # that verbatim, FetchFileJob stores it, pkgman prints it.
+        #
+        # Note the trap this creates: openssl3 ends up in the image ANYWAY, as
+        # a transitive dependency of curl/git/openssh resolved by
+        # build/scripts/build_haiku_image long after jam has parsed everything.
+        # So libssl.so.3 is on disk and `curl https://...` works (curl links
+        # its own OpenSSL) while pkgman/HaikuDepot/SoftwareUpdater are dead.
+        # An image that looks SSL-capable and is not.
+        #
+        # Belt and braces: setting the variable directly is the documented
+        # escape hatch (build/jam/UserBuildConfig.ReadMe), and listing openssl3
+        # in the package list below makes BuildFeatures' own
+        # IsHaikuImagePackageAdded test true as well. Either alone suffices;
+        # the double-add is exactly what upstream's nightly-* profile does.
+        HAIKU_BUILD_FEATURE_SSL = 1 ;
+
+        # ── Packages ─────────────────────────────────────────────────────
+        # EVERY NAME HERE MUST APPEAR IN build/jam/repositories/HaikuPorts/
+        # x86_64 OR build/jam/repositories/Haiku. jam does NOT query HaikuPorts
+        # over the network and does NOT honour `provides:`; it matches the
+        # literal <name>-<version> lines in those two files. An unknown name is
+        # SILENTLY SKIPPED — build/jam/ImageRules:1130 is
+        #
+        #     Echo "AddHaikuImagePackages: package" $(package) "not available!" ;
+        #     continue ;
+        #
+        # an Echo and a `continue`, never an Exit, and `jam -q` does not
+        # suppress Echo but a handful of such lines vanish in a multi-thousand-
+        # line log. That is how a "builder" image shipped with no python and no
+        # compiler. build.sh runs a preflight that turns this into a hard error
+        # BEFORE the hour-long cross-toolchain step; keep it working by keeping
+        # this list plain (no FFilterByBuildFeatures `pkg@feature` / `@{ }@`).
+        #
+        # NOT AVAILABLE, do not add: cmake, ninja, patchelf, rsync, and a bare
+        # `python3`. None exist in the r1beta5 build-time snapshot (nor in
+        # haiku master's). `python3` is not a Haiku package at all — the
+        # packages are python3.10 ... python3.14 — and python3.10 is the one
+        # this image's haiku version satisfies; it ships bin/python3.
         AddHaikuImageSystemPackages
+            # Remote access + TLS. openssl3 must be here, not in
+            # HAIKU_IMAGE_ADDITIONAL_PACKAGES: that is applied at Jamfile:89
+            # (`AddHaikuImageSystemPackages $(HAIKU_IMAGE_ADDITIONAL_PACKAGES)`),
+            # AFTER BuildFeatures has run at Jamfile:7, which installs the
+            # library but leaves Haiku's TLS compiled out.
             openssh
+            openssl3
+
+            # Interactive basics.
             git
-            python3
             nano
+
+            # Scripting languages cvcpkg's build scripts assume.
+            perl
+            python3.10
+
+            # ── The build toolchain ──────────────────────────────────────
+            # These are listed EXPLICITLY, and `AddOptionalHaikuImagePackages
+            # Development` is deliberately NOT used, because that optional
+            # package (and the DevelopmentBase/DevelopmentMin it depends on)
+            # adds every one of them via AddHaikuImageDisabledPackages —
+            # i.e. into /boot/_packages_, the UNACTIVATED directory that exists
+            # so Haiku's GRAPHICAL Installer can enable them later. A headless
+            # image never runs Installer, so the compiler was physically
+            # present on disk and completely unusable: no gcc, no make and no
+            # system headers on PATH. Naming them here claims them for
+            # system/packages first (HAIKU_PACKAGE_ADDED guard, see header).
+            gcc binutils mpc mpfr
+            make m4 patch pkgconfig
+            bison flex nasm mkdepend jam
+
+            # Autotools (were Development's own contribution).
+            autoconf automake texinfo
+
+            # Development headers/libs for the base set that ships as shared
+            # libraries. Their runtime halves are already in the image; these
+            # are the *_devel splits Development would have left unactivated.
+            openssl3_devel zlib_devel zstd_devel
+            libjpeg_turbo_devel libpng16_devel
             ;
 
-        AddOptionalHaikuImagePackages
-            Development
+        # Haiku's own development package: system headers, libroot/libbe link
+        # stubs and the makefile engine. These are built by this tree rather
+        # than downloaded, so they are not in HAIKU_AVAILABLE_PACKAGES and
+        # AddHaikuImageSystemPackages cannot name them — they have to be added
+        # as package FILES. DevelopmentMin (build/jam/OptionalPackages:106)
+        # does exactly this but targets _packages_; we target system packages
+        # so the headers are actually on the include path at boot.
+        #
+        # AddPackageFilesToHaikuImage has NO HAIKU_PACKAGE_ADDED guard (unlike
+        # AddHaikuImagePackages, which skips a package already claimed) — it
+        # just appends to the container's file list. So this must not be
+        # combined with an optional package that adds the same files, or the
+        # same .hpkg is staged into both system/packages and _packages_.
+        # Haiku is hostile to that split in general: the dependency check at
+        # build/scripts/build_haiku_image:351 aborts the image outright when a
+        # dependency of an activated package is found in an unactivated
+        # directory. That is the second reason `AddOptionalHaikuImagePackages
+        # Development` is gone. (Not independently reproduced here — the
+        # first reason, given above with the toolchain list, that Development
+        # stages the whole toolchain unactivated, is the one that was actually
+        # observed.)
+        AddPackageFilesToHaikuImage system packages
+            :
+            haiku_devel.hpkg
+            makefile_engine.hpkg
+            :
+            nameFromMetaInfo
             ;
     }
 }

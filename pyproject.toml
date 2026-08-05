@@ -53,6 +53,18 @@ aiomysql = { version = ">=0.2", optional = true }
 cryptography = ">=41.0"
 httpx = ">=0.24"
 greenlet = ">=3.0"
+# Runtime, not dev: cvcpkg.validation imports jsonschema unguarded to build the
+# Draft202012Validator, so `cvcpkg validate` and `cvcpkg pack` raise
+# ModuleNotFoundError in any install that lacks it — which was every install
+# from PyPI, since this sat in the dev group.
+#
+# Held below 4.18 deliberately: that release swapped the pure-Python
+# `pyrsistent` for `rpds-py`, which is Rust. PyPI ships no BSD wheels for it and
+# the BSD builders have no cargo, so an unbounded bound makes `pip install
+# cvcpkg` unsatisfiable on freebsd/openbsd/netbsd. Lifting the pin is gated on a
+# rust-toolchain recipe — see docs/roadmap/platform-coverage-pypi-blockers.md
+# §W11. 4.17.3 supplies the Draft202012Validator we use.
+jsonschema = ">=4.0,<4.18"
 
 # Optional storage backends — lazily imported by cvcpkg.backends.* and
 # enabled via the matching extras below.
@@ -84,7 +96,6 @@ mypy = "^1.10"
 black = "^24.0"
 httpx = ">=0.24"
 pytest-asyncio = ">=0.21"
-jsonschema = ">=4.0"
 aiosqlite = ">=0.20"
 # Only an extra for real installs (see [tool.poetry.extras]), but the suite
 # needs it unconditionally: tests/unit/test_migrations.py importorskips the

@@ -33,10 +33,11 @@
 > It does not say this image boots.
 
 A headless, pre-configured HaikuOS builder VM image. Haiku's `Installer` is
-graphical-only, so this image is **built pre-installed**: the intent is that it
-comes up with DHCP networking and OpenSSH already running, with no VGA/GUI
-interaction at any point. See the status block above for how much of that has
-actually been demonstrated.
+graphical-only, so this image is **built pre-installed** — boot it and it
+comes up with DHCP networking (Haiku brings that up itself) and `sshd`
+listening. Stock Haiku does **not** start `sshd` — not via socket activation,
+not via anything else — so this recipe bakes in a `launch_daemon` job that
+does; see [Access](#access). No VGA/GUI interaction is needed at any point.
 
 ## Where it lives
 
@@ -107,29 +108,42 @@ file modes do not survive archive extraction, so nothing can enforce it.
 
 ## Access
 
-- The build *attempts* to bake in `$HAIKU_BUILDER_SSH_PUBKEY`. **Assume it did
-  not.** Read `access.ssh_pubkey_baked` out of `image.yaml`
-  (`cvcpkg image info haiku-image --json`; it is deliberately not in
-  `image.env`, which carries only the facts a provisioner acts on) — it is set
-  from a read-back of the injected file, so `false` means the key really is
-  not there, and `false` is
-  what every build has produced so far (see the status block: the injection
-  wrote to a path that does not exist in the mounted volume, and failed
-  silently).
-- Log in as `$CVCPKG_IMAGE_SSH_USER`, never as a name copied out of a
-  document: `ssh "$CVCPKG_IMAGE_SSH_USER"@<ip>`. The build derives that name
-  from the image and **omits** it when it could not, precisely so a stale
-  literal cannot disagree with the account the image actually has. If it is
-  unset, the build did not establish one and there is no safe guess.
-- To inject a key yourself, mount the BFS partition with Haiku's `bfs_shell`
-  (`losetup -f -P` on the raw image → `…p1`) and write
-  **`/myfs/home/config/settings/ssh/authorized_keys`** (mode 600, its
-  directory 700). Two traps, both of which have already cost a day:
-  `bfs_shell` mounts at the fixed path `/myfs` and starts in `/`, so a bare
-  relative `home/...` silently resolves to nothing *and still exits 0*; and
-  Haiku's openssh ships an `sshd_config` whose `AuthorizedKeysFile` is
-  `config/settings/ssh/authorized_keys`, so a key in `~/.ssh` is never read.
-  Verify by reading the file back out and comparing bytes.
+- The image trusts the SSH public key baked in at build time
+  (`$HAIKU_BUILDER_SSH_PUBKEY`). Log in as **`user`**: `ssh user@<ip>`.
+  That is the image's only account: uid 0, gid 0, home `/boot/home`, shell
+  `/bin/bash`. It is named by `HAIKU_ROOT_USER_NAME` in the recipe's
+  `UserBuildConfig`; leaving that unset gets you Haiku's `baron` fallback
+  and `Invalid user user` from `sshd`.
+- **The authorized_keys path is NOT `~/.ssh`.** Haiku's openssh package ships
+  an `sshd_config` whose only non-default directive is
+
+      AuthorizedKeysFile	config/settings/ssh/authorized_keys
+
+  so the key must be at `/boot/home/config/settings/ssh/authorized_keys`
+  (mode 600, its directory 700). A key in `~/.ssh/authorized_keys` is simply
+  never read and every login fails with `Permission denied (publickey,...)`.
+- **Nothing in Haiku starts sshd.** The openssh package ships no
+  `data/launch/sshd` job, and `~/config/settings/boot/UserBootscript` only
+  runs inside a desktop session, which a headless boot never starts. The
+  image therefore carries a launch_daemon SYSTEM-context job at
+  `/boot/system/settings/launch/sshd` that runs
+  `/boot/system/settings/ssh/cvcpkg-start-sshd.sh` (`ssh-keygen -A`, then
+  `sshd -D -e`). Measured: port 22 is open ~20 s after power-on, and
+  survives a reboot.
+- If the image was built without a key (public builds), inject one before
+  first boot with Haiku's `bfs_shell` on the BFS partition
+  (`losetup -f -P haiku-builder-anyboot.iso` → `…p1`), writing
+  `/myfs/home/config/settings/ssh/authorized_keys` — `bfs_shell` mounts the
+  volume at the fixed path `/myfs` and starts in `/`, so a bare
+  `home/config/...` silently resolves to nothing (it prints an error but
+  still exits 0). Or set a password once via the VGA console.
+- **Read the facts from the descriptor, not from this file.** After
+  `eval "$(cvcpkg image env haiku-image)"`, use `$CVCPKG_IMAGE_SSH_USER` for
+  the account and `cvcpkg image info haiku-image --json` for
+  `access.ssh_pubkey_baked`. The build sets `ssh_pubkey_baked` from a
+  read-back of the injected file and **omits** `ssh_user` when it could not
+  establish one, so a stale literal in a document can never disagree with the
+  image you actually have.
 
 ## Incus (VM)
 
@@ -345,22 +359,37 @@ then `dd`/`scp`/import from there.
 
 ## Notes
 
+- **Only the Incus stanza has actually been run** (the LXD one is the same
+  commands under the other binary name). The Proxmox and plain-QEMU recipes
+  above are written to the same requirements — UEFI/OVMF firmware, a disk bus
+  Haiku's boot loader can read, a NIC Haiku can DHCP on — but have not been
+  exercised. Treat them as a starting point, not a verified procedure.
 - **Disk size:** do not read a number out of this file. `boot.disk_min_gib` is
   computed by the build as `ceil(virtual_size_bytes / 1 GiB)` off the image it
-  just produced, and exported as `$CVCPKG_IMAGE_DISK_MIN_GIB`; this note used
-  to say "~50 GB, which is why `disk_min_gib` is 50" and was wrong twice over
-  (a 51204 MiB image does not fit in a 50 GiB volume at all, and
-  `HAIKU_IMAGE_SIZE` has since changed). It is a hard floor: a hypervisor
-  refuses a root volume smaller than the image's virtual size. It is **not**
-  headroom — the guest's usable space was fixed at build time by
-  `HAIKU_IMAGE_SIZE` because BFS can't be grown afterwards, so a larger volume
-  gives the guest nothing. For more space, rebuild with a larger
-  `HAIKU_IMAGE_SIZE` or attach a second BFS-formatted disk as scratch.
+  just produced and exported as `$CVCPKG_IMAGE_DISK_MIN_GIB`. It is a hard
+  floor — a hypervisor refuses a root volume smaller than the image's virtual
+  size — and it is **not** headroom: the baked BFS partition is currently
+  10 GiB (`HAIKU_IMAGE_SIZE=10240`), of which ~7.1 GiB is free on a fresh
+  boot, and BFS cannot be grown afterwards, so a larger volume gives the guest
+  nothing. For more space, rebuild with a larger `HAIKU_IMAGE_SIZE` or attach
+  a second BFS-formatted disk as scratch.
 - **Login account:** likewise, use `$CVCPKG_IMAGE_SSH_USER` rather than a name
   from any document. The build derives it from the image (falling back to
   `HAIKU_ROOT_USER_NAME` and then to Haiku's own default), and it is
   **omitted** from the descriptor when the build could not establish it —
   in which case there is no safe guess and you must supply one explicitly.
+- **Baked-in toolchain:** gcc 13.3.0, binutils 2.42, GNU make 4.1, jam,
+  autotools, m4/patch/pkgconfig/bison/flex/nasm, git 2.45.2, perl 5.40.0,
+  python3.10 (`python3`), and Haiku's own `haiku_devel` headers — all
+  ACTIVATED in `/boot/system/packages`, not staged in `/boot/_packages_`.
+  `python3 -c "import sys; print(sys.platform)"` reports **`haiku1`**.
+- **Not included:** `ninja` — its HaikuPorts build requires
+  `haiku >= r1~beta6_hrev59866_5` and this image is beta5. `cmake` (4.1.6),
+  `patchelf` and `rsync` are NOT baked in but DO install at runtime with
+  `pkgman install -y cmake patchelf rsync` (verified on a booted image;
+  a reboot activates them). This is a **manual step** — the image has no
+  first-boot top-up automation, by design: a `launch_daemon` job that would
+  have run this on first boot failed reproducibly and was not shipped.
 - **No serial shell:** Haiku's serial port is kernel-debug only
   (`boot.console: none`), so SSH is the only admin channel — make sure
   networking/keys are correct before relying on a headless deploy.

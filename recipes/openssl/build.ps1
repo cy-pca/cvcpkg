@@ -1,9 +1,30 @@
 # recipes/openssl/build.ps1 — build OpenSSL from source on Windows.
 #
 # OpenSSL uses its own Perl-based Configure + nmake build system,
-# NOT CMake.  Strawberry Perl and nmake (via MSVC dev env) must be
-# on PATH — both are available on GitHub-hosted Windows runners.
+# NOT CMake.  Strawberry Perl and nmake (via MSVC dev env) must be on PATH.
 $ErrorActionPreference = 'Stop'
+
+# Import the MSVC developer environment, exactly as the other nmake recipes do
+# (bzip2, sqlite, f2c, pthreads4w).
+#
+# This was omitted because nmake "is available on GitHub-hosted Windows
+# runners" — true there, since the workflow runs ilammy/msvc-dev-cmd before
+# invoking us. It is NOT true on a self-hosted builder, whose daemon runs from
+# a plain service session with no dev env, so the build died at:
+#
+#     The term 'nmake' is not recognized as a name of a cmdlet, ...
+#
+# That is why windows openssl was stranded at +cvc.1 while this recipe sat at
+# cvc_revision 3 — the only variants that ever published were built back when a
+# GitHub-hosted runner happened to supply the environment. The failure then
+# cascade-cancelled curl, which kept curl/freetype/libpng missing for windows
+# and left libcvc's package-windows CI red.
+#
+# Sourcing this is sufficient: env-windows.ps1 calls Import-CvcMsvcEnv at load,
+# which no-ops when cl.exe is already on PATH (the GitHub-runner case) and
+# otherwise imports vcvars64.bat located via vswhere.
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+. "$scriptDir\..\_common\env-windows.ps1"
 
 # Validate required env vars (set by builder.py / env-windows.ps1).
 if (-not $env:CVC_SOURCE_DIR)  { throw 'CVC_SOURCE_DIR must be set' }
