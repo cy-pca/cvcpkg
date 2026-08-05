@@ -111,7 +111,12 @@ def _fake_host(
     monkeypatch.setattr("subprocess.run", _run)
     monkeypatch.setattr(plat_mod, "_LXD_DAEMON_PATHS", daemon_paths)
     monkeypatch.setattr("os.path.exists", lambda p: p in daemon_paths)
-    monkeypatch.setattr("os.geteuid", lambda: euid)
+    # os.geteuid/os.getuid are POSIX-only.  raising=False lets the synthetic
+    # host DEFINE them on Windows, where monkeypatch would otherwise fail on a
+    # missing attribute before the test body runs.  The probes read them
+    # through getattr(os, ..., None), so a defined fake is exactly what a
+    # POSIX host looks like to them -- which is what this harness promises.
+    monkeypatch.setattr("os.geteuid", lambda: euid, raising=False)
     return executed
 
 
@@ -288,7 +293,7 @@ class TestDaemonUsability:
             )
 
         monkeypatch.setattr("subprocess.run", _run)
-        monkeypatch.setattr("os.geteuid", lambda: 0)
+        monkeypatch.setattr("os.geteuid", lambda: 0, raising=False)
         monkeypatch.setattr(
             "shutil.which",
             lambda n: {**_INCUS_HOST, **_LXD_HOST, **_CLASSIC_LXC_HOST}.get(n),
@@ -316,7 +321,7 @@ class TestDaemonUsability:
             raise subprocess.TimeoutExpired(argv, kwargs.get("timeout", 0))
 
         monkeypatch.setattr("subprocess.run", _run)
-        monkeypatch.setattr("os.geteuid", lambda: 0)
+        monkeypatch.setattr("os.geteuid", lambda: 0, raising=False)
         monkeypatch.setattr(
             "shutil.which",
             lambda n: {**_INCUS_HOST, **_LXD_HOST, **_CLASSIC_LXC_HOST}.get(n),
@@ -340,7 +345,7 @@ class TestClassicLxcDelegation:
 
     def _unprivileged(self, monkeypatch):
         _fake_host(monkeypatch, _CLASSIC_LXC_HOST, euid=1000)
-        monkeypatch.setattr("os.getuid", lambda: 1000)
+        monkeypatch.setattr("os.getuid", lambda: 1000, raising=False)
         monkeypatch.setattr("getpass.getuser", lambda: "builder")
 
     def _subid(self, tmp_path, monkeypatch, content: str, *, both: bool = True):
@@ -400,7 +405,7 @@ class TestProbesNeverRaise:
     def test_subprocess_exploding(self, monkeypatch, probe):
         binaries = {**_INCUS_HOST, **_LXD_HOST, **_CLASSIC_LXC_HOST}
         monkeypatch.setattr("shutil.which", lambda n: binaries.get(n))
-        monkeypatch.setattr("os.geteuid", lambda: 0)
+        monkeypatch.setattr("os.geteuid", lambda: 0, raising=False)
 
         def _boom(*_a, **_k):
             raise PermissionError("exec denied")
