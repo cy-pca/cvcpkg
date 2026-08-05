@@ -60,7 +60,10 @@ def test_elf_rpath_platforms_covers_bsd_but_not_openbsd():
     # OpenBSD, whose ld.so does not expand $ORIGIN.
     from cvcpkg.builder import _ELF_RPATH_PLATFORMS
 
-    assert {"linux", "freebsd", "netbsd", "dragonflybsd"} <= _ELF_RPATH_PLATFORMS
+    assert {"linux", "freebsd", "netbsd"} <= _ELF_RPATH_PLATFORMS
     assert "openbsd" not in _ELF_RPATH_PLATFORMS
+    # DragonFly is not listed: it detects as freebsd (compat mode), so its
+    # bundles take the freebsd path rather than a platform of their own.
+    assert "dragonflybsd" not in _ELF_RPATH_PLATFORMS
     assert "macos" not in _ELF_RPATH_PLATFORMS  # handled by install_name rewrite
     assert "windows" not in _ELF_RPATH_PLATFORMS

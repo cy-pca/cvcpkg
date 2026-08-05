@@ -2,7 +2,10 @@ schema_version: 1
 recipe:
   name: wireguard-tools
   upstream_version: "1.0.20260223"
-  cvc_revision: 2
+  # Bumped 2 -> 3: added the netbsd build. NetBSD has in-kernel wg(4) and
+  # pkgsrc net/wireguard-tools; build.sh already selects gmake for the BSDs and
+  # the upstream Makefile dispatches on `uname -s`, so no script change.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -52,6 +55,10 @@ build:
       env:
         CFLAGS: "-O2"
     - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2"
+    - platform: netbsd
       script: build.sh
       env:
         CFLAGS: "-O2"

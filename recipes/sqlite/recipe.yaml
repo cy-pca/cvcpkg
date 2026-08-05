@@ -2,7 +2,12 @@ schema_version: 1
 recipe:
   name: sqlite
   upstream_version: "3.49.1"
-  cvc_revision: 2
+  # Added wasm/wasi/cosmo entries.  python311/312/313/313t all declare these
+  # three platforms and runtime-depend on sqlite, so every cross column of the
+  # CPython matrix was a phantom claim.  The cross scripts compile the
+  # amalgamation directly rather than running SQLite 3.49's autosetup
+  # configure, which bootstraps and then *executes* a jimsh built with $CC.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -51,9 +56,21 @@ build:
         CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: cosmo
+      host_platform: linux
+      script: build-cosmo.sh
 
 package:
   files:
+    # bin/sqlite3* is absent on the cross targets — those build the library
+    # only, since the CLI is not runnable on the build host.  package.files
+    # entries are globs, so a non-matching one is a no-op there.
     - lib/libsqlite3*
     - lib/pkgconfig/sqlite3.pc
     - include/sqlite3.h

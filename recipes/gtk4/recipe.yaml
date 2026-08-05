@@ -2,16 +2,27 @@ schema_version: 1
 recipe:
   name: gtk4
   upstream_version: "4.16.7"
-  cvc_revision: 2
+  # Bumped 2 -> 4 (two changes):
+  #  1. Scoped the wayland-protocols build edge to the platforms with a Wayland
+  #     backend. GTK 4 uses its Quartz backend on macOS and its Win32 backend on
+  #     Windows, neither of which runs wayland-scanner, so the unscoped edge made
+  #     this recipe advertise macos/windows while depending on a package with no
+  #     build there.
+  #  2. Replaced the gvsbuild-driven Windows build with a direct Meson + MSVC
+  #     one. gvsbuild fetched and compiled its own copy of the whole GTK stack,
+  #     so the Windows bundle was non-hermetic AND shipped gvsbuild's cairo/
+  #     pango/gdk-pixbuf rather than the ones declared here. The Windows payload
+  #     changes wholesale, hence the bump.
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   description: >-
     GTK 4 — the GIMP Toolkit widget library, used to build graphical
     user interfaces for the GNOME desktop and cross-platform
-    applications.  This recipe builds GTK 4 from source with Meson,
-    linking against cvcpkg-provided glib/cairo/pango/harfbuzz/
-    gdk-pixbuf/epoxy on POSIX hosts and via gvsbuild on Windows.
+    applications.  This recipe builds GTK 4 from source with Meson on
+    every platform, linking against cvcpkg-provided glib/cairo/pango/
+    harfbuzz/gdk-pixbuf/epoxy.
   homepage: https://www.gtk.org/
   license: LGPL-2.1-or-later
   tags: [graphics, gui]
@@ -34,6 +45,7 @@ depends:
     # libwayland (kept under runtime) but never the protocol definitions.
     - name: wayland-protocols
       version: "^1.38"
+      platforms: [linux, freebsd, openbsd, netbsd]
   runtime:
     - name: glib
       version: "^2.80"
@@ -123,14 +135,16 @@ notes:
       gdk-pixbuf, libepoxy, fribidi, graphene, wayland,
       wayland-protocols, xkbcommon) are all provided as cvcpkg
       recipes and resolved automatically during the build.
-  - title: "Windows via gvsbuild"
+  - title: "Windows uses the Win32 backend"
     platforms: [windows]
     description: >-
-      The Windows build uses gvsbuild
-      (https://github.com/wingtk/gvsbuild) to build the entire GTK 4
-      stack under MSVC.  gvsbuild is installed via pipx if missing
-      and the resulting binaries are staged into <prefix>.  Expect a
-      1-2 hour build the first time.
+      The Windows build is Meson + MSVC with GTK's native Win32
+      (GDI/Direct2D) backend; Wayland and X11 are explicitly disabled.
+      Dependencies resolve from the cvcpkg prefix exactly as on every
+      other platform.  This replaced a gvsbuild-driven build, which
+      fetched and compiled its own copy of the entire GTK stack — that
+      was non-hermetic, and it meant the cairo/pango/gdk-pixbuf
+      packages declared here were not the libraries actually linked.
   - title: "Experimental / initial recipe"
     platforms: [linux, macos, windows]
     description: >-

@@ -2,7 +2,10 @@ schema_version: 1
 recipe:
   name: yaml-cpp
   upstream_version: "0.8.0"
-  cvc_revision: 1
+  # Bumped 1 -> 2: added the BSD builds. yaml-cpp is a plain CMake C++ library
+  # with no platform-specific code and is packaged by all three BSDs; the
+  # linux+macos scoping was an oversight rather than a portability limit.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -33,6 +36,18 @@ build:
       script: build.sh
       env:
         MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
 
 package:
   files:

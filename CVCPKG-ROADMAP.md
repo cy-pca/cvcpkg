@@ -1380,10 +1380,15 @@ parallel track (matching the Status Snapshot above).
       cluster alongside the existing BSD fleet (see the vm-provisioning
       repo, `docs/CVCPKG-BUILDERS.md`, for capacity notes and the
       provisioning plan).
-- [ ] **DragonflyBSD builders** — a genuinely new platform (`dragonflybsd`
-      tag): its own kernel, HAMMER2 filesystem, DPorts/`pkg` packages.
-      Requires porting the `_common` build helpers and platform detection,
-      then an Incus VM pair like the other BSDs.
+- [x] **DragonflyBSD** — *dropped; DragonFly consumes the `freebsd` channel in
+      compat mode.* The `dragonflybsd` tag was canonical in `platform.py` and
+      offered in the server UI, but it was never added to the recipe schema's
+      platform enum — so no recipe could declare a DragonFly build and such a
+      host resolved zero packages while the UI advertised the platform. A
+      distinct platform would cost a VM pair, `_common` env helpers and a full
+      catalog rebuild for a FreeBSD-compatible target. Revisit only if that ABI
+      compatibility proves insufficient in practice, in which case the honest
+      fix is to fail detection rather than reinstate an empty channel.
 - [ ] **qemu recipe stack** (see Planned Recipes below) — beyond its value
       as a package, qemu unlocks **emulated builders** for platforms and
       architectures we lack hardware for (arm64/riscv64 Linux, exotic

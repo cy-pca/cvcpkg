@@ -2,13 +2,16 @@ schema_version: 1
 recipe:
   name: freetype
   upstream_version: "2.13.3"
-  cvc_revision: 2
+  # Added wasm/wasi/cosmo entries.  FreeType's CMake build uses the ANSI-C
+  # ftsystem.c (stdio + malloc only), and all three runtime deps — zlib,
+  # libpng, bzip2 — now cover the same three targets.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   homepage: https://freetype.org/
   license: FTL
-  tags: [libraries]
+  tags: [libraries, wasm, wasi]
   description: >-
     FreeType — a freely available software library to render fonts.
     Provides a uniform interface to access font files of many formats.
@@ -59,6 +62,15 @@ build:
         CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: cosmo
+      host_platform: linux
+      script: build-cosmo.sh
 
 package:
   files:

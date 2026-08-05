@@ -2,7 +2,10 @@ schema_version: 1
 recipe:
   name: wayland-protocols
   upstream_version: "1.38"
-  cvc_revision: 1
+  # Bumped 1 -> 2: added openbsd/netbsd builds, matching the wayland recipe.
+  # These are XML protocol definitions plus a meson install, so they follow
+  # wherever wayland itself builds.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -40,6 +43,14 @@ build:
       env:
         CFLAGS: "-O2 -fPIC"
     - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"

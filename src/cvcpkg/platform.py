@@ -25,7 +25,6 @@ CANONICAL_PLATFORMS = frozenset(
         "freebsd",
         "openbsd",
         "netbsd",
-        "dragonflybsd",
         "wasm",
         "wasi",
         "cosmo",
@@ -107,11 +106,20 @@ def normalize_arch(value: str) -> str:
 
 
 def detect_platform() -> str:
-    """Return 'linux', 'macos', 'windows', 'freebsd', 'openbsd', 'netbsd', or 'dragonflybsd'.
+    """Return 'linux', 'macos', 'windows', 'freebsd', 'openbsd', or 'netbsd'.
 
     GhostBSD note: GhostBSD's kernel identifies as FreeBSD (sys.platform
     is ``freebsd*``), so GhostBSD hosts intentionally detect as
     ``freebsd`` and consume the freebsd package channel (compat mode).
+
+    DragonFly BSD is handled the same way, deliberately.  It used to be its own
+    canonical platform, but the recipe schema's platform enum never included it,
+    so no recipe could declare a ``dragonflybsd`` build and such a host resolved
+    exactly zero packages while the UI advertised the platform.  Rather than
+    stand up a whole builder VM and env helper for it, DragonFly consumes the
+    freebsd channel in compat mode.  If that ABI compatibility ever proves
+    insufficient in practice, the honest fix is to fail here rather than to
+    reinstate a platform with no packages behind it.
     """
     s = sys.platform
     if s.startswith("linux"):
@@ -127,7 +135,7 @@ def detect_platform() -> str:
     if s.startswith("netbsd"):
         return "netbsd"
     if s.startswith("dragonfly"):
-        return "dragonflybsd"
+        return "freebsd"
     raise RuntimeError(f"unsupported platform: {s}")
 
 
@@ -169,8 +177,6 @@ def detect_libc() -> str:
         return "openbsd-libc"
     if plat == "netbsd":
         return "netbsd-libc"
-    if plat == "dragonflybsd":
-        return "dragonfly-libc"
     # Linux: try to distinguish glibc vs musl.
     try:
         import ctypes

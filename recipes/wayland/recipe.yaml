@@ -2,7 +2,11 @@ schema_version: 1
 recipe:
   name: wayland
   upstream_version: "1.23.1"
-  cvc_revision: 1
+  # Bumped 1 -> 2: added openbsd/netbsd builds. OpenBSD carries a dedicated
+  # wayland/ ports category (wlroots, sway, labwc) and NetBSD ships
+  # devel/wayland in pkgsrc, so the previous linux+freebsd scoping understated
+  # where this actually builds.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -41,6 +45,14 @@ build:
       env:
         CFLAGS: "-O2 -fPIC"
     - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"

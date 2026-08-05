@@ -2,7 +2,12 @@ schema_version: 1
 recipe:
   name: pango
   upstream_version: "1.54.0"
-  cvc_revision: 1
+  # cvc.2: add the windows build (build.ps1, Meson + MSVC) and the MSVC
+  # artifact patterns.  +cvc.1 was POSIX-only, which left gtk4's
+  # `platform: windows` matrix entry a phantom claim.  The file set also
+  # gains libpangowin32, which upstream builds unconditionally on windows
+  # and +cvc.1 had no pattern for, so this is a real content change.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -63,18 +68,28 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
+    # Unix shared/static artifacts (.so / .so.N / .dylib / .a).
     - lib/libpango-1.0*
     - lib/libpangocairo-1.0*
     - lib/libpangoft2-1.0*
     - lib/pkgconfig/pango*.pc
     - include/pango-1.0/
+    # Windows (MSVC): import libraries under lib/, versioned runtime DLLs
+    # under bin/.  These globs also cover libpangowin32, which upstream
+    # builds only on windows (pangowin32-1.0.lib / pangowin32-1.0-0.dll).
+    - lib/pango*.lib
+    - bin/pango*.dll
   pkg_config:
     - pango
     - pangocairo
     - pangoft2
+    # Windows-only; upstream installs it alongside libpangowin32.
+    - pangowin32
 
 abi:
   cxx_std: 17

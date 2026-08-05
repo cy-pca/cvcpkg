@@ -13,7 +13,19 @@ recipe:
   # needs a rebuild routed to a glibc2.35 builder, which #432 now enforces.
   # (+cvc.1 was deliberately left published as a working fallback and is
   # verified clean at exactly 2.35.)
-  cvc_revision: 3
+  # Bumped 3 -> 4: scoped the readline/ncurses dependency edges to the Unix
+  # platforms that actually consume them. build-python.sh passes
+  # --with-readline=tkinter on every cross target (its own comment: "readline/
+  # ncurses not available on wasm/wasi/cosmo") and the Windows build runs
+  # PCbuild/build.bat, which links neither. Both were previously unscoped, so
+  # this recipe advertised windows/wasm/wasi/cosmo while depending on packages
+  # with no build there — claims that could never resolve.
+  # Bumped 4 -> 5: scoped the libffi edge away from wasi. libffi's wasm
+  # backend builds its call trampolines with EM_JS — it synthesises JavaScript
+  # and patches the wasm table at runtime — so it needs an Emscripten JS engine
+  # and cannot work on wasip1. CPython upstream ships its own WASI build without
+  # _ctypes for the same reason. wasm keeps the dependency.
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -48,16 +60,19 @@ depends:
       version: "^1.3"
     - name: libffi
       version: "^3.0"
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd, wasm, cosmo]
     - name: bzip2
       version: "^1.0"
     - name: xz
       version: "^5.0"
     - name: readline
       version: "^8.0"
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
     - name: sqlite
       version: "^3.0"
     - name: ncurses
       version: "^6.0"
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
   runtime:
     - name: openssl
       version: "^3.0"
@@ -65,16 +80,19 @@ depends:
       version: "^1.3"
     - name: libffi
       version: "^3.0"
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd, wasm, cosmo]
     - name: bzip2
       version: "^1.0"
     - name: xz
       version: "^5.0"
     - name: readline
       version: "^8.0"
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
     - name: sqlite
       version: "^3.0"
     - name: ncurses
       version: "^6.0"
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
   host_tools: []
 
 build:

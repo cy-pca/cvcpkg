@@ -24,7 +24,6 @@ from cvcpkg.server.app import _reject_noncanonical_platform_arch  # noqa: E402
         ("macos", "arm64"),
         ("windows", "x86_64"),
         ("windows-gnu", "x86_64"),  # Phase-8 cross-toolchain target
-        ("dragonflybsd", "x86_64"),  # detect_platform already emits it
         ("wasm", "wasm32"),
         ("any", "noarch"),  # platform-independent bundles: the REAL noarch tuple
         # every noarch bundle is published as platform=any/arch=noarch, so this
@@ -55,7 +54,19 @@ def test_noncanonical_arch_rejected_with_hint(platform, arch, needle):
     assert needle in exc.value.detail
 
 
-@pytest.mark.parametrize("platform", ["ubuntu", "darwin", "win32", "linux-gnu"])
+@pytest.mark.parametrize(
+    "platform",
+    [
+        "ubuntu",
+        "darwin",
+        "win32",
+        "linux-gnu",
+        # Dropped: no recipe could ever declare it (absent from the schema's
+        # platform enum), so the channel had zero packages. DragonFly hosts now
+        # detect as freebsd and publish there.
+        "dragonflybsd",
+    ],
+)
 def test_noncanonical_platform_rejected(platform):
     with pytest.raises(HTTPException) as exc:
         _reject_noncanonical_platform_arch(platform, "x86_64")

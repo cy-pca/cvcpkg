@@ -2,7 +2,11 @@ schema_version: 1
 recipe:
   name: boost
   upstream_version: "1.86.0"
-  cvc_revision: 3
+  # Added wasi entries (build-wasi.sh / .ps1).  `cgal` already declares
+  # platform: wasi on both hosts and runtime-depends on boost, so the wasi
+  # half of cgal's matrix was unbuildable.  See the wasi note below for the
+  # libraries the single-threaded wasip1 target forces us to exclude.
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -60,6 +64,12 @@ build:
     - platform: wasm
       host_platform: windows
       script: build-wasm.ps1
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: wasi
+      host_platform: windows
+      script: build-wasi.ps1
 
 package:
   files:
@@ -85,3 +95,17 @@ notes:
       BOOST_HAS_PTHREADS is defined to force Boost.Container to use
       pthread mutex stubs (which Emscripten provides as no-ops in
       single-threaded mode) rather than the Windows CriticalSection path.
+  - title: "Wasi-excluded libraries"
+    platforms: [wasi]
+    description: >-
+      wasm32-wasip1 is single-threaded and has no signal handlers, no
+      process control, no BSD sockets and no dynamic loading, so the wasi
+      build excludes everything the wasm build excludes plus thread,
+      contract, test, locale, wave and filesystem.  BOOST_HAS_PTHREADS is
+      deliberately NOT defined here: unlike Emscripten, wasi-libc's
+      pthread_create fails at runtime on wasip1, so Boost is left to pick
+      its single-threaded code paths.  Boost.Filesystem is dropped because
+      wasip1 resolves every path relative to a preopened directory, which
+      does not match the absolute-path semantics the library assumes.
+      CGAL — the only cvcpkg consumer of boost on wasi — uses Boost
+      header-only (graph, property_map, variant, multiprecision).

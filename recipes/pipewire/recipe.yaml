@@ -2,7 +2,12 @@ schema_version: 1
 recipe:
   name: pipewire
   upstream_version: "1.2.7"
-  cvc_revision: 2
+  # Bumped 2 -> 3: added the freebsd build. FreeBSD carries pipewire as a
+  # mainline port, and this recipe already builds only the portable core —
+  # build.sh disables systemd, logind, selinux, udev, dbus, alsa and v4l2, which
+  # is exactly the Linux-specific surface. OpenBSD has no port and NetBSD has
+  # only a pkgsrc-wip one, so neither is claimed.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -39,6 +44,10 @@ depends:
 build:
   matrix:
     - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: freebsd
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"

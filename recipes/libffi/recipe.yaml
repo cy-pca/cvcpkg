@@ -10,7 +10,12 @@ recipe:
   # numpy/pydantic/qt6/vtk...). Upstream fixed this (per-format local-label
   # prefix); see libffi#852. 3.7.1 keeps libtool version-info 12:1:4 -> soname
   # libffi.so.8, identical to 3.4.x, so the ABI is unchanged.
-  cvc_revision: 1
+  #
+  # rev 2: added wasm and cosmo entries.  3.7.1's configure.host maps
+  # wasm32-*-* to the pure-C src/wasm backend upstreamed in 3.4.5, and
+  # cosmocc emits plain x86-64 SysV so the existing x86 backend applies.
+  # There is deliberately NO wasi entry — see the note at the bottom.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -59,6 +64,12 @@ build:
         CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: cosmo
+      host_platform: linux
+      script: build-cosmo.sh
 
 package:
   files:
@@ -70,3 +81,21 @@ package:
 
 abi:
   cxx_std: 17
+
+notes:
+  - title: "No wasi build (and there cannot be one)"
+    platforms: [wasi]
+    description: >-
+      libffi's wasm backend is Emscripten-only, not "wasm" generically.
+      A generic FFI has to synthesise a call frame for a signature only
+      known at run time; WebAssembly has no such primitive — calls go
+      through statically typed table entries.  src/wasm/ffi.c therefore
+      implements ffi_call and ffi_closure_alloc with EM_JS, generating
+      JavaScript trampolines and patching the wasm table at run time.
+      wasm32-wasip1 has no JS engine, so the backend cannot be built or
+      used there, and upstream's supported-platform table lists only
+      "WASM32 | Emscripten | EMCC".  This matches CPython, whose WASI
+      build ships without the _ctypes extension for the same reason.
+      Any consumer declaring platform: wasi must mark its libffi
+      dependency `platforms:` accordingly rather than expecting a build
+      here.
