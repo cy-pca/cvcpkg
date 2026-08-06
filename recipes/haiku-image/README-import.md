@@ -144,6 +144,13 @@ file modes do not survive archive extraction, so nothing can enforce it.
   read-back of the injected file and **omits** `ssh_user` when it could not
   establish one, so a stale literal in a document can never disagree with the
   image you actually have.
+- **Any image built before 2026-08-05 reports `ssh_pubkey_baked: false`,
+  whatever key its build was given.** `recipe.yaml` declared
+  `HAIKU_BUILDER_SSH_PUBKEY: ""` under `build.matrix.env`, and matrix env is
+  applied last and unconditionally, so it overwrote the key the environment
+  supplied — CI's secret included. Such an image trusts no key at all; inject
+  one with `bfs_shell` as below, or rebuild. Fixed by dropping that default,
+  so the variable now reaches `build.sh` from the environment.
 
 ## Incus (VM)
 
