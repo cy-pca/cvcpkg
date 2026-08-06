@@ -1172,9 +1172,26 @@ def pack_all_cmd(
                 f"Invalid shard format '{shard}'. Expected INDEX/TOTAL (e.g. 0/3)."
             ) from exc
 
+    # Report what the platform/arch filter drops, so "not applicable here"
+    # reads as a decision rather than recipes silently vanishing.
+    from cvcpkg.builder import _artifacts_cover
+
+    _not_applicable = sorted(
+        r.name
+        for r in all_recipe_list
+        if any(m.platform in (plat, "any") for m in r.build_matrix)
+        and not _artifacts_cover(r, plat, arch)
+    )
+    if _not_applicable:
+        click.echo(
+            f"Skipping {len(_not_applicable)} recipe(s) with no {plat}-{arch} "
+            f"artifact: {', '.join(_not_applicable)}"
+        )
+
     contexts = build_all(
         rdirs if len(rdirs) > 1 else rdirs[0],
         platform=plat,
+        arch=arch,
         config=config,
         link=link,
         prefix=prefix_path,

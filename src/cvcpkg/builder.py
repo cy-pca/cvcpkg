@@ -464,6 +464,54 @@ def _platform_wheel_keys(source: SourceSpec, platform: str, arch: str) -> list[s
     return sorted(k for k in source.artifacts if k == prefix or k.startswith(f"{prefix}-"))
 
 
+#: Architecture spellings that mean the same machine.  Recipes are keyed on
+#: cvcpkg's canonical names, but upstream download URLs (and therefore the
+#: humans transcribing them) frequently use the other spelling — `wasmer`
+#: ships a `linux-aarch64` artifact that would otherwise look like "no arm64
+#: support at all".
+_ARCH_ALIASES: dict[str, tuple[str, ...]] = {
+    "arm64": ("arm64", "aarch64"),
+    "aarch64": ("aarch64", "arm64"),
+    "x86_64": ("x86_64", "amd64"),
+    "amd64": ("amd64", "x86_64"),
+}
+
+
+def _artifacts_cover(recipe: Recipe, platform: str, arch: str) -> bool:
+    """Does *recipe* have a prebuilt artifact for *platform*/*arch*?
+
+    Only meaningful for recipes that ship PREBUILT artifacts — a recipe built
+    from source has no ``artifacts`` map and is always eligible, as is one
+    keyed ``any`` (a pure-Python wheel).
+
+    This exists because ``source.artifacts`` already IS the platform/arch
+    constraint, and it is the only place that information lives: the recipe
+    schema has no ``arch`` field, and duplicating the fact into one would just
+    give it somewhere to drift from.  Without this filter a linux/arm64 run
+    attempts every x86_64-only wheel — torch, triton, wand, the 14
+    nvidia-*-cu12 CUDA redistributables — and each dies deep in the build with
+    ``no artifact for linux-arm64``, which reads like breakage rather than
+    "not applicable here".  27 recipes did exactly that on the first arm64
+    populate.
+
+    Deliberately NOT applied inside a direct ``cvcpkg build <name>``: asking
+    for one recipe by name should still fail loudly, so a mistyped artifact
+    key is an error rather than a silent no-op.
+    """
+    arts = getattr(recipe.source, "artifacts", None)
+    if not arts:
+        return True
+    if "any" in arts:
+        return True
+    if not arch:
+        return True
+    for candidate in _ARCH_ALIASES.get(arch, (arch,)):
+        prefix = f"{platform}-{candidate}"
+        if any(k == prefix or k.startswith(f"{prefix}-") for k in arts):
+            return True
+    return False
+
+
 def _resolve_artifact(source: SourceSpec, platform: str, arch: str) -> tuple[str, str, str]:
     """Resolve the ``artifacts`` entry for *platform*/*arch*.
 
@@ -480,6 +528,14 @@ def _resolve_artifact(source: SourceSpec, platform: str, arch: str) -> tuple[str
 
     key = f"{platform}-{arch}"
     entry = source.artifacts.get(key)
+    if entry is None:
+        # Accept the other common spelling of the same machine before giving
+        # up (linux-aarch64 vs linux-arm64); see _ARCH_ALIASES.
+        for _alias in _ARCH_ALIASES.get(arch, ()):
+            entry = source.artifacts.get(f"{platform}-{_alias}")
+            if entry is not None:
+                key = f"{platform}-{_alias}"
+                break
     if entry is None:
         # Platform-independent ('any') fallback: a recipe whose only artifact is
         # keyed ``any`` (a pure-Python ``py3-none-any`` wheel — valid on every
@@ -2664,6 +2720,7 @@ def build_all(
     recipes_dir: Path | list[Path],
     *,
     platform: str = "",
+    arch: str = "",
     config: str = "release",
     link: str = "shared",
     prefix: Path | None = None,
@@ -2777,6 +2834,7 @@ def build_all(
         r
         for r in all_recipes
         if any(m.platform == platform or m.platform == "any" for m in r.build_matrix)
+        and _artifacts_cover(r, platform, arch)
     ]
     ordered = resolve_build_order(recipes, platform)
 
