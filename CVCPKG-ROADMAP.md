@@ -1517,6 +1517,55 @@ parallel track (matching the Status Snapshot above).
       `Version: 2.0.2`, which is the same string before and after any merge,
       so "is this server current?" is today answerable only by comparing
       uptime against a merge timestamp.
+- [ ] **Finish the Haiku builder** — `haiku-image 1.0.0-beta.5+cvc.1` is
+      published and, as of 2026-08-06, proven end to end for the first time:
+      it builds in ~35 min, boots under Incus, takes a DHCP lease, accepts SSH
+      on its baked key, compiles and runs a C binary in the guest, and starts
+      sshd headlessly from its `launch_daemon` job.  What remains is turning
+      that image into a fleet member, and the gap is architectural rather than
+      a missing config step: **cvcpkg cannot run natively on Haiku** (no pip in
+      HaikuPorts; `cryptography` stuck at 3.4.8 against our `>=41` floor), so a
+      Haiku box is an SSH *delegation target* driven by a Linux builder via
+      `haikuhost.py` (#431), not a host that runs `cvcpkg builder run`.  One
+      real constraint bites provisioning: `boot.console: none`, so there is no
+      out-of-band channel if the network or keys are wrong.  Persistence is
+      NOT a blocker, despite the obvious-looking "Haiku has no cron" — cron is
+      absent because `launch_daemon`, Haiku's native init engine, replaced it,
+      and this image already ships a supervised `service` job that starts sshd
+      and restarts it if it dies.  That is a superset of the crontab `@reboot`
+      line the BSD builders use, and it is proven on a booted guest.  A
+      builder/delegation agent just needs a second job in the same shape.
+      Sequence: land
+      #431, provision with `common/provision-image-vm.sh haiku-image`, wire the
+      owning Linux builder's `haikuhost` settings, decide whether
+      cmake/patchelf/rsync get baked into the recipe rather than left as a
+      post-provision `pkgman` step, and register it in the fleet tables.  Also
+      still open: `test.vm` SKIPS on every builder for want of
+      `HAIKU_BUILDER_SSH_KEY` in a builder's environment — until that lands it
+      is a green skip, not verification.  Full state and traps:
+      `vm-provisioning/docs/HAIKU-IMAGE-BUILDER.md`.
+- [ ] **Build our own images for the whole fleet, not just Haiku** — Haiku
+      forced the issue because its installer is graphical-only, but the
+      argument generalises: a builder provisioned from a `kind: image` package
+      is reproducible, versioned, hash-verified, and boots with no interactive
+      installer, whereas today most of the fleet is a VM someone installed by
+      hand and a script that patches it afterwards.  `image.yaml` already
+      carries every hypervisor constant a provisioning script needs, and
+      `common/provision-image-vm.sh` already consumes it for any guest, so the
+      per-OS work is a recipe rather than new machinery.  Order by payoff:
+      **Linux** first (unattended installs are easy, and it is most of the
+      fleet), then the **BSDs** — FreeBSD/OpenBSD/NetBSD already automate via
+      serial-console expect scripts, so an image mostly removes the install
+      step, and GhostBSD/DragonflyBSD would skip needing one at all.
+      **Windows** is worth doing as a **private** image: the blocker is
+      licensing, not technology, so the image must be org-scoped (never in the
+      public catalog) and the licence-key handling settled up front —
+      evaluation media, KMS/MAK, or per-VM keys injected at provision time.
+      **macOS is explicitly out of scope**: Apple's licensing restricts guests
+      to Apple hardware, we own none, and the toolchain would be a standing
+      tax for one platform.  Cross-cutting prerequisite: image recipes are
+      large (haiku-image is a 546 MB artifact), so storage/retention policy for
+      image packages needs deciding before the catalog carries a dozen of them.
 
 ---
 
