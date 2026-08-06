@@ -1526,11 +1526,16 @@ parallel track (matching the Status Snapshot above).
       a missing config step: **cvcpkg cannot run natively on Haiku** (no pip in
       HaikuPorts; `cryptography` stuck at 3.4.8 against our `>=41` floor), so a
       Haiku box is an SSH *delegation target* driven by a Linux builder via
-      `haikuhost.py` (#431), not a host that runs `cvcpkg builder run`.  Two
-      consequences bite provisioning: Haiku has **no cron**, so the `@reboot`
-      pattern every BSD builder uses does not exist and persistence must be a
-      `launch_daemon` job; and `boot.console: none`, so there is no
-      out-of-band channel if the network or keys are wrong.  Sequence: land
+      `haikuhost.py` (#431), not a host that runs `cvcpkg builder run`.  One
+      real constraint bites provisioning: `boot.console: none`, so there is no
+      out-of-band channel if the network or keys are wrong.  Persistence is
+      NOT a blocker, despite the obvious-looking "Haiku has no cron" — cron is
+      absent because `launch_daemon`, Haiku's native init engine, replaced it,
+      and this image already ships a supervised `service` job that starts sshd
+      and restarts it if it dies.  That is a superset of the crontab `@reboot`
+      line the BSD builders use, and it is proven on a booted guest.  A
+      builder/delegation agent just needs a second job in the same shape.
+      Sequence: land
       #431, provision with `common/provision-image-vm.sh haiku-image`, wire the
       owning Linux builder's `haikuhost` settings, decide whether
       cmake/patchelf/rsync get baked into the recipe rather than left as a
