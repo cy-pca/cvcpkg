@@ -55,6 +55,16 @@ properties:
       guest_release:
         type: string
         description: "Upstream release label of the guest, e.g. r1beta5."
+      guest_build:
+        type: string
+        description: >
+          The guest's exact upstream build within guest_release, as the guest
+          itself reports it — e.g. hrev57937_5, which `uname -v` prints inside
+          a Haiku guest.  guest_release names the release SERIES and is what a
+          consumer matches on; guest_build identifies the single build, so two
+          images of the same release are distinguishable and an image can be
+          traced back to the upstream revision it was cut from.  Optional: not
+          every guest OS has a finer-grained identifier than its release.
       variant:
         type: string
         pattern: "^[a-z][a-z0-9-]*$"
