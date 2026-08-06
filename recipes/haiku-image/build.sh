@@ -25,6 +25,34 @@ BUILDTOOLS_REF="${BUILDTOOLS_REF:-r1beta5}"
 HAIKU_REPO="${HAIKU_REPO:-https://github.com/haiku/haiku.git}"
 BUILDTOOLS_REPO="${BUILDTOOLS_REPO:-https://github.com/haiku/buildtools.git}"
 
+# The package version must NAME THE GUEST IT SHIPS.  recipe.yaml's
+# upstream_version is a hand-written literal while the guest is pinned by
+# HAIKU_REF here, and nothing connected the two: bumping HAIKU_REF to r1beta6
+# would have published an image of beta6 still calling itself 1.0.0-beta.5,
+# and a consumer resolving by version would get a guest it did not ask for.
+#
+# So derive the expected version from HAIKU_REF and refuse to build on a
+# mismatch.  r1beta5 -> 1.0.0-beta.5, r2beta1 -> 2.0.0-beta.1.  A HAIKU_REF
+# this does not understand (a branch name, a hash) is NOT an error — it is
+# the deliberate escape hatch for building something unreleased — but it
+# skips the check rather than guessing, and says so.
+_uv_declared="$(sed -n 's/^[[:space:]]*upstream_version:[[:space:]]*"\{0,1\}\([^"#[:space:]]\{1,\}\).*/\1/p' \
+                "${RECIPE_DIR}/recipe.yaml" | head -1)"
+if [[ "${HAIKU_REF}" =~ ^r([0-9]+)beta([0-9]+)$ ]]; then
+    _uv_expected="${BASH_REMATCH[1]}.0.0-beta.${BASH_REMATCH[2]}"
+    if [[ "${_uv_declared}" != "${_uv_expected}" ]]; then
+        echo "ERROR: recipe.yaml upstream_version is '${_uv_declared}', but HAIKU_REF=${HAIKU_REF}" >&2
+        echo "       describes Haiku ${_uv_expected}. The published package would name a" >&2
+        echo "       guest it does not contain. Update upstream_version to '${_uv_expected}'" >&2
+        echo "       (and bump cvc_revision — ${_uv_declared} is already published)." >&2
+        exit 1
+    fi
+    echo "version check ok: upstream_version ${_uv_declared} matches HAIKU_REF ${HAIKU_REF}"
+else
+    echo "NOTE: HAIKU_REF='${HAIKU_REF}' is not an rNbetaM release label;" >&2
+    echo "      skipping the upstream_version cross-check." >&2
+fi
+
 # ── 0. Disk preflight ───────────────────────────────────────────────────
 # DEFENCE IN DEPTH, not the primary mechanism.  The primary one is
 # `build.min_disk_gb: 35` in recipe.yaml, which the scheduler matches against
@@ -125,6 +153,11 @@ if [[ -z "${DESC}" ]]; then
     export HAIKU_REVISION="${HAIKU_REVISION:-hrev57937_5}"
     echo "No hrev tags reachable — pinning HAIKU_REVISION=${HAIKU_REVISION}"
 fi
+# Whichever branch above ran, this is the revision the image will actually
+# carry, and it is what image.yaml's guest_build reports.  Recorded here so
+# the descriptor never has to re-derive it (and cannot disagree with it).
+HAIKU_REVISION_EFFECTIVE="${HAIKU_REVISION:-${DESC}}"
+echo "haiku revision (effective): ${HAIKU_REVISION_EFFECTIVE}"
 
 # ── 2b. Patch the haiku source tree ─────────────────────────────────────
 # NOTE: these are deliberately NOT in recipe.yaml's `patches:` list. That
@@ -623,6 +656,10 @@ image:
   guest_os: ${IMG_GUEST_OS}
   guest_arch: ${HAIKU_ARCH}
   guest_release: ${HAIKU_REF}
+  # The exact upstream build inside that release, as the guest reports it
+  # (`uname -v` prints hrev57937_5).  guest_release alone cannot distinguish
+  # two images cut from different points in the same beta.
+  guest_build: ${HAIKU_REVISION_EFFECTIVE}
   variant: ${HAIKU_VARIANT}
 disks:
   # file/format/virtual_size_bytes/sha256 are all read back off the staged

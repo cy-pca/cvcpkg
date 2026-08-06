@@ -2,17 +2,19 @@ schema_version: 1
 recipe:
   name: haiku-image
   upstream_version: "1.0.0-beta.5"
-  # NOT bumped -- for the boot fixes or for the prefix layout below -- because
-  # haiku-image has never been published: `cvcpkg info haiku-image` answers
-  # "component 'haiku-image' not found in catalog", and /v1/packages?name=
-  # haiku-image is empty on cvcpkg.org. There is no immutable published
-  # variant for revision 1 to collide with, so there is nothing to supersede
-  # and the layout below can still change for free.
+  # PUBLISHED as of 2026-08-06. `+cvc.1` for this upstream_version is now an
+  # immutable artifact on cvcpkg.org (linux/x86_64/release/shared,
+  # sha256 35d1cf6a…, 546164964 bytes, built on star-00 by build #13794).
   #
-  # This stops being true the moment it IS published. Published variants are
-  # immutable, so from then on every recipe change needs a cvc_revision bump
-  # or it silently no-ops against the already-published artifact -- and a
-  # layout change would additionally break consumers' hardcoded paths.
+  # So the freedom the previous note described is gone: from here, ANY change
+  # to this recipe or to the staged tree needs a cvc_revision bump, or the
+  # build silently no-ops against the already-published artifact and the
+  # change ships to nobody. `cvcpkg pack --bump` / `next-revision` compute the
+  # next free value; do not hand-edit this to a number that is already live.
+  #
+  # The prefix layout below is likewise frozen for revision 1 — consumers
+  # resolve share/haiku-image/<role> paths off it, so changing a filename now
+  # breaks anyone who installed this artifact rather than merely being untidy.
   cvc_revision: 1
   # Enforced, not decorative: a `kind: image` recipe must stage everything
   # under share/<name>/ and nothing else, and must ship a schema-valid
