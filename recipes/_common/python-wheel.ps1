@@ -38,6 +38,21 @@ function Get-CvcPythonExeFor {
     foreach ($c in $candidates) {
         if (Test-Path $c) { return $c }
     }
+    # PCbuild installs the interpreter as a bare python.exe at the prefix ROOT
+    # — no bin/, no version suffix — so none of the candidates above exist for
+    # a windows python31X bundle and every cpXX recipe died here with
+    # "interpreter not found". Only the free-threaded build carries a
+    # distinguishing name (python3.13t.exe), so the bare fallback is for
+    # non-'t' columns only, and we confirm the version rather than trusting the
+    # filename: a prefix holding 3.12 must not satisfy a cp313 recipe.
+    if (-not $Ver.EndsWith('t')) {
+        $bare = Join-Path $env:CVC_DEPS_PREFIX 'python.exe'
+        if (Test-Path $bare) {
+            $got = (& $bare -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>$null)
+            if ($LASTEXITCODE -eq 0 -and $got.Trim() -eq $Ver) { return $bare }
+        }
+        $candidates += $bare
+    }
     throw ("Get-CvcPythonExeFor: interpreter not found; looked for:`n  " + ($candidates -join "`n  ") +
            "`n  (does this recipe depend on python$($Ver -replace '\.', ''))?")
 }
