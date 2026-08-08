@@ -99,6 +99,12 @@ aiosqlite = ">=0.20"
 # needs it unconditionally: tests/unit/test_migrations.py importorskips the
 # whole module without it, which silently disabled every migration check in CI.
 alembic = ">=1.13"
+# tools/gen_python_recipes.py reads TOML (poetry.lock, and each sdist's
+# pyproject.toml for its PEP-517 backend). tomllib is 3.11+ stdlib, so the
+# 3.10 jobs need the backport. It already arrives transitively via black/mypy,
+# but the generator's tests depend on it directly — make that explicit rather
+# than resting on someone else's marker.
+tomli = { version = ">=1.1.0", python = "<3.11" }
 # Mocks the S3 API (Garage-compatible) so the storage-migration test
 # exercises cvcpkg's real s3:// backend in CI; pulls boto3.
 moto = { version = ">=5.0", extras = ["s3"] }

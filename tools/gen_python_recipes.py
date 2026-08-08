@@ -91,6 +91,32 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+# tomllib is 3.11+ stdlib. Both TOML readers here used to `import tomllib`
+# lazily on the theory that only lock parsing needs it and that never runs on
+# 3.10 — true until parse_build_requires() (the sdist build-backend survey)
+# became a second reader, which the 3.10 unit tests DO exercise. The result was
+# ModuleNotFoundError: No module named 'tomllib' across every 3.10 job.
+# tomli is the 3.10 backport and is already in the dev environment (black,
+# mypy and coverage all pull it in under a python_version < "3.11" marker).
+# Kept tolerant of neither being present so the module still imports.
+try:  # pragma: no cover - version shim
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    try:
+        import tomli as tomllib
+    except ModuleNotFoundError:
+        tomllib = None
+
+
+def _require_tomllib():
+    """The TOML reader, or a clear error naming the fix."""
+    if tomllib is None:
+        raise RuntimeError(
+            "no TOML reader available: tomllib needs Python >= 3.11, and the "
+            "tomli backport is not installed. Install tomli to run this on 3.10."
+        )
+    return tomllib
+
 # cvcpkg's five concrete build platforms and the wheel-tag fragments that map to
 # each. First match wins.
 PLATFORM_TAGS = {
@@ -699,9 +725,7 @@ def req_applies(req: str, interp: str) -> bool:
 def parse_build_requires(pyproject_text: str) -> list[str] | None:
     """``[build-system] requires`` from a pyproject.toml, or None if the file
     declares no build-system table (PEP 517 falls back to setuptools then)."""
-    import tomllib
-
-    table = tomllib.loads(pyproject_text).get("build-system") or {}
+    table = _require_tomllib().loads(pyproject_text).get("build-system") or {}
     reqs = table.get("requires")
     return list(reqs) if reqs is not None else None
 
@@ -821,13 +845,8 @@ def source_mode_for(
 
 
 def load_runtime_packages(lock_path: Path) -> dict[str, dict]:
-    # tomllib is 3.11+ stdlib; import it lazily so this module still imports
-    # under Python 3.10 (the classifier is unit-tested there — only lock parsing,
-    # which is never exercised on 3.10, needs it).
-    import tomllib
-
     with open(lock_path, "rb") as fh:
-        lock = tomllib.load(fh)
+        lock = _require_tomllib().load(fh)
     out = {}
     for p in lock["package"]:
         groups = p.get("groups") or ["main"]
