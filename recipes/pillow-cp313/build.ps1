@@ -31,4 +31,4 @@ if ($LASTEXITCODE -ne 0) { throw "pillow-cp313: pip install failed ($LASTEXITCOD
 
 # The check must exercise the runtime closure, not the build-only backend.
 $env:PYTHONPATH = ''
-Invoke-CvcPythonCheck 'from PIL import Image; Image.new('L', (2, 2))'
+Invoke-CvcPythonCheck 'from PIL import Image; Image.new(''L'', (2, 2))'

@@ -31,4 +31,4 @@ if ($LASTEXITCODE -ne 0) { throw "matplotlib-cp311: pip install failed ($LASTEXI
 
 # The check must exercise the runtime closure, not the build-only backend.
 $env:PYTHONPATH = ''
-Invoke-CvcPythonCheck 'import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot'
+Invoke-CvcPythonCheck 'import matplotlib; matplotlib.use(''Agg''); import matplotlib.pyplot'

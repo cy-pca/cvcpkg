@@ -1,0 +1,49 @@
+schema_version: 1
+recipe:
+  name: automake
+  upstream_version: "1.17"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.gnu.org/software/automake/
+  license: GPL-2.0-or-later
+  tags: [tools, build-system]
+  description: >-
+    GNU Automake — generates Makefile.in files for autoconf.
+
+source:
+  type: tarball
+  url: https://ftp.gnu.org/gnu/automake/automake-1.17.tar.xz
+  sha256: "8920c1fc411e13b90bf704ef9db6f29d540e76d232cb3b2c9f4dc4cc599bd990"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - autoconf
+    - perl
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+
+package:
+  files:
+    - bin/automake*
+    - bin/aclocal*
+    - share/automake-*/
+    - share/aclocal-*/
+    - share/aclocal/

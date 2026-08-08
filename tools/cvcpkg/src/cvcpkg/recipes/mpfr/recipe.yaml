@@ -1,0 +1,73 @@
+schema_version: 1
+recipe:
+  name: mpfr
+  upstream_version: "4.2.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "MPFR — the GNU Multiple Precision Floating-Point Reliable library for correct rounding of arbitrary-precision floating-point computations."
+  homepage: https://www.mpfr.org/
+  license: LGPL-3.0-or-later
+  tags: [math, wasm]
+
+source:
+  type: tarball
+  url: https://www.mpfr.org/mpfr-4.2.1/mpfr-4.2.1.tar.xz
+  mirror: https://ftp.gnu.org/gnu/mpfr/mpfr-4.2.1.tar.xz
+  sha256: "277807353a6726978996945af13e52829e3abd7a9a5b7fb2793894e18f1fcbb2"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: gmp
+      version: ">=6.1.0"
+  host_tools:
+    - make
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+      vcpkg_port: mpfr
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
+
+package:
+  files:
+    - lib/libmpfr*
+    - lib/mpfr*
+    - lib/pkgconfig/mpfr*
+    - include/mpfr.h
+    - include/mpf2mpfr.h
+  cmake_packages: []
+
+abi:
+  cxx_std: 17

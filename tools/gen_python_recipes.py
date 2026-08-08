@@ -1553,7 +1553,7 @@ def _emit_column(out, base, m, interp, meta, cols):
     (d / "build.sh").write_text(
         sh.format(
             name=name,
-            check=check,
+            check=_sh_dq(check),
             abi=abi,
             interpreter=f"python{interp}",
             dist=m["pypi_name"],
@@ -1568,13 +1568,15 @@ def _emit_column(out, base, m, interp, meta, cols):
     if windows and mode == "sdist":
         ps1.write_text(
             _BUILD_PS1_SDIST.format(
-                name=name, check=check, dist=m["pypi_name"], version=m["version"]
+                name=name, check=_ps1_sq(check), dist=m["pypi_name"], version=m["version"]
             ),
             encoding="utf-8",
             newline="\n",
         )
     elif windows and kind != "pure":
-        ps1.write_text(_BUILD_PS1.format(name=name, check=check), encoding="utf-8", newline="\n")
+        ps1.write_text(
+            _BUILD_PS1.format(name=name, check=_ps1_sq(check)), encoding="utf-8", newline="\n"
+        )
     elif ps1.exists():
         ps1.unlink()
 
@@ -1632,6 +1634,24 @@ def _toppath(base: str) -> str:
     """Installed directory for package.files globs — the module as a path, so a
     dotted namespace module (``google.protobuf``) globs ``google/protobuf/``."""
     return _toppkg(base).replace(".", "/")
+
+
+def _ps1_sq(s: str) -> str:
+    """Escape for a PowerShell SINGLE-quoted literal: the only escape is '' .
+
+    Without this a check containing an apostrophe — ``Image.new('L', (2, 2))``,
+    ``matplotlib.use('Agg')`` — closes the literal early and the generated
+    build.ps1 is a syntax error, which surfaces as a baffling parse failure
+    partway through the build rather than as a bad check.
+    """
+    return s.replace("'", "''")
+
+
+def _sh_dq(s: str) -> str:
+    """Escape for a bash DOUBLE-quoted string (backslash, quote, $, backtick)."""
+    for a, b in (("\\", "\\\\"), ('"', '\\"'), ("$", "\\$"), ("`", "\\`")):
+        s = s.replace(a, b)
+    return s
 
 
 _BUILD_SH = """#!/usr/bin/env bash
