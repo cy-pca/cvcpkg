@@ -384,6 +384,142 @@ SEED_PACKAGES = {
         "files": ["wheel/", "wheel-*.dist-info/"],
         "check": "import wheel",
     },
+    # ── PEP-517 build backends ──────────────────────────────────────────────
+    # --no-build-isolation means the backend must already be importable in the
+    # build prefix, so an unpackaged backend forces its dependents onto a
+    # prebuilt wheel. These six were the entire blocker list for the plotting/
+    # imaging/schema stack below; packaging them converts those from prebuilt
+    # to from-source. All are pure-Python (pybind11 and cppy ship headers).
+    "calver": {
+        "version": "2022.6.26",
+        "license": "Apache-2.0",
+        "deps": [],
+        "files": ["calver/", "calver-*.dist-info/"],
+        "check": "import calver",
+    },
+    "trove-classifiers": {
+        # Calendar-versioned. Pinned to a THREE-component release: cvcpkg's
+        # validator requires an orderable SemVer upstream_version, and the
+        # usual YYYY.M.D.HH form has four components (validate.py rejects it).
+        "version": "2024.10.16",
+        "license": "Apache-2.0",
+        "deps": ["calver"],
+        "files": ["trove_classifiers/", "trove_classifiers-*.dist-info/"],
+        "check": "import trove_classifiers",
+    },
+    "hatchling": {
+        "version": "1.27.0",
+        "license": "MIT",
+        "deps": ["packaging", "pathspec", "pluggy", "trove-classifiers"],
+        "files": ["hatchling/", "hatchling-*.dist-info/"],
+        "check": "import hatchling",
+    },
+    "hatch-vcs": {
+        "version": "0.4.0",
+        "license": "MIT",
+        "deps": ["hatchling", "setuptools-scm"],
+        "files": ["hatch_vcs/", "hatch_vcs-*.dist-info/"],
+        "check": "import hatch_vcs",
+    },
+    "hatch-fancy-pypi-readme": {
+        "version": "24.1.0",
+        "license": "MIT",
+        "deps": ["hatchling"],
+        "files": ["hatch_fancy_pypi_readme/", "hatch_fancy_pypi_readme-*.dist-info/"],
+        "check": "import hatch_fancy_pypi_readme",
+    },
+    "flit-core": {
+        "version": "3.10.1",
+        "license": "BSD-3-Clause",
+        "deps": [],
+        "files": ["flit_core/", "flit_core-*.dist-info/"],
+        "check": "import flit_core",
+    },
+    "cppy": {
+        "version": "1.3.1",
+        "license": "BSD-3-Clause",
+        "deps": [],
+        "files": ["cppy/", "cppy-*.dist-info/"],
+        "check": "import cppy",
+    },
+    "pybind11": {
+        "version": "2.13.6",
+        "license": "BSD-3-Clause",
+        "deps": [],
+        "files": ["pybind11/", "pybind11-*.dist-info/"],
+        "check": "import pybind11",
+    },
+    # ── plotting / imaging / schema stack ───────────────────────────────────
+    # pillow is the load-bearing one: grl_snam_dbg.ingest.scene_buffers reads
+    # the scene navmask.png through PIL, so the DBG planner cannot ingest a
+    # scene without it. matplotlib and imageio are the grl_snam demo/capture
+    # path; jsonschema validates movement_bundle.v1 against the contract
+    # schema in grl_snam_dbg.scripts.export_movement_bundle.
+    "pillow": {
+        "version": "11.1.0",
+        "license": "MIT-CMU",
+        "deps": [],
+        "files": ["PIL/", "pillow-*.dist-info/"],
+        "check": "from PIL import Image; Image.new('L', (2, 2))",
+    },
+    "cycler": {
+        "version": "0.12.1",
+        "license": "BSD-3-Clause",
+        "deps": [],
+        "files": ["cycler/", "cycler-*.dist-info/"],
+        "check": "import cycler",
+    },
+    "pyparsing": {
+        "version": "3.2.1",
+        "license": "MIT",
+        "deps": [],
+        "files": ["pyparsing/", "pyparsing-*.dist-info/"],
+        "check": "import pyparsing",
+    },
+    "kiwisolver": {
+        "version": "1.4.8",
+        "license": "BSD-3-Clause",
+        "deps": [],
+        "files": ["kiwisolver/", "kiwisolver-*.dist-info/"],
+        "check": "import kiwisolver",
+    },
+    "fonttools": {
+        "version": "4.55.3",
+        "license": "MIT",
+        "deps": [],
+        "files": ["fontTools/", "fonttools-*.dist-info/"],
+        "check": "import fontTools",
+    },
+    "contourpy": {
+        "version": "1.3.1",
+        "license": "BSD-3-Clause",
+        "deps": ["numpy"],
+        "files": ["contourpy/", "contourpy-*.dist-info/"],
+        "check": "import contourpy",
+    },
+    "matplotlib": {
+        "version": "3.10.0",
+        "license": "PSF-2.0",
+        "deps": [
+            "contourpy", "cycler", "fonttools", "kiwisolver", "numpy",
+            "packaging", "pillow", "pyparsing", "python-dateutil",
+        ],
+        "files": ["matplotlib/", "mpl_toolkits/", "pylab.py", "matplotlib-*.dist-info/"],
+        # Agg, not a GUI backend: the build fleet is headless and so is the
+        # offscreen capture path this exists for.
+        "check": "import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot",
+    },
+    "imageio": {
+        "version": "2.36.1",
+        "license": "BSD-2-Clause",
+        "deps": ["numpy", "pillow"],
+        "files": ["imageio/", "imageio-*.dist-info/"],
+        "check": "import imageio",
+    },
+    # jsonschema and its deps (attrs, pyrsistent) come from poetry.lock, which
+    # pins 4.17.3 — the pre-referencing/rpds-py line. The lock shadows any seed
+    # here ("lock wins"), so seeding them would be dead weight; they are pulled
+    # into the emitted set by name instead.
 }
 
 
