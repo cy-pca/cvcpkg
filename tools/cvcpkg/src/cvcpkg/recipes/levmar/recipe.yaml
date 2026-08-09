@@ -1,0 +1,79 @@
+schema_version: 1
+recipe:
+  name: levmar
+  upstream_version: "2.6"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "levmar — a Levenberg-Marquardt nonlinear least squares algorithm in C/C++."
+  homepage: https://users.ics.forth.gr/~lourakis/levmar/
+  license: GPL-2.0-or-later
+  tags: [math, wasm]
+
+source:
+  # Vendored in third-party/levmar/upstream/ because the upstream
+  # host (users.ics.forth.gr) has unreliable HTTPS certificates
+  # that break CI. The CMakeLists.txt in third-party/levmar/
+  # handles the build.
+  type: vendored
+  path: third-party/levmar
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: openblas
+      version: ">=0.3"
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: clapack
+      version: ">=3.2"
+      platforms: [windows, wasm]
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
+
+package:
+  files:
+    - lib/liblevmar*
+    - lib/levmar*
+    - lib/cmake/levmar/
+    - include/levmar/
+    - include/levmar.h
+  cmake_packages:
+    - { name: levmar, targets: ["levmar::levmar"] }
+
+abi:
+  cxx_std: 17

@@ -12,7 +12,12 @@ recipe:
   # assembly BLAS kernels are unaffected; only LAPACK falls back to the
   # bundled C reference. See build.sh for the rejected -static-libgfortran
   # attempt and the Phase-10 follow-up.
-  cvc_revision: 5
+  # Bumped 5 -> 6: added the macOS build. Deferring to Accelerate there left
+  # numpy-cp3XX advertising macOS while build-depending on a package that had no
+  # macOS build, so the claim could never resolve — and Intel/Apple-Silicon Macs
+  # got no OpenBLAS at all. macOS uses the same NOFORTRAN/C_LAPACK path as the
+  # BSDs, plus USE_OPENMP=OFF: Apple clang ships no libomp, so -fopenmp fails.
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -36,13 +41,21 @@ depends:
   host_tools: []
 
 build:
-  # No macOS entry: macOS provides BLAS/LAPACK via the Accelerate
-  # framework, so we use the system libraries there instead.
   matrix:
     - platform: linux
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    # macOS could defer to the Accelerate framework, but a system framework is
+    # not a cvcpkg package: dependents can only express "I need openblas", so
+    # every macOS consumer (numpy) was left with an unresolvable build dep.
+    # Shipping our own keeps the dependency graph honest and identical across
+    # platforms.
+    - platform: macos
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
     - platform: freebsd
       script: build.sh
       env:

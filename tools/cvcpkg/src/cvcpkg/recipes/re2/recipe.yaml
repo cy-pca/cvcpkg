@@ -1,0 +1,75 @@
+schema_version: 1
+recipe:
+  name: re2
+  upstream_version: "2024-07-02"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "RE2 — a fast, safe, thread-friendly regular expression library from Google."
+  homepage: https://github.com/google/re2
+  license: BSD-3-Clause
+  tags: [utils, wasm]
+
+source:
+  type: tarball
+  url: https://github.com/google/re2/releases/download/2024-07-02/re2-2024-07-02.tar.gz
+  sha256: "eb2df807c781601c14a260a507a5bb4509be1ee626024cb45acbd57cb9d4032b"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: abseil
+      version: ">=20240722"
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+      vcpkg_port: re2
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
+
+package:
+  files:
+    - lib/libre2*
+    - lib/re2*
+    - lib/cmake/re2/
+    - lib/pkgconfig/re2*
+    - include/re2/
+  cmake_packages:
+    - { name: re2, targets: ["re2::re2"] }
+
+abi:
+  cxx_std: 17

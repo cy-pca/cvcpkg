@@ -2,7 +2,13 @@ schema_version: 1
 recipe:
   name: cairo
   upstream_version: "1.18.2"
-  cvc_revision: 1
+  # cvc.2: add the windows build (build.ps1, Meson + MSVC) and the MSVC
+  # artifact patterns.  +cvc.1 was POSIX-only, which made gtk4's
+  # `platform: windows` matrix entry a phantom claim — the closure validator
+  # flagged cairo as having no windows build.  The packaged file set changes
+  # (import libs in lib/, runtime DLLs in bin/), so this needs a revision
+  # rather than a silent republish at the same one.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -62,12 +68,21 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
+    # Unix shared/static artifacts (.so / .so.N / .dylib / .a).
     - lib/libcairo*
     - lib/pkgconfig/cairo*.pc
     - include/cairo/
+    # Windows (MSVC): meson drops the "lib" prefix, installs import
+    # libraries under lib/ and the versioned runtime DLLs under bin/
+    # (cairo.lib + cairo-2.dll, and the same for cairo-gobject and
+    # cairo-script-interpreter).
+    - lib/cairo*.lib
+    - bin/cairo*.dll
   pkg_config:
     - cairo
     - cairo-gobject
@@ -75,6 +90,9 @@ package:
     - cairo-ft
     - cairo-pdf
     - cairo-svg
+    # Windows-only backends, enabled automatically by upstream's host check.
+    - cairo-win32
+    - cairo-win32-font
 
 abi:
   cxx_std: 17

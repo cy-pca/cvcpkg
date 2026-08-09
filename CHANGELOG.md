@@ -34,6 +34,56 @@ Major release: production daemon with database backend, the
 `cvcpkg.org` registry, distributed build infrastructure, and wasi
 support.
 
+### Every advertised platform is now buildable (2026-08-05)
+
+Recipes could advertise a platform they were incapable of building. A
+dependency-closure audit found **95** `(recipe, platform)` pairs where a
+recipe declared platform *P* while a dependency that applies on *P* had
+no build for it — `gtk4` claimed windows without cairo/pango/gdk-pixbuf,
+`numpy` claimed macos without openblas, CPython claimed
+windows/wasm/wasi/cosmo while depending on readline and ncurses. Those
+jobs could only fail once a builder claimed them, hours into a DAG.
+
+That count is now **zero**, and `scripts/validate_all_recipes.py` runs in
+CI so it stays there. Each violation was resolved by adding the missing
+build where it is genuinely feasible, or by scoping the dependency edge
+with `platforms:` where it is not.
+
+New platform coverage (+72 build-matrix entries), each checked against
+upstream or the platform's own ports tree rather than assumed: openblas
+on macOS; the cairo/fontconfig/pango/gdk-pixbuf stack on Windows;
+yaml-cpp and libpulse on all three BSDs; wayland and wayland-protocols
+on OpenBSD/NetBSD; LLVM on NetBSD; portaudio and pipewire on FreeBSD;
+wireguard-tools on NetBSD; and sqlite, libffi, zstd, abseil, libpng,
+freetype and expat across the wasm/wasi/cosmo targets. Two new recipes:
+`brotli` and `gperf`.
+
+Cases that look like gaps but are not are now documented where they
+live, so they are not re-investigated: portaudio on OpenBSD/NetBSD needs
+sndio, which upstream has no host API for; libffi has no wasi backend
+(its wasm trampolines are built with `EM_JS` and need a JavaScript
+engine — the same reason CPython ships WASI without `_ctypes`); ncurses
+and readline have no MSVC port.
+
+**Hermeticity.** `gtk4` on Windows no longer shells out to gvsbuild, a
+pipx-installed meta-builder that fetched and compiled its own copy of
+the entire GTK stack — the bundle was non-hermetic and shipped
+gvsbuild's cairo/pango/gdk-pixbuf rather than the packages the recipe
+declares. It is now Meson + MSVC with the Win32 backend. `fontconfig`
+declares the `gperf` dependency it always needed, instead of taking the
+builder's system copy or fetching a meson wrap at setup time. `numpy`
+links cvcpkg's own OpenBLAS on macOS rather than the system Accelerate
+framework, and its cp313t column moved from a prebuilt PyPI wheel to the
+same from-source build as the other three — that wheel carried the
+vendored-OpenBLAS defect that breaks `import numpy` in a merged prefix.
+`wand` now publishes on macOS and the BSDs.
+
+**Removed: `dragonflybsd`.** It was canonical in `platform.py` and
+offered in the server UI, but was never added to the recipe schema's
+platform enum — so no recipe could declare it and such a host resolved
+zero packages while the UI advertised the platform. DragonFly now
+detects as `freebsd` in compat mode, the same treatment GhostBSD gets.
+
 ### Recipes can run their tests inside a throwaway VM (`test.vm`) (2026-08-04)
 
 cvcpkg already had a test hook: `test.script`, a shell script run **on the

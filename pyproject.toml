@@ -101,6 +101,13 @@ aiosqlite = ">=0.20"
 # needs it unconditionally: tests/unit/test_migrations.py importorskips the
 # whole module without it, which silently disabled every migration check in CI.
 alembic = ">=1.13"
+# NOTE: tools/gen_python_recipes.py needs a TOML reader on Python 3.10, where
+# tomllib is not yet stdlib. It is NOT declared here on purpose: poetry.lock
+# already carries tomli under a python_version < "3.11" marker (black, mypy and
+# coverage all require it), and adding a redundant direct entry invalidates the
+# lock — "pyproject.toml changed significantly since poetry.lock was last
+# generated" fails every poetry install job. If that transitive edge ever goes
+# away, add tomli here AND regenerate the lock in the same commit.
 # Mocks the S3 API (Garage-compatible) so the storage-migration test
 # exercises cvcpkg's real s3:// backend in CI; pulls boto3.
 moto = { version = ">=5.0", extras = ["s3"] }

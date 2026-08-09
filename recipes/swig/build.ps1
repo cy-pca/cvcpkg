@@ -39,6 +39,18 @@ New-Item -ItemType Directory -Force -Path "$env:CVC_INSTALL_DIR\lib\cmake\SWIG" 
 Copy-Item "$swigDir\swig.exe" "$env:CVC_INSTALL_DIR\bin\swig.exe"
 Copy-Item -Recurse "$swigDir\Lib\*" "$env:CVC_INSTALL_DIR\share\swig\$swigVer\" -Force
 
+# swigwin's swig.exe resolves its runtime library as <exedir>\Lib — that is
+# compiled in, and `swig -swiglib` reports it verbatim. Staging the library
+# only under share/swig/<ver> left the binary pointing at a directory that
+# does not exist, so CMake's module-mode FindSWIG (which shells out to
+# `swig -swiglib`) failed with "Could NOT find SWIG (missing: SWIG_DIR)" even
+# with the bundle installed — every consumer had to set SWIG_LIB by hand.
+# The generated SWIGConfig.cmake below only helps callers who reach SWIG via
+# config mode; find_package(SWIG COMPONENTS python) does not. Stage the
+# library where the binary actually looks, so the bundle is self-describing.
+New-Item -ItemType Directory -Force -Path "$env:CVC_INSTALL_DIR\bin\Lib" | Out-Null
+Copy-Item -Recurse "$swigDir\Lib\*" "$env:CVC_INSTALL_DIR\bin\Lib\" -Force
+
 # Generate CMake config.
 @"
 set(SWIG_EXECUTABLE "`${CMAKE_CURRENT_LIST_DIR}/../../../bin/swig.exe")

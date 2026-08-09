@@ -2,7 +2,10 @@ schema_version: 1
 recipe:
   name: libpulse
   upstream_version: "17.0"
-  cvc_revision: 1
+  # Bumped 1 -> 2: added the BSD builds. All three BSDs package pulseaudio, and
+  # this recipe builds the CLIENT libraries only (-Ddaemon=false with every
+  # backend integration disabled), which is the portable part.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -37,6 +40,18 @@ depends:
 build:
   matrix:
     - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"

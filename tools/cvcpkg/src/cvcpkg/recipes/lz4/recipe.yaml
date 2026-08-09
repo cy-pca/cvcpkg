@@ -1,0 +1,66 @@
+schema_version: 1
+recipe:
+  name: lz4
+  upstream_version: "1.10.0"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  maintainer_email: "cvcpkg@cyberpcangel.com"
+  maintainer_url: "https://cyberpcangel.com"
+  description: "LZ4 — extremely fast lossless compression algorithm."
+  homepage: https://lz4.org/
+  license: BSD-2-Clause AND GPL-2.0-only
+  tags: [utils, io]
+
+source:
+  type: tarball
+  url: https://github.com/lz4/lz4/releases/download/v1.10.0/lz4-1.10.0.tar.gz
+  sha256: "537512904744b35e232912055ccf8ec66d768639ff3abe5788d90d792ec5f48b"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/liblz4*
+    - lib/lz4*
+    - lib/cmake/lz4/
+    - lib/pkgconfig/liblz4.pc
+    - include/lz4.h
+    - include/lz4hc.h
+    - include/lz4frame.h
+  cmake_packages:
+    - { name: lz4, targets: ["lz4::lz4"] }
+
+abi:
+  cxx_std: 17

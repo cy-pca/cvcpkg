@@ -1,8 +1,34 @@
 schema_version: 1
 recipe:
   name: rust
-  upstream_version: "1.84.0"
-  cvc_revision: 1
+  upstream_version: "1.90.0"
+  # Bumped 1 -> 2, and 1.84.0 -> 1.90.0. Two forced changes, one payload:
+  #
+  #  * VERSION. rust stopped being a slint-only convenience the moment
+  #    cryptography / pydantic-core / bcrypt started building from source: their
+  #    PEP-517 backend (maturin) and their own crates are now IN the build
+  #    closure, and they carry MSRVs 1.84.0 cannot meet. maturin 1.14.1 declares
+  #    `rust-version = "1.89"` with `edition = "2024"`; pydantic-core 2.46.4
+  #    declares 1.88, also edition 2024 — and edition 2024 needs rustc >= 1.85
+  #    before any MSRV is even consulted. 1.90.0 clears every MSRV in the new
+  #    closure (maturin 1.89, pydantic-core 1.88, cryptography 1.83, bcrypt 1.74)
+  #    with a few releases of headroom, without being the newest stable, whose
+  #    fresh lints are the usual way an older crate graph stops compiling.
+  #  * PLATFORMS. freebsd and netbsd are new, and they are the whole reason the
+  #    three Python packages above can reach the BSDs: upstream publishes NO
+  #    PyPI wheel for any BSD, so from-source is the only route, and from-source
+  #    needs cargo on the target. Both are official Rust host triples with
+  #    prebuilt standalone installers.
+  #
+  #  NOT openbsd. There is no `x86_64-unknown-openbsd` on static.rust-lang.org —
+  #  it is a Rust tier-3 target with no official binary release (the 404 is
+  #  reproducible, and the triple is absent from channel-rust-1.90.0.toml
+  #  entirely). OpenBSD Rust exists only as a ports/pkg_add build, which is a
+  #  system toolchain and therefore exactly the thing cvcpkg refuses to depend
+  #  on. Anything needing cargo consequently stops at freebsd/netbsd; declaring
+  #  openbsd here would be a phantom claim, and validate_all_recipes.py would be
+  #  right to reject every recipe that believed it.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -11,19 +37,31 @@ recipe:
   tags: [tools, compiler]
   description: >-
     The Rust toolchain (rustc + cargo + std library), installed from the
-    official prebuilt release binaries. A build-time host tool for recipes
-    whose build invokes cargo/rustc (e.g. slint). No bootstrap compiler is
-    required — the standalone installer ships everything.
+    official prebuilt release binaries. A build-time dependency for recipes
+    whose build invokes cargo/rustc — slint's C++ bindings, and now the
+    from-source Python extension columns (maturin, cryptography, pydantic-core,
+    bcrypt), which is why this recipe covers freebsd and netbsd. No bootstrap
+    compiler is required — the standalone installer ships everything.
 
+# `prebuilt` sources are fetched by the build script, not by cvcpkg core (see
+# builder.py: vcpkg/brew/apt/prebuilt all get a dummy source dir), so this map is
+# DOCUMENTATION of what build.sh/build.ps1 download. The sha256 table that is
+# actually enforced lives in build.sh's sha_for() and build.ps1's $expected —
+# keep the three in sync when bumping.
 source:
   type: prebuilt
   base_url: https://static.rust-lang.org/dist
   artifacts:
-    linux-x86_64: rust-1.84.0-x86_64-unknown-linux-gnu.tar.gz
-    linux-arm64: rust-1.84.0-aarch64-unknown-linux-gnu.tar.gz
-    macos-x86_64: rust-1.84.0-x86_64-apple-darwin.tar.gz
-    macos-arm64: rust-1.84.0-aarch64-apple-darwin.tar.gz
-    windows-x86_64: rust-1.84.0-x86_64-pc-windows-msvc.tar.gz
+    linux-x86_64: rust-1.90.0-x86_64-unknown-linux-gnu.tar.gz
+    linux-arm64: rust-1.90.0-aarch64-unknown-linux-gnu.tar.gz
+    macos-x86_64: rust-1.90.0-x86_64-apple-darwin.tar.gz
+    macos-arm64: rust-1.90.0-aarch64-apple-darwin.tar.gz
+    windows-x86_64: rust-1.90.0-x86_64-pc-windows-msvc.tar.gz
+    # x86_64 only on the BSDs: aarch64-unknown-freebsd and aarch64-unknown-netbsd
+    # are tier-3 with no official binary (404, same as OpenBSD), so build.sh's
+    # sha_for() has no entry for them and fails loudly rather than guessing.
+    freebsd-x86_64: rust-1.90.0-x86_64-unknown-freebsd.tar.gz
+    netbsd-x86_64: rust-1.90.0-x86_64-unknown-netbsd.tar.gz
 
 patches: []
 
@@ -37,6 +75,10 @@ build:
     - platform: linux
       script: build.sh
     - platform: macos
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: netbsd
       script: build.sh
     - platform: windows
       script: build.ps1
@@ -58,5 +100,21 @@ notes:
     platforms: [windows]
     description: >-
       The x86_64-pc-windows-msvc release ships the same POSIX install.sh; the
-      Windows build runs it under Git-Bash (via env-windows.ps1's Get-CvcGitBash)
-      to stage rustc/cargo/std into the prefix.
+      Windows build runs it under Git-Bash to stage rustc/cargo/std into the
+      prefix.
+  - title: "BSD coverage stops at FreeBSD and NetBSD"
+    platforms: [freebsd, netbsd]
+    description: >-
+      x86_64-unknown-freebsd and x86_64-unknown-netbsd are official Rust host
+      triples with prebuilt standalone installers, so they stage exactly like
+      Linux. x86_64-unknown-openbsd is NOT: Rust classifies it tier-3 and
+      publishes no binary for it, so this recipe has no openbsd column and every
+      recipe that build-depends on `rust` inherits that ceiling. Rust on the
+      BSDs is also x86_64-only here — the aarch64 BSD triples are tier-3 too.
+  - title: "Checksum verification uses whatever the host provides"
+    platforms: [linux, macos, freebsd, netbsd]
+    description: >-
+      There is no single sha256 CLI across Linux and the BSDs — GNU coreutils
+      has sha256sum, FreeBSD has sha256(1), NetBSD reaches it through
+      cksum -a sha256, macOS ships shasum. build.sh probes for all four and
+      fails if none is present, rather than assuming sha256sum exists.

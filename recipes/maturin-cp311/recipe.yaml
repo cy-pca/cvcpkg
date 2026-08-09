@@ -1,0 +1,122 @@
+schema_version: 1
+recipe:
+  name: maturin-cp311
+  upstream_version: "1.14.1"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/maturin/
+  license: "MIT OR Apache-2.0"
+  tags: [python, wheel, tools]
+  description: >-
+    maturin 1.14.1 for CPython 3.11 — the cp311 column of cvcpkg's
+    per-interpreter wheel matrix, BUILT FROM SOURCE. maturin is the PEP-517
+    backend that cryptography and pydantic-core declare, and it is itself a Rust
+    program: this recipe compiles the `maturin` executable with cvcpkg's own
+    cargo (recipes/rust) and installs it next to the small Python shim that
+    shells out to it. It is a per-interpreter column rather than a single native
+    recipe because the shim must be importable by the interpreter running the
+    consumer's build — that is how PEP-517 finds a backend.
+
+# From-source sdist. maturin bootstraps itself: pyproject.toml declares
+# backend-path = ["maturin"] with build-backend = "bootstrap", a thin wrapper over
+# setuptools.build_meta whose setup.py builds the Rust binary through
+# setuptools-rust's RustBin. So the sdist is the only shape that works here — a
+# prebuilt maturin wheel would defeat the point AND has no BSD build. The sha256
+# was recomputed from the downloaded tarball and matches the PyPI JSON digest.
+source:
+  type: tarball
+  url: https://files.pythonhosted.org/packages/e7/b3/addd877f871fb1860d46d3a4f206ecb10b946c85846805e6367631926fd3/maturin-1.14.1.tar.gz
+  sha256: "9d6577a62cd08e0ceba7a0db06fb098e0c9b1b3429bad747a4f3a18215a1b3df"
+  strip_components: 1
+
+python:
+  interpreter: python311
+  abi: cp311
+
+patches: []
+
+depends:
+  build:
+    # The interpreter that drives pip, and whose site-packages the shim lands in.
+    - name: python311
+    # PEP-517 backend: maturin's bootstrap backend re-exports setuptools.build_meta
+    # and its pyproject requires setuptools>=77 (the matrix ships 80.9.0).
+    - name: setuptools-cp311
+    # setup.py does `from setuptools_rust import RustBin` — this is the plugin
+    # that actually invokes cargo.
+    - name: setuptools-rust-cp311
+    # setup.py does `from wheel.bdist_wheel import bdist_wheel` inside a
+    # try/except and, on ImportError, passes cmdclass={"bdist_wheel": None} —
+    # which is not a graceful degradation, it is a TypeError later in
+    # Distribution.get_command_obj. Keep `wheel` importable.
+    - name: wheel-cp311
+    # cargo + rustc. Declared the way slint declares it: a depends.build edge, not
+    # a bare host_tools string, so the closure checker can see that a platform
+    # claimed here must also be claimed by `rust`. That edge is exactly why this
+    # recipe stops at freebsd/netbsd and has no openbsd column.
+    - name: rust
+  runtime:
+    # At use time this package is just the Python shim plus a statically-linked-
+    # enough Rust executable; it needs no other cvcpkg package. Note that a
+    # CONSUMER of maturin still needs `rust` at its own build time — cryptography
+    # and pydantic-core declare that themselves — because the shim shells out to
+    # cargo to compile the consumer's crate.
+    - name: python311
+  host_tools:
+    # Must run on the BUILDER: the interpreter (drives pip and the compile) and
+    # the Rust toolchain (cargo/rustc do the actual work).
+    - python311
+    - rust
+
+build:
+  # The Rust binary and the Python shim do not vary with cvcpkg's Release/Debug
+  # build type — cargo builds its own release profile either way.
+  build_type_independent: true
+  # linux/macos/windows plus the two BSDs `rust` can reach. openbsd is absent for
+  # one reason only: Rust publishes no official OpenBSD toolchain, so there is no
+  # cargo to build this with (see recipes/rust). wasm/wasi/cosmo are out — the
+  # static interpreter has no extension-module ABI and nothing there would run a
+  # PEP-517 backend anyway.
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        # Same floor as the python311 recipe: the executable is staged into the
+        # same prefix as the interpreter and should not out-require it.
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  # DOCUMENTATION ONLY — stage_bundle ships the whole CVC_INSTALL_DIR tree;
+  # build.sh keeps it pure by pip-installing --prefix into an empty dir.
+  files:
+    - lib/python3.11/site-packages/maturin/
+    - lib/python3.11/site-packages/maturin-*.dist-info/
+    # The compiled executable, installed from the wheel's .data/scripts/.
+    - bin/maturin*
+    # Windows install scheme: Lib\site-packages plus Scripts\ for the exe.
+    - Lib/site-packages/maturin/
+    - Lib/site-packages/maturin-*.dist-info/
+    - Scripts/maturin*
+
+notes:
+  - title: "cargo fetches crates from the network during this build"
+    platforms: [linux, macos, windows, freebsd, netbsd]
+    description: >-
+      The maturin sdist ships Cargo.lock but does NOT vendor its crate sources,
+      so `cargo build --locked` resolves every dependency out of crates.io. The
+      pip layer is fully offline (--no-index, --no-build-isolation) and the
+      versions are lock-pinned, but the cargo layer is not air-gapped. Set
+      CVC_CARGO_HOME to a pre-populated registry and CVC_CARGO_OFFLINE=1 to force
+      `CARGO_NET_OFFLINE=true` on a builder that must not reach the network;
+      build.sh prints which mode it is in.

@@ -2,13 +2,19 @@ schema_version: 1
 recipe:
   name: libsamplerate
   upstream_version: "0.2.2"
-  cvc_revision: 1
+  # Added wasm/wasi/cosmo entries.  The resampler is bandlimited-sinc
+  # arithmetic over caller-supplied buffers: no threads, no files, and — unlike
+  # libopus or libpng — no assembly or runtime CPU dispatch, so there is no
+  # hardware-optimisation switch the cross scripts need to turn off.  Its one
+  # external dependency, libsndfile, is confined to the examples and tests,
+  # which the build already disables, so the cross builds are dependency-free.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   homepage: https://github.com/libsndfile/libsamplerate
   license: BSD-2-Clause
-  tags: [libraries, audio]
+  tags: [libraries, audio, wasm, wasi]
   description: >-
     libsamplerate (Secret Rabbit Code) — a high-quality audio
     sample-rate conversion library.  Provides the src_* API for
@@ -49,6 +55,15 @@ build:
       script: build.sh
     - platform: windows
       script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: cosmo
+      host_platform: linux
+      script: build-cosmo.sh
 
 package:
   files:

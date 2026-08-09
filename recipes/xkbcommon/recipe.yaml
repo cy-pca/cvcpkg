@@ -2,7 +2,11 @@ schema_version: 1
 recipe:
   name: xkbcommon
   upstream_version: "1.7.0"
-  cvc_revision: 1
+  # Bumped 1 -> 2: added openbsd/netbsd builds. Both ship this library in
+  # ports/pkgsrc, and their absence left xkbcommon-x11 advertising those two
+  # platforms while depending on a package that had no build for them, so the
+  # claim could never resolve.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -48,6 +52,17 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    # The wayland/wayland-protocols build deps above stay scoped to
+    # linux+freebsd: build.sh passes -Denable-tools=false, so they only feed
+    # the disabled interactive-wayland tool and are not needed here.
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
 
 package:
   files:
@@ -63,8 +78,8 @@ abi:
   cxx_std: 17
 
 notes:
-  - title: "Linux and FreeBSD only"
-    platforms: [linux, freebsd]
+  - title: "Unix desktop platforms only"
+    platforms: [linux, freebsd, openbsd, netbsd]
     description: >-
-      xkbcommon is primarily used on Linux/FreeBSD with Wayland or X11.
+      xkbcommon is used on Linux and the BSDs with Wayland or X11.
       macOS and Windows use their native keyboard input mechanisms.

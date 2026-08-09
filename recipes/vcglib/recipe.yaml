@@ -2,14 +2,32 @@ schema_version: 1
 recipe:
   name: vcglib
   upstream_version: "2025.07"
-  cvc_revision: 1
+  # Added wasm/wasi/cosmo entries — but NOT build-wasm.sh/build-wasi.sh/
+  # build-cosmo.sh scripts, which is the one place this recipe departs from the
+  # zlib/libpng cross model, on purpose.  vcglib compiles nothing: build.sh is
+  # `cp -R` of the vcg/ and wrap/ header trees plus a generated cmake config, it
+  # never sources recipes/_common/env-${CVC_PLATFORM}.sh, and it never invokes a
+  # compiler.  The other recipes need a per-target script only because each one
+  # sources a different env helper to get a different toolchain; here there is
+  # no toolchain to get, so the same script produces a byte-identical result on
+  # every target and three copies of it would assert a platform difference that
+  # does not exist.  The headers themselves are templates over geometry and
+  # linear algebra — the target compiler, not this build, is what ever compiles
+  # them — so a wasm/wasi/cosmo consumer can use them as-is.
+  #
+  # What these entries buy: the closure check refuses to let a wasm/wasi/cosmo
+  # recipe depend on vcglib unless vcglib declares those targets.  Without them
+  # any cross consumer is blocked on a package that was already portable.
+  #
+  # See also the note on each cross matrix entry below.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   description: "vcglib — header-only C++ mesh processing library from the Visual Computing Lab (ISTI-CNR)."
   homepage: https://github.com/cnr-isti-vclab/vcglib
   license: GPL-3.0-or-later
-  tags: [graphics, mesh]
+  tags: [graphics, mesh, wasm, wasi]
 
 source:
   type: tarball
@@ -37,6 +55,25 @@ build:
       script: build.sh
     - platform: windows
       script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build.sh
+      note: >-
+        Reuses build.sh rather than a build-wasm.sh: vcglib is header-only, so
+        the build stages headers and never runs a compiler or sources a
+        toolchain env helper.  The output is identical on every target.
+    - platform: wasi
+      host_platform: linux
+      script: build.sh
+      note: >-
+        Reuses build.sh — header staging only, no compilation.  None of the
+        wasip1 restrictions apply to copying headers into the prefix.
+    - platform: cosmo
+      host_platform: linux
+      script: build.sh
+      note: >-
+        Reuses build.sh — header staging only, no compilation.  Nothing is
+        linked here, so cosmo's static-only restriction does not apply.
 
 package:
   files:

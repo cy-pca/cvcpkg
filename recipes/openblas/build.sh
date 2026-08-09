@@ -11,6 +11,13 @@ case "${CVC_PLATFORM}" in
     *bsd)
         OPENBLAS_EXTRA+=(-DNOFORTRAN=ON -DUSE_OPENMP=OFF -DC_LAPACK=ON)
         ;;
+    macos)
+        # NOFORTRAN/C_LAPACK for the same reason as every other platform (see
+        # below). OpenMP is additionally OFF because Apple clang ships no
+        # libomp: -fopenmp is a hard configure failure there, not a slower
+        # build. OpenBLAS still threads through its own pthread backend.
+        OPENBLAS_EXTRA+=(-DNOFORTRAN=ON -DUSE_OPENMP=OFF -DC_LAPACK=ON)
+        ;;
     *)
         # Same NOFORTRAN treatment as the BSDs, and for the same reason: a
         # Fortran-linked libopenblas.so carries a DT_NEEDED on libgfortran.so.5,

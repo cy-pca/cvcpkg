@@ -1,0 +1,67 @@
+schema_version: 1
+recipe:
+  name: gperf
+  upstream_version: "3.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.gnu.org/software/gperf/
+  license: GPL-3.0-or-later
+  tags: [tools, codegen]
+  description: >-
+    GNU gperf — a perfect hash function generator.  Build-time host tool
+    only: it emits a C/C++ lookup function from a keyword list.  fontconfig
+    runs it to generate src/fcobjshash.h.
+
+source:
+  type: tarball
+  url: https://ftp.gnu.org/gnu/gperf/gperf-3.1.tar.gz
+  sha256: "588546b945bba4b70b6a3a616e80b4ab466e3f33024a352fc2198112cdbb3ae2"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools: []
+
+build:
+  # Emits one architecture-independent executable; no debug/release split.
+  build_type_independent: true
+  # No windows entry: gperf 3.1 ships only an autotools build, which does not
+  # run natively under MSVC. Consumers that need it on Windows currently fall
+  # back to upstream's own subproject wrap (see the note in fontconfig).
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2"
+
+package:
+  files:
+    - bin/gperf*
+    - share/man/man1/gperf*
+    - share/info/gperf*
+    - share/doc/gperf/
+
+toolchain:
+  cc:
+    min_version: "any"
+    description: "C++98-capable compiler (gcc or clang)"

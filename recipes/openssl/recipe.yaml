@@ -2,7 +2,12 @@ schema_version: 1
 recipe:
   name: openssl
   upstream_version: "3.4.1"
-  cvc_revision: 3
+  # Bumped 3 -> 4: added the cosmo build. cosmocc is an ordinary x86_64 C
+  # toolchain with a POSIX libc, so unlike the wasm/wasi targets this needs
+  # neither no-sock nor -DNO_FORK; only the APE-inherent limits (static single
+  # file, so no shared/dso/engine) are compiled out. python31x already declared
+  # cosmo and runtime-depends on openssl, so this was also an unresolvable claim.
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -65,6 +70,9 @@ build:
     - platform: wasi
       host_platform: windows
       script: build-wasi.ps1
+    - platform: cosmo
+      host_platform: linux
+      script: build-cosmo.sh
 
 package:
   files:

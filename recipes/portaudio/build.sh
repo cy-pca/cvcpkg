@@ -42,6 +42,10 @@ case "${CVC_PLATFORM}" in
         # CoreAudio is enabled automatically on Apple (PA_USE_COREAUDIO=ON).
         :
         ;;
+    freebsd)
+        # OSS is FreeBSD's native audio interface (ALSA is Linux-only).
+        _pa_opts+=( -DPA_USE_OSS=ON -DPA_USE_ALSA=OFF -DPA_USE_JACK=OFF )
+        ;;
 esac
 
 cvc_cmake_build "${_pa_opts[@]}"

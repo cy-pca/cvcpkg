@@ -12,6 +12,8 @@ import os
 import time
 from pathlib import Path
 
+import pytest
+
 from cvcpkg.builder_gc import sweep_cache, sweep_work_dir
 
 
@@ -24,6 +26,24 @@ def _job_dir(root: Path, name: str, *, size: int = 1024, age_seconds: float = 0)
         old = time.time() - age_seconds
         os.utime(d, (old, old))
     return d
+
+
+def _require_symlinks(tmp_path: Path) -> None:
+    """Skip the caller when this process may not create symlinks.
+
+    On Windows os.symlink needs SeCreateSymbolicLinkPrivilege (elevation or
+    Developer Mode) and raises OSError WinError 1314 otherwise.  CI runners
+    have it, so the assertions below still run there — only unprivileged dev
+    boxes skip.  A dangling *file* link is enough to probe the privilege: it
+    is the same check the directory link uses, and it unlinks cleanly on
+    Windows (os.unlink cannot remove a directory symlink there).
+    """
+    probe = tmp_path / ".symlink-probe"
+    try:
+        probe.symlink_to("probe-target")
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation requires elevated privileges on Windows")
+    probe.unlink()
 
 
 class TestSweepWorkDir:
@@ -118,6 +138,7 @@ class TestSweepWorkDir:
         assert res.removed == 0 and not res
 
     def test_does_not_follow_symlinks_out_of_the_work_dir(self, tmp_path):
+        _require_symlinks(tmp_path)
         outside = tmp_path / "precious"
         outside.mkdir()
         (outside / "data").write_text("do not delete")

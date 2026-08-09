@@ -1,0 +1,65 @@
+schema_version: 1
+recipe:
+  name: wasmer
+  upstream_version: "7.1.0"
+  cvc_revision: 1
+  maintainer: "Wasmer, Inc."
+  homepage: https://wasmer.io/
+  license: MIT
+  tags: [wasm, runtime]
+  description: >-
+    Wasmer — WASM runtime with multiple compilation backends
+    (Cranelift, LLVM, Singlepass).  Ships a C API consumed from C++.
+    Pre-built release artifacts from GitHub Releases.
+
+source:
+  type: prebuilt
+  base_url: https://github.com/wasmerio/wasmer/releases/download/v7.1.0
+  artifacts:
+    linux-x86_64: wasmer-linux-amd64.tar.gz
+    linux-aarch64: wasmer-linux-aarch64.tar.gz
+    macos-arm64: wasmer-darwin-arm64.tar.gz
+    macos-x86_64: wasmer-darwin-amd64.tar.gz
+    windows-x86_64: wasmer-windows-amd64.tar.gz
+  # FIXME: pin SHA256 per artifact once CI validates downloads.
+
+patches: []
+
+depends:
+  build: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env: {}
+    - platform: macos
+      script: build.sh
+      env: {}
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libwasmer*
+    - lib/wasmer*
+    - lib/cmake/wasmer/
+    - include/wasmer.h
+    - include/wasmer.hh
+    - include/wasm.h
+  cmake_packages:
+    - { name: wasmer, targets: ["wasmer::wasmer"] }
+
+toolchain:
+  note: >-
+    Pre-built binaries; no compiler required at build time.
+    A Rust toolchain would be needed only to build from source.
+
+notes:
+  - title: "Pre-built C API artifacts"
+    platforms: [linux, macos, windows]
+    description: >-
+      Downloads pre-compiled release artifacts from GitHub Releases.
+      The build script stages headers, libraries, and generates a CMake
+      config file.  No compilation occurs.

@@ -1,0 +1,87 @@
+schema_version: 1
+recipe:
+  name: brotli
+  upstream_version: "1.1.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "Brotli — a general-purpose lossless compression algorithm from Google, used by HTTP content-encoding and WOFF2 web fonts."
+  homepage: https://github.com/google/brotli
+  license: MIT
+  tags: [utils, io, wasm, wasi]
+
+source:
+  type: tarball
+  url: https://github.com/google/brotli/archive/refs/tags/v1.1.0.tar.gz
+  sha256: "e720a6ca29428b803f4ad165371771f5398faba397edf6778837a18599ea13ff"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: cosmo
+      host_platform: linux
+      script: build-cosmo.sh
+
+package:
+  files:
+    - lib/libbrotlicommon*
+    - lib/libbrotlidec*
+    - lib/libbrotlienc*
+    - lib/brotli*.lib
+    - lib/pkgconfig/libbrotli*.pc
+    - include/brotli/
+    - bin/brotli*
+  pkg_config:
+    - libbrotlicommon
+    - libbrotlidec
+    - libbrotlienc
+
+abi:
+  cxx_std: 17
+
+notes:
+  - title: "No CMake config package"
+    description: >-
+      Brotli 1.1.0 installs its three libraries with a plain install(TARGETS)
+      and no EXPORT set, so there is no lib/cmake/Brotli/ to declare under
+      package.cmake_packages.  Consumers find it through the three
+      pkg-config files, or through their own Find module — this is what
+      FreeType's FindBrotliDec.cmake does.

@@ -6,13 +6,33 @@ recipe:
   # (clang) builders but failed on the prod linux (GCC) builder — a
   # -Wuninitialized false positive in Jolt/Core/HashTable.h was fatal under
   # -Werror. Rebuild all platforms coherently without upstream's -Werror.
-  cvc_revision: 2
+  #
+  # cvc.3: added wasm and cosmo.  Jolt is a headless solver — no files, sockets
+  # or display — and upstream supports Emscripten directly (it defines
+  # JPH_PLATFORM_WASM for __EMSCRIPTEN__ and ships a wasm build script).  cosmocc
+  # is an ordinary x86-64 C++ toolchain that defines __linux__, so Jolt takes its
+  # Linux branch there.  Both cross scripts force every x86 ISA switch OFF: under
+  # Emscripten because the toolchain file reports CMAKE_SYSTEM_PROCESSOR as
+  # "x86" and Jolt would otherwise pass -msse4.2 to a compiler targeting another
+  # instruction set; under cosmo because an APE is meant to run anywhere and
+  # SSE4.2 narrows it to Nehalem-and-later.  Jolt's scalar Vec4/Mat44 path covers
+  # both.  That is an ABI change relative to the native build, which is safe only
+  # because Jolt exports those settings as PUBLIC compile definitions on
+  # Jolt::Jolt — see the ABI warning in the description below.
+  #
+  # NOT wasi, deliberately: Jolt's core unconditionally compiles
+  # JobSystemThreadPool and Semaphore, which need std::thread, std::mutex and
+  # std::condition_variable.  wasi-sdk's wasm32-wasip1 libc++ is built
+  # _LIBCPP_HAS_NO_THREADS and does not provide them, and Jolt's platform
+  # detection has no __wasi__ branch either.  A wasip1-threads sysroot would be
+  # a different toolchain than env-wasi.sh configures.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   homepage: https://github.com/jrouwe/JoltPhysics
   license: MIT
-  tags: [libraries, physics, game]
+  tags: [libraries, physics, game, wasm]
   description: >-
     Jolt Physics — a fast, multi-core-friendly rigid-body physics and
     collision-detection library for games and VR, written in C++17.  Builds the
@@ -66,6 +86,12 @@ build:
         CXXFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: cosmo
+      host_platform: linux
+      script: build-cosmo.sh
 
 package:
   files:

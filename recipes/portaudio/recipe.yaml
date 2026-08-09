@@ -2,7 +2,12 @@ schema_version: 1
 recipe:
   name: portaudio
   upstream_version: "19.7.0"
-  cvc_revision: 1
+  # Bumped 1 -> 2: added the freebsd build. FreeBSD's native audio interface
+  # is OSS, which upstream PortAudio supports directly (PA_USE_OSS), so this
+  # needs no patching. OpenBSD/NetBSD are deliberately NOT added: their native
+  # interface is sndio, and upstream PortAudio has no sndio host API — the
+  # ports carry out-of-tree patches for it, which we do not.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -44,6 +49,8 @@ build:
       script: build.sh
       env:
         MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
     - platform: windows
       script: build.ps1
 
