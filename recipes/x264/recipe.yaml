@@ -29,7 +29,18 @@ depends:
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     - pkg-config
   runtime: []
-  host_tools: []
+  host_tools:
+    # x264's configure/make is a GNU toolchain build. Declaring the compiler
+    # here is what makes it hermetic: cvcpkg stages host_tools into the
+    # EPHEMERAL build prefix and puts that bin/ first on PATH, so the build
+    # uses our pinned gcc. Without it the Windows build silently falls through
+    # to C:\msys64\mingw64\bin -- a toolchain cvcpkg never pinned or verified.
+    #
+    # It must NOT be installed into the runtime prefix instead: gcc in the
+    # shared prefix shadows MSVC for every later CMake build against it
+    # ("Check for working CXX compiler: .../dbg-deps/bin/c++.exe", followed by
+    # link errors from mixing GCC objects with MSVC-built libraries).
+    - mingw-w64-gcc
 
 build:
   matrix:

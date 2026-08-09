@@ -48,6 +48,9 @@ depends:
     - name: zlib
   host_tools:
     - nasm
+    # See recipes/x264: FFmpeg's configure is a GNU toolchain build, and the
+    # compiler belongs in the ephemeral build prefix, never the runtime one.
+    - mingw-w64-gcc
 
 build:
   matrix:

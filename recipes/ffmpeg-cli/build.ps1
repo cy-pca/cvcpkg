@@ -30,8 +30,16 @@ $env:CHERE_INVOKING   = '1'
 # the assignment to `cd` alone (a regular builtin), so configure would run
 # without the prefix on PATH and fail to find nasm/x264. Same bug the x264
 # recipe carried.
-$depsFlag = if ($msysDeps) {
-    "export PKG_CONFIG_PATH='$msysDeps/lib/pkgconfig'; export PATH='$msysDeps/bin:'`$PATH; "
+# Host tools (the compiler, nasm) are staged into CVC_BUILD_PREFIX, NOT the
+# runtime prefix — putting a toolchain in the runtime prefix shadows MSVC for
+# every later CMake build against it. Search the build prefix first so our
+# pinned gcc wins over any ambient C:\msys64\mingw64\bin.
+$toolRoots = @($env:CVC_BUILD_PREFIX, $env:CVC_DEPS_PREFIX) | Where-Object { $_ }
+$msysToolBins = ($toolRoots | ForEach-Object { (ConvertTo-CvcMsysPath $_) + '/bin' }) -join ':'
+$msysPcPaths  = ($toolRoots | ForEach-Object { (ConvertTo-CvcMsysPath $_) + '/lib/pkgconfig' }) -join ':'
+
+$depsFlag = if ($msysToolBins) {
+    "export PKG_CONFIG_PATH='$msysPcPaths'; export PATH='${msysToolBins}:'`$PATH; "
 } else { '' }
 
 # FFmpeg's configure compiles probe files under $TMPDIR (default /tmp) and
@@ -87,6 +95,22 @@ $crossFlag  = if ($env:CVC_DEPS_PREFIX -and (Test-Path $crossProbe)) {
     "--cross-prefix=x86_64-w64-mingw32- \`n    "
 } else { '' }
 
+# Honour CVC_LINK in both directions, like every other recipe.
+#
+# static (the default here) is what makes the shipped ffmpeg.exe SELF-CONTAINED:
+# it absorbs libx264 and the GCC runtime, so the binary imports no MinGW DLL and
+# nothing has to be hand-copied into the prefix. cvcpkg packages no MinGW
+# runtime, so a shared build would leave ffmpeg.exe depending on libgcc/
+# libwinpthread that no package provides — a hermeticity hole.
+#
+# -static-libgcc/-static-libstdc++ are belt and braces for the shared case:
+# even then, do not make the GCC runtime someone else's problem.
+$linkFlags = if ($env:CVC_LINK -eq 'shared') {
+    '--enable-shared --disable-static --extra-ldexeflags=''-static-libgcc'''
+} else {
+    '--disable-shared --enable-static --extra-ldexeflags=''-static -static-libgcc'''
+}
+
 # Everything off, then H.264 encode + the demuxers a PNG/image sequence needs
 # back on. Note there is no --enable-programs: the binaries are on by default
 # and only --disable-programs exists (which is exactly what the sibling
@@ -109,8 +133,7 @@ $depsFlag cd '$msysSource' && \
     --enable-version3 \
     --extra-cflags='-I$msysDeps/include' \
     --extra-ldflags='-L$msysDeps/lib -L$msysDeps/bin' \
-    --disable-shared \
-    --enable-static \
+    $linkFlags \
     --disable-doc \
     --disable-debug \
     --disable-everything \
