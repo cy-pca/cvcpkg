@@ -218,6 +218,32 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # This runner's Docker root is a tmpfs (/mnt/ramdisk/docker, 96 GB) that
+      # also holds the 59 GB cvcpkg-prod-data production volume, leaving ~25 GB
+      # for CI -- shared with txwtf's suite, which runs on the same host for
+      # hours at a time.  When it runs out, the failure surfaces as a baffling
+      # `dpkg: failed to write ... No space left on device` inside an apt-get
+      # layer of the image build, several steps from the real cause.
+      #
+      # `build --no-cache` below means the build cache this job creates is pure
+      # waste -- it is never reused, only accumulated (measured: 8.6 GB with
+      # zero active entries).  Reclaim it up front, and say plainly how much
+      # room is left so a future space failure is one line, not a dpkg trace.
+      #
+      # Deliberately NOT `docker system prune -a`: tagged images and volumes on
+      # this host belong to production and to whatever else is mid-run.
+      - name: Reclaim Docker build cache and report space
+        run: |
+          docker builder prune -af 2>/dev/null | tail -1 || true
+          docker image prune -f 2>/dev/null | tail -1 || true
+          echo "--- Docker root filesystem ---"
+          df -h "$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)"
+          avail_kb=$(df -Pk "$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)" | awk 'NR==2{print $4}')
+          if [ "${avail_kb:-0}" -lt 10485760 ]; then
+            echo "::warning::Less than 10 GiB free on the Docker root; image builds may fail with ENOSPC."
+            docker system df || true
+          fi
+
       - name: Start test stack
         working-directory: .
         run: |
@@ -248,7 +274,15 @@ jobs:
           docker compose -f docker-compose.test.yml logs --tail=200 backend || true
           docker compose -f docker-compose.test.yml logs --tail=50 postgres || true
 
+      # `down -v` drops this run's containers and volumes, but the images and
+      # build cache the --no-cache rebuild just produced survive it, and the
+      # next run's rebuild orphans them.  Clean up after ourselves rather than
+      # leaving it to whoever runs next -- on a shared prod runner that is
+      # usually a different repo.
       - name: Tear down test stack
         if: always()
         working-directory: .
-        run: docker compose -f docker-compose.test.yml down -v 2>/dev/null || true
+        run: |
+          docker compose -f docker-compose.test.yml down -v --rmi local 2>/dev/null || true
+          docker builder prune -af 2>/dev/null | tail -1 || true
+          docker image prune -f 2>/dev/null | tail -1 || true
