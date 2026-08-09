@@ -837,8 +837,19 @@ class TestSourceModePolicy:
 
 
 class TestSdistPlatforms:
-    def test_noarch_package_still_builds_once(self):
-        assert gen.sdist_platforms("pure", ["linux", "macos"]) == [("any", "build.sh")]
+    def test_noarch_package_builds_once_for_posix_plus_a_windows_column(self):
+        # The noarch payload is still built ONCE for everything POSIX -- that
+        # property is what `any` buys and it is preserved. Windows needs its own
+        # entry regardless: a matrix entry names ONE script, `any` names
+        # build.sh, and build.sh cannot run on a Windows builder. Without this
+        # a pure package was advertised as buildable everywhere and was in fact
+        # unbuildable from source on Windows, which is what left setuptools --
+        # and therefore every PEP-517 backend, pillow and numpy -- unbuildable
+        # there.
+        assert gen.sdist_platforms("pure", ["linux", "macos"]) == [
+            ("any", "build.sh"),
+            ("windows", "build.ps1"),
+        ]
 
     def test_compiled_package_builds_per_platform(self):
         assert gen.sdist_platforms("cext", ["linux", "macos", "windows"]) == [
@@ -934,11 +945,18 @@ class TestEmitSdistColumn:
         assert (d / "build.ps1").is_file()
         assert "pip wheel" in (d / "build.ps1").read_text(encoding="utf-8")
 
-    def test_noarch_package_stays_a_single_any_column(self, tmp_path):
+    def test_noarch_package_is_one_any_column_plus_windows(self, tmp_path):
         y, _, d = self._emit(tmp_path, kind="pure", wheels=PURE)
+        # One `any` entry still covers every POSIX platform in a single build.
         assert "- platform: any\n      script: build.sh" in y
         assert "platform: linux" not in y
-        assert not (d / "build.ps1").exists()
+        assert "platform: macos" not in y
+        # ...but windows gets its own entry and script, because `any` names
+        # build.sh and a Windows builder cannot run it. The payload stays
+        # noarch; only the recipe learns that one platform needs PowerShell.
+        assert "- platform: windows\n      script: build.ps1" in y
+        assert (d / "build.ps1").is_file()
+        assert "pip wheel" in (d / "build.ps1").read_text(encoding="utf-8")
 
     def test_build_sh_builds_the_wheel_offline_without_isolation(self, tmp_path):
         _, sh, _ = self._emit(tmp_path)
