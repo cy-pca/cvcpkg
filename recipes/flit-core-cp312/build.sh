@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# recipes/flit-core-cp312/build.sh — build flit-core 3.10.1 FROM SOURCE (generated).
+# recipes/flit-core-cp312/build.sh — build flit-core 3.12.0 FROM SOURCE (generated).
 #
 # WHY FROM SOURCE: a PyPI wheel is somebody else's compiled artifact, linked
 # against libraries we did not build.  cvcpkg fetches and sha256-verifies the

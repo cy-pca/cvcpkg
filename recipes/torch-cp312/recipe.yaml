@@ -2,7 +2,12 @@ schema_version: 1
 recipe:
   name: torch-cp312
   upstream_version: "2.8.0"
-  cvc_revision: 1
+  # Bumped 1 -> 2: add the windows-x86_64 column. torch is a
+  # PREBUILT_ONLY package (there is no realistic from-source build of
+  # PyTorch in this fleet), so windows follows the same pinned,
+  # sha256-verified artifact pattern linux already uses — the official
+  # CPU wheel from download.pytorch.org, not a resolver-chosen one.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -28,6 +33,9 @@ source:
     linux-x86_64:
       url: https://download.pytorch.org/whl/cpu/torch-2.8.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl
       sha256: "cb9a8ba8137ab24e36bf1742cb79a1294bd374db570f09fc15a5e1318160db4e"
+    windows-x86_64:
+      url: https://download.pytorch.org/whl/cpu/torch-2.8.0%2Bcpu-cp312-cp312-win_amd64.whl
+      sha256: "2be20b2c05a0cce10430cc25f32b689259640d273232b2de357c35729132256d"
 
 python:
   interpreter: python312
@@ -58,6 +66,8 @@ build:
   matrix:
     - platform: linux
       script: build.sh
+    - platform: windows
+      script: build.ps1
     # macOS (CPU) + Windows (CPU) columns are a follow-up; the CUDA variant is a
     # separate torch-cp312-cuda recipe (pulls nvidia-*-cu wheels).
 

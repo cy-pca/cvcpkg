@@ -1,4 +1,4 @@
-# recipes/flit-core-cp313/build.ps1 — build flit-core 3.10.1 FROM SOURCE (generated).
+# recipes/flit-core-cp313/build.ps1 — build flit-core 3.12.0 FROM SOURCE (generated).
 # Windows counterpart of build.sh; same contract (see that file for the why).
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'

@@ -459,7 +459,10 @@ SEED_PACKAGES = {
         "check": "import hatch_fancy_pypi_readme",
     },
     "flit-core": {
-        "version": "3.10.1",
+        # 3.12+: 3.10.1 predates PEP 639 and rejects a string `license` field
+        # ("license field should be <class 'dict'>, not <class 'str'>"), which
+        # is what typing-extensions 4.15 and other modern sdists now declare.
+        "version": "3.12.0",
         "license": "BSD-3-Clause",
         "deps": [],
         "files": ["flit_core/", "flit_core-*.dist-info/"],
