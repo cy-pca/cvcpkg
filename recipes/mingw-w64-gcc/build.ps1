@@ -39,5 +39,31 @@ foreach ($exe in 'gcc', 'g++', 'gfortran') {
     if ($LASTEXITCODE -ne 0) { throw "$exe --version failed with exit code $LASTEXITCODE" }
 }
 
+# libstdc++ <thread> must actually COMPILE. It does not on the posix
+# (winpthreads) flavour of this GCC: pthread_t is a struct and
+# bits/std_thread.h compares native_handle_type with ==, so every translation
+# unit including <thread> fails with "no match for 'operator=='". That surfaces
+# hundreds of targets into a consumer's build — scipy hits it through HiGHS —
+# and reads like a broken dependency. Prove it here, where the error can name
+# the actual cause and the fix.
+$probe = Join-Path $env:TEMP "cvc-thread-probe-$PID.cpp"
+@'
+#include <thread>
+int main() {
+    std::thread t([]{});
+    bool same = (t.get_id() == std::this_thread::get_id());
+    t.join();
+    return same ? 1 : 0;
+}
+'@ | Set-Content -Path $probe -Encoding ASCII
+& (Join-Path $env:CVC_INSTALL_DIR 'bin\g++.exe') -std=c++17 $probe -o "$probe.exe" 2>&1 | Out-Null
+$threadOk = ($LASTEXITCODE -eq 0)
+Remove-Item -Force -ErrorAction SilentlyContinue $probe, "$probe.exe"
+if (-not $threadOk) {
+    throw ("mingw-w64-gcc: this toolchain cannot compile libstdc++ <thread>. " +
+           "That is the signature of the posix/winpthreads flavour; the pinned " +
+           "artifact must be the MCF-threads build (winlibs-x86_64-mcf-seh-...).")
+}
+
 $ver = (& (Join-Path $env:CVC_INSTALL_DIR 'bin\gfortran.exe') -dumpversion)
-Write-Host "mingw-w64-gcc staged to $env:CVC_INSTALL_DIR (gfortran $ver)"
+Write-Host "mingw-w64-gcc staged to $env:CVC_INSTALL_DIR (gfortran $ver, libstdc++ <thread> OK)"

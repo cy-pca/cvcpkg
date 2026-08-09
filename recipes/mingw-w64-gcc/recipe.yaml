@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: mingw-w64-gcc
   upstream_version: "16.1.0"
-  cvc_revision: 1
+  cvc_revision: 2
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -12,17 +12,26 @@ recipe:
   tags: [tools, toolchain, windows]
   description: >-
     A native Windows MinGW-w64 GCC toolchain — gcc, g++ and **gfortran** 16.1.0
-    over mingw-w64 14.0.0, UCRT runtime, POSIX threads, SEH exceptions (the
+    over mingw-w64 14.0.0, UCRT runtime, MCF threads, SEH exceptions (the
     WinLibs distribution).  This is cvcpkg's only Fortran compiler on any
     platform: MSVC has none, and the llvm/llvm18/llvm20 recipes build
     LLVM_ENABLE_PROJECTS="clang;lld" with no flang.  Packages that need Fortran
     on Windows — scipy above all — declare this in depends.host_tools, which
     puts its bin/ on the build subprocess PATH.
 
-    UCRT, not msvcrt, is the point: extension modules built here have to be ABI
-    compatible with cvcpkg's MSVC-built CPython, which links the UCRT.  The
-    msvcrt flavour of the same toolchain would mix C runtimes inside one
-    process.
+    Two flavour choices, both load-bearing, both learned by hitting the wall:
+
+    UCRT, not msvcrt: extension modules built here have to be ABI compatible
+    with cvcpkg's MSVC-built CPython, which links the UCRT.  The msvcrt flavour
+    would mix C runtimes inside one process.
+
+    MCF threads, not POSIX: with the posix (winpthreads) flavour, GCC 16.1.0's
+    libstdc++ does not compile its own <thread> header — winpthreads' pthread_t
+    is a struct, and bits/std_thread.h compares native_handle_type with ==,
+    so any translation unit including <thread> dies with
+    "no match for 'operator==' ... std::thread::native_handle_type".  scipy hits
+    this through HiGHS (highs/parallel/HighsTaskExecutor.h).  mcfgthread's
+    handle is a pointer, so the comparison is well-formed.
 
     Prebuilt and sha256-pinned, following recipes/mingw-w64 (llvm-mingw).  That
     is a deliberate exception to the build-from-source rule and a narrow one:
@@ -36,8 +45,8 @@ recipe:
 # a sha256-pinned archive is simpler than a per-platform prebuilt block.
 source:
   type: tarball
-  url: https://github.com/brechtsanders/winlibs_mingw/releases/download/16.1.0posix-14.0.0-ucrt-r4/winlibs-x86_64-posix-seh-gcc-16.1.0-mingw-w64ucrt-14.0.0-r4.zip
-  sha256: "c406a22f8cac82559a3a1d96b62ff603f666499fb5ff4784e87b4eb6fa37dede"
+  url: https://github.com/brechtsanders/winlibs_mingw/releases/download/16.1.0mcf-14.0.0-ucrt-r1/winlibs-x86_64-mcf-seh-gcc-16.1.0-mingw-w64ucrt-14.0.0-r1.zip
+  sha256: "2ff1522a70adeb4e9bc450e917501da72bf48cb583e47530baa8cd0524fea0fd"
   # The archive has a single mingw64/ root.
   strip_components: 1
 
