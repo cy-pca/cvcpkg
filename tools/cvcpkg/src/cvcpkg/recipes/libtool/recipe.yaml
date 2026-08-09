@@ -1,0 +1,52 @@
+schema_version: 1
+recipe:
+  name: libtool
+  upstream_version: "2.5.4"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.gnu.org/software/libtool/
+  license: GPL-2.0-or-later
+  tags: [tools, build-system]
+  description: >-
+    GNU Libtool — generic shared library support script.
+    Required by autotools-based builds on BSD platforms where
+    the system libtool is not GNU-compatible.
+
+source:
+  type: tarball
+  url: https://ftp.gnu.org/gnu/libtool/libtool-2.5.4.tar.xz
+  sha256: "f81f5860666b0bc7d84baddefa60d1cb9fa6fceb2398cc3baca6afaa60266675"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - m4
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+
+package:
+  files:
+    - bin/libtool*
+    - bin/libtoolize*
+    - share/libtool/
+    - share/aclocal/
+    - lib/libltdl*
+    - include/ltdl.h
+    - include/libltdl/

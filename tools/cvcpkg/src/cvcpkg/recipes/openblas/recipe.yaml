@@ -1,0 +1,67 @@
+schema_version: 1
+recipe:
+  name: openblas
+  upstream_version: "0.3.28"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "OpenBLAS — an optimized BLAS (Basic Linear Algebra Subprograms) library."
+  homepage: https://www.openblas.net/
+  license: BSD-3-Clause
+  tags: [math]
+
+source:
+  type: tarball
+  url: https://github.com/OpenMathLib/OpenBLAS/releases/download/v0.3.28/OpenBLAS-0.3.28.tar.gz
+  sha256: "f1003466ad074e9b0c8d421a204121100b0751c96fc6fcf3d1456bd12f8a00a1"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  # No macOS entry: macOS provides BLAS/LAPACK via the Accelerate
+  # framework, so we use the system libraries there instead.
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+      vcpkg_port: openblas
+
+package:
+  files:
+    - lib/libopenblas*
+    - lib/openblas*
+    - lib/cmake/OpenBLAS/
+    - lib/pkgconfig/openblas*
+    - include/openblas/
+    - include/cblas.h
+    - include/lapack.h
+    - include/lapacke*.h
+    - include/f77blas.h
+  cmake_packages:
+    - { name: OpenBLAS, targets: ["OpenBLAS::OpenBLAS"] }
+
+abi:
+  cxx_std: 17

@@ -1,0 +1,70 @@
+schema_version: 1
+recipe:
+  name: gmp
+  upstream_version: "6.3.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "GMP — the GNU Multiple Precision Arithmetic Library for arbitrary precision integer, rational, and floating-point arithmetic."
+  homepage: https://gmplib.org/
+  license: LGPL-3.0-or-later
+  tags: [math, wasm]
+
+source:
+  type: tarball
+  url: https://gmplib.org/download/gmp/gmp-6.3.0.tar.xz
+  mirror: https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz
+  sha256: "a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - make
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+      vcpkg_port: gmp
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
+
+package:
+  files:
+    - lib/libgmp*
+    - lib/gmp*
+    - lib/pkgconfig/gmp*
+    - include/gmp.h
+    - include/gmpxx.h
+  cmake_packages: []
+
+abi:
+  cxx_std: 17

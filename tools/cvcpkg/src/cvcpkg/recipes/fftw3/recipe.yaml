@@ -1,0 +1,74 @@
+schema_version: 1
+recipe:
+  name: fftw3
+  upstream_version: "3.3.10"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "FFTW — a library for computing discrete Fourier transforms with high performance."
+  homepage: https://fftw.org/
+  license: GPL-2.0-or-later
+  tags: [math, wasm]
+
+source:
+  type: tarball
+  url: https://fftw.org/fftw-3.3.10.tar.gz
+  sha256: "56c932549852cddcfafdab3820b0200c7742675be92179e59e6215b340e26467"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+      vcpkg_port: fftw3
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
+
+package:
+  files:
+    - lib/libfftw3*
+    - lib/fftw3*
+    - lib/cmake/fftw3*/
+    - lib/pkgconfig/fftw3*
+    - include/fftw3.h
+    - include/fftw3.f
+    - include/fftw3l.h
+    - include/fftw3q.h
+  cmake_packages:
+    - { name: FFTW3, targets: ["FFTW3::fftw3"] }
+
+abi:
+  cxx_std: 17

@@ -1,0 +1,87 @@
+schema_version: 1
+recipe:
+  name: swig
+  upstream_version: "4.4.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://swig.org/
+  license: GPL-3.0-or-later
+  tags: [tools, codegen]
+  description: >-
+    SWIG >= 4.1.0 supports JavaScript/Emscripten target for WASM output.
+    Version 4.4.1 has mature WASM support via the -javascript -emscripten flags.
+
+source:
+  type: tarball
+  url: https://github.com/swig/swig/archive/refs/tags/v4.4.1.tar.gz
+  sha256: "8bf32042beb7ee1eeb5c71aa15a62513d964893f84234f2cd77e4a8e2ed41e87"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: pcre2
+      version: ">=10.40"
+    - name: bison
+      version: ">=3.8"
+  host_tools:
+    - cmake
+    - autoconf
+    - automake
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2"
+        CXXFLAGS: "-O2 -std=c++17"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - bin/swig*
+    - share/swig/
+    - lib/cmake/SWIG/
+  cmake_packages:
+    - { name: SWIG, targets: [] }
+
+toolchain:
+  cc:
+    min_version: "any"
+    description: "C/C++17 compiler (gcc >= 7, clang >= 5, MSVC >= 2017)"
+
+notes:
+  - title: "Requires bison for parser generation"
+    platforms: [linux, macos]
+    description: >-
+      Building SWIG from the git-derived tarball requires bison >= 3.8
+      to regenerate the parser.  The bison recipe is listed as a build
+      dependency and will be built first automatically.
+  - title: "PCRE2 required for pattern matching"
+    platforms: [linux, macos, windows]
+    description: >-
+      SWIG uses PCRE2 for pattern matching in typemap directives.
+      The pcre2 recipe is listed as a build dependency.

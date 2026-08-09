@@ -25,6 +25,26 @@ $py = Join-Path (Get-Location) "PCbuild\amd64\python.exe"
 & $py PC\layout --copy $env:CVC_INSTALL_DIR --include-pip --include-dev --precompile
 if ($LASTEXITCODE -ne 0) { throw "PC\layout failed ($LASTEXITCODE)" }
 
+# 2b. Teach the interpreter where the prefix's DLLs live.
+#
+# Windows has no RPATH, and since Python 3.8 the loader no longer searches PATH
+# for an extension module's dependencies — only the DLL search directories.
+# cvcpkg keeps shared libraries in <prefix>\bin, so every extension that links
+# one (pillow -> zlib1/jpeg62/tiff, numpy -> openblas, h5py -> hdf5) imports
+# with "DLL load failed while importing _x: The specified module could not be
+# found" no matter what PATH says. This is the Windows counterpart of the
+# $ORIGIN RUNPATH the POSIX builds patch in.
+#
+# A .pth is the one hook that runs at interpreter startup before any import.
+# The path is derived from the running interpreter's own prefix, so the tree
+# stays relocatable.
+$siteDir = Join-Path $env:CVC_INSTALL_DIR "Lib\site-packages"
+New-Item -ItemType Directory -Force -Path $siteDir | Out-Null
+$pth = @'
+import os, sys; _b = os.path.join(sys.prefix, 'bin'); os.path.isdir(_b) and hasattr(os, 'add_dll_directory') and os.add_dll_directory(_b)
+'@
+Set-Content -Path (Join-Path $siteDir "cvcpkg-dll-directories.pth") -Value $pth -Encoding ASCII
+
 # 3. Smoke check the staged interpreter.
 $staged = Join-Path $env:CVC_INSTALL_DIR "python.exe"
 & $staged -c "import ssl, sqlite3, ctypes, lzma, bz2, zlib; import sys; print('cvcpkg: python ' + sys.version.split()[0] + ' ok')"

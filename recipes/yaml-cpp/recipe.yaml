@@ -13,7 +13,13 @@ recipe:
   # libspatialindex, both exception-driven C++, already build at that target.
   # The cross scripts must pass YAML_BUILD_SHARED_LIBS=OFF: build.sh forces it
   # ON, and all three cross targets are static-only.
-  cvc_revision: 3
+  #
+  # Bumped 3 -> 4: added the windows build. Same "oversight, not a portability
+  # limit" argument as the BSDs — and windows is the one platform where the
+  # omission actually blocked a consumer: volrover3 does
+  # find_package(yaml-cpp) unconditionally (volrover3/CMakeLists.txt:50), so
+  # the windows volrover3 build could not configure at all without this.
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -44,6 +50,8 @@ build:
       script: build.sh
       env:
         MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
     - platform: freebsd
       script: build.sh
       env:
@@ -69,6 +77,9 @@ build:
 package:
   files:
     - lib/libyaml-cpp*
+    # MSVC drops the "lib" prefix: yaml-cpp.lib (import lib) + bin/yaml-cpp.dll.
+    - lib/yaml-cpp*
+    - bin/yaml-cpp*
     - lib/cmake/yaml-cpp/
     - lib/pkgconfig/yaml-cpp*
     - include/yaml-cpp/
