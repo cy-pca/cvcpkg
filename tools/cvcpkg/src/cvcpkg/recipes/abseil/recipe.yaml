@@ -1,0 +1,71 @@
+schema_version: 1
+recipe:
+  name: abseil
+  upstream_version: "20240722.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "Abseil C++ Common Libraries — a collection of open-source C++ code designed to augment the standard library."
+  homepage: https://abseil.io/
+  license: Apache-2.0
+  tags: [utils, wasm]
+
+source:
+  type: tarball
+  url: https://github.com/abseil/abseil-cpp/releases/download/20240722.0/abseil-cpp-20240722.0.tar.gz
+  sha256: "f50e5ac311a81382da7fa75b97310e4b9006474f9560ac46f54a9967f07d4ae3"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+      vcpkg_port: abseil
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
+
+package:
+  files:
+    - lib/libabsl*
+    - lib/absl*
+    - lib/cmake/absl/
+    - lib/pkgconfig/absl*
+    - include/absl/
+  cmake_packages:
+    - { name: absl, targets: ["absl::base", "absl::strings"] }
+
+abi:
+  cxx_std: 17

@@ -29,7 +29,15 @@ recipe:
   # consumer then died with "could not find python (3.12) in the dependency
   # closure". Same class as the yaml-cpp windows gap: the build worked, the
   # packaging never did, and no test covers a windows package manifest.
-  cvc_revision: 6
+  #
+  # Bumped 6 -> 7: ship cvcpkg-dll-directories.pth. Windows has no RPATH and
+  # Python 3.8+ stopped searching PATH for an extension module's DLL
+  # dependencies, so every extension linking a prefix library (pillow ->
+  # zlib1/jpeg62/tiff, numpy -> openblas, h5py -> hdf5) failed to import with
+  # "DLL load failed". The .pth calls os.add_dll_directory(<prefix>\bin) at
+  # startup — the Windows counterpart of the $ORIGIN RUNPATH the POSIX builds
+  # patch in, derived from sys.prefix so the tree stays relocatable.
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

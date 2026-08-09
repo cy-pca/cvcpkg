@@ -2,7 +2,11 @@ schema_version: 1
 recipe:
   name: swig
   upstream_version: "4.4.1"
-  cvc_revision: 3
+  # Bumped 3 -> 4: also stage the swig runtime library at bin/Lib on Windows,
+  # where swig.exe's compiled-in -swiglib path points. Without it CMake's
+  # module-mode FindSWIG failed against an installed bundle and consumers had
+  # to set SWIG_LIB by hand.
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -65,6 +69,10 @@ build:
 package:
   files:
     - bin/swig*
+    # bin/Lib/ is swig.exe's compiled-in runtime library location on Windows
+    # (`swig -swiglib` reports <exedir>\Lib); without it FindSWIG's module
+    # mode cannot locate SWIG_DIR. Harmless on POSIX, where no such tree exists.
+    - bin/Lib/
     - share/swig/
     - lib/cmake/SWIG/
   cmake_packages:

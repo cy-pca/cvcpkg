@@ -1,0 +1,60 @@
+schema_version: 1
+recipe:
+  name: readline
+  upstream_version: "8.3"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  maintainer_email: "cvcpkg@cyberpcangel.com"
+  maintainer_url: "https://cyberpcangel.com"
+  description: "GNU Readline — a library for command-line editing with history and completion."
+  homepage: https://tiswww.case.edu/php/chet/readline/rltop.html
+  license: GPL-3.0-or-later
+  tags: [utils]
+
+source:
+  type: tarball
+  url: https://ftp.gnu.org/gnu/readline/readline-8.3.tar.gz
+  sha256: "fe5383204467828cd495ee8d1d3c037a7eba1389c22bc6a041f627976f9061cc"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libreadline*
+    - lib/libhistory*
+    - lib/pkgconfig/readline.pc
+    - include/readline/
+  cmake_packages: []
+  pkg_config:
+    - readline
+
+abi:
+  cxx_std: 17

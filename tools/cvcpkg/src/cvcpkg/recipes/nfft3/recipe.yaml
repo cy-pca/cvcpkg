@@ -1,0 +1,75 @@
+schema_version: 1
+recipe:
+  name: nfft3
+  upstream_version: "3.5.3"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "NFFT — a library for nonequispaced fast Fourier transforms in various dimensions."
+  homepage: https://www-user.tu-chemnitz.de/~potts/nfft/
+  license: GPL-2.0-or-later
+  tags: [math, wasm]
+
+source:
+  type: tarball
+  url: https://github.com/NFFT/nfft/releases/download/3.5.3/nfft-3.5.3.tar.gz
+  mirror: https://www-user.tu-chemnitz.de/~potts/nfft/download/nfft-3.5.3.tar.gz
+  sha256: caf1b3b3e5bf8c33a6bfd7eca811d954efce896605ecfd0144d47d0bebdf4371
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - fftw3
+  host_tools:
+    - autoconf
+    - automake
+    - libtool
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+      note: >
+        Windows builds use MSYS2/mingw64 (autotools+gcc), then
+        gendef + MSVC lib /def: to produce an MSVC-friendly import lib.
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
+
+package:
+  files:
+    - lib/libnfft3*
+    - lib/pkgconfig/nfft3.pc
+    - include/nfft3.h
+    - include/nfft3mp.h
+    - include/nfft3util.h
+    - bin/libnfft3*            # Windows DLLs
+    - bin/libfftw3*            # Windows: bundled mingw FFTW DLLs
+  cmake_packages: []
+  pkg_config:
+    - nfft3
+
+abi:
+  cxx_std: 17

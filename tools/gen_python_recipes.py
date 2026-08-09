@@ -91,6 +91,32 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+# tomllib is 3.11+ stdlib. Both TOML readers here used to `import tomllib`
+# lazily on the theory that only lock parsing needs it and that never runs on
+# 3.10 — true until parse_build_requires() (the sdist build-backend survey)
+# became a second reader, which the 3.10 unit tests DO exercise. The result was
+# ModuleNotFoundError: No module named 'tomllib' across every 3.10 job.
+# tomli is the 3.10 backport and is already in the dev environment (black,
+# mypy and coverage all pull it in under a python_version < "3.11" marker).
+# Kept tolerant of neither being present so the module still imports.
+try:  # pragma: no cover - version shim
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    try:
+        import tomli as tomllib
+    except ModuleNotFoundError:
+        tomllib = None
+
+
+def _require_tomllib():
+    """The TOML reader, or a clear error naming the fix."""
+    if tomllib is None:
+        raise RuntimeError(
+            "no TOML reader available: tomllib needs Python >= 3.11, and the "
+            "tomli backport is not installed. Install tomli to run this on 3.10."
+        )
+    return tomllib
+
 # cvcpkg's five concrete build platforms and the wheel-tag fragments that map to
 # each. First match wins.
 PLATFORM_TAGS = {
@@ -384,6 +410,142 @@ SEED_PACKAGES = {
         "files": ["wheel/", "wheel-*.dist-info/"],
         "check": "import wheel",
     },
+    # ── PEP-517 build backends ──────────────────────────────────────────────
+    # --no-build-isolation means the backend must already be importable in the
+    # build prefix, so an unpackaged backend forces its dependents onto a
+    # prebuilt wheel. These six were the entire blocker list for the plotting/
+    # imaging/schema stack below; packaging them converts those from prebuilt
+    # to from-source. All are pure-Python (pybind11 and cppy ship headers).
+    "calver": {
+        "version": "2022.6.26",
+        "license": "Apache-2.0",
+        "deps": [],
+        "files": ["calver/", "calver-*.dist-info/"],
+        "check": "import calver",
+    },
+    "trove-classifiers": {
+        # Calendar-versioned. Pinned to a THREE-component release: cvcpkg's
+        # validator requires an orderable SemVer upstream_version, and the
+        # usual YYYY.M.D.HH form has four components (validate.py rejects it).
+        "version": "2024.10.16",
+        "license": "Apache-2.0",
+        "deps": ["calver"],
+        "files": ["trove_classifiers/", "trove_classifiers-*.dist-info/"],
+        "check": "import trove_classifiers",
+    },
+    "hatchling": {
+        "version": "1.27.0",
+        "license": "MIT",
+        "deps": ["packaging", "pathspec", "pluggy", "trove-classifiers"],
+        "files": ["hatchling/", "hatchling-*.dist-info/"],
+        "check": "import hatchling",
+    },
+    "hatch-vcs": {
+        "version": "0.4.0",
+        "license": "MIT",
+        "deps": ["hatchling", "setuptools-scm"],
+        "files": ["hatch_vcs/", "hatch_vcs-*.dist-info/"],
+        "check": "import hatch_vcs",
+    },
+    "hatch-fancy-pypi-readme": {
+        "version": "24.1.0",
+        "license": "MIT",
+        "deps": ["hatchling"],
+        "files": ["hatch_fancy_pypi_readme/", "hatch_fancy_pypi_readme-*.dist-info/"],
+        "check": "import hatch_fancy_pypi_readme",
+    },
+    "flit-core": {
+        "version": "3.10.1",
+        "license": "BSD-3-Clause",
+        "deps": [],
+        "files": ["flit_core/", "flit_core-*.dist-info/"],
+        "check": "import flit_core",
+    },
+    "cppy": {
+        "version": "1.3.1",
+        "license": "BSD-3-Clause",
+        "deps": [],
+        "files": ["cppy/", "cppy-*.dist-info/"],
+        "check": "import cppy",
+    },
+    "pybind11": {
+        "version": "2.13.6",
+        "license": "BSD-3-Clause",
+        "deps": [],
+        "files": ["pybind11/", "pybind11-*.dist-info/"],
+        "check": "import pybind11",
+    },
+    # ── plotting / imaging / schema stack ───────────────────────────────────
+    # pillow is the load-bearing one: grl_snam_dbg.ingest.scene_buffers reads
+    # the scene navmask.png through PIL, so the DBG planner cannot ingest a
+    # scene without it. matplotlib and imageio are the grl_snam demo/capture
+    # path; jsonschema validates movement_bundle.v1 against the contract
+    # schema in grl_snam_dbg.scripts.export_movement_bundle.
+    "pillow": {
+        "version": "11.1.0",
+        "license": "MIT-CMU",
+        "deps": [],
+        "files": ["PIL/", "pillow-*.dist-info/"],
+        "check": "from PIL import Image; Image.new('L', (2, 2))",
+    },
+    "cycler": {
+        "version": "0.12.1",
+        "license": "BSD-3-Clause",
+        "deps": [],
+        "files": ["cycler/", "cycler-*.dist-info/"],
+        "check": "import cycler",
+    },
+    "pyparsing": {
+        "version": "3.2.1",
+        "license": "MIT",
+        "deps": [],
+        "files": ["pyparsing/", "pyparsing-*.dist-info/"],
+        "check": "import pyparsing",
+    },
+    "kiwisolver": {
+        "version": "1.4.8",
+        "license": "BSD-3-Clause",
+        "deps": [],
+        "files": ["kiwisolver/", "kiwisolver-*.dist-info/"],
+        "check": "import kiwisolver",
+    },
+    "fonttools": {
+        "version": "4.55.3",
+        "license": "MIT",
+        "deps": [],
+        "files": ["fontTools/", "fonttools-*.dist-info/"],
+        "check": "import fontTools",
+    },
+    "contourpy": {
+        "version": "1.3.1",
+        "license": "BSD-3-Clause",
+        "deps": ["numpy"],
+        "files": ["contourpy/", "contourpy-*.dist-info/"],
+        "check": "import contourpy",
+    },
+    "matplotlib": {
+        "version": "3.10.0",
+        "license": "PSF-2.0",
+        "deps": [
+            "contourpy", "cycler", "fonttools", "kiwisolver", "numpy",
+            "packaging", "pillow", "pyparsing", "python-dateutil",
+        ],
+        "files": ["matplotlib/", "mpl_toolkits/", "pylab.py", "matplotlib-*.dist-info/"],
+        # Agg, not a GUI backend: the build fleet is headless and so is the
+        # offscreen capture path this exists for.
+        "check": "import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot",
+    },
+    "imageio": {
+        "version": "2.36.1",
+        "license": "BSD-2-Clause",
+        "deps": ["numpy", "pillow"],
+        "files": ["imageio/", "imageio-*.dist-info/"],
+        "check": "import imageio",
+    },
+    # jsonschema and its deps (attrs, pyrsistent) come from poetry.lock, which
+    # pins 4.17.3 — the pre-referencing/rpds-py line. The lock shadows any seed
+    # here ("lock wins"), so seeding them would be dead weight; they are pulled
+    # into the emitted set by name instead.
 }
 
 
@@ -563,9 +725,7 @@ def req_applies(req: str, interp: str) -> bool:
 def parse_build_requires(pyproject_text: str) -> list[str] | None:
     """``[build-system] requires`` from a pyproject.toml, or None if the file
     declares no build-system table (PEP 517 falls back to setuptools then)."""
-    import tomllib
-
-    table = tomllib.loads(pyproject_text).get("build-system") or {}
+    table = _require_tomllib().loads(pyproject_text).get("build-system") or {}
     reqs = table.get("requires")
     return list(reqs) if reqs is not None else None
 
@@ -685,13 +845,8 @@ def source_mode_for(
 
 
 def load_runtime_packages(lock_path: Path) -> dict[str, dict]:
-    # tomllib is 3.11+ stdlib; import it lazily so this module still imports
-    # under Python 3.10 (the classifier is unit-tested there — only lock parsing,
-    # which is never exercised on 3.10, needs it).
-    import tomllib
-
     with open(lock_path, "rb") as fh:
-        lock = tomllib.load(fh)
+        lock = _require_tomllib().load(fh)
     out = {}
     for p in lock["package"]:
         groups = p.get("groups") or ["main"]
@@ -1417,7 +1572,7 @@ def _emit_column(out, base, m, interp, meta, cols):
     (d / "build.sh").write_text(
         sh.format(
             name=name,
-            check=check,
+            check=_sh_dq(check),
             abi=abi,
             interpreter=f"python{interp}",
             dist=m["pypi_name"],
@@ -1432,13 +1587,15 @@ def _emit_column(out, base, m, interp, meta, cols):
     if windows and mode == "sdist":
         ps1.write_text(
             _BUILD_PS1_SDIST.format(
-                name=name, check=check, dist=m["pypi_name"], version=m["version"]
+                name=name, check=_ps1_sq(check), dist=m["pypi_name"], version=m["version"]
             ),
             encoding="utf-8",
             newline="\n",
         )
     elif windows and kind != "pure":
-        ps1.write_text(_BUILD_PS1.format(name=name, check=check), encoding="utf-8", newline="\n")
+        ps1.write_text(
+            _BUILD_PS1.format(name=name, check=_ps1_sq(check)), encoding="utf-8", newline="\n"
+        )
     elif ps1.exists():
         ps1.unlink()
 
@@ -1496,6 +1653,24 @@ def _toppath(base: str) -> str:
     """Installed directory for package.files globs — the module as a path, so a
     dotted namespace module (``google.protobuf``) globs ``google/protobuf/``."""
     return _toppkg(base).replace(".", "/")
+
+
+def _ps1_sq(s: str) -> str:
+    """Escape for a PowerShell SINGLE-quoted literal: the only escape is '' .
+
+    Without this a check containing an apostrophe — ``Image.new('L', (2, 2))``,
+    ``matplotlib.use('Agg')`` — closes the literal early and the generated
+    build.ps1 is a syntax error, which surfaces as a baffling parse failure
+    partway through the build rather than as a bad check.
+    """
+    return s.replace("'", "''")
+
+
+def _sh_dq(s: str) -> str:
+    """Escape for a bash DOUBLE-quoted string (backslash, quote, $, backtick)."""
+    for a, b in (("\\", "\\\\"), ('"', '\\"'), ("$", "\\$"), ("`", "\\`")):
+        s = s.replace(a, b)
+    return s
 
 
 _BUILD_SH = """#!/usr/bin/env bash

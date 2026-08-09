@@ -12,6 +12,26 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# Drop MinGW/MSYS2 from PATH for the duration of this build.
+#
+# Same hazard env-windows.ps1's Invoke-CvcCMakeBuild already guards for CMake,
+# but a python sdist build never goes near that helper, so it was unprotected:
+# setuptools compiles C extensions with cl.exe, and with C:\msys64\mingw64\bin
+# on PATH the MinGW-w64 headers win over the MSVC/SDK ones. The result is
+# thousands of parse errors in headers the recipe never asked for --
+#   C:\msys64\mingw64\include\corecrt.h(159): error C2146: missing ')' ...
+#   C:\msys64\mingw64\include\stdio.h(214): error C2061: identifier '__asm__'
+# -- which reads like a broken package rather than a polluted toolchain.
+# An MSVC build has zero use for anything under msys, so drop it outright.
+function Remove-CvcMinGWFromPath {
+    $kept = $env:PATH -split ';' | Where-Object {
+        $_ -notmatch '(?i)\\msys64\\' -and $_ -notmatch '(?i)\\msys32\\'
+    }
+    $env:PATH = ($kept -join ';')
+}
+
+Remove-CvcMinGWFromPath
+
 # Map a cvcpkg interpreter recipe name to the X.Y[t] version it reports.
 #   python311 -> 3.11 ; python313t -> 3.13t
 # Authoritative even for abi3, whose ABI tag carries no version.

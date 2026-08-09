@@ -1,0 +1,77 @@
+schema_version: 1
+recipe:
+  name: yaml
+  upstream_version: "0.2.5"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "libyaml — a fast YAML 1.1 parser and emitter library written in C."
+  homepage: https://pyyaml.org/wiki/LibYAML
+  license: MIT
+  tags: [wasi, utils, wasm]
+
+source:
+  type: tarball
+  url: https://github.com/yaml/libyaml/archive/refs/tags/0.2.5.tar.gz
+  sha256: "fa240dbf262be053f3898006d502d514936c818e422afdcf33921c63bed9bf2e"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+      vcpkg_port: libyaml
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: wasi
+      host_platform: windows
+      script: build-wasi.ps1
+
+package:
+  files:
+    - lib/libyaml*
+    - lib/yaml*
+    - lib/cmake/yaml/
+    - lib/pkgconfig/yaml*
+    - include/yaml.h
+  cmake_packages:
+    - { name: yaml, targets: ["yaml"] }
+
+abi:
+  cxx_std: 17

@@ -1,0 +1,82 @@
+schema_version: 1
+recipe:
+  name: cmake
+  upstream_version: "3.31.7"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://cmake.org/
+  license: BSD-3-Clause
+  tags: [tools, build-system]
+  description: >-
+    CMake — cross-platform build system generator.  Build-time host
+    tool used by nearly every recipe in cvcpkg.
+
+source:
+  type: tarball
+  url: https://github.com/Kitware/CMake/releases/download/v3.31.7/cmake-3.31.7.tar.gz
+  sha256: "a6d2eb1ebeb99130dfe63ef5a340c3fdb11431cce3d7ca148524c125924cea68"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: curl
+      version: ">=8.0"
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2"
+        CXXFLAGS: "-O2"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - bin/cmake*
+    - bin/ctest*
+    - bin/cpack*
+    - share/cmake-*/
+
+toolchain:
+  cc:
+    min_version: "any"
+    description: "C++17-capable compiler"
+
+notes:
+  - title: "Self-bootstrapping build"
+    platforms: [linux, macos]
+    description: >-
+      CMake can bootstrap itself without a pre-existing CMake
+      installation.  The build script uses the bundled bootstrap
+      script which builds a minimal cmake, then uses it to build
+      the full release.
+  - title: "Windows uses pre-built binaries"
+    platforms: [windows]
+    description: >-
+      On Windows the recipe downloads pre-built CMake binaries from
+      the official GitHub release rather than building from source.

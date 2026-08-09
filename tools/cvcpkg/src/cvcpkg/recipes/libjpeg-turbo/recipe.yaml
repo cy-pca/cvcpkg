@@ -1,0 +1,84 @@
+schema_version: 1
+recipe:
+  name: libjpeg-turbo
+  upstream_version: "3.1.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "libjpeg-turbo — a JPEG image codec that uses SIMD instructions for accelerated encoding and decoding."
+  homepage: https://libjpeg-turbo.org/
+  license: IJG AND BSD-3-Clause AND Zlib
+  tags: [wasi, graphics, io, wasm]
+
+source:
+  type: tarball
+  url: https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.1.0/libjpeg-turbo-3.1.0.tar.gz
+  sha256: "9564c72b1dfd1d6fe6274c5f95a8d989b59854575d4bbee44ade7bc17aa9bc93"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - cmake
+    - ninja
+    - nasm
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: wasi
+      host_platform: windows
+      script: build-wasi.ps1
+
+package:
+  files:
+    - lib/libjpeg*
+    - lib/libturbojpeg*
+    - lib/jpeg*
+    - lib/turbojpeg*
+    - lib/cmake/libjpeg-turbo/
+    - lib/pkgconfig/libjpeg.pc
+    - lib/pkgconfig/libturbojpeg.pc
+    - include/jconfig.h
+    - include/jerror.h
+    - include/jmorecfg.h
+    - include/jpeglib.h
+    - include/turbojpeg.h
+  cmake_packages:
+    - { name: libjpeg-turbo, targets: ["libjpeg-turbo::jpeg", "libjpeg-turbo::turbojpeg"] }
+
+abi:
+  cxx_std: 17

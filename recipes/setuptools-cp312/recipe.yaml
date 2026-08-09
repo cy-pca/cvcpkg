@@ -39,6 +39,8 @@ build:
   matrix:
     - platform: any
       script: build.sh
+    - platform: windows
+      script: build.ps1
 
 package:
   files:

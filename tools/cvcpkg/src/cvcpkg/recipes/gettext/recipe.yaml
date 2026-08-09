@@ -1,0 +1,71 @@
+schema_version: 1
+recipe:
+  name: gettext
+  upstream_version: "1.0"
+  cvc_revision: 1
+  maintainer: "CyberPC Angel, LLC"
+  maintainer_email: "cvcpkg@cyberpcangel.com"
+  maintainer_url: "https://cyberpcangel.com"
+  description: "GNU gettext — internationalization (i18n) and localization (l10n) library providing libintl."
+  homepage: https://www.gnu.org/software/gettext/
+  license: GPL-3.0-or-later
+  tags: [utils]
+
+source:
+  type: tarball
+  url: https://ftp.gnu.org/gnu/gettext/gettext-1.0.tar.gz
+  sha256: "85d99b79c981a404874c02e0342176cf75c7698e2b51fe41031cf6526d974f1a"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libintl*
+    - lib/libasprintf*
+    - lib/libgettextlib*
+    - lib/libgettextpo*
+    - lib/libtextstyle*
+    - include/libintl.h
+    - include/autosprintf.h
+    - include/gettext-po.h
+    - include/textstyle.h
+    - include/textstyle/
+    - share/locale/
+    - bin/gettext
+    - bin/ngettext
+    - bin/envsubst
+    - bin/msgfmt
+    - bin/msgmerge
+    - bin/xgettext
+  cmake_packages: []
+
+abi:
+  cxx_std: 17
