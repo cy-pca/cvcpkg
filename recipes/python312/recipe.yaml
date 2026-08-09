@@ -10,7 +10,34 @@ recipe:
   # fleet builders or on users with glibc < 2.38 (every python build failed at
   # `import` with "GLIBC_2.38 not found").  Content-identical to +cvc.2; only the
   # build host's glibc baseline differs.
-  cvc_revision: 3
+  # Bumped 3 -> 4: scoped the readline/ncurses dependency edges to the Unix
+  # platforms that actually consume them. build-python.sh passes
+  # --with-readline=tkinter on every cross target (its own comment: "readline/
+  # ncurses not available on wasm/wasi/cosmo") and the Windows build runs
+  # PCbuild/build.bat, which links neither. Both were previously unscoped, so
+  # this recipe advertised windows/wasm/wasi/cosmo while depending on packages
+  # with no build there — claims that could never resolve.
+  # Bumped 4 -> 5: scoped the libffi edge away from wasi. libffi's wasm
+  # backend builds its call trampolines with EM_JS — it synthesises JavaScript
+  # and patches the wasm table at runtime — so it needs an Emscripten JS engine
+  # and cannot work on wasip1. CPython upstream ships its own WASI build without
+  # _ctypes for the same reason. wasm keeps the dependency.
+  # Bumped 5 -> 6: package the Windows layout. The recipe advertised a windows
+  # build (PCbuild/build.bat via build.ps1) but package.files listed only POSIX
+  # paths, so the windows build packaged ZERO files — `cvcpkg install python312
+  # --platform windows` succeeded while installing nothing, and every cpXX
+  # consumer then died with "could not find python (3.12) in the dependency
+  # closure". Same class as the yaml-cpp windows gap: the build worked, the
+  # packaging never did, and no test covers a windows package manifest.
+  #
+  # Bumped 6 -> 7: ship cvcpkg-dll-directories.pth. Windows has no RPATH and
+  # Python 3.8+ stopped searching PATH for an extension module's DLL
+  # dependencies, so every extension linking a prefix library (pillow ->
+  # zlib1/jpeg62/tiff, numpy -> openblas, h5py -> hdf5) failed to import with
+  # "DLL load failed". The .pth calls os.add_dll_directory(<prefix>\bin) at
+  # startup — the Windows counterpart of the $ORIGIN RUNPATH the POSIX builds
+  # patch in, derived from sys.prefix so the tree stays relocatable.
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -41,16 +68,19 @@ depends:
       version: "^1.3"
     - name: libffi
       version: "^3.0"
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd, wasm, cosmo]
     - name: bzip2
       version: "^1.0"
     - name: xz
       version: "^5.0"
     - name: readline
       version: "^8.0"
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
     - name: sqlite
       version: "^3.0"
     - name: ncurses
       version: "^6.0"
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
   runtime:
     - name: openssl
       version: "^3.0"
@@ -58,16 +88,19 @@ depends:
       version: "^1.3"
     - name: libffi
       version: "^3.0"
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd, wasm, cosmo]
     - name: bzip2
       version: "^1.0"
     - name: xz
       version: "^5.0"
     - name: readline
       version: "^8.0"
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
     - name: sqlite
       version: "^3.0"
     - name: ncurses
       version: "^6.0"
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
   host_tools: []
 
 build:
@@ -117,6 +150,7 @@ build:
 
 package:
   files:
+    # POSIX layout (autotools `make install`).
     - bin/python3.12*
     - bin/pip3.12*
     - bin/idle3.12*
@@ -125,6 +159,20 @@ package:
     - lib/python3.12/
     - lib/pkgconfig/python-3.12*.pc
     - include/python3.12/
+    # Windows layout (PCbuild). CPython on Windows installs a flat tree — the
+    # interpreter, the DLL and the MSVC runtime at the ROOT, headers directly
+    # under include/ (no python3.12/ level), the stdlib in Lib/, extension
+    # modules in DLLs/ and import libs in libs/. None of the POSIX globs above
+    # match any of it, so without these the windows build packaged ZERO files
+    # and `cvcpkg install python312` reported success with 0 components.
+    - python.exe
+    - pythonw.exe
+    - python312.dll
+    - vcruntime140*.dll
+    - DLLs/
+    - Lib/
+    - libs/
+    - include/
   cmake_packages:
     - { name: Python3, targets: ["Python3::Python", "Python3::Interpreter"] }
 

@@ -1,0 +1,84 @@
+schema_version: 1
+recipe:
+  name: mariadb-connector-c
+  upstream_version: "3.4.8"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://mariadb.com/downloads/connectors/connectors-data-access/
+  license: Apache-2.0
+  tags: [database]
+  description: >-
+    MariaDB Connector/C — wire-compatible MySQL client library.
+    Enables Qt6 QMYSQL SQL driver plugin and libcvc database layer.
+
+source:
+  type: tarball
+  url: https://github.com/mariadb-corporation/mariadb-connector-c/archive/refs/tags/v3.4.8.tar.gz
+  sha256: "ced7e5063c91fe2bfafd9d63a759490fe53e81df80599a9abad01c570c202f0c"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: openssl
+      version: "^3.0"
+    - name: zlib
+      version: "^1.3"
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libmariadb*
+    - lib/mariadb*
+    - lib/cmake/mariadb/
+    - lib/pkgconfig/libmariadb.pc
+    - include/mariadb/
+    - include/mysql/
+  cmake_packages:
+    - { name: mariadb, targets: ["mariadb::mariadb"] }
+
+abi:
+  cxx_std: 17
+
+toolchain:
+  cc:
+    min_version: "any"
+    description: "C99-capable compiler"
+
+notes:
+  - title: "Depends on OpenSSL and zlib"
+    platforms: [linux, macos, windows]
+    description: >-
+      The openssl and zlib recipes are listed as build dependencies
+      and will be resolved and built automatically before this recipe.

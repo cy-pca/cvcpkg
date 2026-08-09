@@ -1,0 +1,77 @@
+schema_version: 1
+recipe:
+  name: xz
+  upstream_version: "5.6.4"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "XZ Utils — a general-purpose data compression library implementing the LZMA2 algorithm."
+  homepage: https://tukaani.org/xz/
+  license: 0BSD AND LGPL-2.1-or-later AND GPL-2.0-or-later
+  tags: [wasi, utils, io, wasm]
+
+source:
+  type: tarball
+  url: https://github.com/tukaani-project/xz/releases/download/v5.6.4/xz-5.6.4.tar.gz
+  sha256: "269e3f2e512cbd3314849982014dc199a7b2148cf5c91cedc6db629acdf5e09b"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: wasi
+      host_platform: windows
+      script: build-wasi.ps1
+
+package:
+  files:
+    - lib/liblzma*
+    - lib/lzma*
+    - lib/cmake/liblzma/
+    - lib/pkgconfig/liblzma.pc
+    - include/lzma.h
+    - include/lzma/
+  cmake_packages:
+    - { name: liblzma, targets: ["liblzma::liblzma"] }
+
+abi:
+  cxx_std: 17

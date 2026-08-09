@@ -2,7 +2,18 @@ schema_version: 1
 recipe:
   name: llvm20
   upstream_version: "20.1.8"
-  cvc_revision: 1
+  # Bumped 1 -> 2: scoped the ncurses build edge to Unix. LLVM uses it
+  # only for terminfo colour detection in its Unix Process/Terminal support;
+  # the MSVC build uses the console API instead. Unscoped, it made this recipe
+  # advertise windows while depending on a package with no windows build.
+  # Bumped 2 -> 3: added the netbsd build. pkgsrc ships lang/llvm, and
+  # build.sh is already platform-generic (its only platform branch is the RPATH
+  # form, whose $ORIGIN default is correct for NetBSD). OpenBSD is deliberately
+  # NOT added: this builds LLVM_BUILD_LLVM_DYLIB=ON and relies on an $ORIGIN
+  # RPATH for relocatability, which OpenBSD's ld.so does not implement (see
+  # _ELF_RPATH_PLATFORMS in builder.py) — the bundle would build but not
+  # relocate.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -39,6 +50,7 @@ depends:
       version: "^1.3"
     - name: ncurses
       version: "^6.0"
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
   runtime:
     # libLLVM links zlib, so it must ship alongside; ncurses is only needed
     # while compiling (LLVM_ENABLE_TERMINFO probes it) -- see the llvm recipe.
@@ -55,6 +67,8 @@ build:
       env:
         MACOSX_DEPLOYMENT_TARGET: "13.0"
     - platform: freebsd
+      script: build.sh
+    - platform: netbsd
       script: build.sh
     - platform: windows
       script: build.ps1

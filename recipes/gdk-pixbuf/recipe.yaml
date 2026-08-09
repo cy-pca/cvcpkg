@@ -2,7 +2,14 @@ schema_version: 1
 recipe:
   name: gdk-pixbuf
   upstream_version: "2.42.12"
-  cvc_revision: 1
+  # cvc.2: add the windows build (build.ps1, Meson + MSVC) and the MSVC
+  # artifact patterns.  +cvc.1 was POSIX-only, which left gtk4's
+  # `platform: windows` matrix entry a phantom claim.  The windows build
+  # keeps the libpng/libjpeg-turbo/tiff loaders instead of the WIC ones
+  # (-Dnative_windows_loaders=false) so the declared runtime deps stay
+  # honest, and it installs a differently-named artifact set, so it takes
+  # a revision rather than a republish.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -63,14 +70,22 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
+    # Unix shared/static artifacts (.so / .so.N / .dylib / .a).
     - lib/libgdk_pixbuf-2.0*
     - lib/pkgconfig/gdk-pixbuf-2.0.pc
     - lib/gdk-pixbuf-2.0/
     - include/gdk-pixbuf-2.0/
     - bin/gdk-pixbuf-*
+    # Windows (MSVC): import library under lib/, versioned runtime DLL
+    # under bin/.  Note the library uses an underscore (gdk_pixbuf-2.0)
+    # while the tools above use a hyphen, so it needs its own patterns.
+    - lib/gdk_pixbuf-2.0*.lib
+    - bin/gdk_pixbuf-2.0*.dll
   pkg_config:
     - gdk-pixbuf-2.0
 

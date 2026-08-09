@@ -87,7 +87,8 @@ mkdir -p "${WHEELHOUSE}"
     --wheel-dir "${WHEELHOUSE}" \
     "${CVC_SOURCE_DIR}"
 
-WHEEL="$(find "${WHEELHOUSE}" -maxdepth 1 -name 'h5py-*.whl' -print -quit)"
+readarray -t _wheel_matches < <(find "${WHEELHOUSE}" -maxdepth 1 -name 'h5py-*.whl')
+WHEEL="${_wheel_matches[0]:-}"
 [ -n "${WHEEL}" ] || { echo "h5py-cp312: no wheel produced under ${WHEELHOUSE}" >&2; exit 1; }
 echo "h5py-cp312: built $(basename "${WHEEL}")"
 
@@ -105,7 +106,8 @@ echo "h5py-cp312: built $(basename "${WHEEL}")"
     "${WHEEL}"
 
 # Locate the staged h5py package dir (covers lib/pythonX.Y/site-packages).
-H5PY_DIR="$(find "${CVC_INSTALL_DIR}" -maxdepth 4 -type d -name h5py -print -quit)"
+readarray -t _h5py_dir_matches < <(find "${CVC_INSTALL_DIR}" -maxdepth 4 -type d -name h5py)
+H5PY_DIR="${_h5py_dir_matches[0]:-}"
 [ -n "${H5PY_DIR}" ] || { echo "h5py-cp312: staged h5py/ not found under ${CVC_INSTALL_DIR}" >&2; exit 1; }
 SITE_PACKAGES="$(dirname "${H5PY_DIR}")"
 echo "h5py-cp312: staged into ${SITE_PACKAGES}"
@@ -150,7 +152,7 @@ else
         exit 1
     fi
     while IFS= read -r -d '' _so; do
-        _rel="$(realpath --relative-to="$(dirname "${_so}")" "${CVC_INSTALL_DIR}/lib")"
+        _rel="$("${PY}" -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "${CVC_INSTALL_DIR}/lib" "$(dirname "${_so}")")"
         patchelf --set-rpath "\$ORIGIN:\$ORIGIN/${_rel}" "${_so}"
     done < <(find "${H5PY_DIR}" -name '*.so' -print0)
 fi

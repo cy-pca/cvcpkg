@@ -905,7 +905,7 @@ def _find_patchelf(*prefixes: Path | None) -> str | None:
 # rewrite would be silently ignored — relocatable OpenBSD bundles need a
 # different mechanism if/when it becomes an active build target. macOS/Windows
 # are handled separately (install_name / PATH-relative DLLs).
-_ELF_RPATH_PLATFORMS = frozenset({"linux", "freebsd", "netbsd", "dragonflybsd"})
+_ELF_RPATH_PLATFORMS = frozenset({"linux", "freebsd", "netbsd"})
 
 
 def _patch_elf_rpath(install_dir: Path, patchelf: str | None = None) -> None:

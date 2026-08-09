@@ -2,13 +2,16 @@ schema_version: 1
 recipe:
   name: expat
   upstream_version: "2.6.4"
-  cvc_revision: 2
+  # Added wasm/wasi/cosmo entries.  Expat is a dependency-free C89 parser
+  # whose only platform requirement is an entropy source for its hash salt;
+  # each cross script documents how that resolves on its target.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   homepage: https://libexpat.github.io/
   license: MIT
-  tags: [libraries]
+  tags: [libraries, wasm, wasi]
   description: >-
     Expat — a stream-oriented XML parser library written in C.
     Required by Fontconfig.
@@ -52,6 +55,15 @@ build:
         CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: cosmo
+      host_platform: linux
+      script: build-cosmo.sh
 
 package:
   files:

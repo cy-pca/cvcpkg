@@ -2,7 +2,10 @@ schema_version: 1
 recipe:
   name: zstd
   upstream_version: "1.5.7"
-  cvc_revision: 2
+  # Added a cosmo entry (build-cosmo.sh).  `tiff` and `libiimod` already
+  # declare platform: cosmo and runtime-depend on zstd, so both were phantom
+  # claims until zstd itself could be built for cosmo.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -61,6 +64,9 @@ build:
     - platform: wasi
       host_platform: windows
       script: build-wasi.ps1
+    - platform: cosmo
+      host_platform: linux
+      script: build-cosmo.sh
 
 package:
   files:

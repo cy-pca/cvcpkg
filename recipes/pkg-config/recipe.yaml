@@ -9,7 +9,11 @@ recipe:
   # pkg.m4; we install both `pkgconf` and a `pkg-config` name. No recipe pins a
   # pkg-config version, so the 0.29.2 -> 3.0.4 jump is safe.
   upstream_version: "3.0.4"
-  cvc_revision: 1
+  # Bumped 1 -> 2: the windows build is Meson + MSVC, not autotools under
+  # MSYS2/MinGW64. Git for Windows ships bash but no C compiler, so the old
+  # path failed "C compiler cannot create executables" and the recipe
+  # advertised a windows build it could never produce.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

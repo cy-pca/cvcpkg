@@ -10,9 +10,26 @@ Copy-Item -Recurse "$env:CVC_SOURCE_DIR\mesonbuild" "$mesonLib\mesonbuild" -Forc
 Copy-Item "$env:CVC_SOURCE_DIR\meson.py" "$mesonLib\meson.py"
 
 # Create a wrapper batch file.
+#
+# It must NOT call `python3`. Windows CPython installs python.exe only — there
+# is no python3.exe — so `python3` fell through to the Microsoft Store alias
+# stub and every meson-based windows recipe died before configuring with
+#   Python was not found; run without arguments to install from the Microsoft
+#   Store, or disable this shortcut from Settings > Apps ...
+# which reads like a missing interpreter rather than a bad launcher.
+#
+# Prefer the interpreter that ships in THIS prefix (bin\..\python.exe): meson
+# then runs on the hermetic python instead of whatever happens to be on PATH.
+# Fall back to `python` for prefixes without one (meson is also installed as a
+# host tool next to a system interpreter).
 $wrapper = @"
 @echo off
-python3 "%~dp0\..\lib\meson\meson.py" %*
+set "_CVC_PY=%~dp0\..\python.exe"
+if exist "%_CVC_PY%" (
+  "%_CVC_PY%" "%~dp0\..\lib\meson\meson.py" %*
+) else (
+  python "%~dp0\..\lib\meson\meson.py" %*
+)
 "@
 Set-Content -Path "$env:CVC_INSTALL_DIR\bin\meson.cmd" -Value $wrapper
 

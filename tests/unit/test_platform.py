@@ -85,13 +85,16 @@ class TestDetectPlatform:
         monkeypatch.setattr("sys.platform", "netbsd10")
         assert detect_platform() == "netbsd"
 
-    def test_dragonfly(self, monkeypatch):
+    def test_dragonfly_detects_as_freebsd(self, monkeypatch):
+        # DragonFly consumes the freebsd channel in compat mode. It was never in
+        # the recipe schema's platform enum, so no recipe could declare a
+        # dragonflybsd build and such a host resolved zero packages.
         monkeypatch.setattr("sys.platform", "dragonfly6")
-        assert detect_platform() == "dragonflybsd"
+        assert detect_platform() == "freebsd"
 
-    def test_dragonfly_unversioned(self, monkeypatch):
+    def test_dragonfly_unversioned_detects_as_freebsd(self, monkeypatch):
         monkeypatch.setattr("sys.platform", "dragonfly")
-        assert detect_platform() == "dragonflybsd"
+        assert detect_platform() == "freebsd"
 
     def test_ghostbsd_detects_as_freebsd(self, monkeypatch):
         # GhostBSD's kernel identifies as FreeBSD — compat mode by design.
@@ -152,9 +155,10 @@ class TestDetectLibc:
         monkeypatch.setattr("sys.platform", "netbsd10")
         assert detect_libc() == "netbsd-libc"
 
-    def test_dragonfly_libc(self, monkeypatch):
+    def test_dragonfly_libc_is_freebsd(self, monkeypatch):
+        # Follows detect_platform's compat mapping.
         monkeypatch.setattr("sys.platform", "dragonfly6")
-        assert detect_libc() == "dragonfly-libc"
+        assert detect_libc() == "freebsd-libc"
 
 
 class TestDefaultTuple:
@@ -169,6 +173,5 @@ class TestDefaultTuple:
             "freebsd",
             "openbsd",
             "netbsd",
-            "dragonflybsd",
         )
         assert t["arch"] in ("x86_64", "arm64")

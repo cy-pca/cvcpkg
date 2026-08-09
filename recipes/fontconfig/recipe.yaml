@@ -2,7 +2,15 @@ schema_version: 1
 recipe:
   name: fontconfig
   upstream_version: "2.15.0"
-  cvc_revision: 1
+  # cvc.2: add the windows build (build.ps1, Meson + MSVC) and the MSVC
+  # artifact patterns.  Both cairo and pango declare fontconfig as a runtime
+  # dep on every platform, so their new windows entries are only honest once
+  # fontconfig covers windows too.  The packaged file set changes
+  # (fontconfig.lib in lib/, fontconfig-1.dll in bin/), hence a bump.
+  # cvc.3: declare the gperf build dependency (Unix). It was always required to
+  # generate src/fcobjshash.h but was resolved from the builder's system
+  # packages, so the build was not hermetic and not reproducible across hosts.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -11,7 +19,8 @@ recipe:
   tags: [libraries]
   description: >-
     Fontconfig — a library for configuring and customising font access.
-    Required by Pango and Cairo for font discovery on Linux and macOS.
+    Required by Pango and Cairo for font discovery on Linux, macOS and
+    Windows.
 
 source:
   type: tarball
@@ -30,6 +39,14 @@ depends:
       platforms: [linux, macos, freebsd, openbsd, netbsd]
     - name: python312
       platforms: [windows]
+    # fontconfig runs gperf to generate src/fcobjshash.h. Undeclared, the build
+    # silently used whatever gperf the builder happened to have installed — and
+    # where there is none it falls back to fetching upstream's
+    # subprojects/gperf.wrap at meson-setup time. Neither is hermetic. No
+    # windows entry: gperf ships only an autotools build (see its recipe), so
+    # Windows still relies on the wrap — tracked in the note below.
+    - name: gperf
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
   runtime:
     - name: freetype
       version: "^2.13"
@@ -59,15 +76,28 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+      note: >-
+        Upstream generates src/fcobjshash.h with gperf, which cvcpkg does
+        not package and Windows does not ship.  Without it on PATH meson
+        falls back to upstream's subprojects/gperf.wrap, which downloads
+        at setup time — hermetic builders need a gperf host tool.
 
 package:
   files:
+    # Unix shared/static artifacts (.so / .so.N / .dylib / .a).
     - lib/libfontconfig*
     - lib/pkgconfig/fontconfig.pc
     - include/fontconfig/
     - bin/fc-*
     - etc/fonts/
     - share/fontconfig/
+    # Windows (MSVC): import library under lib/, versioned runtime DLL
+    # under bin/.  The fc-* tools above pick up their .exe suffix from
+    # the same glob.
+    - lib/fontconfig*.lib
+    - bin/fontconfig*.dll
   pkg_config:
     - fontconfig
 

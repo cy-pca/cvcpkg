@@ -1,43 +1,44 @@
-# recipes/gtk4/build.ps1 — build GTK 4 on Windows via gvsbuild.
+# recipes/gtk4/build.ps1 — build GTK 4 on Windows via Meson + MSVC.
 #
-# gvsbuild (https://github.com/wingtk/gvsbuild) is a Python-based
-# meta-builder that fetches and builds the entire GTK 4 stack under
-# MSVC.  We install it with pipx and let it stage into the cvcpkg
-# install prefix.
+# This previously shelled out to gvsbuild, a third-party meta-builder installed
+# with pipx that fetches and compiles the ENTIRE GTK stack from its own sources.
+# That made the Windows bundle non-hermetic (network access and an unpinned
+# toolchain at build time) and, worse, meant the glib/cairo/pango/gdk-pixbuf
+# packages this recipe declares as dependencies were not the ones actually
+# linked: gvsbuild built and shipped its own copies, so the declared dependency
+# graph was decorative on Windows.
+#
+# GTK 4 builds with Meson under MSVC exactly as it does on POSIX, so this now
+# mirrors build.sh — every dependency resolves from the cvcpkg prefix through
+# PKG_CONFIG_PATH, which Invoke-CvcMesonBuild wires up.
 $ErrorActionPreference = 'Stop'
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+. "$scriptDir\..\_common\env-windows.ps1"
 
-# Ensure pipx is available.
-$pipx = Get-Command pipx -ErrorAction SilentlyContinue
-if (-not $pipx) {
-    Write-Host "Installing pipx..."
-    python -m pip install --user pipx
-    python -m pipx ensurepath
-}
+# GTK's meson build imports the Python 'packaging' module, same as glib's.
+& python -m pip install --quiet packaging 2>$null
 
-# Install (or update) gvsbuild.
-Write-Host "Installing gvsbuild..."
-pipx install --force gvsbuild
-
-# Build GTK4 and its dependency stack.  gvsbuild manages sources and
-# their build outputs under its own tree and copies release artifacts
-# to a build directory we control.
-$build = Join-Path $env:CVC_BUILD_DIR 'gvsbuild'
-if (-not (Test-Path $build)) { New-Item -ItemType Directory -Path $build | Out-Null }
-
-Write-Host "Building GTK 4 stack (this can take 1-2 hours) ..."
-gvsbuild build gtk4 `
-    --build-dir $build `
-    --configuration release `
-    --platform x64
-
-# gvsbuild places the resulting GTK 4 install tree under
-# <build>/gtk/x64/release.
-$gvs = Join-Path $build 'gtk\x64\release'
-if (-not (Test-Path $gvs)) {
-    throw "gvsbuild did not produce expected output at $gvs"
-}
-
-Write-Host "Staging into $env:CVC_INSTALL_DIR ..."
-Copy-Item -Path (Join-Path $gvs '*') -Destination $env:CVC_INSTALL_DIR -Recurse -Force
-
-Write-Host "gtk4 (via gvsbuild) installed to $env:CVC_INSTALL_DIR"
+Invoke-CvcMesonBuild @(
+    # Win32 (GDI/Direct2D) is GTK's native Windows backend. Wayland and X11 are
+    # POSIX display servers, pinned off so meson cannot auto-enable one from a
+    # stray dependency in the prefix.
+    '-Dwin32-backend=true',
+    '-Dwayland-backend=false',
+    '-Dx11-backend=false',
+    # Match build.sh: no demos/tests/docs in a packaged bundle.
+    '-Dbuild-tests=false',
+    '-Dbuild-examples=false',
+    '-Dbuild-demos=false',
+    '-Dbuild-testsuite=false',
+    '-Dintrospection=disabled',
+    '-Ddocumentation=false',
+    '-Dman-pages=false',
+    # GTK 4.16 split the old -Dprint-backends string option into per-backend
+    # features. The built-in "file" backend is always compiled; CUPS and CPDB
+    # are Unix printing stacks with no Windows presence.
+    '-Dprint-cups=disabled',
+    '-Dprint-cpdb=disabled',
+    # GStreamer is not a declared dependency of this recipe on any platform, so
+    # do not let meson pick up a system copy.
+    '-Dmedia-gstreamer=disabled'
+)

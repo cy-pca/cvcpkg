@@ -1,0 +1,70 @@
+schema_version: 1
+recipe:
+  name: semantic-version-cp311
+  upstream_version: "2.10.0"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/semantic-version/
+  license: "BSD-2-Clause"
+  tags: [python, wheel]
+  description: >-
+    semantic_version 2.10.0 for CPython 3.11 — the cp311 column of cvcpkg's
+    per-interpreter wheel matrix (pure-Python py2.py3-none-any wheel, same
+    artifact in every column). Pulled in for exactly one reason: setuptools-rust
+    imports it unconditionally (setuptools_rust/extension.py wants SimpleSpec,
+    rustc_info.py wants Version), so it is a hard runtime edge of the Rust
+    build-backend chain rather than an optional nicety. Zero dependencies of its
+    own.
+
+# Prebuilt wheel, NOT the sdist — deliberately, and the odd one out in this
+# branch's from-source push. Two reasons:
+#
+#  * There is nothing to gain. This package is pure Python: the sdist and the
+#    py2.py3-none-any wheel contain the same .py files, there is no compiler, no
+#    vendored library, and no missing-platform gap (a noarch wheel already covers
+#    the BSDs). Every other pure-Python LEAF in the matrix — packaging,
+#    typing-extensions, pycparser, wheel, setuptools — is pinned this way for the
+#    same reason.
+#  * There is something to lose. The 2.10.0 sdist is pre-PEP-621 (setup.py +
+#    setup.cfg, no pyproject.toml) and its setup.cfg carries
+#    `[bdist_wheel] universal = 1`, a flag setuptools has been deprecating.
+#    Building it from source would make this recipe depend on how a future
+#    setuptools treats that flag, for no benefit.
+#
+# setuptools-scm and setuptools-rust ARE built from their sdists — they are
+# modern PEP-517 projects with none of the above.
+source:
+  type: python_wheel
+  artifacts:
+    any:
+      url: https://files.pythonhosted.org/packages/6a/23/8146aad7d88f4fcb3a6218f41a60f6c2d4e3a72de72da1825dc7c8f7877c/semantic_version-2.10.0-py2.py3-none-any.whl
+      sha256: "de78a3b8e0feda74cabc54aab2da702113e33ac9d9eb9d2389bcf1f58b7d9177"
+
+python:
+  interpreter: python311
+  abi: cp311
+
+patches: []
+
+depends:
+  build:
+    - name: python311
+  runtime:
+    # Pure Python with no dependencies of its own; the interpreter is the whole
+    # closure. (django_fields.py in the wheel imports Django, but only when
+    # imported explicitly — the package's __init__ does not touch it.)
+    - name: python311
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - lib/python3.11/site-packages/semantic_version/
+    - lib/python3.11/site-packages/semantic_version-*.dist-info/

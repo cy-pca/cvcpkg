@@ -2,7 +2,10 @@ schema_version: 1
 recipe:
   name: jack
   upstream_version: "1.9.22"
-  cvc_revision: 1
+  # Bumped 1 -> 2: scoped the alsa-lib runtime edge to linux. ALSA is a
+  # Linux kernel sound API; on FreeBSD jack drives OSS instead. Unscoped, it made
+  # this recipe advertise freebsd while depending on a Linux-only package.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -33,6 +36,7 @@ depends:
     - python3
   runtime:
     - name: alsa-lib
+      platforms: [linux]
     # NetJack2 opus network codec (build.sh forces --opus).  Requires libopus
     # built with custom modes (>= 1.6.1+cvc.2) for the opus_custom_* symbols.
     - name: libopus

@@ -2,69 +2,108 @@ schema_version: 1
 recipe:
   name: numpy-cp313t
   upstream_version: "2.4.6"
-  cvc_revision: 1
+  # Bumped 1 -> 2: switched from the prebuilt PyPI wheel to the from-source
+  # meson-python build against cvcpkg's OpenBLAS, matching cp311/cp312/cp313.
+  # The prebuilt wheel ships a vendored libscipy_openblas64_*.so that is not
+  # resolvable from the merged cvcpkg prefix, which is exactly the broken
+  # `import numpy` documented in numpy-cp311+cvc.3 — so this column was the
+  # last one still carrying that defect. Also adds the BSDs, for which PyPI
+  # publishes no wheel at all. Windows regresses to the same loud stub the
+  # other three columns already carry until the MSVC/meson port lands.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   homepage: https://numpy.org/
   license: BSD-3-Clause
-  tags: [math, python, wheel]
+  tags: [math, python]
   description: >-
-    NumPy 2.4.6 for CPython 3.13 free-threaded (cp313t, no-GIL) — the cp313t column of cvcpkg's
-    per-interpreter wheel matrix.  The wheel is pinned by filename + sha256
-    and installed into the python313t interpreter's own site-packages inside
-    the prefix, so one activatable prefix carries both the native C/C++
-    libraries and a complete, pinned Python environment.
-    The cp313t column is the flagship of the matrix: this wheel is
-    installed into the free-threaded interpreter and its check runs with
-    the GIL *disabled* on every platform we publish for, so the no-GIL
+    NumPy 2.4.6 for CPython 3.13 free-threaded (cp313t, no-GIL), BUILT FROM
+    SOURCE with meson-python against cvcpkg's own OpenBLAS (LP64) — the same
+    build every other column uses.  Was a prebuilt PyPI wheel, which in this
+    prefix layout could not resolve its own auditwheel-vendored
+    libscipy_openblas64_*.so at import time (the failure that drove cp311/cp312/
+    cp313 from-source in numpy-cp311+cvc.3).  The cp313t column remains the
+    flagship of the matrix: its check runs with the GIL disabled, so no-GIL
     support is demonstrated rather than assumed.
-
 source:
-  type: python_wheel
-  artifacts:
-    linux-x86_64:
-      url: https://files.pythonhosted.org/packages/21/a6/5d2bae9c9542eb4df16dc9c46dc79c186e9bad53805dfa5399a6023c6db0/numpy-2.4.6-cp313-cp313t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
-      sha256: "ede83e07a75dd06bc501566c1eca2afc0d61677c1472ac9ad93fdee6e638a48d"
-    linux-arm64:
-      url: https://files.pythonhosted.org/packages/eb/0f/037e64c494b67581ae18193d770adef354c41f3f2c8ebf865602d949bf8f/numpy-2.4.6-cp313-cp313t-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl
-      sha256: "f74a575920ab21fe304421a3fc28793d82e299cae9eccb37084e9fc7f3617c20"
-    macos-x86_64:
-      url: https://files.pythonhosted.org/packages/af/57/3917ab0fd97f271a8694513581b8a36c655f111c446852c302f04ccdb6fc/numpy-2.4.6-cp313-cp313t-macosx_14_0_x86_64.whl
-      sha256: "7265a2f3d436e54ef9f2b52b5c937e6be778781bd97a590319d7348f1c1ca997"
-    macos-arm64:
-      url: https://files.pythonhosted.org/packages/63/6d/cc5619247c8f4204e507f5883528372e4ac4bb189e579fb859a12e480b1f/numpy-2.4.6-cp313-cp313t-macosx_11_0_arm64.whl
-      sha256: "112b06a867b235ef466ed3508ddf0238050df9c727cafb5301ac385b899189a1"
-    windows-x86_64:
-      url: https://files.pythonhosted.org/packages/77/71/5673e351671a1d2bd6063b91b44f70c0affea7d1516fa7a6572941ba4aa1/numpy-2.4.6-cp313-cp313t-win_amd64.whl
-      sha256: "25c692919ac5a01f170a3bfcd62d745b24fd095c353d50812637d6fcab442e75"
+  type: tarball
+  url: https://files.pythonhosted.org/packages/d0/ad/fed0499ce6a338d2a03ebae59cd15093910c8875328855781952abf6c2fe/numpy-2.4.6.tar.gz
+  sha256: "f3a3570c4a2a16746ac2c31a7c7c7b0c186b95ce902e33db6f28094ed7387dda"
+  strip_components: 1
 
+# Interpreter/ABI metadata: exported to build.sh as CVC_PYTHON_ABI /
+# CVC_PYTHON_INTERPRETER so cvc_python_exe resolves the prefix's python3.13 and
+# the wheel lands in ITS site-packages.
 python:
   interpreter: python313t
   abi: cp313t
-  manylinux_min: manylinux_2_28
 
 patches: []
 
 depends:
   build:
     - name: python313t
+    # Native CLIs meson-python shells out to (on PATH in the build prefix).
+    - name: pkg-config
+    - name: meson
+    - name: ninja
+    # PEP-517 backend + cythonizer, imported by the build interpreter under
+    # --no-build-isolation (bridged from the build prefix via PYTHONPATH in
+    # build.sh). meson-python-cp313t pulls packaging-cp313t + pyproject-metadata-cp313t.
+    - name: cython-cp313t
+    - name: meson-python-cp313t
+    # OpenBLAS headers + openblas.pc at compile time, on every platform
+    # including macOS (openblas gained a macOS build in openblas+cvc.6).
+    - name: openblas
+      version: ">=0.3.28"
   runtime:
     - name: python313t
+    # libopenblas resolved from the merged prefix at import, every platform.
+    - name: openblas
+      version: ">=0.3.28"
+  host_tools:
+    - python313t
+    - pkg-config
+    - meson
+    - ninja
+    # Stamps the relocatable $ORIGIN RUNPATH into the extension .so on ELF
+    # platforms (Linux/BSD).
+    - patchelf
 
 build:
+  # The Python ABI is stable across cvcpkg build types; build once, optimized.
   build_type_independent: true
+  # openblas now builds on every native platform including macOS, so every
+  # column links the same BLAS. windows is a deliberate delta: meson + MSVC + DLL
+  # discovery differ enough to need its own build.ps1 (currently a loud stub —
+  # until the port lands, windows numpy is unavailable from this recipe).
+  # wasm/wasi/cosmo are excluded: static interpreter, no extension-module ABI.
   matrix:
     - platform: linux
       script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
     - platform: macos
       script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"   # matches the openblas recipe
     - platform: windows
       script: build.ps1
 
 package:
+  # DOCUMENTATION ONLY — stage_bundle ships the whole CVC_INSTALL_DIR tree;
+  # build.sh keeps it pure by pip-installing --prefix into an empty dir. There is
+  # NO numpy.libs/: the OpenBLAS runtime is the cvcpkg openblas package.
   files:
     - lib/python3.13*/site-packages/numpy/
     - lib/python3.13*/site-packages/numpy-2.4.6.dist-info/
     - Lib/site-packages/numpy/
     - Lib/site-packages/numpy-2.4.6.dist-info/
+
+abi:
+  cxx_std: 17
