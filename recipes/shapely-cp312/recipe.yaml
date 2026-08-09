@@ -1,0 +1,63 @@
+schema_version: 1
+recipe:
+  name: shapely-cp312
+  upstream_version: "2.1.2"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://shapely.readthedocs.io/
+  license: "BSD-3-Clause"
+  tags: [python, source, gis]
+  description: >-
+    Shapely 2.1.2 for CPython 3.12, built FROM SOURCE against cvcpkg's GEOS.
+
+    Hand-written rather than generated: the generator reads only
+    [build-system] requires, which names setuptools/Cython/numpy and says
+    nothing about GEOS. A generated recipe would therefore declare no native
+    edge and link whatever libgeos the builder happened to have — the exact
+    failure mode the from-source policy exists to prevent.
+
+    Windows only for now, matching scipy-cp312: this is the column that has
+    been built and verified. Claiming linux/macos without building them is the
+    phantom-platform claim the coverage audit exists to eliminate.
+
+# From-source sdist (NOT source.type python_wheel): the PyPI wheels vendor
+# their own GEOS, which is precisely the non-hermeticity this recipe avoids.
+source:
+  type: tarball
+  url: https://files.pythonhosted.org/packages/4d/bc/0989043118a27cccb4e906a46b7565ce36ca7b57f5a18b78f4f1b0f72d9d/shapely-2.1.2.tar.gz
+  sha256: "2ed4ecb28320a433db18a5bf029986aa8afcfd740745e78847e330d5d94922a9"
+  strip_components: 1
+
+python:
+  interpreter: python312
+  abi: cp312
+
+patches: []
+
+depends:
+  build:
+    - name: python312
+    - name: numpy-cp312
+    - name: cython-cp312
+    - name: setuptools-cp312
+    - name: geos
+  runtime:
+    - name: python312
+    - name: numpy-cp312
+    - name: geos
+  host_tools:
+    - python312
+
+build:
+  matrix:
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - Lib/site-packages/shapely/
+    - Lib/site-packages/shapely-*.dist-info/
+  cmake_packages: []
