@@ -1,4 +1,4 @@
-# recipes/hatchling-cp312/build.ps1 — build hatchling 1.27.0 FROM SOURCE (generated).
+# recipes/hatchling-cp312/build.ps1 — build hatchling 1.31.0 FROM SOURCE (generated).
 # Windows counterpart of build.sh; same contract (see that file for the why).
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'

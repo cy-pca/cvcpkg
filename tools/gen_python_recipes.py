@@ -434,7 +434,11 @@ SEED_PACKAGES = {
         "check": "import trove_classifiers",
     },
     "hatchling": {
-        "version": "1.27.0",
+        # Match master's pin (added there by 7ec083b, PyInstaller-from-source,
+        # which needed the same backend). Two branches packaging the same
+        # backend at different versions is a pointless conflict; the newer one
+        # wins.
+        "version": "1.31.0",
         "license": "MIT",
         "deps": ["packaging", "pathspec", "pluggy", "trove-classifiers"],
         "files": ["hatchling/", "hatchling-*.dist-info/"],
