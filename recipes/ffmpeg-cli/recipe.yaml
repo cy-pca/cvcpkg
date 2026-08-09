@@ -1,0 +1,60 @@
+schema_version: 1
+recipe:
+  name: ffmpeg-cli
+  upstream_version: "7.1.2"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://ffmpeg.org/
+  license: GPL-2.0-or-later
+  tags: [tools, media, windows]
+  description: >-
+    The ffmpeg/ffprobe COMMAND-LINE tools, H.264 only.
+
+    Distinct from the `ffmpeg` recipe on purpose. That one builds
+    `--disable-programs`: it is the shared-library package other recipes link
+    against, and it deliberately produces no executables. Tools that shell out
+    to `ffmpeg` — grl_snam_dbg's offscreen platoon capture encodes a PNG
+    sequence that way — need an actual binary, and installing the library
+    package gives them nothing.
+
+    Scoped hard to keep the dependency closure at nasm + x264 rather than the
+    full `ffmpeg` recipe's twenty-package codec set (x265, vpx, dav1d, opus,
+    lame, vorbis, webp, freetype, fontconfig, openssl, ...). Everything except
+    H.264 encode and the image/rawvideo demuxers is disabled. FFmpeg's MP4
+    muxer is built in, so this produces browser-playable H.264/MP4 with no
+    external muxer — which is what x264's own CLI would have needed lsmash for.
+
+    If you need a codec that is not here, extend the `ffmpeg` library recipe
+    and link against it; do not widen this one.
+
+source:
+  type: tarball
+  url: https://ffmpeg.org/releases/ffmpeg-7.1.2.tar.xz
+  sha256: "089bc60fb59d6aecc5d994ff530fd0dcb3ee39aa55867849a2bbc4e555f9c304"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: nasm
+    - name: x264
+    - name: zlib
+  runtime:
+    - name: x264
+    - name: zlib
+  host_tools:
+    - nasm
+
+build:
+  matrix:
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - bin/
+  cmake_packages: []

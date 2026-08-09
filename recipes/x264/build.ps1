@@ -19,14 +19,30 @@ $env:CHERE_INVOKING   = '1'
 'CC','CXX','LD','AR','NM','RANLIB','CFLAGS','CXXFLAGS','LDFLAGS' |
     ForEach-Object { Remove-Item "Env:$_" -ErrorAction SilentlyContinue }
 
-$depsFlag   = if ($msysDeps) { "PATH='$msysDeps/bin:'`$PATH " } else { '' }
+# `PATH=... cd dir && ./configure` scopes the assignment to `cd` ALONE — cd is a
+# regular builtin, so the prefix assignment does not survive into the commands
+# after &&. configure then ran with the original PATH, never saw the prefix's
+# nasm, and failed "Found no assembler / Minimum version is nasm-2.13" while
+# nasm 2.16.03 sat in <prefix>/bin. Export it so it persists for the whole line.
+$depsFlag   = if ($msysDeps) { "export PATH='$msysDeps/bin:'`$PATH; " } else { '' }
 $sharedFlag = if ($env:CVC_LINK -eq 'static') {
     '--enable-static --disable-shared'
 } else {
     '--enable-shared --disable-static'
 }
 
-$cmd = "$depsFlag cd '$msysSource' && ./configure --prefix='$msysPrefix' --host=x86_64-w64-mingw32 --cross-prefix=x86_64-w64-mingw32- $sharedFlag --disable-cli --disable-lavf --disable-swscale --disable-opencl && make -j $jobs && make install"
+# --cross-prefix only when the cross-named binutils actually exist. cvcpkg's own
+# mingw-w64-gcc is a NATIVE Windows toolchain: it ships x86_64-w64-mingw32-gcc
+# and friends, but binutils under plain names (strings.exe, ar.exe, ld.exe).
+# Passing the cross prefix unconditionally made configure look for
+# x86_64-w64-mingw32-strings, which does not exist, and die "endian test failed"
+# — a message that says nothing about the missing tool.
+$crossProbe = Join-Path $env:CVC_DEPS_PREFIX 'bin\x86_64-w64-mingw32-strings.exe'
+$crossFlag  = if ($env:CVC_DEPS_PREFIX -and (Test-Path $crossProbe)) {
+    '--cross-prefix=x86_64-w64-mingw32- '
+} else { '' }
+
+$cmd = "$depsFlag cd '$msysSource' && ./configure --prefix='$msysPrefix' --host=x86_64-w64-mingw32 $crossFlag$sharedFlag --disable-cli --disable-lavf --disable-swscale --disable-opencl && make -j $jobs && make install"
 Write-Host "cvcpkg: bash -lc `"$cmd`""
 & $bash -lc $cmd
 if ($LASTEXITCODE -ne 0) { throw 'x264 build failed' }
