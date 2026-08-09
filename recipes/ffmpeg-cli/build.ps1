@@ -91,9 +91,17 @@ $crossFlag  = if ($env:CVC_DEPS_PREFIX -and (Test-Path $crossProbe)) {
 # back on. Note there is no --enable-programs: the binaries are on by default
 # and only --disable-programs exists (which is exactly what the sibling
 # `ffmpeg` library recipe passes).
+# IN-TREE build, deliberately. Out of tree, configure records SRC_PATH as the
+# MSYS path it was invoked by (/c/Users/...) and bakes it into the Makefile;
+# our gcc is a NATIVE Windows binary that cannot resolve /c/..., so every
+# object failed with
+#   cc1.exe: fatal error: /c/.../src/libavformat/avformat.c: No such file
+# Building in the source tree makes SRC_PATH '.', so no absolute path is ever
+# handed to the compiler and the translation problem disappears. This is also
+# why the sibling x264 recipe never hit it.
 $configureCmd = @"
-$depsFlag mkdir -p '$msysBuild' && cd '$msysBuild' && \
-  '$msysSource/configure' \
+$depsFlag cd '$msysSource' && \
+  ./configure \
     --prefix='$msysPrefix' \
     --target-os=mingw32 \
     --arch=x86_64 \
@@ -138,7 +146,8 @@ $depsFlag mkdir -p '$msysBuild' && cd '$msysBuild' && \
 Write-Host "cvcpkg: bash -lc <ffmpeg-cli configure + make>"
 & $bash -lc $configureCmd
 if ($LASTEXITCODE -ne 0) {
-    $cfgLog = Join-Path $env:CVC_BUILD_DIR 'ffbuild\config.log'
+    # In-tree build, so ffbuild/ lives under the SOURCE dir, not the build dir.
+    $cfgLog = Join-Path $env:CVC_SOURCE_DIR 'ffbuild\config.log'
     if (Test-Path $cfgLog) {
         Write-Host '--- config.log (last 80 lines) ---'
         Get-Content $cfgLog -Tail 80 | Write-Host
