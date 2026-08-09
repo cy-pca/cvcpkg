@@ -120,6 +120,8 @@ $depsFlag cd '$msysSource' && \
     --enable-w32threads \
     --enable-libx264 \
     --enable-encoder=libx264 \
+    --enable-decoder=h264 \
+    --enable-parser=h264 \
     --enable-encoder=png \
     --enable-encoder=mjpeg \
     --enable-decoder=png \
@@ -163,6 +165,11 @@ $enc = & $ff -hide_banner -encoders 2>&1 | Select-String -Pattern 'libx264'
 if (-not $enc) { throw 'ffmpeg-cli: built ffmpeg.exe has no libx264 encoder' }
 $mux = & $ff -hide_banner -muxers 2>&1 | Select-String -Pattern '\bmp4\b'
 if (-not $mux) { throw 'ffmpeg-cli: built ffmpeg.exe has no mp4 muxer' }
+# --enable-libx264 gives an ENCODER only. Without the native h264 decoder the
+# tool cannot read back a file it just wrote — pulling a poster frame out of
+# its own mp4 fails "Decoding requested, but no decoder found for: h264".
+$dec = & $ff -hide_banner -decoders 2>&1 | Select-String -Pattern '\bh264\b'
+if (-not $dec) { throw 'ffmpeg-cli: built ffmpeg.exe cannot decode h264 (cannot read its own output)' }
 Write-Host "ffmpeg-cli: $((& $ff -version 2>&1 | Select-Object -First 1)) — libx264 + mp4 OK"
 
 Invoke-CvcRewriteInstallPaths
