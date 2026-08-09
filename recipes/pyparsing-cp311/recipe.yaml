@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: pyparsing-cp311
   upstream_version: "3.2.1"
-  cvc_revision: 2
+  cvc_revision: 3
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -48,8 +48,12 @@ build:
   matrix:
     - platform: any
       script: build.sh
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
     - lib/python3.11/site-packages/pyparsing/
     - lib/python3.11/site-packages/pyparsing-*.dist-info/
+    - Lib/site-packages/pyparsing/
+    - Lib/site-packages/*.dist-info/

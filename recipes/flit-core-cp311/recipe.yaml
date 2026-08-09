@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: flit-core-cp311
   upstream_version: "3.10.1"
-  cvc_revision: 1
+  cvc_revision: 2
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -44,8 +44,12 @@ build:
   matrix:
     - platform: any
       script: build.sh
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
     - lib/python3.11/site-packages/flit_core/
     - lib/python3.11/site-packages/flit_core-*.dist-info/
+    - Lib/site-packages/flit_core/
+    - Lib/site-packages/*.dist-info/

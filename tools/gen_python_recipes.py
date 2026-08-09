@@ -1416,9 +1416,16 @@ def sdist_platforms(kind: str, plats: list[str]) -> list[tuple[str, str]]:
     A pure package still builds ONCE: the wheel it produces is py3-none-any, so
     the column stays ``platform: any`` exactly as the prebuilt-noarch one did --
     only the artifact's provenance changes.  A compiled package needs a build
-    per platform, and windows needs PowerShell."""
+    per platform, and windows needs PowerShell.
+
+    The pure column also gets an explicit windows entry. A matrix entry names
+    ONE script and ``any`` names build.sh, which cannot run on a Windows
+    builder -- so a pure package was advertised as buildable everywhere and was
+    in fact unbuildable from source there. The payload is noarch; the recipe
+    was not. That gap is what left setuptools (and therefore every PEP-517
+    backend, and therefore pillow and numpy) unbuildable on Windows."""
     if kind == "pure":
-        return [("any", "build.sh")]
+        return [("any", "build.sh"), ("windows", "build.ps1")]
     return [(p, "build.ps1" if p == "windows" else "build.sh") for p in plats]
 
 

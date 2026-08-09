@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: pyrsistent-cp311
   upstream_version: "0.20.0"
-  cvc_revision: 1
+  cvc_revision: 2
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -49,8 +49,12 @@ build:
   matrix:
     - platform: any
       script: build.sh
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
     - lib/python3.11/site-packages/pyrsistent/
     - lib/python3.11/site-packages/*.dist-info/
+    - Lib/site-packages/pyrsistent/
+    - Lib/site-packages/*.dist-info/

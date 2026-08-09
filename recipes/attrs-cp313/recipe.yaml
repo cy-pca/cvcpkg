@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: attrs-cp313
   upstream_version: "26.1.0"
-  cvc_revision: 2
+  cvc_revision: 3
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -50,8 +50,12 @@ build:
   matrix:
     - platform: any
       script: build.sh
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
     - lib/python3.13/site-packages/attrs/
     - lib/python3.13/site-packages/*.dist-info/
+    - Lib/site-packages/attrs/
+    - Lib/site-packages/*.dist-info/
