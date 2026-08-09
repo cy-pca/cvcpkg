@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# recipes/cython-cp312/build.sh — build cython 3.1.6 FROM SOURCE (generated).
+# recipes/cython-cp312/build.sh — build cython 3.2.9 FROM SOURCE (generated).
 #
 # WHY FROM SOURCE: a PyPI wheel is somebody else's compiled artifact, linked
 # against libraries we did not build.  cvcpkg fetches and sha256-verifies the
