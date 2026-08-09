@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: ca-bundle
   upstream_version: "2026.05.14"
-  cvc_revision: 3
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -32,31 +32,24 @@ depends:
   host_tools: []
 
 build:
+  build_type_independent: true
   matrix:
-    - platform: linux
+    # noarch: the payload is a PEM file and a POSIX shell hook, identical on
+    # every platform.  Built once, installed everywhere.  There is nothing to
+    # compile, so there is no reason for this to be a per-platform recipe --
+    # and a per-platform matrix meant the Windows path needed a whole separate
+    # build.ps1 that shipped broken for a year without anyone noticing.
+    - platform: any
       script: build.sh
-    - platform: macos
-      script: build.sh
-    - platform: freebsd
-      script: build.sh
-    - platform: openbsd
-      script: build.sh
-    - platform: netbsd
-      script: build.sh
-    - platform: windows
-      script: build.ps1
 
 package:
   files:
     - etc/ssl/cert.pem
     - share/ca-bundle/
 
-abi:
-  cxx_std: 17
-
 notes:
   - title: "Usage: hermetic / container environments"
-    platforms: [linux, macos, freebsd, openbsd, netbsd]
+    platforms: [any]
     description: >-
       After installing ca-bundle into your cvcpkg prefix, point OpenSSL
       (and tools like curl, Python, git) at the bundled certs by exporting:
@@ -81,9 +74,10 @@ notes:
       it looks like it works while verification actually falls back to
       whatever else is configured.
   - title: "Update cadence"
-    platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    platforms: [any]
     description: >-
       Mozilla updates its CA set approximately 4-6 times per year.
       When a new cacert.pem is published at https://curl.se/ca/cacert.pem
       bump upstream_version (YYYY.MM.DD), update the URL and sha256 in
-      build.sh/build.ps1, and publish a new cvc_revision.
+      build.sh, and publish a new cvc_revision.  This is a noarch package,
+      so that is one build for every platform rather than six.

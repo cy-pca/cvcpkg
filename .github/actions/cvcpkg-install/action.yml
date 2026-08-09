@@ -87,6 +87,19 @@ runs:
   steps:
     # Sparse-checkout libcvc-deps for the cvcpkg tool and default
     # requirements, without pulling the entire repo history.
+    #
+    # EVERY path pip needs to BUILD this package must be listed here, not just
+    # the ones needed to run it. pep517-backend/ holds the in-tree PEP 517
+    # backend named by `backend-path` in pyproject.toml; omit it and
+    # `pip install ./_libcvc-deps` dies before it starts:
+    #
+    #     BackendUnavailable: Cannot find module 'cvcpkg_build_backend'
+    #       in ['.../_libcvc-deps/pep517-backend']
+    #
+    # which took out every consumer of this action (all of libcvc's
+    # package-linux / package-macos / package-windows jobs) the moment the
+    # backend landed. A `git+https://` install is unaffected — it clones the
+    # whole repo — so this only ever breaks the sparse path.
     - name: Checkout libcvc-deps (sparse)
       uses: actions/checkout@v5
       with:
@@ -99,6 +112,7 @@ runs:
           README.md
           packaging
           cvc-requirements.yaml
+          pep517-backend
         sparse-checkout-cone-mode: false
 
     - name: Set up Python

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import struct
 import sys
 
@@ -264,9 +265,282 @@ def _probe_cuda() -> bool:
     return False
 
 
+# ── Container / VM manager capabilities ─────────────────────────
+#
+# These gate jobs that boot an *ephemeral* machine — e.g. running a recipe's
+# tests against the image it just built.  THREE capabilities, named for the
+# PRODUCT each one gates, never for whatever command that product happens to
+# install:
+#
+#   incus  Incus (the community fork of LXD).  Client binary ``incus``, daemon
+#          ``incusd`` on /var/lib/incus/unix.socket, admin group
+#          ``incus-admin``.  REST-API manager; can boot real VMs (``--vm``).
+#   lxd    LXD.  Its CLI entry point is a binary literally named ``lxc``
+#          (/usr/bin/lxc), its daemon is ``lxd`` on /var/lib/lxd/unix.socket,
+#          and its admin group is ``lxd``.  Also a REST-API manager with VMs.
+#   lxc    CLASSIC LXC — liblxc plus the hyphenated ``lxc-create`` /
+#          ``lxc-start`` / ``lxc-attach`` tools, and NO plain ``lxc`` binary
+#          at all.  Daemonless (containers are children of the invoking
+#          process) and containers only, never VMs.
+#
+# The three are NOT interchangeable and must never be collapsed: the
+# incus/LXD REST CLIs and the classic ``lxc-*`` CLI share no command surface
+# (``lxc launch img c1`` vs ``lxc-create -n c1 -t download``), so a job's
+# harness is written against exactly one of them.  A recipe declaring
+# ``requires_capabilities: [lxc]`` means the classic tools and nothing else;
+# LXD is spelled ``lxd`` precisely so that reading stays unambiguous.
+#
+# ``shutil.which("lxc")`` on its own is the wrong probe, in every direction:
+#
+#   * it MIS-attributes.  The plain ``lxc`` binary is LXD's client, so a naive
+#     which("lxc") detects LXD and files it under "lxc" — routing classic-LXC
+#     jobs to a host that has never heard of ``lxc-create``.
+#   * it OVER-matches.  Some distros ship an ``lxc`` compatibility shim that
+#     actually drives Incus, so a bare ``which`` would label an Incus-only
+#     host "lxd" and route LXD jobs to a daemon that is not running there.
+#     The probe therefore makes the client prove which server answered.
+#   * it UNDER-describes.  The binary existing says nothing about whether this
+#     user can reach the socket, which is what a job actually needs.
+#
+# Every probe answers "can THIS user drive it RIGHT NOW", not "is a binary
+# installed": a builder whose account is outside the ``incus-admin``/``lxd``
+# group, or whose daemon is stopped, has the binary and fails every job it is
+# sent.  Same doctrine as _probe_cuda — an unadvertised capability leaves a job
+# queued (visible, diagnosable), a falsely advertised one burns a build.
+
+# Seconds a capability probe may spend in a subprocess.  Probes run on the
+# builder's startup path and on the install-side resolve path, so a wedged
+# daemon must degrade to "capability absent" fast instead of hanging the CLI.
+_PROBE_TIMEOUT_SECONDS = 5.0
+
+# Where LXD's DAEMON binary lives.  This is the positive marker that separates
+# LXD from Incus: Incus's daemon is ``incusd``, so an ``lxd`` executable is
+# never Incus.  /usr/sbin and /usr/lib are absent from a non-root PATH, so
+# these are checked explicitly rather than through which().  Module-level so
+# tests can point it at a fixture instead of the host's real filesystem.
+_LXD_DAEMON_PATHS = (
+    "/usr/sbin/lxd",
+    "/usr/lib/lxd/lxd",
+    "/usr/local/sbin/lxd",
+    "/snap/bin/lxd",
+)
+
+# `lxc info` / `incus info` dump the server's environment as YAML; the
+# `server:` key names the implementation ("lxd" / "incus").  Anchored so the
+# neighbouring server_name/server_pid/server_version keys cannot match.
+_SERVER_KEY_RE = re.compile(r"^[ \t]*server:[ \t]*(\S+)[ \t]*$", re.MULTILINE)
+
+# Files granting a user the subordinate uid/gid ranges an *unprivileged*
+# classic-LXC container needs.  Module-level so tests can point them at a
+# fixture instead of the host's real /etc.
+_SUBID_FILES = ("/etc/subuid", "/etc/subgid")
+
+
+def _which(name: str) -> str | None:
+    """``shutil.which`` that never raises."""
+    import shutil
+
+    try:
+        return shutil.which(name)
+    except Exception:
+        return None
+
+
+def _command_ok(argv: list[str]) -> bool:
+    """True when *argv* runs and exits 0 within :data:`_PROBE_TIMEOUT_SECONDS`.
+
+    Never raises: a missing binary, a permission error, a hung daemon (timeout)
+    and a non-zero exit are all just "no".  stdin is /dev/null so a probe can
+    never block waiting for input, and both output streams are discarded so a
+    chatty tool cannot fill a pipe buffer and deadlock.
+    """
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=_PROBE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except Exception:
+        return False
+    return proc.returncode == 0
+
+
+def _command_output(argv: list[str]) -> str | None:
+    """stdout of *argv* when it exits 0, else ``None``.  Never raises.
+
+    Same bounds as :func:`_command_ok` (no stdin, hard timeout); stdout is
+    captured instead of discarded because a probe may need to read WHICH
+    implementation answered, not just that something did.
+    """
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=_PROBE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    out = proc.stdout
+    if isinstance(out, bytes):
+        return out.decode("utf-8", "replace")
+    return out or ""
+
+
+def _reported_server(text: str) -> str:
+    """The implementation name an ``info`` dump reports, or ``""``."""
+    match = _SERVER_KEY_RE.search(text or "")
+    return match.group(1).strip().strip("\"'").lower() if match else ""
+
+
+def _probe_incus() -> bool:
+    """Detect a *usable* Incus daemon.  Never raises.
+
+    ``incus info`` (no argument) is a read-only round-trip to the daemon over
+    its unix socket, so exit 0 proves all three things a job needs at once:
+    the client exists, incusd is running, and this user's group membership
+    lets it open the socket.  ``shutil.which("incus")`` alone proves none of
+    them — the client package installs cleanly on a host with no daemon.
+
+    The binary name is unambiguous (nothing else ships ``incus``), so unlike
+    :func:`_probe_lxd` this needs no implementation cross-check.
+    """
+    exe = _which("incus")
+    if not exe:
+        return False
+    return _command_ok([exe, "info"])
+
+
+def _lxd_daemon_present() -> bool:
+    """True when LXD's own daemon binary is installed.  Never raises.
+
+    Incus's daemon is ``incusd``, so finding ``lxd`` rules Incus out.  Used
+    only as the fallback discriminator when the ``info`` dump does not name
+    its server in the expected shape.
+    """
+    if _which("lxd"):
+        return True
+    for candidate in _LXD_DAEMON_PATHS:
+        try:
+            if os.path.exists(candidate):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _probe_lxd() -> bool:
+    """Detect a *usable* LXD daemon.  Never raises.
+
+    Two questions, in order, because the client binary's NAME is not evidence:
+
+    1. Does a daemon answer?  ``lxc info`` with no argument is LXD's read-only
+       server-info call, so exit 0 proves the daemon is up and this user's
+       ``lxd`` group membership lets it reach the socket.  A bare
+       ``which("lxc")`` proves neither.
+    2. Is that daemon actually LXD?  The dump names its implementation
+       (``server: lxd``), which rejects an ``lxc`` compatibility shim that
+       fronts Incus — such a host would otherwise advertise ``lxd`` and fail
+       every LXD job routed to it.  If the output shape is unrecognised, fall
+       back to whether LXD's own daemon binary is installed at all.
+
+    Classic LXC cannot reach either question: it ships no plain ``lxc``.
+    """
+    exe = _which("lxc")
+    if not exe:
+        return False
+    out = _command_output([exe, "info"])
+    if out is None:
+        return False
+    server = _reported_server(out)
+    if server:
+        return server == "lxd"
+    return _lxd_daemon_present()
+
+
+def _has_subid_delegation() -> bool:
+    """True when the invoking user has BOTH subuid and subgid ranges."""
+    import getpass
+    from pathlib import Path
+
+    names: set[str] = set()
+    try:
+        names.add(getpass.getuser())
+    except Exception:
+        pass
+    getuid = getattr(os, "getuid", None)
+    if getuid is not None:
+        try:
+            names.add(str(getuid()))
+        except Exception:
+            pass
+    if not names:
+        return False
+    for path in _SUBID_FILES:
+        try:
+            text = Path(path).read_text()
+        except Exception:
+            return False
+        owners = {line.split(":", 1)[0] for line in text.splitlines() if ":" in line}
+        if not (names & owners):
+            return False
+    return True
+
+
+def _probe_lxc() -> bool:
+    """Detect a *usable* CLASSIC LXC (liblxc + ``lxc-*`` tools).  Never raises.
+
+    Deliberately never looks at a plain ``lxc`` binary: that is LXD's client
+    (see :func:`_probe_lxd`), and classic LXC does not ship one.  The marker
+    of classic LXC is the hyphenated pair a job actually drives —
+    ``lxc-create`` + ``lxc-start`` — which LXD and Incus never install, so no
+    amount of LXD/Incus on a host can satisfy this probe.
+
+    Classic LXC is daemonless, so there is no socket whose permissions stand
+    in for "usable".  Two checks replace it:
+
+    * ``lxc-ls -1`` must exit 0.  It is the read-only listing command from the
+      same lxc-utils package, and it exercises liblxc's config + lxcpath
+      lookup as this user, so it fails on a half-installed or unreadable
+      install.  (An empty list is still exit 0 — a fresh host is usable.)
+    * a non-root user must additionally hold subuid/subgid delegation.  This
+      is the classic-LXC analogue of "not in the ``lxd`` group": without the
+      ranges, ``lxc-start`` cannot create the user namespace and every
+      unprivileged container fails, even though every binary is present.
+    """
+    create = _which("lxc-create")
+    start = _which("lxc-start")
+    if not (create and start):
+        return False
+    geteuid = getattr(os, "geteuid", None)
+    if geteuid is not None and geteuid() != 0 and not _has_subid_delegation():
+        return False
+    ls = _which("lxc-ls")
+    if not ls:
+        # lxc-utils ships lxc-ls beside lxc-create; missing means a partial
+        # install, and there is no other read-only command cheap enough to
+        # stand in for it.
+        return False
+    return _command_ok([ls, "-1"])
+
+
 # name -> zero-arg probe returning True when the capability is present.
 _CAPABILITY_PROBES = {
     "cuda": _probe_cuda,
+    "incus": _probe_incus,
+    "lxd": _probe_lxd,
+    "lxc": _probe_lxc,
 }
 
 

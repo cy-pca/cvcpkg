@@ -15,6 +15,7 @@ for maintainability:
 - ``_signing``   — key management, sign, verify-sig
 - ``_cache``     — cache subcommand group
 - ``_doctor``    — environment diagnostics (``cvcpkg doctor``)
+- ``_image``     — installed VM/disk image discovery (``cvcpkg image``)
 - ``_init``      — recipe scaffolding (``cvcpkg init``)
 - ``_server``    — token, user, registration, server, org management
 - ``_builder``   — builder agent commands
@@ -120,6 +121,7 @@ from cvcpkg.cli import (  # noqa: E402, F401
     _catalog,
     _cpkg,
     _doctor,
+    _image,
     _init,
     _install,
     _publish,

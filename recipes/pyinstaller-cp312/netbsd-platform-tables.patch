@@ -1,0 +1,55 @@
+diff --git a/PyInstaller/compat.py b/PyInstaller/compat.py
+index 776b3b8..65182c1 100644
+--- a/PyInstaller/compat.py
++++ b/PyInstaller/compat.py
+@@ -89,11 +89,12 @@
+ is_aix = sys.platform.startswith('aix')
+ is_freebsd = sys.platform.startswith('freebsd')
+ is_openbsd = sys.platform.startswith('openbsd')
++is_netbsd = sys.platform.startswith('netbsd')
+ is_hpux = sys.platform.startswith('hp-ux')
+ 
+ # Some code parts are similar to several unix platforms (e.g. Linux, Solaris, AIX).
+ # macOS is not considered as unix since there are many platform-specific details for Mac in PyInstaller.
+-is_unix = is_linux or is_solar or is_aix or is_freebsd or is_hpux or is_openbsd
++is_unix = is_linux or is_solar or is_aix or is_freebsd or is_hpux or is_openbsd or is_netbsd
+ 
+ # Linux distributions such as Alpine or OpenWRT use musl as their libc implementation and resultantly need specially
+ # compiled bootloaders. On musl systems, ldd with no arguments prints 'musl' and its version.
+diff --git a/PyInstaller/depend/bindepend.py b/PyInstaller/depend/bindepend.py
+index a8b8067..2549c30 100644
+--- a/PyInstaller/depend/bindepend.py
++++ b/PyInstaller/depend/bindepend.py
+@@ -818,7 +818,7 @@ def _resolve_library_path_unix(name):
+                 paths.append('/usr/local/lib/hpux32')
+             else:
+                 paths.append('/usr/local/lib/hpux64')
+-        elif compat.is_freebsd or compat.is_openbsd:
++        elif compat.is_freebsd or compat.is_openbsd or compat.is_netbsd:
+             paths.append('/usr/local/lib')
+         lib = lib_search_func(name, paths)
+ 
+diff --git a/bootloader/wscript b/bootloader/wscript
+index e86be20..9cecbf1 100644
+--- a/bootloader/wscript
++++ b/bootloader/wscript
+@@ -48,6 +48,7 @@
+     'linux': 'Linux',
+     'freebsd': 'FreeBSD',
+     'openbsd': 'OpenBSD',
++    'netbsd': 'NetBSD',
+     'win32': 'Windows',
+     'darwin': 'Darwin',
+     'sunos': platform.system(),  # FIXME: inhibits cross-compile
+@@ -64,6 +65,11 @@
+     # Android is also folded back into 'linux', to avoid a message about "cross-compiling for Linux".
+     'Android': 'linux',
+     'FreeBSD': 'freebsd',
++    # Without these, BUILD_OS falls back to platform.system() ('OpenBSD' /
++    # 'NetBSD'), which never equals waf's DEST_OS ('openbsd' / 'netbsd'), so a
++    # native build is misreported as a cross-compilation.
++    'OpenBSD': 'openbsd',
++    'NetBSD': 'netbsd',
+     'Windows': 'win32',
+     'Darwin': 'darwin',
+     'Solaris': 'sunos',

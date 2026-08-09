@@ -428,6 +428,12 @@ release.  These are the gaps to close **before** the final publish step.
    version ranges (e.g. `^3.0`, `==1.3.0`) in the recipe/catalog, and the
    resolver enforces them — user + transitive constraints, with
    intersection and conflict rejection (see test_resolver.py).
+   *Scope note:* this is the **install** path (`depends.runtime` →
+   manifest → resolver).  **Build-time host tools are not covered**:
+   `depends.host_tools` is a bare `array[string]`, never reaches the
+   manifest, and resolves by name — so a build gets whatever version of a
+   host tool that builder last built.  Tracked in **Phase 7.6**, where
+   pinning a hermetic `incus` is the first thing that needs it.
 
 ### Phase 2 — Analytics & Telemetry
 
@@ -582,6 +588,10 @@ deliberately language-agnostic.  Future expansion:
 - **Haskell** — GHC toolchain plus Haskell packages, built against *our own*
   pinned GHC and ABI.  Developed in full in **Phase 7.5**, because Haskell's
   per-closure ABI hashing makes it a different (harder) problem than wheels.
+- **Go** — a pinned toolchain plus offline (vendored) module resolution.
+  Developed in full in **Phase 7.6**; it is the *easiest* of these, not the
+  hardest, and it gates the hermetic container runtime (Incus) and the
+  Phase 20 `verlihub` TLS proxy.
 
 #### Recipe Ecosystem
 
@@ -1203,6 +1213,105 @@ precisely this reason.
 
 ---
 
+### Phase 7.6 — Go Ecosystem Integration (Our Go, Our Modules)
+
+**Status: Proposed** — full design in
+[`docs/roadmap/hermetic-container-runtime.md`](docs/roadmap/hermetic-container-runtime.md).
+
+Numbered 7.6 for the same reason as 7.5: it sits beside the other
+language-ecosystem phases without renumbering the PyPI release off its
+terminal slot.  **Go is much easier than Haskell and should not be
+sequenced behind it** — Phase 7.5's hard part (per-closure ABI hashing)
+has no Go equivalent, and upstream ships official per-platform binary
+tarballs, so there is no bootstrap dance.
+
+Today the word "Go" appears **once** in this roadmap: the Phase 20
+`verlihub` entry, where the TLS-proxy feature "requires a **Go
+toolchain** and should stay off by default".  That is a feature already
+deferred because of this gap, and Phase 4's language list omits Go
+entirely.
+
+- [ ] **`go` recipe** — pin an official upstream toolchain tarball per
+      platform, SHA256-pinned and mirrored, exactly as
+      `new-dependencies.md` §1 does for the Emscripten SDK.  Consumers
+      declare it through `depends.host_tools`.
+- [ ] **Offline module resolution** — `go build` wants
+      `proxy.golang.org`; cvcpkg builds must be offline.  Standardize on
+      `GOFLAGS=-mod=vendor` + `GOPROXY=off` against a vendored tree (the
+      Go analogue of the `python_sdist` offline problem).
+- [ ] **`CGO_ENABLED` composes with the native toolchain** — a cgo build
+      is only as hermetic as its C compiler, so this inherits whatever
+      [`hermetic-native-toolchain.md`](docs/roadmap/hermetic-native-toolchain.md)
+      decides.
+- [ ] **Unblock Phase 20's `verlihub` TLS proxy** — the first consumer
+      that already exists in the roadmap.
+
+#### The driving consumer — Incus as a dependency, not a capability
+
+`incus` / `lxd` / `lxc` are currently **host capabilities**: `platform.py`
+probes them and `test.vm.requires_capabilities` gates on the result.  The
+probes are good at what they do (they prove usability, not mere presence,
+and disambiguate the overloaded `lxc` name), but a capability cannot pin a
+**version** and cannot **cause** provisioning — a builder runs VM tests
+only because an admin ran `apt install incus` out of band.  That is the
+same "floats to the system default" gap Phase 7 closed for Python, 7.5
+closes for GHC, and `hermetic-native-toolchain.md` raises for `CC`/`CXX`.
+
+- [ ] **`liblxc` (≥ 5.0.0) + `libcap`, `libacl`, `libattr`, `libudev`,
+      `libuv`** — ~6 new C recipes; `sqlite`, `lz4`, `xz`, `zstd`,
+      `libtool` and `pkg-config` are already in the catalog.
+- [ ] **`incus` recipe** — build from the **release tarball**, which
+      bundles the Go dependency tree plus local `libraft`/`libcowsql`,
+      removing two otherwise-painful recipes.  Requires Go ≥ **1.25.12**.
+- [ ] **Incus only — not LXD.**  Incus is Apache-2.0; LXD was relicensed
+      to **AGPLv3 under a Canonical CLA** (Dec 2023) and is now a mix of
+      AGPLv3 and Apache-2.0 **with no per-file metadata** saying which is
+      which.  For a catalog that redistributes binaries that is an
+      unresolvable provenance question.  Debian is deprecating LXD in
+      favour of Incus for trixie.  Keep the `lxd` *probe* regardless —
+      detecting a runtime we do not ship costs nothing.
+- [ ] **Narrow the capability; do not delete it.**  A hermetic Incus
+      cannot ship the parts the capability attests: the daemon is
+      **Linux-only**, it needs contiguous **sub-UID/sub-GID ranges ≥ 10M**
+      for root, kernel namespaces and cgroup delegation, and a running
+      privileged daemon.  So `requires_capabilities: [incus]` becomes
+      `host_tools: [incus]` (shippable, pinned) **plus**
+      `requires_capabilities: [linux-containers]` (the substrate, which
+      only the host can attest).  The capability stops meaning "did an
+      admin install a container manager" and starts meaning "can this
+      kernel host containers".
+- [ ] **`host_tools` needs version constraints.**  Pinning Incus *by
+      version* is currently impossible, and the gap is wider than the
+      schema.  Four distinct pieces:
+      - **Schema.**  `depends.host_tools` is a bare `array[string]`,
+        while `depends.build` / `depends.runtime` accept a `dep_entry`
+        (`name`, `version`, `platforms`).  The *code* already reads dict
+        entries (`builder.py::_dep_names`, `validation.py`), so only the
+        schema rejects them — `cvcpkg validate` currently fails a recipe
+        the builder would happily accept.  Making `host_tools` accept
+        `dep_entry` is the cheap half and buys `platforms` for free.
+      - **Platform filter — latent bug.**  In `builder.py::_dep_names`
+        the build/runtime loop skips entries whose `platforms` exclude
+        the target; the `host_tools` loop directly beneath it does not.
+        A dict host tool carrying `platforms` would be requested on
+        *every* platform — which bites immediately for a Linux-only
+        `incus`.
+      - **Enforcement is the substantive half.**  Phase 1.5 §8's version
+        ranges are enforced on the **install** path (recipe
+        `depends.runtime` → manifest → resolver `satisfies()`).  Host
+        tools never reach the manifest — it carries `depends.runtime`
+        only, and host tools are stripped on install — so there is no
+        build-time equivalent: a host tool resolves **by name**, and the
+        build gets whatever version that builder last built.  Pinning
+        needs build-time constraint resolution, not just a richer schema.
+      - **Provenance.**  Once a host tool is pinned, the built artifact
+        should record *which* one built it, or the pin is unverifiable
+        after the fact.  Relates to Phase 16 (Prefix Provenance) and to
+        the reproducibility argument in
+        [`hermetic-native-toolchain.md`](docs/roadmap/hermetic-native-toolchain.md).
+
+---
+
 ### Phase 8 — Self-Hosting & Universal Bootstrap (`cvpkg`)
 
 **Status: Planned** — see also Phase 11, which develops the
@@ -1396,6 +1505,72 @@ parallel track (matching the Status Snapshot above).
 - [ ] **Emulated-arch pilot** — once qemu recipes land, trial a
       qemu-system-aarch64 Linux builder VM to extend the fleet beyond
       x86_64 without new hardware.
+- [ ] **Redeploy the dev cluster on merge, and make its version legible** —
+      the dev server runs whatever was last deployed, which can be many hours
+      behind `master`, so a merged fix silently does not apply and gets
+      re-diagnosed as a live bug.  On 2026-08-05 disk-aware scheduling
+      (#440, merged 03:39Z) was absent from a dev server started
+      2026-08-04T13:54Z, ~14 h earlier: two `haiku-image` jobs routed to a
+      34 GiB builder and failed on the recipe's own disk preflight, while an
+      idle 87 GiB builder — the only one advertising `incus`, and therefore
+      the only one that could have run the recipe's `test.vm` — was never
+      offered the work (#469).  The same class of lag produced the catalog
+      drift that `CVCPKG_POPULATE_UPSTREAM` fixed in #366.  Two parts:
+      (a) have `deploy-dev.yml` redeploy and migrate on every merge to
+      `master`, so dev is by construction not behind; and (b) report the
+      deployed commit in `cvcpkg server status` — it currently prints only
+      `Version: 2.0.2`, which is the same string before and after any merge,
+      so "is this server current?" is today answerable only by comparing
+      uptime against a merge timestamp.
+- [ ] **Finish the Haiku builder** — `haiku-image 1.0.0-beta.5+cvc.1` is
+      published and, as of 2026-08-06, proven end to end for the first time:
+      it builds in ~35 min, boots under Incus, takes a DHCP lease, accepts SSH
+      on its baked key, compiles and runs a C binary in the guest, and starts
+      sshd headlessly from its `launch_daemon` job.  What remains is turning
+      that image into a fleet member, and the gap is architectural rather than
+      a missing config step: **cvcpkg cannot run natively on Haiku** (no pip in
+      HaikuPorts; `cryptography` stuck at 3.4.8 against our `>=41` floor), so a
+      Haiku box is an SSH *delegation target* driven by a Linux builder via
+      `haikuhost.py` (#431), not a host that runs `cvcpkg builder run`.  One
+      real constraint bites provisioning: `boot.console: none`, so there is no
+      out-of-band channel if the network or keys are wrong.  Persistence is
+      NOT a blocker, despite the obvious-looking "Haiku has no cron" — cron is
+      absent because `launch_daemon`, Haiku's native init engine, replaced it,
+      and this image already ships a supervised `service` job that starts sshd
+      and restarts it if it dies.  That is a superset of the crontab `@reboot`
+      line the BSD builders use, and it is proven on a booted guest.  A
+      builder/delegation agent just needs a second job in the same shape.
+      Sequence: land
+      #431, provision with `common/provision-image-vm.sh haiku-image`, wire the
+      owning Linux builder's `haikuhost` settings, decide whether
+      cmake/patchelf/rsync get baked into the recipe rather than left as a
+      post-provision `pkgman` step, and register it in the fleet tables.  Also
+      still open: `test.vm` SKIPS on every builder for want of
+      `HAIKU_BUILDER_SSH_KEY` in a builder's environment — until that lands it
+      is a green skip, not verification.  Full state and traps:
+      `vm-provisioning/docs/HAIKU-IMAGE-BUILDER.md`.
+- [ ] **Build our own images for the whole fleet, not just Haiku** — Haiku
+      forced the issue because its installer is graphical-only, but the
+      argument generalises: a builder provisioned from a `kind: image` package
+      is reproducible, versioned, hash-verified, and boots with no interactive
+      installer, whereas today most of the fleet is a VM someone installed by
+      hand and a script that patches it afterwards.  `image.yaml` already
+      carries every hypervisor constant a provisioning script needs, and
+      `common/provision-image-vm.sh` already consumes it for any guest, so the
+      per-OS work is a recipe rather than new machinery.  Order by payoff:
+      **Linux** first (unattended installs are easy, and it is most of the
+      fleet), then the **BSDs** — FreeBSD/OpenBSD/NetBSD already automate via
+      serial-console expect scripts, so an image mostly removes the install
+      step, and GhostBSD/DragonflyBSD would skip needing one at all.
+      **Windows** is worth doing as a **private** image: the blocker is
+      licensing, not technology, so the image must be org-scoped (never in the
+      public catalog) and the licence-key handling settled up front —
+      evaluation media, KMS/MAK, or per-VM keys injected at provision time.
+      **macOS is explicitly out of scope**: Apple's licensing restricts guests
+      to Apple hardware, we own none, and the toolchain would be a standing
+      tax for one platform.  Cross-cutting prerequisite: image recipes are
+      large (haiku-image is a 546 MB artifact), so storage/retention policy for
+      image packages needs deciding before the catalog carries a dozen of them.
 
 ---
 

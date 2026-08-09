@@ -36,6 +36,7 @@ EXPECTED_SUBMODULES = [
     "_catalog",
     "_cpkg",
     "_doctor",
+    "_image",
     "_init",
     "_install",
     "_publish",
@@ -274,3 +275,62 @@ class TestInitReexports:
             assert (
                 submodule in imported_modules
             ), f"__init__.py does not import {submodule} — its CLI commands won't be registered"
+
+
+# ── 5. Non-CLI files the CLI package depends on ────────────────
+
+
+# Everything under src/cvcpkg/ that a cli/ submodule imports but that does NOT
+# live in cli/, plus the non-Python data those modules read.  This list exists
+# because `cvcpkg.cli.__init__` imports every submodule at import time, so a
+# tree that is missing one of these does not fail at `cvcpkg image ...` — it
+# fails at `import cvcpkg.cli`, i.e. on EVERY cvcpkg command.
+#
+# The concrete way that happens: these were new, untracked files, and a
+# `git commit -a` stages tracked modifications only.  Committing the modified
+# cli/__init__.py without `git add`ing cli/_image.py + its imports produces a
+# tree whose entire CLI raises ImportError.  THIS test file is tracked, so it
+# rides along with such a commit and turns that into a red build.
+PACKAGE_DIR = CLI_DIR.parent
+
+REQUIRED_SUPPORT_MODULES = (
+    "images.py",  # cli/_image.py: `from cvcpkg import images as _images`
+    "vmtest.py",  # cli/_image.py: `from cvcpkg import vmtest as _vmtest`
+)
+
+# Read at runtime via importlib.resources (cvcpkg.validation.load_schema), so
+# nothing about a normal import would notice they are gone.
+REQUIRED_SCHEMAS = (
+    "recipe-schema.yaml",
+    "components-schema.yaml",
+    "manifest-schema.yaml",
+    "image-schema.yaml",
+)
+
+
+class TestCliSupportFiles:
+    """cli/ submodules' non-cli dependencies must be present and importable."""
+
+    @pytest.mark.parametrize("filename", REQUIRED_SUPPORT_MODULES)
+    def test_support_module_file_exists(self, filename):
+        path = PACKAGE_DIR / filename
+        assert path.is_file(), (
+            f"Missing {path} — a cli/ submodule imports it, so the whole "
+            f"`cvcpkg` CLI is unimportable without it (was it never `git add`ed?)"
+        )
+
+    @pytest.mark.parametrize("filename", REQUIRED_SUPPORT_MODULES)
+    def test_support_module_imports(self, filename):
+        importlib.import_module(f"cvcpkg.{filename[:-3]}")
+
+    @pytest.mark.parametrize("filename", REQUIRED_SCHEMAS)
+    def test_bundled_schema_present(self, filename):
+        path = PACKAGE_DIR / "schemas" / filename
+        assert path.is_file(), (
+            f"Missing {path} — schemas are loaded via importlib.resources, so "
+            f"a tree without this one imports fine and fails at `cvcpkg validate`"
+        )
+
+    def test_cli_is_importable_as_a_whole(self):
+        """The failure mode the list above exists to prevent, end to end."""
+        importlib.import_module(CLI_PKG)

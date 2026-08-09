@@ -1,10 +1,21 @@
 #!/usr/bin/env bash
 # recipes/ca-bundle/build.sh — stage the Mozilla CA bundle into the prefix.
+#
+# This recipe is noarch (platform: any): the payload is one PEM file plus a
+# POSIX shell hook, byte-identical everywhere, so it is built once and
+# installed on every platform.
+#
+# Deliberately does NOT source _common/env-${CVC_PLATFORM}.sh.  An 'any'
+# recipe still builds on some concrete host — builder.py resolves
+# build_platform back to detect_platform() — so CVC_PLATFORM is whatever
+# machine happened to claim the job.  Sourcing a per-platform helper would
+# make a noarch build's success depend on that host, and there is no
+# env-windows.sh at all (only .ps1).  Nothing here compiles, so the only
+# thing needed from the environment is the install prefix.  Same approach as
+# recipes/wasmtime/build.sh and recipes/wasi-sdk/build.sh.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# shellcheck source=recipes/_common/env-linux.sh
-source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
+: "${CVC_INSTALL_DIR:?CVC_INSTALL_DIR must be set}"
 
 CERT_URL="https://curl.se/ca/cacert-2026-05-14.pem"
 CERT_SHA256="86a1f3366afac7c6f8ae9f3c779ac221129328c43f0ab2b8817eb2f362a5025c"
@@ -17,9 +28,10 @@ mkdir -p "${SSL_DIR}" "${SHARE_DIR}"
 # Download and verify the CA bundle.
 curl -fsSL --retry 5 --retry-delay 3 -o "${SSL_DIR}/cert.pem" "${CERT_URL}"
 
-# sha256 tooling differs across this recipe's matrix: coreutils sha256sum on
-# Linux, sha256(1) on the BSDs, shasum/openssl on macOS.  Same fallback chain
-# as recipes/grpc/build.sh.
+# sha256 tooling differs by build host: coreutils sha256sum on Linux,
+# sha256(1) on the BSDs, shasum/openssl on macOS.  Same fallback chain as
+# recipes/grpc/build.sh.  Still needed after the noarch move: the package is
+# platform-independent, but the machine that builds it is not.
 if command -v sha256sum >/dev/null 2>&1; then
     ACTUAL_SHA256="$(sha256sum "${SSL_DIR}/cert.pem" | awk '{print $1}')"
 elif command -v sha256 >/dev/null 2>&1; then

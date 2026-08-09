@@ -199,7 +199,9 @@ class Recipe:
     raw: dict[str, Any]  # full parsed YAML for manifest generation
     recipe_dir: Path
     tags: list[str] = field(default_factory=list)
-    kind: str = ""  # e.g. data, media, config, iso -- for downstream hints
+    kind: str = ""  # e.g. data, media, config, iso, image -- downstream hints
+    # NOTE: "image" is not just a hint -- pack_recipe enforces the
+    # share/<name>/ layout and a schema-valid image.yaml for it.
     cross_toolchain_targets: list[str] = field(default_factory=list)
     cross_toolchain_env: dict[str, str] = field(default_factory=dict)
     conflicts: list[str] = field(default_factory=list)
@@ -211,6 +213,14 @@ class Recipe:
     # Host capabilities that must ALL be present for this package to be
     # selectable by the resolver (e.g. ``[cuda]``).  Empty = universal.
     requires_capabilities: list[str] = field(default_factory=list)
+    # Raw ``test.vm`` block (see cvcpkg.vmtest).  Held unparsed so the builder
+    # never imports the hypervisor machinery for the ~all recipes without one.
+    #
+    # NOTE this is deliberately NOT folded into requires_capabilities above:
+    # that key gates whether the resolver will SELECT the package, and an image
+    # must stay installable on a host with no hypervisor.  test.vm carries its
+    # own capability gate, which controls only whether the test runs.
+    vm_test: dict[str, Any] | None = None
     python: PythonSpec | None = None
 
     @property
@@ -245,6 +255,7 @@ class Recipe:
             build_matrix=[MatrixEntry.from_dict(m) for m in build_block.get("matrix", [])],
             package_files=package_block.get("files", []),
             test_script=test_block.get("script") if test_block else None,
+            vm_test=(test_block.get("vm") or None) if test_block else None,
             raw=raw,
             recipe_dir=recipe_dir.resolve(),
             tags=recipe_block.get("tags", []) or [],
@@ -453,6 +464,54 @@ def _platform_wheel_keys(source: SourceSpec, platform: str, arch: str) -> list[s
     return sorted(k for k in source.artifacts if k == prefix or k.startswith(f"{prefix}-"))
 
 
+#: Architecture spellings that mean the same machine.  Recipes are keyed on
+#: cvcpkg's canonical names, but upstream download URLs (and therefore the
+#: humans transcribing them) frequently use the other spelling — `wasmer`
+#: ships a `linux-aarch64` artifact that would otherwise look like "no arm64
+#: support at all".
+_ARCH_ALIASES: dict[str, tuple[str, ...]] = {
+    "arm64": ("arm64", "aarch64"),
+    "aarch64": ("aarch64", "arm64"),
+    "x86_64": ("x86_64", "amd64"),
+    "amd64": ("amd64", "x86_64"),
+}
+
+
+def _artifacts_cover(recipe: Recipe, platform: str, arch: str) -> bool:
+    """Does *recipe* have a prebuilt artifact for *platform*/*arch*?
+
+    Only meaningful for recipes that ship PREBUILT artifacts — a recipe built
+    from source has no ``artifacts`` map and is always eligible, as is one
+    keyed ``any`` (a pure-Python wheel).
+
+    This exists because ``source.artifacts`` already IS the platform/arch
+    constraint, and it is the only place that information lives: the recipe
+    schema has no ``arch`` field, and duplicating the fact into one would just
+    give it somewhere to drift from.  Without this filter a linux/arm64 run
+    attempts every x86_64-only wheel — torch, triton, wand, the 14
+    nvidia-*-cu12 CUDA redistributables — and each dies deep in the build with
+    ``no artifact for linux-arm64``, which reads like breakage rather than
+    "not applicable here".  27 recipes did exactly that on the first arm64
+    populate.
+
+    Deliberately NOT applied inside a direct ``cvcpkg build <name>``: asking
+    for one recipe by name should still fail loudly, so a mistyped artifact
+    key is an error rather than a silent no-op.
+    """
+    arts = getattr(recipe.source, "artifacts", None)
+    if not arts:
+        return True
+    if "any" in arts:
+        return True
+    if not arch:
+        return True
+    for candidate in _ARCH_ALIASES.get(arch, (arch,)):
+        prefix = f"{platform}-{candidate}"
+        if any(k == prefix or k.startswith(f"{prefix}-") for k in arts):
+            return True
+    return False
+
+
 def _resolve_artifact(source: SourceSpec, platform: str, arch: str) -> tuple[str, str, str]:
     """Resolve the ``artifacts`` entry for *platform*/*arch*.
 
@@ -469,6 +528,14 @@ def _resolve_artifact(source: SourceSpec, platform: str, arch: str) -> tuple[str
 
     key = f"{platform}-{arch}"
     entry = source.artifacts.get(key)
+    if entry is None:
+        # Accept the other common spelling of the same machine before giving
+        # up (linux-aarch64 vs linux-arm64); see _ARCH_ALIASES.
+        for _alias in _ARCH_ALIASES.get(arch, ()):
+            entry = source.artifacts.get(f"{platform}-{_alias}")
+            if entry is not None:
+                key = f"{platform}-{_alias}"
+                break
     if entry is None:
         # Platform-independent ('any') fallback: a recipe whose only artifact is
         # keyed ``any`` (a pure-Python ``py3-none-any`` wheel — valid on every
@@ -706,6 +773,13 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
     env["CVC_LINK"] = ctx.link
     env["CVC_COMPONENT"] = ctx.recipe.name
     env["CVC_VERSION"] = ctx.recipe.upstream_version
+    # The minted identity, for build scripts that must WRITE their own version
+    # into a generated file (an image descriptor, a version header).  These
+    # reflect the recipe as committed; `pack --bump` / `--cvc-revision` re-stamp
+    # the revision AFTER the build script has run, so a bumped pack leaves such
+    # a generated file at the committed revision.
+    env["CVC_REVISION"] = str(ctx.recipe.cvc_revision)
+    env["CVC_FULL_VERSION"] = ctx.recipe.full_version
     env["CVC_RECIPE_DIR"] = str(ctx.recipe.recipe_dir)
 
     # CVC_DEPS_PREFIX tells build.sh where to find previously-built
@@ -1188,6 +1262,90 @@ def run_test(
         ).returncode
     if returncode != 0:
         raise BuildError(f"Test for {ctx.recipe.name} failed with code {returncode}")
+
+
+def resolve_vm_test_image(ctx: BuildContext, image_name: str) -> Any:
+    """Locate the image a ``test.vm`` block wants to boot.
+
+    ``image: self`` resolves against the recipe's own STAGED tree — that is the
+    whole point: the artifact under test is the one this build just produced,
+    not whatever happens to be installed in the shared prefix.  A named image
+    (a recipe testing against some other package's guest) resolves against the
+    prefix, where its dependency was already installed.
+    """
+    from cvcpkg import images as _imgs
+
+    candidates = [ctx.install_dir]
+    if ctx.prefix != ctx.install_dir:
+        candidates.append(ctx.prefix)
+    for root in candidates:
+        image_dir = root / _imgs.SHARE_DIR / image_name
+        if (image_dir / _imgs.IMAGE_DESCRIPTOR).is_file():
+            return _imgs.load_image(image_dir)
+    looked = ", ".join(str(c / _imgs.SHARE_DIR / image_name) for c in candidates)
+    raise BuildError(
+        f"test.vm wants to boot image '{image_name}' but no {_imgs.IMAGE_DESCRIPTOR} "
+        f"was found in: {looked}"
+    )
+
+
+def run_vm_test(
+    ctx: BuildContext,
+    *,
+    log_callback: Callable[[str], None] | None = None,
+) -> None:
+    """Run the recipe's ``test.vm`` block, if it has one.
+
+    Boots the just-built image in a throwaway VM and asserts against it.  A
+    builder with no hypervisor SKIPS (reported, green); a guest that fails to
+    boot or fails the guest-side script raises :class:`BuildError`, which is
+    what makes an image recipe self-testing rather than trust-me.  The VM is
+    destroyed on every exit path — see :mod:`cvcpkg.vmtest`.
+    """
+    if not ctx.recipe.vm_test:
+        return
+    from cvcpkg import vmtest as _vmtest
+
+    def emit(message: str) -> None:
+        print(message)
+        if log_callback:
+            log_callback(f"{message}\n")
+
+    try:
+        spec = _vmtest.VmTestSpec.from_dict(ctx.recipe.vm_test)
+    except _vmtest.VmTestError as exc:
+        raise BuildError(f"{ctx.recipe.name}: invalid test.vm block: {exc}") from exc
+    assert spec is not None  # vm_test was non-empty
+
+    image_name = ctx.recipe.name if spec.image == "self" else spec.image
+    image = resolve_vm_test_image(ctx, image_name)
+
+    script_path = ctx.recipe.recipe_dir / spec.script if spec.script else None
+
+    try:
+        result = _vmtest.run_vm_test(
+            spec=spec,
+            image=image,
+            script_path=script_path,
+            log=emit,
+        )
+    except _vmtest.VmTestError as exc:
+        # Setup problems that are the recipe's fault (declared script missing,
+        # no importer metadata) — a bug to fix, not an environment to tolerate.
+        raise BuildError(f"{ctx.recipe.name}: VM test could not run: {exc}") from exc
+
+    emit(_vmtest.format_result(image_name, result))
+    if result.output:
+        emit(result.output)
+    if result.leaked:
+        emit(
+            f"cvcpkg: WARNING: the {image_name} test VM or its imported image may not "
+            f"have been destroyed — look for INSTANCES and IMAGES named "
+            f"{_vmtest.INSTANCE_PREFIX}* (a leaked image is a multi-gigabyte qcow2 "
+            f"sitting in the daemon's store, so check both namespaces)"
+        )
+    if result.status == _vmtest.FAILED:
+        raise BuildError(f"VM test for {ctx.recipe.name} failed: {result.reason}")
 
 
 # ── Manifest generation ────────────────────────────────────────
@@ -1739,6 +1897,12 @@ def build_recipe(
     if recipe.test_script:
         run_test(ctx, log_callback=log_callback)
 
+    # Boot the artifact we just built and assert against it, if the recipe
+    # asked for that.  Runs AFTER the host-side test and BEFORE staging, so a
+    # guest that cannot boot never becomes a bundle.
+    if recipe.vm_test:
+        run_vm_test(ctx, log_callback=log_callback)
+
     # If the caller supplied an explicit --prefix that differs from the
     # per-recipe isolated install_dir, mirror install_dir into it so the
     # user's prefix actually gets populated. Without this, `cvcpkg build
@@ -1848,6 +2012,24 @@ def pack_recipe(
             raise BuildError(f"{ctx.recipe.name}: glibc floor violation — {_msg}")
         if _req is not None:
             print(f"cvcpkg: glibc floor OK — {_msg}")
+
+    # ── kind: image layout gate ─────────────────────────────────────────
+    # An image package's staged tree is merged into a SHARED prefix, so a file
+    # left at the root of the install dir lands at the prefix root under a
+    # generic name (metadata.yaml, README.md) and the second image package
+    # clobbers the first.  Confine every image to share/<name>/ and require a
+    # schema-valid image.yaml there, so `cvcpkg image` can find it and a shell
+    # consumer can derive the disk path from the package name alone.  Checked
+    # against the REAL staged tree here — package.files is only declarative.
+    if ctx.recipe.kind == "image":
+        from cvcpkg import images as _images
+
+        _img_errors = _images.check_staged_image_tree(ctx.install_dir, ctx.recipe.name)
+        if _img_errors:
+            raise BuildError(
+                f"{ctx.recipe.name}: kind 'image' layout violation:\n  " + "\n  ".join(_img_errors)
+            )
+        print(f"cvcpkg: image layout OK — share/{ctx.recipe.name}/ (image.yaml validated)")
 
     manifest = generate_manifest(
         ctx.recipe,
@@ -2538,6 +2720,7 @@ def build_all(
     recipes_dir: Path | list[Path],
     *,
     platform: str = "",
+    arch: str = "",
     config: str = "release",
     link: str = "shared",
     prefix: Path | None = None,
@@ -2651,6 +2834,7 @@ def build_all(
         r
         for r in all_recipes
         if any(m.platform == platform or m.platform == "any" for m in r.build_matrix)
+        and _artifacts_cover(r, platform, arch)
     ]
     ordered = resolve_build_order(recipes, platform)
 
@@ -3092,6 +3276,8 @@ def build_all(
                 run_build(ctx)
                 if recipe.test_script:
                     run_test(ctx)
+                if recipe.vm_test:
+                    run_vm_test(ctx)
                 # Merge this recipe's install into the shared prefix so
                 # subsequent recipes can find it via CVC_DEPS_PREFIX.
                 if install_dir.is_dir():

@@ -1,0 +1,160 @@
+# Build ONE recipe on Windows and throw the result away.
+#
+# windows-build.yml is the only other Windows recipe path, and it builds every
+# Windows recipe and then runs `cvcpkg publish --all` against cvcpkg.org.  That
+# is the wrong tool for "does this one recipe's build.ps1 actually work on
+# Windows?" -- too slow to iterate on, and it publishes.
+#
+# This workflow builds a single named recipe on the GitHub-hosted
+# windows-latest runner and never publishes: no CVCPKG_PUBLISHER_TOKEN, no
+# --server-cache-push, no `cvcpkg publish`.  It exists because the self-hosted
+# Windows builders (sandipaws, phm-win11) are offline, so a recipe's .ps1 build
+# script can otherwise reach master having never executed on Windows at all --
+# which is exactly how ca-bundle shipped a build.ps1 that had never run.
+#
+# Usage:
+#   gh workflow run windows-recipe-check -f recipe=ca-bundle
+#
+# The pull_request trigger is deliberately narrow: it fires only when this
+# workflow file itself changes, so the PR that edits it proves it still works
+# instead of adding a Windows job to every recipe PR.
+
+name: Windows recipe check
+
+on:
+  workflow_dispatch:
+    inputs:
+      recipe:
+        description: "Recipe to build (single name)"
+        required: true
+        default: "ca-bundle"
+        type: string
+      config:
+        description: "Build config"
+        required: true
+        default: "release"
+        type: choice
+        options:
+          - release
+          - debug
+      link:
+        description: "Link mode"
+        required: true
+        default: "shared"
+        type: choice
+        options:
+          - shared
+          - static
+  pull_request:
+    paths:
+      - ".github/workflows/windows-recipe-check.yml"
+
+concurrency:
+  group: windows-recipe-check-${{ github.ref }}-${{ inputs.recipe || 'ca-bundle' }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ inputs.recipe || 'ca-bundle' }} on Windows
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Recipe build scripts invoke cl.exe / link.exe directly, and
+      # _common/env-windows.ps1 throws if it cannot find a Visual Studio
+      # install, so MSVC must be active before the build step.
+      - name: Set up MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install system build tools
+        shell: powershell
+        run: |
+          choco install ninja --no-progress -y 2>&1 | Out-Null
+          choco install cmake --version=3.31.7 --installargs 'ADD_CMAKE_TO_PATH=System' --no-progress -y 2>&1 | Out-Null
+          choco install nasm --no-progress -y 2>&1 | Out-Null
+          foreach ($dir in ([System.Environment]::GetEnvironmentVariable('PATH', 'Machine') -split ';')) {
+            if ($dir) { echo $dir | Out-File -Append -Encoding utf8 $env:GITHUB_PATH }
+          }
+
+      - name: Ensure pwsh is on PATH
+        shell: bash
+        run: |
+          # Recipes with .ps1 build scripts need PowerShell Core (pwsh).
+          if ! command -v pwsh >/dev/null 2>&1; then
+            for d in "/c/Program Files/PowerShell/7" "/c/Program Files/PowerShell/7-preview"; do
+              if [ -x "$d/pwsh.exe" ]; then
+                echo "$d" >> "$GITHUB_PATH"
+                break
+              fi
+            done
+          fi
+
+      - name: Install cvcpkg
+        shell: bash
+        run: |
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet .
+          PY_SCRIPTS=$(python -c "import sysconfig; print(sysconfig.get_path('scripts'))")
+          echo "$PY_SCRIPTS" >> "$GITHUB_PATH"
+
+      - name: Validate recipe
+        shell: bash
+        run: cvcpkg validate "recipes/${{ inputs.recipe || 'ca-bundle' }}"
+
+      - name: Build ${{ inputs.recipe || 'ca-bundle' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cvcpkg build "${{ inputs.recipe || 'ca-bundle' }}" \
+            --local \
+            --platform windows \
+            --config "${{ inputs.config || 'release' }}" \
+            --link "${{ inputs.link || 'shared' }}" \
+            --recipes-dir recipes \
+            --prefix "${{ github.workspace }}/prefix"
+
+      - name: Show installed payload
+        if: always()
+        shell: bash
+        run: |
+          if [ -d "${{ github.workspace }}/prefix" ]; then
+            find "${{ github.workspace }}/prefix" -mindepth 1 | sort
+          else
+            echo "no prefix produced"
+          fi
+
+      # Guards against the class of bug that motivated this workflow: a .ps1
+      # that generates a POSIX shell script inherits its own CRLF line endings
+      # on a Windows checkout, which silently corrupts every value the hook
+      # exports.  Cheap to assert, invisible otherwise.
+      - name: Check generated shell scripts are LF and BOM-free
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="${{ github.workspace }}/prefix"
+          [ -d "$prefix" ] || { echo "no prefix; skipping"; exit 0; }
+          rc=0
+          while IFS= read -r -d '' f; do
+            if grep -qU $'\r' "$f"; then
+              echo "::error file=$f::generated shell script has CRLF line endings"
+              rc=1
+            fi
+            if [ "$(head -c3 "$f")" = $'\xef\xbb\xbf' ]; then
+              echo "::error file=$f::generated shell script has a UTF-8 BOM"
+              rc=1
+            fi
+            echo "ok (LF, no BOM): ${f#"$prefix"/}"
+          done < <(find "$prefix" -type f -name '*.sh' -print0)
+          exit $rc

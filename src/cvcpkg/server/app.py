@@ -2583,18 +2583,120 @@ def create_app(
 
     # ── Dependency graph (read) ────────────────────────────
 
+    class _RawRecipe:
+        """Minimal stand-in for a builder Recipe, for graph construction.
+
+        The pushed-recipe path only ever needs ``.name`` and ``.raw``; parsing
+        each bundle through the full Recipe loader would also make one bad
+        pushed recipe able to break the whole graph.
+        """
+
+        __slots__ = ("name", "raw")
+
+        def __init__(self, name: str, raw: dict):
+            self.name = name
+            self.raw = raw
+
+    #: (signature, parsed) — see _pushed_recipes_for_deps.
+    _pushed_deps_cache: dict[str, object] = {"sig": None, "val": []}
+
+    async def _pushed_recipes_for_deps() -> list[tuple[str, dict]]:
+        """Parse ``recipe.yaml`` out of every pushed recipe bundle.
+
+        Cached on ``(count, latest updated_at)`` from the recipes table, which
+        changes on any push, so a fresh push is reflected immediately while the
+        common case costs one cheap listing. Without a cache this would open
+        and gunzip several hundred tarballs on every package page view.
+        """
+        if not (_use_db and _db_recipes is not None):
+            return []
+        import io
+        import tarfile
+
+        import yaml as _yaml
+
+        try:
+            infos, total = await _db_recipes.list_recipes(limit=10000, offset=0)
+        except Exception:  # pragma: no cover - listing must never 500 the page
+            return []
+
+        latest = max((i.updated_at for i in infos), default=None)
+        sig = (total, latest.isoformat() if latest else "")
+        if _pushed_deps_cache["sig"] == sig:
+            return _pushed_deps_cache["val"]  # type: ignore[return-value]
+
+        out: list[tuple[str, dict]] = []
+        for info in infos:
+            try:
+                bundle_path = await _db_recipes.get_bundle_path(info.name, org_slug=info.org_slug)
+                if not bundle_path or not Path(bundle_path).is_file():
+                    continue
+                with tarfile.open(bundle_path, "r:gz") as tar:
+                    member = next(
+                        (
+                            m
+                            for m in tar.getmembers()
+                            if m.isfile() and Path(m.name).name == "recipe.yaml"
+                        ),
+                        None,
+                    )
+                    if member is None:
+                        continue
+                    fh = tar.extractfile(member)
+                    if fh is None:
+                        continue
+                    raw = _yaml.safe_load(io.BytesIO(fh.read()))
+                if isinstance(raw, dict):
+                    name = (raw.get("recipe") or {}).get("name") or info.name
+                    out.append((name, raw))
+            except Exception:
+                # One unreadable or malformed bundle must not blank the graph
+                # for every other package.
+                continue
+
+        _pushed_deps_cache["sig"] = sig
+        _pushed_deps_cache["val"] = out
+        return out
+
     @app.get("/v1/deps", tags=["packages"])
     async def get_dependency_graph(
         _auth: None = Depends(optional_reader_auth),
     ):
-        """Return forward and reverse dependency maps derived from recipes."""
+        """Return forward and reverse dependency maps derived from recipes.
+
+        Built from BOTH the server's local recipe set and the recipes orgs have
+        pushed with ``cvcpkg recipe push``.
+
+        Pushed recipes used to be missing entirely, and the effect was silent:
+        every package published from a repo whose recipes live outside this
+        server's own tree — the whole `cvc` org family (libcvc, libcvc-cuda,
+        cvcgl, pycvc, pycvc-gl, cvc-cli) — had no entry here, so its package
+        page rendered neither "Dependencies" nor "Used By" (both blocks stay
+        `display:none` until renderDeps finds a match) and it was badged
+        `community` rather than mainline. Nothing errored; the sections just
+        were not there.
+        """
         from cvcpkg.builder import RecipeError, find_recipes_dir, list_recipes
         from cvcpkg.refs import parse_dep_ref
 
+        recipes: list = []
         try:
-            recipes = list_recipes(find_recipes_dir())
+            recipes = list(list_recipes(find_recipes_dir()))
         except RecipeError:
-            return JSONResponse({"forward": {}, "reverse": {}})
+            recipes = []
+
+        # Overlay pushed recipes. Later entries win on a name collision, so an
+        # org's own push takes precedence over a stale local copy of the same
+        # name — the same "later wins" rule --recipes-dir already uses.
+        pushed = await _pushed_recipes_for_deps()
+        if pushed:
+            by_name = {r.name: r for r in recipes}
+            for name, raw in pushed:
+                by_name[name] = _RawRecipe(name, raw)
+            recipes = [by_name[n] for n in sorted(by_name)]
+
+        if not recipes:
+            return JSONResponse({"forward": {}, "reverse": {}, "meta": {}, "recipe_names": []})
 
         forward: dict[str, list[str]] = {}
         meta: dict[str, dict] = {}

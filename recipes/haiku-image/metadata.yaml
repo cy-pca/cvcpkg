@@ -1,5 +1,10 @@
 # Incus/LXD image metadata for the HaikuOS builder image.
-# Used with:  incus image import metadata.yaml haiku-builder.qcow2 --alias haiku-builder
+#
+# build.sh copies this to share/haiku-image/incus/metadata.yaml AND wraps it in
+# share/haiku-image/incus/metadata.tar.xz — `incus image import` takes the
+# TARBALL, not this file:
+#   incus image import "$(cvcpkg image path haiku-image --role incus-metadata)" \
+#                      "$(cvcpkg image path haiku-image)" --alias haiku-builder
 # (see README-import.md). creation_date is a placeholder — set it at import
 # time if you need provenance.
 architecture: x86_64

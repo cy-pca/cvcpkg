@@ -1,0 +1,180 @@
+# JSON-Schema (expressed in YAML) for an installed image descriptor:
+#   <prefix>/share/<package-name>/image.yaml
+#
+# Written by a `kind: image` recipe's build script, never by hand.  It is the
+# canonical description of a bootable guest image: what the payload is, what a
+# hypervisor needs to boot it, and how to import it.  Every field exists to
+# replace a hardcoded constant in a provisioning script.
+#
+# The flat `image.env` shipped beside it carries the same facts as POSIX
+# KEY=value for consumers with no YAML parser; image.yaml is the source.
+
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://cvcpkg.org/schemas/image-v1.yaml"
+title: "cvcpkg installed image descriptor"
+description: >
+  Canonical descriptor for an image package installed at
+  <prefix>/share/<package-name>/.
+
+type: object
+required: [schema_version, image, disks]
+additionalProperties: false
+
+properties:
+  schema_version:
+    type: integer
+    const: 1
+
+  image:
+    type: object
+    required: [package, version, guest_os, guest_arch]
+    additionalProperties: false
+    properties:
+      package:
+        type: string
+        pattern: "^[a-z][a-z0-9-]*$"
+        description: >
+          The cvcpkg package name.  MUST equal the name of the directory this
+          descriptor sits in — the directory name is the addressing key that
+          makes `<prefix>/share/<package>/disk.qcow2` derivable from the
+          package name alone.
+      version:
+        type: string
+        description: "Full minted version, e.g. 1.0.0-beta.5+cvc.1."
+      guest_os:
+        type: string
+        pattern: "^[a-z][a-z0-9-]*$"
+        description: >
+          The OS INSIDE the image (haiku, freebsd, windows...).  This is a
+          guest axis, not the bundle's own `platform`: the bundle is built on
+          and published for a host, and ships a guest.
+      guest_arch:
+        type: string
+        pattern: "^[a-z0-9_]+$"
+        description: "The architecture INSIDE the image, e.g. x86_64."
+      guest_release:
+        type: string
+        description: "Upstream release label of the guest, e.g. r1beta5."
+      guest_build:
+        type: string
+        description: >
+          The guest's exact upstream build within guest_release, as the guest
+          itself reports it — e.g. hrev57937_5, which `uname -v` prints inside
+          a Haiku guest.  guest_release names the release SERIES and is what a
+          consumer matches on; guest_build identifies the single build, so two
+          images of the same release are distinguishable and an image can be
+          traced back to the upstream revision it was cut from.  Optional: not
+          every guest OS has a finer-grained identifier than its release.
+      variant:
+        type: string
+        pattern: "^[a-z][a-z0-9-]*$"
+        description: "Role of this build of the guest, e.g. builder, desktop."
+
+  disks:
+    type: array
+    minItems: 1
+    description: "Disk payloads, in the order a hypervisor should attach them."
+    items:
+      type: object
+      required: [file, format, role]
+      additionalProperties: false
+      properties:
+        file:
+          type: string
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+          description: >
+            Path relative to the image directory.  Role-based
+            (`disk.qcow2`), never guest- or version-named, so a consumer can
+            derive it without knowing the upstream naming scheme.
+        format:
+          type: string
+          enum: [qcow2, raw, vmdk, vdi, vhdx, vhd]
+        role:
+          type: string
+          enum: [root, data, efi, swap]
+        virtual_size_bytes:
+          type: integer
+          minimum: 0
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+
+  boot:
+    type: object
+    additionalProperties: false
+    description: >
+      What a hypervisor must be told to boot this guest.  Each key replaces a
+      hardcoded constant in a provisioning script.
+    properties:
+      firmware:
+        type: string
+        enum: [uefi, bios]
+      disk_bus:
+        type: string
+        enum: [virtio-blk, virtio-scsi, sata, nvme, ide]
+        description: >
+          Some guests hard-require one bus (Haiku panics on virtio-scsi), and
+          the hypervisor default is usually the other one.
+      net_model:
+        type: string
+      console:
+        type: string
+        enum: [none, serial, vga]
+        description: >
+          `none` means there is NO out-of-band admin channel — networking and
+          keys must be correct before a headless deploy.
+      secureboot:
+        type: boolean
+      cpu_min:
+        type: integer
+        minimum: 1
+      memory_min_mib:
+        type: integer
+        minimum: 1
+      disk_min_gib:
+        type: integer
+        minimum: 1
+
+  access:
+    type: object
+    additionalProperties: false
+    properties:
+      ssh_user:
+        type: string
+      ssh_pubkey_baked:
+        type: boolean
+        description: "True when a public key was injected at build time."
+      work_dir:
+        type: string
+        pattern: "^/"
+        description: >
+          Absolute path INSIDE the guest where a driving builder should put
+          its build tree.  Optional, and only worth setting when it is not
+          simply `$HOME/cvcpkg-build`: a consumer that can log in should ask
+          the guest for $HOME rather than trust a field that can drift.  It
+          exists because the alternative was a provisioning script carrying
+          `/boot/home/cvcpkg-build` — one guest's home directory layout,
+          hardcoded in a script that claims to be guest-agnostic.
+
+  importers:
+    type: object
+    additionalProperties:
+      type: string
+      pattern: "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+    description: >
+      Importer name -> path (relative to the image directory) of the metadata
+      that importer takes, e.g. incus: incus/metadata.tar.xz.  `incus image
+      import` wants a metadata TARBALL, not a bare metadata.yaml.
+
+  writable:
+    type: boolean
+    description: >
+      ADVISORY ONLY.  qcow2 is a read-write format, so booting the installed
+      master in place mutates it and breaks `cvcpkg image verify`; boot a
+      qcow2 overlay with the installed file as its backing file instead.  File
+      modes cannot enforce this — they do not survive archive extraction.
+
+  docs:
+    type: string
+    pattern: "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+    description: "Path (relative to the image directory) of the import guide."

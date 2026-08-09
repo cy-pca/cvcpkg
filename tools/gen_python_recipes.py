@@ -254,6 +254,60 @@ _RESURRECTED_FLOOR = {
 # just <module>/ + dist-info. Versions are pinned like poetry.lock pins:
 # bumping one is a deliberate edit here.
 SEED_PACKAGES = {
+    "altgraph": {
+        "version": "0.17.5",
+        "license": "MIT",
+        "deps": [],
+        "files": ["altgraph/", "altgraph-*.dist-info/"],
+        "check": "import altgraph",
+    },
+    "hatchling": {
+        # PyInstaller's PEP-517 backend: a BUILD dep of the from-source
+        # pyinstaller recipes, which use --no-build-isolation.
+        "version": "1.31.0",
+        "license": "MIT",
+        "deps": ["packaging", "pathspec", "pluggy", "trove-classifiers"],
+        "files": ["hatchling/", "hatchling-*.dist-info/"],
+        "check": "import hatchling",
+    },
+    "macholib": {
+        "version": "1.16.4",
+        "license": "MIT",
+        "deps": ["altgraph"],
+        "files": ["macholib/", "macholib-*.dist-info/"],
+        "check": "import macholib",
+    },
+    "pefile": {
+        "version": "2024.8.26",
+        "license": "MIT",
+        "deps": [],
+        "files": ["pefile.py", "peutils.py", "ordlookup/", "pefile-*.dist-info/"],
+        "check": "import pefile",
+    },
+    "pyinstaller-hooks-contrib": {
+        "version": "2026.6",
+        "license": "Apache-2.0 OR GPL-2.0-or-later",
+        "deps": ["packaging", "setuptools"],
+        "files": [
+            "_pyinstaller_hooks_contrib/",
+            "pyinstaller_hooks_contrib-*.dist-info/",
+        ],
+        "check": "import _pyinstaller_hooks_contrib",
+    },
+    "pywin32-ctypes": {
+        "version": "0.2.3",
+        "license": "BSD-3-Clause",
+        "deps": [],
+        "files": ["win32ctypes/", "pywin32_ctypes-*.dist-info/"],
+        "check": "import win32ctypes",
+    },
+    "trove-classifiers": {
+        "version": "2024.10.16",
+        "license": "Apache-2.0",
+        "deps": [],
+        "files": ["trove_classifiers/", "trove_classifiers-*.dist-info/"],
+        "check": "import trove_classifiers",
+    },
     "black": {
         "version": "26.5.1",
         "license": "MIT",

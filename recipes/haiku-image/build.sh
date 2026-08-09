@@ -25,6 +25,34 @@ BUILDTOOLS_REF="${BUILDTOOLS_REF:-r1beta5}"
 HAIKU_REPO="${HAIKU_REPO:-https://github.com/haiku/haiku.git}"
 BUILDTOOLS_REPO="${BUILDTOOLS_REPO:-https://github.com/haiku/buildtools.git}"
 
+# The package version must NAME THE GUEST IT SHIPS.  recipe.yaml's
+# upstream_version is a hand-written literal while the guest is pinned by
+# HAIKU_REF here, and nothing connected the two: bumping HAIKU_REF to r1beta6
+# would have published an image of beta6 still calling itself 1.0.0-beta.5,
+# and a consumer resolving by version would get a guest it did not ask for.
+#
+# So derive the expected version from HAIKU_REF and refuse to build on a
+# mismatch.  r1beta5 -> 1.0.0-beta.5, r2beta1 -> 2.0.0-beta.1.  A HAIKU_REF
+# this does not understand (a branch name, a hash) is NOT an error — it is
+# the deliberate escape hatch for building something unreleased — but it
+# skips the check rather than guessing, and says so.
+_uv_declared="$(sed -n 's/^[[:space:]]*upstream_version:[[:space:]]*"\{0,1\}\([^"#[:space:]]\{1,\}\).*/\1/p' \
+                "${RECIPE_DIR}/recipe.yaml" | head -1)"
+if [[ "${HAIKU_REF}" =~ ^r([0-9]+)beta([0-9]+)$ ]]; then
+    _uv_expected="${BASH_REMATCH[1]}.0.0-beta.${BASH_REMATCH[2]}"
+    if [[ "${_uv_declared}" != "${_uv_expected}" ]]; then
+        echo "ERROR: recipe.yaml upstream_version is '${_uv_declared}', but HAIKU_REF=${HAIKU_REF}" >&2
+        echo "       describes Haiku ${_uv_expected}. The published package would name a" >&2
+        echo "       guest it does not contain. Update upstream_version to '${_uv_expected}'" >&2
+        echo "       (and bump cvc_revision — ${_uv_declared} is already published)." >&2
+        exit 1
+    fi
+    echo "version check ok: upstream_version ${_uv_declared} matches HAIKU_REF ${HAIKU_REF}"
+else
+    echo "NOTE: HAIKU_REF='${HAIKU_REF}' is not an rNbetaM release label;" >&2
+    echo "      skipping the upstream_version cross-check." >&2
+fi
+
 # ── 0. Disk preflight ───────────────────────────────────────────────────
 # DEFENCE IN DEPTH, not the primary mechanism.  The primary one is
 # `build.min_disk_gb: 35` in recipe.yaml, which the scheduler matches against
@@ -49,6 +77,31 @@ if [[ -z "${HAIKU_SKIP_SPACE_CHECK:-}" ]]; then
     fi
     echo "cvcpkg: disk preflight OK - ${_avail_gb} GiB free (need ~${HAIKU_MIN_DISK_GB} GiB)"
 fi
+
+# ── Guest axes: SINGLE SOURCES, not descriptor literals ─────────────────
+# Everything below drives BOTH a real build command and the generated
+# descriptor, so image.yaml cannot describe a guest this script did not build.
+# The rule for this file: a value that can be read off the artifact or off the
+# build inputs is DERIVED; a value that cannot is written in the POLICY block
+# in step 6 with its units and its evidence, and nowhere else.
+HAIKU_ARCH="${HAIKU_ARCH:-x86_64}"   # -> ./configure --build-cross-tools AND image.guest_arch
+
+# The jam profile, its output filename and the image's baked BFS size are read
+# out of UserBuildConfig — the same file that is copied into the Haiku tree and
+# that actually decides them. When the other worktree changes HAIKU_IMAGE_SIZE
+# (51200 -> 10240 MiB) or renames the profile, this follows without an edit here.
+UBC="${RECIPE_DIR}/UserBuildConfig"
+[[ -r "${UBC}" ]] || { echo "missing ${UBC}" >&2; exit 1; }
+HAIKU_PROFILE="$(sed -n 's/^[[:space:]]*DefineBuildProfile[[:space:]]\{1,\}\([A-Za-z0-9._-]\{1,\}\)[[:space:]]*:.*/\1/p' "${UBC}" | head -1)"
+HAIKU_IMAGE_FILE="$(sed -n 's/^[[:space:]]*DefineBuildProfile[^"]*"\([^"]\{1,\}\)".*/\1/p' "${UBC}" | head -1)"
+HAIKU_IMAGE_SIZE_MIB="$(sed -n 's/^[[:space:]]*HAIKU_IMAGE_SIZE[[:space:]]*=[[:space:]]*\([0-9]\{1,\}\).*/\1/p' "${UBC}" | head -1)"
+[[ -n "${HAIKU_PROFILE}" && -n "${HAIKU_IMAGE_FILE}" ]] || {
+    echo "could not read DefineBuildProfile out of ${UBC}" >&2; exit 1; }
+# image.variant: the profile name minus its image-format suffix
+# (builder-anyboot -> builder). Must match image-schema.yaml's ^[a-z][a-z0-9-]*$.
+HAIKU_VARIANT="${HAIKU_PROFILE%%-*}"
+echo "profile=${HAIKU_PROFILE} image=${HAIKU_IMAGE_FILE} arch=${HAIKU_ARCH} \
+variant=${HAIKU_VARIANT} HAIKU_IMAGE_SIZE=${HAIKU_IMAGE_SIZE_MIB:-<unset>} MiB"
 
 # ── 1. Host build dependencies (Debian/Ubuntu) ──────────────────────────
 # Haiku's build needs a specific host toolchain plus xorriso/mtools for the
@@ -100,6 +153,11 @@ if [[ -z "${DESC}" ]]; then
     export HAIKU_REVISION="${HAIKU_REVISION:-hrev57937_5}"
     echo "No hrev tags reachable — pinning HAIKU_REVISION=${HAIKU_REVISION}"
 fi
+# Whichever branch above ran, this is the revision the image will actually
+# carry, and it is what image.yaml's guest_build reports.  Recorded here so
+# the descriptor never has to re-derive it (and cannot disagree with it).
+HAIKU_REVISION_EFFECTIVE="${HAIKU_REVISION:-${DESC}}"
+echo "haiku revision (effective): ${HAIKU_REVISION_EFFECTIVE}"
 
 # ── 2b. Patch the haiku source tree ─────────────────────────────────────
 # NOTE: these are deliberately NOT in recipe.yaml's `patches:` list. That
@@ -190,7 +248,7 @@ echo "Using jam: ${JAM_BIN}"; jam -v 2>/dev/null || true
 cd haiku
 if [[ ! -e generated/build/BuildConfig && ! -e generated.x86_64/build/BuildConfig ]]; then
     ./configure -j"${JOBS}" \
-        --build-cross-tools x86_64 \
+        --build-cross-tools "${HAIKU_ARCH}" \
         --cross-tools-source ../buildtools
 fi
 
@@ -200,9 +258,9 @@ fi
 # aren't reachable, from the HAIKU_REVISION fallback exported there. Haiku's
 # build imports HAIKU_REVISION from the environment, so nothing extra is
 # needed here — a correctly-set value flows straight into the package version.
-jam -q -j"${JOBS}" @builder-anyboot
+jam -q -j"${JOBS}" "@${HAIKU_PROFILE}"
 
-ANYBOOT="$(ls -1 generated*/haiku-builder-anyboot.iso 2>/dev/null | head -1)"
+ANYBOOT="$(ls -1 generated*/"${HAIKU_IMAGE_FILE}" 2>/dev/null | head -1)"
 [[ -n "${ANYBOOT}" ]] || ANYBOOT="$(ls -1 generated*/*anyboot*.iso 2>/dev/null | head -1)"
 [[ -n "${ANYBOOT}" ]] || { echo "anyboot image not produced by jam" >&2; ls -R generated* | head -50; exit 1; }
 echo "Built anyboot: ${ANYBOOT}"
@@ -218,6 +276,37 @@ mkdir -p "${INJ}"
 printf '%s\n' "${HAIKU_BUILDER_SSH_PUBKEY:-}" > "${INJ}/authorized_keys"
 cp "${RECIPE_DIR}/launch-sshd"          "${INJ}/launch-sshd"
 cp "${RECIPE_DIR}/cvcpkg-start-sshd.sh" "${INJ}/cvcpkg-start-sshd.sh"
+
+# Whether the image really trusts a key. This becomes access.ssh_pubkey_baked
+# in image.yaml, which a fleet operator reads to decide whether the VM is
+# reachable — so it is set from a READ-BACK of the injected file, never from
+# "the command exited 0" (bfs_shell's scripted session can exit 0 with a failed
+# cp inside it).
+SSH_PUBKEY_BAKED=false
+
+# access.ssh_user — the account a fleet operator will actually type. It used to
+# be the literal `user`, which is a CLAIM ABOUT THE IMAGE that this script never
+# checked. Haiku's build names its single interactive account from
+# HAIKU_ROOT_USER_NAME, whose upstream default is `baron`; an image built
+# without that pinned has no account called `user` at all, and the literal was
+# simply false. It is now derived, best evidence first:
+#   1. the artifact's own passwd file, read back out of the BFS with bfs_shell
+#      (evidence — this is what the image HAS);
+#   2. HAIKU_ROOT_USER_NAME as pinned in the UserBuildConfig this script copies
+#      into the tree (intent — this is what the build ASKED for);
+#   3. the fallback Haiku's own jam rules use, read out of the cloned tree as
+#      `$(HAIKU_ROOT_USER_NAME:E=<name>)` rather than retyped here.
+# If none of them yields a name, access.ssh_user is OMITTED and the build says
+# so loudly. An absent key is a question the consumer is forced to answer
+# (cvcpkg's provisioner refuses to run without --ssh-user); a wrong literal is a
+# silent login failure on a guest with no out-of-band console.
+SSH_USER=""
+SSH_USER_SRC=""
+SSH_USER_CFG="$(sed -n 's/^[[:space:]]*HAIKU_ROOT_USER_NAME[[:space:]]*=[[:space:]]*\([A-Za-z0-9._-]\{1,\}\).*/\1/p' "${UBC}" | head -1)"
+# `|| true` is load-bearing: this file runs under `set -o pipefail`, and grep
+# exits 1 on no-match / 2 on a missing directory, either of which would abort
+# the whole image build over a source that is allowed to be absent.
+SSH_USER_UPSTREAM="$( { grep -rho 'HAIKU_ROOT_USER_NAME:E=[A-Za-z0-9._-]\{1,\}' build/jam 2>/dev/null || true; } | sed 's/.*=//' | head -1)"
 
 if [[ -n "${BFS_SHELL}" ]]; then
     # The anyboot has an MBR; bfs_shell needs the BFS partition. Loop-mount
@@ -287,6 +376,12 @@ ls /myfs/system/settings/launch
 sync
 quit
 BFSCMDS
+        # NOTE: the read-back path is Haiku's config/settings/ssh, NOT
+        # ~/.ssh.  The openssh package ships an sshd_config whose
+        # AuthorizedKeysFile names the former, so a key under ~/.ssh is
+        # never read and every login fails with publickey denied.  An
+        # earlier revision of this script read ~/.ssh back and would have
+        # reported a confirmed key that sshd ignores.
         # fssh exits 0 even when every command failed, so verify by reading
         # the file back instead of trusting the exit status.
         if sudo "${BFS_SHELL}" "${BFSPART}" 2>/dev/null <<'BFSVERIFY' | grep -q 'ssh-'
@@ -294,6 +389,7 @@ cat /myfs/home/config/settings/ssh/authorized_keys
 quit
 BFSVERIFY
         then
+            SSH_PUBKEY_BAKED=true
             echo "bfs_shell: authorized_keys injected into /boot/home/config/settings/ssh"
         elif [[ -z "${HAIKU_BUILDER_SSH_PUBKEY:-}" ]]; then
             echo "bfs_shell: no HAIKU_BUILDER_SSH_PUBKEY set — image ships with no key." >&2
@@ -302,6 +398,29 @@ BFSVERIFY
             sudo losetup -d "${LOOP}" 2>/dev/null || true
             exit 1
         fi
+
+        # (1) Read the account list out of the artifact. Haiku's passwd has
+        # moved between releases and the anyboot's BFS root is /boot, so probe
+        # the known locations instead of asserting one. The interactive account
+        # is the entry whose home is under /boot/home — Haiku's default user is
+        # uid 0, so "uid >= 1000" does NOT identify it (that check is only a
+        # last resort for a differently-configured image).
+        for pwcand in system/settings/etc/passwd boot/system/settings/etc/passwd \
+                      system/data/etc/passwd etc/passwd; do
+            rm -f "${INJ}/passwd.readback"
+            sudo "${BFS_SHELL}" "${BFSPART}" <<BFSPW >/dev/null 2>&1 || true
+cp ${pwcand} :${INJ}/passwd.readback
+quit
+BFSPW
+            [[ -s "${INJ}/passwd.readback" ]] || continue
+            SSH_USER="$(awk -F: '$6 ~ /^\/boot\/home/ { print $1; exit }' "${INJ}/passwd.readback")"
+            [[ -n "${SSH_USER}" ]] || \
+                SSH_USER="$(awk -F: '$3 + 0 >= 1000 { print $1; exit }' "${INJ}/passwd.readback")"
+            if [[ -n "${SSH_USER}" ]]; then
+                SSH_USER_SRC="image:${pwcand}"
+                break
+            fi
+        done
         sudo losetup -d "${LOOP}" 2>/dev/null || true
     else
         echo "WARN: could not loop-mount the anyboot BFS partition; SSH key not injected." >&2
@@ -311,16 +430,337 @@ else
     echo "WARN: bfs_shell not built; SSH key not injected (inject post-import)." >&2
 fi
 
-# ── 6. Stage outputs: portable qcow2 + anyboot + docs ───────────────────
-mkdir -p "${CVC_INSTALL_DIR}"
-if command -v qemu-img >/dev/null 2>&1; then
-    qemu-img convert -f raw -O qcow2 "${ANYBOOT}" "${CVC_INSTALL_DIR}/haiku-builder.qcow2"
-else
-    cp "${ANYBOOT}" "${CVC_INSTALL_DIR}/haiku-builder.qcow2"  # raw fallback (still qemu-bootable)
+# Resolve access.ssh_user from whatever evidence we got, loudest disagreement
+# first. The artifact always wins over the build config: if the pin did not
+# land in the image, the image is what an operator will have to log into.
+if [[ -n "${SSH_USER}" && -n "${SSH_USER_CFG}" && "${SSH_USER}" != "${SSH_USER_CFG}" ]]; then
+    echo "WARN: UserBuildConfig pins HAIKU_ROOT_USER_NAME=${SSH_USER_CFG} but the" >&2
+    echo "      built image's passwd has '${SSH_USER}'. The pin did NOT land." >&2
+    echo "      image.yaml will advertise the account the image really has." >&2
 fi
-cp "${ANYBOOT}" "${CVC_INSTALL_DIR}/haiku-builder-anyboot.iso"
-cp "${RECIPE_DIR}/metadata.yaml"     "${CVC_INSTALL_DIR}/metadata.yaml"
-cp "${RECIPE_DIR}/README-import.md"  "${CVC_INSTALL_DIR}/README-import.md"
+if [[ -z "${SSH_USER}" && -n "${SSH_USER_CFG}" ]]; then
+    SSH_USER="${SSH_USER_CFG}"
+    SSH_USER_SRC="UserBuildConfig:HAIKU_ROOT_USER_NAME"
+    echo "NOTE: could not read the image's passwd; taking ssh_user from the" >&2
+    echo "      UserBuildConfig pin (${SSH_USER}) — intent, not verified." >&2
+fi
+if [[ -z "${SSH_USER}" && -n "${SSH_USER_UPSTREAM}" ]]; then
+    SSH_USER="${SSH_USER_UPSTREAM}"
+    SSH_USER_SRC="haiku-tree-default:HAIKU_ROOT_USER_NAME:E="
+    echo "NOTE: UserBuildConfig pins no HAIKU_ROOT_USER_NAME; using Haiku's own" >&2
+    echo "      default account name from the source tree (${SSH_USER})." >&2
+fi
+if [[ -z "${SSH_USER}" ]]; then
+    echo "WARN: could not determine the image's login account from the artifact," >&2
+    echo "      from UserBuildConfig, or from the Haiku tree. image.yaml will" >&2
+    echo "      OMIT access.ssh_user rather than guess; consumers must pass one" >&2
+    echo "      explicitly (cvcpkg's provisioner refuses to run without it)." >&2
+else
+    echo "access.ssh_user=${SSH_USER} (source: ${SSH_USER_SRC})"
+fi
 
-echo "Haiku builder image staged to ${CVC_INSTALL_DIR}:"
-ls -lh "${CVC_INSTALL_DIR}"
+# ── 6. Stage outputs into share/<package-name>/ ─────────────────────────
+# cvcpkg merges a bundle's staged tree into the prefix preserving relative
+# paths, so anything staged at the ROOT of CVC_INSTALL_DIR lands at the ROOT of
+# a SHARED prefix. This recipe used to stage metadata.yaml and README-import.md
+# there — names that describe no particular guest — so a second image package
+# would have collided with it on both. Everything now lives in one directory
+# named after the package (unique in the catalog keyspace), with ROLE-based
+# filenames so a consumer derives the path from the package name alone:
+#
+#   $PREFIX/share/haiku-image/disk.qcow2
+#   $PREFIX/share/haiku-image/image.yaml   (canonical descriptor)
+#   $PREFIX/share/haiku-image/image.env    (same facts, `. `-sourceable)
+#
+# Only ONE payload format is shipped. The anyboot .iso used to be staged
+# alongside the qcow2; it is the same bits, tar.gz does no cross-file dedup, and
+# it doubled the bundle against the server's upload cap. Recover it with:
+#   qemu-img convert -f qcow2 -O raw disk.qcow2 haiku-anyboot.iso
+# The package name IS the directory name — that is the addressing key that
+# makes $PREFIX/share/<pkg>/disk.qcow2 derivable from the package name alone
+# (image-schema.yaml requires image.package to equal it). Take it from the
+# recipe directory rather than retyping it, and fail on a mismatch with
+# recipe.yaml so renaming one without the other stops here instead of at a
+# consumer resolving a path that does not exist.
+PKG_NAME="$(basename "${RECIPE_DIR}")"
+RECIPE_NAME="$(sed -n 's/^[[:space:]]*name:[[:space:]]*\([A-Za-z0-9._-]\{1,\}\).*/\1/p' \
+                   "${RECIPE_DIR}/recipe.yaml" | head -1)"
+[[ -z "${RECIPE_NAME}" || "${RECIPE_NAME}" == "${PKG_NAME}" ]] || {
+    echo "recipe.yaml name '${RECIPE_NAME}' != recipe dir '${PKG_NAME}'" >&2; exit 1; }
+IMGDIR="${CVC_INSTALL_DIR}/share/${PKG_NAME}"
+mkdir -p "${IMGDIR}/incus"
+
+# Role-based staged filenames. Declared once and used for the copy, the
+# descriptor, image.env and SHA256SUMS, so those four cannot disagree.
+DISK_FILE=disk.qcow2
+DOCS_FILE=README.md
+INCUS_META=incus/metadata.tar.xz
+CHECKSUMS_FILE=SHA256SUMS
+
+# POLICY CONSTANTS — the values that genuinely CANNOT be read off the artifact.
+# Each one is a decision or a measured guest behaviour, with its units stated.
+# The rule this file follows: if a value is not in this block, it is derived;
+# if it IS in this block, it needs evidence. They are declared here, ahead of
+# every consumer, and interpolated into image.yaml, image.env AND the Incus
+# metadata below — those three used to carry independent hand-typed copies.
+BOOT_FIRMWARE=uefi         # POLICY: the hypervisor's default UEFI/OVMF, with
+                           # security.csm=false — the combination the disk-bus
+                           # bisection below was carried out under.
+BOOT_DISK_BUS=nvme         # MEASURED, see the note rendered into image.yaml.
+BOOT_NET_MODEL=virtio-net  # MEASURED: a stock virtio NIC holds a DHCP lease.
+BOOT_CONSOLE=none          # GUEST FACT: Haiku's serial port is kernel-debug
+                           # only, so there is no out-of-band admin channel.
+BOOT_SECUREBOOT=false      # POLICY: Haiku is not signed for the Microsoft keys.
+BOOT_CPU_MIN=4             # POLICY. UNITS: vCPUs.
+BOOT_MEMORY_MIN_MIB=4096   # POLICY. UNITS: MiB.
+IMG_GUEST_OS=haiku         # IDENTITY: what this recipe exists to build.
+IMG_WRITABLE=false         # ADVISORY, see the note in image.yaml.
+
+# qemu-img is required, not optional: without it the fallback wrote a RAW image
+# to a path named .qcow2, so image.yaml's declared format would be a lie and
+# `incus image import` would take the wrong branch. Step 1 installs qemu-utils.
+command -v qemu-img >/dev/null 2>&1 || {
+    echo "qemu-img not found — cannot produce a qcow2 (install qemu-utils)" >&2; exit 1; }
+qemu-img convert -f raw -O qcow2 "${ANYBOOT}" "${IMGDIR}/${DISK_FILE}"
+
+# Disk facts are READ BACK OFF THE PRODUCED FILE, not asserted. The previous
+# version said `format: qcow2` as a literal and computed the virtual size from
+# `wc -c` on the anyboot via the standing assumption "the anyboot is raw" — both
+# are claims about a file we can simply ask about.
+QEMU_IMG_JSON="$(qemu-img info --output=json "${IMGDIR}/${DISK_FILE}")"
+_qi() {  # _qi <top-level key> -> value, unquoted
+    printf '%s' "${QEMU_IMG_JSON}" | python3 -c \
+        'import json,sys; print(json.load(sys.stdin).get(sys.argv[1], ""))' "$1" 2>/dev/null \
+    || printf '%s' "${QEMU_IMG_JSON}" \
+       | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",}]*\)\"\{0,1\}.*/\1/p" | head -1
+}
+DISK_FORMAT="$(_qi format)"
+DISK_VIRTUAL_SIZE="$(_qi virtual-size)"
+[[ "${DISK_FORMAT}" == "qcow2" ]] || {
+    echo "qemu-img reports format '${DISK_FORMAT}' for ${DISK_FILE}, expected qcow2" >&2; exit 1; }
+[[ "${DISK_VIRTUAL_SIZE}" =~ ^[0-9]+$ ]] || {
+    echo "could not read virtual-size from qemu-img info" >&2; exit 1; }
+
+# boot.disk_min_gib is DERIVED, and it is a hypervisor requirement, not taste:
+# `incus init -d root,size=N` fails if N is smaller than the image's virtual
+# size, so the floor is exactly ceil(virtual_size / GiB). It is NOT "how much
+# room the builder wants" — the guest's usable space is fixed at build time by
+# HAIKU_IMAGE_SIZE because BFS cannot be grown after the fact, so a bigger
+# volume buys the guest nothing.
+#
+# This used to be the literal `50`, derived by hand from HAIKU_IMAGE_SIZE =
+# 51200 MiB. The literal does not move when UserBuildConfig does: with
+# HAIKU_IMAGE_SIZE = 10240 MiB it tells every operator to allocate 5x the disk,
+# and it would have gone on saying 50 forever.
+DISK_MIN_GIB=$(( (DISK_VIRTUAL_SIZE + 1073741823) / 1073741824 ))
+# Consistency check against UserBuildConfig, NOT a second source of truth. The
+# BFS partition lives inside the anyboot, so the baked size can never legally
+# exceed the image's virtual size; if it appears to, the artifact and the build
+# config are out of sync and the ARTIFACT wins — it is the file the operator
+# will actually import. Overriding with the config value here would put the
+# stale-constant bug straight back in.
+if [[ "${HAIKU_IMAGE_SIZE_MIB}" =~ ^[0-9]+$ ]]; then
+    BFS_GIB=$(( (HAIKU_IMAGE_SIZE_MIB + 1023) / 1024 ))
+    if (( DISK_MIN_GIB < BFS_GIB )); then
+        echo "WARN: UserBuildConfig bakes a ${BFS_GIB} GiB BFS but the produced image's" >&2
+        echo "      virtual size is only ${DISK_MIN_GIB} GiB — these cannot both be true." >&2
+        echo "      Using the artifact's ${DISK_MIN_GIB} GiB; check that jam rebuilt the image." >&2
+    fi
+fi
+echo "disk_min_gib=${DISK_MIN_GIB} GiB (derived from virtual-size ${DISK_VIRTUAL_SIZE} B;\
+ HAIKU_IMAGE_SIZE=${HAIKU_IMAGE_SIZE_MIB:-<unset>} MiB)"
+
+cp "${RECIPE_DIR}/README-import.md" "${IMGDIR}/${DOCS_FILE}"
+
+# The Incus/LXD metadata carries its OWN copy of the guest axes (architecture,
+# release, variant) — a third place for them to go stale, after image.yaml and
+# image.env. The committed file is a template; the axes are overwritten here
+# from the same variables the descriptor uses, and the result is checked, so a
+# `release: r1beta5` left behind after HAIKU_REF moved cannot ship.
+# creation_date is deliberately NOT touched: it is a fixed placeholder so the
+# bundle stays byte-reproducible (set it at import time if you need provenance).
+sed -e "s/^architecture:.*/architecture: ${HAIKU_ARCH}/" \
+    -e "s/^  release:.*/  release: ${HAIKU_REF}/" \
+    -e "s/^  variant:.*/  variant: ${HAIKU_VARIANT}/" \
+    -e "s/^  description:.*/  description: ${IMG_GUEST_OS} ${HAIKU_REF} headless ${HAIKU_VARIANT} (${HAIKU_ARCH})/" \
+    "${RECIPE_DIR}/metadata.yaml" > "${IMGDIR}/incus/metadata.yaml"
+for _k in "architecture: ${HAIKU_ARCH}" "release: ${HAIKU_REF}" "variant: ${HAIKU_VARIANT}"; do
+    grep -q "^ *${_k}\$" "${IMGDIR}/incus/metadata.yaml" || {
+        echo "incus metadata.yaml did not take '${_k}' — template shape changed?" >&2
+        exit 1; }
+done
+
+# `incus image import` takes a metadata TARBALL, not a bare metadata.yaml — the
+# old README told operators to pass the .yaml, which does not work. Build the
+# tarball with metadata.yaml at its root.
+tar -C "${IMGDIR}/incus" -cJf "${IMGDIR}/${INCUS_META}" metadata.yaml
+
+# Hash the big file ONCE and reuse the digest for both image.yaml and
+# SHA256SUMS (the small files are hashed in the same pass below).
+DISK_SHA256="$(cd "${IMGDIR}" && sha256sum "${DISK_FILE}" | cut -d' ' -f1)"
+
+# ── 6a. Descriptor values ───────────────────────────────────────────────
+# Everything the descriptor says is resolved into a shell variable HERE, once,
+# and both image.yaml and image.env are rendered from these same variables.
+# The two files used to carry independent hand-typed copies of every value —
+# so `disk_min_gib: 50` and `CVCPKG_IMAGE_DISK_MIN_GIB=50` were two separate
+# lies that had to be found and fixed twice.
+#
+# CVC_FULL_VERSION is the recipe's committed <upstream>+cvc.<rev>. NOTE: `pack
+# --bump` / `--cvc-revision` re-stamp the revision AFTER this script has run, so
+# packing an image with a bump would leave image.version one revision behind the
+# bundle. Pack image recipes at their committed revision. The no-CVC_FULL_VERSION
+# fallback is COMPOSED from recipe.yaml rather than being a literal that freezes
+# at whatever the version happened to be the day it was typed.
+IMG_VERSION="${CVC_FULL_VERSION:-}"
+if [[ -z "${IMG_VERSION}" ]]; then
+    _uv="$(sed -n 's/^[[:space:]]*upstream_version:[[:space:]]*"\{0,1\}\([0-9][^"#[:space:]]*\).*/\1/p' \
+                "${RECIPE_DIR}/recipe.yaml" | head -1)"
+    _rv="$(sed -n 's/^[[:space:]]*cvc_revision:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' \
+                "${RECIPE_DIR}/recipe.yaml" | head -1)"
+    [[ -n "${_uv}" && -n "${_rv}" ]] || {
+        echo "CVC_FULL_VERSION unset and recipe.yaml has no readable version" >&2; exit 1; }
+    IMG_VERSION="${_uv}+cvc.${_rv}"
+    echo "NOTE: CVC_FULL_VERSION unset; composed ${IMG_VERSION} from recipe.yaml" >&2
+fi
+
+# access.ssh_user is emitted only when step 5 actually established it. An
+# ABSENT key is a question the consumer must answer; a guessed literal is a
+# silent login failure on a guest with no console.
+if [[ -n "${SSH_USER}" ]]; then
+    SSH_USER_YAML="  # DERIVED, never a literal: Haiku names this account from
+  # HAIKU_ROOT_USER_NAME and its upstream default is not 'user'.
+  # source: ${SSH_USER_SRC}
+  ssh_user: ${SSH_USER}"
+    SSH_USER_ENV="CVCPKG_IMAGE_SSH_USER=${SSH_USER}"
+else
+    SSH_USER_YAML="  # ssh_user is deliberately ABSENT: this build could not read the login
+  # account out of the artifact, out of UserBuildConfig, or out of the Haiku
+  # tree, and a guess here is a silent login failure on a guest with no
+  # out-of-band console. Pass one explicitly (--ssh-user)."
+    SSH_USER_ENV="# CVCPKG_IMAGE_SSH_USER unset: see image.yaml's access: block."
+fi
+
+# ── 6b. image.yaml — the canonical descriptor ───────────────────────────
+# Every field here replaces a constant a provisioning script would otherwise
+# hardcode (disk bus, firmware, minimum sizes, ssh user, importer path). Every
+# VALUE here is either a ${VAR} resolved above from the artifact/build inputs,
+# or one of the labelled POLICY constants — there are no bare literals left in
+# this heredoc except the schema version and the schema's own enum spellings.
+cat > "${IMGDIR}/image.yaml" <<YAML
+# Generated by recipes/haiku-image/build.sh — do not edit.
+schema_version: 1
+image:
+  package: ${PKG_NAME}
+  version: ${IMG_VERSION}
+  guest_os: ${IMG_GUEST_OS}
+  guest_arch: ${HAIKU_ARCH}
+  guest_release: ${HAIKU_REF}
+  # The exact upstream build inside that release, as the guest reports it
+  # (`uname -v` prints hrev57937_5).  guest_release alone cannot distinguish
+  # two images cut from different points in the same beta.
+  guest_build: ${HAIKU_REVISION_EFFECTIVE}
+  variant: ${HAIKU_VARIANT}
+disks:
+  # file/format/virtual_size_bytes/sha256 are all read back off the staged
+  # artifact (qemu-img info + sha256sum), never asserted.
+  - file: ${DISK_FILE}
+    format: ${DISK_FORMAT}
+    role: root
+    virtual_size_bytes: ${DISK_VIRTUAL_SIZE}
+    sha256: "${DISK_SHA256}"
+boot:
+  firmware: ${BOOT_FIRMWARE}
+  # NVMe. Not virtio-blk, not virtio-scsi. This is the single most important
+  # line in the file, and it was bisected live against Haiku r1/beta5 under
+  # Incus/QEMU rather than inferred:
+  #   virtio-blk  -> general protection fault (vector 0xd) in virtio_pci
+  #                  notify_queue(); the VM never reaches userland.
+  #   virtio-scsi -> no Haiku driver at all; the disk does not appear and the
+  #                  boot loader dies in vfs_mount_boot_file_system.
+  #   nvme        -> boots into userland. Haiku's NVMe driver is native and
+  #                  pre-dates its virtio work.
+  # An earlier revision said virtio-blk here, inferred from "Haiku panics on
+  # virtio-scsi" without anyone checking that virtio-blk works. It does not.
+  disk_bus: ${BOOT_DISK_BUS}
+  net_model: ${BOOT_NET_MODEL}
+  # Haiku's serial port is kernel-debug only: there is NO out-of-band admin
+  # channel. Networking and keys must be right before a headless deploy.
+  console: ${BOOT_CONSOLE}
+  secureboot: ${BOOT_SECUREBOOT}
+  # POLICY. UNITS: vCPUs.
+  cpu_min: ${BOOT_CPU_MIN}
+  # POLICY. UNITS: MiB.
+  memory_min_mib: ${BOOT_MEMORY_MIN_MIB}
+  # DERIVED. UNITS: GiB. ceil(virtual_size_bytes / 1 GiB) — a hypervisor
+  # refuses a root volume smaller than the image's virtual size, so this is a
+  # hard floor. It is NOT extra headroom: the guest's usable space was fixed
+  # at build time by HAIKU_IMAGE_SIZE (${HAIKU_IMAGE_SIZE_MIB:-?} MiB) because
+  # BFS cannot be grown, so a larger volume gives the guest nothing.
+  disk_min_gib: ${DISK_MIN_GIB}
+access:
+${SSH_USER_YAML}
+  # Set from a READ-BACK of the injected file, never from an exit status.
+  ssh_pubkey_baked: ${SSH_PUBKEY_BAKED}
+importers:
+  incus: ${INCUS_META}
+  lxd: ${INCUS_META}
+# ADVISORY: qcow2 is a read-write format, so booting this master in place
+# mutates it and breaks \`cvcpkg image verify\`. Boot an overlay instead:
+#   qemu-img create -f qcow2 -F qcow2 -b ${DISK_FILE} overlay.qcow2
+# File modes cannot enforce this — they do not survive archive extraction.
+writable: ${IMG_WRITABLE}
+docs: ${DOCS_FILE}
+YAML
+
+# ── 6c. image.env — the same facts, flattened ───────────────────────────
+# An Incus cluster node reliably has neither jq nor yq nor pkg-config, but every
+# /bin/sh can source KEY=value. Paths are RELATIVE to this directory so it stays
+# correct after a copy; \`cvcpkg image env\` regenerates the same keys with
+# absolute paths.
+#
+# Rendered from the SAME variables as image.yaml above. It used to be a second
+# hand-typed copy of every value, which is how it came to say
+# CVCPKG_IMAGE_DISK_MIN_GIB=50 next to a disk_min_gib: 50 that was also wrong —
+# one lie in two places. Keys with no value are omitted, matching
+# cvcpkg.images.env_map, so a consumer's \`:-\` default still fires.
+cat > "${IMGDIR}/image.env" <<ENV
+# Generated by recipes/haiku-image/build.sh — do not edit.
+# Paths are relative to this file's directory:
+#   cd \$PREFIX/share/${PKG_NAME} && . ./image.env
+CVCPKG_IMAGE_NAME=${PKG_NAME}
+CVCPKG_IMAGE_VERSION=${IMG_VERSION}
+CVCPKG_IMAGE_DISK=${DISK_FILE}
+CVCPKG_IMAGE_DISK_FORMAT=${DISK_FORMAT}
+CVCPKG_IMAGE_DISK_BUS=${BOOT_DISK_BUS}
+CVCPKG_IMAGE_FIRMWARE=${BOOT_FIRMWARE}
+CVCPKG_IMAGE_NET_MODEL=${BOOT_NET_MODEL}
+CVCPKG_IMAGE_CONSOLE=${BOOT_CONSOLE}
+CVCPKG_IMAGE_SECUREBOOT=${BOOT_SECUREBOOT}
+CVCPKG_IMAGE_CPU_MIN=${BOOT_CPU_MIN}
+CVCPKG_IMAGE_MEMORY_MIN_MIB=${BOOT_MEMORY_MIN_MIB}
+CVCPKG_IMAGE_DISK_MIN_GIB=${DISK_MIN_GIB}
+${SSH_USER_ENV}
+CVCPKG_IMAGE_GUEST_OS=${IMG_GUEST_OS}
+CVCPKG_IMAGE_GUEST_ARCH=${HAIKU_ARCH}
+CVCPKG_IMAGE_GUEST_RELEASE=${HAIKU_REF}
+CVCPKG_IMAGE_VARIANT=${HAIKU_VARIANT}
+CVCPKG_IMAGE_WRITABLE=${IMG_WRITABLE}
+CVCPKG_IMAGE_INCUS_METADATA=${INCUS_META}
+CVCPKG_IMAGE_LXD_METADATA=${INCUS_META}
+CVCPKG_IMAGE_DOCS=${DOCS_FILE}
+CVCPKG_IMAGE_CHECKSUMS=${CHECKSUMS_FILE}
+ENV
+
+# SHA256SUMS in `sha256sum -c` format. Deliberately duplicates the descriptor's
+# digest: this serves a zero-dependency check after the payload has been copied
+# to another machine, the descriptor serves the CLI. Reuses the digest computed
+# above so the multi-gigabyte file is read once.
+( cd "${IMGDIR}" && {
+    printf '%s  %s\n' "${DISK_SHA256}" "${DISK_FILE}"
+    sha256sum "${DOCS_FILE}" image.yaml image.env incus/metadata.yaml "${INCUS_META}"
+  } > "${CHECKSUMS_FILE}" )
+
+echo "Haiku builder image staged to ${IMGDIR}:"
+ls -lhR "${IMGDIR}"
+( cd "${IMGDIR}" && sha256sum -c "${CHECKSUMS_FILE}" )

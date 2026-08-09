@@ -2,28 +2,49 @@ schema_version: 1
 recipe:
   name: haiku-image
   upstream_version: "1.0.0-beta.5"
-  # NOT bumped for the boot fixes below, because haiku-image has never been
-  # published: `cvcpkg info haiku-image` answers "component 'haiku-image'
-  # not found in catalog". There is no immutable published variant for
-  # revision 1 to collide with, so there is nothing to supersede.
+  # PUBLISHED as of 2026-08-06. `+cvc.1` for this upstream_version is now an
+  # immutable artifact on cvcpkg.org (linux/x86_64/release/shared,
+  # sha256 35d1cf6a…, 546164964 bytes, built on star-00 by build #13794).
   #
-  # This stops being true the moment it IS published. Published variants are
-  # immutable, so from then on every recipe change needs a bump or it
-  # silently no-ops against the already-published artifact.
+  # So the freedom the previous note described is gone: from here, ANY change
+  # to this recipe or to the staged tree needs a cvc_revision bump, or the
+  # build silently no-ops against the already-published artifact and the
+  # change ships to nobody. `cvcpkg pack --bump` / `next-revision` compute the
+  # next free value; do not hand-edit this to a number that is already live.
+  #
+  # The prefix layout below is likewise frozen for revision 1 — consumers
+  # resolve share/haiku-image/<role> paths off it, so changing a filename now
+  # breaks anyone who installed this artifact rather than merely being untidy.
   cvc_revision: 1
+  # Enforced, not decorative: a `kind: image` recipe must stage everything
+  # under share/<name>/ and nothing else, and must ship a schema-valid
+  # share/<name>/image.yaml.  `cvcpkg validate` checks package.files below;
+  # `cvcpkg pack` checks the real staged tree.
+  kind: image
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   homepage: https://www.haiku-os.org/
   license: MIT
   tags: [tools, images, haiku]
+  # This string is PUBLISHED — it is what `cvcpkg search`/`cvcpkg info` print,
+  # for someone who has not downloaded the package and so cannot have read
+  # README-import.md.  It therefore states the DESIGN, and points at the one
+  # place that tracks what has actually been observed, rather than asserting a
+  # boot.  It used to say "Boots with NO VGA/GUI interaction" flatly, which was
+  # never demonstrated.  Do not re-assert a boot here; update the status block
+  # in README-import.md and let this keep pointing at it.
   description: >-
     A headless, self-configuring HaikuOS builder image, built from source
-    (configure + jam) with OpenSSH, a build toolchain, and a builder user
-    baked in.  Boots with NO VGA/GUI interaction — Haiku's Installer is
+    (configure + jam) with OpenSSH, a build toolchain, and a login account
+    baked in.  DESIGNED to need NO VGA/GUI interaction — Haiku's Installer is
     graphical-only, so this image is pre-installed and pre-configured at
-    build time.  Ships a qcow2 (portable) plus an anyboot image and import
-    docs for Incus, LXD, Proxmox, and plain QEMU/libvirt.
+    build time.  See README-import.md's status block for how much of that has
+    been observed; do not assume it boots or that a key is trusted, and read
+    the login account from the descriptor (access.ssh_user), never from prose.
+    Installs into share/haiku-image/ as a portable qcow2 plus an
+    image.yaml/image.env descriptor pair, SHA256SUMS, Incus/LXD import
+    metadata, and docs for Proxmox and plain QEMU/libvirt.
 
 source:
   # build.sh clones the Haiku source + buildtools at pinned refs and builds a
@@ -59,18 +80,76 @@ build:
   matrix:
     - platform: linux
       script: build.sh
-      env:
-        # Set by the fleet's CI from a secret so the image trusts the builder
-        # key; empty in public builds (import then inject a key — see README).
-        HAIKU_BUILDER_SSH_PUBKEY: ""
+      # HAIKU_BUILDER_SSH_PUBKEY is deliberately NOT declared here.  It is
+      # supplied from the BUILDER PROCESS's environment (a fleet secret in CI,
+      # or an operator's own key for a local build), and build.sh reads it as
+      # ${HAIKU_BUILDER_SSH_PUBKEY:-}, so an unset variable is already the
+      # "public build, no key" case.
+      #
+      # It used to be declared here as "".  matrix env is applied LAST and
+      # unconditionally (cvcpkg/builder.py: `env.update(matrix.env)`), so that
+      # empty default silently CLOBBERED whatever the environment supplied —
+      # including CI's secret.  The key could therefore never be baked in by
+      # anyone: every build produced access.ssh_pubkey_baked: false, and
+      # test.vm could never authenticate.  Confirmed by the first end-to-end
+      # run of this recipe (2026-08-05), which passed a real key and still
+      # logged "no HAIKU_BUILDER_SSH_PUBKEY set".  Do not re-add a default
+      # value here for any variable that is meant to come from the environment.
 
 package:
+  # Everything lives under share/<package-name>/ with ROLE-based filenames.
+  # The directory is the package name (unique in the catalog keyspace), so N
+  # image packages can be installed side by side; the filenames carry no guest
+  # arch and no version, so a provisioning script can derive
+  # "$PREFIX/share/haiku-image/disk.qcow2" from the package name alone.
+  # Guest axes live in the package NAME and in image.yaml, never in a filename.
+  #
+  # Declarative only — build.sh's staging is what actually decides — but
+  # `cvcpkg validate` cross-checks this list against the kind: image rule.
   files:
-    - haiku-builder.qcow2
-    - haiku-builder-anyboot.iso
-    - metadata.yaml
-    - README-import.md
+    - share/haiku-image/image.yaml
+    - share/haiku-image/image.env
+    - share/haiku-image/disk.qcow2
+    - share/haiku-image/SHA256SUMS
+    - share/haiku-image/README.md
+    - share/haiku-image/incus/metadata.yaml
+    - share/haiku-image/incus/metadata.tar.xz
 
+test:
+  # There is deliberately NO host-side `script:` here.  A bash script on the
+  # Linux builder can prove that disk.qcow2 exists and that `qemu-img info`
+  # parses it — which is precisely the "trust me, it boots" that shipped a
+  # descriptor claiming disk_bus: virtio-blk, a value that general-protection-
+  # faults this guest before userland.  The only assertion worth anything for
+  # an image package is booting it.
+  vm:
+    # Gate.  A builder without Incus SKIPS (reported, green) — it is never a
+    # red build on a machine that was never going to be able to run this.
+    # Incus specifically, not [incus, lxd]: the boot facts in image.yaml were
+    # bisected under Incus/QEMU, and an untested LXD path would be a claim of
+    # the same kind this whole block exists to stop making.
+    requires_capabilities: [incus]
+    hypervisors: [incus]
+    # Boot the image THIS build just staged, not whatever is installed.
+    image: self
+    # Haiku runs no incus agent, so the hypervisor's exec channel does not
+    # exist here; SSH is the only way in, which is also why the build makes
+    # the key injection fatal and reads the key back to confirm it.
+    connect: ssh
+    ssh:
+      # Private half of HAIKU_BUILDER_SSH_PUBKEY (build.matrix env, above).
+      # Read from the BUILDER PROCESS's environment, not from build.matrix.env
+      # — it is a fleet secret, so it is injected once where the builder is
+      # launched rather than written into a recipe that lives in git.  Absent
+      # or empty (a public builder) -> SKIP with that reason, resolved before
+      # any hypervisor state is created.
+      key_env: HAIKU_BUILDER_SSH_KEY
+    script: vm-test.sh
+    # Haiku's first boot writes its BFS index and starts the launch_daemon
+    # sshd job, so it is slower than a Linux guest; 12 minutes is generous but
+    # bounded, and a hung boot must cost minutes, not a builder.
+    boot_timeout_seconds: 720
+    timeout_seconds: 1800
 notes: |-
   Build cost: Haiku is built from source, cross-toolchain first, so budget
   roughly 90 minutes on a modern multi-core Linux host. Disk is the tighter
@@ -97,6 +176,43 @@ notes: |-
   defects found during that work are fixed here too: the authorized_keys
   path is Haiku's config/settings/ssh, not ~/.ssh, and nothing in Haiku
   starts sshd headlessly, so the image ships a launch_daemon SYSTEM job.
+
+
+  BOOTING THE PRODUCED IMAGE -- authoritative guest facts, bisected live
+  against Haiku r1/beta5 under Incus/QEMU on 2026-08-03. They are the source
+  for share/haiku-image/image.yaml's boot: block, so a consumer should read
+  them from there ($CVCPKG_IMAGE_DISK_BUS etc.) rather than retype them.
+
+  SCOPE, because the disk-bus row below has been over-read once already:
+  every bullet is a statement about what the HAIKU GUEST OS can drive under
+  Incus/QEMU. None is a claim that a CLEAN RUN of this recipe produces an
+  image that boots -- see "What is NOT yet verified" below, which still
+  stands. Picking the right bus removes the bus from the list of suspects,
+  nothing more.
+
+    * Disk bus MUST be nvme.  virtio-blk general-protection-faults (vector
+      0xd) in virtio_pci notify_queue() and never reaches userland;
+      virtio-scsi -- the usual hypervisor default -- has no Haiku driver at
+      all, so the disk never appears and the boot loader dies in
+      vfs_mount_boot_file_system.  nvme is the only bus that gets anywhere:
+      the disk enumerates and Haiku reaches userland.  An earlier revision of
+      this recipe said virtio-blk, inferred from "Haiku panics on
+      virtio-scsi" without anyone checking that virtio-blk works.  It does
+      not.
+    * The NIC needs NO special model.  A stock virtio NIC works and holds a
+      DHCP lease.  The older claim that virtio_net page-faults is RETRACTED:
+      it was a symptom of the disk bug above, seen only in an already-degraded
+      boot with no usable root device.
+    * Firmware stays the hypervisor's default UEFI/OVMF with
+      security.csm=false and security.secureboot=false -- that is the
+      combination the bus bisection was carried out under.  Haiku is not
+      signed for the Microsoft keys, and CSM swaps OVMF for SeaBIOS.
+    * There is NO out-of-band admin channel (boot.console: none -- Haiku's
+      serial port is kernel-debug only), so networking and SSH access have to
+      be right before a headless deploy.  Do NOT assume a key is baked in:
+      read access.ssh_pubkey_baked out of image.yaml, and read the account
+      name from access.ssh_user, which the build OMITS rather than guesses
+      when it cannot establish one.
 
   Independently re-verified against pristine upstream r1beta5 sources, off
   the build host: the anyboot patch applies with no fuzz to the r1beta5
