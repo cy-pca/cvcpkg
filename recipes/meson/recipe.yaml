@@ -2,7 +2,11 @@ schema_version: 1
 recipe:
   name: meson
   upstream_version: "1.7.2"
-  cvc_revision: 1
+  # Bumped 1 -> 2: the windows launcher called `python3`, which does
+  # not exist on Windows CPython, so it hit the Microsoft Store alias stub and
+  # every meson-based windows recipe failed before configuring. Now prefers the
+  # prefix's own python.exe.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

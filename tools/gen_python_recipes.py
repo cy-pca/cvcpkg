@@ -434,7 +434,11 @@ SEED_PACKAGES = {
         "check": "import trove_classifiers",
     },
     "hatchling": {
-        "version": "1.27.0",
+        # Match master's pin (added there by 7ec083b, PyInstaller-from-source,
+        # which needed the same backend). Two branches packaging the same
+        # backend at different versions is a pointless conflict; the newer one
+        # wins.
+        "version": "1.31.0",
         "license": "MIT",
         "deps": ["packaging", "pathspec", "pluggy", "trove-classifiers"],
         "files": ["hatchling/", "hatchling-*.dist-info/"],
@@ -455,7 +459,10 @@ SEED_PACKAGES = {
         "check": "import hatch_fancy_pypi_readme",
     },
     "flit-core": {
-        "version": "3.10.1",
+        # 3.12+: 3.10.1 predates PEP 639 and rejects a string `license` field
+        # ("license field should be <class 'dict'>, not <class 'str'>"), which
+        # is what typing-extensions 4.15 and other modern sdists now declare.
+        "version": "3.12.0",
         "license": "BSD-3-Clause",
         "deps": [],
         "files": ["flit_core/", "flit_core-*.dist-info/"],
@@ -1416,9 +1423,16 @@ def sdist_platforms(kind: str, plats: list[str]) -> list[tuple[str, str]]:
     A pure package still builds ONCE: the wheel it produces is py3-none-any, so
     the column stays ``platform: any`` exactly as the prebuilt-noarch one did --
     only the artifact's provenance changes.  A compiled package needs a build
-    per platform, and windows needs PowerShell."""
+    per platform, and windows needs PowerShell.
+
+    The pure column also gets an explicit windows entry. A matrix entry names
+    ONE script and ``any`` names build.sh, which cannot run on a Windows
+    builder -- so a pure package was advertised as buildable everywhere and was
+    in fact unbuildable from source there. The payload is noarch; the recipe
+    was not. That gap is what left setuptools (and therefore every PEP-517
+    backend, and therefore pillow and numpy) unbuildable on Windows."""
     if kind == "pure":
-        return [("any", "build.sh")]
+        return [("any", "build.sh"), ("windows", "build.ps1")]
     return [(p, "build.ps1" if p == "windows" else "build.sh") for p in plats]
 
 

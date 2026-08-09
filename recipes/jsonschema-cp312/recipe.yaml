@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: jsonschema-cp312
   upstream_version: "4.17.3"
-  cvc_revision: 2
+  cvc_revision: 3
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -54,8 +54,12 @@ build:
   matrix:
     - platform: any
       script: build.sh
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
     - lib/python3.12/site-packages/jsonschema/
     - lib/python3.12/site-packages/*.dist-info/
+    - Lib/site-packages/jsonschema/
+    - Lib/site-packages/*.dist-info/

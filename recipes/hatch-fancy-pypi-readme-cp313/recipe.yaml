@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: hatch-fancy-pypi-readme-cp313
   upstream_version: "24.1.0"
-  cvc_revision: 1
+  cvc_revision: 2
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -49,8 +49,12 @@ build:
   matrix:
     - platform: any
       script: build.sh
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
     - lib/python3.13/site-packages/hatch_fancy_pypi_readme/
     - lib/python3.13/site-packages/hatch_fancy_pypi_readme-*.dist-info/
+    - Lib/site-packages/hatch_fancy_pypi_readme/
+    - Lib/site-packages/*.dist-info/
