@@ -333,6 +333,38 @@ SEED_PACKAGES = {
         "files": ["pythran/", "omp/", "pythran-*.dist-info/"],
         "check": "import pythran",
     },
+    # --- Flask, for the platoon-sim scene viewer ---------------------------
+    # scene_viewer/viewer_app.py is a Flask server, and the DBG web demo is
+    # recorded from it. click and jinja2 already arrive via poetry.lock.
+    # All pure Python.
+    "itsdangerous": {
+        "version": "2.2.0",
+        "license": "BSD-3-Clause",
+        "deps": [],
+        "files": ["itsdangerous/", "itsdangerous-*.dist-info/"],
+        "check": "import itsdangerous",
+    },
+    "blinker": {
+        "version": "1.9.0",
+        "license": "MIT",
+        "deps": [],
+        "files": ["blinker/", "blinker-*.dist-info/"],
+        "check": "import blinker",
+    },
+    "werkzeug": {
+        "version": "3.1.8",
+        "license": "BSD-3-Clause",
+        "deps": ["markupsafe"],
+        "files": ["werkzeug/", "werkzeug-*.dist-info/"],
+        "check": "import werkzeug",
+    },
+    "flask": {
+        "version": "3.1.3",
+        "license": "BSD-3-Clause",
+        "deps": ["blinker", "click", "itsdangerous", "jinja2", "markupsafe", "werkzeug"],
+        "files": ["flask/", "flask-*.dist-info/"],
+        "check": "import flask",
+    },
     # Not part of scipy: geometry-scene-gen imports trimesh eagerly from
     # scene_gen/__init__, so the DBG movement-bundle export needs it in the
     # prefix.  Pure Python over numpy.

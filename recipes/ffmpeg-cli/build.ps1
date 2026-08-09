@@ -47,6 +47,37 @@ $winTmp = ($env:CVC_BUILD_DIR -replace '\\', '/') + '/cfgtmp'
 New-Item -ItemType Directory -Force -Path (Join-Path $env:CVC_BUILD_DIR 'cfgtmp') | Out-Null
 $depsFlag = "export TMPDIR='$winTmp'; " + $depsFlag
 
+# cvcpkg's zlib is built with MSVC and installs MSVC-named artifacts
+# (zlib.lib / zlibstatic.lib). MinGW's `-lz` — which ffmpeg's --enable-zlib
+# emits and which its PNG decoder needs — looks for libz.a / libz.dll.a / z.lib
+# and finds none of them, so configure reports "zlib requested but not found"
+# even though the headers and a perfectly good bin/libz.dll are right there.
+# Synthesise the missing import library from the DLL with dlltool (ships with
+# mingw-w64-gcc) rather than teaching ffmpeg a different library name.
+if ($env:CVC_DEPS_PREFIX) {
+    $zImp = Join-Path $env:CVC_DEPS_PREFIX 'lib\libz.dll.a'
+    $zDll = Join-Path $env:CVC_DEPS_PREFIX 'bin\libz.dll'
+    $dlltool = Join-Path $env:CVC_DEPS_PREFIX 'bin\dlltool.exe'
+    $gendef = Join-Path $env:CVC_DEPS_PREFIX 'bin\gendef.exe'
+    # A too-small .dll.a from an earlier attempt is worse than none: it links
+    # and then fails at symbol resolution. Treat anything implausibly small as
+    # absent. zlib exports ~190 symbols; a real import lib is tens of KB.
+    if ((Test-Path $zImp) -and ((Get-Item $zImp).Length -lt 8192)) { Remove-Item -Force $zImp }
+    if ((-not (Test-Path $zImp)) -and (Test-Path $zDll) -and (Test-Path $dlltool) -and (Test-Path $gendef)) {
+        Write-Host "ffmpeg-cli: generating libz.dll.a from bin/libz.dll (MSVC-named zlib)"
+        # gendef, NOT `dlltool -z`: dlltool builds a .def from OBJECT files and
+        # silently emits a near-empty one when handed a DLL (1.8 KB import lib,
+        # zero usable symbols). gendef reads a PE export table.
+        $def = Join-Path $env:CVC_BUILD_DIR 'libz.def'
+        & $gendef - $zDll 2>$null | Set-Content -Path $def -Encoding ASCII
+        if (Test-Path $def) {
+            & $dlltool -d $def -l $zImp -D 'libz.dll' 2>$null
+        }
+        if (-not (Test-Path $zImp)) { throw "ffmpeg-cli: could not synthesise libz.dll.a from $zDll" }
+        Write-Host "ffmpeg-cli: libz.dll.a is $((Get-Item $zImp).Length) bytes"
+    }
+}
+
 # --cross-prefix only when the cross-named binutils exist. cvcpkg's own
 # mingw-w64-gcc is a NATIVE toolchain: cross-named compilers, plain-named
 # binutils (strings.exe, ar.exe). Passing it unconditionally makes configure
@@ -69,7 +100,7 @@ $depsFlag mkdir -p '$msysBuild' && cd '$msysBuild' && \
     $crossFlag--enable-gpl \
     --enable-version3 \
     --extra-cflags='-I$msysDeps/include' \
-    --extra-ldflags='-L$msysDeps/lib' \
+    --extra-ldflags='-L$msysDeps/lib -L$msysDeps/bin' \
     --disable-shared \
     --enable-static \
     --disable-doc \
