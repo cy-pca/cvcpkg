@@ -277,6 +277,19 @@ SEED_PACKAGES = {
         "files": ["macholib/", "macholib-*.dist-info/"],
         "check": "import macholib",
     },
+    "poetry-core": {
+        # grl-snam's PEP-517 backend (CVC-Lab/GRL-SNAM builds with
+        # poetry.core.masonry.api): a BUILD dep of the grl-snam-cp31X column
+        # recipes, which pip-install their sdist with --no-build-isolation.
+        # Self-hosting backend (its own [build-system] requires is empty and
+        # it builds itself via backend-path), so it terminates the backend
+        # chain. The wheel ships only the `poetry/core/` PEP-420 namespace
+        # subpackage (no poetry/__init__.py) — files/check derive from the
+        # _TOPPKG entry ("poetry.core").
+        "version": "2.4.1",
+        "license": "MIT",
+        "deps": [],
+    },
     "pefile": {
         "version": "2024.8.26",
         "license": "MIT",
@@ -1785,6 +1798,9 @@ _TOPPKG = {
     "azure-identity": "azure",
     "azure-core": "azure",
     "pyjwt": "jwt",
+    # PEP-420 namespace: the wheel ships poetry/core/ only (no
+    # poetry/__init__.py), and `import poetry_core` does not exist.
+    "poetry-core": "poetry.core",
 }
 
 
