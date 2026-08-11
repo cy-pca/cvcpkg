@@ -201,6 +201,95 @@ class TestComputeColumns:
         assert cols["pyjwt"] == INTERPS
 
 
+class TestHandWrittenDepColumns:
+    """Hand-written column families (numpy) as resolvable dependency edges.
+
+    Before HANDWRITTEN_DEP_BASES, a seed dep on ``numpy`` was silently dropped
+    by deps_for_column's universe test: trimesh-cp311 shipped with NO numpy
+    edge and imported only when a sibling build left numpy in the shared
+    prefix.  These tests pin the fix: the edge renders, the columns come from
+    disk, and a dependent claiming a column the family lacks is pruned."""
+
+    def _seed_meta(self):
+        # A pure seed depending on numpy — the gymnasium/trimesh shape.
+        return {
+            "gymnasium": {
+                "kind": "pure",
+                "wheels": PURE,
+                "deps": ["numpy"],
+                "seed": True,
+            },
+        }
+
+    def test_columns_come_from_disk(self, tmp_path):
+        for i in ("311", "313t"):
+            d = tmp_path / f"numpy-cp{i}"
+            d.mkdir()
+            (d / "recipe.yaml").write_text("recipe:\n  name: numpy\n")
+        (tmp_path / "numpy-cp312").mkdir()  # dir without recipe.yaml: not a column
+        assert gen.handwritten_columns(tmp_path, INTERPS) == {"numpy": ["311", "313t"]}
+
+    def test_dep_edge_resolves_against_extra_universe(self):
+        meta = self._seed_meta()
+        cols = gen.compute_columns(meta, INTERPS, {"numpy": ["311", "312", "313", "313t"]})
+        assert cols["gymnasium"] == INTERPS
+        assert cols["numpy"] == INTERPS  # seeded through untouched
+
+    def test_dependent_prunes_to_the_family_s_columns(self, capsys):
+        meta = self._seed_meta()
+        cols = gen.compute_columns(meta, INTERPS, {"numpy": ["311", "312", "313"]})
+        # numpy has no cp313t recipe on disk -> gymnasium must not claim one.
+        assert cols["gymnasium"] == ["311", "312", "313"]
+        assert "prune gymnasium-cp313t" in capsys.readouterr().err
+
+    def test_without_the_table_the_edge_still_drops(self):
+        # The historical behaviour, pinned so the fix's mechanism is explicit:
+        # no extra universe -> the dep neither resolves nor prunes.
+        cols = gen.compute_columns(self._seed_meta(), INTERPS)
+        assert cols["gymnasium"] == INTERPS
+
+    def test_seed_interpreter_cap_prunes_the_package_and_its_dependents(self, capsys):
+        # pillow's shape: upstream ships cp313t wheels, but the hand-written
+        # conversion covers 311/312/313 only — the cap must hold the column
+        # back AND prune dependents through the fixpoint, or a full regen
+        # emits a generated pillow-cp313t with no native edges.
+        meta = {
+            "pillow": {
+                "kind": "pure",
+                "wheels": PURE,
+                "deps": [],
+                "seed": True,
+                "interpreters": ["311", "312", "313"],
+            },
+            "imageio": {"kind": "pure", "wheels": PURE, "deps": ["pillow"], "seed": True},
+        }
+        cols = gen.compute_columns(meta, INTERPS)
+        assert cols["pillow"] == ["311", "312", "313"]
+        assert cols["imageio"] == ["311", "312", "313"]
+        err = capsys.readouterr().err
+        assert "prune pillow-cp313t: column capped" in err
+        assert "prune imageio-cp313t: dep(s) lack the column: pillow" in err
+
+    def test_emitted_recipe_carries_the_edge(self, tmp_path):
+        m = _meta_sdist(deps=["numpy"], seed=True, build_requires=["setuptools"])
+        meta = {"widget": m}
+        gen._emit_column(
+            tmp_path, "widget", m, "311", meta, {"widget": ["311"]}, extra_universe={"numpy"}
+        )
+        y = (tmp_path / "widget-cp311" / "recipe.yaml").read_text(encoding="utf-8")
+        build, _, runtime = y.partition("  runtime:\n")
+        assert "- name: numpy-cp311" in build
+        assert "- name: numpy-cp311" in runtime
+
+    def test_shipped_table_resolves_against_the_real_recipes(self):
+        # The table's bases must have real columns on disk, or every run
+        # aborts; this is the same check main() enforces, pinned in CI.
+        recipes = Path(__file__).resolve().parents[2] / "recipes"
+        cols = gen.handwritten_columns(recipes, INTERPS)
+        for base in gen.HANDWRITTEN_DEP_BASES:
+            assert cols[base], f"{base} has no {base}-cpNNN recipes on disk"
+
+
 class TestMarkers:
     def test_python_version_lt(self):
         spec = {"markers": 'python_version < "3.11"'}
@@ -430,6 +519,14 @@ _HAND_WRITTEN_COLUMNS = (
     "greenlet-cp311",
     "greenlet-cp312",
     "greenlet-cp313",
+    # pillow: native-library edges (zlib/libjpeg-turbo/tiff/freetype/libwebp
+    # + closures), `-C <feature>=enable` codec pinning and an $ORIGIN rpath
+    # pass — its base is a SEED (matplotlib/imageio resolve their pillow dep
+    # edges against it), so like the four above, the ownership test is the
+    # only thing between it and a regeneration that would strip its codecs.
+    "pillow-cp311",
+    "pillow-cp312",
+    "pillow-cp313",
 )
 
 _REPO = Path(__file__).resolve().parents[2]

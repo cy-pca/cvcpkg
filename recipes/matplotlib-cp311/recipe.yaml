@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: matplotlib-cp311
   upstream_version: "3.10.0"
-  cvc_revision: 2
+  cvc_revision: 3
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -38,6 +38,7 @@ depends:
     - name: cycler-cp311
     - name: fonttools-cp311
     - name: kiwisolver-cp311
+    - name: numpy-cp311
     - name: packaging-cp311
     - name: pillow-cp311
     - name: pyparsing-cp311
@@ -54,6 +55,7 @@ depends:
     - name: cycler-cp311
     - name: fonttools-cp311
     - name: kiwisolver-cp311
+    - name: numpy-cp311
     - name: packaging-cp311
     - name: pillow-cp311
     - name: pyparsing-cp311

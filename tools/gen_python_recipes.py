@@ -117,6 +117,7 @@ def _require_tomllib():
         )
     return tomllib
 
+
 # cvcpkg's five concrete build platforms and the wheel-tag fragments that map to
 # each. First match wins.
 PLATFORM_TAGS = {
@@ -261,15 +262,9 @@ SEED_PACKAGES = {
         "files": ["altgraph/", "altgraph-*.dist-info/"],
         "check": "import altgraph",
     },
-    "hatchling": {
-        # PyInstaller's PEP-517 backend: a BUILD dep of the from-source
-        # pyinstaller recipes, which use --no-build-isolation.
-        "version": "1.31.0",
-        "license": "MIT",
-        "deps": ["packaging", "pathspec", "pluggy", "trove-classifiers"],
-        "files": ["hatchling/", "hatchling-*.dist-info/"],
-        "check": "import hatchling",
-    },
+    # hatchling (PyInstaller's PEP-517 backend) is defined once, in the
+    # build-backends section below — a second entry here was a merge artifact
+    # that Python's dict literal silently collapsed (last key wins).
     "macholib": {
         "version": "1.16.4",
         "license": "MIT",
@@ -347,8 +342,8 @@ SEED_PACKAGES = {
         "check": "import pythran",
     },
     # --- Flask, for the platoon-sim scene viewer ---------------------------
-    # scene_viewer/viewer_app.py is a Flask server, and the DBG web demo is
-    # recorded from it. click and jinja2 already arrive via poetry.lock.
+    # scene_viewer/viewer_app.py is a Flask server, and the platoon-sim
+    # web demo is recorded from it. click and jinja2 already arrive via poetry.lock.
     # All pure Python.
     "itsdangerous": {
         "version": "2.2.0",
@@ -379,7 +374,7 @@ SEED_PACKAGES = {
         "check": "import flask",
     },
     # Not part of scipy: geometry-scene-gen imports trimesh eagerly from
-    # scene_gen/__init__, so the DBG movement-bundle export needs it in the
+    # scene_gen/__init__, so the movement-bundle export needs it in the
     # prefix.  Pure Python over numpy.
     "trimesh": {
         "version": "5.0.0",
@@ -388,13 +383,9 @@ SEED_PACKAGES = {
         "files": ["trimesh/", "trimesh-*.dist-info/"],
         "check": "import trimesh",
     },
-    "trove-classifiers": {
-        "version": "2024.10.16",
-        "license": "Apache-2.0",
-        "deps": [],
-        "files": ["trove_classifiers/", "trove_classifiers-*.dist-info/"],
-        "check": "import trove_classifiers",
-    },
+    # trove-classifiers is defined once, in the build-backends section below
+    # (with its calver dep) — a duplicate here was a merge artifact that
+    # Python's dict literal silently collapsed (last key wins).
     "black": {
         "version": "26.5.1",
         "license": "MIT",
@@ -626,15 +617,29 @@ SEED_PACKAGES = {
         "check": "import pybind11",
     },
     # ── plotting / imaging / schema stack ───────────────────────────────────
-    # pillow is the load-bearing one: grl_snam_dbg.ingest.scene_buffers reads
-    # the scene navmask.png through PIL, so the DBG planner cannot ingest a
+    # pillow is the load-bearing one: the scene-buffer ingestion path reads
+    # the scene navmask.png raster through PIL, so a planner cannot ingest a
     # scene without it. matplotlib and imageio are the grl_snam demo/capture
-    # path; jsonschema validates movement_bundle.v1 against the contract
-    # schema in grl_snam_dbg.scripts.export_movement_bundle.
+    # path; jsonschema validates movement_bundle.v1 exports against the
+    # contract schema.
+    # NOTE: the pillow-cp31X recipes on disk are HAND-CONVERTED (no generator
+    # marker): they declare native-library edges (zlib, libjpeg-turbo, tiff,
+    # freetype, libwebp + their flat closures), pass require/disable feature
+    # config-settings so codec support cannot silently vanish, and run an
+    # $ORIGIN rpath pass — none of which this generator can infer (see
+    # is_generator_owned).  The seed stays because matplotlib/imageio resolve
+    # their `pillow` dep edges against this universe; a regeneration prints
+    # "keep pillow-cp31X: hand-written" instead of overwriting.
     "pillow": {
         "version": "11.1.0",
         "license": "MIT-CMU",
         "deps": [],
+        # Capped: the hand conversion covers exactly these columns.  Without
+        # the cap a full regeneration would see 11.1.0's cp313t wheels, emit a
+        # GENERATED pillow-cp313t (no native edges, silently codec-less) and
+        # let matplotlib/imageio claim cp313t columns over it.  Extend the cap
+        # only together with a hand-written, verified pillow-cp313t.
+        "interpreters": ["311", "312", "313"],
         "files": ["PIL/", "pillow-*.dist-info/"],
         "check": "from PIL import Image; Image.new('L', (2, 2))",
     },
@@ -677,8 +682,15 @@ SEED_PACKAGES = {
         "version": "3.10.0",
         "license": "PSF-2.0",
         "deps": [
-            "contourpy", "cycler", "fonttools", "kiwisolver", "numpy",
-            "packaging", "pillow", "pyparsing", "python-dateutil",
+            "contourpy",
+            "cycler",
+            "fonttools",
+            "kiwisolver",
+            "numpy",
+            "packaging",
+            "pillow",
+            "pyparsing",
+            "python-dateutil",
         ],
         "files": ["matplotlib/", "mpl_toolkits/", "pylab.py", "matplotlib-*.dist-info/"],
         # Agg, not a GUI backend: the build fleet is headless and so is the
@@ -692,11 +704,74 @@ SEED_PACKAGES = {
         "files": ["imageio/", "imageio-*.dist-info/"],
         "check": "import imageio",
     },
+    # ── RL stack ────────────────────────────────────────────────────────────
+    # gymnasium is the RL environment API the grl-snam line of work builds
+    # its training environments on, alongside pillow above.  All three are
+    # pure Python; gymnasium's compiled leg is numpy, a hand-written column.
+    "cloudpickle": {
+        "version": "3.1.2",
+        "license": "BSD-3-Clause",
+        "deps": [],
+        "files": ["cloudpickle/", "cloudpickle-*.dist-info/"],
+        # A real closure round-trip, not just an import: pickling live
+        # functions is the one thing gymnasium needs cloudpickle FOR
+        # (vectorized-env workers serialize the env constructor).
+        "check": (
+            "import cloudpickle, pickle; "
+            "f = pickle.loads(cloudpickle.dumps(lambda x: x + 1)); "
+            "assert f(1) == 2"
+        ),
+    },
+    "farama-notifications": {
+        # License is MIT per the sdist's LICENSE file and the PyPI trove
+        # classifier; the metadata's `license` field itself is empty, which
+        # _spdx would otherwise report as NOASSERTION.
+        "version": "0.0.6",
+        "license": "MIT",
+        "deps": [],
+        "files": ["farama_notifications/", "farama_notifications-*.dist-info/"],
+        "check": "import farama_notifications",
+    },
+    "gymnasium": {
+        "version": "1.3.0",
+        "license": "MIT",
+        # The unconditional requires-dist set; the extras (atari, box2d,
+        # mujoco, ...) are optional env families this closure does not need.
+        "deps": ["cloudpickle", "farama-notifications", "numpy", "typing-extensions"],
+        "files": ["gymnasium/", "gymnasium-*.dist-info/"],
+        # Constructing a Box space exercises the numpy path RL spaces
+        # exercise, beyond a bare import.
+        "check": "import gymnasium; gymnasium.spaces.Box(-1.0, 1.0, (3,))",
+    },
     # jsonschema and its deps (attrs, pyrsistent) come from poetry.lock, which
     # pins 4.17.3 — the pre-referencing/rpds-py line. The lock shadows any seed
     # here ("lock wins"), so seeding them would be dead weight; they are pulled
     # into the emitted set by name instead.
 }
+
+# ── Hand-written column families the generated matrix may depend on ──────────
+# numpy's recipes are from-source conversions carrying native-library edges
+# (openblas), rpath passes and per-platform gates (see is_generator_owned): the
+# generator must never emit or prune them, but seeds DO depend on them —
+# gymnasium, trimesh, pythran, contourpy, matplotlib, imageio all import numpy.
+# Before this table existed those edges were dropped on the floor by
+# deps_for_column's universe test, so trimesh-cp311 shipped with NO numpy edge
+# and imported only when a sibling build happened to leave numpy in the shared
+# prefix.  An unresolvable dependency must be loud, never silent.
+#
+# Only the BASE names are declared here; which columns exist is read from disk
+# (recipes/<base>-cpNNN/recipe.yaml), so the truth stays with the recipes and a
+# hand-written family that gains or loses a column is picked up by the next
+# run.  A base listed here with no columns on disk aborts the run.
+HANDWRITTEN_DEP_BASES = ("numpy",)
+
+
+def handwritten_columns(out: Path, interps: list[str]) -> dict[str, list[str]]:
+    """base -> interpreter columns present on disk, for HANDWRITTEN_DEP_BASES."""
+    return {
+        base: [i for i in interps if (out / f"{base}-cp{i}" / "recipe.yaml").is_file()]
+        for base in HANDWRITTEN_DEP_BASES
+    }
 
 
 def norm(name: str) -> str:
@@ -1127,17 +1202,35 @@ def deps_for_column(m: dict, interp: str, universe: set[str]) -> list[str]:
     ]
 
 
-def compute_columns(meta: dict[str, dict], interps: list[str]) -> dict[str, list[str]]:
+def compute_columns(
+    meta: dict[str, dict],
+    interps: list[str],
+    extra_cols: dict[str, list[str]] | None = None,
+) -> dict[str, list[str]]:
     """Viable columns per base: a column needs a wheel AND every python dep
     viable in that column, to a fixpoint.  Pruning is reported to stderr so a
-    silently missing column is visible in the regeneration log."""
-    universe = set(meta)
-    cols: dict[str, list[str]] = {}
+    silently missing column is visible in the regeneration log.
+
+    *extra_cols* are hand-written column families (HANDWRITTEN_DEP_BASES) that
+    participate as resolvable dependencies: their columns are fixed facts from
+    disk, so they seed the map, join the universe, and prune dependents that
+    claim a column they lack — but the fixpoint never shrinks them and the
+    emit/prune passes never touch them (they are not in *meta*)."""
+    extra_cols = extra_cols or {}
+    universe = set(meta) | set(extra_cols)
+    cols: dict[str, list[str]] = {b: list(c) for b, c in extra_cols.items()}
     why: dict[tuple[str, str], str] = {}
     for base, m in meta.items():
         cols[base] = []
+        # A seed may CAP its columns below what upstream's wheels would allow
+        # (pillow: the hand conversion covers 311/312/313 only) — the cap
+        # prunes dependents through the fixpoint below, keeping the matrix
+        # honest instead of emitting columns over an unconverted recipe.
+        allowed = m.get("interpreters")
         for i in interps:
-            if wheel_for_column(m, i):
+            if allowed is not None and i not in allowed:
+                why[(base, i)] = "column capped by the seed's `interpreters`"
+            elif wheel_for_column(m, i):
                 cols[base].append(i)
             else:
                 why[(base, i)] = "no compatible wheel"
@@ -1404,6 +1497,7 @@ def main() -> int:
             "license": seed.get("license", lic),
             "files": seed.get("files"),
             "check": seed.get("check"),
+            "interpreters": seed.get("interpreters"),
             "seed": True,
         }
 
@@ -1425,7 +1519,46 @@ def main() -> int:
         )
         return 1
 
-    cols = compute_columns(meta, interps)
+    # Hand-written dep families: columns are facts read from disk.  An empty
+    # family that something in the universe DEPENDS on is fatal — every dep
+    # edge on it would silently vanish, which is the exact failure this table
+    # removes.  An empty family nothing references (a run against a synthetic
+    # --out, as the unit-test harness does) is merely irrelevant.
+    referenced: set[str] = set()
+    for m in meta.values():
+        d = m["deps"]
+        referenced.update(norm(x) for x in (d if isinstance(d, (list, tuple)) else d.keys()))
+    extra = handwritten_columns(out, interps)
+    for hw_base, hw_cols in sorted(extra.items()):
+        if hw_base in meta:
+            print(
+                f"FATAL: {hw_base} is both a hand-written dep base and a "
+                f"generated package (lock/seed) — pick one owner.",
+                file=sys.stderr,
+            )
+            return 1
+        if not hw_cols:
+            if hw_base in referenced:
+                print(
+                    f"FATAL: hand-written dep base '{hw_base}' has no "
+                    f"{hw_base}-cpNNN recipes under {out}/ but packages depend "
+                    f"on it — their edges cannot resolve.",
+                    file=sys.stderr,
+                )
+                return 1
+            del extra[hw_base]
+            print(
+                f"  note: hand-written dep base '{hw_base}' has no columns "
+                f"under {out}/ and nothing references it; ignored",
+                file=sys.stderr,
+            )
+            continue
+        print(
+            f"hand-written dep columns: {hw_base} -> {', '.join(hw_cols)} (from disk)",
+            file=sys.stderr,
+        )
+
+    cols = compute_columns(meta, interps, extra)
 
     # A column with NO wheel anywhere is pruned above.  That is deliberately
     # unchanged by sdist mode: cvcpkg only claims interpreter columns upstream
@@ -1461,7 +1594,7 @@ def main() -> int:
                 print(f"  keep {d.name}: hand-written, not regenerated", file=sys.stderr)
                 kept += 1
                 continue
-            _emit_column(out, base, m, interp, meta, cols)
+            _emit_column(out, base, m, interp, meta, cols, extra_universe=set(extra))
             emitted += 1
         if cols[base]:
             counts[m["kind"]] += 1
@@ -1520,7 +1653,10 @@ def _prune_stale(out: Path, meta: dict, cols: dict[str, list[str]], interps: lis
         if not d.is_dir() or not d.name.endswith(suffixes):
             continue
         base = re.sub(r"-cp3[0-9]{2}t?$", "", d.name)
-        if base in meta:
+        if base in meta or base in HANDWRITTEN_DEP_BASES:
+            # Hand-written dep families are outside meta by design; the marker
+            # test below would already spare them, but their exclusion is a
+            # property of the design, not a lucky property of their prose.
             continue
         y = d / "recipe.yaml"
         if y.is_file() and marker in y.read_text(encoding="utf-8"):
@@ -1579,13 +1715,17 @@ def sdist_platforms(kind: str, plats: list[str]) -> list[tuple[str, str]]:
     return [(p, "build.ps1" if p == "windows" else "build.sh") for p in plats]
 
 
-def _emit_column(out, base, m, interp, meta, cols):
+def _emit_column(out, base, m, interp, meta, cols, extra_universe=frozenset()):
     """Emit one recipe: <base>-cp<interp>.
 
     ``m["mode"]`` selects the shape: ``sdist`` (from-source tarball, the
     default) or ``wheel`` (prebuilt PyPI wheel, the documented fallback).
     ``m["reason"]`` is recorded in the recipe so the choice is auditable from
-    the recipe alone, not just from a regeneration log."""
+    the recipe alone, not just from a regeneration log.
+
+    *extra_universe* extends dependency resolution to hand-written column
+    families (HANDWRITTEN_DEP_BASES): a seed dep on ``numpy`` renders as a
+    ``numpy-cp<interp>`` edge instead of being silently dropped."""
     name = f"{base}-cp{interp}"
     d = out / name
     mode = m.get("mode", "wheel")
@@ -1593,7 +1733,7 @@ def _emit_column(out, base, m, interp, meta, cols):
     abi = column_abi(m, interp, arts, mode)
     ver = col_version(interp)
     kind = m["kind"]
-    dep_bases = deps_for_column(m, interp, set(meta))
+    dep_bases = deps_for_column(m, interp, set(meta) | set(extra_universe))
     # Runtime deps are ALSO build deps: the post-install `import <pkg>` check
     # imports the package for real, and many packages eagerly import a runtime
     # dep at module load (sqlalchemy -> typing_extensions), so it must be staged
@@ -1801,6 +1941,10 @@ _TOPPKG = {
     # PEP-420 namespace: the wheel ships poetry/core/ only (no
     # poetry/__init__.py), and `import poetry_core` does not exist.
     "poetry-core": "poetry.core",
+    # The import package is PIL, not pillow — without this a regenerated
+    # files glob would name a `pillow/` dir that never exists (the shipped
+    # hand-written recipes glob PIL/ correctly).
+    "pillow": "PIL",
 }
 
 
