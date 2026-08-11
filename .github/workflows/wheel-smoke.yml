@@ -81,6 +81,7 @@ jobs:
         with:
           name: cvcpkg-dist
           path: dist/
+          retention-days: 7
 
   smoke:
     name: Install & run (${{ matrix.os }} / Py ${{ matrix.python }})

@@ -100,6 +100,7 @@ jobs:
         with:
           name: test-results-${{ matrix.os }}-py${{ matrix.python }}
           path: "*-results.xml"
+          retention-days: 7
 
       - name: Upload coverage report
         if: always()
@@ -107,6 +108,7 @@ jobs:
         with:
           name: coverage-${{ matrix.os }}-py${{ matrix.python }}
           path: coverage.xml
+          retention-days: 7
 
   secrets-scan:
     name: Secret scan
