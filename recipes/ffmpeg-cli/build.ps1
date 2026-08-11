@@ -35,11 +35,22 @@ $env:CHERE_INVOKING   = '1'
 # every later CMake build against it. Search the build prefix first so our
 # pinned gcc wins over any ambient C:\msys64\mingw64\bin.
 $toolRoots = @($env:CVC_BUILD_PREFIX, $env:CVC_DEPS_PREFIX) | Where-Object { $_ }
+
+# PATH is consumed by the SHELL, so it wants MSYS form and ':' separators.
 $msysToolBins = ($toolRoots | ForEach-Object { (ConvertTo-CvcMsysPath $_) + '/bin' }) -join ':'
-$msysPcPaths  = ($toolRoots | ForEach-Object { (ConvertTo-CvcMsysPath $_) + '/lib/pkgconfig' }) -join ':'
+
+# PKG_CONFIG_PATH is consumed by pkg-config.exe, a NATIVE Windows binary, so it
+# wants drive-letter paths and ';' separators. Handing it the MSYS form made it
+# silently find nothing, and ffmpeg's configure reported
+#   ERROR: x264 not found using pkg-config
+# with x264.pc sitting in the build prefix -- indistinguishable from x264 not
+# being built. Only --with-deps hit it, because a plain build happened to find
+# x264 already merged into the deps prefix. numpy-cp312 gets this right; this
+# did not.
+$winPcPaths = ($toolRoots | ForEach-Object { ($_ -replace '\\', '/') + '/lib/pkgconfig' }) -join ';'
 
 $depsFlag = if ($msysToolBins) {
-    "export PKG_CONFIG_PATH='$msysPcPaths'; export PATH='${msysToolBins}:'`$PATH; "
+    "export PKG_CONFIG_PATH='$winPcPaths'; export PATH='${msysToolBins}:'`$PATH; "
 } else { '' }
 
 # FFmpeg's configure compiles probe files under $TMPDIR (default /tmp) and
