@@ -1,78 +1,160 @@
 #!/usr/bin/env bash
-# recipes/pillow-cp312/build.sh — build pillow 11.1.0 FROM SOURCE (generated).
+# recipes/pillow-cp312/build.sh — build Pillow 11.1.0 FROM SOURCE against
+# cvcpkg's zlib / libjpeg-turbo / libtiff / freetype / libwebp, then install
+# the wheel into the python312 interpreter's site-packages.
 #
-# WHY FROM SOURCE: a PyPI wheel is somebody else's compiled artifact, linked
-# against libraries we did not build.  cvcpkg fetches and sha256-verifies the
-# SDIST (source.type: tarball) instead, and this script compiles the wheel with
-# the prefix's own interpreter, then installs it — so the bundle contains only
-# things cvcpkg built.  pip still produces a real wheel (dist-info/RECORD/
-# METADATA), so a consumer's later `pip install <other>` coexists and pip's
-# resolver sees this package as satisfied.
-#
-# BUILD BACKEND: setuptools-cp312
-# --no-build-isolation means pip does NOT download the PEP-517 backend into a
-# throwaway venv (that would be both non-hermetic and impossible offline): the
-# backend must ALREADY be importable.  It is declared in recipe.yaml as a
-# depends.build edge, so it is staged into CVC_BUILD_PREFIX — a different prefix
-# from the one cvc_python_exe's interpreter imports.  Step 2's PYTHONPATH bridge
-# is what makes it importable; without it the build falls back to isolation and
-# fails offline.
+# WHY HAND-WRITTEN (not the generated sdist script): Pillow links native
+# cvcpkg libraries.  The build must (a) discover them HERMETICALLY — never the
+# builder's /usr copies, (b) hard-fail if one is missing (`-C <feat>=enable`)
+# instead of silently dropping the codec, and (c) stamp an $ORIGIN-relative
+# RUNPATH so the extensions resolve the libraries out of the merged prefix at
+# import.  None of that is inferable from [build-system] requires — the same
+# reason numpy/h5py are hand-written (see gen_python_recipes.py).
 set -euo pipefail
-
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# Platform toolchain/env.  Sourced conditionally: a noarch (platform: any)
-# column can be claimed by a builder whose platform ships no env-*.sh.
-_CVC_ENV="${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM:-linux}.sh"
 # shellcheck disable=SC1090
-[ -f "${_CVC_ENV}" ] && . "${_CVC_ENV}"
+source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"      # toolchain, CVC_JOBS
 # shellcheck disable=SC1091
-. "${SCRIPT_DIR}/../_common/python-wheel.sh"   # cvc_python_exe, cvc_python_check
+source "${SCRIPT_DIR}/../_common/python-wheel.sh"            # cvc_python_exe
 
-# ── 1. Resolve this column's interpreter inside the prefix ──────────────────
 : "${CVC_PYTHON_ABI:=cp312}"
 : "${CVC_PYTHON_INTERPRETER:=python312}"
-PY_EXE="$(cvc_python_exe)"
-echo "pillow-cp312: building with ${PY_EXE}"
+PY="$(cvc_python_exe)"                         # <CVC_DEPS_PREFIX>/bin/python3.12
+DEPS="${CVC_DEPS_PREFIX:-${CVC_INSTALL_DIR}}"
+BLD="${CVC_BUILD_PREFIX:-${DEPS}}"
+_D="${CVC_PYTHON_ABI#cp}"; _D="${_D%t}"; _PYMM="${_D:0:1}.${_D:1}"
 
-# ── 2. Bridge the build-only backend onto that interpreter's path ───────────
-_D="${CVC_PYTHON_ABI#cp}"; _D="${_D%t}"
-_PYMM="${_D:0:1}.${_D:1}"                 # cp311 -> 3.11
-if [ -n "${CVC_BUILD_PREFIX:-}" ]; then
-    _BP_SITE="${CVC_BUILD_PREFIX}/lib/python${_PYMM}/site-packages"
-    export PYTHONPATH="${_BP_SITE}${PYTHONPATH:+:${PYTHONPATH}}"
+# ── Bridge the build-only backend (setuptools) onto the interpreter's path ──
+export PATH="${BLD}/bin:${DEPS}/bin:${PATH}"
+export PYTHONPATH="${BLD}/lib/python${_PYMM}/site-packages${PYTHONPATH:+:${PYTHONPATH}}"
+
+# ── Python headers ──────────────────────────────────────────────────────────
+# The staged interpreter's sysconfig INCLUDEPY can be a stale (unrelocated)
+# build-prefix path (same failure numpy hit under meson); get_path('include')
+# derives from the running prefix and is correct — add it as a fallback.
+PYINC="$("${PY}" -c 'import sysconfig; print(sysconfig.get_path("include"))')"
+if [ -n "${PYINC}" ] && [ -f "${PYINC}/Python.h" ]; then
+  export CPATH="${PYINC}${CPATH:+:${CPATH}}"
 fi
 
-# ── 3. Build the wheel from the extracted sdist ─────────────────────────────
-# --no-deps: transitive deps are cvcpkg recipes, resolved by the depends graph.
-# --no-index: no network resolution — this is what makes air-gapped builds work.
-WHEELHOUSE="${CVC_BUILD_DIR:-${CVC_SOURCE_DIR}}/wheelhouse"
-mkdir -p "${WHEELHOUSE}"
-"${PY_EXE}" -m pip wheel \
-    --no-build-isolation \
-    --no-deps \
-    --no-index \
-    --no-cache-dir \
-    --wheel-dir "${WHEELHOUSE}" \
-    "${CVC_SOURCE_DIR}"
+# ── Hermetic feature-library discovery ──────────────────────────────────────
+# Three fences, all pointing at the prefixes and nothing else:
+#   1. per-feature *_ROOT env vars (setup.py consults them before pkg-config),
+#   2. PKG_CONFIG_LIBDIR *replacing* the system .pc search path,
+#   3. `-C platform-guessing=disable` killing the /usr fallback probes.
+# A library the closure failed to stage then FAILS the corresponding
+# `-C <feature>=enable` loudly instead of resolving to the builder's copy.
+for _pc in "${BLD}/bin/pkg-config" "${DEPS}/bin/pkg-config" "$(command -v pkg-config 2>/dev/null || true)"; do
+    if [ -x "${_pc}" ]; then export PKG_CONFIG="${_pc}"; break; fi
+done
+[ -n "${PKG_CONFIG:-}" ] || { echo "pillow-cp312: no pkg-config in ${BLD}/bin, ${DEPS}/bin or PATH" >&2; exit 1; }
+export PKG_CONFIG_PATH="${DEPS}/lib/pkgconfig:${BLD}/lib/pkgconfig"
+export PKG_CONFIG_LIBDIR="${DEPS}/lib/pkgconfig:${BLD}/lib/pkgconfig"
+export ZLIB_ROOT="${DEPS}" JPEG_ROOT="${DEPS}" TIFF_ROOT="${DEPS}" \
+       FREETYPE_ROOT="${DEPS}" WEBP_ROOT="${DEPS}"
+# freetype's headers live under include/freetype2; the *_ROOT mechanism only
+# adds <root>/include, so name the subdir explicitly for the compile.
+export CFLAGS="-I${DEPS}/include -I${DEPS}/include/freetype2 ${CFLAGS:-}"
+export LDFLAGS="-L${DEPS}/lib ${LDFLAGS:-}"
 
-# --no-deps means the wheelhouse holds exactly one wheel: ours.
-WHEEL="$(find "${WHEELHOUSE}" -maxdepth 1 -name '*.whl' -print -quit)"
-[ -n "${WHEEL}" ] || { echo "pillow-cp312: no wheel produced under ${WHEELHOUSE}" >&2; exit 1; }
+# Fail HERE, with the search path in hand, instead of inside setup.py's
+# generic "could not be found" message.
+for _mod in zlib libjpeg libtiff-4 freetype2 libwebp; do
+    if ! "${PKG_CONFIG}" --exists "${_mod}"; then
+        echo "pillow-cp312: ${_mod}.pc not found by ${PKG_CONFIG}" >&2
+        echo "  PKG_CONFIG_LIBDIR=${PKG_CONFIG_LIBDIR}" >&2
+        ls -la "${DEPS}/lib/pkgconfig" 2>&1 | head -40 >&2
+        exit 1
+    fi
+done
+echo "pillow-cp312: zlib $("${PKG_CONFIG}" --modversion zlib), libjpeg $("${PKG_CONFIG}" --modversion libjpeg), libtiff $("${PKG_CONFIG}" --modversion libtiff-4), freetype $("${PKG_CONFIG}" --modversion freetype2), libwebp $("${PKG_CONFIG}" --modversion libwebp)"
+
+WHEELOUT="${CVC_BUILD_DIR:-${CVC_SOURCE_DIR}}/wheelhouse"; mkdir -p "${WHEELOUT}"
+
+# ── Build (offline, no isolation, features pinned) ──────────────────────────
+# Pillow's config settings: `enable` REQUIRES the feature (the build fails if
+# the library is not found — there is no separate "require" value), `disable`
+# excludes it.  Everything the grl-snam imaging path needs is enabled;
+# everything without a cvcpkg recipe is disabled so nothing can leak in from
+# the system (raqm/lcms/openjpeg/imagequant/xcb have no recipes today).
+"${PY}" -m pip wheel \
+  --no-build-isolation --no-deps --no-index --no-cache-dir \
+  --wheel-dir "${WHEELOUT}" \
+  -C zlib=enable \
+  -C jpeg=enable \
+  -C tiff=enable \
+  -C freetype=enable \
+  -C webp=enable \
+  -C raqm=disable \
+  -C lcms=disable \
+  -C jpeg2000=disable \
+  -C imagequant=disable \
+  -C xcb=disable \
+  -C platform-guessing=disable \
+  -C parallel="${CVC_JOBS:-4}" \
+  "${CVC_SOURCE_DIR}"
+
+readarray -t _wheel_matches < <(find "${WHEELOUT}" -maxdepth 1 -name 'pillow-*.whl')
+WHEEL="${_wheel_matches[0]:-}"
+[ -n "${WHEEL}" ] || { echo "pillow-cp312: no wheel produced" >&2; exit 1; }
 echo "pillow-cp312: built $(basename "${WHEEL}")"
 
-# ── 4. Install it into this recipe's (empty) staging prefix ─────────────────
-# stage_bundle ships the whole CVC_INSTALL_DIR tree, so installing --prefix into
-# an empty dir with --no-deps is what keeps the bundle to just this package.
-"${PY_EXE}" -m pip install \
-    --no-index \
-    --no-deps \
-    --no-compile \
-    --ignore-installed \
-    --prefix "${CVC_INSTALL_DIR}" \
-    "${WHEEL}"
+# ── Install ONLY site-packages into the (empty) staging prefix ──────────────
+"${PY}" -m pip install --no-deps --no-index --no-compile \
+  --prefix "${CVC_INSTALL_DIR}" "${WHEEL}"
 
-# ── 5. Verify the staged package actually imports ──────────────────────────
-# Drop the build-prefix bridge first: the check must exercise the RUNTIME
-# closure, not accidentally import a build-only backend.
-unset PYTHONPATH
-cvc_python_check "from PIL import Image; Image.new('L', (2, 2))"
+readarray -t _pil_dir_matches < <(find "${CVC_INSTALL_DIR}" -maxdepth 4 -type d -name PIL)
+PIL_DIR="${_pil_dir_matches[0]:-}"
+[ -n "${PIL_DIR}" ] || { echo "pillow-cp312: staged PIL/ not found" >&2; exit 1; }
+
+# ── Relocatable RUNPATH per-file ────────────────────────────────────────────
+# The extensions land at site-packages/PIL/*.so; compute the $ORIGIN-relative
+# path to <prefix>/lib per-file (numpy's pattern — never hard-code the depth).
+if [ "${CVC_PLATFORM}" != "macos" ]; then
+  command -v patchelf >/dev/null 2>&1 || { echo "pillow-cp312: patchelf missing" >&2; exit 1; }
+  while IFS= read -r -d '' so; do
+    rel="$("${PY}" -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "${CVC_INSTALL_DIR}/lib" "$(dirname "${so}")")"
+    patchelf --set-rpath "\$ORIGIN:\$ORIGIN/${rel}" "${so}"
+  done < <(find "${PIL_DIR}" -name '*.so' -print0)
+fi
+command -v cvc_rewrite_install_paths >/dev/null 2>&1 && cvc_rewrite_install_paths || true
+
+# ── Verify: every promised codec works + NO vendored libs ───────────────────
+# The generated recipe's `Image.new()` check passes with zero codecs compiled
+# in; this one exercises what the consumers actually do (PNG ingest) plus
+# each enabled feature, so a regression fails the build, not the demo.
+export PYTHONPATH="$(dirname "${PIL_DIR}")${PYTHONPATH:+:${PYTHONPATH}}"
+_LOADPATH="${DEPS}/lib${CVC_BUILD_PREFIX:+:${CVC_BUILD_PREFIX}/lib}"
+if [ "${CVC_PLATFORM}" = "macos" ]; then
+  export DYLD_LIBRARY_PATH="${_LOADPATH}${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
+else
+  export LD_LIBRARY_PATH="${_LOADPATH}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+fi
+"${PY}" - <<'PYCHECK'
+import io, os
+import PIL
+from PIL import Image, features
+
+wanted = ("zlib", "jpg", "libtiff", "freetype2", "webp")
+missing = [f for f in wanted if not features.check(f)]
+assert not missing, f"features missing from the build: {missing}"
+
+# PNG round-trip through bytes — the navmask.png path of
+# scene-raster ingestion, byte-for-byte the codec that must work.
+buf = io.BytesIO()
+Image.new("RGB", (4, 4), (10, 20, 30)).save(buf, "PNG")
+px = Image.open(io.BytesIO(buf.getvalue())).convert("RGB").getpixel((0, 0))
+assert px == (10, 20, 30), f"PNG round-trip corrupted: {px}"
+
+for fmt in ("JPEG", "TIFF", "WEBP"):
+    s = io.BytesIO()
+    Image.new("RGB", (8, 8)).save(s, fmt)
+    Image.open(io.BytesIO(s.getvalue())).load()
+
+sp = os.path.dirname(os.path.dirname(PIL.__file__))
+libs = [d for d in os.listdir(sp) if d.endswith(".libs")]
+assert not libs, f"vendored {libs} present — the prefix libs were not used"
+
+print("PIL", PIL.__version__, "features:", {f: features.version(f) for f in wanted})
+print("pillow-cp312 build + verification complete")
+PYCHECK
