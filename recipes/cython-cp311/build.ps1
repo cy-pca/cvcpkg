@@ -1,4 +1,4 @@
-# recipes/cython-cp311/build.ps1 — build cython 3.1.6 FROM SOURCE (generated).
+# recipes/cython-cp311/build.ps1 — build cython 3.2.9 FROM SOURCE (generated).
 # Windows counterpart of build.sh; same contract (see that file for the why).
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'

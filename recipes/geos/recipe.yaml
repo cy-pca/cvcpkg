@@ -1,0 +1,55 @@
+schema_version: 1
+recipe:
+  name: geos
+  upstream_version: "3.14.1"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://libgeos.org/
+  license: "LGPL-2.1-only"
+  tags: [library, geometry, gis]
+  description: >-
+    GEOS — the Geometry Engine, Open Source: predicates and operations on
+    planar geometry (intersection, buffer, union, overlay, spatial
+    relationships), the C/C++ engine behind PostGIS and Shapely.
+
+    Packaged because `shapely` links it. Shapely 2.x does NOT vendor GEOS: its
+    sdist build requires an external libgeos, so there is no from-source
+    shapely without this.
+
+    Plain CMake, no unusual prerequisites — which is worth stating because the
+    GIS stack has a reputation earned by GDAL and PROJ rather than by this.
+
+source:
+  type: tarball
+  url: https://download.osgeo.org/geos/geos-3.14.1.tar.bz2
+  sha256: "3c20919cda9a505db07b5216baa980bacdaa0702da715b43f176fb07eff7e716"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - bin/
+    - lib/
+    - include/
+  cmake_packages:
+    - { name: GEOS, targets: ["GEOS::geos_c"] }

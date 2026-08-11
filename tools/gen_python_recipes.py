@@ -301,6 +301,80 @@ SEED_PACKAGES = {
         "files": ["win32ctypes/", "pywin32_ctypes-*.dist-info/"],
         "check": "import win32ctypes",
     },
+    # --- scipy's build stack --------------------------------------------
+    # pythran compiles scipy's ahead-of-time-annotated Python to C++, and
+    # scipy's meson looks for it during configure.  All four are BUILD deps
+    # of scipy rather than anything a user imports.
+    "gast": {
+        "version": "0.7.0",
+        "license": "BSD-3-Clause",
+        "deps": [],
+        "files": ["gast/", "gast-*.dist-info/"],
+        "check": "import gast",
+    },
+    "beniget": {
+        "version": "0.5.0",
+        "license": "BSD-3-Clause",
+        "deps": ["gast"],
+        "files": ["beniget/", "beniget-*.dist-info/"],
+        "check": "import beniget",
+    },
+    "ply": {
+        "version": "3.11",
+        "license": "BSD-3-Clause",
+        "deps": [],
+        "files": ["ply/", "ply-*.dist-info/"],
+        "check": "import ply",
+    },
+    "pythran": {
+        "version": "0.18.1",
+        "license": "BSD-3-Clause",
+        "deps": ["beniget", "gast", "numpy", "ply", "setuptools"],
+        "files": ["pythran/", "omp/", "pythran-*.dist-info/"],
+        "check": "import pythran",
+    },
+    # --- Flask, for the platoon-sim scene viewer ---------------------------
+    # scene_viewer/viewer_app.py is a Flask server, and the DBG web demo is
+    # recorded from it. click and jinja2 already arrive via poetry.lock.
+    # All pure Python.
+    "itsdangerous": {
+        "version": "2.2.0",
+        "license": "BSD-3-Clause",
+        "deps": [],
+        "files": ["itsdangerous/", "itsdangerous-*.dist-info/"],
+        "check": "import itsdangerous",
+    },
+    "blinker": {
+        "version": "1.9.0",
+        "license": "MIT",
+        "deps": [],
+        "files": ["blinker/", "blinker-*.dist-info/"],
+        "check": "import blinker",
+    },
+    "werkzeug": {
+        "version": "3.1.8",
+        "license": "BSD-3-Clause",
+        "deps": ["markupsafe"],
+        "files": ["werkzeug/", "werkzeug-*.dist-info/"],
+        "check": "import werkzeug",
+    },
+    "flask": {
+        "version": "3.1.3",
+        "license": "BSD-3-Clause",
+        "deps": ["blinker", "click", "itsdangerous", "jinja2", "markupsafe", "werkzeug"],
+        "files": ["flask/", "flask-*.dist-info/"],
+        "check": "import flask",
+    },
+    # Not part of scipy: geometry-scene-gen imports trimesh eagerly from
+    # scene_gen/__init__, so the DBG movement-bundle export needs it in the
+    # prefix.  Pure Python over numpy.
+    "trimesh": {
+        "version": "5.0.0",
+        "license": "MIT",
+        "deps": ["numpy"],
+        "files": ["trimesh/", "trimesh-*.dist-info/"],
+        "check": "import trimesh",
+    },
     "trove-classifiers": {
         "version": "2024.10.16",
         "license": "Apache-2.0",
@@ -316,7 +390,9 @@ SEED_PACKAGES = {
         "check": "import black",
     },
     "cython": {
-        "version": "3.1.6",
+        # >= 3.2.0 is a hard floor from scipy's meson.build ("SciPy requires
+        # Cython >= 3.2.0"), which fails configure rather than degrading.
+        "version": "3.2.9",
         "license": "Apache-2.0",
         "deps": [],
         "files": ["Cython/", "cython.py", "pyximport/", "cython-*.dist-info/"],

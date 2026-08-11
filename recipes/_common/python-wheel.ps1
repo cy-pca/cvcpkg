@@ -32,6 +32,57 @@ function Remove-CvcMinGWFromPath {
 
 Remove-CvcMinGWFromPath
 
+# Make the prefixes' console scripts and pkg-config metadata discoverable.
+#
+# A meson/setuptools sdist build finds its tooling by RUNNING it off PATH, not
+# by importing it: meson probes Cython by executing `cython`, and pybind11 by
+# executing `pybind11-config`. On Windows those land in <prefix>\Scripts, which
+# nothing else puts on PATH, so a build with Cython and pybind11 both installed
+# still fails with
+#   ERROR: Unknown compiler(s): [['cython'], ['cython3']]
+#   Run-time dependency pybind11 found: NO (tried pkg-config, config-tool and cmake)
+# — which reads as a missing dependency rather than a missing PATH entry.
+# numpy's hand-written recipe already does this inline; generated recipes had
+# no equivalent, so this covers every one of them at dot-source time.
+#
+# pybind11 additionally ships its .pc and cmake config INSIDE the package
+# (site-packages\pybind11\share\...), not in <prefix>\lib\pkgconfig, so those
+# directories have to be named explicitly for the pkg-config and cmake probes.
+function Add-CvcPythonToolPaths {
+    $prefixes = @($env:CVC_BUILD_PREFIX, $env:CVC_DEPS_PREFIX, $env:CVC_INSTALL_DIR) |
+        Where-Object { $_ } | Select-Object -Unique
+
+    $pathParts = @()
+    $pcParts = @()
+    $cmakeParts = @()
+    foreach ($p in $prefixes) {
+        foreach ($sub in 'Scripts', 'bin') {
+            $d = Join-Path $p $sub
+            if (Test-Path $d) { $pathParts += $d }
+        }
+        $pc = Join-Path $p 'lib\pkgconfig'
+        if (Test-Path $pc) { $pcParts += $pc }
+        $share = Join-Path $p 'Lib\site-packages\pybind11\share'
+        if (Test-Path $share) {
+            $sharePc = Join-Path $share 'pkgconfig'
+            if (Test-Path $sharePc) { $pcParts += $sharePc }
+            $cmakeParts += $share
+        }
+    }
+
+    if ($pathParts) { $env:PATH = ($pathParts -join ';') + ';' + $env:PATH }
+    if ($pcParts) {
+        $joined = $pcParts -join ';'
+        $env:PKG_CONFIG_PATH = if ($env:PKG_CONFIG_PATH) { "$joined;$env:PKG_CONFIG_PATH" } else { $joined }
+    }
+    if ($cmakeParts) {
+        $joined = $cmakeParts -join ';'
+        $env:CMAKE_PREFIX_PATH = if ($env:CMAKE_PREFIX_PATH) { "$joined;$env:CMAKE_PREFIX_PATH" } else { $joined }
+    }
+}
+
+Add-CvcPythonToolPaths
+
 # Map a cvcpkg interpreter recipe name to the X.Y[t] version it reports.
 #   python311 -> 3.11 ; python313t -> 3.13t
 # Authoritative even for abi3, whose ABI tag carries no version.

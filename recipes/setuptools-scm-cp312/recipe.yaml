@@ -77,10 +77,19 @@ build:
   # `platform: any` — the wheel this produces is py3-none-any, valid on every
   # platform cvcpkg targets, so the recipe is built once and published noarch,
   # exactly like the other pure-Python columns (setuptools, packaging, wheel).
-  # That also means there is no build.ps1: one build.sh serves the single job.
+  #
+  # A noarch ARTIFACT still needs a per-host BUILD script. build.sh resolves
+  # the interpreter as <prefix>/bin/python3.12; a Windows prefix has python.exe
+  # at its root and site-packages under Lib\, so there it fails before doing any
+  # work ("cvc_python_exe_for: interpreter not found"). #475 gave every
+  # GENERATED pure column a windows entry for exactly this reason; this recipe
+  # is hand-written, so the sweep skipped it and the POSIX-only assumption
+  # survived.
   matrix:
     - platform: any
       script: build.sh
+    - platform: windows
+      script: build.ps1
 
 package:
   # DOCUMENTATION ONLY. cvcpkg's stage_bundle ships the ENTIRE CVC_INSTALL_DIR

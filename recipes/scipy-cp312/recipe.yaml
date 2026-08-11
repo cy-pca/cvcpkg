@@ -1,0 +1,75 @@
+schema_version: 1
+recipe:
+  name: scipy-cp312
+  upstream_version: "1.18.0"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://scipy.org/
+  license: "BSD-3-Clause"
+  tags: [python, source, science]
+  description: >-
+    SciPy 1.18.0 for CPython 3.12, built FROM SOURCE against cvcpkg's OpenBLAS.
+    Hand-written, not generated: the generator reads only
+    [build-system] requires and would miss both the native OpenBLAS edge and
+    the Fortran toolchain, silently producing a recipe that links whatever BLAS
+    the builder happens to have.
+
+    Windows only, deliberately. SciPy needs a Fortran compiler — MSVC has none
+    and LLVM flang is unsupported — so this builds with mingw-w64-gcc
+    (gcc/g++/gfortran), the way SciPy's own CI does rather than mixing MSVC for
+    C/C++ with gfortran for Fortran. linux/macos are not claimed here because
+    they have not been built and verified; an unverified platform column is the
+    phantom-platform claim the coverage audit exists to prevent, not a freebie.
+
+# From-source sdist (NOT source.type python_wheel): the PyPI wheel bundles its
+# own vendored OpenBLAS, which is exactly the non-hermeticity this recipe
+# exists to avoid — the same reason numpy-cp312 builds from source.
+source:
+  type: tarball
+  url: https://files.pythonhosted.org/packages/a7/25/c2700dfaf6442b4effaa91af24ebce5dc9d31bb4a69706313aae70d72cd0/scipy-1.18.0.tar.gz
+  sha256: "67b2ad2ad54c72ca6d04975a9b2df8c3638c34ddd5b28738e94fc2b57929d378"
+  strip_components: 1
+
+python:
+  interpreter: python312
+  abi: cp312
+
+patches: []
+
+depends:
+  build:
+    - name: python312
+    - name: numpy-cp312
+    - name: cython-cp312
+    - name: meson-python-cp312
+    - name: pybind11-cp312
+    - name: pythran-cp312
+    - name: packaging-cp312
+    - name: pyproject-metadata-cp312
+    - name: openblas
+  runtime:
+    - name: python312
+    - name: numpy-cp312
+    - name: openblas
+  host_tools:
+    - python312
+    # The reason this recipe can exist at all: cvcpkg's only Fortran compiler.
+    - mingw-w64-gcc
+    - meson
+    # meson resolves BLAS through pkgconfig only — never cmake — so without a
+    # pkg-config inside the prefix the build dies "No BLAS library detected!".
+    - pkg-config
+
+build:
+  matrix:
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - Lib/site-packages/scipy/
+    - Lib/site-packages/scipy-*.dist-info/
+  cmake_packages: []
