@@ -48,8 +48,6 @@ package:
   files:
     - msys2/
 
-abi:
-  cxx_std: 17
 
 notes:
   - title: "System-level installation"

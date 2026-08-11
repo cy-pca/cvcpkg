@@ -26,6 +26,48 @@ _TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled", "timed_out",
 # e.g. a heavy recipe (llvm) that cannot finish inside a CI window.
 WAIT_TIMEOUT_EXIT_CODE = 75
 
+# Non-terminal statuses that mean NO builder has the job yet.  A job sitting
+# here when the wait budget elapses was never claimed -- that is a scheduling
+# or capacity problem, not a slow build, and it must not be reported as
+# "still building".  Conflating the two made the pr-recipe-build-dev check
+# green while it had verified nothing: ca-bundle (a 190 KB download) sat
+# unclaimed for the full 25-minute window on both pr-447 and pr-457 and the
+# check passed each time.
+_UNCLAIMED_STATUSES = frozenset({"pending", "dispatched"})
+
+
+def _builder_can_serve(builder: dict, job: dict) -> bool:
+    """Mirror of the server scheduler's eligibility test, minus transients.
+
+    Matches ``_choose_builder`` in server/app.py on the durable axes —
+    namespace, required capabilities, platform/arch (including
+    ``cross_platforms`` and the noarch reference target for ``any``) — and
+    deliberately ignores the transient ones (capacity, free disk): the caller
+    wants "could anything EVER claim this job", not "could it claim it right
+    now".
+    """
+    served = builder.get("served_namespaces") or [builder.get("org_slug", "")]
+    if (job.get("org_slug") or "") not in served:
+        return False
+    caps = builder.get("capabilities") or {}
+    if any(not caps.get(c) for c in job.get("required_capabilities") or []):
+        return False
+    jp, ja = job.get("platform"), job.get("arch")
+    if jp == "any":
+        from cvcpkg.platform import noarch_build_target
+
+        jp, ja = noarch_build_target()
+    if builder.get("platform") == jp and builder.get("arch") == ja:
+        return True
+    for cp in caps.get("cross_platforms") or []:
+        if isinstance(cp, dict):
+            if cp.get("platform") == jp and cp.get("arch") == ja:
+                return True
+        elif cp == jp:  # legacy platform-only cross target
+            return True
+    return False
+
+
 # A DAG's jobs may not be queryable the instant a waiter starts, so an empty
 # result is only conclusive after this many consecutive polls.
 _EMPTY_POLL_GRACE = 24  # × 5s ≈ 2 min
@@ -760,6 +802,7 @@ def _wait_for_dags(
     failed_ids: list[int] = []
     skipped_ids: list[int] = []
     building: list[str] = []
+    unclaimed: list[tuple[str, dict]] = []
     with httpx.Client(timeout=30) as client:
         for jid in all_job_ids:
             resp = client.get(f"{base}/v1/builds/{jid}", headers=headers)
@@ -773,8 +816,16 @@ def _wait_for_dags(
                 skipped_ids.append(jid)
                 continue
             if status not in terminal:
-                # Still building -- only reachable when we stopped at the deadline.
-                building.append(f"#{jid} {info.get('recipe_name', '?')}")
+                # Only reachable when we stopped at the deadline.  Split by
+                # whether a builder ever picked the job up: "running" is a
+                # genuinely slow build and a legitimate soft pass, while
+                # pending/dispatched means nothing claimed it and the run
+                # verified nothing at all.
+                label = f"#{jid} {info.get('recipe_name', '?')} ({status})"
+                if status in _UNCLAIMED_STATUSES:
+                    unclaimed.append((label, info))
+                else:
+                    building.append(label)
                 continue
             failed_ids.append(jid)
 
@@ -792,6 +843,60 @@ def _wait_for_dags(
             err=True,
         )
         raise SystemExit(WAIT_TIMEOUT_EXIT_CODE)
+    if timed_out and unclaimed:
+        # Not a slow build: no builder ever took these.  Whether that is a
+        # hard failure depends on WHY.  Ask the builder registry and split:
+        #
+        #   * queued  — an ONLINE builder can serve the job but every such
+        #     builder is at capacity (current_jobs >= max_jobs).  The job is
+        #     legitimately waiting in line behind running work; that is the
+        #     same "submitted OK, will finish on the cluster" shape as a slow
+        #     build, so it soft-passes with the same exit code.
+        #   * dead    — either no online builder can serve the job at all
+        #     (every capable builder offline/deregistered), or a capable
+        #     builder is online WITH free capacity and still nothing claimed
+        #     the job for the whole window.  The latter is exactly the
+        #     ca-bundle pathology (pr-447/pr-457: three online builders, a
+        #     190 KB job pending for 25 minutes) — a scheduler or builder
+        #     that has gone silent must not produce a green check.
+        #
+        # If the registry itself cannot be read, every unclaimed job counts
+        # as dead: an unverifiable "nothing happened" must stay a failure.
+        builders: list[dict] | None
+        try:
+            with httpx.Client(timeout=30) as client:
+                resp = client.get(f"{base}/v1/builders", headers=headers)
+                builders = resp.json().get("builders", []) if resp.status_code < 400 else None
+        except Exception:
+            builders = None
+        queued: list[str] = []
+        dead: list[str] = []
+        for label, info in unclaimed:
+            capable = [
+                b
+                for b in builders or []
+                if b.get("status") == "online" and _builder_can_serve(b, info)
+            ]
+            if capable and all(
+                int(b.get("current_jobs") or 0) >= int(b.get("max_jobs") or 1) for b in capable
+            ):
+                queued.append(label)
+            else:
+                dead.append(label)
+        if dead:
+            raise click.ClickException(
+                f"{len(dead)} job(s) were never claimed by a builder within "
+                f"{wait_timeout:.0f}s: {', '.join(sorted(dead))}. "
+                "Nothing was verified — check that a registered builder can serve this "
+                "platform/arch and is online (`cvcpkg builds monitor`)."
+            )
+        click.echo(
+            f"\n{len(queued)} job(s) still queued after {wait_timeout:.0f}s behind "
+            f"online builder(s) at capacity (submitted OK, continuing on the "
+            f"cluster): {', '.join(sorted(queued))}"
+        )
+        if not building:
+            raise SystemExit(WAIT_TIMEOUT_EXIT_CODE)
     if timed_out and building:
         click.echo(
             f"\n{len(building)} job(s) still building after {wait_timeout:.0f}s "
