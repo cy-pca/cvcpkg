@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: pythran-cp313
   upstream_version: "0.18.1"
-  cvc_revision: 1
+  cvc_revision: 2
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -36,6 +36,7 @@ depends:
     - name: python313
     - name: beniget-cp313
     - name: gast-cp313
+    - name: numpy-cp313
     - name: ply-cp313
     - name: setuptools-cp313
     # PEP-517 build backend, from this sdist's [build-system] requires.
@@ -45,6 +46,7 @@ depends:
     - name: python313
     - name: beniget-cp313
     - name: gast-cp313
+    - name: numpy-cp313
     - name: ply-cp313
     - name: setuptools-cp313
   host_tools:
