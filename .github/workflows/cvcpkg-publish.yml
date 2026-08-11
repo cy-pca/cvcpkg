@@ -110,6 +110,7 @@ jobs:
         with:
           name: cvcpkg-dist
           path: dist/
+          retention-days: 7
 
   live-smoke:
     name: Live smoke (${{ matrix.os }} / Py ${{ matrix.python }})
