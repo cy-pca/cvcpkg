@@ -137,6 +137,7 @@ th.is-sorted { color: #3273dc; }
 .platform-tag.freebsd { background-color: rgba(255, 56, 56, 0.15); color: #ff3838; }
 .platform-tag.netbsd { background-color: rgba(255, 145, 51, 0.15); color: #ff9133; }
 .platform-tag.openbsd { background-color: rgba(241, 196, 15, 0.15); color: #f1c40f; }
+.platform-tag.haiku { background-color: rgba(0, 169, 157, 0.15); color: #00a99d; }
 .platform-tag.wasm { background-color: rgba(155, 89, 182, 0.15); color: #9b59b6; }
 .platform-tag.wasi { background-color: rgba(230, 126, 34, 0.15); color: #e67e22; }
 
@@ -378,6 +379,7 @@ function platformTag(platform) {
   else if (lp === 'freebsd') cls = 'freebsd';
   else if (lp === 'netbsd') cls = 'netbsd';
   else if (lp === 'openbsd') cls = 'openbsd';
+  else if (lp === 'haiku') cls = 'haiku';
   else if (lp === 'wasm') cls = 'wasm';
   else if (lp === 'wasi') cls = 'wasi';
   return '<span class="tag is-rounded platform-tag ' + cls + '">' + esc(platform) + '</span>';
@@ -2526,6 +2528,7 @@ def builds_html() -> str:
             <option value="freebsd">FreeBSD</option>
             <option value="netbsd">NetBSD</option>
             <option value="openbsd">OpenBSD</option>
+            <option value="haiku">Haiku</option>
             <option value="macos">macOS</option>
             <option value="windows">Windows</option>
             <option value="wasm">WASM</option>
