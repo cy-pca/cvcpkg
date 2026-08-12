@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: pytest-cp313
   upstream_version: "9.1.1"
-  cvc_revision: 2
+  cvc_revision: 3
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -43,6 +43,7 @@ depends:
     # in the build prefix already (build.sh bridges it onto sys.path).
     - name: setuptools-cp313
     - name: setuptools-scm-cp313
+    - name: trove-classifiers-cp313
   runtime:
     - name: python313
     - name: iniconfig-cp313

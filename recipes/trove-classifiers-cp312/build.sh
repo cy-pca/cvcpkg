@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# recipes/trove-classifiers-cp312/build.sh — build trove-classifiers 2024.10.16 FROM SOURCE (generated).
+# recipes/trove-classifiers-cp312/build.sh — build trove-classifiers 2026.6.1.19 FROM SOURCE (generated).
 #
 # WHY FROM SOURCE: a PyPI wheel is somebody else's compiled artifact, linked
 # against libraries we did not build.  cvcpkg fetches and sha256-verifies the
