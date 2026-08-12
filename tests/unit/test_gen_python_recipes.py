@@ -535,6 +535,13 @@ _HAND_WRITTEN_COLUMNS = (
     "contourpy-cp311",
     "contourpy-cp312",
     "contourpy-cp313",
+    # matplotlib: contourpy's pybind11 fix PLUS -Dsystem-freetype/-Dsystem-
+    # qhull (the default meson wraps DOWNLOAD both sources — impossible on an
+    # offline builder), native freetype/qhull edges, an $ORIGIN rpath pass and
+    # a real Agg-render check.  A regeneration would put the downloads back.
+    "matplotlib-cp311",
+    "matplotlib-cp312",
+    "matplotlib-cp313",
 )
 
 _REPO = Path(__file__).resolve().parents[2]

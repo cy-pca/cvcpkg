@@ -1,0 +1,75 @@
+schema_version: 1
+recipe:
+  name: qhull
+  upstream_version: "8.0.2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    Qhull — convex hulls, Delaunay triangulations and Voronoi diagrams.
+    Ships the reentrant libqhull_r (the library matplotlib's triangulation
+    links) plus a hand-written qhull_r.pc: upstream 8.0.2 installs no
+    pkg-config file, and meson's dependency('qhull_r') needs one to pick the
+    system copy instead of downloading its subproject wrap (which an offline
+    builder cannot do).  The version and source pin match matplotlib 3.10's
+    own subprojects/qhull.wrap exactly.
+  homepage: http://www.qhull.org/
+  license: Qhull
+  tags: [math, geometry]
+
+source:
+  type: tarball
+  url: https://github.com/qhull/qhull/archive/v8.0.2/qhull-8.0.2.tar.gz
+  sha256: "8774e9a12c70b0180b95d6b0b563c5aa4bea8d5960c15e18ae3b6d2521d64f8b"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libqhull_r*
+    - lib/qhull_r*
+    - lib/libqhullcpp*
+    - lib/libqhullstatic*
+    - lib/pkgconfig/qhull_r.pc
+    - lib/cmake/Qhull/
+    - include/libqhull_r/
+    - include/libqhullcpp/
+    - bin/qhull*
+    - bin/rbox*
+  cmake_packages: []
+
+abi:
+  cxx_std: 11
