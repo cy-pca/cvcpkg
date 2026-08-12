@@ -1,4 +1,4 @@
-# recipes/trove-classifiers-cp311/build.ps1 — build trove-classifiers 2024.10.16 FROM SOURCE (generated).
+# recipes/trove-classifiers-cp311/build.ps1 — build trove-classifiers 2026.6.1.19 FROM SOURCE (generated).
 # Windows counterpart of build.sh; same contract (see that file for the why).
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
