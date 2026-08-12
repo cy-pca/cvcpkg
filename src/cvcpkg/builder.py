@@ -20,7 +20,7 @@ import sys
 import tarfile
 import tempfile
 import zipfile
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1565,11 +1565,22 @@ def stage_bundle(
     manifest: dict[str, Any],
     staging_dir: Path,
     recipe_dir: Path | None = None,
+    temp_prefixes: Sequence[Path | str] = (),
 ) -> None:
-    """Copy the installed tree, manifest, and recipe into a staging directory."""
+    """Copy the installed tree, manifest, and recipe into a staging directory.
+
+    *temp_prefixes* names the build-time prefixes (deps / build-tool /
+    install dirs) that will not exist wherever the bundle is unpacked;
+    console-script shebangs pointing into them are rewritten to relocatable
+    ``/usr/bin/env`` form — see :func:`_rewrite_shebangs`.  The rewrite runs
+    on the STAGED copy only: ``pack --from-prefix`` packages a tree the
+    caller owns, which must come out of packing byte-identical.
+    """
     # Copy entire install tree (preserve symlinks for toolchains like cosmocc)
     if install_dir.is_dir():
         shutil.copytree(install_dir, staging_dir, symlinks=True, dirs_exist_ok=True)
+
+    _rewrite_shebangs(staging_dir, temp_prefixes)
 
     # Write manifest
     meta_dir = staging_dir / "share" / "libcvc-deps"
@@ -1704,11 +1715,11 @@ def _incremental_work_dir(
     return base / f"{name}-{platform}-{config}-{link}"
 
 
-def _write_text_preserving_mode(path: Path, text: str) -> None:
-    """Write *text* to *path* even when the file is read-only.
+def _write_bytes_preserving_mode(path: Path, data: bytes) -> None:
+    """Write *data* to *path* even when the file is read-only.
 
     Dependency payloads legitimately ship read-only files -- perl installs
-    ``lib/<ver>/<arch>/Config.pm`` mode 444 -- and a bare ``write_text``
+    ``lib/<ver>/<arch>/Config.pm`` mode 444 -- and a bare ``write_bytes``
     raises EACCES there.  Because prefix rewriting runs over a whole
     installed dependency tree, one such file aborted the entire dep install
     and took the build with it.
@@ -1717,7 +1728,7 @@ def _write_text_preserving_mode(path: Path, text: str) -> None:
     never silently leaves a file more writable than its package intended.
     """
     try:
-        path.write_text(text, encoding="utf-8")
+        path.write_bytes(data)
         return
     except PermissionError:
         pass
@@ -1725,7 +1736,7 @@ def _write_text_preserving_mode(path: Path, text: str) -> None:
     original = path.stat().st_mode
     try:
         path.chmod(original | stat.S_IWUSR)
-        path.write_text(text, encoding="utf-8")
+        path.write_bytes(data)
     finally:
         try:
             path.chmod(original)
@@ -1734,6 +1745,11 @@ def _write_text_preserving_mode(path: Path, text: str) -> None:
             # successful write, and must not turn one unwritable file into a
             # failed dependency install.
             pass
+
+
+def _write_text_preserving_mode(path: Path, text: str) -> None:
+    """UTF-8 text form of :func:`_write_bytes_preserving_mode`."""
+    _write_bytes_preserving_mode(path, text.encode("utf-8"))
 
 
 def _merge_tree(src: Path, dst: Path) -> None:
@@ -1862,6 +1878,103 @@ def _rewrite_script_prefixes(target_dir: Path) -> None:
         new_text = _TEMP_PREFIX_RE.sub(lambda _m: target_str, text)
         if new_text != text:
             _write_text_preserving_mode(path, new_text)
+
+
+# A path component created by any of cvcpkg's mkdtemp calls: builder jobs
+# (cvcpkg-job-<recipe>-<id>), their prefixes (cvcpkg-prefix-<recipe>-<id>),
+# local pack work dirs (cvcpkg-<recipe>-<id>), and the builder work root
+# itself (/tmp/cvcpkg-builder).  Unlike _TEMP_PREFIX_RE this deliberately
+# does NOT require a trailing /install: a pip shebang bakes the *deps
+# prefix* (.../cvcpkg-job-x-y/bin/python3.11), which that regex misses.
+_TEMP_SHEBANG_RE = re.compile(r"/cvcpkg-[^/]+/")
+
+# Script dirs scanned for shebangs.  POSIX layouts only: a Windows console
+# script is a Scripts/*.exe launcher whose interpreter path is embedded
+# INSIDE the PE image (pip/distlib append shebang + zip to a stub .exe);
+# fixing those needs a binary-aware pass and is tracked separately.  The
+# ``#!`` sniff below skips them regardless (a PE starts ``MZ``).
+_SHEBANG_DIRS = ("bin", "sbin", "libexec")
+
+
+def _rewrite_shebangs(root: Path, temp_prefixes: Sequence[Path | str] = ()) -> None:
+    """Rewrite build-prefix shebangs under *root*'s script dirs to env form.
+
+    pip writes every console script (``bin/cython``, ``bin/pybind11-config``,
+    ...) with a shebang naming the exact interpreter that ran the install —
+    inside cvcpkg that is the job's ephemeral deps prefix::
+
+        #!/tmp/cvcpkg-builder/cvcpkg-job-pybind11-cp311-abc123/bin/python3.11
+
+    a path that exists on no consumer machine, so the staged script cannot
+    execute from an installed prefix at all.  Recipes used to shim around it
+    case-by-case (numpy fabricates a ``cython`` wrapper, contourpy sidesteps
+    the dead ``pybind11-config`` via ``python -m pybind11 --pkgconfigdir``);
+    rewriting here, on the staged tree, fixes every bundle in one place.
+
+    The rewrite preserves the interpreter's basename and anchors it at env —
+    ``#!/usr/bin/env python3.11`` — the same form the meson recipe has always
+    used for its own wrapper.  The versioned name is shipped by the matching
+    interpreter recipe, and the prefix ``bin/`` is on PATH both under an
+    activated consumer prefix and inside a builder job (_build_env), so the
+    script resolves its own column's interpreter in either context.
+
+    A shebang is rewritten only when its interpreter clearly cannot survive
+    packaging: it lives under one of *temp_prefixes* (the build's deps /
+    build-tool / install prefixes) or under any ``cvcpkg-*`` directory
+    component (every dir shape cvcpkg mkdtemps).  System interpreters
+    (``#!/bin/sh``, ``#!/usr/bin/perl``) and already-relocatable env forms
+    pass through untouched.  A matching shebang that carries interpreter
+    *arguments* is left alone with a warning: Linux hands everything after
+    the interpreter to it as ONE argument, so ``/usr/bin/env NAME ARG``
+    would trade a broken path for a broken invocation.
+    """
+    prefixes = tuple(str(p).rstrip("/") for p in temp_prefixes if p)
+
+    def _is_temp(interp: str) -> bool:
+        if any(interp.startswith(p + "/") for p in prefixes):
+            return True
+        return _TEMP_SHEBANG_RE.search(interp) is not None
+
+    count = 0
+    for sub in _SHEBANG_DIRS:
+        subdir = root / sub
+        if not subdir.is_dir():
+            continue
+        for path in sorted(subdir.rglob("*")):
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                if path.stat().st_size > _MAX_REWRITE_BYTES:
+                    continue
+                data = path.read_bytes()
+            except OSError:
+                continue
+            if not data.startswith(b"#!"):
+                continue
+            newline_at = data.find(b"\n")
+            head_end = newline_at if newline_at != -1 else len(data)
+            try:
+                line = data[2:head_end].decode("utf-8").strip()
+            except UnicodeDecodeError:
+                continue
+            fields = line.split(None, 1)
+            if not fields:
+                continue
+            interp = fields[0]
+            if not _is_temp(interp):
+                continue
+            if len(fields) > 1:
+                print(
+                    f"cvcpkg: WARNING: {path.relative_to(root)}: build-prefix shebang"
+                    f" carries interpreter arguments, left unrewritten: #!{line}"
+                )
+                continue
+            new_head = f"#!/usr/bin/env {interp.rsplit('/', 1)[-1]}".encode()
+            rest = data[head_end:] if newline_at != -1 else b"\n"
+            _write_bytes_preserving_mode(path, new_head + rest)
+            count += 1
+    if count:
+        print(f"cvcpkg: rewrote {count} build-prefix shebang(s) to /usr/bin/env form")
 
 
 def build_recipe(
@@ -2118,7 +2231,13 @@ def pack_recipe(
     # have disturbed — fail later in stage_bundle with a clearer cause than a
     # bare FileNotFoundError on mkdir.
     staging.mkdir(parents=True, exist_ok=True)
-    stage_bundle(ctx.install_dir, manifest, staging, recipe_dir=ctx.recipe.recipe_dir)
+    stage_bundle(
+        ctx.install_dir,
+        manifest,
+        staging,
+        recipe_dir=ctx.recipe.recipe_dir,
+        temp_prefixes=(ctx.prefix, ctx.build_prefix, ctx.install_dir),
+    )
 
     archive_path, sha256, size = create_archive(
         staging,
@@ -2231,7 +2350,13 @@ def pack_from_prefix(
 
     staging = Path(tempfile.mkdtemp(prefix=f"cvcpkg-pack-{recipe.name}-"))
     try:
-        stage_bundle(prefix, manifest, staging, recipe_dir=recipe.recipe_dir)
+        stage_bundle(
+            prefix,
+            manifest,
+            staging,
+            recipe_dir=recipe.recipe_dir,
+            temp_prefixes=(prefix,),
+        )
         archive_path, sha256, size = create_archive(
             staging,
             output_dir,
