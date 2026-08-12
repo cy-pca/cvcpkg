@@ -1252,7 +1252,13 @@ def pack_all_cmd(
         )
         staging = ctx.work_dir / "staging"
         staging.mkdir(exist_ok=True)
-        stage_bundle(ctx.install_dir, manifest, staging, recipe_dir=ctx.recipe.recipe_dir)
+        stage_bundle(
+            ctx.install_dir,
+            manifest,
+            staging,
+            recipe_dir=ctx.recipe.recipe_dir,
+            temp_prefixes=(ctx.prefix, ctx.build_prefix, ctx.install_dir),
+        )
         archive_path, sha256, size = create_archive(
             staging,
             output,

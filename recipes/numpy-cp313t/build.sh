@@ -44,6 +44,13 @@ export PYTHONPATH="${BLD}/lib/python${_PYMM}/site-packages${PYTHONPATH:+:${PYTHO
 # and numpy silently never builds from source. Shim a `cython` that runs the
 # Cython module under THIS interpreter (module import works fine — only the
 # script shebang is broken), and put it first on PATH.
+#
+# REMOVABLE: cvcpkg's stage_bundle now rewrites staged console-script
+# shebangs to `/usr/bin/env python3.13t` (builder.py _rewrite_shebangs), so
+# once cython-cp313t is REPUBLISHED by a builder running that cvcpkg, the
+# staged `cython` executes off PATH and this whole block can be deleted.
+# Until then the shim stays: deleting it first would break every numpy
+# build against the still-broken published cython artifact.
 CYTHON_SHIM="${CVC_BUILD_DIR}/cython-shim"
 mkdir -p "${CYTHON_SHIM}"
 cat > "${CYTHON_SHIM}/cython" <<EOF
