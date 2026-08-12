@@ -37,7 +37,7 @@ recipe:
   # "DLL load failed". The .pth calls os.add_dll_directory(<prefix>\bin) at
   # startup — the Windows counterpart of the $ORIGIN RUNPATH the POSIX builds
   # patch in, derived from sys.prefix so the tree stays relocatable.
-  cvc_revision: 7
+  cvc_revision: 8
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
