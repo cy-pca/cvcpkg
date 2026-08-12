@@ -25,6 +25,26 @@ from cvcpkg.envfile import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_environ():
+    """Undo every environment change these tests make.
+
+    Loading an env file is *supposed* to mutate ``os.environ`` -- that is the
+    whole mechanism -- but it does so with plain ``os.environ[k] = v``, which
+    ``monkeypatch`` does not know about and therefore cannot roll back.  Without
+    this, ``CVCPKG_TOKEN`` and ``CVCPKG_SERVER_URL`` escape into every later test
+    in the process and quietly satisfy options that those tests expect to be
+    missing.  Unit and integration runs are split into separate processes in CI,
+    so that kind of leak is invisible there until the full suite runs in one.
+    """
+    saved = os.environ.copy()
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+
+
 # ── parsing ─────────────────────────────────────────────────────
 
 
