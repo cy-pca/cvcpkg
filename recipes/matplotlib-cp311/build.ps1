@@ -14,13 +14,9 @@ if ($env:CVC_BUILD_PREFIX) {
     $env:PYTHONPATH = if ($env:PYTHONPATH) { "$sp;$env:PYTHONPATH" } else { $sp }
 }
 
-# pybind11 discovery + system freetype/qhull — see build.sh for the why.
-$pb11 = (& $py -m pybind11 --pkgconfigdir) -join ''
-if ($LASTEXITCODE -ne 0 -or -not $pb11) { throw "matplotlib-cp311: python -m pybind11 --pkgconfigdir failed" }
-$env:PKG_CONFIG_PATH = if ($env:PKG_CONFIG_PATH) { "$pb11;$env:PKG_CONFIG_PATH" } else { $pb11 }
-$pb11inc = (& $py -c 'import pybind11; print(pybind11.get_include())') -join ''
-if ($LASTEXITCODE -ne 0 -or -not $pb11inc) { throw "matplotlib-cp311: pybind11.get_include() failed" }
-$env:INCLUDE = if ($env:INCLUDE) { "$pb11inc;$env:INCLUDE" } else { $pb11inc }
+# pybind11 needs no per-recipe discovery: Add-CvcPythonToolPaths
+# (python-wheel.ps1, dot-sourced above) already puts <prefix>\Scripts on PATH
+# for meson's pybind11-config probe.  System freetype/qhull — see build.sh.
 # sdist builds have no git metadata; pin the version for setuptools_scm.
 $env:SETUPTOOLS_SCM_PRETEND_VERSION_FOR_MATPLOTLIB = '3.10.0'
 $env:SETUPTOOLS_SCM_PRETEND_VERSION = '3.10.0'

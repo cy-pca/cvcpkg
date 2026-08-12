@@ -2,16 +2,12 @@
 # recipes/matplotlib-cp312/build.sh — build matplotlib 3.10.0 FROM SOURCE
 # against cvcpkg's freetype and qhull (hand-converted).
 #
-# WHY HAND-WRITTEN: three things the generator cannot infer.
-#  1. meson's dependency('pybind11') misses the staged copy (the shipped
-#     pybind11-config script has a dead ephemeral-prefix shebang) — same fix
-#     as recipes/contourpy-cp312: the .pc dir via --pkgconfigdir plus the
-#     header dir unconditionally via CXXFLAGS.
-#  2. matplotlib's default build DOWNLOADS freetype 2.6.1 and qhull 8.0.2
+# WHY HAND-WRITTEN: two things the generator cannot infer.
+#  1. matplotlib's default build DOWNLOADS freetype 2.6.1 and qhull 8.0.2
 #     through meson wrap files — impossible on an offline builder and
 #     non-hermetic anywhere else.  -Dsystem-freetype/-Dsystem-qhull link
 #     cvcpkg's own recipes instead (qhull_r.pc ships in the qhull recipe).
-#  3. The extensions link prefix libraries, so they need the numpy-style
+#  2. The extensions link prefix libraries, so they need the numpy-style
 #     per-file $ORIGIN RUNPATH pass and a check that proves the render path,
 #     not just an import.
 set -euo pipefail
@@ -47,13 +43,6 @@ if [ -n "${CVC_BUILD_PREFIX:-}" ]; then
     export PYTHONPATH="${_BP_SITE}${PYTHONPATH:+:${PYTHONPATH}}"
 fi
 
-# ── pybind11 discovery (contourpy's fleet-proven pair of routes) ────────────
-_PB11_PC="$("${PY_EXE}" -m pybind11 --pkgconfigdir)"
-[ -n "${_PB11_PC}" ] || { echo "matplotlib-cp312: python -m pybind11 --pkgconfigdir returned nothing" >&2; exit 1; }
-_PB11_INC="$("${PY_EXE}" -c 'import pybind11; print(pybind11.get_include())')"
-[ -d "${_PB11_INC}" ] || { echo "matplotlib-cp312: pybind11.get_include() -> ${_PB11_INC} does not exist" >&2; exit 1; }
-export CXXFLAGS="-I${_PB11_INC} ${CXXFLAGS:-}"
-
 # ── Version detection + tool resolution ─────────────────────────────────────
 # meson.build:4 shells out to `python3 -m setuptools_scm` by PATH lookup —
 # NOT through meson-python's native-file interpreter — so an unshimmed PATH
@@ -74,8 +63,11 @@ for _pc in "${BLD}/bin/pkg-config" "${DEPS}/bin/pkg-config" "$(command -v pkg-co
     if [ -x "${_pc}" ]; then export PKG_CONFIG="${_pc}"; break; fi
 done
 [ -n "${PKG_CONFIG:-}" ] || { echo "matplotlib-cp312: no pkg-config in ${BLD}/bin, ${DEPS}/bin or PATH" >&2; exit 1; }
-export PKG_CONFIG_PATH="${_PB11_PC}:${DEPS}/lib/pkgconfig:${BLD}/lib/pkgconfig"
-export PKG_CONFIG_LIBDIR="${_PB11_PC}:${DEPS}/lib/pkgconfig:${BLD}/lib/pkgconfig"
+# pybind11 is deliberately absent here: it ships its .pc inside site-packages,
+# so pkg-config misses it and meson falls through to the pybind11-config probe
+# — which resolves off PATH (set just above) and is the supported route.
+export PKG_CONFIG_PATH="${DEPS}/lib/pkgconfig:${BLD}/lib/pkgconfig"
+export PKG_CONFIG_LIBDIR="${DEPS}/lib/pkgconfig:${BLD}/lib/pkgconfig"
 for _mod in freetype2 qhull_r; do
     if ! "${PKG_CONFIG}" --exists "${_mod}"; then
         echo "matplotlib-cp312: ${_mod}.pc not found by ${PKG_CONFIG}" >&2
@@ -85,9 +77,9 @@ for _mod in freetype2 qhull_r; do
     fi
 done
 export CFLAGS="-I${DEPS}/include -I${DEPS}/include/freetype2 ${CFLAGS:-}"
-export CXXFLAGS="-I${DEPS}/include -I${DEPS}/include/freetype2 ${CXXFLAGS}"
+export CXXFLAGS="-I${DEPS}/include -I${DEPS}/include/freetype2 ${CXXFLAGS:-}"
 export LDFLAGS="-L${DEPS}/lib ${LDFLAGS:-}"
-echo "matplotlib-cp312: pybind11 pc=${_PB11_PC} include=${_PB11_INC}; freetype $("${PKG_CONFIG}" --modversion freetype2), qhull_r $("${PKG_CONFIG}" --modversion qhull_r)"
+echo "matplotlib-cp312: pybind11-config $(pybind11-config --version); freetype $("${PKG_CONFIG}" --modversion freetype2), qhull_r $("${PKG_CONFIG}" --modversion qhull_r)"
 
 WHEELHOUSE="${CVC_BUILD_DIR:-${CVC_SOURCE_DIR}}/wheelhouse"
 mkdir -p "${WHEELHOUSE}"

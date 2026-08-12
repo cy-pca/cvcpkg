@@ -2,11 +2,12 @@ schema_version: 1
 recipe:
   name: matplotlib-cp313
   upstream_version: "3.10.0"
-  # Bumped 3 -> 4: hand-converted.  The generated build died on the
-  # fleet at meson's pybind11 probe, and even past that would have tried
-  # to DOWNLOAD freetype/qhull through meson wraps (offline builders).
-  # Now links cvcpkg's freetype + qhull and verifies a real Agg render.
-  cvc_revision: 4
+  # Bumped 4 -> 5: dropped the pybind11 discovery shim.  meson's
+  # config-tool probe now finds bin/pybind11-config on its own (relocatable
+  # console-script shebangs, pybind11 2.13.6+cvc.3), so hand-feeding it the
+  # .pc dir and the header dir via CXXFLAGS is dead weight.  The hermetic
+  # freetype/qhull wiring and the Agg render check are unchanged.
+  cvc_revision: 5
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -19,9 +20,9 @@ recipe:
     cvcpkg's per-interpreter matrix (C extensions compiled for cp313 from the PyPI sdist).
     HAND-CONVERTED: builds against cvcpkg's OWN freetype and qhull
     (-Dsystem-freetype/-Dsystem-qhull — the default meson wraps DOWNLOAD
-    both, impossible offline and hermetic nowhere), resolves the staged
-    pybind11 the same way contourpy does, stamps an $ORIGIN RUNPATH, and
-    verifies an actual Agg PNG render.  See build.sh.
+    both, impossible offline and hermetic nowhere), stamps an $ORIGIN
+    RUNPATH, and verifies an actual Agg PNG render.  pybind11 needs no
+    help: meson's pybind11-config probe resolves it off PATH.  See build.sh.
     Built FROM SOURCE: cvcpkg fetches and sha256-verifies the PyPI sdist,
     and build.sh compiles the wheel with the prefix's own CPython 3.13 —
     no third-party prebuilt binary enters the bundle.

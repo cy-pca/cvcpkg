@@ -700,21 +700,19 @@ SEED_PACKAGES = {
         "files": ["fontTools/", "fonttools-*.dist-info/"],
         "check": "import fontTools",
     },
-    # NOTE: the contourpy-cp31X recipes on disk are HAND-CONVERTED (no
-    # generator marker): meson's dependency('pybind11') cannot find the staged
-    # pybind11 (the shipped pybind11-config has a dead ephemeral-prefix
-    # shebang), so build.sh publishes `python -m pybind11 --pkgconfigdir` on
-    # PKG_CONFIG_PATH — a discovery step the generator cannot infer.  The seed
-    # stays for matplotlib's dep-edge resolution; regeneration keeps the
-    # hand-written columns via the ownership test.
+    # contourpy is plain generated output again.  It was hand-converted for two
+    # revisions because meson's dependency('pybind11') could not find the staged
+    # pybind11 — bin/pybind11-config had a dead ephemeral-prefix shebang, so the
+    # config-tool probe failed and build.sh had to hand-feed the .pc dir and the
+    # header dir.  Relocatable console-script shebangs (pybind11 2.13.6+cvc.3)
+    # fixed that at the source: the build prefix's bin/ is first on PATH, so
+    # meson's Pybind11ConfigToolDependency resolves with no help from a recipe.
     "contourpy": {
         "version": "1.3.1",
         "license": "BSD-3-Clause",
         "deps": ["numpy"],
-        # Capped like pillow: the hand conversion covers exactly these
-        # columns, and a cp313t column would dangle on pybind11-cp313t
-        # anyway.  Extend only together with a hand-written, verified
-        # contourpy-cp313t.
+        # Capped like pillow: a cp313t column would dangle on pybind11-cp313t,
+        # which is not published.  Extend only alongside that column.
         "interpreters": ["311", "312", "313"],
         "files": ["contourpy/", "contourpy-*.dist-info/"],
         "check": "import contourpy",

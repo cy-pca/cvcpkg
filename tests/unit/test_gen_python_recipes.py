@@ -527,18 +527,13 @@ _HAND_WRITTEN_COLUMNS = (
     "pillow-cp311",
     "pillow-cp312",
     "pillow-cp313",
-    # contourpy: meson finds the staged pybind11 only through the
-    # --pkgconfigdir step in its hand-written build.sh (the shipped
-    # pybind11-config script has a dead ephemeral-prefix shebang); a
-    # regeneration would drop that step and every server build dies in
-    # meson's dependency probe again.
-    "contourpy-cp311",
-    "contourpy-cp312",
-    "contourpy-cp313",
-    # matplotlib: contourpy's pybind11 fix PLUS -Dsystem-freetype/-Dsystem-
-    # qhull (the default meson wraps DOWNLOAD both sources — impossible on an
-    # offline builder), native freetype/qhull edges, an $ORIGIN rpath pass and
-    # a real Agg-render check.  A regeneration would put the downloads back.
+    # matplotlib: -Dsystem-freetype/-Dsystem-qhull (the default meson wraps
+    # DOWNLOAD both sources — impossible on an offline builder), native
+    # freetype/qhull edges, an $ORIGIN rpath pass and a real Agg-render check.
+    # A regeneration would put the downloads back.
+    # (contourpy is NOT here: it went back to generator ownership once
+    # relocatable console-script shebangs made meson's pybind11-config probe
+    # work on its own.)
     "matplotlib-cp311",
     "matplotlib-cp312",
     "matplotlib-cp313",

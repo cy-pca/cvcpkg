@@ -14,19 +14,6 @@ if ($env:CVC_BUILD_PREFIX) {
     $env:PYTHONPATH = if ($env:PYTHONPATH) { "$sp;$env:PYTHONPATH" } else { $sp }
 }
 
-# meson probes pkg-config / pybind11-config / cmake for pybind11; the staged
-# pybind11-config script's shebang is dead (ephemeral build prefix), so
-# publish pybind11's .pc directory on PKG_CONFIG_PATH instead (native path,
-# straight from the module — never an MSYS-mangled one).
-$pb11 = (& $py -m pybind11 --pkgconfigdir) -join ''
-if ($LASTEXITCODE -ne 0 -or -not $pb11) { throw "contourpy-cp313: python -m pybind11 --pkgconfigdir failed" }
-$env:PKG_CONFIG_PATH = if ($env:PKG_CONFIG_PATH) { "$pb11;$env:PKG_CONFIG_PATH" } else { $pb11 }
-# Same belt-and-suspenders as build.sh: put pybind11's canonical header dir
-# on the compiler's search path directly (MSVC reads INCLUDE).
-$pb11inc = (& $py -c 'import pybind11; print(pybind11.get_include())') -join ''
-if ($LASTEXITCODE -ne 0 -or -not $pb11inc) { throw "contourpy-cp313: pybind11.get_include() failed" }
-$env:INCLUDE = if ($env:INCLUDE) { "$pb11inc;$env:INCLUDE" } else { $pb11inc }
-
 $root = if ($env:CVC_BUILD_DIR) { $env:CVC_BUILD_DIR } else { $env:CVC_SOURCE_DIR }
 $wheelhouse = Join-Path $root 'wheelhouse'
 New-Item -ItemType Directory -Force -Path $wheelhouse | Out-Null
