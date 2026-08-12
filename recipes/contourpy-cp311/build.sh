@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# recipes/contourpy-cp311/build.sh — build contourpy 1.3.1 FROM SOURCE (generated).
+# recipes/contourpy-cp311/build.sh — build contourpy 1.3.1 FROM SOURCE
+# (hand-converted: generated shape + the pybind11 pkg-config fix in step 2b).
 #
 # WHY FROM SOURCE: a PyPI wheel is somebody else's compiled artifact, linked
 # against libraries we did not build.  cvcpkg fetches and sha256-verifies the
@@ -41,6 +42,17 @@ if [ -n "${CVC_BUILD_PREFIX:-}" ]; then
     _BP_SITE="${CVC_BUILD_PREFIX}/lib/python${_PYMM}/site-packages"
     export PYTHONPATH="${_BP_SITE}${PYTHONPATH:+:${PYTHONPATH}}"
 fi
+
+# ── 2b. Make the staged pybind11 discoverable by meson ──────────────────────
+# meson's dependency('pybind11') probes pkg-config, the pybind11-config tool,
+# then cmake — and all three miss.  The staged bin/pybind11-config cannot
+# run: its shebang is the ephemeral build-prefix interpreter of the machine
+# that BUILT pybind11 (the same broken-console-script disease numpy's build
+# shims around for cython).  pybind11 publishes its .pc directory for exactly
+# this case; put it on PKG_CONFIG_PATH and meson's first probe hits.
+_PB11_PC="$("${PY_EXE}" -m pybind11 --pkgconfigdir)"
+[ -n "${_PB11_PC}" ] || { echo "contourpy-cp311: python -m pybind11 --pkgconfigdir returned nothing" >&2; exit 1; }
+export PKG_CONFIG_PATH="${_PB11_PC}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 
 # ── 3. Build the wheel from the extracted sdist ─────────────────────────────
 # --no-deps: transitive deps are cvcpkg recipes, resolved by the depends graph.

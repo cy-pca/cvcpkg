@@ -527,6 +527,14 @@ _HAND_WRITTEN_COLUMNS = (
     "pillow-cp311",
     "pillow-cp312",
     "pillow-cp313",
+    # contourpy: meson finds the staged pybind11 only through the
+    # --pkgconfigdir step in its hand-written build.sh (the shipped
+    # pybind11-config script has a dead ephemeral-prefix shebang); a
+    # regeneration would drop that step and every server build dies in
+    # meson's dependency probe again.
+    "contourpy-cp311",
+    "contourpy-cp312",
+    "contourpy-cp313",
 )
 
 _REPO = Path(__file__).resolve().parents[2]
