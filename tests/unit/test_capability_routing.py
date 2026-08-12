@@ -505,13 +505,15 @@ class TestFleetCapabilities:
 # style, matching the other submit-dag tests (tests/unit/test_populate.py).
 
 
-def _write_cap_recipe(tmp_path, name, caps=(), platforms=("linux",)):
+def _write_cap_recipe(tmp_path, name, caps=(), platforms=("linux",), prebuilt=False):
     """A minimal recipe, optionally declaring requires_capabilities."""
     rdir = tmp_path / "recipes" / name
     rdir.mkdir(parents=True)
     caps_line = (
         "requires_capabilities: [" + ", ".join(f'"{c}"' for c in caps) + "]\n" if caps else ""
     )
+    if prebuilt:
+        caps_line += "prebuilt_payload: true\n"
     matrix = "".join(f"    - platform: {p}\n      script: build.sh\n" for p in platforms)
     (rdir / "recipe.yaml").write_text(
         f"""schema_version: 1
@@ -617,6 +619,66 @@ class TestSubmitDagCapabilityPropagation:
         jobs = [j for b in posted for j in b["jobs"]]
         assert len(jobs) == 1
         assert jobs[0]["required_capabilities"] == [capability_name(target_floor())]
+
+    def test_prebuilt_payload_drops_the_glibc_floor(self, tmp_path, monkeypatch):
+        # Nothing is compiled, so the builder's glibc cannot reach the bundle
+        # and routing on it would only narrow the eligible fleet for nothing.
+        _write_cap_recipe(tmp_path, "torch-cp311", prebuilt=True)
+        posted: list = []
+        assert _submit_dag(tmp_path, monkeypatch, posted, [_PLAIN_BUILDER], "torch-cp311") == 0
+        jobs = [j for b in posted for j in b["jobs"]]
+        assert len(jobs) == 1
+        assert "required_capabilities" not in jobs[0]
+
+    def test_prebuilt_payload_keeps_the_recipe_s_own_capabilities(self, tmp_path, monkeypatch):
+        from cvcpkg.glibc import capability_name, target_floor
+
+        _write_cap_recipe(tmp_path, "torch-cp311-cuda", caps=("cuda",), prebuilt=True)
+        posted: list = []
+        assert _submit_dag(tmp_path, monkeypatch, posted, [_CUDA_BUILDER], "torch-cp311-cuda") == 0
+        jobs = [j for b in posted for j in b["jobs"]]
+        assert len(jobs) == 1
+        # cuda survives; only the floor proxy is dropped.
+        assert jobs[0]["required_capabilities"] == ["cuda"]
+        assert capability_name(target_floor()) not in jobs[0]["required_capabilities"]
+
+    def test_prebuilt_cuda_recipe_submits_against_a_newer_glibc_cuda_builder(
+        self, tmp_path, monkeypatch
+    ):
+        # The real fleet: the only cuda host runs glibc 2.39, so it advertises
+        # glibc2.39/2.41 but NOT the 2.35 floor.  cuda + glibc2.35 is satisfied
+        # by nobody, which is what left torch-cp311-cuda unschedulable.
+        cuda_239 = {
+            "platform": "linux",
+            "arch": "x86_64",
+            "capabilities": {"cuda": True, "glibc2.39": True, "glibc2.41": True},
+        }
+        _write_cap_recipe(tmp_path, "torch-cp311-cuda", caps=("cuda",), prebuilt=True)
+        posted: list = []
+        assert _submit_dag(tmp_path, monkeypatch, posted, [cuda_239], "torch-cp311-cuda") == 0
+        assert [j for b in posted for j in b["jobs"]] != []
+
+    def test_without_prebuilt_payload_the_job_carries_the_unsatisfiable_pair(
+        self, tmp_path, monkeypatch
+    ):
+        # The counterpart: absent the flag the job demands cuda AND the floor.
+        # No single builder offers both, so the server reaps it as
+        # `unschedulable` — the state this flag exists to avoid.
+        from cvcpkg.glibc import capability_name, target_floor
+
+        cuda_239 = {
+            "platform": "linux",
+            "arch": "x86_64",
+            "capabilities": {"cuda": True, "glibc2.39": True, "glibc2.41": True},
+        }
+        _write_cap_recipe(tmp_path, "torch-cp311-cuda", caps=("cuda",))
+        posted: list = []
+        assert _submit_dag(tmp_path, monkeypatch, posted, [cuda_239], "torch-cp311-cuda") == 0
+        jobs = [j for b in posted for j in b["jobs"]]
+        assert len(jobs) == 1
+        required = set(jobs[0]["required_capabilities"])
+        assert required == {"cuda", capability_name(target_floor())}
+        assert not required <= set(cuda_239["capabilities"])
 
     def test_non_linux_job_carries_no_requirement(self, tmp_path, monkeypatch):
         # Absent (not empty-list) so an OLD server ignoring the field behaves

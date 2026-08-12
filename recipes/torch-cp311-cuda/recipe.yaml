@@ -33,6 +33,16 @@ provides: ["torch-cp311"]
 # cvcpkg roadmap (CVCPKG-ROADMAP.md "GPU/CUDA build-time routing"); until it
 # lands these are published from a GPU host by hand.
 requires_capabilities: ["cuda"]
+# The payload is PyPI's manylinux_2_28 torch wheel — build.sh only pip-installs
+# it, so nothing is compiled here and the builder's glibc never reaches the
+# bundle (the published +cvc.1, built on the 2.39 CUDA host, tops out at
+# GLIBC_2.28 in libtorch_cpu.so). Without this the job would carry the fleet's
+# glibc2.35 floor capability ON TOP of `cuda`, and the one CUDA builder runs
+# 2.39 — an empty intersection that made this recipe permanently
+# `unschedulable`. Routing only; stage_bundle still gates the staged tree
+# against the 2.35 floor, so a future wheel needing something newer fails the
+# build instead of shipping.
+prebuilt_payload: true
 
 source:
   type: python_wheel

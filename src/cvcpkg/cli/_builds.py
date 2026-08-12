@@ -1215,8 +1215,27 @@ def builds_submit_dag(
     from cvcpkg.glibc import capability_name as _glibc_cap
     from cvcpkg.glibc import target_floor as _glibc_floor
 
-    def _platform_caps(plat: str) -> list[str]:
-        return [_glibc_cap(_glibc_floor())] if plat == "linux" else []
+    def _platform_caps(name: str, plat: str) -> list[str]:
+        """The floor capability a linux job needs, unless the payload is prebuilt.
+
+        The floor capability is a proxy for "whatever this builder COMPILES
+        will not demand symbols older than its own glibc".  A recipe that
+        compiles nothing — `prebuilt_payload`, e.g. a manylinux wheel repack —
+        has a floor fixed by whoever built the binary, so the proxy is a
+        category error there, and an expensive one: it composes with the
+        recipe's own `requires_capabilities`, and `cuda` + `glibc2.35` is
+        satisfied by no builder on this fleet (the one CUDA host runs 2.39),
+        which left torch-cp311-cuda permanently `unschedulable`.
+
+        Dropping it costs no safety: stage_bundle's floor gate still scans the
+        real staged tree against the same floor and raises, so the failure
+        mode is a loud build error, never a bundle that will not start.
+        """
+        if plat != "linux":
+            return []
+        if recipe_data.get(name, {}).get("prebuilt_payload"):
+            return []
+        return [_glibc_cap(_glibc_floor())]
 
     def _required_caps(name: str) -> list[str]:
         """A recipe's top-level requires_capabilities (e.g. ['cuda']).
@@ -1615,6 +1634,18 @@ def builds_submit_dag(
                     # requires_capabilities: [cuda] recipe with no cuda
                     # builder) — their jobs would only sit pending until the
                     # server's unschedulable reaper failed them.
+                    #
+                    # Only the recipe's OWN capabilities are weighed, not the
+                    # glibc floor the job also carries, so a recipe whose two
+                    # halves are individually servable but jointly are not
+                    # still reaches the server before anyone notices (that is
+                    # how torch-cp311-cuda got stranded: a cuda builder exists,
+                    # but it is the fleet's one 2.39 host).  Folding the floor
+                    # in here needs the unknown case to fail OPEN first — a
+                    # builder on an agent older than glibc capability reporting
+                    # advertises none, and reading that as "cannot serve" would
+                    # make submit-dag refuse every linux recipe until the whole
+                    # fleet had been upgraded.  Same reasoning as min_disk.
                     if _builder_check:
                         _uncapable = [
                             n
@@ -1669,7 +1700,7 @@ def builds_submit_dag(
                             "org_slug": org_slug,
                             "depends_on": [],
                         }
-                        _rc = _required_caps(name) + _platform_caps(plat)
+                        _rc = _required_caps(name) + _platform_caps(name, plat)
                         if _rc:
                             job["required_capabilities"] = sorted(set(_rc))
                         _d = _min_disk(name)
@@ -1755,7 +1786,7 @@ def builds_submit_dag(
                         # A noarch job is built on the reference target, so it
                         # inherits THAT platform's floor even though the bundle
                         # itself is platform-independent.
-                        _rc = _required_caps(name) + _platform_caps(_noarch_target[0])
+                        _rc = _required_caps(name) + _platform_caps(name, _noarch_target[0])
                         if _rc:
                             job["required_capabilities"] = sorted(set(_rc))
                         _d = _min_disk(name)
