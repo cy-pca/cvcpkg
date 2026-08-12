@@ -1898,6 +1898,72 @@ _TEMP_SHEBANG_RE = re.compile(r"/cvcpkg-[^/]+/")
 # The ``#!`` sniff below skips them regardless (a PE starts ``MZ``).
 _SHEBANG_DIRS = ("bin", "sbin", "libexec")
 
+# pip's /bin/sh POLYGLOT wrapper, emitted instead of a plain ``#!`` whenever the
+# interpreter path is too long for the kernel's shebang limit (~128 bytes on
+# Linux) or contains a space::
+#
+#     #!/bin/sh
+#     '''exec' /tmp/cvcpkg-builder/cvcpkg-job-<recipe>-<id>/.../bin/python3.11 "$0" "$@"
+#     ' '''
+#
+# The interpreter is on line TWO, so the line-one rewrite below never saw it and
+# passed the script through as a harmless ``#!/bin/sh``.
+#
+# Which form pip emits is decided by the TOTAL path length against the kernel's
+# 128-byte BINPRM_BUF_SIZE, and that path is
+# ``<work root>/cvcpkg-job-<name>-<id>/cvcpkg-prefix-<name>-<id>/bin/pythonX.Y``
+# -- so it depends on the BUILDER as much as on the recipe.  The fleet's work
+# roots differ by 15 characters (``/tmp/cvcpkg-builder/`` on star-*/rebota/lat
+# vs ``/var/lib/cvcpkg-builder/cvcpkg-org/`` on prettyhatemachine), a window wide
+# enough that one recipe emits the plain form on one host and the polyglot on
+# another: torch-cp311 lands at 101 bytes on a /tmp builder, while
+# torch-cp311-cuda -- five characters longer, and buildable ONLY on the CUDA
+# host -- lands at 126 and goes polyglot.  Two corollaries: this is not a
+# property of the recipe alone, and an audit over published artifacts
+# UNDER-counts, because most packages were last built on a /tmp builder.
+#
+# Both readings survive substituting the interpreter token: sh parses ``'''exec'``
+# as ``'' + 'exec'`` and execs the rest, while Python sees lines 2-3 as one
+# triple-quoted string expression.
+_SH_POLYGLOT_RE = re.compile(r"^('''exec' +)(\S+)( .*)$")
+
+
+def _rewrite_sh_polyglot(
+    path: Path,
+    data: bytes,
+    head_end: int,
+    is_temp: Callable[[str], bool],
+) -> bool:
+    """Rewrite the interpreter inside pip's ``/bin/sh`` polyglot wrapper.
+
+    *data* is the whole script, *head_end* the index of the first newline (end
+    of the ``#!`` line).  Returns True when the file was rewritten.
+
+    Only the interpreter TOKEN on line two is replaced, with the same
+    ``/usr/bin/env <basename>`` form the plain-shebang path uses, so the sh
+    reading (``exec /usr/bin/env python3.11 "$0" "$@"``) and the Python reading
+    (lines 2-3 as one triple-quoted string) both keep working.
+    """
+    if head_end >= len(data):
+        return False
+    tail = data[head_end + 1 :]
+    line2_end = tail.find(b"\n")
+    if line2_end == -1:
+        return False
+    try:
+        line2 = tail[:line2_end].decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    m = _SH_POLYGLOT_RE.match(line2)
+    if not m or not is_temp(m.group(2)):
+        return False
+    new_line2 = f"{m.group(1)}/usr/bin/env {m.group(2).rsplit('/', 1)[-1]}{m.group(3)}"
+    _write_bytes_preserving_mode(
+        path,
+        data[: head_end + 1] + new_line2.encode() + tail[line2_end:],
+    )
+    return True
+
 
 def _rewrite_shebangs(root: Path, temp_prefixes: Sequence[Path | str] = ()) -> None:
     """Rewrite build-prefix shebangs under *root*'s script dirs to env form.
@@ -1926,7 +1992,10 @@ def _rewrite_shebangs(root: Path, temp_prefixes: Sequence[Path | str] = ()) -> N
     build-tool / install prefixes) or under any ``cvcpkg-*`` directory
     component (every dir shape cvcpkg mkdtemps).  System interpreters
     (``#!/bin/sh``, ``#!/usr/bin/perl``) and already-relocatable env forms
-    pass through untouched.  A matching shebang that carries interpreter
+    pass through untouched -- EXCEPT a ``#!/bin/sh`` that turns out to be
+    pip's polyglot wrapper, whose real interpreter hides on line two
+    (:func:`_rewrite_sh_polyglot`); that one is a build-prefix path like any
+    other and is rewritten in place.  A matching shebang that carries interpreter
     *arguments* is left alone with a warning: Linux hands everything after
     the interpreter to it as ONE argument, so ``/usr/bin/env NAME ARG``
     would trade a broken path for a broken invocation.
@@ -1965,6 +2034,13 @@ def _rewrite_shebangs(root: Path, temp_prefixes: Sequence[Path | str] = ()) -> N
                 continue
             interp = fields[0]
             if not _is_temp(interp):
+                # Not a build-prefix interpreter on line one -- but pip may have
+                # hidden one on line two behind a /bin/sh polyglot (see
+                # _SH_POLYGLOT_RE).  Rewriting the token in place keeps both the
+                # sh and the Python reading intact.
+                rewritten = _rewrite_sh_polyglot(path, data, head_end, _is_temp)
+                if rewritten:
+                    count += 1
                 continue
             if len(fields) > 1:
                 print(

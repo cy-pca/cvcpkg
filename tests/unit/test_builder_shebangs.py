@@ -10,6 +10,7 @@ bin/cython and bin/pybind11-config dead on arrival (numpy's build shims a
 private cython wrapper; contourpy sidesteps its dead pybind11-config via
 pkg-config)."""
 
+import ast
 import os
 import stat
 import subprocess
@@ -65,6 +66,110 @@ def test_system_and_env_shebangs_untouched(tmp_path):
     _rewrite_shebangs(tmp_path)
     for script, line in zip(scripts, lines, strict=True):
         assert script.read_bytes() == b"#!" + line.encode() + b"\n" + BODY
+
+
+def _polyglot(root, relpath, interp, mode=0o755):
+    """pip's /bin/sh wrapper, used when the interpreter path is too long for
+    the kernel's shebang limit (~128 bytes) or contains a space."""
+    path = root / relpath
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(
+        b"#!/bin/sh\n" b"'''exec' " + interp.encode() + b' "$0" "$@"\n' b"' '''\n" + BODY
+    )
+    path.chmod(mode)
+    return path
+
+
+# The exact prefix shape that triggered this in the wild.  pip switches to the
+# polyglot form once the interpreter path passes the kernel's 128-byte
+# BINPRM_BUF_SIZE, and that path is
+# <work root>/cvcpkg-job-<name>-<id>/cvcpkg-prefix-<name>-<id>/bin/pythonX.Y --
+# so the BUILDER contributes as much as the recipe name does.
+LONG_PREFIX = (
+    "/tmp/cvcpkg-builder/cvcpkg-job-trove-classifiers-cp311-b07zsnjz"
+    "/cvcpkg-prefix-trove-classifiers-cp311-2nqo44fa"
+)
+
+# prettyhatemachine's work root is 15 chars longer than the /tmp builders', which
+# is enough to flip a recipe across the limit on its own: torch-cp311 stays plain
+# at 101 bytes on a /tmp builder, but torch-cp311-cuda -- five characters longer,
+# and buildable ONLY on this host -- reaches 126 and goes polyglot.
+CUDA_HOST_PREFIX = (
+    "/var/lib/cvcpkg-builder/cvcpkg-org/cvcpkg-job-torch-cp311-cuda-jhb2rnq8"
+    "/cvcpkg-prefix-torch-cp311-cuda-mlp9p6a4"
+)
+
+
+def test_rewrites_sh_polyglot_interpreter(tmp_path):
+    # Regression: the dead path is on line TWO, so the line-one pass saw only a
+    # harmless "#!/bin/sh" and shipped bin/trove-classifiers dead on arrival.
+    script = _polyglot(tmp_path, "bin/trove-classifiers", f"{LONG_PREFIX}/bin/python3.11")
+    _rewrite_shebangs(tmp_path)
+    text = script.read_bytes().decode()
+    assert text.splitlines()[0] == "#!/bin/sh"
+    assert text.splitlines()[1] == "'''exec' /usr/bin/env python3.11 \"$0\" \"$@\""
+    assert text.splitlines()[2] == "' '''"
+    assert "cvcpkg-" not in text and "/tmp/" not in text
+    if sys.platform != "win32":
+        assert (script.stat().st_mode & 0o777) == 0o755
+
+
+def test_sh_polyglot_keeps_both_readings(tmp_path):
+    """The wrapper is a polyglot: sh execs line two, Python reads lines 2-3 as
+    one triple-quoted string.  A rewrite that broke either would trade a dead
+    path for a broken script."""
+    script = _polyglot(tmp_path, "bin/tool", f"{LONG_PREFIX}/bin/python3.11")
+    _rewrite_shebangs(tmp_path)
+    text = script.read_bytes().decode()
+
+    # Python reading: still parses, and still starts with the string expression.
+    tree = ast.parse(text)
+    assert isinstance(tree.body[0], ast.Expr)
+    assert isinstance(tree.body[0].value, ast.Constant)
+
+    # sh reading: the line sh executes resolves the interpreter through env.
+    assert text.splitlines()[1].startswith("'''exec' /usr/bin/env ")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="no /bin/sh")
+def test_rewritten_sh_polyglot_actually_runs(tmp_path):
+    # End-to-end: dead before, executable after, using this interpreter's own
+    # versioned name so /usr/bin/env can find it on PATH.
+    name = f"python3.{sys.version_info.minor}"
+    script = _polyglot(tmp_path, "bin/tool", f"{LONG_PREFIX}/bin/{name}")
+    script.write_bytes(script.read_bytes().replace(BODY, b"import sys\nsys.exit(7)\n"))
+    script.chmod(0o755)
+
+    assert subprocess.run([str(script)], capture_output=True).returncode != 7
+
+    _rewrite_shebangs(tmp_path)
+    env = {
+        **os.environ,
+        "PATH": f"{os.path.dirname(sys.executable)}{os.pathsep}{os.environ['PATH']}",
+    }
+    assert subprocess.run([str(script)], capture_output=True, env=env).returncode == 7
+
+
+def test_rewrites_polyglot_under_alternate_builder_work_root(tmp_path):
+    # The rewrite must key off "is this an ephemeral cvcpkg dir", not off /tmp:
+    # prettyhatemachine builds under /var/lib/cvcpkg-builder/cvcpkg-org/, and it
+    # is the only host that can build the -cuda columns, so a /tmp-only match
+    # would leave exactly the packages nothing else can rebuild broken.
+    script = _polyglot(tmp_path, "bin/torchrun", f"{CUDA_HOST_PREFIX}/bin/python3.11")
+    assert len(f"{CUDA_HOST_PREFIX}/bin/python3.11") > 120  # why pip went polyglot
+    _rewrite_shebangs(tmp_path)
+    text = script.read_bytes().decode()
+    assert text.splitlines()[1] == "'''exec' /usr/bin/env python3.11 \"$0\" \"$@\""
+    assert "/var/lib/" not in text and "cvcpkg-" not in text
+
+
+def test_genuine_sh_polyglot_untouched(tmp_path):
+    # Same wrapper shape, but the interpreter is a real system path: nothing
+    # about it dies on packaging, so it must pass through byte-identical.
+    script = _polyglot(tmp_path, "bin/system-tool", "/usr/bin/python3.11")
+    before = script.read_bytes()
+    _rewrite_shebangs(tmp_path)
+    assert script.read_bytes() == before
 
 
 def test_binaries_and_symlinks_skipped(tmp_path):

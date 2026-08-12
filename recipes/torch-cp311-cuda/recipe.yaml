@@ -4,7 +4,7 @@ recipe:
   upstream_version: "2.8.0"
   # Bumped 1 -> 2: noarch python deps renamed to their -cp311 columns
   # (the bare-name + fanout model is retired; see tools/gen_python_recipes.py).
-  cvc_revision: 2
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
