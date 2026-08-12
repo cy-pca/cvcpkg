@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: flask-cp313t
   upstream_version: "3.1.3"
-  cvc_revision: 1
+  cvc_revision: 2
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"

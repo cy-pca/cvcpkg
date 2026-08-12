@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: jsonschema-cp311
   upstream_version: "4.17.3"
-  cvc_revision: 3
+  cvc_revision: 4
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"

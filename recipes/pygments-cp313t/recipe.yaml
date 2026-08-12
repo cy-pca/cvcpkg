@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: pygments-cp313t
   upstream_version: "2.20.0"
-  cvc_revision: 1
+  cvc_revision: 2
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"

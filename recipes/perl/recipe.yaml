@@ -7,7 +7,7 @@ recipe:
   # and the bundle cannot even `use strict` once unpacked anywhere else — which
   # broke openssl fleet-wide (its Configure is a perl script). Published
   # variants are immutable, so the build.sh fix only ships behind a bump.
-  cvc_revision: 2
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

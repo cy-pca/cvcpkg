@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: uvicorn-cp313
   upstream_version: "0.47.0"
-  cvc_revision: 2
+  cvc_revision: 3
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
