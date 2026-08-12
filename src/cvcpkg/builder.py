@@ -1572,15 +1572,18 @@ def stage_bundle(
     *temp_prefixes* names the build-time prefixes (deps / build-tool /
     install dirs) that will not exist wherever the bundle is unpacked;
     console-script shebangs pointing into them are rewritten to relocatable
-    ``/usr/bin/env`` form — see :func:`_rewrite_shebangs`.  The rewrite runs
-    on the STAGED copy only: ``pack --from-prefix`` packages a tree the
-    caller owns, which must come out of packing byte-identical.
+    form — ``/usr/bin/env`` for POSIX text scripts (:func:`_rewrite_shebangs`),
+    ``<launcher_dir>`` for the shebang embedded in Windows Scripts/*.exe
+    launchers (:func:`_rewrite_exe_launchers`).  The rewrites run on the
+    STAGED copy only: ``pack --from-prefix`` packages a tree the caller
+    owns, which must come out of packing byte-identical.
     """
     # Copy entire install tree (preserve symlinks for toolchains like cosmocc)
     if install_dir.is_dir():
         shutil.copytree(install_dir, staging_dir, symlinks=True, dirs_exist_ok=True)
 
     _rewrite_shebangs(staging_dir, temp_prefixes)
+    _rewrite_exe_launchers(staging_dir, temp_prefixes)
 
     # Write manifest
     meta_dir = staging_dir / "share" / "libcvc-deps"
@@ -1890,9 +1893,9 @@ _TEMP_SHEBANG_RE = re.compile(r"/cvcpkg-[^/]+/")
 
 # Script dirs scanned for shebangs.  POSIX layouts only: a Windows console
 # script is a Scripts/*.exe launcher whose interpreter path is embedded
-# INSIDE the PE image (pip/distlib append shebang + zip to a stub .exe);
-# fixing those needs a binary-aware pass and is tracked separately.  The
-# ``#!`` sniff below skips them regardless (a PE starts ``MZ``).
+# INSIDE the binary (pip/distlib append shebang + zip to a stub .exe);
+# those get their own binary-aware pass, :func:`_rewrite_exe_launchers`.
+# The ``#!`` sniff below skips them regardless (a PE starts ``MZ``).
 _SHEBANG_DIRS = ("bin", "sbin", "libexec")
 
 
@@ -1975,6 +1978,188 @@ def _rewrite_shebangs(root: Path, temp_prefixes: Sequence[Path | str] = ()) -> N
             count += 1
     if count:
         print(f"cvcpkg: rewrote {count} build-prefix shebang(s) to /usr/bin/env form")
+
+
+# Script dirs scanned for Windows launcher .exes, and how far back from the
+# appended archive the shebang line is searched for.  distlib reads the line
+# into a MAX_PATH buffer, so a rewritten line must stay comfortably below
+# 260 bytes -- ours is ~30.
+_LAUNCHER_DIRS = ("Scripts", "bin")
+_LAUNCHER_SHEBANG_WINDOW = 512
+_LAUNCHER_MAX_SHEBANG = 250
+
+
+def _win_norm(path_str: str) -> str:
+    """Normalize a Windows-ish path for comparison: forward slashes, casefolded."""
+    return path_str.replace("\\", "/").rstrip("/").casefold()
+
+
+def _parse_launcher_shebang(seg: bytes) -> tuple[str, str] | None:
+    """Split a launcher shebang segment into (interpreter, args).
+
+    *seg* is the raw bytes between the stub PE image and the appended
+    archive: ``#!<interpreter>[ args]\\r?\\n``.  The interpreter may be
+    double-quoted (pip quotes paths containing spaces).  Returns None when
+    the segment is not decodable as the UTF-8 line the stub itself expects.
+    """
+    if not seg.startswith(b"#!") or not seg.endswith(b"\n"):
+        return None
+    try:
+        body = seg[2:].rstrip(b"\r\n").decode("utf-8").strip()
+    except UnicodeDecodeError:
+        return None
+    if body.startswith('"'):
+        closing = body.find('"', 1)
+        if closing == -1:
+            return None
+        return body[1:closing], body[closing + 1 :].strip()
+    # Unquoted: the stub delimits the interpreter at the last ``.exe``, not
+    # at whitespace, so mirror that rather than splitting on spaces.
+    lowered = body.casefold()
+    end = lowered.rfind(".exe")
+    while end != -1:
+        after = body[end + 4 : end + 5]
+        if after in ("", " ", "\t"):
+            return body[: end + 4], body[end + 4 :].strip()
+        end = lowered.rfind(".exe", 0, end)
+    # No .exe anywhere: /usr/bin/env form, or something we don't understand.
+    fields = body.split(None, 1)
+    if not fields:
+        return None
+    return fields[0], fields[1] if len(fields) > 1 else ""
+
+
+def _rewrite_exe_launchers(root: Path, temp_prefixes: Sequence[Path | str] = ()) -> None:
+    """Rewrite build-prefix interpreter paths inside staged Scripts/*.exe.
+
+    The Windows sibling of :func:`_rewrite_shebangs`.  pip builds each
+    console script as a launcher .exe of three concatenated segments
+    (distlib's ``ScriptMaker._write_script``)::
+
+        <stub PE image> #!C:\\...\\cvcpkg-job-x-y\\python\\python.exe\\r\\n <zip of __main__.py>
+
+    The embedded path names the interpreter that ran the install -- the
+    job's ephemeral build prefix -- so on any consumer machine the launcher
+    exits without running anything, same disease as the POSIX shebangs but
+    with the path INSIDE the binary.
+
+    The rewrite is a pure splice.  The stub locates the archive FROM THE END
+    of the file (end-of-central-directory scan; distlib writes the zip with
+    offsets relative to its own start) and then takes the line immediately
+    preceding it as the shebang, so the segment between PE image and archive
+    may change length freely as long as it stays newline-terminated and
+    adjacent.  Python's zipimport recomputes the same way on the child side.
+
+    The replacement anchors at the stub's own location::
+
+        #!<launcher_dir>\\..\\python.exe
+
+    ``<launcher_dir>\\`` is a literal prefix the stub resolves against its
+    own directory (distlib's SUPPORT_RELATIVE_PATH, in every launcher since
+    0.3.0; verified present in the stubs pip 25.0.1 and 26.2.1 embed, and
+    exercised end-to-end under wine).  From ``<prefix>\\Scripts`` that
+    reaches the interpreter at the merged prefix root, where the Windows
+    python recipes stage python.exe (``PC\\layout``) -- mirroring the POSIX
+    pass's reliance on the sibling ``bin/`` interpreter, but with no PATH
+    contract at all: the stub's alternative ``/usr/bin/env NAME`` form
+    hard-errors when NAME is not on PATH, and nothing guarantees a consumer
+    prefix ROOT (not ``Scripts``) is.  The interpreter basename is
+    preserved (python.exe vs pythonw.exe, versioned names).
+
+    Only launchers whose interpreter clearly cannot survive packaging are
+    touched, by the same rules as the POSIX pass but compared with Windows
+    semantics (either slash, case-insensitive).  Already-relocatable forms
+    (``<launcher_dir>``, ``/usr/bin/env``) pass through, which also makes
+    the rewrite idempotent.  A matching launcher carrying interpreter
+    arguments is left alone with a warning, mirroring the POSIX pass.
+    """
+    import io
+
+    prefixes = tuple(_win_norm(str(p)) for p in temp_prefixes if p)
+
+    def _is_temp(interp: str) -> bool:
+        n = _win_norm(interp)
+        if any(n.startswith(p + "/") for p in prefixes):
+            return True
+        return _TEMP_SHEBANG_RE.search(n) is not None
+
+    count = 0
+    for sub in _LAUNCHER_DIRS:
+        subdir = root / sub
+        if not subdir.is_dir():
+            continue
+        for path in sorted(subdir.rglob("*.exe")):
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                if path.stat().st_size > _MAX_REWRITE_BYTES:
+                    continue
+                data = path.read_bytes()
+            except OSError:
+                continue
+            if not data.startswith(b"MZ"):
+                continue
+            try:
+                zf = zipfile.ZipFile(io.BytesIO(data))
+                names = zf.namelist()
+                # min() over header offsets, not the EOCD's central-directory
+                # offset: zipfile has already folded the prepended-data delta
+                # into header_offset, so this is the archive start in file
+                # coordinates regardless of how the writer counted offsets.
+                arc_start = min(zi.header_offset for zi in zf.infolist())
+            except Exception:
+                continue  # no appended archive: a real tool .exe, not a launcher
+            if "__main__.py" not in names or not data.startswith(b"PK\x03\x04", arc_start):
+                continue
+            window_at = max(0, arc_start - _LAUNCHER_SHEBANG_WINDOW)
+            sheb_rel = data.rfind(b"#!", window_at, arc_start)
+            if sheb_rel == -1:
+                continue
+            seg = data[sheb_rel:arc_start]
+            parsed = _parse_launcher_shebang(seg)
+            if parsed is None:
+                continue
+            interp, args = parsed
+            if interp.startswith("<launcher_dir>") or interp == "/usr/bin/env":
+                continue
+            if not _is_temp(interp):
+                continue
+            if args:
+                print(
+                    f"cvcpkg: WARNING: {path.relative_to(root)}: build-prefix launcher"
+                    f" carries interpreter arguments, left unrewritten: #!{interp} {args}"
+                )
+                continue
+            basename = interp.replace("\\", "/").rsplit("/", 1)[-1]
+            if not basename:
+                continue
+            # Anchor at the launcher's own directory and climb to the staged
+            # root, where the interpreter lives in the merged install prefix.
+            depth = len(path.parent.relative_to(root).parts)
+            new_interp = "<launcher_dir>\\" + "..\\" * depth + basename
+            nl = b"\r\n" if seg.endswith(b"\r\n") else b"\n"
+            new_seg = b"#!" + new_interp.encode() + nl
+            if len(new_seg) > _LAUNCHER_MAX_SHEBANG:
+                print(
+                    f"cvcpkg: WARNING: {path.relative_to(root)}: rewritten launcher"
+                    f" shebang would exceed the stub's line buffer, left unrewritten"
+                )
+                continue
+            new_data = data[:sheb_rel] + new_seg + data[arc_start:]
+            try:
+                bad = zipfile.ZipFile(io.BytesIO(new_data)).testzip()
+            except Exception:
+                bad = "<unreadable>"
+            if bad is not None:
+                print(
+                    f"cvcpkg: WARNING: {path.relative_to(root)}: launcher rewrite"
+                    f" produced an unreadable archive ({bad}), left unrewritten"
+                )
+                continue
+            _write_bytes_preserving_mode(path, new_data)
+            count += 1
+    if count:
+        print(f"cvcpkg: rewrote {count} launcher exe(s) to <launcher_dir> form")
 
 
 def build_recipe(
