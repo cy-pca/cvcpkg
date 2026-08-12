@@ -235,6 +235,49 @@ def test_env_file_feeds_subcommand_without_touching_argv(tmp_path, monkeypatch):
     assert seen == {"token": "cvctok_from_file", "server": "https://example.invalid"}
 
 
+def test_invocation_does_not_leak_into_the_process(tmp_path, monkeypatch):
+    """os.environ is process-wide but cvcpkg is not always a process: it is
+    imported by the server, by tests, and by anything embedding the CLI.  One
+    command's env file must not become the standing configuration for everything
+    that runs after it -- the leak #497 removed from --trust-mirror."""
+    env = tmp_path / "cvcpkg.env"
+    env.write_text("CVCPKG_TOKEN=scoped\nCVCPKG_SERVER_URL=https://example.invalid\n")
+    monkeypatch.delenv("CVCPKG_TOKEN", raising=False)
+    monkeypatch.delenv("CVCPKG_SERVER_URL", raising=False)
+    monkeypatch.delenv("CVCPKG_ENV_FILE", raising=False)
+
+    inside = {}
+
+    @click.command("envfile-scope-probe")
+    def _probe():
+        inside["token"] = os.environ.get("CVCPKG_TOKEN")
+
+    cli.add_command(_probe)
+    try:
+        result = CliRunner().invoke(cli, ["--env-file", str(env), "envfile-scope-probe"])
+    finally:
+        cli.commands.pop("envfile-scope-probe", None)
+
+    assert result.exit_code == 0, result.output
+    assert inside["token"] == "scoped"  # visible while the command runs
+    assert "CVCPKG_TOKEN" not in os.environ  # and gone afterwards
+    assert "CVCPKG_SERVER_URL" not in os.environ
+
+
+def test_preexisting_value_is_left_alone_on_cleanup(tmp_path, monkeypatch):
+    """Cleanup removes only what we added.  A variable the operator exported was
+    never ours to touch, so it must survive the invocation unchanged."""
+    env = tmp_path / "cvcpkg.env"
+    env.write_text("CVCPKG_TOKEN=from_file\n")
+    monkeypatch.setenv("CVCPKG_TOKEN", "from_real_env")
+    monkeypatch.delenv("CVCPKG_ENV_FILE", raising=False)
+
+    result = CliRunner().invoke(cli, ["--env-file", str(env), "--help"])
+
+    assert result.exit_code == 0
+    assert os.environ["CVCPKG_TOKEN"] == "from_real_env"
+
+
 def test_explicit_env_file_must_exist(tmp_path, monkeypatch):
     """A typo'd --env-file has to fail loudly: failing open would surface as a
     confusing 'missing token' from whatever ran next."""

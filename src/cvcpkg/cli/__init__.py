@@ -83,15 +83,26 @@ def _load_env_file(ctx: click.Context, param: click.Parameter, value: str | None
     required to exist (a typo'd path must not fail open into "token missing");
     the default search path is best-effort.
     """
+    import os
+
     from cvcpkg.envfile import EnvFileError, load_default_env_files, load_env_file
 
     try:
-        if value:
-            load_env_file(value)
-        else:
-            load_default_env_files()
+        applied = load_env_file(value) if value else load_default_env_files()
     except EnvFileError as e:
         raise click.BadParameter(str(e), ctx=ctx, param=param) from None
+
+    # Undo it when this invocation ends.  os.environ is process-wide, and cvcpkg
+    # is not always a process: it is imported by the server, by tests, and by
+    # anything embedding the CLI.  Leaving the variables behind would make one
+    # command's env file the standing configuration for everything that ran
+    # after it in the same interpreter -- the same leak #497 removed from
+    # --trust-mirror.  Only keys we actually added are removed (a value that was
+    # already in the environment is never touched, so there is nothing to
+    # restore), and this fires after the command completes, so subprocesses
+    # spawned during it still inherit the settings.
+    if applied:
+        ctx.call_on_close(lambda: [os.environ.pop(k, None) for k in applied])
     return value
 
 

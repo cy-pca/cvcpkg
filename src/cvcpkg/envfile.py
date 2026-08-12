@@ -205,8 +205,8 @@ def candidate_env_files() -> list[Path]:
     return out
 
 
-def load_default_env_files(*, override: bool = False) -> list[Path]:
-    """Load every default env file that exists; return those actually read.
+def load_default_env_files(*, override: bool = False) -> list[str]:
+    """Load every default env file that exists; return the names applied.
 
     Earlier (more specific) files win: each is loaded with the *previous* files'
     keys already in the environment, so a project-local ``.cvcpkg.env`` shadows
@@ -214,15 +214,17 @@ def load_default_env_files(*, override: bool = False) -> list[Path]:
     unreadable or malformed file is reported and skipped rather than killing an
     unrelated command — the value it would have supplied is simply absent, and
     the option that needed it fails with its own (clearer) error.
+
+    Returns variable names rather than paths so the caller can undo exactly what
+    was added (see the root group's ``--env-file`` callback).
     """
-    read: list[Path] = []
+    applied: list[str] = []
     for candidate in candidate_env_files():
         try:
             if not candidate.is_file():
                 continue
-            load_env_file(candidate, override=override, required=False)
+            applied.extend(load_env_file(candidate, override=override, required=False))
         except (EnvFileError, OSError) as e:
             print(f"cvcpkg: WARNING: ignoring env file: {e}", file=sys.stderr)
             continue
-        read.append(candidate)
-    return read
+    return applied

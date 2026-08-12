@@ -64,6 +64,11 @@ optional quoting, and **no** `$VAR` interpolation or command substitution
 execute anything, and a token containing `$` must survive verbatim.
 cvcpkg warns (but does not refuse) when the file is group/world-readable.
 
+The variables are scoped to the invocation and removed when the command
+finishes, so an embedding process (the server, a test session) never
+inherits one command's env file as standing configuration — the same leak
+removed from `--trust-mirror` in the entry above.
+
 ### Every advertised platform is now buildable (2026-08-05)
 
 Recipes could advertise a platform they were incapable of building. A

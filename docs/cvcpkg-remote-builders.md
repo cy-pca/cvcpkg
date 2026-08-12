@@ -293,6 +293,12 @@ cvcpkg warns if the file is group- or world-readable. It is a warning rather
 than a refusal, because shared builders and CI images cannot always tighten the
 mode at that moment — but `chmod 600` it.
 
+The loaded variables are **scoped to the invocation**: cvcpkg removes the ones
+it added when the command finishes, so an embedding process (the server, a test
+session, an IDE plugin) does not inherit one command's env file as standing
+configuration. Anything already in the environment is never touched, and
+subprocesses started during the command still see the settings.
+
 > Fleet configs have their own indirection for the same reason: prefer
 > `token_env:` over a literal `token:` in `fleet.yaml`, and supply the named
 > variable from an env file. See [builder-fleet.md](builder-fleet.md).
