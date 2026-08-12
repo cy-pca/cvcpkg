@@ -10,6 +10,7 @@ import platform
 import re
 import struct
 import sys
+from collections.abc import Sequence
 
 # Canonical vocabularies for the package keyspace. The catalog is keyed by
 # these exact strings; every ingestion boundary (CLI detection, composite
@@ -77,6 +78,39 @@ def noarch_build_target() -> tuple[str, str]:
         os.environ.get("CVCPKG_NOARCH_BUILD_PLATFORM", "linux"),
         os.environ.get("CVCPKG_NOARCH_BUILD_ARCH", "x86_64"),
     )
+
+
+PLATFORM_ALIASES = {"win": "windows"}
+
+
+def served_by_any_entry(matrix_platforms: Sequence[str], target: str) -> bool:
+    """True when a build for *target* is driven by a recipe's ``platform: any`` entry.
+
+    A recipe's matrix maps target platforms to build scripts, and ``any`` is the
+    fallback for every target without an entry of its own.  That fallback is
+    also what decides the bundle's *identity*: targets served by it share one
+    noarch bundle, while a target with its own entry gets a bundle tagged for it.
+
+    Deriving this per target — rather than from the recipe as a whole ("every
+    entry is ``any``") — is load-bearing.  Pure-Python columns carry an ``any``
+    entry for ``build.sh`` plus a ``windows`` entry for ``build.ps1`` (Windows
+    needs PowerShell and installs to ``Lib/site-packages`` rather than
+    ``lib/pythonX.Y/site-packages``).  Under the whole-recipe test that second
+    entry silently re-tagged the *other* platforms' bundles as host-specific, so
+    one noarch bundle valid everywhere became a linux-only bundle plus a stale
+    noarch one, and macOS/BSD quietly resolved the older revision forever.
+    """
+    plats = {PLATFORM_ALIASES.get(p, p) for p in matrix_platforms if p}
+    if not plats:
+        return False
+    if "any" not in plats:
+        return False
+    norm_target = PLATFORM_ALIASES.get(target, target)
+    # An explicit request to build "any" is the noarch build itself.
+    if not norm_target or norm_target == "any":
+        return True
+    # A target with its own entry is built by it, not by the fallback.
+    return norm_target not in plats
 
 
 def platform_matches(bundle_platform: str, requested: str) -> bool:

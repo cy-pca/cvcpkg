@@ -2327,16 +2327,18 @@ def pack_recipe(
     from cvcpkg.platform import detect_arch, detect_platform
 
     recipe = Recipe.load(recipe_dir)
-    is_any = _is_any_recipe(recipe)
 
     if not arch:
         arch = detect_arch()
+    # The platform this bundle is being built FOR; empty means "this host".
+    target_platform = platform or detect_platform()
     # The host we actually build on. "any" is not a real host, so fall back to
     # the detected platform for the compile/install step.
-    build_platform = platform or detect_platform()
-    if build_platform == "any":
-        build_platform = detect_platform()
-    # The package identity: noarch for an 'any' recipe, else the build target.
+    build_platform = detect_platform() if target_platform == "any" else target_platform
+    # The package identity follows the matrix entry that drives THIS build: a
+    # target served by the `any` fallback publishes one noarch bundle shared by
+    # every such target, a target with its own entry publishes under that name.
+    is_any = _serves_target_via_any(recipe, target_platform, host_platform)
     pkg_platform = "any" if is_any else build_platform
     pkg_arch = "noarch" if is_any else arch
 
@@ -2835,13 +2837,18 @@ def _detect_arch_for_platform(platform: str) -> str:
     return detect_arch()
 
 
-def _is_any_recipe(recipe: Recipe) -> bool:
-    """Return True if *recipe* is platform-independent.
+def _serves_target_via_any(recipe: Recipe, platform: str, host_platform: str = "") -> bool:
+    """True when *recipe*'s build for *platform* is driven by its ``any`` entry.
 
-    A recipe is platform-independent when all of its build matrix
-    entries use ``platform: any``.
+    Such a build publishes one noarch bundle shared by every target the ``any``
+    entry serves; a target with its own matrix entry publishes under that
+    target's own name.  See :func:`cvcpkg.platform.served_by_any_entry` for why
+    this is decided per target rather than per recipe.
     """
-    return bool(recipe.build_matrix) and all(m.platform == "any" for m in recipe.build_matrix)
+    from cvcpkg.platform import served_by_any_entry
+
+    del host_platform  # entry selection for identity keys off the target only
+    return served_by_any_entry([m.platform for m in recipe.build_matrix], platform)
 
 
 def _common_scripts_hash(recipes_dir: Path) -> str:
@@ -3507,9 +3514,10 @@ def build_all(
         label = "" if is_assigned else " (dep)"
         print(f"\ncvcpkg: == {recipe.name} ({recipe.full_version}){label} ==")
 
-        # For platform-independent recipes, use "any"/"noarch" so
-        # a single cache entry is shared across all target platforms.
-        eff_platform = "any" if _is_any_recipe(recipe) else platform
+        # When this target is served by the recipe's `any` entry, use
+        # "any"/"noarch" so a single cache entry is shared across every target
+        # that entry covers.  A target with its own entry keeps its own key.
+        eff_platform = "any" if _serves_target_via_any(recipe, platform) else platform
         eff_arch = _detect_arch_for_platform(eff_platform)
 
         # Build cache lookup.

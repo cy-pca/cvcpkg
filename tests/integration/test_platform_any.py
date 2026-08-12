@@ -463,6 +463,79 @@ class TestPlatformAnyManifest:
         dep_names = [d["name"] for d in manifest["dependencies"]["required"]]
         assert "base-theme" in dep_names
 
+    def test_pack_recipe_keeps_noarch_when_a_windows_entry_is_added(self, tmp_path, monkeypatch):
+        """A second matrix entry must not re-tag the OTHER platforms' bundle.
+
+        This is the regression that split every pure-Python column in two.  The
+        columns carry `any` (build.sh) plus `windows` (build.ps1, because
+        Windows installs to Lib/site-packages), and the old whole-recipe test
+        read that as "not platform-independent" — so the linux build, which is
+        still served by the `any` entry, published as linux/x86_64.  One noarch
+        bundle valid everywhere became a linux-only bundle plus a stale noarch
+        one, and macOS/BSD silently resolved the older revision forever.
+        """
+        import tarfile
+
+        import cvcpkg.builder as builder_mod
+        from cvcpkg.builder import BuildContext, Recipe, pack_recipe
+
+        recipes_dir = tmp_path / "recipes"
+        recipes_dir.mkdir()
+        (recipes_dir / "_common").mkdir()
+        _create_any_recipe(recipes_dir, "widgets", files={"w.js": "console.log(1)"})
+        recipe_dir = recipes_dir / "widgets"
+
+        # Add the windows column, exactly as the generator does.
+        data = yaml.safe_load((recipe_dir / "recipe.yaml").read_text())
+        data["build"]["matrix"].append({"platform": "windows", "script": "build.ps1"})
+        (recipe_dir / "recipe.yaml").write_text(yaml.dump(data, default_flow_style=False))
+        (recipe_dir / "build.ps1").write_text("# windows build\n")
+
+        def _fake_build_recipe(rdir, *, platform, config, link, prefix, **kw):
+            r = Recipe.load(rdir)
+            work = tmp_path / f"work-{platform}"
+            install = work / "install"
+            (install / "share" / "widgets").mkdir(parents=True)
+            (install / "share" / "widgets" / "w.js").write_text("console.log(1)")
+            return BuildContext(
+                recipe=r,
+                platform=platform,
+                config=config,
+                link=link,
+                prefix=prefix or install,
+                source_dir=work / "src",
+                build_dir=work / "build",
+                install_dir=install,
+                work_dir=work,
+            )
+
+        monkeypatch.setattr(builder_mod, "build_recipe", _fake_build_recipe)
+        out = tmp_path / "dist"
+
+        # linux has no entry of its own -> still served by `any` -> noarch.
+        linux_archive, _s, _z = pack_recipe(
+            recipe_dir, platform="linux", arch="x86_64", output_dir=out
+        )
+        assert "any-noarch" in linux_archive.name
+        assert "linux" not in linux_archive.name
+        with tarfile.open(linux_archive) as tf:
+            m = yaml.safe_load(tf.extractfile("share/libcvc-deps/manifest.yaml").read())
+        assert m["bundle"]["platform"] == "any"
+        assert m["bundle"]["arch"] == "noarch"
+
+        # windows names itself in the matrix -> its own bundle, as intended.
+        # (Windows bundles ship as .zip, not .tar.gz.)
+        import zipfile
+
+        win_archive, _s, _z = pack_recipe(
+            recipe_dir, platform="windows", arch="x86_64", output_dir=out
+        )
+        assert "windows-x86_64" in win_archive.name
+        with zipfile.ZipFile(win_archive) as zf:
+            m = yaml.safe_load(zf.read("share/libcvc-deps/manifest.yaml"))
+        assert m["bundle"]["platform"] == "windows"
+        assert m["bundle"]["arch"] == "x86_64"
+
     def test_pack_recipe_packages_any_recipe_as_noarch(self, tmp_path, monkeypatch):
         """pack_recipe always tags a `platform: any` recipe's bundle any/noarch.
 

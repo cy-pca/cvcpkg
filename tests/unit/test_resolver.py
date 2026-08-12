@@ -7,15 +7,22 @@ from cvcpkg.manifest import CatalogEntry, ComponentReq, Dependency
 from cvcpkg.resolver import resolve
 
 
-def _entry(name: str, version: str, deps: list[Dependency] | None = None) -> CatalogEntry:
+def _entry(
+    name: str,
+    version: str,
+    deps: list[Dependency] | None = None,
+    *,
+    platform: str = "linux",
+    arch: str = "x86_64",
+) -> CatalogEntry:
     """Helper: build a minimal CatalogEntry."""
     return CatalogEntry(
         name=name,
         version=version,
         upstream_version=version.split("+")[0],
         cvc_revision=1,
-        platform="linux",
-        arch="x86_64",
+        platform=platform,
+        arch=arch,
         build_type="release",
         link="shared",
         sha256="0" * 64,
@@ -69,6 +76,36 @@ class TestResolverBasic:
         }
         result = resolve(reqs, candidates)
         assert result.picked["fftw3"].version == "3.3.10+cvc.2"
+
+    def test_concrete_platform_beats_noarch_at_the_same_version(self):
+        """A bundle built for this platform wins a tie against a noarch one.
+
+        Both satisfy the host — `platform_matches` lets `any` through on
+        purpose — but they are not interchangeable.  A recipe ships both only
+        because its noarch build cannot serve every target: for the pure-Python
+        columns the noarch bundle installs to lib/pythonX.Y/site-packages while
+        Windows needs Lib/site-packages, so picking noarch there puts the files
+        where that interpreter never looks.
+        """
+        reqs = [ComponentReq(name="anyio-cp311")]
+        noarch = _entry("anyio-cp311", "4.13.0+cvc.2", platform="any", arch="noarch")
+        native = _entry("anyio-cp311", "4.13.0+cvc.2", platform="windows")
+        for order in ([noarch, native], [native, noarch]):
+            result = resolve(reqs, {"anyio-cp311": list(order)})
+            assert result.picked["anyio-cp311"].platform == "windows"
+
+    def test_version_still_dominates_platform_specificity(self):
+        """Specificity only breaks ties — it must not pin a host to old content."""
+        reqs = [ComponentReq(name="anyio-cp311")]
+        candidates = {
+            "anyio-cp311": [
+                _entry("anyio-cp311", "4.13.0+cvc.1", platform="windows"),
+                _entry("anyio-cp311", "4.13.0+cvc.2", platform="any", arch="noarch"),
+            ]
+        }
+        result = resolve(reqs, candidates)
+        assert result.picked["anyio-cp311"].version == "4.13.0+cvc.2"
+        assert result.picked["anyio-cp311"].platform == "any"
 
     def test_picks_highest_cvc_revision_under_version_constraint(self):
         reqs = [ComponentReq(name="fftw3", version="==3.3.10")]
