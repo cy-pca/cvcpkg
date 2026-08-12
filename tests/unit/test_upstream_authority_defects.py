@@ -339,6 +339,154 @@ class TestTrustMirrorFlag:
         assert "--no-trust-mirror" in result.output
 
 
+def _catalog_file(tmp_path, *, upstream_yanked):
+    """A one-bundle local catalog, so install resolves without a network."""
+    import yaml
+
+    b = _bundle("chainpkg", upstream_yanked=upstream_yanked)
+    b["sha256"] = "0" * 64
+    b["size_bytes"] = 1
+    b["archive_url"] = "http://127.0.0.1:1/chainpkg.tar.gz"
+    p = tmp_path / "catalog.yaml"
+    p.write_text(yaml.safe_dump({"bundles": [b]}), encoding="utf-8")
+    return p
+
+
+class TestTrustMirrorIsNotProcessGlobal:
+    """--trust-mirror is one command's decision, not the process's.
+
+    It used to be passed down by writing ``os.environ["CVCPKG_TRUST_MIRROR"]``
+    and never restoring it.  In any long-lived or embedding process -- an IDE
+    plugin, a server, a test session -- a single ``install --trust-mirror``
+    then silently changed resolution policy for everything that ran after it,
+    reinstating bundles an upstream had withdrawn for a CVE.  It also made the
+    in-process CLI tests order-dependent: the leak from a ``--trust-mirror``
+    run is what broke test_authority_chain's upstream-wins assertion whenever
+    the full suite ran, while it passed on its own.
+    """
+
+    def _invoke_and_read_env(self, argv, monkeypatch):
+        """Run *argv*, then report what it left in the environment.
+
+        Popped before asserting so a regression cannot poison the rest of the
+        session -- the failure mode under test is precisely a leak that outlives
+        the command.
+        """
+        import os
+
+        from click.testing import CliRunner
+
+        from cvcpkg.cli import cli
+
+        monkeypatch.delenv("CVCPKG_TRUST_MIRROR", raising=False)
+        # install would otherwise try to publish telemetry / fetch mirror URLs.
+        monkeypatch.delenv("CVCPKG_SERVER_URL", raising=False)
+        try:
+            result = CliRunner().invoke(cli, argv)
+        finally:
+            leaked = os.environ.pop("CVCPKG_TRUST_MIRROR", None)
+        return result, leaked
+
+    @pytest.mark.parametrize("flag", ["--trust-mirror", "--no-trust-mirror"])
+    def test_install_does_not_export_the_flag(self, flag, tmp_path, monkeypatch):
+        import cvcpkg.installer as installer
+
+        monkeypatch.setattr(installer, "install_entry", lambda *a, **kw: None)
+        cat = _catalog_file(tmp_path, upstream_yanked=False)
+        result, leaked = self._invoke_and_read_env(
+            [
+                "install",
+                "chainpkg",
+                "--catalog",
+                str(cat),
+                "--prefix",
+                str(tmp_path / "px"),
+                "--platform",
+                "linux",
+                "--arch",
+                "x86_64",
+                flag,
+            ],
+            monkeypatch,
+        )
+        # Not incidental: had it bailed before resolution, "nothing leaked"
+        # would be true for the wrong reason.
+        assert result.exit_code == 0, result.output
+        assert leaked is None, (
+            f"install {flag} left CVCPKG_TRUST_MIRROR={leaked!r} in os.environ; "
+            "every later resolution in this process now inherits that policy"
+        )
+
+    @pytest.mark.parametrize("flag", ["--trust-mirror", "--no-trust-mirror"])
+    def test_search_does_not_export_the_flag(self, flag, tmp_path, monkeypatch):
+        import httpx
+
+        class _Resp:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {"total": 0, "package_count": 0, "packages": []}
+
+        class _Client:
+            def __init__(self, *a, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def get(self, *a, **kw):
+                return _Resp()
+
+        monkeypatch.setattr(httpx, "Client", _Client)
+        result, leaked = self._invoke_and_read_env(["search", "zlib", flag], monkeypatch)
+        assert result.exit_code == 0, result.output
+        assert leaked is None, (
+            f"search {flag} left CVCPKG_TRUST_MIRROR={leaked!r} in os.environ; "
+            "every later resolution in this process now inherits that policy"
+        )
+
+    def test_install_still_honours_the_flag_without_the_env(self, tmp_path, monkeypatch):
+        """Threading it through must not make the flag decorative.
+
+        Same catalog both times, and the only bundle in it is one the upstream
+        retired: default resolution must refuse it, --trust-mirror must select
+        it.  Without this, "no leak" would also be satisfied by a flag that
+        stopped doing anything at all.
+        """
+        import cvcpkg.installer as installer
+
+        installed = []
+        monkeypatch.setattr(
+            installer, "install_entry", lambda e, *a, **kw: installed.append(e.name)
+        )
+        cat = _catalog_file(tmp_path, upstream_yanked=True)
+        argv = [
+            "install",
+            "chainpkg",
+            "--catalog",
+            str(cat),
+            "--prefix",
+            str(tmp_path / "px"),
+            "--platform",
+            "linux",
+            "--arch",
+            "x86_64",
+        ]
+
+        refused, _ = self._invoke_and_read_env(argv, monkeypatch)
+        assert refused.exit_code != 0, refused.output
+        assert "no bundles found" in refused.output
+        assert installed == []
+
+        opted_in, _ = self._invoke_and_read_env(argv + ["--trust-mirror"], monkeypatch)
+        assert opted_in.exit_code == 0, opted_in.output
+        assert installed == ["chainpkg"]
+
+
 class TestSearchHonoursUpstreamAuthority:
     """search bypasses catalog_entries(), so it needs the policy applied too."""
 

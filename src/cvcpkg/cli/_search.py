@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-import os as _os
-
 import click
 
 from cvcpkg.catalog import trust_mirror_default as _trust_mirror_default
@@ -92,16 +90,12 @@ def search(
       cvcpkg search --platform linux --tag scientific
       cvcpkg search fft --link static --release v1.3.0
     """
-    if trust_mirror is not None:
-        # Consulted by cvcpkg.catalog.trust_mirror_default(); set here so
-        # every downstream resolution path sees it without threading a
-        # parameter through each one.  Writing "0" on --no-trust-mirror is what
-        # lets the flag override an inherited CVCPKG_TRUST_MIRROR=1.
-        _os.environ["CVCPKG_TRUST_MIRROR"] = "1" if trust_mirror else "0"
     # search talks to /v1/search directly rather than going through
     # catalog_entries(), so the upstream-authoritative default has to be applied
     # here too -- otherwise search is the one command that still shows a
-    # mirror's dissent as though upstream had never retired the bundle.
+    # mirror's dissent as though upstream had never retired the bundle.  The
+    # flag stays a local decision: exporting it into os.environ would make one
+    # command's --trust-mirror the standing policy for the rest of the process.
     _trust = _trust_mirror_default() if trust_mirror is None else trust_mirror
     import json as _json
 

@@ -229,9 +229,14 @@ def chain(tmp_path, monkeypatch):
             "CVCPKG_POPULATE_UPSTREAM",
             "CVCPKG_POPULATE_SYNC_INTERVAL",
             "CVCPKG_MIRROR_MODE",
+            # This fixture asserts a resolution *policy*, so every env var that
+            # can move that policy has to be pinned -- including one an operator
+            # may simply have exported.
+            "CVCPKG_TRUST_MIRROR",
         )
     }
     os.environ.pop("CVCPKG_MIRROR_MODE", None)
+    os.environ.pop("CVCPKG_TRUST_MIRROR", None)
 
     a = Server("A", tmp_path / "a")
     a.seed_admin()

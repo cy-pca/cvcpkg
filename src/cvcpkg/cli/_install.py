@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import os
-import os as _os
 from pathlib import Path
 
 import click
@@ -178,12 +177,6 @@ def install(
     and --link override the corresponding values in the requirements
     file if explicitly provided on the command line.
     """
-    if trust_mirror is not None:
-        # Consulted by cvcpkg.catalog.trust_mirror_default(); set here so
-        # every downstream resolution path sees it without threading a
-        # parameter through each one.  Writing "0" on --no-trust-mirror is what
-        # lets the flag override an inherited CVCPKG_TRUST_MIRROR=1.
-        _os.environ["CVCPKG_TRUST_MIRROR"] = "1" if trust_mirror else "0"
     from cvcpkg.cache import default_cache_dir
     from cvcpkg.catalog import (
         catalog_entries,
@@ -317,6 +310,11 @@ def install(
             arch=arc,
             build_type=reqs.config,
             link=reqs.link,
+            # None keeps catalog_entries' own default (CVCPKG_TRUST_MIRROR, else
+            # upstream wins).  Passed rather than exported: a process-global
+            # flag would outlive this command and silently reinstate bundles an
+            # upstream withdrew for every later resolution in the same process.
+            trust_mirror=trust_mirror,
         )
 
         # Group candidate entries by component name for the resolver, scoping

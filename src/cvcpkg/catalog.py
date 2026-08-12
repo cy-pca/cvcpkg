@@ -175,6 +175,13 @@ def trust_mirror_default() -> bool:
     would silently reinstate a bundle that was withdrawn for being broken, or
     for a CVE, on every machine pointed at that mirror.  Opting in is explicit:
     ``--trust-mirror``, or CVCPKG_TRUST_MIRROR=1 for non-interactive use.
+
+    CVCPKG_TRUST_MIRROR is input-only -- read here, never written.  A command
+    overriding it passes ``trust_mirror=`` to :func:`catalog_entries` instead,
+    so the override is scoped to that resolution.  Exporting it would make one
+    command's opt-in the standing policy for every later resolution in a
+    long-lived or embedding process -- silently reinstating withdrawn bundles,
+    which is the exact failure this default exists to prevent.
     """
     import os
 
