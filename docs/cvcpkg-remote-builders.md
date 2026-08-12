@@ -232,6 +232,71 @@ curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
 tokens via Python directly (bypassing the API), pass the same `state_dir` the
 running server uses, otherwise the hashes won't match.
 
+### Keeping the token out of `ps` — `--env-file`
+
+`--token <TOKEN>` puts the secret in the process command line, and a command
+line is not private: on Linux `/proc/<pid>/cmdline` is world-readable, so **any
+local user can read a builder's token out of `ps`**, and Task Manager's
+command-line column does the same on Windows. Exporting `CVCPKG_TOKEN` keeps it
+out of `argv`, but the value still has to be written somewhere to get there —
+in practice a plaintext literal in the launcher script.
+
+Put it in a file with its own permissions instead:
+
+```bash
+install -m 600 /dev/null /etc/cvcpkg/env
+cat >> /etc/cvcpkg/env <<'EOF'
+CVCPKG_TOKEN=cvctok_...
+CVCPKG_SERVER_URL=https://cvcpkg.org
+EOF
+
+cvcpkg builder run --name my-builder          # no --token, no export
+```
+
+cvcpkg reads the file before resolving any option's environment variable, so it
+serves **every** command that takes `--token`, not just the builder.
+
+Read automatically when present, most specific first:
+
+| location | scope |
+|----------|-------|
+| `$CVCPKG_ENV_FILE` | explicit, wins over the rest |
+| `./.cvcpkg.env` | project-local |
+| `~/.config/cvcpkg/env` | per-user (`$XDG_CONFIG_HOME` honoured) |
+| `/etc/cvcpkg/env` | system-wide (POSIX) |
+| `%APPDATA%\cvcpkg\env`, `%PROGRAMDATA%\cvcpkg\env` | Windows |
+
+Or name one explicitly — note it goes **before** the subcommand, since it has
+to be read before that subcommand's options resolve:
+
+```bash
+cvcpkg --env-file /etc/cvcpkg/env builder run --name my-builder
+```
+
+Precedence, most specific first. **Nothing already in the environment is ever
+displaced**, so adding a file cannot change what an existing deployment
+resolves to:
+
+```
+--token on the command line     (still supported; still visible in ps)
+CVCPKG_TOKEN already exported   (a real env var beats a file)
+the env file
+```
+
+Format: `KEY=VALUE`, one per line, `#` comments, optional `export` prefix (so
+the same file can be `source`d by an existing shell wrapper), optional quoting.
+There is deliberately **no** `$VAR` interpolation or command substitution — a
+file whose only job is to hold credentials should not be able to execute
+anything, and a token containing `$` must survive verbatim.
+
+cvcpkg warns if the file is group- or world-readable. It is a warning rather
+than a refusal, because shared builders and CI images cannot always tighten the
+mode at that moment — but `chmod 600` it.
+
+> Fleet configs have their own indirection for the same reason: prefer
+> `token_env:` over a literal `token:` in `fleet.yaml`, and supply the named
+> variable from an env file. See [builder-fleet.md](builder-fleet.md).
+
 ## Monitoring
 
 ### Live Monitor (top-like)

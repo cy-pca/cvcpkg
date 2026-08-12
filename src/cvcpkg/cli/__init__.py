@@ -74,8 +74,42 @@ def _force_utf8_stdio() -> None:
 # ── Root group ──────────────────────────────────────────────────
 
 
+def _load_env_file(ctx: click.Context, param: click.Parameter, value: str | None) -> str | None:
+    """Load an env file into the environment before subcommands parse.
+
+    Eager, and runs in the ROOT group so it lands before Click resolves any
+    subcommand's ``envvar=`` — that is what lets one option serve all 63
+    ``--token`` sites without touching them.  An explicit ``--env-file`` is
+    required to exist (a typo'd path must not fail open into "token missing");
+    the default search path is best-effort.
+    """
+    from cvcpkg.envfile import EnvFileError, load_default_env_files, load_env_file
+
+    try:
+        if value:
+            load_env_file(value)
+        else:
+            load_default_env_files()
+    except EnvFileError as e:
+        raise click.BadParameter(str(e), ctx=ctx, param=param) from None
+    return value
+
+
 @click.group(invoke_without_command=True)
 @click.version_option(__version__, prog_name="cvcpkg")
+@click.option(
+    "--env-file",
+    metavar="PATH",
+    is_eager=True,
+    expose_value=False,
+    callback=_load_env_file,
+    envvar="CVCPKG_ENV_FILE",
+    help="Read KEY=VALUE settings (CVCPKG_TOKEN, ...) from PATH instead of "
+    "putting secrets in argv, where ps and Task Manager can read them. "
+    "An already-exported variable or an explicit --token still wins. "
+    "Without this flag, ./.cvcpkg.env, ~/.config/cvcpkg/env and "
+    "/etc/cvcpkg/env are read when present.",
+)
 @click.pass_context
 def cli(ctx: click.Context) -> None:
     """Cross-platform, language-agnostic package manager and binary archive
