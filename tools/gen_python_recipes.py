@@ -690,6 +690,12 @@ SEED_PACKAGES = {
         "files": ["contourpy/", "contourpy-*.dist-info/"],
         "check": "import contourpy",
     },
+    # NOTE: the matplotlib-cp31X recipes on disk are HAND-CONVERTED (no
+    # generator marker): they link cvcpkg's freetype + qhull via
+    # -Dsystem-freetype/-Dsystem-qhull (the default meson wraps DOWNLOAD both,
+    # impossible on offline builders), resolve the staged pybind11 the way
+    # contourpy does, stamp an $ORIGIN RUNPATH and verify a real Agg render.
+    # The seed stays for dep-edge resolution and column viability.
     "matplotlib": {
         "version": "3.10.0",
         "license": "PSF-2.0",
