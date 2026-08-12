@@ -34,32 +34,6 @@ _PYMM="$(cvc_interp_version "${CVC_PYTHON_INTERPRETER:-python313t}")"   # 3.13t
 export PATH="${BLD}/bin:${DEPS}/bin:${PATH}"
 export PYTHONPATH="${BLD}/lib/python${_PYMM}/site-packages${PYTHONPATH:+:${PYTHONPATH}}"
 
-# ── Working `cython` for meson ──────────────────────────────────────────────
-# numpy's meson build discovers Cython as a *compiler* by running the `cython`
-# executable off PATH. The staged cython console script's shebang is a hardcoded
-# absolute path to its own (ephemeral) build prefix's interpreter — unlike meson,
-# whose recipe rewrites the shebang to `/usr/bin/env python3` — so the staged
-# `cython` "cannot execute" and meson fails with
-#   ERROR: Unknown compiler(s): [['cython'], ['cython3']]
-# and numpy silently never builds from source. Shim a `cython` that runs the
-# Cython module under THIS interpreter (module import works fine — only the
-# script shebang is broken), and put it first on PATH.
-#
-# REMOVABLE: cvcpkg's stage_bundle now rewrites staged console-script
-# shebangs to `/usr/bin/env python3.13t` (builder.py _rewrite_shebangs), so
-# once cython-cp313t is REPUBLISHED by a builder running that cvcpkg, the
-# staged `cython` executes off PATH and this whole block can be deleted.
-# Until then the shim stays: deleting it first would break every numpy
-# build against the still-broken published cython artifact.
-CYTHON_SHIM="${CVC_BUILD_DIR}/cython-shim"
-mkdir -p "${CYTHON_SHIM}"
-cat > "${CYTHON_SHIM}/cython" <<EOF
-#!/bin/sh
-exec "${PY}" -m cython "\$@"
-EOF
-chmod +x "${CYTHON_SHIM}/cython"
-export PATH="${CYTHON_SHIM}:${PATH}"
-
 # ── Python headers for meson ────────────────────────────────────────────────
 # meson's dependency('python') probes Python.h using sysconfig's INCLUDEPY,
 # which in the staged interpreter is a stale (unrelocated) build-prefix path,
