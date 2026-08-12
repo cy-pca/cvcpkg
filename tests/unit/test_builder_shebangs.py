@@ -11,8 +11,11 @@ private cython wrapper; contourpy sidesteps its dead pybind11-config via
 pkg-config)."""
 
 import os
+import stat
 import subprocess
 import sys
+
+import pytest
 
 from cvcpkg.builder import _rewrite_shebangs, create_archive, stage_bundle
 from cvcpkg.installer import extract_bundle
@@ -33,7 +36,8 @@ def test_rewrites_job_prefix_shebang(tmp_path):
     script = _script(tmp_path, "bin/pybind11-config", f"{JOB_PREFIX}/bin/python3.11")
     _rewrite_shebangs(tmp_path)
     assert script.read_bytes() == b"#!/usr/bin/env python3.11\n" + BODY
-    assert (script.stat().st_mode & 0o777) == 0o755
+    if sys.platform != "win32":  # Windows has no POSIX perms (mode reads 0o666)
+        assert (script.stat().st_mode & 0o777) == 0o755
 
 
 def test_preserves_free_threaded_interpreter_name(tmp_path):
@@ -95,7 +99,13 @@ def test_readonly_script_rewritten_and_mode_restored(tmp_path):
     script = _script(tmp_path, "bin/frozen", f"{JOB_PREFIX}/bin/python3.11", mode=0o555)
     _rewrite_shebangs(tmp_path)
     assert script.read_bytes().startswith(b"#!/usr/bin/env python3.11\n")
-    assert (script.stat().st_mode & 0o777) == 0o555
+    # The write must not leave the file more writable than the package
+    # intended.  The user-write bit is the one signal both platforms share:
+    # Windows squashes 0o555 to its read-only 0o444, so only assert the
+    # exact POSIX mode where POSIX modes exist.
+    assert not (script.stat().st_mode & stat.S_IWUSR)
+    if sys.platform != "win32":
+        assert (script.stat().st_mode & 0o777) == 0o555
 
 
 def test_scan_is_bounded_to_script_dirs(tmp_path):
@@ -121,6 +131,11 @@ def test_stage_bundle_rewrites_staging_not_install_dir(tmp_path):
     assert source.read_bytes().startswith(b"#!" + JOB_PREFIX.encode())
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="shebang execution is a POSIX kernel feature; Windows console "
+    "scripts are Scripts/*.exe launchers (see _SHEBANG_DIRS in builder.py)",
+)
 def test_packed_bundle_bin_entry_executes_from_fresh_prefix(tmp_path):
     """End-to-end acceptance: pack a script package, install it into a fresh
     prefix, and execute its bin entry -- the exact flow that used to die with
