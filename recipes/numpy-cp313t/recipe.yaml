@@ -10,7 +10,7 @@ recipe:
   # last one still carrying that defect. Also adds the BSDs, for which PyPI
   # publishes no wheel at all. Windows regresses to the same loud stub the
   # other three columns already carry until the MSVC/meson port lands.
-  cvc_revision: 2
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
