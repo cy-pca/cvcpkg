@@ -12,13 +12,18 @@ name: deploy-dev
 # Required repo secrets:
 #   (none — the runners are on the incus cluster hosts)
 
+# Deploys on every master push.  This used to key off a `dev` branch, but
+# nothing ever pushed there: `dev` stalled at 2026-08-05 while master moved 94
+# commits ahead, so the dev cluster silently ran week-old cvcpkg while every
+# recipe PR was gated against master's CLI.  Master is the branch that actually
+# moves, so it is the one the dev cluster should track.
 on:
   push:
-    branches: [dev]
+    branches: [master]
   workflow_dispatch:
     inputs:
       sha:
-        description: "Commit SHA to deploy (defaults to dev HEAD)"
+        description: "Commit SHA to deploy (defaults to master HEAD)"
         required: false
         type: string
 
