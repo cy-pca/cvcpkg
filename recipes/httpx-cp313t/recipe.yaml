@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: httpx-cp313t
   upstream_version: "0.28.1"
-  cvc_revision: 1
+  cvc_revision: 2
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
