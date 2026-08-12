@@ -28,7 +28,7 @@ from cvcpkg.builder import (
     _discover_cross_toolchains,
     _file_list,
     _find_patchelf,
-    _is_any_recipe,
+    _serves_target_via_any,
     _patch_elf_rpath,
     _select_matrix_entry,
     _sha256_file,
@@ -316,20 +316,27 @@ class TestPlatformAny:
     def test_detect_arch_noarch(self):
         assert _detect_arch_for_platform("any") == "noarch"
 
-    def test_is_any_recipe_true(self, tmp_path):
+    def test_serves_target_via_any_true(self, tmp_path):
         recipe_dir = tmp_path / "recipes" / "web-assets"
         _write_recipe(recipe_dir, ANY_RECIPE)
         r = Recipe.load(recipe_dir)
-        assert _is_any_recipe(r)
+        assert _serves_target_via_any(r, "linux")
+        assert _serves_target_via_any(r, "any")
 
-    def test_is_any_recipe_false(self, tmp_path):
+    def test_serves_target_via_any_false(self, tmp_path):
         recipe_dir = tmp_path / "recipes" / "testpkg"
         _write_recipe(recipe_dir, MINIMAL_RECIPE)
         r = Recipe.load(recipe_dir)
-        assert not _is_any_recipe(r)
+        assert not _serves_target_via_any(r, "linux")
 
-    def test_is_any_recipe_mixed_false(self, tmp_path):
-        """A recipe with both 'any' and 'linux' entries is NOT platform-independent."""
+    def test_serves_target_via_any_mixed_is_per_target(self, tmp_path):
+        """With both 'any' and 'linux' entries, only linux escapes the fallback.
+
+        The old whole-recipe test called this recipe "not platform-independent"
+        outright, which re-tagged EVERY platform's bundle as host-specific the
+        moment a second entry appeared.  The identity is per target: linux has
+        its own entry, macOS and the explicit noarch build do not.
+        """
         recipe_dict = {
             **MINIMAL_RECIPE,
             "build": {
@@ -342,7 +349,10 @@ class TestPlatformAny:
         recipe_dir = tmp_path / "recipes" / "mixed"
         _write_recipe(recipe_dir, recipe_dict)
         r = Recipe.load(recipe_dir)
-        assert not _is_any_recipe(r)
+        assert not _serves_target_via_any(r, "linux")
+        assert _serves_target_via_any(r, "macos")
+        assert _serves_target_via_any(r, "freebsd")
+        assert _serves_target_via_any(r, "any")
 
     def test_select_matrix_entry_any_fallback(self, tmp_path):
         """When no exact platform match exists, 'any' entry is selected."""
@@ -523,8 +533,8 @@ class TestPlatformAny:
         with patch("cvcpkg.platform.platform.machine", return_value="LoongArch64"):
             assert detect_arch() == "loongarch64"
 
-    def test_is_any_recipe_empty_matrix(self):
-        """A recipe with an empty matrix is NOT platform-independent."""
+    def test_serves_target_via_any_empty_matrix(self):
+        """A recipe with an empty matrix has no `any` entry to fall back to."""
         r = Recipe(
             name="empty",
             upstream_version="1.0",
@@ -537,7 +547,7 @@ class TestPlatformAny:
             raw={},
             recipe_dir=Path("/tmp/fake"),
         )
-        assert not _is_any_recipe(r)
+        assert not _serves_target_via_any(r, "linux")
 
     def test_select_matrix_entry_any_for_all_platforms(self, tmp_path):
         """A platform=any recipe should match every conceivable platform."""

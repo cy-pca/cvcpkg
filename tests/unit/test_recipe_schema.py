@@ -4,7 +4,7 @@ These exist because the two can drift apart silently.  The builder's own tests
 construct recipes in tmp_path and never touch packaging/validate.py, while
 validate.py only ever walks recipes/ — so a feature can be fully implemented,
 fully unit-tested, and still be impossible to express in a real recipe.  That
-is exactly how `platform: any` shipped unusable: _is_any_recipe honoured it,
+is exactly how `platform: any` shipped unusable: the builder honoured it,
 the Phase 14 end-to-end test exercised it from a temp dir, and the schema
 rejected it for anything under recipes/.
 """
@@ -60,7 +60,7 @@ class TestPlatformAny:
     def test_builder_and_schema_agree_on_any(self, schema):
         # Guard the specific drift: the builder treats "any" as special, so the
         # schema must permit the value the builder keys on.
-        from cvcpkg.builder import MatrixEntry, Recipe, SourceSpec, _is_any_recipe
+        from cvcpkg.builder import MatrixEntry, Recipe, SourceSpec, _serves_target_via_any
 
         r = _recipe(build={"matrix": [{"platform": "any", "script": "build.sh"}]})
         assert _valid(schema, r)
@@ -77,7 +77,7 @@ class TestPlatformAny:
             raw=r,
             recipe_dir=Path("."),
         )
-        assert _is_any_recipe(recipe) is True
+        assert _serves_target_via_any(recipe, "linux") is True
 
     def test_bogus_platform_still_rejected(self, schema):
         # The enum must not have been loosened into a free-form string.

@@ -422,7 +422,7 @@ def build(
         available = [by_name[n] for n in needed if n in by_name]
 
         # Split into target-platform recipes and host-tool recipes.
-        from cvcpkg.platform import detect_platform
+        from cvcpkg.platform import detect_platform, served_by_any_entry
 
         host_plat = host_platform or detect_platform()
 
@@ -466,11 +466,17 @@ def build(
         # into <build-prefix>/src/<name>).  Build-time only: never shipped.
         if build_only_recipes:
             for r in resolve_build_order(build_only_recipes, plat):
-                # A platform-independent recipe (source packages: every matrix
-                # entry is `any`) is built ONCE, natively -- never for the target
+                # A recipe whose build for this target comes from its `any`
+                # entry is built ONCE, natively -- never for the target
                 # platform.  Building it "for windows" from a WSL host would
                 # hand its build.sh to winhost delegation, which only runs .ps1.
-                _p = "any" if all(m.platform == "any" for m in r.build_matrix) else plat
+                # A target with its own entry (a `windows` build.ps1) still
+                # builds for that target, which is what that entry is for.
+                _p = (
+                    "any"
+                    if served_by_any_entry([m.platform for m in r.build_matrix], plat)
+                    else plat
+                )
                 _dest = f" -> {_bp}" if _bp else ""
                 print(f"\ncvcpkg: ══ {r.name} ({r.full_version}) [build dep{_dest}] ══")
                 build_recipe(

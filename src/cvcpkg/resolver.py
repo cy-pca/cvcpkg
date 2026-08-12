@@ -156,9 +156,22 @@ def _sort_candidates(entries: list[CatalogEntry], recommended_ver: str) -> list[
     Version-range constraints still reject them in _backtrack /
     _compatible_with_picked (satisfies() raising counts as no-match).
     """
+    # Most-specific-wins on platform, applied WITHIN a version: a bundle built
+    # for this host's own platform beats a noarch one carrying the same version.
+    # Both satisfy the host (platform_matches lets `any` through deliberately),
+    # but they are not interchangeable -- a recipe that ships both does so
+    # because the noarch build cannot serve every target.  For the pure-Python
+    # columns that means layout: the noarch bundle installs to
+    # lib/pythonX.Y/site-packages, while Windows needs Lib/site-packages, so
+    # letting the noarch bundle win on Windows installs files where that
+    # interpreter will never look.  Version still dominates, so this only
+    # breaks ties rather than pinning a host to an older revision.
     ordered = sorted(
         entries,
-        key=lambda e: version_sort_key(e.version, e.cvc_revision),
+        key=lambda e: (
+            version_sort_key(e.version, e.cvc_revision),
+            e.platform != "any",
+        ),
         reverse=True,
     )
 

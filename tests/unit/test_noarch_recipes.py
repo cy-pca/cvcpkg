@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from cvcpkg.builder import Recipe, _is_any_recipe, _select_matrix_entry
+from cvcpkg.builder import Recipe, _select_matrix_entry, _serves_target_via_any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RECIPES_DIR = REPO_ROOT / "recipes"
@@ -130,7 +130,7 @@ class TestCaBundleIsNoarch:
 
     def test_matrix_is_a_single_any_entry(self):
         recipe = Recipe.load(RECIPES_DIR / "ca-bundle")
-        assert _is_any_recipe(recipe)
+        assert _serves_target_via_any(recipe, "linux")
         assert [e.platform for e in recipe.build_matrix] == ["any"]
 
     def test_no_powershell_build_script(self):
