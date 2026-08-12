@@ -25,7 +25,7 @@ recipe:
   # and patches the wasm table at runtime — so it needs an Emscripten JS engine
   # and cannot work on wasip1. CPython upstream ships its own WASI build without
   # _ctypes for the same reason. wasm keeps the dependency.
-  cvc_revision: 5
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
