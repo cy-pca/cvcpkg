@@ -53,6 +53,18 @@ fi
 _PB11_PC="$("${PY_EXE}" -m pybind11 --pkgconfigdir)"
 [ -n "${_PB11_PC}" ] || { echo "contourpy-cp313: python -m pybind11 --pkgconfigdir returned nothing" >&2; exit 1; }
 export PKG_CONFIG_PATH="${_PB11_PC}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+# Belt AND suspenders: on the fleet the .pc route resolved (meson reported
+# the dep found, correct version) yet the -I never reached the compile line
+# — not reproducible locally, even with the builder's split-prefix layout
+# and the same pkgconf/meson artifacts.  pybind11.get_include() is the
+# canonical header-dir API; feeding it through CXXFLAGS reaches the
+# compiler regardless of how the dependency object was populated (the
+# header-only duplicate -I is harmless when both routes work).  The echo
+# keeps the resolved values in the build log for the next forensics pass.
+_PB11_INC="$("${PY_EXE}" -c 'import pybind11; print(pybind11.get_include())')"
+[ -d "${_PB11_INC}" ] || { echo "contourpy-cp313: pybind11.get_include() -> ${_PB11_INC} does not exist" >&2; exit 1; }
+export CXXFLAGS="-I${_PB11_INC} ${CXXFLAGS:-}"
+echo "contourpy-cp313: pybind11 pc=${_PB11_PC} include=${_PB11_INC} cflags=[$(pkg-config --cflags pybind11 2>&1 || true)]"
 
 # ── 3. Build the wheel from the extracted sdist ─────────────────────────────
 # --no-deps: transitive deps are cvcpkg recipes, resolved by the depends graph.
