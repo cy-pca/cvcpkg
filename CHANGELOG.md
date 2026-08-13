@@ -34,6 +34,41 @@ Major release: production daemon with database backend, the
 `cvcpkg.org` registry, distributed build infrastructure, and wasi
 support.
 
+### Secrets can live in an env file instead of `argv` (2026-08-12)
+
+`--token` is accepted by 63 options across the CLI, and every one of them
+puts the bearer token in the process command line — which is not private.
+On Linux `/proc/<pid>/cmdline` is world-readable, so any local user could
+read a builder's publisher token out of `ps`; Task Manager's command-line
+column does the same on Windows. Exporting `CVCPKG_TOKEN` kept it out of
+`argv` but only moved the problem, since the value still had to be written
+somewhere to get there — in practice a plaintext literal in the launcher
+script.
+
+`cvcpkg --env-file PATH` (and `$CVCPKG_ENV_FILE`) reads `KEY=VALUE`
+settings before Click resolves any option's environment variable, so one
+option serves **every** existing `--token` site without changing any of
+them. `./.cvcpkg.env`, `~/.config/cvcpkg/env` and `/etc/cvcpkg/env` are
+read automatically when present (plus `%APPDATA%`/`%PROGRAMDATA%` on
+Windows).
+
+**Fully backward compatible:** `--token` and `CVCPKG_TOKEN` work exactly
+as before and take precedence, so a file can only supply a value nobody
+else set — adding one cannot change what an existing deployment resolves
+to.
+
+The format is deliberately inert: `#` comments, an optional `export`
+prefix so the same file can be `source`d by an existing shell wrapper,
+optional quoting, and **no** `$VAR` interpolation or command substitution
+— a file whose only job is to hold credentials should not be able to
+execute anything, and a token containing `$` must survive verbatim.
+cvcpkg warns (but does not refuse) when the file is group/world-readable.
+
+The variables are scoped to the invocation and removed when the command
+finishes, so an embedding process (the server, a test session) never
+inherits one command's env file as standing configuration — the same leak
+removed from `--trust-mirror` in the entry above.
+
 ### Every advertised platform is now buildable (2026-08-05)
 
 Recipes could advertise a platform they were incapable of building. A
