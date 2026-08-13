@@ -9,6 +9,7 @@ import urllib.error
 import urllib.request
 from typing import BinaryIO, ClassVar
 
+from cvcpkg.retry import with_retry
 from cvcpkg.storage import ObjectInfo, StorageBackend
 
 
@@ -36,21 +37,31 @@ class HttpsBackend(StorageBackend):
     schemes: ClassVar[tuple[str, ...]] = ("https", "http")
 
     def head(self, uri: str) -> ObjectInfo:
-        req = urllib.request.Request(uri, method="HEAD", headers={"User-Agent": _user_agent()})
-        try:
+        def _once() -> ObjectInfo:
+            req = urllib.request.Request(uri, method="HEAD", headers={"User-Agent": _user_agent()})
             with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
                 size = int(resp.headers.get("Content-Length", -1))
                 etag = resp.headers.get("ETag", "")
                 ct = resp.headers.get("Content-Type", "")
                 return ObjectInfo(size=size, etag=etag, content_type=ct)
+
+        try:
+            return with_retry(_once, what=f"HEAD {uri}")
         except urllib.error.URLError as exc:
             raise OSError(f"HEAD {uri}: {exc}") from exc
 
     def open(self, uri: str) -> BinaryIO:
-        req = urllib.request.Request(uri, headers={"User-Agent": _user_agent()})
-        try:
+        # Retries only ESTABLISHING the stream. A failure part-way through the
+        # body cannot be resumed from here -- the caller has already been handed
+        # the file object -- so restarting the whole transfer is the download
+        # path's job (see installer._download_from_url).
+        def _once() -> BinaryIO:
+            req = urllib.request.Request(uri, headers={"User-Agent": _user_agent()})
             resp = urllib.request.urlopen(req, timeout=120)  # noqa: S310
             return resp  # type: ignore[return-value]
+
+        try:
+            return with_retry(_once, what=f"GET {uri}")
         except urllib.error.URLError as exc:
             raise OSError(f"GET {uri}: {exc}") from exc
 

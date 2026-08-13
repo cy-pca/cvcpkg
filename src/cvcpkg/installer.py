@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import tarfile
 import zipfile
@@ -14,6 +15,7 @@ from pathlib import Path
 from cvcpkg import cache as cache_mod
 from cvcpkg.errors import InstallError, IntegrityError
 from cvcpkg.manifest import CatalogEntry
+from cvcpkg.retry import with_retry
 
 
 def _safe_extractall(tf: tarfile.TarFile, path: Path) -> None:
@@ -54,12 +56,17 @@ def download_bundle(
     last_error: Exception | None = None
     for url in urls:
         try:
-            path = _download_from_url(url, filename, sha, cache_dir, max_bytes)
+            # Retry the entire transfer, not just connection setup: a stream
+            # that fails after a 200 (proxy reset, incomplete read) is only
+            # recoverable by starting the file again. IntegrityError is NOT
+            # retried -- a hash mismatch is a verdict on the bytes.
+            path = with_retry(
+                lambda u=url: _download_from_url(u, filename, sha, cache_dir, max_bytes),
+                what=f"download {filename}",
+            )
             return path
         except (InstallError, IntegrityError) as exc:
             last_error = exc
-            import logging
-
             logging.getLogger("cvcpkg").debug(
                 "download from %s failed (%s), trying next mirror...",
                 url,
@@ -84,11 +91,24 @@ def _download_from_url(
 
     try:
         backend = get_backend(url)
-        info = backend.head(url)
-        if info.size >= 0 and info.size > max_bytes:
-            raise InstallError(
-                f"archive for {filename} is {info.size} bytes, exceeds {max_bytes} limit"
+        # The size probe is an OPTIMISATION, not a gate: it lets an oversized
+        # archive be rejected before a byte is transferred. It must never be
+        # able to fail the download on its own -- a transient 5xx on the probe
+        # used to raise InstallError, and since catalog entries carry a single
+        # archive_url with no mirrors, that killed the whole install. The
+        # streaming cap below is the real enforcement and needs no probe.
+        # (catalog._fetch_url learned this after an outage; this path did not.)
+        try:
+            info = backend.head(url)
+        except Exception as probe_exc:  # noqa: BLE001 -- advisory only
+            logging.getLogger("cvcpkg").debug(
+                "size probe for %s failed (%s); relying on the streaming cap", url, probe_exc
             )
+        else:
+            if info.size >= 0 and info.size > max_bytes:
+                raise InstallError(
+                    f"archive for {filename} is {info.size} bytes, exceeds {max_bytes} limit"
+                )
         # Stream to a temp file instead of loading into memory
         cache_dir.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(dir=cache_dir, delete=False, suffix=".download") as tmp:
