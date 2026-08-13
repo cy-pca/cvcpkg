@@ -25,6 +25,23 @@ from cvcpkg.envfile import (
 )
 
 
+def _fake_home(monkeypatch, path):
+    """Point ``Path.home()`` at *path* on every platform.
+
+    Setting HOME alone is a POSIX habit that silently does nothing on Windows:
+    there ``Path.home()`` goes through ``expanduser``, which consults USERPROFILE
+    (then HOMEDRIVE/HOMEPATH) and ignores HOME entirely.  A HOME-only test still
+    passes on Linux and macOS while quietly probing the *real* user's config
+    directory on Windows -- which is how this file first went red there.
+    """
+    monkeypatch.setenv("HOME", str(path))
+    monkeypatch.setenv("USERPROFILE", str(path))
+    monkeypatch.delenv("HOMEDRIVE", raising=False)
+    monkeypatch.delenv("HOMEPATH", raising=False)
+    monkeypatch.delenv("APPDATA", raising=False)
+    monkeypatch.delenv("PROGRAMDATA", raising=False)
+
+
 @pytest.fixture(autouse=True)
 def _isolate_environ():
     """Undo every environment change these tests make.
@@ -156,7 +173,7 @@ def test_project_local_file_shadows_system(tmp_path, monkeypatch):
     (project / ".cvcpkg.env").write_text("CVCPKG_TOKEN=project\n")
 
     monkeypatch.chdir(project)
-    monkeypatch.setenv("HOME", str(home))
+    _fake_home(monkeypatch, home)
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.delenv("CVCPKG_ENV_FILE", raising=False)
     monkeypatch.delenv("CVCPKG_TOKEN", raising=False)
@@ -182,7 +199,7 @@ def test_malformed_default_file_is_skipped_not_fatal(tmp_path, monkeypatch, caps
     project.mkdir()
     (project / ".cvcpkg.env").write_text("THIS IS NOT AN ENV FILE\n")
     monkeypatch.chdir(project)
-    monkeypatch.setenv("HOME", str(tmp_path / "nohome"))
+    _fake_home(monkeypatch, tmp_path / "nohome")
     monkeypatch.delenv("CVCPKG_ENV_FILE", raising=False)
 
     assert load_default_env_files() == []
