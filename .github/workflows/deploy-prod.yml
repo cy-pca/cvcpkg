@@ -70,15 +70,32 @@ jobs:
 
           # ── Pre-deploy disk cleanup ──
           echo "Checking disk space on primary..."
+
+          # Reclaim leaked cvcpkg build trees.  This used to be a one-liner
+          #     find /tmp -maxdepth 1 -name 'cvcpkg-*' -type d -mmin +60 ...
+          # pasted into five places, and it deleted IN-FLIGHT builds: '-maxdepth
+          # 1 -type d -mmin' tests the top directory's OWN mtime, which stops
+          # advancing as soon as a build tree has created build/ and install/,
+          # so a working tree looked stale after an hour no matter how busy it
+          # was.  On 2026-08-04 it deleted /tmp/cvcpkg-haiku-image-b6wd0qrn 90
+          # minutes into a build.  scripts/reap-stale-build-dirs.sh asks for
+          # signs of life instead (heartbeat, owning pid, newest mtime anywhere
+          # in the tree) and is now the single implementation behind every one of
+          # those call sites.
+          #
+          # `sh -s --` streams it from stdin, so the remote host needs nothing
+          # installed and picks up changes on the first deploy that carries
+          # them -- these cleanup steps run BEFORE the hosts are updated, so a
+          # reaper shipped as part of cvcpkg would always be one deploy stale.
+          $SSH "$REMOTE" sudo -n sh -s -- -a 60 -d 1 /tmp \
+            < "${{ github.workspace }}/scripts/reap-stale-build-dirs.sh" || true
+
           $SSH "$REMOTE" bash -s <<'CLEANUP'
           set -euo pipefail
           echo "Before cleanup: $(df -h / | tail -1)"
 
           # Prune unused Docker images, build cache, and stopped containers
           sudo docker system prune -af --volumes 2>/dev/null || true
-
-          # Remove stale cvcpkg build temp dirs
-          sudo find /tmp -maxdepth 1 -name 'cvcpkg-*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true
 
           # Clean old database backups (keep last 5)
           BKDIR="/home/tfx/libcvc-deps/backups"
@@ -394,24 +411,25 @@ jobs:
           SSH="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
           # BSD builders are addressed by LAN IP (no DNS for the *-build
           # hostnames); star-00 shares that LAN.
+          REAPER="${{ github.workspace }}/scripts/reap-stale-build-dirs.sh"
           for host in ${{ vars.BSD_BUILDER_SSH_HOSTS }}; do
             echo "--- $host ---"
+            # Leaked work dirs from failed builds, WITHOUT touching live ones.
+            # Both roots in one pass: /tmp holds the pre-job-root layout and
+            # /tmp/cvcpkg-builder is the daemon's --work-dir, whose direct
+            # children are job dirs.  The script refuses to delete either root
+            # itself -- the daemon's work dir matches 'cvcpkg-*' and is always
+            # older than the threshold, and deleting it left the builder unable
+            # to write its pidfile, so the restart below killed a working daemon
+            # and could not bring it back.  Four builders went down that way the
+            # first time these steps reached a host they could log into.
+            #
+            # Streamed over stdin as POSIX sh: these are FreeBSD/NetBSD hosts
+            # that may not have bash, and this step runs before they are
+            # updated, so anything shipped inside cvcpkg would be a deploy late.
+            $SSH "$host" sh -s -- -a 60 -d 1 /tmp /tmp/cvcpkg-builder < "$REAPER" \
+              || echo "::warning::$host: reap failed"
             $SSH "$host" "
-              # Remove leaked work dirs from failed builds.
-              #
-              # -not -name cvcpkg-builder is load-bearing: that is the daemon's
-              # own --work-dir, it matches 'cvcpkg-*', and it is always older
-              # than 60 minutes. Deleting it left the builder unable to write
-              # its pidfile, so the restart below killed a working daemon and
-              # could not bring it back. Four builders went down that way the
-              # first time these steps reached a host they could actually
-              # log into.
-              find /tmp -maxdepth 1 -name 'cvcpkg-*' -not -name 'cvcpkg-builder' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null
-              # Stale job dirs *inside* the work dir are still fair game.
-              # -mindepth 1 matters: find tests its own starting point, and
-              # 'cvcpkg-builder' matches 'cvcpkg-*', so without it this line
-              # deletes the very directory the line above was written to spare.
-              find /tmp/cvcpkg-builder -mindepth 1 -maxdepth 1 -name 'cvcpkg-*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null
               # Clean pip cache
               pip cache purge 2>/dev/null || true
               # Reclaim cvcpkg client cache if it landed on the root fs
@@ -640,8 +658,14 @@ jobs:
 
       - name: Clean up stale build artifacts
         run: |
-          # Remove leaked work dirs from failed builds
-          find /tmp -maxdepth 1 -name 'cvcpkg-*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true
+          # Leaked work dirs from failed builds, WITHOUT touching live ones.
+          # This step runs on the builder itself, so /tmp/cvcpkg-builder (the
+          # daemon's --work-dir) is swept for stale job dirs too -- and the
+          # script will not delete either root.  The one-liner this replaces
+          # had no `-not -name cvcpkg-builder` guard at all, so it could delete
+          # the running daemon's work dir along with the live build inside it.
+          sh "${{ github.workspace }}/scripts/reap-stale-build-dirs.sh" \
+            -a 60 -d 1 /tmp /tmp/cvcpkg-builder || true
           # Clean pip cache
           pip cache purge 2>/dev/null || true
           echo "$(hostname): disk $(df -h / | awk 'NR==2{print $4}') free"
@@ -803,20 +827,18 @@ jobs:
           " || { echo "::error::CUDA builder ($CUDA) update to $SHA failed"; exit 1; }
 
           echo "--- Cleaning up stale build artifacts ---"
-          # -not -name 'cvcpkg-builder': never delete the work dir itself
-          # (the always-older-than-an-hour trap documented in
-          # vm-provisioning/docs/CVCPKG-BUILDERS.md).
-          # Two layouts: a single-server builder keeps job dirs directly in
-          # /tmp/cvcpkg-*, while the fleet supervisor puts them under
+          # Two layouts, hence two passes: a single-server builder keeps job
+          # dirs directly in /tmp and in its --work-dir, while the fleet
+          # supervisor puts them a level further down, under
           # /var/lib/cvcpkg-builder/<server-slug>/ (so the /tmp sweep alone
-          # silently cleans nothing on a converted host).  In both cases
-          # -mindepth 1 keeps `find` from testing — and deleting — the work
-          # root itself, which is always older than an hour.
-          $SSH "$CUDA" "
-            find /tmp -maxdepth 1 -name 'cvcpkg-*' -not -name 'cvcpkg-builder' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null
-            find /var/lib/cvcpkg-builder -mindepth 2 -maxdepth 2 -name 'cvcpkg-*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null
-            df -h / | awk 'NR==2{print \"disk \" \$4 \" free\"}'
-          " || true
+          # silently cleans nothing on a converted host).  In both cases the
+          # script refuses to test — and so to delete — a work root itself,
+          # which is always older than the threshold (the trap documented in
+          # vm-provisioning/docs/CVCPKG-BUILDERS.md).
+          REAPER="${{ github.workspace }}/scripts/reap-stale-build-dirs.sh"
+          $SSH "$CUDA" sh -s -- -a 60 -d 1 /tmp /tmp/cvcpkg-builder < "$REAPER" || true
+          $SSH "$CUDA" sh -s -- -a 60 -d 2 /var/lib/cvcpkg-builder < "$REAPER" || true
+          $SSH "$CUDA" "df -h / | awk 'NR==2{print \"disk \" \$4 \" free\"}'" || true
 
           echo "--- Restarting the CUDA builder ---"
           $SSH "$CUDA" "

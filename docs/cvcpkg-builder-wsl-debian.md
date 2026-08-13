@@ -474,9 +474,16 @@ own** even after you delete files.
 ### Inside the distro — free space
 
 ```bash
-# cvcpkg build scratch + cache (safe; rebuilt on demand)
+# cvcpkg build scratch, skipping anything a build is still working in.
+# Prefer this over a bare glob: a build tree's top-level mtime stops
+# advancing within seconds of the build starting, so "looks old" and "is
+# idle" are very different things (see scripts/reap-stale-build-dirs.sh).
+sh scripts/reap-stale-build-dirs.sh -a 60 -d 1 /tmp /tmp/cvcpkg-builder
+
+# Unconditional -- only when the builder is stopped, or you will delete a
+# running build out from under itself.
 rm -rf /tmp/cvcpkg-builder/*
-rm -rf ~/.cache/cvcpkg
+rm -rf ~/.cache/cvcpkg  # download cache, content-addressed, always safe
 
 # apt caches
 sudo apt-get clean

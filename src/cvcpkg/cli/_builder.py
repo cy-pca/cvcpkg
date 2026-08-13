@@ -18,6 +18,8 @@ from cvcpkg._archive import safe_tar_extractall
 from cvcpkg.cli import cli
 from cvcpkg.cli._publish import _publish_to_server
 from cvcpkg.cli._server import _api_request
+from cvcpkg.heartbeat import unwatch as heartbeat_unwatch
+from cvcpkg.heartbeat import watch as heartbeat_watch
 from cvcpkg.semver import version_sort_key
 
 
@@ -1561,6 +1563,12 @@ def builder_run(
             job_root = Path(tempfile.mkdtemp(prefix=f"cvcpkg-job-{recipe_name}-", dir=work_root))
             with jobs_lock:
                 active_job_roots.add(job_root)
+            # active_job_roots only protects this tree from *our own* periodic
+            # gc.  The fleet's disk reaper runs from the deploy workflow, in
+            # another process and possibly as another user, and can only judge
+            # by what it can stat.  Publish liveness so it can tell a running
+            # job from one stranded by a SIGKILL. (cvcpkg/heartbeat.py)
+            heartbeat_watch(job_root, label=recipe_name)
             dep_prefix = Path(
                 tempfile.mkdtemp(prefix=f"cvcpkg-prefix-{recipe_name}-", dir=job_root)
             )
@@ -1667,6 +1675,7 @@ def builder_run(
             if job_root is not None:
                 with jobs_lock:
                     active_job_roots.discard(job_root)
+                heartbeat_unwatch(job_root)
                 if job_root.is_dir():
                     shutil.rmtree(job_root, ignore_errors=True)
             # NB: the slot count is released by _run_job_guarded's finally,

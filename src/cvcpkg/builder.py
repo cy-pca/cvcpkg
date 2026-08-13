@@ -29,6 +29,7 @@ from typing import Any
 import yaml
 
 from cvcpkg.errors import CvcpkgError
+from cvcpkg.heartbeat import unwatch, watch, watched
 from cvcpkg.platform import detect_arch, detect_platform, lib_path_var
 
 # ── Errors ──────────────────────────────────────────────────────
@@ -2300,73 +2301,81 @@ def build_recipe(
         work_dir.mkdir(parents=True, exist_ok=True)
     else:
         work_dir = _mkworkdir(f"cvcpkg-{recipe.name}-", work_dir_root)
-    install_dir = work_dir / "install"
-    build_dir = work_dir / "build"
 
-    # Incremental re-runs reuse an already-staged source tree (recorded in a
-    # marker) rather than re-fetching/re-extracting and re-patching — the latter
-    # would fail (extract into an existing dir, patch an already-patched tree).
-    # Vendored/local sources always build in place: fetch_source returns the
-    # repo tree itself, never a copy, so this is a no-op re-fetch for them.
-    source_marker = work_dir / ".cvcpkg-source"
-    source_dir: Path | None = None
-    if incremental and source_marker.is_file():
-        staged = Path(source_marker.read_text(encoding="utf-8").strip())
-        if staged.is_dir():
-            source_dir = staged
-    if source_dir is None:
-        source_dir = fetch_source(recipe, work_dir, platform=platform)
-        if recipe.patches:
-            apply_patches(recipe, source_dir)
-        if incremental:
-            source_marker.write_text(str(source_dir), encoding="utf-8")
+    # Publish liveness into the scratch root so the fleet's disk reaper can
+    # tell an in-flight build from a leaked one.  Without it the tree looks
+    # abandoned within minutes -- the top directory's mtime stops advancing as
+    # soon as build/ and install/ exist -- and a long build gets rm -rf'd out
+    # from under itself.  See cvcpkg/heartbeat.py and
+    # scripts/reap-stale-build-dirs.sh.
+    with watched(work_dir, label=recipe.name):
+        install_dir = work_dir / "install"
+        build_dir = work_dir / "build"
 
-    ctx = BuildContext(
-        recipe=recipe,
-        platform=platform,
-        config=config,
-        link=link,
-        prefix=prefix or install_dir,
-        source_dir=source_dir,
-        build_dir=build_dir,
-        install_dir=install_dir,
-        work_dir=work_dir,
-        keep_build_dir=keep_build_dir,
-        host_platform=host_platform,
-        cross_toolchain_env=cross_toolchain_env or {},
-        build_prefix=build_prefix,
-    )
+        # Incremental re-runs reuse an already-staged source tree (recorded in a
+        # marker) rather than re-fetching/re-extracting and re-patching — the latter
+        # would fail (extract into an existing dir, patch an already-patched tree).
+        # Vendored/local sources always build in place: fetch_source returns the
+        # repo tree itself, never a copy, so this is a no-op re-fetch for them.
+        source_marker = work_dir / ".cvcpkg-source"
+        source_dir: Path | None = None
+        if incremental and source_marker.is_file():
+            staged = Path(source_marker.read_text(encoding="utf-8").strip())
+            if staged.is_dir():
+                source_dir = staged
+        if source_dir is None:
+            source_dir = fetch_source(recipe, work_dir, platform=platform)
+            if recipe.patches:
+                apply_patches(recipe, source_dir)
+            if incremental:
+                source_marker.write_text(str(source_dir), encoding="utf-8")
 
-    run_build(ctx, log_callback=log_callback)
+        ctx = BuildContext(
+            recipe=recipe,
+            platform=platform,
+            config=config,
+            link=link,
+            prefix=prefix or install_dir,
+            source_dir=source_dir,
+            build_dir=build_dir,
+            install_dir=install_dir,
+            work_dir=work_dir,
+            keep_build_dir=keep_build_dir,
+            host_platform=host_platform,
+            cross_toolchain_env=cross_toolchain_env or {},
+            build_prefix=build_prefix,
+        )
 
-    if recipe.test_script:
-        run_test(ctx, log_callback=log_callback)
+        run_build(ctx, log_callback=log_callback)
 
-    # Boot the artifact we just built and assert against it, if the recipe
-    # asked for that.  Runs AFTER the host-side test and BEFORE staging, so a
-    # guest that cannot boot never becomes a bundle.
-    if recipe.vm_test:
-        run_vm_test(ctx, log_callback=log_callback)
+        if recipe.test_script:
+            run_test(ctx, log_callback=log_callback)
 
-    # If the caller supplied an explicit --prefix that differs from the
-    # per-recipe isolated install_dir, mirror install_dir into it so the
-    # user's prefix actually gets populated. Without this, `cvcpkg build
-    # --prefix X` and the source-fallback install path leave X empty.
-    if prefix is not None and prefix != install_dir and install_dir.is_dir():
-        prefix.mkdir(parents=True, exist_ok=True)
-        # Preserve symlinks (don't follow them): install trees contain relative
-        # version symlinks (libfoo.dylib -> libfoo.N.dylib) and occasionally a
-        # dangling one; following them duplicates content and crashes on broken
-        # links. Matches the staging copy above.
-        _merge_tree(install_dir, prefix)
+        # Boot the artifact we just built and assert against it, if the recipe
+        # asked for that.  Runs AFTER the host-side test and BEFORE staging, so a
+        # guest that cannot boot never becomes a bundle.
+        if recipe.vm_test:
+            run_vm_test(ctx, log_callback=log_callback)
 
-    if not keep_build_dir and not incremental:
-        # Clean up build dir but keep install.  Incremental builds deliberately
-        # keep it so the next run recompiles only what changed.
-        if build_dir.is_dir():
-            shutil.rmtree(build_dir, ignore_errors=True)
+        # If the caller supplied an explicit --prefix that differs from the
+        # per-recipe isolated install_dir, mirror install_dir into it so the
+        # user's prefix actually gets populated. Without this, `cvcpkg build
+        # --prefix X` and the source-fallback install path leave X empty.
+        if prefix is not None and prefix != install_dir and install_dir.is_dir():
+            prefix.mkdir(parents=True, exist_ok=True)
+            # Preserve symlinks (don't follow them): install trees contain relative
+            # version symlinks (libfoo.dylib -> libfoo.N.dylib) and occasionally a
+            # dangling one; following them duplicates content and crashes on broken
+            # links. Matches the staging copy above.
+            _merge_tree(install_dir, prefix)
 
-    return ctx
+        if not keep_build_dir and not incremental:
+            # Clean up build dir but keep install.  Incremental builds deliberately
+            # keep it so the next run recompiles only what changed.
+            if build_dir.is_dir():
+                shutil.rmtree(build_dir, ignore_errors=True)
+
+        return ctx
 
 
 def pack_recipe(
@@ -3349,6 +3358,17 @@ def build_all(
 
     if prefix is None:
         prefix = _mkworkdir("cvcpkg-all-", work_dir_root)
+        # A shared prefix we created ourselves is scratch, and it is the
+        # longest-lived tree in the process: `cvcpkg build-all` merges every
+        # component into it over hours.  Its top-level mtime stops advancing
+        # once bin/ lib/ include/ exist, so without a heartbeat the disk reaper
+        # reads it as abandoned and deletes the prefix the build is installing
+        # into.  Released at the single return below.  If build_all raises
+        # instead, the watch outlives the call: harmless, because it is one
+        # entry on a shared daemon thread that drops any root once the
+        # directory is gone, and `cvcpkg build-all` is a one-per-process CLI
+        # entry point rather than something the long-lived builder daemon runs.
+        watch(prefix, label="build-all")
     prefix = prefix.resolve()
 
     # Destination for the build-dependency closure (host tools / toolchains and
@@ -3842,6 +3862,11 @@ def build_all(
     else:
         cache_msg = f" ({cache_hits} cache hits)" if cache_hits else ""
         print(f"\ncvcpkg: all {len(contexts)} components built into {prefix}{cache_msg}")
+
+    # Work has stopped, so stop claiming the prefix is alive.  The final beat
+    # unwatch() emits resets the tree's age to *now*, which is what the reaper
+    # should count from if this process dies before anything cleans up.
+    unwatch(prefix)
 
     # Attach failures to the returned list for callers to inspect.
     contexts.failures = failures
