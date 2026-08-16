@@ -80,7 +80,7 @@ class TestPkgConfigModules:
 class TestCMake:
     def test_reads_project_metadata(self, tmp_path):
         (tmp_path / "CMakeLists.txt").write_text(
-            'project(WidgetLib\n  VERSION 2.4.1\n'
+            "project(WidgetLib\n  VERSION 2.4.1\n"
             '  DESCRIPTION "A widget library"\n'
             '  HOMEPAGE_URL "https://widgets.example"\n  LANGUAGES CXX)\n'
             "find_package(ZLIB REQUIRED)\nfind_package(Boost REQUIRED)\n",
@@ -187,8 +187,7 @@ class TestPython:
     def test_setup_py_is_read_not_executed(self, tmp_path):
         """Running a stranger's setup.py to read its name would be reckless."""
         (tmp_path / "setup.py").write_text(
-            "import os\nos.system('touch pwned')\n"
-            "setup(name='legacy', version='0.1')\n",
+            "import os\nos.system('touch pwned')\n" "setup(name='legacy', version='0.1')\n",
             encoding="utf-8",
         )
         info = parse_python(tmp_path)

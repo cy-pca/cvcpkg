@@ -146,12 +146,16 @@ def parse_cmake(project: Path) -> ProjectInfo:
     # A CMake variable rather than a literal ("project(${FOO})") tells us
     # nothing; better to say so than to write '${FOO}' into the recipe.
     if info.name.startswith("$"):
-        info.warnings.append(f"project() name is a CMake variable ({info.name}); using directory name")
+        info.warnings.append(
+            f"project() name is a CMake variable ({info.name}); using directory name"
+        )
         info.name = ""
     if info.version.startswith("$"):
         info.version = ""
 
-    for dep in re.findall(r"\bfind_package\s*\(\s*([A-Za-z_][A-Za-z0-9_.+-]*)", text, re.IGNORECASE):
+    for dep in re.findall(
+        r"\bfind_package\s*\(\s*([A-Za-z_][A-Za-z0-9_.+-]*)", text, re.IGNORECASE
+    ):
         if dep.lower() not in {"python", "python3", "pythoninterp", "pythonlibs", "threads"}:
             info.deps.append(dep)
     for mod in re.findall(
@@ -281,7 +285,7 @@ def _parse_pyproject(path: Path, info: ProjectInfo) -> bool:
         info.description = str(poetry.get("description", "") or "")
         info.license = str(poetry.get("license", "") or "")
         info.homepage = str(poetry.get("homepage", "") or poetry.get("repository", "") or "")
-        for name in (poetry.get("dependencies") or {}):
+        for name in poetry.get("dependencies") or {}:
             if name.lower() != "python":
                 info.deps.append(name)
         return bool(info.name)
@@ -664,12 +668,8 @@ def render_recipe(
     lines.append("  runtime: []")
 
     if unresolved:
-        lines.append(
-            "  # Detected in the project but not matched to a cvcpkg recipe."
-        )
-        lines.append(
-            "  # Add a recipe for each one you need, then move it up into build:."
-        )
+        lines.append("  # Detected in the project but not matched to a cvcpkg recipe.")
+        lines.append("  # Add a recipe for each one you need, then move it up into build:.")
         lines += [f"  #   - {d}" for d in unresolved]
 
     lines.append("  host_tools:")
@@ -686,9 +686,7 @@ def render_recipe(
         lines.append("    - platform: windows")
         lines.append("      script: build.ps1")
     else:
-        lines.append(
-            f"    # No windows entry: a {system} build needs a POSIX shell. Add a"
-        )
+        lines.append(f"    # No windows entry: a {system} build needs a POSIX shell. Add a")
         lines.append("    # build.ps1 (or an MSYS2 wrapper) and a windows row when ready.")
     lines.append("")
 
