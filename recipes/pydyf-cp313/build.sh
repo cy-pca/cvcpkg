@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# recipes/pydyf-cp313/build.sh — build pydyf 0.11.0 FROM SOURCE (generated).
+# recipes/pydyf-cp313/build.sh — build pydyf 0.12.1 FROM SOURCE (generated).
 #
 # WHY FROM SOURCE: a PyPI wheel is somebody else's compiled artifact, linked
 # against libraries we did not build.  cvcpkg fetches and sha256-verifies the

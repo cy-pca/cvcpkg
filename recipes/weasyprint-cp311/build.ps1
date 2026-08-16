@@ -1,4 +1,4 @@
-# recipes/weasyprint-cp311/build.ps1 — build weasyprint 66.0 FROM SOURCE (generated).
+# recipes/weasyprint-cp311/build.ps1 — build weasyprint 69.0 FROM SOURCE (generated).
 # Windows counterpart of build.sh; same contract (see that file for the why).
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'

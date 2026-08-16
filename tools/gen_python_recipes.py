@@ -665,7 +665,13 @@ SEED_PACKAGES = {
         "check": "import kiwisolver",
     },
     "fonttools": {
-        "version": "4.55.3",
+        # 4.63.0, up from 4.55.3: weasyprint >= 67.0 floors at
+        # fonttools[woff]>=4.59.2, and pinning weasyprint back to dodge that
+        # would have frozen the whole contract-PDF set a year behind.  Nothing
+        # else in the catalog objects — matplotlib asks for >=4.22.0, the
+        # columns are unchanged (cp311/312/313; there is no cp313t either
+        # way), and the licence is still MIT.
+        "version": "4.63.0",
         "license": "MIT",
         "deps": [],
         "files": ["fontTools/", "fonttools-*.dist-info/"],
@@ -751,18 +757,22 @@ SEED_PACKAGES = {
     # cvc-engagement-docs/contract/generate_contract_pdfs.py renders the
     # invoices and the progress report to UT-styled PDFs through WeasyPrint,
     # and NEITHER weasyprint NOR markdown was packaged anywhere — so the client
-    # PDFs could not be regenerated at all.  Everything here is pure Python
-    # with a PyPI sdist, which is why this set is independent of the
-    # git+submodule source type the Sionna track is blocked on.
+    # PDFs could not be regenerated at all.  Every package here has a PyPI
+    # sdist, which is why this set is independent of the git+submodule source
+    # type the Sionna track is blocked on.
     #
-    # WeasyPrint is pinned to 66.0, NOT the current 69.0, deliberately: 67.0
-    # raised its floor to fonttools[woff]>=4.59.2 and the fonttools seed above
-    # is 4.55.3.  Taking 69.0 would force a fonttools bump, and fonttools is
-    # already installed in the shared dbg-deps prefix as a matplotlib
-    # dependency — so the bump would REPLACE a package under a running demo
-    # rather than add one.  66.0 keeps this whole set purely additive.  Moving
-    # to 69.0 + fonttools 4.63.0 is a two-line follow-up, worth doing as its
-    # own change once the demos have shipped.
+    # Pinned to the CURRENT releases (weasyprint 69.0), which required bumping
+    # the fonttools seed to 4.63.0 — see its entry above for why that is safe.
+    #
+    # WeasyPrint is NOT pure Python at runtime.  It dropped cairo in v53 but
+    # kept Pango: weasyprint/text/ffi.py dlopens libgobject-2.0, libpango-1.0,
+    # libpangoft2-1.0, libharfbuzz, libharfbuzz-subset and libfontconfig at
+    # import time.  cvcpkg has recipes for all of them and each declares a
+    # windows platform, but they are NATIVE recipes rather than -cpNNN columns,
+    # so they cannot be named in `deps` here — the prefix simply has to carry
+    # them.  The import check below is what catches their absence, and it is
+    # why this toolchain installs into its own `docs-deps` prefix rather than
+    # into `dbg-deps`, which already has a freetype.dll while VTK links its own.
     "webencodings": {
         # 0.6.1, not the contemporaneous 0.5.1: 0.5.1 is a 2017 legacy setup.py
         # sdist with no pyproject.toml, while 0.6.1 is the same tiny API
@@ -775,28 +785,28 @@ SEED_PACKAGES = {
         "check": "import webencodings",
     },
     "tinycss2": {
-        "version": "1.4.0",
+        "version": "1.5.1",
         "license": "BSD-3-Clause",
         "deps": ["webencodings"],
         "files": ["tinycss2/", "tinycss2-*.dist-info/"],
         "check": "import tinycss2",
     },
     "cssselect2": {
-        "version": "0.8.0",
+        "version": "0.9.0",
         "license": "BSD-3-Clause",
         "deps": ["tinycss2", "webencodings"],
         "files": ["cssselect2/", "cssselect2-*.dist-info/"],
         "check": "import cssselect2",
     },
     "tinyhtml5": {
-        "version": "2.0.0",
+        "version": "2.1.0",
         "license": "MIT",
         "deps": ["webencodings"],
         "files": ["tinyhtml5/", "tinyhtml5-*.dist-info/"],
         "check": "import tinyhtml5",
     },
     "pydyf": {
-        "version": "0.11.0",
+        "version": "0.12.1",
         "license": "BSD-3-Clause",
         "deps": [],
         "files": ["pydyf/", "pydyf-*.dist-info/"],
@@ -806,14 +816,14 @@ SEED_PACKAGES = {
         # Tri-licensed, and PyPI's `license` field is empty while none of its
         # three classifiers are in _spdx's map — so without this override the
         # recipe would be emitted as NOASSERTION.
-        "version": "0.17.2",
+        "version": "0.18.1",
         "license": "GPL-2.0-or-later OR LGPL-2.0-or-later OR MPL-1.1",
         "deps": [],
         "files": ["pyphen/", "pyphen-*.dist-info/"],
         "check": "import pyphen",
     },
     "weasyprint": {
-        "version": "66.0",
+        "version": "69.0",
         "license": "BSD-3-Clause",
         # fonttools carries a [woff] extra (brotli + zopfli, for WOFF2 web
         # fonts).  cvcpkg columns have no extras concept, and the contract CSS
@@ -841,7 +851,7 @@ SEED_PACKAGES = {
         ),
     },
     "markdown": {
-        "version": "3.8.2",
+        "version": "3.10.3",
         "license": "BSD-3-Clause",
         "deps": [],
         "files": ["markdown/", "markdown-*.dist-info/"],

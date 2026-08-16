@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# recipes/tinyhtml5-cp313t/build.sh — build tinyhtml5 2.0.0 FROM SOURCE (generated).
+# recipes/tinyhtml5-cp313t/build.sh — build tinyhtml5 2.1.0 FROM SOURCE (generated).
 #
 # WHY FROM SOURCE: a PyPI wheel is somebody else's compiled artifact, linked
 # against libraries we did not build.  cvcpkg fetches and sha256-verifies the

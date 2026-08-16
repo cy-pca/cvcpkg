@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# recipes/tinycss2-cp311/build.sh — build tinycss2 1.4.0 FROM SOURCE (generated).
+# recipes/tinycss2-cp311/build.sh — build tinycss2 1.5.1 FROM SOURCE (generated).
 #
 # WHY FROM SOURCE: a PyPI wheel is somebody else's compiled artifact, linked
 # against libraries we did not build.  cvcpkg fetches and sha256-verifies the

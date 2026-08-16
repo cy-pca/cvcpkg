@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# recipes/markdown-cp313/build.sh — build markdown 3.8.2 FROM SOURCE (generated).
+# recipes/markdown-cp313/build.sh — build markdown 3.10.3 FROM SOURCE (generated).
 #
 # WHY FROM SOURCE: a PyPI wheel is somebody else's compiled artifact, linked
 # against libraries we did not build.  cvcpkg fetches and sha256-verifies the

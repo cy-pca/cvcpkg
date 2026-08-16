@@ -1,4 +1,4 @@
-# recipes/markdown-cp311/build.ps1 — build markdown 3.8.2 FROM SOURCE (generated).
+# recipes/markdown-cp311/build.ps1 — build markdown 3.10.3 FROM SOURCE (generated).
 # Windows counterpart of build.sh; same contract (see that file for the why).
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'

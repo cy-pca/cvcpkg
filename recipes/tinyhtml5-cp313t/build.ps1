@@ -1,4 +1,4 @@
-# recipes/tinyhtml5-cp313t/build.ps1 — build tinyhtml5 2.0.0 FROM SOURCE (generated).
+# recipes/tinyhtml5-cp313t/build.ps1 — build tinyhtml5 2.1.0 FROM SOURCE (generated).
 # Windows counterpart of build.sh; same contract (see that file for the why).
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'

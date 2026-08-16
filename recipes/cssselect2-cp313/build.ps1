@@ -1,4 +1,4 @@
-# recipes/cssselect2-cp313/build.ps1 — build cssselect2 0.8.0 FROM SOURCE (generated).
+# recipes/cssselect2-cp313/build.ps1 — build cssselect2 0.9.0 FROM SOURCE (generated).
 # Windows counterpart of build.sh; same contract (see that file for the why).
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'

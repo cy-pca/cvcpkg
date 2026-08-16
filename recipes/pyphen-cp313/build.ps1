@@ -1,4 +1,4 @@
-# recipes/pyphen-cp313/build.ps1 — build pyphen 0.17.2 FROM SOURCE (generated).
+# recipes/pyphen-cp313/build.ps1 — build pyphen 0.18.1 FROM SOURCE (generated).
 # Windows counterpart of build.sh; same contract (see that file for the why).
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'

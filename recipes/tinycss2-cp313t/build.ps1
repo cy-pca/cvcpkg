@@ -1,4 +1,4 @@
-# recipes/tinycss2-cp313t/build.ps1 — build tinycss2 1.4.0 FROM SOURCE (generated).
+# recipes/tinycss2-cp313t/build.ps1 — build tinycss2 1.5.1 FROM SOURCE (generated).
 # Windows counterpart of build.sh; same contract (see that file for the why).
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'

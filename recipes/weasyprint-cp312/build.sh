@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# recipes/weasyprint-cp312/build.sh — build weasyprint 66.0 FROM SOURCE (generated).
+# recipes/weasyprint-cp312/build.sh — build weasyprint 69.0 FROM SOURCE (generated).
 #
 # WHY FROM SOURCE: a PyPI wheel is somebody else's compiled artifact, linked
 # against libraries we did not build.  cvcpkg fetches and sha256-verifies the

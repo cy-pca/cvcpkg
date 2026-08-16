@@ -1,4 +1,4 @@
-# recipes/pydyf-cp311/build.ps1 — build pydyf 0.11.0 FROM SOURCE (generated).
+# recipes/pydyf-cp311/build.ps1 — build pydyf 0.12.1 FROM SOURCE (generated).
 # Windows counterpart of build.sh; same contract (see that file for the why).
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'

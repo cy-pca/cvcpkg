@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# recipes/markdown-cp312/build.sh — build markdown 3.10.3 FROM SOURCE (generated).
+# recipes/fonttools-cp313t/build.sh — build fonttools 4.63.0 FROM SOURCE (generated).
 #
 # WHY FROM SOURCE: a PyPI wheel is somebody else's compiled artifact, linked
 # against libraries we did not build.  cvcpkg fetches and sha256-verifies the
@@ -9,7 +9,7 @@
 # METADATA), so a consumer's later `pip install <other>` coexists and pip's
 # resolver sees this package as satisfied.
 #
-# BUILD BACKEND: setuptools-cp312
+# BUILD BACKEND: setuptools-cp313t, wheel-cp313t
 # --no-build-isolation means pip does NOT download the PEP-517 backend into a
 # throwaway venv (that would be both non-hermetic and impossible offline): the
 # backend must ALREADY be importable.  It is declared in recipe.yaml as a
@@ -29,10 +29,10 @@ _CVC_ENV="${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM:-linux}.sh"
 . "${SCRIPT_DIR}/../_common/python-wheel.sh"   # cvc_python_exe, cvc_python_check
 
 # ── 1. Resolve this column's interpreter inside the prefix ──────────────────
-: "${CVC_PYTHON_ABI:=cp312}"
-: "${CVC_PYTHON_INTERPRETER:=python312}"
+: "${CVC_PYTHON_ABI:=cp313t}"
+: "${CVC_PYTHON_INTERPRETER:=python313t}"
 PY_EXE="$(cvc_python_exe)"
-echo "markdown-cp312: building with ${PY_EXE}"
+echo "fonttools-cp313t: building with ${PY_EXE}"
 
 # ── 2. Bridge the build-only backend onto that interpreter's path ───────────
 _D="${CVC_PYTHON_ABI#cp}"; _D="${_D%t}"
@@ -57,8 +57,8 @@ mkdir -p "${WHEELHOUSE}"
 
 # --no-deps means the wheelhouse holds exactly one wheel: ours.
 WHEEL="$(find "${WHEELHOUSE}" -maxdepth 1 -name '*.whl' -print -quit)"
-[ -n "${WHEEL}" ] || { echo "markdown-cp312: no wheel produced under ${WHEELHOUSE}" >&2; exit 1; }
-echo "markdown-cp312: built $(basename "${WHEEL}")"
+[ -n "${WHEEL}" ] || { echo "fonttools-cp313t: no wheel produced under ${WHEELHOUSE}" >&2; exit 1; }
+echo "fonttools-cp313t: built $(basename "${WHEEL}")"
 
 # ── 4. Install it into this recipe's (empty) staging prefix ─────────────────
 # stage_bundle ships the whole CVC_INSTALL_DIR tree, so installing --prefix into
@@ -75,4 +75,4 @@ echo "markdown-cp312: built $(basename "${WHEEL}")"
 # Drop the build-prefix bridge first: the check must exercise the RUNTIME
 # closure, not accidentally import a build-only backend.
 unset PYTHONPATH
-cvc_python_check "import markdown; assert markdown.markdown('*x*') == '<p><em>x</em></p>'"
+cvc_python_check "import fontTools"

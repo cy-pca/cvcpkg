@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# recipes/pyphen-cp312/build.sh — build pyphen 0.17.2 FROM SOURCE (generated).
+# recipes/pyphen-cp312/build.sh — build pyphen 0.18.1 FROM SOURCE (generated).
 #
 # WHY FROM SOURCE: a PyPI wheel is somebody else's compiled artifact, linked
 # against libraries we did not build.  cvcpkg fetches and sha256-verifies the
