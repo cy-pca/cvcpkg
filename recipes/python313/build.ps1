@@ -22,7 +22,12 @@ if ($LASTEXITCODE -ne 0) { throw "PCbuild\build.bat failed ($LASTEXITCODE)" }
 
 # 2. Stage a relocatable layout into the install prefix.
 $py = Join-Path (Get-Location) "PCbuild\amd64\python.exe"
-& $py PC\layout --copy $env:CVC_INSTALL_DIR --include-pip --include-dev --precompile
+# --include-stable stages python3.dll, the limited-API forwarder. Without it the
+# prefix carries only python313.dll and EVERY abi3 extension module fails to
+# import — python3.dll is in its import table and is simply absent. The error
+# names the extension, never the forwarder. See recipes/python312/build.ps1,
+# where this was diagnosed against drjit 1.3.1 on 2026-08-16.
+& $py PC\layout --copy $env:CVC_INSTALL_DIR --include-pip --include-dev --include-stable --precompile
 if ($LASTEXITCODE -ne 0) { throw "PC\layout failed ($LASTEXITCODE)" }
 
 # 3. Smoke check the staged interpreter.

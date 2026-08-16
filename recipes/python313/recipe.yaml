@@ -143,6 +143,25 @@ package:
     - lib/python3.13/
     - lib/pkgconfig/python-3.13*.pc
     - include/python3.13/
+    # Windows layout (PCbuild). CPython on Windows installs a flat tree — the
+    # interpreter, the DLLs and the MSVC runtime at the ROOT, headers directly
+    # under include/ (no python3.13/ level), the stdlib in Lib/, extension
+    # modules in DLLs/ and import libs in libs/. None of the POSIX globs above
+    # match any of it, so without these the windows build packages ZERO files
+    # and `cvcpkg install python313` reports success with 0 components. Same
+    # omission that was fixed in recipes/python312.
+    - python.exe
+    - pythonw.exe
+    - python313.dll
+    # The limited-API forwarder, staged by PC\layout --include-stable. Every
+    # abi3 extension module names python3.dll in its import table, so without
+    # this the prefix cannot load a single stable-ABI wheel.
+    - python3.dll
+    - vcruntime140*.dll
+    - DLLs/
+    - Lib/
+    - libs/
+    - include/
   cmake_packages:
     - { name: Python3, targets: ["Python3::Python", "Python3::Interpreter"] }
 
