@@ -56,15 +56,24 @@ def world(
     recipes_dirs: tuple[str, ...],
     no_default_recipes: bool,
 ) -> None:
-    """Build all recipes needed by a requirements file.
+    """Build every recipe a requirements file names, from source.
 
-    Reads a cvc-requirements.yaml, resolves dependencies between
-    recipes, and builds them all in topological order into the prefix.
+    Reads a requirements YAML, resolves dependencies between recipes, and
+    builds them all in topological order into the prefix.
+
+    \b
+    Legacy.  Requirements files are being retired in favour of the
+    recipe-first workflow: vendor a recipe for your project in ./recipes
+    and let its own depends: block describe the closure.
+      cvcpkg install-deps myapp --prefix ./deps   # prebuilt deps
+      cvcpkg build myapp --prefix ./deps          # build just myapp
+    Use 'build --with-deps' when you specifically want the whole closure
+    compiled from source.
 
     \b
     Examples:
-      cvcpkg world --from cvc-requirements.yaml --prefix ./prefix
-      cvcpkg world --from cvc-requirements.yaml --config debug
+      cvcpkg world --from requirements.yaml --prefix ./prefix
+      cvcpkg world --from requirements.yaml --config debug
     """
     from cvcpkg.builder import (
         BuildContext,

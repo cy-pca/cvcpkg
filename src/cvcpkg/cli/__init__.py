@@ -15,6 +15,7 @@ for maintainability:
 - ``_signing``   — key management, sign, verify-sig
 - ``_cache``     — cache subcommand group
 - ``_doctor``    — environment diagnostics (``cvcpkg doctor``)
+- ``_generate``  — recipe generation from an existing project (``cvcpkg generate``)
 - ``_image``     — installed VM/disk image discovery (``cvcpkg image``)
 - ``_init``      — recipe scaffolding (``cvcpkg init``)
 - ``_server``    — token, user, registration, server, org management
@@ -71,10 +72,117 @@ def _force_utf8_stdio() -> None:
             pass
 
 
+# ── Sectioned help ──────────────────────────────────────────────
+#
+# cvcpkg has ~45 top-level commands.  Click's default help prints them as
+# one flat alphabetical list, which puts `nuke` next to `org` and buries
+# `install` between `info` and `install-deps` — the list is complete but
+# tells a newcomer nothing about which three commands they actually need.
+# Group them by the job they do instead.
+#
+# _SECTIONS is presentation only: a command that is not listed here still
+# appears, under "Other", so adding a command can never make it invisible.
+
+_SECTIONS: list[tuple[str, list[str]]] = [
+    (
+        "Find and install packages",
+        ["search", "info", "install", "install-deps", "list", "upgrade", "download"],
+    ),
+    (
+        "Reproducible prefixes",
+        ["lock", "sync", "verify", "image", "cpkg"],
+    ),
+    (
+        "Recipes and building",
+        [
+            "init",
+            "generate",
+            "recipes",
+            "build",
+            "build-all",
+            "pack",
+            "pack-all",
+            "validate",
+            "world",
+        ],
+    ),
+    (
+        "Remote build fleet",
+        ["builder", "builds"],
+    ),
+    (
+        "Publishing",
+        [
+            "publish",
+            "recipe",
+            "yank",
+            "unyank",
+            "nuke",
+            "rev-bump",
+            "next-revision",
+            "cascade-bump",
+        ],
+    ),
+    (
+        "Signing",
+        ["key", "sign", "verify-sig"],
+    ),
+    (
+        "Catalog and cache",
+        ["catalog", "catalog-generate", "cache", "gc", "clean"],
+    ),
+    (
+        "Server, orgs, and accounts",
+        ["server", "org", "token", "user", "register", "webhook"],
+    ),
+    (
+        "Requirements files (legacy)",
+        ["add", "remove"],
+    ),
+    (
+        "Diagnostics",
+        ["doctor", "telemetry"],
+    ),
+]
+
+
+class _SectionedGroup(click.Group):
+    """A ``click.Group`` whose help lists commands under headings."""
+
+    def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
+        commands: dict[str, click.Command] = {}
+        for name in self.list_commands(ctx):
+            cmd = self.get_command(ctx, name)
+            if cmd is not None and not cmd.hidden:
+                commands[name] = cmd
+
+        def _rows(names: list[str]) -> list[tuple[str, str]]:
+            rows = []
+            for name in names:
+                cmd = commands.pop(name, None)
+                if cmd is None:  # renamed or removed since _SECTIONS was written
+                    continue
+                rows.append((name, cmd.get_short_help_str(limit=68)))
+            return rows
+
+        for title, names in _SECTIONS:
+            rows = _rows(names)
+            if not rows:
+                continue
+            with formatter.section(title):
+                formatter.write_dl(rows)
+
+        # Anything not claimed by a section above -- keeps new commands visible.
+        leftovers = _rows(sorted(commands))
+        if leftovers:
+            with formatter.section("Other"):
+                formatter.write_dl(leftovers)
+
+
 # ── Root group ──────────────────────────────────────────────────
 
 
-@click.group(invoke_without_command=True)
+@click.group(cls=_SectionedGroup, invoke_without_command=True)
 @click.version_option(__version__, prog_name="cvcpkg")
 @click.pass_context
 def cli(ctx: click.Context) -> None:
@@ -85,16 +193,27 @@ def cli(ctx: click.Context) -> None:
     from the cvcpkg catalog, or builds them from source recipes.
 
     \b
-    Quick start (downstream consumer):
-      cvcpkg install --from cvc-requirements.yaml
+    Install prebuilt packages:
+      cvcpkg search hdf5                  # find it
+      cvcpkg install hdf5 --prefix ./deps # install it
       cmake -B build -DCMAKE_PREFIX_PATH=./deps
 
     \b
-    Quick start (recipe maintainer):
-      cvcpkg build-all --prefix ./prefix --recipes-dir recipes
-      cvcpkg validate
+    Build a project from its vendored recipe set.  A project keeps its
+    recipes in ./recipes beside its source; cvcpkg picks that directory
+    up automatically from the project root.
+      cvcpkg init myapp                      # scaffold recipes/myapp
+      cvcpkg install-deps myapp --prefix ./deps   # prebuilt deps
+      cvcpkg build myapp --prefix ./deps          # build just myapp
 
     \b
+    Publish and watch remote builds:
+      cvcpkg pack myapp --prefix ./deps
+      cvcpkg publish dist/myapp-*.tar.gz
+      cvcpkg builds monitor               # live 'top' for the fleet
+
+    \b
+    Docs: https://cvcpkg.org/guide
     © 2026 CyberPC Angel, LLC — released under the MIT License
     """
     _restore_default_sigpipe()
@@ -121,6 +240,7 @@ from cvcpkg.cli import (  # noqa: E402, F401
     _catalog,
     _cpkg,
     _doctor,
+    _generate,
     _image,
     _init,
     _install,
