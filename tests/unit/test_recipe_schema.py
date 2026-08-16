@@ -313,3 +313,98 @@ class TestAbiOnlyWhereItMeansSomething:
             "recipes declare an abi block but ship nothing to link or compile "
             "against:\n  " + "\n  ".join(offenders)
         )
+
+
+class TestGitSource:
+    """`source.type: git` must be expressible in a real recipe, not just in the
+    builder.  The schema already listed `git` in the type enum and carried a
+    `commit` field while builder.py raised "Git source fetching not yet
+    implemented" and SourceSpec parsed neither `commit` nor `submodules` — the
+    same drift in the other direction.
+    """
+
+    def _git(self, **over):
+        src = {
+            "type": "git",
+            "url": "https://github.com/mitsuba-renderer/drjit.git",
+            "commit": "3b3556d875d59eb56bf11bc22a0af784382f058a",
+        }
+        src.update(over)
+        return _recipe(source=src)
+
+    def test_pinned_git_source_is_accepted(self, schema):
+        assert _valid(schema, self._git(submodules="recursive"))
+
+    def test_git_without_a_commit_is_rejected(self, schema):
+        # The acceptance criterion: a tag is mutable, so a git source with no
+        # commit is not reproducible and must not reach a builder.
+        r = _recipe(
+            source={
+                "type": "git",
+                "url": "https://github.com/mitsuba-renderer/drjit.git",
+            }
+        )
+        assert not _valid(schema, r), "schema accepts a git source with no commit pin"
+
+    def test_git_without_a_url_is_rejected(self, schema):
+        r = _recipe(
+            source={
+                "type": "git",
+                "commit": "3b3556d875d59eb56bf11bc22a0af784382f058a",
+            }
+        )
+        assert not _valid(schema, r)
+
+    def test_short_commit_is_rejected(self, schema):
+        assert not _valid(schema, self._git(commit="3b3556d"))
+
+    def test_uppercase_commit_is_rejected(self, schema):
+        assert not _valid(schema, self._git(commit="3B3556D875D59EB56BF11BC22A0AF784382F058A"))
+
+    @pytest.mark.parametrize("mode", ["none", "shallow", "recursive"])
+    def test_submodule_modes(self, schema, mode):
+        assert _valid(schema, self._git(submodules=mode))
+
+    def test_legacy_boolean_submodules_still_accepted(self, schema):
+        # The field shipped as a plain boolean; a recipe using that form must
+        # not start failing validation because the enum was added.
+        assert _valid(schema, self._git(submodules=True))
+
+    def test_unknown_submodule_mode_is_rejected(self, schema):
+        assert not _valid(schema, self._git(submodules="sometimes"))
+
+    def test_submodule_pins_must_be_full_shas(self, schema):
+        ok = self._git(submodule_pins={"ext/drjit-core": "a" * 40})
+        assert _valid(schema, ok)
+        bad = self._git(submodule_pins={"ext/drjit-core": "abc123"})
+        assert not _valid(schema, bad)
+
+    def test_depth_zero_is_allowed(self, schema):
+        # 0 means a full clone, for a submodule whose build reads history.
+        assert _valid(schema, self._git(depth=0))
+        assert not _valid(schema, self._git(depth=-1))
+
+    def test_builder_parses_every_field_the_schema_allows(self, schema):
+        """The drift guard: whatever the schema accepts, SourceSpec must read.
+
+        Without this, `submodule_pins` could validate in a recipe and be
+        silently dropped on the floor by the builder — which is precisely how
+        `platform: any` shipped unusable, only inverted.
+        """
+        from cvcpkg.builder import SourceSpec
+
+        src = {
+            "type": "git",
+            "url": "https://github.com/mitsuba-renderer/mitsuba3.git",
+            "commit": "b" * 40,
+            "submodules": "recursive",
+            "submodule_pins": {"ext/drjit": "c" * 40},
+            "depth": 0,
+        }
+        assert _valid(schema, _recipe(source=src)), "schema rejects the spec under test"
+
+        spec = SourceSpec.from_dict(src)
+        assert spec.commit == "b" * 40
+        assert spec.submodules == "recursive"
+        assert spec.submodule_pins == {"ext/drjit": "c" * 40}
+        assert spec.depth == 0
