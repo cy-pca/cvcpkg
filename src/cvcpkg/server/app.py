@@ -2743,35 +2743,261 @@ def create_app(
         )
 
     # ── Recipe content (read) ──────────────────────────────
+    #
+    # A recipe is its recipe.yaml *plus* the build/test scripts, patches and
+    # media beside it.  These endpoints serve that whole directory, from
+    # either of the two places a recipe can live:
+    #
+    #   1. the pushed bundle in ``recipe_bundles/[org]/<name>.tar.gz`` —
+    #      the only source for a recipe added after release, or one that
+    #      belongs to an org and was never vendored in this repo;
+    #   2. the repo-vendored ``recipes/<name>/`` directory — the fallback,
+    #      and the only source on a server running without a DB.
+    #
+    # Reading only (2) is what made the package page's recipe section useless
+    # for org and late-added packages, so bundle-first is deliberate: a pushed
+    # bundle is by definition the newer, authoritative copy.
+
+    _RECIPE_NAME_RE = _re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+
+    #: Largest single file served inline to the recipe viewer.
+    _RECIPE_INLINE_MAX = 512 * 1024
+
+    async def _recipe_org_visible(org: str, caller: TokenRecord | None) -> bool:
+        """Whether *caller* may see recipes in the *org* namespace."""
+        if not org:
+            return True
+        if not _use_db or _db_orgs is None:
+            return True
+        org_info = await _db_orgs.get(org)
+        if org_info is None or not org_info.is_private:
+            return True
+        if caller is None:
+            return False
+        return caller.role == TokenRole.admin or await _db_orgs.is_member(org, caller.name)
+
+    async def _recipe_files(name: str, org: str) -> dict[str, bytes] | None:
+        """Return ``{path: content}`` for a recipe, or None if there is none.
+
+        Paths are relative to the *recipes root*, i.e. they keep the
+        ``<name>/`` prefix and any ``_common/`` sibling — the same layout
+        ``cvcpkg recipe push`` uploads, so extracting the archive built from
+        this mapping yields a directory cvcpkg can build straight away.
+        """
+        import tarfile as _tf
+
+        # 1. Pushed bundle (authoritative when present).
+        if _use_db and _db_recipes is not None:
+            try:
+                bundle_path = await _db_recipes.get_bundle_path(name, org_slug=org)
+            except Exception:  # pragma: no cover - store/back-end hiccup
+                bundle_path = None
+            if bundle_path and Path(bundle_path).is_file():
+                out: dict[str, bytes] = {}
+                try:
+                    with _tf.open(bundle_path, "r:gz") as tar:
+                        for member in tar.getmembers():
+                            if not member.isfile():
+                                continue
+                            mname = member.name.lstrip("./")
+                            if mname.startswith("/") or ".." in Path(mname).parts:
+                                continue
+                            if member.size > _RECIPE_INLINE_MAX * 40:
+                                continue  # absurd member; skip rather than blow up RAM
+                            fh = tar.extractfile(member)
+                            if fh is not None:
+                                out[mname] = fh.read()
+                except (OSError, _tf.TarError):
+                    out = {}
+                if out:
+                    return out
+
+        # 2. Repo-vendored recipes/<name>/.
+        if org:
+            return None  # org recipes are never vendored in this repo
+        from cvcpkg.builder import RecipeError, find_recipes_dir
+
+        try:
+            recipes_dir = find_recipes_dir().resolve()
+        except RecipeError:
+            return None
+        recipe_dir = (recipes_dir / name).resolve()
+        if not str(recipe_dir).startswith(str(recipes_dir)):
+            return None
+        if not (recipe_dir / "recipe.yaml").is_file():
+            return None
+
+        out = {}
+        for f in sorted(recipe_dir.rglob("*")):
+            if f.is_file() and f.stat().st_size <= _RECIPE_INLINE_MAX * 40:
+                out[f"{name}/{f.relative_to(recipe_dir).as_posix()}"] = f.read_bytes()
+        common = recipes_dir / "_common"
+        if common.is_dir():
+            for f in sorted(common.rglob("*")):
+                if f.is_file() and f.stat().st_size <= _RECIPE_INLINE_MAX * 40:
+                    out[f"_common/{f.relative_to(common).as_posix()}"] = f.read_bytes()
+        return out or None
+
+    async def _load_recipe_or_error(name: str, org: str, caller: TokenRecord | None):
+        """Shared guard: validate, authorize, load.  Returns (files, None) or
+        (None, JSONResponse)."""
+        if not _RECIPE_NAME_RE.match(name):
+            return None, JSONResponse({"error": "invalid recipe name"}, status_code=400)
+        if org and not _RECIPE_NAME_RE.match(org):
+            return None, JSONResponse({"error": "invalid organization"}, status_code=400)
+        if not await _recipe_org_visible(org, caller):
+            # 404 rather than 403 so a private org's recipe names stay secret.
+            return None, JSONResponse({"error": "recipe not found"}, status_code=404)
+        files = await _recipe_files(name, org)
+        if not files:
+            return None, JSONResponse({"error": "recipe not found"}, status_code=404)
+        return files, None
 
     @app.get("/v1/recipe/{name}", tags=["packages"])
     async def get_recipe(
         name: str,
+        org: str = Query("", description="Organization scope (empty = public namespace)"),
         _auth: None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
     ):
         """Return the raw recipe.yaml content for a named recipe."""
-        import re
-
-        from cvcpkg.builder import RecipeError, find_recipes_dir
-
-        # Validate name to prevent path traversal
-        if not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$", name):
-            return JSONResponse({"error": "invalid recipe name"}, status_code=400)
-
-        try:
-            recipes_dir = find_recipes_dir()
-        except RecipeError:
-            return JSONResponse({"error": "recipes not available"}, status_code=404)
-
-        recipe_path = (recipes_dir / name / "recipe.yaml").resolve()
-        # Ensure resolved path is inside recipes_dir
-        if not str(recipe_path).startswith(str(recipes_dir.resolve())):
-            return JSONResponse({"error": "invalid recipe name"}, status_code=400)
-        if not recipe_path.is_file():
+        files, err = await _load_recipe_or_error(name, org, caller)
+        if err is not None:
+            return err
+        body = files.get(f"{name}/recipe.yaml")
+        if body is None:
             return JSONResponse({"error": "recipe not found"}, status_code=404)
+        return PlainTextResponse(body.decode("utf-8", "replace"), media_type="text/yaml")
 
-        content = recipe_path.read_text(encoding="utf-8")
-        return PlainTextResponse(content, media_type="text/yaml")
+    @app.get("/v1/recipe/{name}/files", tags=["packages"])
+    async def get_recipe_files(
+        name: str,
+        org: str = Query(""),
+        _auth: None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
+    ):
+        """List every artifact that belongs to a recipe.
+
+        Powers the package page's recipe section: the yaml, its build/test
+        scripts, patches and any media, each with enough metadata for the
+        page to decide between a code viewer and an inline <img>.
+        """
+        files, err = await _load_recipe_or_error(name, org, caller)
+        if err is not None:
+            return err
+
+        import mimetypes
+
+        entries = []
+        for path in sorted(files):
+            data = files[path]
+            media = mimetypes.guess_type(path)[0] or ""
+            if media.startswith("image/"):
+                kind = "image"
+            elif path.endswith((".yaml", ".yml")):
+                kind = "recipe" if path == f"{name}/recipe.yaml" else "yaml"
+            elif path.endswith((".sh", ".ps1", ".bat", ".cmd", ".py")):
+                kind = "script"
+            elif path.endswith((".patch", ".diff")):
+                kind = "patch"
+            elif b"\0" in data[:8000]:
+                kind = "binary"
+            else:
+                kind = "text"
+            entries.append(
+                {
+                    "path": path,
+                    # Path as it appears inside the recipe dir, for display.
+                    "name": path[len(name) + 1 :] if path.startswith(f"{name}/") else path,
+                    "size": len(data),
+                    "kind": kind,
+                    "media_type": media,
+                    "shared": path.startswith("_common/"),
+                    "too_large": len(data) > _RECIPE_INLINE_MAX,
+                }
+            )
+        return {"name": name, "org": org, "files": entries}
+
+    @app.get("/v1/recipe/{name}/file", tags=["packages"])
+    async def get_recipe_file(
+        name: str,
+        path: str = Query(..., description="Path within the recipe set"),
+        org: str = Query(""),
+        _auth: None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
+    ):
+        """Return the contents of one artifact belonging to a recipe."""
+        files, err = await _load_recipe_or_error(name, org, caller)
+        if err is not None:
+            return err
+        data = files.get(path)
+        if data is None:
+            return JSONResponse({"error": "file not found"}, status_code=404)
+        if len(data) > _RECIPE_INLINE_MAX:
+            return JSONResponse({"error": "file too large to display"}, status_code=413)
+
+        import mimetypes
+
+        media = mimetypes.guess_type(path)[0] or ""
+        if media.startswith("image/"):
+            return Response(content=data, media_type=media)
+        return PlainTextResponse(data.decode("utf-8", "replace"), media_type="text/plain")
+
+    @app.get("/v1/recipe/{name}/archive", tags=["packages"])
+    async def get_recipe_archive(
+        name: str,
+        org: str = Query(""),
+        format: str = Query("tar.gz", pattern="^(tar\\.gz|zip)$"),
+        _auth: None = Depends(optional_reader_auth),
+        caller: TokenRecord | None = Depends(optional_token),
+    ):
+        """Download a recipe and its scripts as one compressed archive.
+
+        Extracting the result into a ``recipes/`` directory produces a
+        well-formed recipe directory: ``<name>/recipe.yaml`` plus its scripts
+        and patches, alongside the shared ``_common/`` helpers the scripts
+        source.  So the archive is directly usable with
+        ``cvcpkg build <name> --recipes-dir <dir>``.
+
+        Unlike ``GET /v1/recipes/{name}`` (publisher-only, serves the stored
+        bundle verbatim) this is readable by anyone who can see the package,
+        which is the point: a package page must be able to offer it.
+        """
+        files, err = await _load_recipe_or_error(name, org, caller)
+        if err is not None:
+            return err
+
+        import io as _io
+        import tarfile as _tf
+
+        buf = _io.BytesIO()
+        if format == "zip":
+            import zipfile as _zf
+
+            with _zf.ZipFile(buf, "w", _zf.ZIP_DEFLATED) as zf:
+                for path in sorted(files):
+                    zf.writestr(path, files[path])
+            media_type, suffix = "application/zip", "zip"
+        else:
+            with _tf.open(fileobj=buf, mode="w:gz") as tar:
+                for path in sorted(files):
+                    data = files[path]
+                    info = _tf.TarInfo(name=path)
+                    info.size = len(data)
+                    info.mode = 0o755 if path.endswith((".sh", ".ps1", ".py")) else 0o644
+                    tar.addfile(info, _io.BytesIO(data))
+            media_type, suffix = "application/gzip", "tar.gz"
+
+        buf.seek(0)
+        label = f"{name}-recipe.{suffix}" if not org else f"{org}-{name}-recipe.{suffix}"
+        return StreamingResponse(
+            buf,
+            media_type=media_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{label}"',
+                "Content-Length": str(buf.getbuffer().nbytes),
+            },
+        )
 
     # ── Packages (read) ─────────────────────────────────────
 
