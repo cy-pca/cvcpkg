@@ -15,7 +15,7 @@ recipe:
   # wasm32-*-* to the pure-C src/wasm backend upstreamed in 3.4.5, and
   # cosmocc emits plain x86-64 SysV so the existing x86 backend applies.
   # There is deliberately NO wasi entry — see the note at the bottom.
-  cvc_revision: 2
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
