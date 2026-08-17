@@ -1506,9 +1506,11 @@ def run_test(
         raise BuildError(f"Test script not found: {test_path}")
 
     env = os.environ.copy()
+    test_build_prefix = ctx.build_prefix or ctx.prefix
     env["CVC_PREFIX"] = ctx.install_dir.as_posix()
     env["CVC_INSTALL_DIR"] = ctx.install_dir.as_posix()
     env["CVC_DEPS_PREFIX"] = ctx.prefix.as_posix()
+    env["CVC_BUILD_PREFIX"] = test_build_prefix.as_posix()
     env["CVC_PLATFORM"] = ctx.platform
 
     # Mark host-delegated Windows cross builds so test scripts can
@@ -1528,10 +1530,26 @@ def run_test(
 
     # Ensure host tools built into the prefix (including cross-toolchain
     # binaries) are on PATH — mirrors _build_env() behaviour.
+    #
+    # The build prefix has to come first, exactly as it does in _build_env().
+    # It was missing here, which meant a HOST TOOL was on PATH while a recipe
+    # built and gone by the time its own test ran — so the test silently fell
+    # through to whatever the system had. pcre2's test invokes a bare
+    # `pkg-config` and got C:\Strawberry\perl\bin\pkg-config (a Perl script)
+    # instead of the pkgconf cvcpkg had just staged, then died inside it:
+    #
+    #     Can't locate Pod/Usage.pm in @INC ... at /c/Strawberry/perl/bin/pkg-config
+    #
+    # A test that passes only because the machine happens to have a tool is
+    # not testing the bundle, so this is worth keeping in lockstep.
     bin_dirs = [
+        (test_build_prefix / "bin").as_posix(),
         (ctx.prefix / "bin").as_posix(),
         (ctx.install_dir / "bin").as_posix(),
     ]
+    # Deduplicate while preserving order: build_prefix and prefix are the same
+    # path when no separation is configured.
+    bin_dirs = list(dict.fromkeys(bin_dirs))
     existing_path = env.get("PATH", "")
     env["PATH"] = os.pathsep.join(bin_dirs + ([existing_path] if existing_path else []))
 
