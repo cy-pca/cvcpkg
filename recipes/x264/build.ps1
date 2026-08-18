@@ -43,7 +43,7 @@ $depsFlag   = if ($msysToolPaths) { "export PATH='${msysToolPaths}:'`$PATH; " } 
 # Honour CVC_LINK in BOTH directions. Static matters for hermeticity: a shared
 # libx264 drags MinGW runtime DLLs into anything that links it, and cvcpkg
 # packages no MinGW runtime, so a shared-only x264 forces hand-copied DLLs into
-# the prefix. Static lets ffmpeg-cli absorb it and ship self-contained.
+# the prefix. Static lets ffmpeg absorb it and ship self-contained.
 $sharedFlag = if ($env:CVC_LINK -eq 'static') {
     '--enable-static --disable-shared'
 } else {

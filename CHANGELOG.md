@@ -34,6 +34,42 @@ Major release: production daemon with database backend, the
 `cvcpkg.org` registry, distributed build infrastructure, and wasi
 support.
 
+### `ffmpeg-cli` folded into `ffmpeg`; two packaging leaks fixed (2026-08-17)
+
+`recipes/ffmpeg-cli` declared `package.files: [bin/]` and shipped FFmpeg's
+entire library, header and pkg-config set — `lib/libav*.a`, `libpostproc.a`,
+`libsw*.a`, `include/libav*/`, and eight `.pc` files — into every prefix it
+was installed to. Two independent causes:
+
+**`package.files` never filtered anything.** It is parsed into the recipe
+object and then used only by the `kind: image` layout check; `pack` copies the
+whole `CVC_INSTALL_DIR` and derives the manifest's `contents.files` from the
+real staged tree. What scopes a package is that each recipe installs into its
+own empty install dir — so a `make install` that lays down more than the recipe
+advertises ships all of it, silently. `docs/recipe-authoring.md` described the
+field as "globs to ship", which is what the recipe author reasonably relied on;
+it now says what actually happens and points at pruning in the build script.
+The field remains declarative — nothing was made to filter, because 747 recipes
+currently declare it as documentation and would start dropping files.
+
+**`Invoke-CvcRewriteInstallPaths` silently no-opped on MSYS-form prefixes.** It
+searched for `CVC_INSTALL_DIR` in backslash and drive-letter form only, so a
+recipe passing `./configure --prefix=/c/Users/...` (the form Git Bash wants)
+got no rewrite at all and shipped `.pc` files still naming its own per-build
+temp directory. It now also recognises the MSYS form, and its match gate is
+case-insensitive to match the case-insensitive rewrite it guards — a gate
+stricter than its own replacement was the same class of silent skip.
+
+`ffmpeg-cli` itself was **removed**. It existed only because `ffmpeg` once
+built `--disable-programs` and shipped no executables; now that `ffmpeg` ships
+`ffmpeg`/`ffprobe` on every platform, the two owned the same `bin/ffmpeg.exe`
+and had to be declared conflicting. Nothing in the tree depended on either, and
+all 19 of `ffmpeg`'s dependencies build on Windows, so the minimal-closure
+variant was not worth keeping in sync — the drift had already produced this
+leak plus a self-contradicting description. Consumers that only shell out to
+the binary now install `ffmpeg` and get a superset. Prefixes populated by the
+old recipe still hold the leaked files and must have them removed by hand.
+
 ### Secrets can live in an env file instead of `argv` (2026-08-12)
 
 `--token` is accepted by 63 options across the CLI, and every one of them

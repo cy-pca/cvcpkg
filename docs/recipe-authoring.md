@@ -89,14 +89,25 @@ build:
       script: build.ps1
 
 package:
-  files:                    # globs (relative to the install prefix) to ship
-    - include/
+  files:                    # DECLARATIVE: what this package is expected to
+    - include/              # contain. NOT a filter — see below.
     - lib/libmylib.*
   cmake_packages:           # optional: CMake targets this component provides
     - { name: mylib, targets: ["mylib::mylib"] }
   pkg_config:               # optional: pkg-config modules shipped
     - mylib
 ```
+
+> **`package.files` does not filter anything.** `cvcpkg pack` copies the
+> *entire* `CVC_INSTALL_DIR` into the bundle and derives the manifest's
+> `contents.files` from the real staged tree, so what your build script
+> installs is exactly what ships — a path you did not declare still goes out,
+> and nothing warns you. What scopes a package is that each recipe installs
+> into its own empty `CVC_INSTALL_DIR`: if `make install` drops more than you
+> want to publish, prune it in the build script. A recipe declaring `bin/` once
+> shipped FFmpeg's entire library, header and pkg-config set into a consumer
+> prefix this way, where it sat for months — the declaration was right, and
+> nothing enforced it.
 
 The authoritative schema is
 [`src/cvcpkg/schemas/recipe-schema.yaml`](../src/cvcpkg/schemas/recipe-schema.yaml)

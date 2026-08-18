@@ -162,6 +162,19 @@ function Invoke-CvcCMakeBuild {
 # on Windows writes paths with forward slashes into generated files,
 # but MSVC/PowerShell APIs return backslash form, so we search for
 # both variants.  Idempotent.
+#
+# A THIRD form is the MSYS one (/c/Users/...).  Recipes that drive an
+# autotools configure through Git Bash may hand it --prefix in MSYS form,
+# and configure bakes --prefix verbatim into every .pc file it installs.
+# Searching only the two Windows forms made this function match nothing and
+# silently no-op on exactly those recipes, shipping .pc files still pointing
+# at the (by then deleted) per-build temp prefix.  The since-removed
+# ffmpeg-cli recipe did this to the dbg-deps prefix, where the .pc files sat
+# broken and unnoticed:
+#     prefix=/c/Users/.../Temp/cvcpkg-ffmpeg-cli-mo8z5hhz/install
+# Recipes should still pass the drive-letter form (see recipes/x264: a
+# native ranlib run by `make install` cannot resolve /c/... at all), but a
+# relocatability helper must not depend on every caller getting that right.
 
 function Invoke-CvcRewriteInstallPaths {
     $root = $env:CVC_INSTALL_DIR
@@ -171,7 +184,10 @@ function Invoke-CvcRewriteInstallPaths {
 
     $rootBack = $root
     $rootFwd  = $root -replace '\\','/'
-    $forms = @($rootBack, $rootFwd) | Sort-Object -Unique
+    # Defined further down this file; by the time a build.ps1 calls us the
+    # whole file has been dot-sourced, so the ordering is fine.
+    $rootMsys = ConvertTo-CvcMsysPath $root
+    $forms = @($rootBack, $rootFwd, $rootMsys) | Sort-Object -Unique
 
     $files = Get-ChildItem -Path $root -Recurse -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Extension -eq '.pc' -or $_.Extension -eq '.cmake' }
@@ -179,9 +195,17 @@ function Invoke-CvcRewriteInstallPaths {
     foreach ($f in $files) {
         $text = Get-Content -Raw -LiteralPath $f.FullName -ErrorAction SilentlyContinue
         if (-not $text) { continue }
+        # Case-INSENSITIVE, to match the -replace below (PowerShell's -replace
+        # is case-insensitive by default). String.Contains is ordinal, so a
+        # case-sensitive gate here would be stricter than the rewrite it
+        # guards and would skip files the rewrite could have fixed — Windows
+        # paths differ in case freely, and the MSYS form lower-cases the drive
+        # letter by construction.
         $needsRewrite = $false
         foreach ($form in $forms) {
-            if ($text.Contains($form)) { $needsRewrite = $true; break }
+            if ($text.IndexOf($form, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                $needsRewrite = $true; break
+            }
         }
         if (-not $needsRewrite) { continue }
 
