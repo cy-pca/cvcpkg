@@ -176,10 +176,18 @@ a.pkg-link:hover { text-decoration: underline; }
   }
 }
 .note-card { border-left: 3px solid #3273dc; padding: 0.75rem 1rem; margin-bottom: 0.75rem; }
-.recipe-viewer { max-height: 500px; overflow-y: auto; }
+.recipe-viewer { max-height: 640px; overflow-y: auto; }
 .recipe-viewer pre { white-space: pre; word-break: normal; overflow-x: auto; }
 .collapsible-header { cursor: pointer; user-select: none; }
 .collapsible-header:hover { color: #3273dc; }
+.recipe-artifact { border-top: 1px solid #2a2a3e; }
+.recipe-artifact:last-child { border-bottom: 1px solid #2a2a3e; }
+.recipe-artifact-head {
+  display: flex; align-items: center; gap: 0.25rem;
+  padding: 0.45rem 0.25rem; cursor: pointer; user-select: none;
+}
+.recipe-artifact-head:hover { background-color: #1a1a2e; }
+.recipe-artifact-body pre { margin: 0 0 0.5rem 0; max-height: 420px; overflow: auto; }
 
 .navbar-dropdown {
   background-color: #1a1a2e !important;
@@ -1122,24 +1130,121 @@ function renderDeps(forward, reverse, meta, recipeNames) {
     }
   }
 
-  // Load recipe YAML viewer
-  if (isMainline) {
-    fetchRecipe();
-  }
+  // Load the recipe and everything that ships with it.
+  //
+  // Deliberately NOT gated on isMainline.  isMainline means "this name is in
+  // the recipe list bundled with the running server", which is false for an
+  // org package and for any recipe pushed after the last release — exactly
+  // the pages whose recipe was invisible before.  The endpoint decides what
+  // the caller may see; the page just asks.
+  loadRecipeArtifacts();
 }
 
-async function fetchRecipe() {
+// Query string carrying the org scope (and any extra params) to the
+// recipe endpoints.  Public packages send nothing, so anonymous visitors
+// keep working unchanged.
+function recipeQuery(extra) {
+  const p = new URLSearchParams(extra || {});
+  if (pkgOrg) p.set('org', pkgOrg);
+  const s = p.toString();
+  return s ? '?' + s : '';
+}
+
+async function loadRecipeArtifacts() {
+  const section = document.getElementById('recipe-section');
+  const list = document.getElementById('recipe-artifacts');
+  if (!section || !list) return;
+
+  let files = [];
   try {
-    const resp = await fetch('/v1/recipe/' + encodeURIComponent(pkgName));
+    const resp = await fetch(
+      '/v1/recipe/' + encodeURIComponent(pkgName) + '/files' + recipeQuery());
     if (!resp.ok) return;
-    const text = await resp.text();
-    const recipeEl = document.getElementById('recipe-content');
-    const recipeSection = document.getElementById('recipe-section');
-    if (recipeEl && recipeSection) {
-      recipeEl.textContent = text;
-      recipeSection.style.display = '';
-    }
-  } catch (_) {}
+    files = (await resp.json()).files || [];
+  } catch (_) { return; }
+  if (files.length === 0) return;
+
+  // recipe.yaml first, then the recipe's own files, then shared helpers.
+  const rank = f => (f.kind === 'recipe' ? 0 : (f.shared ? 2 : 1));
+  files.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+
+  const iconFor = k =>
+    k === 'recipe' ? 'fa-file-code' :
+    k === 'image'  ? 'fa-image' :
+    k === 'patch'  ? 'fa-file-medical' :
+    k === 'script' ? 'fa-terminal' : 'fa-file-alt';
+
+  list.innerHTML = files.map((f, i) =>
+    '<div class="recipe-artifact">' +
+      '<a class="recipe-artifact-head" onclick="toggleArtifact(' + i + ')">' +
+        '<span class="icon is-small"><i id="ra-icon-' + i + '" class="fas fa-chevron-right"></i></span>' +
+        '<span class="icon is-small"><i class="fas ' + iconFor(f.kind) + '"></i></span>' +
+        '<span class="ml-2 has-text-light">' + esc(f.name) + '</span>' +
+        (f.shared
+          ? '<span class="tag is-dark is-rounded is-small ml-2" title="Shared helper sourced by many recipes">shared</span>'
+          : '') +
+        '<span class="has-text-grey ml-2 is-size-7">' + fmtSize(f.size) + '</span>' +
+      '</a>' +
+      '<div id="ra-body-' + i + '" class="recipe-artifact-body" style="display:none"' +
+        ' data-path="' + esc(f.path) + '" data-kind="' + esc(f.kind) + '"' +
+        ' data-large="' + (f.too_large ? '1' : '0') + '" data-loaded="0"></div>' +
+    '</div>'
+  ).join('');
+  section.style.display = '';
+}
+
+// Everything starts folded; a file's bytes are fetched on first expand so a
+// recipe with a dozen scripts costs one request until the user asks.
+async function toggleArtifact(i) {
+  const body = document.getElementById('ra-body-' + i);
+  const icon = document.getElementById('ra-icon-' + i);
+  if (!body) return;
+
+  if (body.style.display !== 'none') {
+    body.style.display = 'none';
+    if (icon) icon.className = 'fas fa-chevron-right';
+    return;
+  }
+  body.style.display = '';
+  if (icon) icon.className = 'fas fa-chevron-down';
+  if (body.dataset.loaded === '1') return;
+  body.dataset.loaded = '1';
+
+  const path = body.dataset.path;
+  const url = '/v1/recipe/' + encodeURIComponent(pkgName) + '/file' +
+              recipeQuery({ path: path });
+
+  if (body.dataset.large === '1') {
+    body.innerHTML = '<p class="has-text-grey p-3 is-size-7">Too large to show inline &mdash; ' +
+      '<a class="has-text-link" href="' + url + '">open it</a> or download the recipe archive.</p>';
+    return;
+  }
+  if (body.dataset.kind === 'image') {
+    body.innerHTML = '<div class="p-3"><img src="' + url + '" alt="' + esc(path) +
+      '" style="max-width:100%;border-radius:6px"></div>';
+    return;
+  }
+  if (body.dataset.kind === 'binary') {
+    body.innerHTML = '<p class="has-text-grey p-3 is-size-7">Binary file &mdash; ' +
+      '<a class="has-text-link" href="' + url + '">download it</a>.</p>';
+    return;
+  }
+
+  try {
+    const resp = await fetch(url);
+    const text = resp.ok ? await resp.text() : 'Could not load this file.';
+    // textContent, not innerHTML: recipe scripts are untrusted content.
+    const pre = document.createElement('pre');
+    pre.className = 'has-background-dark has-text-light p-3';
+    pre.style.borderRadius = '6px';
+    pre.style.overflowX = 'auto';
+    const code = document.createElement('code');
+    code.textContent = text;
+    pre.appendChild(code);
+    body.replaceChildren(pre);
+  } catch (_) {
+    body.innerHTML = '<p class="has-text-grey p-3 is-size-7">Could not load this file.</p>';
+  }
 }
 
 function toggleRecipe() {
@@ -1555,6 +1660,62 @@ def package_detail_html(name: str, *, org: str = "") -> str:
       </div>
     </div>
 
+  </div>
+</section>
+
+<!-- Available builds -->
+<!-- Above Quick Start on purpose: "which platforms is this actually built
+     for?" is the first question a visitor has, and the install commands
+     below are only useful once it is answered. -->
+<section class="section pt-0 has-background-black-bis">
+  <div class="container">
+    <!-- Download Stats Graph -->
+    <div class="box has-background-black-ter mb-5" id="download-stats-section" style="display:none">
+      <h3 class="title is-5 has-text-white">
+        <span class="icon mr-1"><i class="fas fa-chart-area"></i></span> Downloads
+        <span class="tag is-dark is-rounded ml-2" id="download-total">0</span>
+      </h3>
+      <div style="position:relative">
+        <canvas id="download-chart"></canvas>
+      </div>
+    </div>
+
+    <h2 class="title is-4 has-text-white mb-4">
+      <span class="icon mr-1"><i class="fas fa-box"></i></span> Available Builds
+    </h2>
+
+    <div class="table-container" id="builds-table">
+      <table class="table is-fullwidth is-hoverable is-dark is-striped">
+        <thead>
+          <tr>
+            <th class="is-sortable" data-key="platform">Platform <span class="sort-arrow"></span></th>
+            <th class="is-sortable" data-key="arch">Arch <span class="sort-arrow"></span></th>
+            <th class="is-sortable" data-key="version">Version <span class="sort-arrow"></span></th>
+            <th class="is-sortable" data-key="build_type">Config <span class="sort-arrow"></span></th>
+            <th class="is-sortable" data-key="link">Link <span class="sort-arrow"></span></th>
+            <th class="is-sortable" data-key="size_bytes">Size <span class="sort-arrow"></span></th>
+            <th class="is-sortable" data-key="release_tag">Release <span class="sort-arrow"></span></th>
+            <th class="is-sortable" data-key="published_at">Published <span class="sort-arrow"></span></th>
+            <th>DL</th>
+          </tr>
+        </thead>
+        <tbody id="builds-body">
+          <tr>
+            <td colspan="9" class="has-text-centered py-6">
+              <span class="icon is-large has-text-link">
+                <i class="fas fa-spinner fa-spin fa-2x"></i>
+              </span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- Quick Start -->
+<section class="section pt-0 has-background-black-bis">
+  <div class="container">
     <!-- Integration guide -->
     <div class="box has-background-black-ter mt-4">
       <h3 class="title is-5 has-text-white">
@@ -1606,50 +1767,51 @@ tar --zstd -xf &lt;package&gt;.tar.zst -C /opt/cvcpkg</pre>
   </div>
 </section>
 
-<!-- Recipe viewer -->
+<!-- Recipe + its artifacts -->
 <section class="section pt-0 has-background-black-bis" id="recipe-section" style="display:none">
   <div class="container">
     <div class="box has-background-black-ter">
       <h3 class="title is-5 has-text-white collapsible-header" onclick="toggleRecipe()">
         <span class="icon mr-1"><i class="fas fa-file-code"></i></span> Recipe
         <span class="icon is-small ml-2"><i id="recipe-toggle-icon" class="fas fa-chevron-down"></i></span>
-        <a class="button is-small is-link is-outlined ml-3" id="recipe-download-link"
-           href="/v1/recipe/{safe_name}" download="recipe.yaml" title="Download recipe.yaml"
-           onclick="event.stopPropagation()">
-          <span class="icon is-small"><i class="fas fa-download"></i></span>
-          <span>Download</span>
-        </a>
+        <span class="is-pulled-right" onclick="event.stopPropagation()">
+          <a class="button is-small is-link is-outlined" id="recipe-archive-link"
+             href="/v1/recipe/{safe_name}/archive{'?org=' + safe_org if safe_org else ''}"
+             title="Download recipe.yaml and every script it ships with, as a tar.gz">
+            <span class="icon is-small"><i class="fas fa-file-archive"></i></span>
+            <span>tar.gz</span>
+          </a>
+          <a class="button is-small is-link is-outlined ml-1" id="recipe-zip-link"
+             href="/v1/recipe/{safe_name}/archive?format=zip{'&amp;org=' + safe_org if safe_org else ''}"
+             title="Same archive as a zip">
+            <span class="icon is-small"><i class="fas fa-file-archive"></i></span>
+            <span>zip</span>
+          </a>
+        </span>
       </h3>
       <div id="recipe-body" style="display:none" class="recipe-viewer">
-        <pre class="has-background-dark has-text-light p-3" style="border-radius:6px;"><code id="recipe-content"></code></pre>
+        <p class="has-text-grey-lighter is-size-7 mb-3">
+          Extract either archive into a <code>recipes/</code> directory and it is a
+          well-formed recipe directory &mdash;
+          <code>cvcpkg build {safe_name} --recipes-dir &lt;dir&gt;</code> will use it as-is.
+          Click any file to view it.
+        </p>
+        <div id="recipe-artifacts"></div>
       </div>
     </div>
   </div>
 </section>
 
-<!-- Available builds -->
-<section class="section has-background-black-bis">
+<!-- Recent build jobs -->
+<!-- Last on the page: this is fleet activity for maintainers, not something
+     a consumer of the package needs in order to use it. -->
+<section class="section pt-0 has-background-black-bis">
   <div class="container">
-    <!-- Download Stats Graph -->
-    <div class="box has-background-black-ter mb-5" id="download-stats-section" style="display:none">
-      <h3 class="title is-5 has-text-white">
-        <span class="icon mr-1"><i class="fas fa-chart-area"></i></span> Downloads
-        <span class="tag is-dark is-rounded ml-2" id="download-total">0</span>
-      </h3>
-      <div style="position:relative">
-        <canvas id="download-chart"></canvas>
-      </div>
-    </div>
-
-    <h2 class="title is-4 has-text-white mb-4">
-      <span class="icon mr-1"><i class="fas fa-box"></i></span> Available Builds
-    </h2>
-
-    <!-- Build Jobs (shown if authenticated) -->
-    <div class="box has-background-black-ter mb-5" id="build-jobs-section" style="display:none">
+    <div class="box has-background-black-ter" id="build-jobs-section" style="display:none">
       <h3 class="title is-5 has-text-white">
         <span class="icon mr-1"><i class="fas fa-hard-hat"></i></span> Recent Build Jobs
         <a href="/builds" class="is-size-7 has-text-link ml-3">View all &rarr;</a>
+        <a href="/live" class="is-size-7 has-text-link ml-3">Live builds &rarr;</a>
       </h3>
       <div class="table-container">
         <table class="table is-fullwidth is-hoverable is-dark is-striped">
@@ -1670,33 +1832,6 @@ tar --zstd -xf &lt;package&gt;.tar.zst -C /opt/cvcpkg</pre>
           <tbody id="build-jobs-body"></tbody>
         </table>
       </div>
-    </div>
-
-    <div class="table-container" id="builds-table">
-      <table class="table is-fullwidth is-hoverable is-dark is-striped">
-        <thead>
-          <tr>
-            <th class="is-sortable" data-key="platform">Platform <span class="sort-arrow"></span></th>
-            <th class="is-sortable" data-key="arch">Arch <span class="sort-arrow"></span></th>
-            <th class="is-sortable" data-key="version">Version <span class="sort-arrow"></span></th>
-            <th class="is-sortable" data-key="build_type">Config <span class="sort-arrow"></span></th>
-            <th class="is-sortable" data-key="link">Link <span class="sort-arrow"></span></th>
-            <th class="is-sortable" data-key="size_bytes">Size <span class="sort-arrow"></span></th>
-            <th class="is-sortable" data-key="release_tag">Release <span class="sort-arrow"></span></th>
-            <th class="is-sortable" data-key="published_at">Published <span class="sort-arrow"></span></th>
-            <th>DL</th>
-          </tr>
-        </thead>
-        <tbody id="builds-body">
-          <tr>
-            <td colspan="9" class="has-text-centered py-6">
-              <span class="icon is-large has-text-link">
-                <i class="fas fa-spinner fa-spin fa-2x"></i>
-              </span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
     </div>
   </div>
 </section>
@@ -3267,8 +3402,8 @@ def guide_html() -> str:
       <ol class="toc ml-4">
         <li><a href="#install">Installation</a></li>
         <li><a href="#quick-start">Quick Start</a></li>
-        <li><a href="#requirements">Requirements Files</a></li>
-        <li><a href="#commands">CLI Reference</a></li>
+        <li><a href="#requirements">Your Project's Recipe Set</a></li>
+        <li><a href="#commands">CLI Reference &mdash; every command, with examples</a></li>
         <li><a href="#cmake">CMake Integration</a></li>
         <li><a href="#recipes">Creating Recipes</a></li>
         <li><a href="#publishing">Publishing Builds</a></li>
@@ -3336,44 +3471,70 @@ cvcpkg install qt6 --prefix ./deps --config debug --link static</code></pre></di
       </div>
     </div>
 
-    <!-- Requirements Files -->
+    <!-- Recipe-first workflow -->
     <div id="requirements" class="guide-section" style="counter-reset: guide-step;">
       <h2 class="title is-4 has-text-white">
         <span class="icon mr-1"><i class="fas fa-file-alt"></i></span>
-        Requirements Files
+        Your Project's Recipe Set
       </h2>
+      <p class="has-text-grey-lighter mb-4">
+        A project describes its dependencies with a <strong>recipe</strong> that
+        lives beside its source, in a <code>recipes/</code> directory the project
+        vendors and version-controls. cvcpkg picks that directory up
+        automatically when run from the project root &mdash; no flag, no separate
+        manifest to keep in sync with the build.
+      </p>
       <div class="guide-step">
         <p class="has-text-grey-lighter mb-2">
-          Create a <code>cvc-requirements.yaml</code> to declare your
-          dependencies:
+          Already have a project that builds? Generate the recipe from it:
         </p>
-        <div class="guide-code"><pre><code># cvc-requirements.yaml
-components:
-  - name: boost
-    version: "&gt;=1.86"
-  - name: hdf5
-    version: "^1.14"
-  - name: qt6
-    version: "~6.8"
-  - name: vtk
-    version: "^9.5"
+        <div class="guide-code"><pre><code># Detects CMake, autotools, Meson, a plain Makefile, or Python packaging
+cvcpkg generate .
 
-config: release
-link: shared</code></pre></div>
+# Or scaffold a blank one to fill in by hand
+cvcpkg init myapp</code></pre></div>
       </div>
       <div class="guide-step">
         <p class="has-text-grey-lighter mb-2">
-          Install everything from the requirements file:
+          Declare what you depend on in <code>recipes/myapp/recipe.yaml</code>:
         </p>
-        <div class="guide-code"><pre><code>\
-cvcpkg install --from cvc-requirements.yaml --prefix ./deps</code></pre></div>
+        <div class="guide-code"><pre><code>depends:
+  build:
+    - name: boost
+      version: "&gt;=1.86"
+    - name: hdf5
+    - name: qt6
+    - name: vtk
+  host_tools:
+    - cmake
+    - ninja</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          Install that dependency closure as <strong>prebuilt</strong> bundles,
+          then build only your own code against them:
+        </p>
+        <div class="guide-code"><pre><code>cvcpkg install-deps myapp --prefix ./deps
+cvcpkg build myapp --prefix ./deps</code></pre></div>
       </div>
       <div class="guide-step">
         <p class="has-text-grey-lighter mb-2">
           Lock versions for reproducible builds:
         </p>
         <div class="guide-code"><pre><code>cvcpkg lock     # creates cvc-lock.yaml
-cvcpkg sync     # installs exactly what's in the lockfile</code></pre></div>
+cvcpkg sync     # installs exactly what's in the lockfile
+cvcpkg verify   # check the prefix still matches the lockfile</code></pre></div>
+      </div>
+      <div class="box has-background-black-ter mt-4">
+        <p class="has-text-grey-lighter">
+          <span class="icon"><i class="fas fa-info-circle has-text-warning"></i></span>
+          <strong class="has-text-white">Migrating from a requirements file?</strong>
+          <code>cvcpkg install --from &lt;file&gt;</code> and <code>cvcpkg world</code>
+          still read a components list, and keep working through v2.0. New
+          projects should carry a recipe instead: it is the same information in
+          the file that already describes how the project builds, so the two
+          cannot drift apart.
+        </p>
       </div>
     </div>
 
@@ -3383,41 +3544,211 @@ cvcpkg sync     # installs exactly what's in the lockfile</code></pre></div>
         <span class="icon mr-1"><i class="fas fa-terminal"></i></span>
         CLI Reference
       </h2>
+      <p class="has-text-grey-lighter mb-4">
+        Every top-level command, grouped the same way <code>cvcpkg --help</code>
+        groups them. Any command takes <code>--help</code> for its full option
+        list. <code>CVCPKG_SERVER_URL</code> and <code>CVCPKG_TOKEN</code> save
+        repeating <code>--server</code>/<code>--token</code>.
+      </p>
+
+      <h3 class="title is-5 has-text-white mt-5">Find and install packages</h3>
       <div class="table-container">
         <table class="table is-fullwidth is-hoverable is-dark is-striped">
-          <thead>
-            <tr>
-              <th>Command</th>
-              <th>Description</th>
-            </tr>
-          </thead>
+          <thead><tr><th>Command</th><th>What it does</th><th>Example</th></tr></thead>
           <tbody>
-            <tr><td><code>cvcpkg install</code></td>
-                <td>Install packages into a prefix</td></tr>
-            <tr><td><code>cvcpkg list</code></td>
-                <td>List installed packages</td></tr>
-            <tr><td><code>cvcpkg info &lt;name&gt;</code></td>
-                <td>Show package details and dependencies</td></tr>
-            <tr><td><code>cvcpkg add &lt;name&gt;</code></td>
-                <td>Add a component to requirements</td></tr>
-            <tr><td><code>cvcpkg remove &lt;name&gt;</code></td>
-                <td>Remove a component from requirements</td></tr>
-            <tr><td><code>cvcpkg lock</code></td>
-                <td>Lock dependency versions</td></tr>
-            <tr><td><code>cvcpkg sync</code></td>
-                <td>Install from lockfile</td></tr>
-            <tr><td><code>cvcpkg catalog</code></td>
-                <td>Browse or refresh the package catalog</td></tr>
-            <tr><td><code>cvcpkg verify</code></td>
-                <td>Verify integrity of installed packages</td></tr>
-            <tr><td><code>cvcpkg validate</code></td>
-                <td>Validate recipe files</td></tr>
-            <tr><td><code>cvcpkg gc</code></td>
-                <td>Remove unused cached downloads</td></tr>
-            <tr><td><code>cvcpkg publish</code></td>
-                <td>Publish archives to a cvcpkg server</td></tr>
-            <tr><td><code>cvcpkg world</code></td>
-                <td>Show the dependency world set</td></tr>
+            <tr><td><code>search</code></td><td>Search the catalog by name, tag, or description</td>
+                <td><code>cvcpkg search hdf5 --tag io</code></td></tr>
+            <tr><td><code>info</code></td><td>Show a component's versions, platforms, and deps</td>
+                <td><code>cvcpkg info boost</code></td></tr>
+            <tr><td><code>install</code></td><td>Install prebuilt bundles into a prefix</td>
+                <td><code>cvcpkg install boost hdf5 --prefix ./deps</code></td></tr>
+            <tr><td><code>install-deps</code></td><td>Install a recipe's whole dependency closure</td>
+                <td><code>cvcpkg install-deps myapp --prefix ./deps</code></td></tr>
+            <tr><td><code>list</code></td><td>List what is installed, or what is available</td>
+                <td><code>cvcpkg list --prefix ./deps</code></td></tr>
+            <tr><td><code>upgrade</code></td><td>Move installed components to newer catalog versions</td>
+                <td><code>cvcpkg upgrade --prefix ./deps</code></td></tr>
+            <tr><td><code>download</code></td><td>Fetch archives without extracting them</td>
+                <td><code>cvcpkg download qt6 --platform linux --dest ./dl</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="title is-5 has-text-white mt-5">Reproducible prefixes</h3>
+      <div class="table-container">
+        <table class="table is-fullwidth is-hoverable is-dark is-striped">
+          <thead><tr><th>Command</th><th>What it does</th><th>Example</th></tr></thead>
+          <tbody>
+            <tr><td><code>lock</code></td><td>Write/refresh <code>cvc-lock.yaml</code> pinning exact builds</td>
+                <td><code>cvcpkg lock --prefix ./deps</code></td></tr>
+            <tr><td><code>sync</code></td><td>Make the prefix match the lockfile exactly</td>
+                <td><code>cvcpkg sync --prefix ./deps</code></td></tr>
+            <tr><td><code>verify</code></td><td>Check prefix integrity against the lockfile</td>
+                <td><code>cvcpkg verify --prefix ./deps</code></td></tr>
+            <tr><td><code>image</code></td><td>Locate and check VM/disk images in a prefix</td>
+                <td><code>cvcpkg image list --prefix ./deps</code></td></tr>
+            <tr><td><code>cpkg</code></td><td>Interop with a cpkg (getcpkg.net) project</td>
+                <td><code>cvcpkg cpkg import ./cpkg.lua</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="title is-5 has-text-white mt-5">Recipes and building</h3>
+      <div class="table-container">
+        <table class="table is-fullwidth is-hoverable is-dark is-striped">
+          <thead><tr><th>Command</th><th>What it does</th><th>Example</th></tr></thead>
+          <tbody>
+            <tr><td><code>init</code></td><td>Scaffold a blank recipe from a template</td>
+                <td><code>cvcpkg init mylib --build-system meson</code></td></tr>
+            <tr><td><code>generate</code></td><td>Derive a recipe from a project that already builds</td>
+                <td><code>cvcpkg generate ../mylib --dry-run</code></td></tr>
+            <tr><td><code>recipes</code></td><td>List or inspect the recipes cvcpkg can see</td>
+                <td><code>cvcpkg recipes --show grpc</code></td></tr>
+            <tr><td><code>build</code></td><td>Build named recipes from source into a prefix</td>
+                <td><code>cvcpkg build mylib --prefix ./deps</code></td></tr>
+            <tr><td><code>build-all</code></td><td>Build every recipe, in dependency order</td>
+                <td><code>cvcpkg build-all --prefix ./prefix</code></td></tr>
+            <tr><td><code>pack</code></td><td>Build, then archive the result for publishing</td>
+                <td><code>cvcpkg pack mylib --prefix ./deps</code></td></tr>
+            <tr><td><code>pack-all</code></td><td>Build and archive every recipe</td>
+                <td><code>cvcpkg pack-all --prefix ./prefix</code></td></tr>
+            <tr><td><code>validate</code></td><td>Check recipes against the JSON schema and each other</td>
+                <td><code>cvcpkg validate recipes/mylib</code></td></tr>
+            <tr><td><code>world</code></td><td><em>Legacy.</em> Build everything a requirements file names</td>
+                <td><code>cvcpkg world --from requirements.yaml</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="title is-5 has-text-white mt-5">Remote build fleet</h3>
+      <div class="table-container">
+        <table class="table is-fullwidth is-hoverable is-dark is-striped">
+          <thead><tr><th>Command</th><th>What it does</th><th>Example</th></tr></thead>
+          <tbody>
+            <tr><td><code>builds monitor</code></td>
+                <td><strong>Live <code>top</code>-style dashboard</strong> of builders and running jobs</td>
+                <td><code>cvcpkg builds monitor</code></td></tr>
+            <tr><td><code>builds submit</code></td><td>Queue one remote build job</td>
+                <td><code>cvcpkg builds submit zlib --platform linux</code></td></tr>
+            <tr><td><code>builds submit-dag</code></td><td>Queue a whole dependency graph of jobs</td>
+                <td><code>cvcpkg builds submit-dag --platform linux,freebsd gsl</code></td></tr>
+            <tr><td><code>builds list</code></td><td>List build jobs, filtered by state</td>
+                <td><code>cvcpkg builds list --status running</code></td></tr>
+            <tr><td><code>builds log</code></td><td>View or follow a job's build log</td>
+                <td><code>cvcpkg builds log 4821 -f</code></td></tr>
+            <tr><td><code>builds follow-dag</code></td><td>Follow every job in a DAG at once</td>
+                <td><code>cvcpkg builds follow-dag dag-91c2</code></td></tr>
+            <tr><td><code>builds cancel</code> / <code>pause</code> / <code>resume</code></td>
+                <td>Control queued or running jobs (<code>-dag</code> variants act on a whole DAG)</td>
+                <td><code>cvcpkg builds cancel-dag dag-91c2</code></td></tr>
+            <tr><td><code>builder list</code></td><td>List registered builders and their state</td>
+                <td><code>cvcpkg builder list --status online</code></td></tr>
+            <tr><td><code>builder status</code></td><td>Show one builder in detail</td>
+                <td><code>cvcpkg builder status 4</code></td></tr>
+            <tr><td><code>builder logs</code></td><td>Recent build activity, optionally per builder</td>
+                <td><code>cvcpkg builder logs --builder star-00</code></td></tr>
+            <tr><td><code>builder run</code></td><td>Register this machine as a builder and poll for work</td>
+                <td><code>cvcpkg builder run --name star-00 --max-jobs 4</code></td></tr>
+            <tr><td><code>builder fleet</code></td><td>Run one builder against several servers at once</td>
+                <td><code>cvcpkg builder fleet --config /etc/cvcpkg/fleet.yaml</code></td></tr>
+            <tr><td><code>builder gc</code></td><td>Reclaim disk from orphaned build scratch dirs</td>
+                <td><code>cvcpkg builder gc --work-dir /tmp/cvcpkg-builder</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="title is-5 has-text-white mt-5">Publishing</h3>
+      <div class="table-container">
+        <table class="table is-fullwidth is-hoverable is-dark is-striped">
+          <thead><tr><th>Command</th><th>What it does</th><th>Example</th></tr></thead>
+          <tbody>
+            <tr><td><code>publish</code></td><td>Upload bundle archives to a server</td>
+                <td><code>cvcpkg publish dist/mylib-*.tar.zst --org my-team</code></td></tr>
+            <tr><td><code>recipe push</code></td><td>Upload a recipe directory so the server can build it</td>
+                <td><code>cvcpkg recipe push mylib --recipes-dir recipes</code></td></tr>
+            <tr><td><code>recipe pull</code></td><td>Fetch a recipe (and its scripts) back down</td>
+                <td><code>cvcpkg recipe pull mylib --dest ./recipes</code></td></tr>
+            <tr><td><code>yank</code> / <code>unyank</code></td><td>Hide a version from resolution, or restore it</td>
+                <td><code>cvcpkg yank mylib --version 2.1.0</code></td></tr>
+            <tr><td><code>nuke</code></td><td>Permanently delete a yanked bundle (admin)</td>
+                <td><code>cvcpkg nuke mylib --version 2.1.0</code></td></tr>
+            <tr><td><code>rev-bump</code></td><td>Bump <code>cvc_revision</code> for a recipe and its dependents</td>
+                <td><code>cvcpkg rev-bump openssl</code></td></tr>
+            <tr><td><code>next-revision</code></td><td>Print the revision a <code>--bump</code> pack would use</td>
+                <td><code>cvcpkg next-revision zlib</code></td></tr>
+            <tr><td><code>cascade-bump</code></td><td>Published-aware family bump across a recipe tree</td>
+                <td><code>cvcpkg cascade-bump boost</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="title is-5 has-text-white mt-5">Signing</h3>
+      <div class="table-container">
+        <table class="table is-fullwidth is-hoverable is-dark is-striped">
+          <thead><tr><th>Command</th><th>What it does</th><th>Example</th></tr></thead>
+          <tbody>
+            <tr><td><code>key</code></td><td>Create, list, and trust Ed25519 signing keys</td>
+                <td><code>cvcpkg key generate --name release</code></td></tr>
+            <tr><td><code>sign</code></td><td>Sign an archive</td>
+                <td><code>cvcpkg sign dist/mylib-2.1.0.tar.zst --key release</code></td></tr>
+            <tr><td><code>verify-sig</code></td><td>Verify an archive against the trusted keys</td>
+                <td><code>cvcpkg verify-sig dist/mylib-2.1.0.tar.zst</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="title is-5 has-text-white mt-5">Catalog and cache</h3>
+      <div class="table-container">
+        <table class="table is-fullwidth is-hoverable is-dark is-striped">
+          <thead><tr><th>Command</th><th>What it does</th><th>Example</th></tr></thead>
+          <tbody>
+            <tr><td><code>catalog</code></td><td>Browse or refresh the component catalog</td>
+                <td><code>cvcpkg catalog refresh</code></td></tr>
+            <tr><td><code>catalog-generate</code></td><td>Build a unified catalog from per-platform indexes</td>
+                <td><code>cvcpkg catalog-generate --out catalog/latest.yaml</code></td></tr>
+            <tr><td><code>cache</code></td><td>Inspect or clear the local build cache</td>
+                <td><code>cvcpkg cache stats</code></td></tr>
+            <tr><td><code>gc</code></td><td>Prune the download cache</td>
+                <td><code>cvcpkg gc --older-than 30d</code></td></tr>
+            <tr><td><code>clean</code></td><td>Remove leftover build work directories</td>
+                <td><code>cvcpkg clean</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="title is-5 has-text-white mt-5">Server, orgs, and accounts</h3>
+      <div class="table-container">
+        <table class="table is-fullwidth is-hoverable is-dark is-striped">
+          <thead><tr><th>Command</th><th>What it does</th><th>Example</th></tr></thead>
+          <tbody>
+            <tr><td><code>register</code></td><td>Request an API token from a server</td>
+                <td><code>cvcpkg register --server https://cvcpkg.org</code></td></tr>
+            <tr><td><code>token</code></td><td>Create, list, and revoke API tokens</td>
+                <td><code>cvcpkg token list</code></td></tr>
+            <tr><td><code>user</code></td><td>Look up a user profile</td>
+                <td><code>cvcpkg user show alice</code></td></tr>
+            <tr><td><code>org</code></td><td>Manage organizations and their members</td>
+                <td><code>cvcpkg org add-member my-team alice</code></td></tr>
+            <tr><td><code>server</code></td><td>Administer a running server</td>
+                <td><code>cvcpkg server stats</code></td></tr>
+            <tr><td><code>webhook</code></td><td>Manage server webhooks</td>
+                <td><code>cvcpkg webhook add https://ci.example/hook</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="title is-5 has-text-white mt-5">Diagnostics and legacy</h3>
+      <div class="table-container">
+        <table class="table is-fullwidth is-hoverable is-dark is-striped">
+          <thead><tr><th>Command</th><th>What it does</th><th>Example</th></tr></thead>
+          <tbody>
+            <tr><td><code>doctor</code></td><td>Check this machine can build and install packages</td>
+                <td><code>cvcpkg doctor</code></td></tr>
+            <tr><td><code>telemetry</code></td><td>Opt in/out of anonymous environment telemetry</td>
+                <td><code>cvcpkg telemetry status</code></td></tr>
+            <tr><td><code>add</code> / <code>remove</code></td>
+                <td><em>Legacy.</em> Edit a requirements file's component list</td>
+                <td><code>cvcpkg add boost --from requirements.yaml</code></td></tr>
           </tbody>
         </table>
       </div>
