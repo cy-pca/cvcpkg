@@ -250,7 +250,48 @@ jobs:
         working-directory: .
         run: |
           docker compose -f docker-compose.test.yml down -v 2>/dev/null || true
-          docker compose -f docker-compose.test.yml build --no-cache test playwright
+
+          # Retry the image build on buildkit's transient content-store lock.
+          #
+          # The self-hosted runner shares ONE docker daemon (buildx on the
+          # `docker` driver, so one embedded buildkit) between eight Actions
+          # runners and a Kubernetes containerd. When two builds write the same
+          # blob at once, the loser gets
+          #
+          #   failed to open writer: ref moby/1/<id> locked for 11.574479ms
+          #   (since ...): unavailable
+          #
+          # and the whole build dies before a single test runs. It is not a
+          # flake in the "rare" sense: the daemon logged 222 of these in 48
+          # hours, in bursts of 20-38 within the same minute, and it took out
+          # this job twice fourteen hours apart.
+          #
+          # The lock is held for MILLISECONDS and containerd reports it as
+          # gRPC Unavailable -- the code that means "try again". So retry,
+          # rather than pretending the build is deterministic. Anything that is
+          # not this specific contention still fails on the first attempt.
+          # pipefail, because `docker ... | tee` otherwise reports TEE's exit
+          # status and every failed build would look like a success.
+          set -o pipefail
+          build_images() {
+            docker compose -f docker-compose.test.yml build --no-cache test playwright
+          }
+          for attempt in 1 2 3; do
+            if build_images 2>&1 | tee /tmp/build.log; then
+              break
+            fi
+            if ! grep -qE 'locked for .*unavailable|failed to open writer' /tmp/build.log; then
+              echo "::error::image build failed for a reason other than buildkit lock contention"
+              exit 1
+            fi
+            if [[ $attempt -eq 3 ]]; then
+              echo "::error::buildkit lock contention persisted across 3 attempts"
+              exit 1
+            fi
+            echo "::warning::buildkit content-store contention; retrying build (attempt $((attempt+1))/3)"
+            sleep $((attempt * 20))
+          done
+
           docker compose -f docker-compose.test.yml up -d --build postgres backend
           echo "Waiting for backend health..."
           timeout 120 bash -c 'until curl -sf http://127.0.0.1:8421/healthz; do sleep 2; done'
