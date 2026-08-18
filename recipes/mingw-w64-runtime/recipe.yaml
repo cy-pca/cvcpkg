@@ -1,0 +1,61 @@
+schema_version: 1
+recipe:
+  name: mingw-w64-runtime
+  upstream_version: "16.1.0"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://winlibs.com/
+  license: "GPL-3.0-or-later WITH GCC-exception-3.1"
+  tags: [library, runtime, windows]
+  description: >-
+    The redistributable runtime DLLs of cvcpkg's MinGW-w64 GCC toolchain:
+    libwinpthread-1, libgcc_s_seh-1, libstdc++-6, libgomp-1, libquadmath-0,
+    libatomic-1, libssp-0 and libmcfgthread-2.
+
+    Anything cvcpkg builds with mingw-w64-gcc imports these BY NAME — the
+    toolchain bakes the reference in — so a MinGW-built package needs them
+    present at run time. Nothing packaged them, which left two workarounds in
+    the tree, both reaching outside cvcpkg:
+
+      * recipes/nfft3 copies them from a hardcoded C:\msys64\mingw64\bin, so it
+        ships whichever versions that third-party install happens to hold.
+      * ffmpeg-cli could not run from a clean prefix at all, and papering over
+        it with a fully static link silently absorbed MSYS2's zlib instead of
+        cvcpkg's (detectable only from the version string in the binary).
+
+    Declaring this as a runtime dependency replaces both with a pinned,
+    verified artifact. Same source archive and same sha256 as mingw-w64-gcc, so
+    the runtime always matches the compiler that produced the code — which is
+    the part that actually matters, and the part an ambient copy cannot
+    guarantee.
+
+    Split from mingw-w64-gcc on purpose: the compiler is a HOST TOOL that must
+    never enter the runtime prefix (its bin/ shadows MSVC for every later CMake
+    build), while these DLLs must. Same artifact, opposite lifetimes.
+
+source:
+  type: tarball
+  url: https://github.com/brechtsanders/winlibs_mingw/releases/download/16.1.0mcf-14.0.0-ucrt-r1/winlibs-x86_64-mcf-seh-gcc-16.1.0-mingw-w64ucrt-14.0.0-r1.zip
+  sha256: "2ff1522a70adeb4e9bc450e917501da72bf48cb583e47530baa8cd0524fea0fd"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - bin/
+  cmake_packages: []

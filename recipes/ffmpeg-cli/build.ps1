@@ -62,40 +62,24 @@ $depsFlag = if ($msysToolBins) {
 # which reads as a broken toolchain rather than a path-translation mismatch.
 # A drive-letter path with forward slashes is understood by BOTH bash and the
 # native compiler, so point TMPDIR at one inside the build dir.
+# Headers and libs can live in EITHER prefix: link deps (zlib, x264) land in
+# the deps prefix normally but in the BUILD prefix under --with-deps, so search
+# both rather than assuming. MSYS form here — these are consumed by the shell
+# on their way into configure's own compiler invocations.
+$extraCflags = ($toolRoots | ForEach-Object { "-I$(ConvertTo-CvcMsysPath $_)/include" }) -join ' '
+$extraLdflags = ($toolRoots | ForEach-Object {
+    $m = ConvertTo-CvcMsysPath $_; "-L$m/lib -L$m/bin"
+}) -join ' '
+
 $winTmp = ($env:CVC_BUILD_DIR -replace '\\', '/') + '/cfgtmp'
 New-Item -ItemType Directory -Force -Path (Join-Path $env:CVC_BUILD_DIR 'cfgtmp') | Out-Null
 $depsFlag = "export TMPDIR='$winTmp'; " + $depsFlag
 
-# cvcpkg's zlib is built with MSVC and installs MSVC-named artifacts
-# (zlib.lib / zlibstatic.lib). MinGW's `-lz` — which ffmpeg's --enable-zlib
-# emits and which its PNG decoder needs — looks for libz.a / libz.dll.a / z.lib
-# and finds none of them, so configure reports "zlib requested but not found"
-# even though the headers and a perfectly good bin/libz.dll are right there.
-# Synthesise the missing import library from the DLL with dlltool (ships with
-# mingw-w64-gcc) rather than teaching ffmpeg a different library name.
-if ($env:CVC_DEPS_PREFIX) {
-    $zImp = Join-Path $env:CVC_DEPS_PREFIX 'lib\libz.dll.a'
-    $zDll = Join-Path $env:CVC_DEPS_PREFIX 'bin\libz.dll'
-    $dlltool = Join-Path $env:CVC_DEPS_PREFIX 'bin\dlltool.exe'
-    $gendef = Join-Path $env:CVC_DEPS_PREFIX 'bin\gendef.exe'
-    # A too-small .dll.a from an earlier attempt is worse than none: it links
-    # and then fails at symbol resolution. Treat anything implausibly small as
-    # absent. zlib exports ~190 symbols; a real import lib is tens of KB.
-    if ((Test-Path $zImp) -and ((Get-Item $zImp).Length -lt 8192)) { Remove-Item -Force $zImp }
-    if ((-not (Test-Path $zImp)) -and (Test-Path $zDll) -and (Test-Path $dlltool) -and (Test-Path $gendef)) {
-        Write-Host "ffmpeg-cli: generating libz.dll.a from bin/libz.dll (MSVC-named zlib)"
-        # gendef, NOT `dlltool -z`: dlltool builds a .def from OBJECT files and
-        # silently emits a near-empty one when handed a DLL (1.8 KB import lib,
-        # zero usable symbols). gendef reads a PE export table.
-        $def = Join-Path $env:CVC_BUILD_DIR 'libz.def'
-        & $gendef - $zDll 2>$null | Set-Content -Path $def -Encoding ASCII
-        if (Test-Path $def) {
-            & $dlltool -d $def -l $zImp -D 'libz.dll' 2>$null
-        }
-        if (-not (Test-Path $zImp)) { throw "ffmpeg-cli: could not synthesise libz.dll.a from $zDll" }
-        Write-Host "ffmpeg-cli: libz.dll.a is $((Get-Item $zImp).Length) bytes"
-    }
-}
+# zlib's GNU-named aliases (libz.a / libz.dll.a) are produced by the zlib
+# recipe itself now. This recipe used to synthesise an import library here with
+# gendef+dlltool, which worked but put the fix in the wrong place -- every
+# future MinGW consumer would have rediscovered the same "zlib requested but
+# not found" against a zlib that was plainly installed. See recipes/zlib.
 
 # --cross-prefix only when the cross-named binutils exist. cvcpkg's own
 # mingw-w64-gcc is a NATIVE toolchain: cross-named compilers, plain-named
@@ -116,10 +100,44 @@ $crossFlag  = if ($env:CVC_DEPS_PREFIX -and (Test-Path $crossProbe)) {
 #
 # -static-libgcc/-static-libstdc++ are belt and braces for the shared case:
 # even then, do not make the GCC runtime someone else's problem.
+#
+# But deliberately NOT a fully static `-static` link. `-static` makes ld prefer
+# libz.a over libz.dll.a, and cvcpkg's zlib is MSVC-built with no
+# MinGW-linkable static archive (renaming zlibstatic.lib does not work — its
+# objects reference MSVC's /GS symbols; see recipes/zlib). The search therefore
+# fell straight through to C:\msys64\mingw64\lib\libz.a and silently linked an
+# AMBIENT zlib.
+#
+# That artifact looked BETTER than the correct one — no zlib1.dll import at all
+# — and the only evidence was the version string baked into the binary: 1.3.2,
+# where cvcpkg's recipe is 1.3.1. Worth remembering as a detection method.
+#
+# Without -static, ld uses our libz.dll.a and zlib comes from the prefix's own
+# zlib1.dll. libx264 is still absorbed statically (there is a real libx264.a)
+# and the GCC runtime stays in, so the single added runtime dependency is a
+# cvcpkg-built DLL sitting beside the exe.
+# -static-libgcc covers libgcc, but NOT libwinpthread, which x264 pulls in, so
+# the exe imports libwinpthread-1.dll. That used to be fatal — nothing packaged
+# the MinGW runtime, so ffmpeg.exe could not start from a clean prefix.
+#
+# The attempted fix here was to bracket just that library, `-Wl,-Bstatic
+# -lwinpthread -Wl,-Bdynamic`, absorbing pthreads while leaving zlib dynamic.
+# It does not work: --extra-ldexeflags are emitted BEFORE the object files and
+# libraries on the link line, so by the time ld resolves the real -lwinpthread
+# the -Bdynamic is long since back in effect. The import survives.
+#
+# mingw-w64-runtime removes the need. It packages the eight redistributable
+# GCC/threading DLLs from the SAME pinned WinLibs artifact as mingw-w64-gcc, so
+# the runtime always matches the compiler that produced the code, and it is
+# declared in this recipe's depends.runtime. Link plainly and let the package
+# supply the DLLs:
+#   static:  libx264, libgcc
+#   dynamic: zlib1.dll + libwinpthread-1.dll — all cvcpkg-built, beside the exe
+$gccRuntime = "-static-libgcc"
 $linkFlags = if ($env:CVC_LINK -eq 'shared') {
-    '--enable-shared --disable-static --extra-ldexeflags=''-static-libgcc'''
+    "--enable-shared --disable-static --extra-ldexeflags='$gccRuntime'"
 } else {
-    '--disable-shared --enable-static --extra-ldexeflags=''-static -static-libgcc'''
+    "--disable-shared --enable-static --extra-ldexeflags='$gccRuntime'"
 }
 
 # Everything off, then H.264 encode + the demuxers a PNG/image sequence needs
@@ -142,8 +160,8 @@ $depsFlag cd '$msysSource' && \
     --arch=x86_64 \
     $crossFlag--enable-gpl \
     --enable-version3 \
-    --extra-cflags='-I$msysDeps/include' \
-    --extra-ldflags='-L$msysDeps/lib -L$msysDeps/bin' \
+    --extra-cflags='$extraCflags' \
+    --extra-ldflags='$extraLdflags' \
     $linkFlags \
     --disable-doc \
     --disable-debug \
@@ -195,6 +213,20 @@ if ($LASTEXITCODE -ne 0) {
 # encode H.264 into MP4. Prove both rather than trusting configure.
 $ff = Join-Path $env:CVC_INSTALL_DIR 'bin\ffmpeg.exe'
 if (-not (Test-Path $ff)) { throw "ffmpeg-cli: no ffmpeg.exe produced at $ff" }
+
+# These checks RUN the binary, and it links zlib1.dll from the dependency
+# prefix. At this point we are still in the per-recipe install dir — nothing
+# has been merged into the prefix yet — so the DLL is not beside the exe and
+# Windows fails the load. The process then produces no output at all, and the
+# checks below misreport it as "no libx264 encoder" when the encoder is present
+# and the binary simply never started.
+$runPath = ($toolRoots | ForEach-Object { Join-Path $_ 'bin' } | Where-Object { Test-Path $_ }) -join ';'
+if ($runPath) { $env:PATH = "$runPath;$env:PATH" }
+& $ff -hide_banner -version > $null 2>&1
+if ($LASTEXITCODE -ne 0) {
+    throw ("ffmpeg-cli: built ffmpeg.exe cannot start (exit $LASTEXITCODE). " +
+           "A 0xC0000135 here means a runtime DLL is missing from the dependency prefix.")
+}
 $enc = & $ff -hide_banner -encoders 2>&1 | Select-String -Pattern 'libx264'
 if (-not $enc) { throw 'ffmpeg-cli: built ffmpeg.exe has no libx264 encoder' }
 $mux = & $ff -hide_banner -muxers 2>&1 | Select-String -Pattern '\bmp4\b'

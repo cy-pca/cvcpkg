@@ -46,6 +46,11 @@ depends:
   runtime:
     - name: x264
     - name: zlib
+    # ffmpeg.exe is built by mingw-w64-gcc, so it imports libwinpthread-1.dll
+    # and friends BY NAME. Without this it cannot start from a clean prefix,
+    # and the tempting fix (-static) silently absorbs MSYS2's zlib instead of
+    # cvcpkg's -- see the link-flag comment in build.ps1.
+    - name: mingw-w64-runtime
   host_tools:
     - nasm
     # See recipes/x264: FFmpeg's configure is a GNU toolchain build, and the
