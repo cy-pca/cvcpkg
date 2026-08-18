@@ -150,6 +150,10 @@ jobs:
             SKIP_EXISTING=(--no-skip-existing)
           fi
 
+          # Tee the submit output so the follow step can tell "nothing needed
+          # building" apart from "jobs were staged and then went missing".
+          # Without that distinction a run that stages work and observes none
+          # of it reports success -- see the check in the next step.
           cvcpkg builds submit-dag \
             --platform "$(echo '${{ inputs.platforms }}' | tr ',' '\n' | grep -vx macos | paste -sd, || true)" \
             --arch "${{ inputs.arch }}" \
@@ -158,7 +162,14 @@ jobs:
             --dag-id "$DAG_ID" \
             --recipes-dir recipes \
             ${SKIP_EXISTING[@]+"${SKIP_EXISTING[@]}"} \
-            "${RECIPES[@]}"
+            "${RECIPES[@]}" | tee /tmp/submit.log
+
+          # "Staged N job(s) for <tuple>", summed over every tuple. awk, not
+          # `paste -sd+`, so this is a number rather than the string "9+29".
+          STAGED=$(grep -oE '^[[:space:]]*Staged [0-9]+ job' /tmp/submit.log \
+                   | grep -oE '[0-9]+' | awk '{s+=$1} END{print s+0}')
+          echo "staged=${STAGED:-0}" >> "$GITHUB_OUTPUT"
+          echo "submit-dag staged ${STAGED:-0} job(s)"
 
       - name: Follow build output
         # Backstop below the job's 120 min budget: --wait-timeout exits
@@ -175,9 +186,33 @@ jobs:
           # continue on the cluster, so surface it as a warning rather than
           # failing the run.
           set +e
-          cvcpkg builds follow-dag "$DAG_PREFIX" --wait-timeout 5400
-          rc=$?
+          cvcpkg builds follow-dag "$DAG_PREFIX" --wait-timeout 5400 2>&1 | tee /tmp/follow.log
+          rc=${PIPESTATUS[0]}
           set -e
+
+          # A populate run that builds NOTHING must not report success.
+          #
+          # submit-dag names one DAG per platform/arch/config/link -- e.g.
+          # populate-20260816-182051-release-static -- and follow-dag takes the
+          # bare prefix and matches them. When that match comes back empty it
+          # prints
+          #     DAG populate-20260816-182051: 0/0 succeeded, 0 failed
+          # and exits 0, because zero jobs failed. On 2026-08-16 a Windows run
+          # staged 38 jobs, reported exactly that, published nothing, and went
+          # green -- while libcvc's CI stayed red on the very packages the run
+          # was meant to supply. Nothing in the log said anything was wrong.
+          #
+          # Staging zero jobs is a legitimate no-op (everything already
+          # published). Staging jobs and then observing none of them is not.
+          STAGED="${{ steps.submit.outputs.staged }}"
+          if [[ "${STAGED:-0}" -gt 0 ]] && grep -qE 'DAG [^:]+: 0/0 succeeded' /tmp/follow.log; then
+            echo "::error::submit-dag staged ${STAGED} job(s) but follow-dag matched none." \
+                 "Nothing was published and no failure was reported. Check that" \
+                 "follow-dag's prefix matching still agrees with the per-tuple DAG" \
+                 "ids submit-dag creates."
+            exit 1
+          fi
+
           if [[ $rc -eq 75 ]]; then
             echo "::warning::follow-dag timed out; builds continue on the cluster"
             exit 0
