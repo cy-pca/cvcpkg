@@ -698,3 +698,79 @@ class TestBuildLogUI:
         assert "build-jobs-section" in html
         assert "Recent Build Jobs" in html
         assert "loadBuildJobs" in html
+
+
+class TestTestEnvMirrorsBuildEnv:
+    r"""A recipe's test must see the same host tools its build saw.
+
+    run_test() built its PATH from prefix/bin + install_dir/bin while
+    _build_env() used build_prefix/bin + prefix/bin + install_dir/bin, even
+    though run_test's own comment claimed it "mirrors _build_env() behaviour".
+    The build prefix is where host tools live (pkg-config, cmake, ninja), so a
+    tool was on PATH while a recipe compiled and gone by the time its test ran
+    -- and the test then silently used whatever the machine had. pcre2 called a
+    bare `pkg-config`, got C:\Strawberry\perl\bin\pkg-config, and died with
+    "Can't locate Pod/Usage.pm in @INC".
+    """
+
+    def _ctx(self, tmp_path, *, separate_build_prefix):
+        from cvcpkg import builder
+
+        prefix = tmp_path / "prefix"
+        build_prefix = (tmp_path / "prefix.build") if separate_build_prefix else None
+        for d in filter(None, (prefix, build_prefix)):
+            (d / "bin").mkdir(parents=True, exist_ok=True)
+        install_dir = tmp_path / "install"
+        (install_dir / "bin").mkdir(parents=True, exist_ok=True)
+
+        return builder.BuildContext(
+            recipe=None,
+            platform="windows",
+            config="release",
+            link="shared",
+            prefix=prefix,
+            source_dir=tmp_path / "src",
+            build_dir=tmp_path / "build",
+            install_dir=install_dir,
+            work_dir=tmp_path / "work",
+            build_prefix=build_prefix,
+        )
+
+    def _test_path_dirs(self, ctx):
+        """Reproduce run_test's PATH construction without executing a script."""
+        import os
+
+        test_build_prefix = ctx.build_prefix or ctx.prefix
+        bin_dirs = [
+            (test_build_prefix / "bin").as_posix(),
+            (ctx.prefix / "bin").as_posix(),
+            (ctx.install_dir / "bin").as_posix(),
+        ]
+        return list(dict.fromkeys(bin_dirs)), os.pathsep
+
+    def test_build_prefix_bin_comes_first(self, tmp_path):
+        ctx = self._ctx(tmp_path, separate_build_prefix=True)
+        dirs, _ = self._test_path_dirs(ctx)
+        assert dirs[0] == (ctx.build_prefix / "bin").as_posix(), (
+            "host tools must be found before the runtime prefix and before "
+            "anything the system happens to provide"
+        )
+
+    def test_no_duplicate_entries_when_prefixes_coincide(self, tmp_path):
+        ctx = self._ctx(tmp_path, separate_build_prefix=False)
+        dirs, _ = self._test_path_dirs(ctx)
+        assert len(dirs) == len(set(dirs))
+        assert dirs[0] == (ctx.prefix / "bin").as_posix()
+
+    def test_run_test_source_actually_includes_the_build_prefix(self):
+        """Guard the real function, not just a reimplementation of it."""
+        import inspect
+
+        from cvcpkg import builder
+
+        src = inspect.getsource(builder.run_test)
+        assert "CVC_BUILD_PREFIX" in src, "run_test must export CVC_BUILD_PREFIX"
+        assert 'test_build_prefix / "bin"' in src, (
+            "run_test must put the build prefix's bin on PATH -- see "
+            "_build_env(), which it claims to mirror"
+        )

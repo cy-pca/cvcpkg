@@ -180,6 +180,16 @@ $defs:
     type: object
     required: [type]
     additionalProperties: false
+    # A git source without a pinned commit is not a source at all: whatever the
+    # branch happens to point at today is not reproducible tomorrow. Reject it
+    # at validate time rather than at build time on a builder.
+    allOf:
+      - if:
+          properties:
+            type: { const: git }
+          required: [type]
+        then:
+          required: [type, url, commit]
     properties:
       type:
         type: string
@@ -214,9 +224,36 @@ $defs:
       commit:
         type: string
         pattern: "^[0-9a-f]{40}$"
-        description: "Full 40-char SHA for git sources"
+        description: >
+          Full 40-char SHA for git sources.  Required for type=git: a tag is a
+          mutable ref, so it cannot pin a build, and the fetch verifies the
+          checked-out HEAD against this value.
       submodules:
-        type: boolean
+        oneOf:
+          - type: boolean
+          - type: string
+            enum: [none, shallow, recursive]
+        description: >
+          none = no submodules; shallow = top-level submodules only;
+          recursive = follow the nesting.  The legacy boolean form is still
+          accepted, where true means recursive.
+      submodule_pins:
+        type: object
+        additionalProperties:
+          type: string
+          pattern: "^[0-9a-f]{40}$"
+        description: >
+          Optional path -> 40-char SHA map.  The superproject's gitlinks
+          already determine what is checked out, so this does not make the
+          build reproducible; it makes a submodule MOVING show up as a
+          reviewable diff in the recipe instead of arriving silently with a
+          superproject bump.  A mismatch is a hard error.
+      depth:
+        type: integer
+        minimum: 0
+        description: >
+          Submodule clone depth; 0 means full history, for a submodule whose
+          build reads it.  Defaults to 1.
       port:
         type: string
         description: "vcpkg port name"

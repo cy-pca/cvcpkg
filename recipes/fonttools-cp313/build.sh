@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# recipes/fonttools-cp313/build.sh — build fonttools 4.55.3 FROM SOURCE (generated).
+# recipes/fonttools-cp313/build.sh — build fonttools 4.63.0 FROM SOURCE (generated).
 #
 # WHY FROM SOURCE: a PyPI wheel is somebody else's compiled artifact, linked
 # against libraries we did not build.  cvcpkg fetches and sha256-verifies the

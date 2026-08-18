@@ -1,4 +1,4 @@
-# recipes/fonttools-cp312/build.ps1 — build fonttools 4.55.3 FROM SOURCE (generated).
+# recipes/fonttools-cp312/build.ps1 — build fonttools 4.63.0 FROM SOURCE (generated).
 # Windows counterpart of build.sh; same contract (see that file for the why).
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
