@@ -83,3 +83,17 @@ if ($LASTEXITCODE -ne 0) { throw "PCbuild\build.bat failed (exit $LASTEXITCODE)"
     --include-pip `
     --precompile
 if ($LASTEXITCODE -ne 0) { throw "PC\layout failed (exit $LASTEXITCODE)" }
+
+# Windows $ORIGIN analog for C-extension DLL resolution. Since Python 3.8 the
+# loader IGNORES PATH for a .pyd's dependent DLLs — only the module's own dir,
+# system dirs, and dirs registered via os.add_dll_directory() are searched. So a
+# downstream `import numpy` / `import pycvc` cannot find the cvcpkg DLLs
+# (openblas.dll, libcvc.dll, ...) in <prefix>\bin without help. Ship a .pth that
+# registers <prefix>\bin at every interpreter startup (derived from sys.prefix,
+# so the tree stays relocatable). Matches recipes/python312/build.ps1.
+$siteDir = Join-Path $env:CVC_INSTALL_DIR "Lib\site-packages"
+New-Item -ItemType Directory -Force -Path $siteDir | Out-Null
+$pth = @'
+import os, sys; _b = os.path.join(sys.prefix, 'bin'); os.path.isdir(_b) and hasattr(os, 'add_dll_directory') and os.add_dll_directory(_b)
+'@
+Set-Content -Path (Join-Path $siteDir "cvcpkg-dll-directories.pth") -Value $pth -Encoding ASCII

@@ -243,6 +243,60 @@ def extract_bundle(archive: Path, prefix: Path) -> None:
     raise InstallError(f"unsupported archive format: {archive.name}")
 
 
+def _merge_move(src: Path, dst: Path) -> None:
+    """Recursively move the contents of *src* into *dst*, merging directories.
+
+    Colliding files are last-writer-wins (the freshly-installed bundle wins);
+    directories are merged recursively so unrelated distributions sharing a
+    parent (e.g. two packages both under site-packages) don't clobber each other.
+    """
+    import shutil
+
+    for item in src.iterdir():
+        target = dst / item.name
+        if item.is_dir() and not item.is_symlink() and target.is_dir() and not target.is_symlink():
+            _merge_move(item, target)
+            try:
+                item.rmdir()
+            except OSError:
+                pass
+            continue
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target)
+        elif target.exists() or target.is_symlink():
+            target.unlink()
+        shutil.move(str(item), str(target))
+
+
+def _relocate_windows_site_packages(prefix: Path) -> None:
+    """Move noarch python packages into the site dir Windows python.exe searches.
+
+    cvcpkg's noarch (``platform: any``) python bundles are laid out with the Unix
+    convention ``lib/pythonX.Y/site-packages/``, but a python.org-layout Windows
+    interpreter (the ``python311`` package) only searches
+    ``<prefix>/Lib/site-packages``.  Without this, nothing cvcpkg installs is
+    importable on Windows — ``import numpy`` / ``packaging`` fail and setuptools
+    falls back to python's bundled copy with no ``bdist_wheel``.  Merge any
+    ``lib/python*/site-packages`` tree into ``Lib/site-packages``.
+
+    A Windows-native bundle (built by a recipe's ``build.ps1``, which already
+    targets ``Lib/site-packages``) has no Unix site dir, so this is a no-op for
+    it — safe to run after every Windows install.
+    """
+    win_site = prefix / "Lib" / "site-packages"
+    for unix_site in sorted(prefix.glob("lib/python*/site-packages")):
+        if not unix_site.is_dir():
+            continue
+        win_site.mkdir(parents=True, exist_ok=True)
+        _merge_move(unix_site, win_site)
+        # Prune the now-empty Unix site path (…/lib/pythonX.Y[/site-packages]).
+        for d in (unix_site, unix_site.parent):
+            try:
+                d.rmdir()
+            except OSError:
+                break
+
+
 def install_entry(
     entry: CatalogEntry,
     prefix: Path,
@@ -251,6 +305,7 @@ def install_entry(
     verify_signatures: bool = False,
     require_signatures: bool = False,
     keys_dir: Path | None = None,
+    target_platform: str | None = None,
 ) -> Path:
     """Download, verify, and extract one bundle into *prefix*.
 
@@ -286,6 +341,10 @@ def install_entry(
             raise IntegrityError(f"Signature verification failed for {entry.name}: {e}") from e
 
     extract_bundle(archive, prefix)
+    # On Windows, relocate any noarch python package from the Unix site path to
+    # the Lib\site-packages the python.org-layout interpreter actually searches.
+    if target_platform == "windows":
+        _relocate_windows_site_packages(prefix)
     return archive
 
 

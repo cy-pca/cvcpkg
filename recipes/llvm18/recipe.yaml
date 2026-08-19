@@ -102,6 +102,12 @@ package:
     - include/clang/
     - include/clang-c/
     - include/lld/
+    # Windows (globs matching nothing are skipped): DLLs live in bin/ (libclang.dll
+    # is what shiboken's ApiExtractor loads), and the static + import libraries are
+    # lib/*.lib (no "lib" prefix / .so suffix) — the LLVM/Clang component libs that
+    # find_package(Clang)/find_package(LLVM) resolve.
+    - bin/*.dll
+    - lib/*.lib
   cmake_packages:
     - { name: LLVM, targets: ["LLVM"] }
     - { name: Clang, targets: ["clang", "clangTooling"] }

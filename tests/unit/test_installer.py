@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import io
+import sys
 import tarfile
 import zipfile
 
 import pytest
 
 from cvcpkg.errors import InstallError, IntegrityError
-from cvcpkg.installer import _archive_filename, extract_bundle, install_entry
+from cvcpkg.installer import (
+    _archive_filename,
+    _relocate_windows_site_packages,
+    extract_bundle,
+    install_entry,
+)
 from cvcpkg.manifest import CatalogEntry
 
 # ── extract_bundle ──────────────────────────────────────────────
@@ -266,3 +272,46 @@ class TestRequireSignatures:
         # verify-if-present: an unsigned entry is accepted and extracted.
         install_entry(self._entry(signature=""), prefix, tmp_path, verify_signatures=True)
         assert (prefix / "lib" / "libz.so").exists()
+
+
+# ── Windows site-packages relocation ────────────────────────────
+
+
+# These tests distinguish `Lib/site-packages` from `lib/python*/site-packages`,
+# which only differ on a case-sensitive filesystem. macOS and Windows default to
+# case-insensitive (Lib == lib), so the fixtures collide there. The remap code
+# path is Windows-only anyway; exercise it on the case-sensitive CI (Linux).
+@pytest.mark.skipif(
+    sys.platform in ("darwin", "win32"),
+    reason="Lib and lib collide on case-insensitive filesystems",
+)
+class TestRelocateWindowsSitePackages:
+    def test_relocates_unix_site_to_windows_site(self, tmp_path):
+        prefix = tmp_path / "prefix"
+        unix = prefix / "lib" / "python3.11" / "site-packages" / "numpy"
+        unix.mkdir(parents=True)
+        (unix / "__init__.py").write_text("x")
+        _relocate_windows_site_packages(prefix)
+        # Moved to the Windows site dir python.exe searches; Unix path pruned.
+        assert (prefix / "Lib" / "site-packages" / "numpy" / "__init__.py").exists()
+        assert not (prefix / "lib" / "python3.11" / "site-packages").exists()
+
+    def test_merges_without_clobbering_siblings(self, tmp_path):
+        prefix = tmp_path / "prefix"
+        # An existing Windows-site package (e.g. python311's bundled pip).
+        existing = prefix / "Lib" / "site-packages" / "pip"
+        existing.mkdir(parents=True)
+        (existing / "keep.py").write_text("keep")
+        # A freshly-installed noarch package in the Unix site path.
+        fresh = prefix / "lib" / "python3.11" / "site-packages" / "cython"
+        fresh.mkdir(parents=True)
+        (fresh / "__init__.py").write_text("cy")
+        _relocate_windows_site_packages(prefix)
+        assert (prefix / "Lib" / "site-packages" / "pip" / "keep.py").exists()  # untouched
+        assert (prefix / "Lib" / "site-packages" / "cython" / "__init__.py").exists()
+
+    def test_noop_when_no_unix_site(self, tmp_path):
+        prefix = tmp_path / "prefix"
+        (prefix / "Lib" / "site-packages" / "shiboken6").mkdir(parents=True)
+        _relocate_windows_site_packages(prefix)  # no lib/python*/site-packages → no-op
+        assert (prefix / "Lib" / "site-packages" / "shiboken6").exists()

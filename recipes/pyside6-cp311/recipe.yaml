@@ -90,6 +90,8 @@ build:
       script: build.sh
       env:
         CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
@@ -105,6 +107,14 @@ package:
     - include/PySide6*/
     # Typesystem XML shipped for downstream binding generation.
     - share/PySide6/
+    # Windows layout (globs matching nothing are skipped): DLLs in bin/, import
+    # libs in lib/, the importable package under Lib/site-packages/.
+    - bin/pyside6*.dll
+    # Defensive: the runtime support DLL may land in lib/ rather than bin/ —
+    # harmless if empty (see shiboken6-cp311).
+    - lib/pyside6*.dll
+    - lib/pyside6*.lib
+    - Lib/site-packages/PySide6/
   cmake_packages:
     - { name: PySide6, targets: ["PySide6::pyside6"] }
 

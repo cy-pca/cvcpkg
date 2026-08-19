@@ -185,9 +185,24 @@ jobs:
           mkdir -p "${{ github.workspace }}/dist"
 
           if [ -n "${{ inputs.recipes }}" ]; then
-            # Targeted build: just the named recipes, no sharding. Their deps
-            # resolve from the server; the Publish step below ships dist/.
+            # Targeted build: the named recipes, in the order given. For each:
+            # install its published dep closure into the shared prefix, build+pack
+            # against it, then publish immediately — so a later recipe in the same
+            # run that depends on an earlier one (a chain, e.g. shiboken6 ->
+            # pyside6) can install-deps it from the server.
             for r in ${{ inputs.recipes }}; do
+              echo "::group::install-deps $r (windows)"
+              # cvcpkg pack does NOT resolve deps — it builds against whatever is
+              # already in --prefix (single-prefix model). Install the recipe's
+              # build+runtime closure first, or its build.ps1 can't find python/
+              # qt/llvm/etc. Host tools (cmake/ninja) come from the CI image.
+              cvcpkg install-deps "recipes/$r" \
+                --platform windows \
+                --config "${{ inputs.config }}" \
+                --link "${{ inputs.link }}" \
+                --prefix "${{ github.workspace }}/prefix" \
+                --recipes-dir recipes
+              echo "::endgroup::"
               echo "::group::pack $r (windows)"
               cvcpkg pack "recipes/$r" \
                 --platform windows \
@@ -198,6 +213,15 @@ jobs:
                 --recipes-dir recipes \
                 --server "$CVCPKG_SERVER_URL" \
                 --token "$CVCPKG_TOKEN"
+              echo "::endgroup::"
+              echo "::group::publish $r (windows)"
+              cvcpkg publish --all \
+                --server "$CVCPKG_SERVER_URL" \
+                --token "$CVCPKG_TOKEN" \
+                --output-dir "${{ github.workspace }}/dist" \
+                --platform windows \
+                --config "${{ inputs.config }}" \
+                --link "${{ inputs.link }}" || true
               echo "::endgroup::"
             done
           else

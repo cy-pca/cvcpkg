@@ -89,6 +89,8 @@ build:
       script: build.sh
       env:
         CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
@@ -104,6 +106,16 @@ package:
     - lib/cmake/Shiboken6*/
     # Public headers for anything that links libshiboken directly.
     - include/shiboken6*/
+    # Windows layout (globs matching nothing are skipped): DLLs land in bin/,
+    # import libs in lib/, and the importable package under Lib/site-packages/.
+    - bin/shiboken6*.dll
+    # Defensive: the runtime DLL may install to lib/ instead of bin/ (the
+    # Shiboken6 config advertises SHIBOKEN_SHARED_LIBRARY_DIR=<prefix>/lib) —
+    # harmless if empty, but avoids silently shipping without the DLL.
+    - lib/shiboken6*.dll
+    - lib/shiboken6*.lib
+    - Lib/site-packages/shiboken6/
+    - Lib/site-packages/shiboken6_generator/
   cmake_packages:
     - {
         name: Shiboken6,

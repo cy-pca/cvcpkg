@@ -483,6 +483,7 @@ def install(
                 cache_dir,
                 verify_signatures=verify_signatures or require_signatures,
                 require_signatures=require_signatures,
+                target_platform=plat,
             )
         except (InstallError, IntegrityError) as exc:
             if not fallback_to_source:
@@ -1137,7 +1138,7 @@ def sync(prefix: str) -> None:
                 if fallback not in cat_entry.mirror_urls:
                     cat_entry.mirror_urls.append(fallback)
         click.echo(f"cvcpkg: syncing {entry.name} {entry.version} ...")
-        install_entry(cat_entry, prefix_path, cache_dir)
+        install_entry(cat_entry, prefix_path, cache_dir, target_platform=lock.platform)
         installed += 1
 
     if installed:
@@ -1302,6 +1303,7 @@ def upgrade(
             cache_dir,
             verify_signatures=verify_signatures or require_signatures,
             require_signatures=require_signatures,
+            target_platform=lock.platform,
         )
         by_lock_name[b.name] = LockEntry(
             name=new.name,

@@ -33,7 +33,13 @@ recipe:
   # Development.Embed) expects. Also scoped the libffi edge off windows (CPython
   # bundles its own, and libffi has no windows package) and added the windows
   # files to package.files.
-  cvc_revision: 7
+  # Bumped 7 -> 8: ship Lib/site-packages/cvcpkg-dll-directories.pth on Windows.
+  # Since Python 3.8 the loader ignores PATH for a .pyd's dependent DLLs (only the
+  # module dir, system dirs, and os.add_dll_directory() dirs are searched), so a
+  # downstream `import numpy` / `import pycvc` could not find the cvcpkg DLLs in
+  # <prefix>\bin. The .pth registers <prefix>\bin at interpreter startup — the
+  # Windows $ORIGIN analog, matching python312. Additive; unix builds unaffected.
+  cvc_revision: 8
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
