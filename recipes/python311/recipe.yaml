@@ -25,7 +25,15 @@ recipe:
   # and patches the wasm table at runtime — so it needs an Emscripten JS engine
   # and cannot work on wasip1. CPython upstream ships its own WASI build without
   # _ctypes for the same reason. wasm keeps the dependency.
-  cvc_revision: 6
+  # Bumped 6 -> 7: make the WINDOWS build actually work (it had never published).
+  # build.ps1 used a non-existent `--experimental-instdir` build.bat flag and then
+  # copied an `inst/` dir that was never produced. Rewrote it to build via
+  # PCbuild\build.bat -e (CPython fetches its own externals) + PC\layout
+  # --include-dev, which lays out the python.org-style tree find_package(Python3
+  # Development.Embed) expects. Also scoped the libffi edge off windows (CPython
+  # bundles its own, and libffi has no windows package) and added the windows
+  # files to package.files.
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -56,7 +64,7 @@ depends:
       version: "^1.3"
     - name: libffi
       version: "^3.0"
-      platforms: [linux, macos, windows, freebsd, openbsd, netbsd, wasm, cosmo]
+      platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, cosmo]  # not windows: CPython fetches its own libffi via get_externals
     - name: bzip2
       version: "^1.0"
     - name: xz
@@ -76,7 +84,7 @@ depends:
       version: "^1.3"
     - name: libffi
       version: "^3.0"
-      platforms: [linux, macos, windows, freebsd, openbsd, netbsd, wasm, cosmo]
+      platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, cosmo]  # not windows: CPython fetches its own libffi via get_externals
     - name: bzip2
       version: "^1.0"
     - name: xz
@@ -138,6 +146,8 @@ build:
 
 package:
   files:
+    # Unix layout (bin/lib/include). Globs that match nothing on a given platform
+    # are skipped, so the Windows entries below coexist in this one list.
     - bin/python3.11*
     - bin/pip3.11*
     - bin/idle3.11*
@@ -146,6 +156,18 @@ package:
     - lib/python3.11/
     - lib/pkgconfig/python-3.11*.pc
     - include/python3.11/
+    # Windows layout (python.org / PC\layout tree at the prefix root): python.exe,
+    # python3XX.dll, the stdlib (Lib/), extension modules (DLLs/), embed headers +
+    # import lib (include/, libs/python3XX.lib), and pip (Scripts/). This is exactly
+    # what find_package(Python3 Development.Embed) locates via Python3_ROOT_DIR.
+    - python*.exe
+    - python3*.dll
+    - vcruntime*.dll
+    - Lib/
+    - DLLs/
+    - include/
+    - libs/
+    - Scripts/
   cmake_packages:
     - { name: Python3, targets: ["Python3::Python", "Python3::Interpreter"] }
 
