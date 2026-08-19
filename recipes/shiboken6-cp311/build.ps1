@@ -56,20 +56,30 @@ if (-not (Test-Path "$($env:LLVM_INSTALL_DIR)\lib\cmake\clang\ClangConfig.cmake"
 $depsPrefix = if ($env:CVC_DEPS_PREFIX) { $env:CVC_DEPS_PREFIX } else { $env:CVC_INSTALL_DIR }
 $env:PATH = "$($env:LLVM_INSTALL_DIR)\bin;$depsPrefix\bin;$env:CVC_INSTALL_DIR\bin;$env:PATH"
 
-# Windows site-packages is <prefix>\Lib\site-packages (not lib/python3.11/...).
-$sitePackages = "$env:CVC_INSTALL_DIR\Lib\site-packages"
-
-$prefixPath = if ($env:CMAKE_PREFIX_PATH) { $env:CMAKE_PREFIX_PATH } else { $depsPrefix }
+# Pass FORWARD-SLASH paths to cmake. shiboken bakes -DPYTHON_SITE_PACKAGES into
+# Shiboken6Config's SHIBOKEN_PYTHON_MODULE_DIR verbatim; a backslash there
+# (\Lib -> \L, \Users -> \U) is an invalid CMake string escape that breaks a
+# downstream find_package(Shiboken6) (pyside6). cmake accepts forward slashes on
+# Windows, and Invoke-CvcRewriteInstallPaths only fixes the install-dir PREFIX,
+# not backslashes in the remainder — so normalize every path we hand cmake.
+$prefixPathRaw = if ($env:CMAKE_PREFIX_PATH) { $env:CMAKE_PREFIX_PATH } else { $depsPrefix }
+$installFwd = $env:CVC_INSTALL_DIR -replace '\\', '/'
+$srcFwd = "$env:CVC_SOURCE_DIR\sources\shiboken6" -replace '\\', '/'
+$buildFwd = $env:CVC_BUILD_DIR -replace '\\', '/'
+$sitePackages = "$installFwd/Lib/site-packages"
+$prefixPathFwd = $prefixPathRaw -replace '\\', '/'
+$pyExeFwd = $pyExe -replace '\\', '/'
+$pyRootFwd = $pyRoot -replace '\\', '/'
 
 $allArgs = @(
     '-G', 'Ninja',
-    '-S', "$env:CVC_SOURCE_DIR\sources\shiboken6",
-    '-B', $env:CVC_BUILD_DIR,
-    "-DCMAKE_INSTALL_PREFIX=$env:CVC_INSTALL_DIR",
+    '-S', $srcFwd,
+    '-B', $buildFwd,
+    "-DCMAKE_INSTALL_PREFIX=$installFwd",
     "-DCMAKE_BUILD_TYPE=$cmakeBuildType",
-    "-DCMAKE_PREFIX_PATH=$prefixPath",
-    "-DPython_EXECUTABLE=$pyExe",
-    "-DPython_ROOT_DIR=$pyRoot",
+    "-DCMAKE_PREFIX_PATH=$prefixPathFwd",
+    "-DPython_EXECUTABLE=$pyExeFwd",
+    "-DPython_ROOT_DIR=$pyRootFwd",
     '-DPython_FIND_STRATEGY=LOCATION',
     "-DPYTHON_SITE_PACKAGES=$sitePackages",
     '-DSHIBOKEN_BUILD_TOOLS=ON',
@@ -93,3 +103,12 @@ if ($LASTEXITCODE -ne 0) { throw "shiboken6: cmake build failed" }
 
 & cmake --install $env:CVC_BUILD_DIR
 if ($LASTEXITCODE -ne 0) { throw "shiboken6: cmake install failed" }
+
+# Make the installed .cmake/.pc files relocatable. cmake bakes the absolute
+# build-time CVC_INSTALL_DIR (with backslashes) into Shiboken6Config.abi3.cmake's
+# SHIBOKEN_PYTHON_MODULE_DIR; a downstream find_package(Shiboken6) (pyside6) then
+# fails to even parse it ("Invalid character escape '\U'" from C:\Users\...) and
+# can't locate the module. Rewrite absolute paths to a ${CMAKE_CURRENT_LIST_DIR}
+# anchor — the raw-cmake analog of what Invoke-CvcCMakeBuild does automatically,
+# and the Windows counterpart of build.sh's cvc_rewrite_install_paths.
+Invoke-CvcRewriteInstallPaths
