@@ -1446,6 +1446,52 @@ flowchart LR
     APE --> B[BSDs]
 ```
 
+**Scoping update (2026-08-19).** Nothing above has been started — no
+`cvpkg`/`cvcpkg-sc` recipe exists yet. A closer look changes what "the
+blocker" actually is:
+
+- **A client-only APE (install/build/validate/activate/doctor, no
+  `cvcpkg server`) has a genuinely clean import boundary**, confirmed by
+  grep rather than just the PyInstaller spec's `excludes=`:
+  `fastapi`/`uvicorn`/`starlette`/`sqlalchemy`/`pydantic`/`greenlet`/
+  `aiosqlite`/`asyncpg`/`alembic` appear at module level only under
+  `src/cvcpkg/server/` and `src/cvcpkg/migrations/`, reachable only via
+  the separate `cvcpkg-server` entry point. Client code (`cli/_server.py`,
+  `cli/_builder.py`) only talks to a *remote* server over `httpx`. So
+  `pydantic_core` is not a blocker for a client-only cut — only for the
+  **combined** client+server APE this section originally scoped.
+- **But `cryptography` is a client-side blocker of the same class.** Used
+  for Ed25519 signing (`signing.py`), it has two native surfaces (a Rust
+  core plus a CFFI `_openssl.so`), and every `cryptography-cp31x` recipe
+  fetches a prebuilt manylinux wheel — no cosmo build has ever been
+  attempted, for this or for `PyYAML`'s `_yaml` accelerator.
+- **Structural constraint not previously written down here:** cosmo APEs
+  are fully static. `dlopen()` inside the embedded interpreter delegates
+  to the *host's* native dlopen, so a standard pip wheel's `.so` (built
+  against the manylinux/CPython ABI) cannot load into a cosmo-static
+  CPython at all. Every C extension has to be compiled **in** via
+  `Modules/Setup` at cosmo-CPython build time — the PyOxidizer model, not
+  the wheel model. The only known prior art (ahgamut/superconfigure) did
+  this against a **patched CPython 3.11.4**, not stock 3.12/3.13.
+- **The existing `recipes/python312/build-cosmo.sh` is unproven, not
+  working.** It runs `./configure --host=x86_64-cosmo --disable-shared`
+  and stops at an unlinked static archive — no `apelink` step, no zipos
+  stdlib packaging, no launcher `main()` anywhere in-repo.
+  `docs/roadmap/static-single-binary-python.md` says outright that no
+  built cosmo-python artifact or CI evidence exists.
+
+  Smallest real path, in order: (1) finish the apelink/zipos step and
+  prove cosmo-CPython boots at all — currently zero evidence it does;
+  (2) skip PyYAML's `_yaml` C accelerator, force the pure-Python
+  `SafeLoader` path; (3) promote `jsonschema` (needed by `cvcpkg
+  validate`) from a build-time `pip install` step to a real dependency —
+  trivial once the interpreter boots; (4) the long pole — either a
+  from-scratch cosmo build of `cryptography`'s Rust+CFFI extensions, or
+  scope Ed25519 signing out of the APE variant. A client-only `cvpkg` is
+  therefore a plausible interim milestone before the combined
+  client+builder+server APE this section targets, gated on the same
+  step (1) plus steps (2)–(4) minus the pydantic_core/greenlet work.
+
 #### Single-binary server — every workflow from one file
 
 The payoff of the single entry point (Phase 15) plus a full-featured
