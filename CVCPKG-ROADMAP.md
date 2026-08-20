@@ -91,6 +91,73 @@ PyPI publish so the first public release carries the correct ownership.
       files** — CI workflows, composite actions, `landing.py`/`app.py`,
       `config.py`, schemas, docs).  Coordinate with the deferred repo rename
       so downstream `uses:` directives update in one pass.
+
+  > **Scoped 2026-08-19 — org exists, transfer is clean, one real risk
+  > class identified.**
+  >
+  > - **Org confirmed: `cy-pca`** ("CyberPC Angel, LLC"), created
+  >   2026-07-19. `transfix` already holds `admin` role on it. `cy-pca/cvcpkg`
+  >   does not exist yet (no naming collision). `transfix` also holds
+  >   `admin` on the source repo — nothing blocks initiating the transfer.
+  > - **No PyPI publish has ever happened** (`pypi.org/pypi/cvcpkg/json` →
+  >   404, zero releases) and **no PyPI trusted publisher is registered
+  >   yet** — so there is no stale trusted-publisher binding to break. This
+  >   is the ideal window: `cvcpkg-publish.yml` already targets the `pypi`/
+  >   `testpypi` GitHub Environments (both currently have zero secrets
+  >   configured, so nothing environment-scoped is at risk), and the
+  >   trusted publisher only needs to be registered once, against the
+  >   final `cy-pca/cvcpkg` identity.
+  > - **Repo-level secrets and variables transfer automatically**
+  >   (`CVCPKG_ADMIN_TOKEN`, `CVCPKG_PROD_ADMIN_TOKEN`, `CVCPKG_PUBLISHER_TOKEN`,
+  >   `CVCPKG_PUBLISH_TOKEN`, and the BSD/CUDA/Windows builder variables) —
+  >   GitHub docs confirm repo secrets move with a transfer; only
+  >   *environment*-scoped and *org*-scoped secrets don't, and neither
+  >   applies here (`transfix` is a personal account, not an org, so there
+  >   are no org secrets in play at all).
+  > - **No GitHub Pages, no webhooks, no branch protection rules** configured
+  >   on the repo today — one less category to reconcile post-transfer.
+  >   (`pyproject.toml`'s `documentation = ".../transfix.github.io/..."` URL
+  >   is already stale/aspirational — Pages was never actually turned on.)
+  > - **The one real risk: GitHub Actions `uses:` references do not follow
+  >   repository-transfer redirects**, unlike git clone/fetch and most REST
+  >   API calls, which do redirect. This is a documented GitHub limitation,
+  >   not a guess — see the community reports at
+  >   [github/community#43111](https://github.com/orgs/community/discussions/43111)
+  >   and [github/community#123611](https://github.com/orgs/community/discussions/123611).
+  >   GitHub also **permanently retires the old `owner/repo` combination**
+  >   on transfer once usage crosses a threshold (>100 clones or >100 Action
+  >   uses in the preceding week) — `transfix/libcvc-deps` almost certainly
+  >   clears that bar, so the old name is not coming back either way.
+  > - **Grounding the blast radius:** the `~53 occurrences / ~20 files`
+  >   estimate above bundles in-repo references. Externally, grepping the
+  >   whole local checkout tree first looked like ~25 affected repos, but
+  >   nearly all of those were **local worktrees of the same underlying
+  >   repos**, not distinct GitHub repos. Deduplicated, exactly **four**
+  >   downstream GitHub repos hardcode
+  >   `uses: transfix/libcvc-deps/.github/actions/cvcpkg-install@master`
+  >   and need a one-line fix: `transfix/libcvc`, `transfix/TexMol`,
+  >   `transfix/volrover`, `CVC-Lab/GRL-SNAM`. `transfix` has push access
+  >   to all four (`CVC-Lab/GRL-SNAM` is `write`, not `admin` — sufficient
+  >   to open a PR/push a branch). `src/cvcpkg/server/assets/install.sh`
+  >   and `install.ps1` (added in #514, `REPO="transfix/libcvc-deps"`) join
+  >   the in-repo list once that PR lands.
+  > - **Self-hosted runners are registered at the repo level** (`cvcpkg-prod`,
+  >   `lat`, `rebota`, `star-00`, `star-01`, `stablefarm-win11`) — GitHub's
+  >   docs don't explicitly confirm these survive a transfer; treat this as
+  >   **unverified** and check `gh api repos/cy-pca/cvcpkg/actions/runners`
+  >   immediately after transfer, before relying on any builder-dependent
+  >   CI.
+  > - **Sequencing to avoid a CI-breaking gap:** because `uses:` refs don't
+  >   redirect, do the transfer, then immediately (same sitting) push the
+  >   four downstream one-line fixes — a `uses:` PR opened *before* the
+  >   transfer would itself be broken, since `cy-pca/cvcpkg` doesn't exist
+  >   until the transfer happens. The gap is only as long as it takes to
+  >   push four branches/PRs; nothing is lost if a CI run happens to land
+  >   in that window — it just needs a re-run once the fix merges.
+  > - **Net assessment:** safe to execute, not a "nothing breaks" scenario
+  >   as literally stated — one well-understood, small, mechanical class of
+  >   breakage (four external `uses:` refs) that's fixable in the same
+  >   sitting as the transfer.
 - [x] **License stays MIT.**  MIT is the right fit and matches peer package
       managers (vcpkg, Conan, pip are all MIT).  Retained deliberately; the
       one alternative worth a conversation is Apache-2.0 (or a dual
