@@ -172,7 +172,7 @@ jobs:
           echo "Built packages (shard ${{ matrix.shard }}):"
           ls -lh "${{ github.workspace }}/dist/" 2>/dev/null || echo "(no packages)"
           echo ""
-          COUNT=$(ls "${{ github.workspace }}/dist/"*.tar.zst 2>/dev/null | wc -l || echo 0)
+          COUNT=$(ls "${{ github.workspace }}/dist/"*.tar.gz 2>/dev/null | wc -l || echo 0)
           echo "Count: $COUNT archives"
 
       - name: Publish to cvcpkg.org
@@ -184,8 +184,12 @@ jobs:
           set -euo pipefail
           DIST="${{ github.workspace }}/dist"
 
-          # Count archives
-          ARCHIVES=($(ls "$DIST"/*.tar.zst 2>/dev/null || true))
+          # cvcpkg pack writes a .tar.gz on macOS (create_archive: unix -> .tar.gz,
+          # windows -> .zip; .tar.zst only exists in the remote-builder rewrap +
+          # server storage, never the local pack output). Globbing *.tar.zst here
+          # matched nothing, so this guard silently skipped publishing after a
+          # successful pack (exit 0). Same class of bug as the windows .zip fix (#509).
+          ARCHIVES=($(ls "$DIST"/*.tar.gz 2>/dev/null || true))
           if [ ${#ARCHIVES[@]} -eq 0 ]; then
             echo "::warning::No archives found in dist/ — nothing to publish"
             exit 0
