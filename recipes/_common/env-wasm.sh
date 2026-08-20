@@ -22,6 +22,17 @@ BUILD_SHARED_LIBS=OFF
 CVC_LINK=static
 export CVC_LINK
 
+# Opt-in threaded (SharedArrayBuffer) variant: CVC_WASM_THREADS=1 compiles the
+# whole closure with -pthread. Emscripten forbids mixing -pthread and
+# non-pthread objects, so a threaded consumer needs EVERY static lib in its
+# link built this way (into its own prefix). Hosting then requires COOP/COEP.
+if [[ "${CVC_WASM_THREADS:-0}" == "1" ]]; then
+    export CFLAGS="-pthread ${CFLAGS:-}"
+    export CXXFLAGS="-pthread ${CXXFLAGS:-}"
+    export LDFLAGS="-pthread ${LDFLAGS:-}"
+    echo "── CVC_WASM_THREADS=1: building with -pthread ──"
+fi
+
 # Re-define cvc_cmake_build to inject the Emscripten toolchain file.
 cvc_cmake_build() {
     local _find_root_path_args=()

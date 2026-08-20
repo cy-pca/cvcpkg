@@ -5,7 +5,11 @@ recipe:
   # Bumped 1 -> 2: consume the hermetic X11 + OpenGL(GLVND)/GLU recipes on Linux
   # instead of system libs (find_package(X11)/OpenGL now resolve to the cvcpkg
   # prefix). Lets libcvc's publish-cvcpkg.yml drop its apt-get X11/GL line.
-  cvc_revision: 2
+  # Bumped 2 -> 3: wasm build enables the rendering modules (WebGL2/GLES3
+  # backend) + ESSL 3.00 volume-composer patch. The published 9.5.0+cvc.2 wasm
+  # bundle is compute-only; without this bump the recipe change would no-op
+  # against the immutable published variant.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -22,6 +26,10 @@ source:
 
 patches:
   - vtk-fmt-cstdlib-wasm.patch
+  # ESSL 3.00 forbids non-constant global initializers; the volume raycast
+  # composer emitted `mat4 g_eyeToTexture = <uniform expr>;` at global scope,
+  # which kills every shaded/scattering volume under WebGL2.
+  - vtk-essl3-no-global-uniform-init.patch
 
 depends:
   build:
