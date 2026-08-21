@@ -1015,6 +1015,41 @@ def validate(target: str, recipes_dirs: tuple[str, ...], no_default_recipes: boo
 # ── verify ──────────────────────────────────────────────────────
 
 
+def _locate_bundle_manifest(prefix_path: Path, name: str) -> Path | None:
+    """Return the path to *name*'s manifest.yaml in an installed prefix, if any.
+
+    Bundles stage their manifest under a subdirectory named for the bundle
+    (``share/libcvc-deps/<name>/manifest.yaml``) precisely so that
+    co-installed bundles cannot clobber each other's manifest when
+    extraction merges into a shared prefix.  Bundles published before that
+    layout landed staged it flat at ``share/libcvc-deps/manifest.yaml``
+    instead, which a blind-merge install overwrites with whichever bundle
+    extracted last.  The flat path is checked as a fallback, but only
+    trusted when the manifest's own ``bundle.name`` actually matches *name*
+    -- otherwise it is silently some other package's leftover, and reporting
+    it as *name*'s manifest would be a false positive, not a fix.  This does
+    not validate the manifest beyond that identity check -- callers that
+    need a fully parsed, schema-valid manifest still parse it themselves.
+    """
+    import yaml
+
+    meta_dir = prefix_path / "share" / "libcvc-deps"
+
+    per_name = meta_dir / name / "manifest.yaml"
+    if per_name.is_file():
+        return per_name
+
+    flat = meta_dir / "manifest.yaml"
+    if flat.is_file():
+        try:
+            data = yaml.safe_load(flat.read_text())
+        except (OSError, yaml.YAMLError):
+            return None
+        if isinstance(data, dict) and data.get("bundle", {}).get("name") == name:
+            return flat
+    return None
+
+
 @cli.command()
 @_prefix_opt
 def verify(prefix: str) -> None:
@@ -1041,8 +1076,8 @@ def verify(prefix: str) -> None:
 
     ok = True
     for entry in lock.bundles:
-        manifest_path = prefix_path / "share" / "libcvc-deps" / entry.name / "manifest.yaml"
-        if not manifest_path.exists():
+        manifest_path = _locate_bundle_manifest(prefix_path, entry.name)
+        if manifest_path is None:
             click.echo(f"  MISSING  {entry.name} -- no manifest.yaml")
             ok = False
             continue
@@ -1113,8 +1148,7 @@ def sync(prefix: str) -> None:
         mirror_urls = _fetch_mirror_urls(server_url, os.environ.get("CVCPKG_TOKEN"))
 
     for entry in lock.bundles:
-        manifest_path = prefix_path / "share" / "libcvc-deps" / entry.name / "manifest.yaml"
-        if manifest_path.exists():
+        if _locate_bundle_manifest(prefix_path, entry.name) is not None:
             continue
         if not entry.archive_url:
             raise click.ClickException(f"cannot sync {entry.name} -- no archive_url in lockfile.")

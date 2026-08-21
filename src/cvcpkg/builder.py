@@ -1929,8 +1929,12 @@ def stage_bundle(
     _rewrite_shebangs(staging_dir, temp_prefixes)
     _rewrite_exe_launchers(staging_dir, temp_prefixes)
 
-    # Write manifest
-    meta_dir = staging_dir / "share" / "libcvc-deps"
+    # Write the manifest under a subdirectory named for the bundle itself.
+    # Every bundle installs into the same shared prefix, and extraction is a
+    # blind merge -- a flat share/libcvc-deps/manifest.yaml would be
+    # overwritten by whichever bundle extracted last, leaving every other
+    # co-installed package's manifest clobbered and unverifiable.
+    meta_dir = staging_dir / "share" / "libcvc-deps" / manifest["bundle"]["name"]
     meta_dir.mkdir(parents=True, exist_ok=True)
     with open(meta_dir / "manifest.yaml", "w") as f:
         yaml.dump(manifest, f, default_flow_style=False, sort_keys=False)

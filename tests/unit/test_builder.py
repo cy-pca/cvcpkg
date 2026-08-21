@@ -998,16 +998,20 @@ class TestPlatformAny:
         # Verify content
         assert (staging / "share" / "style.css").is_file()
         # Verify manifest
-        assert (staging / "share" / "libcvc-deps" / "manifest.yaml").is_file()
+        assert (staging / "share" / "libcvc-deps" / "web-assets" / "manifest.yaml").is_file()
         import yaml as _yaml
 
-        m = _yaml.safe_load((staging / "share" / "libcvc-deps" / "manifest.yaml").read_text())
+        m = _yaml.safe_load(
+            (staging / "share" / "libcvc-deps" / "web-assets" / "manifest.yaml").read_text()
+        )
         assert m["bundle"]["platform"] == "any"
         assert m["bundle"]["arch"] == "noarch"
         assert m["meta"]["kind"] == "data"
         # Verify recipe was included
-        assert (staging / "share" / "libcvc-deps" / "recipe" / "recipe.yaml").is_file()
-        assert (staging / "share" / "libcvc-deps" / "recipe" / "build.sh").is_file()
+        assert (
+            staging / "share" / "libcvc-deps" / "web-assets" / "recipe" / "recipe.yaml"
+        ).is_file()
+        assert (staging / "share" / "libcvc-deps" / "web-assets" / "recipe" / "build.sh").is_file()
 
     def test_list_recipes_includes_any(self, tmp_path):
         """list_recipes returns 'any' recipes alongside platform-specific ones."""
@@ -1517,10 +1521,15 @@ class TestStageBundle:
 
         stage_bundle(install_dir, manifest, staging)
         assert (staging / "lib" / "libtest.so").exists()
-        assert (staging / "share" / "libcvc-deps" / "manifest.yaml").exists()
+        # Staged under a subdirectory named for the bundle, not flat --
+        # otherwise co-installed bundles clobber each other's manifest when
+        # extraction merges into a shared prefix (cvcpkg verify / sync read
+        # this per-bundle path).
+        assert (staging / "share" / "libcvc-deps" / "test" / "manifest.yaml").exists()
+        assert not (staging / "share" / "libcvc-deps" / "manifest.yaml").exists()
 
         manifest_content = yaml.safe_load(
-            (staging / "share" / "libcvc-deps" / "manifest.yaml").read_text()
+            (staging / "share" / "libcvc-deps" / "test" / "manifest.yaml").read_text()
         )
         assert manifest_content["bundle"]["name"] == "test"
 

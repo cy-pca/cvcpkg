@@ -95,7 +95,7 @@ def _validated(member: str) -> str | None:
     return name
 
 
-def read_archive(archive: Path) -> tuple[list[str], dict | None]:
+def read_archive(archive: Path, pkg_name: str) -> tuple[list[str], dict | None]:
     """Return ``(member paths, embedded manifest)`` from ONE pass over *archive*.
 
     Both are read together on purpose.  A ``.tar.gz``/``.tar.zst`` has to be
@@ -106,13 +106,20 @@ def read_archive(archive: Path) -> tuple[list[str], dict | None]:
 
     Directory members are omitted: removal deletes files and then prunes
     emptied directories, so they carry no information.
+
+    *pkg_name*'s manifest may sit at either of two paths depending on when
+    the archive was built: ``share/libcvc-deps/<pkg_name>/manifest.yaml``
+    (current) or the flat ``share/libcvc-deps/manifest.yaml`` predating that
+    layout.  Unlike reading a merged prefix, a single archive belongs to
+    exactly one bundle, so there is no clobbering risk in accepting either
+    path without cross-checking the manifest's own name.
     """
     name = archive.name.lower()
     if name.endswith(".7z"):
         raise InstallError(
             f"cannot list files in {archive.name}: .7z archives are not supported for uninstall"
         )
-    target = META_PREFIX + "manifest.yaml"
+    targets = {META_PREFIX + pkg_name + "/manifest.yaml", META_PREFIX + "manifest.yaml"}
     files: list[str] = []
     manifest: dict | None = None
 
@@ -125,7 +132,7 @@ def read_archive(archive: Path) -> tuple[list[str], dict | None]:
                 if not p:
                     continue
                 files.append(p)
-                if p == target and manifest is None:
+                if p in targets and manifest is None:
                     manifest = _safe_yaml(zf.read(info))
         return files, manifest
 
@@ -137,7 +144,7 @@ def read_archive(archive: Path) -> tuple[list[str], dict | None]:
             if not p:
                 continue
             files.append(p)
-            if p == target and manifest is None and member.isreg():
+            if p in targets and manifest is None and member.isreg():
                 f = tf.extractfile(member)
                 if f is not None:
                     manifest = _safe_yaml(f.read())
@@ -215,7 +222,7 @@ def load_installed(
             p = cache_mod.cache_path(cache_dir, entry.sha256, archive_filename(entry))
             if p.is_file():
                 pkg.archive = p
-                pkg.files, manifest = read_archive(p)
+                pkg.files, manifest = read_archive(p, entry.name)
                 if manifest is not None:
                     pkg.deps, pkg.provides = _manifest_deps_provides(manifest)
                 else:
@@ -262,7 +269,7 @@ def fetch_removal_archive(pkg: InstalledPackage, lock: Lockfile, cache_dir: Path
         source_release=entry.source_release,
     )
     pkg.archive = download_bundle(cat_entry, cache_dir)
-    pkg.files, manifest = read_archive(pkg.archive)
+    pkg.files, manifest = read_archive(pkg.archive, entry.name)
     if manifest is not None:
         pkg.deps, pkg.provides = _manifest_deps_provides(manifest)
         pkg.deps_known = True

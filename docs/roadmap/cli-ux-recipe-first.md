@@ -81,6 +81,20 @@ Detail:
   below for what the archive-derived approach cannot do yet (post-install
   file writes, modified-file drift, a teardown hook) and what `prefix.db`
   fixes.
+- **`cvcpkg verify`/`sync` actually find a bundle's manifest** (#525) —
+  `generate_manifest()` writing each bundle's manifest under its own
+  `share/libcvc-deps/<name>/` (described below) is this fix, not a
+  pre-existing property: every bundle used to write it flat at
+  `share/libcvc-deps/manifest.yaml`, and since extraction is a blind merge
+  into the shared prefix, that path held only whichever bundle extracted
+  last. `verify` reported every other co-installed package MISSING, and
+  `sync`, reading the same wrong path, re-downloaded and re-extracted the
+  entire prefix on every run — broken this way since the first commit that
+  introduced either side. Bundles published before this fix keep the flat
+  layout until rebuilt; `verify`/`sync` fall back to it, but only trust it
+  when its own `bundle.name` matches what's being looked up, so at most one
+  old-layout package per prefix verifies correctly (honestly reported, not
+  silently wrong) until republished.
 
 The rest of the phase is unimplemented. In particular `cvcpkg verify` hashes
 no files, `cvcpkg gc` prunes against an empty referenced set, and there is no
@@ -235,11 +249,14 @@ tree, recipes have no teardown slot, and re-install always re-extracts.
 `cvcpkg uninstall` now exists (#522), but as an archive-derived command
 rather than a DB-backed one — see below. Note the DB work is not starting
 from zero either: each bundle already ships a real per-package file list —
-`generate_manifest()`
-walks the actually-staged install tree and writes it into
-`share/libcvc-deps/<name>/manifest.yaml` (`file_conflicts.py` already
-computes cross-package overlaps from exactly these lists). What is missing
-is a *queryable, per-prefix* index of that data. The data backbone is a
+`generate_manifest()` walks the actually-staged install tree, and
+`stage_bundle()` writes it into `share/libcvc-deps/<name>/manifest.yaml`
+(`file_conflicts.py` already computes cross-package overlaps from exactly
+these lists). That per-name path is itself a fix (#525): every bundle used
+to write flat at `share/libcvc-deps/manifest.yaml`, which extraction's
+blind merge clobbered down to whichever bundle installed last — see
+"Shipped since the old snapshot" above. What is missing now is a
+*queryable, per-prefix* index of that data. The data backbone is a
 **per-prefix SQLite database at `share/cvcpkg/prefix.db`**, next to the
 prefix's existing metadata (today `share/libcvc-deps/lockfile.yaml` +
 per-bundle `manifest.yaml`) — the machine-level `~/.cvcpkg/local.db` indexes

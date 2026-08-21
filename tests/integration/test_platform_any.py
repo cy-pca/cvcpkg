@@ -446,7 +446,7 @@ class TestPlatformAnyManifest:
             members = tf.getnames()
             assert "share/icons/logo.png" in members
             assert "share/icons/favicon.ico" in members
-            assert "share/libcvc-deps/manifest.yaml" in members
+            assert "share/libcvc-deps/icons/manifest.yaml" in members
 
     def test_manifest_with_deps(self, tmp_path):
         """Manifest for an 'any' recipe with deps records them correctly."""
@@ -519,7 +519,7 @@ class TestPlatformAnyManifest:
         assert "any-noarch" in linux_archive.name
         assert "linux" not in linux_archive.name
         with tarfile.open(linux_archive) as tf:
-            m = yaml.safe_load(tf.extractfile("share/libcvc-deps/manifest.yaml").read())
+            m = yaml.safe_load(tf.extractfile("share/libcvc-deps/widgets/manifest.yaml").read())
         assert m["bundle"]["platform"] == "any"
         assert m["bundle"]["arch"] == "noarch"
 
@@ -532,7 +532,7 @@ class TestPlatformAnyManifest:
         )
         assert "windows-x86_64" in win_archive.name
         with zipfile.ZipFile(win_archive) as zf:
-            m = yaml.safe_load(zf.read("share/libcvc-deps/manifest.yaml"))
+            m = yaml.safe_load(zf.read("share/libcvc-deps/widgets/manifest.yaml"))
         assert m["bundle"]["platform"] == "windows"
         assert m["bundle"]["arch"] == "x86_64"
 
@@ -590,7 +590,7 @@ class TestPlatformAnyManifest:
 
         # The manifest the publish path reads records the noarch identity.
         with tarfile.open(archive_path) as tf:
-            raw = tf.extractfile("share/libcvc-deps/manifest.yaml").read()
+            raw = tf.extractfile("share/libcvc-deps/widgets/manifest.yaml").read()
         manifest = yaml.safe_load(raw)
         assert manifest["bundle"]["platform"] == "any"
         assert manifest["bundle"]["arch"] == "noarch"
@@ -635,7 +635,7 @@ class TestPlatformAnyManifest:
 
         assert "+cvc.6" in archive_path.name
         with tarfile.open(archive_path) as tf:
-            raw = tf.extractfile("share/libcvc-deps/manifest.yaml").read()
+            raw = tf.extractfile("share/libcvc-deps/widgets/manifest.yaml").read()
         bundle = yaml.safe_load(raw)["bundle"]
         assert bundle["cvc_revision"] == 6
         assert bundle["version"].endswith("+cvc.6")

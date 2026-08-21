@@ -62,8 +62,15 @@ def _make_bundle(
     version: str = "1.0.0+cvc.1",
     deps: tuple[str, ...] = (),
     provides: tuple[str, ...] = (),
+    legacy_flat_manifest: bool = False,
 ) -> tuple[LockEntry, Path]:
-    """Build a bundle tar.gz, store it in the cache, return (entry, archive)."""
+    """Build a bundle tar.gz, store it in the cache, return (entry, archive).
+
+    The manifest is staged under share/libcvc-deps/<name>/manifest.yaml,
+    matching real stage_bundle output.  legacy_flat_manifest builds an
+    archive the OLD way (flat share/libcvc-deps/manifest.yaml) to exercise
+    the fallback path for bundles published before that layout landed.
+    """
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tf:
         for rel, content in files.items():
@@ -72,7 +79,12 @@ def _make_bundle(
             info.size = len(data)
             tf.addfile(info, io.BytesIO(data))
         mdata = yaml.safe_dump(_manifest_dict(name, version, deps, provides)).encode()
-        minfo = tarfile.TarInfo("share/libcvc-deps/manifest.yaml")
+        manifest_path = (
+            "share/libcvc-deps/manifest.yaml"
+            if legacy_flat_manifest
+            else f"share/libcvc-deps/{name}/manifest.yaml"
+        )
+        minfo = tarfile.TarInfo(manifest_path)
         minfo.size = len(mdata)
         tf.addfile(minfo, io.BytesIO(mdata))
     raw = buf.getvalue()
@@ -139,8 +151,12 @@ class TestUninstallCommand:
         assert not (prefix / "bin" / "alpha").exists()
         assert not (prefix / "lib").exists()  # emptied and pruned
         assert (prefix / "bin" / "bravo").exists()
-        # shared metadata slot survives while packages remain
-        assert (prefix / "share" / "libcvc-deps" / "manifest.yaml").exists()
+        # plan_removal treats anything under share/libcvc-deps/ as protected
+        # while other packages remain installed, so alpha's own per-name
+        # manifest is kept too -- conservative, since it is not actually
+        # shared with bravo, but safe.
+        assert (prefix / "share" / "libcvc-deps" / "alpha" / "manifest.yaml").exists()
+        assert (prefix / "share" / "libcvc-deps" / "bravo" / "manifest.yaml").exists()
         assert [b.name for b in _read_lock(prefix).bundles] == ["bravo"]
 
     def test_unknown_package_errors(self, tmp_path, cache_dir, capsys):
@@ -187,8 +203,10 @@ class TestUninstallCommand:
         assert ret == 0
         assert not (prefix / "lib").exists()
         assert not (prefix / "bin").exists()
-        # last package gone: the shared metadata slot goes with it
-        assert not (prefix / "share" / "libcvc-deps" / "manifest.yaml").exists()
+        # last package gone: every per-name metadata slot goes with it
+        assert not (prefix / "share" / "libcvc-deps" / "alpha").exists()
+        assert not (prefix / "share" / "libcvc-deps" / "bravo").exists()
+        assert not (prefix / "share" / "libcvc-deps" / "charlie").exists()
         assert _read_lock(prefix).bundles == []
         out = capsys.readouterr().out
         assert "[dependent]" in out
@@ -441,7 +459,7 @@ class TestUninstallerHelpers:
             info.size = len(data)
             tf.addfile(info, io.BytesIO(data))
         with pytest.raises(InstallError):
-            read_archive(evil)
+            read_archive(evil, "evil")
 
     def test_read_archive_returns_files_and_manifest_in_one_open(self, tmp_path, cache_dir):
         """Files and manifest come from a single pass.  A second pass would
@@ -461,7 +479,7 @@ class TestUninstallerHelpers:
             return real_open(*args, **kwargs)
 
         with mock.patch.object(uninstaller.tarfile, "open", counting_open):
-            files, manifest = uninstaller.read_archive(archive)
+            files, manifest = uninstaller.read_archive(archive, "alpha")
 
         assert opens == 1
         assert "bin/alpha" in files
@@ -479,10 +497,26 @@ class TestUninstallerHelpers:
             info.size = len(data)
             tf.addfile(info, io.BytesIO(data))
 
-        files, manifest = read_archive(plain)
+        files, manifest = read_archive(plain, "thing")
 
         assert files == ["bin/thing"]
         assert manifest is None
+
+    def test_read_archive_finds_legacy_flat_manifest(self, cache_dir):
+        """Archives built before the per-name layout landed staged their
+        manifest flat; uninstall must still read those already-published
+        bundles, not just newly-built ones."""
+        from cvcpkg.uninstaller import read_archive
+
+        _entry, archive = _make_bundle(
+            cache_dir, "alpha", {"bin/alpha": "#!"}, legacy_flat_manifest=True
+        )
+
+        files, manifest = read_archive(archive, "alpha")
+
+        assert "share/libcvc-deps/manifest.yaml" in files
+        assert manifest is not None
+        assert manifest["bundle"]["name"] == "alpha"
 
     def test_execute_removal_counts_and_prunes(self, tmp_path):
         from cvcpkg.uninstaller import execute_removal

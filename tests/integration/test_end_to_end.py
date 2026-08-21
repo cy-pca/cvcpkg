@@ -128,7 +128,7 @@ class TestPackPipeline:
         # Verify staging
         assert (staging / "lib" / "libz.so.1.3.1").exists()
         assert (staging / "include" / "zlib.h").exists()
-        assert (staging / "share" / "libcvc-deps" / "manifest.yaml").exists()
+        assert (staging / "share" / "libcvc-deps" / "zlib" / "manifest.yaml").exists()
 
         # Create archive
         dist = tmp_path / "dist"
