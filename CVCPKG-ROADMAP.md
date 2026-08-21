@@ -324,7 +324,7 @@ flowchart TD
 | 12 | Federation Hardening — Selective Mirroring & Authoritative Resolution | ✅ Complete — mirror allow/deny policy, size budget with usage-based eviction, and top-down root-authoritative resolution |
 | 13 | Identity & Access — OIDC / External Providers | ✅ Complete — OIDC login for the admin dashboard (code flow + PKCE, claim→role mapping); HMAC tokens remain for machines |
 | 14 | Source Recipes — File-Artifact Packages | ✅ Complete — `platform: any` file artifacts consumed by downstream platform recipes, canonized by an end-to-end test |
-| 15 | CLI UX & the Recipe-First Workflow | ⬜ Planned — single entry point (fold `cvcpkg-server` into `cvcpkg server`), deprecate `cvc-requirements.yaml`, `~/.cvcpkg/` defaults + auto-populated `settings.yaml` with a `--save` sticky-overrides flag, install-prefix registry (`~/.cvcpkg/local.db`) with aliases + delete/inspect/modify, per-prefix state DB (`share/cvcpkg/prefix.db`: installed-file tracking, **first-class `uninstall`**, idempotent installs, hash-verify, ops journal), recipe generation from existing projects, clean/activate commands, terminal graphics, offline source cache, recipe-set export + source pre-seeding for air-gapped self-hosting |
+| 15 | CLI UX & the Recipe-First Workflow | ⬜ Planned — single entry point (fold `cvcpkg-server` into `cvcpkg server`), deprecate `cvc-requirements.yaml`, `~/.cvcpkg/` defaults + auto-populated `settings.yaml` with a `--save` sticky-overrides flag, install-prefix registry (`~/.cvcpkg/local.db`) with aliases + delete/inspect/modify, per-prefix state DB (`share/cvcpkg/prefix.db`: installed-file tracking, **first-class `uninstall`** — an archive-derived `uninstall` ships now, DB-backed later, idempotent installs, hash-verify, ops journal), recipe generation from existing projects, clean/activate commands, terminal graphics, offline source cache, recipe-set export + source pre-seeding for air-gapped self-hosting |
 | 16 | Prefix Provenance & Server Seeding | ⬜ Planned — install prefixes carry catalog info + recipes in `share/cvcpkg/` so a prefix can seed a cvcpkg-server; org/private status explicit with warnings |
 | 17 | Recipe Archives — Declared Artifacts & Package-Page UX | ⬜ Planned — schema-declared recipe artifacts, full recipe directories on the server, downloadable recipe archives, collapsible artifact viewer, package-list layout rework |
 | 18 | Server Backups, Scheduled Jobs & Quota Governance | ⬜ Planned — recipe/package backup + restore; a general admin job manager + scheduler (none exists today); quota governance (global default → infinite, reconciliation job, recipes count against org quota) |
@@ -2263,9 +2263,8 @@ all state lives inside each prefix tree
 (`share/libcvc-deps/lockfile.yaml` + per-bundle manifests).  The gap has
 real consequences — `cvcpkg gc` documents pruning archives "no longer
 referenced by any installed prefix" but cannot enumerate prefixes, so it
-treats the referenced set as empty; and an install-conflict error message
-already points users at a `cvcpkg uninstall` that does not exist yet.
-Phase 15 gives prefixes a first-class management story:
+treats the referenced set as empty.  Phase 15 gives prefixes a first-class
+management story:
 
 - [ ] **Track install prefixes in a local database** — when a user installs
       an install prefix with a bunch of packages, keep track of it in an
@@ -2308,10 +2307,10 @@ Phase 15 gives prefixes a first-class management story:
 
 Four primitives that are **first-class functionality, not nice-to-haves**
 (directive 2026-07-18): today extraction is a **blind merge** into the
-prefix tree with no record of which package wrote which file, there is no
-`cvcpkg uninstall` (an install-conflict error message already tells users
-to run one that does not exist), recipes have no teardown slot, and
-re-install always re-extracts.  The data backbone is a **per-prefix SQLite
+prefix tree with no record of which package wrote which file, recipes have
+no teardown slot, and re-install always re-extracts.  `cvcpkg uninstall`
+now exists, but as an **archive-derived** command (see below) rather than a
+DB-backed one.  The data backbone is a **per-prefix SQLite
 database at `share/cvcpkg/prefix.db`**, next to the prefix's existing
 metadata (today `share/libcvc-deps/lockfile.yaml` + per-bundle
 `manifest.yaml`) — the machine-level `~/.cvcpkg/local.db` indexes
@@ -2323,7 +2322,7 @@ the prefix**.
       `prefix.db` (the recipe's `package.files` are *globs*, not a file
       list — the DB holds what actually landed).  Enables `cvcpkg owns
       <file>`, real file-conflict detection, and hash-level verification.
-- [ ] **First-class `cvcpkg uninstall <pkg> --prefix/-alias`.**  Remove
+- [~] **First-class `cvcpkg uninstall <pkg> --prefix/-alias`.**  Remove
       exactly the files the package owns, prune emptied directories,
       update lockfile + DB atomically (SQLite transaction), and handle
       dependents deliberately: refuse by default when other installed
@@ -2331,6 +2330,32 @@ the prefix**.
       closure (the resolver already knows the runtime graph).  Runs the
       recipe's teardown hook when one is declared (the state contract in
       the configuration-management phase below).
+
+      **Shipped ahead of the DB** (`cvcpkg.uninstaller` + `cvcpkg uninstall`,
+      with `--cascade` and `--dry-run`) because the install-conflict error
+      told users to run it while it did not exist.  Without the file table
+      it derives the owned-file set from the **bundle archive** the lockfile
+      names — the member list is exactly what extraction materialized —
+      served from the content-addressed cache and re-downloaded when
+      evicted.  What that costs, and what `prefix.db` buys back:
+
+      - a **source-built** entry has no archive, so it cannot be removed
+        file-by-file — the command refuses and says to rebuild the prefix;
+      - files a package **wrote after install** (generated caches, `.pyc`,
+        anything a post-install step produced) are not in the archive and
+        so are not removed;
+      - a **modified** file is deleted blind — there are no recorded
+        digests yet to warn on drift;
+      - **dependent detection** reads each bundle's embedded manifest, so a
+        bystander whose archive was evicted *and* has no local recipe is
+        warned about and treated as independent;
+      - lockfile rewrite is a plain write, not a **transaction** — an
+        interrupted uninstall can leave files removed with the lockfile
+        stale (re-running converges: absent files are counted, not fatal).
+
+      When `prefix.db` lands, uninstall should switch to the file table as
+      its source of truth and keep the archive path only as a fallback for
+      prefixes predating the DB.
 - [ ] **Idempotent installs.**  Installing a variant already recorded in
       `prefix.db` that passes verification is a **no-op** (today it
       re-downloads and re-extracts over the tree); `--force` overrides;

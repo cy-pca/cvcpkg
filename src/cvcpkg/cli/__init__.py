@@ -86,7 +86,7 @@ def _force_utf8_stdio() -> None:
 _SECTIONS: list[tuple[str, list[str]]] = [
     (
         "Find and install packages",
-        ["search", "info", "install", "install-deps", "list", "upgrade", "download"],
+        ["search", "info", "install", "install-deps", "uninstall", "list", "upgrade", "download"],
     ),
     (
         "Reproducible prefixes",
@@ -295,6 +295,7 @@ from cvcpkg.cli import (  # noqa: E402, F401
     _server,
     _signing,
     _telemetry,
+    _uninstall,
     _webhook,
 )
 from cvcpkg.cli._build import (  # noqa: E402, F401

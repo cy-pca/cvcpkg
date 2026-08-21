@@ -38,6 +38,9 @@ cvcpkg install --from cvc-requirements.yaml --prefix ./deps
 
 # Verify an existing prefix:
 cvcpkg verify --prefix ./deps
+
+# Remove a component (refuses if others depend on it; --cascade to include them):
+cvcpkg uninstall fftw3 --prefix ./deps
 ```
 
 ## Recipe ownership

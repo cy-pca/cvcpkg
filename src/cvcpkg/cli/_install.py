@@ -677,7 +677,9 @@ def _check_conflicts(
                     f"To install {pkg!r}, first uninstall the conflicting package:\n"
                     f"  cvcpkg uninstall {conflict} --prefix {prefix_str}\n"
                     f"Then retry:\n"
-                    f"  cvcpkg install {pkg} --prefix {prefix_str}"
+                    f"  cvcpkg install {pkg} --prefix {prefix_str}\n"
+                    f"(If {conflict!r} was built from source it has no archive to "
+                    f"remove files from; install into a fresh --prefix instead.)"
                 )
 
 
