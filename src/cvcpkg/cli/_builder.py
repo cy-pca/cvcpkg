@@ -22,6 +22,48 @@ from cvcpkg.heartbeat import unwatch as heartbeat_unwatch
 from cvcpkg.heartbeat import watch as heartbeat_watch
 from cvcpkg.semver import version_sort_key
 
+# Written last, inside a fully extracted cross-toolchain cache entry.  Its
+# presence -- not "the directory exists and is non-empty" -- is what makes a
+# cached toolchain usable, so concurrent jobs cannot pick up a partial tree.
+_TC_CACHE_MARKER = ".cvcpkg-toolchain-complete"
+
+
+def _toolchain_cache_ready(tc_cache_path: Path) -> bool:
+    """True only when *tc_cache_path* holds a COMPLETE cached toolchain.
+
+    Readiness is the completion marker, deliberately not "the directory exists
+    and is non-empty": builders run several cross-compilation jobs at once
+    against one shared cache, and the non-empty test was satisfied the moment
+    the first job wrote its download into the cache directory.  A second job
+    then symlinked a half-unpacked toolchain into its build prefix -- for emsdk
+    that means emsdk_env.sh aborts with "unable to determine 'emsdk' directory"
+    because emsdk.py has not been extracted yet.
+    """
+    return (tc_cache_path / _TC_CACHE_MARKER).is_file()
+
+
+def _publish_toolchain_cache(staging: Path, cache_path: Path, stamp: str) -> None:
+    """Publish a fully extracted *staging* tree as the cache entry *cache_path*.
+
+    The marker is written last and the tree is moved with a single rename, so
+    a concurrent job polling ``_toolchain_cache_ready`` observes the entry as
+    either absent or complete -- never mid-extraction.  Losing a publish race
+    is not an error: the winner's tree has identical content, so ours is
+    simply discarded.
+    """
+    import shutil
+
+    (staging / _TC_CACHE_MARKER).write_text(f"{stamp}\n")
+    # A marker-less directory here is debris from an older cvcpkg or a crashed
+    # run; nothing publishes into cache_path except this rename, so replacing
+    # it cannot pull a tree out from under a concurrent job.
+    if cache_path.exists() and not _toolchain_cache_ready(cache_path):
+        shutil.rmtree(cache_path, ignore_errors=True)
+    try:
+        staging.rename(cache_path)
+    except OSError:
+        shutil.rmtree(staging, ignore_errors=True)
+
 
 def _symlink_merge_into(src_root: Path, dst_root: Path) -> None:
     """Symlink the contents of *src_root* into *dst_root*, merging directories.
@@ -1283,10 +1325,19 @@ def builder_run(
                 # every cross-compilation job.
                 extract_target = prefix
                 tc_cache_path: Path | None = None
+                tc_staging: Path | None = None
                 if cache_dir is not None:
                     tc_cache_root = cache_dir / "toolchains"
                     tc_cache_path = tc_cache_root / f"{tc_name}-{tc_version}"
-                    if tc_cache_path.is_dir() and any(tc_cache_path.iterdir()):
+                    # Readiness is the completion MARKER, never "the directory
+                    # has something in it".  Concurrent jobs on one builder
+                    # share this cache, and the old non-empty test was true the
+                    # instant the first job wrote its download into the cache
+                    # dir -- so a second job symlinked a half-unpacked
+                    # toolchain into its prefix (emsdk_env.sh then aborts with
+                    # "unable to determine 'emsdk' directory", because
+                    # emsdk.py has not been extracted yet).
+                    if _toolchain_cache_ready(tc_cache_path):
                         log_cb(
                             f"  Toolchain {tc_name} ({tc_version}) cached, symlinking into prefix\n"
                         )
@@ -1313,14 +1364,24 @@ def builder_run(
                             except Exception as exc:
                                 log_cb(f"  host_tool {tool_name}: install failed ({exc})\n")
                         continue
-                    # Not cached yet - extract into cache dir
-                    tc_cache_path.mkdir(parents=True, exist_ok=True)
-                    extract_target = tc_cache_path
+                    # Not cached yet - unpack into a private staging directory
+                    # and publish it atomically below, so a concurrent job
+                    # never observes a partial tree (and never has to clean up
+                    # after ours).
+                    tc_cache_root.mkdir(parents=True, exist_ok=True)
+                    tc_staging = tc_cache_root / (
+                        f".{tc_name}-{tc_version}.{os.getpid()}.{time.time_ns()}.tmp"
+                    )
+                    shutil.rmtree(tc_staging, ignore_errors=True)
+                    tc_staging.mkdir(parents=True, exist_ok=True)
+                    extract_target = tc_staging
 
                 log_cb(f"  Installing cross-toolchain: {tc_name} ({tc_version})\n")
                 dl_resp = client.get(archive_url)
                 if dl_resp.status_code >= 400:
                     log_cb(f"  toolchain {tc_name}: download failed ({dl_resp.status_code})\n")
+                    if tc_staging is not None:
+                        shutil.rmtree(tc_staging, ignore_errors=True)
                     continue
 
                 tc_bytes = dl_resp.content
@@ -1354,12 +1415,19 @@ def builder_run(
                         raise ValueError(f"unknown archive format (magic={head!r})")
                 except Exception as exc:
                     log_cb(f"  toolchain {tc_name}: extract failed ({exc})\n")
-                    # Clean up broken cache entry
-                    if tc_cache_path and tc_cache_path.is_dir():
-                        shutil.rmtree(tc_cache_path, ignore_errors=True)
+                    # Only ever discard OUR staging dir.  Removing the shared
+                    # cache here used to delete a concurrent job's good
+                    # toolchain out from under it, turning one failure into a
+                    # cascade across every wasm job on the builder.
+                    if tc_staging is not None:
+                        shutil.rmtree(tc_staging, ignore_errors=True)
                     continue
                 finally:
                     tmp_archive.unlink(missing_ok=True)
+
+                if tc_staging is not None and tc_cache_path is not None:
+                    _publish_toolchain_cache(tc_staging, tc_cache_path, f"{tc_name} {tc_version}")
+                    extract_target = tc_cache_path
 
             # If we extracted into the cache, merge into prefix now
             # (recursing on dir collisions with deps already there).
