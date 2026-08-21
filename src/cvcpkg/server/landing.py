@@ -82,6 +82,19 @@ def brand_logo_asset() -> tuple[bytes, str]:
         return b"", "image/png"
 
 
+@functools.lru_cache(maxsize=2)
+def install_script_asset(name: str) -> str:
+    """Return the text of a bundled install script (``install.sh`` / ``install.ps1``).
+
+    Read via ``importlib.resources`` (package data, like ``brand_logo_asset``)
+    so it ships in the wheel and is served identically whether cvcpkg-server
+    runs from a repo checkout or a ``pip install``.
+    """
+    from importlib.resources import files as _res_files
+
+    return _res_files("cvcpkg.server").joinpath("assets", name).read_text(encoding="utf-8")
+
+
 def brand_logo_bytes() -> bytes:
     """Backwards-compatible accessor for just the icon bytes."""
     return brand_logo_asset()[0]
@@ -3422,7 +3435,17 @@ def guide_html() -> str:
         Installation
       </h2>
       <div class="guide-step">
-        <p class="has-text-grey-lighter mb-2">Install from PyPI:</p>
+        <p class="has-text-grey-lighter mb-2">
+          Linux, macOS, or BSD — install the standalone binary (no Python required):
+        </p>
+        <div class="guide-code"><pre><code>curl -fsSL https://cvcpkg.org/install.sh | sh</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">Windows (PowerShell):</p>
+        <div class="guide-code"><pre><code>irm https://cvcpkg.org/install.ps1 | iex</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">Or install from PyPI:</p>
         <div class="guide-code"><pre><code>pip install cvcpkg</code></pre></div>
       </div>
       <div class="guide-step">

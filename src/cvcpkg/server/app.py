@@ -2275,6 +2275,28 @@ def create_app(
             headers={"Cache-Control": "public, max-age=86400"},
         )
 
+    @app.get("/install.sh", include_in_schema=False)
+    async def install_sh():
+        """Serve the POSIX installer: ``curl -fsSL https://cvcpkg.org/install.sh | sh``."""
+        from cvcpkg.server.landing import install_script_asset
+
+        return Response(
+            content=install_script_asset("install.sh"),
+            media_type="text/x-shellscript; charset=utf-8",
+            headers={"Cache-Control": "public, max-age=300"},
+        )
+
+    @app.get("/install.ps1", include_in_schema=False)
+    async def install_ps1():
+        """Serve the Windows installer: ``irm https://cvcpkg.org/install.ps1 | iex``."""
+        from cvcpkg.server.landing import install_script_asset
+
+        return Response(
+            content=install_script_asset("install.ps1"),
+            media_type="text/plain; charset=utf-8",
+            headers={"Cache-Control": "public, max-age=300"},
+        )
+
     @app.get("/package/{name}", response_class=HTMLResponse, include_in_schema=False)
     async def package_detail_page(
         name: str,
