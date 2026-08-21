@@ -162,9 +162,10 @@ hardcoded globs are understood as temporary, not endorsed:
 - [x] `windows-build.yml` publish pre-check glob `*.tar.zst` → `*.zip`
       (libcvc-deps `fix/python311-windows`). Unblocks the first Windows python
       publish.
-- [ ] `macos-build.yml` publish pre-check glob `*.tar.zst` → `*.tar.gz`
-      (tracked as a follow-up task; identical bug, different correct suffix —
-      which is itself the argument for this roadmap).
+- [x] `macos-build.yml` publish pre-check glob `*.tar.zst` → `*.tar.gz`
+      (shipped in #516, commit `928ba29f` — fixed both the archive-count check
+      and the publish guard; identical bug to the Windows one, different
+      correct suffix — which is itself the argument for this roadmap).
 
 Both are `s/one magic string/another magic string/`. They are correct today and
 wrong the next time the format policy moves; Section B deletes the need for them.

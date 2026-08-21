@@ -128,7 +128,7 @@ Response:
 - **Self-rotation needs no admin**: set `CVCPKG_TOKEN` to the token
   being rotated. This lets each credential holder rotate on their own
   schedule without sharing admin access.
-- **DB deployments** need Alembic migration `015`
+- **DB deployments** need Alembic migration `016`
   (`cvcpkg-server migrate upgrade head`) before the endpoint is used;
   fresh installs and YAML-backend servers need nothing.
 - The audit trail (`GET /v1/audit`, admin-only) is the place to check

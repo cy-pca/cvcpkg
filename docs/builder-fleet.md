@@ -1,6 +1,7 @@
 # Multi-homed builder fleet
 
-The "Multi-tenant / shared builder fleet" feature (see `CVCPKG-ROADMAP.md`) lets
+The "Multi-tenant / shared builder fleet" feature (see
+`roadmap/CVCPKG-ROADMAP.md`) lets
 one physical builder serve **several namespaces** (the public catalogue *and*
 one or more orgs) and register with **several servers** at once. This collapses
 what used to be separate per-server / per-org builder deployments into a single

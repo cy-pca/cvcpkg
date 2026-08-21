@@ -62,11 +62,19 @@ same prefix and also exports `LIBCVC_DEPS_ROOT_DIR` / `LIBCVC_DEPS_VERSION`.
 
 ## 2. Toolchain file
 
-To make the prefix authoritative for an entire configure (including
-cross-compiles), pass the toolchain file:
+To make a prefix authoritative for an entire configure (including
+cross-compiles), pass the toolchain file. `cvcpkg install` does **not**
+write it into the prefix — `<prefix>/share/cmake/cvcpkg/` only exists when
+`cvcpkg` itself was installed via `cmake --install` (not the common case for
+consumers). For a `cvcpkg install`-populated deps prefix, use the copy
+shipped in this repo at
+[`cmake/cvcpkg-toolchain.cmake`](../cmake/cvcpkg-toolchain.cmake) and point
+it at the prefix explicitly with `-DCVCPKG_PREFIX`:
 
 ```bash
-cmake -B build -DCMAKE_TOOLCHAIN_FILE="$PWD/deps/cvcpkg-toolchain.cmake"
+cmake -B build \
+  -DCVCPKG_PREFIX="$PWD/deps" \
+  -DCMAKE_TOOLCHAIN_FILE=/path/to/cvcpkg-toolchain.cmake
 ```
 
 ## 3. Activation script

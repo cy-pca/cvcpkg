@@ -1,6 +1,13 @@
 # Roadmap: split `libcvc-deps` into composable component bundles
 
-Status: **Phase 5 in progress**. Phases 0–4 merged to master.
+Status: **Implemented** (shipped in v1.3.0) — retained as a historical
+design record.
+
+> **Do not renumber sections.** Code docstrings cite this document's
+> §-numbers directly: `src/cvcpkg/abi.py` (§3.2.1), `src/cvcpkg/lockfile.py`
+> (§5.4), `src/cvcpkg/builder.py` (§7.4–7.5 and §7.3), and
+> `src/cvcpkg/config.py` (§5.9.3). Section numbering must stay stable.
+
 Author: roadmap drafted 2026-05-19 in response to Windows monolithic
 bundles tipping over 2 GB (PowerShell `Compress-Archive`'s 2 GB cap
 was hit on every Windows assemble flavor in run `26127717492`, and

@@ -9,17 +9,24 @@ script that consumes it. It describes **the packaging layer** — the layout, th
 descriptor, the `cvcpkg image` surface, the `test.vm` hook — all of which are
 implemented and unit-tested.
 
-> **What is NOT claimed here.** No image package has been published, and
-> `haiku-image`, the worked example throughout this document, **does not
-> currently boot** — its anyboot partition table is truncated for any image
-> ≥ 4 GiB, its SSH-key injection has never landed a key, and nothing in it
-> started `sshd`. Repair is in flight on a separate branch. Every example
-> below is a description of the contract, not a transcript of a working
-> deployment: where a value is shown (`disk_bus: nvme`, `ssh_pubkey_baked`,
-> a `qm`/`incus` command line), read
-> `recipes/haiku-image/README-import.md`'s status block for what has actually
-> been observed. The `test.vm` hook exists precisely because this document
-> could not otherwise tell you that.
+> **Status.** `haiku-image 1.0.0-beta.5+cvc.1` is **published** on
+> cvcpkg.org (linux/x86_64, built on `star-00` — see the header comment in
+> [`recipes/haiku-image/recipe.yaml`](../recipes/haiku-image/recipe.yaml))
+> and, as of 2026-08-06, **proven end to end** (per the roadmap's Phase 9
+> status): it builds, boots under Incus, takes a DHCP lease, accepts SSH on
+> its baked key, compiles and runs a C program in the guest, and starts
+> `sshd` headlessly from its `launch_daemon` job. The boot blockers an
+> earlier draft of this document described — an anyboot partition table
+> truncated for any image ≥ 4 GiB, SSH-key injection that never landed a
+> key, nothing starting `sshd` — were fixed in #442, and the matrix-env
+> default that silently clobbered the supplied SSH public key in #463.
+> Where a value is shown below (`disk_bus: nvme`, an `incus` command line),
+> the authoritative record of what was measured is the `notes:` block in
+> `recipes/haiku-image/recipe.yaml`. The image exists to become the fleet's
+> Haiku build host — Haiku builds are delegated over SSH from an owning
+> Linux builder (see
+> [cvcpkg-remote-builders.md](cvcpkg-remote-builders.md)); turning the
+> published image into that fleet member is still open in the roadmap.
 
 ## The layout
 
@@ -208,9 +215,12 @@ boot:
 access: {ssh_user: baron, ssh_pubkey_baked: false}
                                 # ILLUSTRATIVE VALUES, not a known-good pair.
                                 # `baron` is Haiku's upstream default account
-                                # name; `false` is what every haiku-image build
-                                # has actually produced so far. Never copy an
-                                # account name out of a document — see below.
+                                # name; the published beta.5 image actually
+                                # accepts SSH for `user`, and a build that is
+                                # handed HAIKU_BUILDER_SSH_PUBKEY now bakes it
+                                # (an empty matrix-env default used to clobber
+                                # the supplied key — fixed in #463). Never copy
+                                # an account name out of a document — see below.
                                 # ssh_user is DERIVED from the image (Haiku
                                 # names the account from HAIKU_ROOT_USER_NAME,
                                 # whose upstream default is NOT `user`), and is
@@ -341,21 +351,25 @@ hypervisor — carrying it to a host that has one is the point of the package.
 
 The lifecycle, the gates, the deadline and the teardown are exercised by unit
 tests against a mocked hypervisor (`tests/unit/test_vmtest.py`) and end to end
-against a stub `incus`/`ssh` on `PATH`. They have **not** been run against a
-live Incus daemon or a real Haiku guest: the command forms are Incus's
-documented split-VM-image surface, not an observed session.
+against a stub `incus`/`ssh` on `PATH`.
 
-Concretely, `haiku-image`'s `test.vm` **skips everywhere today** — no builder in
-the fleet advertises `incus` yet, and `HAIKU_BUILDER_SSH_KEY` is not plumbed
-into CI. Wiring one builder with Incus plus that secret is what turns this from
-a seam into a signal, and `vm-test.sh`'s Haiku-specific assertions (gcc/make
+The image itself is no longer unproven: what `vm-test.sh` asserts — gcc/make
 present and able to compile and run a binary; a boot-time sshd hook installed
-on disk) are written from the recipe's own build script and get their first
-real check on that run.
+on disk — was verified against a booted guest on 2026-08-06 (see the status
+block at the top and the `notes:` in
+[`recipes/haiku-image/recipe.yaml`](../recipes/haiku-image/recipe.yaml)).
 
-That last assertion is deliberately mechanism-agnostic: it accepts either the
+In fleet CI, however, `haiku-image`'s `test.vm` still resolves to a reported
+**skip** on almost every builder: `HAIKU_BUILDER_SSH_KEY` is not yet plumbed
+into any builder's environment — a missing key is a green SKIP, not
+verification (roadmap Phase 9 open item). Wiring that secret into an
+incus-capable builder is what turns the hook from a one-off proof into a
+standing signal on every rebuild.
+
+The sshd assertion is deliberately mechanism-agnostic: it accepts either the
 `launch_daemon` job at `/boot/system/settings/launch/sshd` or a
 `~/config/settings/boot/UserBootscript`, and logs which one it found. Only the
-former runs on a headless boot, and the boot-repair work replaces the latter
-with it — naming just one would make the test fail on the very change that
-fixes what it is testing.
+former runs on a headless boot, and it is what the published image ships — the
+sshd `launch_daemon` job is the only launch job in the image (recipe `notes:`).
+Accepting both kept the test valid across the boot-repair change that swapped
+one for the other.

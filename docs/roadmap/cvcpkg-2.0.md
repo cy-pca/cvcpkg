@@ -1,6 +1,9 @@
 # Roadmap: cvcpkg 2.0 — production registry with trust & identity
 
-Status: **Planning** (no implementation started).
+Status: **Implemented** — historical founding design (drafted 2026-05);
+shipped as v2.0.0 (the [CHANGELOG](../../CHANGELOG.md) v2.0.0 entry cites
+this document). Superseded for live tracking by the sibling
+[CVCPKG-ROADMAP.md](CVCPKG-ROADMAP.md).
 Author: roadmap drafted 2026-05-22.
 Target: libcvc-deps v2.0.0 (with possible 1.x releases working up to it).
 

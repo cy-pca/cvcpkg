@@ -25,7 +25,7 @@ cacheable, and version-locked — you only pull what you need.
 pipx install cvcpkg
 
 # Or install from source:
-pip install -e '.[progress]'
+pip install -e .
 
 # List available components:
 cvcpkg list --available
@@ -42,6 +42,51 @@ cvcpkg verify --prefix ./deps
 # Remove a component (refuses if others depend on it; --cascade to include them):
 cvcpkg uninstall fftw3 --prefix ./deps
 ```
+
+## Documentation
+
+All documentation lives under [`docs/`](docs/).
+
+**Using cvcpkg**
+
+- [Installing cvcpkg](docs/pypi-install.md) — quick-install one-liners, standalone binaries, pip
+- [Getting-started tutorial](docs/getting-started-tutorial.md) — first recipe to first published package
+- [Building everything from source](docs/BUILDING.md) — per-platform prerequisites for a full `build-all`
+- [CMake integration](docs/cmake-integration.md) — consuming a prefix: `cvcpkgConfig.cmake`, toolchain file, activation
+- [Release channels](docs/release-channels.md) — live vs tagged releases, `--release` pins, yank lifecycle
+- [Build cache](docs/build-cache.md) — content-addressed local + server-side build caching
+- [Python wheels](docs/python-wheels.md) — the per-interpreter `-cpXXX` column model, no-GIL channel
+- [Capabilities & hardware](docs/capabilities-and-hardware.md) — virtual providers (CUDA peers), capability routing
+- [cpkg integration](docs/cpkg-integration.md) — using cvcpkg prefixes from `cpkg.lua` builds
+- [Legacy bundle usage](docs/USAGE.md) — the retired v1.x monolithic GitHub-Releases archives
+- [Known issues](docs/known-issues.md)
+
+**Authoring recipes**
+
+- [Recipe authoring](docs/recipe-authoring.md) — ownership model, `init`/`generate`, recipe anatomy
+- [Source recipes](docs/source-recipes.md) — file-artifact (`platform: any`) packages
+- [Image packages](docs/image-packages.md) — VM/OS images as packages, `cvcpkg image`, `test.vm`
+- [Mutual exclusion](docs/mutual-exclusion.md) — `provides:` slots, `conflicts:`, file-overlap detection
+- [Contributing](docs/CONTRIBUTING.md)
+
+**Running a server / fleet**
+
+- [Deployment guide](docs/deployment-guide.md) — production Docker + PostgreSQL stack
+- [Operator runbook](docs/operator-runbook.md) — day-2 operations, backups, PyPI publishing
+- [API reference](docs/api-reference.md) — the `/v1` REST surface
+- [Admin dashboard](docs/admin-dashboard.md) — the `/admin` web UI
+- [Organizations](docs/organizations.md) — org namespaces, members, private orgs, quotas
+- [Clusters & federation](docs/clusters-and-federation.md) — primary/mirror/edge roles, populate, mirror trust
+- [Analytics & telemetry](docs/analytics-and-telemetry.md) — download analytics, opt-in client telemetry
+- [OIDC identity](docs/oidc-identity.md) — SSO login for the admin dashboard
+- [Token rotation](docs/token-rotation.md) — rotating machine tokens with a grace window
+- [Remote builders](docs/cvcpkg-remote-builders.md) — operating the builder fleet ([multi-homed fleets](docs/builder-fleet.md), [WSL builders](docs/cvcpkg-builder-wsl-debian.md), [Windows cross-builds](docs/cvcpkg-builder-wsl-windows-cross.md))
+- [CI/CD pipeline](docs/ci-cd-pipeline.md) — deploy pipelines and repo workflows
+
+**Roadmap & design**
+
+- [Roadmap](docs/roadmap/CVCPKG-ROADMAP.md) — status snapshot, remaining work by phase, path to PyPI
+- [Design docs](docs/roadmap/) — active proposals and historical design records
 
 ## Recipe ownership
 
@@ -116,7 +161,10 @@ conflicts).
 
 > **Status: planned (roadmap Phase 23).**  This section describes a
 > direction, not shipped behavior.  It is documented here because it
-> shapes the recipe format; the checkboxes live in `CVCPKG-ROADMAP.md`.
+> shapes the recipe format; the full design lives in
+> [docs/roadmap/config-management.md](docs/roadmap/config-management.md)
+> and the tracking checkboxes in
+> [docs/roadmap/CVCPKG-ROADMAP.md](docs/roadmap/CVCPKG-ROADMAP.md).
 
 cvcpkg is not only for publishing packages.  A recipe set can be used as a
 **general build system and configuration-management tool** — closer in
@@ -163,8 +211,9 @@ Every state operation is recorded in a per-machine, hash-chained,
 append-only **transaction journal** (who, from where, what changed, with
 per-file before/after hashes) that cross-anchors to the server audit log —
 a tamper-evident paper trail for forensics that mainstream configuration
-tools do not provide.  See `CVCPKG-ROADMAP.md` Phase 23 for the full design,
-security model, and worked recipe examples.
+tools do not provide.  See
+[docs/roadmap/config-management.md](docs/roadmap/config-management.md) for
+the full design, security model, and worked recipe examples.
 
 ## Activating a prefix
 
@@ -1858,7 +1907,7 @@ concentrated in a short time window.
 
 ```bash
 # from the repo root
-pip install -e '.[progress,server]'
+pip install -e '.[server]'
 pytest
 ```
 
@@ -1878,8 +1927,9 @@ cvcpkg is a **[CyberPC Angel, LLC](https://cyberpcangel.com)** project —
 designed, funded, and maintained by the CyberPC Angel team, who own the
 project's intellectual property.
 
-Community contributions are welcome via pull request; see the full list of
-everyone who has contributed on the
+Community contributions are welcome via pull request — see
+[docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for the workflow — and the full
+list of everyone who has contributed on the
 [contributors page](https://github.com/transfix/libcvc-deps/graphs/contributors).
 
 ## License

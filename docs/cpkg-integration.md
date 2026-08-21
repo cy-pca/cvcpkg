@@ -63,13 +63,17 @@ add_dependency(function()
 end)
 ```
 
-### Fetching the shim over HTTP
+### Getting the shim
 
-cpkg can execute external Lua scripts over HTTP, so the shim can be pulled at
-build time instead of vendored:
+The shim is not served by cvcpkg-server; it ships in the cvcpkg repository at
+[`integrations/cpkg/cvcpkg.lua`](../integrations/cpkg/cvcpkg.lua). Vendor that
+one dependency-free file into your project (recommended), or — since cpkg can
+execute external Lua scripts over HTTP — pull it from GitHub at build time:
 
 ```lua
-local cvcpkg = load(io.popen("curl -fsSL https://cvcpkg.org/cvcpkg.lua"):read("*a"))()
+local cvcpkg = load(io.popen(
+  "curl -fsSL https://raw.githubusercontent.com/transfix/libcvc-deps/master/integrations/cpkg/cvcpkg.lua"
+):read("*a"))()
 ```
 
 ### Calling the CLI directly

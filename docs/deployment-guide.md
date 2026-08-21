@@ -53,9 +53,26 @@ curl http://localhost:8420/healthz
 | `CVCPKG_RELEASE` | `dev` | Release tag for OCI labels |
 | `TIMEZONE` | `UTC` | Container timezone |
 | `CVCPKG_MAX_UPLOAD_BYTES` | `4294967296` | Max bundle upload size (4 GiB). Accepts `8GB`/`512MB`; same as `cvcpkg server run --max-upload-bytes`. |
-| `CVCPKG_RATE_LIMIT_RPM` | `60` | Rate limit: requests/min for writes |
+| `CVCPKG_RATE_LIMIT_RPM` | `300` | Rate limit: requests/min per client IP on write endpoints (publish, upload, register, telemetry); `0` disables. `docker-compose.production.yml` passes the same `300` default. |
 | `CVCPKG_CORS_ORIGINS` | *(empty)* | Comma-separated allowed CORS origins |
 | `CVCPKG_LOG_JSON` | *(empty)* | Set `1` for structured JSON logs |
+
+### Server branding
+
+The landing pages can be re-branded without code changes:
+
+| Variable | Default | Description |
+|---|---|---|
+| `CVCPKG_SITE_TITLE` | `cvcpkg` | Site name — page `<title>` and hero heading |
+| `CVCPKG_SITE_TAGLINE` | `Package Archive` | Appended to the page title (`cvcpkg — Package Archive`) |
+| `CVCPKG_SITE_HERO` | *(built-in blurb)* | Hero paragraph on the landing page |
+| `CVCPKG_SITE_URL` | `https://cvcpkg.org` | Absolute origin used to build social-preview (Open Graph / Twitter) image URLs |
+| `CVCPKG_SITE_LOGO` | *(bundled gears logo)* | Favicon and social image: an `http(s)://` URL (linked directly) or a path to a local image file (png/svg/ico/jpg/gif/webp, served by the backend). Missing or unreadable files fall back to the bundled logo |
+| `CVCPKG_GITHUB_REPO` | `transfix/libcvc-deps` | `owner/repo` slug behind the GitHub links in the navbar and footer |
+
+`docker-compose.production.yml` does not forward these, so for Compose
+deployments add the ones you set to the `backend` service's `environment:`
+block (they are read by the server process, not baked at build time).
 
 ## TLS Configuration
 

@@ -44,6 +44,11 @@ asymmetrically**, which matters more than the brevity (see below).
 Slot names live in their own namespace, so unlike package names they may carry
 a dot: `cpython-3.13` is the expected shape.
 
+Slots are also how hardware-specific peers work: requesting a slot name picks
+the best provider the host's capabilities allow (e.g. `torch-cp311` resolves to
+`torch-cp311-cuda` on a CUDA host) — see
+[capabilities-and-hardware.md](capabilities-and-hardware.md).
+
 ## `conflicts:` — explicit pairs
 
 ```yaml

@@ -39,7 +39,7 @@ backend (a Rust-based tool). On BSD platforms:
 Install `cryptography` from **OS packages** (pre-built by
 ports/packages maintainers) before running `pip install cvcpkg`:
 
-| OS | Command | Package version |
+| OS | Command | Package version (as tested) |
 |---|---|---|
 | FreeBSD 14.4 | `pkg install -y py311-cryptography` | 46.0.7 |
 | OpenBSD 7.7 | `pkg_add py3-cryptography` | 44.0.2 |
@@ -47,6 +47,50 @@ ports/packages maintainers) before running `pip install cvcpkg`:
 
 The BSD remote builders run this step automatically before
 installing cvcpkg.
+
+### Escape hatch: standalone binaries need no pip at all
+
+The [`cvcpkg-standalone.yml`](../.github/workflows/cvcpkg-standalone.yml)
+workflow builds single-file PyInstaller executables that embed the
+Python runtime and every dependency — `cryptography` included — so
+neither pip nor Rust nor OS packages are needed. It attaches these to
+the GitHub Release for each `cvcpkg-v*` tag, alongside `.sha256`
+checksums:
+
+- `cvcpkg-freebsd-x86_64`
+- `cvcpkg-openbsd-x86_64`
+- `cvcpkg-netbsd-x86_64`
+
+(plus `cvcpkg-linux-x86_64`, `cvcpkg-macos-arm64`, and
+`cvcpkg-windows-x86_64.exe` for the other platforms).
+
+The quick-install script detects FreeBSD/OpenBSD/NetBSD on x86_64,
+downloads the matching asset, verifies its sha256, and installs to
+`~/.local/bin` (override with `CVCPKG_INSTALL_DIR`; pin a tag with
+`CVCPKG_VERSION`):
+
+```sh
+curl -fsSL https://cvcpkg.org/install.sh | sh
+```
+
+One build-side quirk: upstream PyInstaller ships no NetBSD bootloader,
+so the NetBSD binary is built from a PyInstaller source tree with
+[`recipes/pyinstaller-cp313/netbsd-platform-tables.patch`](../recipes/pyinstaller-cp313/netbsd-platform-tables.patch)
+applied (submitted upstream). The other five platforms use the same
+PyInstaller version from PyPI.
+
+### Related: the jsonschema pin
+
+`cvcpkg` pins `jsonschema = ">=4.0,<4.18"` in
+[`pyproject.toml`](../pyproject.toml) for the same underlying reason:
+jsonschema 4.18 swapped the pure-Python `pyrsistent` for `rpds-py`,
+which is Rust. PyPI ships no BSD wheels for it and the BSD builders
+have no cargo, so an unbounded bound makes `pip install cvcpkg`
+unsatisfiable on the BSDs. Lifting the pin is gated on a
+rust-toolchain recipe — see
+[roadmap/platform-coverage-pypi-blockers.md](roadmap/platform-coverage-pypi-blockers.md)
+(§W11). Do not install jsonschema explicitly on the BSD VMs either;
+let `pip install .` resolve it inside the pin.
 
 ### OpenBSD disk requirements
 
@@ -69,182 +113,77 @@ module works on OpenBSD 7.7:
 - Bytes signing (`sign_bytes`) and verification (`verify_bytes`)
 - PEM key serialization and keyring management
 
-## Windows static builds: mpfr hang in vcpkg
+## cvcpkg.org: sporadic 502s through the reverse proxy
 
 ### Symptom
 
-When running vcpkg's `mpfr` port against the `x64-windows-static`
-triplet on hosted GitHub Actions `windows-latest` runners, the build
-stalls indefinitely (>1.5 h observed; never completes within the
-6 h hosted-runner cap) after the autotools `configure` stage.
+Very occasionally, a request to `cvcpkg.org` returns `502 Bad
+Gateway` and succeeds on the next attempt. Measured against
+production in August 2026: 40 of 540,889 requests over two days
+(0.0074%), spread 1–4 per hour.
 
-Comparable `x64-windows` (dynamic) builds of the same port and
-version complete in ~6 minutes total via the same code path.
+### Root cause
 
-### Reproduction in CI
+`cvcpkg.org` runs uvicorn behind a TLS-terminating reverse proxy
+(see [deployment-guide.md](deployment-guide.md)). A proxy in that
+position occasionally hands back a 5xx that has nothing to do with
+the request — reusing a backend keep-alive connection the app
+already closed, a worker recycling, a deploy swapping the container.
 
-Observed twice in the `libcvc-deps` release pipeline on
-`windows-latest` (windows-2025 → redirected to windows-2025-vs2026):
+### Mitigation
 
-* Workflow runs `25697939991` and `25769524450`.
-* `windows-vcpkg (Debug, x64-windows-static)` and
-  `windows-vcpkg (Release, x64-windows-static)` jobs.
-* vcpkg port `mpfr@4.2.2#1`, triplet `x64-windows-static`.
+Since #502 the client's download path retries transient failures
+itself: [`src/cvcpkg/retry.py`](../src/cvcpkg/retry.py) retries 408,
+425, 429, 502, 503, 504 and connection-level faults (reset, timeout,
+incomplete read, remote disconnect) on idempotent GET/HEAD requests,
+bounded by both attempt count and a wall-clock budget. Deliberately
+*not* retried: every 4xx, plain 500 (a deterministic application
+bug), TLS verification failures, and SHA-256 mismatches.
 
-Log evidence (from job `75689399776`):
+If a single 502 fails an install for you, update cvcpkg. If you hit
+`cvcpkg.org` directly from your own scripts, add your own retry —
+e.g. `curl -fsSL --retry 3`.
 
-```
-00:36:42  Installing 113/124 mpfr:x64-windows-static@4.2.2#1...
-00:36:42  Building mpfr:x64-windows-static@4.2.2#1...
-00:36:44  Successfully downloaded mpfr-4.2.2.tar.xz
-00:36:45  -- Extracting source D:/vcpkg-downloads/mpfr-4.2.2.tar.xz
-00:36:47  -- Loading CMake variables from .../cmake-get-vars_C_CXX-x64-windows-static.cmake.log
-00:37:01  Downloading msys2-gmp-6.3.0-2-x86_64.pkg.tar.zst, trying https://mirror.msys2.org/msys/x86_64/gmp-6.3.0-2-x86_64.pkg.tar.zst
-00:37:01  Successfully downloaded msys2-gmp-6.3.0-2-x86_64.pkg.tar.zst
-00:37:05  Downloading msys2-mpfr-4.2.2-1-x86_64.pkg.tar.zst, trying https://mirror.msys2.org/msys/x86_64/mpfr-4.2.2-1-x86_64.pkg.tar.zst
-00:37:06  Successfully downloaded msys2-mpfr-4.2.2-1-x86_64.pkg.tar.zst
-   <silence — no further log output for >1h32m; job cancelled at 02:09>
-```
+## Windows static builds: vcpkg hangs on x64-windows-static (historical)
 
-Compare to the same step on the dynamic triplet (job
-`75689399753`, `x64-windows`):
+The original libcvc-deps release pipeline
+(`.github/workflows/release.yml`) built Windows bundles with vcpkg on
+hosted GitHub runners. Two of its autotools-based ports hung
+indefinitely under the `x64-windows-static` triplet while the same
+port versions on the dynamic `x64-windows` triplet, same runner
+image, completed in minutes:
 
-```
-00:23:33  Building mpfr:x64-windows@4.2.2#1...
-00:23:53  Successfully downloaded msys2-mpfr-4.2.2-1-x86_64.pkg.tar.zst
-00:26:34  -- Using cached msys2-mpfr-4.2.2-1-x86_64.pkg.tar.zst
-00:29:32  -- Fixing pkgconfig file: .../mpfr_x64-windows/lib/pkgconfig/mpfr.pc
-00:29:32  Elapsed time to handle mpfr:x64-windows: 6 min
-```
+- **mpfr** — silent stall right after the MSYS2 gmp/mpfr package
+  downloads, inside the `vcpkg_make_configure`/`vcpkg_make_install`
+  libtool path; >1.5 h with no further log output vs ~6 min on the
+  dynamic triplet. Reproduced across release runs `25697939991` and
+  `25769524450`.
+- **grpc** (and transitive deps `abseil`, `c-ares`, `protobuf`) —
+  the same class of stall during dependency install.
 
-Same vcpkg port + version, same runner image, only the triplet
-differs. Static triplet hangs after MSYS2 packages download
-(during `vcpkg_make_configure`/`vcpkg_make_install` invocation of
-the bundled `libtool`) and never produces another log line.
+The root cause was never isolated. The suspects were an MSYS2
+`fork()` retry loop against the runner's real-time AV scanning and a
+libtool static-relink hang — both known trouble spots for the
+vcpkg + MSYS2 + hosted-runner combination. The hang was never
+observed on developer machines without real-time AV scanning of the
+build tree.
 
-### Suspected cause
+Two consequences baked into the `v1.0.0` release still stand:
 
-vcpkg's `mpfr` port uses `vcpkg_make_configure` + `vcpkg_make_install`
-(autotools), which shells out to an MSYS2 `libtool`. On the
-`x64-windows-static` triplet, libtool runs an extra static-archive
-relink step (`ar`/`ranlib`) inside the MSYS2 environment that on
-GitHub's hosted Windows runners exhibits one of:
+- The Windows artifacts are shared-only
+  (`libcvc-deps-<ver>-windows-x86_64-{debug,release}.zip`); no
+  `*-static` Windows artifact was ever produced.
+- The gRPC/Protobuf stack in the Windows bundle resolves to `.dll`
+  runtime artifacts stitched in from the shared triplet (the same
+  hybrid-static fallback used for cgal/gmp/mpfr).
 
-* A `fork()` retry loop in MSYS2 against Windows Defender real-time
-  scan on `D:\vcpkg-buildtrees/...` (the runner's `D:` drive is the
-  Azure ephemeral volume).
-* libtool hanging in a wait on a stalled background `cmd.exe`
-  invocation from `vcpkg_execute_in_download_mode` when relinking
-  with the static CRT.
-
-Both patterns are known issues in the vcpkg + MSYS2 + hosted-runner
-combination and have surfaced in adjacent vcpkg ports
-(`gettext`, `libtool`, `gmp` historically). They do not occur on
-the dynamic triplet because the libtool relink for `.dll` output
-does not trigger the same path.
-
-We have not isolated the root cause beyond confirming the symptom
-reproduces deterministically across runs and that the dynamic
-triplet of the identical port version is unaffected.
-
-### Mitigation in this repo
-
-`x64-windows-static` is removed from the release matrix. The
-Windows artifact in `v1.0.0` is shared-only:
-
-* `libcvc-deps-<ver>-windows-x86_64-debug.zip`
-* `libcvc-deps-<ver>-windows-x86_64-release.zip`
-
-A `*-static` Windows artifact is not produced.
-
-### Re-enabling once fixed
-
-When upstream vcpkg or its `mpfr` port resolves this (or we
-introduce an overlay port that builds mpfr via a non-autotools
-path, e.g. MSBuild project files generated from the source tree),
-restore the `x64-windows-static` entries to both Windows matrices
-in `.github/workflows/release.yml`:
-
-```yaml
-# windows-vcpkg.strategy.matrix.include:
-  - build_type: Debug
-    triplet: x64-windows-static
-  - build_type: Release
-    triplet: x64-windows-static
-
-# windows.strategy.matrix.include:
-  - build_type: Debug
-    link: static
-  - build_type: Release
-    link: static
-```
-
-Then bump `vcpkg-deps-...-v2-...` and `vtk-...-v2` cache keys to
-`-v3` if the prep stages' cache layout needs invalidating.
-
-### Workaround for downstream consumers needing static-link Windows
-
-If you need a static-link Windows bundle right now:
-
-1. Clone this repo on a Windows host.
-2. Run `vcpkg install <packages> --triplet x64-windows-static`
-   locally with the same package list as
-   `.github/workflows/release.yml` (`windows-vcpkg` job). The
-   hang has only been observed on the GitHub-hosted runners; on
-   most developer Windows machines (no real-time AV scan on the
-   build tree) `mpfr` completes in well under 10 min.
-3. Continue the staging steps manually following the patterns in
-   the `windows` assemble job of the workflow.
-
-Or, with our own self-hosted Windows runner (planned), the
-`x64-windows-static` matrix entries can be restored with
-`runs-on: [self-hosted, windows]` overriding the hosted runner.
-
-## Windows static builds: grpc hang in vcpkg
-
-### Symptom
-
-When running vcpkg's `grpc` port (or any of its transitive
-dependencies — `abseil`, `c-ares`, `protobuf`) against the
-`x64-windows-static` triplet on hosted GitHub Actions
-`windows-latest` runners, the build stalls indefinitely during the
-`Install vcpkg dependencies` step. We have observed >1.5 h with
-the job still in dependency install and no further progress, while
-the same packages against the `x64-windows` (shared) triplet
-finish in under 20 minutes.
-
-This is the same class of failure as the `mpfr` hang documented
-above: a vcpkg port build under `x64-windows-static` that completes
-quickly under `x64-windows`.
-
-### Mitigation in this repo
-
-The `windows-vcpkg` job skips `protobuf[libprotoc]` and `grpc`
-from the `x64-windows-static` install set. The `windows` assemble
-job then restores the `x64-windows` (shared) cache alongside the
-static one and stitches the gRPC / Protobuf stack into the static
-bundle as shared `.dll` + import `.lib` + headers + cmake configs,
-using the same hybrid-static fallback mechanism already in place
-for cgal/gmp/mpfr.
-
-The transitive support libraries shipped from the shared tree in
-the static bundle are: `abseil`, `c-ares`, `OpenSSL`, `re2`,
-`upb`, `utf8_range`, `zlib`. Codegen tools (`protoc.exe`,
-`grpc_*_plugin.exe`) and the `tools/protobuf` and `tools/grpc`
-subtrees are likewise copied from the shared tree.
-
-The result: the Windows static bundle exposes the same
-`find_package(Protobuf)` / `find_package(gRPC)` surface as the
-shared bundle, just with those packages resolving to `.dll`
-runtime artifacts inside an otherwise-`.lib` install prefix.
-
-### Re-enabling once fixed
-
-When upstream vcpkg or the affected ports resolve this on the
-static triplet, restore `'protobuf[libprotoc]','grpc'` to the
-static install package set in `.github/workflows/release.yml`
-(`windows-vcpkg` job, inside the
-`if ('${{ matrix.triplet }}' -eq 'x64-windows-static')` block)
-and drop the matching entries from the assemble job's
-`$fbPrefixes` fallback array.
-
+The re-enable instructions that used to live in this section targeted
+matrix entries in `release.yml`, which was retired once package
+building migrated to the cvcpkg remote-builder system and deleted in
+July 2026 (commit `79946574`). Windows packages are now produced by
+the recipe pipeline instead — `windows-build.yml` on hosted
+`windows-2022` runners plus the self-hosted Windows builders (see
+[cvcpkg-remote-builders.md](cvcpkg-remote-builders.md)) — which does
+not build through vcpkg triplet matrices. If you resurrect a
+vcpkg-based static Windows build, assume the hang still reproduces on
+hosted runners until verified otherwise.

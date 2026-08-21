@@ -46,6 +46,59 @@ globs) and validate:
 python packaging/validate.py recipes/mylib
 ```
 
+## Generate from an existing project with `cvcpkg generate`
+
+Where `init` leaves every field a `TODO`, `cvcpkg generate` starts from a
+project that already builds:
+
+```bash
+cvcpkg generate ../mylib          # detect and write recipes/mylib/
+cvcpkg generate . --dry-run       # print what it would write
+```
+
+It detects the build system — CMake, Meson, Autotools, a plain Makefile, or
+Python packaging (PEP 621 `pyproject.toml`, Poetry, `setup.cfg`) — reads the
+metadata the project already declares (name, version, description, homepage,
+license, dependencies) and writes a `recipe.yaml` with those fields filled
+in, plus a matching `build.sh` (and a `build.ps1` for CMake and Python
+projects, the two with a Windows story out of the box). A git checkout also
+gets its `source:` block prefilled from the `origin` remote and current
+commit. If a project carries both a `CMakeLists.txt` and a `pyproject.toml`
+(scikit-build, pybind11), Python wins: that is the entry point that installs
+the importable package.
+
+Two rules shape the output:
+
+- **It never emits a dependency that does not resolve.** Detected dependency
+  names (CMake packages, pkg-config modules, PyPI names) are matched against
+  the recipe set cvcpkg can actually resolve — including `provides` slots —
+  and anything unmatched becomes a commented suggestion, so the result
+  passes `cvcpkg validate` as generated.
+- **Anything the project did not state is written as a `TODO`**, so guesses
+  surface in review instead of silently shipping a wrong value.
+
+Everything that resolves is filed under `depends.build`, with `runtime` left
+empty — review that split before publishing: a library the project links
+against belongs in `depends.runtime` or it will not ship (see
+[key fields](#key-fields)). Note also that a generated Python recipe builds
+the project tree with `pip install . --no-deps`; a package headed for the
+shared per-interpreter `-cpXXX` matrix uses the `python_wheel` /
+`python_sdist` model from [python-wheels.md](python-wheels.md) instead.
+
+| Flag | Meaning |
+|------|---------|
+| `--build-system {auto,cmake,autotools,meson,make,python}` | Override detection (default `auto`). |
+| `--name` | Recipe name (default: the project's own). |
+| `--dir` | Recipes directory to create the recipe in (default `recipes`). |
+| `--recipes-dir` | Recipe directory to resolve detected dependencies against (repeatable). |
+| `--no-default-recipes` | Do not consult the default recipe set when resolving dependencies. |
+| `--dry-run` | Print the recipe instead of writing it. |
+| `--force` | Overwrite an existing recipe directory. |
+
+If no build system can be detected, the command fails and names the marker
+files it looked for — pass `--build-system` to force one, or fall back to
+`cvcpkg init` for a blank scaffold.
+
 ## `recipe.yaml` structure
 
 ```yaml
@@ -126,6 +179,11 @@ its own recipes with `cvcpkg validate ./cvcpkg/recipes/<name>` or
 - **`package.files`** — glob patterns selecting what ends up in the bundle.
   Use `lib/*/…` variants to catch Debian multiarch paths (e.g.
   `lib/x86_64-linux-gnu/`).
+- **Python packages** are a special case: they use the `python_wheel` /
+  `python_sdist` source types plus a `python:` block naming the target
+  interpreter and ABI, and every Python package is published as a matrix of
+  per-interpreter column recipes (`-cp311`, `-cp312`, `-cp313`, `-cp313t`).
+  See [python-wheels.md](python-wheels.md) before authoring one.
 
 ### Cross-compilation host tools
 
@@ -204,3 +262,14 @@ cvcpkg recipe push mylib --server "$CVCPKG_SERVER_URL" --token "$CVCPKG_TOKEN"
 
 Once a recipe is on the server, the builder fleet can build it for every
 platform and publish the resulting bundles to the catalog.
+
+Pushed recipes are also **browsable**. The server's package page
+(`/package/<name>`) shows the recipe: the yaml, its build scripts and
+patches. The same content is served over the API — `GET /v1/recipe/{name}`
+returns the raw `recipe.yaml`, with `…/files` (list every artifact),
+`…/file?path=…` (fetch one) and `…/archive` (tar.gz or zip) companions;
+scope organization recipes with `?org=<org>`. The archive extracts into a
+well-formed recipe directory — `<name>/` plus the shared `_common/` helpers
+its scripts source — so it is directly usable with
+`cvcpkg build <name> --recipes-dir <dir>`. See
+[api-reference.md](api-reference.md).
