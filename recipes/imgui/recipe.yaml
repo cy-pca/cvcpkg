@@ -48,6 +48,11 @@ build:
       script: build.sh
     - platform: netbsd
       script: build.sh
+    # windows: MSVC (cl.exe) via build.ps1 — compiles the core .cpp and archives
+    # a STATIC imgui.lib (ImGui exports no __declspec(dllexport) symbols, so a DLL
+    # would export nothing). Consumers link the static lib directly.
+    - platform: windows
+      script: build.ps1
     # wasm: cross-compiled with em++ (see build-wasm.sh — the shared build.sh
     # would emit NATIVE objects because env-wasm.sh inherits CXX=g++).
     # Static only; wasm has no shared libraries.
@@ -58,6 +63,7 @@ build:
 package:
   files:
     - lib/libimgui*
+    - lib/imgui.lib
     - include/imgui/
 
 abi:
