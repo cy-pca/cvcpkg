@@ -1,0 +1,69 @@
+name: build-wasm-deps-catx03
+
+# The cvcpkg populate fleet's wasm builders can not resolve CVC_EMSDK_DIR
+# (their toolchain step writes '${PREFIX}' literal instead of the real path).
+# catx-03 has emsdk properly set up via the cyberpcangel-cvcgl nightly, so
+# route wasm dep builds here explicitly, then publish via this repo's already-
+# configured CVCPKG_PUBLISHER_TOKEN. Manual dispatch only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      recipes:
+        description: "Recipes to pack + publish (space-separated)"
+        required: true
+        default: "zlib bzip2 xz zstd libpng libjpeg-turbo tiff freetype libwebp libxml2 lerc assimp imagemagick"
+
+concurrency:
+  group: wasm-deps-catx03
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-publish:
+    runs-on: [self-hosted, Linux, X64]
+    env:
+      CVC_EMSDK_DIR: /opt/cvc-wasm/emsdk
+      CVC_WASM_DEPS: /opt/cvc-wasm/deps-wasm-mt
+      CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISHER_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use the runner's cvcpkg CMake
+        run: echo "/opt/cvc-wasm/cmake-cvcpkg/bin" >> "$GITHUB_PATH"
+
+      - name: Locate cvcpkg
+        run: |
+          if command -v cvcpkg >/dev/null 2>&1; then
+            echo "cvcpkg present at $(command -v cvcpkg)"
+          else
+            python3 -m pip install --user --upgrade .
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          fi
+          PATH="$HOME/.local/bin:$PATH" cvcpkg --version
+
+      - name: Pack the wasm dep closure on catx-03
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for r in ${{ inputs.recipes }}; do
+            echo "=== packing $r for wasm ==="
+            cvcpkg pack "$r" \
+              --recipes-dir recipes --no-default-recipes \
+              --prefix "$CVC_WASM_DEPS" \
+              --platform wasm \
+              --config release --link static \
+              --output-dir dist/ || echo "  (skipped: $r)"
+          done
+          ls -la dist/
+
+      - name: Publish freshly packed bundles
+        run: |
+          set -euo pipefail
+          for f in dist/*.tar.gz; do
+            [ -e "$f" ] || { echo "no archives produced"; exit 1; }
+            echo "=== publish $f ==="
+            cvcpkg publish "$f" --server https://cvcpkg.org
+          done
