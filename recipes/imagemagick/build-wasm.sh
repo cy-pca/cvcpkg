@@ -36,6 +36,9 @@ emconfigure bash -c '
     # libMagickCore is ~5% — an acceptable tradeoff for actual PNG support.
     export CFLAGS="-O1 ${CFLAGS:-}"
     export CXXFLAGS="-O1 ${CXXFLAGS:-}"
+    # libtiff.a references private deps (lerc, zstd) not carried through by
+    # its .pc Requires; add them explicitly for the magick CLI link step.
+    export LIBS="-llerc -lzstd -lsharpyuv ${LIBS:-}"
     exec ./configure "$@"
 ' _ \
     --prefix="${CVC_INSTALL_DIR}" \

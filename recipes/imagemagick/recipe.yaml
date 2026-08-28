@@ -32,7 +32,7 @@ recipe:
   # `pkg-config --libs` drops. build.sh now links -lsharpyuv/-lzstd/-lLerc via
   # $LIBS. (cvc.9 release linked only because that fleet job happened to see a
   # system libwebp bundling sharpyuv; not reproducible/portable.)
-  cvc_revision: 16
+  cvc_revision: 17
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
