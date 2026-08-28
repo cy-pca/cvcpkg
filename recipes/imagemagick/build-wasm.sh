@@ -16,19 +16,23 @@ export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig:${CVC_DEPS_PREFIX}/shar
 export CPPFLAGS="-I${CVC_DEPS_PREFIX}/include ${CPPFLAGS:-}"
 export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib ${LDFLAGS:-}"
 
-# emconfigure sets PKG_CONFIG_LIBDIR to emscripten's sysroot pkgconfig only,
-# which OVERRIDES PKG_CONFIG_PATH — so pkg-config never sees the wasm-deps
-# libpng/libjpeg/libwebp/libtiff/libfreetype/libxml2 .pc files, every
-# PKG_CHECK_MODULES probe returns no, and PNG_DELEGATE ends up FALSE
-# (the built libMagickCore had 0 png_read_ symbols despite --with-png).
-# Point PKG_CONFIG_LIBDIR at both the wasm-deps prefix AND the emscripten
-# sysroot, and set CPPFLAGS/LDFLAGS inline so they survive emconfigure's
-# child env.
-PKG_CONFIG_LIBDIR="${CVC_DEPS_PREFIX}/lib/pkgconfig:${CVC_DEPS_PREFIX}/share/pkgconfig:${EMSDK}/upstream/emscripten/cache/sysroot/lib/pkgconfig:${EMSDK}/upstream/emscripten/cache/sysroot/local/lib/pkgconfig" \
-PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig:${CVC_DEPS_PREFIX}/share/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}" \
-CPPFLAGS="-I${CVC_DEPS_PREFIX}/include ${CPPFLAGS:-}" \
-LDFLAGS="-L${CVC_DEPS_PREFIX}/lib ${LDFLAGS:-}" \
-emconfigure ./configure \
+# emconfigure hard-sets PKG_CONFIG_LIBDIR to emscripten's sysroot pkgconfig
+# only — pkg-config uses PKG_CONFIG_LIBDIR EXCLUSIVELY when set, so
+# PKG_CHECK_MODULES([PNG],[libpng >= 1.0.0]) never sees the wasm-deps
+# libpng.pc, PNG_DELEGATE ends up FALSE, and the built libMagickCore has
+# 0 png_read_ symbols (despite --with-png). Ditto every other delegate.
+#
+# Wrap emconfigure in a shell that RE-sets PKG_CONFIG_LIBDIR after
+# emconfigure has run its own env manipulation — bash-c's env comes from
+# emconfigure's env, but the assignments inside the string run last, so
+# they win.
+emconfigure bash -c '
+    export PKG_CONFIG_LIBDIR="'"${CVC_DEPS_PREFIX}"'/lib/pkgconfig:'"${CVC_DEPS_PREFIX}"'/share/pkgconfig:${PKG_CONFIG_LIBDIR}"
+    export PKG_CONFIG_PATH="'"${CVC_DEPS_PREFIX}"'/lib/pkgconfig:'"${CVC_DEPS_PREFIX}"'/share/pkgconfig:${PKG_CONFIG_PATH:-}"
+    export CPPFLAGS="-I'"${CVC_DEPS_PREFIX}"'/include ${CPPFLAGS:-}"
+    export LDFLAGS="-L'"${CVC_DEPS_PREFIX}"'/lib ${LDFLAGS:-}"
+    exec ./configure "$@"
+' _ \
     --prefix="${CVC_INSTALL_DIR}" \
     --host=none-none-none \
     --disable-shared \
