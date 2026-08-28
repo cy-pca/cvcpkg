@@ -16,10 +16,15 @@ export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig:${CVC_DEPS_PREFIX}/shar
 export CPPFLAGS="-I${CVC_DEPS_PREFIX}/include ${CPPFLAGS:-}"
 export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib ${LDFLAGS:-}"
 
-# emconfigure runs configure with a sanitized env — PKG_CONFIG_PATH from the
-# shell doesn't reach ImageMagick's PKG_CHECK_MODULES probes, so PNG/JPEG/WebP
-# etc. silently fell back to "no". Set it inline on the configure command so
-# it survives into the child process. Same for CPPFLAGS/LDFLAGS.
+# emconfigure sets PKG_CONFIG_LIBDIR to emscripten's sysroot pkgconfig only,
+# which OVERRIDES PKG_CONFIG_PATH — so pkg-config never sees the wasm-deps
+# libpng/libjpeg/libwebp/libtiff/libfreetype/libxml2 .pc files, every
+# PKG_CHECK_MODULES probe returns no, and PNG_DELEGATE ends up FALSE
+# (the built libMagickCore had 0 png_read_ symbols despite --with-png).
+# Point PKG_CONFIG_LIBDIR at both the wasm-deps prefix AND the emscripten
+# sysroot, and set CPPFLAGS/LDFLAGS inline so they survive emconfigure's
+# child env.
+PKG_CONFIG_LIBDIR="${CVC_DEPS_PREFIX}/lib/pkgconfig:${CVC_DEPS_PREFIX}/share/pkgconfig:${EMSDK}/upstream/emscripten/cache/sysroot/lib/pkgconfig:${EMSDK}/upstream/emscripten/cache/sysroot/local/lib/pkgconfig" \
 PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig:${CVC_DEPS_PREFIX}/share/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}" \
 CPPFLAGS="-I${CVC_DEPS_PREFIX}/include ${CPPFLAGS:-}" \
 LDFLAGS="-L${CVC_DEPS_PREFIX}/lib ${LDFLAGS:-}" \
