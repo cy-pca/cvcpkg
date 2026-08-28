@@ -56,7 +56,7 @@ emconfigure bash -c '
     --with-png \
     --with-webp \
     --with-tiff \
-    --with-freetype \
+    --without-freetype \
     --without-jbig \
     --without-raw \
     --without-openjp2 \
