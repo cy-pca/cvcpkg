@@ -8,7 +8,7 @@ recipe:
   # FindZLIB's ${ZLIB_LIBRARIES}), so `find_package(assimp)` + link assimp::assimp
   # failed on every consumer. Fixed by the shared cvc_rewrite_install_paths helper
   # now relocating $CVC_DEPS_PREFIX paths too; this bump ships the corrected bundle.
-  cvc_revision: 5
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
