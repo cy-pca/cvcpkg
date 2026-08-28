@@ -16,6 +16,13 @@ export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig:${CVC_DEPS_PREFIX}/shar
 export CPPFLAGS="-I${CVC_DEPS_PREFIX}/include ${CPPFLAGS:-}"
 export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib ${LDFLAGS:-}"
 
+# emconfigure runs configure with a sanitized env — PKG_CONFIG_PATH from the
+# shell doesn't reach ImageMagick's PKG_CHECK_MODULES probes, so PNG/JPEG/WebP
+# etc. silently fell back to "no". Set it inline on the configure command so
+# it survives into the child process. Same for CPPFLAGS/LDFLAGS.
+PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig:${CVC_DEPS_PREFIX}/share/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}" \
+CPPFLAGS="-I${CVC_DEPS_PREFIX}/include ${CPPFLAGS:-}" \
+LDFLAGS="-L${CVC_DEPS_PREFIX}/lib ${LDFLAGS:-}" \
 emconfigure ./configure \
     --prefix="${CVC_INSTALL_DIR}" \
     --host=none-none-none \
