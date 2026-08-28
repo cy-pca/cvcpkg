@@ -23,7 +23,11 @@ permissions:
 
 jobs:
   build-and-publish:
-    runs-on: [self-hosted, Linux, X64]
+    # cy-pca label pins this to catx-03 — the ONLY runner with the emsdk
+    # bundle at /opt/cvc-wasm/emsdk + the wasm-deps prefix. Without the label
+    # runs land on any generic self-hosted linux where env-wasm.sh can't
+    # source emsdk_env.sh ("No such file or directory") and every recipe fails.
+    runs-on: [self-hosted, Linux, X64, cy-pca]
     env:
       CVC_EMSDK_DIR: /opt/cvc-wasm/emsdk
       CVC_WASM_DEPS: /opt/cvc-wasm/deps-wasm-mt
