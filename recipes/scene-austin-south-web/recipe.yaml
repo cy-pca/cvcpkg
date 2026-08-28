@@ -1,0 +1,49 @@
+schema_version: 1
+recipe:
+  name: scene-austin-south-web
+  upstream_version: "1.0.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://cyberpcangel.com
+  license: CC-BY-4.0
+  tags: [scene, geospatial, dataset, cvcgl, wasm]
+  description: >-
+    Downscaled downtown Austin scene bundle for wasm/browser demos —
+    same footprint (±1500 metres) and same file names as
+    scene-austin-south, but stripped to the four files a nav demo needs
+    (terrain.json, buildings.glb, satellite.png) with satellite downscaled
+    so the total preload payload fits under ~15 MB. Meant to be baked into
+    a wasm module's .data file via emscripten --preload-file.
+
+    Install this INSTEAD OF scene-austin-south for the wasm build. Same
+    install path (share/cvc-scenes/austin_south/), so the demo code paths
+    are identical.
+
+source:
+  type: none
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - share/cvc-scenes/austin_south/
+
+notes:
+  - title: "Pairing"
+    platforms: [any]
+    description: >-
+      Pair with vehicle-humvee to give the wasm demos a real vehicle
+      model. Both together are ~15.6 MB.

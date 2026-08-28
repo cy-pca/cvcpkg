@@ -1,0 +1,55 @@
+schema_version: 1
+recipe:
+  name: scene-austin-south
+  upstream_version: "1.0.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://cyberpcangel.com
+  license: CC-BY-4.0
+  tags: [scene, geospatial, dataset, cvcgl]
+  description: >-
+    Full-resolution downtown Austin, TX scene bundle for cvcgl demos: 3km x
+    3km terrain elevation grid, extruded buildings mesh, Mapbox satellite
+    imagery, plus derived maps (roads, water, foliage, navigation) and
+    high-res LOD sidecars. ~230 MB total.
+
+    For wasm/browser demos where a 230 MB preload is prohibitive, install
+    scene-austin-south-web instead — same layout, downscaled to ~15 MB.
+
+    Structure:
+      share/cvc-scenes/austin_south/{terrain.json, buildings.glb,
+        satellite.png, foliage_*, navmask.png, roads.png, water.png, ...}
+
+    The nav demos discover the bundle via CVC_NAV_BUNDLE env, --bundle argv,
+    or the CMake CVC_WASM_BUNDLE option for wasm preload. Use this recipe
+    as the template for future scene bundles (scene-<city>).
+
+source:
+  type: none
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - share/cvc-scenes/austin_south/
+
+notes:
+  - title: "Loading the bundle at runtime"
+    platforms: [any]
+    description: >-
+      Native demos discover it via CVC_NAV_BUNDLE=<prefix>/share/cvc-scenes/austin_south
+      or the --bundle argv. Install alongside vehicle-humvee so the demos
+      resolve <bundle>/../../shared/Humvee.glb.
