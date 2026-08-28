@@ -31,6 +31,11 @@ emconfigure bash -c '
     export PKG_CONFIG_PATH="'"${CVC_DEPS_PREFIX}"'/lib/pkgconfig:'"${CVC_DEPS_PREFIX}"'/share/pkgconfig:${PKG_CONFIG_PATH:-}"
     export CPPFLAGS="-I'"${CVC_DEPS_PREFIX}"'/include ${CPPFLAGS:-}"
     export LDFLAGS="-L'"${CVC_DEPS_PREFIX}"'/lib ${LDFLAGS:-}"
+    # -O1: emcc/clang 23 crashes with a segfault on coders/png.c at -O2
+    # (default). -O1 codegen is stable; the size delta of the resulting
+    # libMagickCore is ~5% — an acceptable tradeoff for actual PNG support.
+    export CFLAGS="-O1 ${CFLAGS:-}"
+    export CXXFLAGS="-O1 ${CXXFLAGS:-}"
     exec ./configure "$@"
 ' _ \
     --prefix="${CVC_INSTALL_DIR}" \
