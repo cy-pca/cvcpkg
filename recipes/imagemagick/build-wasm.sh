@@ -66,5 +66,30 @@ emconfigure bash -c '
 emmake make -j "${CVC_JOBS}"
 emmake make install
 
+# ImageMagick's autotools build embeds a SECOND compilation of six
+# MagickCore translation units (magick.c, cache.c, tree.c, list.c, view.c,
+# histogram.c) into libMagickCore-7.Q16HDRI.a — a smaller stub compiled
+# from the top-level libtool convenience-lib pass, distinct from the full
+# MagickCore/*_la-*.o objects. Each has its own file-scope `static
+# magick_list`, so wasm-ld can end up satisfying the coder-query call
+# chain from the STUB copy (its magick_list stays empty) while our
+# RegisterPNGImage / RegisterStaticModules writes to the FULL copy's
+# list. Result at runtime: RegisterMagickInfo returns a nonzero id but
+# Magick::Image throws NoDecodeDelegateForThisImageFormat 'PNG' because
+# the list the reader consults never received the entry. Strip the stub
+# duplicates from the archive.
+_ar="${CVC_INSTALL_DIR}/lib/libMagickCore-7.Q16HDRI.a"
+if [[ -f "${_ar}" ]]; then
+    for _obj in libMagickCore_7_Q16HDRI_la-magick.o \
+                libMagickCore_7_Q16HDRI_la-cache.o \
+                libMagickCore_7_Q16HDRI_la-tree.o \
+                libMagickCore_7_Q16HDRI_la-list.o \
+                libMagickCore_7_Q16HDRI_la-view.o \
+                libMagickCore_7_Q16HDRI_la-histogram.o; do
+        emar d "${_ar}" "${_obj}" 2>/dev/null || true
+    done
+    emranlib "${_ar}"
+fi
+
 # Ensure installed .pc/.cmake files are relocatable.
 cvc_rewrite_install_paths
