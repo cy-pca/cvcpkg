@@ -78,22 +78,13 @@ emmake make install
 # Magick::Image throws NoDecodeDelegateForThisImageFormat 'PNG' because
 # the list the reader consults never received the entry. Strip the stub
 # duplicates from the archive.
-_ar="${CVC_INSTALL_DIR}/lib/libMagickCore-7.Q16HDRI.a"
-if [[ -f "${_ar}" ]]; then
-    # Extract all stub-prefixed objects (libMagickCore_..._la-*.o) — these
-    # are the top-level libtool-convenience-lib copies with independent
-    # static state and (for the 6 core files) a smaller body than the real
-    # MagickCore/ compilations that live under MagickCore_libMagickCore_...
-    _stubs=$(emar t "${_ar}" | grep -E '^libMagickCore_7_Q16HDRI_la-.*\.o$' || true)
-    if [[ -n "${_stubs}" ]]; then
-        # emar refuses more than one object per invocation — loop.
-        while IFS= read -r _obj; do
-            [[ -z "${_obj}" ]] && continue
-            emar d "${_ar}" "${_obj}" 2>/dev/null || true
-        done <<< "${_stubs}"
-        emranlib "${_ar}"
-    fi
-fi
+# NOTE: earlier revisions (cvc.20/.21) tried to strip the top-level libtool
+# convenience-lib stubs from libMagickCore.a to fix the split-static-state
+# NoDecodeDelegate PNG bug on wasm. That created more link failures than it
+# solved — both the "stub" and "full" object sets contribute distinct
+# symbols the other depends on. Leave the archive as ImageMagick's build
+# produces it; libcvc side handles PNG through a stb-image fast path that
+# runs before the Magick++ handler, so the dup-state trap is bypassed.
 
 # Ensure installed .pc/.cmake files are relocatable.
 cvc_rewrite_install_paths
