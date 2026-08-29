@@ -80,15 +80,19 @@ emmake make install
 # duplicates from the archive.
 _ar="${CVC_INSTALL_DIR}/lib/libMagickCore-7.Q16HDRI.a"
 if [[ -f "${_ar}" ]]; then
-    for _obj in libMagickCore_7_Q16HDRI_la-magick.o \
-                libMagickCore_7_Q16HDRI_la-cache.o \
-                libMagickCore_7_Q16HDRI_la-tree.o \
-                libMagickCore_7_Q16HDRI_la-list.o \
-                libMagickCore_7_Q16HDRI_la-view.o \
-                libMagickCore_7_Q16HDRI_la-histogram.o; do
-        emar d "${_ar}" "${_obj}" 2>/dev/null || true
-    done
-    emranlib "${_ar}"
+    # Extract all stub-prefixed objects (libMagickCore_..._la-*.o) — these
+    # are the top-level libtool-convenience-lib copies with independent
+    # static state and (for the 6 core files) a smaller body than the real
+    # MagickCore/ compilations that live under MagickCore_libMagickCore_...
+    _stubs=$(emar t "${_ar}" | grep -E '^libMagickCore_7_Q16HDRI_la-.*\.o$' || true)
+    if [[ -n "${_stubs}" ]]; then
+        # emar refuses more than one object per invocation — loop.
+        while IFS= read -r _obj; do
+            [[ -z "${_obj}" ]] && continue
+            emar d "${_ar}" "${_obj}" 2>/dev/null || true
+        done <<< "${_stubs}"
+        emranlib "${_ar}"
+    fi
 fi
 
 # Ensure installed .pc/.cmake files are relocatable.
