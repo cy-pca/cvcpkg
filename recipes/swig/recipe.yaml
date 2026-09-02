@@ -6,7 +6,12 @@ recipe:
   # where swig.exe's compiled-in -swiglib path points. Without it CMake's
   # module-mode FindSWIG failed against an installed bundle and consumers had
   # to set SWIG_LIB by hand.
-  cvc_revision: 4
+  # Bumped 4 -> 5: the same defect on Unix, which rev 4 fixed only for Windows.
+  # autotools compiles the configure-time --prefix (the builder's temp dir) in
+  # as the swiglib path, so an installed bundle reported a path that no longer
+  # exists and every invocation failed with "Unable to find 'swig.swg'". bin/swig
+  # is now a wrapper that exports SWIG_LIB relative to its own prefix.
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
