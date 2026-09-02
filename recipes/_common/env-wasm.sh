@@ -15,7 +15,23 @@ source "${_COMMON_DIR}/env-${_host}.sh"
 
 # Activate Emscripten.
 # shellcheck disable=SC1091
+_cvc_em_cache_pre="${EM_CACHE:-}"  # emsdk_env.sh clears it; restored below
 source "${CVC_EMSDK_DIR}/emsdk_env.sh"
+# emcc must WRITE to its cache (lock files under cache/symbol_lists at link
+# time, system libs on first use). On a shared builder the emsdk can belong
+# to another account (catx-03: /opt/cvc-wasm/emsdk is owned by github-runner
+# while the libcvc-deps runner is tfx) and every em++ link then dies with
+# PermissionError on the .json.lock. emsdk_env.sh UNSETS EM_CACHE when it is
+# sourced, so this must run after it: restore an explicit EM_CACHE, else
+# fall back to a per-user cache when the emsdk cache is read-only.
+_cvc_em_cache_dir="${CVC_EMSDK_DIR}/upstream/emscripten/cache"
+if [[ -n "${_cvc_em_cache_pre:-}" ]]; then
+    export EM_CACHE="${_cvc_em_cache_pre}"
+elif [[ -d "${_cvc_em_cache_dir}" && ! -w "${_cvc_em_cache_dir}" ]]; then
+    export EM_CACHE="${HOME}/.cache/emscripten-cvcpkg"
+    mkdir -p "${EM_CACHE}"
+    echo "cvcpkg: emsdk cache is read-only for $(id -un); using EM_CACHE=${EM_CACHE}" >&2
+fi
 
 # Wasm builds are always static.
 BUILD_SHARED_LIBS=OFF
