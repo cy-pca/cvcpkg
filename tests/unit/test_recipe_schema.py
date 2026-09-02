@@ -408,3 +408,43 @@ class TestGitSource:
         assert spec.submodules == "recursive"
         assert spec.submodule_pins == {"ext/drjit": "c" * 40}
         assert spec.depth == 0
+
+
+class TestSourceNone:
+    """`source.type: none` must be expressible in a real recipe.
+
+    Data-only packages (scene bundles, vehicle GLB assets) stage their payload
+    out-of-band and are packed with `cvcpkg pack --from-prefix`; their build
+    script is only a guard.  #532 shipped three such recipes with
+    `type: none` while the enum did not list it, so every PR after it went red
+    on the shipped-recipes test (and #543 through #548 merged over the red).
+    """
+
+    def test_none_source_is_accepted(self, schema):
+        why = "schema rejects source.type: none - data-only recipes cannot ship"
+        assert _valid(schema, _recipe(source={"type": "none"})), why
+
+    def test_none_needs_no_url_sha_or_path(self, schema):
+        # The point of `none` is that there is nothing to pin.
+        r = _recipe(source={"type": "none"})
+        assert "url" not in r["source"] and "path" not in r["source"]
+        assert _valid(schema, r)
+
+    def test_builder_fetches_nothing_for_none(self, schema, tmp_path):
+        # Guard the schema/builder seam the same way platform: any is guarded:
+        # fetch_source must not raise "Unknown source type" and must hand the
+        # build an existing (empty) source directory.
+        from cvcpkg.builder import Recipe, fetch_source
+
+        r = _recipe(source={"type": "none"})
+        assert _valid(schema, r)
+        (tmp_path / "widget").mkdir(parents=True)
+        with open(tmp_path / "widget" / "recipe.yaml", "w", encoding="utf-8") as f:
+            yaml.safe_dump(r, f)
+        recipe = Recipe.load(tmp_path / "widget")
+        assert recipe.source.type == "none"
+        work = tmp_path / "work"
+        work.mkdir()
+        src_dir = fetch_source(recipe, work)
+        assert src_dir.is_dir()
+        assert not any(src_dir.iterdir())

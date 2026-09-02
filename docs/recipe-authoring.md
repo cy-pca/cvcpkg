@@ -116,7 +116,7 @@ recipe:
   tags: [math]
 
 source:
-  type: tarball             # tarball | git | vendored | prebuilt | ...
+  type: tarball             # tarball | git | vendored | prebuilt | none | ...
   url: https://example.org/mylib-1.2.3.tar.gz
   sha256: "…64 hex chars…"  # verified on download
   strip_components: 1

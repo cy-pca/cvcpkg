@@ -204,7 +204,14 @@ $defs:
             prebuilt,
             python_wheel,
             python_sdist,
+            none,
           ]
+        description: >
+          none = there is no upstream source to fetch.  For data-only
+          packages (scene bundles, vehicle GLB assets) whose payload is
+          staged out-of-band and packed with `cvcpkg pack --from-prefix`;
+          the build script is then only a guard that the payload exists.
+          Needs no url/sha256/path.
       url:
         type: string
         format: uri
