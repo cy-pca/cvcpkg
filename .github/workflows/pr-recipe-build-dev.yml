@@ -142,6 +142,19 @@ jobs:
           rc=$?
           set -e
           echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          # On failure, append the tail of each failed job's build log so the PR
+          # comment says WHY; the status lines alone only say which platform.
+          # The log is only reachable from this runner (dev server is on the
+          # incus LAN), so this is the one place it can be surfaced.
+          if [ "$rc" != "0" ] && [ "$rc" != "75" ]; then
+            for id in $(grep -oE '#[0-9]+ [^ ]+ [(][^)]+[)]: failed' build.log | grep -oE '^#[0-9]+' | tr -d '#' | sort -u); do
+              {
+                echo ""
+                echo "===== job #$id: last 80 log lines ====="
+                cvcpkg builds log "$id" --server "$CVCPKG_SERVER_URL" --token "$CVCPKG_TOKEN" 2>&1 | tail -n 80
+              } >> build.log || true
+            done
+          fi
           # 75 = submitted OK, still building past the window -> soft pass.
           if [ "$rc" = "75" ]; then
             echo "status=building" >> "$GITHUB_OUTPUT"
