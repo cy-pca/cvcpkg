@@ -1104,6 +1104,14 @@ def build_all_cmd(
     envvar="CVCPKG_SERVER_CACHE_ORG",
     help="Organization slug for server cache queries.",
 )
+@click.option(
+    "--strict-globs/--no-strict-globs",
+    "strict_globs",
+    default=True,
+    help="Fail when a package.files entry matches nothing in the staged tree "
+    "(default). See 'cvcpkg pack --help'. CVCPKG_STRICT_GLOBS=0 downgrades "
+    "this to a warning fleet-wide.",
+)
 def pack_all_cmd(
     platform: str,
     config: str,
@@ -1134,6 +1142,7 @@ def pack_all_cmd(
     server_cache_push: bool,
     no_server_cache: bool,
     server_cache_org: str,
+    strict_globs: bool,
 ) -> None:
     """Build and archive all recipes.
 
@@ -1157,6 +1166,7 @@ def pack_all_cmd(
     from cvcpkg.builder import (
         build_all,
         create_archive,
+        enforce_declared_files,
         generate_manifest,
         list_recipes,
         stage_bundle,
@@ -1268,6 +1278,16 @@ def pack_all_cmd(
 
                 _bump_revision_in_yaml(ctx.recipe.recipe_dir / "recipe.yaml", override)
             ctx.recipe.cvc_revision = override
+        # pack-all stages inline rather than going through pack_recipe, so it
+        # needs the declaration gate explicitly -- this is the third staging
+        # site, and the one a check placed only in pack_recipe would miss.
+        enforce_declared_files(
+            ctx.install_dir,
+            ctx.recipe.package_files,
+            ctx_plat,
+            ctx.recipe.name,
+            strict=strict_globs,
+        )
         manifest = generate_manifest(
             ctx.recipe,
             ctx.install_dir,
