@@ -8,14 +8,14 @@
 #
 #   client (default) — the CLI (install / build / validate). Omits the server
 #     extra (fastapi/uvicorn/...) to stay lean.
-#       pip install -e . jsonschema pyinstaller
+#       pip install -e ".[remote,signing,validate]" pyinstaller
 #       pyinstaller --clean --noconfirm packaging/cvcpkg.spec
 #       ./dist/cvcpkg --version && ./dist/cvcpkg validate recipes
 #
 #   combined (CVCPKG_BUNDLE_SERVER=1) — ONE multi-call binary that is both
 #     `cvcpkg` and `cvcpkg-server`, dispatched by argv[0] (busybox-style; ship a
 #     `cvcpkg-server` symlink, or set CVCPKG_ENTRY=server). Includes the server.
-#       pip install -e ".[production]" jsonschema pyinstaller
+#       pip install -e ".[production,signing,validate]" pyinstaller
 #       CVCPKG_BUNDLE_SERVER=1 pyinstaller --clean --noconfirm packaging/cvcpkg.spec
 #       ./dist/cvcpkg --version
 #       ln -sf cvcpkg dist/cvcpkg-server && ./dist/cvcpkg-server run
@@ -39,7 +39,23 @@ datas = [
 datas += copy_metadata("cvcpkg")
 
 # Lazily-imported deps PyInstaller's static analysis doesn't follow.
-hiddenimports = ["jsonschema"]
+#
+# httpx, cryptography and jsonschema are here because cvcpkg reaches them
+# through cvcpkg.optional's guards — `require_httpx()` /
+# `require_cryptography()` / `require_jsonschema()`, a CALL, not an `import
+# httpx` statement modulegraph can see.  A standalone binary is a fixed
+# closure, so leaving them out silently ships a `cvcpkg` whose publish /
+# builder / signing / validate commands all report a missing extra.  All three
+# must also be installed in the build env (`pip install
+# '.[remote,signing,validate]'`).
+hiddenimports = [
+    "jsonschema",
+    "httpx",
+    "cryptography",
+    "cryptography.exceptions",
+    "cryptography.hazmat.primitives.serialization",
+    "cryptography.hazmat.primitives.asymmetric.ed25519",
+]
 
 if BUNDLE_SERVER:
     # Combined multi-call binary: include the server and bundle its DB migrations

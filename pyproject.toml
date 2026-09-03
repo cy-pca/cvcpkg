@@ -38,33 +38,48 @@ include = [
 
 [tool.poetry.dependencies]
 python = "^3.10"
+
+# ── Core: the whole client, and nothing more ────────────────────
+# Traced at run time (not read off this file): `cvcpkg install` — fetch
+# catalog, resolve, download, verify sha256, extract, write lockfile, CMake
+# config and activation scripts — plus `cvcpkg build`, `pack` and the recipe
+# tooling load exactly these two third-party distributions.  HTTP on the
+# install path is urllib.request (cvcpkg.storage) and integrity is
+# hashlib.sha256, both stdlib.  Keeping this list at two is what makes cvcpkg
+# installable on platforms with a thin wheel ecosystem, where four
+# mandatory-but-unimported distributions were the entire blocker.
 PyYAML = "^6.0"
 click = "^8.1"
+
+# ── Optional: grouped into extras by ENTRY POINT (see below) ────
+# Every one of these is imported lazily, at the point of use, behind a guard
+# in cvcpkg.optional that names the extra to install (see that module).
 tqdm = { version = "^4.66", optional = true }
 fastapi = { version = ">=0.100", optional = true }
 uvicorn = { version = ">=0.20", optional = true }
 pydantic = { version = "^2.0", optional = true }
 python-multipart = { version = ">=0.0.5", optional = true }
-sqlalchemy = "^2.0"
+sqlalchemy = { version = "^2.0", optional = true }
 alembic = { version = ">=1.13", optional = true }
 asyncpg = { version = ">=0.28", optional = true }
 aiosqlite = { version = ">=0.20", optional = true }
 aiomysql = { version = ">=0.2", optional = true }
-cryptography = ">=41.0"
-httpx = ">=0.24"
-greenlet = ">=3.0"
-# Runtime, not dev: cvcpkg.validation imports jsonschema unguarded to build the
-# Draft202012Validator, so `cvcpkg validate` and `cvcpkg pack` raise
-# ModuleNotFoundError in any install that lacks it — which was every install
-# from PyPI, since this sat in the dev group.
+cryptography = { version = ">=41.0", optional = true }
+httpx = { version = ">=0.24", optional = true }
+greenlet = { version = ">=3.0", optional = true }
+# Behind [validate] now, not core: only `cvcpkg validate` (and the image-layout
+# gate for kind:image builds) constructs a Draft202012Validator, and every one
+# of those imports goes through cvcpkg.optional.require_jsonschema, which names
+# the extra instead of raising ModuleNotFoundError.
 #
 # Held below 4.18 deliberately: that release swapped the pure-Python
 # `pyrsistent` for `rpds-py`, which is Rust. PyPI ships no BSD wheels for it and
 # the BSD builders have no cargo, so an unbounded bound makes `pip install
-# cvcpkg` unsatisfiable on freebsd/openbsd/netbsd. Lifting the pin is gated on a
-# rust-toolchain recipe — see docs/roadmap/platform-coverage-pypi-blockers.md
-# §W11. 4.17.3 supplies the Draft202012Validator we use.
-jsonschema = ">=4.0,<4.18"
+# 'cvcpkg[validate]'` unsatisfiable on freebsd/openbsd/netbsd. Lifting the pin
+# is gated on a rust-toolchain recipe — see
+# docs/roadmap/platform-coverage-pypi-blockers.md §W11. 4.17.3 supplies the
+# Draft202012Validator we use.
+jsonschema = { version = ">=4.0,<4.18", optional = true }
 
 # Optional storage backends — lazily imported by cvcpkg.backends.* and
 # enabled via the matching extras below.
@@ -75,18 +90,107 @@ google-cloud-storage = { version = ">=2.10", optional = true }
 paramiko = { version = ">=3.0", optional = true }
 
 [tool.poetry.extras]
+# Extras are named after the ENTRY POINT that needs them, not after the wheel
+# they happen to pull, because the name is what the error message tells a user
+# to install ("… Install it with: pip install 'cvcpkg[publish]'").  Several
+# therefore resolve to the same distribution; that is the point.
+
+# Download/extract progress bars.
 progress = ["tqdm"]
-server = ["fastapi", "uvicorn", "pydantic", "python-multipart"]
-db = ["asyncpg", "alembic"]
-db-sqlite = ["aiosqlite", "alembic"]
-db-mysql = ["aiomysql", "alembic"]
-db-all = ["asyncpg", "aiosqlite", "aiomysql", "alembic"]
-production = ["fastapi", "uvicorn", "pydantic", "python-multipart", "asyncpg", "alembic"]
+
+# Every command that talks to a cvcpkg registry over its HTTP API: search,
+# recipe pull/list, builds list/log/monitor/purge, webhook *, token/user/org
+# admin, `doctor --server`, and `build`'s optional pull of the server's recipe
+# set.  `install` is deliberately NOT in this list — cvcpkg.storage speaks
+# urllib, so a core install still resolves and downloads from cvcpkg.org.
+remote = ["httpx"]
+
+# What a publisher runs: `publish`, `recipe push` / `recipe publish`,
+# `builds submit-dag`.  Same wheel as [remote]; a distinct name so a publisher
+# is told to install the extra their own command belongs to.
+publish = ["httpx"]
+
+# The builder agent (`cvcpkg builder run/list/logs`), which claims jobs from
+# the server and streams build logs back.
+builder = ["httpx"]
+
+# Recipe authoring: `cvcpkg validate` checks recipe.yaml / components.yaml
+# against the bundled JSON-Schemas, which is the one thing in the recipe
+# tooling that is not click + PyYAML.  Installing a recipe is not affected —
+# the catalog and lockfile paths never validate a schema — so this belongs to
+# the maintainer who runs `cvcpkg init` and `cvcpkg validate`, not to the
+# client.  Building a `kind: image` recipe also needs it (the staged-tree
+# image.yaml gate).
+validate = ["jsonschema"]
+
+# Ed25519 key management (`cvcpkg key …`, `sign`, `verify-sig`) and signature
+# verification on install (`--verify-signatures` / `--require-signatures`,
+# both opt-in and off by default).
+signing = ["cryptography"]
+
+# Running cvcpkg-server: the ASGI stack, the SQLAlchemy layer (greenlet is
+# SQLAlchemy's asyncio bridge, not a direct import of ours), and httpx for the
+# server's own outbound calls — webhook delivery, mirror sync, OIDC.
+server = [
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "python-multipart",
+    "sqlalchemy",
+    "greenlet",
+    "httpx",
+]
+
+# Database drivers + migrations, on top of [server].  sqlalchemy/greenlet are
+# repeated because an extra must be self-contained: `pip install cvcpkg[db]`
+# has to bring the ORM alembic runs against.
+db = ["asyncpg", "alembic", "sqlalchemy", "greenlet"]
+db-sqlite = ["aiosqlite", "alembic", "sqlalchemy", "greenlet"]
+db-mysql = ["aiomysql", "alembic", "sqlalchemy", "greenlet"]
+db-all = ["asyncpg", "aiosqlite", "aiomysql", "alembic", "sqlalchemy", "greenlet"]
+production = [
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "python-multipart",
+    "asyncpg",
+    "alembic",
+    "sqlalchemy",
+    "greenlet",
+    "httpx",
+]
+
+# Storage backends for `publish --dest` and server-side archive storage.
 s3 = ["boto3"]
 azure = ["azure-storage-blob", "azure-identity"]
 gcs = ["google-cloud-storage"]
 sftp = ["paramiko"]
 storage-all = ["boto3", "azure-storage-blob", "azure-identity", "google-cloud-storage", "paramiko"]
+
+# Everything.  This is the one-word migration for anyone who relied on the
+# pre-2.0.3 metadata, where sqlalchemy, cryptography, httpx and greenlet were
+# mandatory: `pip install 'cvcpkg[all]'` is a superset of what they had.
+all = [
+    "tqdm",
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "python-multipart",
+    "sqlalchemy",
+    "alembic",
+    "asyncpg",
+    "aiosqlite",
+    "aiomysql",
+    "cryptography",
+    "httpx",
+    "greenlet",
+    "jsonschema",
+    "boto3",
+    "azure-storage-blob",
+    "azure-identity",
+    "google-cloud-storage",
+    "paramiko",
+]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"
@@ -97,6 +201,18 @@ black = "^24.0"
 httpx = ">=0.24"
 pytest-asyncio = ">=0.21"
 aiosqlite = ">=0.20"
+# Only extras for real installs (see [tool.poetry.extras]) now that the core
+# shrank to click + PyYAML, but the suite needs them unconditionally:
+# tests/unit/test_signing.py exercises key generation and verification, the
+# server/db tests import SQLAlchemy (greenlet is its asyncio bridge), and
+# test_recipe_schema.py / test_init.py / test_validate_recipe_dirs.py
+# importorskip jsonschema — without these here those checks silently vanish
+# from CI.  jsonschema keeps the same <4.18 ceiling as the extra (rpds-py is
+# Rust; see the runtime comment above).
+sqlalchemy = "^2.0"
+greenlet = ">=3.0"
+cryptography = ">=41.0"
+jsonschema = ">=4.0,<4.18"
 # Only an extra for real installs (see [tool.poetry.extras]), but the suite
 # needs it unconditionally: tests/unit/test_migrations.py importorskips the
 # whole module without it, which silently disabled every migration check in CI.
@@ -144,6 +260,13 @@ ignore = ["SIM102", "SIM105", "SIM108", "SIM112", "SIM117"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/cvcpkg/server/app.py" = ["B008"]
+# The server DB/model modules import sqlalchemy/pydantic at module scope
+# behind a cvcpkg.optional.require_*() guard (so a core install gets one
+# clean line, not ModuleNotFoundError), which necessarily puts imports after
+# a statement.
+"src/cvcpkg/server/db.py" = ["E402"]
+"src/cvcpkg/server/db_stores.py" = ["E402"]
+"src/cvcpkg/server/models.py" = ["E402"]
 "src/cvcpkg/server/landing.py" = ["E501"]
 "src/cvcpkg/activate.py" = ["E501"]
 "tests/**" = ["E402", "B017", "E501", "B007", "N802"]
