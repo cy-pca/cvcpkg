@@ -1,0 +1,91 @@
+schema_version: 1
+recipe:
+  name: openmp
+  upstream_version: "21.1.8"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    LLVM's OpenMP runtime library (libomp), built standalone. AppleClang ships
+    no OpenMP runtime of its own, so find_package(OpenMP) fails on macOS unless
+    a libomp is on the prefix -- and consumers that gate on OpenMP_CXX_FOUND
+    then silently build serial code.
+  homepage: https://openmp.llvm.org/
+  license: Apache-2.0 WITH LLVM-exception
+  tags: [runtime, parallel, compiler]
+
+source:
+  type: tarball
+  # LLVM stopped publishing per-project source tarballs after 21.x -- from 22.x
+  # the only source asset is the ~159 MB monorepo. Staying on 21.1.8 keeps this
+  # a 1 MB download; moving forward is a deliberate decision, not a routine bump.
+  url: https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/openmp-21.1.8.src.tar.xz
+  sha256: "856b023748b41ac7b2c83fd8e9f765ff48a4df2fe6777d2811ef7c7ed8f2f977"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    # macOS is the reason this recipe exists: AppleClang has no bundled OpenMP
+    # runtime, so without a libomp on the prefix find_package(OpenMP) fails and
+    # a consumer gating on OpenMP_CXX_FOUND silently goes serial.
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    # Linux is published for clang-based consumers. GCC needs nothing from here
+    # -- it finds its own libgomp through the compiler -- and cannot be confused
+    # by this bundle either, because LIBOMP_INSTALL_ALIASES=OFF means we ship no
+    # libgomp for FindOpenMP's `NAMES omp gomp iomp5` search to pick up.
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    # libomp.dylib on macOS, libomp.so on Linux, libomp.a for a static build.
+    - lib/libomp.*
+    # omp.h is the one consumers include; ompt.h / omp-tools.h / ompx.h come
+    # along with it. One pattern rather than four names, so a header upstream
+    # renames does not turn into a packaging failure.
+    - include/omp*.h
+  cmake_packages: []
+
+abi:
+  cxx_std: 17
+
+toolchain:
+  cc:
+    min_version: "any"
+    description: "C/C++ compiler (the runtime itself is C/C++; no OpenMP support required to build it)"
+
+notes:
+  - title: "Consumers need nothing beyond the prefix"
+    platforms: [macos, linux]
+    description: >-
+      CMake's FindOpenMP locates the runtime with
+      find_library(OpenMP_libomp_LIBRARY NAMES omp gomp iomp5), which honours
+      CMAKE_PREFIX_PATH and OpenMP_ROOT. Installing this bundle into a prefix
+      that is already on CMAKE_PREFIX_PATH is therefore enough; no per-consumer
+      OpenMP_CXX_FLAGS / OpenMP_CXX_LIB_NAMES wiring is required. On AppleClang
+      FindOpenMP supplies the '-Xclang -fopenmp' spelling itself.
+  - title: "No libgomp/libiomp5 aliases, deliberately"
+    platforms: [macos, linux]
+    description: >-
+      Upstream defaults LIBOMP_INSTALL_ALIASES=ON, which installs
+      lib/libgomp.so{,.1} and lib/libiomp5.so beside libomp. This recipe turns
+      that OFF: those names would sit in a shared prefix that GCC-built
+      consumers also search, and binding two OpenMP runtimes into one process
+      aborts with "OMP: Error #15: Initializing libomp, but found libgomp
+      already initialized". build.sh asserts the aliases are absent.
