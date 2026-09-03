@@ -69,7 +69,9 @@ jobs:
           python-version: '3.12'
 
       - name: Install cvcpkg
-        run: pip install -e .
+        # [validate] pulls jsonschema — `cvcpkg validate` needs it to check
+        # recipes against their schema (core is click + PyYAML only).
+        run: pip install -e '.[validate]'
 
       - name: Validate dependency graph & build order
         run: |
