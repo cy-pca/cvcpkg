@@ -207,7 +207,7 @@ def test_stage_bundle_rewrites_staging_not_install_dir(tmp_path):
     staging.mkdir()
     source = _launcher(install_dir, "Scripts/tool.exe", f"{JOB_PREFIX}\\python\\python.exe")
 
-    stage_bundle(install_dir, {"name": "toolpkg"}, staging, temp_prefixes=(JOB_PREFIX,))
+    stage_bundle(install_dir, {"bundle": {"name": "toolpkg"}}, staging, temp_prefixes=(JOB_PREFIX,))
 
     staged = staging / "Scripts" / "tool.exe"
     assert _segments(staged.read_bytes())[1] == b"#!<launcher_dir>\\..\\python.exe\r\n"
@@ -226,7 +226,7 @@ def test_windows_pack_path_carries_rewritten_launcher(tmp_path):
 
     staging = tmp_path / "staging"
     staging.mkdir()
-    stage_bundle(install_dir, {"name": "toolpkg"}, staging, temp_prefixes=(JOB_PREFIX,))
+    stage_bundle(install_dir, {"bundle": {"name": "toolpkg"}}, staging, temp_prefixes=(JOB_PREFIX,))
     archive, _sha, _size = create_archive(
         staging,
         tmp_path / "dist",

@@ -15,11 +15,20 @@
 #     Going through cvc_cmake_build (rather than the raw `cmake` invocation the
 #     native build.sh needs) is what injects the Emscripten toolchain file.
 #
-#   * Every x86 ISA switch is forced OFF.  Emscripten's toolchain file reports
-#     CMAKE_SYSTEM_PROCESSOR as "x86", so Jolt would otherwise select its SSE
-#     baseline and pass -msse4.2 to a compiler targeting a different instruction
-#     set entirely.  With these off Jolt falls back to the scalar path in its
-#     Vec4/Mat44 layer, which is the portable configuration.
+#   * Every x86 ISA switch is pinned OFF for uniformity with build-cosmo.sh, but
+#     they are inert here: Jolt.cmake tests `elseif (EMSCRIPTEN)` BEFORE its
+#     x86 branch, so no -msse4.2/-mfma ever reaches emcc regardless. The SIMD
+#     choice on wasm is USE_WASM_SIMD (default OFF -> scalar Vec4/Mat44). Scalar
+#     is kept: it is the configuration upstream's cross-platform-determinism
+#     claim is verified against for WASM32.
+#
+#   * The library compiles JobSystemThreadPool unconditionally and links fine
+#     without -pthread, but std::thread's constructor throws
+#     std::system_error("Not supported") at runtime in a non-pthread Emscripten
+#     program, so a consumer of THIS bundle must drive PhysicsSystem::Update
+#     with JobSystemSingleThreaded. A -pthread bundle would need COOP/COEP
+#     hosting (not available on GitHub Pages) and a pthread variant axis the
+#     catalog does not have.
 #
 # ENABLE_ALL_WARNINGS=OFF is not cosmetic and must stay: it enables -Werror, and
 # cvc.2 of this recipe exists precisely because upstream's -Werror broke the
@@ -54,6 +63,8 @@ cvc_cmake_build \
     -DFLOATING_POINT_EXCEPTIONS_ENABLED=OFF \
     -DINTERPROCEDURAL_OPTIMIZATION=OFF \
     -DENABLE_ALL_WARNINGS=OFF \
+    -DCROSS_PLATFORM_DETERMINISTIC=ON \
+    -DPROFILER_IN_DEBUG_AND_RELEASE=OFF \
     -DJPH_USE_DX12=OFF \
     -DJPH_USE_VK=OFF \
     -DJPH_USE_MTL=OFF \

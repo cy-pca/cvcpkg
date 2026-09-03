@@ -78,7 +78,7 @@ def qualified_name(name: str, org: str = "") -> str:
 class SourceSpec:
     """Parsed ``source:`` block from recipe.yaml."""
 
-    type: str  # tarball | git | vcpkg | brew | apt | vendored | prebuilt |
+    type: str  # tarball | git | vcpkg | brew | apt | vendored | prebuilt | none |
     #            python_wheel | python_sdist
     url: str = ""
     mirror: str = ""
@@ -90,6 +90,21 @@ class SourceSpec:
     strip_components: int = 1
     base_url: str = ""
     artifacts: dict[str, Any] = field(default_factory=dict)
+    # ── git sources ──
+    # A tag is a MUTABLE ref, so it is never sufficient on its own: the recipe
+    # pins the 40-hex commit and the fetch verifies HEAD against it.
+    commit: str = ""
+    # none | shallow | recursive.  Accepts the legacy booleans the schema used
+    # to allow, where true meant "recursive".
+    submodules: str = "none"
+    # Optional path -> 40-hex map.  The superproject's gitlinks already pin
+    # every submodule, so this is not what makes the build reproducible; it
+    # exists so that a submodule moving shows up as a reviewable diff in the
+    # recipe rather than silently riding in on a superproject bump.
+    submodule_pins: dict[str, str] = field(default_factory=dict)
+    # Clone depth; 0 means a full clone (needed by recipes whose build reads
+    # git history, e.g. to derive a version).
+    depth: int = 1
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> SourceSpec:
@@ -105,7 +120,29 @@ class SourceSpec:
             strip_components=d.get("strip_components", 1),
             base_url=d.get("base_url", ""),
             artifacts=d.get("artifacts", {}) or {},
+            commit=d.get("commit", ""),
+            submodules=_normalize_submodules(d.get("submodules")),
+            submodule_pins=dict(d.get("submodule_pins", {}) or {}),
+            depth=int(d.get("depth", 1)),
         )
+
+
+def _normalize_submodules(value: Any) -> str:
+    """Coerce a ``source.submodules`` value to ``none``/``shallow``/``recursive``.
+
+    The schema originally typed this as a plain boolean, so accept that form
+    too rather than breaking a recipe that used it: ``true`` is ``recursive``
+    (the only useful meaning of "yes" for a nested project like Mitsuba) and
+    ``false`` is ``none``.
+    """
+    if value is None:
+        return "none"
+    if isinstance(value, bool):
+        return "recursive" if value else "none"
+    text = str(value).strip().lower()
+    if text not in ("none", "shallow", "recursive"):
+        raise RecipeError(f"source.submodules must be one of none/shallow/recursive, got {value!r}")
+    return text
 
 
 @dataclass
@@ -414,6 +451,294 @@ def _fetch_tarball(source: SourceSpec, dest: Path) -> Path:
     return source_dir
 
 
+def _git_cache_dir() -> Path | None:
+    """Bare-mirror cache directory for git sources, or None if disabled.
+
+    Controlled by ``CVCPKG_GIT_CACHE`` (set to empty string to disable).
+    Default: ``~/.cache/cvcpkg/git``, alongside the tarball source cache.
+    """
+    env = os.environ.get("CVCPKG_GIT_CACHE")
+    if env is not None:
+        if not env:
+            return None  # explicitly disabled
+        return Path(env)
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    if xdg:
+        return Path(xdg) / "cvcpkg" / "git"
+    return Path.home() / ".cache" / "cvcpkg" / "git"
+
+
+def _git_offline() -> bool:
+    """True when ``CVCPKG_GIT_OFFLINE`` forbids network access.
+
+    The tarball path is fully offline once its cache is warm; this is how the
+    git path reaches parity.  It fails loudly rather than quietly reaching out,
+    which is the only behaviour an air-gapped build can actually rely on.
+    """
+    val = os.environ.get("CVCPKG_GIT_OFFLINE", "").strip().lower()
+    return val not in ("", "0", "false", "no", "off")
+
+
+def _mirror_path(cache_dir: Path, url: str) -> Path:
+    """Bare-mirror directory for *url* — readable slug plus a hash for uniqueness.
+
+    Splits on both separators and caps the slug: a local Windows path has no
+    forward slashes at all, so splitting on "/" alone turned the whole
+    ``C:\\Users\\...`` path into the "name" and produced a mirror path long
+    enough for git to fail mid-clone with "Filename too long". The hash is what
+    guarantees uniqueness; the slug only has to be readable.
+    """
+    parts = [p for p in re.split(r"[\\/]+", url.rstrip("/\\")) if p]
+    tail = parts[-1] if parts else "repo"
+    if tail.endswith(".git"):
+        tail = tail[:-4]
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", tail).strip("-")[:48] or "repo"
+    digest = hashlib.sha256(url.encode()).hexdigest()[:12]
+    return cache_dir / f"{slug}-{digest}.git"
+
+
+def _run_git(args: list[str], cwd: Path | None = None, *, what: str) -> str:
+    """Run git, returning stdout; raise RecipeError naming *what* on failure."""
+    if shutil.which("git") is None:
+        raise RecipeError("source.type=git requires git on PATH, and it was not found")
+    proc = subprocess.run(  # noqa: S603
+        ["git", *args],
+        cwd=str(cwd) if cwd else None,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        raise RecipeError(f"{what} failed: git {' '.join(args)}\n{detail}")
+    return proc.stdout.strip()
+
+
+def _rmtree_force(path: Path) -> None:
+    """Remove a tree, clearing the read-only bit git sets on its pack files.
+
+    Windows refuses to unlink a read-only file, so a plain ``rmtree`` on a git
+    mirror leaves a half-deleted directory behind — and the next clone then
+    fails with "destination path already exists and is not an empty directory",
+    which says nothing about the actual cause.
+    """
+
+    def _handle(func: Any, p: str, _exc: Any) -> None:
+        try:
+            os.chmod(p, stat.S_IWRITE)
+            func(p)
+        except OSError:
+            pass
+
+    if not path.exists():
+        return
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=_handle)
+    else:
+        shutil.rmtree(path, onerror=_handle)
+
+
+def _update_mirror(url: str, mirror: Path, *, commit: str) -> None:
+    """Ensure *mirror* is a bare clone of *url* containing *commit*.
+
+    Offline, the mirror must already exist and already hold the commit; the
+    error names the missing mirror and its URL, because "clone failed" without
+    that is unactionable on a machine with no network.
+    """
+    offline = _git_offline()
+
+    def _has_commit() -> bool:
+        if not (mirror / "HEAD").is_file():
+            return False
+        proc = subprocess.run(  # noqa: S603
+            ["git", "cat-file", "-e", f"{commit}^{{commit}}"],
+            cwd=str(mirror),
+            capture_output=True,
+            text=True,
+        )
+        return proc.returncode == 0
+
+    if _has_commit():
+        return
+
+    if offline:
+        if not (mirror / "HEAD").is_file():
+            raise RecipeError(
+                f"CVCPKG_GIT_OFFLINE is set and no mirror exists for {url}\n"
+                f"  expected bare mirror at: {mirror}\n"
+                f"  warm it with a networked run, or point CVCPKG_GIT_CACHE at "
+                f"a populated cache"
+            )
+        raise RecipeError(
+            f"CVCPKG_GIT_OFFLINE is set and the mirror for {url} does not "
+            f"contain commit {commit}\n"
+            f"  mirror: {mirror}\n"
+            f"  the pin moved since the mirror was warmed — re-warm it online"
+        )
+
+    if (mirror / "HEAD").is_file():
+        # Mirror exists but predates this pin: fetch, don't re-clone.
+        _run_git(
+            ["fetch", "--prune", "origin", "+refs/*:refs/*"],
+            cwd=mirror,
+            what=f"updating git mirror for {url}",
+        )
+    else:
+        # A directory with no HEAD is a half-written mirror from an interrupted
+        # clone. Clear it rather than letting git refuse a non-empty target.
+        _rmtree_force(mirror)
+        mirror.parent.mkdir(parents=True, exist_ok=True)
+        _run_git(["clone", "--mirror", url, str(mirror)], what=f"cloning git mirror for {url}")
+
+    if not _has_commit():
+        raise RecipeError(
+            f"commit {commit} is not present in {url} after fetching\n"
+            f"  a pinned commit that the remote does not have is either a typo "
+            f"or a force-push; cvcpkg will not fall back to a branch tip"
+        )
+
+
+def _submodule_state(work: Path) -> list[tuple[str, str]]:
+    """Return sorted ``(path, sha)`` for every initialized submodule, recursively."""
+    out = _run_git(
+        ["submodule", "status", "--recursive"], cwd=work, what="reading submodule status"
+    )
+    state: list[tuple[str, str]] = []
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        # " <sha> <path> (<describe>)" — a leading -/+/U marks un-init/modified.
+        if line[0] in "-+U":
+            line = line[1:]
+        parts = line.split()
+        if len(parts) >= 2:
+            state.append((parts[1], parts[0]))
+    return sorted(state)
+
+
+def _tree_digest(commit: str, submodules: list[tuple[str, str]]) -> str:
+    """A deterministic digest of exactly what was checked out.
+
+    The superproject commit plus every submodule's (path, sha), sorted.  Two
+    cold-cache runs of the same recipe produce the same digest, and "did the
+    source change" is answerable without a network round-trip.
+
+    Sorts its own input rather than trusting the caller to: a digest whose
+    value depends on the order git happened to report submodules in would be
+    reproducible only by accident.
+    """
+    h = hashlib.sha256()
+    h.update(commit.encode())
+    for path, sha in sorted(submodules):
+        h.update(b"\0")
+        h.update(path.encode())
+        h.update(b"\0")
+        h.update(sha.encode())
+    return h.hexdigest()
+
+
+def _fetch_git(source: SourceSpec, dest: Path) -> Path:
+    """Clone a pinned git commit (optionally with submodules) into ``dest/src``.
+
+    Meets the same contract the tarball path already meets — pinned, verified
+    and reproducible offline once the mirror cache is warm:
+
+    * the recipe pins a 40-hex ``commit`` and never a tag, because tags move;
+    * the checkout is verified against that commit after the fact;
+    * ``submodule_pins`` entries are checked, so a moved submodule is a loud
+      failure rather than a silent difference;
+    * a bare mirror under ``CVCPKG_GIT_CACHE`` makes re-runs offline-capable,
+      and ``CVCPKG_GIT_OFFLINE=1`` refuses to touch the network at all.
+    """
+    if not source.url:
+        raise RecipeError("source.type=git but no URL specified")
+    if not source.commit:
+        raise RecipeError(
+            "source.type=git requires a 40-character `commit` — a tag is a "
+            "mutable ref and cannot pin a build"
+        )
+    if not re.fullmatch(r"[0-9a-f]{40}", source.commit):
+        raise RecipeError(
+            f"source.commit must be a full 40-character lowercase SHA, got " f"{source.commit!r}"
+        )
+
+    work = dest / "src"
+    cache_dir = _git_cache_dir()
+
+    if cache_dir is not None:
+        mirror = _mirror_path(cache_dir, source.url)
+        _update_mirror(source.url, mirror, commit=source.commit)
+        origin: str = str(mirror)
+    else:
+        if _git_offline():
+            raise RecipeError(
+                "CVCPKG_GIT_OFFLINE is set but the git mirror cache is "
+                'disabled (CVCPKG_GIT_CACHE=""), so there is nothing to '
+                "build from offline"
+            )
+        origin = source.url
+
+    _run_git(["clone", "--no-checkout", origin, str(work)], what=f"cloning {source.url}")
+    _run_git(
+        ["checkout", "--detach", source.commit], cwd=work, what=f"checking out {source.commit}"
+    )
+
+    head = _run_git(["rev-parse", "HEAD"], cwd=work, what="verifying HEAD")
+    if head != source.commit:
+        raise RecipeError(f"checked-out HEAD {head} does not match pinned commit {source.commit}")
+
+    if source.submodules != "none":
+        if _git_offline():
+            # Submodule URLs in .gitmodules are absolute upstreams, and cvcpkg
+            # does not mirror them per-module yet, so there is nothing on disk
+            # to fetch them from. Say so instead of failing later inside git.
+            raise RecipeError(
+                "CVCPKG_GIT_OFFLINE with source.submodules is not supported "
+                "yet: submodules are fetched from their own upstream URLs and "
+                "cvcpkg mirrors only the superproject. Warm the checkout "
+                "online first, or vendor the tree."
+            )
+        # 'shallow' takes the top level only; 'recursive' follows the nesting.
+        args = ["submodule", "update", "--init"]
+        if source.submodules == "recursive":
+            args.append("--recursive")
+        # depth=0 means "full history", for a submodule whose build reads it.
+        if source.depth:
+            args += ["--depth", str(source.depth), "--recommend-shallow"]
+        _run_git(args, cwd=work, what="initializing submodules")
+
+    state = _submodule_state(work) if source.submodules != "none" else []
+
+    # Verify declared pins. The gitlink already decides what gets checked out,
+    # so a mismatch here means the RECIPE is stale relative to the superproject
+    # bump — which is exactly the review signal the pins exist to produce.
+    if source.submodule_pins:
+        actual = dict(state)
+        problems = []
+        for path, want in sorted(source.submodule_pins.items()):
+            got = actual.get(path)
+            if got is None:
+                problems.append(f"  {path}: declared in submodule_pins but not checked out")
+            elif got != want:
+                problems.append(f"  {path}: pinned {want}, superproject has {got}")
+        if problems:
+            raise RecipeError(
+                "submodule pins do not match the superproject:\n"
+                + "\n".join(problems)
+                + "\nupdate source.submodule_pins to match, or move the commit pin back"
+            )
+
+    digest = _tree_digest(source.commit, state)
+    (dest / "git-tree-digest.txt").write_text(digest + "\n", encoding="utf-8")
+
+    # .git is deliberately KEPT. Plenty of CMake projects — Mitsuba among them —
+    # derive a version string from `git describe` at configure time, and
+    # deleting the metadata would break them in a way that looks like a build
+    # bug rather than a fetch decision. The tree is pinned either way, so
+    # keeping it costs reproducibility nothing.
+    return work
+
+
 def _resolve_vendored(source: SourceSpec, recipe_dir: Path) -> Path:
     """Locate vendored source tree relative to the repo."""
     if not source.path:
@@ -639,14 +964,16 @@ def fetch_source(recipe: Recipe, work_dir: Path, *, platform: str = "", arch: st
         if not sha256:
             raise RecipeError("python_sdist requires a sha256 (pinning is required)")
         return _fetch_tarball(replace(src, url=url, sha256=sha256, mirror=""), work_dir)
-    if src.type in ("vcpkg", "brew", "apt", "prebuilt"):
-        # These are handled by the build script itself; return a
-        # dummy source directory.
+    if src.type in ("vcpkg", "brew", "apt", "prebuilt", "none"):
+        # These are handled by the build script itself (or, for ``none``,
+        # there is nothing to fetch: data-only recipes stage their payload
+        # out-of-band and are packed with --from-prefix); return a dummy
+        # source directory.
         dummy = work_dir / "src"
         dummy.mkdir(exist_ok=True)
         return dummy
     if src.type == "git":
-        raise RecipeError("Git source fetching not yet implemented")
+        return _fetch_git(src, work_dir)
     raise RecipeError(f"Unknown source type: {src.type}")
 
 
@@ -1242,9 +1569,11 @@ def run_test(
         return
 
     env = os.environ.copy()
+    test_build_prefix = ctx.build_prefix or ctx.prefix
     env["CVC_PREFIX"] = ctx.install_dir.as_posix()
     env["CVC_INSTALL_DIR"] = ctx.install_dir.as_posix()
     env["CVC_DEPS_PREFIX"] = ctx.prefix.as_posix()
+    env["CVC_BUILD_PREFIX"] = test_build_prefix.as_posix()
     env["CVC_PLATFORM"] = ctx.platform
 
     # Mark host-delegated Windows cross builds so test scripts can
@@ -1264,10 +1593,26 @@ def run_test(
 
     # Ensure host tools built into the prefix (including cross-toolchain
     # binaries) are on PATH — mirrors _build_env() behaviour.
+    #
+    # The build prefix has to come first, exactly as it does in _build_env().
+    # It was missing here, which meant a HOST TOOL was on PATH while a recipe
+    # built and gone by the time its own test ran — so the test silently fell
+    # through to whatever the system had. pcre2's test invokes a bare
+    # `pkg-config` and got C:\Strawberry\perl\bin\pkg-config (a Perl script)
+    # instead of the pkgconf cvcpkg had just staged, then died inside it:
+    #
+    #     Can't locate Pod/Usage.pm in @INC ... at /c/Strawberry/perl/bin/pkg-config
+    #
+    # A test that passes only because the machine happens to have a tool is
+    # not testing the bundle, so this is worth keeping in lockstep.
     bin_dirs = [
+        (test_build_prefix / "bin").as_posix(),
         (ctx.prefix / "bin").as_posix(),
         (ctx.install_dir / "bin").as_posix(),
     ]
+    # Deduplicate while preserving order: build_prefix and prefix are the same
+    # path when no separation is configured.
+    bin_dirs = list(dict.fromkeys(bin_dirs))
     existing_path = env.get("PATH", "")
     env["PATH"] = os.pathsep.join(bin_dirs + ([existing_path] if existing_path else []))
 
@@ -1586,8 +1931,12 @@ def stage_bundle(
     _rewrite_shebangs(staging_dir, temp_prefixes)
     _rewrite_exe_launchers(staging_dir, temp_prefixes)
 
-    # Write manifest
-    meta_dir = staging_dir / "share" / "libcvc-deps"
+    # Write the manifest under a subdirectory named for the bundle itself.
+    # Every bundle installs into the same shared prefix, and extraction is a
+    # blind merge -- a flat share/libcvc-deps/manifest.yaml would be
+    # overwritten by whichever bundle extracted last, leaving every other
+    # co-installed package's manifest clobbered and unverifiable.
+    meta_dir = staging_dir / "share" / "libcvc-deps" / manifest["bundle"]["name"]
     meta_dir.mkdir(parents=True, exist_ok=True)
     with open(meta_dir / "manifest.yaml", "w") as f:
         yaml.dump(manifest, f, default_flow_style=False, sort_keys=False)

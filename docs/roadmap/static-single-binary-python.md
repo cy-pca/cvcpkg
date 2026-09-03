@@ -5,6 +5,19 @@
 
 > **Provenance (2026-07):** this revision replaces the earlier rate-limited draft. Three grounded investigations — one on the general static-embed mechanism, one on the Cosmopolitan case, one on the WASM case — now back every claim against the repos and upstream. Where the earlier draft said **[verify]**, this doc records the confirmed answer and flags only the genuinely open items. The three reports are cited inline as **[R1]** (general mechanism), **[R2]** (cosmo), **[R3]** (wasm).
 
+> **Update (2026-08-21, post-#517):** the WASM-VTK "wall" described below has
+> narrowed. `recipes/vtk/build-wasm.sh` now **enables** the rendering
+> backend against Emscripten's WebGL2/GLES3
+> (`VTK_MODULE_ENABLE_VTK_RenderingOpenGL2=YES`, `RenderingUI=YES`,
+> `RenderingVolume=YES`, `RenderingVolumeOpenGL2=YES`, plus
+> `RenderingAnnotation`/`FreeType`), with an opt-in `-pthread` variant, and
+> carries two wasm patches (a `<cstdlib>` include fix and an ESSL3
+> global-uniform-init fix) rather than one. `VTK_WRAP_PYTHON=OFF` /
+> `VTK_ENABLE_WRAPPING=OFF` are still set — Python wrapping on wasm remains
+> unbuilt — so the wall is now specifically **VTK Python wrapping on wasm**,
+> not rendering. The "headless + un-wrapped" characterization below is
+> pre-#517 and only half true today.
+
 ---
 
 ## 0. Verdict
@@ -14,12 +27,12 @@
 | Case | Possible? | Worth it? | What works | The wall |
 |---|---|---|---|---|
 | **Cosmo (APE) python + vtk-python** | ✅ **headless only** | ✅ yes — as a portable install-free scientific CLI | non-rendering VTK (CommonCore, CommonDataModel, CommonExecutionModel, Filters{Core,General,Sources,Geometry}, IO{Geometry,XML,Image,Legacy}, the `vtkPythonUtil` bridge) + libcvc SDF/mesh/quality/`state_exec` DSL, static-linked into one fat (x86_64+aarch64) APE, assets in the zipos | **rendering** — Cosmopolitan ships *no* window system, GL driver, EGL, or portable `dlopen`. There is literally nothing for `vtkRenderingOpenGL2` to bind to. OSMesa/llvmpipe software GL is unproven under cosmocc — a research spike, not the deliverable **[R2]** |
-| **WASM VolRover + embedded interpreter (libcvc + vtk-python)** | ✅ **feasible with effort** | ⚠️ high-payoff flagship, multi-month, front-loaded risk | libcvc(wasm) + VTK(wasm, WebGL2 *or* WebGPU) + embedded CPython + static vtk-python wrappers + a browser UI in one `.wasm`, assets via MEMFS | the VTK **wasm rendering backend** (today's recipe disables it), **`VTK_WRAP_PYTHON` on wasm is undocumented upstream and VTK is absent from Pyodide**, GPU volume rendering correctness, threads/`SharedArrayBuffer`, binary size **[R3]** |
+| **WASM VolRover + embedded interpreter (libcvc + vtk-python)** | ✅ **feasible with effort** | ⚠️ high-payoff flagship, multi-month, front-loaded risk | libcvc(wasm) + VTK(wasm, WebGL2 *or* WebGPU) + embedded CPython + static vtk-python wrappers + a browser UI in one `.wasm`, assets via MEMFS | **`VTK_WRAP_PYTHON` on wasm is undocumented upstream and VTK is absent from Pyodide** (rendering itself now builds — see the 2026-08-21 update above), GPU volume rendering correctness at scale, threads/`SharedArrayBuffer`, binary size **[R3]** |
 
 **Load-bearing reasons.**
 - Static linking C extensions into one `libpython`-embedding binary is a **fully supported, standard CPython capability** — it is how CPython builds its own stdlib extensions in every `--disable-shared`/cross configuration. The hard part is never "can Python do it"; it is (a) getting each third-party build system to emit a **static archive with `PyInit_*` still exported** instead of a `.so`, (b) **registering** each module in the inittab, and (c) the one-copy-only invariant for C++ global registries like VTK's `vtkPythonUtil` **[R1]**.
 - **Cosmo is worth it** because a single `cvc.com` that runs libcvc's SDF/meshing/quality/DSL + headless VTK data/IO on Linux/macOS/Windows/BSD with zero install is a clean, near-term realization of the single-binary goal — and it reuses the static-wrapper + inittab + zipos machinery `cvcpkg bake` needs anyway. Rendering is the wrong ask for cosmo; that is the wasm case's job **[R2]**.
-- **WASM is worth pursuing but honestly gated:** every individual piece exists (emsdk infra in-repo, several C deps already build to wasm, CPython-on-wasm proven by Pyodide, VTK renders on wasm), but *the specific combination VolRover needs* — VTK Python wrappers compiled to wasm **with volume rendering**, statically embedded in a CPython interpreter inside a C++ app — is unproven at every seam, and the current recipes point the opposite way (wasm VTK is headless + un-wrapped; vtk-python is linux/windows-only shared libs) **[R3]**.
+- **WASM is worth pursuing but honestly gated:** every individual piece exists (emsdk infra in-repo, several C deps already build to wasm, CPython-on-wasm proven by Pyodide, VTK renders on wasm since #517), but *the specific combination VolRover needs* — VTK Python wrappers compiled to wasm **with volume rendering**, statically embedded in a CPython interpreter inside a C++ app — is unproven at every seam, and the current recipes still leave the Python half unbuilt (wasm VTK renders but is un-wrapped; vtk-python is linux/windows-only shared libs) **[R3]**.
 
 Full VTK **rendering** is the deciding factor for both: a hard wall in cosmo, a real-but-solvable-and-fragile problem in wasm.
 
@@ -29,7 +42,7 @@ Full VTK **rendering** is the deciding factor for both: a hard wall in cosmo, a 
 
 Both targets are **already static-only** in cvcpkg and already embed assets. This build case is the Python-embedding layer on top of existing infra — not a new distribution model.
 
-- **Cosmo — the APE zipos.** `recipes/_common/env-cosmo.sh` points `CC/CXX` at the `cosmocc` frontend and forces `BUILD_SHARED_LIBS=OFF` / `CVC_LINK=static` — the header comment states plainly *"Cosmopolitan is static-only: APE binaries link everything into one file"* (`env-cosmo.sh:23`). It also sets `SOURCE_DATE_EPOCH=0` and `LC_ALL=C` (the only in-repo `SOURCE_DATE_EPOCH` precedent). The APE's **zipos** — a zip appended to the executable, addressable at runtime as `/zip/…` — *is* "assets in the binary"; the APE `main()` is the fixed entry point; scratch is memory or the embedded fs. This is the `cvcpkg bake … cosmo APE variant` under **Phase 19** (`CVCPKG-ROADMAP.md:255`); the `cvpkg` APE bootstrap (`CVCPKG-ROADMAP.md:1212–1245`) is the same path for the tool itself **[R2]**.
+- **Cosmo — the APE zipos.** `recipes/_common/env-cosmo.sh` points `CC/CXX` at the `cosmocc` frontend and forces `BUILD_SHARED_LIBS=OFF` / `CVC_LINK=static` — the header comment states plainly *"Cosmopolitan is static-only: APE binaries link everything into one file"* (`env-cosmo.sh:23`). It also sets `SOURCE_DATE_EPOCH=0` and `LC_ALL=C` (the only in-repo `SOURCE_DATE_EPOCH` precedent). The APE's **zipos** — a zip appended to the executable, addressable at runtime as `/zip/…` — *is* "assets in the binary"; the APE `main()` is the fixed entry point; scratch is memory or the embedded fs. This is the `cvcpkg bake … cosmo APE variant` under **Phase 19** ([`CVCPKG-ROADMAP.md`](CVCPKG-ROADMAP.md), Phase 19 `cvcpkg bake`); the `cvpkg` APE bootstrap ([`CVCPKG-ROADMAP.md`](CVCPKG-ROADMAP.md), Phases 8/11) is the same path for the tool itself **[R2]**.
 - **WASM — MEMFS.** `recipes/_common/env-wasm.sh` sources the host env, activates emscripten, then forces every wasm build static (`BUILD_SHARED_LIBS=OFF`, `CVC_LINK=static`) and injects `-DCMAKE_TOOLCHAIN_FILE=…/Emscripten.cmake`. Emscripten's `--embed-file` / `--preload-file` bakes assets into **MEMFS**; the `.wasm` (+ a small `.js` loader, optionally one self-contained `.html`) is the single artifact; `main()` is the fixed entry point; scratch is wasm linear memory. `recipes/_common/cvc_wasm_run.sh` already runs emscripten output under `node` as a smoke test **[R3]**.
 
 So "static python + native modules in one file" is `bake` with a CPython + extensions payload — the embedding model the goal wants is already the documented target for both platforms; it just has not been exercised with a CPython+VTK payload.
@@ -132,7 +145,7 @@ The static VTK-Python launcher shape: link the static wrapper archives + `libvtk
 - **Toolchain** — `recipes/emsdk/recipe.yaml` pins **emsdk 5.0.7**, pre-populates the ports cache for offline builds, registered as `cross_toolchain` for `[wasm]`.
 - **Libraries already ported** — `build-wasm.sh` exists for `zstd, ffmpeg, hdf5, openssl, libjpeg-turbo, clapack, levmar, fftw3, qtmultimedia, skia, python312, vtk` — a good chunk of libcvc's C closure.
 - **CPython on wasm** — `recipes/python312/build-wasm.sh` cross-compiles **3.12.10** `--host=wasm32-emscripten --disable-shared`. The recipe's own note — *"Cross-compilation targets build libpython as a static archive since extension modules (.so) are uncommon"* — **is the entire design tension**: to embed vtk-python, extensions are the whole point and must be static builtins.
-- **VTK on wasm — exists but headless and un-wrapped.** `recipes/vtk/build-wasm.sh` builds VTK 9.5 to wasm but turns off exactly what this project needs: `VTK_WRAP_PYTHON=OFF`, `VTK_ENABLE_WRAPPING=OFF`, `RenderingOpenGL2=NO`, `RenderingUI=NO`. So today's wasm VTK is a data-model/filters/IO build with **no renderer and no Python** — useful for headless number-crunching, useless for VolRover. (The only wasm patch present is a one-line `<cstdlib>` include fix.)
+- **VTK on wasm — renders since #517, still un-wrapped.** `recipes/vtk/build-wasm.sh` builds VTK 9.5 to wasm and, as of #517, enables the WebGL2/GLES3 rendering backend (`RenderingOpenGL2=YES`, `RenderingUI=YES`, `RenderingVolume=YES`, `RenderingVolumeOpenGL2=YES`, plus annotation/FreeType, with an opt-in `-pthread` variant) and carries two wasm patches (a `<cstdlib>` include fix and an ESSL3 global-uniform-init fix). What it still turns off is exactly the Python half this project needs: `VTK_WRAP_PYTHON=OFF`, `VTK_ENABLE_WRAPPING=OFF`. So today's wasm VTK is a data-model/filters/IO/**rendering** build with **no Python** — the wall has narrowed from "no renderer, no Python" to "renderer works, Python wrapping doesn't."
 - **vtk-python does NOT target wasm** — `vtk-python-cp312` matrix is **linux + windows only**, and it uses the shared-library model (`libvtkWrappingPythonCore…so`, `vtkmodules/*.so`) — the opposite of wasm static linking.
 - **libcvc has no wasm build** — no wasm/emscripten preset in `CMakePresets.json`; C++20 + CUDA-default (CUDA must go off); uses `std::thread`/`std::filesystem` in ~127 spots plus an `xmlrpc` networking module (`XmlRpcSocket.cpp`).
 - **VolRover itself is a separate repo** (extracted `volrover3` viz-lab/gym), historically a **Qt desktop app**. The Qt-free VTK scene graph is `src/cvcGL` (→ `pycvc-gl`), whose `CMakeLists.txt` needs `RenderingCore RenderingVolume RenderingVolumeOpenGL2 RenderingOpenGL2 RenderingAnnotation RenderingFreeType InteractionStyle` — including **`RenderingVolumeOpenGL2`** (GPU volume ray-casting), the hardest thing to get right on wasm.
@@ -207,9 +220,9 @@ The static-embed happy path, independent of platform **[R1]**:
 - `recipes/cosmocc/recipe.yaml` — cosmocc 4.0.2 (`cross_toolchain` for `[cosmo]`)
 - `recipes/emsdk/recipe.yaml`, `recipes/emsdk/build.sh` — emsdk 5.0.7 (`cross_toolchain` for `[wasm]`)
 - `recipes/python313/build-cosmo.sh`, `recipes/python312/build-wasm.sh` — static cosmo/wasm CPython
-- `recipes/vtk/build-wasm.sh` — **headless, `WRAP_PYTHON=OFF`, `RenderingOpenGL2=NO`** (the wall)
+- `recipes/vtk/build-wasm.sh` — **renders (since #517), but still `WRAP_PYTHON=OFF`** (the current wall)
 - `recipes/vtk-python-cp313/{build.sh,recipe.yaml}` (+ cp311/cp312) — shared-lib wrappers, **linux+windows only**, `vtkPythonUtil` bridge
-- `CVCPKG-ROADMAP.md:255–257` (Phase 19 `cvcpkg bake` + cosmo APE), `:1212–1245` (`cvpkg` APE bootstrap)
+- [`CVCPKG-ROADMAP.md`](CVCPKG-ROADMAP.md) — Phase 19 (`cvcpkg bake` + cosmo APE variant); Phases 8/11 (`cvpkg` APE bootstrap)
 
 **libcvc (`/home/joe/src/cvc/libcvc/`)**
 - `src/cvcGL/CMakeLists.txt` — VTK render modules cvcGL needs (incl. `RenderingVolumeOpenGL2`)

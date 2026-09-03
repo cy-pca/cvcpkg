@@ -24,7 +24,8 @@ More generally: **"same source + same flags" does NOT yield the same binary if t
 
 cvcpkg already ships **hermetic toolchains** for the non-native ecosystems:
 
-- **WASM** → bundled Emscripten SDK (Clang→wasm), see `new-dependencies.md` §1.
+- **WASM** → bundled Emscripten SDK (Clang→wasm), see the emsdk row of
+  `new-dependencies.md`'s shipped ledger.
 - **Haskell** → our own GHC (Phase 7.5, "Our GHC, Our ABI").
 - **Python** → hermetic interpreters (`python311/312/313`, Phase 7).
 
@@ -47,5 +48,5 @@ Fits alongside Phase 1.5 (Release Engineering Readiness) / the build-cache work.
 See [`native-toolchain-spec.md`](native-toolchain-spec.md) — GCC 14.2 / glibc-2.28-floor decision, `gcc-toolchain` recipe shape, `env-linux.sh` edits, and the catalog-rebuild rollout.
 
 ## Related
-- `docs/roadmap/build-cache-roadmap.md` (reproducibility feeds caching)
+- [`../build-cache.md`](../build-cache.md) — the build cache has shipped; reproducible builds feed it (identical chain hash ⇒ reusable artifact)
 - The multi-python `vtk-python-cpXXX` recipes assume ABI-matched `vtk` — they are only truly hermetic once the native toolchain is pinned.

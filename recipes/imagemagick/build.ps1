@@ -121,11 +121,22 @@ foreach ($component in @('Magick++','MagickCore','MagickWand')) {
     }
 }
 
-# Runtime DLLs (CORE_RL_*, IM_MOD_RL_*, FILTER_*) shipped alongside the
-# installer's magick.exe.  Ship them all so apps can resolve symbols.
-foreach ($pat in @('CORE_RL_*.dll','IM_MOD_RL_*.dll','FILTER_*.dll')) {
-    $matches = Get-ChildItem -Path $appDir -Filter $pat -ErrorAction SilentlyContinue
-    foreach ($f in $matches) {
+# Core runtime DLLs (CORE_RL_*) live next to magick.exe at the top of app\.
+# The dynamic CODER + FILTER modules (IM_MOD_RL_png_.dll, IM_MOD_RL_jpeg_.dll, ...)
+# — what actually DECODE png/jpeg/tiff/... — live under app\modules\{coders,filters}\
+# in the official -dll build. The previous non-recursive copy missed that subtree
+# entirely, so ImageMagick loaded with ZERO coders ("no decode delegate for this
+# image format" on every read, which broke embedded-texture and satellite loads).
+#
+# Stage every module FLAT into bin\ alongside the CORE_RL_* DLLs, NOT in a
+# modules\ subdir: ImageMagick resolves a coder module's own dependencies
+# (CORE_RL_png_.dll -> CORE_RL_zlib_.dll, ...) in the MODULE's directory, so a
+# coder in bin\modules\coders\ can't find its CORE_RL_* deps up in bin\ and fails
+# with "the specified module could not be found". The official installer keeps
+# everything in one directory for exactly this reason; MAGICK_CODER_MODULE_PATH
+# then points at bin\ (see libcvc magick_io.cpp, which sets it relative to the DLL).
+foreach ($pat in @('CORE_RL_*.dll', 'IM_MOD_RL_*.dll', 'FILTER_*.dll')) {
+    foreach ($f in Get-ChildItem -Path $appDir -Recurse -Filter $pat -ErrorAction SilentlyContinue) {
         Copy-Item -Force $f.FullName $installBin
     }
 }

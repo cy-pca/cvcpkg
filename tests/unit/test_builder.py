@@ -998,16 +998,20 @@ class TestPlatformAny:
         # Verify content
         assert (staging / "share" / "style.css").is_file()
         # Verify manifest
-        assert (staging / "share" / "libcvc-deps" / "manifest.yaml").is_file()
+        assert (staging / "share" / "libcvc-deps" / "web-assets" / "manifest.yaml").is_file()
         import yaml as _yaml
 
-        m = _yaml.safe_load((staging / "share" / "libcvc-deps" / "manifest.yaml").read_text())
+        m = _yaml.safe_load(
+            (staging / "share" / "libcvc-deps" / "web-assets" / "manifest.yaml").read_text()
+        )
         assert m["bundle"]["platform"] == "any"
         assert m["bundle"]["arch"] == "noarch"
         assert m["meta"]["kind"] == "data"
         # Verify recipe was included
-        assert (staging / "share" / "libcvc-deps" / "recipe" / "recipe.yaml").is_file()
-        assert (staging / "share" / "libcvc-deps" / "recipe" / "build.sh").is_file()
+        assert (
+            staging / "share" / "libcvc-deps" / "web-assets" / "recipe" / "recipe.yaml"
+        ).is_file()
+        assert (staging / "share" / "libcvc-deps" / "web-assets" / "recipe" / "build.sh").is_file()
 
     def test_list_recipes_includes_any(self, tmp_path):
         """list_recipes returns 'any' recipes alongside platform-specific ones."""
@@ -1077,14 +1081,33 @@ class TestFetchSource:
         src = fetch_source(r, work_dir)
         assert src.is_dir()
 
-    def test_git_source_not_implemented(self, tmp_path):
+    def test_git_source_without_a_url_is_rejected(self, tmp_path):
+        # Was test_git_source_not_implemented, which asserted the placeholder
+        # RecipeError("Git source fetching not yet implemented").  The git
+        # source type is implemented now, so the interesting behaviour is that
+        # an unusable spec still fails loudly at dispatch.  Full coverage of
+        # the fetch itself lives in tests/unit/test_builder_git_source.py.
         recipe_dict = {**MINIMAL_RECIPE, "source": {"type": "git"}}
         recipe_dir = tmp_path / "recipes" / "testpkg"
         _write_recipe(recipe_dir, recipe_dict)
         r = Recipe.load(recipe_dir)
         work_dir = tmp_path / "work"
         work_dir.mkdir()
-        with pytest.raises(RecipeError, match="not yet implemented"):
+        with pytest.raises(RecipeError, match="no URL"):
+            fetch_source(r, work_dir)
+
+    def test_git_source_without_a_commit_is_rejected(self, tmp_path):
+        # A tag is a mutable ref, so an unpinned git source must never build.
+        recipe_dict = {
+            **MINIMAL_RECIPE,
+            "source": {"type": "git", "url": "https://example.invalid/x.git"},
+        }
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        with pytest.raises(RecipeError, match="mutable ref"):
             fetch_source(r, work_dir)
 
     def test_unknown_source_type(self, tmp_path):
@@ -1498,10 +1521,15 @@ class TestStageBundle:
 
         stage_bundle(install_dir, manifest, staging)
         assert (staging / "lib" / "libtest.so").exists()
-        assert (staging / "share" / "libcvc-deps" / "manifest.yaml").exists()
+        # Staged under a subdirectory named for the bundle, not flat --
+        # otherwise co-installed bundles clobber each other's manifest when
+        # extraction merges into a shared prefix (cvcpkg verify / sync read
+        # this per-bundle path).
+        assert (staging / "share" / "libcvc-deps" / "test" / "manifest.yaml").exists()
+        assert not (staging / "share" / "libcvc-deps" / "manifest.yaml").exists()
 
         manifest_content = yaml.safe_load(
-            (staging / "share" / "libcvc-deps" / "manifest.yaml").read_text()
+            (staging / "share" / "libcvc-deps" / "test" / "manifest.yaml").read_text()
         )
         assert manifest_content["bundle"]["name"] == "test"
 

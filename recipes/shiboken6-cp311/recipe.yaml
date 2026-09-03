@@ -2,7 +2,13 @@ schema_version: 1
 recipe:
   name: shiboken6-cp311
   upstream_version: "6.8.2"
-  cvc_revision: 2
+  # Bumped 2 -> 3 -> 4: Windows Shiboken6Config.abi3.cmake had a bad
+  # SHIBOKEN_PYTHON_MODULE_DIR. +cvc.2 baked the absolute build-time install dir;
+  # +cvc.3 added Invoke-CvcRewriteInstallPaths (fixes the PREFIX) but the config
+  # still carried backslashes in the remainder (\Lib -> invalid CMake escape '\L');
+  # +cvc.4 passes forward-slash paths to cmake so nothing backslashed is baked.
+  # Downstream find_package(Shiboken6) (pyside6) now parses cleanly.
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -89,6 +95,8 @@ build:
       script: build.sh
       env:
         CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
@@ -104,6 +112,16 @@ package:
     - lib/cmake/Shiboken6*/
     # Public headers for anything that links libshiboken directly.
     - include/shiboken6*/
+    # Windows layout (globs matching nothing are skipped): DLLs land in bin/,
+    # import libs in lib/, and the importable package under Lib/site-packages/.
+    - bin/shiboken6*.dll
+    # Defensive: the runtime DLL may install to lib/ instead of bin/ (the
+    # Shiboken6 config advertises SHIBOKEN_SHARED_LIBRARY_DIR=<prefix>/lib) —
+    # harmless if empty, but avoids silently shipping without the DLL.
+    - lib/shiboken6*.dll
+    - lib/shiboken6*.lib
+    - Lib/site-packages/shiboken6/
+    - Lib/site-packages/shiboken6_generator/
   cmake_packages:
     - {
         name: Shiboken6,

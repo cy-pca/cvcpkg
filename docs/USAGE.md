@@ -1,4 +1,13 @@
-# Using libcvc-deps
+# Using libcvc-deps (legacy v1.x bundles)
+
+> **Legacy document.** This page describes the retired v1.x monolithic
+> `libcvc-deps-<version>` GitHub-Releases archives. New consumers should
+> install per-component packages with `cvcpkg install` instead — see the
+> [README](../README.md) and the
+> [getting-started tutorial](getting-started-tutorial.md). This page is
+> kept for projects still pinned to a v1.x archive; the Windows Qt
+> deployment and runtime-library sections remain broadly applicable to
+> cvcpkg prefixes too.
 
 This page is the practical reference for plugging a `libcvc-deps`
 release into a CMake build.
@@ -259,7 +268,7 @@ directly.
 
 ## Component pins
 
-See [`README.md`](README.md#version-pins) for the upstream versions
+See the [release notes](../CHANGELOG.md) for the upstream versions
 captured by a given `libcvc-deps` release.
 
 ## Host requirements
@@ -370,7 +379,7 @@ for whatever the static linker pulls in (e.g. system `-ldl`,
 > **Windows note:** the `windows-x86_64-*-static` flavor is **not
 > produced** for v1.0.x. vcpkg's `mpfr` port hangs indefinitely on
 > the `x64-windows-static` triplet under hosted GitHub Actions
-> Windows runners. See `docs/known-issues.md` for the diagnosis
+> Windows runners. See `known-issues.md` for the diagnosis
 > and re-enablement plan. Windows users should consume the
 > shared bundles (`windows-x86_64-debug.zip` /
 > `windows-x86_64-release.zip`).

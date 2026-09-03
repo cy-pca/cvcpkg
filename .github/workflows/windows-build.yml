@@ -47,6 +47,16 @@ on:
           - "4"
           - "5"
           - "6"
+      recipes:
+        description: "Space-separated recipe names to build (empty = all recipes, sharded). Set to build/publish just a few — e.g. a one-off fix or iteration."
+        required: false
+        default: ""
+        type: string
+      ref:
+        description: "Branch/ref to build from (default: prod). Use a feature branch to test recipe changes before they land on prod."
+        required: false
+        default: "prod"
+        type: string
   workflow_call:
     inputs:
       config:
@@ -62,6 +72,10 @@ on:
         required: false
         type: string
         default: "4"
+      ref:
+        required: false
+        type: string
+        default: "prod"
 
 permissions:
   contents: read
@@ -75,14 +89,23 @@ jobs:
     steps:
       - id: gen
         run: |
-          TOTAL="${{ inputs.shards || '4' }}"
-          SHARDS=$(python3 -c "import json; print(json.dumps(list(range(int('$TOTAL')))))")
-          echo "shards=$SHARDS" >> "$GITHUB_OUTPUT"
+          # A targeted `recipes` build is small — one shard, no sharding math.
+          if [ -n "${{ inputs.recipes }}" ]; then
+            echo 'shards=[0]' >> "$GITHUB_OUTPUT"
+          else
+            TOTAL="${{ inputs.shards || '4' }}"
+            SHARDS=$(python3 -c "import json; print(json.dumps(list(range(int('$TOTAL')))))")
+            echo "shards=$SHARDS" >> "$GITHUB_OUTPUT"
+          fi
 
   build-shard:
     name: Windows shard ${{ matrix.shard }}/${{ inputs.shards || '4' }} (${{ inputs.config }}/${{ inputs.link }})
     needs: setup
-    runs-on: windows-latest
+    # Pin to windows-2022 (VS 2022 / toolset v143). `windows-latest` has drifted to
+    # Visual Studio 18 (2026, MSVC 14.51), which CPython 3.11's PCbuild props don't
+    # recognise — MSBuild falls back to requesting the v140 (VS2015) toolset and dies
+    # with MSB8020. v143 is the newest toolset CPython 3.11 builds against cleanly.
+    runs-on: windows-2022
     timeout-minutes: 350
     strategy:
       fail-fast: false
@@ -92,7 +115,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: prod
+          ref: ${{ inputs.ref || 'prod' }}
 
       - uses: actions/setup-python@v5
         with:
@@ -161,18 +184,60 @@ jobs:
           mkdir -p "${{ github.workspace }}/prefix"
           mkdir -p "${{ github.workspace }}/dist"
 
-          cvcpkg pack-all \
-            --keep-going \
-            --platform windows \
-            --config "${{ inputs.config }}" \
-            --link "${{ inputs.link }}" \
-            --prefix "${{ github.workspace }}/prefix" \
-            --output-dir "${{ github.workspace }}/dist" \
-            --recipes-dir recipes \
-            --shard "${{ matrix.shard }}/${SHARDS}" \
-            --server-cache "$CVCPKG_SERVER_URL" \
-            --server-cache-token "$CVCPKG_TOKEN" \
-            --server-cache-push
+          if [ -n "${{ inputs.recipes }}" ]; then
+            # Targeted build: the named recipes, in the order given. For each:
+            # install its published dep closure into the shared prefix, build+pack
+            # against it, then publish immediately — so a later recipe in the same
+            # run that depends on an earlier one (a chain, e.g. shiboken6 ->
+            # pyside6) can install-deps it from the server.
+            for r in ${{ inputs.recipes }}; do
+              echo "::group::install-deps $r (windows)"
+              # cvcpkg pack does NOT resolve deps — it builds against whatever is
+              # already in --prefix (single-prefix model). Install the recipe's
+              # build+runtime closure first, or its build.ps1 can't find python/
+              # qt/llvm/etc. Host tools (cmake/ninja) come from the CI image.
+              cvcpkg install-deps "recipes/$r" \
+                --platform windows \
+                --config "${{ inputs.config }}" \
+                --link "${{ inputs.link }}" \
+                --prefix "${{ github.workspace }}/prefix" \
+                --recipes-dir recipes
+              echo "::endgroup::"
+              echo "::group::pack $r (windows)"
+              cvcpkg pack "recipes/$r" \
+                --platform windows \
+                --config "${{ inputs.config }}" \
+                --link "${{ inputs.link }}" \
+                --prefix "${{ github.workspace }}/prefix" \
+                --output-dir "${{ github.workspace }}/dist" \
+                --recipes-dir recipes \
+                --server "$CVCPKG_SERVER_URL" \
+                --token "$CVCPKG_TOKEN"
+              echo "::endgroup::"
+              echo "::group::publish $r (windows)"
+              cvcpkg publish --all \
+                --server "$CVCPKG_SERVER_URL" \
+                --token "$CVCPKG_TOKEN" \
+                --output-dir "${{ github.workspace }}/dist" \
+                --platform windows \
+                --config "${{ inputs.config }}" \
+                --link "${{ inputs.link }}" || true
+              echo "::endgroup::"
+            done
+          else
+            cvcpkg pack-all \
+              --keep-going \
+              --platform windows \
+              --config "${{ inputs.config }}" \
+              --link "${{ inputs.link }}" \
+              --prefix "${{ github.workspace }}/prefix" \
+              --output-dir "${{ github.workspace }}/dist" \
+              --recipes-dir recipes \
+              --shard "${{ matrix.shard }}/${SHARDS}" \
+              --server-cache "$CVCPKG_SERVER_URL" \
+              --server-cache-token "$CVCPKG_TOKEN" \
+              --server-cache-push
+          fi
 
       - name: List built packages
         if: always()
@@ -180,7 +245,7 @@ jobs:
         run: |
           echo "Built packages (shard ${{ matrix.shard }}):"
           ls -lh "${{ github.workspace }}/dist/" 2>/dev/null || echo "(no packages)"
-          COUNT=$(ls "${{ github.workspace }}/dist/"*.tar.zst 2>/dev/null | wc -l || echo 0)
+          COUNT=$(ls "${{ github.workspace }}/dist/"*.zip 2>/dev/null | wc -l || echo 0)
           echo "Count: $COUNT archives"
 
       - name: Publish to cvcpkg.org
@@ -192,7 +257,12 @@ jobs:
         run: |
           set -euo pipefail
           DIST="${{ github.workspace }}/dist"
-          ARCHIVES=($(ls "$DIST"/*.tar.zst 2>/dev/null || true))
+          # cvcpkg pack writes a .zip on Windows (create_archive: windows -> .zip,
+          # unix -> .tar.gz; .tar.zst only exists in the remote-builder rewrap +
+          # server storage, never the local pack output). Globbing *.tar.zst here
+          # matched nothing, so this guard silently skipped publishing after a
+          # successful pack (exit 0) — the reason python311/windows never landed.
+          ARCHIVES=($(ls "$DIST"/*.zip 2>/dev/null || true))
           if [ ${#ARCHIVES[@]} -eq 0 ]; then
             echo "::warning::No archives found in dist/ — nothing to publish"
             exit 0

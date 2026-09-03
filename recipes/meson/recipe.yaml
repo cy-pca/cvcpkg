@@ -1,11 +1,14 @@
 schema_version: 1
 recipe:
   name: meson
-  upstream_version: "1.7.2"
-  # Bumped 1 -> 2: the windows launcher called `python3`, which does
-  # not exist on Windows CPython, so it hit the Microsoft Store alias stub and
-  # every meson-based windows recipe failed before configuring. Now prefers the
-  # prefix's own python.exe.
+  # Bumped 1.7.2 -> 1.8.3: numpy 2.4.6's meson.build requires meson >=1.8.3
+  # ("Meson version is 1.7.2 but project requires >=1.8.3"), so the 1.7.2 build
+  # can no longer configure numpy on any platform. 1.8.3 is the floor numpy needs.
+  upstream_version: "1.8.3"
+  # (History from 1.7.2) Bumped 1 -> 2: the windows launcher called `python3`,
+  # which does not exist on Windows CPython, so it hit the Microsoft Store alias
+  # stub and every meson-based windows recipe failed before configuring. Now
+  # prefers the prefix's own python.exe.
   cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -19,8 +22,8 @@ recipe:
 
 source:
   type: tarball
-  url: https://github.com/mesonbuild/meson/releases/download/1.7.2/meson-1.7.2.tar.gz
-  sha256: "4d40d63aa748a9c139cc41ab9bffe43edd113c5639d78bde81544ca955aea890"
+  url: https://github.com/mesonbuild/meson/releases/download/1.8.3/meson-1.8.3.tar.gz
+  sha256: "f118aa910fc0a137cc2dd0122232dbf82153d9a12fb5b0f5bb64896f6a157abf"
   strip_components: 1
 
 patches: []

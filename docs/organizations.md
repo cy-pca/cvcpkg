@@ -111,7 +111,7 @@ If any check fails, the publish is rejected (403 or 413).
 Recipes can also be scoped to an org:
 
 ```bash
-cvcpkg recipes push my-lib --org my-team
+cvcpkg recipe push my-lib --org my-team
 ```
 
 ### Remote Builds

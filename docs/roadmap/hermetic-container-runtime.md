@@ -32,7 +32,8 @@ The problem is what the capability *cannot* express:
   precisely to make image packages trustworthy.
 - **It is the same gap we have already closed four times.** Python got hermetic
   interpreters (Phase 7), Haskell gets its own GHC (Phase 7.5, "Our GHC, Our
-  ABI"), WASM gets a bundled Emscripten SDK (`new-dependencies.md` §1), and
+  ABI"), WASM gets a bundled Emscripten SDK (the emsdk row of
+  `new-dependencies.md`'s shipped ledger), and
   `hermetic-native-toolchain.md` makes the same argument for `CC`/`CXX`: *"same
   source + same flags" does NOT yield the same binary if the toolchain can
   differ.* The container runtime is now the odd one out.
@@ -42,8 +43,9 @@ small. That changes as image packages grow, which is the moment to fix it.
 
 ## Why it has not happened: we have no Go
 
-Incus and LXD are written in Go, and **cvcpkg has no Go toolchain.** The word
-"Go" appears exactly once in this entire roadmap — Phase 20, on `verlihub`:
+Incus and LXD are written in Go, and **cvcpkg has no Go toolchain.** When this
+doc was drafted, the word "Go" appeared exactly once in the sibling
+[`CVCPKG-ROADMAP.md`](CVCPKG-ROADMAP.md) — Phase 20, on `verlihub`:
 
 > the TLS-proxy feature requires a **Go toolchain** and should stay off by default.
 
@@ -61,7 +63,8 @@ Go is **much easier than Haskell** and should not be sequenced behind it:
 - **No bootstrap problem in practice.** Go has been self-hosting since 1.5, so a
   from-source build needs a Go to build Go — but upstream publishes official
   per-platform binary tarballs. SHA256-pin and mirror them, exactly as
-  `new-dependencies.md` §1 does for the Emscripten SDK. No `ghc-bootstrap` dance.
+  the emsdk row of `new-dependencies.md`'s shipped ledger does for the
+  Emscripten SDK. No `ghc-bootstrap` dance.
 - **No per-closure ABI hashing.** The thing that makes Haskell hard (Phase 7.5's
   central warning) simply does not exist here. Go links statically by default and
   produces one self-contained binary.
@@ -233,9 +236,10 @@ with Phase 16.
 
 - [`hermetic-native-toolchain.md`](hermetic-native-toolchain.md) — the same
   argument for `CC`/`CXX`; cgo makes Incus depend on its outcome.
-- [`new-dependencies.md`](new-dependencies.md) §1 — the bundled-Emscripten-SDK
-  precedent for shipping a pinned upstream toolchain tarball.
-- `CVCPKG-ROADMAP.md` Phase 7 / 7.5 — hermetic Python and "Our GHC, Our ABI".
-- `CVCPKG-ROADMAP.md` Phase 10 — the capability/peer-provider model this narrows.
-- `CVCPKG-ROADMAP.md` Phase 20 — the deferred verlihub TLS proxy that Layer 1
+- [`new-dependencies.md`](new-dependencies.md) — the emsdk row of its shipped
+  ledger is the bundled-Emscripten-SDK precedent for shipping a pinned
+  upstream toolchain tarball.
+- [`CVCPKG-ROADMAP.md`](CVCPKG-ROADMAP.md) Phase 7 / 7.5 — hermetic Python and "Our GHC, Our ABI".
+- [`CVCPKG-ROADMAP.md`](CVCPKG-ROADMAP.md) Phase 10 — the capability/peer-provider model this narrows.
+- [`CVCPKG-ROADMAP.md`](CVCPKG-ROADMAP.md) Phase 20 — the deferred verlihub TLS proxy that Layer 1
   unblocks.

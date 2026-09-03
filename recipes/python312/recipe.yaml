@@ -168,6 +168,10 @@ package:
     - python.exe
     - pythonw.exe
     - python312.dll
+    # The limited-API forwarder, staged by PC\layout --include-stable. Every
+    # abi3 extension module names python3.dll in its import table, so without
+    # this the prefix cannot load a single stable-ABI wheel.
+    - python3.dll
     - vcruntime140*.dll
     - DLLs/
     - Lib/

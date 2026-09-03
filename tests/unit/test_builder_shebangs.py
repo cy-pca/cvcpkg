@@ -228,7 +228,7 @@ def test_stage_bundle_rewrites_staging_not_install_dir(tmp_path):
     staging.mkdir()
     source = _script(install_dir, "bin/tool", f"{JOB_PREFIX}/bin/python3.11")
 
-    stage_bundle(install_dir, {"name": "toolpkg"}, staging, temp_prefixes=(JOB_PREFIX,))
+    stage_bundle(install_dir, {"bundle": {"name": "toolpkg"}}, staging, temp_prefixes=(JOB_PREFIX,))
 
     staged = staging / "bin" / "tool"
     assert staged.read_bytes().startswith(b"#!/usr/bin/env python3.11\n")
@@ -255,7 +255,7 @@ def test_packed_bundle_bin_entry_executes_from_fresh_prefix(tmp_path):
 
     staging = tmp_path / "staging"
     staging.mkdir()
-    stage_bundle(install_dir, {"name": "toolpkg"}, staging, temp_prefixes=(JOB_PREFIX,))
+    stage_bundle(install_dir, {"bundle": {"name": "toolpkg"}}, staging, temp_prefixes=(JOB_PREFIX,))
     archive, _sha, _size = create_archive(
         staging, tmp_path / "dist", "toolpkg", "1.0.0+cvc.1", "linux", "x86_64", "release", "shared"
     )

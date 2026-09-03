@@ -12,20 +12,16 @@ if (-not (Test-Path $srcLlvm)) {
     throw "LLVM monorepo source not found at $srcLlvm"
 }
 
-$LinkJobs = [Math]::Max(1, [Math]::Min(2, [int]$env:CVC_JOBS))
-
 cmake -G Ninja `
-    -S $srcLlvm `
-    -B $env:CVC_BUILD_DIR `
-    -DCMAKE_INSTALL_PREFIX=$env:CVC_INSTALL_DIR `
+    -S "$srcLlvm" `
+    -B "$env:CVC_BUILD_DIR" `
+    "-DCMAKE_INSTALL_PREFIX=$env:CVC_INSTALL_DIR" `
     -DCMAKE_BUILD_TYPE=Release `
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON `
     -DCMAKE_CXX_STANDARD=17 `
-    -DCMAKE_PREFIX_PATH=$env:CVC_DEPS_PREFIX `
+    "-DCMAKE_PREFIX_PATH=$env:CVC_DEPS_PREFIX" `
     -DLLVM_ENABLE_PROJECTS="clang;lld" `
     -DLLVM_TARGETS_TO_BUILD="X86;AArch64;WebAssembly" `
-    -DLLVM_BUILD_LLVM_DYLIB=ON `
-    -DLLVM_LINK_LLVM_DYLIB=ON `
     -DLLVM_INCLUDE_TESTS=OFF `
     -DLLVM_INCLUDE_BENCHMARKS=OFF `
     -DLLVM_INCLUDE_EXAMPLES=OFF `
@@ -33,7 +29,7 @@ cmake -G Ninja `
     -DLLVM_ENABLE_LIBXML2=OFF `
     -DLLVM_ENABLE_TERMINFO=OFF `
     -DLLVM_ENABLE_BINDINGS=OFF `
-    -DLLVM_PARALLEL_LINK_JOBS=$LinkJobs `
+    -DLLVM_PARALLEL_LINK_JOBS=2 `
     -DCLANG_INCLUDE_DOCS=OFF `
     -DCLANG_INCLUDE_TESTS=OFF `
     -DCLANG_BUILD_TOOLS=ON

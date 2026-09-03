@@ -23,6 +23,17 @@ hosting its **own private organization packages locally**.
 > `mirror_mode` and `populate` are *different* mechanisms. A mirror is read-only.
 > An edge server is read-write and uses *populate* — it never becomes read-only.
 
+A read-only mirror announces itself to its primary via
+`POST /v1/mirrors/register` (admin token; body: the mirror's public base `url`,
+optional `display_name` / `contact`). The primary periodically health-checks
+registered mirrors and serves the healthy set at `GET /v1/mirrors` — clients
+use that list for download failover (e.g. `cvcpkg download` appends
+`<mirror>/v1/mirror/download/<file>` fallback URLs to each bundle).
+Re-registering an existing URL clears a previous rejection
+(`POST /v1/mirrors/reject` removes a mirror from the public list) and resets
+its health state. A server running in mirror mode refuses to register mirrors
+of its own, and the registry requires a database backend.
+
 ## Populate — keeping the public catalog in sync
 
 An edge server runs a background loop that **imports missing public packages**
@@ -193,6 +204,76 @@ Either way exactly one of {the build, the import} wins — whichever committed t
 the catalog first — and no published variant ever diverges from what a client
 would get from upstream.
 
+## Mirror trust and upstream authority
+
+Populate only ever *adds* packages, so on its own a mirror would keep serving a
+bundle forever after upstream retired it — silently disagreeing with the server
+it claims to mirror. Two mechanisms close that gap: the populate loop
+**reconciles upstream's yank/nuke decisions** on every sync, and clients treat
+**upstream as authoritative by default** when a mirror dissents.
+
+### Upstream yank/nuke reconciliation
+
+On every populate sync, the edge compares the bundles it imported from its
+upstream against what upstream serves *now*. Only rows carrying that upstream's
+provenance are eligible — a locally published package, an org package, or a
+bundle mirrored from a different upstream is never touched ("absent upstream"
+says nothing about a package upstream never had). Three cases, in decreasing
+confidence:
+
+| Upstream state | Edge action |
+|----------------|-------------|
+| Listed but **yanked** | Yank locally (reversible — an upstream unyank propagates back on the next sync). |
+| **Gone, with a tombstone** (`GET /v1/packages/{name}/tombstones`) | Upstream nuked it: yank + write a local tombstone, so downloads answer **410 Gone** (with the reason and date) exactly as upstream does. The archive bytes are deliberately left to the ordinary yank-retention GC. |
+| **Gone, no tombstone** | Ambiguous — a partial catalog, a truncated response, or a transient upstream fault all look like this. Yank only (recoverable), logged loudly; `cvcpkg unyank` is the recovery if upstream was merely unavailable. |
+
+Tombstone lookups are fetched only for the packages that actually went missing,
+not the whole catalog. The 410 is enforced even while the bytes are still on
+disk — an inherited nuke must not keep serving. Reconciliation activity shows
+up in `populate_stats` (`last_reconciled` / `reconciled_total`, on
+`GET /healthz`) and in the log.
+
+Upstream's verdict also survives a *chain* of mirrors: when reconciling, an
+edge reads both `yanked` **and** `upstream_yanked` from its upstream's catalog,
+so a mid-chain mirror that dissents (below) cannot launder the origin's ruling
+into a clean unyank for everyone downstream of it.
+
+### The `upstream_yanked` dissent flag
+
+A mirror operator may *deliberately* unyank a bundle upstream still considers
+retired — e.g. to keep an air-gapped site building while a replacement is
+prepared. Because the row records that the upstream verdict was already
+enforced once, the reconciler recognises a later local unyank as an **operator
+override** and leaves it standing rather than re-yanking it on every sync.
+
+The divergence stays visible instead of disappearing: the bundle is served with
+`yanked: false` but `upstream_yanked: true` in `/v1/catalog` and on
+`GET /v1/packages`, so *clients* decide whose ruling to follow. The flag clears
+automatically once upstream serves the bundle again (and a yank the edge merely
+inherited is lifted at the same time).
+
+### Client side — `--trust-mirror`
+
+By default, **upstream wins**: resolution (`cvcpkg install` /
+`cvcpkg install-deps`) skips any catalog entry flagged `upstream_yanked`, and
+`cvcpkg search` hides such rows from its results. Taking a dissenting mirror at
+face value would silently reinstate a bundle that was withdrawn for being
+broken — or for a CVE — on every machine pointed at that mirror, so opting in
+is explicit:
+
+| Control | Effect |
+|---------|--------|
+| *(default)* | Upstream authoritative — bundles the upstream retired are skipped even if this mirror still serves them. |
+| `--trust-mirror` | Accept the mirror's ruling for this invocation (`install`, `install-deps`, `search`). |
+| `--no-trust-mirror` | Force the upstream-authoritative default even when `CVCPKG_TRUST_MIRROR` is set. |
+| `CVCPKG_TRUST_MIRROR=1` | Standing opt-in for non-interactive use (`1`/`true`/`yes`); the flags always win for a single command. |
+
+The env var is input-only — a command overriding it passes the choice into that
+one resolution rather than exporting it, so one command's `--trust-mirror`
+never becomes the standing policy for every later resolution in a long-lived
+process. `search --include-yanked` / `--yanked-only` still show the flagged
+rows: asking to see retired builds is a deliberate request.
+
 ## Local-only organization packages
 
 Organizations are a **separate namespace** — the package identity includes the
@@ -293,12 +374,18 @@ satellite is a cache.  A client configured with a distinct root:
 - **falls back to the local mirror** when the root is unreachable, so an
   offline / air-gapped satellite still resolves.
 
-Config:
+Config — two distinct URLs, one per role in the topology:
 
-- **`CVCPKG_ROOT_URL`** — the authoritative root server (default: the
-  compiled-in `cvcpkg.org`).  When it equals `CVCPKG_SERVER_URL` there is no
-  separate root and resolution is unchanged.
-- **`CVCPKG_ROOT_CATALOG_URL`** — override the root's catalog URL directly.
+- **`CVCPKG_SERVER_URL`** — the server the client *talks to*: the nearby
+  edge/satellite (default: the compiled-in `cvcpkg.org`). It backs the
+  `--server` flag on commands like `search`, and its catalog defaults to
+  `$CVCPKG_SERVER_URL/v1/catalog` (override with `CVCPKG_CATALOG_URL`). This is
+  where org packages live and where publishes and searches go.
+- **`CVCPKG_ROOT_URL`** — the server that is *authoritative* for the public
+  namespace (default: the compiled-in `cvcpkg.org`).  When it equals
+  `CVCPKG_SERVER_URL` there is no separate root and resolution is unchanged.
+- **`CVCPKG_ROOT_CATALOG_URL`** — override the root's catalog URL directly
+  (default: `$CVCPKG_ROOT_URL/v1/catalog`).
 
 An explicit `--catalog` / `CVCPKG_CATALOG_URL` bypasses this and uses the
 given catalog verbatim.  (Download *locality* — fetching a root-resolved
@@ -329,7 +416,9 @@ See `lab/README.md`.
 | `CVCPKG_POPULATE_EXCLUDE` | edge | Optional package-name denylist (never mirror these); wins over the allowlist. |
 | `CVCPKG_POPULATE_MAX_PACKAGE_BYTES` | edge | Per-package size cap for mirroring (default: `CVCPKG_MAX_UPLOAD_BYTES`, 4 GiB). Accepts `8GB`/`512MB`. |
 | `CVCPKG_POPULATE_MAX_MIRROR_BYTES` | edge | Total mirror-cache size budget; least-downloaded populate packages are evicted over it (0 = unbounded). |
+| `CVCPKG_SERVER_URL` | client | The server the client talks to (nearby edge/satellite; default `cvcpkg.org`); default catalog is `$CVCPKG_SERVER_URL/v1/catalog`. |
 | `CVCPKG_ROOT_URL` | client | Authoritative root server for public packages (default `cvcpkg.org`); resolution is top-down when it differs from `CVCPKG_SERVER_URL`. |
-| `CVCPKG_ROOT_CATALOG_URL` | client | Override the root's catalog URL directly. |
+| `CVCPKG_ROOT_CATALOG_URL` | client | Override the root's catalog URL directly (default `$CVCPKG_ROOT_URL/v1/catalog`). |
+| `CVCPKG_TRUST_MIRROR` | client | `1`/`true`/`yes`: accept a mirror's ruling over its upstream's (serve `upstream_yanked` bundles). Default off — upstream is authoritative. Per-command `--trust-mirror`/`--no-trust-mirror` wins. |
 | `CVCPKG_MIRROR_MODE` / `CVCPKG_MIRROR_UPSTREAM` | mirror | Read-only mirror of a primary. |
 | `registries.yaml` / `CVCPKG_REGISTRIES` / `CVCPKG_REGISTRIES_FILE` | client | Federated registry hosts → `{url, token}` (allowlist + credentials). |

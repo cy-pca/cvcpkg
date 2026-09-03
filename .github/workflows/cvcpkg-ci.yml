@@ -202,6 +202,22 @@ jobs:
   # Only runs on the self-hosted prod runner where Docker is
   # available.
   integration:
+    # Serialise this job across the WHOLE repo, not per-ref.
+    #
+    # The workflow-level group is cvcpkg-ci-${{ github.ref }}, so every open
+    # PR runs its own copy of this job at the same time -- and they all land
+    # on ONE self-hosted docker daemon that is already shared with seven other
+    # runner services. Three of them overlapping is what exhausted the retry
+    # added in #505: contention on all 3 attempts, the last after 8 minutes of
+    # building, because `--no-cache` rebuilds every layer and each layer is a
+    # fresh chance to collide on the content store.
+    #
+    # Retrying harder does not fix a build that is structurally maximally
+    # exposed. Not racing ourselves does. cancel-in-progress is false: these
+    # runs should queue, never cancel each other.
+    concurrency:
+      group: cvcpkg-docker-integration
+      cancel-in-progress: false
     name: Integration tests (Docker)
     # Self-hosted runner safety.  For `pull_request`, GitHub evaluates the
     # workflow definition from the PR's own merge ref, so a fork PR can edit
@@ -274,7 +290,7 @@ jobs:
           # status and every failed build would look like a success.
           set -o pipefail
           build_images() {
-            docker compose -f docker-compose.test.yml build --no-cache test playwright
+            docker compose -f docker-compose.test.yml build --no-cache test playwright backend
           }
           for attempt in 1 2 3; do
             if build_images 2>&1 | tee /tmp/build.log; then
@@ -292,7 +308,12 @@ jobs:
             sleep $((attempt * 20))
           done
 
-          docker compose -f docker-compose.test.yml up -d --build postgres backend
+          # `backend` is built inside the retry above, so no --build here. It was
+          # the THIRD build site and the one still unprotected: the test/playwright
+          # build succeeded, the loop broke, and then this line hit the same
+          # content-store race with no retry around it -- which is why #508's own
+          # run failed with no retry warning in the log.
+          docker compose -f docker-compose.test.yml up -d postgres backend
           echo "Waiting for backend health..."
           timeout 120 bash -c 'until curl -sf http://127.0.0.1:8421/healthz; do sleep 2; done'
           echo ""
@@ -303,12 +324,20 @@ jobs:
         env:
           CVCPKG_TEST_SERVER_URL: http://127.0.0.1:8421
         run: |
-          docker compose -f docker-compose.test.yml run --build --rm test
+          # No --build: `test` is built inside the retry in `Start test stack`.
+          docker compose -f docker-compose.test.yml run --rm test
 
       - name: Run Playwright browser tests
         working-directory: .
         run: |
-          docker compose -f docker-compose.test.yml run --build --rm playwright
+          # NO --build. `Start test stack` above already built this image with
+          # --no-cache, in this same job, from this same compose file. --build
+          # rebuilt it a SECOND time: minutes of duplicated work, and a second
+          # place to lose the buildkit content-store race -- which is exactly
+          # where #503 died, in this step rather than the one #505 wrapped in a
+          # retry. Removing the redundant build removes the collision site
+          # instead of retrying it.
+          docker compose -f docker-compose.test.yml run --rm playwright
 
       - name: Collect logs on failure
         if: failure()

@@ -36,6 +36,7 @@ EXPECTED_SUBMODULES = [
     "_catalog",
     "_cpkg",
     "_doctor",
+    "_generate",
     "_image",
     "_init",
     "_install",
@@ -45,6 +46,7 @@ EXPECTED_SUBMODULES = [
     "_server",
     "_signing",
     "_telemetry",
+    "_uninstall",
     "_webhook",
 ]
 

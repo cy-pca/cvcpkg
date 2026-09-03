@@ -94,6 +94,19 @@ gh workflow run macos-drain.yml -R transfix/libcvc-deps   # drain the macOS queu
 The same pattern drains any platform's queue — pass the matching `--platform` and
 run it on (or cross-compiling to) that platform.
 
+### GitHub-hosted linux/arm64 lane
+
+macOS is not the only platform without a standing builder: the fleet is
+x86_64-only, so **linux/arm64** has the same gap.
+`.github/workflows/linux-arm-build.yml` — deliberately a close sibling of
+`macos-build.yml` — builds the full recipe DAG with `pack-all` on
+GitHub-hosted `ubuntu-22.04-arm` runners in parallel shards and publishes
+each package directly (default server `https://cvcpkg.org`). Run it via
+`workflow_dispatch`, or let `populate-server.yml` call it when `arm64` is in
+the requested arch list. The runner pin matters: 22.04 is glibc 2.35, the
+fleet floor — a 24.04-arm runner (glibc 2.39) would emit `GLIBC_2.38+`
+references that `cvcpkg pack` rejects outright.
+
 ## Multi-tenant / shared fleet
 
 A builder can serve **several namespaces** and register with **several servers**
@@ -209,6 +222,58 @@ an exchange directory in the host user's profile, MSVC found by
 `env-windows.ps1`'s auto-import), while packaging and publishing stay on
 the Linux side. See
 [cvcpkg-builder-wsl-windows-cross.md](cvcpkg-builder-wsl-windows-cross.md).
+
+## Haiku (SSH cross-build delegation)
+
+`haiku` is a canonical platform (PR #431): recipes declare `platform: haiku`
+matrix entries and the bundles publish as `haiku/x86_64` like any other
+platform. What is different is that **a Haiku machine can never be a
+builder**: cvcpkg cannot run natively on Haiku — HaikuPorts has no pip, and
+its `cryptography` is stuck at 3.4.8 against cvcpkg's `>=41.0` floor — so a
+Haiku box is a build *target* driven from a machine that does run cvcpkg.
+
+The mechanism (`src/cvcpkg/haikuhost.py`, the Haiku analogue of the WSL
+Windows-cross `winhost` above) keeps source fetch, patching, packaging and
+publishing on the owning **Linux builder**; only the recipe's build script —
+and its test script, since the install tree that comes back holds Haiku
+binaries that cannot run on the Linux side — executes on the Haiku host, over
+plain OpenSSH. Each job stages the source tree, the recipe dir (plus
+`recipes/_common`) and the dependency prefixes into
+`$CVCPKG_HAIKU_WORKDIR/jobs/<job>` on the Haiku side (rsync when both ends
+have it, tar-over-ssh otherwise), runs a generated `run-job.sh` there while
+streaming the log, and copies the install tree back so the normal
+pack/publish path runs unchanged.
+
+A haiku job that cannot be delegated is a **hard error, never a local
+build**: there is no local Haiku toolchain, so the only thing a "fallback"
+could produce is Linux binaries packaged as `haiku/x86_64`. An unconfigured
+builder fails the job loudly, naming the missing setting.
+
+Settings, read from the owning Linux builder's environment (the full
+annotated list is the module docstring of `src/cvcpkg/haikuhost.py`):
+
+| Variable | Meaning |
+|----------|---------|
+| `CVCPKG_HAIKU_SSH` | `user@host` of the Haiku box. Required — a haiku job fails until it is set. |
+| `CVCPKG_HAIKU_SSH_KEY` | Identity file for the connection. |
+| `CVCPKG_HAIKU_SSH_PORT` | Non-default SSH port. |
+| `CVCPKG_HAIKU_WORKDIR` | Remote work root (default `/boot/home/cvcpkg-build`). |
+| `CVCPKG_HAIKU_TRANSFER` | File exchange: `auto` \| `rsync` \| `tar`. |
+| `CVCPKG_HAIKU_JOBS` | Overrides `CVC_JOBS` for the remote build. |
+| `CVCPKG_HAIKU_KEEP_JOBS` | How many kept (failed / `--keep-build-dir`) remote job dirs to leave behind; the next job reaps the rest. `0` disables reaping. |
+| `CVCPKG_HAIKU_JOB_TTL` | Seconds a job dir's liveness marker protects it from the reaper (default 86400). |
+| `CVCPKG_HAIKUHOST` | `0`/`false` makes this builder **refuse** haiku jobs. It does not fall back to a local build. |
+
+Routing is the normal cross-target mechanism: register the owning Linux
+builder with `--cross-platform haiku` and the scheduler offers it haiku
+jobs.
+
+The Haiku VM itself can be provisioned from the published `haiku-image`
+package — see [image-packages.md](image-packages.md). One related variable
+that is **not** a delegation setting: `HAIKU_BUILDER_SSH_KEY` is the
+environment variable named by `haiku-image`'s `test.vm.ssh.key_env` — the
+private key the recipe's VM boot test uses to reach the guest — and is
+likewise read from the builder process's environment.
 
 ## API Tokens
 

@@ -300,15 +300,19 @@ jobs:
       - name: List artifacts
         run: find artifacts -type f | sort
 
+      - name: Generate checksums
+        # install.sh / install.ps1 verify against these before running
+        # anything they downloaded.
+        run: |
+          cd artifacts
+          for f in *; do
+            sha256sum "$f" > "$f.sha256"
+          done
+          find . -name '*.sha256' | sort
+
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          files: |
-            artifacts/cvcpkg-linux-x86_64
-            artifacts/cvcpkg-macos-arm64
-            artifacts/cvcpkg-windows-x86_64.exe
-            artifacts/cvcpkg-freebsd-x86_64
-            artifacts/cvcpkg-openbsd-x86_64
-            artifacts/cvcpkg-netbsd-x86_64
+          files: artifacts/*
           fail_on_unmatched_files: false

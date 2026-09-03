@@ -26,7 +26,19 @@ recipe:
   # _LIBCPP_HAS_NO_THREADS and does not provide them, and Jolt's platform
   # detection has no __wasi__ branch either.  A wasip1-threads sysroot would be
   # a different toolchain than env-wasi.sh configures.
-  cvc_revision: 3
+  # cvc.4: (1) wasm from a Windows host too (build-wasm.ps1) -- the cvc.3
+  # wasm/cosmo/openbsd variants never reached the catalog (the live catalog has
+  # no cross-target bundle for ANY package touched by 82d7acb8, so this is not
+  # a Jolt-specific failure); (2) CROSS_PLATFORM_DETERMINISTIC=ON on EVERY
+  # platform: upstream guarantees identical results across compiler (incl.
+  # emscripten), OS, arch and word size only with it on (~8% cost) -- the
+  # property a native-authoritative / browser-replay digital twin needs. It is
+  # a JPH_VERSION_ID feature bit, so all platforms flip together;
+  # PROFILER_IN_DEBUG_AND_RELEASE=OFF likewise (upstream's wasm CI config is
+  # Distribution, i.e. no profiler). (3) test.sh builds + runs a find_package
+  # consumer, natively and under node for wasm (JPH::RegisterTypes aborts on a
+  # config mismatch, so it is a real ABI check).
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -89,6 +101,9 @@ build:
     - platform: wasm
       host_platform: linux
       script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
     - platform: cosmo
       host_platform: linux
       script: build-cosmo.sh
@@ -105,6 +120,9 @@ package:
     - include/Jolt/
   cmake_packages:
     - { name: Jolt, targets: ["Jolt::Jolt"] }
+
+test:
+  script: test.sh
 
 abi:
   cxx_std: 17

@@ -21,8 +21,18 @@ Set-Location $env:CVC_SOURCE_DIR
 if ($LASTEXITCODE -ne 0) { throw "PCbuild\build.bat failed ($LASTEXITCODE)" }
 
 # 2. Stage a relocatable layout into the install prefix.
+#
+# --include-stable stages python3.dll, the limited-API forwarder. Without it the
+# prefix carries only python312.dll, and EVERY abi3 extension module fails to
+# import with "DLL load failed while importing _x: The specified module could
+# not be found" — because python3.dll is in its import table and is simply not
+# there. The error names the extension, never the missing forwarder, and CPython
+# then reports a misleading "the Python version for which X was compiled
+# (3.12.10) is incompatible with the current interpreter (3.12.10)". Measured
+# 2026-08-16 on drjit 1.3.1 (cp312-abi3): python3.dll was the ONLY unresolved
+# import of the whole dependency set.
 $py = Join-Path (Get-Location) "PCbuild\amd64\python.exe"
-& $py PC\layout --copy $env:CVC_INSTALL_DIR --include-pip --include-dev --precompile
+& $py PC\layout --copy $env:CVC_INSTALL_DIR --include-pip --include-dev --include-stable --precompile
 if ($LASTEXITCODE -ne 0) { throw "PC\layout failed ($LASTEXITCODE)" }
 
 # 2b. Teach the interpreter where the prefix's DLLs live.

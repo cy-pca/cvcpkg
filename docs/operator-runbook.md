@@ -305,7 +305,7 @@ docker compose -f docker-compose.production.yml exec backend \
 
 - [ ] Rotate/prune old backups (>30 days)
 - [ ] Review rate limit and size limit settings
-- [ ] Check for cvcpkg updates (`git log --oneline origin/main..HEAD`)
+- [ ] Check for cvcpkg updates (`git fetch origin && git log --oneline HEAD..origin/master`)
 - [ ] Verify audit chain integrity
 
 ### Quarterly
@@ -320,69 +320,93 @@ docker compose -f docker-compose.production.yml exec backend \
 ## 11. Publishing `cvcpkg` to PyPI
 
 The `cvcpkg` Python CLI is published to PyPI by the
-[`.github/workflows/cvcpkg-publish.yml`](../../.github/workflows/cvcpkg-publish.yml)
+[`.github/workflows/cvcpkg-publish.yml`](../.github/workflows/cvcpkg-publish.yml)
 workflow, which fires on tags matching `cvcpkg-v*` and uses **trusted
 publishing (OIDC)** — no API tokens stored in the repo.
 
-### 11.1. One-time setup
+There is no TestPyPI leg any more (dropped in #145/#147): a pre-release
+tag now stops after the live smoke instead of pushing anywhere.
 
-Both PyPI and TestPyPI must have the project pre-registered with a
-**pending publisher** that matches the workflow exactly, otherwise
-the first push will fail with `404 Not Found` (project unknown) or
-`403 Forbidden` (trusted publisher not configured).
+### 11.1. The publish gate
 
-For each of PyPI (<https://pypi.org>) and TestPyPI
-(<https://test.pypi.org>), as an account with permission to claim
-the `cvcpkg` name:
+`publish-pypi` is the deliberate final step of a release and only runs
+when **all** of the following hold:
 
-1. Log in.
-2. **Your account → Publishing** (or, while the project does not yet
-   exist, **Your projects → Publishing → Add a new pending
-   publisher**).
-3. Fill in the form:
-   - **PyPI Project Name:** `cvcpkg`
-   - **Owner:** `transfix`
-   - **Repository name:** `libcvc-deps`
-   - **Workflow name:** `cvcpkg-publish.yml`
-   - **Environment name:** `pypi` (for PyPI) or `testpypi` (for
-     TestPyPI). These must match the `environment:` keys in the
-     workflow.
-4. Save.
+1. **Repo variable `CVCPKG_PUBLISH_TO_PYPI` is `true`** (Settings →
+   Secrets and variables → Actions → Variables). Until it is set,
+   pushing even a stable tag builds and live-smokes but does **not**
+   publish — so the release can be staged first (repo rename / org
+   move, trusted-publisher registration, roadmap gaps).
+2. **The run was triggered by a tag push.** `workflow_dispatch` runs
+   never publish; they exist to exercise test/build/smoke against a
+   branch or tag.
+3. **The tag is stable**: `cvcpkg-vMAJOR.MINOR.PATCH` with no
+   pre-release marker — any `a`, `b`, `rc`, `dev` or `post` in the tag
+   name skips the publish job.
+4. **The GitHub environment `pypi` allows it.** The job runs in the
+   `pypi` environment with OIDC (`id-token: write`) via
+   `pypa/gh-action-pypi-publish` (`skip-existing: true`). Add a
+   required reviewer to the environment to additionally force a human
+   approval.
 
-Then in the GitHub repo (Settings → Environments) create two
-environments with the same names — `pypi` and `testpypi`. They do
-**not** need secrets; OIDC handles auth. Optionally add a required
-reviewer to the `pypi` environment to force a human approval before
-the real PyPI push.
+### 11.2. One-time setup — trusted publisher
+
+PyPI must have the `cvcpkg` project pre-registered with a **pending
+publisher** that matches the workflow exactly, otherwise the first push
+fails with `404 Not Found` (project unknown) or `403 Forbidden`
+(trusted publisher not configured). On <https://pypi.org>, as an
+account with permission to claim the `cvcpkg` name: **Your projects →
+Publishing → Add a new pending publisher**, with:
+
+- **PyPI Project Name:** `cvcpkg`
+- **Owner / Repository name:** the repo's identity **at publish time**.
+  The repo is moving into the CyberPC Angel GitHub org as
+  **`cy-pca/cvcpkg`**; that transfer is still pending (see the
+  "Ownership, Copyright & Branding" section of
+  [the roadmap](roadmap/CVCPKG-ROADMAP.md)). Register the trusted
+  publisher against that post-transfer identity, not
+  `transfix/libcvc-deps`. No PyPI release exists and no publisher is
+  registered today, so there is no stale binding to migrate — but one
+  registered against the pre-transfer name would become exactly that.
+- **Workflow name:** `cvcpkg-publish.yml`
+- **Environment name:** `pypi` (must match the workflow's
+  `environment:` key)
+
+Then in the GitHub repo (Settings → Environments) create the `pypi`
+environment. It needs **no** secrets — OIDC handles auth.
 
 References:
 - <https://docs.pypi.org/trusted-publishers/adding-a-publisher/>
 - <https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/>
 
-### 11.2. Cutting a release
+### 11.3. Cutting a release
 
 1. Update `pyproject.toml` `version`.
-2. Add a top section to [`CHANGELOG.md`](../../CHANGELOG.md) for the
+2. Add a top section to [`CHANGELOG.md`](../CHANGELOG.md) for the
    new version.
-3. Commit on `prod` (or merge a release PR into `prod`).
-4. Tag and push:
+3. Make sure the repo variable `CVCPKG_PUBLISH_TO_PYPI` is `true`
+   (once — it stays set after the first release).
+4. Tag the release commit and push the tag (the workflow is tag-driven
+   and checks out the tag; the branch the commit lives on does not
+   change the pipeline):
    ```bash
    git tag cvcpkg-v<MAJOR>.<MINOR>.<PATCH>
    git push origin cvcpkg-v<MAJOR>.<MINOR>.<PATCH>
    ```
 5. Watch the workflow:
-   - `test` → matrix tests on Python 3.10–3.13.
-   - `build` → sdist + wheel, `twine check`, sanity install.
-   - `live-smoke` → installs the wheel on Linux/macOS/Windows and
-     drives it against the live `https://cvcpkg.org` (list, info,
-     install `zlib`, verify).
-   - `publish-testpypi` → trusted-publish to TestPyPI
-     (`skip-existing: true`).
-   - `publish-pypi` → trusted-publish to PyPI. **Skipped** on any
-     pre-release tag (e.g. `cvcpkg-v2.0.0rc1`,
-     `cvcpkg-v2.0.0a1`, `cvcpkg-v2.0.0b1`, `cvcpkg-v2.0.0.dev1`).
+   - `test` → unit + integration tests on Python 3.10–3.13.
+   - `build` → sdist + wheel via the in-tree PEP 517 backend (which
+     bundles the recipes), `twine check`, a content gate that asserts
+     ≥ 100 recipes actually landed in the artifacts, and a sanity
+     install.
+   - `live-smoke` → installs the built wheel on Linux/macOS/Windows
+     (Python 3.10 and 3.12) and drives it against the live
+     `https://cvcpkg.org` registry (catalog probe, `list`, `info`,
+     `install zlib`). A green smoke run is the gate for any publish.
+   - `publish-pypi` → trusted-publish to PyPI, if every gate in §11.1
+     passes.
 
-### 11.3. Pre-release flow (recommended for any version bump)
+### 11.4. Pre-release flow (recommended for any version bump)
 
 To exercise the full pipeline without burning a PyPI version number:
 
@@ -391,12 +415,12 @@ git tag cvcpkg-v2.0.1rc1
 git push origin cvcpkg-v2.0.1rc1
 ```
 
-`publish-pypi` is skipped automatically; the wheel still lands on
-TestPyPI so you can `pip install -i https://test.pypi.org/simple/
-cvcpkg==2.0.1rc1` from anywhere and verify it works against the
-live registry.
+`publish-pypi` is skipped automatically on a pre-release tag; the
+tests, the build gates and the live smoke against `https://cvcpkg.org`
+all still run. (Before `CVCPKG_PUBLISH_TO_PYPI` is set, even a stable
+tag behaves this way.)
 
-### 11.4. Verifying a published release
+### 11.5. Verifying a published release
 
 ```bash
 pip install --upgrade cvcpkg
@@ -406,11 +430,11 @@ cvcpkg install --prefix /tmp/cvcpkg-smoke zlib
 cvcpkg verify --prefix /tmp/cvcpkg-smoke
 ```
 
-### 11.5. Troubleshooting
+### 11.6. Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `403 Forbidden` on publish | Pending publisher not configured for that environment | Re-check the project's *Publishing* settings on PyPI/TestPyPI. Owner/repo/workflow/environment must all match. |
+| `publish-pypi` is skipped on a stable-looking tag | Repo variable `CVCPKG_PUBLISH_TO_PYPI` unset or not `true`; or the tag contains `a`, `b`, `rc`, `dev` or `post`; or the run was `workflow_dispatch` | Set the variable; push a strict `cvcpkg-vMAJOR.MINOR.PATCH` tag with no suffix. |
+| `403 Forbidden` on publish | Trusted publisher not configured for this repo identity / environment | Re-check the project's *Publishing* settings on PyPI. Owner/repo/workflow/environment must all match the repo **as it is named at publish time** (post-transfer: `cy-pca/cvcpkg`). |
 | `400 File already exists` | Re-running the workflow for a tag that was already published | Bump to the next patch version and re-tag. `skip-existing: true` already handles common cases; this fires when the wheel bytes differ. |
 | `live-smoke` install fails on Windows | A heavy Windows package (qt6, vtk, …) was added to the smoke set without Windows coverage | Keep the smoke set to packages that are known-published on all three platforms (currently zlib is the canary). |
-| `publish-pypi` is skipped on a stable-looking tag | Tag includes `a`, `b`, `rc`, `dev`, or `post` | Use a strict `cvcpkg-vMAJOR.MINOR.PATCH` tag with no suffix. |

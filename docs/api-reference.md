@@ -12,7 +12,8 @@ All write endpoints require a bearer token:
 Authorization: Bearer cvctok_...
 ```
 
-Tokens are created via the admin API or CLI.  Three roles exist:
+Tokens are created via the admin API or CLI, or through
+[self-service registration](#registration--token-requests).  Three roles exist:
 
 | Role | Read | Publish | Admin |
 |---|---|---|---|
@@ -20,8 +21,12 @@ Tokens are created via the admin API or CLI.  Three roles exist:
 | `publisher` | ✅ | ✅ | ❌ |
 | `admin` | ✅ | ✅ | ✅ |
 
-Read endpoints are unauthenticated by default but can require tokens
-when `REQUIRE_AUTH_READS=1` is set.
+Read endpoints are unauthenticated by default.  To require tokens for
+reads too, start the server with `cvcpkg-server run --require-auth-reads`;
+the flag sets the server environment variable
+`CVCPKG_SERVER_REQUIRE_AUTH_READS=1`.  In the docker-compose production
+stack the shorter `REQUIRE_AUTH_READS` variable in `.env.production` maps
+onto `CVCPKG_SERVER_REQUIRE_AUTH_READS` inside the container.
 
 ---
 
@@ -72,7 +77,11 @@ cvcpkg_bytes_uploaded_total 52428800
 
 Fetch the full package catalog.
 
-**Query Parameters**: None.
+**Query Parameters**:
+
+| Param | Type | Default | Description |
+|---|---|---|---|
+| `include_yanked` | bool | `false` | Include yanked bundles.  Meant for downstream mirrors, which must tell a deliberate upstream yank apart from a bundle that merely vanished |
 
 **Auth**: Optional (configurable).
 
@@ -114,7 +123,14 @@ List packages with filtering and pagination.
 |---|---|---|---|
 | `name` | string | `""` | Filter by component name |
 | `platform` | string | `""` | Filter by platform |
+| `arch` | string | `""` | Filter by architecture |
+| `build_type` | string | `""` | Filter by build type (`release`/`debug`) |
+| `link` | string | `""` | Filter by link mode (`shared`/`static`) |
+| `recipe_version` | string | `""` | Filter by recipe version (chain hash); enables exact-match cache lookups |
 | `release` | string | `""` | Filter by release tag; `"live"` = no release tag |
+| `org` | string | `""` | Filter by organization slug |
+| `search` | string | `""` | Full-text search across all attributes |
+| `include_yanked` | bool | `false` | Include yanked packages in results |
 | `limit` | int | `100` | Page size (1–1000) |
 | `offset` | int | `0` | Offset for pagination |
 
@@ -149,16 +165,105 @@ List packages with filtering and pagination.
 
 List all variants/versions for a specific component.
 
+**Query Parameters**: `org` (filter by organization slug),
+`include_yanked` (bool, default `false`).
+
 **Response**: Same format as `GET /v1/packages`.
+
+### `GET /v1/search`
+
+Search the catalog with filters, pagination, and aggregated facet buckets
+— this is what backs the landing-page search box.
+
+**Auth**: None (a token, if sent, widens results to private orgs the
+caller belongs to).
+
+**Query Parameters**:
+
+| Param | Type | Default | Description |
+|---|---|---|---|
+| `q` | string | `""` | Full-text substring search across name/tags/etc. |
+| `platform` | string | `""` | Filter by platform |
+| `arch` | string | `""` | Filter by architecture |
+| `build_type` | string | `""` | Filter by build type (`release`/`debug`) |
+| `link` | string | `""` | Filter by link mode (`shared`/`static`) |
+| `release` | string | `""` | Filter by release tag (`"live"` = unreleased builds) |
+| `org` | string | `""` | Filter by organization slug |
+| `tag` | string | `""` | Filter by a single tag name |
+| `recipe_version` | string | `""` | Filter by recipe version |
+| `include_yanked` | bool | `false` | Include yanked packages |
+| `limit` | int | `50` | Page size (0–200) |
+| `offset` | int | `0` | Offset for pagination |
+| `facets` | bool | `true` | Compute facet buckets over the filtered result set |
+
+**Response** `200 OK`: `total`, `package_count` (distinct names),
+`total_size_bytes`, `packages` (same shape as `GET /v1/packages`),
+`limit`, `offset`, `query`, and `facets` with bucket lists for
+`platforms`, `archs`, `build_types`, `links`, `releases`, `orgs`,
+`tags`, and `licenses`.
+
+### `GET /v1/deps`
+
+Return forward and reverse dependency maps derived from recipes (the
+server's local recipe set plus recipes orgs have pushed with
+`cvcpkg recipe push`).  Powers the "Dependencies" / "Used By" blocks on
+package pages.
+
+**Auth**: None (unless the server requires auth for reads).
+
+**Response** `200 OK`: `{"forward": {...}, "reverse": {...}, "meta": {...},
+"recipe_names": [...]}` — `meta` carries per-recipe description, homepage,
+license, and maintainer fields.
 
 ### `GET /v1/download/{filename}`
 
-Download a package archive.
+Download a package archive.  `HEAD` is also supported so clients can
+check size before downloading.
 
 **Response**: `200 OK` with `application/octet-stream` body. Includes
 `Content-Disposition` and `Content-Length` headers.
 
-**Error**: `404` if the archive does not exist.
+**Errors**: `404` if the archive does not exist; `410 Gone` if it was
+nuked (see [tombstones](#nuked-package-tombstones)).
+
+---
+
+## Recipes (read)
+
+Read-only access to the recipe behind a package, used by the package
+pages.  All four endpoints accept an `org` query parameter
+(empty = public namespace); private-org recipes require membership.
+Distinct from the publisher-facing `/v1/recipes/{name}` store used by
+remote builds.
+
+### `GET /v1/recipe/{name}`
+
+Return the raw `recipe.yaml` for a named recipe as `text/yaml`.
+`404` if the recipe is unknown.
+
+### `GET /v1/recipe/{name}/files`
+
+List every artifact belonging to a recipe (the yaml, build/test scripts,
+patches, media).  Each entry carries `path`, `name`, `size`, `kind`
+(`recipe`/`yaml`/`script`/`patch`/`image`/`binary`/`text`), `media_type`,
+`shared` (lives under `_common/`), and `too_large`.
+
+### `GET /v1/recipe/{name}/file`
+
+Return the contents of one artifact.
+
+**Query Parameters**: `path` (**required** — path within the recipe set),
+`org`.
+
+**Errors**: `404` unknown file, `413` file too large to display inline.
+
+### `GET /v1/recipe/{name}/archive`
+
+Download the recipe and its scripts as one archive, including the shared
+`_common/` helpers.  Extracting into a `recipes/` directory yields a
+well-formed recipe usable with `cvcpkg build <name> --recipes-dir <dir>`.
+
+**Query Parameters**: `format` (`tar.gz` default, or `zip`), `org`.
 
 ---
 
@@ -172,7 +277,7 @@ Upload and publish a package bundle.
 
 **Rate Limited**: Yes (configurable via `CVCPKG_RATE_LIMIT_RPM`).
 
-**Size Limited**: Yes — `cvcpkg server run --max-upload-bytes` / `CVCPKG_MAX_UPLOAD_BYTES`, default 4 GiB.  Accepts a byte count or a human size (`8GB`, `512MB`); units are binary.
+**Size Limited**: Yes — `cvcpkg-server run --max-upload-bytes` / `CVCPKG_MAX_UPLOAD_BYTES`, default 4 GiB.  Accepts a byte count or a human size (`8GB`, `512MB`); units are binary.
 
 **Query Parameters**:
 
@@ -212,6 +317,62 @@ Upload and publish a package bundle.
 | `409` | Duplicate package (same name+version+platform+arch+build_type+link) |
 | `413` | Upload exceeds size limit |
 | `429` | Rate limit exceeded |
+
+### Chunked uploads
+
+For large archives, or where a single `POST /v1/publish` is impractical,
+publish in resumable chunks.  All five endpoints require `publisher` or
+`admin`.  A session belongs to the token that created it — writes
+(`PATCH`, `.../complete`) and cancellation (`DELETE`) by other actors get
+`403`; the status endpoint (`GET`) only requires a publisher/admin token
+and does not check ownership.
+
+#### `POST /v1/upload/init`
+
+Initialise a chunked upload session.  Takes the same query parameters as
+`POST /v1/publish` (including the metadata params `description`,
+`homepage`, `license`, `maintainer`, `tags`, `required_deps`,
+`provides`, and `org`, which publish also accepts) plus `total_size`
+(bytes, `0` = unknown).  Rate limited; duplicates are rejected with
+`409` up front.
+
+**Response** `201 Created`:
+
+```json
+{
+  "upload_id": "…",
+  "chunk_size": 8388608,
+  "max_size": 4294967296,
+  "expires_in": 3600
+}
+```
+
+Chunk size defaults to 8 MiB (`CVCPKG_CHUNK_SIZE`); idle sessions expire
+after `expires_in` seconds (default 3600, `CVCPKG_UPLOAD_SESSION_TTL`).
+
+#### `PATCH /v1/upload/{upload_id}`
+
+Append a chunk.  Body is the raw chunk bytes
+(`Content-Type: application/octet-stream`).  Include
+`Content-Range: bytes {start}-{end}/{total}` for resume safety — the
+server returns `409` with the current offset if `start` does not match
+`bytes_received`.  Returns `{upload_id, bytes_received, total_size}`.
+
+#### `GET /v1/upload/{upload_id}`
+
+Status of an in-progress upload: `bytes_received`, `total_size`, `name`,
+`version`.
+
+#### `POST /v1/upload/{upload_id}/complete`
+
+Finalise: verify integrity and register the package.  Optional
+`expected_sha256` query parameter — on mismatch the session is discarded
+with `422`.  Returns the same response as `POST /v1/publish`; `409` if a
+concurrent publish raced this session to the same coordinates.
+
+#### `DELETE /v1/upload/{upload_id}`
+
+Cancel and discard an in-progress session.  Returns `204`.
 
 ### `POST /v1/packages/{name}/{version}/yank`
 
@@ -326,6 +487,57 @@ archive bytes. Prefer `nuke`, which has full scope and removes the archive.
 
 ---
 
+## Build Cache
+
+The server doubles as a build cache: bundles published without a
+`release_tag` are cache entries, keyed by recipe chain hash.
+
+### `GET /v1/cache/status`
+
+Cache probe: is a bundle for this exact recipe state already published?
+
+**Auth**: None; a private org requires a token with membership.
+
+**Query Parameters**: `name`, `chain_hash`, `platform` (**required**);
+`arch`, `build_type`, `link`, `org` (optional narrowing).
+
+**Response** `200 OK`: `{"hit": false}` or `hit: true` plus the bundle's
+coordinates, `archive_url`, `sha256`, and `size_bytes`.
+
+### `GET /v1/cache`
+
+List non-release cache entries (packages with an empty `release_tag`).
+Auth: `publisher` or `admin`.
+
+**Query Parameters**: `name`, `platform`, `arch`, `limit` (1–1000,
+default 100), `offset`.
+
+### `DELETE /v1/cache`
+
+Bulk-purge non-release cache entries. Auth: `admin`.
+
+**Query Parameters**: `older_than` — only delete entries older than this
+duration (e.g. `14d`).  **Without it, every non-release package is
+removed.**  Returns `deleted_count` and the deleted rows.
+
+### `GET /v1/cache/stats`
+
+Storage statistics: totals, package counts, and a per-org breakdown.
+Auth: `publisher` or `admin` — non-admins see only orgs they belong to
+in the breakdown.
+
+### `POST /v1/cache/gc`
+
+Run garbage collection on cached packages. Auth: `admin`.
+
+**Body**: JSON with one or more of `max_age_seconds` (delete non-release
+packages older than this), `max_storage_bytes` (evict oldest to fit
+under the cap), `valid_chain_hashes` (list of current chain hashes —
+entries whose `recipe_version` is not in the set are stale and removed).
+`422` if none are given.
+
+---
+
 ## Token Management
 
 ### `POST /v1/tokens`
@@ -397,6 +609,53 @@ working while stored copies (CI secrets, config files) are updated;
 
 See [Token Rotation](token-rotation.md) for the full workflow, security
 model, and CI examples.
+
+---
+
+## Registration & Token Requests
+
+Self-service signup.  The policy is set at server start with
+`cvcpkg-server run --registration-mode open|admin-gated` (or
+`CVCPKG_REGISTRATION_MODE`; default `open`).
+
+### `POST /v1/register`
+
+Register for a token. No auth; rate limited.
+
+**Body**:
+
+```json
+{
+  "name": "alice",
+  "email": "alice@example.com",
+  "role": "publisher",
+  "description": "optional",
+  "metadata": ""
+}
+```
+
+`name` (a valid C identifier) and `email` are required.  In **open**
+mode the token is created immediately and returned once — the requested
+role is ignored; open self-registration is always `reader`.  In
+**admin-gated** mode a pending request is recorded instead and the
+response carries a `request_id` (requires the database backend).
+`409` if the username is taken.
+
+### `GET /v1/token-requests`
+
+List registration requests. Auth: `admin`.  Optional `status` filter
+(`pending`/`approved`/`denied`).
+
+### `POST /v1/token-requests/{request_id}/approve`
+
+Approve a pending request. Auth: `admin`.  Creates the token with the
+role the requester asked for and returns the raw token value in the
+response — the admin must relay it to the requester.  `409` if already
+resolved.
+
+### `POST /v1/token-requests/{request_id}/deny`
+
+Deny a pending request. Auth: `admin`.  `409` if already resolved.
 
 ---
 
@@ -606,6 +865,181 @@ POST /v1/publish?name=my-lib&version=1.0.0&org=my-team
 The server validates org membership and storage limits before accepting the
 upload. Returns `403` if the publisher is not a member, or `413` if the
 upload would exceed the org's storage limit.
+
+---
+
+## Webhooks
+
+Event notifications delivered as HTTP POSTs.  All management endpoints
+are `admin`-only and require the database backend.
+
+Deliveries are JSON bodies of the form
+`{"event": …, "timestamp": …, "data": {…}}` with headers
+`X-CvcPkg-Event`, `X-CvcPkg-Delivery` (unique id), and
+`X-CvcPkg-Signature: sha256=<hex>` — an HMAC-SHA256 of the body keyed by
+the webhook's secret.  Failed deliveries are retried with backoff.
+Events include `package.published`, the `build.*` lifecycle
+(`build.started`, `build.completed`, `build.succeeded`, `build.failed`,
+`build.cancelled`, `build.timed_out`, `build.unschedulable`), and
+`builder.online` / `builder.offline`.
+
+### `POST /v1/webhooks`
+
+Register a webhook.
+
+**Body**: `url` (**required** — must be an http(s) URL resolving to a
+public address), `events` (**required**, non-empty list), `org_slug`
+(optional scope; empty = global).
+
+### `GET /v1/webhooks`
+
+List webhooks.  Optional `org_slug` filter, `limit` (1–1000), `offset`.
+
+### `GET /v1/webhooks/{webhook_id}`
+
+Get one webhook's details.
+
+### `PATCH /v1/webhooks/{webhook_id}`
+
+Update `url`, `events`, and/or `active`.
+
+### `DELETE /v1/webhooks/{webhook_id}`
+
+Delete a webhook.
+
+### `POST /v1/webhooks/{webhook_id}/test`
+
+Send a signed `webhook.test` payload to the endpoint now.  Returns the
+delivery's status code, or `502` if delivery failed.
+
+---
+
+## Mirrors
+
+Registry of downstream mirror servers.  See
+[clusters-and-federation.md](clusters-and-federation.md) for how
+mirroring works.
+
+### `POST /v1/mirrors/register`
+
+Register a mirror with the primary. Auth: `admin`.  Requires the
+database backend; unavailable on a server that is itself in mirror mode.
+Re-registering an existing URL clears a previous rejection and resets
+health state.
+
+**Body**: `url` (**required**, `http(s)://`), `display_name`, `contact`.
+
+### `GET /v1/mirrors`
+
+List healthy mirrors for client failover.  No auth required (unless the
+server requires auth for reads).
+
+### `GET /v1/mirrors/all`
+
+List all mirrors including rejected and unhealthy ones. Auth: `admin`.
+
+### `POST /v1/mirrors/reject`
+
+Reject a mirror (query param `url`), removing it from the public list
+while keeping it in the database for audit. Auth: `admin`.
+
+### `DELETE /v1/mirrors`
+
+Permanently remove a mirror (query param `url`). Auth: `admin`.
+
+### `GET /v1/mirror/download/{filename}`
+
+Only on a server running in mirror mode: proxy a package download from
+the upstream, caching the archive locally for subsequent requests.
+
+---
+
+## Feed
+
+### `GET /v1/feed.xml`
+
+RSS 2.0 feed of the latest published packages.  Optional `limit`
+(1–200, default 50).  No auth required (unless the server requires auth
+for reads).
+
+---
+
+## Analytics & Telemetry
+
+Aggregate download, bandwidth, and client-environment statistics.  This
+is a summary — see
+[analytics-and-telemetry.md](analytics-and-telemetry.md) for data
+collection, privacy model, and CLI usage.
+
+### `GET /v1/downloads/stats`
+
+Daily download counts for charting (used by package pages).  No auth
+required.  Params: `name` (empty = all packages), `days` (1–365,
+default 30).
+
+### `GET /v1/analytics/downloads`
+
+Download totals and top packages. Auth: `admin`.  Params: `name`,
+`days`, `limit`.
+
+### `GET /v1/analytics/bandwidth`
+
+Total bytes served plus a daily series. Auth: `admin`.  Params: `name`,
+`days`.
+
+### `GET /v1/analytics/platforms`
+
+Download distribution by platform/arch and client version. Auth:
+`admin`.  Param: `days`.
+
+### `GET /v1/analytics/trends`
+
+Zero-filled daily download buckets. Auth: `admin`.  Params: `name`,
+`days`.
+
+### `POST /v1/telemetry`
+
+Accept an opt-in, anonymous client telemetry ping (sent only when
+`CVCPKG_TELEMETRY=1` or via `cvcpkg telemetry send`).  No auth; rate
+limited.  Returns `204`.
+
+### `GET /v1/analytics/telemetry`
+
+Aggregated telemetry summary: platform/python/client mix and CI share.
+Auth: `admin`.  Param: `days`.
+
+---
+
+## Admin
+
+### `GET /v1/admin/settings`
+
+Current server-wide settings: `global_cache_storage_limit_bytes`,
+`org_storage_limit_bytes`, `max_upload_bytes`, `rate_limit_rpm`.
+Auth: `admin`.
+
+### `PATCH /v1/admin/settings`
+
+Update settings at runtime. Auth: `admin`.
+
+**Body**: JSON with one or both of `global_cache_storage_limit_bytes`,
+`org_storage_limit_bytes`.  Changes take effect immediately but are
+**not** persisted across restarts — use environment variables for
+permanent configuration.
+
+### `POST /v1/admin/backup`
+
+Trigger a database backup. Auth: `admin`.  Writes a timestamped
+snapshot under `<state_dir>/backups` and returns its path and size; the
+strategy depends on the backend (sqlite `VACUUM INTO`, `pg_dump`, or
+`mysqldump`).  Requires the database backend.
+
+### `GET /admin/oidc/login` / `GET /admin/oidc/callback`
+
+Browser endpoints for the admin dashboard's OIDC single sign-on
+(authorization-code flow with PKCE).  `404` unless an OIDC provider is
+configured; only identities that map to the `admin` role get a
+dashboard session.  See [oidc-identity.md](oidc-identity.md).
 
 ---
 

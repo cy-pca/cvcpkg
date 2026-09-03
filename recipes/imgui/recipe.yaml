@@ -2,7 +2,9 @@ schema_version: 1
 recipe:
   name: imgui
   upstream_version: "1.92.9"
-  cvc_revision: 1
+  # Bumped 1 -> 2: adds the wasm matrix entry (build-wasm.sh) so cvcGL's
+  # ImGuiOverlay can ship in the WebAssembly demos.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -46,10 +48,22 @@ build:
       script: build.sh
     - platform: netbsd
       script: build.sh
+    # windows: MSVC (cl.exe) via build.ps1 — compiles the core .cpp and archives
+    # a STATIC imgui.lib (ImGui exports no __declspec(dllexport) symbols, so a DLL
+    # would export nothing). Consumers link the static lib directly.
+    - platform: windows
+      script: build.ps1
+    # wasm: cross-compiled with em++ (see build-wasm.sh — the shared build.sh
+    # would emit NATIVE objects because env-wasm.sh inherits CXX=g++).
+    # Static only; wasm has no shared libraries.
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
 
 package:
   files:
     - lib/libimgui*
+    - lib/imgui.lib
     - include/imgui/
 
 abi:
