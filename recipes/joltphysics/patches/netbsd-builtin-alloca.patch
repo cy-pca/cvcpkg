@@ -1,0 +1,18 @@
+--- a/Jolt/Core/Core.h
++++ b/Jolt/Core/Core.h
+@@ -603,7 +603,14 @@
+ #endif
+ 
+ // Stack allocation
+-#define JPH_STACK_ALLOC(n)		alloca(n)
++// cvcpkg: on GCC/Clang use the builtin directly. Jolt includes no header for
++// alloca outside MSVC, and on NetBSD the bare call resolves to the libc
++// alloca(3) that ld warns "most likely will not work" (the consumer segfaults).
++#if defined(__GNUC__) || defined(__clang__)
++	#define JPH_STACK_ALLOC(n)	__builtin_alloca(n)
++#else
++	#define JPH_STACK_ALLOC(n)		alloca(n)
++#endif
+ 
+ // Shorthand for #ifdef JPH_DEBUG / #endif
+ #ifdef JPH_DEBUG

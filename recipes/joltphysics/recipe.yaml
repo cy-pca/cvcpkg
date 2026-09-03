@@ -27,6 +27,9 @@ recipe:
   # detection has no __wasi__ branch either.  A wasip1-threads sysroot would be
   # a different toolchain than env-wasi.sh configures.
   # cvc.4: (1) wasm from a Windows host too (build-wasm.ps1) -- the cvc.3
+  # cvc.5: patch JPH_STACK_ALLOC to __builtin_alloca on GCC/Clang. Jolt includes no
+  #   header for alloca outside MSVC; on NetBSD the bare call resolved to libc alloca(3)
+  #   (ld: "most likely will not work") and the cvc.4 smoke consumer segfaulted there.
   # wasm/cosmo/openbsd variants never reached the catalog (the live catalog has
   # no cross-target bundle for ANY package touched by 82d7acb8, so this is not
   # a Jolt-specific failure); (2) CROSS_PLATFORM_DETERMINISTIC=ON on EVERY
@@ -38,7 +41,7 @@ recipe:
   # Distribution, i.e. no profiler). (3) test.sh builds + runs a find_package
   # consumer, natively and under node for wasm (JPH::RegisterTypes aborts on a
   # config mismatch, so it is a real ABI check).
-  cvc_revision: 4
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -65,7 +68,8 @@ source:
   sha256: "6e069ee0172478cc78182047aac87e5310ba14a67a53348ae14cc37801fd3f8e"
   strip_components: 1
 
-patches: []
+patches:
+  - patches/netbsd-builtin-alloca.patch
 
 depends:
   build:
