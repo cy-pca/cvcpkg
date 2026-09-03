@@ -1,0 +1,12 @@
+diff -urN a/MagickCore/random.c b/MagickCore/random.c
+--- a/MagickCore/random.c	2026-08-22 09:36:37.710033712 -0500
++++ b/MagickCore/random.c	2026-08-22 09:36:49.851388512 -0500
+@@ -64,7 +64,7 @@
+ #include "MagickCore/timer-private.h"
+ #include "MagickCore/utility.h"
+ #include "MagickCore/utility-private.h"
+-#if defined(MAGICKCORE_HAVE_GETENTROPY)
++#if defined(MAGICKCORE_HAVE_GETENTROPY) && !defined(__OpenBSD__)
+ #include <sys/random.h>
+ #endif
+ /*

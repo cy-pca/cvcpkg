@@ -37,7 +37,15 @@ if [ "$(uname -s)" != "Darwin" ]; then
     $MAKE -f Makefile-libbz2_so -j "${CVC_JOBS}" CC="${CC:-cc}"
     $MAKE clean
 fi
-$MAKE -j "${CVC_JOBS}" CC="${CC:-cc}"
+# Build the artifacts only, NOT the default `all` target. `all` also runs the
+# `test` target, which fails on OpenBSD: the static `make clean` above leaves
+# libbz2.so.1.0 in the build dir (from the Makefile-libbz2_so step), OpenBSD's
+# ld then links the `bzip2` test binary against that .so in preference to
+# libbz2.a, and OpenBSD's ld.so refuses to load a library from the build dir at
+# test time ("bzip2: can't load library 'libbz2.so.1.0'"). The self-test is not
+# needed to produce the bundle, and `install:` depends only on
+# bzip2/bzip2recover (not `all`/`test`), so skipping it is safe everywhere.
+$MAKE -j "${CVC_JOBS}" CC="${CC:-cc}" libbz2.a bzip2 bzip2recover
 
 $MAKE install PREFIX="${CVC_INSTALL_DIR}"
 

@@ -2,7 +2,45 @@ schema_version: 1
 recipe:
   name: cmake
   upstream_version: "3.31.7"
-  cvc_revision: 1
+  # Bumped 1 -> 2: two OpenBSD build.sh fixes landed (link our OpenSSL instead
+  # of the system LibreSSL; stop baking CMAKE_INSTALL_RPATH to the ephemeral
+  # per-job CVC_DEPS_PREFIX, which left every packaged cmake binary with a
+  # dangling rpath once its own build job's scratch dir was deleted, breaking
+  # every later job that installed cmake as a build-tool dependency — e.g.
+  # lerc/libjpeg-turbo: "ld.so: cmake: can't load library '.../libcurl.so.12.0'").
+  # Without a revision bump the dependency resolver kept treating the
+  # already-succeeded pre-fix build as satisfying "cmake" and never rebuilt it,
+  # even after both content fixes were pushed to the dev server.
+  #
+  # Bumped 2 -> 3: +cvc.2 (rebuilt fresh, confirmed via a new job id) still
+  # shipped the same dangling OpenBSD rpath. Removing the explicit
+  # CMAKE_BUILD_RPATH/CMAKE_INSTALL_RPATH flags wasn't sufficient:
+  # CMAKE_INSTALL_RPATH_USE_LINK_PATH defaults ON, so CMake automatically
+  # re-derives and embeds the same ephemeral libcurl.so location from the
+  # find_package(CURL) imported target regardless. -DCMAKE_SKIP_INSTALL_RPATH=ON
+  # on OpenBSD suppresses that automatic path too.
+  # Bumped 3 -> 4: no build.sh content change here -- the actual root
+  # cause was in curl, not cmake (libcurl.so had no DT_SONAME at all on
+  # OpenBSD, so ANY consumer linking it, not just cmake, baked in the
+  # literal ephemeral build path; see the curl recipe for the full
+  # diagnosis and fix). Bumping so cmake gets rebuilt against the now-
+  # fixed curl artifact -- the dependency resolver does not automatically
+  # rebuild a consumer just because one of its dependencies changed.
+  #
+  # Bumped 4 -> 5: diagnostic only. NetBSD's bin/cmake fails "make install"
+  # self-invocation with "Shared object libcurl.so.12.0 not found" even
+  # after curl's SONAME was fixed to be a direct (non-symlink) filename
+  # match, and even though LD_LIBRARY_PATH + CMAKE_BUILD_RPATH both
+  # correctly point at the directory containing that exact file (confirmed:
+  # libssl.so.3/libcrypto.so.3 from the SAME directory load fine in the
+  # SAME ldd check). Suspect curl's own generated libcurl.pc/libcurl.la
+  # embed an absolute, now-deleted path from curl's OWN original build job
+  # (confirmed present in both files), which CMAKE_INSTALL_RPATH_USE_LINK_PATH
+  # may be picking up as bin/cmake's actual embedded rpath instead of our
+  # explicit CMAKE_BUILD_RPATH. Added a readelf/objdump dump of bin/cmake's
+  # real RPATH/RUNPATH/NEEDED entries to build.sh's existing debug block to
+  # confirm before attempting another fix.
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

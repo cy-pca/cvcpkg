@@ -32,6 +32,22 @@ fi
 
 if [[ -n "${CVC_DEPS_PREFIX:-}" ]]; then
     export CMAKE_PREFIX_PATH="${CVC_DEPS_PREFIX}"
+    # A build-time TOOL dependency (cmake, cvc's own recipe) may itself have a
+    # runtime dependency on a shared lib from the deps closure (e.g. cmake ->
+    # libcurl.so, built with --system-curl). That tool's own install RPATH was
+    # baked at ITS build time to ITS OWN build job's ephemeral scratch prefix,
+    # which no longer exists once packaged. cvcpkg deliberately never registers
+    # per-job prefixes into OpenBSD's global /var/run/ld.so.hints (there's a
+    # no-op `ldconfig` shim on PATH specifically to prevent that — see
+    # deps#519/#520 and the openbsd-builder-ldso-hints-clobber postmortem), so
+    # the shipped tool's rpath can never be satisfied that way either. Export
+    # LD_LIBRARY_PATH to THIS job's own freshly-reconstituted deps prefix so
+    # ld.so's normal LD_LIBRARY_PATH fallback (consulted when an RPATH entry
+    # isn't found, which is standard ELF loader behavior, not OpenBSD-specific)
+    # resolves it. Every other platform's builder either has a system copy of
+    # the library or a persistent ldconfig/dyld cache that masks this same
+    # latent bug; OpenBSD's minimal base has neither.
+    export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 fi
 
 # OpenBSD packages install under /usr/local.

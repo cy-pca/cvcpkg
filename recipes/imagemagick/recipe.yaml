@@ -1,7 +1,7 @@
 schema_version: 1
 recipe:
   name: imagemagick
-  upstream_version: "7.1.1"
+  upstream_version: "7.1.2"
   # Bumped 6 -> 7 to republish the macOS bundle with @rpath install names (the
   # autotools/libtool build baked an absolute build-temp install_name into
   # libMagick++, breaking dyld for consumers — see libcvc-deps#345). The fix
@@ -32,7 +32,27 @@ recipe:
   # `pkg-config --libs` drops. build.sh now links -lsharpyuv/-lzstd/-lLerc via
   # $LIBS. (cvc.9 release linked only because that fleet job happened to see a
   # system libwebp bundling sharpyuv; not reproducible/portable.)
-  cvc_revision: 22
+  #
+  # (Revisions 11 -> 22 were the wasm codec-chain and Windows coder-staging
+  # iteration series — see the build-wasm.sh / build.ps1 history.)
+  #
+  # Bumped 22 -> 23: align the version across platforms. Unix builds from the
+  # 7.1.1-41 source tarball, but the Windows recipe repackages the official
+  # prebuilt installer (build.ps1) and that was pinned to 7.1.2-22 — a version
+  # skew. Upstream deletes old release binaries from GitHub, so 7.1.1's Windows
+  # installer is already gone (404); the earliest still-downloadable is 7.1.2-15.
+  # So align UP: bump the source tarball to 7.1.2-24 (the same version whose
+  # Windows installer we repackage) rather than down to an unavailable 7.1.1.
+  # All platforms are now 7.1.2-24. Also fixes an OpenBSD build failure —
+  # MagickCore/random.c unconditionally does `#if
+  # defined(MAGICKCORE_HAVE_GETENTROPY) #include <sys/random.h> #endif`.
+  # configure correctly detects getentropy() exists (OpenBSD originated that
+  # syscall), but assumes any platform with getentropy() also has
+  # <sys/random.h> — true on Linux/macOS/FreeBSD/NetBSD, false on OpenBSD,
+  # which declares getentropy() in <unistd.h> instead (already pulled in
+  # earlier via MagickCore/studio.h's own MAGICKCORE_HAVE_UNISTD_H-gated
+  # include). Patched to skip the <sys/random.h> include on OpenBSD only.
+  cvc_revision: 23
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -43,11 +63,12 @@ recipe:
 
 source:
   type: tarball
-  url: https://github.com/ImageMagick/ImageMagick/archive/refs/tags/7.1.1-41.tar.gz
-  sha256: "cabf2516dce66da56dd4e3071453b808eefaf4326a93292d2a222a4ea623d601"
+  url: https://github.com/ImageMagick/ImageMagick/archive/refs/tags/7.1.2-24.tar.gz
+  sha256: "645f1dc68482ba952a02a854ffaf67efca42871b168e0cf702a043db2ec54638"
   strip_components: 1
 
-patches: []
+patches:
+  - openbsd-getentropy-no-sys-random-h.patch
 
 depends:
   host_tools:

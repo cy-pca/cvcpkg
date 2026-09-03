@@ -1,20 +1,25 @@
-# recipes/imagemagick/build.ps1 — ImageMagick on Windows without vcpkg.
+# recipes/imagemagick/build.ps1 — ImageMagick on Windows.
 #
-# ImageMagick's Windows source build is intricate (its own VisualMagick
-# configure wizard, ~20 optional delegate libraries, Q-depth and HDRI
-# matrices).  For CI usage we repackage the official upstream Inno Setup
-# installer directly (no vcpkg) using a pinned innoextract.exe.
+# Unlike every other platform (build.sh compiles ImageMagick from source),
+# Windows repackages the official upstream Inno Setup installer directly,
+# using a pinned innoextract.exe. ImageMagick's Windows source build is
+# intricate (the separate ImageMagick-Windows/VisualMagick repo with its own
+# Configure.exe wizard and ~20 vendored delegate libraries — there is no CMake
+# build for any ImageMagick version), and VisualMagick vendors its own codecs
+# rather than consuming cvcpkg's, so a hermetic MSVC source build is not
+# currently practical. This is a deliberate, documented exception.
 #
-# Any *libraries* ImageMagick would depend on are declared as cvcpkg
-# recipes in recipe.yaml (zlib, tiff); this script does not pull anything
-# from vcpkg.
+# IM_VERSION MUST match the source tarball in recipe.yaml so all platforms ship
+# the same ImageMagick version. Note upstream prunes old release binaries from
+# GitHub (7.1.1's installer is already 404), so this tracks a still-available
+# 7.1.2-x that also has a matching source tag; bump both together.
 $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\..\_common\env-windows.ps1"
 
-$IM_VERSION            = '7.1.2-22'
+$IM_VERSION            = '7.1.2-24'
 $IM_INSTALLER_URL      = "https://github.com/ImageMagick/ImageMagick/releases/download/$IM_VERSION/ImageMagick-$IM_VERSION-Q16-HDRI-x64-dll.exe"
-$IM_INSTALLER_SHA256   = 'd55b0868a8fc1ce3e7c9d1ff755f910bb01fc9306bdf856c252c2b77559dd660'
+$IM_INSTALLER_SHA256   = '5665e6b0c27591ab3103e757d509eef85508133d0312390d6eaebf78bdbb4c8a'
 $INNOEXTRACT_URL       = 'https://github.com/dscharrer/innoextract/releases/download/1.9/innoextract-1.9-windows.zip'
 $INNOEXTRACT_SHA256    = '6989342c9b026a00a72a38f23b62a8e6a22cc5de69805cf47d68ac2fec993065'
 

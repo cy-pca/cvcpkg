@@ -11,7 +11,21 @@ recipe:
   # imagemagick +cvc.8, volrover3, libcvc #138). Rebuilding on a fleet builder
   # re-references fmod@GLIBC_2.2.5 and restores portability. The +cvc.1 bundle is
   # immutable, so the corrected build ships as +cvc.2.
-  cvc_revision: 2
+  #
+  # Bumped 2 -> 3: disable the runtime module loader on NetBSD (build.sh). The
+  # +cvc.2 NetBSD bundle shipped a libxml2.so with undefined
+  # xmlModulePlatformOpen/Symbol/Close (the CMake build enables modules by
+  # default but doesn't resolve NetBSD's dlopen impl), so every consumer failed
+  # to link it (e.g. imagemagick: "undefined reference to xmlModulePlatform*").
+  # The +cvc.2 NetBSD bundle is immutable, so the fixed build ships as +cvc.3.
+  # Non-NetBSD bundles are unchanged (the build.sh change is NetBSD-only) and
+  # republish byte-identically at +cvc.3.
+  #
+  # Bumped 3 -> 4: same undefined xmlModulePlatformOpen/Symbol/Close bug hit
+  # OpenBSD too, blocking imagemagick's OpenBSD build the same way it
+  # blocked NetBSD. Extended the -DLIBXML2_WITH_MODULES=OFF workaround to
+  # OpenBSD (build.sh). Linux/macOS/FreeBSD/Windows bundles are unchanged.
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

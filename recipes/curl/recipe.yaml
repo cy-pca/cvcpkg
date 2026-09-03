@@ -2,7 +2,79 @@ schema_version: 1
 recipe:
   name: curl
   upstream_version: "8.13.0"
-  cvc_revision: 1
+  # Bumped 1 -> 2: OpenBSD fixes — libcurl.so had no DT_SONAME at all (so
+  # every consumer that links it bakes in the literal, ephemeral build-time
+  # path instead of a portable soname, e.g. cmake: "ld.so: cmake: can't load
+  # library '.../cvcpkg-job-curl-.../lib/libcurl.so.12.0'"), no bare
+  # libcurl.so symlink, and the $ORIGIN rpath meant for its own libssl lookup
+  # was corrupted to "RIGIN" by an under-escaped LDFLAGS string (make's `$O`
+  # single-letter variable syntax ate the dollar+O). See build.sh.
+  #
+  # Bumped 2 -> 3: +cvc.2 failed to build at all — "ld: error: cannot open
+  # libcurl.so.12.0: No such file or directory" during the CCLD libcurl.la
+  # step. The comma-joined -Wl,-soname,libcurl.so.12.0 gets split by libtool
+  # into separate tokens, and its filename heuristic matched "libcurl.so.12.0"
+  # as a reference to an existing library to link against, stripping the
+  # -Wl, protection and passing it to the linker as a bare positional input
+  # (which doesn't exist — it's the very file this link step produces).
+  # Two independently -Wl,-prefixed flags (the same pattern already used for
+  # -Wl,-rpath -Wl,$$ORIGIN two lines above) avoid the comma-split entirely.
+  #
+  # Bumped 3 -> 4: +cvc.3 hit the EXACT SAME "ld: error: cannot open
+  # libcurl.so.12.0" failure — splitting into two -Wl, flags did not help
+  # either; libtool's filename classifier matches the value regardless of how
+  # it's split. Gave up on injecting -soname through libtool's own link step
+  # entirely. Reverted build.sh to the plain (working, soname-less) build and
+  # added a POST-install patchelf --set-soname step, which operates on the
+  # already-linked artifact and never touches libtool's argument handling.
+  # Added patchelf as an OpenBSD-only build dependency (already has an
+  # OpenBSD recipe in this tree).
+  #
+  # Bumped 4 -> 5: +cvc.4 failed on linux, freebsd, openbsd, AND netbsd
+  # simultaneously in the same run, each with a different symptom right
+  # after "CCLD libcurlu.la" / "CCLD libcurl.la" ("cannot find libcurl.so.4"
+  # on linux/freebsd; "unknown directive: curl_easy_cleanup" reading
+  # .libs/libcurl.exp on openbsd's lld). Hypothesized a parallel-make race
+  # between curl's two sibling libtool targets (libcurl.la and libcurlu.la,
+  # a noinst convenience lib built from overlapping sources) and serialized
+  # the build (`make -j1`).
+  #
+  # Bumped 5 -> 6: +cvc.5 hit the IDENTICAL "cannot find libcurl.so.4"
+  # failure even fully serialized — ruling out the race theory. The real
+  # difference from the last known-good build (+cvc.1) is the $ORIGIN
+  # LDFLAGS rpath: +cvc.1 had it silently corrupted to the harmless-but-
+  # useless literal "RIGIN" (an escaping bug, since fixed), whereas every
+  # revision since has fed the *correct* `$ORIGIN` string through
+  # `-Wl,-rpath,`. With a real $ORIGIN value present, libtool's `-Wl,`
+  # comma-splitting — the same mechanism that broke the -soname LDFLAGS
+  # attempt in v2/v3 — apparently mishandles this token too, breaking the
+  # "CCLD libcurl.la" link step on every ELF platform. Dropped the
+  # LDFLAGS rpath injection entirely; a real $ORIGIN rpath is now set
+  # post-install via patchelf, alongside the existing SONAME fix. Reverted
+  # the v5 `-j1` serialization (make -j "${CVC_JOBS}" again) since it
+  # wasn't the cause. Widened patchelf from an OpenBSD-only build dep to
+  # all four ELF platforms (linux/freebsd/openbsd/netbsd), since the
+  # LDFLAGS rpath was silently broken everywhere, not just OpenBSD.
+  #
+  # Bumped 6 -> 7: NetBSD's cmake build failed at a NEW stage — bin/cmake
+  # (self-built during cmake's own bootstrap) couldn't be invoked during
+  # `make install`: "Shared object libcurl.so.12 not found", despite
+  # LD_LIBRARY_PATH and RPATH both correctly pointing at the exact
+  # directory containing that exact filename (confirmed via cmake's own
+  # build.sh debug ldd check, which resolved libssl.so.3 from the same
+  # directory just fine in the same run). Root cause: NetBSD's (and
+  # Linux/FreeBSD's) libtool ALSO creates a shorter SONAME-convention
+  # symlink (libcurl.so.12 -> libcurl.so.12.0) alongside the real
+  # fully-versioned file; v6's `ls libcurl.so.*` glob picked that symlink
+  # (alphabetically first) and set SONAME to a name that itself requires a
+  # symlink hop to resolve. NetBSD's rtld/ldd apparently doesn't follow that
+  # hop via LD_LIBRARY_PATH/RPATH lookup, unlike a SONAME that matches a
+  # real file directly (openssl's libssl.so.3 has no such indirection and
+  # loaded fine). Switched to `find -type f` so the real, non-symlink file
+  # is always selected and SONAME never requires symlink resolution — this
+  # is what OpenBSD was already doing by accident (its libtool never
+  # created the shorter symlink in the first place).
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -22,7 +94,15 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    # ELF platforms only: post-install SONAME + RPATH injection (see
+    # build.sh) — both reliably break the "CCLD libcurl.la" link step when
+    # passed through libtool's own -Wl, LDFLAGS handling instead (comma-
+    # split argument re-classification quirk). patchelf operates on the
+    # already-linked artifact and never touches libtool's argument
+    # handling.
+    - name: patchelf
+      platforms: [linux, freebsd, openbsd, netbsd]
   runtime:
     - name: openssl
       version: "^3.0"
