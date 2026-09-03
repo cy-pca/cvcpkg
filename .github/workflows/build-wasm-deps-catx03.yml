@@ -23,11 +23,13 @@ permissions:
 
 jobs:
   build-and-publish:
-    # cy-pca label pins this to catx-03 — the ONLY runner with the emsdk
-    # bundle at /opt/cvc-wasm/emsdk + the wasm-deps prefix. Without the label
-    # runs land on any generic self-hosted linux where env-wasm.sh can't
-    # source emsdk_env.sh ("No such file or directory") and every recipe fails.
-    runs-on: [self-hosted, Linux, X64, cy-pca]
+    # The cvcpkg-prod label is the catx-03 runner registered to THIS repo, the
+    # only one with the emsdk bundle at /opt/cvc-wasm/emsdk + the wasm-deps
+    # prefix. (cy-pca is a label on the cy-pca ORG runner, which this repo
+    # cannot see: with it the job queues forever; without any pin, runs land
+    # on star-01 where env-wasm.sh cannot source emsdk_env.sh and every recipe
+    # is skipped, which is what happened on 2026-08-28.)
+    runs-on: [self-hosted, Linux, X64, cvcpkg-prod]
     env:
       CVC_EMSDK_DIR: /opt/cvc-wasm/emsdk
       CVC_WASM_DEPS: /opt/cvc-wasm/deps-wasm-mt
