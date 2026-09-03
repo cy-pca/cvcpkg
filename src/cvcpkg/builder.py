@@ -1086,6 +1086,80 @@ class BuildContext:
     build_prefix: Path | None = None
 
 
+# Platforms whose ldconfig(8) maintains a SYSTEM-WIDE hints cache that it
+# rebuilds from scratch by default -- ``ldconfig dir...`` REPLACES the search
+# path, and only ``ldconfig -m dir...`` merges into it.  A build step that runs
+# ldconfig as root on these therefore rewrites machine-global state.
+#
+# OpenBSD is the platform this was found on.  Its /etc/rc seeds the hints with
+# /usr/local/lib and /usr/X11R6/lib at boot; a bare ``ldconfig`` (the reflex
+# that is correct on Linux, and common in install hooks) rebuilds them from the
+# built-in /usr/lib alone, so both directories silently vanish and every package
+# under /usr/local stops resolving -- including python's own libpython:
+#
+#   ld.so: python3.12: can't load library 'libpython3.12.so.0.0'
+#
+# FreeBSD has the same replace-by-default semantics for /var/run/ld-elf.so.hints
+# and is covered pre-emptively.  NetBSD is deliberately absent: it ships no
+# hints cache at all (no /var/run/ld.so.hints, no /etc/ld.so.conf), so there is
+# nothing for a build to corrupt.
+_LDCONFIG_HINTS_PLATFORMS = frozenset({"openbsd", "freebsd"})
+
+
+def _install_ldconfig_shim(ctx: BuildContext) -> Path | None:
+    """Stage a no-op ``ldconfig`` for the build to find ahead of the real one.
+
+    cvcpkg never needs a build to touch the system hints cache: everything it
+    installs is found through the prefix search paths this same function's
+    caller exports (``LD_LIBRARY_PATH`` and friends) and, at run time, through
+    RPATH.  Any ldconfig a build *does* run is therefore pure side effect on
+    the shared builder VM -- at best littering the hints with the job's own
+    scratch directories, at worst dropping the system ones.
+
+    Both happened on the OpenBSD builder: libtool's ``finish_cmds`` is
+    ``ldconfig -m $libdir``, which only ever appends, so it left seven dead
+    ``.../cvcpkg-job-*/install/lib`` entries behind; something else ran a
+    non-merging ldconfig that dropped /usr/local/lib outright.
+
+    Shimming covers both without having to identify every caller, because
+    libtool resolves ldconfig through ``PATH`` (its finish_cmds *appends*
+    ``/sbin``, so a shim at the front wins).  Returns the shim directory, or
+    None on platforms with no hints cache to protect.
+
+    Read-only queries are forwarded to the real binary so anything genuinely
+    inspecting the cache still works; every mutating form exits 0 silently.
+    A build that calls ``/sbin/ldconfig`` by absolute path still bypasses this
+    -- the release workflow re-merges the system directories before each build
+    as a backstop for that case.
+    """
+    if ctx.platform not in _LDCONFIG_HINTS_PLATFORMS:
+        return None
+    # Cache-restore builds synthesise a context whose build_dir IS the prefix
+    # (see the cache.restore branch of build_recipe).  No build script runs
+    # there, so there is nothing to shim -- and writing into it would leave the
+    # shim sitting in a deliverable.
+    if ctx.build_dir in (ctx.prefix, ctx.install_dir):
+        return None
+    shim_dir = ctx.build_dir / ".cvcpkg-shims"
+    try:
+        shim_dir.mkdir(parents=True, exist_ok=True)
+        shim = shim_dir / "ldconfig"
+        shim.write_text(
+            "#!/bin/sh\n"
+            "# cvcpkg build shim -- see builder._install_ldconfig_shim.\n"
+            "# Builds must not rewrite this machine's shared-library cache.\n"
+            'case "${1:-}" in\n'
+            '    -r) exec /sbin/ldconfig "$@" ;;\n'
+            "esac\n"
+            "exit 0\n"
+        )
+        shim.chmod(0o755)
+    except OSError:
+        # Never fail a build over the shim; the worst case is the old behaviour.
+        return None
+    return shim_dir
+
+
 def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
     """Construct the environment for the build script."""
     env = os.environ.copy()
@@ -1175,6 +1249,11 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
         _s = str(_d.resolve())
         if _s not in bin_dirs:
             bin_dirs.append(_s)
+    # Ahead of everything, including the prefix: this has to win over the real
+    # /sbin/ldconfig that libtool appends to PATH for its finish_cmds.
+    _shim_dir = _install_ldconfig_shim(ctx)
+    if _shim_dir is not None:
+        bin_dirs.insert(0, str(_shim_dir))
     existing_path = env.get("PATH", "")
     env["PATH"] = os.pathsep.join(bin_dirs + ([existing_path] if existing_path else []))
 
