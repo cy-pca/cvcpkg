@@ -67,6 +67,7 @@ All documentation lives under [`docs/`](docs/).
 - [Source recipes](docs/source-recipes.md) — file-artifact (`platform: any`) packages
 - [Image packages](docs/image-packages.md) — VM/OS images as packages, `cvcpkg image`, `test.vm`
 - [Mutual exclusion](docs/mutual-exclusion.md) — `provides:` slots, `conflicts:`, file-overlap detection
+- [HaikuPorts integration](docs/haikuports-integration.md) — running cvcpkg on Haiku, `cvcpkg haiku draft-recipe`
 - [Contributing](docs/CONTRIBUTING.md)
 
 **Running a server / fleet**

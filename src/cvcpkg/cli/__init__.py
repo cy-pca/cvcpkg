@@ -16,6 +16,7 @@ for maintainability:
 - ``_cache``     — cache subcommand group
 - ``_doctor``    — environment diagnostics (``cvcpkg doctor``)
 - ``_generate``  — recipe generation from an existing project (``cvcpkg generate``)
+- ``_haiku``     — HaikuPorts recipe drafting (``cvcpkg haiku``)
 - ``_image``     — installed VM/disk image discovery (``cvcpkg image``)
 - ``_init``      — recipe scaffolding (``cvcpkg init``)
 - ``_server``    — token, user, registration, server, org management
@@ -104,6 +105,7 @@ _SECTIONS: list[tuple[str, list[str]]] = [
             "pack-all",
             "validate",
             "world",
+            "haiku",
         ],
     ),
     (
@@ -286,6 +288,7 @@ from cvcpkg.cli import (  # noqa: E402, F401
     _cpkg,
     _doctor,
     _generate,
+    _haiku,
     _image,
     _init,
     _install,

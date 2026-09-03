@@ -37,6 +37,7 @@ EXPECTED_SUBMODULES = [
     "_cpkg",
     "_doctor",
     "_generate",
+    "_haiku",
     "_image",
     "_init",
     "_install",
