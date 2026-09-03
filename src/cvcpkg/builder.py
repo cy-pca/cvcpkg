@@ -1906,6 +1906,145 @@ def generate_manifest(
 # ── Staging & archiving ─────────────────────────────────────────
 
 
+# Extensions that only ever exist on one platform. An entry naming one of
+# these is not REQUIRED to match when packing for a different platform -- see
+# check_declared_files. Measured against the catalog: 84 declared entries in
+# multi-platform recipes carry a platform-locked extension (e.g. ffmpeg's
+# bin/avcodec-*.dll in a matrix that also builds linux), so without this the
+# check would fire on recipes that are perfectly correct.
+_PLATFORM_ONLY_SUFFIXES: dict[str, tuple[str, ...]] = {
+    ".dll": ("windows",),
+    ".lib": ("windows",),
+    ".exe": ("windows",),
+    ".pdb": ("windows",),
+    ".dylib": ("macos",),
+}
+# Extensions that exist everywhere EXCEPT the listed platforms.
+_PLATFORM_EXCLUDED_SUFFIXES: dict[str, tuple[str, ...]] = {
+    ".so": ("windows",),
+    ".a": ("windows",),
+}
+
+
+def _entry_applies_to(entry: str, platform: str) -> bool:
+    """Is *entry* expected to match anything when packing for *platform*?"""
+    for suffix, only in _PLATFORM_ONLY_SUFFIXES.items():
+        if suffix in entry:
+            return platform in only
+    for suffix, excluded in _PLATFORM_EXCLUDED_SUFFIXES.items():
+        # ".so" also catches ".so.6"; guard against matching e.g. "foo.sox".
+        if suffix in entry and platform in excluded:
+            return False
+    return True
+
+
+def _alternate_group(entry: str) -> str:
+    """Key grouping the Unix/MSVC spelling pair of one library.
+
+    ``add_library(foo STATIC)`` installs ``lib/libfoo.a`` on Unix but
+    ``lib/foo.lib`` on MSVC, so recipes routinely declare BOTH ``lib/libfoo*``
+    and ``lib/foo*`` -- 44 recipes in the catalog do. Exactly one of the pair
+    matches on any given platform, so they must be judged together or the
+    check fires on every correct build.
+    """
+    head, _, tail = entry.rpartition("/")
+    stem = tail[3:] if tail.startswith("lib") else tail
+    return f"{head}/{stem}"
+
+
+def check_declared_files(
+    install_dir: Path,
+    package_files: Sequence[str],
+    platform: str,
+) -> list[str]:
+    """Return the ``package.files`` entries that match nothing in *install_dir*.
+
+    ``package.files`` does not select what gets archived -- stage_bundle copies
+    the whole install tree -- so it is a DECLARATION of what the bundle ships.
+    Nothing used to verify it, and an entry that matched nothing was simply
+    ignored. libcvc shipped twice that way: the recipe declared
+    ``lib/libxmlrpc*`` and exported ``cvc::xmlrpc`` while the build had
+    ``CVC_USING_XMLRPC`` off, so the bundle carried include/xmlrpc/ headers for
+    a library it did not contain, and packing said nothing.
+
+    Entries are judged in groups (see :func:`_alternate_group`) and skipped
+    when they cannot apply to *platform* (see :func:`_entry_applies_to`), so a
+    correct recipe does not trip this.
+    """
+    groups: dict[str, list[str]] = {}
+    for entry in package_files:
+        if not entry or not _entry_applies_to(entry, platform):
+            continue
+        groups.setdefault(_alternate_group(entry), []).append(entry)
+
+    unmatched: list[str] = []
+    for _key, entries in sorted(groups.items()):
+        satisfied = False
+        for entry in entries:
+            if entry.endswith("/"):
+                # Directory entries carry wildcards too ("include/ImageMagick*/",
+                # "lib/cmake/fftw3*/"), so they must be globbed, not resolved
+                # literally. A declared directory that exists but is EMPTY ships
+                # nothing, so it does not satisfy the declaration either.
+                stem = entry.rstrip("/")
+                try:
+                    candidates = install_dir.glob(stem)
+                except (NotImplementedError, ValueError):
+                    satisfied = True
+                    break
+                if any(c.is_dir() and next(c.iterdir(), None) is not None for c in candidates):
+                    satisfied = True
+                    break
+                continue
+            try:
+                if next(install_dir.glob(entry), None) is not None:
+                    satisfied = True
+                    break
+            except (NotImplementedError, ValueError):
+                # A pattern pathlib cannot compile is a recipe bug, but it is
+                # not evidence of a missing artifact -- do not fail the build.
+                satisfied = True
+                break
+        if not satisfied:
+            unmatched.extend(entries)
+    return unmatched
+
+
+def enforce_declared_files(
+    install_dir: Path,
+    package_files: Sequence[str],
+    platform: str,
+    recipe_name: str,
+    *,
+    strict: bool = True,
+) -> None:
+    """Fail (or warn) when a recipe declares files the build did not produce."""
+    # Env override so a fleet that trips this can be unblocked without a code
+    # change or a recipe edit -- the flag alone would mean editing every caller.
+    if strict and os.environ.get("CVCPKG_STRICT_GLOBS", "1") == "0":
+        strict = False
+    unmatched = check_declared_files(install_dir, package_files, platform)
+    if not unmatched:
+        return
+    listed = "\n  ".join(unmatched)
+    if not strict:
+        print(
+            f"cvcpkg: WARNING -- {recipe_name} declares package.files entries that "
+            f"match nothing in the staged tree:\n  {listed}"
+        )
+        return
+    raise BuildError(
+        f"{recipe_name}: package.files declares {len(unmatched)} entr"
+        f"{'y' if len(unmatched) == 1 else 'ies'} that match nothing in the "
+        f"staged tree:\n  {listed}\n"
+        "The bundle would ship without them. Either the build did not produce "
+        "them (the usual cause -- a CMake option left at its default), or the "
+        "recipe over-declares.\n"
+        "Set CVCPKG_STRICT_GLOBS=0, or pass --no-strict-globs, to downgrade "
+        "this to a warning."
+    )
+
+
 def stage_bundle(
     install_dir: Path,
     manifest: dict[str, Any],
@@ -2743,6 +2882,7 @@ def pack_recipe(
     host_platform: str = "",
     cross_toolchain_env: dict[str, str] | None = None,
     cvc_revision: int | None = None,
+    strict_globs: bool = True,
 ) -> tuple[Path, str, int]:
     """Build + package a recipe. Returns (archive_path, sha256, size).
 
@@ -2836,6 +2976,16 @@ def pack_recipe(
             )
         print(f"cvcpkg: image layout OK — share/{ctx.recipe.name}/ (image.yaml validated)")
 
+    # package.files is a DECLARATION of what this bundle ships, and until now
+    # nothing checked it against the tree that was actually built.
+    enforce_declared_files(
+        ctx.install_dir,
+        ctx.recipe.package_files,
+        pkg_platform,
+        ctx.recipe.name,
+        strict=strict_globs,
+    )
+
     manifest = generate_manifest(
         ctx.recipe,
         ctx.install_dir,
@@ -2894,6 +3044,7 @@ def pack_from_prefix(
     maintainer: str = "",
     org_slug: str = "",
     cvc_revision: int | None = None,
+    strict_globs: bool = True,
 ) -> tuple[Path, str, int]:
     """Package an already-installed prefix as if built by :func:`pack_recipe`.
 
@@ -2957,6 +3108,17 @@ def pack_from_prefix(
 
     if output_dir is None:
         output_dir = Path.cwd() / "dist"
+
+    # Same declaration check as pack_recipe. This is the path libcvc's publish
+    # workflow uses (`cvcpkg pack ... --from-prefix stage`), which is exactly
+    # where the missing cvc::xmlrpc shipped.
+    enforce_declared_files(
+        prefix,
+        recipe.package_files,
+        platform,
+        recipe.name,
+        strict=strict_globs,
+    )
 
     manifest = generate_manifest(
         recipe,

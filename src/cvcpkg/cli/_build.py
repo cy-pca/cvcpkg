@@ -668,6 +668,17 @@ def _resolve_bump_revision(
     help="Organization slug to scope --bump queries and embed in manifests.",
 )
 @click.option(
+    "--strict-globs/--no-strict-globs",
+    "strict_globs",
+    default=True,
+    help="Fail when a package.files entry matches nothing in the staged tree "
+    "(default). package.files is only a declaration -- the whole install tree "
+    "is archived either way -- so an entry matching nothing means the build "
+    "did not produce something the recipe says it ships. Entries that cannot "
+    "apply to the target platform, and Unix/MSVC spelling pairs, are exempt. "
+    "CVCPKG_STRICT_GLOBS=0 downgrades this to a warning fleet-wide.",
+)
+@click.option(
     "--bump-downstream",
     is_flag=True,
     default=False,
@@ -700,6 +711,7 @@ def pack(
     token: str,
     org: str,
     bump_downstream: bool,
+    strict_globs: bool,
 ) -> None:
     """Build and archive one or more recipes.
 
@@ -815,6 +827,7 @@ def pack(
                 maintainer=maintainer,
                 org_slug=org,
                 cvc_revision=override,
+                strict_globs=strict_globs,
             )
         else:
             archive, sha, size = pack_recipe(
@@ -828,6 +841,7 @@ def pack(
                 maintainer=maintainer,
                 host_platform=host_platform,
                 cvc_revision=override,
+                strict_globs=strict_globs,
             )
         click.echo(f"  {archive} ({size:,} bytes, sha256={sha})")
         if signing_key:
