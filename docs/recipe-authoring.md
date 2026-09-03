@@ -187,9 +187,11 @@ its own recipes with `cvcpkg validate ./cvcpkg/recipes/<name>` or
   A build-only tool filed under `runtime` will wrongly ship; a linked library
   filed under `build` will wrongly not ship. `platforms: [linux, macos]` on a
   dep scopes it.
-- **`package.files`** — glob patterns selecting what ends up in the bundle.
-  Use `lib/*/…` variants to catch Debian multiarch paths (e.g.
-  `lib/x86_64-linux-gnu/`).
+- **`package.files`** — declares the *expected* bundle contents, but filters
+  nothing: `cvcpkg pack` ships the entire `CVC_INSTALL_DIR` regardless (see
+  the callout above). Keep the globs accurate as documentation — use
+  `lib/*/…` variants to describe Debian multiarch paths (e.g.
+  `lib/x86_64-linux-gnu/`) — and prune unwanted installs in the build script.
 - **Python packages** are a special case: they use the `python_wheel` /
   `python_sdist` source types plus a `python:` block naming the target
   interpreter and ABI, and every Python package is published as a matrix of
