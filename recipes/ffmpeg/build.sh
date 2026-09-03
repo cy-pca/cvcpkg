@@ -86,6 +86,17 @@ if [[ "${CVC_LINK:-shared}" == "static" ]]; then
     )
 fi
 
+# The deps prefix must reach configure's own probes. pkg-config-covered libs
+# get their -I/-L appended as each check succeeds, but libmp3lame ships no .pc
+# file, so its bare `-lmp3lame` link test finds nothing without an explicit
+# -L — configure then aborts "libmp3lame >= 3.98.3 not found" even though the
+# library is right there. (ffmpeg's configure appends repeated --extra-* flags,
+# so the macOS rpath addition below still composes with these.)
+CONFIGURE_ARGS+=(
+    --extra-cflags="-I${CVC_DEPS_PREFIX}/include"
+    --extra-ldflags="-L${CVC_DEPS_PREFIX}/lib"
+)
+
 # fontconfig is Linux/BSD/macOS only (no Windows port in cvcpkg).
 if [[ "${CVC_PLATFORM}" != "windows" ]]; then
     CONFIGURE_ARGS+=(--enable-libfontconfig)
@@ -191,10 +202,14 @@ _ff="${CVC_INSTALL_DIR}/bin/ffmpeg"
 [[ -x "${_ff}" ]] || { echo "cvcpkg: no ffmpeg binary produced at ${_ff}" >&2; exit 1; }
 [[ -x "${CVC_INSTALL_DIR}/bin/ffprobe" ]] || { echo "cvcpkg: no ffprobe binary produced" >&2; exit 1; }
 
+# The deps prefix must be on the loader path too: the external codec libs
+# (libx264.so, libmp3lame.so, ...) live there, and on a split-prefix builder a
+# binary that cannot load them produces no output at all — the encoder greps
+# below would then misreport "missing encoder" when the binary never started.
 if [[ "${CVC_PLATFORM}" == "macos" ]]; then
-    export DYLD_LIBRARY_PATH="${CVC_INSTALL_DIR}/lib${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
+    export DYLD_LIBRARY_PATH="${CVC_INSTALL_DIR}/lib:${CVC_DEPS_PREFIX}/lib${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
 else
-    export LD_LIBRARY_PATH="${CVC_INSTALL_DIR}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+    export LD_LIBRARY_PATH="${CVC_INSTALL_DIR}/lib:${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 fi
 
 _encoders="$("${_ff}" -hide_banner -encoders 2>&1)"
