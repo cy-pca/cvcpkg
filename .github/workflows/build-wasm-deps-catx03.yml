@@ -50,6 +50,24 @@ jobs:
           fi
           PATH="$HOME/.local/bin:$PATH" cvcpkg --version
 
+      - name: Writable overlay of the shared wasm deps prefix
+        # /opt/cvc-wasm/deps-wasm-mt belongs to github-runner and this runner
+        # is tfx, so cvcpkg cannot install a freshly built package into it
+        # (PermissionError on include/<pkg>, then "(skipped: <r>)" and "no
+        # archives produced"). Mirror the prefix as a symlink farm under
+        # $HOME: existing deps resolve through the links, new installs land in
+        # tfx-owned directories, and it costs no disk. Hardlinks are not an
+        # option (fs.protected_hardlinks blocks them for files tfx does not
+        # own). Verified 2026-09-03 with joltphysics: pack + node smoke pass.
+        run: |
+          set -euo pipefail
+          OV="$HOME/.cache/cvcpkg/wasm-prefix-overlay"
+          rm -rf "$OV"
+          mkdir -p "$OV"
+          cp -as "$CVC_WASM_DEPS/." "$OV/"
+          echo "overlay of $CVC_WASM_DEPS: $(find "$OV" -type l | wc -l) links"
+          echo "CVC_WASM_DEPS=$OV" >> "$GITHUB_ENV"
+
       - name: Pack the wasm dep closure on catx-03
         run: |
           set -euo pipefail
