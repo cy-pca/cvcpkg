@@ -153,6 +153,8 @@ jobs:
         id: vm
         shell: bash
         run: |
+          PYTHON="${{ matrix.python }}"
+
           resolve_vm_ip() {
             local vm_name="$1" fallback="$2"
             if command -v incus >/dev/null 2>&1; then
@@ -163,8 +165,38 @@ jobs:
             fi
             echo "$fallback"
           }
-          vm_is_reachable() {
-            ssh ${SSH_OPTS} -o ConnectTimeout=5 "root@$1" true >/dev/null 2>&1
+
+          # cvcpkg builds run as root on these VMs, and libtool's OpenBSD
+          # finish_cmds re-run ldconfig with the job's own -L directories.
+          # That rewrites /var/run/ld.so.hints, and when it drops
+          # /usr/local/lib every package installed there stops resolving --
+          # including python's own libpython, which dies before main():
+          #
+          #   ld.so: python3.12: can't load library 'libpython3.12.so.0.0'
+          #
+          # The hints are rebuilt from these same directories at boot (see
+          # /etc/rc), so re-merging them is a restore, not a policy change.
+          # `-m` merges rather than replaces, so this discards nothing and is
+          # safe to run unconditionally on every build.
+          repair_openbsd_hints() {
+            case "${{ matrix.os }}" in
+              openbsd*)
+                ssh ${SSH_OPTS} -o ConnectTimeout=5 "root@$1" \
+                  "ldconfig -m /usr/local/lib /usr/X11R6/lib" >/dev/null 2>&1 || true
+                ;;
+            esac
+          }
+
+          # A builder that answers ssh but cannot run its own interpreter is
+          # useless to us, and answering the port was all the old check tested
+          # -- so a VM in that state never failed over and silently cost the
+          # release its binary.  Probe the interpreter, not just the port.
+          vm_is_usable() {
+            [ -n "$1" ] || return 1
+            ssh ${SSH_OPTS} -o ConnectTimeout=5 "root@$1" true >/dev/null 2>&1 || return 1
+            repair_openbsd_hints "$1"
+            ssh ${SSH_OPTS} -o ConnectTimeout=10 "root@$1" \
+              "${PYTHON} -c 'import sys'" >/dev/null 2>&1
           }
           # VM names + fallback IPs come from repo variables so they are not
           # hard-coded in this public workflow.  Each var holds "primary
@@ -180,9 +212,17 @@ jobs:
           read -r IP1 IP2 <<< "$IPS"
           HOST=$(resolve_vm_ip "$VM1" "$IP1")
           FALLBACK=$(resolve_vm_ip "$VM2" "$IP2")
-          if ! vm_is_reachable "$HOST" && [ -n "$FALLBACK" ]; then
-            echo "::warning::Primary VM $HOST unreachable, falling back to $FALLBACK"
-            HOST="$FALLBACK"
+          if ! vm_is_usable "$HOST"; then
+            if vm_is_usable "$FALLBACK"; then
+              echo "::warning::Primary VM $HOST failed a ${PYTHON} health check, falling back to $FALLBACK"
+              HOST="$FALLBACK"
+            else
+              # Fail loudly.  Releases attach with fail_on_unmatched_files,
+              # so a builder that quietly produces nothing yields a release
+              # that is simply missing this platform.
+              echo "::error::No usable ${{ matrix.os }} builder: neither $HOST nor $FALLBACK can run ${PYTHON}"
+              exit 1
+            fi
           fi
           echo "host=$HOST" >> "$GITHUB_OUTPUT"
           echo "Selected ${{ matrix.os }} VM: $HOST"
@@ -299,6 +339,24 @@ jobs:
 
       - name: List artifacts
         run: find artifacts -type f | sort
+
+      - name: Warn on missing platforms
+        # Uploads are best-effort (fail_on_unmatched_files is false) so that one
+        # dead builder cannot hold up the other five.  The cost is that a
+        # missing binary is invisible in the release -- and install.sh hard
+        # fails for that platform, because it fetches a .sha256 that no job
+        # produced.  Name the gap here instead of leaving it to be discovered
+        # by whoever runs the install script.
+        run: |
+          cd artifacts
+          missing=()
+          for f in cvcpkg-linux-x86_64 cvcpkg-macos-arm64 cvcpkg-windows-x86_64.exe \
+                   cvcpkg-freebsd-x86_64 cvcpkg-openbsd-x86_64 cvcpkg-netbsd-x86_64; do
+            [ -f "$f" ] || missing+=("$f")
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::warning::Release is missing ${#missing[@]} platform binaries: ${missing[*]}"
+          fi
 
       - name: Generate checksums
         # install.sh / install.ps1 verify against these before running
