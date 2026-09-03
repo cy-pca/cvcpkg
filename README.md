@@ -43,6 +43,50 @@ cvcpkg verify --prefix ./deps
 cvcpkg uninstall fftw3 --prefix ./deps
 ```
 
+## Installation: core vs extras
+
+The core install is **`click` + `PyYAML`, and nothing else**:
+
+```bash
+pip install cvcpkg
+```
+
+That is the whole client. Resolving, downloading (`urllib`), sha256
+verification, extraction, lockfiles, CMake config and activation scripts,
+`cvcpkg build`, and the recipe tooling all run on those two — which is what
+lets cvcpkg install on platforms whose wheel ecosystem is thin.
+
+Everything else is an **extra**, named after the entry point that needs it.
+Install one when you take on that role:
+
+| Extra | Install | For |
+|---|---|---|
+| `remote` | `pip install 'cvcpkg[remote]'` | commands that talk to a cvcpkg server: `search`, `recipe pull`, `builds list/log/monitor`, `webhook …`, `token`/`user`/`org` admin, `doctor --server` |
+| `publish` | `pip install 'cvcpkg[publish]'` | `publish`, `recipe push`, `recipe publish`, `builds submit-dag` |
+| `builder` | `pip install 'cvcpkg[builder]'` | running a builder agent (`cvcpkg builder run`) |
+| `signing` | `pip install 'cvcpkg[signing]'` | `cvcpkg key …`, `sign`, `verify-sig`, and `install --verify-signatures` |
+| `validate` | `pip install 'cvcpkg[validate]'` | `cvcpkg validate` — checking a recipe or `components.yaml` against the bundled JSON-Schemas |
+| `server` | `pip install 'cvcpkg[server,db]'` | running `cvcpkg-server` (ASGI stack + SQLAlchemy; add a `db*` extra for the driver) |
+| `progress` | `pip install 'cvcpkg[progress]'` | download/extract progress bars |
+| `s3`, `azure`, `gcs`, `sftp` | `pip install 'cvcpkg[s3]'` | storage backends for `publish --dest` |
+| `all` | `pip install 'cvcpkg[all]'` | everything above |
+
+`remote`, `publish` and `builder` all resolve to the same package (`httpx`);
+the three names exist so the error you get names *your* command's extra.
+
+Running a command whose extra is missing is never a traceback — it is one
+line telling you what to install:
+
+```
+$ cvcpkg publish zlib
+Error: httpx is required to talk to a cvcpkg server over HTTP. Install it with: pip install 'cvcpkg[publish]'
+```
+
+**Upgrading from cvcpkg ≤ 2.0.2?** `sqlalchemy`, `cryptography`, `httpx` and
+`greenlet` used to be mandatory, so you had them whether you used them or not.
+If you would rather not think about which role you are in, `pip install
+'cvcpkg[all]'` is a superset of what you had before.
+
 ## Documentation
 
 All documentation lives under [`docs/`](docs/).
@@ -359,6 +403,8 @@ cvcpkg recipe pull-all --org my-org --output-dir ./org-recipes
 ### Pushing recipes to the server
 
 ```bash
+# Needs the publish extra (httpx):  pip install 'cvcpkg[publish]'
+
 # Push a single recipe (admin):
 cvcpkg recipe push zlib
 
@@ -387,6 +433,8 @@ with persistent, uncapped build agents.
 ### Starting a builder
 
 ```bash
+# Needs the builder extra (httpx):  pip install 'cvcpkg[builder]'
+
 export CVCPKG_SERVER_URL=https://cvcpkg.org
 export CVCPKG_TOKEN=cvctok_...
 
@@ -593,7 +641,7 @@ cvcpkg recipe push boost
 
 ### Setting up builders
 
-Run builder agents on each target platform:
+Run builder agents on each target platform (`pip install 'cvcpkg[builder]'`):
 
 ```bash
 # On a Linux x86_64 build host (platform auto-detected):
@@ -1019,6 +1067,8 @@ cvcpkg pack my-library --prefix ./stage \
 ### Step 3: Publish
 
 ```bash
+# Needs the publish extra (httpx):  pip install 'cvcpkg[publish]'
+
 # Publish to a cvcpkg-server (REST API):
 export CVCPKG_TOKEN="cvctok_..."
 export CVCPKG_SERVER_URL="https://cvcpkg.org"

@@ -80,8 +80,12 @@ sudo apt-get install -y --no-install-recommends \
   pkg-config patchelf
 
 pipx ensurepath
-pipx install cvcpkg
-# or, for dev against a checkout:  cd libcvc-deps && pip install -e '.[progress]'
+# [builder] is not optional for this host: this box's whole job is `cvcpkg
+# builder run`, which talks to the server over HTTP (httpx).  A bare
+# `pipx install cvcpkg` gets the core client (click + PyYAML) and the agent
+# refuses to start.  [progress] just adds download progress bars.
+pipx install 'cvcpkg[builder,progress]'
+# or, for dev against a checkout:  cd libcvc-deps && pip install -e '.[builder,progress]'
 ```
 
 | Bootstrap package | Why it can't come from cvcpkg |
