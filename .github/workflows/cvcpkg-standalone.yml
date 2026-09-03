@@ -73,11 +73,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller==${{ env.PYINSTALLER_VERSION }}
-          # jsonschema arrives via `pip install .` — it is a runtime dependency,
-          # pinned below the Rust rewrite (see pyproject.toml). Do not install it
-          # explicitly: an unbounded `pip install jsonschema` resolves to >=4.18
-          # and drags rpds-py/cargo in, which does not build on the BSD VMs.
-          pip install .
+          # [remote,signing,validate]: a standalone binary is a fixed closure,
+          # so httpx, cryptography and jsonschema must be in the build env to
+          # be bundled at all. jsonschema comes via the [validate] extra — it
+          # is pinned there below the Rust rewrite (see pyproject.toml). Do not
+          # install it explicitly: an unbounded `pip install jsonschema`
+          # resolves to >=4.18 and drags rpds-py/cargo in, which does not
+          # build on the BSD VMs.
+          pip install '.[remote,signing,validate]'
 
       - name: Build standalone binary
         shell: bash
@@ -257,9 +260,12 @@ jobs:
           # cvcpkg's .dist-info — keep this in step with the `build` job rather
           # than maintaining a second, drifting flag list here.
           #
-          # jsonschema comes from `pip install .` (a runtime dependency pinned
-          # below the Rust rewrite). Installing it explicitly would resolve to
-          # >=4.18, whose rpds-py needs cargo — which these VMs do not have.
+          # [remote,signing,validate]: a standalone binary is a fixed closure,
+          # so httpx, cryptography and jsonschema must be in the build env to
+          # be bundled. jsonschema comes via the [validate] extra (pinned
+          # below the Rust rewrite there). Installing it explicitly would
+          # resolve to >=4.18, whose rpds-py needs cargo — which these VMs do
+          # not have.
 
           # NetBSD needs a patched PyInstaller. Upstream ships no NetBSD
           # bootloader, so pip compiles one, and bootloader/wscript has no
@@ -288,8 +294,8 @@ jobs:
           fi
 
           ssh ${SSH_OPTS} "${VM}" "set -e; cd ${remote_dir} && \
-            TMPDIR=/usr/local/tmp ${PYTHON} -m pip install --break-system-packages . 2>/dev/null \
-              || ${PYTHON} -m pip install .; \
+            TMPDIR=/usr/local/tmp ${PYTHON} -m pip install --break-system-packages '.[remote,signing,validate]' 2>/dev/null \
+              || ${PYTHON} -m pip install '.[remote,signing,validate]'; \
             ${PYTHON} -m PyInstaller --clean --noconfirm packaging/cvcpkg.spec"
 
       - name: Verify + retrieve binary

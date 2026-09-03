@@ -71,7 +71,8 @@ jobs:
         # platform vocabulary (wasm-mt) and the recipe schemas ride in the
         # package, and a stale install rejects them at the CLI boundary.
         run: |
-          python3 -m pip install --user --upgrade .
+          # [publish]: this workflow packs and publishes bundles.
+          python3 -m pip install --user --upgrade '.[publish]'
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           PATH="$HOME/.local/bin:$PATH" cvcpkg --version
 

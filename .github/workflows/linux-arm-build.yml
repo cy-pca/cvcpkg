@@ -150,7 +150,7 @@ jobs:
       - name: Install cvcpkg
         run: |
           set -euo pipefail
-          pip install .
+          pip install '.[publish]'
           cvcpkg --version
 
       - name: Build shard ${{ matrix.shard }} (pack-all)

@@ -87,7 +87,10 @@ jobs:
         working-directory: .
         run: |
           python -m pip install --upgrade pip
-          pip install .
+          # [publish]: this job runs `recipe push-all`, `builds submit-dag` and
+          # `builds follow-dag` against the PUBLIC catalog — every one of them
+          # is an HTTP call (httpx), so core-only breaks the populate.
+          pip install '.[publish]'
 
       - name: Push all recipes
         if: ${{ !inputs.skip_push }}

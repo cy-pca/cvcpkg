@@ -95,7 +95,9 @@ jobs:
 
       - name: Install cvcpkg
         run: |
-          python3 -m pip install --quiet --user .
+          # [remote]: yank/unyank/nuke are registry admin calls over the
+          # server's HTTP API (httpx).
+          python3 -m pip install --quiet --user '.[remote]'
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Guard — nuke requires an exact confirmation
