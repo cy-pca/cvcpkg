@@ -176,7 +176,19 @@ its own recipes with `cvcpkg validate ./cvcpkg/recipes/<name>` or
   A build-only tool filed under `runtime` will wrongly ship; a linked library
   filed under `build` will wrongly not ship. `platforms: [linux, macos]` on a
   dep scopes it.
-- **`package.files`** — glob patterns selecting what ends up in the bundle.
+- **`package.files`** — glob patterns DECLARING what the bundle ships. They do
+  **not** select it: `stage_bundle` archives the entire `$CVC_INSTALL_DIR` tree,
+  so anything the build installs ships whether or not it is listed here. To keep
+  something OUT of a bundle, delete it from `$CVC_INSTALL_DIR` at the end of the
+  build script — 35 recipes already do exactly that, and their comments say why.
+  What the list IS for: `cvcpkg pack` verifies every entry against the staged
+  tree and FAILS when one matches nothing, because an entry matching nothing
+  means the build did not produce something the recipe claims to ship. (libcvc
+  shipped twice declaring `lib/libxmlrpc*` while `CVC_USING_XMLRPC` was off.)
+  Unix/MSVC spelling pairs (`lib/libfoo*` beside `lib/foo*`) count as one
+  requirement, and entries locked to another platform by extension (`.dll`,
+  `.lib`, `.exe`, `.dylib`) are skipped off-platform. `--no-strict-globs` or
+  `CVCPKG_STRICT_GLOBS=0` downgrades the failure to a warning.
   Use `lib/*/…` variants to catch Debian multiarch paths (e.g.
   `lib/x86_64-linux-gnu/`).
 - **Python packages** are a special case: they use the `python_wheel` /
