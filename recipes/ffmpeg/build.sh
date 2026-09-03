@@ -102,9 +102,15 @@ if [[ "${CVC_PLATFORM}" != "windows" ]]; then
     CONFIGURE_ARGS+=(--enable-libfontconfig)
 fi
 
-# PulseAudio is Linux-only.
+# PulseAudio is Linux-only. libpulse.so pulls in libpulsecommon-<ver>.so via
+# DT_NEEDED, and that private helper lives in lib/pulseaudio/, not lib/. At the
+# final ffmpeg link ld follows libpulse's NEEDED entries to resolve its symbols
+# and can't find libpulsecommon on the search path — every pa_* comes back
+# "undefined reference". -rpath-link points ld at the subdir for this secondary
+# lookup without touching the shipped binary's runtime rpath.
 if [[ "${CVC_PLATFORM}" == "linux" ]]; then
     CONFIGURE_ARGS+=(--enable-libpulse)
+    CONFIGURE_ARGS+=(--extra-ldflags="-Wl,-rpath-link,${CVC_DEPS_PREFIX}/lib/pulseaudio")
 fi
 
 # FFmpeg's configure hard-defaults its C compiler to "gcc" and does not
@@ -209,7 +215,10 @@ _ff="${CVC_INSTALL_DIR}/bin/ffmpeg"
 if [[ "${CVC_PLATFORM}" == "macos" ]]; then
     export DYLD_LIBRARY_PATH="${CVC_INSTALL_DIR}/lib:${CVC_DEPS_PREFIX}/lib${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
 else
-    export LD_LIBRARY_PATH="${CVC_INSTALL_DIR}/lib:${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+    # lib/pulseaudio too: libpulse.so needs libpulsecommon from that subdir, and
+    # it is reached via LD_LIBRARY_PATH for this in-tree smoke run (the shipped
+    # ffmpeg relies on libpulse.so's own rpath, which is libpulse's concern).
+    export LD_LIBRARY_PATH="${CVC_INSTALL_DIR}/lib:${CVC_DEPS_PREFIX}/lib:${CVC_DEPS_PREFIX}/lib/pulseaudio${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 fi
 
 _encoders="$("${_ff}" -hide_banner -encoders 2>&1)"
