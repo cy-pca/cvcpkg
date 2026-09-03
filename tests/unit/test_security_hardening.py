@@ -456,6 +456,42 @@ class TestReadAuthEnforcement:
         # a valid token is still accepted
         assert client.get("/v1/packages", headers=_hdr(reader)).status_code == 200
 
+    @pytest.fixture()
+    def ra_server_env_only(self, tmp_path, monkeypatch):
+        """`cvcpkg server run --require-auth-reads` / docker-compose's
+        REQUIRE_AUTH_READS only ever set CVCPKG_SERVER_REQUIRE_AUTH_READS in
+        the environment — uvicorn's factory entrypoint then calls
+        create_app() with no arguments, so the flag must reach the app via
+        the module-level REQUIRE_AUTH_FOR_READS constant, not the
+        require_auth_for_reads parameter."""
+        db_url = f"sqlite+aiosqlite:///{tmp_path / 'ra_env.db'}"
+        monkeypatch.setenv("CVCPKG_DATABASE_URL", db_url)
+        monkeypatch.delenv("CVCPKG_MIRROR_MODE", raising=False)
+        monkeypatch.setattr(app_mod, "REQUIRE_AUTH_FOR_READS", True)
+        from cvcpkg.server.db import create_tables, dispose_engine, init_db
+        from cvcpkg.server.db_stores import DbTokenStore
+
+        async def _seed():
+            init_db(db_url)
+            await create_tables()
+            reader = await DbTokenStore(tmp_path).create("r", TokenRole.reader)
+            await dispose_engine()
+            return reader
+
+        reader = asyncio.run(_seed())
+        # No require_auth_for_reads kwarg — this is exactly what
+        # uvicorn.run("cvcpkg.server.app:create_app", factory=True) invokes.
+        app = create_app(state_dir=tmp_path)
+        with TestClient(app) as client:
+            yield client, reader
+
+    def test_env_var_alone_enforces_read_auth(self, ra_server_env_only):
+        client, reader = ra_server_env_only
+        assert client.get("/v1/packages").status_code == 401
+        assert client.get("/v1/feed.xml").status_code == 401
+        assert client.get("/v1/download/whatever.tar.zst").status_code == 401
+        assert client.get("/v1/packages", headers=_hdr(reader)).status_code == 200
+
 
 class TestPrivateDownloadHardening:
     def test_head_download_gated(self, sec_server):

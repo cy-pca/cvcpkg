@@ -338,6 +338,16 @@ POPULATE_MAX_MIRROR_BYTES = int(os.environ.get("CVCPKG_POPULATE_MAX_MIRROR_BYTES
 # Registration mode: "open" (default) or "admin-gated".
 REGISTRATION_MODE = RegistrationMode(os.environ.get("CVCPKG_REGISTRATION_MODE", "open"))
 
+# When set, `cvcpkg server run --require-auth-reads` (or docker-compose's
+# REQUIRE_AUTH_READS) enables the gate.  The CLI/docker path only ever sets
+# this env var — it never calls create_app() directly — so create_app() must
+# read it back rather than rely solely on its require_auth_for_reads param.
+REQUIRE_AUTH_FOR_READS = os.environ.get("CVCPKG_SERVER_REQUIRE_AUTH_READS", "").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+
 logger = logging.getLogger("cvcpkg.server")
 
 
@@ -2073,6 +2083,11 @@ def create_app(
     require_auth_for_reads: bool = False,
 ) -> FastAPI:
     """Build and return the FastAPI application."""
+    # The uvicorn factory entrypoint ("cvcpkg.server.app:create_app") is
+    # always invoked with no arguments, so the CLI's --require-auth-reads /
+    # docker-compose's REQUIRE_AUTH_READS (both of which only set
+    # CVCPKG_SERVER_REQUIRE_AUTH_READS) would otherwise silently no-op.
+    require_auth_for_reads = require_auth_for_reads or REQUIRE_AUTH_FOR_READS
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
