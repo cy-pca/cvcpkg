@@ -1,36 +1,49 @@
 # HaikuOS builder image — import guide
 
-> ## STATUS: NOT KNOWN-BOOTABLE (2026-08-04)
+> ## STATUS: KNOWN-BOOTABLE (verified 2026-08-06)
 >
-> **No image produced by this recipe has been observed to boot to userland,
-> and none has been observed to accept an SSH login.** Boot repair is in
-> flight on a separate branch. Until that lands and someone posts an observed
-> boot, treat everything below as *the intended import procedure*, not as a
-> report of something that worked.
+> `haiku-image 1.0.0-beta.5+cvc.1` is published (linux/x86_64/release/shared,
+> built on `star-00`, build #13794, sha256 `35d1cf6a…`, 546164964 bytes) and
+> **has been observed to boot to userland and accept an SSH login.** The four
+> boot blockers this recipe fixes were each verified on a booted VM (commit
+> `5b6e2ea0`, PR #442):
 >
-> Known-broken. These were found by inspection and by failed runs on the
-> boot-repair branch (`fix/haiku-image-boot`), not by a successful boot:
+> * **The anyboot partition table was wrong for any image ≥ 4 GiB.** Haiku's
+>   `src/tools/anyboot` computed MBR extents in 32-bit, so the BFS extent was
+>   truncated mod 2^32 and the EFI entry pointed inside the BFS — fatal to
+>   firmware. Fixed and independently re-verified against pristine upstream
+>   r1beta5 sources: the patch turns a wrapped 2 GiB MBR entry into the
+>   correct 10 GiB one and moves the EFI entry clear of the BFS payload.
+> * **The account name was `baron`, not `user`.** `HAIKU_ROOT_USER_NAME` now
+>   sets it explicitly, so `sshd` no longer refuses the login with
+>   `Invalid user user`.
+> * **The toolchain was staged unactivated in `/boot/_packages_`**; it is now
+>   ACTIVATED in `/boot/system/packages`.
+> * **`pkgman` was missing TLS**, which broke the runtime installs
+>   (`cmake`/`patchelf`/`rsync`) documented in [Notes](#notes).
 >
-> * **The partition table is wrong for any image ≥ 4 GiB**, and
->   `HAIKU_IMAGE_SIZE` here is 51200 MiB. Haiku's `src/tools/anyboot`
->   computed MBR extents in 32-bit, so the BFS extent was truncated mod 2^32
->   and the EFI entry pointed inside the BFS. That is fatal to firmware *and*
->   to the `losetup -P` this build uses to inject the SSH key.
-> * **The SSH key injection has never been shown to work.** `bfs_shell` mounts
->   the volume at a fixed `/myfs` and starts at `/`, so the build's relative
->   `home/.ssh/authorized_keys` target resolved to nothing — and `bfs_shell`
->   prints an error but still exits 0, so nothing noticed. Haiku's `sshd_config`
->   also reads `config/settings/ssh/authorized_keys`, not `~/.ssh`. **Do not
->   assume a key is baked in**; check `access.ssh_pubkey_baked` and plan to
->   inject one yourself.
-> * **Nothing in the image started `sshd`.** Haiku's openssh package ships no
->   launch job, and `UserBootscript` only runs inside a desktop session, which
->   a headless boot never starts.
+> A follow-up (commit `c9366a93`, PR #463) fixed a second defect found during
+> that same verification pass: `build.matrix.env` declared
+> `HAIKU_BUILDER_SSH_PUBKEY: ""`, and matrix env is applied last and
+> unconditionally, so that empty default silently clobbered whatever key the
+> environment supplied — CI's secret included. Any image built before that
+> fix reports `access.ssh_pubkey_baked: false` no matter what key it was
+> given; see [Access](#access) below.
 >
-> What *is* established, and is about the guest OS rather than about this
-> image, is the disk-bus behaviour in "Disk bus" below: it was bisected live
-> against Haiku r1/beta5 under Incus/QEMU. It says which bus Haiku can drive.
-> It does not say this image boots.
+> Per `docs/roadmap/CVCPKG-ROADMAP.md` Phase 9 ("Fleet & platform
+> expansion"), the image is
+> proven end to end as of 2026-08-06: it builds in ~35 min, boots under
+> Incus, takes a DHCP lease, accepts SSH on its baked key, compiles and runs
+> a C binary in the guest, and starts `sshd` headlessly from its
+> `launch_daemon` job.
+>
+> What is still open, so as not to over-claim: only the Incus stanza below
+> has actually been run (see [Notes](#notes)) — the LXD/Proxmox/plain-QEMU/
+> libvirt translations are unexercised. And the recipe's own `test.vm` SKIPS
+> on any builder that lacks `HAIKU_BUILDER_SSH_KEY` in its environment, so a
+> routine CI rebuild at a later revision is a green skip, not an automatic
+> re-verification — the boot proof above is tied to the 2026-08-06 build
+> specifically.
 
 A headless, pre-configured HaikuOS builder VM image. Haiku's `Installer` is
 graphical-only, so this image is **built pre-installed** — boot it and it
@@ -222,11 +235,12 @@ is the solid one. Earlier revisions of this file said `virtio-blk`, inferred
 from "Haiku panics on virtio-scsi" without anyone checking that virtio-blk
 works — it does not. Read the bus from `$CVCPKG_IMAGE_DISK_BUS`.
 
-Scope of that last row, because it has been over-read once already: it is a
-statement about **Haiku's driver support**, established against Haiku r1/beta5
-under Incus/QEMU. It is *not* a statement that an image built by this recipe
-boots — see the status block at the top; it does not. Picking `nvme` removes
-the bus from the list of suspects, nothing more.
+Scope of that last row, because it has been over-read once already: on its
+own it is a statement about **Haiku's driver support**, established against
+Haiku r1/beta5 under Incus/QEMU — not a claim that `nvme` alone boots this
+image. Combined with the other fixes recorded in the status block at the
+top, it does boot; picking `nvme` was one necessary condition among several,
+not the whole story.
 
 **Networking needs no such treatment.** The stock virtio NIC works and holds a
 DHCP lease; a claim that `virtio_net` page-faults was retracted — it was a
