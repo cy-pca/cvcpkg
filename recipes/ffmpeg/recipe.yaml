@@ -2,7 +2,12 @@ schema_version: 1
 recipe:
   name: ffmpeg
   upstream_version: "7.1.2"
-  cvc_revision: 1
+  # Bumped 1 -> 2: ship the ffmpeg/ffprobe programs on every platform (--disable-programs
+  # removed; the binaries are on by default), drop the configure-aborting
+  # --enable-libjpeg/--enable-libpng (JPEG/PNG are native codecs), honour
+  # CVC_LINK on Windows with a statically linked GCC runtime, and absorb the
+  # former ffmpeg-cli package (removed) — this bundle now owns bin/ffmpeg*.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

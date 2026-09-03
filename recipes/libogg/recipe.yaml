@@ -10,7 +10,11 @@ recipe:
   # layout keeps matching the package.files globs, which do not declare the
   # lib/cmake/Ogg/ directory the CMake path would add.  Unblocks libvorbis,
   # which runtime-depends on libogg and could not claim these targets until now.
-  cvc_revision: 2
+  # Bumped 2 -> 3: Windows build.ps1 rework: honour CVC_LINK in both directions and pin
+  # the build to the cvcpkg MinGW toolchain (exported PATH/PKG_CONFIG_PATH,
+  # drive-letter prefixes, TMPDIR fix). Script-only change, so the catalog
+  # and dev build cache only pick it up with a revision bump.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

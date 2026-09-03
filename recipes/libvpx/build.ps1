@@ -70,9 +70,11 @@ $depsFlag = "export TMPDIR='$winTmp'; " + $depsFlag
 # because the nasm/PATH bug above killed configure before it got this far — so
 # this recipe had never actually produced a Windows build.
 #
-# Static is also what we want: cvcpkg packages no MinGW runtime, so a shared
-# libvpx would drag libgcc into everything linking it. ffmpeg absorbs the
-# archive and stays self-contained, exactly as it does with x264.
+# Static is also what we want: a shared libvpx would drag libgcc into
+# everything linking it (and cvcpkg's mingw-w64-runtime package exists for
+# consumers that import the runtime DLLs, which the ffmpeg stack deliberately
+# does not — it links the runtime statically). ffmpeg absorbs the archive and
+# stays self-contained, exactly as it does with x264.
 $sharedFlag = '--disable-shared --enable-static'
 
 $cmd = "$depsFlag mkdir -p '$msysBuild' && cd '$msysBuild' && '$msysSource/configure' --prefix='$winPrefix' --target=x86_64-win64-gcc $sharedFlag --disable-examples --disable-tools --disable-docs --disable-unit-tests --enable-vp8 --enable-vp9 --enable-vp9-highbitdepth && make -j $jobs && make install"

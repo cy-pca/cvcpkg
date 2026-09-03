@@ -89,31 +89,13 @@ $winTmp = ($env:CVC_BUILD_DIR -replace '\\', '/') + '/cfgtmp'
 New-Item -ItemType Directory -Force -Path (Join-Path $env:CVC_BUILD_DIR 'cfgtmp') | Out-Null
 $depsFlag = "export TMPDIR='$winTmp'; " + $depsFlag
 
-# cvcpkg's zlib is built with MSVC and installs MSVC-named artifacts
-# (zlib.lib / zlibstatic.lib). MinGW's `-lz` — which --enable-zlib emits and
-# which the PNG decoder needs — looks for libz.a / libz.dll.a / z.lib and finds
-# none of them, so configure reports "zlib requested but not found" even though
-# the headers and a perfectly good bin/libz.dll are right there. Synthesise the
-# missing import library from the DLL rather than teaching ffmpeg another name.
-if ($env:CVC_DEPS_PREFIX) {
-    $zImp = Join-Path $env:CVC_DEPS_PREFIX 'lib\libz.dll.a'
-    $zDll = Join-Path $env:CVC_DEPS_PREFIX 'bin\libz.dll'
-    $dlltool = Join-Path $env:CVC_DEPS_PREFIX 'bin\dlltool.exe'
-    $gendef  = Join-Path $env:CVC_DEPS_PREFIX 'bin\gendef.exe'
-    # A too-small .dll.a from an earlier attempt is worse than none: it links
-    # and then fails at symbol resolution. zlib exports ~190 symbols; a real
-    # import lib is tens of KB.
-    if ((Test-Path $zImp) -and ((Get-Item $zImp).Length -lt 8192)) { Remove-Item -Force $zImp }
-    if ((-not (Test-Path $zImp)) -and (Test-Path $zDll) -and (Test-Path $dlltool) -and (Test-Path $gendef)) {
-        Write-Host "ffmpeg: generating libz.dll.a from bin/libz.dll (MSVC-named zlib)"
-        # gendef, NOT `dlltool -z`: dlltool builds a .def from OBJECT files and
-        # silently emits a near-empty one when handed a DLL.
-        $def = Join-Path $env:CVC_BUILD_DIR 'libz.def'
-        & $gendef - $zDll 2>$null | Set-Content -Path $def -Encoding ASCII
-        if (Test-Path $def) { & $dlltool -d $def -l $zImp -D 'libz.dll' 2>$null }
-        if (-not (Test-Path $zImp)) { throw "ffmpeg: could not synthesise libz.dll.a from $zDll" }
-    }
-}
+# zlib's GNU-named import alias (lib/libz.dll.a) is produced by the zlib
+# recipe itself (rev 3+), which also asserts it exists in shared builds. This
+# recipe used to synthesise one here with gendef+dlltool, which worked but put
+# the fix in the wrong place — and its cleanup pass deleted "too small"
+# libz.dll.a files from the SHARED deps prefix, i.e. someone else's shipped
+# artifact. See recipes/zlib/build.ps1 for why only the import lib can be
+# aliased and why there is deliberately no MinGW libz.a.
 
 # --cross-prefix only when the cross-named binutils exist. cvcpkg's own
 # mingw-w64-gcc is a NATIVE toolchain: cross-named compilers, plain-named
@@ -128,10 +110,13 @@ foreach ($r in $toolRoots) {
     }
 }
 
-# cvcpkg packages no MinGW runtime, so anything we ship must not import
-# libgcc_s_seh-1.dll / libstdc++-6.dll / libwinpthread-1.dll. -static-libstdc++
-# is not belt-and-braces here: x265 is C++, so linking it pulls libstdc++ into
-# both the shared libavcodec and the executables.
+# cvcpkg DOES package the redistributable GCC/threading DLLs now
+# (recipes/mingw-w64-runtime, added for the old ffmpeg-cli), but this recipe
+# deliberately does not depend on them: it ships dozens of binaries, so the
+# GCC runtime is linked statically instead and nothing we ship may import
+# libgcc_s_seh-1.dll / libstdc++-6.dll / libwinpthread-1.dll (asserted below).
+# -static-libstdc++ is not belt-and-braces here: x265 is C++, so linking it
+# pulls libstdc++ into both the shared libavcodec and the executables.
 $extraPathFlags = if ($winDeps) {
     "--extra-cflags='-I$winDeps/include' \`n    --extra-ldflags='-L$winDeps/lib -L$winDeps/bin' \`n    "
 } else { '' }
@@ -249,9 +234,10 @@ foreach ($want in @('scale', 'format', 'fps', 'hstack', 'vstack', 'overlay', 'pa
     if ($filterNames -notcontains $want) { throw "ffmpeg: built ffmpeg.exe is missing the $want filter" }
 }
 
-# The MinGW runtime must not have leaked into anything we ship; cvcpkg packages
-# no libgcc/libstdc++/libwinpthread DLL, so an import here is an install that
-# breaks on a machine without MSYS2 — and passes every test on this one.
+# The MinGW runtime must not have leaked into anything we ship. This recipe
+# links the runtime statically rather than depending on mingw-w64-runtime, so
+# an import here is an install that breaks on a machine without MSYS2 — and
+# passes every test on this one.
 # Check EVERY shipped binary, not just ffmpeg.exe: in a shared build the
 # executables are thin and the runtime would leak in via avcodec-*.dll instead.
 $objdump = @($toolRoots | ForEach-Object { Join-Path $_ 'bin\objdump.exe' } | Where-Object { Test-Path $_ }) |
@@ -268,6 +254,34 @@ if ($objdump) {
         }
     }
     Write-Host "ffmpeg: $($shipped.Count) shipped binaries carry no MinGW runtime imports"
+}
+
+# In a static link, `-static` makes ld prefer libz.a — and the only libz.a a
+# MinGW link can find is MSYS2's ambient one (cvcpkg's zlib ships the import
+# alias only and deletes any libz.a; see recipes/zlib). An absorbed ambient
+# zlib is invisible on the import table; the one witness is the version string
+# zlib bakes into deflate.c. Compare it against the zlib.h actually in the
+# prefix. (Learned on the old ffmpeg-cli: the wrong binary looked BETTER — no
+# zlib1.dll import at all — and only its baked 1.3.2 vs the recipe's 1.3.1
+# gave it away.)
+if ($env:CVC_LINK -eq 'static') {
+    $zh = $toolRoots | ForEach-Object { Join-Path $_ 'include\zlib.h' } |
+        Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($zh) {
+        $wantMatch = Select-String -Path $zh -Pattern '#define\s+ZLIB_VERSION\s+"([^"]+)"' |
+            Select-Object -First 1
+        $bakedMatch = Select-String -Path $ff -Pattern 'deflate\s+([0-9][0-9.]*)\s+Copyright' |
+            Select-Object -First 1
+        if ($wantMatch -and $bakedMatch) {
+            $want  = $wantMatch.Matches[0].Groups[1].Value
+            $baked = $bakedMatch.Matches[0].Groups[1].Value
+            if ($baked -ne $want) {
+                throw ("ffmpeg: statically absorbed zlib $baked but the prefix zlib is $want " +
+                       '— ld fell through to an ambient libz.a')
+            }
+            Write-Host "ffmpeg: static zlib is $baked (matches prefix zlib.h)"
+        }
+    }
 }
 
 Write-Host "ffmpeg: $((& $ff -version 2>&1 | Select-Object -First 1)) — full codec set + programs OK"

@@ -11,7 +11,11 @@ recipe:
   # switches are also off on cosmo, where they *would* work — an APE is supposed
   # to be the run-anywhere artefact, and opus's x86 path compiles per-ISA
   # translation units with -msse4.1/-mavx2 (same call recipes/libpng makes).
-  cvc_revision: 3
+  # Bumped 3 -> 4: Windows build.ps1 rework: honour CVC_LINK in both directions and pin
+  # the build to the cvcpkg MinGW toolchain (exported PATH/PKG_CONFIG_PATH,
+  # drive-letter prefixes, TMPDIR fix). Script-only change, so the catalog
+  # and dev build cache only pick it up with a revision bump.
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

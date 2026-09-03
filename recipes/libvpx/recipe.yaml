@@ -2,7 +2,11 @@ schema_version: 1
 recipe:
   name: libvpx
   upstream_version: "1.15.0"
-  cvc_revision: 1
+  # Bumped 1 -> 2: Windows build.ps1 rework: honour CVC_LINK in both directions and pin
+  # the build to the cvcpkg MinGW toolchain (exported PATH/PKG_CONFIG_PATH,
+  # drive-letter prefixes, TMPDIR fix). Script-only change, so the catalog
+  # and dev build cache only pick it up with a revision bump.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
