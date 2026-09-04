@@ -45,6 +45,20 @@ jobs:
       - name: Use the runner's cvcpkg CMake
         run: echo "/opt/cvc-wasm/cmake-cvcpkg/bin" >> "$GITHUB_PATH"
 
+      - name: Roomy TMPDIR + clean stale work dirs
+        # cvcpkg pack stages builds under $TMPDIR and leaves the trees behind;
+        # six wasm builds filled catx-03's /tmp mid-run and every later recipe
+        # died in CMake try_compile with "No usable temporary directory".
+        # Point TMPDIR at disk-backed cache space and sweep stale work dirs
+        # from both locations before starting.
+        run: |
+          set -euo pipefail
+          T="$HOME/.cache/cvcpkg/tmp"
+          mkdir -p "$T"
+          rm -rf "$T"/cvcpkg-* /tmp/cvcpkg-* 2>/dev/null || true
+          echo "TMPDIR=$T" >> "$GITHUB_ENV"
+          df -h "$T" /tmp | tail -2
+
       - name: Install THIS checkout's cvcpkg
         # Always the checkout, never whatever is lying on the runner: the
         # platform vocabulary (wasm-mt) and the recipe schemas ride in the
@@ -93,22 +107,44 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
+          failed=""
           for r in ${{ inputs.recipes }}; do
-            echo "=== packing $r for wasm ==="
+            # Resume support: a partial earlier run may have published part of
+            # the closure.  A successful catalog install is BOTH the skip
+            # signal and the dependency seed (pack resolves deps from the
+            # prefix), so re-dispatch after a mid-list failure picks up where
+            # it stopped instead of dying on the first missing dependency.
+            if cvcpkg install "$r" \
+                 --prefix "$CVC_WASM_DEPS" \
+                 --platform "${{ inputs.platform }}" --arch wasm32 \
+                 --config release --link static \
+                 --no-fallback-to-source >/dev/null 2>&1; then
+              echo "=== $r: already published for ${{ inputs.platform }} -- installed into prefix, skipping pack ==="
+              continue
+            fi
+            echo "=== packing $r for ${{ inputs.platform }} ==="
             cvcpkg pack "$r" \
               --recipes-dir recipes --no-default-recipes \
               --prefix "$CVC_WASM_DEPS" \
               --platform "${{ inputs.platform }}" \
               --config release --link static \
-              --output-dir dist/ || echo "  (skipped: $r)"
+              --output-dir dist/ || failed="$failed $r"
+            rm -rf "$TMPDIR"/cvcpkg-"$r"-* /tmp/cvcpkg-"$r"-* 2>/dev/null || true
           done
           ls -la dist/
+          if [ -n "$failed" ]; then
+            echo "::error::pack FAILED for:$failed"
+            exit 1
+          fi
 
       - name: Publish freshly packed bundles
         run: |
           set -euo pipefail
+          shopt -s nullglob
+          n=0
           for f in dist/*.tar.gz; do
-            [ -e "$f" ] || { echo "no archives produced"; exit 1; }
+            n=$((n+1))
             echo "=== publish $f ==="
             cvcpkg publish "$f" --server https://cvcpkg.org
           done
+          echo "published $n archive(s); 0 means everything requested was already on the catalog"
