@@ -22,7 +22,14 @@ patches: []
 
 depends:
   build:
-    - make
+    # Scoped away from windows: there is no `make` bundle for windows in the
+    # catalog, and build.ps1 does not want one -- it builds through MSYS2's
+    # MinGW-w64 gcc / GNU make / m4, which it sets up itself. Unscoped, this
+    # made `cvcpkg install-deps recipes/mpfr --platform windows` fail
+    # outright with "no bundles found in catalog for this platform tuple",
+    # which is what blocked publishing the windows-debug bundles.
+    - name: make
+      platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasi, cosmo]
   runtime:
     - name: gmp
       version: ">=6.1.0"

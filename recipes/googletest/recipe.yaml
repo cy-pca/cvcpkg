@@ -1,0 +1,81 @@
+schema_version: 1
+recipe:
+  name: googletest
+  upstream_version: "1.17.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "GoogleTest — Google's C++ testing and mocking framework (gtest + gmock)."
+  homepage: https://github.com/google/googletest
+  license: BSD-3-Clause
+  tags: [testing, utils]
+
+source:
+  type: tarball
+  url: https://github.com/google/googletest/releases/download/v1.17.0/googletest-1.17.0.tar.gz
+  sha256: "65fab701d9829d38cb77c14acdc431d2108bfdbf8979e40eb8ae567edf10b27c"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+  runtime: []
+  host_tools: []
+
+build:
+  # No wasm/wasi/cosmo entries: those platforms run cvcpkg's own harnesses
+  # rather than a native gtest binary, and nothing in the catalog asks for
+  # gtest there yet. Add them when a consumer does.
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    # gtest and gmock, plus the *_main variants consumers link for a default
+    # main(). Both the Unix (libgtest.a / .so) and MSVC (gtest.lib) spellings.
+    - lib/libgtest*
+    - lib/libgmock*
+    - lib/gtest*
+    - lib/gmock*
+    - lib/cmake/GTest/
+    - lib/pkgconfig/gtest*
+    - lib/pkgconfig/gmock*
+    - include/gtest/
+    - include/gmock/
+  cmake_packages:
+    - name: GTest
+      targets:
+        - GTest::gtest
+        - GTest::gtest_main
+        - GTest::gmock
+        - GTest::gmock_main
+
+abi:
+  # GoogleTest 1.17 requires C++17 and its headers are not C++14-compatible,
+  # so a consumer built at 14 or lower cannot use this bundle.
+  cxx_std: 17
