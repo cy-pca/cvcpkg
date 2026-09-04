@@ -177,7 +177,7 @@ jobs:
           & "$msys\usr\bin\pacman.exe" -Sy --noconfirm
           & "$msys\usr\bin\pacman.exe" -S --noconfirm --needed `
               base-devel m4 autoconf automake libtool make patch diffutils `
-              mingw-w64-x86_64-binutils mingw-w64-x86_64-pkgconf
+              mingw-w64-x86_64-gcc mingw-w64-x86_64-binutils mingw-w64-x86_64-pkgconf
           if ($LASTEXITCODE -ne 0) { throw "pacman failed with $LASTEXITCODE" }
           # Fail loudly here rather than letting ./configure report the
           # useless "could not find a working compiler" three steps later.

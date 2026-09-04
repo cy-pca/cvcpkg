@@ -348,7 +348,13 @@ function Invoke-CvcMsysAutotoolsBuild {
     Write-Host "cvcpkg: msys bash  = $bash"
     Write-Host "cvcpkg: msys PATH+ = $msysToolPaths"
 
-    $probeCmd = "$depsFlag" + 'for t in m4 libtool autoconf automake make gcc; do ' +
+    # Probe the compiler autotools will ACTUALLY invoke. ./configure
+    # --host=<triple> makes libtool call <triple>-gcc, so probing plain `gcc`
+    # is not enough: a toolchain providing only `gcc` passes the guard and then
+    # dies inside make with
+    #     ../libtool: line 1931: x86_64-w64-mingw32-gcc: command not found
+    # which is exactly the opaque failure this guard exists to prevent.
+    $probeCmd = "$depsFlag" + "for t in m4 libtool autoconf automake make gcc $HostTriple-gcc; do " +
                 'command -v $t >/dev/null || { echo "MISSING:$t"; }; done; echo PROBED'
     $probe = & $bash -lc $probeCmd
     $probeText = ($probe | Out-String)

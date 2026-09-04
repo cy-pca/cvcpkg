@@ -108,7 +108,7 @@ jobs:
           # half-synced database produces "command failed to execute
           # correctly" without a non-zero exit.
           $pkgs = @('base-devel','m4','autoconf','automake','libtool','make',
-                    'patch','diffutils','mingw-w64-x86_64-binutils',
+                    'patch','diffutils','mingw-w64-x86_64-gcc','mingw-w64-x86_64-binutils',
                     'mingw-w64-x86_64-pkgconf')
           $ok = $false
           for ($i = 1; $i -le 3 -and -not $ok; $i++) {
