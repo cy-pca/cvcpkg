@@ -26,7 +26,16 @@ depends:
   runtime:
     - name: gmp
       version: ">=6.1.0"
-  host_tools: []
+  # The MinGW toolchain the Windows build needs. build.ps1 goes through
+  # Invoke-CvcMsysAutotoolsBuild, which needs a real gcc + binutils; the
+  # GitHub-hosted windows image ships MSYS2 with only the `base` package
+  # group (no gcc, no make, no m4), and #169 removed the pacman self-heal
+  # that used to install them. Declaring it here stages the pinned compiler
+  # into CVC_BUILD_PREFIX -- the same route that made x264 build on Windows.
+  # host_tools are excluded from the runtime prefix by design, so gcc does
+  # not end up shadowing MSVC for later CMake builds.
+  host_tools:
+    - mingw-w64-gcc
 
 build:
   matrix:
