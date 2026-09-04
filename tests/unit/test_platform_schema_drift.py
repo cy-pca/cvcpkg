@@ -53,7 +53,7 @@ from cvcpkg.validation import load_schema
 # (wasm/wasi/cosmo), an ABI flavour of another host (windows-gnu, built from a
 # Linux or Windows host), or the noarch sentinel.  A site restricted to genuine
 # hosts is allowed to omit these.
-_NOT_A_HOST = frozenset({"any", "wasm", "wasi", "cosmo", "windows-gnu"})
+_NOT_A_HOST = frozenset({"any", "wasm", "wasm-mt", "wasi", "cosmo", "windows-gnu"})
 
 # ``any`` is the platform-independent *recipe* sentinel (build once, valid
 # everywhere).  In a list-of-platforms field it would be a no-op — a dependency

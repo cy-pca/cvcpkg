@@ -13,6 +13,11 @@ on:
         description: "Recipes to pack + publish (space-separated)"
         required: true
         default: "zlib bzip2 xz zstd libpng libjpeg-turbo tiff freetype libwebp libxml2 lerc assimp imagemagick"
+      platform:
+        description: "Target platform (wasm = single-threaded, wasm-mt = -pthread)"
+        type: choice
+        options: [wasm, wasm-mt]
+        default: wasm
 
 concurrency:
   group: wasm-deps-catx03
@@ -40,14 +45,13 @@ jobs:
       - name: Use the runner's cvcpkg CMake
         run: echo "/opt/cvc-wasm/cmake-cvcpkg/bin" >> "$GITHUB_PATH"
 
-      - name: Locate cvcpkg
+      - name: Install THIS checkout's cvcpkg
+        # Always the checkout, never whatever is lying on the runner: the
+        # platform vocabulary (wasm-mt) and the recipe schemas ride in the
+        # package, and a stale install rejects them at the CLI boundary.
         run: |
-          if command -v cvcpkg >/dev/null 2>&1; then
-            echo "cvcpkg present at $(command -v cvcpkg)"
-          else
-            python3 -m pip install --user --upgrade .
-            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          fi
+          python3 -m pip install --user --upgrade .
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           PATH="$HOME/.local/bin:$PATH" cvcpkg --version
 
       - name: Writable overlay of the shared wasm deps prefix
@@ -59,13 +63,30 @@ jobs:
         # tfx-owned directories, and it costs no disk. Hardlinks are not an
         # option (fs.protected_hardlinks blocks them for files tfx does not
         # own). Verified 2026-09-03 with joltphysics: pack + node smoke pass.
+        #
+        # wasm-mt builds must NOT seed from the single-threaded prefix: a
+        # -pthread link that picks up a single-threaded archive dies with
+        # "--shared-memory is disallowed" (the whole reason wasm-mt is its own
+        # platform).  The threaded closure bootstraps from an empty overlay in
+        # dependency order (the default recipes list is dependency-ordered and
+        # pack installs each fresh bundle into the prefix for the next one),
+        # optionally seeded from a prior threaded prefix if one exists.
         run: |
           set -euo pipefail
-          OV="$HOME/.cache/cvcpkg/wasm-prefix-overlay"
+          OV="$HOME/.cache/cvcpkg/wasm-prefix-overlay-${{ inputs.platform }}"
           rm -rf "$OV"
           mkdir -p "$OV"
-          cp -as "$CVC_WASM_DEPS/." "$OV/"
-          echo "overlay of $CVC_WASM_DEPS: $(find "$OV" -type l | wc -l) links"
+          if [ "${{ inputs.platform }}" = "wasm-mt" ]; then
+            SEED="/opt/cvc-wasm/deps-wasm-pthread"
+          else
+            SEED="$CVC_WASM_DEPS"
+          fi
+          if [ -d "$SEED" ]; then
+            cp -as "$SEED/." "$OV/"
+            echo "overlay of $SEED: $(find "$OV" -type l | wc -l) links"
+          else
+            echo "no seed prefix at $SEED — bootstrapping an empty ${{ inputs.platform }} closure"
+          fi
           echo "CVC_WASM_DEPS=$OV" >> "$GITHUB_ENV"
 
       - name: Pack the wasm dep closure on catx-03
@@ -77,7 +98,7 @@ jobs:
             cvcpkg pack "$r" \
               --recipes-dir recipes --no-default-recipes \
               --prefix "$CVC_WASM_DEPS" \
-              --platform wasm \
+              --platform "${{ inputs.platform }}" \
               --config release --link static \
               --output-dir dist/ || echo "  (skipped: $r)"
           done

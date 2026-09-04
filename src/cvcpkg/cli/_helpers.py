@@ -23,6 +23,7 @@ _VALID_PLATFORMS = [
     "macos",
     "windows",
     "wasm",
+    "wasm-mt",
     "wasi",
     "cosmo",
     "freebsd",

@@ -29,6 +29,13 @@ CANONICAL_PLATFORMS = frozenset(
         "netbsd",
         "haiku",
         "wasm",
+        # Threaded wasm (emscripten -pthread) is its own platform, not a
+        # config of "wasm": every object is compiled with atomics+shared
+        # memory and wasm-ld refuses to mix the two worlds ("--shared-memory
+        # is disallowed" linking a single-threaded archive into a -pthread
+        # build).  One OS, two incompatible ABIs, two catalog keys — the
+        # windows / windows-gnu precedent.
+        "wasm-mt",
         "wasi",
         "cosmo",
         "any",  # platform-independent bundles (builder.py 'any' fallback)

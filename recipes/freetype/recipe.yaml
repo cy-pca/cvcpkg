@@ -65,6 +65,14 @@ build:
     - platform: wasm
       host_platform: linux
       script: build-wasm.sh
+    # Threaded wasm: same build script, -pthread injected by env-wasm.sh's
+    # CVC_WASM_THREADS hook.  A separate platform because emscripten cannot
+    # link single-threaded objects into a shared-memory build.
+    - platform: wasm-mt
+      host_platform: linux
+      script: build-wasm.sh
+      env:
+        CVC_WASM_THREADS: "1"
     - platform: wasi
       host_platform: linux
       script: build-wasi.sh
