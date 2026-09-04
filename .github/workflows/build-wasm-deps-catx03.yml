@@ -12,7 +12,7 @@ on:
       recipes:
         description: "Recipes to pack + publish (space-separated)"
         required: true
-        default: "zlib bzip2 xz zstd libpng libjpeg-turbo tiff freetype libwebp libxml2 lerc assimp imagemagick"
+        default: "zlib bzip2 xz zstd libpng libjpeg-turbo tiff freetype libwebp libxml2 lerc assimp imagemagick boost imgui vtk"
       platform:
         description: "Target platform (wasm = single-threaded, wasm-mt = -pthread)"
         type: choice
