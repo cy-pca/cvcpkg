@@ -6939,7 +6939,7 @@ def create_app(
                 raise HTTPException(403, "not a member of this organization")
         # wasm/wasi/cosmo only support static linking — enforce server-side.
         link = body.link
-        if body.platform in ("wasm", "wasi", "cosmo") and link != "static":
+        if body.platform in ("wasm", "wasm-mt", "wasi", "cosmo") and link != "static":
             link = "static"
         async with _audit_txn(
             AuditAction.build_submit,
@@ -6996,7 +6996,7 @@ def create_app(
                 "arch": j.arch,
                 "config": j.config,
                 # wasm/wasi/cosmo only support static linking — enforce server-side.
-                "link": "static" if j.platform in ("wasm", "wasi", "cosmo") else j.link,
+                "link": "static" if j.platform in ("wasm", "wasm-mt", "wasi", "cosmo") else j.link,
                 "required_capabilities": j.required_capabilities,
                 "min_disk_gb": j.min_disk_gb,
                 "org_slug": j.org_slug,

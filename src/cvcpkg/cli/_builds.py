@@ -970,7 +970,7 @@ def builds_submit(
     Example: cvcpkg builds submit --recipe zlib --platform linux --arch x86_64
     """
     # wasm/wasi only support static linking.
-    if platform in ("wasm", "wasi") and link != "static":
+    if platform in ("wasm", "wasm-mt", "wasi") and link != "static":
         link = "static"
         click.echo(f"  Note: forcing --link=static for {platform} (shared not supported)")
 
@@ -1258,9 +1258,9 @@ def builds_submit_dag(
 
     # Valid platform→arch pairings.  wasm32 only pairs with wasm/wasi.
     _wasm_arches = {"wasm32"}
-    _wasm_platforms = {"wasm", "wasi"}
+    _wasm_platforms = {"wasm", "wasm-mt", "wasi"}
     # Platforms that only support static linking (no shared libraries).
-    _static_only_platforms = {"wasm", "wasi", "cosmo"}
+    _static_only_platforms = {"wasm", "wasm-mt", "wasi", "cosmo"}
 
     # ── Drop combos no registered builder can serve ──────────────
     # The server dispatches a job only to a builder whose platform+arch

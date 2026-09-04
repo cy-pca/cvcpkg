@@ -1231,7 +1231,7 @@ def pack_all_cmd(
         # Cross-compiled recipes (e.g. wasm built on linux) use their
         # actual target platform and arch, not the host's.
         ctx_plat = ctx.platform
-        ctx_arch = "wasm32" if ctx_plat == "wasm" else arch
+        ctx_arch = "wasm32" if ctx_plat in ("wasm", "wasm-mt") else arch
         # Stamp the caller-chosen revision (--bump / --cvc-revision).  Recipe is
         # mutable and full_version derives from it, so this flows into both the
         # manifest and the archive name below.

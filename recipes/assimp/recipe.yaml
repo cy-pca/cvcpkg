@@ -69,6 +69,13 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2"
+    # Threaded wasm: build.sh sources env-${CVC_PLATFORM}.sh, and
+    # env-wasm-mt.sh injects -pthread (see recipes/_common/env-wasm-mt.sh).
+    - platform: wasm-mt
+      host_platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2"
 
 package:
   files:

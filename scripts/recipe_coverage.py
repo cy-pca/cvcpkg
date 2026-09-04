@@ -35,6 +35,7 @@ ALL_PLATFORMS = [
     "openbsd",
     "netbsd",
     "wasm",
+    "wasm-mt",
     "wasi",
     "cosmo",
 ]

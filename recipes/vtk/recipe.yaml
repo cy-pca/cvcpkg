@@ -36,10 +36,16 @@ depends:
     - cmake
     - ninja
   runtime:
+    # Desktop-only: the wasm/wasi builds configure VTK without Qt or HDF5
+    # (see build-wasm.sh), and neither dependency exists for those platforms —
+    # without the filter, dependency resolution for a wasm-family install dies
+    # looking for qt6@wasm.  Same mechanism as the X11 set below.
     - name: qt6
       version: ">=6.7"
+      platforms: [linux, macos, windows, windows-gnu, freebsd, openbsd, netbsd, haiku]
     - name: hdf5
       version: "^1.14"
+      platforms: [linux, macos, windows, windows-gnu, freebsd, openbsd, netbsd, haiku]
     - name: tiff
       version: "^4.6"
     - name: zlib
@@ -85,6 +91,13 @@ build:
     - platform: wasm
       host_platform: linux
       script: build-wasm.sh
+    # Threaded wasm: same build script; env-wasm.sh injects -pthread via the
+    # CVC_WASM_THREADS hook this script already honors.
+    - platform: wasm-mt
+      host_platform: linux
+      script: build-wasm.sh
+      env:
+        CVC_WASM_THREADS: "1"
     - platform: wasm
       host_platform: windows
       script: build-wasm.ps1

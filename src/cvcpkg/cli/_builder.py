@@ -725,6 +725,7 @@ def builder_run(
     # -- Build cross-platform/arch pairs ---------------------
     _cross_arch_defaults = {
         "wasm": "wasm32",
+        "wasm-mt": "wasm32",
         "wasi": "wasm32",
     }
     cross_entries: list[dict[str, str]] = []
@@ -1256,6 +1257,7 @@ def builder_run(
         # dynamically, but needs to know which recipes to look for.
         _toolchain_map: dict[str, list[str]] = {
             "wasm": ["emsdk"],
+            "wasm-mt": ["emsdk"],
             "wasi": ["wasi-sdk"],
             "cosmo": ["cosmocc"],
         }

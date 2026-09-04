@@ -369,7 +369,7 @@ def cache_server_gc_cmd(
 
 def _auto_arch(platform: str) -> str:
     """Resolve architecture for a given platform."""
-    if platform == "wasm":
+    if platform in ("wasm", "wasm-mt"):
         return "wasm32"
     from cvcpkg.platform import detect_arch
 
@@ -414,7 +414,7 @@ def _compute_current_chain_hashes() -> set[str]:
         for me in r.build_matrix:
             platforms.add(me.platform)
     if not platforms:
-        platforms = {"linux", "darwin", "windows", "freebsd", "wasm"}
+        platforms = {"linux", "darwin", "windows", "freebsd", "wasm", "wasm-mt"}
 
     hashes: set[str] = set()
     for plat in platforms:

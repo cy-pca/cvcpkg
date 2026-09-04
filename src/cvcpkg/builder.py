@@ -1271,7 +1271,7 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
     if sys.platform == "darwin":
         existing = env.get("DYLD_LIBRARY_PATH", "")
         env["DYLD_LIBRARY_PATH"] = ":".join(lib_dirs + ([existing] if existing else []))
-    elif ctx.platform != "wasm":
+    elif ctx.platform not in ("wasm", "wasm-mt"):
         # Not always LD_LIBRARY_PATH: Haiku's runtime_loader reads LIBRARY_PATH
         # and ignores LD_LIBRARY_PATH outright, so the wrong name here would
         # leave the prefix's shared libs invisible to every build step.
@@ -2721,7 +2721,7 @@ def build_recipe(
     # wasm/wasi/cosmo only support static linking — shared libraries are
     # impossible in these environments.  Cosmopolitan produces one-file
     # Actually Portable Executables that statically link everything.
-    if platform in ("wasm", "wasi", "cosmo"):
+    if platform in ("wasm", "wasm-mt", "wasi", "cosmo"):
         link = "static"
 
     if incremental:
@@ -3031,7 +3031,7 @@ def pack_from_prefix(
         arch = detect_arch()
 
     # wasm/wasi/cosmo never link shared; keep the invariant used by build_recipe.
-    if platform in ("wasm", "wasi", "cosmo"):
+    if platform in ("wasm", "wasm-mt", "wasi", "cosmo"):
         link = "static"
 
     if output_dir is None:
@@ -3343,7 +3343,7 @@ def _detect_arch_for_platform(platform: str) -> str:
     """Return the architecture string for a given platform."""
     if platform == "any":
         return "noarch"
-    if platform == "wasm":
+    if platform in ("wasm", "wasm-mt"):
         return "wasm32"
     from cvcpkg.platform import detect_arch
 

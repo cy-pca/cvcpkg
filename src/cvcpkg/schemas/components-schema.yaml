@@ -53,6 +53,7 @@ $defs:
               windows,
               windows-gnu,
               wasm,
+              wasm-mt,
               wasi,
               cosmo,
               freebsd,

@@ -2680,6 +2680,7 @@ def builds_html() -> str:
             <option value="macos">macOS</option>
             <option value="windows">Windows</option>
             <option value="wasm">WASM</option>
+            <option value="wasm-mt">WASM (threads)</option>
             <option value="wasi">WASI</option>
             <option value="cosmo">Cosmo</option>
           </select>
