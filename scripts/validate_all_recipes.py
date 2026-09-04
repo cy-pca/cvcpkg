@@ -41,7 +41,7 @@ try:
 except ImportError:  # pragma: no cover
     sys.exit("ERROR: PyYAML is required.  pip install pyyaml")
 
-CROSS_PLATFORMS = {"wasm", "wasi", "cosmo"}
+CROSS_PLATFORMS = {"wasm", "wasm-mt", "wasi", "cosmo"}
 
 
 def load(recipe_yaml: Path) -> dict:
