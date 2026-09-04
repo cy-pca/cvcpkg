@@ -1351,7 +1351,7 @@ def builder_run(
                             merged_env[var] = tpl.replace("${PREFIX}", str(prefix))
                         log_cb(
                             f"  Toolchain {tc_name} ready "
-                            f"({', '.join(f'{k}={v}' for k, v in ct_env.items())})\n"
+                            f"({', '.join(f'{k}={merged_env[k]}' for k in ct_env)})\n"
                         )
                         # Still install host_tools (cheap, small packages)
                         for tool_name in ct_host_tools:
@@ -1442,7 +1442,7 @@ def builder_run(
 
             log_cb(
                 f"  Toolchain {tc_name} installed "
-                f"({', '.join(f'{k}={v}' for k, v in ct_env.items())})\n"
+                f"({', '.join(f'{k}={merged_env[k]}' for k in ct_env)})\n"
             )
 
             # 4. Install host_tools declared by the toolchain recipe
