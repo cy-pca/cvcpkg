@@ -314,7 +314,21 @@ function Invoke-CvcMsysAutotoolsBuild {
     # prevents MSYS from mangling Windows-style arguments passed to
     # non-MSYS binaries invoked from configure/libtool.
     $env:MSYSTEM         = 'MINGW64'
-    $env:MSYS_NO_PATHCONV = '1'
+    # MSYS_NO_PATHCONV is deliberately NOT set here.
+    #
+    # It suppresses MSYS's POSIX->Windows argument translation, which breaks
+    # libtool: when linking a shared library from convenience archives libtool
+    # runs `cd .libs/<lib>.lax/<x>.a && ar x "/c/Users/.../<x>.a"`, handing a
+    # /c/... path to mingw64's ar.exe -- a NATIVE Win32 binary that cannot read
+    # it. gsl got all the way through configure, every object and the final
+    # link before dying there:
+    #     ar.exe: /c/Users/.../block/.libs/libgslblock.a: No such file or directory
+    #     make[2]: *** [Makefile:827: libgsl.la] Error 9
+    # Leaving conversion enabled lets MSYS rewrite that to C:\Users\... for the
+    # native tool, which is the behaviour autotools builds expect on MSYS2.
+    #
+    # MSYS2_ARG_CONV_EXCL is the knob to reach for if a specific argument ever
+    # needs excluding from conversion; blanket-disabling it is what broke this.
     $env:CHERE_INVOKING  = '1'
 
     # Clear MSVC compiler env inherited from the outer PowerShell
