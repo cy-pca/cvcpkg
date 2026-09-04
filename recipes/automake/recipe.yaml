@@ -15,12 +15,6 @@ recipe:
 source:
   type: tarball
   url: https://ftp.gnu.org/gnu/automake/automake-1.17.tar.xz
-  # Fallback: ftp.gnu.org is unreachable from some builders (the
-  # freebsd/openbsd dev nodes time out on it), which failed builds that
-  # had nothing wrong with them. mirrors.kernel.org is
-  # a reliable, well-maintained GNU mirror. ftpmirror.gnu.org, GNU's own
-  # redirector, was tried first and is not reachable at all (HTTP 000).
-  mirror: https://mirrors.kernel.org/gnu/automake/automake-1.17.tar.xz
   sha256: "8920c1fc411e13b90bf704ef9db6f29d540e76d232cb3b2c9f4dc4cc599bd990"
   strip_components: 1
 

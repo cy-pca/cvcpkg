@@ -14,12 +14,6 @@ recipe:
 source:
   type: tarball
   url: https://ftp.gnu.org/gnu/libidn/libidn2-2.3.7.tar.gz
-  # Fallback: ftp.gnu.org is unreachable from some builders (the
-  # freebsd/openbsd dev nodes time out on it), which failed builds that
-  # had nothing wrong with them. mirrors.kernel.org is
-  # a reliable, well-maintained GNU mirror. ftpmirror.gnu.org, GNU's own
-  # redirector, was tried first and is not reachable at all (HTTP 000).
-  mirror: https://mirrors.kernel.org/gnu/libidn/libidn2-2.3.7.tar.gz
   sha256: "4c21a791b610b9519b9d0e12b8097bf2f359b12f8dd92647611a929e6bfd7d64"
   strip_components: 1
 
