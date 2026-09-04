@@ -14,6 +14,12 @@ recipe:
 source:
   type: tarball
   url: https://ftp.gnu.org/gnu/libiconv/libiconv-1.17.tar.gz
+  # Fallback: ftp.gnu.org is unreachable from some builders (the
+  # freebsd/openbsd dev nodes time out on it), which failed builds that
+  # had nothing wrong with them. mirrors.kernel.org is
+  # a reliable, well-maintained GNU mirror. ftpmirror.gnu.org, GNU's own
+  # redirector, was tried first and is not reachable at all (HTTP 000).
+  mirror: https://mirrors.kernel.org/gnu/libiconv/libiconv-1.17.tar.gz
   sha256: "8f74213b56238c85a50a5329f77e06198771e70dd9a739779f4c02f65d971313"
   strip_components: 1
 

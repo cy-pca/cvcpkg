@@ -17,6 +17,12 @@ recipe:
 source:
   type: tarball
   url: https://ftp.gnu.org/gnu/gperf/gperf-3.1.tar.gz
+  # Fallback: ftp.gnu.org is unreachable from some builders (the
+  # freebsd/openbsd dev nodes time out on it), which failed builds that
+  # had nothing wrong with them. mirrors.kernel.org is
+  # a reliable, well-maintained GNU mirror. ftpmirror.gnu.org, GNU's own
+  # redirector, was tried first and is not reachable at all (HTTP 000).
+  mirror: https://mirrors.kernel.org/gnu/gperf/gperf-3.1.tar.gz
   sha256: "588546b945bba4b70b6a3a616e80b4ab466e3f33024a352fc2198112cdbb3ae2"
   strip_components: 1
 

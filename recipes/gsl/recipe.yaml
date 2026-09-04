@@ -14,6 +14,12 @@ recipe:
 source:
   type: tarball
   url: https://ftp.gnu.org/gnu/gsl/gsl-2.8.tar.gz
+  # Fallback: ftp.gnu.org is unreachable from some builders (the
+  # freebsd/openbsd dev nodes time out on it), which failed builds that
+  # had nothing wrong with them. mirrors.kernel.org is
+  # a reliable, well-maintained GNU mirror. ftpmirror.gnu.org, GNU's own
+  # redirector, was tried first and is not reachable at all (HTTP 000).
+  mirror: https://mirrors.kernel.org/gnu/gsl/gsl-2.8.tar.gz
   sha256: "6a99eeed15632c6354895b1dd542ed5a855c0f15d9ad1326c6fe2b2c9e423190"
   strip_components: 1
 
