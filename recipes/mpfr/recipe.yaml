@@ -33,16 +33,22 @@ depends:
   runtime:
     - name: gmp
       version: ">=6.1.0"
-  # The MinGW toolchain the Windows build needs. build.ps1 goes through
-  # Invoke-CvcMsysAutotoolsBuild, which needs a real gcc + binutils; the
-  # GitHub-hosted windows image ships MSYS2 with only the `base` package
-  # group (no gcc, no make, no m4), and #169 removed the pacman self-heal
-  # that used to install them. Declaring it here stages the pinned compiler
-  # into CVC_BUILD_PREFIX -- the same route that made x264 build on Windows.
-  # host_tools are excluded from the runtime prefix by design, so gcc does
-  # not end up shadowing MSVC for later CMake builds.
-  host_tools:
-    - mingw-w64-gcc
+  # NOT declaring mingw-w64-gcc here, though the Windows build needs it.
+  # host_tools is `array of string` in the schema -- unlike a normal dep entry
+  # it cannot be platform-scoped -- and mingw-w64-gcc is published for windows
+  # ONLY. Unscoped it breaks every other platform:
+  #     cvcpkg install-deps recipes/gsl --platform linux --include-host-tools
+  #     Error: requested component(s) not found in the catalog for this
+  #     platform tuple: mingw-w64-gcc
+  # which is the same trap the `make` dep above was scoped away from, in the
+  # other direction. (recipes/x264 carries the identical construct and has the
+  # same latent breakage; it simply has no caller that trips it.)
+  #
+  # The Windows toolchain comes from the pacman step in windows-build.yml /
+  # windows-recipe-check.yml instead, which installs mingw-w64-x86_64-gcc --
+  # that provides both `gcc` and the x86_64-w64-mingw32-gcc spelling libtool
+  # invokes via --host.
+  host_tools: []
 
 build:
   matrix:
