@@ -104,11 +104,20 @@ jobs:
           if (-not (Test-Path "$msys\usr\bin\pacman.exe")) {
             throw "MSYS2 not found at $msys on this runner image."
           }
-          & "$msys\usr\bin\pacman.exe" -Sy --noconfirm
-          & "$msys\usr\bin\pacman.exe" -S --noconfirm --needed `
-              base-devel m4 autoconf automake libtool make patch diffutils `
-              mingw-w64-x86_64-binutils mingw-w64-x86_64-pkgconf
-          if ($LASTEXITCODE -ne 0) { throw "pacman failed with $LASTEXITCODE" }
+          # Retry: the msys2 mirrors time out often enough to matter, and a
+          # half-synced database produces "command failed to execute
+          # correctly" without a non-zero exit.
+          $pkgs = @('base-devel','m4','autoconf','automake','libtool','make',
+                    'patch','diffutils','mingw-w64-x86_64-binutils',
+                    'mingw-w64-x86_64-pkgconf')
+          $ok = $false
+          for ($i = 1; $i -le 3 -and -not $ok; $i++) {
+            & "$msys\usr\bin\pacman.exe" -Sy --noconfirm
+            & "$msys\usr\bin\pacman.exe" -S --noconfirm --needed @pkgs
+            if ($LASTEXITCODE -eq 0) { $ok = $true }
+            else { Write-Host "pacman attempt $i failed ($LASTEXITCODE); retrying"; Start-Sleep 15 }
+          }
+          if (-not $ok) { throw "pacman failed after 3 attempts" }
           echo "CVC_MSYS2_DIR=$msys" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
       - name: Ensure pwsh is on PATH
@@ -135,6 +144,22 @@ jobs:
       - name: Validate recipe
         shell: bash
         run: cvcpkg validate "recipes/${{ inputs.recipe || 'gsl' }}"
+
+      # `cvcpkg build` defaults to --no-deps: it assumes the closure is already
+      # in --prefix. Stage it first, WITH host tools, so a recipe that declares
+      # its compiler as a host_tool (mingw-w64-gcc) actually gets it. Without
+      # this the build reaches the toolchain probe with no gcc at all.
+      - name: Install dependency closure (incl. host tools)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cvcpkg install-deps "recipes/${{ inputs.recipe || 'gsl' }}" \
+            --platform windows \
+            --config "${{ inputs.config || 'release' }}" \
+            --link "${{ inputs.link || 'shared' }}" \
+            --prefix "${{ github.workspace }}/prefix" \
+            --recipes-dir recipes \
+            --include-host-tools
 
       - name: Build ${{ inputs.recipe || 'gsl' }}
         shell: bash

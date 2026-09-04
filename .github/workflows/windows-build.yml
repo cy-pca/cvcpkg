@@ -236,12 +236,18 @@ jobs:
               # already in --prefix (single-prefix model). Install the recipe's
               # build+runtime closure first, or its build.ps1 can't find python/
               # qt/llvm/etc. Host tools (cmake/ninja) come from the CI image.
+              # --include-host-tools: recipes that build through MSYS2 declare
+              # their compiler as a host_tool (mingw-w64-gcc). Without this the
+              # pinned toolchain is never staged into the prefix and the build
+              # silently falls back to whatever ambient gcc exists -- or, on a
+              # bare runner, to none at all.
               cvcpkg install-deps "recipes/$r" \
                 --platform windows \
                 --config "${{ inputs.config }}" \
                 --link "${{ inputs.link }}" \
                 --prefix "${{ github.workspace }}/prefix" \
-                --recipes-dir recipes
+                --recipes-dir recipes \
+                --include-host-tools
               echo "::endgroup::"
               echo "::group::pack $r (windows)"
               cvcpkg pack "recipes/$r" \
