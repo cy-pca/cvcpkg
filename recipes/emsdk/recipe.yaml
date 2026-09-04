@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: emsdk
   upstream_version: "5.0.7"
-  cvc_revision: 1
+  cvc_revision: 2
   maintainer: "Emscripten Contributors"
   homepage: https://emscripten.org/
   license: MIT
@@ -13,7 +13,7 @@ recipe:
     and cross-compiles to the "wasm" platform target.
 
 cross_toolchain:
-  target_platforms: [wasm]
+  target_platforms: [wasm, wasm-mt]
   env:
     CVC_EMSDK_DIR: "${PREFIX}"
 
@@ -43,13 +43,30 @@ build:
       script: build.ps1
 
 package:
+  # The COMPLETE emsdk tree that build.sh stages.  The previous list omitted
+  # emsdk.py, the json manifests and the .emscripten config -- and `pack`
+  # IGNORES unmatched globs silently ('emsdk/' matched nothing: emsdk is a
+  # FILE at the repo root, not a directory), so the archive shipped without
+  # the launcher emsdk_env.sh needs.  Every fleet wasm build then died with
+  # emsdk's "unable to determine 'emsdk' directory", which is what got the
+  # fleet written off as wasm-incapable in August (cyberpcangel-cvcgl#7,
+  # libcvc-deps#531) and the demos downgraded to single-threaded.
   files:
-    - emsdk/
+    - emsdk
+    - emsdk.py
+    - emsdk.bat
+    - emsdk.ps1
+    - emsdk_env.sh
+    - emsdk_env.ps1
+    - emsdk_env.bat
+    - emsdk_env.csh
+    - emsdk_env.fish
+    - emsdk_manifest.json
+    - emscripten-releases-tags.json
+    - .emscripten
     - upstream/
     - node/
     - bin/
-    - emsdk_env.sh
-    - emsdk_env.ps1
 
 toolchain:
   python:
