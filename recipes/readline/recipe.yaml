@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: readline
   upstream_version: "8.3"
-  cvc_revision: 2
+  cvc_revision: 3
   maintainer: "CyberPC Angel, LLC"
   maintainer_email: "cvcpkg@cyberpcangel.com"
   maintainer_url: "https://cyberpcangel.com"
@@ -22,6 +22,7 @@ patches: []
 depends:
   build:
     - pkg-config
+  runtime: []
   host_tools: []
 
 build:

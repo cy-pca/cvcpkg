@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: lz4
   upstream_version: "1.10.0"
-  cvc_revision: 1
+  cvc_revision: 2
   maintainer: "CyberPC Angel, LLC"
   maintainer_email: "cvcpkg@cyberpcangel.com"
   maintainer_url: "https://cyberpcangel.com"
@@ -23,6 +23,7 @@ depends:
   build:
     - cmake
     - ninja
+  runtime: []
   host_tools: []
 
 build:
