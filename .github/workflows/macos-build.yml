@@ -47,6 +47,11 @@ on:
           - "4"
           - "5"
           - "6"
+      recipes:
+        description: "Recipe names to build (space/comma separated; default: every recipe). Set to publish just a few — a one-off fix, or filling a single gap without a multi-hour full-DAG run."
+        required: false
+        default: ""
+        type: string
       ref:
         description: "Git ref to build recipes from (default: prod)"
         required: false
@@ -78,6 +83,10 @@ on:
         required: false
         type: string
         default: "4"
+      recipes:
+        required: false
+        type: string
+        default: ""
       ref:
         required: false
         type: string
@@ -100,10 +109,17 @@ jobs:
     steps:
       - id: gen
         run: |
-          TOTAL="${{ inputs.shards || '4' }}"
-          # Generate JSON array [0, 1, ..., TOTAL-1]
-          SHARDS=$(python3 -c "import json; print(json.dumps(list(range(int('$TOTAL')))))")
-          echo "shards=$SHARDS" >> "$GITHUB_OUTPUT"
+          # A targeted `recipes` build is small — one shard, no sharding math.
+          # Sharding a two-recipe build across four runners means three of them
+          # queue for a macOS runner only to find nothing in their slice.
+          if [ -n "${{ inputs.recipes }}" ]; then
+            echo 'shards=[0]' >> "$GITHUB_OUTPUT"
+          else
+            TOTAL="${{ inputs.shards || '4' }}"
+            # Generate JSON array [0, 1, ..., TOTAL-1]
+            SHARDS=$(python3 -c "import json; print(json.dumps(list(range(int('$TOTAL')))))")
+            echo "shards=$SHARDS" >> "$GITHUB_OUTPUT"
+          fi
 
   build-shard:
     name: macOS ${{ inputs.runner || 'macos-latest' }} shard ${{ matrix.shard }}/${{ inputs.shards || '4' }} (${{ inputs.config }}/${{ inputs.link }})
@@ -153,18 +169,51 @@ jobs:
           mkdir -p "${{ github.workspace }}/prefix"
           mkdir -p "${{ github.workspace }}/dist"
 
-          cvcpkg pack-all \
-            --keep-going \
-            --platform macos \
-            --config "${{ inputs.config }}" \
-            --link "${{ inputs.link }}" \
-            --prefix "${{ github.workspace }}/prefix" \
-            --output-dir "${{ github.workspace }}/dist" \
-            --recipes-dir recipes \
-            --shard "${{ matrix.shard }}/${SHARDS}" \
-            --server-cache "$CVCPKG_SERVER_URL" \
-            --server-cache-token "$CVCPKG_TOKEN" \
-            --server-cache-push
+          RECIPES="$(echo '${{ inputs.recipes }}' | tr ',' ' ' | xargs || true)"
+
+          if [ -n "$RECIPES" ]; then
+            # Targeted build, mirroring windows-build.yml. NOTE this loops over
+            # `cvcpkg pack` rather than passing names to `pack-all`:
+            # `pack-all` takes OPTIONS ONLY and rejects positional recipe names
+            # ("Error: Got unexpected extra argument"). Only `pack` accepts them.
+            for r in $RECIPES; do
+              echo "::group::install-deps $r (macos)"
+              # pack does NOT resolve deps -- it builds against whatever is
+              # already in --prefix. Install the closure first, or the recipe's
+              # build.sh cannot find what it needs. Host tools come from brew.
+              cvcpkg install-deps "recipes/$r" \
+                --platform macos \
+                --config "${{ inputs.config }}" \
+                --link "${{ inputs.link }}" \
+                --prefix "${{ github.workspace }}/prefix" \
+                --recipes-dir recipes
+              echo "::endgroup::"
+              echo "::group::pack $r (macos)"
+              cvcpkg pack "recipes/$r" \
+                --platform macos \
+                --config "${{ inputs.config }}" \
+                --link "${{ inputs.link }}" \
+                --prefix "${{ github.workspace }}/prefix" \
+                --output-dir "${{ github.workspace }}/dist" \
+                --recipes-dir recipes \
+                --server "$CVCPKG_SERVER_URL" \
+                --token "$CVCPKG_TOKEN"
+              echo "::endgroup::"
+            done
+          else
+            cvcpkg pack-all \
+              --keep-going \
+              --platform macos \
+              --config "${{ inputs.config }}" \
+              --link "${{ inputs.link }}" \
+              --prefix "${{ github.workspace }}/prefix" \
+              --output-dir "${{ github.workspace }}/dist" \
+              --recipes-dir recipes \
+              --shard "${{ matrix.shard }}/${SHARDS}" \
+              --server-cache "$CVCPKG_SERVER_URL" \
+              --server-cache-token "$CVCPKG_TOKEN" \
+              --server-cache-push
+          fi
 
       - name: List built packages
         if: always()

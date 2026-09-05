@@ -167,19 +167,51 @@ jobs:
           # and this runner IS arm64, which is exactly how macos-build.yml ends
           # up producing macos/arm64 archives.
           RECIPES="$(echo '${{ inputs.recipes }}' | tr ',' ' ' | xargs || true)"
-          cvcpkg pack-all \
-            --keep-going \
-            --platform linux \
-            --config "${{ inputs.config }}" \
-            --link "${{ inputs.link }}" \
-            --prefix "${{ github.workspace }}/prefix" \
-            --output-dir "${{ github.workspace }}/dist" \
-            --recipes-dir recipes \
-            --shard "${{ matrix.shard }}/${SHARDS}" \
-            --server-cache "$CVCPKG_SERVER_URL" \
-            --server-cache-token "$CVCPKG_TOKEN" \
-            --server-cache-push \
-            ${RECIPES}
+
+          if [ -n "$RECIPES" ]; then
+            # The `recipes` input used to be appended to pack-all as positional
+            # arguments, which pack-all REJECTS -- it takes options only:
+            #   Usage: cvcpkg pack-all [OPTIONS]
+            #   Error: Got unexpected extra argument (<name>)
+            # So this input was advertised but had never worked; any run that
+            # used it died before building anything. Only `pack` takes recipe
+            # names, so loop it, exactly as windows-build.yml does.
+            for r in $RECIPES; do
+              echo "::group::install-deps $r (linux/arm64)"
+              # pack does not resolve deps; it builds against --prefix as-is.
+              cvcpkg install-deps "recipes/$r" \
+                --platform linux \
+                --config "${{ inputs.config }}" \
+                --link "${{ inputs.link }}" \
+                --prefix "${{ github.workspace }}/prefix" \
+                --recipes-dir recipes
+              echo "::endgroup::"
+              echo "::group::pack $r (linux/arm64)"
+              cvcpkg pack "recipes/$r" \
+                --platform linux \
+                --config "${{ inputs.config }}" \
+                --link "${{ inputs.link }}" \
+                --prefix "${{ github.workspace }}/prefix" \
+                --output-dir "${{ github.workspace }}/dist" \
+                --recipes-dir recipes \
+                --server "$CVCPKG_SERVER_URL" \
+                --token "$CVCPKG_TOKEN"
+              echo "::endgroup::"
+            done
+          else
+            cvcpkg pack-all \
+              --keep-going \
+              --platform linux \
+              --config "${{ inputs.config }}" \
+              --link "${{ inputs.link }}" \
+              --prefix "${{ github.workspace }}/prefix" \
+              --output-dir "${{ github.workspace }}/dist" \
+              --recipes-dir recipes \
+              --shard "${{ matrix.shard }}/${SHARDS}" \
+              --server-cache "$CVCPKG_SERVER_URL" \
+              --server-cache-token "$CVCPKG_TOKEN" \
+              --server-cache-push
+          fi
 
       - name: List built packages
         if: always()
