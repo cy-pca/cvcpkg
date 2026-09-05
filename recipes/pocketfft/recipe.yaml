@@ -1,0 +1,69 @@
+schema_version: 1
+recipe:
+  name: pocketfft
+  # No upstream releases or tags -- the cpp branch is the distribution, so the
+  # version tracks the pinned commit's date. The source URL below is what
+  # actually identifies the code; this only has to sort correctly and not lie.
+  #
+  #   $ gh api repos/mreineck/pocketfft/commits/c90e55b3d5...
+  #   author date:    2026-06-30T11:37:42Z
+  #   committer date: 2026-06-30T11:37:42Z
+  upstream_version: "2026.06.30"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "PocketFFT — header-only C++ FFT (the transform NumPy and SciPy use). Permissively licensed, so it can back an LGPL consumer where FFTW (GPL) cannot."
+  homepage: https://github.com/mreineck/pocketfft
+  license: BSD-3-Clause
+  tags: [math, fft, header-only]
+
+# Declares the `fft-provider` slot so a consumer can depend on the capability
+# rather than a specific implementation, and so pocketfft / fftw3 / mkl / cufft
+# read as alternatives. Nothing resolves this automatically yet -- consumers
+# still name what they want -- but it records the relationship.
+provides: ["pocketfft", "fft-provider"]
+
+source:
+  # A tarball of the pinned commit, NOT type: git -- same code, same pin, but
+  # the dev-cluster builders run a cvcpkg predating _fetch_git() and answer a
+  # git source with "Git source fetching not yet implemented". Nothing is given
+  # up here: a GitHub archive URL names the commit just as exactly, and the
+  # sha256 pins the bytes on top of that. Revisit once the builders are current.
+  type: tarball
+  url: https://github.com/mreineck/pocketfft/archive/c90e55b3d529f8efa40ed01a20de22405f45fc65.tar.gz
+  sha256: "2d90016da31a8cc1dd0ac0c89c1f2fb55df8f4ccc3f0386dcfbad09ac6d1c3ba"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  # Header-only: no compiler runs, so one script covers every platform and the
+  # result is identical everywhere.
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - include/pocketfft_hdronly.h
+    - share/pocketfft/
+
+abi:
+  # pocketfft_hdronly.h requires C++17.
+  cxx_std: 17
