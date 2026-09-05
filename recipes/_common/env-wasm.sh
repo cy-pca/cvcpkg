@@ -16,7 +16,21 @@ source "${_COMMON_DIR}/env-${_host}.sh"
 # Activate Emscripten.
 # shellcheck disable=SC1091
 _cvc_em_cache_pre="${EM_CACHE:-}"  # emsdk_env.sh clears it; restored below
+# Source emsdk_env.sh FROM INSIDE the emsdk dir.  The fleet builders
+# symlink-merge the toolchain into the build prefix, so emsdk_env.sh is an
+# ABSOLUTE symlink there -- and emsdk_env.sh's own symlink self-location is
+# broken for absolute targets (it prepends $DIR to the absolute path, the cd
+# fails, and it only finds emsdk.py if the CWD already contains it).  Sourcing
+# with CVC_EMSDK_DIR as the CWD is emsdk's documented workaround ("source this
+# script while in the 'emsdk' directory") and makes that accidental fallback
+# deterministic.  catx-03 never hit this because its emsdk is a real extracted
+# tree, not symlinks.  Restore the CWD afterwards -- the recipe build runs next
+# and expects it.
+_cvc_em_prev_pwd="$PWD"
+cd "${CVC_EMSDK_DIR}"
 source "${CVC_EMSDK_DIR}/emsdk_env.sh"
+cd "${_cvc_em_prev_pwd}"
+unset _cvc_em_prev_pwd
 # emcc must WRITE to its cache (lock files under cache/symbol_lists at link
 # time, system libs on first use). On a shared builder the emsdk can belong
 # to another account (catx-03: /opt/cvc-wasm/emsdk is owned by github-runner
