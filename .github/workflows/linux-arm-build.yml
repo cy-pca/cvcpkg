@@ -224,11 +224,22 @@ jobs:
             --config "${{ inputs.config }}" \
             --link "${{ inputs.link }}"
 
-      - name: Upload dist artifacts
+      # No dist/ upload: the step above already published every one of these
+      # archives to the server, so the artifact was a paid duplicate that
+      # nothing downloads. See the same removal in macos-build.yml.
+      - name: Record a manifest (names and sizes only, never the archives)
+        if: always()
+        run: |
+          set -uo pipefail
+          mkdir -p manifest
+          ls -l dist/ > manifest/dist-listing.txt 2>&1 || echo "no dist/" > manifest/dist-listing.txt
+          du -sh dist/ >> manifest/dist-listing.txt 2>&1 || true
+
+      - name: Upload manifest
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-arm64-packages-shard${{ matrix.shard }}-${{ inputs.config }}-${{ inputs.link }}
-          path: dist/
+          name: linux-arm64-manifest-shard${{ matrix.shard }}-${{ inputs.config }}-${{ inputs.link }}
+          path: manifest/
           if-no-files-found: warn
-          retention-days: 7
+          retention-days: 3

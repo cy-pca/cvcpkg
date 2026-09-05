@@ -204,14 +204,34 @@ jobs:
             --config "${{ inputs.config }}" \
             --link "${{ inputs.link }}"
 
-      - name: Upload dist artifacts
+      # DO NOT upload dist/ — that is the whole macOS package set, per shard,
+      # and the step above has already published every one of those archives to
+      # cvcpkg.org. The artifact was a duplicate of packages that live on the
+      # server, and it was the single largest consumer of this repo's Actions
+      # storage: ~1.9 GB per run out of 4.1 GB live, against 189 GB written
+      # historically. That is a real, billed cost for bytes nobody fetches.
+      #
+      # The server is the artifact store. If a run fails, re-run it: the inputs
+      # are deterministic and the build is reproducible. What is kept here is a
+      # manifest — names and sizes only, kilobytes — which is what you actually
+      # want when asking "did this shard build what I expected?".
+      - name: Record a manifest (names and sizes only, never the archives)
+        if: always()
+        run: |
+          set -uo pipefail
+          mkdir -p manifest
+          ls -l dist/ > "manifest/dist-listing.txt" 2>&1 || echo "no dist/" > "manifest/dist-listing.txt"
+          du -sh dist/ >> "manifest/dist-listing.txt" 2>&1 || true
+          wc -c < "manifest/dist-listing.txt"
+
+      - name: Upload manifest
         if: always()
         uses: actions/upload-artifact@v4
         with:
           # Runner is part of the name: populate-server can invoke this workflow
           # twice in one run (arm64 + intel), and upload-artifact fails on a
           # duplicate name.
-          name: macos-packages-${{ inputs.runner || 'macos-latest' }}-shard${{ matrix.shard }}-${{ inputs.config }}-${{ inputs.link }}
-          path: dist/
+          name: macos-manifest-${{ inputs.runner || 'macos-latest' }}-shard${{ matrix.shard }}-${{ inputs.config }}-${{ inputs.link }}
+          path: manifest/
           if-no-files-found: warn
-          retention-days: 7
+          retention-days: 3

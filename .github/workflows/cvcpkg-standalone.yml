@@ -123,7 +123,7 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: dist/${{ matrix.artifact }}
-          retention-days: 7
+          retention-days: 1
 
   # ─────────────────── BSD builds via SSH ──────────────────────
   build-bsd:
@@ -319,7 +319,7 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: dist/${{ matrix.artifact }}
-          retention-days: 7
+          retention-days: 1
 
   release:
     name: Attach to GitHub Release
