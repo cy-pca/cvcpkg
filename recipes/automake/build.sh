@@ -64,9 +64,19 @@ echo "===== end diagnostics ====="
 cd "${CVC_SOURCE_DIR}"
 
 if ! ./configure --prefix="${CVC_INSTALL_DIR}"; then
-    echo "===== configure FAILED — config.log tail ====="
-    tail -n 50 config.log 2>/dev/null || echo "(no config.log)"
-    echo "===== end config.log tail ====="
+    echo "===== configure FAILED ====="
+    # Re-echo the key facts here so they survive the build-log tail -80 (the
+    # pre-configure diagnostics scroll past it behind configure's own output).
+    if [ -n "${M4+x}" ]; then echo "M4=[${M4}]"; else echo "M4=<unset>"; fi
+    echo "command -v m4=$(command -v m4 || echo none)  gm4=$(command -v gm4 || echo none)"
+    for r in "${CVC_BUILD_PREFIX:-}" "${CVC_DEPS_PREFIX:-}"; do
+        [ -n "${r}" ] && echo "stat ${r}/bin/m4: $(ls -l "${r}/bin/m4" 2>&1)"
+    done
+    echo "--- config.log: m4 / autom4te / autoconf-works lines ---"
+    grep -nE "autom4te|need GNU m4|reload-state|autoconf works|cd conftest" config.log 2>/dev/null | head -30
+    echo "--- config.log: context around the autoconf-works test ---"
+    awk '/checking whether autoconf works/{c=NR} c&&NR>=c&&NR<=c+12{print}' config.log 2>/dev/null | head -15
+    echo "===== end failure diagnostics ====="
     exit 1
 fi
 
