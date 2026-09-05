@@ -41,6 +41,27 @@ def _recipes(*rs):
 
 
 class TestDepClosures:
+    def test_platform_filtered_dep_is_excluded_off_platform(self, tmp_path):
+        # A dep carrying `platforms:` that excludes the target must NOT enter
+        # the closure -- vtk's qt6/hdf5 are declared linux/macos/... only, and
+        # dragging them into a wasm build cascaded a pile of
+        # qt6/python/hdf5-for-wasm jobs (the DAG submitter's _dep_names had this
+        # bug; builder.resolve_dep_closures was always right -- this pins it).
+        app = _mk(
+            tmp_path,
+            "app",
+            runtime=[
+                {"name": "gui", "platforms": ["linux", "macos"]},
+                "zlib",
+            ],
+        )
+        # Off-platform: the filtered dep is gone, the plain one stays.
+        rt, _ = resolve_dep_closures(["app"], _recipes(app), "wasm")
+        assert rt == {"zlib"}
+        # On the platform it targets: the filtered dep is back.
+        rt2, _ = resolve_dep_closures(["app"], _recipes(app), "linux")
+        assert rt2 == {"gui", "zlib"}
+
     def test_runtime_dep_ships_build_dep_does_not(self, tmp_path):
         app = _mk(tmp_path, "app", build=["srcpkg"], runtime=["zlib"])
         rt, bt = resolve_dep_closures(["app"], _recipes(app), "linux")

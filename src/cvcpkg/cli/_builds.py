@@ -1156,18 +1156,29 @@ def builds_submit_dag(
                 recipe_data[rpath.name] = _yaml.safe_load(yaml_path.read_text())
                 recipe_paths[rpath.name] = rpath
 
-    def _dep_names(name: str) -> list[str]:
-        """Extract runtime + build + host_tools dependency names from a recipe."""
+    def _dep_names(name: str, plat: str = "") -> list[str]:
+        """Extract runtime + build + host_tools dependency names from a recipe.
+
+        When *plat* is given, a runtime/build dep carrying a ``platforms:``
+        list that excludes *plat* is skipped -- the same filter the client-side
+        resolver (validate_all_recipes.check_closure) applies.  Without it the
+        DAG dragged a recipe's non-target deps into the closure: vtk's qt6/hdf5
+        (declared linux/macos/... only, NOT wasm) got auto-added for a wasm
+        build and cascaded a pile of qt6/python/hdf5-for-wasm jobs that have no
+        business there.  host_tools are host-side (cmake, ninja) and always
+        apply regardless of the cross target, so they are never filtered.
+        """
         data = recipe_data.get(name, {})
         deps_block = data.get("depends", {})
         names: list[str] = []
-        # Include host_tools so the DAG scheduler orders host prerequisites
-        # (cmake, ninja, meson, ...) before recipes that depend on them.
         for key in ("runtime", "build", "host_tools"):
             for dep in deps_block.get(key, []) or []:
                 if isinstance(dep, str):
                     names.append(dep)
                 elif isinstance(dep, dict):
+                    only_on = dep.get("platforms")
+                    if plat and key != "host_tools" and only_on and plat not in only_on:
+                        continue  # dep does not apply on the target platform
                     names.append(dep["name"])
         return names
 
@@ -1439,14 +1450,14 @@ def builds_submit_dag(
             ) in _published
 
         seen: set[str] = set()
-        queue = [d for s in seeds for d in _dep_names(s)]
+        queue = [d for s in seeds for d in _dep_names(s, plat)]
         while queue:
             n = queue.pop()
             if n in seen:
                 continue
             seen.add(n)
             if n in recipe_data and not _published_for_combo(n):
-                queue.extend(_dep_names(n))
+                queue.extend(_dep_names(n, plat))
         seen.difference_update(seeds)
         return seen
 
