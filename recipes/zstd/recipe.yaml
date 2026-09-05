@@ -5,7 +5,7 @@ recipe:
   # Added a cosmo entry (build-cosmo.sh).  `tiff` and `libiimod` already
   # declare platform: cosmo and runtime-depend on zstd, so both were phantom
   # claims until zstd itself could be built for cosmo.
-  cvc_revision: 3
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -26,6 +26,7 @@ depends:
   build:
     - cmake
     - ninja
+  runtime: []
   host_tools: []
 
 build:
