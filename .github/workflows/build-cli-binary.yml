@@ -16,8 +16,10 @@ on:
   release:
     types: [published]
 
+# contents: write so a release build can attach its binaries to the Release.
+# Read was enough while the only output was an artifact -- which was the bug.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -79,9 +81,31 @@ jobs:
           tag="${{ matrix.variant }}-${{ runner.os }}-${{ runner.arch }}"
           cp "dist/cvcpkg$EXT" "out/cvcpkg-$tag$EXT"
 
+      # A release build has to leave something permanent behind. This workflow
+      # already ran on `release: published` and built all six binaries, but the
+      # only output was a 7-day ARTIFACT: the Release page got no assets, and
+      # the binaries someone published a release for disappeared a week later.
+      # The artifact was the whole delivery mechanism, and it was temporary.
+      - name: Attach binaries to the release
+        if: github.event_name == 'release'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # --clobber so re-running a release build replaces the asset instead
+          # of failing on the name already being taken.
+          gh release upload "${{ github.event.release.tag_name }}" out/* --clobber
+          echo "attached to ${{ github.event.release.tag_name }}:"
+          ls -1 out/
+
+      # A manual run has no release to attach to, so it still gets an artifact
+      # — that is the case the artifact is actually for. Short retention: it
+      # exists to be downloaded now, not warehoused (see #573).
       - uses: actions/upload-artifact@v4
+        if: github.event_name != 'release'
         with:
           name: cvcpkg-${{ matrix.variant }}-${{ matrix.os }}
           path: out/*
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 3
