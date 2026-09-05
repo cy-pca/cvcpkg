@@ -51,42 +51,31 @@ def _dep_name(d: object) -> str:
     return ""
 
 
-# Recipes with the same host-tool leak that are NOT fixed in this change. The fix
-# (an explicit ``runtime: []``) is trivial and identical for all of them, but each
-# requires a cvc_revision bump + fleet rebuild to republish the corrected manifest,
-# and several currently fail to rebuild on the dev fleet for unrelated, pre-existing
-# reasons (e.g. automake's autoconf-needs-GNU-m4, wayland). Fixing them in bulk here
-# re-triggers those failures and blocks the wasm-mt demo unblock this change is for,
-# so they are deferred to a dedicated follow-up that can validate each fleet build.
+# Recipes with the same host-tool leak that are NOT yet fixed. The fix (an explicit
+# ``runtime: []``) is trivial and identical for all of them, but each requires a
+# cvc_revision bump + fleet rebuild to republish the corrected manifest, and these
+# few currently fail to rebuild on the fleet for unrelated, pre-existing reasons —
+# so bumping them re-triggers those failures. They are blocked on dedicated
+# build-repair tasks; only once a recipe's fleet build is green can its leak fix
+# land and it drop off this list.
+#
+#   automake            — autoconf's self-test runs `autoconf -o /dev/null`, whose
+#                         autom4te resolves m4 as `$M4 || /usr/bin/m4` (never PATH);
+#                         builders lack /usr/bin/m4 or ship non-GNU BSD m4, so the
+#                         rebuild fails (build-on-dev #9688/#9692).
+#   wayland-protocols   — build-depend on the `wayland` recipe, whose own build
+#   xkbcommon             fails on linux/freebsd (build-on-dev #9691/#9695); their
+#                         rebuild can't succeed until wayland's does.
 #
 # The leak is harmless on every platform these recipes target (their host tools —
 # cmake/ninja/nasm/… — are published there, so the resolver just installs them
 # wastefully); it is only fatal on cross-only platforms like wasm-mt, and none of
-# these are in the wasm-mt demo closure. Shrink this list as the follow-up lands;
+# these are in the wasm-mt demo closure. Shrink this list as each build is repaired;
 # do NOT add to it — a new leaking recipe must be fixed, not deferred.
 _DEFERRED_LEAKS: set[str] = {
-    "abseil",
     "automake",
-    "c-ares",
-    "clapack",
-    "fftw3",
-    "gmp",
-    "gsl",
-    "libgeos",
-    "libspatialindex",
-    "log4cplus",
-    "lz4",
-    "openblas",
-    "openssl",
-    "pcre2",
-    "qhull",
-    "readline",
-    "wamr",
-    "wasmedge",
     "wayland-protocols",
     "xkbcommon",
-    "yaml",
-    "yaml-cpp",
 }
 
 

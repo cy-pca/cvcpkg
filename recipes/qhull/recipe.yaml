@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: qhull
   upstream_version: "8.0.2"
-  cvc_revision: 1
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -30,6 +30,7 @@ depends:
   build:
     - cmake
     - ninja
+  runtime: []
   host_tools: []
 
 build:

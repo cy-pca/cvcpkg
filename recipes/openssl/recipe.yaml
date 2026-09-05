@@ -7,7 +7,7 @@ recipe:
   # neither no-sock nor -DNO_FORK; only the APE-inherent limits (static single
   # file, so no shared/dso/engine) are compiled out. python31x already declared
   # cosmo and runtime-depends on openssl, so this was also an unresolvable claim.
-  cvc_revision: 5
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -32,6 +32,7 @@ depends:
     # everything openssl's Configure + build scripts need.
     - name: perl
       platforms: [linux, macos, freebsd, netbsd, windows]
+  runtime: []
   host_tools: []
 
 build:
