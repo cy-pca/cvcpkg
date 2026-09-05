@@ -681,15 +681,22 @@ jobs:
             sudo sed -i '/^Environment=CVC_COSMOCC_DIR=/d' "$UNIT"
             # Add --cross-platform wasm if missing
             if ! grep -q -- '--cross-platform wasm' "$UNIT" 2>/dev/null; then
-              sudo sed -i 's|--work-dir [^ ]*|& --cross-platform wasm|' "$UNIT"
+              sudo sed -i 's|--work-dir [^ ]*|& --cross-platform wasm |' "$UNIT"
+            fi
+            # Add --cross-platform wasm-mt if missing (threaded wasm; same
+            # emsdk toolchain as wasm, so any wasm cross-builder can serve it).
+            # Exact match: 'grep --cross-platform wasm' already matches wasm-mt
+            # as a substring, so anchor on a trailing space/EOL.
+            if ! grep -qE -- '--cross-platform wasm-mt( |$)' "$UNIT" 2>/dev/null; then
+              sudo sed -i 's|--cross-platform wasm |& --cross-platform wasm-mt |' "$UNIT"
             fi
             # Add --cross-platform wasi if missing
-            if ! grep -q -- '--cross-platform wasi' "$UNIT" 2>/dev/null; then
-              sudo sed -i 's|--cross-platform wasm|& --cross-platform wasi|' "$UNIT"
+            if ! grep -qE -- '--cross-platform wasi( |$)' "$UNIT" 2>/dev/null; then
+              sudo sed -i 's|--cross-platform wasm-mt |& --cross-platform wasi |' "$UNIT"
             fi
             # Add --cross-platform cosmo if missing
-            if ! grep -q -- '--cross-platform cosmo' "$UNIT" 2>/dev/null; then
-              sudo sed -i 's|--cross-platform wasi|& --cross-platform cosmo|' "$UNIT"
+            if ! grep -qE -- '--cross-platform cosmo( |$)' "$UNIT" 2>/dev/null; then
+              sudo sed -i 's|--cross-platform wasi |& --cross-platform cosmo |' "$UNIT"
             fi
             sudo systemctl daemon-reload
             sudo systemctl enable cvcpkg-builder 2>/dev/null || true
