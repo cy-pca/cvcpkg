@@ -1,10 +1,17 @@
 name: build-wasm-deps-catx03
 
-# The cvcpkg populate fleet's wasm builders can not resolve CVC_EMSDK_DIR
-# (their toolchain step writes '${PREFIX}' literal instead of the real path).
-# catx-03 has emsdk properly set up via the cyberpcangel-cvcgl nightly, so
-# route wasm dep builds here explicitly, then publish via this repo's already-
-# configured CVCPKG_PUBLISHER_TOKEN. Manual dispatch only.
+# DEPRECATED as of the emsdk package fix (#567) + wasm-mt fleet enablement
+# (deploy-prod --cross-platform wasm-mt): the populate fleet builds wasm and
+# wasm-mt directly now, so prefer `populate-server.yml` (recipes=..., platforms
+# includes wasm/wasm-mt) which spreads the closure across all four linux
+# builders. The old blocker was NOT that the fleet "can't resolve
+# CVC_EMSDK_DIR" -- that was a red-herring log line; the real cause was the
+# emsdk PACKAGE shipping without its launcher (package.files globbed a
+# non-existent 'emsdk/' dir), so every fleet wasm build died in emsdk_env.sh.
+#
+# Kept as a catx-03-pinned fallback: single-runner, no DAG scheduler, useful
+# when the fleet is drained or for a quick one-off against catx-03's own
+# prebuilt emsdk. Manual dispatch only.
 
 on:
   workflow_dispatch:
