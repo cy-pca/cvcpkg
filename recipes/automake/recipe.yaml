@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: automake
   upstream_version: "1.17"
-  cvc_revision: 1
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -24,6 +24,9 @@ depends:
   build:
     - autoconf
     - perl
+    # Diagnostic: put a GNU m4 in the build closure so the run can show that
+    # autom4te still ignores it (it reads $M4 || /usr/bin/m4, never PATH).
+    - m4
   host_tools: []
 
 build:
