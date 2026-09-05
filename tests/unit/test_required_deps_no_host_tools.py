@@ -66,7 +66,6 @@ def _dep_name(d: object) -> str:
 # do NOT add to it — a new leaking recipe must be fixed, not deferred.
 _DEFERRED_LEAKS: set[str] = {
     "abseil",
-    "automake",
     "c-ares",
     "clapack",
     "fftw3",

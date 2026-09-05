@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: automake
   upstream_version: "1.17"
-  cvc_revision: 3
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -21,11 +21,19 @@ source:
 patches: []
 
 depends:
+  # automake is a build-time host tool; nothing links or loads it at runtime.
+  # An explicit empty runtime list keeps its build deps out of the consumer-
+  # facing required_deps the manifest generator derives from
+  # depends.get("runtime", depends.get("build", [])).
+  runtime: []
   build:
     - autoconf
     - perl
-    # Diagnostic: put a GNU m4 in the build closure so the run can show that
-    # autom4te still ignores it (it reads $M4 || /usr/bin/m4, never PATH).
+    # automake's configure runs `autoconf` to prove the toolchain works, so a
+    # GNU m4 must be present in the build prefix: the (now relocatable) autoconf
+    # resolves its m4 as <prefix>/bin/m4. m4 rides in transitively via autoconf,
+    # but list it explicitly so the closure is guaranteed regardless of how the
+    # resolver walks build-deps-of-build-deps.
     - m4
   host_tools: []
 
