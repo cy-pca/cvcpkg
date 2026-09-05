@@ -80,8 +80,10 @@ jobs:
             cd ${CVCPKG_DIR}
             export CVCPKG_RELEASE='${RELEASE_TAG}'
 
-            # Install CLI update
-            pip install --break-system-packages --quiet . 2>/dev/null || true
+            # Install CLI update. NOT '2>/dev/null || true': a discarded error
+            # here is how the cluster ends up serving jobs with a cvcpkg that
+            # never installed, while this step still reports success.
+            pip install --break-system-packages --quiet .
 
             # Check for env file
             if [[ ! -f .env.production ]]; then
@@ -165,8 +167,22 @@ jobs:
               git fetch origin
               git checkout -f ${SHA}
               cd ${CVCPKG_DIR}
-              pip install --break-system-packages --quiet . 2>/dev/null || true
-              echo \"$VM: \$(cvcpkg --version)\"
+              pip install --break-system-packages --quiet .
+              # Verify by COMMIT, not by 'cvcpkg --version'. The package version
+              # (2.0.2 at time of writing) does not move commit to commit, so it
+              # prints the same string on a build from weeks ago and confirms
+              # nothing. Compare what the installed cvcpkg reports as its source
+              # tree against the SHA we were asked to deploy.
+              # Resolve BOTH sides: workflow_dispatch accepts a short sha
+              # (^[0-9a-f]{7,40}$), which would never string-equal a 40-char
+              # HEAD.
+              want=\$(git -C ${DEPLOY_DIR} rev-parse ${SHA})
+              got=\$(git -C ${DEPLOY_DIR} rev-parse HEAD)
+              if [ \"\$got\" != \"\$want\" ]; then
+                echo \"::error::$VM is at \$got but \$want (${SHA}) was requested\"
+                exit 1
+              fi
+              echo \"$VM: \$(cvcpkg --version) @ \$got\"
             "
           done
           echo "All dev builder VMs updated."
@@ -227,16 +243,56 @@ jobs:
             || echo "::warning::sandipaws-wsl unreachable or update failed (offline?)"
 
       # ── Notify builders to self-update via server API ─────────
+      # This is the ONLY update path for every builder that is not one of the
+      # two incus VMs or sandipaws-wsl -- the BSD guests and the Windows
+      # cross-builders among them. It stays continue-on-error (a deploy that
+      # already succeeded must not be failed by an unreachable builder), but it
+      # no longer stays SILENT: the point of the report below is that
+      # "everything is fine" and "half the fleet never heard about it" stopped
+      # looking identical. A windows builder ran a cvcpkg without git-source
+      # support for weeks behind exactly this gap.
       - name: Notify builders to self-update
         continue-on-error: true
         env:
           CVCPKG_ADMIN_TOKEN: ${{ secrets.CVCPKG_ADMIN_TOKEN }}
         run: |
+          set -uo pipefail
           sleep 10
           SERVER_URL="http://$(incus list cvcpkg-server -c4 -fcsv | tr -d '"' | tr ',' '\n' | awk '{print $1}' | grep -E '^10\.' | head -1):8420"
-          if [ -n "${CVCPKG_ADMIN_TOKEN:-}" ]; then
-            echo "Notifying builders via $SERVER_URL to self-update..."
-            curl -fsS -X POST "$SERVER_URL/v1/admin/update-builders" \
-              -H "Authorization: Bearer $CVCPKG_ADMIN_TOKEN" \
-              -H "Content-Type: application/json" || true
+          if [ -z "${CVCPKG_ADMIN_TOKEN:-}" ]; then
+            echo "::warning::CVCPKG_ADMIN_TOKEN is unset — no builder outside the incus VMs was told to update. They keep running whatever cvcpkg they last had."
+            exit 0
           fi
+
+          echo "Notifying builders via $SERVER_URL to self-update..."
+          if ! curl -fsS -X POST "$SERVER_URL/v1/admin/update-builders" \
+                 -H "Authorization: Bearer $CVCPKG_ADMIN_TOKEN" \
+                 -H "Content-Type: application/json"; then
+            echo "::warning::update-builders call failed — the fleet was NOT notified"
+            exit 0
+          fi
+
+          # Report which builders are actually reachable, so a builder that is
+          # offline (and therefore did not get the message) is visible here
+          # rather than discovered later by a job that will not build.
+          echo ""
+          echo "Fleet after notify:"
+          curl -fsS "$SERVER_URL/v1/builders" 2>/dev/null | python3 -c '
+          import json, sys
+          try:
+              builders = json.load(sys.stdin)["builders"]
+          except Exception as exc:
+              print("::warning::could not read the builder list: {}".format(exc))
+              sys.exit(0)
+          stale = []
+          for b in builders:
+              caps = b.get("capabilities", {}) or {}
+              cross = ",".join(p["platform"] for p in caps.get("cross_platforms", []))
+              serves = b["platform"] + (" (+" + cross + ")" if cross else "")
+              print("  {:8} {:30} {:24} {}".format(
+                  b["status"], b["name"], serves, b["last_heartbeat"]))
+              if b["status"] == "offline":
+                  stale.append(b["name"] + " (" + serves + ")")
+          if stale:
+              print("::warning::offline builders did not receive the update: " + ", ".join(stale))
+          ' || echo "::warning::could not summarise the fleet"

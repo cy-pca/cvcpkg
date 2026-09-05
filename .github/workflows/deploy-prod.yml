@@ -859,3 +859,75 @@ jobs:
               exit 1
             fi
           " || { echo "::error::CUDA builder ($CUDA) failed to restart"; exit 1; }
+
+  # ── Fleet convergence report ───────────────────────────────────
+  # Every update-* job above is continue-on-error, deliberately: an
+  # unreachable builder must not fail a deploy that already succeeded. The
+  # cost of that is silence, and silence is how a builder stays dead for
+  # weeks. phm-win11 sat offline from 2026-07-27 to 2026-09-04 crash-looping
+  # on an expired token -- self-updating from master the whole time, current
+  # code, simply unable to register -- and no deploy ever said so.
+  #
+  # So: report, never fail. This job asks the server which builders it has
+  # actually heard from and names the ones it has not. It cannot fail the
+  # workflow (continue-on-error + always()), and it does not probe the hosts
+  # -- a builder is "there" if and only if the server says it is, which is
+  # the only definition that matters for whether jobs will be claimed.
+  report-fleet:
+    name: Fleet report
+    needs:
+      - deploy
+      - update-bsd-builders
+      - update-linux-builders
+      - update-windows-builder
+      - update-cuda-builder
+    if: always()
+    continue-on-error: true
+    runs-on: [self-hosted, Linux, cvcpkg-prod]
+    timeout-minutes: 5
+
+    steps:
+      - name: Report the builder fleet
+        run: |
+          set -uo pipefail
+          SERVER_URL="https://cvcpkg.org"
+
+          if ! curl -fsS --max-time 20 "$SERVER_URL/v1/builders" -o builders.json; then
+            echo "::warning::could not reach $SERVER_URL to report the fleet"
+            exit 0
+          fi
+
+          python3 - builders.json <<'PY' || echo "::warning::could not summarise the fleet"
+          import json, sys
+
+          with open(sys.argv[1]) as fh:
+              builders = json.load(fh)["builders"]
+
+          offline = []
+          print(f"{'status':8} {'name':32} {'serves':26} last heartbeat")
+          for b in sorted(builders, key=lambda x: (x["status"] != "offline", x["name"])):
+              caps = b.get("capabilities") or {}
+              cross = ",".join(p["platform"] for p in caps.get("cross_platforms", []))
+              serves = b["platform"] + (" (+" + cross + ")" if cross else "")
+              print(f"{b['status']:8} {b['name']:32} {serves:26} {b['last_heartbeat']}")
+              if b["status"] == "offline":
+                  offline.append(f"{b['name']} [{serves}]")
+
+          # A platform with no online builder is the actionable case: jobs for
+          # it will be staged and then never claimed, which surfaces much later
+          # as an unexplained timeout in whatever PR happens to need it.
+          serving = {}
+          for b in builders:
+              caps = b.get("capabilities") or {}
+              targets = {b["platform"]} | {p["platform"] for p in caps.get("cross_platforms", [])}
+              for t in targets:
+                  serving.setdefault(t, []).append(b["status"] == "online")
+
+          dark = sorted(t for t, states in serving.items() if not any(states))
+          if dark:
+              print("::warning::platforms with NO online builder: " + ", ".join(dark))
+          if offline:
+              print("::warning::offline builders: " + ", ".join(offline))
+          if not dark and not offline:
+              print("all registered builders are online")
+          PY
