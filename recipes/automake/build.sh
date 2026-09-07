@@ -57,29 +57,28 @@ if ! ./configure --prefix="${CVC_INSTALL_DIR}"; then
     exit 1
 fi
 
-# Stub help2man. The man pages are not in this recipe's package.files, so
-# regenerating the versioned .1 pages is pure wasted work — and it runs the
-# freshly-built `bin/automake --help`, which fails the whole build on OpenBSD.
-# A no-op that just creates the --output target keeps `make`/`make install`
-# happy without shipping (or depending on) man pages.
-_h2m="${CVC_BUILD_DIR:-${CVC_SOURCE_DIR}}/.cvcpkg-help2man"
-cat > "${_h2m}" <<'STUB'
-#!/bin/sh
-out=
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --output=*) out=${1#--output=} ;;
-        -o) shift; out=$1 ;;
-    esac
-    shift
-done
-[ -n "${out}" ] && : > "${out}"
-exit 0
+# Neutralize man-page generation. The man pages are NOT in this recipe's
+# package.files, so regenerating the versioned .1 pages is pure wasted work — and
+# the versioned rule (doc/local.mk `update_mans`) runs `$(PERL) doc/help2man`,
+# automake's bundled help2man, which internally runs the freshly-built
+# `bin/automake --help` and fails the whole build on OpenBSD. Overriding the make
+# HELP2MAN variable does NOT help (that rule doesn't use it). Replace the bundled
+# doc/help2man with a stub that just writes the --output target, so make and make
+# install succeed without shipping (or depending on) man pages.
+cat > doc/help2man <<'STUB'
+#!/usr/bin/env perl
+# cvcpkg stub — write a minimal page to --output and exit; never runs the target.
+use strict; use warnings;
+my $out;
+while (@ARGV) { local $_ = shift;
+    if (/^--output=(.*)/) { $out = $1 } elsif ($_ eq '-o' or $_ eq '--output') { $out = shift } }
+if (defined $out) { open my $fh, '>', $out or die "$out: $!"; print $fh ".\\\" generated stub\n"; close $fh }
+exit 0;
 STUB
-chmod +x "${_h2m}"
+chmod +x doc/help2man
 
-"${MAKE}" -j "${CVC_JOBS}" HELP2MAN="${_h2m}"
-"${MAKE}" install HELP2MAN="${_h2m}"
+"${MAKE}" -j "${CVC_JOBS}"
+"${MAKE}" install
 
 # Relocate the installed automake. Like autoconf, `bin/automake` and `bin/aclocal`
 # bake ${CVC_INSTALL_DIR}/share/automake-<ver> as the @INC dir for their Perl
