@@ -57,5 +57,55 @@ if ! ./configure --prefix="${CVC_INSTALL_DIR}"; then
     exit 1
 fi
 
-"${MAKE}" -j "${CVC_JOBS}"
-"${MAKE}" install
+# Stub help2man. The man pages are not in this recipe's package.files, so
+# regenerating the versioned .1 pages is pure wasted work — and it runs the
+# freshly-built `bin/automake --help`, which fails the whole build on OpenBSD.
+# A no-op that just creates the --output target keeps `make`/`make install`
+# happy without shipping (or depending on) man pages.
+_h2m="${CVC_BUILD_DIR:-${CVC_SOURCE_DIR}}/.cvcpkg-help2man"
+cat > "${_h2m}" <<'STUB'
+#!/bin/sh
+out=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --output=*) out=${1#--output=} ;;
+        -o) shift; out=$1 ;;
+    esac
+    shift
+done
+[ -n "${out}" ] && : > "${out}"
+exit 0
+STUB
+chmod +x "${_h2m}"
+
+"${MAKE}" -j "${CVC_JOBS}" HELP2MAN="${_h2m}"
+"${MAKE}" install HELP2MAN="${_h2m}"
+
+# Relocate the installed automake. Like autoconf, `bin/automake` and `bin/aclocal`
+# bake ${CVC_INSTALL_DIR}/share/automake-<ver> as the @INC dir for their Perl
+# modules (Automake::*), so the INSTALLED tool cannot find its own modules once
+# cvcpkg reaps the ephemeral build prefix — it would die "Can't locate
+# Automake/Config.pm in @INC" on every platform. Inject a BEGIN that prepends the
+# real, self-relative module dir (<prefix>/share/automake-<ver>) derived from the
+# tool's own path. Idempotent (guarded by a marker).
+_reloc='BEGIN {
+  # cvcpkg relocation: find our Automake/* modules relative to this script.
+  my $s = $0; $s = "./$s" if $s !~ m{/};
+  (my $p = $s) =~ s{/[^/]+/[^/]+$}{};
+  for my $d (glob("$p/share/automake-*"), glob("$p/share/aclocal-*")) {
+    unshift @INC, $d if -d "$d/Automake" || -d $d;
+  }
+}'
+_relf="$(mktemp "${TMPDIR:-/tmp}/cvcpkg-automake-reloc.XXXXXX")"
+printf '%s\n' "${_reloc}" > "${_relf}"
+for _t in "${CVC_INSTALL_DIR}"/bin/automake* "${CVC_INSTALL_DIR}"/bin/aclocal*; do
+    [ -f "${_t}" ] || continue
+    head -1 "${_t}" | grep -q perl || continue
+    _RELF="${_relf}" perl -0777 -i -pe '
+        BEGIN { local $/; open my $fh, "<", $ENV{"_RELF"} or die $!; our $B = <$fh>; close $fh; }
+        s/(\n)(use warnings[^\n]*;\n)/$1$2\n$B\n/ unless /cvcpkg relocation/;
+    ' "${_t}"
+done
+rm -f "${_relf}"
+grep -q "cvcpkg relocation" "${CVC_INSTALL_DIR}/bin/automake" \
+    || { echo "automake reloc: @INC injection missing from bin/automake" >&2; exit 1; }
