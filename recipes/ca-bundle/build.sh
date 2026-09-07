@@ -41,6 +41,11 @@ elif command -v shasum >/dev/null 2>&1; then
 else
     ACTUAL_SHA256="$(openssl dgst -sha256 "${SSL_DIR}/cert.pem" | awk '{print $NF}')"
 fi
+# GNU coreutils escapes the whole output line when the FILE NAME contains a
+# backslash: the line becomes "\<hash>  C:\path\to\cert.pem", so awk $1 carries a
+# leading backslash. On Windows (MSYS bash, native paths) that made every
+# comparison below fail with "expected <h>, got \<h>" -- the same hash.
+ACTUAL_SHA256="${ACTUAL_SHA256#\\}"
 if [ "${ACTUAL_SHA256}" != "${CERT_SHA256}" ]; then
     echo "SHA256 mismatch: expected ${CERT_SHA256}, got ${ACTUAL_SHA256}" >&2
     exit 1
