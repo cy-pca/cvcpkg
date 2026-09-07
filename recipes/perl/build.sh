@@ -21,6 +21,18 @@
 # With -Duserelocatableinc, @INC entries are stored as ".../"-prefixed paths
 # resolved relative to the perl binary at runtime, so the bundle works wherever
 # cvcpkg unpacks it.
+#
+# BUT relocatableinc needs perl to know its OWN executable's path. On Linux/
+# FreeBSD it reads that from /proc/self/exe or KERN_PROC_PATHNAME. OpenBSD, by
+# design, exposes NO way for a process to find its own executable, so perl falls
+# back to argv[0] — and cvcpkg rewrites script shebangs to `#!/usr/bin/env perl`,
+# under which argv[0] is the bare string "perl" (no directory). The ".../" base
+# then resolves to the CURRENT DIRECTORY, so @INC becomes ../lib/... and every
+# perl script run from elsewhere dies with "Can't locate strict.pm in @INC"
+# (breaking autoconf/autom4te → automake, openssl's Configure, etc. on OpenBSD).
+# Fix below: wrap perl in a /bin/sh shim that re-execs the real interpreter by
+# its ABSOLUTE path — the kernel hands a shebang script its real file path as $0
+# even when env passed argv[0]="perl", so relocatableinc gets a real base again.
 set -euo pipefail
 
 : "${CVC_INSTALL_DIR:?CVC_INSTALL_DIR must be set}"
@@ -39,3 +51,29 @@ sh ./Configure -des \
 
 make -j "${CVC_JOBS}"
 make install
+
+# OpenBSD relocation shim (see the header). perl and perlX.Y.Z are the same real
+# interpreter; keep ONE as perl.bin and replace the entry points with a /bin/sh
+# shim that re-execs it by absolute path so -Duserelocatableinc has a real base.
+if [ "$(uname -s)" = "OpenBSD" ]; then
+    _bin="${CVC_INSTALL_DIR}/bin"
+    _ver="$("${_bin}/perl" -e 'print $^V' 2>/dev/null | sed 's/^v//')"
+    mv -f "${_bin}/perl" "${_bin}/perl.bin"
+    for _w in perl "perl${_ver}"; do
+        [ -n "${_w}" ] || continue
+        rm -f "${_bin}/${_w}"
+        cat > "${_bin}/${_w}" <<'SH'
+#!/bin/sh
+# cvcpkg OpenBSD relocation shim: OpenBSD cannot let a process discover its own
+# executable, so `env perl` (argv[0]="perl") defeats -Duserelocatableinc and @INC
+# resolves to the CWD. Re-exec the real perl by its absolute path — the kernel
+# gives this shebang script its real file path as "$0" regardless of argv[0].
+d=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec "$d/perl.bin" "$@"
+SH
+        chmod 0755 "${_bin}/${_w}"
+    done
+    # Sanity: the shimmed perl must load a core module from OUTSIDE its own dir.
+    ( cd / && "${_bin}/perl" -e 'use strict; use warnings; print "reloc ok\n"' ) \
+        || { echo "perl OpenBSD reloc shim FAILED self-test" >&2; exit 1; }
+fi
