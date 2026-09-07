@@ -44,27 +44,15 @@ case "$(uname -s)" in
         ;;
 esac
 
-# --- openbsd diagnostics (cvc.6): automake's configure reports "autoconf is
-# installed... no" on openbsd though autoconf 2.72+cvc.2 is in the closure.
-# Show what AUTOCONF resolved to, whether the script actually runs, and dump the
-# config.log check region on failure. Cheap; harmless on the green platforms. ---
-_ac_show="${AUTOCONF:-autoconf}"
-_ac_path="$(command -v "${_ac_show}" 2>/dev/null || echo NOTFOUND)"
-echo "[automake diag] AUTOCONF=[${AUTOCONF:-unset}] -> ${_ac_path}"
-echo "[automake diag] AUTOM4TE=[${AUTOM4TE:-unset}]  M4=[${M4:-unset}]"
-echo "[automake diag] CVC_BUILD_PREFIX=[${CVC_BUILD_PREFIX:-}] CVC_DEPS_PREFIX=[${CVC_DEPS_PREFIX:-}]"
-if [ "${_ac_path}" != "NOTFOUND" ]; then
-    echo "[automake diag] shebang: $(head -1 "${_ac_path}" 2>&1)"
-    echo "[automake diag] \$AUTOCONF --version (exit shown):"
-    "${_ac_show}" --version 2>&1 | head -3 || true
-    echo "[automake diag]   -> exit ${PIPESTATUS[0]:-?}"
-fi
-
 cd "${CVC_SOURCE_DIR}"
 
 if ! ./configure --prefix="${CVC_INSTALL_DIR}"; then
-    echo "===== configure FAILED (automake) ====="
-    grep -nE "autoconf is installed|autoconf works|Autoconf 2.65|AUTOCONF|autom4te|version" config.log 2>/dev/null | head -20 || true
+    # The build-log tail never carries config.log; surface the toolchain-check
+    # region so a failure is diagnosable instead of a bare "autoconf does not
+    # work" / "Autoconf 2.65 or better is required".
+    echo "===== configure FAILED (automake) — config.log excerpt ====="
+    grep -nE "autoconf is installed|autoconf works|Autoconf 2.65|autom4te|Can't locate|need GNU m4" \
+        config.log 2>/dev/null | head -20 || true
     echo "===== end config.log excerpt ====="
     exit 1
 fi

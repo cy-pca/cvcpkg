@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: automake
   upstream_version: "1.17"
-  cvc_revision: 6
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -46,8 +46,13 @@ build:
       script: build.sh
     - platform: freebsd
       script: build.sh
-    - platform: openbsd
-      script: build.sh
+    # openbsd is intentionally omitted: automake's configure runs `autoconf`,
+    # but the cvcpkg perl bundle is non-relocatable on OpenBSD (its @INC is
+    # CWD-relative, `../lib/...`, not binary-relative, despite -Duserelocatableinc),
+    # so every perl script — autoconf included — fails with "Can't locate strict.pm
+    # in @INC" when run from another dir, and configure reports "Autoconf 2.65 or
+    # better is required". automake was never published for openbsd anyway. Restore
+    # this entry once the perl recipe is relocatable on OpenBSD (tracked separately).
     - platform: netbsd
       script: build.sh
     - platform: windows
