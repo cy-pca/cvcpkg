@@ -232,9 +232,30 @@ jobs:
        contains(format(',{0},', vars.CI_ALLOWED_ACTORS), format(',{0},', github.actor)))
     needs: [test, validate, lint]
     runs-on: [self-hosted, Linux, cvcpkg-prod]
-    timeout-minutes: 30
+    # The isolated `docker-container` builder below trades a little speed for not
+    # sharing a content store with the rest of the host: a cold buildkit plus the
+    # `--no-cache` rebuild of three images runs slower than the shared warm one,
+    # and a first run overran the old 30-minute cap while Playwright was still
+    # going (build + Docker suite passed).  Give it headroom.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
+
+      # Build this job's images on a DEDICATED buildkit, not the daemon's shared
+      # one.  The default `docker` driver uses one embedded buildkit whose content
+      # store is shared with the other seven Actions runners and a Kubernetes
+      # containerd on this host; concurrent writers there collide on
+      # `failed to open writer: ref ... locked ... unavailable` and kill the build
+      # even across the retry below (observed persisting past all three attempts
+      # under load).  A `docker-container` builder has its OWN buildkit and content
+      # store, so this job cannot contend with anything else.  Named + persisted
+      # for layer reuse; its cache is bounded in teardown.
+      - name: Set up an isolated buildx builder
+        run: |
+          docker buildx inspect cvcpkg-ci >/dev/null 2>&1 \
+            && docker buildx inspect --bootstrap cvcpkg-ci >/dev/null \
+            || docker buildx create --name cvcpkg-ci --driver docker-container --bootstrap >/dev/null
+          echo "Using isolated builder: cvcpkg-ci"
 
       # This runner's Docker root is a tmpfs (/mnt/ramdisk/docker, 96 GB) that
       # also holds the 59 GB cvcpkg-prod-data production volume, leaving ~25 GB
@@ -243,10 +264,10 @@ jobs:
       # `dpkg: failed to write ... No space left on device` inside an apt-get
       # layer of the image build, several steps from the real cause.
       #
-      # `build --no-cache` below means the build cache this job creates is pure
-      # waste -- it is never reused, only accumulated (measured: 8.6 GB with
-      # zero active entries).  Reclaim it up front, and say plainly how much
-      # room is left so a future space failure is one line, not a dpkg trace.
+      # This prunes the DEFAULT builder's cache (shared with the other services
+      # on the host) and reports free space, so a future space failure is one
+      # line, not a dpkg trace several layers deep.  This job's OWN build cache
+      # lives on the isolated `cvcpkg-ci` builder and is bounded in teardown.
       #
       # Deliberately NOT `docker system prune -a`: tagged images and volumes on
       # this host belong to production and to whatever else is mid-run.
@@ -267,30 +288,20 @@ jobs:
         run: |
           docker compose -f docker-compose.test.yml down -v 2>/dev/null || true
 
-          # Retry the image build on buildkit's transient content-store lock.
+          # Build on the isolated `cvcpkg-ci` builder (set up above), so this job
+          # never shares a content store with the rest of the host.  That is what
+          # removes the buildkit lock contention -- `failed to open writer: ref
+          # ... locked ... unavailable` -- that used to take the build down even
+          # across this retry (it once persisted past all three attempts under
+          # load).  The retry stays only as a cheap backstop for any residual
+          # transient buildkit error; with a private content store the specific
+          # contention it was written for should no longer occur.
           #
-          # The self-hosted runner shares ONE docker daemon (buildx on the
-          # `docker` driver, so one embedded buildkit) between eight Actions
-          # runners and a Kubernetes containerd. When two builds write the same
-          # blob at once, the loser gets
-          #
-          #   failed to open writer: ref moby/1/<id> locked for 11.574479ms
-          #   (since ...): unavailable
-          #
-          # and the whole build dies before a single test runs. It is not a
-          # flake in the "rare" sense: the daemon logged 222 of these in 48
-          # hours, in bursts of 20-38 within the same minute, and it took out
-          # this job twice fourteen hours apart.
-          #
-          # The lock is held for MILLISECONDS and containerd reports it as
-          # gRPC Unavailable -- the code that means "try again". So retry,
-          # rather than pretending the build is deterministic. Anything that is
-          # not this specific contention still fails on the first attempt.
           # pipefail, because `docker ... | tee` otherwise reports TEE's exit
           # status and every failed build would look like a success.
           set -o pipefail
           build_images() {
-            docker compose -f docker-compose.test.yml build --no-cache test playwright backend
+            docker compose -f docker-compose.test.yml build --no-cache --builder=cvcpkg-ci test playwright backend
           }
           for attempt in 1 2 3; do
             if build_images 2>&1 | tee /tmp/build.log; then
@@ -346,15 +357,17 @@ jobs:
           docker compose -f docker-compose.test.yml logs --tail=200 backend || true
           docker compose -f docker-compose.test.yml logs --tail=50 postgres || true
 
-      # `down -v` drops this run's containers and volumes, but the images and
-      # build cache the --no-cache rebuild just produced survive it, and the
-      # next run's rebuild orphans them.  Clean up after ourselves rather than
-      # leaving it to whoever runs next -- on a shared prod runner that is
-      # usually a different repo.
+      # `down -v --rmi local` drops this run's containers, volumes, and the images
+      # we loaded into the daemon store from the isolated build.  Bound the
+      # isolated builder's own cache here too so it can't grow unwatched on the
+      # ramdisk, and keep sweeping the default builder + dangling images for the
+      # other services' sake -- on a shared prod runner the next job is usually a
+      # different repo.
       - name: Tear down test stack
         if: always()
         working-directory: .
         run: |
           docker compose -f docker-compose.test.yml down -v --rmi local 2>/dev/null || true
+          docker buildx prune -af --builder cvcpkg-ci 2>/dev/null | tail -1 || true
           docker builder prune -af 2>/dev/null | tail -1 || true
           docker image prune -f 2>/dev/null | tail -1 || true

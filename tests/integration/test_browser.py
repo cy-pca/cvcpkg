@@ -36,6 +36,54 @@ playwright_module = pytest.importorskip("playwright.sync_api", reason="playwrigh
 
 SERVER_URL = os.environ.get("CVCPKG_TEST_SERVER_URL", "http://127.0.0.1:8421")
 
+# Ceiling for waits on JavaScript-driven content.  Overridable via the
+# environment so the runner can be given more headroom without a code change.
+# The default is deliberately generous (30s, up from a hard-coded 10s): the
+# self-hosted CI runner hosts a CPU-starved headless browser on a ramdisk it
+# shares with several other runner services, and a cold image rebuild can even
+# drift the bundled browser version — both of which push these fetch-driven
+# pages well past a 10s budget.
+JS_WAIT_TIMEOUT_MS = int(os.environ.get("CVCPKG_TEST_JS_TIMEOUT_MS", "30000"))
+
+# The landing page renders "—" (an em dash) as the placeholder in every stats
+# box and only replaces it once the package data has been fetched and applied.
+_STATS_READY_JS = """
+    () => {
+        const el = document.getElementById('stat-packages');
+        return el && el.textContent.trim() !== '—';
+    }
+"""
+
+
+def _goto_awaiting(page, url, response_url_substr):
+    """Navigate to *url* and block until a response whose URL contains
+    *response_url_substr* arrives.
+
+    JS-driven page content (the stats boxes, the orgs list) is populated by
+    fetches that fire after ``DOMContentLoaded``.  Waiting on the concrete
+    network response — rather than polling a JS predicate on a fixed timer — is
+    deterministic no matter how slow the headless browser or the
+    resource-shared self-hosted runner is.  The waiter is registered *before*
+    the navigation so a fast response cannot resolve before we start waiting.
+    """
+    with page.expect_response(
+        lambda r: response_url_substr in r.url, timeout=JS_WAIT_TIMEOUT_MS
+    ) as resp_info:
+        page.goto(url)
+    _ = resp_info.value  # block until the awaited response resolves
+
+
+def _goto_and_wait_for_stats(page, url=SERVER_URL):
+    """Navigate to a landing-style page and block until its package stats load.
+
+    ``init()`` fires two sequential fetches — ``/v1/deps`` then ``/v1/search``
+    — and writes ``#stat-packages`` only once ``/v1/search`` resolves, so that
+    is the response we wait on; the follow-up ``wait_for_function`` just
+    confirms the DOM was actually updated from the response.
+    """
+    _goto_awaiting(page, url, "/v1/search")
+    page.wait_for_function(_STATS_READY_JS, timeout=JS_WAIT_TIMEOUT_MS)
+
 
 # ── Landing page ────────────────────────────────────────────────
 
@@ -57,19 +105,10 @@ class TestLandingPage:
 
     def test_stats_section_loads(self, page):
         """Stats boxes should update from —  to actual values via JS."""
-        page.goto(SERVER_URL)
-        # Wait for the JS init to update stats (fetches /v1/packages)
-        stat = page.locator("#stat-packages")
-        stat.wait_for(state="attached")
-        # After JS runs, the stat should no longer be the placeholder
-        page.wait_for_function(
-            """() => {
-                const el = document.getElementById('stat-packages');
-                return el && el.textContent.trim() !== '—';
-            }""",
-            timeout=10000,
-        )
-        text = stat.text_content().strip()
+        # The stat is written from the /v1/search response; wait on that
+        # response (deterministic) rather than a fixed-timeout JS poll.
+        _goto_and_wait_for_stats(page)
+        text = page.locator("#stat-packages").text_content().strip()
         assert text != "—", f"stat-packages was not updated by JS: {text!r}"
 
     def test_navbar_brand_links_home(self, page):
@@ -232,14 +271,15 @@ class TestOrganizationsPage:
 
     def test_orgs_page_fetches_data(self, page):
         """The page should attempt to load orgs via JS."""
-        page.goto(f"{SERVER_URL}/orgs")
+        # Wait on the /v1/orgs response (deterministic) before checking the DOM.
+        _goto_awaiting(page, f"{SERVER_URL}/orgs", "/v1/orgs")
         # Wait for the spinner to disappear (JS init runs)
         page.wait_for_function(
             """() => {
                 const el = document.getElementById('orgs-list');
                 return el && !el.querySelector('.fa-spinner');
             }""",
-            timeout=10000,
+            timeout=JS_WAIT_TIMEOUT_MS,
         )
         # After JS, the list should have content (even if "No organizations yet")
         content = page.locator("#orgs-list").text_content()
@@ -510,15 +550,8 @@ class TestMobileBadgeLayout:
 
     def test_badge_no_line_wrap(self, page):
         """Badge elements should not wrap to multiple lines on mobile."""
-        page.goto(SERVER_URL)
-        # Wait for packages to load
-        page.wait_for_function(
-            """() => {
-                const el = document.getElementById('stat-packages');
-                return el && el.textContent.trim() !== '—';
-            }""",
-            timeout=10000,
-        )
+        # Wait for packages to load (deterministic: keyed on /v1/search)
+        _goto_and_wait_for_stats(page)
         # Check badge CSS properties
         badges = page.locator(".badge-mainline, .badge-community")
         if badges.count() > 0:
@@ -531,14 +564,8 @@ class TestMobileBadgeLayout:
 
     def test_source_column_not_overflow(self, page):
         """The Source column in the package table should not overflow on mobile."""
-        page.goto(SERVER_URL)
-        page.wait_for_function(
-            """() => {
-                const el = document.getElementById('stat-packages');
-                return el && el.textContent.trim() !== '—';
-            }""",
-            timeout=10000,
-        )
+        # Wait for packages to load (deterministic: keyed on /v1/search)
+        _goto_and_wait_for_stats(page)
         # The table should still be scrollable and not break the layout
         table = page.locator(".table-container")
         assert table.is_visible()
