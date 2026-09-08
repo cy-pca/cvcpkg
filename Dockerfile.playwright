@@ -22,8 +22,17 @@ COPY pyproject.toml poetry.lock* ./
 RUN poetry install --no-interaction --no-ansi --with dev -E server
 
 COPY . .
+# Pin playwright to the version this base image was built for. Unpinned,
+# `pip install pytest-playwright` pulls whatever is current (1.62.0 as of
+# 2026-09-08) and the `playwright install` below downloads a browser to match --
+# Chrome for Testing 151 instead of the Chromium bundled here -- so the image tag
+# becomes a lie and the browser changes underneath the suite whenever the layer
+# cache is cold. That is what broke the three fetch-dependent tests in
+# tests/integration/test_browser.py: the same commit passed on 2026-09-05 from a
+# warm cache and failed on 2026-09-08 after a rebuild.
+ARG PLAYWRIGHT_VERSION=1.52.0
 RUN pip install --no-cache-dir -e ".[server]" && \
-    pip install --no-cache-dir pytest-playwright && \
+    pip install --no-cache-dir "playwright==${PLAYWRIGHT_VERSION}" pytest-playwright && \
     playwright install --with-deps chromium
 
 ENV PYTHONPATH=/app
