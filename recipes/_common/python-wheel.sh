@@ -142,7 +142,18 @@ ${snippet}
 print('${CVC_PYTHON_ABI} check OK (GIL disabled)')
 "
   else
+    # Symmetric to the free-threaded assertion above: a NON-t column must install
+    # under the standard (GIL-enabled) interpreter. If the build environment ever
+    # resolves pythonX.Y to a free-threaded build, its purelib is
+    # lib/pythonX.Yt/site-packages and the module lands there instead of
+    # lib/pythonX.Y/site-packages -- the import check would still pass (the wheel
+    # imports fine under either), silently publishing a mislaid artifact. Fail
+    # loudly instead. (platformdirs-cp313 +cvc.2 shipped this way; this build helper had no guard for it.)
     "${py}" -c "
+import sys, sysconfig
+if sysconfig.get_config_var('Py_GIL_DISABLED'):
+    sys.exit('${CVC_PYTHON_ABI}: interpreter is free-threaded; a non-t column must build '
+             'under the standard interpreter or its module lands in lib/pythonX.Yt/site-packages')
 ${snippet}
 print('${CVC_PYTHON_ABI} check OK')
 "
