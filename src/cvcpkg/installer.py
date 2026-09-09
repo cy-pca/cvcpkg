@@ -87,7 +87,16 @@ def _download_from_url(
     """Download a single URL, verify SHA-256, store in cache."""
     import tempfile
 
+    from cvcpkg.config import authorize_request
     from cvcpkg.storage import get_backend
+
+    # A private org's archive is downloadable only by an authenticated member
+    # (the server 404s otherwise).  Authenticate ONLY to our own origin; for a
+    # public bundle whose archive_url / mirror_url points at GitHub Releases or a
+    # CDN this leaves the URL unchanged and sends no header.  For our own server
+    # this also upgrades the http:// URL the proxy emits back to https:// so the
+    # token is never sent in cleartext.
+    url, auth = authorize_request(url)
 
     try:
         backend = get_backend(url)
@@ -99,7 +108,7 @@ def _download_from_url(
         # streaming cap below is the real enforcement and needs no probe.
         # (catalog._fetch_url learned this after an outage; this path did not.)
         try:
-            info = backend.head(url)
+            info = backend.head(url, headers=auth) if auth else backend.head(url)
         except Exception as probe_exc:  # noqa: BLE001 -- advisory only
             logging.getLogger("cvcpkg").debug(
                 "size probe for %s failed (%s); relying on the streaming cap", url, probe_exc
@@ -114,7 +123,7 @@ def _download_from_url(
         with tempfile.NamedTemporaryFile(dir=cache_dir, delete=False, suffix=".download") as tmp:
             total = 0
             h = hashlib.sha256()
-            with backend.open(url) as stream:
+            with backend.open(url, headers=auth) if auth else backend.open(url) as stream:
                 while True:
                     chunk = stream.read(1 << 16)  # 64 KB
                     if not chunk:

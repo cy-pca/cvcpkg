@@ -31,12 +31,19 @@ def _fetch_url(url: str, *, max_bytes: int = _MAX_CATALOG_BYTES) -> bytes:
     when GET works.  If HEAD fails or is refused, we skip the pre-check
     and rely on the streaming byte cap below.
     """
+    from cvcpkg.config import authorize_request
     from cvcpkg.storage import get_backend
+
+    # Authenticate ONLY to our own server (origin-scoped): a private org's
+    # catalog is served to an authenticated member.  For the public GitHub
+    # Pages fallback and any other host, this leaves the URL unchanged and sends
+    # no header, so the token never leaves our origin.
+    url, auth = authorize_request(url)
 
     try:
         backend = get_backend(url)
         try:
-            info = backend.head(url)
+            info = backend.head(url, headers=auth) if auth else backend.head(url)
         except Exception:
             # HEAD refused / unsupported — fall through to GET and let
             # the streaming cap enforce the size limit.
@@ -45,7 +52,7 @@ def _fetch_url(url: str, *, max_bytes: int = _MAX_CATALOG_BYTES) -> bytes:
             raise CatalogError(f"catalog at {url} is {info.size} bytes, exceeds {max_bytes} limit")
         chunks: list[bytes] = []
         total = 0
-        with backend.open(url) as stream:
+        with backend.open(url, headers=auth) if auth else backend.open(url) as stream:
             while True:
                 chunk = stream.read(1 << 16)  # 64 KB
                 if not chunk:

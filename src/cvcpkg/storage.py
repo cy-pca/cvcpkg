@@ -56,12 +56,21 @@ class StorageBackend(Protocol):
 
     schemes: ClassVar[tuple[str, ...]]
 
-    def head(self, uri: str) -> ObjectInfo:
-        """Return size and optional pre-computed hashes for *uri*."""
+    def head(self, uri: str, headers: dict[str, str] | None = None) -> ObjectInfo:
+        """Return size and optional pre-computed hashes for *uri*.
+
+        *headers* are extra request headers (e.g. an ``Authorization`` bearer
+        for our own server); only the http(s) backend honours them, and callers
+        pass them only for same-origin server URLs (see
+        :func:`cvcpkg.config.server_auth_headers`).
+        """
         ...
 
-    def open(self, uri: str) -> BinaryIO:
-        """Return a streaming binary reader for *uri*."""
+    def open(self, uri: str, headers: dict[str, str] | None = None) -> BinaryIO:
+        """Return a streaming binary reader for *uri*.
+
+        See :meth:`head` for *headers*.
+        """
         ...
 
     def supports_range(self, uri: str) -> bool:

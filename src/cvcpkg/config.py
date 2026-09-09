@@ -70,6 +70,82 @@ def default_root_catalog_url() -> str:
     return f"{default_root_url().rstrip('/')}/v1/catalog"
 
 
+def _server_schemes() -> dict[str, str]:
+    """Map ``host -> scheme`` for our configured server and root.
+
+    This both recognises our own server (only these hosts are ours) and records
+    how to reach it — https for cvcpkg.org, but a dev/satellite server may be
+    plain http on a custom port.  The server is consulted before the root, so
+    the server's scheme wins if they share a host.
+    """
+    from urllib.parse import urlsplit
+
+    out: dict[str, str] = {}
+    for base in (default_server_url(), default_root_url()):
+        try:
+            parts = urlsplit(base)
+        except ValueError:
+            continue
+        if parts.hostname and parts.scheme in ("http", "https"):
+            out.setdefault(parts.hostname.lower(), parts.scheme)
+    return out
+
+
+def authorize_request(url: str) -> tuple[str, dict[str, str]]:
+    """Prepare a request to *url*, authenticating iff it targets our server.
+
+    Returns ``(url, headers)``:
+
+    - When *url*'s host is the configured server or root host, the URL is
+      rewritten to that server's scheme and, if ``CVCPKG_TOKEN`` is set, an
+      ``Authorization: Bearer`` header is returned.
+    - For any other host the URL is returned unchanged with no headers.
+
+    Why this exists: a PRIVATE org's catalog entries and archives are served by
+    the cvcpkg server only to an authenticated member.  ``cvcpkg search`` sent
+    the token, but ``install`` fetched the catalog and downloaded archives
+    through the tokenless storage backend, so private-org installs failed with
+    "no bundles found in catalog for this platform tuple" (and, past that, a 404
+    on the archive).  The install-time catalog fetch and archive download call
+    this to authenticate.
+
+    Two boundaries this enforces:
+
+    - **Origin scoping** (a security boundary, not a convenience): the token is
+      a credential for OUR server.  It is never attached to the public GitHub
+      Pages catalog fallback (``transfix.github.io``), a third-party mirror, or
+      an artifact CDN — any of which legitimately appears as a catalog fallback
+      URL, an ``archive_url``, or a ``mirror_url``.
+    - **Scheme canonicalisation**: the server sits behind a TLS-terminating
+      proxy, so it emits ``http://`` download URLs even though it is reached
+      over https.  Sending a bearer token to a cleartext ``http://`` URL would
+      leak it, and the anonymous http request also 404s a private archive.  So a
+      URL to our https server is upgraded to https before the token is attached.
+    """
+    from urllib.parse import urlsplit, urlunsplit
+
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url, {}
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return url, {}
+
+    host = parts.hostname.lower()
+    scheme = _server_schemes().get(host)
+    if scheme is None:
+        # Not our server: leave the URL alone and send no credential.
+        return url, {}
+
+    default_port = 443 if scheme == "https" else 80
+    netloc = host if not parts.port or parts.port == default_port else f"{host}:{parts.port}"
+    fixed = urlunsplit((scheme, netloc, parts.path, parts.query, parts.fragment))
+
+    token = os.environ.get("CVCPKG_TOKEN", "").strip()
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    return fixed, headers
+
+
 # ── Data model ──────────────────────────────────────────────────
 
 

@@ -28,6 +28,38 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
+## v2.0.3
+
+### `cvcpkg install` can install from a private org (2026-09-08)
+
+`cvcpkg search --org <o> --token <t>` could see a private org's packages, but
+`cvcpkg install <o>/<pkg>` failed with *"no bundles found in catalog for this
+platform tuple."* The server was never the problem — `/v1/catalog` already
+includes a private org's bundles for an authenticated member, and the
+`/v1/download/…` archive is served to members too. The gap was on the client:
+`search` sent the bearer token, but the install-time catalog fetch
+(`catalog._fetch_url`) and archive download (`installer._download_from_url`)
+went through the tokenless storage backend, so they got the anonymous catalog
+(private bundles absent) and, past that, a 404 on the archive.
+
+Install now attaches `Authorization: Bearer $CVCPKG_TOKEN` to both the catalog
+fetch and the archive download, and `cvcpkg install` gains a `--token` flag for
+parity with `search`. The token is **origin-scoped**: it is sent only to the
+configured server/root host (`CVCPKG_SERVER_URL` / `CVCPKG_ROOT_URL`) and never
+to the public GitHub Pages catalog fallback, a third-party mirror, or an
+artifact CDN — any of which can legitimately appear as a fallback catalog URL,
+an `archive_url`, or a `mirror_url`. A URL to our own server is also
+canonicalised to the server's scheme before the token is attached, because the
+server sits behind a TLS-terminating proxy and emits `http://` download URLs —
+so the bearer is never sent over cleartext http (and the private archive is not
+fetched anonymously).
+
+```sh
+CVCPKG_TOKEN=<tok> cvcpkg install myorg/private-pkg --prefix ./deps
+# or
+cvcpkg install myorg/private-pkg --token <tok> --prefix ./deps
+```
+
 ## v2.0.0
 
 Major release: production daemon with database backend, the

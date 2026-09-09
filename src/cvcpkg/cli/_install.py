@@ -51,6 +51,14 @@ from cvcpkg.cli._helpers import (
 @_config_opt
 @_link_opt
 @click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    default=None,
+    help="Bearer token for installing packages from a private org (catalog "
+    "resolution + archive download). Only sent to the configured server/root "
+    "origin.  [env: CVCPKG_TOKEN]",
+)
+@click.option(
     "--catalog",
     metavar="URL",
     help="Override catalog URL or path to a local catalog YAML file.",
@@ -132,6 +140,7 @@ def install(
     arch: str,
     config: str,
     link: str,
+    token: str | None,
     catalog: str | None,
     catalog_revision: int | None,
     source: str,
@@ -192,6 +201,13 @@ def install(
 
     ctx = click.get_current_context()
     prefix_path = Path(prefix).resolve()
+
+    # An explicit --token reaches the origin-scoped auth on the catalog fetch
+    # and archive download (cvcpkg.config.server_auth_headers) via the
+    # environment, the same channel CVCPKG_TOKEN already uses. Setting it when
+    # the env var already carries it is a harmless no-op.
+    if token:
+        os.environ["CVCPKG_TOKEN"] = token
 
     if keep_host_tools is not None:
         click.echo(
@@ -837,6 +853,9 @@ def install_deps(
         arch=arch,
         config=config,
         link=link,
+        # None -> install() still reads CVCPKG_TOKEN from the environment, so a
+        # private-org dep resolves as long as the token is exported.
+        token=None,
         catalog=catalog,
         catalog_revision=catalog_revision,
         source=source,

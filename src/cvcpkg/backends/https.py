@@ -36,9 +36,20 @@ class HttpsBackend(StorageBackend):
 
     schemes: ClassVar[tuple[str, ...]] = ("https", "http")
 
-    def head(self, uri: str) -> ObjectInfo:
+    @staticmethod
+    def _headers(extra: dict[str, str] | None) -> dict[str, str]:
+        """Default User-Agent, with *extra* (e.g. an Authorization header for
+        our own server) merged on top."""
+        hdrs = {"User-Agent": _user_agent()}
+        if extra:
+            hdrs.update(extra)
+        return hdrs
+
+    def head(self, uri: str, headers: dict[str, str] | None = None) -> ObjectInfo:
+        hdrs = self._headers(headers)
+
         def _once() -> ObjectInfo:
-            req = urllib.request.Request(uri, method="HEAD", headers={"User-Agent": _user_agent()})
+            req = urllib.request.Request(uri, method="HEAD", headers=hdrs)
             with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
                 size = int(resp.headers.get("Content-Length", -1))
                 etag = resp.headers.get("ETag", "")
@@ -50,13 +61,15 @@ class HttpsBackend(StorageBackend):
         except urllib.error.URLError as exc:
             raise OSError(f"HEAD {uri}: {exc}") from exc
 
-    def open(self, uri: str) -> BinaryIO:
+    def open(self, uri: str, headers: dict[str, str] | None = None) -> BinaryIO:
         # Retries only ESTABLISHING the stream. A failure part-way through the
         # body cannot be resumed from here -- the caller has already been handed
         # the file object -- so restarting the whole transfer is the download
         # path's job (see installer._download_from_url).
+        hdrs = self._headers(headers)
+
         def _once() -> BinaryIO:
-            req = urllib.request.Request(uri, headers={"User-Agent": _user_agent()})
+            req = urllib.request.Request(uri, headers=hdrs)
             resp = urllib.request.urlopen(req, timeout=120)  # noqa: S310
             return resp  # type: ignore[return-value]
 
