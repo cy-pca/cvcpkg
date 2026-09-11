@@ -28,6 +28,61 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
+## Unreleased
+
+### Sign in with tx.wtf (OIDC) — server enablement
+
+The Phase 13 OIDC relying-party code has shipped since 2026-07 and was
+**dormant in production**: the route was registered and visible in the OpenAPI,
+but `docker-compose.production.yml` never passed the four `CVCPKG_OIDC_*`
+variables through, so `/admin/oidc/login` answered 404 on cvcpkg.org. This
+release makes it configurable and hardens the flow it turns on. It is the first
+stage of wiring cvcpkg.org logins to the tx.wtf federated identity network so
+interactive users stop hand-cutting API tokens; see
+`docs/roadmap/txwtf-sso-and-cli-login.md`.
+
+**Machine tokens are untouched.** `cvctok_` secrets, their hashing, and every
+`CVCPKG_TOKEN` code path behave exactly as before.
+
+Added:
+- `CVCPKG_OIDC_*` pass-through in `docker-compose.production.yml`, documented in
+  `.env.production.example`.
+- `CVCPKG_OIDC_READER_GROUPS` — a `reader` tier below `publisher`.
+- `CVCPKG_OIDC_DEFAULT_ROLE` — role for a user who authenticates but matches no
+  group. Empty keeps refuse-by-default; `reader` gives them a named identity an
+  org owner can add to a private org by handle.
+- `CVCPKG_COOKIE_SECURE` (default on) and `CVCPKG_SESSION_TTL_SECONDS`.
+- `auth.derive_key()` — purpose-scoped subkeys, so new signing purposes stop
+  sharing the raw token-hashing key. `_hash_token` deliberately still uses the
+  raw key; rekeying it would invalidate every live token in the fleet.
+- `AuditAction.login` / `.logout`. Dashboard logins were previously recorded as
+  `token_create` ("closest existing action"), making a sign-in indistinguishable
+  from minting a credential.
+
+Fixed:
+- **The OIDC `nonce` was minted, sent, and never checked**, so a callback was
+  never bound to the login attempt that started it. It is now verified against
+  the `id_token`, and a missing nonce claim is refused rather than accepted.
+- **Session and login-transaction cookies now carry `Secure`.** The flag is *not*
+  derived from the request scheme: Apache terminates TLS for cvcpkg.org and uvicorn
+  is not run with `--proxy-headers`, so the app sees `http` there and scheme-sniffing
+  would silently disable `Secure` in production. A genuinely plain-http deployment
+  sets `CVCPKG_COOKIE_SECURE=0`, and is warned once if it has not — gated on the
+  absence of `X-Forwarded-Proto: https`, so the warning stays quiet behind a proxy.
+- **The server refuses to start on an unsafe group map.** Mapping a role to a
+  group every account already holds (`user`, `everyone`, ...) made "can sign up
+  on the IdP" equivalent to that role, and looked healthy until someone tried
+  it. `CVCPKG_OIDC_DEFAULT_ROLE=admin` is refused for the same reason.
+- `POST /admin/tokens/create` applied only `.strip()` to the token name while
+  every other mint path validates it. A token name is the org-membership key,
+  so a name with a space could not be typed back into `cvcpkg org add-member`.
+- `cvcpkg install --token` set `CVCPKG_TOKEN` in `os.environ` and never removed
+  it, leaving one command's credential as the standing configuration for
+  everything after it in the same interpreter (same shape as the #497 leak).
+- `registries.yaml` holds a bearer token per federated registry and had no
+  permission check; it now warns when group/world-readable, as env files do.
+- OIDC discovery was fetched twice per login; it is now cached for 5 minutes.
+
 ## v2.0.3
 
 ### `cvcpkg install` can install from a private org (2026-09-08)

@@ -111,7 +111,7 @@ All dashboard mutations write to the same audit chain as the REST API:
 
 | Dashboard action | Audit action | Actor recorded |
 | --- | --- | --- |
-| Login (token or OIDC) | `token_create`, target `admin-ui` | token name / OIDC subject |
+| Login (token or OIDC) | `login`, target `admin-ui` | token name / OIDC subject |
 | Package yank / unyank / delete | `yank` / `unyank` / `delete`, detail `… via /admin` | `admin-ui` |
 | Token create | `token_create`, detail `role=… via /admin` | `admin-ui` |
 | Token revoke | `token_revoke` (skipped if nothing was revoked) | `admin-ui` |

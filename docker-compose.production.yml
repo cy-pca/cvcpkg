@@ -70,6 +70,24 @@ services:
             CVCPKG_RATE_LIMIT_RPM: ${CVCPKG_RATE_LIMIT_RPM:-300}
             CVCPKG_CORS_ORIGINS: ${CVCPKG_CORS_ORIGINS:-}
             CVCPKG_LOG_JSON: ${CVCPKG_LOG_JSON:-}
+            # ── Sign in with tx.wtf (OIDC) ─────────────────────
+            # All four of ISSUER/CLIENT_ID/CLIENT_SECRET/REDIRECT_URL must be
+            # set together; with any of them missing /admin/oidc/login 404s and
+            # the dashboard falls back to bearer-token login.  Set them in
+            # .env.production -- the secret must never be committed here.
+            CVCPKG_OIDC_ISSUER: ${CVCPKG_OIDC_ISSUER:-}
+            CVCPKG_OIDC_CLIENT_ID: ${CVCPKG_OIDC_CLIENT_ID:-}
+            CVCPKG_OIDC_CLIENT_SECRET: ${CVCPKG_OIDC_CLIENT_SECRET:-}
+            CVCPKG_OIDC_REDIRECT_URL: ${CVCPKG_OIDC_REDIRECT_URL:-}
+            CVCPKG_OIDC_SCOPES: ${CVCPKG_OIDC_SCOPES:-}
+            CVCPKG_OIDC_GROUPS_CLAIM: ${CVCPKG_OIDC_GROUPS_CLAIM:-}
+            CVCPKG_OIDC_ADMIN_GROUPS: ${CVCPKG_OIDC_ADMIN_GROUPS:-}
+            CVCPKG_OIDC_PUBLISHER_GROUPS: ${CVCPKG_OIDC_PUBLISHER_GROUPS:-}
+            CVCPKG_OIDC_READER_GROUPS: ${CVCPKG_OIDC_READER_GROUPS:-}
+            CVCPKG_OIDC_ADMIN_EMAILS: ${CVCPKG_OIDC_ADMIN_EMAILS:-}
+            CVCPKG_OIDC_DEFAULT_ROLE: ${CVCPKG_OIDC_DEFAULT_ROLE:-}
+            CVCPKG_COOKIE_SECURE: ${CVCPKG_COOKIE_SECURE:-}
+            CVCPKG_SESSION_TTL_SECONDS: ${CVCPKG_SESSION_TTL_SECONDS:-}
             # ── Mirror mode (optional) ─────────────────────────
             # Set CVCPKG_MIRROR_MODE=1 + CVCPKG_MIRROR_UPSTREAM=<url>
             # in .env.production to run this instance as a read-only

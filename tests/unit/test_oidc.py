@@ -204,6 +204,9 @@ def oidc_server(tmp_path, monkeypatch):
     monkeypatch.setenv("CVCPKG_OIDC_CLIENT_SECRET", "sec")
     monkeypatch.setenv("CVCPKG_OIDC_REDIRECT_URL", "https://cvcpkg.org/admin/oidc/callback")
     monkeypatch.setenv("CVCPKG_OIDC_ADMIN_GROUPS", "cvc-admins")
+    # TestClient speaks plain http, and a browser never returns a Secure cookie
+    # over http.  Production is https and keeps the default.
+    monkeypatch.setenv("CVCPKG_COOKIE_SECURE", "0")
 
     from cvcpkg.server.db import create_tables, dispose_engine, init_db
 
@@ -223,14 +226,26 @@ def oidc_server(tmp_path, monkeypatch):
             "userinfo_endpoint": "https://idp.example/userinfo",
         }
 
+    real_build_authorize_url = oidc_mod.build_authorize_url
+
     async def fake_exchange(endpoint, cfg, *, code, verifier, **kw):
         state["exchanged"] = {"code": code, "verifier": verifier}
-        return {"access_token": "at-123"}
+        # A conforming IdP echoes the nonce it was handed on the authorize
+        # request; the callback binds the response to the login attempt with it.
+        nonce = state.get("nonce_override", state.get("sent_nonce", ""))
+        body = base64.urlsafe_b64encode(json.dumps({"nonce": nonce}).encode())
+        id_token = "hdr." + body.rstrip(b"=").decode() + ".sig"
+        return {"access_token": "at-123", "id_token": id_token}
 
     async def fake_userinfo(endpoint, access_token, **kw):
         state["userinfo_token"] = access_token
         return state["claims"]
 
+    def spy_build_authorize_url(endpoint, cfg, **kw):
+        state["sent_nonce"] = kw.get("nonce", "")
+        return real_build_authorize_url(endpoint, cfg, **kw)
+
+    monkeypatch.setattr(oidc_mod, "build_authorize_url", spy_build_authorize_url)
     monkeypatch.setattr(oidc_mod, "discover", fake_discover)
     monkeypatch.setattr(oidc_mod, "exchange_code", fake_exchange)
     monkeypatch.setattr(oidc_mod, "fetch_userinfo", fake_userinfo)
@@ -310,6 +325,51 @@ class TestOidcFlow:
         assert _SESSION_COOKIE not in r.cookies
 
 
+class TestNonceBinding:
+    """The nonce was minted and sent but never checked until 2026-09."""
+
+    def test_idp_echoing_a_different_nonce_is_refused(self, oidc_server):
+        client, st = oidc_server
+        st["nonce_override"] = "attacker-supplied-nonce"
+        r = client.get("/admin/oidc/login", follow_redirects=False)
+        from urllib.parse import parse_qs, urlparse
+
+        sent = parse_qs(urlparse(r.headers["location"]).query)["state"][0]
+        r = client.get(f"/admin/oidc/callback?code=abc&state={sent}", follow_redirects=False)
+        assert r.status_code == 400
+        assert "nonce mismatch" in r.text
+        assert _SESSION_COOKIE not in r.cookies
+
+    def test_idp_omitting_the_id_token_is_refused(self, oidc_server, monkeypatch):
+        client, st = oidc_server
+
+        async def no_id_token(endpoint, cfg, *, code, verifier, **kw):
+            return {"access_token": "at-123"}
+
+        monkeypatch.setattr(oidc_mod, "exchange_code", no_id_token)
+        r = client.get("/admin/oidc/login", follow_redirects=False)
+        from urllib.parse import parse_qs, urlparse
+
+        sent = parse_qs(urlparse(r.headers["location"]).query)["state"][0]
+        r = client.get(f"/admin/oidc/callback?code=abc&state={sent}", follow_redirects=False)
+        assert r.status_code == 400
+        assert _SESSION_COOKIE not in r.cookies
+
+
+class TestCookieHardening:
+    def test_session_cookie_is_secure_by_default(self, oidc_server, monkeypatch):
+        """Production is https; Secure must not depend on remembering a flag."""
+        client, _ = oidc_server
+        monkeypatch.delenv("CVCPKG_COOKIE_SECURE", raising=False)
+        r = client.get("/admin/oidc/login", follow_redirects=False)
+        assert "secure" in r.headers["set-cookie"].lower()
+
+    def test_secure_can_be_disabled_for_plain_http_deployments(self, oidc_server):
+        client, _ = oidc_server  # fixture sets CVCPKG_COOKIE_SECURE=0
+        r = client.get("/admin/oidc/login", follow_redirects=False)
+        assert "secure" not in r.headers["set-cookie"].lower()
+
+
 class TestOidcDisabled:
     def test_endpoints_404_when_unconfigured(self, tmp_path, monkeypatch):
         for v in (
@@ -326,3 +386,260 @@ class TestOidcDisabled:
             assert client.get("/admin/oidc/callback?code=x&state=y").status_code == 404
             # and the login page does not advertise SSO
             assert "Sign in with SSO" not in client.get("/admin").text
+
+
+# ── Reader tier + default role (2026-09 SSO work) ───────────────
+
+
+_TIERED = OidcConfig(
+    admin_groups=frozenset({"cvcpkg-admin"}),
+    publisher_groups=frozenset({"cvcpkg-publisher"}),
+    reader_groups=frozenset({"cvcpkg-reader"}),
+)
+
+
+def test_reader_group_maps_to_reader():
+    assert map_claims_to_role({"groups": ["cvcpkg-reader"]}, _TIERED) == "reader"
+
+
+def test_reader_group_ranks_below_publisher():
+    """A user in both gets the higher role, not the last one matched."""
+    claims = {"groups": ["cvcpkg-reader", "cvcpkg-publisher"]}
+    assert map_claims_to_role(claims, _TIERED) == "publisher"
+
+
+def test_no_group_match_still_refuses_without_a_default():
+    assert map_claims_to_role({"groups": ["unrelated"]}, _TIERED) is None
+
+
+def test_default_role_applies_when_no_group_matches():
+    cfg = OidcConfig(admin_groups=frozenset({"cvcpkg-admin"}), default_role="reader")
+    assert map_claims_to_role({"groups": ["unrelated"]}, cfg) == "reader"
+    assert map_claims_to_role({}, cfg) == "reader"
+
+
+def test_default_role_never_overrides_a_real_group_match():
+    cfg = OidcConfig(admin_groups=frozenset({"cvcpkg-admin"}), default_role="reader")
+    assert map_claims_to_role({"groups": ["cvcpkg-admin"]}, cfg) == "admin"
+
+
+# ── Startup validation ──────────────────────────────────────────
+
+
+@pytest.mark.parametrize("universal", ["user", "users", "everyone", "authenticated", "USER"])
+def test_universal_group_in_admin_map_is_refused(universal):
+    """Every self-registered IdP account holds these, so mapping one to a role
+    silently makes 'can sign up' equivalent to that role."""
+    problems = oidc_mod.validate_config(OidcConfig(admin_groups=frozenset({universal})))
+    assert problems and "CVCPKG_OIDC_ADMIN_GROUPS" in problems[0]
+
+
+def test_universal_group_in_publisher_map_is_refused():
+    problems = oidc_mod.validate_config(OidcConfig(publisher_groups=frozenset({"user"})))
+    assert problems and "CVCPKG_OIDC_PUBLISHER_GROUPS" in problems[0]
+
+
+def test_dedicated_group_names_are_accepted():
+    assert oidc_mod.validate_config(_TIERED) == []
+
+
+def test_default_role_admin_is_refused():
+    problems = oidc_mod.validate_config(OidcConfig(default_role="admin"))
+    assert problems and "every authenticated user an admin" in problems[0]
+
+
+def test_unknown_default_role_is_refused():
+    problems = oidc_mod.validate_config(OidcConfig(default_role="wizard"))
+    assert problems and "not one of" in problems[0]
+
+
+def test_reader_default_role_is_accepted():
+    assert oidc_mod.validate_config(OidcConfig(default_role="reader")) == []
+
+
+# ── id_token nonce binding ──────────────────────────────────────
+
+
+def _id_token(payload: dict) -> str:
+    body = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
+    return f"header.{body}.signature"
+
+
+def test_nonce_matches_when_idp_echoes_it():
+    assert oidc_mod.nonce_matches(_id_token({"nonce": "abc123"}), "abc123")
+
+
+def test_nonce_mismatch_is_refused():
+    assert not oidc_mod.nonce_matches(_id_token({"nonce": "abc123"}), "different")
+
+
+def test_missing_nonce_claim_is_refused():
+    """Absence must not be a pass — the IdP is the party this guards against."""
+    assert not oidc_mod.nonce_matches(_id_token({"sub": "joe"}), "abc123")
+
+
+@pytest.mark.parametrize("token", ["", "not-a-jwt", "a.b", "a.!!!.c"])
+def test_malformed_id_token_is_refused(token):
+    assert not oidc_mod.nonce_matches(token, "abc123")
+
+
+def test_empty_expected_nonce_is_refused():
+    assert not oidc_mod.nonce_matches(_id_token({"nonce": ""}), "")
+
+
+def test_id_token_claims_decodes_payload_without_verifying():
+    claims = oidc_mod.id_token_claims(_id_token({"sub": "joe", "nonce": "n"}))
+    assert claims == {"sub": "joe", "nonce": "n"}
+
+
+# ── Discovery caching ───────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_discovery_is_cached_within_its_ttl(monkeypatch):
+    """Both legs of a login call discover(); it should cost one round trip."""
+    cfg = OidcConfig(issuer="https://idp.test.invalid")
+    oidc_mod._discovery_cache.clear()
+    calls = []
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"authorization_endpoint": "https://idp.test.invalid/auth"}
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url):
+            calls.append(url)
+            return _Resp()
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    await oidc_mod.discover(cfg, now=1000.0)
+    await oidc_mod.discover(cfg, now=1100.0)
+    assert len(calls) == 1
+    # Past the TTL it refetches rather than serving a stale document forever.
+    await oidc_mod.discover(cfg, now=1000.0 + oidc_mod._DISCOVERY_TTL_SECONDS + 1)
+    assert len(calls) == 2
+    oidc_mod._discovery_cache.clear()
+
+
+# ── Session lifetime knob ───────────────────────────────────────
+
+
+def test_session_ttl_defaults_to_one_working_day(monkeypatch):
+    from cvcpkg.server import admin_ui
+
+    monkeypatch.delenv("CVCPKG_SESSION_TTL_SECONDS", raising=False)
+    assert admin_ui._session_ttl_seconds() == 8 * 3600
+
+
+def test_session_ttl_is_overridable(monkeypatch):
+    from cvcpkg.server import admin_ui
+
+    monkeypatch.setenv("CVCPKG_SESSION_TTL_SECONDS", "900")
+    assert admin_ui._session_ttl_seconds() == 900
+
+
+@pytest.mark.parametrize("bad", ["", "not-a-number", "0", "-5"])
+def test_session_ttl_rejects_nonsense_without_crashing(monkeypatch, bad):
+    """A malformed value must not make every session immortal or instantly dead."""
+    from cvcpkg.server import admin_ui
+
+    monkeypatch.setenv("CVCPKG_SESSION_TTL_SECONDS", bad)
+    ttl = admin_ui._session_ttl_seconds()
+    assert ttl >= 60
+
+
+def test_session_value_uses_the_configured_ttl(monkeypatch):
+    from cvcpkg.server import admin_ui
+
+    monkeypatch.setenv("CVCPKG_SESSION_TTL_SECONDS", "900")
+    value = admin_ui.make_session_value(b"k", now=1000.0)
+    assert int(value.split(".", 1)[0]) == 1900
+
+
+# ── Secure-cookie / proxy detection ─────────────────────────────
+
+
+def _fake_request(scheme: str, headers: dict | None = None):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(url=SimpleNamespace(scheme=scheme), headers=headers or {})
+
+
+@pytest.mark.parametrize(
+    "scheme,headers,expected",
+    [
+        # Nothing says TLS: a Secure cookie here is silently dropped.
+        ("http", {}, True),
+        # cvcpkg.org's shape — Apache terminates TLS, uvicorn sees http.
+        ("http", {"x-forwarded-proto": "https"}, False),
+        # A proxy chain: the left-most hop is what the client spoke.
+        ("http", {"x-forwarded-proto": "https, http"}, False),
+        ("https", {}, False),
+        ("http", {"x-forwarded-proto": "http"}, True),
+    ],
+)
+def test_plain_http_detection(scheme, headers, expected):
+    """The warning must not fire for a correctly proxied production server."""
+    from cvcpkg.server import admin_ui
+
+    assert admin_ui._looks_like_plain_http(_fake_request(scheme, headers)) is expected
+
+
+def test_cookie_kwargs_are_secure_and_httponly_by_default(monkeypatch):
+    from cvcpkg.server import admin_ui
+
+    monkeypatch.delenv("CVCPKG_COOKIE_SECURE", raising=False)
+    kw = admin_ui.session_cookie_kwargs()
+    assert kw["secure"] is True
+    assert kw["httponly"] is True
+    assert kw["samesite"] == "lax"
+
+
+def test_cookie_secure_opt_out(monkeypatch):
+    from cvcpkg.server import admin_ui
+
+    monkeypatch.setenv("CVCPKG_COOKIE_SECURE", "0")
+    assert admin_ui.session_cookie_kwargs()["secure"] is False
+
+
+def test_plain_http_warning_fires_once(monkeypatch, caplog):
+    """Once per process, not once per login — this is advice, not an alarm."""
+    import logging
+
+    from cvcpkg.server import admin_ui
+
+    monkeypatch.delenv("CVCPKG_COOKIE_SECURE", raising=False)
+    monkeypatch.setattr(admin_ui, "_warned_insecure_scheme", False)
+    req = _fake_request("http", {})
+    with caplog.at_level(logging.WARNING, logger="cvcpkg.server"):
+        admin_ui.session_cookie_kwargs(request=req)
+        admin_ui.session_cookie_kwargs(request=req)
+    hits = [r for r in caplog.records if "CVCPKG_COOKIE_SECURE" in r.message]
+    assert len(hits) == 1
+
+
+def test_no_warning_when_proxied(monkeypatch, caplog):
+    import logging
+
+    from cvcpkg.server import admin_ui
+
+    monkeypatch.delenv("CVCPKG_COOKIE_SECURE", raising=False)
+    monkeypatch.setattr(admin_ui, "_warned_insecure_scheme", False)
+    req = _fake_request("http", {"x-forwarded-proto": "https"})
+    with caplog.at_level(logging.WARNING, logger="cvcpkg.server"):
+        admin_ui.session_cookie_kwargs(request=req)
+    assert not [r for r in caplog.records if "CVCPKG_COOKIE_SECURE" in r.message]

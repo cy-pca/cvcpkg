@@ -207,7 +207,24 @@ def install(
     # environment, the same channel CVCPKG_TOKEN already uses. Setting it when
     # the env var already carries it is a harmless no-op.
     if token:
+        # Restore the environment when this invocation ends: os.environ is
+        # process-wide and cvcpkg is not always a process (it is imported by
+        # the server, by tests, and by anything embedding the CLI), so an
+        # un-popped token becomes the standing credential for everything that
+        # runs after it in the same interpreter.  Same leak shape as #497.
+        # Only pop if we actually introduced the key -- a value already in the
+        # environment is left exactly as it was.
+        _had_token = "CVCPKG_TOKEN" in os.environ
+        _prev_token = os.environ.get("CVCPKG_TOKEN")
         os.environ["CVCPKG_TOKEN"] = token
+
+        def _restore_token() -> None:
+            if _had_token:
+                os.environ["CVCPKG_TOKEN"] = _prev_token or ""
+            else:
+                os.environ.pop("CVCPKG_TOKEN", None)
+
+        ctx.call_on_close(_restore_token)
 
     if keep_host_tools is not None:
         click.echo(

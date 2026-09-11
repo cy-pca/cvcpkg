@@ -130,6 +130,8 @@ from cvcpkg.server.models import (
     WebhookRegisterRequest,
     WebhookUpdateRequest,
 )
+from cvcpkg.server.oidc import OidcConfig as _OidcConfig
+from cvcpkg.server.oidc import validate_config as _oidc_validate_config
 
 # ── State ───────────────────────────────────────────────────────
 
@@ -5997,6 +5999,42 @@ def create_app(
 
         return OidcConfig.from_env().is_enabled()
 
+    # Fail at construction, not at the first login.  A group map that grants a
+    # role to a group every account already holds is not a login bug — it is a
+    # server that is open to anyone who can sign up on the IdP, and it would
+    # look completely healthy until someone tried it.
+    _oidc_cfg_at_startup = _OidcConfig.from_env()
+    _oidc_problems = _oidc_validate_config(_oidc_cfg_at_startup)
+    if _oidc_problems:
+        raise RuntimeError(
+            "refusing to start — unsafe OIDC configuration:\n  " + "\n  ".join(_oidc_problems)
+        )
+    if _oidc_cfg_at_startup.is_enabled():
+        logger.info(
+            "OIDC login enabled: issuer=%s client_id=%s default_role=%s",
+            _oidc_cfg_at_startup.issuer,
+            _oidc_cfg_at_startup.client_id,
+            _oidc_cfg_at_startup.default_role or "(refuse)",
+        )
+    else:
+        _missing = [
+            var
+            for var, val in (
+                ("CVCPKG_OIDC_ISSUER", _oidc_cfg_at_startup.issuer),
+                ("CVCPKG_OIDC_CLIENT_ID", _oidc_cfg_at_startup.client_id),
+                ("CVCPKG_OIDC_CLIENT_SECRET", _oidc_cfg_at_startup.client_secret),
+                ("CVCPKG_OIDC_REDIRECT_URL", _oidc_cfg_at_startup.redirect_url),
+            )
+            if not val
+        ]
+        # Only worth a line when it is half-configured — a deployment that has
+        # set none of them has simply not opted in.
+        if len(_missing) < 4:
+            logger.warning(
+                "OIDC login is DORMANT (/admin/oidc/login will 404): missing %s",
+                ", ".join(_missing),
+            )
+
     @app.get("/admin", tags=["admin"], response_class=HTMLResponse)
     async def admin_dashboard(request: Request):
         """Server-rendered admin overview (login page when unauthenticated)."""
@@ -6028,7 +6066,7 @@ def create_app(
         return HTMLResponse(admin_ui.dashboard_html(data))
 
     @app.post("/admin/login", tags=["admin"], response_class=HTMLResponse)
-    async def admin_login(token: str = Form("")):
+    async def admin_login(request: Request, token: str = Form("")):
         """Exchange an admin API token for a signed session cookie."""
         from cvcpkg.server import admin_ui
 
@@ -6054,20 +6092,18 @@ def create_app(
 
         if _use_db and _db_audit is not None:
             await _db_audit.record(
-                action=AuditAction.token_create,  # closest existing action
+                action=AuditAction.login,
                 actor=record.name,
                 target="admin-ui",
-                detail="admin dashboard login",
+                detail="admin dashboard login (bearer token)",
             )
 
         resp = RedirectResponse("/admin", status_code=303)
         resp.set_cookie(
             admin_ui._SESSION_COOKIE,
             admin_ui.make_session_value(_admin_session_key()),
-            max_age=admin_ui._SESSION_TTL_SECONDS,
-            httponly=True,
-            samesite="lax",
-            path="/admin",
+            max_age=admin_ui._session_ttl_seconds(),
+            **admin_ui.session_cookie_kwargs(request=request),
         )
         return resp
 
@@ -6079,10 +6115,11 @@ def create_app(
     # the mechanism for machines.
 
     @app.get("/admin/oidc/login", tags=["admin"])
-    async def admin_oidc_login():
+    async def admin_oidc_login(request: Request):
         """Begin the OIDC authorization-code flow (state + nonce + PKCE)."""
         import secrets as _secrets
 
+        from cvcpkg.server import admin_ui
         from cvcpkg.server import oidc as _oidc
 
         cfg = _oidc.OidcConfig.from_env()
@@ -6114,9 +6151,7 @@ def create_app(
             _oidc._TXN_COOKIE,
             txn,
             max_age=_oidc._TXN_TTL_SECONDS,
-            httponly=True,
-            samesite="lax",
-            path="/admin",
+            **admin_ui.session_cookie_kwargs(request=request),
         )
         return resp
 
@@ -6168,6 +6203,16 @@ def create_app(
                 status_code=502,
             )
 
+        # The nonce was minted on the authorize leg and carried in the signed
+        # txn cookie; until now it was sent and never checked, so the reply was
+        # never bound to this login attempt.  See oidc.nonce_matches for what
+        # this does and does not prove.
+        if not _oidc.nonce_matches(tokens.get("id_token", ""), str(txn.get("nonce", ""))):
+            return HTMLResponse(
+                admin_ui.login_html(error="OIDC nonce mismatch — login refused."),
+                status_code=400,
+            )
+
         role = _oidc.map_claims_to_role(claims, cfg)
         subject = _oidc.claims_subject(claims)
         if role != "admin":
@@ -6184,7 +6229,7 @@ def create_app(
 
         if _use_db and _db_audit is not None:
             await _db_audit.record(
-                action=AuditAction.token_create,
+                action=AuditAction.login,
                 actor=subject or "oidc-user",
                 target="admin-ui",
                 detail="admin dashboard login via OIDC",
@@ -6194,10 +6239,8 @@ def create_app(
         resp.set_cookie(
             admin_ui._SESSION_COOKIE,
             admin_ui.make_session_value(_admin_session_key()),
-            max_age=admin_ui._SESSION_TTL_SECONDS,
-            httponly=True,
-            samesite="lax",
-            path="/admin",
+            max_age=admin_ui._session_ttl_seconds(),
+            **admin_ui.session_cookie_kwargs(request=request),
         )
         resp.delete_cookie(_oidc._TXN_COOKIE, path="/admin")
         return resp
@@ -6291,6 +6334,22 @@ def create_app(
             raise HTTPException(403, "admin session required")
         if not _use_db or _db_tokens is None:
             raise HTTPException(503, "token management requires the database backend")
+        # The dashboard mint path applied only .strip(), while every other mint
+        # path validates.  A token name is the org-membership key, so a name
+        # with a space or a lookalike unicode character is an identity that
+        # cannot be typed back into `cvcpkg org add-member`.
+        if not _is_valid_identifier(name.strip()):
+            tokens = await _db_tokens.list_tokens()
+            return HTMLResponse(
+                admin_ui.tokens_html(
+                    tokens,
+                    error=(
+                        "invalid token name: must start with a letter or underscore "
+                        "and contain only letters, digits, underscores or hyphens."
+                    ),
+                ),
+                status_code=422,
+            )
         try:
             role_val = TokenRole(role)
         except ValueError:

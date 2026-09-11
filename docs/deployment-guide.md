@@ -56,6 +56,43 @@ curl http://localhost:8420/healthz
 | `CVCPKG_RATE_LIMIT_RPM` | `300` | Rate limit: requests/min per client IP on write endpoints (publish, upload, register, telemetry); `0` disables. `docker-compose.production.yml` passes the same `300` default. |
 | `CVCPKG_CORS_ORIGINS` | *(empty)* | Comma-separated allowed CORS origins |
 | `CVCPKG_LOG_JSON` | *(empty)* | Set `1` for structured JSON logs |
+| `CVCPKG_OIDC_ISSUER` | *(empty)* | OIDC provider, e.g. `https://tx.wtf`. **All four of ISSUER/CLIENT_ID/CLIENT_SECRET/REDIRECT_URL must be set together**; with any missing, `/admin/oidc/login` answers 404 and the dashboard keeps bearer-token login. |
+| `CVCPKG_OIDC_CLIENT_ID` | *(empty)* | Relying-party client id issued by the provider |
+| `CVCPKG_OIDC_CLIENT_SECRET` | *(empty)* | Client secret — set it in `.env.production`, never in the compose file |
+| `CVCPKG_OIDC_REDIRECT_URL` | *(empty)* | Must byte-match a URI registered with the provider, e.g. `https://cvcpkg.org/admin/oidc/callback` |
+| `CVCPKG_OIDC_SCOPES` | `openid email profile` | Add `groups` to receive the group claim |
+| `CVCPKG_OIDC_GROUPS_CLAIM` | `groups` | Claim holding the user's groups |
+| `CVCPKG_OIDC_ADMIN_GROUPS` | *(empty)* | Comma-separated groups granted `admin` |
+| `CVCPKG_OIDC_PUBLISHER_GROUPS` | *(empty)* | Comma-separated groups granted `publisher` |
+| `CVCPKG_OIDC_READER_GROUPS` | *(empty)* | Comma-separated groups granted `reader` |
+| `CVCPKG_OIDC_ADMIN_EMAILS` | *(empty)* | Emails granted `admin`, for providers that emit no groups |
+| `CVCPKG_OIDC_DEFAULT_ROLE` | *(empty)* | Role for a user who authenticates but matches no group. Empty refuses the login; `reader` gives them a named identity an org owner can add to a private org by handle. `admin` is refused at startup. |
+| `CVCPKG_COOKIE_SECURE` | `1` | Session cookies carry `Secure`. Set `0` only for a deployment genuinely reached over plain http. |
+| `CVCPKG_SESSION_TTL_SECONDS` | `28800` | Admin session lifetime (8h) |
+
+> **The group map is a security boundary.** The server **refuses to start** if
+> `CVCPKG_OIDC_ADMIN_GROUPS` or `CVCPKG_OIDC_PUBLISHER_GROUPS` names a group
+> every account on the provider already holds (`user`, `users`, `everyone`,
+> `authenticated`) — that would make "can sign up on the IdP" equivalent to
+> holding the role, and it would look healthy until someone tried it. Create
+> dedicated groups (`cvcpkg-admin`, `cvcpkg-publisher`, `cvcpkg-reader`).
+
+Register the relying party with the provider first. For a tx.wtf issuer:
+
+```bash
+txwtf register-oidc-client --name "cvcpkg.org" \
+    --redirect-uri https://cvcpkg.org/admin/oidc/callback \
+    --scopes "openid profile email groups"
+```
+
+It prints the `client_id`, and the `client_secret` **once**. Verify with:
+
+```bash
+curl -o /dev/null -w '%{http_code}\n' https://cvcpkg.org/admin/oidc/login
+```
+
+`404` means OIDC is still dormant; `303` means it is live and redirecting to
+the provider.
 
 ### Server branding
 

@@ -40,6 +40,11 @@ class AuditAction(str, Enum):
     nuke = "nuke"
     token_create = "token_create"
     token_revoke = "token_revoke"
+    # Dashboard sign-in/sign-out.  Both were previously recorded as
+    # ``token_create`` against target "admin-ui" ("closest existing action"),
+    # which made a login indistinguishable from minting a credential.
+    login = "login"
+    logout = "logout"
     catalog_rebuild = "catalog_rebuild"
     org_create = "org_create"
     org_add_member = "org_add_member"

@@ -318,7 +318,15 @@ def load_registries(config_dir: Path | None = None) -> dict[str, Registry]:
     The set of configured hosts is the federation allowlist.
     """
     raw: dict = {}
-    fd = _load_yaml_file(_registries_path(config_dir))
+    reg_path = _registries_path(config_dir)
+    if reg_path.is_file():
+        # This file holds bearer tokens for every federated registry, so it is
+        # exactly as sensitive as an env file -- and, unlike one, it was never
+        # checked.
+        from cvcpkg.envfile import warn_if_world_readable
+
+        warn_if_world_readable(reg_path)
+    fd = _load_yaml_file(reg_path)
     if isinstance(fd.get("registries"), dict):
         raw.update(fd["registries"])
     env = os.environ.get("CVCPKG_REGISTRIES", "").strip()

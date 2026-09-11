@@ -127,7 +127,7 @@ def parse_env_file(text: str, *, path: str = "<env>") -> dict[str, str]:
     return out
 
 
-def _warn_if_world_readable(path: Path) -> None:
+def warn_if_world_readable(path: Path) -> None:
     """Warn when a secrets file is readable beyond its owner.
 
     Advisory only — ssh refuses to run in this situation, but cvcpkg is often
@@ -147,6 +147,10 @@ def _warn_if_world_readable(path: Path) -> None:
             f"{mode & 0o777:04o}); it holds secrets — chmod 600 it",
             file=sys.stderr,
         )
+
+
+# Back-compat alias: the private name predates any other caller.
+_warn_if_world_readable = warn_if_world_readable
 
 
 def load_env_file(
@@ -172,7 +176,7 @@ def load_env_file(
     except OSError as e:
         raise EnvFileError(f"cannot read env file {p}: {e}") from None
 
-    _warn_if_world_readable(p)
+    warn_if_world_readable(p)
     applied: list[str] = []
     for key, value in parse_env_file(text, path=str(p)).items():
         if not override and key in os.environ:

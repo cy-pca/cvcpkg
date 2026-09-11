@@ -33,8 +33,11 @@ Config (env):
     CVCPKG_OIDC_GROUPS_CLAIM    claim holding the user's groups (default "groups")
     CVCPKG_OIDC_ADMIN_GROUPS    comma-separated groups granted the admin role
     CVCPKG_OIDC_PUBLISHER_GROUPS  comma-separated groups granted publisher
+    CVCPKG_OIDC_READER_GROUPS   comma-separated groups granted reader
     CVCPKG_OIDC_ADMIN_EMAILS    comma-separated emails granted admin (fallback
                                 for IdPs that do not emit groups)
+    CVCPKG_OIDC_DEFAULT_ROLE    role for a user who authenticates but matches
+                                no group; empty = refuse the login
 """
 
 from __future__ import annotations
@@ -75,7 +78,9 @@ class OidcConfig:
     groups_claim: str = "groups"
     admin_groups: frozenset[str] = field(default_factory=frozenset)
     publisher_groups: frozenset[str] = field(default_factory=frozenset)
+    reader_groups: frozenset[str] = field(default_factory=frozenset)
     admin_emails: frozenset[str] = field(default_factory=frozenset)
+    default_role: str = ""
 
     @classmethod
     def from_env(cls) -> OidcConfig:
@@ -88,7 +93,9 @@ class OidcConfig:
             groups_claim=os.environ.get("CVCPKG_OIDC_GROUPS_CLAIM", "groups").strip(),
             admin_groups=_csv_set(os.environ.get("CVCPKG_OIDC_ADMIN_GROUPS", "")),
             publisher_groups=_csv_set(os.environ.get("CVCPKG_OIDC_PUBLISHER_GROUPS", "")),
+            reader_groups=_csv_set(os.environ.get("CVCPKG_OIDC_READER_GROUPS", "")),
             admin_emails=_csv_set(os.environ.get("CVCPKG_OIDC_ADMIN_EMAILS", "")),
+            default_role=os.environ.get("CVCPKG_OIDC_DEFAULT_ROLE", "").strip().lower(),
         )
 
     def is_enabled(self) -> bool:
@@ -103,12 +110,61 @@ class OidcConfig:
 # ── Claim -> role mapping (pure) ────────────────────────────────
 
 
+# Groups every self-registered account on the IdP already holds.  Mapping one
+# of these to a cvcpkg role would silently make "has an account on tx.wtf"
+# equivalent to that role, which is never what an operator means to configure.
+_UNIVERSAL_GROUPS = frozenset({"user", "users", "everyone", "authenticated"})
+
+_ROLE_TIERS = ("admin", "publisher", "reader")
+
+
+def validate_config(cfg: OidcConfig) -> list[str]:
+    """Return configuration errors that must stop startup, or an empty list.
+
+    Called at app construction so a dangerous group map fails loudly at deploy
+    time rather than at the first login.
+    """
+    problems: list[str] = []
+    # reader_groups is deliberately not checked: "every authenticated user is a
+    # reader" is a coherent policy (it is what CVCPKG_OIDC_DEFAULT_ROLE=reader
+    # says outright), and a reader sees no more than an anonymous visitor.
+    for label, groups in (
+        ("CVCPKG_OIDC_ADMIN_GROUPS", cfg.admin_groups),
+        ("CVCPKG_OIDC_PUBLISHER_GROUPS", cfg.publisher_groups),
+    ):
+        bad = {g for g in groups if g.strip().lower() in _UNIVERSAL_GROUPS}
+        if bad:
+            problems.append(
+                f"{label} contains {sorted(bad)!r}, which every account on the "
+                f"identity provider already holds — this would grant "
+                f"{label.split('_')[2].lower()} to anyone who can sign up. "
+                f"Use a dedicated group instead."
+            )
+    if cfg.default_role and cfg.default_role not in _ROLE_TIERS:
+        problems.append(
+            f"CVCPKG_OIDC_DEFAULT_ROLE={cfg.default_role!r} is not one of {_ROLE_TIERS!r}"
+        )
+    if cfg.default_role == "admin":
+        problems.append(
+            "CVCPKG_OIDC_DEFAULT_ROLE=admin would make every authenticated user an "
+            "admin; refuse rather than honour it."
+        )
+    return problems
+
+
 def map_claims_to_role(claims: dict, cfg: OidcConfig) -> str | None:
     """Map IdP claims onto a cvcpkg role name, or None if unauthorized.
 
-    Precedence: admin groups -> admin emails -> publisher groups -> None.
-    Returning None means the user authenticated with the IdP but has no
-    cvcpkg entitlement — they are refused rather than silently downgraded.
+    Precedence: admin groups -> admin emails -> publisher groups -> reader
+    groups -> ``default_role``.
+
+    ``default_role`` is what a user gets for authenticating successfully while
+    matching no group at all.  Empty (the default) preserves refuse-by-default.
+    Set to ``reader`` it means "an account on the IdP earns you a *named*
+    identity here" — which is what lets an org owner add someone to a private
+    org by handle instead of minting and couriering a token first.  A reader
+    can see no more than an anonymous visitor already can; the value is the
+    name, not the permission.
     """
     raw_groups = claims.get(cfg.groups_claim) or []
     if isinstance(raw_groups, str):
@@ -123,7 +179,9 @@ def map_claims_to_role(claims: dict, cfg: OidcConfig) -> str | None:
         return "admin"
     if cfg.publisher_groups and (groups & cfg.publisher_groups):
         return "publisher"
-    return None
+    if cfg.reader_groups and (groups & cfg.reader_groups):
+        return "reader"
+    return cfg.default_role or None
 
 
 def claims_subject(claims: dict) -> str:
@@ -200,14 +258,70 @@ def build_authorize_url(
 # ── IdP calls (network) ─────────────────────────────────────────
 
 
-async def discover(cfg: OidcConfig, *, timeout: float = 15.0) -> dict:
-    """Fetch the provider's OpenID discovery document."""
+def id_token_claims(id_token: str) -> dict:
+    """Decode an id_token's payload **without verifying its signature**.
+
+    This is deliberately not a JWT library and deliberately not a validation
+    routine.  The token arrives over a direct server-to-server TLS call to the
+    token endpoint, which per OIDC Core §3.1.3.7 is what stands in for checking
+    the signature here; the payload is decoded only so the ``nonce`` minted at
+    /admin/oidc/login can be compared against the one the IdP echoes back.
+
+    What that comparison buys: it binds this response to *this* login attempt,
+    catching a token-substitution mix-up.  What it does not buy: any assurance
+    the token is authentic, since an attacker who could supply the token could
+    supply the nonce inside it.  The authentic-ness comes from the TLS channel.
+    Treat a failure as "abort the login", not as "the signature was bad".
+    """
+    try:
+        payload = id_token.split(".")[1]
+    except (AttributeError, IndexError):
+        return {}
+    try:
+        pad = "=" * (-len(payload) % 4)
+        body = json.loads(base64.urlsafe_b64decode(payload + pad).decode())
+    except Exception:
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def nonce_matches(id_token: str, expected: str) -> bool:
+    """True if *id_token* carries exactly *expected* as its ``nonce`` claim.
+
+    A missing id_token or a missing nonce claim is a mismatch, not a pass: the
+    nonce was sent on the authorization request, so an IdP that honours the
+    spec echoes it, and silently accepting its absence would make the whole
+    check opt-out by the very party it guards against.
+    """
+    if not expected:
+        return False
+    got = id_token_claims(id_token).get("nonce")
+    return isinstance(got, str) and hmac.compare_digest(got, expected)
+
+
+# Discovery is fetched on both legs of every login (authorize + callback).  The
+# document is near-static, so a short shared TTL removes one network round trip
+# from each login and one hard dependency on the IdP being reachable at exactly
+# the moment a callback lands.
+_DISCOVERY_TTL_SECONDS = 300.0
+_discovery_cache: dict[str, tuple[float, dict]] = {}
+
+
+async def discover(cfg: OidcConfig, *, timeout: float = 15.0, now: float | None = None) -> dict:
+    """Fetch the provider's OpenID discovery document (cached, 5-minute TTL)."""
     import httpx
+
+    clock = now if now is not None else time.time()
+    hit = _discovery_cache.get(cfg.discovery_url)
+    if hit is not None and clock < hit[0]:
+        return hit[1]
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.get(cfg.discovery_url)
         resp.raise_for_status()
-        return resp.json()
+        doc = resp.json()
+    _discovery_cache[cfg.discovery_url] = (clock + _DISCOVERY_TTL_SECONDS, doc)
+    return doc
 
 
 async def exchange_code(

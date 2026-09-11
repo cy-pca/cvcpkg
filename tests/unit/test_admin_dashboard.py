@@ -60,6 +60,9 @@ def admin_server(tmp_path, monkeypatch):
     db_url = f"sqlite+aiosqlite:///{tmp_path / 'test.db'}"
     monkeypatch.setenv("CVCPKG_DATABASE_URL", db_url)
     monkeypatch.delenv("CVCPKG_MIRROR_MODE", raising=False)
+    # TestClient speaks plain http, and no client returns a Secure cookie over
+    # http -- every authenticated page would fall back to the login screen.
+    monkeypatch.setenv("CVCPKG_COOKIE_SECURE", "0")
 
     from cvcpkg.server.db import create_tables, dispose_engine, init_db
     from cvcpkg.server.db_stores import DbDownloadStore, DbTokenStore
@@ -143,6 +146,9 @@ def manage_server(tmp_path, monkeypatch):
     db_url = f"sqlite+aiosqlite:///{tmp_path / 'manage.db'}"
     monkeypatch.setenv("CVCPKG_DATABASE_URL", db_url)
     monkeypatch.delenv("CVCPKG_MIRROR_MODE", raising=False)
+    # TestClient speaks plain http, and no client returns a Secure cookie over
+    # http -- every authenticated page would fall back to the login screen.
+    monkeypatch.setenv("CVCPKG_COOKIE_SECURE", "0")
 
     from cvcpkg.server.db import create_tables, dispose_engine, init_db
     from cvcpkg.server.db_stores import DbPackageIndex, DbTokenStore
@@ -287,6 +293,9 @@ def health_server(tmp_path, monkeypatch):
     db_url = f"sqlite+aiosqlite:///{tmp_path / 'health.db'}"
     monkeypatch.setenv("CVCPKG_DATABASE_URL", db_url)
     monkeypatch.delenv("CVCPKG_MIRROR_MODE", raising=False)
+    # TestClient speaks plain http, and no client returns a Secure cookie over
+    # http -- every authenticated page would fall back to the login screen.
+    monkeypatch.setenv("CVCPKG_COOKIE_SECURE", "0")
 
     from cvcpkg.server.db import create_tables, dispose_engine, init_db
     from cvcpkg.server.db_stores import DbBuilderStore, DbPackageIndex, DbTokenStore

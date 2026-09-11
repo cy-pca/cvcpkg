@@ -39,6 +39,21 @@ def _ensure_hmac_key(state_dir: Path) -> bytes:
     return key
 
 
+def derive_key(hmac_key: bytes, purpose: str) -> bytes:
+    """Derive a purpose-scoped subkey from the server's root HMAC key.
+
+    One 32-byte key file currently signs API tokens, admin session cookies and
+    OIDC login-transaction cookies, with nothing but a message prefix keeping
+    them apart.  A prefix is a convention; a distinct key is a boundary.  Every
+    *new* signing purpose takes a subkey from here so that a forgery primitive
+    found in one context cannot be carried into another.
+
+    ``_hash_token`` deliberately stays on the raw key: rekeying it would
+    invalidate every ``cvctok_`` in the fleet at once.
+    """
+    return hmac.new(hmac_key, b"cvcpkg/v1/" + purpose.encode(), hashlib.sha256).digest()
+
+
 def _hash_token(raw_token: str, hmac_key: bytes) -> str:
     """Derive a deterministic hash from *raw_token* using HMAC-SHA256."""
     return hmac.new(hmac_key, raw_token.encode(), hashlib.sha256).hexdigest()

@@ -19,10 +19,75 @@ from __future__ import annotations
 import datetime
 import hashlib
 import hmac
+import os
 import time
 
 _SESSION_COOKIE = "cvcpkg_admin_session"
-_SESSION_TTL_SECONDS = 8 * 3600  # one working day
+
+
+def _session_ttl_seconds() -> int:
+    """Admin session lifetime, overridable per deployment."""
+    try:
+        return max(60, int(os.environ.get("CVCPKG_SESSION_TTL_SECONDS", "") or 8 * 3600))
+    except ValueError:
+        return 8 * 3600
+
+
+def cookie_secure() -> bool:
+    """Whether session cookies carry ``Secure``.
+
+    Defaults on.  A deployment reached over plain http (a laptop running the
+    server directly, an integration test) sets ``CVCPKG_COOKIE_SECURE=0``;
+    production behind TLS must never need to.
+    """
+    raw = os.environ.get("CVCPKG_COOKIE_SECURE", "").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+_warned_insecure_scheme = False
+
+
+def session_cookie_kwargs(*, path: str = "/admin", request=None) -> dict:
+    """Keyword arguments shared by every ``set_cookie`` for a session cookie.
+
+    ``Secure`` defaults on.  Deriving it from the request scheme instead would
+    silently disable it on cvcpkg.org: Apache terminates TLS and uvicorn is not
+    run with ``--proxy-headers``, so the app sees ``http`` there too.
+
+    That same fact makes the failure mode worth naming.  A client discards a
+    ``Secure`` cookie sent over http, so a genuinely plain-http deployment sees
+    a login that returns 303, sets a cookie, and lands back on the sign-in page
+    with nothing logged.  We warn once — but only when there is no
+    ``X-Forwarded-Proto: https``, which is what separates "someone is running
+    this directly over http" from "a TLS proxy is doing its job".
+    """
+    secure = cookie_secure()
+    if secure and request is not None and _looks_like_plain_http(request):
+        global _warned_insecure_scheme
+        if not _warned_insecure_scheme:
+            _warned_insecure_scheme = True
+            import logging
+
+            logging.getLogger("cvcpkg.server").warning(
+                "admin session cookies are Secure, but this request arrived over "
+                "plain http with no X-Forwarded-Proto: https — the client will "
+                "discard the cookie and login will appear to do nothing. Set "
+                "CVCPKG_COOKIE_SECURE=0 for a plain-http deployment, or put this "
+                "server behind TLS."
+            )
+    return dict(httponly=True, samesite="lax", secure=secure, path=path)
+
+
+def _looks_like_plain_http(request) -> bool:
+    """True when nothing indicates this request ever travelled over TLS."""
+    try:
+        if request.url.scheme == "https":
+            return False
+        forwarded = request.headers.get("x-forwarded-proto", "")
+    except AttributeError:  # pragma: no cover - defensive
+        return False
+    # The header may be a comma-separated chain; the left-most hop is the client.
+    return "https" not in {p.strip().lower() for p in forwarded.split(",")}
 
 
 # ── Session cookie helpers ──────────────────────────────────────
@@ -30,7 +95,7 @@ _SESSION_TTL_SECONDS = 8 * 3600  # one working day
 
 def make_session_value(key: bytes, *, now: float | None = None) -> str:
     """Return a signed session cookie value: ``<expiry_ts>.<hmac_hex>``."""
-    exp = int((now if now is not None else time.time()) + _SESSION_TTL_SECONDS)
+    exp = int((now if now is not None else time.time()) + _session_ttl_seconds())
     sig = hmac.new(key, f"admin-session:{exp}".encode(), hashlib.sha256).hexdigest()
     return f"{exp}.{sig}"
 
@@ -177,7 +242,7 @@ def login_html(*, error: str = "", oidc_enabled: bool = False) -> str:
                autocomplete="off" autofocus required>
       </div>
       <p class="help">Requires an <strong>admin</strong>-role token. Exchanged for a
-      signed session cookie ({_SESSION_TTL_SECONDS // 3600}h); the token itself is not stored.</p>
+      signed session cookie ({_session_ttl_seconds() // 3600}h); the token itself is not stored.</p>
     </div>
     <button class="button is-link is-fullwidth" type="submit">Sign in</button>
   </form>
