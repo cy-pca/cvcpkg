@@ -94,18 +94,31 @@ jobs:
           set -euo pipefail
           echo "Before cleanup: $(df -h / | tail -1)"
 
-          # Prune unused Docker images, build cache, and stopped containers.
+          # Reclaim space WITHOUT touching anything a concurrent build is
+          # using.  Two hazards, both hit in production:
           #
-          # Deliberately NOT --volumes.  prune removes stopped containers first,
-          # so a stack left down by a failed deploy makes cvcpkg-prod-data
-          # "unused" and the next deploy deletes it.  That volume holds
-          # /app/data/hmac_key, which keys every cvctok_ AND — since the account
-          # surface landed — every browser session and CSRF token.  Losing it
-          # invalidates every credential in the fleet silently: the server comes
-          # up healthy and generates a fresh key.  Images and build cache are
-          # what actually reclaim space on these hosts; data volumes are not the
-          # deploy's to reap.
-          sudo docker system prune -af 2>/dev/null || true
+          #   --volumes: prune removes stopped containers first, so a stack
+          #   left down by a failed deploy makes cvcpkg-prod-data "unused" and
+          #   the next deploy deletes it.  That volume holds
+          #   /app/data/hmac_key, which keys every cvctok_ and every browser
+          #   session and CSRF token.  Losing it invalidates every credential
+          #   in the fleet silently, because the server restarts healthy with a
+          #   fresh key.
+          #
+          #   Unfiltered `system prune -af`: this host also runs cvcpkg CI, and
+          #   a global prune deletes build cache out from under whatever else
+          #   is building.  On 2026-09-11 a CI run started 80s before the
+          #   deploy; the prune landed at 04:17:52 and the mirror build died at
+          #   04:23:43 with `failed to solve: lease ...: not found`.  The
+          #   primary had already deployed, so a green-looking deploy left the
+          #   mirror a version behind.
+          #
+          # An age filter keeps the reclaim while making in-flight work
+          # untouchable: nothing a build started in the last day can reference
+          # is eligible.
+          sudo docker image prune -af --filter "until=24h" 2>/dev/null || true
+          sudo docker builder prune -f --filter "until=24h" 2>/dev/null || true
+          sudo docker container prune -f --filter "until=24h" 2>/dev/null || true
 
           # Clean old database backups (keep last 5)
           BKDIR="/home/tfx/libcvc-deps/backups"
