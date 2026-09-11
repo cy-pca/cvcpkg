@@ -22,6 +22,7 @@ from sqlalchemy import true as sa_true
 from sqlalchemy.exc import IntegrityError
 
 from cvcpkg.semver import version_sort_key
+from cvcpkg.server import principals as _principals_mod
 from cvcpkg.server.db import (
     AuditRow,
     BuilderRow,
@@ -33,6 +34,7 @@ from cvcpkg.server.db import (
     OrgMemberRow,
     PackageRow,
     PackageTombstoneRow,
+    PrincipalRow,
     RecipeRow,
     TagRow,
     TelemetryEventRow,
@@ -112,8 +114,27 @@ class DbTokenStore:
         email: str = "",
         description: str = "",
         metadata: str = "",
+        *,
+        principal_id: int | None = None,
     ) -> str:
         async with get_session() as session:
+            # A principal's name IS its authority: org membership is keyed on a
+            # bare name with no liveness check.  Without this guard, and with
+            # CVCPKG_REGISTRATION_MODE defaulting to "open", anyone could
+            # POST /v1/register a token named after an existing SSO principal
+            # and inherit its memberships, ownership rows and audit trail.
+            # principal_id is set only by the self-service account page, which
+            # is minting *for* that principal and so is exempt.
+            if principal_id is None:
+                claimed = await session.execute(
+                    select(PrincipalRow.name).where(PrincipalRow.name == name)
+                )
+                if claimed.scalars().first() is not None:
+                    raise ValueError(
+                        f"'{name}' is a reserved identity name (an SSO principal); "
+                        f"choose another name"
+                    )
+
             existing = await session.execute(
                 select(TokenRow).where(
                     TokenRow.name == name,
@@ -140,6 +161,7 @@ class DbTokenStore:
                 description=description,
                 user_metadata=metadata,
                 expires_at=expires_at,
+                principal_id=principal_id,
             )
             session.add(row)
             try:
@@ -181,9 +203,39 @@ class DbTokenStore:
             expires_at = _ensure_aware(row.expires_at)
             if expires_at is not None and expires_at < now:
                 return None
+            # A token minted through the self-service account page belongs to a
+            # principal, and presents to the rest of the server AS that
+            # principal.  That single substitution is what lets an SSO identity
+            # work everywhere without touching the ~11 org-membership
+            # predicates or the ~105 actor.name sites: a token row named
+            # "joe.laptop" verifies as TokenRecord.name == "joe".
+            eff_role = TokenRole(row.role)
+            cred_kind = "token"
+            eff_name = row.name
+            if row.principal_id is not None:
+                principal = (
+                    (
+                        await session.execute(
+                            select(PrincipalRow).where(PrincipalRow.id == row.principal_id)
+                        )
+                    )
+                    .scalars()
+                    .first()
+                )
+                # Offboarding: disabling the principal invalidates every token
+                # it ever minted, in one flip — something a bare cvctok_ has
+                # never had.
+                if principal is None or principal.disabled:
+                    return None
+                eff_name = principal.name
+                cred_kind = "delegated"
+                # Demotion clamp: the token cannot outrank what the principal
+                # is entitled to *now*, so losing a group in the IdP takes
+                # effect on the next request rather than at token expiry.
+                eff_role = _principals_mod.min_role(eff_role, TokenRole(principal.last_role))
             return TokenRecord(
-                name=row.name,
-                role=TokenRole(row.role),
+                name=eff_name,
+                role=eff_role,
                 token_hash=row.token_hash,
                 email=row.email,
                 description=row.description,
@@ -194,6 +246,9 @@ class DbTokenStore:
                 previous_token_hash=row.previous_token_hash or "",
                 previous_hash_expires_at=_ensure_aware(row.previous_hash_expires_at),
                 via_previous_hash=via_previous,
+                credential_kind=cred_kind,
+                credential_name=row.name,
+                principal_id=row.principal_id,
             )
 
     async def rotate(self, name: str, grace_minutes: int = 0) -> str | None:
@@ -439,6 +494,46 @@ class DbTokenStore:
             )
             return result.scalar() or 0
 
+    async def tokens_for_principal(self, principal_id: int) -> list[TokenRecord]:
+        """Live tokens belonging to one principal, filtered in SQL.
+
+        The account page and the admin principals page both need this; doing it
+        by scanning list_tokens() in Python made the latter O(principals x
+        tokens).
+        """
+        async with get_session() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(TokenRow)
+                        .where(
+                            TokenRow.principal_id == principal_id,
+                            TokenRow.revoked == False,  # noqa: E712
+                        )
+                        .order_by(TokenRow.created_at)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return [
+                TokenRecord(
+                    name=r.name,
+                    role=TokenRole(r.role),
+                    token_hash=r.token_hash,
+                    email=r.email,
+                    description=r.description,
+                    metadata=r.user_metadata,
+                    created_at=r.created_at,
+                    expires_at=_ensure_aware(r.expires_at),
+                    revoked=r.revoked,
+                    principal_id=r.principal_id,
+                    previous_token_hash=r.previous_token_hash or "",
+                    previous_hash_expires_at=_ensure_aware(r.previous_hash_expires_at),
+                )
+                for r in rows
+            ]
+
     async def list_tokens(self) -> list[TokenRecord]:
         async with get_session() as session:
             result = await session.execute(select(TokenRow).order_by(TokenRow.created_at))
@@ -453,6 +548,14 @@ class DbTokenStore:
                     created_at=row.created_at,
                     expires_at=row.expires_at,
                     revoked=row.revoked,
+                    # Carried so callers can tell WHOSE token this is.  Omitting
+                    # principal_id left it defaulting to None on every record,
+                    # which silently emptied every "my tokens" filter built on
+                    # it — including the guard that decides whether a handle may
+                    # still be renamed.
+                    principal_id=row.principal_id,
+                    previous_token_hash=row.previous_token_hash or "",
+                    previous_hash_expires_at=_ensure_aware(row.previous_hash_expires_at),
                 )
                 for row in result.scalars().all()
             ]

@@ -334,6 +334,9 @@ def _navbar_html() -> str:
         <a class="navbar-item" href="{_GITHUB_URL}">
           <span class="icon"><i class="fab fa-github"></i></span><span>GitHub</span>
         </a>
+        <a class="navbar-item" href="/account">
+          <span class="icon"><i class="fas fa-user"></i></span><span>Account</span>
+        </a>
       </div>
     </div>
   </div>

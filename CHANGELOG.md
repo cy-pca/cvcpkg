@@ -28,7 +28,89 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
-## Unreleased
+## v2.1.0
+
+### Sign in to cvcpkg.org — the non-admin web surface
+
+cvcpkg had no authenticated surface for anyone but an admin. The public site
+had no login at all (`grep -ci login landing.py` → 0), and the OIDC callback
+refused every role but `admin` — so `publisher` and `reader` were real on the
+server and inert in a browser. The only way to get a publish token was for an
+admin to mint one by hand and courier the secret out of band.
+
+**That handoff is gone.** Sign in with tx.wtf, land on `/account`, mint your
+own token. The secret is shown once and is not re-shown on reload.
+
+**Machine tokens are untouched.** Every existing `cvctok_` keeps
+`principal_id = NULL` and behaves exactly as before. There is no backfill.
+
+Added:
+- `/login`, `/logout`, `/account` — identity, role (and *why* you have it),
+  organizations, API tokens with mint/revoke, and signed-in devices with
+  per-session revoke.
+- `/admin/principals` — the operator view: disable/enable an identity, sign it
+  out everywhere, and an **orphan-membership panel** listing `org_members`
+  rows that name neither a live token nor a principal. Each is a live grant
+  attached to a name nobody holds; collectively they are exactly the set a
+  name-claim could have hijacked.
+- `principals` + `sessions` tables and a nullable `tokens.principal_id`
+  (migration 028).
+- Per-form CSRF tokens (`server/csrf.py`), bound to both the session and the
+  form's purpose, so a token lifted from one form cannot drive another.
+
+Two bugs the pre-release audit caught in this same work, worth naming because
+both were invisible to a green suite:
+- `list_tokens()` omitted `principal_id`, so every "is this token mine?" filter
+  matched nothing — an empty token list, a 404 on self-revoke, and a rename
+  guard that never fired, which would have let a handle owning packages and org
+  memberships be freed and re-allotted.
+- A disabled principal could still complete a login; a disabled *admin* got the
+  dashboard back and could re-enable themselves.
+
+How SSO identity reaches existing authorization, unchanged:
+- A token minted by the account page is named `<principal>.<label>` and
+  **verifies as its principal**: a row named `joe.laptop` presents as
+  `TokenRecord.name == "joe"`. That one substitution is why none of the ~11
+  org-membership predicates and ~105 `actor.name` sites needed editing.
+- Two properties a bare `cvctok_` never had: disabling a principal invalidates
+  every token it minted, immediately; and a delegated token is clamped to the
+  principal's *current* role, so a demotion at the identity provider takes
+  effect on the next request rather than at token expiry.
+
+Security — name allocation is the boundary:
+- A principal is resolved on `(issuer, subject)` and **never** on email.
+  `tokens.email` is unvalidated free text, self-settable via
+  `PATCH /v1/tokens/{name}/email`, carries no unique constraint, and is
+  readable through an endpoint documented as requiring no authentication.
+  Linking on it would hand an account to whoever typed the address first.
+- The set of unavailable names includes **revoked** tokens.
+  `uq_tokens_active_name` is a *partial* index and `revoke()` flips one boolean
+  without touching `org_members`, so a revoked token named `joe` still owns
+  every org it ever joined. It also includes orphan `org_members` rows (which
+  `add_member` writes with no existence check) and `build_jobs.claimed_by`.
+- The reverse guard: `DbTokenStore.create()` refuses a name already held by a
+  principal. With `CVCPKG_REGISTRATION_MODE` defaulting to `open`, without it
+  anyone could `POST /v1/register` a token named after a principal and inherit
+  its memberships.
+- The admin cookie is untouched. `/account` uses a **separate** `cvcpkg_session`
+  cookie at `path=/`; `cvcpkg_admin_session`, `_has_admin_session` and the
+  dashboard's `role != "admin"` gate are unchanged, so a publisher holding a
+  session still gets the sign-in page at `/admin`.
+- The session cookie is a reference, not a bearer: the row is re-read and the
+  principal re-checked on every request, which is what makes signing out end
+  the session rather than merely asking the client to forget it.
+
+Also fixed here: the three **pre-existing** admin POSTs
+(`/admin/tokens/create`, `/admin/tokens/revoke`, `/admin/packages/action`) had
+no CSRF protection at all. `SameSite=Lax` does stop a cross-site form POST in
+current browsers, but it is a browser-version-dependent mitigation that does
+not cover a same-site subdomain — and those three routes create credentials,
+revoke credentials and delete packages. They now carry and require a token on
+the same terms as the account surface. Since the admin cookie signs only an
+expiry and has no session id to key on, the binding is derived from a hash of
+the cookie value: per-session and per-browser, without putting the cookie
+itself into page HTML.
+
 
 ### Sign in with tx.wtf (OIDC) — server enablement
 

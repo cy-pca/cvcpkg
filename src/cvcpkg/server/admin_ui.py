@@ -343,6 +343,17 @@ def dashboard_html(data: dict) -> str:
 # ── Management pages (increment 2) ──────────────────────────────
 
 
+def _csrf_field(csrf_for, ref: str) -> str:
+    """Hidden CSRF input for one form, or nothing when no issuer is supplied.
+
+    Optional so these renderers remain callable from contexts with no session.
+    Enforcement lives in the route handlers, never here.
+    """
+    if csrf_for is None:
+        return ""
+    return f'<input type="hidden" name="_csrf" value="{_esc(csrf_for(ref))}">'
+
+
 def _tabs(active: str) -> str:
     items = [
         ("Overview", "/admin"),
@@ -350,6 +361,7 @@ def _tabs(active: str) -> str:
         ("Tokens", "/admin/tokens"),
         ("Audit", "/admin/audit"),
         ("Releases", "/admin/releases"),
+        ("Principals", "/admin/principals"),
         ("Health", "/admin/health"),
     ]
     lis = "".join(
@@ -380,7 +392,7 @@ def _variant_fields(p: object) -> str:
     return fields
 
 
-def packages_html(pkgs: list, total: int, *, q: str = "", notice: str = "") -> str:
+def packages_html(pkgs: list, total: int, *, q: str = "", notice: str = "", csrf_for=None) -> str:
     notice_html = (
         f'<div class="notification is-success is-light">{_esc(notice)}</div>' if notice else ""
     )
@@ -390,14 +402,17 @@ def packages_html(pkgs: list, total: int, *, q: str = "", notice: str = "") -> s
         state = '<span class="tag is-warning">yanked</span>' if yanked else ""
         toggle_action = "unyank" if yanked else "yank"
         toggle_class = "is-success is-light" if yanked else "is-warning is-light"
+        csrf_input = _csrf_field(csrf_for, "admin-package-action")
         actions = (
             '<form method="post" action="/admin/packages/action" style="display:inline">'
+            f"{csrf_input}"
             f"{_variant_fields(p)}"
             f'<input type="hidden" name="action" value="{toggle_action}">'
             f'<button class="button is-small {toggle_class}" type="submit">'
             f"{toggle_action}</button></form> "
             '<form method="post" action="/admin/packages/action" style="display:inline" '
             "onsubmit=\"return confirm('Delete this variant permanently?')\">"
+            f"{csrf_input}"
             f"{_variant_fields(p)}"
             '<input type="hidden" name="action" value="delete">'
             '<button class="button is-small is-danger is-light" type="submit">delete</button>'
@@ -442,6 +457,7 @@ def tokens_html(
     *,
     new_token: tuple[str, str] | None = None,
     notice: str = "",
+    csrf_for=None,
     error: str = "",
 ) -> str:
     flash = ""
@@ -476,8 +492,9 @@ def tokens_html(
             revoke_btn = (
                 '<form method="post" action="/admin/tokens/revoke" style="display:inline" '
                 f"onsubmit=\"return confirm('Revoke token {tok_name}?')\">"
-                f'<input type="hidden" name="name" value="{tok_name}">'
-                '<button class="button is-small is-danger is-light" type="submit">'
+                + _csrf_field(csrf_for, "admin-token-revoke")
+                + f'<input type="hidden" name="name" value="{tok_name}">'
+                + '<button class="button is-small is-danger is-light" type="submit">'
                 "revoke</button></form>"
             )
         rows.append(
@@ -496,12 +513,14 @@ def tokens_html(
         )
     else:
         table = '<p class="cvc-muted">no tokens</p>'
+    csrf_create = _csrf_field(csrf_for, "admin-token-create")
     body = f"""
 {_tabs("tokens")}
 {flash}
 <div class="box">
   <h2 class="subtitle is-6">Create token</h2>
   <form method="post" action="/admin/tokens/create" class="field is-grouped">
+    {csrf_create}
     <div class="control is-expanded">
       <input class="input" type="text" name="name" placeholder="token name" required>
     </div>
@@ -710,3 +729,98 @@ def releases_html(
 {detail}
 """
     return _PAGE_SHELL.format(title="Releases", nav_right=_NAV_SIGNOUT, body=body)
+
+
+def principals_html(
+    rows: list,
+    *,
+    orphan_memberships: list | None = None,
+    q: str = "",
+    csrf_for=None,
+    error: str = "",
+) -> str:
+    """Operator view of SSO identities.
+
+    Two things live here that exist nowhere else.  **Disable** is the
+    offboarding lever: a disabled principal's sessions die on their next
+    request and every token it ever minted stops verifying at once — something
+    a bare API token has never supported.  And the **orphan memberships**
+    panel lists ``org_members`` rows naming neither a token nor a principal:
+    each is a live grant attached to a name nobody holds, and collectively they
+    are exactly the set a name-claim could have hijacked.
+    """
+    err = f'<div class="notification is-danger is-light">{_esc(error)}</div>' if error else ""
+
+    def _tok(ref: str) -> str:
+        return _esc(csrf_for(ref)) if csrf_for else ""
+
+    body_rows = []
+    for r in rows:
+        flagged = ""
+        if r.get("email_changed"):
+            flagged = ' <span class="tag is-warning is-light">email changed</span>'
+        state = (
+            '<span class="tag is-danger">disabled</span>'
+            if r["disabled"]
+            else '<span class="tag is-success is-light">active</span>'
+        )
+        ref = "principal-enable" if r["disabled"] else "principal-disable"
+        url = "enable" if r["disabled"] else "disable"
+        label = "Enable" if r["disabled"] else "Disable"
+        body_rows.append(
+            "<tr>"
+            f"<td><code>{_esc(r['name'])}</code></td>"
+            f"<td class=\"cvc-muted\">{_esc(r['issuer'])}</td>"
+            f"<td class=\"cvc-muted\"><small>{_esc(r['subject'][:24])}</small></td>"
+            f"<td>{_esc(r['email'])}{flagged}</td>"
+            f"<td>{_esc(r['last_role'])}</td>"
+            f"<td class=\"cvc-num\">{r['sessions']}</td>"
+            f"<td class=\"cvc-num\">{r['tokens']}</td>"
+            f"<td>{state}</td>"
+            "<td>"
+            f'<form method="post" action="/admin/principals/{_esc(r["name"])}/{url}" '
+            'style="display:inline" '
+            f"onsubmit=\"return confirm('{label} {_esc(r['name'])}?')\">"
+            f'<input type="hidden" name="_csrf" value="{_tok(ref)}">'
+            f'<button class="button is-small" type="submit">{label}</button></form> '
+            f'<form method="post" action="/admin/principals/{_esc(r["name"])}/revoke-sessions" '
+            'style="display:inline" '
+            f"onsubmit=\"return confirm('Sign {_esc(r['name'])} out everywhere?')\">"
+            f'<input type="hidden" name="_csrf" value="{_tok("principal-revoke-sessions")}">'
+            '<button class="button is-small is-dark" type="submit">Sign out</button></form>'
+            "</td></tr>"
+        )
+
+    orphans = ""
+    if orphan_memberships:
+        items = "".join(
+            f"<tr><td><code>{_esc(o['token_name'])}</code></td>"
+            f"<td>{_esc(o['org_slug'])}</td></tr>"
+            for o in orphan_memberships
+        )
+        orphans = (
+            '<h2 class="title is-6 mt-6">Orphan organization memberships</h2>'
+            '<p class="cvc-muted is-size-7 mb-3">These <code>org_members</code> rows name '
+            "neither a live token nor a principal &mdash; a grant attached to a name nobody "
+            "holds. They are also exactly the names a new identity must never be allotted.</p>"
+            '<table class="table is-fullwidth is-narrow">'
+            "<thead><tr><th>Name</th><th>Organization</th></tr></thead>"
+            f"<tbody>{items}</tbody></table>"
+        )
+
+    empty = '<tr><td colspan="9" class="cvc-muted">No principals yet.</td></tr>'
+    body = (
+        _tabs("principals")
+        + err
+        + '<form method="get" action="/admin/principals" class="field has-addons mb-4">'
+        '<div class="control is-expanded">'
+        f'<input class="input" name="q" placeholder="filter by handle" value="{_esc(q)}">'
+        "</div>"
+        '<div class="control"><button class="button" type="submit">Filter</button></div>'
+        "</form>"
+        '<table class="table is-fullwidth is-narrow"><thead><tr>'
+        "<th>Handle</th><th>Issuer</th><th>Subject</th><th>Email</th>"
+        "<th>Role</th><th>Sessions</th><th>Tokens</th><th>State</th><th></th>"
+        "</tr></thead><tbody>" + ("".join(body_rows) or empty) + "</tbody></table>" + orphans
+    )
+    return _PAGE_SHELL.format(title="Principals", nav_right="", body=body)

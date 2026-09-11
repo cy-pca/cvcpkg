@@ -7,6 +7,7 @@ server-rendered overview page.
 from __future__ import annotations
 
 import asyncio
+import re
 
 import pytest
 
@@ -83,6 +84,20 @@ def admin_server(tmp_path, monkeypatch):
     app = create_app(state_dir=tmp_path)
     with TestClient(app) as client:
         yield client, admin_token, pub_token
+
+
+def _csrf(client, page_url: str, action: str) -> str:
+    """The CSRF token from the live page, scraped as a browser would.
+
+    Deliberately not recomputed from the server's key: doing that would pass
+    even if the field were never rendered, which is half of what this protects.
+    """
+    html = client.get(page_url).text
+    form = re.search(r'<form[^>]*action="' + re.escape(action) + r'"[^>]*>(.*?)</form>', html, re.S)
+    assert form, f"no form posting to {action} on {page_url}"
+    field = re.search(r'name="_csrf" value="([0-9a-f]*)"', form.group(1))
+    assert field, f"no _csrf field in the {action} form"
+    return field.group(1)
 
 
 class TestAdminDashboard:
@@ -205,7 +220,11 @@ class TestAdminPackagesPage:
         }
         r = manage_server.post(
             "/admin/packages/action",
-            data={**variant, "action": "yank"},
+            data={
+                **variant,
+                "action": "yank",
+                "_csrf": _csrf(manage_server, "/admin/packages", "/admin/packages/action"),
+            },
             follow_redirects=False,
         )
         assert r.status_code == 303
@@ -213,7 +232,11 @@ class TestAdminPackagesPage:
 
         r = manage_server.post(
             "/admin/packages/action",
-            data={**variant, "action": "unyank"},
+            data={
+                **variant,
+                "action": "unyank",
+                "_csrf": _csrf(manage_server, "/admin/packages", "/admin/packages/action"),
+            },
             follow_redirects=False,
         )
         assert r.status_code == 303
@@ -222,7 +245,11 @@ class TestAdminPackagesPage:
 
         r = manage_server.post(
             "/admin/packages/action",
-            data={**variant, "action": "delete"},
+            data={
+                **variant,
+                "action": "delete",
+                "_csrf": _csrf(manage_server, "/admin/packages", "/admin/packages/action"),
+            },
             follow_redirects=False,
         )
         assert r.status_code == 303
@@ -239,14 +266,26 @@ class TestAdminPackagesPage:
     def test_unknown_action_422(self, manage_server):
         r = manage_server.post(
             "/admin/packages/action",
-            data={"action": "explode", "name": "zlib", "version": "1.3.1"},
+            data={
+                "action": "explode",
+                "name": "zlib",
+                "version": "1.3.1",
+                "_csrf": _csrf(manage_server, "/admin/packages", "/admin/packages/action"),
+            },
         )
         assert r.status_code == 422
 
 
 class TestAdminTokensPage:
     def test_create_shows_raw_once_and_revoke(self, manage_server):
-        r = manage_server.post("/admin/tokens/create", data={"name": "ci-bot", "role": "publisher"})
+        r = manage_server.post(
+            "/admin/tokens/create",
+            data={
+                "name": "ci-bot",
+                "role": "publisher",
+                "_csrf": _csrf(manage_server, "/admin/tokens", "/admin/tokens/create"),
+            },
+        )
         assert r.status_code == 200
         assert "ci-bot" in r.text
         assert "cvctok_" in r.text  # raw token shown once
@@ -256,26 +295,59 @@ class TestAdminTokensPage:
         assert "cvctok_" not in page  # never shown again
 
         r = manage_server.post(
-            "/admin/tokens/revoke", data={"name": "ci-bot"}, follow_redirects=False
+            "/admin/tokens/revoke",
+            data={
+                "name": "ci-bot",
+                "_csrf": _csrf(manage_server, "/admin/tokens", "/admin/tokens/revoke"),
+            },
+            follow_redirects=False,
         )
         assert r.status_code == 303
         assert "revoked" in manage_server.get("/admin/tokens").text
 
     def test_duplicate_create_conflict(self, manage_server):
-        manage_server.post("/admin/tokens/create", data={"name": "dup", "role": "reader"})
-        r = manage_server.post("/admin/tokens/create", data={"name": "dup", "role": "reader"})
+        manage_server.post(
+            "/admin/tokens/create",
+            data={
+                "name": "dup",
+                "role": "reader",
+                "_csrf": _csrf(manage_server, "/admin/tokens", "/admin/tokens/create"),
+            },
+        )
+        r = manage_server.post(
+            "/admin/tokens/create",
+            data={
+                "name": "dup",
+                "role": "reader",
+                "_csrf": _csrf(manage_server, "/admin/tokens", "/admin/tokens/create"),
+            },
+        )
         assert r.status_code == 409
         assert "create failed" in r.text
 
     def test_bad_role_422(self, manage_server):
-        r = manage_server.post("/admin/tokens/create", data={"name": "x", "role": "root"})
+        r = manage_server.post(
+            "/admin/tokens/create",
+            data={
+                "name": "x",
+                "role": "root",
+                "_csrf": _csrf(manage_server, "/admin/tokens", "/admin/tokens/create"),
+            },
+        )
         assert r.status_code == 422
 
 
 class TestAdminAuditPage:
     def test_entries_and_chain_verify(self, manage_server):
         # Generate an audited action first.
-        manage_server.post("/admin/tokens/create", data={"name": "aud", "role": "reader"})
+        manage_server.post(
+            "/admin/tokens/create",
+            data={
+                "name": "aud",
+                "role": "reader",
+                "_csrf": _csrf(manage_server, "/admin/tokens", "/admin/tokens/create"),
+            },
+        )
         r = manage_server.get("/admin/audit")
         assert r.status_code == 200
         assert "token_create" in r.text
@@ -362,7 +434,14 @@ class TestAdminHealthPage:
         # The refactor must not break the JSON endpoint contract.
         # (Bearer auth — reuse the session-login token path is cookie-based,
         # so mint a fresh admin token via the tokens page.)
-        r = health_server.post("/admin/tokens/create", data={"name": "probe", "role": "admin"})
+        r = health_server.post(
+            "/admin/tokens/create",
+            data={
+                "name": "probe",
+                "role": "admin",
+                "_csrf": _csrf(health_server, "/admin/tokens", "/admin/tokens/create"),
+            },
+        )
         raw = next(line for line in r.text.splitlines() if "cvctok_" in line)
         token = raw.split("cvctok_", 1)[1].split("<", 1)[0]
         r = health_server.get(

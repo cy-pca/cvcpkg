@@ -290,6 +290,89 @@ class OrgMemberRow(Base):
     )
 
 
+class PrincipalRow(Base):
+    """A human identity, resolved on ``(issuer, subject)``.
+
+    ``name`` is the load-bearing column: organization membership is keyed on a
+    bare string (``org_members.token_name``) compared with ``==`` and no
+    liveness check, so the name a principal is allotted is exactly what grants
+    access to a private org.  Allocation is guarded in DbPrincipalStore against
+    every name that could already carry authority — revoked tokens included.
+
+    Resolution is never on email.  ``tokens.email`` is unvalidated, self-
+    settable and publicly enumerable; linking on it would be privilege
+    escalation by whoever typed the address first.
+    """
+
+    __tablename__ = "principals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    issuer: Mapped[str] = mapped_column(String(255), nullable=False)
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    # Only so that an email change on an existing (issuer, subject) is
+    # detectable — IdP subject reuse is otherwise silent.
+    first_seen_email: Mapped[str] = mapped_column(
+        String(255), nullable=False, default="", server_default=""
+    )
+    display_name: Mapped[str] = mapped_column(
+        String(255), nullable=False, default="", server_default=""
+    )
+    # The role the principal held at last login.  Delegated tokens are clamped
+    # to this, so a demotion in the IdP takes effect on the next request rather
+    # than whenever the token happens to expire.
+    last_role: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="reader", server_default="reader"
+    )
+    disabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_login_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_principals_name"),
+        UniqueConstraint("issuer", "subject", name="uq_principals_identity"),
+    )
+
+
+class SessionRow(Base):
+    """A browser session for a principal.
+
+    The cookie is a *reference*, not a bearer: it carries this row's id and the
+    row is re-read on every request, which is what makes signing out actually
+    end the session.  A signed stateless cookie cannot be invalidated.
+    """
+
+    __tablename__ = "sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    principal_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("principals.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    device_label: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="", server_default=""
+    )
+    ip_at_issue: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", server_default=""
+    )
+    issued_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    revoked: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+
+
 class TokenRow(Base):
     __tablename__ = "tokens"
 
@@ -318,6 +401,13 @@ class TokenRow(Base):
     previous_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     previous_hash_expires_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    # The human this token was minted for, when it came from the self-service
+    # account page.  NULL for every token that predates that surface and for
+    # every machine token, which is what keeps this additive: verify() only
+    # consults a principal when this is set.  See migration 028.
+    principal_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("principals.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
     __table_args__ = (

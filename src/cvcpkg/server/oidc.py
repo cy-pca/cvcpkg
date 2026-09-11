@@ -89,8 +89,15 @@ class OidcConfig:
             client_id=os.environ.get("CVCPKG_OIDC_CLIENT_ID", "").strip(),
             client_secret=os.environ.get("CVCPKG_OIDC_CLIENT_SECRET", "").strip(),
             redirect_url=os.environ.get("CVCPKG_OIDC_REDIRECT_URL", "").strip(),
-            scopes=os.environ.get("CVCPKG_OIDC_SCOPES", "openid email profile").strip(),
-            groups_claim=os.environ.get("CVCPKG_OIDC_GROUPS_CLAIM", "groups").strip(),
+            # `or <default>`, not just a get() default: docker compose's
+            # `environment:` mapping SETS the key, so an unset variable arrives
+            # as "" rather than absent and get()'s default never fires.  With
+            # groups_claim == "" the lookup becomes claims.get("") — which
+            # matches nothing, so every group mapping silently fails and every
+            # user falls through to CVCPKG_OIDC_DEFAULT_ROLE.  That failure is
+            # invisible: the login succeeds and the ship-gate 303 still passes.
+            scopes=os.environ.get("CVCPKG_OIDC_SCOPES", "").strip() or "openid email profile",
+            groups_claim=os.environ.get("CVCPKG_OIDC_GROUPS_CLAIM", "").strip() or "groups",
             admin_groups=_csv_set(os.environ.get("CVCPKG_OIDC_ADMIN_GROUPS", "")),
             publisher_groups=_csv_set(os.environ.get("CVCPKG_OIDC_PUBLISHER_GROUPS", "")),
             reader_groups=_csv_set(os.environ.get("CVCPKG_OIDC_READER_GROUPS", "")),

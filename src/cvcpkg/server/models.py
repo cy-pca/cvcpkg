@@ -111,6 +111,12 @@ class TokenRecord(BaseModel):
     # secret. Rotation is denied to such callers — otherwise a leaked
     # old secret could re-rotate inside the window and steal the token.
     via_previous_hash: bool = Field(default=False, exclude=True)
+    # Set by DbTokenStore.verify when the token belongs to an SSO principal.
+    # Excluded from serialisation like via_previous_hash above, so no API
+    # response shape changes anywhere.
+    credential_kind: str = Field(default="token", exclude=True)
+    credential_name: str = Field(default="", exclude=True)
+    principal_id: int | None = Field(default=None, exclude=True)
 
 
 class TokenCreateRequest(BaseModel):

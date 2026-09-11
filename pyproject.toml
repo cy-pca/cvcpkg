@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "cvcpkg"
-version = "2.0.3"
+version = "2.1.0"
 description = "Cross-platform, language-agnostic package manager and binary archive for the scientific computing community"
 authors = ["cvcpkg group <info@cvcpkg.org>"]
 license = "MIT"
@@ -145,6 +145,9 @@ ignore = ["SIM102", "SIM105", "SIM108", "SIM112", "SIM117"]
 [tool.ruff.lint.per-file-ignores]
 "src/cvcpkg/server/app.py" = ["B008"]
 "src/cvcpkg/server/landing.py" = ["E501"]
+# Same reason as landing.py above: these are HTML templates, and wrapping
+# markup at 100 columns hurts readability more than the long lines do.
+"src/cvcpkg/server/account_ui.py" = ["E501"]
 "src/cvcpkg/activate.py" = ["E501"]
 "tests/**" = ["E402", "B017", "E501", "B007", "N802"]
 

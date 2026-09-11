@@ -94,8 +94,18 @@ jobs:
           set -euo pipefail
           echo "Before cleanup: $(df -h / | tail -1)"
 
-          # Prune unused Docker images, build cache, and stopped containers
-          sudo docker system prune -af --volumes 2>/dev/null || true
+          # Prune unused Docker images, build cache, and stopped containers.
+          #
+          # Deliberately NOT --volumes.  prune removes stopped containers first,
+          # so a stack left down by a failed deploy makes cvcpkg-prod-data
+          # "unused" and the next deploy deletes it.  That volume holds
+          # /app/data/hmac_key, which keys every cvctok_ AND — since the account
+          # surface landed — every browser session and CSRF token.  Losing it
+          # invalidates every credential in the fleet silently: the server comes
+          # up healthy and generates a fresh key.  Images and build cache are
+          # what actually reclaim space on these hosts; data volumes are not the
+          # deploy's to reap.
+          sudo docker system prune -af 2>/dev/null || true
 
           # Clean old database backups (keep last 5)
           BKDIR="/home/tfx/libcvc-deps/backups"
