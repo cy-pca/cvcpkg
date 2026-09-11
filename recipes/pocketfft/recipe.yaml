@@ -58,6 +58,18 @@ build:
       script: build.sh
     - platform: windows
       script: build.ps1
+    # Cross-built from a Linux host. Nothing compiles here either, so build.sh
+    # applies unchanged -- it only installs a header and the licence, and never
+    # sources env-${CVC_PLATFORM}.sh because there is no compiler to configure.
+    - platform: wasm
+      host_platform: linux
+      script: build.sh
+    - platform: wasm-mt
+      host_platform: linux
+      script: build.sh
+    - platform: wasi
+      host_platform: linux
+      script: build.sh
 
 package:
   files:

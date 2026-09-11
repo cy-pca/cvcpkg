@@ -21,6 +21,7 @@ components:
   - gsl
   - log4cplus
   - tiff
+  - pocketfft
   - fftw3
   - openblas
   - levmar
