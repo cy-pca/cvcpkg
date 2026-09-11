@@ -206,6 +206,22 @@ jobs:
 
           # Build and deploy
           echo "Building cvcpkg-server:${RELEASE_TAG}..."
+          # Build on a dedicated docker-container builder, never the daemon's
+          # embedded one.  On 2026-09-11 the default builder on catx-03 got a
+          # cache record pointing at a lease that no longer existed, and every
+          # build died with `failed to solve: lease ...: not found` -- including
+          # `--no-cache`, so the builder could not start ANY build.  Nothing
+          # short of resetting the daemon's buildkit state fixes that, which
+          # means bouncing every container on the host.
+          #
+          # A docker-container builder keeps its buildkit state in its own
+          # container, so the same corruption is cleared with `docker buildx rm`
+          # and costs nothing else.  Created on demand, so a host that has never
+          # deployed gets one automatically.
+          docker buildx inspect cvcpkg-deploy >/dev/null 2>&1 \
+            || docker buildx create --name cvcpkg-deploy --driver docker-container
+          export BUILDX_BUILDER=cvcpkg-deploy
+
           $COMPOSE build --build-arg "CVCPKG_RELEASE=${RELEASE_TAG}" backend
           echo "Ensuring postgres is up..."
           $COMPOSE up -d postgres
@@ -319,6 +335,22 @@ jobs:
           fi
 
           echo "Building cvcpkg-server:${RELEASE_TAG}..."
+          # Build on a dedicated docker-container builder, never the daemon's
+          # embedded one.  On 2026-09-11 the default builder on catx-03 got a
+          # cache record pointing at a lease that no longer existed, and every
+          # build died with `failed to solve: lease ...: not found` -- including
+          # `--no-cache`, so the builder could not start ANY build.  Nothing
+          # short of resetting the daemon's buildkit state fixes that, which
+          # means bouncing every container on the host.
+          #
+          # A docker-container builder keeps its buildkit state in its own
+          # container, so the same corruption is cleared with `docker buildx rm`
+          # and costs nothing else.  Created on demand, so a host that has never
+          # deployed gets one automatically.
+          docker buildx inspect cvcpkg-deploy >/dev/null 2>&1 \
+            || docker buildx create --name cvcpkg-deploy --driver docker-container
+          export BUILDX_BUILDER=cvcpkg-deploy
+
           $COMPOSE build --build-arg "CVCPKG_RELEASE=${RELEASE_TAG}" backend
           echo "Ensuring postgres is up..."
           $COMPOSE up -d postgres
