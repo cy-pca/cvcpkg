@@ -74,14 +74,12 @@ def _goto_awaiting(page, url, response_url_substr):
 
 
 def _goto_and_wait_for_stats(page, url=SERVER_URL):
-    """Navigate to a landing-style page and block until its package stats load.
+    """Navigate to the landing page and block until its package count loads.
 
-    ``init()`` fires two sequential fetches — ``/v1/deps`` then ``/v1/search``
-    — and writes ``#stat-packages`` only once ``/v1/search`` resolves, so that
-    is the response we wait on; the follow-up ``wait_for_function`` just
-    confirms the DOM was actually updated from the response.
+    The landing page no longer scans the registry; it writes ``#stat-packages``
+    from a single cheap ``/healthz`` fetch, so that is the response we wait on.
     """
-    _goto_awaiting(page, url, "/v1/search")
+    _goto_awaiting(page, url, "/healthz")
     page.wait_for_function(_STATS_READY_JS, timeout=JS_WAIT_TIMEOUT_MS)
 
 
@@ -132,25 +130,19 @@ class TestLandingPage:
         assert any("Getting Started" in t for t in texts)
         assert any("API Reference" in t for t in texts)
 
-    def test_search_input_exists(self, page):
+    def test_landing_search_box_targets_search_page(self, page):
+        # The landing search box is a plain form that navigates to /search;
+        # it no longer runs an inline query.
         page.goto(SERVER_URL)
-        search = page.locator("#search")
-        assert search.is_visible()
-        assert search.get_attribute("placeholder")
+        form = page.locator('form[action="/search"]')
+        assert form.count() >= 1
+        assert form.locator('input[name="q"]').count() >= 1
 
-    def test_platform_filter_exists(self, page):
+    def test_landing_has_no_package_table(self, page):
+        # The registry scan moved off the front page (kept fast).
         page.goto(SERVER_URL)
-        select = page.locator("#platform-filter")
-        assert select.is_visible()
-
-    def test_package_table_has_sortable_headers(self, page):
-        page.goto(SERVER_URL)
-        headers = page.locator("th.is-sortable")
-        assert headers.count() >= 3  # name, version, builds, size
-        # Each should have a sort-arrow span
-        for i in range(headers.count()):
-            arrow = headers.nth(i).locator(".sort-arrow")
-            assert arrow.count() == 1
+        assert page.locator("#pkg-body").count() == 0
+        assert page.locator("#platform-filter").count() == 0
 
     def test_footer_visible(self, page):
         page.goto(SERVER_URL)
@@ -162,6 +154,38 @@ class TestLandingPage:
         page.goto(SERVER_URL)
         gh_link = page.locator(".navbar-end a[href*='github.com']")
         assert gh_link.count() >= 1
+
+
+class TestSearchPage:
+    """The dedicated /search page: filters, table, and lazy loading."""
+
+    def test_search_input_exists(self, page):
+        page.goto(f"{SERVER_URL}/search")
+        search = page.locator("#search")
+        assert search.is_visible()
+        assert search.get_attribute("placeholder")
+
+    def test_platform_filter_exists(self, page):
+        page.goto(f"{SERVER_URL}/search")
+        assert page.locator("#platform-filter").is_visible()
+
+    def test_package_table_has_sortable_headers(self, page):
+        page.goto(f"{SERVER_URL}/search")
+        headers = page.locator("th.is-sortable")
+        assert headers.count() >= 3
+        for i in range(headers.count()):
+            assert headers.nth(i).locator(".sort-arrow").count() == 1
+
+    def test_opens_in_empty_state_without_querying(self, page):
+        # No /v1/search fires on load; the table shows the empty rest state.
+        page.goto(f"{SERVER_URL}/search")
+        page.wait_for_selector("#pkg-body .search-empty", timeout=JS_WAIT_TIMEOUT_MS)
+        assert page.locator("#pkg-body .search-empty").count() == 1
+
+    def test_query_param_deep_link_runs_a_search(self, page):
+        # /search?q=... prefills and runs, firing /v1/search.
+        _goto_awaiting(page, f"{SERVER_URL}/search?q=zzz-no-such-pkg", "/v1/search")
+        assert page.locator("#search").input_value() == "zzz-no-such-pkg"
 
 
 # ── Guide page ──────────────────────────────────────────────────

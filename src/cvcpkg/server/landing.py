@@ -20,9 +20,24 @@ from cvcpkg import __version__
 _GITHUB_REPO = os.environ.get("CVCPKG_GITHUB_REPO", "transfix/libcvc-deps")
 _GITHUB_URL = f"https://github.com/{_GITHUB_REPO}"
 
-# CyberPC Angel, LLC gears logo — the project brand mark, served self-hosted
-# at /favicon.ico and /assets/cyberpc-angel-gears.png (see app.py).
-_BRAND_LOGO_PATH = "/assets/cyberpc-angel-gears.png"
+# The cvcpkg brand mark — the neon flaming-package icon, served self-hosted
+# at /favicon.ico and /assets/cvcpkg-icon.png (see app.py).  The gears asset
+# still ships for backward-compatible links.
+_BRAND_LOGO_PATH = "/assets/cvcpkg-icon.png"
+_BRAND_BANNER_PATH = "/assets/cvcpkg-banner.png"
+_BRAND_HERO_PATH = "/assets/cvcpkg-hero.png"
+
+# Bundled brand images that /assets/<name> may serve, mapped to their bytes on
+# demand.  A fixed allow-list, so the route can never read arbitrary package
+# files.
+_BRAND_ASSETS = {
+    "cvcpkg-icon.png",
+    "cvcpkg-icon-180.png",
+    "cvcpkg-icon-512.png",
+    "cvcpkg-banner.png",
+    "cvcpkg-hero.png",
+    "cyberpc-angel-gears.png",
+}
 
 #: Operator override for the site icon.  Either an absolute ``http(s)://``
 #: URL (linked directly, not proxied) or a path to a local image file
@@ -46,8 +61,37 @@ def _logo_is_remote() -> bool:
 
 
 def brand_logo_href() -> str:
-    """URL used in ``<link rel="icon">`` and the social-image meta tags."""
+    """URL used in ``<link rel="icon">`` and the small brand mark."""
     return _SITE_LOGO if _logo_is_remote() else _BRAND_LOGO_PATH
+
+
+def brand_banner_href() -> str:
+    """The horizontal logo (icon + wordmark), used in the navbar and og:image."""
+    return _BRAND_BANNER_PATH
+
+
+def brand_hero_href() -> str:
+    """The large hero graphic on the landing page."""
+    return _BRAND_HERO_PATH
+
+
+@functools.lru_cache(maxsize=len(_BRAND_ASSETS) + 1)
+def brand_asset(name: str) -> tuple[bytes, str]:
+    """Return ``(bytes, media_type)`` for a bundled brand image, or ``(b"", ...)``.
+
+    Only names in the ``_BRAND_ASSETS`` allow-list are served; anything else
+    returns empty so the asset route answers 404 rather than reading an
+    arbitrary package file.
+    """
+    if name not in _BRAND_ASSETS:
+        return b"", "image/png"
+    try:
+        from importlib.resources import files as _res_files
+
+        data = _res_files("cvcpkg.server").joinpath("assets", name).read_bytes()
+        return data, "image/png"
+    except (FileNotFoundError, ModuleNotFoundError, OSError):
+        return b"", "image/png"
 
 
 @functools.lru_cache(maxsize=1)
@@ -74,9 +118,7 @@ def brand_logo_asset() -> tuple[bytes, str]:
     try:
         from importlib.resources import files as _res_files
 
-        data = (
-            _res_files("cvcpkg.server").joinpath("assets", "cyberpc-angel-gears.png").read_bytes()
-        )
+        data = _res_files("cvcpkg.server").joinpath("assets", "cvcpkg-icon.png").read_bytes()
         return data, "image/png"
     except (FileNotFoundError, ModuleNotFoundError, OSError):
         return b"", "image/png"
@@ -105,32 +147,151 @@ def brand_logo_bytes() -> bytes:
 _SITE_URL = os.environ.get("CVCPKG_SITE_URL", "https://cvcpkg.org").rstrip("/")
 
 _SITE_TITLE = os.environ.get("CVCPKG_SITE_TITLE", "cvcpkg")
-_SITE_TAGLINE = os.environ.get("CVCPKG_SITE_TAGLINE", "Package Archive")
+_SITE_TAGLINE = os.environ.get(
+    "CVCPKG_SITE_TAGLINE", "A hermetic package manager for the scientific stack"
+)
 _SITE_HERO = os.environ.get(
     "CVCPKG_SITE_HERO",
-    "A cross-platform, language-agnostic binary package archive for the"
-    " scientific computing community. Pre-built C/C++ libraries for Linux,"
-    " macOS, and Windows \u2014 with curated LTS releases for reproducible"
-    " downstream builds.",
+    "We ship the tools we depend on, in public. A hermetic package manager and"
+    " registry for the scientific stack \u2014 including WebAssembly builds of"
+    " libraries nobody else ships \u2014 with curated LTS releases for"
+    " reproducible downstream builds across Linux, macOS, Windows, the BSDs,"
+    " Haiku, and the browser.",
 )
 
 # ── Shared CSS ───────────────────────────────────────────────────
 
 _CSS = r"""
-html { background-color: #0a0a0a; }
+/* ── CyberPC Angel brand layer ──────────────────────────────────
+   Neon magenta + cyan on dark navy, translucent panels with a soft
+   glow, Gentium Book Basic body / VT323 terminal accents, pill
+   buttons.  Matches cyberpcangel.com so the registry, the CLI splash,
+   and the consultancy read as one product. */
+:root {
+  --neon-cyan: #00ffff;
+  --neon-magenta: #ff00ff;
+  --neon-pink: #ff2d95;
+  --phosphor: rgba(200, 200, 255, 0.92);
+  --bg: #0a0a12;
+  --bg-alt: #0d0d1a;
+  --navy-panel: rgba(0, 0, 64, 0.5);
+  --panel-glow: 0 0 10px 2px rgba(100, 100, 255, 0.3);
+}
+html { background-color: var(--bg); }
+body {
+  font-family: "Gentium Book Basic", Georgia, serif;
+  color: var(--phosphor);
+  background-color: var(--bg);
+}
+h1, h2, h3, h4, .title, .subtitle { font-family: "Gentium Book Basic", Georgia, serif; }
+code, pre, .is-family-monospace { font-family: "Consolas", "Monaco", monospace; }
+
+.neon-cyan { color: var(--neon-cyan); text-shadow: 0 0 8px rgba(0,255,255,0.6); }
+.neon-magenta { color: var(--neon-magenta); text-shadow: 0 0 8px rgba(255,0,255,0.6); }
+.brand-wordmark {
+  font-family: "VT323", monospace;
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+}
+
+/* Translucent navy panel with the house glow. */
+.brand-panel {
+  background: var(--navy-panel);
+  border: 1px solid rgba(120, 120, 255, 0.18);
+  box-shadow: var(--panel-glow);
+  border-radius: 10px;
+}
+.brand-panel:hover { box-shadow: 0 0 14px 3px rgba(120,120,255,0.4); }
+
+/* Pill buttons in the brand palette. */
+.button.is-brand {
+  border-radius: 9999px;
+  border: 1px solid rgba(255,0,255,0.5);
+  background: linear-gradient(90deg, rgba(255,0,255,0.18), rgba(0,255,255,0.18));
+  color: #fff;
+  text-shadow: 0 0 6px rgba(255,255,255,0.35);
+  transition: box-shadow 0.15s, transform 0.1s;
+}
+.button.is-brand:hover {
+  box-shadow: 0 0 14px 2px rgba(255,0,255,0.35), 0 0 18px 4px rgba(0,255,255,0.25);
+  transform: translateY(-1px);
+  color: #fff;
+}
+.button.is-rounded, .button.is-brand-outline { border-radius: 9999px; }
+.button.is-brand-outline {
+  background: transparent; border: 1px solid rgba(0,255,255,0.45);
+  color: var(--neon-cyan);
+}
+.button.is-brand-outline:hover {
+  box-shadow: 0 0 12px 1px rgba(0,255,255,0.35);
+  border-color: var(--neon-cyan); color: var(--neon-cyan);
+}
+
+a, a.pkg-link { color: var(--neon-cyan); }
+a:hover { color: #7fffff; }
+
+/* Full-bleed neon hero for the landing page. */
+.brand-hero {
+  position: relative;
+  background:
+    radial-gradient(1200px 500px at 50% -10%, rgba(255,0,255,0.12), transparent 60%),
+    radial-gradient(1000px 500px at 80% 120%, rgba(0,255,255,0.10), transparent 60%),
+    var(--bg);
+  border-bottom: 1px solid rgba(120,120,255,0.12);
+  overflow: hidden;
+}
+.brand-hero .hero-art {
+  max-width: 340px; width: 60%;
+  filter: drop-shadow(0 0 24px rgba(255,0,255,0.35))
+          drop-shadow(0 0 30px rgba(0,255,255,0.25));
+}
+.brand-hero-title {
+  font-family: "VT323", monospace;
+  font-size: clamp(3rem, 9vw, 6rem);
+  line-height: 1;
+  color: #fff;
+  text-shadow: 0 0 10px rgba(0,255,255,0.7), 0 0 22px rgba(0,255,255,0.4);
+}
+.brand-hero-tagline {
+  color: #7fffff;
+  text-shadow: 0 0 6px rgba(0,255,255,0.4);
+  font-size: 1.15rem;
+}
+
+/* Feature cards on the landing page. */
+.feature-card { height: 100%; padding: 1.5rem; }
+.feature-card .fa { text-shadow: 0 0 10px currentColor; }
+
+/* Copyable install command. */
+.install-cmd {
+  font-family: "Consolas","Monaco",monospace;
+  background: #05050c;
+  border: 1px solid rgba(0,255,255,0.3);
+  border-radius: 9999px;
+  padding: 0.6rem 1.2rem;
+  color: var(--neon-cyan);
+  display: inline-flex; align-items: center; gap: 0.75rem;
+}
+.install-cmd .copy-btn { cursor: pointer; color: var(--phosphor); }
+.install-cmd .copy-btn:hover { color: var(--neon-magenta); }
+
+/* Empty search state. */
+.search-empty { padding: 4rem 1rem; text-align: center; color: rgba(200,200,255,0.6); }
+.search-empty .fa { text-shadow: 0 0 18px var(--neon-cyan); }
+
+.navbar-logo { max-height: 2.1rem; width: auto; }
 
 .hero-gradient {
-  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+  background:
+    radial-gradient(900px 400px at 50% -20%, rgba(255,0,255,0.10), transparent 60%),
+    linear-gradient(135deg, #14071f 0%, #0b1030 50%, #06121f 100%);
 }
 
 .logo-icon {
-  width: 48px; height: 48px;
-  background: linear-gradient(135deg, #3273dc, #48c774);
+  width: 40px; height: 40px;
   border-radius: 10px;
   display: inline-flex; align-items: center; justify-content: center;
-  font-size: 24px; font-weight: 700; color: #fff;
-  margin-right: 12px;
-  vertical-align: middle;
+  vertical-align: middle; margin-right: 10px;
 }
 
 .stat-box {
@@ -140,8 +301,8 @@ html { background-color: #0a0a0a; }
 .stat-box .title { margin-bottom: 0.25rem !important; }
 
 th.is-sortable { cursor: pointer; user-select: none; white-space: nowrap; }
-th.is-sortable:hover { color: #3273dc; }
-th.is-sorted { color: #3273dc; }
+th.is-sortable:hover { color: var(--neon-cyan); }
+th.is-sorted { color: var(--neon-cyan); }
 .sort-arrow { font-size: 0.65em; margin-left: 4px; }
 
 .platform-tag.linux { background-color: rgba(72, 199, 116, 0.15); color: #48c774; }
@@ -281,8 +442,7 @@ def _navbar_html() -> str:
   <div class="container">
     <div class="navbar-brand">
       <a class="navbar-item" href="/">
-        <span class="logo-icon">C</span>
-        <strong class="is-size-4">cvcpkg</strong>
+        <img class="navbar-logo" src="{_BRAND_BANNER_PATH}" alt="cvcpkg" />
         <span class="tag is-dark is-rounded ml-2">v{__version__}</span>
       </a>
       <a role="button" class="navbar-burger" aria-label="menu" aria-expanded="false" data-target="navMenu">
@@ -293,6 +453,9 @@ def _navbar_html() -> str:
     </div>
     <div id="navMenu" class="navbar-menu">
       <div class="navbar-end">
+        <a class="navbar-item" href="/search">
+          <span class="icon"><i class="fas fa-search"></i></span><span>Search</span>
+        </a>
         <div class="navbar-item has-dropdown is-hoverable">
           <a class="navbar-link">
             <span class="icon"><i class="fas fa-book"></i></span><span>Docs</span>
@@ -363,19 +526,26 @@ def _footer_html() -> str:
 def _head_html(title: str) -> str:
     href = brand_logo_href()
     # Social scrapers need an absolute URL; a configured remote logo already
-    # is one, a served asset gets the site origin prepended.
-    logo_url = href if _logo_is_remote() else f"{_SITE_URL}{href}"
+    # is one, a served asset gets the site origin prepended.  The wide banner
+    # makes a better social card than the square icon.
+    banner = brand_banner_href()
+    og_image = href if _logo_is_remote() else f"{_SITE_URL}{banner}"
     return f"""<head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{title}</title>
   <link rel="icon" href="{href}" />
-  <link rel="apple-touch-icon" href="{href}" />
+  <link rel="apple-touch-icon" href="/assets/cvcpkg-icon-180.png" />
+  <meta name="theme-color" content="#0a0a12" />
   <meta property="og:title" content="{title}" />
   <meta property="og:type" content="website" />
-  <meta property="og:image" content="{logo_url}" />
-  <meta name="twitter:card" content="summary" />
-  <meta name="twitter:image" content="{logo_url}" />
+  <meta property="og:image" content="{og_image}" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:image" content="{og_image}" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Gentium+Book+Basic:ital,wght@0,400;0,700;1,400&family=VT323&display=swap" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.4/css/bulma.min.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
         integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA=="
@@ -729,18 +899,72 @@ function sortBy(key) {
   if (lastResponse) renderResults(lastResponse);
 }
 
-const debouncedSearch = _debounce(runSearch, 250);
+const debouncedSearch = _debounce(maybeSearch, 250);
 
-async function init() {
-  // Fetch recipe metadata once; used for license/description fallback and
-  // the "mainline vs community" badge.
+let _recipeMetaLoaded = false;
+
+// Recipe metadata (license/description fallback + the mainline/community
+// badge) is large, so it is fetched lazily on the first actual search rather
+// than on page load -- the search page must open instantly.
+async function ensureRecipeMeta() {
+  if (_recipeMetaLoaded) return;
+  _recipeMetaLoaded = true;
   try {
     const dresp = await fetch('/v1/deps');
     const ddata = await dresp.json();
     recipeMeta = ddata.meta || {};
     recipeNames = ddata.recipe_names || [];
   } catch (_) {}
+}
+
+function _hasCriteria() {
+  return !!(state.q || state.platform || state.arch || state.tag || state.release
+            || state.link || state.build_type);
+}
+
+function showSearchEmptyState() {
+  const tbody = document.getElementById('pkg-body');
+  if (tbody) {
+    tbody.innerHTML =
+      '<tr><td colspan="6" class="search-empty">'
+      + '<p class="mb-3"><span class="icon is-large"><i class="fas fa-magnifying-glass fa-2x"></i></span></p>'
+      + '<p class="is-size-5">Search the cvcpkg registry</p>'
+      + '<p class="is-size-7 mt-2">Type a package name, or pick a platform, architecture, or tag to begin.</p>'
+      + '</td></tr>';
+  }
+  const cnt = document.getElementById('pkg-count');
+  if (cnt) cnt.innerHTML = '&nbsp;';
+  const more = document.getElementById('load-more');
+  if (more) more.style.display = 'none';
+}
+
+// Run a search only when the user has entered criteria; otherwise rest in the
+// empty state.  Recipe metadata is loaded lazily right before the first query.
+async function maybeSearch() {
+  if (!_hasCriteria()) { showSearchEmptyState(); return; }
+  await ensureRecipeMeta();
   await runSearch();
+}
+
+async function init() {
+  // Deep link: /search?q=... (or a filter param) opens directly on results.
+  const params = new URLSearchParams(location.search);
+  const q = params.get('q') || '';
+  if (q) {
+    const box = document.getElementById('search');
+    if (box) box.value = q;
+    state.q = q;
+  }
+  for (const k of ['platform', 'arch', 'tag', 'release']) {
+    const v = params.get(k);
+    if (v) state[k] = v;
+  }
+  if (_hasCriteria()) {
+    await ensureRecipeMeta();
+    await runSearch();
+  } else {
+    showSearchEmptyState();
+  }
 }
 
 function loadMore() {
@@ -753,9 +977,16 @@ function loadMore() {
 
 
 def landing_html() -> str:
-    """Return the complete HTML for the landing page."""
-    page_title = _html.escape(f"{_SITE_TITLE} \u2014 {_SITE_TAGLINE}", quote=False)
-    hero_title = _html.escape(_SITE_TITLE)
+    """The landing page: branded, fast, and free of any package listing.
+
+    Deliberately makes **no** call to ``/v1/search`` or ``/v1/deps`` — those
+    scan the whole registry (tens of thousands of variants) and made the front
+    page slow to first paint.  Package discovery lives on ``/search`` now; this
+    page loads instantly and does a single cheap ``/healthz`` fetch for the one
+    live number it shows.
+    """
+    page_title = _html.escape(f"{_SITE_TITLE} — {_SITE_TAGLINE}", quote=False)
+    hero = _html.escape(_SITE_HERO, quote=False)
     return f"""<!DOCTYPE html>
 <html lang="en" data-theme="dark" class="has-background-black-bis">
 {_head_html(page_title)}
@@ -764,79 +995,193 @@ def landing_html() -> str:
 {_navbar_html()}
 
 <!-- Hero -->
-<section class="hero hero-gradient is-medium">
+<section class="hero brand-hero is-medium">
   <div class="hero-body">
-    <div class="container">
-      <p class="title is-2 has-text-white">
-        <span class="icon is-large mr-2"><i class="fas fa-cubes"></i></span>
-        {hero_title}
-      </p>
-      <p class="subtitle is-5 has-text-grey-lighter" style="max-width: 740px;">
-        {_html.escape(_SITE_HERO, quote=False)}
-      </p>
+    <div class="container has-text-centered">
+      <img class="hero-art mb-4" src="{_BRAND_HERO_PATH}" alt="cvcpkg" />
+      <h1 class="brand-hero-title brand-wordmark mb-3">{_html.escape(_SITE_TITLE)}</h1>
+      <p class="brand-hero-tagline mx-auto mb-5" style="max-width: 760px;">{hero}</p>
+
+      <form action="/search" method="get" class="mb-4">
+        <div class="field has-addons has-addons-centered">
+          <div class="control has-icons-left is-expanded" style="max-width: 460px;">
+            <input class="input is-medium is-rounded is-dark" type="text" name="q"
+                   placeholder="Search 4,000+ packages…" autofocus />
+            <span class="icon is-left"><i class="fas fa-search"></i></span>
+          </div>
+          <div class="control">
+            <button class="button is-medium is-brand" type="submit">Search</button>
+          </div>
+        </div>
+      </form>
+
+      <div class="buttons is-centered">
+        <a href="/search" class="button is-brand-outline">
+          <span class="icon"><i class="fas fa-box-open"></i></span><span>Browse packages</span>
+        </a>
+        <a href="/guide" class="button is-brand-outline">
+          <span class="icon"><i class="fas fa-rocket"></i></span><span>Get started</span>
+        </a>
+        <a href="{_GITHUB_URL}" class="button is-brand-outline">
+          <span class="icon"><i class="fab fa-github"></i></span><span>Source</span>
+        </a>
+      </div>
     </div>
+  </div>
+</section>
+
+<!-- Install -->
+<section class="section pt-5 pb-5 has-background-black-ter">
+  <div class="container has-text-centered">
+    <p class="heading has-text-grey-light mb-3">Install in one line</p>
+    <span class="install-cmd">
+      <span id="install-cmd-text">curl -fsSL {_SITE_URL}/install.sh | sh</span>
+      <span class="copy-btn" id="copy-install" title="Copy"><i class="fas fa-copy"></i></span>
+    </span>
+    <p class="is-size-7 has-text-grey mt-3">
+      Windows: <code class="is-family-monospace">iwr {_SITE_URL}/install.ps1 -useb | iex</code>
+    </p>
   </div>
 </section>
 
 <!-- Stats -->
-<section class="section pt-4 pb-4 has-background-black-ter">
+<section class="section pt-4 pb-4">
   <div class="container">
-    <div class="columns is-mobile is-multiline">
+    <div class="columns is-mobile is-multiline has-text-centered">
       <div class="column is-3-desktop is-6-mobile">
-        <div class="stat-box">
-          <p class="title is-3 has-text-link" id="stat-packages">&mdash;</p>
-          <p class="heading has-text-grey-light">Packages</p>
-        </div>
+        <p class="title is-3 neon-cyan" id="stat-packages">&mdash;</p>
+        <p class="heading has-text-grey-light">Packages</p>
       </div>
       <div class="column is-3-desktop is-6-mobile">
-        <div class="stat-box">
-          <p class="title is-3 has-text-info" id="stat-builds">&mdash;</p>
-          <p class="heading has-text-grey-light">Builds</p>
-        </div>
+        <p class="title is-3 neon-magenta">10+</p>
+        <p class="heading has-text-grey-light">Platforms</p>
       </div>
       <div class="column is-3-desktop is-6-mobile">
-        <div class="stat-box">
-          <p class="title is-3 has-text-success" id="stat-platforms">&mdash;</p>
-          <p class="heading has-text-grey-light">Platforms</p>
-        </div>
+        <p class="title is-3 neon-cyan">Hermetic</p>
+        <p class="heading has-text-grey-light">Self-contained builds</p>
       </div>
       <div class="column is-3-desktop is-6-mobile">
-        <div class="stat-box">
-          <p class="title is-3 has-text-warning" id="stat-size">&mdash;</p>
-          <p class="heading has-text-grey-light">Total Size</p>
-        </div>
+        <p class="title is-3 neon-magenta">LTS</p>
+        <p class="heading has-text-grey-light">Reproducible releases</p>
       </div>
     </div>
   </div>
 </section>
 
-<!-- Build system quick links -->
-<section class="section pt-2 pb-4 has-background-black-ter">
+<!-- Features -->
+<section class="section pt-4 pb-6">
   <div class="container">
-    <div class="columns is-mobile is-multiline is-centered">
-      <div class="column is-narrow">
-        <a href="/builders" class="button is-dark is-outlined">
-          <span class="icon"><i class="fas fa-server"></i></span><span>Builders</span>
-        </a>
+    <div class="columns is-multiline">
+      <div class="column is-3-desktop is-6-tablet">
+        <div class="brand-panel feature-card">
+          <p class="mb-3"><span class="icon is-large neon-cyan"><i class="fas fa-cube fa-2x"></i></span></p>
+          <p class="title is-5 has-text-white">Hermetic &amp; reproducible</p>
+          <p class="is-size-7">Pinned, self-contained binaries and curated LTS releases, so a
+          downstream build resolves the same closure today and next year.</p>
+        </div>
       </div>
-      <div class="column is-narrow">
-        <a href="/builds" class="button is-dark is-outlined">
-          <span class="icon"><i class="fas fa-hammer"></i></span><span>Build Jobs</span>
-        </a>
+      <div class="column is-3-desktop is-6-tablet">
+        <div class="brand-panel feature-card">
+          <p class="mb-3"><span class="icon is-large neon-magenta"><i class="fas fa-fire fa-2x"></i></span></p>
+          <p class="title is-5 has-text-white">WebAssembly, shipped</p>
+          <p class="is-size-7">Threaded WebAssembly builds of scientific libraries nobody else
+          publishes &mdash; the same registry, the same tool, straight to the browser.</p>
+        </div>
       </div>
-      <div class="column is-narrow">
-        <a href="/recipes" class="button is-dark is-outlined">
-          <span class="icon"><i class="fas fa-scroll"></i></span><span>Recipes</span>
-        </a>
+      <div class="column is-3-desktop is-6-tablet">
+        <div class="brand-panel feature-card">
+          <p class="mb-3"><span class="icon is-large neon-cyan"><i class="fas fa-layer-group fa-2x"></i></span></p>
+          <p class="title is-5 has-text-white">Every platform</p>
+          <p class="is-size-7">Linux, macOS, Windows, FreeBSD, NetBSD, OpenBSD, Haiku, and WebAssembly
+          &mdash; one manifest, prebuilt everywhere.</p>
+        </div>
+      </div>
+      <div class="column is-3-desktop is-6-tablet">
+        <div class="brand-panel feature-card">
+          <p class="mb-3"><span class="icon is-large neon-magenta"><i class="fas fa-terminal fa-2x"></i></span></p>
+          <p class="title is-5 has-text-white">One tool</p>
+          <p class="is-size-7">Build, publish, and install from a single CLI backed by a public
+          registry &mdash; with a remote builder fleet doing the cross-compiles.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="has-text-centered mt-5">
+      <div class="buttons is-centered">
+        <a href="/builders" class="button is-dark is-rounded">
+          <span class="icon"><i class="fas fa-server"></i></span><span>Builders</span></a>
+        <a href="/builds" class="button is-dark is-rounded">
+          <span class="icon"><i class="fas fa-hammer"></i></span><span>Build Jobs</span></a>
+        <a href="/recipes" class="button is-dark is-rounded">
+          <span class="icon"><i class="fas fa-scroll"></i></span><span>Recipes</span></a>
+        <a href="/orgs" class="button is-dark is-rounded">
+          <span class="icon"><i class="fas fa-building"></i></span><span>Organizations</span></a>
+        <a href="/tags" class="button is-dark is-rounded">
+          <span class="icon"><i class="fas fa-tags"></i></span><span>Tags</span></a>
+        <a href="/docs" class="button is-dark is-rounded">
+          <span class="icon"><i class="fas fa-code"></i></span><span>API</span></a>
       </div>
     </div>
   </div>
 </section>
 
-<!-- Package index -->
-<section class="section has-background-black-bis">
+{_footer_html()}
+
+<script>
+{_NAVBAR_JS}
+document.addEventListener('DOMContentLoaded', () => {{
+  // One cheap fetch for the single live number on the page.
+  fetch('/healthz').then(r => r.json()).then(d => {{
+    const el = document.getElementById('stat-packages');
+    if (el && typeof d.packages_count === 'number') {{
+      el.textContent = d.packages_count.toLocaleString();
+    }}
+  }}).catch(() => {{
+    const el = document.getElementById('stat-packages');
+    if (el) el.textContent = '—';
+  }});
+
+  const copyBtn = document.getElementById('copy-install');
+  if (copyBtn) copyBtn.addEventListener('click', () => {{
+    const txt = document.getElementById('install-cmd-text').textContent;
+    navigator.clipboard.writeText(txt).then(() => {{
+      copyBtn.innerHTML = '<i class="fas fa-check"></i>';
+      setTimeout(() => {{ copyBtn.innerHTML = '<i class="fas fa-copy"></i>'; }}, 1500);
+    }}).catch(() => {{}});
+  }});
+}});
+</script>
+</body>
+</html>"""
+
+
+def search_html() -> str:
+    """The package search page: the registry's search UI, on its own route.
+
+    Opens in an empty rest state and issues **no** ``/v1/search`` until the
+    visitor enters a query or picks a filter (``init()`` in the search JS,
+    which also honours a ``?q=`` deep link from the landing page).
+    """
+    page_title = _html.escape(f"Search — {_SITE_TITLE}", quote=False)
+    return f"""<!DOCTYPE html>
+<html lang="en" data-theme="dark" class="has-background-black-bis">
+{_head_html(page_title)}
+<body class="has-background-black-bis has-text-light">
+
+{_navbar_html()}
+
+<section class="section">
   <div class="container">
-    <div class="columns is-vcentered mb-4">
+    <h1 class="title is-3 has-text-white">
+      <span class="icon is-large mr-2 neon-cyan"><i class="fas fa-search"></i></span>
+      Search packages
+    </h1>
+    <p class="subtitle is-6 has-text-grey-lighter mb-4">
+      Prebuilt binaries across every platform. Start typing, or filter by
+      platform, architecture, or tag.
+    </p>
+
+    <div class="columns is-multiline is-vcentered">
       <div class="column is-4">
         <div class="field">
           <div class="control has-icons-left">
@@ -847,44 +1192,36 @@ def landing_html() -> str:
         </div>
       </div>
       <div class="column is-2">
-        <div class="field">
-          <div class="control has-icons-left">
-            <div class="select is-dark is-fullwidth">
-              <select id="tag-filter"><option value="">All tags</option></select>
-            </div>
-            <span class="icon is-left"><i class="fas fa-tag"></i></span>
+        <div class="field"><div class="control has-icons-left">
+          <div class="select is-dark is-fullwidth">
+            <select id="tag-filter"><option value="">All tags</option></select>
           </div>
-        </div>
+          <span class="icon is-left"><i class="fas fa-tag"></i></span>
+        </div></div>
       </div>
       <div class="column is-2">
-        <div class="field">
-          <div class="control">
-            <div class="select is-dark is-fullwidth">
-              <select id="platform-filter"><option value="">All platforms</option></select>
-            </div>
+        <div class="field"><div class="control">
+          <div class="select is-dark is-fullwidth">
+            <select id="platform-filter"><option value="">All platforms</option></select>
           </div>
-        </div>
+        </div></div>
       </div>
       <div class="column is-2">
-        <div class="field">
-          <div class="control">
-            <div class="select is-dark is-fullwidth">
-              <select id="arch-filter"><option value="">All architectures</option></select>
-            </div>
+        <div class="field"><div class="control">
+          <div class="select is-dark is-fullwidth">
+            <select id="arch-filter"><option value="">All architectures</option></select>
           </div>
-        </div>
+        </div></div>
       </div>
       <div class="column is-2">
-        <div class="field">
-          <div class="control">
-            <div class="select is-dark is-fullwidth">
-              <select id="release-filter">
-                <option value="">All channels</option>
-                <option value="live" data-static="true">Live only</option>
-              </select>
-            </div>
+        <div class="field"><div class="control">
+          <div class="select is-dark is-fullwidth">
+            <select id="release-filter">
+              <option value="">All channels</option>
+              <option value="live" data-static="true">Live only</option>
+            </select>
           </div>
-        </div>
+        </div></div>
       </div>
       <div class="column is-2 has-text-right">
         <span class="is-size-7 has-text-grey-light" id="pkg-count">&nbsp;</span>
@@ -903,15 +1240,7 @@ def landing_html() -> str:
             <th class="is-sortable" data-key="totalSize">Size <span class="sort-arrow"></span></th>
           </tr>
         </thead>
-        <tbody id="pkg-body">
-          <tr>
-            <td colspan="6" class="has-text-centered py-6">
-              <span class="icon is-large has-text-link">
-                <i class="fas fa-spinner fa-spin fa-2x"></i>
-              </span>
-            </td>
-          </tr>
-        </tbody>
+        <tbody id="pkg-body"></tbody>
       </table>
     </div>
 
@@ -938,19 +1267,19 @@ document.addEventListener('DOMContentLoaded', () => {{
   }});
   document.getElementById('platform-filter').addEventListener('change', e => {{
     state.platform = e.target.value;
-    runSearch();
+    maybeSearch();
   }});
   document.getElementById('arch-filter').addEventListener('change', e => {{
     state.arch = e.target.value;
-    runSearch();
+    maybeSearch();
   }});
   document.getElementById('tag-filter').addEventListener('change', e => {{
     state.tag = e.target.value;
-    runSearch();
+    maybeSearch();
   }});
   document.getElementById('release-filter').addEventListener('change', e => {{
     state.release = e.target.value;
-    runSearch();
+    maybeSearch();
   }});
   document.querySelectorAll('th.is-sortable').forEach(th => {{
     th.addEventListener('click', () => sortBy(th.dataset.key));

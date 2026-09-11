@@ -208,9 +208,12 @@ class TestOrgDetailPage:
 # ── Landing page + package detail (anonymous, visibility) ───────
 
 
-class TestLandingPackageList:
+class TestSearchPackageList:
+    # Package discovery moved from the landing page to /search, which only
+    # queries once there is a query or filter (or a ?q= deep link).
     def test_public_package_listed_private_hidden(self, page, seeded_server):
-        page.goto(seeded_server)
+        # A query that would match both org packages; only the public one shows.
+        page.goto(f"{seeded_server}/search?q=lib")
         page.wait_for_function(
             "() => { const b = document.querySelector('#pkg-body');"
             " return b && b.textContent.includes('acme-lib'); }",
@@ -221,7 +224,7 @@ class TestLandingPackageList:
         assert "shell-lib" not in body  # private package hidden from anonymous
 
     def test_search_box_filters_to_public_package(self, page, seeded_server):
-        page.goto(seeded_server)
+        page.goto(f"{seeded_server}/search")
         page.fill("#search", "acme-lib")
         page.wait_for_function(
             "() => { const b = document.querySelector('#pkg-body');"

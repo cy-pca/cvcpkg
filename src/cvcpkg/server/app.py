@@ -2331,6 +2331,30 @@ def create_app(
 
         return HTMLResponse(landing_html())
 
+    @app.get("/search", response_class=HTMLResponse, include_in_schema=False)
+    async def search_page():
+        from cvcpkg.server.landing import search_html
+
+        return HTMLResponse(search_html())
+
+    @app.get("/assets/{name}", include_in_schema=False)
+    async def brand_image(name: str):
+        """Serve a bundled brand image (icon, banner, hero) by name.
+
+        Restricted to the allow-list in landing.brand_asset — an unknown name
+        404s rather than reading an arbitrary package file.
+        """
+        from cvcpkg.server.landing import brand_asset
+
+        data, media_type = brand_asset(name)
+        if not data:
+            raise HTTPException(status_code=404, detail="asset not found")
+        return Response(
+            content=data,
+            media_type=media_type,
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
     @app.get("/favicon.ico", include_in_schema=False)
     @app.get("/assets/cyberpc-angel-gears.png", include_in_schema=False)
     async def brand_logo():

@@ -119,12 +119,12 @@ def _reload_landing(monkeypatch, value):
     return importlib.reload(landing)
 
 
-def test_site_logo_defaults_to_bundled_gears(monkeypatch):
+def test_site_logo_defaults_to_bundled_icon(monkeypatch):
     landing = _reload_landing(monkeypatch, None)
     data, media = landing.brand_logo_asset()
     assert data.startswith(b"\x89PNG\r\n\x1a\n")
     assert media == "image/png"
-    assert landing.brand_logo_href() == "/assets/cyberpc-angel-gears.png"
+    assert landing.brand_logo_href() == "/assets/cvcpkg-icon.png"
 
 
 def test_site_logo_local_file_override(monkeypatch, tmp_path):
@@ -135,7 +135,7 @@ def test_site_logo_local_file_override(monkeypatch, tmp_path):
     assert data == custom.read_bytes()
     assert media == "image/svg+xml"
     # served through our own route, so the href stays local
-    assert landing.brand_logo_href() == "/assets/cyberpc-angel-gears.png"
+    assert landing.brand_logo_href() == "/assets/cvcpkg-icon.png"
 
 
 def test_site_logo_remote_url_is_linked_directly(monkeypatch):
@@ -164,3 +164,25 @@ def test_head_includes_icon_and_social_tags(monkeypatch):
 def test_cleanup_reload(monkeypatch):
     """Leave the module in its default state for other tests."""
     _reload_landing(monkeypatch, None)
+
+
+def test_brand_banner_and_hero_hrefs(monkeypatch):
+    landing = _reload_landing(monkeypatch, None)
+    assert landing.brand_banner_href() == "/assets/cvcpkg-banner.png"
+    assert landing.brand_hero_href() == "/assets/cvcpkg-hero.png"
+
+
+def test_brand_asset_serves_allowlisted_images(monkeypatch):
+    landing = _reload_landing(monkeypatch, None)
+    for name in ("cvcpkg-icon.png", "cvcpkg-banner.png", "cvcpkg-hero.png"):
+        data, media = landing.brand_asset(name)
+        assert data.startswith(b"\x89PNG\r\n\x1a\n"), name
+        assert media == "image/png"
+
+
+def test_brand_asset_refuses_unlisted_names(monkeypatch):
+    landing = _reload_landing(monkeypatch, None)
+    # Not in the allow-list -> empty, so the route 404s rather than reading it.
+    for name in ("secrets.png", "../pyproject.toml", "app.py"):
+        data, _ = landing.brand_asset(name)
+        assert data == b""

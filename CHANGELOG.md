@@ -28,6 +28,29 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
+## Unreleased
+
+### Front page: fast landing, dedicated search, cvcpkg branding
+
+The landing page ran a full `/v1/search` (every variant in the registry, with
+facets and a size rollup) plus a `/v1/deps` fetch on first paint, so it got
+slow to load as the catalog passed a few thousand packages.
+
+- **The landing page no longer lists packages.** It is a branded overview that
+  loads instantly with a single cheap `/healthz` call; the hero search box
+  navigates to the search page rather than querying inline.
+- **Package search moved to its own `/search` page** (a new "Search" nav item).
+  It opens in an empty rest state and issues no `/v1/search` until you enter a
+  query or pick a platform/architecture/tag filter. Recipe metadata (`/v1/deps`)
+  is fetched lazily before the first query, not on load. A `?q=` deep link from
+  the landing box opens directly on results.
+- **cvcpkg branding.** The neon flaming-package mark replaces the placeholder
+  gears as the site icon; the horizontal banner is the navbar logo; a hero
+  graphic anchors the landing page. The palette adopts the house neon magenta +
+  cyan on translucent navy panels with Gentium Book Basic / VT323 type and pill
+  buttons, matching cyberpcangel.com. The brand images ship as package data and
+  are served self-hosted from `/assets/`.
+
 ## v2.1.0
 
 ### Sign in to cvcpkg.org — the non-admin web surface

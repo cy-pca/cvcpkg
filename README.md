@@ -1,11 +1,18 @@
-<img src="src/cvcpkg/server/assets/cyberpc-angel-gears.png" alt="CyberPC Angel, LLC" width="72" align="left" />
+<p align="center">
+  <img src="docs/img/cvcpkg-hero.png" alt="cvcpkg" width="360" />
+</p>
 
-# cvcpkg
+<h1 align="center">cvcpkg</h1>
 
-A [CyberPC Angel, LLC](https://cyberpcangel.com) project.
+<p align="center">
+  <strong>A hermetic package manager and registry for the scientific stack.</strong><br/>
+  A <a href="https://cyberpcangel.com">CyberPC Angel, LLC</a> project.
+</p>
 
-Cross-platform, language-agnostic package manager and binary archive for
-the scientific computing community.
+We ship the tools we depend on, in public: a cross-platform, language-agnostic
+package manager and binary registry for the scientific computing community —
+including WebAssembly builds of libraries nobody else ships, with curated LTS
+releases for reproducible downstream builds.
 
 `cvcpkg` resolves a set of component requirements against a package
 catalog, downloads the matching prebuilt bundles, verifies their integrity,

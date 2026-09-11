@@ -1788,11 +1788,20 @@ class TestTagPages:
 
 
 class TestLandingPageTags:
-    def test_landing_has_tag_filter(self, server_env):
+    def test_search_page_has_tag_filter(self, server_env):
+        # The tag filter moved to the dedicated /search page; the landing page
+        # no longer carries the package table (kept fast, no registry scan).
+        client, _, _, _ = server_env
+        resp = client.get("/search")
+        assert resp.status_code == 200
+        assert "tag-filter" in resp.text
+
+    def test_landing_has_no_package_table(self, server_env):
         client, _, _, _ = server_env
         resp = client.get("/")
         assert resp.status_code == 200
-        assert "tag-filter" in resp.text
+        assert "tag-filter" not in resp.text
+        assert 'id="pkg-body"' not in resp.text
 
     def test_navbar_has_tags_link(self, server_env):
         client, _, _, _ = server_env
