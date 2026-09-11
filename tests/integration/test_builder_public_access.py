@@ -117,13 +117,17 @@ class TestBuilderPublicAccess:
         # Add org-member to the private org
         self._add_member(c, admin_tok, "private-org", "org-member")
 
-        # Register builders:
+        # Register builders.  Attaching a builder to an org requires membership
+        # in it (or admin), so the two org-scoped builders are registered by the
+        # admin that created those orgs; "publisher" belongs to neither.  These
+        # tests are about who can *see* a builder, and the registrant is never a
+        # viewer in any assertion below, so this changes no membership set.
         # 1. Global builder (no org) — should be public
         b1 = self._register_builder(c, pub_tok, "global-builder")
         # 2. Public org builder — should be public
-        b2 = self._register_builder(c, pub_tok, "public-org-builder", org="public-org")
+        b2 = self._register_builder(c, admin_tok, "public-org-builder", org="public-org")
         # 3. Private org builder — should be hidden from non-members
-        b3 = self._register_builder(c, pub_tok, "private-org-builder", org="private-org")
+        b3 = self._register_builder(c, admin_tok, "private-org-builder", org="private-org")
 
         return b1, b2, b3
 

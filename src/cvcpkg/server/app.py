@@ -6792,6 +6792,61 @@ def create_app(
                 501, "builder registry requires a database backend (set CVCPKG_DATABASE_URL)"
             )
 
+    async def _require_org_member(actor: TokenRecord, org_slug: str) -> None:
+        """Refuse an org-scoped action by a non-member.
+
+        The same gate POST /v1/builds already applies.  Without it a caller
+        could attach a builder to an organization it has no relationship with,
+        and the org's own members would then see a builder they cannot account
+        for serving their namespace.
+        """
+        if org_slug and actor.role != TokenRole.admin and _db_orgs is not None:
+            if not await _db_orgs.is_member(org_slug, actor.name):
+                raise HTTPException(403, "not a member of this organization")
+
+    async def _builder_or_404(builder_id: int):
+        info = await _db_builders.get(builder_id)
+        if info is None:
+            raise HTTPException(404, f"builder {builder_id} not found")
+        return info
+
+    def _owns_builder(actor: TokenRecord, info) -> bool:
+        """True when *actor* is the identity this builder registered under."""
+        if actor.role == TokenRole.admin:
+            return True
+        return bool(info.registered_by) and info.registered_by == actor.name
+
+    async def _require_builder_identity(actor: TokenRecord, builder_id: int):
+        """Gate the endpoints where the caller *claims to be* the builder.
+
+        ``heartbeat``, ``next-job`` and the WebSocket are the builder asserting
+        its own identity: taking a job dispatched to another builder, or
+        displacing its socket, is never a legitimate action even for a
+        co-member of the same organization.  So this is owner-or-admin only,
+        deliberately stricter than _require_builder_control below.
+        """
+        info = await _builder_or_404(builder_id)
+        if not _owns_builder(actor, info):
+            raise HTTPException(403, "this token does not own that builder")
+        return info
+
+    async def _require_builder_control(actor: TokenRecord, builder_id: int):
+        """Gate administrative mutation of a builder's record.
+
+        Broader than _require_builder_identity: a member of the owning
+        organization may retune a builder that serves that org.  Rewriting
+        ``served_namespaces`` matters because _choose_builder trusts it for
+        namespace isolation — but only within an org the caller already
+        belongs to, which is a boundary the org's owner controls.
+        """
+        info = await _builder_or_404(builder_id)
+        if _owns_builder(actor, info):
+            return info
+        if info.org_slug and _db_orgs is not None:
+            if await _db_orgs.is_member(info.org_slug, actor.name):
+                return info
+        raise HTTPException(403, "this token may not modify that builder")
+
     @app.post("/v1/builders/register", response_model=BuilderInfo, tags=["builders"])
     async def register_builder(
         body: BuilderRegisterRequest,
@@ -6799,6 +6854,19 @@ def create_app(
     ):
         """Register a new builder or re-register an existing one."""
         _require_db_builders()
+        await _require_org_member(actor, body.org_slug)
+        # Re-registration is an upsert keyed on (name, org_slug) that reassigns
+        # registered_by, so without this an ownership check on the endpoints
+        # below would be worth nothing: anyone could re-register another
+        # builder's name, become its owner, and then pass every later gate.
+        existing = await _db_builders.get_by_name(body.name, body.org_slug)
+        if existing is not None and not _owns_builder(actor, existing):
+            raise HTTPException(
+                409,
+                f"builder {body.name!r} is already registered by "
+                f"{existing.registered_by!r}; re-register with that token, or ask an "
+                f"admin to unregister it first",
+            )
         async with _audit_txn(
             AuditAction.builder_register,
             actor.name,
@@ -6901,6 +6969,7 @@ def create_app(
     ):
         """Update mutable builder fields."""
         _require_db_builders()
+        await _require_builder_control(actor, builder_id)
         async with _audit_txn(
             AuditAction.builder_update,
             actor.name,
@@ -6941,6 +7010,7 @@ def create_app(
         registration; omitting it leaves the stored value alone.
         """
         _require_db_builders()
+        await _require_builder_identity(actor, builder_id)
         info = await _db_builders.heartbeat(
             builder_id,
             status=body.status,
@@ -7676,6 +7746,8 @@ def create_app(
         Returns a job object or 204 No Content.
         """
         _require_db_build_jobs()
+        _require_db_builders()
+        await _require_builder_identity(actor, builder_id)
         deadline = time.time() + timeout
         while time.time() < deadline:
             info = await _db_build_jobs.next_job_for_builder(builder_id)
@@ -7724,6 +7796,13 @@ def create_app(
         info = await _db_builders.get(builder_id)
         if info is None:
             await websocket.close(code=4004, reason="builder not found")
+            return
+        # Same owner-or-admin rule the HTTP builder endpoints apply, enforced
+        # here as a close because this handler cannot raise HTTPException.
+        # Without it any publisher token could connect as any builder_id and
+        # displace the real builder's socket in _ws_builders.
+        if not _owns_builder(actor, info):
+            await websocket.close(code=4003, reason="token does not own this builder")
             return
 
         await websocket.accept()

@@ -626,6 +626,17 @@ class TestBuilderEndpoints:
         default = self._register(client, pub_tok, "plain").json()
         assert default["served_namespaces"] == [""]
 
+        # Attaching a builder to an org now requires membership in it, so the
+        # publisher creates the org first (the creator is its owner).  Before
+        # that gate existed this test passed while registering a builder for an
+        # org the token had no relationship with at all.
+        made = client.post(
+            "/v1/orgs",
+            json={"slug": "cvc", "display_name": "CVC"},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert made.status_code == 200, made.text
+
         # A multi-homed registration serves its home org plus extras (home first).
         resp = client.post(
             "/v1/builders/register",

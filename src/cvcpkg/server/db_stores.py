@@ -3159,6 +3159,24 @@ class DbBuilderStore:
             ).scalar()
             return self._row_to_info(row) if row else None
 
+    async def get_by_name(self, name: str, org_slug: str = "") -> BuilderInfo | None:
+        """Look up a builder by the identity ``register()`` upserts on.
+
+        ``register`` matches on ``(name, org_slug)``, so this is what lets a
+        caller be told whether a re-registration would take over somebody
+        else's row instead of creating their own.
+        """
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(BuilderRow).where(
+                        BuilderRow.name == name,
+                        BuilderRow.org_slug == org_slug,
+                    )
+                )
+            ).scalar()
+            return self._row_to_info(row) if row else None
+
     async def list_builders(
         self,
         *,

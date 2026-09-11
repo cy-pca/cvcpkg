@@ -1941,7 +1941,13 @@ class TestCLIBuildCommands:
         admin = server["admin_token"]
         pub = server["pub_token"]  # role=publisher, name="builder-ci"
 
-        builder = self._register_builder(c, admin, "reauth-builder")
+        # Registered by the SAME token that opens the socket below: a builder's
+        # WebSocket is that builder asserting its own identity, so a token that
+        # does not own it is refused at connect.  Registering as admin here and
+        # connecting as the publisher would close the socket at 4003 before
+        # this test could exercise what it is actually about — the re-auth
+        # teardown when the live token is revoked.
+        builder = self._register_builder(c, pub, "reauth-builder")
         builder_id = builder["id"]
 
         # Re-verify aggressively so the test does not wait on the 30s default.

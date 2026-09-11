@@ -83,6 +83,41 @@ Fixed:
   permission check; it now warns when group/world-readable, as env files do.
 - OIDC discovery was fetched twice per login; it is now cached for 5 minutes.
 
+### Security — builder endpoint authorization
+
+The builder endpoints authenticated a *role* (publisher or admin) and then trusted
+whatever `org_slug` or `builder_id` the caller named. `POST /v1/builds` has always
+gated org attachment with `is_member`; the builder endpoints never did.
+
+- **Registering a builder for another org.** `POST /v1/builders/register` passed
+  `body.org_slug` to the store with no membership check, so any publisher token
+  could attach a builder to any organization. Now gated by the same check
+  `/v1/builds` uses.
+- **Re-registration takeover.** `register()` upserts on `(name, org_slug)` and
+  reassigned `registered_by` unconditionally, so any publisher could re-register
+  another builder's name, become its owner, and pass every ownership check below.
+  A non-owner re-registration is now `409`; owner re-registration (what every
+  builder does on restart) is unchanged.
+- **Rewriting another builder's `served_namespaces`.** `PATCH /v1/builders/{id}`
+  had no ownership check, and `_choose_builder` trusts `served_namespaces` for
+  namespace isolation.
+- **Assuming a builder's identity.** `heartbeat`, `next-job` and the WebSocket
+  authenticated any publisher token against any `builder_id` — so a caller could
+  take a job dispatched to another builder, or displace the real builder's socket,
+  since the WS handler assigned `_ws_builders[builder_id]` unconditionally.
+
+The rule now: attaching to an org needs membership in it; *being* a builder
+(`heartbeat`, `next-job`, `ws`) is owner-or-admin only; *administering* one
+(`PATCH`) additionally allows a member of the owning org. `DELETE` was already
+admin-only.
+
+No live builder changes behaviour: every registered builder has a non-empty
+`registered_by`, and `cvcpkg builder run` uses one token for its whole lifecycle.
+Token rotation is safe, since it preserves the name `registered_by` records. A
+builder re-tokened under a *different name* gets a 409 on its next registration,
+with an error saying to re-register with the owning token or ask an admin to
+unregister it.
+
 ## v2.0.3
 
 ### `cvcpkg install` can install from a private org (2026-09-08)
