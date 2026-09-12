@@ -42,8 +42,10 @@ class TestLandingIsFastAndBranded:
 
     def test_landing_is_branded(self):
         html = landing.landing_html()
-        assert landing.brand_banner_href() in html  # navbar logo
+        assert landing.brand_logo_href() in html  # box-fire icon = navbar mark + favicon
+        assert 'class="navbar-wordmark' in html  # live "cvcpkg" wordmark beside the icon
         assert landing.brand_hero_href() in html  # hero graphic
+        assert landing.brand_banner_href() in html  # wide banner as the og: social card
         assert "install.sh" in html  # one-line install
         # brand fonts + neon palette are wired in the head/CSS
         assert "Gentium+Book+Basic" in html and "VT323" in html

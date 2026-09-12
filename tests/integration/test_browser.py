@@ -574,8 +574,10 @@ class TestMobileBadgeLayout:
 
     def test_badge_no_line_wrap(self, page):
         """Badge elements should not wrap to multiple lines on mobile."""
-        # Wait for packages to load (deterministic: keyed on /v1/search)
-        _goto_and_wait_for_stats(page)
+        # The package table (and any source badges) live on the dedicated
+        # /search page now, not the landing page.  With no query the table is
+        # empty, so the assertions below stay guarded on badge presence.
+        page.goto(f"{SERVER_URL}/search")
         # Check badge CSS properties
         badges = page.locator(".badge-mainline, .badge-community")
         if badges.count() > 0:
@@ -588,10 +590,12 @@ class TestMobileBadgeLayout:
 
     def test_source_column_not_overflow(self, page):
         """The Source column in the package table should not overflow on mobile."""
-        # Wait for packages to load (deterministic: keyed on /v1/search)
-        _goto_and_wait_for_stats(page)
-        # The table should still be scrollable and not break the layout
+        # The package table lives on the dedicated /search page now.  It is
+        # server-rendered (not fetch-driven), so waiting for the container to
+        # be visible is deterministic without a network round-trip.
+        page.goto(f"{SERVER_URL}/search")
         table = page.locator(".table-container")
+        page.wait_for_selector(".table-container", state="visible", timeout=JS_WAIT_TIMEOUT_MS)
         assert table.is_visible()
 
 

@@ -279,7 +279,12 @@ a:hover { color: #7fffff; }
 .search-empty { padding: 4rem 1rem; text-align: center; color: rgba(200,200,255,0.6); }
 .search-empty .fa { text-shadow: 0 0 18px var(--neon-cyan); }
 
-.navbar-logo { max-height: 2.1rem; width: auto; }
+.navbar-logo { height: 2.3rem; width: auto;
+  filter: drop-shadow(0 0 6px rgba(255,0,255,0.45)) drop-shadow(0 0 8px rgba(0,255,255,0.35)); }
+.navbar-wordmark {
+  font-size: 1.7rem; line-height: 1; margin-left: 0.5rem; color: #fff;
+  text-shadow: 0 0 8px rgba(0,255,255,0.6), 0 0 14px rgba(255,0,255,0.35);
+}
 
 .hero-gradient {
   background:
@@ -442,7 +447,8 @@ def _navbar_html() -> str:
   <div class="container">
     <div class="navbar-brand">
       <a class="navbar-item" href="/">
-        <img class="navbar-logo" src="{_BRAND_BANNER_PATH}" alt="cvcpkg" />
+        <img class="navbar-logo" src="{_BRAND_LOGO_PATH}" alt="cvcpkg" />
+        <span class="navbar-wordmark brand-wordmark">cvcpkg</span>
         <span class="tag is-dark is-rounded ml-2">v{__version__}</span>
       </a>
       <a role="button" class="navbar-burger" aria-label="menu" aria-expanded="false" data-target="navMenu">
