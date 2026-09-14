@@ -20,7 +20,16 @@ slug (e.g. `cvc/zlib`) and controls who can publish to that namespace.
 
 ## Creating an Organization
 
-Any user with a `publisher` or `admin` token can create an organization:
+Any user with a `publisher` or `admin` credential can create an organization.
+After `cvcpkg login` the CLI uses your session, so no token flag is needed:
+
+```bash
+cvcpkg login                       # once, if you haven't
+cvcpkg org create my-team --display-name "My Team" --description "Shared packages"
+cvcpkg org create secret-lab --private
+```
+
+Or over HTTP:
 
 ```bash
 curl -X POST https://cvcpkg.org/v1/orgs \

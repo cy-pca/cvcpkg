@@ -740,12 +740,24 @@ def server_backup(server: str, token: str):
 def org_group() -> None:
     """Manage organizations on the server.
 
-    A member is named by an **SSO username** (a person who has signed in —
-    ``--user``) or a **machine-token name** (``--token-name``).  Owners can
-    add/remove members and grant the ``owner`` role (org admin) to control who
-    can publish to — and administer — the organization's namespace, without
-    affecting the member's access to anything else.
+    ``create`` makes an org (you become its owner); ``add-member`` names a member
+    by an **SSO username** (``--user``) or a **machine-token name**
+    (``--token-name``), and ``--role owner`` grants org-admin.  These commands use
+    your ``cvcpkg login`` session when ``--token`` is omitted, so after signing in
+    you can manage orgs without passing a token.
     """
+
+
+def _org_token(token: str, server: str) -> str:
+    """Resolve the credential for an org command: --token / CVCPKG_TOKEN / session."""
+    from cvcpkg.cli._helpers import resolve_token
+
+    tok = resolve_token(token, server)
+    if not tok:
+        raise click.ClickException(
+            "not authenticated — run 'cvcpkg login' or pass --token (or set CVCPKG_TOKEN)"
+        )
+    return tok
 
 
 def _resolve_member(user: str, token_name: str, name: str) -> tuple[str, str]:
@@ -773,11 +785,12 @@ def _resolve_member(user: str, token_name: str, name: str) -> tuple[str, str]:
 @click.option(
     "--token",
     envvar="CVCPKG_TOKEN",
-    required=True,
-    help="Bearer token (org owner or admin).  [env: CVCPKG_TOKEN]",
+    default="",
+    help="Bearer token; falls back to your 'cvcpkg login' session.  [env: CVCPKG_TOKEN]",
 )
 def org_members(slug: str, server: str, token: str):
     """List members of an organization."""
+    token = _org_token(token, server)
     data = _api_request("get", f"{server.rstrip('/')}/v1/orgs/{slug}", token)
     members = data.get("members", [])
     if not members:
@@ -801,8 +814,8 @@ def org_members(slug: str, server: str, token: str):
 @click.option(
     "--token",
     envvar="CVCPKG_TOKEN",
-    required=True,
-    help="Bearer token (org owner or admin).  [env: CVCPKG_TOKEN]",
+    default="",
+    help="Bearer token; falls back to your 'cvcpkg login' session.  [env: CVCPKG_TOKEN]",
 )
 @click.option("--user", default="", help="SSO username (must have signed in once).")
 @click.option("--token-name", "token_name", default="", help="Machine-token name to add.")
@@ -822,6 +835,7 @@ def org_add_member(
     machine token). The name must already exist on the server.
     """
     member, kind = _resolve_member(user, token_name, name)
+    token = _org_token(token, server)
     url = f"{server.rstrip('/')}/v1/orgs/{slug}/members"
     _api_request(
         "post", url, token, params={"token_name": member, "role": role, "principal_kind": kind}
@@ -841,8 +855,8 @@ def org_add_member(
 @click.option(
     "--token",
     envvar="CVCPKG_TOKEN",
-    required=True,
-    help="Bearer token (org owner or admin).  [env: CVCPKG_TOKEN]",
+    default="",
+    help="Bearer token; falls back to your 'cvcpkg login' session.  [env: CVCPKG_TOKEN]",
 )
 @click.option("--user", default="", help="SSO username (principal) to remove.")
 @click.option("--token-name", "token_name", default="", help="Machine-token name to remove.")
@@ -854,6 +868,55 @@ def org_remove_member(slug: str, server: str, token: str, user: str, token_name:
     affecting the member's global token or access to other orgs.
     """
     member, _kind = _resolve_member(user, token_name, name)
+    token = _org_token(token, server)
     url = f"{server.rstrip('/')}/v1/orgs/{slug}/members/{member}"
     _api_request("delete", url, token)
     click.echo(f"Removed '{member}' from '{slug}'.")
+
+
+@org_group.command("create")
+@click.argument("slug")
+@click.option(
+    "--server",
+    envvar="CVCPKG_SERVER_URL",
+    required=True,
+    metavar="URL",
+    help="cvcpkg-server URL.  [env: CVCPKG_SERVER_URL]",
+)
+@click.option(
+    "--token",
+    envvar="CVCPKG_TOKEN",
+    default="",
+    help="Bearer token; falls back to your 'cvcpkg login' session.  [env: CVCPKG_TOKEN]",
+)
+@click.option(
+    "--display-name", "display_name", default="", help="Human-readable name (default: slug)."
+)
+@click.option("--description", default="", help="Short description.")
+@click.option("--homepage", default="", help="Homepage URL.")
+@click.option("--private", is_flag=True, help="Make the org private (members-only visibility).")
+def org_create(
+    slug: str,
+    server: str,
+    token: str,
+    display_name: str,
+    description: str,
+    homepage: str,
+    private: bool,
+):
+    """Create an organization; you become its first owner.
+
+    Requires a publisher- or admin-level credential. After this you can add
+    members with 'cvcpkg org add-member' (or the /org/<slug>/manage page).
+    """
+    token = _org_token(token, server)
+    body: dict = {
+        "slug": slug,
+        "display_name": display_name or slug,
+        "description": description,
+        "homepage": homepage,
+        "is_private": private,
+    }
+    data = _api_request("post", f"{server.rstrip('/')}/v1/orgs", token, json=body)
+    kind = "private" if data.get("is_private") else "public"
+    click.echo(f"Created {kind} organization '{data.get('slug', slug)}' — you are its owner.")
