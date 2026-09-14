@@ -22,6 +22,7 @@ from cvcpkg.cli._helpers import (
     _prefix_opt,
     _recipes_dir_opt,
     _resolve_recipes_dirs,
+    _validate_org_slug,
 )
 
 # ── install ─────────────────────────────────────────────────────
@@ -57,6 +58,15 @@ from cvcpkg.cli._helpers import (
     help="Bearer token for installing packages from a private org (catalog "
     "resolution + archive download). Only sent to the configured server/root "
     "origin.  [env: CVCPKG_TOKEN]",
+)
+@click.option(
+    "--org",
+    default="",
+    callback=_validate_org_slug,
+    help="Default organization slug to scope resolution for every requested "
+    "component that is not already org-qualified as 'org/name' (e.g. "
+    "--org utdbg is equivalent to prefixing each name with 'utdbg/'). "
+    "Private orgs still require --token / CVCPKG_TOKEN.",
 )
 @click.option(
     "--catalog",
@@ -141,6 +151,7 @@ def install(
     config: str,
     link: str,
     token: str | None,
+    org: str,
     catalog: str | None,
     catalog_revision: int | None,
     source: str,
@@ -334,7 +345,11 @@ def install(
     # indistinguishable to the resolver (ComponentReq carried no org), and if
     # multiple orgs (or the public catalog) ever published the same name, an
     # org-qualified request could silently resolve against the wrong one.
-    requested_org: dict[str, str] = {c.name: c.org for c in reqs.components if c.org}
+    # --org supplies a DEFAULT org for names that were not written as 'org/name';
+    # an explicit org-qualified spec always wins over the flag (c.org or org).
+    requested_org: dict[str, str] = {
+        c.name: (c.org or org) for c in reqs.components if (c.org or org)
+    }
 
     if not catalog_failed:
         entries = catalog_entries(
