@@ -236,3 +236,26 @@ def _human_size(n: int) -> str:
             return f"{n:.1f} {unit}"
         n /= 1024.0  # type: ignore[assignment]
     return f"{n:.1f} PB"
+
+
+def resolve_token(explicit: str, server_url: str) -> str:
+    """The token to authenticate to *server_url* with, by precedence.
+
+    ``--token`` (explicit) > ``CVCPKG_TOKEN`` env > a stored ``cvcpkg login``
+    session for that server's host (auto-refreshed if the access token has
+    expired).  A machine exporting ``CVCPKG_TOKEN`` therefore never consults the
+    credential file and behaves exactly as before.
+    """
+    import os
+
+    if explicit:
+        return explicit
+    env = os.environ.get("CVCPKG_TOKEN", "").strip()
+    if env:
+        return env
+    try:
+        from cvcpkg import credentials
+
+        return credentials.token_for(credentials.host_of(server_url))
+    except Exception:
+        return ""

@@ -99,6 +99,19 @@ def _notification(kind: str, body: str) -> str:
     return f'<div class="notification {_esc(kind)}">{body}</div>'
 
 
+def message_html(title: str, body: str, *, kind: str = "is-warning is-light") -> str:
+    """A standalone themed page carrying a single notice — e.g. a 403.
+
+    Used where a browser hits a page it may not access and a JSON error would
+    be jarring.
+    """
+    return _page(
+        title,
+        f'<h1 class="title is-4 has-text-white">{_esc(title)}</h1>'
+        + _notification(kind, _esc(body)),
+    )
+
+
 # ── /login ──────────────────────────────────────────────────────
 
 

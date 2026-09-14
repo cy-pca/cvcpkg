@@ -196,6 +196,37 @@ def test_alembic_upgrade_head_on_sqlite(_sqlite_upgrade_head):
     )
 
 
+def test_migration_029_columns_match_orm(_sqlite_upgrade_head):
+    """Alembic-built auth schema is a superset of the ORM's — no silent drift.
+
+    Every other test builds schema via metadata.create_all, never Alembic, so a
+    migration that omitted or misnamed one of the sessions refresh columns or a
+    new cli_* table would pass CI while an alembic-migrated Postgres deploy fails
+    at runtime (e.g. verify_bearer selecting a nonexistent token_hash).
+    """
+    from cvcpkg.server.db import Base
+
+    proc, db = _sqlite_upgrade_head
+    assert proc.returncode == 0, "upgrade failed; see test_alembic_upgrade_head_on_sqlite"
+
+    conn = sqlite3.connect(db)
+    try:
+        for table in (
+            "sessions",
+            "cli_pairings",
+            "cli_auth_codes",
+            "cli_login_txns",
+            "code_attempts",
+        ):
+            migrated = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+            assert migrated, f"migration did not create table {table!r}"
+            orm = set(Base.metadata.tables[table].columns.keys())
+            missing = orm - migrated
+            assert not missing, f"{table}: migration missing columns {sorted(missing)}"
+    finally:
+        conn.close()
+
+
 def test_sqlite_chain_builds_the_recipe_unique_constraint(_sqlite_upgrade_head):
     """uq_recipe_name_org survives the SQLite batch-mode rebuild.
 

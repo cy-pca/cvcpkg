@@ -2366,6 +2366,10 @@ def org_detail_html(slug: str) -> str:
 
     <h3 class="title is-5 has-text-white mt-5 mb-3">
       <span class="icon mr-1"><i class="fas fa-users"></i></span> Members
+      <a href="/org/{safe_slug}/manage" class="button is-small is-dark ml-3">
+        <span class="icon is-small"><i class="fas fa-users-gear"></i></span>
+        <span>Manage</span>
+      </a>
     </h3>
     <div id="org-members" class="mb-5">
       <span class="has-text-grey-light">Loading...</span>
@@ -2474,6 +2478,161 @@ function renderOrg(data) {{
 
 document.addEventListener('DOMContentLoaded', init);
 </script>
+</body>
+</html>"""
+
+
+# ── Organization member management page (session-authed) ─────────
+
+
+def org_manage_html(
+    slug: str,
+    *,
+    org,
+    members,
+    principals,
+    csrf_add: str,
+    csrf_remove: str,
+    field: str,
+    flash=None,
+) -> str:
+    """Owner-facing member management for one org — server-rendered, POST forms.
+
+    A member is a person (an SSO principal) or a machine token.  Add someone by
+    their username (they must have signed in once) or by a machine-token name,
+    and grant ``owner`` to make them an org admin.  Mirrors the ``/account``
+    surface: session cookie + CSRF, no bearer token in the browser.
+    """
+    import html as _html
+
+    esc = lambda s: _html.escape(str(s), quote=True)  # noqa: E731
+    safe_slug = esc(slug)
+    display = esc(getattr(org, "display_name", "") or slug)
+
+    flash_html = ""
+    if flash is not None:
+        kind, body = flash
+        flash_html = f'<div class="notification {esc(kind)}">{body}</div>'
+
+    # A datalist of known principal names to make the add form autocompleting.
+    options = "".join(f'<option value="{esc(p)}">' for p in principals)
+
+    if members:
+        rows = ""
+        for m in members:
+            name = esc(m.token_name)
+            krole = esc(getattr(m.role, "value", m.role))
+            kind = esc(getattr(m, "kind", "") or "?")
+            kind_tag = {
+                "user": '<span class="tag is-info is-light">person</span>',
+                "token": '<span class="tag is-dark">token</span>',
+                "orphan": '<span class="tag is-danger is-light">orphan</span>',
+            }.get(getattr(m, "kind", ""), '<span class="tag is-dark">?</span>')
+            owner_tag = (
+                '<span class="tag is-warning is-light ml-1">owner</span>'
+                if krole == "owner"
+                else ""
+            )
+            rows += f"""
+            <tr>
+              <td class="is-family-monospace">{name}</td>
+              <td>{kind_tag}</td>
+              <td>{krole} {owner_tag}</td>
+              <td class="has-text-right">
+                <form method="post" action="/org/{safe_slug}/members/remove" style="display:inline"
+                      onsubmit="return confirm('Remove this member from {safe_slug}?')">
+                  <input type="hidden" name="{esc(field)}" value="{esc(csrf_remove)}">
+                  <input type="hidden" name="token_name" value="{name}">
+                  <button class="button is-small is-danger is-light" type="submit">Remove</button>
+                </form>
+              </td>
+            </tr>"""
+        members_table = f"""
+        <div class="table-container">
+          <table class="table is-fullwidth is-dark is-striped is-hoverable">
+            <thead><tr><th>Member</th><th>Type</th><th>Role</th><th></th></tr></thead>
+            <tbody>{rows}</tbody>
+          </table>
+        </div>"""
+    else:
+        members_table = '<p class="has-text-grey-light">No members yet.</p>'
+
+    return f"""<!DOCTYPE html>
+<html lang="en" data-theme="dark" class="has-background-black-bis">
+{_head_html(f"Manage {display} &mdash; cvcpkg")}
+<body class="has-background-black-bis has-text-light">
+
+{_navbar_html()}
+
+<section class="section pt-4 pb-2 has-background-black-bis">
+  <div class="container">
+    <nav class="breadcrumb" aria-label="breadcrumbs">
+      <ul>
+        <li><a href="/" class="has-text-grey-light">Home</a></li>
+        <li><a href="/orgs" class="has-text-grey-light">Organizations</a></li>
+        <li><a href="/org/{safe_slug}" class="has-text-grey-light">{display}</a></li>
+        <li class="is-active"><a href="#" class="has-text-light">Members</a></li>
+      </ul>
+    </nav>
+  </div>
+</section>
+
+<section class="section pt-2 has-background-black-bis">
+  <div class="container">
+    <h1 class="title is-3 has-text-white">
+      <span class="icon mr-2"><i class="fas fa-users-gear"></i></span> Manage members
+      <span class="is-size-5 has-text-grey-light">&mdash; {display}</span>
+    </h1>
+
+    {flash_html}
+
+    <div class="box has-background-black-ter">
+      <h2 class="title is-5 has-text-white">Add a member</h2>
+      <p class="subtitle is-6 has-text-grey-lighter">
+        Add a person by their <strong>username</strong> (they must have signed in once),
+        or a <strong>machine token</strong> by its name. Grant <strong>owner</strong> to make
+        them an org admin who can manage members.
+      </p>
+      <form method="post" action="/org/{safe_slug}/members">
+        <input type="hidden" name="{esc(field)}" value="{esc(csrf_add)}">
+        <div class="field is-grouped is-grouped-multiline">
+          <div class="control is-expanded">
+            <input class="input" type="text" name="token_name" list="known-principals"
+                   placeholder="username or machine-token name" autocomplete="off" required>
+            <datalist id="known-principals">{options}</datalist>
+          </div>
+          <div class="control">
+            <div class="select">
+              <select name="principal_kind">
+                <option value="user">person (SSO username)</option>
+                <option value="token">machine token</option>
+                <option value="auto">auto-detect</option>
+              </select>
+            </div>
+          </div>
+          <div class="control">
+            <div class="select">
+              <select name="role">
+                <option value="member">member</option>
+                <option value="owner">owner (admin)</option>
+              </select>
+            </div>
+          </div>
+          <div class="control">
+            <button class="button is-link" type="submit">Add</button>
+          </div>
+        </div>
+      </form>
+    </div>
+
+    <h2 class="title is-5 has-text-white mt-5">Current members</h2>
+    {members_table}
+
+    <a href="/org/{safe_slug}" class="button is-small is-dark mt-3">&larr; Back to organization</a>
+  </div>
+</section>
+
+{_footer_html()}
 </body>
 </html>"""
 
@@ -4090,7 +4249,7 @@ cvcpkg verify   # check the prefix still matches the lockfile</code></pre></div>
             <tr><td><code>user</code></td><td>Look up a user profile</td>
                 <td><code>cvcpkg user show alice</code></td></tr>
             <tr><td><code>org</code></td><td>Manage organizations and their members</td>
-                <td><code>cvcpkg org add-member my-team alice</code></td></tr>
+                <td><code>cvcpkg org add-member my-team --user alice</code></td></tr>
             <tr><td><code>server</code></td><td>Administer a running server</td>
                 <td><code>cvcpkg server stats</code></td></tr>
             <tr><td><code>webhook</code></td><td>Manage server webhooks</td>
@@ -4328,12 +4487,17 @@ ls dist/mylib-*.tar.gz</code></pre></div>
       </div>
       <div class="guide-step">
         <p class="has-text-grey-lighter mb-2">
-          Add members (requires org owner or admin token):
+          Add members (requires org owner or admin). A member is an SSO
+          <strong>username</strong> (a person; <code>principal_kind=user</code>) or a
+          <strong>machine-token</strong> name (<code>principal_kind=token</code>); grant
+          <code>role=owner</code> to make them an org admin. The name must already exist.
         </p>
-        <div class="guide-code"><pre><code>curl -X POST https://cvcpkg.org/v1/orgs/my-team/members \\
-  -H "Authorization: Bearer cvctok_..." \\
-  -H "Content-Type: application/json" \\
-  -d '{{"token_name": "alice-token", "role": "member"}}'</code></pre></div>
+        <div class="guide-code"><pre><code># by username (the person must have signed in once)
+cvcpkg org add-member my-team --user alice --role owner
+
+# or over HTTP
+curl -X POST "https://cvcpkg.org/v1/orgs/my-team/members?token_name=alice&amp;role=owner&amp;principal_kind=user" \\
+  -H "Authorization: Bearer cvctok_..."</code></pre></div>
       </div>
       <div class="guide-step">
         <p class="has-text-grey-lighter mb-2">

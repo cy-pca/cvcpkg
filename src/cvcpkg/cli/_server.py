@@ -740,10 +740,25 @@ def server_backup(server: str, token: str):
 def org_group() -> None:
     """Manage organizations on the server.
 
-    Organization owners can add/remove members to control who can
-    publish to the organization's namespace — without affecting the
-    member's access to anything else.
+    A member is named by an **SSO username** (a person who has signed in —
+    ``--user``) or a **machine-token name** (``--token-name``).  Owners can
+    add/remove members and grant the ``owner`` role (org admin) to control who
+    can publish to — and administer — the organization's namespace, without
+    affecting the member's access to anything else.
     """
+
+
+def _resolve_member(user: str, token_name: str, name: str) -> tuple[str, str]:
+    """Resolve exactly one of the mutually-exclusive member selectors.
+
+    Returns ``(member_name, principal_kind)`` where kind is ``user`` (an SSO
+    principal), ``token`` (a machine token) or ``auto`` (the deprecated
+    ``--name``, resolved as either by the server).
+    """
+    chosen = [(v, k) for v, k in ((user, "user"), (token_name, "token"), (name, "auto")) if v]
+    if len(chosen) != 1:
+        raise click.UsageError("give exactly one of --user, --token-name or --name")
+    return chosen[0]
 
 
 @org_group.command("members")
@@ -770,7 +785,8 @@ def org_members(slug: str, server: str, token: str):
         return
     click.echo(f"Members of '{slug}':")
     for m in members:
-        click.echo(f"  {m['token_name']:<24} role={m['role']}")
+        kind = m.get("kind") or "?"
+        click.echo(f"  {m['token_name']:<24} role={m['role']:<7} ({kind})")
 
 
 @org_group.command("add-member")
@@ -788,18 +804,29 @@ def org_members(slug: str, server: str, token: str):
     required=True,
     help="Bearer token (org owner or admin).  [env: CVCPKG_TOKEN]",
 )
-@click.option("--name", required=True, help="Token name to add as member.")
+@click.option("--user", default="", help="SSO username (must have signed in once).")
+@click.option("--token-name", "token_name", default="", help="Machine-token name to add.")
+@click.option("--name", default="", help="Deprecated: name resolved as principal or token.")
 @click.option(
     "--role",
     type=click.Choice(["owner", "member"]),
     default="member",
-    help="Org-level role (default: member).",
+    help="owner grants org-admin (manage members); member is publish access. Default: member.",
 )
-def org_add_member(slug: str, server: str, token: str, name: str, role: str):
-    """Add a member to an organization."""
+def org_add_member(
+    slug: str, server: str, token: str, user: str, token_name: str, name: str, role: str
+):
+    """Add a member to an organization.
+
+    Specify the member with --user (an SSO username) or --token-name (a
+    machine token). The name must already exist on the server.
+    """
+    member, kind = _resolve_member(user, token_name, name)
     url = f"{server.rstrip('/')}/v1/orgs/{slug}/members"
-    _api_request("post", url, token, params={"token_name": name, "role": role})
-    click.echo(f"Added '{name}' to '{slug}' as {role}.")
+    _api_request(
+        "post", url, token, params={"token_name": member, "role": role, "principal_kind": kind}
+    )
+    click.echo(f"Added '{member}' to '{slug}' as {role}.")
 
 
 @org_group.command("remove-member")
@@ -817,13 +844,16 @@ def org_add_member(slug: str, server: str, token: str, name: str, role: str):
     required=True,
     help="Bearer token (org owner or admin).  [env: CVCPKG_TOKEN]",
 )
-@click.option("--name", required=True, help="Token name to remove.")
-def org_remove_member(slug: str, server: str, token: str, name: str):
+@click.option("--user", default="", help="SSO username (principal) to remove.")
+@click.option("--token-name", "token_name", default="", help="Machine-token name to remove.")
+@click.option("--name", default="", help="Deprecated alias for the member name to remove.")
+def org_remove_member(slug: str, server: str, token: str, user: str, token_name: str, name: str):
     """Remove a member from an organization.
 
     This revokes access to the organization's packages without
     affecting the member's global token or access to other orgs.
     """
-    url = f"{server.rstrip('/')}/v1/orgs/{slug}/members/{name}"
+    member, _kind = _resolve_member(user, token_name, name)
+    url = f"{server.rstrip('/')}/v1/orgs/{slug}/members/{member}"
     _api_request("delete", url, token)
-    click.echo(f"Removed '{name}' from '{slug}'.")
+    click.echo(f"Removed '{member}' from '{slug}'.")

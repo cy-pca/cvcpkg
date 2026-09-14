@@ -135,7 +135,18 @@ _SECTIONS: list[tuple[str, list[str]]] = [
     ),
     (
         "Server, orgs, and accounts",
-        ["server", "org", "token", "user", "register", "webhook"],
+        [
+            "login",
+            "logout",
+            "whoami",
+            "auth",
+            "server",
+            "org",
+            "token",
+            "user",
+            "register",
+            "webhook",
+        ],
     ),
     (
         "Requirements files (legacy)",
@@ -280,6 +291,7 @@ def cli(ctx: click.Context) -> None:
 # @cli.command() or creates subgroups.
 
 from cvcpkg.cli import (  # noqa: E402, F401
+    _auth,
     _build,
     _builder,
     _builds,

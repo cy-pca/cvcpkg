@@ -371,6 +371,152 @@ class SessionRow(Base):
     revoked: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false()
     )
+    # CLI sessions (migration 029) are opaque ``cvcses_`` bearers verified by
+    # hash, with a rotating ``cvcref_`` refresh token and a hard reauth horizon.
+    # All NULL for a browser session, whose cookie is a signed reference rather
+    # than a stored bearer — which is what keeps this additive.
+    token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
+    refresh_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
+    refresh_family: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    refresh_used: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    client_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", server_default=""
+    )
+    refresh_expires_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    max_lifetime_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class CliPairingRow(Base):
+    """One ``cvcpkg login`` device-pairing attempt (headless grant).
+
+    The user code and pairing id are stored only as keyed hashes; the verifier
+    is stored as the client's ``sha256`` so a leaked ``pairing_id`` alone cannot
+    collect.  Status walks pending -> approved -> collected (or denied), and the
+    token is minted on *collection*, so an approved-but-uncollected pairing
+    leaves no credential anywhere.
+    """
+
+    __tablename__ = "cli_pairings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    pairing_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    user_code_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    verifier_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", server_default="pending"
+    )
+    requested_role: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="", server_default=""
+    )
+    granted_role: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="", server_default=""
+    )
+    device_label: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="", server_default=""
+    )
+    client_version: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="", server_default=""
+    )
+    platform: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    client_ip: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", server_default=""
+    )
+    principal_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("principals.id", ondelete="CASCADE"), nullable=True
+    )
+    interval_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=5, server_default="5"
+    )
+    slow_down_strikes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    last_poll_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+
+
+class CliAuthCodeRow(Base):
+    """A single-use authorization code from the loopback grant (60s TTL)."""
+
+    __tablename__ = "cli_auth_codes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    principal_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
+    )
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    code_challenge: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", server_default=""
+    )
+    redirect_uri: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    device_label: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="", server_default=""
+    )
+    used: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    expires_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+
+
+class CliLoginTxnRow(Base):
+    """A parked loopback login (authorize -> IdP -> resume); single use."""
+
+    __tablename__ = "cli_login_txns"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    txn_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    client_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", server_default=""
+    )
+    redirect_uri: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    cli_state: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    code_challenge: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", server_default=""
+    )
+    requested_role: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="", server_default=""
+    )
+    device_label: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="", server_default=""
+    )
+    expires_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+
+
+class CodeAttemptRow(Base):
+    """Per-IP brute-force accounting for user-code submission (DB-backed).
+
+    In Postgres, not the per-worker in-process rate limiter, so a 5s poll
+    against a per-minute window trips instantly and does not reset on restart
+    or multiply with ``--workers``.
+    """
+
+    __tablename__ = "code_attempts"
+
+    client_ip: Mapped[str] = mapped_column(String(64), primary_key=True)
+    window_start: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    locked_until: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class TokenRow(Base):
@@ -823,6 +969,18 @@ def init_db(database_url: str) -> None:
             connect_args={"check_same_thread": False},
             **pool_kwargs,
         )
+        # SQLite enforces foreign keys only when asked, per connection — without
+        # this, ondelete=CASCADE on the auth tables is a silent no-op and a
+        # deleted principal would orphan its sessions/pairings/codes on SQLite
+        # while cascading on Postgres.  Match production behaviour everywhere.
+        from sqlalchemy import event as _sa_event
+
+        @_sa_event.listens_for(_engine.sync_engine, "connect")
+        def _enable_sqlite_fks(dbapi_conn, _record):  # pragma: no cover - trivial
+            cur = dbapi_conn.cursor()
+            cur.execute("PRAGMA foreign_keys=ON")
+            cur.close()
+
     else:
         _engine = create_async_engine(
             database_url,

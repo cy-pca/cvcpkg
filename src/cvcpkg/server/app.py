@@ -69,6 +69,9 @@ from cvcpkg.server.auth import TokenStore
 from cvcpkg.server.models import (
     AuditAction,
     AuditLogResponse,
+    DeviceAuthRequest,
+    DevicePollRequest,
+    RevokeRequest,
     BuilderHeartbeatRequest,
     BuilderInfo,
     BuilderListResponse,
@@ -131,7 +134,10 @@ from cvcpkg.server.models import (
     WebhookUpdateRequest,
 )
 from cvcpkg.server import admin_ui
+from cvcpkg.server import cli_auth as _cli_auth_mod
 from cvcpkg.server import csrf as _csrf_mod
+from cvcpkg.server import link_ui
+from cvcpkg.server import pairing as _pairing_mod
 from cvcpkg.server import principals as _principals_mod
 from cvcpkg.server import sessions as _sessions_mod
 from cvcpkg.server.oidc import OidcConfig as _OidcConfig
@@ -468,6 +474,7 @@ def _fallback_state_key() -> bytes:
 
 _FALLBACK_STATE_KEY: bytes = b""
 _db_sessions = None  # DbSessionStore when using DB backend
+_db_cli_auth = None  # DbCliAuthStore when using DB backend (cvcpkg login broker)
 _db_downloads = None  # DbDownloadStore when using DB backend
 _db_telemetry = None  # DbTelemetryStore when using DB backend
 _db_mirrors = None  # DbMirrorStore when using DB backend
@@ -707,6 +714,12 @@ def _extract_token(authorization: str | None = Header(None)) -> str | None:
     return None
 
 
+# Signals to a client (roadmap §5.3) that a *presented* credential failed to
+# verify — as opposed to being forbidden — so the CLI can transparently refresh
+# an expired ``cvcses_`` on a 401 instead of forcing a full re-login.
+_INVALID_TOKEN_HEADERS = {"WWW-Authenticate": 'Bearer realm="cvcpkg", error="invalid_token"'}
+
+
 def require_role(*roles: TokenRole, allow_grace: bool = False):
     """FastAPI dependency that requires one of the given roles.
 
@@ -722,16 +735,12 @@ def require_role(*roles: TokenRole, allow_grace: bool = False):
     """
 
     async def _dep(authorization: str | None = Header(None)) -> TokenRecord:
-        state = _get_state()
         raw = _extract_token(authorization)
         if raw is None:
             raise HTTPException(401, "missing Authorization header")
-        if _use_db:
-            record = await _db_tokens.verify(raw)
-        else:
-            record = state.tokens.verify(raw)
+        record = await _authenticate_token(raw)
         if record is None:
-            raise HTTPException(401, "invalid or expired token")
+            raise HTTPException(401, "invalid or expired token", headers=_INVALID_TOKEN_HEADERS)
         if record.role not in roles:
             raise HTTPException(
                 403,
@@ -756,12 +765,9 @@ async def optional_reader_auth(authorization: str | None = Header(None)) -> Toke
     raw = _extract_token(authorization)
     if raw is None:
         raise HTTPException(401, "this server requires authentication for reads")
-    if _use_db:
-        record = await _db_tokens.verify(raw)
-    else:
-        record = state.tokens.verify(raw)
+    record = await _authenticate_token(raw)
     if record is None:
-        raise HTTPException(401, "invalid or expired token")
+        raise HTTPException(401, "invalid or expired token", headers=_INVALID_TOKEN_HEADERS)
     return record
 
 
@@ -777,14 +783,29 @@ async def optional_token(authorization: str | None = Header(None)) -> TokenRecor
         if state.require_auth_for_reads:
             raise HTTPException(401, "this server requires authentication for reads")
         return None
-    record = await _db_tokens.verify(raw) if _use_db else state.tokens.verify(raw)
+    record = await _authenticate_token(raw)
     if record is None and state.require_auth_for_reads:
-        raise HTTPException(401, "invalid or expired token")
+        raise HTTPException(401, "invalid or expired token", headers=_INVALID_TOKEN_HEADERS)
     return record
 
 
 async def _authenticate_token(raw: str) -> TokenRecord | None:
-    """Verify a raw token string and return the record (or None)."""
+    """Verify any cvcpkg bearer credential — the credential seam.
+
+    ``cvcses_`` -> a CLI session (humans).  Its ``TokenRecord.name`` is the
+    principal, so every downstream authorization predicate — ``is_member``,
+    ``published_by``, the audit actor — behaves identically to a token named
+    after the person, without touching any of those sites.
+    ``cvctok_`` and legacy secrets -> the token store (machines; unchanged).
+
+    The token self-service routes (PATCH email/profile, rotate) deliberately do
+    NOT go through here — they verify against ``_db_tokens`` directly, so a
+    session simply fails to verify there and can never administer a token.
+    """
+    if raw.startswith(_sessions_mod.ACCESS_PREFIX):
+        if _use_db and _db_sessions is not None:
+            return await _db_sessions.verify_bearer(raw)
+        return None
     if _use_db:
         return await _db_tokens.verify(raw)
     state = _get_state()
@@ -1145,6 +1166,8 @@ _LOG_GC_INTERVAL = int(os.environ.get("CVCPKG_LOG_GC_INTERVAL", "3600"))
 _YANK_RETENTION_DAYS = int(os.environ.get("CVCPKG_YANK_RETENTION_DAYS", "0"))
 # How often the yank retention GC runs (seconds, default 6 hours)
 _YANK_GC_INTERVAL = int(os.environ.get("CVCPKG_YANK_GC_INTERVAL", "21600"))
+# How often expired auth sessions + CLI-login rows are reaped (default 1 hour)
+_AUTH_GC_INTERVAL = int(os.environ.get("CVCPKG_AUTH_GC_INTERVAL", "3600"))
 
 
 def _satisfies_capabilities(builder, job) -> bool:
@@ -1442,6 +1465,32 @@ async def _build_scheduler_loop() -> None:
 
         except Exception:
             logger.exception("build scheduler loop error")
+
+
+async def _auth_gc_loop() -> None:
+    """Periodically reap expired browser/CLI sessions and CLI-login rows.
+
+    The auth tables (sessions, cli_pairings, cli_auth_codes, cli_login_txns,
+    code_attempts) only ever flip status in place otherwise, so without this
+    sweep they grow without bound on a busy server.
+    """
+    import asyncio
+
+    while True:
+        await asyncio.sleep(_AUTH_GC_INTERVAL)
+        if not _use_db or _db_sessions is None or _db_cli_auth is None:
+            continue
+        try:
+            purged_sessions = await _db_sessions.expire_stale()
+            purged_cli = await _db_cli_auth.reap_expired()
+            if purged_sessions or purged_cli:
+                logger.info(
+                    "auth GC: purged %d sessions, %d cli-auth rows",
+                    purged_sessions,
+                    purged_cli,
+                )
+        except Exception:
+            logger.exception("auth GC error")
 
 
 async def _log_retention_gc_loop() -> None:
@@ -2147,7 +2196,7 @@ def create_app(
     async def lifespan(app: FastAPI):
         global _state, _START_TIME, _use_db
         global _db_tokens, _db_audit, _db_packages, _db_orgs
-        global _db_principals, _db_sessions
+        global _db_principals, _db_sessions, _db_cli_auth
         global _db_downloads, _db_mirrors, _db_tags, _db_token_requests
         global _db_telemetry
         global _db_builders
@@ -2193,13 +2242,14 @@ def create_app(
             _db_audit = DbAuditLog()
             _db_packages = DbPackageIndex()
             _db_orgs = DbOrgStore()
+            from cvcpkg.server.cli_auth import DbCliAuthStore
             from cvcpkg.server.identities import DbPrincipalStore
             from cvcpkg.server.sessions import DbSessionStore
 
+            _hmac_for_sessions = getattr(_db_tokens, "_hmac_key", b"") or _fallback_state_key()
             _db_principals = DbPrincipalStore()
-            _db_sessions = DbSessionStore(
-                getattr(_db_tokens, "_hmac_key", b"") or _fallback_state_key()
-            )
+            _db_sessions = DbSessionStore(_hmac_for_sessions)
+            _db_cli_auth = DbCliAuthStore(_hmac_for_sessions)
             _db_downloads = DbDownloadStore()
             _db_telemetry = DbTelemetryStore()
             _db_mirrors = DbMirrorStore()
@@ -2224,6 +2274,7 @@ def create_app(
             if _use_db and not MIRROR_MODE:
                 bg_tasks.append(asyncio.create_task(_mirror_health_loop()))
                 bg_tasks.append(asyncio.create_task(_build_scheduler_loop()))
+                bg_tasks.append(asyncio.create_task(_auth_gc_loop()))
                 if _LOG_RETENTION_DAYS > 0:
                     bg_tasks.append(asyncio.create_task(_log_retention_gc_loop()))
                 # Non-mirror only (the enclosing guard): a mirror may hold the
@@ -5559,6 +5610,63 @@ def create_app(
 
     # ── Organizations ───────────────────────────────────────
 
+    async def _annotate_members(members: list) -> list:
+        """Fill ``OrgMember.kind`` (user / token / orphan) for a member list.
+
+        Two set lookups, not one query per member: a member name is either an
+        SSO principal (a person), a live machine token, or an orphan grant on a
+        name nobody holds.
+        """
+        if not members or not _use_db:
+            return members
+        people = await _db_principals.principal_names() if _db_principals is not None else set()
+        tokens = await _db_tokens.active_bare_names() if _db_tokens is not None else set()
+        for m in members:
+            if m.token_name in people:
+                m.kind = "user"
+            elif m.token_name in tokens:
+                m.kind = "token"
+            else:
+                m.kind = "orphan"
+        return members
+
+    async def _validate_new_member(name: str, kind: str) -> None:
+        """Enforce must-exist-first when adding an org member.
+
+        ``kind`` is the caller's intent — ``user`` (an SSO principal),
+        ``token`` (a machine token), or ``auto`` (either).  A name that is
+        neither is refused: it is precisely the orphan grant the admin
+        principals page can otherwise only flag after the fact, and — because
+        membership is keyed on a bare name — a claimable handle to a private
+        org.  A person is added by their principal name (their delegated tokens
+        and browser session all present as it); a machine token by its own name.
+        """
+        if not _use_db:
+            return
+        principal = await _db_principals.by_name(name) if _db_principals is not None else None
+        is_live_token = _db_tokens is not None and await _db_tokens.active_bare_by_name(name)
+        if kind == "user":
+            if principal is None:
+                raise HTTPException(
+                    404, f"no SSO principal named '{name}' — they must sign in once first"
+                )
+            if principal.disabled:
+                raise HTTPException(409, f"principal '{name}' is disabled")
+            return
+        if kind == "token":
+            if not is_live_token:
+                raise HTTPException(404, f"no live machine token named '{name}'")
+            return
+        # auto: accept a live principal or a live machine token; refuse orphans.
+        if principal is not None and principal.disabled:
+            raise HTTPException(409, f"principal '{name}' is disabled")
+        if principal is None and not is_live_token:
+            raise HTTPException(
+                404,
+                f"'{name}' is neither an SSO principal nor a live machine token; "
+                f"the person must sign in once, or the token must be created, first",
+            )
+
     @app.post("/v1/orgs", response_model=OrgInfo, tags=["organizations"])
     async def create_org(
         body: OrgCreateRequest,
@@ -5639,7 +5747,7 @@ def create_app(
             raise HTTPException(404, f"organization '{slug}' not found")
         # Only members and admins can see the member list
         if is_admin or is_member:
-            members = await _db_orgs.get_members(slug)
+            members = await _annotate_members(await _db_orgs.get_members(slug))
         else:
             members = []
             # Storage figures are member/super-admin-only.
@@ -5757,19 +5865,36 @@ def create_app(
     @app.post("/v1/orgs/{slug}/members", tags=["organizations"])
     async def add_org_member(
         slug: str,
-        token_name: str = Query(..., description="Token name to add as member"),
-        role: OrgRole = Query(OrgRole.member),
-        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+        token_name: str = Query(
+            ..., description="Member name: an SSO username (principal) or a machine-token name"
+        ),
+        role: OrgRole = Query(OrgRole.member, description="member, or owner (org admin)"),
+        principal_kind: str = Query(
+            "auto",
+            description=(
+                "How to resolve token_name: 'user' (SSO principal), 'token' "
+                "(machine token), or 'auto' (either). The name must already exist."
+            ),
+        ),
+        # Any valid (non-grace) token: authorization is by *org* role below, so
+        # an org owner who is only a global reader can still manage their org.
+        actor: TokenRecord = Depends(
+            require_role(TokenRole.reader, TokenRole.publisher, TokenRole.admin)
+        ),
     ):
         if not _use_db or _db_orgs is None:
             raise HTTPException(501, "organizations require database backend")
+        if principal_kind not in ("auto", "user", "token"):
+            raise HTTPException(422, "principal_kind must be 'user', 'token' or 'auto'")
         if not await _db_orgs.is_owner(slug, actor.name) and actor.role != TokenRole.admin:
             raise HTTPException(403, "only org owners or admins can manage members")
+        # Must-exist-first: refuse an orphan grant on a claimable name.
+        await _validate_new_member(token_name, principal_kind)
         async with _audit_txn(
             AuditAction.org_add_member,
             actor.name,
             slug,
-            f"member={token_name} role={role.value}",
+            f"member={token_name} role={role.value} kind={principal_kind}",
         ):
             try:
                 added = await _db_orgs.add_member(slug, token_name, role)
@@ -5783,7 +5908,9 @@ def create_app(
     async def remove_org_member(
         slug: str,
         token_name: str,
-        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+        actor: TokenRecord = Depends(
+            require_role(TokenRole.reader, TokenRole.publisher, TokenRole.admin)
+        ),
     ):
         if not _use_db or _db_orgs is None:
             raise HTTPException(501, "organizations require database backend")
@@ -5798,7 +5925,9 @@ def create_app(
             try:
                 removed = await _db_orgs.remove_member(slug, token_name)
             except ValueError as exc:
-                raise HTTPException(404, str(exc)) from exc
+                # "last owner" is a conflict (409); a missing org is 404.
+                status = 409 if "last owner" in str(exc) else 404
+                raise HTTPException(status, str(exc)) from exc
             if not removed:
                 raise HTTPException(404, f"'{token_name}' is not a member of '{slug}'")
         return {"message": f"removed '{token_name}' from '{slug}'"}
@@ -6657,6 +6786,718 @@ def create_app(
 
         return HTMLResponse(org_detail_html(slug))
 
+    async def _can_manage_org(slug: str, principal) -> bool:
+        """True if *principal* owns *slug* or is a global admin.
+
+        Org ownership is the authority here — a person who is only a global
+        ``reader`` but an owner of this org may still manage its members.
+        """
+        if principal is None or not _use_db or _db_orgs is None:
+            return False
+        if str(principal.last_role) == TokenRole.admin.value:
+            return True
+        return await _db_orgs.is_owner(slug, principal.name)
+
+    @app.get("/org/{slug}/manage", response_class=HTMLResponse, include_in_schema=False)
+    async def org_manage_page(request: Request, slug: str):
+        """Owner-facing member management (browser session; no bearer token)."""
+        from cvcpkg.server import account_ui
+        from cvcpkg.server.landing import org_manage_html
+
+        _require_db_account()
+        resolved = await _current_session(request)
+        if resolved is None:
+            return RedirectResponse(f"/login?next=/org/{slug}/manage", status_code=303)
+        row, principal = resolved
+        org = await _db_orgs.get(slug)
+        if org is None:
+            raise HTTPException(404, f"organization '{slug}' not found")
+        if not await _can_manage_org(slug, principal):
+            return HTMLResponse(
+                account_ui.message_html(
+                    "Not authorized",
+                    f"You must be an owner of '{slug}' to manage its members.",
+                ),
+                status_code=403,
+            )
+        members = await _annotate_members(await _db_orgs.get_members(slug))
+        # The autocomplete roster is a people-directory (roadmap §4.1/§6): only a
+        # global admin sees the full principal list. A plain org owner types the
+        # username, which _validate_new_member checks server-side.
+        principals: list[str] = []
+        if str(principal.last_role) == TokenRole.admin.value and _db_principals is not None:
+            principals = [p.name for p in await _db_principals.list_all()]
+        csrf_for = _csrf_for(str(row.id))
+        return HTMLResponse(
+            org_manage_html(
+                slug,
+                org=org,
+                members=members,
+                principals=principals,
+                csrf_add=csrf_for(_csrf_mod.REF_ORG_ADD_MEMBER),
+                csrf_remove=csrf_for(_csrf_mod.REF_ORG_REMOVE_MEMBER),
+                field=_csrf_mod.FIELD,
+                flash=account_ui.take_flash(str(row.id)),
+            )
+        )
+
+    @app.post("/org/{slug}/members", include_in_schema=False)
+    async def org_manage_add_member(
+        request: Request,
+        slug: str,
+        token_name: str = Form(""),
+        principal_kind: str = Form("auto"),
+        role: str = Form("member"),
+    ):
+        from cvcpkg.server import account_ui
+
+        _require_db_account()
+        resolved = await _current_session(request)
+        if resolved is None:
+            return RedirectResponse(f"/login?next=/org/{slug}/manage", status_code=303)
+        row, principal = resolved
+        form = await request.form()
+        _check_csrf(
+            request, str(row.id), _csrf_mod.REF_ORG_ADD_MEMBER, str(form.get(_csrf_mod.FIELD, ""))
+        )
+        if not await _can_manage_org(slug, principal):
+            raise HTTPException(403, "only org owners or admins can manage members")
+
+        member = (token_name or "").strip()
+        kind = principal_kind if principal_kind in ("auto", "user", "token") else "auto"
+        try:
+            org_role = OrgRole(role)
+        except ValueError:
+            account_ui.put_flash(str(row.id), "is-danger is-light", f"Unknown role '{role}'.")
+            return RedirectResponse(f"/org/{slug}/manage", status_code=303)
+        try:
+            await _validate_new_member(member, kind)
+            async with _audit_txn(
+                AuditAction.org_add_member,
+                principal.name,
+                slug,
+                f"member={member} role={org_role.value} kind={kind} via /org/manage",
+            ):
+                added = await _db_orgs.add_member(slug, member, org_role)
+            if not added:
+                account_ui.put_flash(
+                    str(row.id), "is-warning is-light", f"'{member}' is already a member."
+                )
+            else:
+                account_ui.put_flash(
+                    str(row.id), "is-success", f"Added '{member}' as {org_role.value}."
+                )
+        except HTTPException as exc:
+            account_ui.put_flash(str(row.id), "is-danger is-light", _esc_text(exc.detail))
+        except ValueError as exc:
+            account_ui.put_flash(str(row.id), "is-danger is-light", _esc_text(str(exc)))
+        return RedirectResponse(f"/org/{slug}/manage", status_code=303)
+
+    @app.post("/org/{slug}/members/remove", include_in_schema=False)
+    async def org_manage_remove_member(
+        request: Request,
+        slug: str,
+        token_name: str = Form(""),
+    ):
+        from cvcpkg.server import account_ui
+
+        _require_db_account()
+        resolved = await _current_session(request)
+        if resolved is None:
+            return RedirectResponse(f"/login?next=/org/{slug}/manage", status_code=303)
+        row, principal = resolved
+        form = await request.form()
+        _check_csrf(
+            request,
+            str(row.id),
+            _csrf_mod.REF_ORG_REMOVE_MEMBER,
+            str(form.get(_csrf_mod.FIELD, "")),
+        )
+        if not await _can_manage_org(slug, principal):
+            raise HTTPException(403, "only org owners or admins can manage members")
+        member = (token_name or "").strip()
+        try:
+            async with _audit_txn(
+                AuditAction.org_remove_member,
+                principal.name,
+                slug,
+                f"member={member} via /org/manage",
+            ):
+                removed = await _db_orgs.remove_member(slug, member)
+            if removed:
+                account_ui.put_flash(str(row.id), "is-success", f"Removed '{member}'.")
+            else:
+                account_ui.put_flash(
+                    str(row.id), "is-warning is-light", f"'{member}' is not a member."
+                )
+        except ValueError as exc:
+            account_ui.put_flash(str(row.id), "is-danger is-light", _esc_text(str(exc)))
+        return RedirectResponse(f"/org/{slug}/manage", status_code=303)
+
+    # ── CLI login broker (roadmap Stage 3) ──────────────────────
+    #
+    # cvcpkg.org acts as a small first-party authorization server so interactive
+    # users stop hand-cutting API tokens.  The CLI obtains an opaque ``cvcses_``
+    # session by one of two grants — device pairing (headless) or loopback
+    # authorization code (desktop) — both resolving to one principal identity.
+    # Machines keep using ``cvctok_`` tokens, unchanged.
+
+    def _cli_cfg() -> dict:
+        def _int(name: str, default: int) -> int:
+            try:
+                return int(os.environ.get(name, "") or default)
+            except ValueError:
+                return default
+
+        return {
+            "access_ttl": _int("CVCPKG_SESSION_TTL_SECONDS", 12 * 3600),
+            "refresh_ttl": _int("CVCPKG_REFRESH_TTL_SECONDS", 30 * 86400),
+            "max_lifetime": _int("CVCPKG_SESSION_MAX_LIFETIME_SECONDS", 7 * 86400),
+            "max_role": (os.environ.get("CVCPKG_CLI_MAX_ROLE", "admin") or "admin").strip(),
+            "pairing_ttl": _int("CVCPKG_CLI_PAIRING_TTL_SECONDS", 600),
+            "poll_interval": _int("CVCPKG_CLI_POLL_INTERVAL", 5),
+        }
+
+    def _cli_ceiling(principal_role: str) -> TokenRole:
+        """The highest role a CLI session for this principal may hold."""
+        try:
+            base = TokenRole(principal_role)
+        except ValueError:
+            base = TokenRole.reader
+        try:
+            cap = TokenRole(_cli_cfg()["max_role"])
+        except ValueError:
+            cap = TokenRole.admin
+        return _principals_mod.min_role(base, cap)
+
+    def _clamp_cli_role(requested: str, principal_role: str) -> TokenRole:
+        """Least privilege by default (roadmap §0/§9).
+
+        An unspecified or unrecognised role yields the **floor** (``reader``),
+        never the ceiling — a bare ``cvcpkg login`` must not silently mint an
+        admin session for an admin-entitled principal.  An explicit role is
+        honoured but only ever *narrowed* to the principal's ceiling.
+        """
+        if not requested:
+            return TokenRole.reader
+        try:
+            want = TokenRole(requested)
+        except ValueError:
+            return TokenRole.reader
+        return _principals_mod.min_role(want, _cli_ceiling(principal_role))
+
+    def _allowed_cli_roles(principal_role: str) -> list[str]:
+        ceiling = _cli_ceiling(principal_role)
+        order = [TokenRole.reader, TokenRole.publisher, TokenRole.admin]
+        rank = {TokenRole.reader: 0, TokenRole.publisher: 1, TokenRole.admin: 2}
+        return [r.value for r in order if rank[r] <= rank[ceiling]]
+
+    def _cli_token_response(minted, principal, *, device: str = "") -> dict:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        return {
+            "access_token": minted.access,
+            "token_type": "Bearer",
+            "expires_in": max(0, int((minted.expires_at - now).total_seconds())),
+            "refresh_token": minted.refresh,
+            "refresh_expires_in": max(0, int((minted.refresh_expires_at - now).total_seconds())),
+            "max_lifetime_at": minted.max_lifetime_at.isoformat(),
+            "principal": principal.name,
+            "role": minted.role,
+            "email": principal.email,
+            "issuer": principal.issuer,
+            "subject": principal.subject,
+            "device": device,
+            "session_id": minted.session_id,
+        }
+
+    def _require_broker_db():
+        if not _use_db or _db_cli_auth is None or _db_sessions is None or _db_principals is None:
+            raise HTTPException(501, "cvcpkg login requires the database backend")
+
+    @app.post("/v1/auth/device", tags=["auth"])
+    async def auth_device_start(body: DeviceAuthRequest, request: Request):
+        """Begin a device-pairing login; returns a user code to approve."""
+        _require_broker_db()
+        if body.client_id not in _cli_auth_mod.CLI_CLIENTS:
+            raise HTTPException(400, "unknown client_id")
+        cfg = _cli_cfg()
+        user_code = _pairing_mod.new_user_code()
+        pairing_id = _pairing_mod.new_pairing_id()
+        await _db_cli_auth.create_pairing(
+            user_code=user_code,
+            pairing_id=pairing_id,
+            verifier_hash=body.verifier_hash,
+            device_label=body.device_label,
+            client_version=body.client_version,
+            platform=body.platform,
+            client_ip=(request.client.host if request.client else ""),
+            requested_role=body.requested_role,
+            ttl_seconds=cfg["pairing_ttl"],
+            interval_seconds=cfg["poll_interval"],
+        )
+        base = os.environ.get("CVCPKG_PUBLIC_URL", "").rstrip("/")
+        verification_uri = f"{base}/link" if base else "/link"
+        return {
+            "pairing_id": pairing_id,
+            "user_code": user_code,
+            "verification_uri": verification_uri,
+            "verification_uri_complete": f"{verification_uri}?code={user_code}",
+            "expires_in": cfg["pairing_ttl"],
+            "interval": cfg["poll_interval"],
+        }
+
+    def _oauth_error(error: str, *, interval: int | None = None, status: int = 400):
+        body: dict = {"error": error}
+        if interval is not None:
+            body["interval"] = interval
+        return JSONResponse(status_code=status, content=body)
+
+    @app.post("/v1/auth/device/token", tags=["auth"])
+    async def auth_device_token(body: DevicePollRequest):
+        """Poll for a paired session, or an OAuth-style pending/denied error."""
+        _require_broker_db()
+        row = await _db_cli_auth.pairing_by_id(body.pairing_id)
+        if row is None:
+            return _oauth_error("expired_token")
+        # The verifier proves this poller is the device that started the pairing.
+        if not _pairing_mod.verifier_matches(body.verifier, row.verifier_hash):
+            return _oauth_error("access_denied")
+        # The pairing TTL bounds the WHOLE window, approval included — an
+        # approved-but-forgotten code must not be collectible days later.
+        if _pairing_expired(row):
+            return _oauth_error("expired_token")
+        if row.status == "denied":
+            return _oauth_error("access_denied")
+        if row.status == "pending":
+            # RFC 8628 §3.5: refuse polls faster than the interval, backing off.
+            too_fast, interval = await _db_cli_auth.note_poll(row.id)
+            return _oauth_error(
+                "slow_down" if too_fast else "authorization_pending", interval=interval
+            )
+        if row.status != "approved":
+            return _oauth_error("expired_token")
+        # Approved: mint on collection, exactly once.
+        if not await _db_cli_auth.collect_pairing(row.id):
+            return _oauth_error("expired_token")
+        principal = await _db_principals.by_id(row.principal_id)
+        if principal is None or principal.disabled:
+            return _oauth_error("access_denied")
+        cfg = _cli_cfg()
+        minted = await _db_sessions.mint_cli(
+            principal,
+            row.granted_role or "reader",
+            ttl_seconds=cfg["access_ttl"],
+            refresh_ttl_seconds=cfg["refresh_ttl"],
+            max_lifetime_seconds=cfg["max_lifetime"],
+            device_label=row.device_label,
+            client_id="cvcpkg-cli",
+            ip=row.client_ip,
+        )
+        if _db_audit is not None:
+            await _db_audit.record(
+                action=AuditAction.login,
+                actor=principal.name,
+                target="cli",
+                detail=f"device pairing collected (role={minted.role}, device={row.device_label})",
+            )
+        return _cli_token_response(minted, principal, device=row.device_label)
+
+    @app.post("/v1/auth/device/cancel", tags=["auth"])
+    async def auth_device_cancel(body: DevicePollRequest):
+        _require_broker_db()
+        row = await _db_cli_auth.pairing_by_id(body.pairing_id)
+        if row is not None and _pairing_mod.verifier_matches(body.verifier, row.verifier_hash):
+            await _db_cli_auth.deny_pairing(row.id)
+        return Response(status_code=204)
+
+    @app.get("/v1/auth/authorize", tags=["auth"])
+    async def auth_authorize(
+        request: Request,
+        client_id: str = Query(...),
+        redirect_uri: str = Query(...),
+        code_challenge: str = Query(...),
+        code_challenge_method: str = Query("S256"),
+        state: str = Query(""),
+        role: str = Query(""),
+        device: str = Query(""),
+    ):
+        """Loopback grant: park the request, then send the browser to sign in."""
+        _require_broker_db()
+        if client_id not in _cli_auth_mod.CLI_CLIENTS:
+            raise HTTPException(400, "unknown client_id")
+        if code_challenge_method != "S256" or not _cli_auth_mod.valid_code_challenge(
+            code_challenge
+        ):
+            raise HTTPException(400, "code_challenge must be S256 (43-char base64url)")
+        if not _cli_auth_mod.loopback_redirect_ok(redirect_uri):
+            raise HTTPException(400, "redirect_uri must be an http loopback-IP /callback")
+        if role and role not in (r.value for r in TokenRole):
+            raise HTTPException(400, f"unknown role: {role}")
+        txn_id = _cli_auth_mod.new_txn_id()
+        await _db_cli_auth.create_login_txn(
+            txn_id=txn_id,
+            client_id=client_id,
+            redirect_uri=redirect_uri,
+            cli_state=state,
+            code_challenge=code_challenge,
+            requested_role=role,
+            device_label=device,
+        )
+        return RedirectResponse(f"/auth/oidc/login?next=/v1/auth/resume/{txn_id}", status_code=303)
+
+    @app.get("/v1/auth/resume/{txn_id}", tags=["auth"])
+    async def auth_resume(request: Request, txn_id: str):
+        """After the browser signs in, issue the loopback code and bounce back."""
+        _require_broker_db()
+        resolved = await _current_session(request)
+        if resolved is None:
+            return RedirectResponse(
+                f"/auth/oidc/login?next=/v1/auth/resume/{txn_id}", status_code=303
+            )
+        _row, principal = resolved
+        txn = await _db_cli_auth.take_login_txn(txn_id)
+        if txn is None:
+            raise HTTPException(400, "login request expired — run 'cvcpkg login' again")
+        role = _clamp_cli_role(txn.requested_role, principal.last_role).value
+        code = _cli_auth_mod.new_auth_code()
+        await _db_cli_auth.create_auth_code(
+            code=code,
+            principal_id=principal.id,
+            role=role,
+            code_challenge=txn.code_challenge,
+            redirect_uri=txn.redirect_uri,
+            device_label=txn.device_label,
+        )
+        from urllib.parse import urlencode
+
+        sep = "&" if "?" in txn.redirect_uri else "?"
+        params = urlencode({"code": code, "state": txn.cli_state})
+        return RedirectResponse(f"{txn.redirect_uri}{sep}{params}", status_code=302)
+
+    @app.post("/v1/auth/token", tags=["auth"])
+    async def auth_token(
+        grant_type: str = Form(...),
+        code: str = Form(""),
+        code_verifier: str = Form(""),
+        client_id: str = Form("cvcpkg-cli"),
+        redirect_uri: str = Form(""),
+        refresh_token: str = Form(""),
+    ):
+        """Exchange a loopback code, or rotate a refresh token, for a session."""
+        _require_broker_db()
+        cfg = _cli_cfg()
+        if grant_type == "authorization_code":
+            row = await _db_cli_auth.redeem_auth_code(code)
+            if row is None:
+                return _oauth_error("invalid_grant")
+            if not _cli_auth_mod.verify_pkce_s256(code_verifier, row.code_challenge):
+                return _oauth_error("invalid_grant")
+            if redirect_uri != row.redirect_uri:
+                return _oauth_error("invalid_grant")
+            principal = await _db_principals.by_id(row.principal_id)
+            if principal is None or principal.disabled:
+                return _oauth_error("invalid_grant")
+            minted = await _db_sessions.mint_cli(
+                principal,
+                row.role,
+                ttl_seconds=cfg["access_ttl"],
+                refresh_ttl_seconds=cfg["refresh_ttl"],
+                max_lifetime_seconds=cfg["max_lifetime"],
+                device_label=row.device_label,
+                client_id=client_id,
+            )
+            if _db_audit is not None:
+                await _db_audit.record(
+                    action=AuditAction.login,
+                    actor=principal.name,
+                    target="cli",
+                    detail=f"loopback login (role={minted.role}, device={row.device_label})",
+                )
+            return _cli_token_response(minted, principal, device=row.device_label)
+        if grant_type == "refresh_token":
+            minted = await _db_sessions.rotate(
+                refresh_token,
+                ttl_seconds=cfg["access_ttl"],
+                refresh_ttl_seconds=cfg["refresh_ttl"],
+            )
+            if minted is None:
+                return _oauth_error("invalid_grant")
+            principal = await _db_principals.by_name(minted.principal_name)
+            if principal is None:
+                return _oauth_error("invalid_grant")
+            return _cli_token_response(minted, principal)
+        return _oauth_error("unsupported_grant_type")
+
+    @app.post("/v1/auth/revoke", tags=["auth"])
+    async def auth_revoke(
+        body: RevokeRequest,
+        actor: TokenRecord = Depends(
+            require_role(TokenRole.reader, TokenRole.publisher, TokenRole.admin)
+        ),
+    ):
+        """Sign out: revoke this session, or every session for the principal."""
+        _require_broker_db()
+        if body.all and actor.principal_id is not None:
+            n = await _db_sessions.revoke_all_for_principal(actor.principal_id)
+            return {"revoked": n}
+        if actor.session_id is not None:
+            await _db_sessions.revoke(actor.session_id, principal_id=actor.principal_id)
+        return Response(status_code=204)
+
+    @app.get("/v1/auth/whoami", tags=["auth"])
+    async def auth_whoami(
+        actor: TokenRecord = Depends(
+            require_role(TokenRole.reader, TokenRole.publisher, TokenRole.admin)
+        ),
+    ):
+        """Identify the caller — the first consumer the reader role has ever had."""
+        orgs: list[dict] = []
+        if _use_db and _db_orgs is not None:
+            for slug in sorted(await _db_orgs.member_org_slugs(actor.name)):
+                is_owner = await _db_orgs.is_owner(slug, actor.name)
+                orgs.append({"slug": slug, "role": "owner" if is_owner else "member"})
+        issuer = subject = ""
+        if actor.principal_id is not None and _use_db and _db_principals is not None:
+            p = await _db_principals.by_id(actor.principal_id)
+            if p is not None:
+                issuer, subject = p.issuer, p.subject
+        return {
+            "name": actor.name,
+            "role": actor.role.value,
+            "kind": actor.credential_kind,
+            "principal": actor.name if actor.credential_kind in ("session", "delegated") else "",
+            "email": actor.email,
+            "issuer": issuer,
+            "subject": subject,
+            "device": actor.credential_name if actor.credential_kind == "token" else "",
+            "session_id": actor.session_id,
+            "expires_at": actor.expires_at.isoformat() if actor.expires_at else "",
+            "orgs": orgs,
+        }
+
+    @app.get("/v1/auth/devices", tags=["auth"])
+    async def auth_devices(
+        actor: TokenRecord = Depends(
+            require_role(TokenRole.reader, TokenRole.publisher, TokenRole.admin)
+        ),
+    ):
+        _require_broker_db()
+        if actor.principal_id is None:
+            return {"devices": []}
+        rows = await _db_sessions.list_for_principal(actor.principal_id)
+        return {
+            "devices": [
+                {
+                    "session_id": r.id,
+                    "device_label": r.device_label,
+                    "client_id": r.client_id,
+                    "ip_at_issue": r.ip_at_issue,
+                    "issued_at": r.issued_at.isoformat() if r.issued_at else "",
+                    "expires_at": r.expires_at.isoformat() if r.expires_at else "",
+                    "current": r.id == actor.session_id,
+                }
+                for r in rows
+            ]
+        }
+
+    @app.delete("/v1/auth/devices/{session_id}", tags=["auth"])
+    async def auth_device_revoke(
+        session_id: int,
+        actor: TokenRecord = Depends(
+            require_role(TokenRole.reader, TokenRole.publisher, TokenRole.admin)
+        ),
+    ):
+        _require_broker_db()
+        if actor.principal_id is None:
+            raise HTTPException(403, "not a principal session")
+        await _db_sessions.revoke(session_id, principal_id=actor.principal_id)
+        return Response(status_code=204)
+
+    # ── Browser approval pages for device pairing (/link) ───────
+
+    def _elapsed_seconds(created) -> int:
+        if created is None:
+            return 0
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=datetime.timezone.utc)
+        return max(0, int((datetime.datetime.now(datetime.timezone.utc) - created).total_seconds()))
+
+    def _client_ip(request: Request) -> str:
+        return request.client.host if request.client else ""
+
+    def _pairing_expired(pairing) -> bool:
+        exp = pairing.expires_at
+        if exp is not None and exp.tzinfo is None:
+            exp = exp.replace(tzinfo=datetime.timezone.utc)
+        return exp is not None and exp < datetime.datetime.now(datetime.timezone.utc)
+
+    async def _link_lookup(client_ip: str, norm: str | None):
+        """Resolve a user code to a pending pairing, enforcing brute-force lockout.
+
+        Returns ``(pairing, error)`` where error is "" (ok), "locked" (429) or
+        "invalid" (404).  EVERY user-code lookup — GET /link deep-link, submit,
+        approve, deny — funnels through here, so the DB-backed lockout that
+        justifies the deliberately short user code (roadmap §10) cannot be
+        sidestepped by hitting a different endpoint.  A miss records a failure.
+        """
+        if await _db_cli_auth.is_locked_out(client_ip):
+            return None, "locked"
+        pairing = await _db_cli_auth.pairing_by_user_code(norm) if norm else None
+        if pairing is None or pairing.status != "pending" or _pairing_expired(pairing):
+            await _db_cli_auth.record_failure(client_ip)
+            return None, "invalid"
+        return pairing, ""
+
+    def _render_confirm(row, principal, pairing, norm):
+        csrf_for = _csrf_for(str(row.id))
+        return HTMLResponse(
+            link_ui.confirm_html(
+                csrf=csrf_for(_csrf_mod.REF_LINK_APPROVE),
+                field=_csrf_mod.FIELD,
+                user_code=norm,
+                device_label=pairing.device_label,
+                platform=pairing.platform,
+                client_version=pairing.client_version,
+                client_ip=pairing.client_ip,
+                requested_role=pairing.requested_role,
+                allowed_roles=_allowed_cli_roles(principal.last_role),
+                elapsed_seconds=_elapsed_seconds(pairing.created_at),
+            )
+        )
+
+    def _render_code_entry(row, *, prefill: str = "", error: str = "", status: int = 200):
+        csrf_for = _csrf_for(str(row.id))
+        return HTMLResponse(
+            link_ui.code_entry_html(
+                csrf=csrf_for(_csrf_mod.REF_LINK_SUBMIT),
+                field=_csrf_mod.FIELD,
+                prefill=prefill,
+                error=error,
+            ),
+            status_code=status,
+        )
+
+    _locked_msg = "Too many attempts — wait a few minutes and try again."
+
+    @app.get("/link", response_class=HTMLResponse, include_in_schema=False)
+    async def link_page(request: Request, code: str = Query("")):
+        _require_db_account()
+        resolved = await _current_session(request)
+        norm = _pairing_mod.normalize_user_code(code) if code else None
+        if resolved is None:
+            # Carry the (normalised) code across the sign-in round-trip so the
+            # one-click verification_uri_complete deep-link is not lost.
+            from urllib.parse import quote
+
+            nxt = f"/link?code={norm}" if norm else "/link"
+            return RedirectResponse(f"/auth/oidc/login?next={quote(nxt, safe='')}", status_code=303)
+        row, principal = resolved
+        if norm:
+            pairing, err = await _link_lookup(_client_ip(request), norm)
+            if err == "locked":
+                return _render_code_entry(row, error=_locked_msg, status=429)
+            if pairing is not None:
+                return _render_confirm(row, principal, pairing, norm)
+            return _render_code_entry(
+                row, prefill=code, error="That code is not valid or has expired.", status=404
+            )
+        return _render_code_entry(row)
+
+    @app.post("/link/submit", response_class=HTMLResponse, include_in_schema=False)
+    async def link_submit(request: Request, user_code: str = Form("")):
+        _require_db_account()
+        resolved = await _current_session(request)
+        if resolved is None:
+            return RedirectResponse("/auth/oidc/login?next=/link", status_code=303)
+        row, principal = resolved
+        form = await request.form()
+        _check_csrf(
+            request, str(row.id), _csrf_mod.REF_LINK_SUBMIT, str(form.get(_csrf_mod.FIELD, ""))
+        )
+        norm = _pairing_mod.normalize_user_code(user_code)
+        pairing, err = await _link_lookup(_client_ip(request), norm)
+        if err == "locked":
+            return _render_code_entry(row, error=_locked_msg, status=429)
+        if pairing is None:
+            return _render_code_entry(
+                row, prefill=user_code, error="That code is not valid or has expired.", status=404
+            )
+        return _render_confirm(row, principal, pairing, norm)
+
+    @app.post("/link/approve", response_class=HTMLResponse, include_in_schema=False)
+    async def link_approve(request: Request, user_code: str = Form(""), role: str = Form("")):
+        _require_db_account()
+        resolved = await _current_session(request)
+        if resolved is None:
+            return RedirectResponse("/auth/oidc/login?next=/link", status_code=303)
+        row, principal = resolved
+        form = await request.form()
+        _check_csrf(
+            request, str(row.id), _csrf_mod.REF_LINK_APPROVE, str(form.get(_csrf_mod.FIELD, ""))
+        )
+        client_ip = _client_ip(request)
+        norm = _pairing_mod.normalize_user_code(user_code)
+        pairing, err = await _link_lookup(client_ip, norm)
+        if err == "locked":
+            return HTMLResponse(
+                link_ui.result_html("Too many attempts", _locked_msg, kind="is-danger is-light"),
+                status_code=429,
+            )
+        if pairing is None:
+            return HTMLResponse(
+                link_ui.result_html(
+                    "Nothing to approve",
+                    "That code is no longer pending.",
+                    kind="is-warning is-light",
+                ),
+                status_code=404,
+            )
+        granted = _clamp_cli_role(role, principal.last_role).value
+        await _db_cli_auth.approve_pairing(pairing.id, principal.id, granted)
+        await _db_cli_auth.clear_failures(client_ip)
+        if _db_audit is not None:
+            await _db_audit.record(
+                action=AuditAction.login,
+                actor=principal.name,
+                target="cli",
+                detail=f"device pairing APPROVED (role={granted}, device={pairing.device_label})",
+            )
+        return HTMLResponse(
+            link_ui.result_html(
+                "Device approved",
+                f"'{pairing.device_label or 'the device'}' can finish signing in as "
+                f"{principal.name} ({granted}). You can close this tab.",
+            )
+        )
+
+    @app.post("/link/deny", response_class=HTMLResponse, include_in_schema=False)
+    async def link_deny(request: Request, user_code: str = Form("")):
+        _require_db_account()
+        resolved = await _current_session(request)
+        if resolved is None:
+            return RedirectResponse("/auth/oidc/login?next=/link", status_code=303)
+        row, principal = resolved
+        form = await request.form()
+        _check_csrf(
+            request, str(row.id), _csrf_mod.REF_LINK_DENY, str(form.get(_csrf_mod.FIELD, ""))
+        )
+        client_ip = _client_ip(request)
+        norm = _pairing_mod.normalize_user_code(user_code)
+        pairing, err = await _link_lookup(client_ip, norm)
+        if err == "locked":
+            return HTMLResponse(
+                link_ui.result_html("Too many attempts", _locked_msg, kind="is-danger is-light"),
+                status_code=429,
+            )
+        if pairing is not None:
+            await _db_cli_auth.deny_pairing(pairing.id)
+            await _db_cli_auth.clear_failures(client_ip)
+        return HTMLResponse(
+            link_ui.result_html(
+                "Device denied", "The pairing request was denied.", kind="is-danger is-light"
+            )
+        )
+
     @app.get("/auth/oidc/login", include_in_schema=False)
     async def auth_oidc_login(request: Request, next: str = "/account"):
         """Public alias for the OIDC login leg.
@@ -6862,8 +7703,32 @@ def create_app(
             raise HTTPException(501, "accounts require a database backend")
 
     def _safe_next(value: str) -> str:
-        """Only two destinations are ever redirect targets after sign-in."""
-        return value if value in ("/account", "/admin") else "/account"
+        """Post-sign-in redirect target — a literal allow-list, never a regex.
+
+        An open redirect here is a full account-takeover primitive, so this
+        accepts only fixed local destinations whose *shape* is checked exactly:
+        the dashboard/account pages, the device-pairing approval page ``/link``
+        (optionally carrying a normalised ``?code=`` deep-link), the CLI
+        loopback resume leg ``/v1/auth/resume/<txn_id>``, and an org manage page
+        ``/org/<slug>/manage``.  Every accepted value begins with a single ``/``
+        and no ``//`` or backslash, so it can never point off-site.
+        """
+        if value in ("/account", "/admin", "/link"):
+            return value
+        # /link?code=XXXXXXXX — only our own normalised user-code shape.
+        if value.startswith("/link?code="):
+            code = value[len("/link?code=") :]
+            if code and code.isalnum() and len(code) <= 16:
+                return value
+        if value.startswith("/v1/auth/resume/"):
+            txn = value[len("/v1/auth/resume/") :]
+            if txn and "/" not in txn and all(c.isalnum() or c in "-_" for c in txn):
+                return value
+        if value.startswith("/org/") and value.endswith("/manage"):
+            slug = value[len("/org/") : -len("/manage")]
+            if slug and "/" not in slug and all(c.isalnum() or c in "-" for c in slug):
+                return value
+        return "/account"
 
     async def _role_for_principal(principal) -> str:
         return str(principal.last_role or "reader")

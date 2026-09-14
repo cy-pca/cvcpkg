@@ -43,6 +43,11 @@ REF_ADMIN_PACKAGE_ACTION = "admin-package-action"
 REF_PRINCIPAL_DISABLE = "principal-disable"
 REF_PRINCIPAL_ENABLE = "principal-enable"
 REF_PRINCIPAL_REVOKE_SESSIONS = "principal-revoke-sessions"
+REF_ORG_ADD_MEMBER = "org-add-member"
+REF_ORG_REMOVE_MEMBER = "org-remove-member"
+REF_LINK_SUBMIT = "cli-link-submit"
+REF_LINK_APPROVE = "cli-link-approve"
+REF_LINK_DENY = "cli-link-deny"
 
 FIELD = "_csrf"
 

@@ -766,7 +766,8 @@ public orgs; private orgs return `404` to non-members.
     {
       "token_name": "alice",
       "role": "owner",
-      "added_at": "2026-05-25T12:00:00+00:00"
+      "added_at": "2026-05-25T12:00:00+00:00",
+      "kind": "user"
     }
   ],
   "packages": [ PackageInfo, ... ]
@@ -820,25 +821,35 @@ Serve the organization logo. No auth required.
 
 ### `POST /v1/orgs/{slug}/members`
 
-Add a member to the organization. Auth: org owner or `admin`.
+Add a member to the organization. Auth: any valid token whose holder is an
+**org owner** of `{slug}`, or a global `admin`. (Org ownership is sufficient —
+a global `reader` who owns the org may manage it.)
+
+A member is named either by an **SSO username** (a *principal* — a person who
+has signed in at least once) or by a **machine-token** name. The name must
+already exist; a name matching neither is refused (`404`) rather than creating
+an orphaned grant. A person's delegated tokens and browser sessions all present
+as their username, so adding the username grants the role to all of them.
 
 **Query Parameters**:
 
 | Param | Type | Default | Description |
 |---|---|---|---|
-| `token_name` | string | — | **(required)** Token name of the user to add |
-| `role` | string | `member` | `member` or `owner` |
+| `token_name` | string | — | **(required)** SSO username or machine-token name to add |
+| `role` | string | `member` | `member`, or `owner` (org admin — may manage members) |
+| `principal_kind` | string | `auto` | `user` (must be an existing principal), `token` (must be a live machine token), or `auto` (either) |
 
 **Response** `200 OK`:
 
 ```json
 {
-  "message": "added 'alice' to 'my-team' as member"
+  "message": "added 'alice' to 'my-team' as owner"
 }
 ```
 
-**Errors**: `403` not an owner, `404` org or token not found, `409` already
-a member.
+**Errors**: `403` not an owner/admin, `404` org not found or the name is
+neither a principal nor a live token, `409` already a member (or the named
+principal is disabled), `422` invalid `principal_kind`.
 
 ### `DELETE /v1/orgs/{slug}/members/{token_name}`
 

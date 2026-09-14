@@ -141,9 +141,25 @@ def authorize_request(url: str) -> tuple[str, dict[str, str]]:
     netloc = host if not parts.port or parts.port == default_port else f"{host}:{parts.port}"
     fixed = urlunsplit((scheme, netloc, parts.path, parts.query, parts.fragment))
 
-    token = os.environ.get("CVCPKG_TOKEN", "").strip()
+    token = os.environ.get("CVCPKG_TOKEN", "").strip() or _credentials_token_for(host)
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     return fixed, headers
+
+
+def _credentials_token_for(host: str) -> str:
+    """A stored ``cvcpkg login`` session token for *host*, refreshed if needed.
+
+    Lazily imported (credentials.py imports this module) and best-effort: any
+    failure yields no token, so an install falls back to anonymous rather than
+    crashing.  This is what makes private-org ``cvcpkg install`` flag-free after
+    ``cvcpkg login`` — the token is inherited for the origin-scoped fetch.
+    """
+    try:
+        from cvcpkg import credentials
+
+        return credentials.token_for(host)
+    except Exception:
+        return ""
 
 
 # ── Data model ──────────────────────────────────────────────────

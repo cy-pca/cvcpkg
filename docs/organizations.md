@@ -65,12 +65,27 @@ cvcpkg org members my-team
 
 ### Add a Member
 
-Org owners (or server admins) can add members:
+A member is either an **SSO username** (a person who has signed in at least
+once — a *principal*) or a **machine-token** name. Org owners (or server admins)
+add them:
 
 ```bash
-cvcpkg org add-member my-team alice
-cvcpkg org add-member my-team bob --role owner
+# a person, by their SSO username (they must have signed in once)
+cvcpkg org add-member my-team --user alice
+cvcpkg org add-member my-team --user bob --role owner
+
+# a CI / machine token, by its name
+cvcpkg org add-member my-team --token-name deploy-ci
 ```
+
+The name **must already exist** — a mistyped or not-yet-seen name is refused
+rather than silently creating an orphaned grant. Granting `--role owner` makes
+the member an **org admin** who can add/remove other members. Because a person's
+delegated tokens and browser sessions all present as their username, adding the
+username grants the role to all of them at once.
+
+Owners can also manage members from the browser at
+`https://<server>/org/<slug>/manage` after signing in — no token needed.
 
 Roles:
 
@@ -79,14 +94,18 @@ Roles:
 | `member` | ✅ | ❌ | ❌ |
 | `owner` | ✅ | ✅ | ✅ |
 
+Being an org owner is sufficient to manage that org's members even if your
+*global* role is only `reader` — org ownership is the authority.
+
 ### Remove a Member
 
 ```bash
-cvcpkg org remove-member my-team bob
+cvcpkg org remove-member my-team --user bob
+cvcpkg org remove-member my-team --token-name deploy-ci
 ```
 
-The member's personal API token remains valid — they simply lose access to
-the org namespace.
+The member's personal token or SSO identity remains valid — they simply lose
+access to the org namespace.
 
 ---
 

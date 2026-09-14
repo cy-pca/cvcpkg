@@ -148,6 +148,8 @@ ignore = ["SIM102", "SIM105", "SIM108", "SIM112", "SIM117"]
 # Same reason as landing.py above: these are HTML templates, and wrapping
 # markup at 100 columns hurts readability more than the long lines do.
 "src/cvcpkg/server/account_ui.py" = ["E501"]
+# Same reason: link_ui.py is server-rendered HTML for the /link approval pages.
+"src/cvcpkg/server/link_ui.py" = ["E501"]
 "src/cvcpkg/activate.py" = ["E501"]
 "tests/**" = ["E402", "B017", "E501", "B007", "N802"]
 

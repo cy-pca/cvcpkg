@@ -29,6 +29,7 @@ CLI_DIR = Path(__file__).resolve().parents[2] / "src" / "cvcpkg" / "cli"
 # Submodules that should exist in the cli/ package
 EXPECTED_SUBMODULES = [
     "_helpers",
+    "_auth",
     "_build",
     "_builder",
     "_builds",

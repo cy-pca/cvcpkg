@@ -117,6 +117,9 @@ class TokenRecord(BaseModel):
     credential_kind: str = Field(default="token", exclude=True)
     credential_name: str = Field(default="", exclude=True)
     principal_id: int | None = Field(default=None, exclude=True)
+    # Set when the credential is a CLI ``cvcses_`` session, so the caller can
+    # be shown/revoked in the device list.  Excluded from serialisation.
+    session_id: int | None = Field(default=None, exclude=True)
 
 
 class TokenCreateRequest(BaseModel):
@@ -493,13 +496,21 @@ class OrgInfo(BaseModel):
 
 
 class OrgMember(BaseModel):
-    """An organization membership record."""
+    """An organization membership record.
+
+    ``token_name`` is the bare member name (the column predates SSO).  It is
+    either an SSO **principal** name (a person, e.g. ``joe``) or a **machine
+    token** name (e.g. ``acme-ci``).  ``kind`` classifies it for display —
+    ``"user"``, ``"token"`` or ``"orphan"`` (a grant on a name nobody holds) —
+    and is computed at read time, never stored.
+    """
 
     token_name: str
     role: OrgRole = OrgRole.member
     added_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
     )
+    kind: str = ""
 
 
 class OrgCreateRequest(BaseModel):
@@ -537,6 +548,33 @@ class OrgDetailResponse(BaseModel):
     org: OrgInfo
     members: list[OrgMember]
     packages: list[PackageInfo]
+
+
+# ── CLI login broker (Stage 3) ──────────────────────────────────
+
+
+class DeviceAuthRequest(BaseModel):
+    """Start a device-pairing login (headless grant)."""
+
+    client_id: str = "cvcpkg-cli"
+    device_label: str = ""
+    platform: str = ""
+    client_version: str = ""
+    # sha256 of a client-generated verifier; the plaintext is presented only at
+    # collection, so a leaked pairing_id alone cannot mint a credential.
+    verifier_hash: str = ""
+    requested_role: str = ""
+
+
+class DevicePollRequest(BaseModel):
+    """Poll for (or cancel) a pending pairing."""
+
+    pairing_id: str
+    verifier: str = ""
+
+
+class RevokeRequest(BaseModel):
+    all: bool = False
 
 
 class OrgListResponse(BaseModel):
