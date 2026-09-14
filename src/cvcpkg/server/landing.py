@@ -3917,6 +3917,7 @@ def guide_html() -> str:
         <li><a href="#commands">CLI Reference &mdash; every command, with examples</a></li>
         <li><a href="#cmake">CMake Integration</a></li>
         <li><a href="#recipes">Creating Recipes</a></li>
+        <li><a href="#accounts">Accounts &amp; Signing In</a></li>
         <li><a href="#publishing">Publishing Builds</a></li>
         <li><a href="#orgs">Organizations</a></li>
         <li><a href="#server">Self-Hosting</a></li>
@@ -4242,14 +4243,22 @@ cvcpkg verify   # check the prefix still matches the lockfile</code></pre></div>
         <table class="table is-fullwidth is-hoverable is-dark is-striped">
           <thead><tr><th>Command</th><th>What it does</th><th>Example</th></tr></thead>
           <tbody>
+            <tr><td><code>login</code></td><td>Sign in with your SSO identity (browser or device code)</td>
+                <td><code>cvcpkg login --server https://cvcpkg.org</code></td></tr>
+            <tr><td><code>logout</code></td><td>Sign out and revoke the local session</td>
+                <td><code>cvcpkg logout</code></td></tr>
+            <tr><td><code>whoami</code></td><td>Show who you are signed in as, and your orgs</td>
+                <td><code>cvcpkg whoami</code></td></tr>
+            <tr><td><code>auth</code></td><td>Manage sessions/devices; list identity providers</td>
+                <td><code>cvcpkg auth providers</code></td></tr>
             <tr><td><code>register</code></td><td>Request an API token from a server</td>
                 <td><code>cvcpkg register --server https://cvcpkg.org</code></td></tr>
             <tr><td><code>token</code></td><td>Create, list, and revoke API tokens</td>
                 <td><code>cvcpkg token list</code></td></tr>
             <tr><td><code>user</code></td><td>Look up a user profile</td>
                 <td><code>cvcpkg user show alice</code></td></tr>
-            <tr><td><code>org</code></td><td>Manage organizations and their members</td>
-                <td><code>cvcpkg org add-member my-team --user alice</code></td></tr>
+            <tr><td><code>org</code></td><td>Create organizations and manage their members</td>
+                <td><code>cvcpkg org create my-team --display-name "My Team"</code></td></tr>
             <tr><td><code>server</code></td><td>Administer a running server</td>
                 <td><code>cvcpkg server stats</code></td></tr>
             <tr><td><code>webhook</code></td><td>Manage server webhooks</td>
@@ -4411,6 +4420,80 @@ ls dist/mylib-*.tar.gz</code></pre></div>
       </div>
     </div>
 
+    <!-- Accounts & Signing In -->
+    <div id="accounts" class="guide-section" style="counter-reset: guide-step;">
+      <h2 class="title is-4 has-text-white">
+        <span class="icon mr-1"><i class="fas fa-right-to-bracket"></i></span>
+        Accounts &amp; Signing In
+      </h2>
+      <p class="has-text-grey-lighter mb-4">
+        You sign in to cvcpkg with your <strong class="has-text-white">SSO
+        identity</strong> (an OIDC provider such as a tx.wtf ring). Signing in
+        gives you a named identity &mdash; a <em>handle</em> like
+        <code>alice</code> &mdash; that org owners can add to their organizations
+        by name, and lets you mint your own API tokens. Machines (CI, builders)
+        keep using API tokens directly; humans sign in.
+      </p>
+
+      <h3 class="title is-5 has-text-white mt-5">On the website</h3>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          Click <strong class="has-text-white">Sign in</strong> (or open
+          <a class="has-text-link" href="/login">/login</a>) and choose your
+          identity provider. If the server is connected to several providers you
+          pick which one; if it has just one you go straight there.
+        </p>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          You land on <a class="has-text-link" href="/account">/account</a>, where
+          you can see your handle and role and
+          <strong class="has-text-white">mint API tokens</strong> for use with the
+          CLI or CI. Each token is named <code>&lt;you&gt;.&lt;label&gt;</code> and
+          the secret is shown once.
+        </p>
+      </div>
+
+      <h3 class="title is-5 has-text-white mt-5">From the CLI</h3>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          Sign in from a terminal. On a desktop this opens your browser; over SSH
+          or on a headless box it prints a short code to approve in any browser:
+        </p>
+        <div class="guide-code"><pre><code>cvcpkg login --server https://cvcpkg.org
+
+# force the device-code flow (no local browser)
+cvcpkg login --server https://cvcpkg.org --code</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          If the server offers several identity providers, list them and pick one
+          (otherwise you choose in the browser):
+        </p>
+        <div class="guide-code"><pre><code>cvcpkg auth providers
+cvcpkg login --server https://cvcpkg.org --provider ringb</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          Check who you are, and sign out when done. Once you are signed in, other
+          commands (install, search, <code>org</code>, publish&hellip;) use that
+          session automatically &mdash; no <code>--token</code> needed:
+        </p>
+        <div class="guide-code"><pre><code>cvcpkg whoami
+cvcpkg auth devices     # your active sessions
+cvcpkg logout</code></pre></div>
+      </div>
+      <div class="box has-background-black-ter mt-4">
+        <p class="has-text-grey-lighter">
+          <span class="icon"><i class="fas fa-robot has-text-link"></i></span>
+          <strong class="has-text-white">CI and automation</strong> should not use
+          <code>cvcpkg login</code>. Mint a machine token on
+          <a class="has-text-link" href="/account">/account</a> and export it as
+          <code>CVCPKG_TOKEN</code> instead.
+        </p>
+      </div>
+    </div>
+
     <!-- Publishing Builds -->
     <div id="publishing" class="guide-section" style="counter-reset: guide-step;">
       <h2 class="title is-4 has-text-white">
@@ -4476,27 +4559,73 @@ ls dist/mylib-*.tar.gz</code></pre></div>
         <code>CVCPKG_ORG_STORAGE_LIMIT_BYTES</code> environment variable.
         Admins can adjust the limit per-org via the API.
       </p>
+      <p class="has-text-grey-lighter mb-4">
+        You create and administer organizations two ways: from the
+        <strong class="has-text-white">website</strong> after signing in, or from
+        the <strong class="has-text-white">CLI</strong>. Creating an org needs a
+        <code>publisher</code> or <code>admin</code> role; managing its members
+        needs to be an <strong>owner</strong> of that org (or a global admin).
+      </p>
+
+      <h3 class="title is-5 has-text-white mt-5">Create an organization</h3>
       <div class="guide-step">
         <p class="has-text-grey-lighter mb-2">
-          Create an organization:
+          From the CLI &mdash; you become its first owner:
+        </p>
+        <div class="guide-code"><pre><code>cvcpkg login --server https://cvcpkg.org      # once, if not already signed in
+cvcpkg org create my-team --display-name "My Team"
+
+# optional: --description, --homepage, --private (members-only visibility)</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          Or over the REST API directly:
         </p>
         <div class="guide-code"><pre><code>curl -X POST https://cvcpkg.org/v1/orgs \\
   -H "Authorization: Bearer cvctok_..." \\
   -H "Content-Type: application/json" \\
   -d '{{"slug": "my-team", "display_name": "My Team"}}'</code></pre></div>
       </div>
+
+      <h3 class="title is-5 has-text-white mt-5">Administer members &mdash; on the website</h3>
       <div class="guide-step">
         <p class="has-text-grey-lighter mb-2">
-          Add members (requires org owner or admin). A member is an SSO
-          <strong>username</strong> (a person; <code>principal_kind=user</code>) or a
-          <strong>machine-token</strong> name (<code>principal_kind=token</code>); grant
-          <code>role=owner</code> to make them an org admin. The name must already exist.
+          Open your org at <code>/org/&lt;slug&gt;</code> and click
+          <strong class="has-text-white">Manage</strong> (owners only). From
+          <code>/org/&lt;slug&gt;/manage</code> you can add a member by their
+          <strong>handle</strong>, choose their role, and remove members &mdash; no
+          command line needed. Grant <code>owner</code> to make someone a
+          co-administrator of the org.
         </p>
-        <div class="guide-code"><pre><code># by username (the person must have signed in once)
+      </div>
+
+      <h3 class="title is-5 has-text-white mt-5">Administer members &mdash; from the CLI</h3>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          A member is either an SSO <strong>username</strong> (a person &mdash; use
+          <code>--user</code>; they must have signed in at least once so the handle
+          exists) or a <strong>machine-token</strong> name (use
+          <code>--token-name</code>). Grant <code>--role owner</code> to make them an
+          org admin.
+        </p>
+        <div class="guide-code"><pre><code># add a person as a co-owner
 cvcpkg org add-member my-team --user alice --role owner
 
-# or over HTTP
-curl -X POST "https://cvcpkg.org/v1/orgs/my-team/members?token_name=alice&amp;role=owner&amp;principal_kind=user" \\
+# add a CI/machine token as a plain member
+cvcpkg org add-member my-team --token-name acme-ci --role member
+
+# list members (shows each one's kind: user / token / orphan)
+cvcpkg org members my-team
+
+# remove a member
+cvcpkg org remove-member my-team --user alice</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">
+          The same over the REST API (<code>principal_kind</code> is
+          <code>user</code>, <code>token</code>, or <code>auto</code>):
+        </p>
+        <div class="guide-code"><pre><code>curl -X POST "https://cvcpkg.org/v1/orgs/my-team/members?token_name=alice&amp;role=owner&amp;principal_kind=user" \\
   -H "Authorization: Bearer cvctok_..."</code></pre></div>
       </div>
       <div class="guide-step">

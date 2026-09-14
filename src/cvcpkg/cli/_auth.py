@@ -69,12 +69,22 @@ _server_opt = click.option(
 )
 
 
+def _prompt_provider(choices: list[dict]) -> str:
+    """Interactively pick one of several OIDC providers; returns its id."""
+    click.echo("This server offers several identity providers:")
+    for i, c in enumerate(choices, 1):
+        name = c.get("display_name") or c.get("id") or "?"
+        click.echo(f"  {i}. {name}  ({c.get('id', '')})")
+    idx = click.prompt("Choose a provider", type=click.IntRange(1, len(choices)), default=1)
+    return str(choices[idx - 1].get("id", ""))
+
+
 @cli.command("login")
 @_server_opt
 @click.option(
     "--role",
     type=click.Choice(["reader", "publisher", "admin"]),
-    default="",
+    default=None,
     help="Requested role for the session (narrows to your entitlement; default: lowest).",
 )
 @click.option("--device", default="", help="A label for this device (default: hostname).")
@@ -86,20 +96,61 @@ _server_opt = click.option(
 @click.option("--code", is_flag=True, help="Force the headless device-pairing flow.")
 @click.option("--port", type=int, default=0, help="Pin the loopback callback port (for ssh -L).")
 @click.option("--timeout", type=float, default=300.0, help="Seconds to wait for approval.")
+@click.option(
+    "--provider",
+    default="",
+    help="OIDC provider id when the server has several (see 'cvcpkg auth providers'). "
+    "Omit to pick in the browser.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Print the resulting session as JSON.")
-def login(server, role, device, browser, code, port, timeout, as_json):
+def login(server, role, device, browser, code, port, timeout, provider, as_json):
     """Sign in to a cvcpkg server with your SSO identity.
 
     Desktop: opens your browser (loopback). Headless/SSH: prints a short code to
     approve in any browser (pairing). Use --code to force pairing, or --port with
     ``ssh -L`` to bring the loopback back to a remote box.
 
+    If the server offers several identity providers (tx.wtf sites / rings), pass
+    ``--provider <id>`` or pick one when prompted; otherwise you choose in the
+    browser.
+
     CI should not use this — export CVCPKG_TOKEN with a machine token instead.
     """
     from cvcpkg import credentials, oauth_native
 
     server = (server or _server_default()).rstrip("/")
+    # click.Choice rejects an empty-string default, so --role defaults to None
+    # (no role requested); normalize to "" for the wire, unchanged from before.
+    role = role or ""
     use_loopback = port > 0 or (browser and not code and oauth_native.can_open_browser())
+
+    # Resolve a provider when the server has several and the user named none.
+    # On a TTY we prompt; non-interactive loopback falls through to the browser
+    # picker, so only pairing (no browser leg here) needs a hard ask.
+    if not provider:
+        choices = oauth_native.fetch_providers(server)
+        if len(choices) == 1:
+            provider = str(choices[0].get("id", ""))
+        elif len(choices) > 1:
+            if sys.stdin.isatty():
+                provider = _prompt_provider(choices)
+            elif not use_loopback:
+                ids = ", ".join(str(c.get("id", "")) for c in choices)
+                raise click.ClickException(
+                    f"server has multiple identity providers ({ids}); "
+                    "pass --provider <id> when running non-interactively"
+                )
+    else:
+        # Validate a named provider up front. In the loopback flow the server's
+        # 400 lands in the browser, not here, so without this a typo just hangs
+        # until the timeout and then reports a misleading "timed out". Skip the
+        # check only when the server lists none (older server / offline) so we
+        # still degrade gracefully.
+        choices = oauth_native.fetch_providers(server)
+        if choices and provider not in {str(c.get("id", "")) for c in choices}:
+            ids = ", ".join(str(c.get("id", "")) for c in choices)
+            raise click.ClickException(f"unknown provider {provider!r}; this server offers: {ids}")
+
     try:
         if use_loopback:
             cred = oauth_native.loopback_login(
@@ -109,11 +160,17 @@ def login(server, role, device, browser, code, port, timeout, as_json):
                 port=port,
                 open_browser=browser,
                 timeout=timeout,
+                provider=provider,
                 printer=click.echo,
             )
         else:
             cred = oauth_native.pairing_login(
-                server, role=role, device=device, timeout=max(timeout, 600.0), printer=click.echo
+                server,
+                role=role,
+                device=device,
+                timeout=max(timeout, 600.0),
+                provider=provider,
+                printer=click.echo,
             )
     except oauth_native.LoginError as exc:
         raise click.ClickException(str(exc)) from exc
@@ -261,3 +318,22 @@ def auth_status(server):
         sys.exit(1)
     cred = credentials.get(host)
     click.echo(f"Signed in to {host} as {cred.principal} ({cred.role}).")
+
+
+@auth_group.command("providers")
+@_server_opt
+@click.option("--json", "as_json", is_flag=True, help="Print providers as JSON.")
+def auth_providers(server, as_json):
+    """List the identity providers this server accepts (for 'login --provider')."""
+    from cvcpkg import oauth_native
+
+    server = (server or _server_default()).rstrip("/")
+    choices = oauth_native.fetch_providers(server)
+    if as_json:
+        click.echo(json.dumps(choices, indent=2))
+        return
+    if not choices:
+        click.echo("This server has no OIDC providers configured (token login only).")
+        return
+    for c in choices:
+        click.echo(f"  {c.get('id', ''):<16} {c.get('display_name') or ''}")

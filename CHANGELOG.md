@@ -28,7 +28,35 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
-## Unreleased
+## v2.2.0
+
+### Multi-issuer SSO — cvcpkg as an OIDC client of several tx.wtf rings
+
+A cvcpkg instance was an OIDC client of exactly one issuer. It can now be a
+client of **several at once**, so users from different tx.wtf sites / federation
+rings sign in to the same cvcpkg and land as distinct, correctly-scoped
+identities.
+
+- **Provider registry.** The bare `CVCPKG_OIDC_*` vars stay provider `default`
+  (zero config change for cvcpkg.org). Additional providers are a single
+  `CVCPKG_OIDC_EXTRA_PROVIDERS` JSON array — one env key, so the docker-compose
+  `${VAR:-}` passthrough stays one line. `CVCPKG_OIDC_DISPLAY_NAME` labels the
+  bare provider in the picker. Each provider carries its own group→role maps.
+- **Login routing.** One provider → today's UX unchanged; several → a provider
+  picker on `/login` and the `/admin` sign-in, and `cvcpkg login --provider`
+  (or an interactive pick / the browser picker). New `GET /v1/auth/providers`
+  and `cvcpkg auth providers`.
+- **Mix-up safe.** The chosen provider rides the *signed* transaction cookie; the
+  shared `/auth/oidc/callback` resolves the issuer from that cookie, never from
+  its own query, so a code from issuer A can't be paired with provider B.
+- **Loud config guards.** Two providers may not share an issuer; a malformed or
+  half-configured extra provider fails the boot instead of silently vanishing.
+- **No migration.** Identities were already namespaced by `(issuer, subject)`.
+
+Also fixed: `cvcpkg login` with no `--role` exited with a click usage error under
+click ≥ 8.1.6 (an empty-string default is not a valid `Choice`); it now defaults to
+"no role requested". And a mistyped `cvcpkg login --provider <id>` is now rejected
+up front instead of hanging until the browser-login timeout.
 
 ### Front page: fast landing, dedicated search, cvcpkg branding
 

@@ -21,6 +21,7 @@ import hashlib
 import hmac
 import os
 import time
+from urllib.parse import quote
 
 _SESSION_COOKIE = "cvcpkg_admin_session"
 
@@ -212,23 +213,49 @@ def _table(headers: list[str], rows: list[list[str]], *, empty: str = "no data")
 # ── Pages ───────────────────────────────────────────────────────
 
 
-def login_html(*, error: str = "", oidc_enabled: bool = False) -> str:
-    error_html = (
-        f'<div class="notification is-danger is-light">{_esc(error)}</div>' if error else ""
-    )
-    # OIDC (Phase 13) is offered only when the provider is fully configured;
-    # the token form always remains available for machine/break-glass access.
-    sso_html = (
-        """
-  <a class="button is-primary is-fullwidth mb-4" href="/admin/oidc/login">
+def _sso_buttons(providers: list[dict] | None, next_url: str, *, login_path: str) -> str:
+    """One SSO button per configured provider (multi-issuer); a single generic
+    button when exactly one — or none listed but OIDC is enabled (back-compat)."""
+    nxt = f"next={quote(next_url, safe='/')}" if next_url else ""
+    if providers and len(providers) > 1:
+        rows = []
+        for p in providers:
+            q = f"provider={quote(str(p.get('id', '')), safe='')}"
+            if nxt:
+                q += "&" + nxt
+            label = _esc(p.get("display_name") or p.get("id") or "SSO")
+            rows.append(
+                f'  <a class="button is-primary is-fullwidth mb-2" href="{login_path}?{q}">'
+                f'<span class="icon mr-1"><i class="fas fa-right-to-bracket"></i></span>'
+                f"Sign in with {label}</a>"
+            )
+        return "\n".join(rows) + (
+            '\n  <p class="has-text-centered cvc-muted is-size-7 mb-4">' "or use an API token</p>\n"
+        )
+    href = login_path + (f"?{nxt}" if nxt else "")
+    return f"""
+  <a class="button is-primary is-fullwidth mb-4" href="{href}">
     <span class="icon mr-1"><i class="fas fa-right-to-bracket"></i></span>
     Sign in with SSO
   </a>
   <p class="has-text-centered cvc-muted is-size-7 mb-4">or use an admin API token</p>
 """
-        if oidc_enabled
-        else ""
+
+
+def login_html(
+    *,
+    error: str = "",
+    oidc_enabled: bool = False,
+    providers: list[dict] | None = None,
+    next: str = "",
+) -> str:
+    error_html = (
+        f'<div class="notification is-danger is-light">{_esc(error)}</div>' if error else ""
     )
+    # OIDC (Phase 13) is offered only when a provider is fully configured; the
+    # token form always remains available for machine/break-glass access.  With
+    # several providers we render one button each (multi-issuer picker).
+    sso_html = _sso_buttons(providers, next, login_path="/admin/oidc/login") if oidc_enabled else ""
     body = f"""
 <div class="columns is-centered"><div class="column is-4">
   <h1 class="title is-4">Sign in</h1>

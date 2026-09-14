@@ -93,6 +93,23 @@ def _read_json(resp) -> dict | None:
         return None
 
 
+def fetch_providers(server_url: str, *, timeout: float = 15.0) -> list[dict]:
+    """GET the server's enabled OIDC providers as ``[{id, display_name}]``.
+
+    Returns ``[]`` on any error or a token-only server — the caller then just
+    lets the browser picker (if any) sort it out.
+    """
+    url = f"{server_url.rstrip('/')}/v1/auth/providers"
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})  # noqa: S310
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+            data = _read_json(resp) or {}
+    except (urllib.error.URLError, TimeoutError, urllib.error.HTTPError):
+        return []
+    out = data.get("providers")
+    return out if isinstance(out, list) else []
+
+
 # ── Loopback (desktop) ──────────────────────────────────────────
 
 
@@ -132,6 +149,7 @@ def loopback_login(
     port: int = 0,
     open_browser: bool = True,
     timeout: float = 300.0,
+    provider: str = "",
     printer=print,
 ) -> Credential:
     """Run the loopback authorization-code grant and return the Credential."""
@@ -159,6 +177,10 @@ def loopback_login(
     }
     if role:
         params["role"] = role
+    # When omitted, the server shows a provider picker in the browser if it has
+    # more than one issuer configured; --provider just skips that step.
+    if provider:
+        params["provider"] = provider
     authorize_url = f"{server_url}/v1/auth/authorize?{urlencode(params)}"
 
     printer(f"Opening your browser to sign in to {urlsplit(server_url).netloc} …")
@@ -207,10 +229,16 @@ def pairing_login(
     role: str = "",
     device: str = "",
     timeout: float = 600.0,
+    provider: str = "",
     printer=print,
     sleep=time.sleep,
 ) -> Credential:
-    """Run the device-pairing grant: print a code, poll until approved."""
+    """Run the device-pairing grant: print a code, poll until approved.
+
+    ``provider`` is advisory here: the human chooses the issuer in the browser
+    when they approve the code (the pairing flow has no login-leg to carry it),
+    so we only remind them which one to pick.
+    """
     server_url = server_url.rstrip("/")
     verifier = secrets.token_urlsafe(32)
     verifier_hash = hashlib.sha256(verifier.encode()).hexdigest()
@@ -238,6 +266,8 @@ def pairing_login(
     printer(f"  1. On any device, open:  {uri}")
     printer(f"  2. Enter this code:      {user_code}\n")
     printer(f"  (or open directly: {uri_complete})\n")
+    if provider:
+        printer(f"  When asked to sign in, choose the '{provider}' provider.\n")
     printer("Waiting for approval… (Ctrl-C to cancel)")
 
     deadline = time.time() + timeout

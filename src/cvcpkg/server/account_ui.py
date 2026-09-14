@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import datetime
 import threading
+from urllib.parse import quote
 
 from cvcpkg.server import csrf as _csrf
 from cvcpkg.server.admin_ui import _esc
@@ -115,16 +116,49 @@ def message_html(title: str, body: str, *, kind: str = "is-warning is-light") ->
 # ── /login ──────────────────────────────────────────────────────
 
 
-def login_html(*, oidc_enabled: bool, next_url: str = "/account", error: str = "") -> str:
+def login_html(
+    *,
+    oidc_enabled: bool,
+    providers: list[dict] | None = None,
+    next_url: str = "/account",
+    error: str = "",
+) -> str:
     """The public sign-in page (distinct from the admin break-glass form)."""
     err = _notification("is-danger is-light", _esc(error)) if error else ""
     sso = ""
     if oidc_enabled:
-        sso = f"""
+        nxt = f"next={quote(next_url, safe='/')}"
+        if providers and len(providers) > 1:
+            # Multi-issuer: one button per ring, the provider carried in the query
+            # (and thence the signed txn — the callback never trusts the URL).
+            btns = []
+            for p in providers:
+                q = f"provider={quote(str(p.get('id', '')), safe='')}&{nxt}"
+                label = _esc(p.get("display_name") or p.get("id") or "SSO")
+                btns.append(
+                    f'      <a class="button is-primary is-fullwidth mb-2"'
+                    f' href="/auth/oidc/login?{q}">'
+                    f'<span class="icon mr-1"><i class="fas fa-right-to-bracket"></i></span>'
+                    f"Sign in with {label}</a>"
+                )
+            sso = (
+                "\n".join(btns)
+                + '\n      <p class="has-text-centered has-text-grey is-size-7 mb-4">'
+                "or use an API token</p>\n"
+            )
+        else:
+            # One provider (or none listed, back-compat): a single generic button.
+            label = "tx.wtf"
+            if providers and len(providers) == 1:
+                label = _esc(providers[0].get("display_name") or providers[0].get("id") or "SSO")
+                q = f"provider={quote(str(providers[0].get('id', '')), safe='')}&{nxt}"
+            else:
+                q = nxt
+            sso = f"""
       <a class="button is-primary is-fullwidth mb-4"
-         href="/auth/oidc/login?next={_esc(next_url)}">
+         href="/auth/oidc/login?{q}">
         <span class="icon mr-1"><i class="fas fa-right-to-bracket"></i></span>
-        Sign in with tx.wtf
+        Sign in with {label}
       </a>
       <p class="has-text-centered has-text-grey is-size-7 mb-4">or use an API token</p>
 """

@@ -10,12 +10,24 @@ tokens. Machines keep using `cvctok_` tokens, unchanged.
 cvcpkg login                 # desktop: opens your browser (loopback)
 cvcpkg login --code          # headless/SSH: prints a code to approve in a browser
 cvcpkg login --role publisher --device catx-03
+cvcpkg auth providers        # list the server's identity providers (if several)
+cvcpkg login --provider ringb  # pick one when the server has several
 cvcpkg whoami                # who am I, and which orgs
 cvcpkg auth devices          # list your active sessions
 cvcpkg auth revoke <id>      # revoke one session
 cvcpkg logout [--all]        # revoke server-side + forget locally
 cvcpkg auth status           # exit 0 iff a live session exists
 ```
+
+## Choosing an identity provider (multi-issuer)
+
+A server can be an OIDC client of **several** issuers at once (different tx.wtf
+sites / federation rings — see [`roadmap/multi-issuer-sso.md`](roadmap/multi-issuer-sso.md)).
+When it is, `cvcpkg login` picks the provider like this: `--provider <id>` if you
+pass one; otherwise the single provider if there is only one; otherwise it prompts
+on a TTY, or (for the browser/loopback flow) lets you pick on the sign-in page.
+Run `cvcpkg auth providers` to see the ids and labels. When scripting a headless
+login against a multi-provider server, pass `--provider` explicitly.
 
 After `cvcpkg login`, `cvcpkg search`/`install` against a **private** org just
 work: the stored session is attached (origin-scoped) for that server's host and

@@ -141,7 +141,8 @@ from cvcpkg.server import pairing as _pairing_mod
 from cvcpkg.server import principals as _principals_mod
 from cvcpkg.server import sessions as _sessions_mod
 from cvcpkg.server.oidc import OidcConfig as _OidcConfig
-from cvcpkg.server.oidc import validate_config as _oidc_validate_config
+from cvcpkg.server.oidc import load_providers as _oidc_load_providers
+from cvcpkg.server.oidc import validate_registry as _oidc_validate_registry
 
 # ── State ───────────────────────────────────────────────────────
 
@@ -2591,7 +2592,11 @@ def create_app(
         from cvcpkg.server import admin_ui
 
         if not _has_admin_session(request):
-            return HTMLResponse(admin_ui.login_html(oidc_enabled=_oidc_enabled()))
+            return HTMLResponse(
+                admin_ui.login_html(
+                    oidc_enabled=_oidc_enabled(), providers=_oidc_provider_choices()
+                )
+            )
         stats = await _gather_admin_stats()
         builders: list = []
         if _use_db and _db_builders is not None:
@@ -2603,7 +2608,11 @@ def create_app(
         from cvcpkg.server import admin_ui
 
         if not _has_admin_session(request):
-            return HTMLResponse(admin_ui.login_html(oidc_enabled=_oidc_enabled()))
+            return HTMLResponse(
+                admin_ui.login_html(
+                    oidc_enabled=_oidc_enabled(), providers=_oidc_provider_choices()
+                )
+            )
         tags: list = []
         pkgs: list | None = None
         if _use_db and _db_packages is not None:
@@ -6209,37 +6218,60 @@ def create_app(
         val = request.cookies.get(admin_ui._SESSION_COOKIE, "")
         return bool(val) and admin_ui.verify_session_value(_admin_session_key(), val)
 
-    def _oidc_enabled() -> bool:
-        """True when an OIDC provider is fully configured (Phase 13)."""
-        from cvcpkg.server.oidc import OidcConfig
+    # ── OIDC provider registry (multi-issuer) ───────────────
+    #
+    # A cvcpkg instance can be an OIDC client of several issuers at once (tx.wtf
+    # sites / federation rings).  The bare CVCPKG_OIDC_* vars are provider
+    # "default" (back-compat); extras come from CVCPKG_OIDC_EXTRA_PROVIDERS
+    # (JSON).  Identities are already namespaced by (issuer, subject), so this is
+    # config + login-routing only.  Built once at startup — env does not change
+    # under a running process.
+    _oidc_providers_list = _oidc_load_providers()
+    _oidc_providers_map = {p.id: p for p in _oidc_providers_list}
 
-        return OidcConfig.from_env().is_enabled()
+    def _oidc_enabled() -> bool:
+        """True when at least one OIDC provider is fully configured (Phase 13)."""
+        return bool(_oidc_providers_map)
+
+    def _oidc_provider(pid: str):
+        """Look up a configured provider by id, or None."""
+        return _oidc_providers_map.get(pid)
+
+    def _oidc_provider_choices() -> list[dict]:
+        """[{id, display_name}] for the picker / /v1/auth/providers, id-ordered."""
+        return [
+            {"id": p.id, "display_name": p.display_name}
+            for p in sorted(_oidc_providers_list, key=lambda p: p.id)
+        ]
 
     # Fail at construction, not at the first login.  A group map that grants a
     # role to a group every account already holds is not a login bug — it is a
     # server that is open to anyone who can sign up on the IdP, and it would
-    # look completely healthy until someone tried it.
-    _oidc_cfg_at_startup = _OidcConfig.from_env()
-    _oidc_problems = _oidc_validate_config(_oidc_cfg_at_startup)
+    # look completely healthy until someone tried it.  Registry validation also
+    # refuses two providers that share an issuer (ambiguous callback routing).
+    _oidc_problems = _oidc_validate_registry(_oidc_providers_list)
     if _oidc_problems:
         raise RuntimeError(
             "refusing to start — unsafe OIDC configuration:\n  " + "\n  ".join(_oidc_problems)
         )
-    if _oidc_cfg_at_startup.is_enabled():
-        logger.info(
-            "OIDC login enabled: issuer=%s client_id=%s default_role=%s",
-            _oidc_cfg_at_startup.issuer,
-            _oidc_cfg_at_startup.client_id,
-            _oidc_cfg_at_startup.default_role or "(refuse)",
-        )
+    if _oidc_providers_list:
+        for _p in _oidc_providers_list:
+            logger.info(
+                "OIDC provider %r enabled: issuer=%s client_id=%s default_role=%s",
+                _p.id,
+                _p.issuer,
+                _p.client_id,
+                _p.default_role or "(refuse)",
+            )
     else:
+        _bare = _OidcConfig.from_env()
         _missing = [
             var
             for var, val in (
-                ("CVCPKG_OIDC_ISSUER", _oidc_cfg_at_startup.issuer),
-                ("CVCPKG_OIDC_CLIENT_ID", _oidc_cfg_at_startup.client_id),
-                ("CVCPKG_OIDC_CLIENT_SECRET", _oidc_cfg_at_startup.client_secret),
-                ("CVCPKG_OIDC_REDIRECT_URL", _oidc_cfg_at_startup.redirect_url),
+                ("CVCPKG_OIDC_ISSUER", _bare.issuer),
+                ("CVCPKG_OIDC_CLIENT_ID", _bare.client_id),
+                ("CVCPKG_OIDC_CLIENT_SECRET", _bare.client_secret),
+                ("CVCPKG_OIDC_REDIRECT_URL", _bare.redirect_url),
             )
             if not val
         ]
@@ -6258,7 +6290,11 @@ def create_app(
         from cvcpkg.server import admin_ui
 
         if not _has_admin_session(request):
-            return HTMLResponse(admin_ui.login_html(oidc_enabled=_oidc_enabled()))
+            return HTMLResponse(
+                admin_ui.login_html(
+                    oidc_enabled=_oidc_enabled(), providers=_oidc_provider_choices()
+                )
+            )
 
         days = 30
         data: dict = {"days": days, "stats": {"version": _server_version, "packages_count": 0}}
@@ -6330,17 +6366,45 @@ def create_app(
     # signed admin session cookie the token login uses.  HMAC tokens stay
     # the mechanism for machines.
 
+    def _resolve_login_provider(pid: str):
+        """Pick the OIDC provider for a login leg.
+
+        Returns ``(provider, picker_needed)``.  ``picker_needed`` is True only
+        when several providers are configured and the caller named none — the
+        route then renders a chooser instead of guessing.  An explicit but
+        unknown id is a hard 400 (never a silent fall-through to ``default``).
+        """
+        pid = (pid or "").strip()
+        if pid:
+            p = _oidc_provider(pid)
+            if p is None:
+                raise HTTPException(400, f"unknown OIDC provider {pid!r}")
+            return p, False
+        if len(_oidc_providers_list) == 1:
+            return _oidc_providers_list[0], False
+        return None, True
+
     @app.get("/admin/oidc/login", tags=["admin"])
-    async def admin_oidc_login(request: Request, next: str = "/admin"):
+    async def admin_oidc_login(request: Request, next: str = "/admin", provider: str = Query("")):
         """Begin the OIDC authorization-code flow (state + nonce + PKCE)."""
         import secrets as _secrets
 
         from cvcpkg.server import admin_ui
         from cvcpkg.server import oidc as _oidc
 
-        cfg = _oidc.OidcConfig.from_env()
-        if not cfg.is_enabled():
+        if not _oidc_enabled():
             raise HTTPException(404, "OIDC is not configured on this server")
+
+        cfg, picker_needed = _resolve_login_provider(provider)
+        if picker_needed:
+            # >1 provider and none chosen — let the human pick which ring.
+            return HTMLResponse(
+                admin_ui.login_html(
+                    oidc_enabled=True,
+                    providers=_oidc_provider_choices(),
+                    next=_safe_next(next),
+                )
+            )
 
         try:
             doc = await _oidc.discover(cfg)
@@ -6355,7 +6419,10 @@ def create_app(
         nonce = _secrets.token_urlsafe(16)
         # `next` rides inside the SIGNED transaction cookie, and is validated
         # against a two-entry allow-list on the way out — never echoed from the
-        # query string, which would make this an open redirect.
+        # query string, which would make this an open redirect.  `provider` also
+        # rides in the SIGNED txn: the callback picks the issuer from the cookie,
+        # never from its own query, so an attacker cannot pair issuer A's code
+        # with provider B's client secret (an OAuth mix-up).
         txn = _oidc.sign_txn(
             _admin_session_key(),
             {
@@ -6363,6 +6430,7 @@ def create_app(
                 "verifier": verifier,
                 "nonce": nonce,
                 "next": _safe_next(next),
+                "provider": cfg.id,
             },
         )
 
@@ -6391,8 +6459,7 @@ def create_app(
         from cvcpkg.server import admin_ui
         from cvcpkg.server import oidc as _oidc
 
-        cfg = _oidc.OidcConfig.from_env()
-        if not cfg.is_enabled():
+        if not _oidc_enabled():
             raise HTTPException(404, "OIDC is not configured on this server")
 
         if error:
@@ -6411,6 +6478,18 @@ def create_app(
         if not code or not state or not secrets.compare_digest(state, str(txn.get("state", ""))):
             return HTMLResponse(
                 admin_ui.login_html(error="invalid OIDC state — login refused."),
+                status_code=400,
+            )
+        # Which issuer this code belongs to comes ONLY from the signed txn — see
+        # the mix-up note on admin_oidc_login.  Pre-multi-issuer txns have no
+        # "provider" key and resolve to "default".
+        cfg = _oidc_provider(str(txn.get("provider") or "default"))
+        if cfg is None:
+            return HTMLResponse(
+                admin_ui.login_html(
+                    error="login provider is no longer configured — please try again.",
+                    oidc_enabled=True,
+                ),
                 status_code=400,
             )
 
@@ -6451,6 +6530,7 @@ def create_app(
                         "(no group mapping, and no default role is configured)."
                     ),
                     oidc_enabled=_oidc_enabled(),
+                    providers=_oidc_provider_choices(),
                 ),
                 status_code=403,
             )
@@ -6481,6 +6561,7 @@ def create_app(
                     admin_ui.login_html(
                         error="This account has been disabled.",
                         oidc_enabled=_oidc_enabled(),
+                        providers=_oidc_provider_choices(),
                     ),
                     status_code=403,
                 )
@@ -6546,7 +6627,11 @@ def create_app(
         from cvcpkg.server import admin_ui
 
         if not _has_admin_session(request):
-            return HTMLResponse(admin_ui.login_html(oidc_enabled=_oidc_enabled()))
+            return HTMLResponse(
+                admin_ui.login_html(
+                    oidc_enabled=_oidc_enabled(), providers=_oidc_provider_choices()
+                )
+            )
         pkgs: list = []
         total = 0
         if _use_db and _db_packages is not None:
@@ -6612,7 +6697,11 @@ def create_app(
         from cvcpkg.server import admin_ui
 
         if not _has_admin_session(request):
-            return HTMLResponse(admin_ui.login_html(oidc_enabled=_oidc_enabled()))
+            return HTMLResponse(
+                admin_ui.login_html(
+                    oidc_enabled=_oidc_enabled(), providers=_oidc_provider_choices()
+                )
+            )
         tokens: list = []
         if _use_db and _db_tokens is not None:
             tokens = await _db_tokens.list_tokens()
@@ -6710,7 +6799,11 @@ def create_app(
         from cvcpkg.server import admin_ui
 
         if not _has_admin_session(request):
-            return HTMLResponse(admin_ui.login_html(oidc_enabled=_oidc_enabled()))
+            return HTMLResponse(
+                admin_ui.login_html(
+                    oidc_enabled=_oidc_enabled(), providers=_oidc_provider_choices()
+                )
+            )
         entries: list = []
         total = 0
         chain = None
@@ -7113,6 +7206,15 @@ def create_app(
             await _db_cli_auth.deny_pairing(row.id)
         return Response(status_code=204)
 
+    @app.get("/v1/auth/providers", tags=["auth"])
+    async def auth_providers():
+        """Enabled OIDC providers, so `cvcpkg login` can offer a `--provider` pick.
+
+        ``[{id, display_name}]``; empty when the server is token-only.  No secrets
+        or issuer URLs are exposed — just what a human needs to choose a ring.
+        """
+        return {"providers": _oidc_provider_choices()}
+
     @app.get("/v1/auth/authorize", tags=["auth"])
     async def auth_authorize(
         request: Request,
@@ -7123,6 +7225,7 @@ def create_app(
         state: str = Query(""),
         role: str = Query(""),
         device: str = Query(""),
+        provider: str = Query(""),
     ):
         """Loopback grant: park the request, then send the browser to sign in."""
         _require_broker_db()
@@ -7136,6 +7239,11 @@ def create_app(
             raise HTTPException(400, "redirect_uri must be an http loopback-IP /callback")
         if role and role not in (r.value for r in TokenRole):
             raise HTTPException(400, f"unknown role: {role}")
+        # A named provider is validated here so the CLI gets a clean 400 rather
+        # than discovering the mistake mid-browser.  It rides the login-leg query
+        # (and thence the signed OIDC txn); we do not persist it on the login txn.
+        if provider and _oidc_provider(provider) is None:
+            raise HTTPException(400, f"unknown OIDC provider {provider!r}")
         txn_id = _cli_auth_mod.new_txn_id()
         await _db_cli_auth.create_login_txn(
             txn_id=txn_id,
@@ -7146,7 +7254,12 @@ def create_app(
             requested_role=role,
             device_label=device,
         )
-        return RedirectResponse(f"/auth/oidc/login?next=/v1/auth/resume/{txn_id}", status_code=303)
+        _login_next = f"/auth/oidc/login?next=/v1/auth/resume/{txn_id}"
+        if provider:
+            from urllib.parse import quote
+
+            _login_next += f"&provider={quote(provider, safe='')}"
+        return RedirectResponse(_login_next, status_code=303)
 
     @app.get("/v1/auth/resume/{txn_id}", tags=["auth"])
     async def auth_resume(request: Request, txn_id: str):
@@ -7502,13 +7615,13 @@ def create_app(
         )
 
     @app.get("/auth/oidc/login", include_in_schema=False)
-    async def auth_oidc_login(request: Request, next: str = "/account"):
+    async def auth_oidc_login(request: Request, next: str = "/account", provider: str = Query("")):
         """Public alias for the OIDC login leg.
 
         The dashboard route keeps working so an identity provider still
         configured with the old redirect URI is not broken by this change.
         """
-        return await admin_oidc_login(request, next=next)
+        return await admin_oidc_login(request, next=next, provider=provider)
 
     @app.get("/auth/oidc/callback", response_class=HTMLResponse, include_in_schema=False)
     async def auth_oidc_callback(
@@ -7557,7 +7670,11 @@ def create_app(
     @app.get("/admin/principals", tags=["admin"], response_class=HTMLResponse)
     async def admin_principals_page(request: Request, q: str = Query("")):
         if not _has_admin_session(request):
-            return HTMLResponse(admin_ui.login_html(oidc_enabled=_oidc_enabled()))
+            return HTMLResponse(
+                admin_ui.login_html(
+                    oidc_enabled=_oidc_enabled(), providers=_oidc_provider_choices()
+                )
+            )
         if not _use_db or _db_principals is None:
             return HTMLResponse(
                 admin_ui.principals_html([], error="Principals require a database backend."),
@@ -7756,7 +7873,11 @@ def create_app(
         if await _current_session(request) is not None:
             return RedirectResponse(_safe_next(next), status_code=303)
         return HTMLResponse(
-            account_ui.login_html(oidc_enabled=_oidc_enabled(), next_url=_safe_next(next))
+            account_ui.login_html(
+                oidc_enabled=_oidc_enabled(),
+                providers=_oidc_provider_choices(),
+                next_url=_safe_next(next),
+            )
         )
 
     @app.post("/login", response_class=HTMLResponse, include_in_schema=False)
@@ -7779,6 +7900,7 @@ def create_app(
             return HTMLResponse(
                 account_ui.login_html(
                     oidc_enabled=_oidc_enabled(),
+                    providers=_oidc_provider_choices(),
                     next_url=dest,
                     error="Invalid token.",
                 ),
@@ -7799,6 +7921,7 @@ def create_app(
             return HTMLResponse(
                 account_ui.login_html(
                     oidc_enabled=_oidc_enabled(),
+                    providers=_oidc_provider_choices(),
                     next_url=dest,
                     error="This account has been disabled.",
                 ),
@@ -7860,13 +7983,15 @@ def create_app(
         row, principal = resolved
 
         role = await _role_for_principal(principal)
-        cfg = _OidcConfig.from_env()
+        # Explain the role in terms of THIS principal's own issuer/provider, not
+        # the bare default — a multi-issuer server has one default_role per ring.
+        cfg = next((p for p in _oidc_providers_list if p.issuer == principal.issuer), None)
         if principal.issuer == "local":
             reason = "Inherited from the API token you signed in with."
-        elif cfg.default_role and role == cfg.default_role:
+        elif cfg is not None and cfg.default_role and role == cfg.default_role:
             reason = (
                 "Server default for an authenticated user who matches no group "
-                "(CVCPKG_OIDC_DEFAULT_ROLE)."
+                "(default role for your identity provider)."
             )
         else:
             reason = "Granted by your group membership at the identity provider."

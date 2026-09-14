@@ -5,8 +5,13 @@ makes it a client of **several** simultaneously, so users from different tx.wtf
 deployments (or federation rings) can each sign in to the same cvcpkg, pick their
 provider at login, and land as distinct, correctly-scoped identities.
 
-Status: **design only.** Nothing here is built yet. It follows and reuses the
-Stage 1–3 work in `txwtf-sso-and-cli-login.md`.
+Status: **IMPLEMENTED.** It follows and reuses the Stage 1–3 work in
+`txwtf-sso-and-cli-login.md`. One deviation from the original design below: extra
+providers are configured as a single **`CVCPKG_OIDC_EXTRA_PROVIDERS` JSON array**
+rather than indexed `CVCPKG_OIDC_<ID>_*` env vars — a docker-compose `${VAR:-}`
+passthrough cannot enumerate an unknown set of indexed keys, and a single key is
+also what the empty-string-passthrough outage taught us to prefer. The bare
+`CVCPKG_OIDC_*` vars remain provider `default` exactly as designed.
 
 ---
 
@@ -59,41 +64,41 @@ migration.
 
 Introduce **named providers**. Keep the bare `CVCPKG_OIDC_*` vars as the implicit
 provider `default`, so every current single-issuer deployment (cvcpkg.org) keeps
-working with **zero config change**. Additional providers are indexed by a
-short slug, listed in `CVCPKG_OIDC_PROVIDERS`:
+working with **zero config change**. Additional providers are a single JSON array
+in **`CVCPKG_OIDC_EXTRA_PROVIDERS`**:
 
 ```
-CVCPKG_OIDC_PROVIDERS=txwtf,ringb
+CVCPKG_OIDC_DISPLAY_NAME=tx.wtf          # label for the bare "default" provider
 
-# provider "txwtf"
-CVCPKG_OIDC_TXWTF_ISSUER=https://tx.wtf
-CVCPKG_OIDC_TXWTF_DISPLAY_NAME=tx.wtf
-CVCPKG_OIDC_TXWTF_CLIENT_ID=...
-CVCPKG_OIDC_TXWTF_CLIENT_SECRET=...
-CVCPKG_OIDC_TXWTF_REDIRECT_URL=https://cvcpkg.org/auth/oidc/callback
-CVCPKG_OIDC_TXWTF_ADMIN_GROUPS=cvcpkg-admin
-CVCPKG_OIDC_TXWTF_PUBLISHER_GROUPS=cvcpkg-publisher
-CVCPKG_OIDC_TXWTF_READER_GROUPS=cvcpkg-reader
-CVCPKG_OIDC_TXWTF_DEFAULT_ROLE=reader
-
-# provider "ringb"
-CVCPKG_OIDC_RINGB_ISSUER=https://ring-b.example
-CVCPKG_OIDC_RINGB_CLIENT_ID=...
-...
+CVCPKG_OIDC_EXTRA_PROVIDERS=[{"id":"ringb","display_name":"Ring B",
+  "issuer":"https://ring-b.example","client_id":"...","client_secret":"...",
+  "redirect_url":"https://cvcpkg.org/auth/oidc/callback",
+  "admin_groups":["cvcpkg-admin"],"publisher_groups":["cvcpkg-publisher"],
+  "reader_groups":["cvcpkg-reader"],"default_role":"reader"}]
 ```
 
-Indexed env (not a JSON file) keeps parity with the existing docker-compose
-`${VAR:-}` passthrough model and the `test_env_passthrough` gate. A provider
-also has `scopes`, `groups_claim`, `admin_emails`, and `enabled`.
+Each entry needs `id`, `issuer`, `client_id`, `client_secret`, `redirect_url`;
+optional `display_name`, `scopes`, `groups_claim`, `admin_groups`,
+`publisher_groups`, `reader_groups`, `admin_emails`, `default_role` (group fields
+accept a JSON list or a comma string). A single key (not indexed vars, not a
+file) keeps one clean `${VAR:-}` passthrough line — the `test_env_passthrough`
+gate has a row for it — and avoids the enumerate-unknown-keys problem compose
+cannot solve. Malformed JSON, a missing required field, an empty `id`, or reusing
+`id:"default"` fails the boot loudly (never a silently dropped provider).
 
-**Types.** `OidcConfig` becomes `OidcProvider` (today's fields + `id`,
-`display_name`). A new `OidcRegistry`:
+**Types.** `OidcConfig` is kept as the per-provider type (it already *was* a
+single provider's config) and gains `id` + `display_name`; renaming to
+`OidcProvider` would have churned every call site for no behavioural gain. The
+registry is two module functions rather than a class:
 
-- `OidcRegistry.from_env()` — builds `{id: OidcProvider}`; the bare vars become
-  `default` when set.
-- `.enabled()` → providers that are fully configured (issuer+client+secret+redirect).
-- `.get(id)` / `.by_issuer(issuer_url)`.
-- `map_claims_to_role(claims, provider)` is unchanged logic, per-provider maps.
+- `load_providers()` → `list[OidcConfig]`: the bare `default` (when enabled) plus
+  the JSON extras; only fully-configured providers are returned.
+- `validate_registry(providers)` → problems: per-provider `validate_config`
+  (universal-group + default_role guards) **plus** a duplicate-issuer / duplicate-id
+  guard.
+- In `app.py` the list is turned into `{id: OidcConfig}` once at startup;
+  `_oidc_provider(id)` / `_oidc_provider_choices()` / lookup-by-issuer are closures.
+- `map_claims_to_role(claims, cfg)` is unchanged logic, per-provider maps.
 
 ### 3.2 Startup guards
 
@@ -164,27 +169,30 @@ also has `scopes`, `groups_claim`, `admin_emails`, and `enabled`.
   vars become the `default` provider.
 - Rollback is config-only (remove the extra providers).
 
-## 5. Scope estimate
+## 5. What shipped
 
 | Area | Work |
 |---|---|
-| `server/oidc.py` | `OidcConfig` → `OidcProvider` + `OidcRegistry.from_env`; per-provider guards |
-| `server/app.py` | provider param on login/authorize; provider in signed txn; callback dispatch on provider; `_oidc_enabled` → registry; `GET /v1/auth/providers` |
-| UI | provider picker on `/login` + `/admin` sign-in (server-rendered, like `link_ui`) |
-| CLI | `cvcpkg login --provider`; interactive pick; consume `/v1/auth/providers` |
-| Ops | indexed `CVCPKG_OIDC_<ID>_*` in docker-compose passthrough + `.env.production.example` + `test_env_passthrough` rows |
-| Tests | registry parsing + back-compat default; picker rendering; callback picks provider from cookie not query; mix-up refusal; per-issuer role mapping; handle-collision across issuers; two-provider login flow against two stub IdPs |
+| `server/oidc.py` | `OidcConfig` + `id`/`display_name`/`from_dict`; `load_providers()` (default + JSON extras, loud failures); `validate_registry()` (dup-issuer/dup-id + per-provider guards) |
+| `server/app.py` | provider param on login/authorize; provider in the signed txn; callback dispatch on the txn provider only; `_oidc_enabled` → registry; `GET /v1/auth/providers` |
+| UI | provider picker on `/login` + the `/admin` sign-in (server-rendered, one button per ring) |
+| CLI | `cvcpkg login --provider` (interactive pick / browser-picker fallback); `cvcpkg auth providers`; consume `/v1/auth/providers` |
+| Ops | `CVCPKG_OIDC_DISPLAY_NAME` + `CVCPKG_OIDC_EXTRA_PROVIDERS` in docker-compose passthrough + `.env.production.example` + `test_compose_env_passthrough` rows |
+| Tests | `test_oidc_registry` (parsing, back-compat default, loud failures, dup-issuer); `test_multi_issuer_login` (picker rendering, callback picks provider from txn not query, per-issuer identity, single-provider back-compat) |
 
-No new runtime dependencies. Estimated ~1 focused PR (server registry + routing +
-picker + CLI + tests); the data layer is already done.
+No new runtime dependencies. The data layer needed no change — `(issuer, subject)`
+already namespaces every identity.
 
-## 6. Open questions for a human
+## 6. Decisions taken (were open questions)
 
-1. **Shared callback vs per-provider callback path.** Shared is simpler and
-   mix-up-safe via the signed cookie; per-provider is needed only if some IdP
-   refuses to share a redirect URI. Default to shared.
-2. **Handle collisions across rings** — accept global-first-come + suffixing
-   (recommended), or is a provider-scoped handle display wanted in the UI/audit?
-3. **Admin across rings** — is a global admin expected to come from *any* ring's
-   `cvcpkg-admin`, or should server-admin be pinned to one trusted "home" ring?
-   (Design allows any; pinning would be an extra guard.)
+1. **Shared callback path.** One `/auth/oidc/callback`; the provider is read from
+   the signed txn, so no per-provider redirect URI is needed. (A per-provider
+   `/auth/oidc/callback/<id>` remains the fallback if some IdP ever refuses to
+   share a redirect URI.)
+2. **Handle collisions across rings** — global-first-come + suffixing (existing
+   `collision_candidates`). The handle is a shared namespace across rings; the
+   issuer disambiguates the identity, not the handle. The `/account` page shows
+   each principal's own issuer so a human can tell two `joe`s apart.
+3. **Admin across rings** — a global admin may come from *any* ring's
+   `cvcpkg-admin` (each provider carries its own group maps). Pinning server-admin
+   to one "home" ring was **not** added; it would be a small extra guard if wanted.

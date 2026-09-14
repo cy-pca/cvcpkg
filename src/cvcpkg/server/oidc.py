@@ -68,7 +68,12 @@ def _b64url(raw: bytes) -> str:
 
 @dataclass(frozen=True)
 class OidcConfig:
-    """OIDC provider + claim-mapping configuration."""
+    """One OIDC provider + its claim-mapping (a single issuer / tx.wtf ring).
+
+    ``id`` is a stable slug used in the login URL and provider picker; the bare
+    ``CVCPKG_OIDC_*`` provider is always ``id="default"`` for back-compat.
+    ``display_name`` is what the picker shows a human.
+    """
 
     issuer: str = ""
     client_id: str = ""
@@ -81,6 +86,8 @@ class OidcConfig:
     reader_groups: frozenset[str] = field(default_factory=frozenset)
     admin_emails: frozenset[str] = field(default_factory=frozenset)
     default_role: str = ""
+    id: str = "default"
+    display_name: str = ""
 
     @classmethod
     def from_env(cls) -> OidcConfig:
@@ -103,6 +110,35 @@ class OidcConfig:
             reader_groups=_csv_set(os.environ.get("CVCPKG_OIDC_READER_GROUPS", "")),
             admin_emails=_csv_set(os.environ.get("CVCPKG_OIDC_ADMIN_EMAILS", "")),
             default_role=os.environ.get("CVCPKG_OIDC_DEFAULT_ROLE", "").strip().lower(),
+            id="default",
+            display_name=os.environ.get("CVCPKG_OIDC_DISPLAY_NAME", "").strip() or "SSO",
+        )
+
+    @classmethod
+    def from_dict(cls, d: dict) -> OidcConfig:
+        """Build one extra provider from a JSON object (see load_providers)."""
+
+        def _groups(key: str) -> frozenset[str]:
+            v = d.get(key)
+            if isinstance(v, list):
+                return frozenset(str(x).strip() for x in v if str(x).strip())
+            return _csv_set(str(v or ""))
+
+        pid = str(d.get("id") or "").strip()
+        return cls(
+            issuer=str(d.get("issuer") or "").strip().rstrip("/"),
+            client_id=str(d.get("client_id") or "").strip(),
+            client_secret=str(d.get("client_secret") or "").strip(),
+            redirect_url=str(d.get("redirect_url") or "").strip(),
+            scopes=str(d.get("scopes") or "").strip() or "openid email profile",
+            groups_claim=str(d.get("groups_claim") or "").strip() or "groups",
+            admin_groups=_groups("admin_groups"),
+            publisher_groups=_groups("publisher_groups"),
+            reader_groups=_groups("reader_groups"),
+            admin_emails=_groups("admin_emails"),
+            default_role=str(d.get("default_role") or "").strip().lower(),
+            id=pid,
+            display_name=str(d.get("display_name") or "").strip() or pid or "SSO",
         )
 
     def is_enabled(self) -> bool:
@@ -112,6 +148,88 @@ class OidcConfig:
     @property
     def discovery_url(self) -> str:
         return f"{self.issuer}/.well-known/openid-configuration"
+
+
+# ── Provider registry (multi-issuer) ────────────────────────────
+#
+# A cvcpkg instance can be an OIDC client of SEVERAL issuers at once (e.g.
+# different tx.wtf sites / federation rings).  Identities are already namespaced
+# by issuer (principals unique on (issuer, subject)), so this is purely a
+# config + login-routing concern.
+#
+#   * the bare CVCPKG_OIDC_* vars are always provider "default" (back-compat);
+#   * CVCPKG_OIDC_EXTRA_PROVIDERS is a JSON array of provider objects, kept as a
+#     single env key so docker-compose passthrough stays one line (not an
+#     unenumerable CVCPKG_OIDC_<ID>_* family).
+
+
+def load_providers() -> list[OidcConfig]:
+    """All fully-configured providers: the ``default`` env provider + extras."""
+    out: list[OidcConfig] = []
+    default = OidcConfig.from_env()
+    if default.is_enabled():
+        out.append(default)
+    raw = os.environ.get("CVCPKG_OIDC_EXTRA_PROVIDERS", "").strip()
+    if raw:
+        # Non-empty but malformed is an operator mistake — fail loudly at boot
+        # rather than silently dropping providers (a login outage nobody can
+        # diagnose).  Empty ("" from a compose ${VAR:-} passthrough) is fine.
+        try:
+            parsed = json.loads(raw)
+        except ValueError as exc:
+            raise ValueError(f"CVCPKG_OIDC_EXTRA_PROVIDERS is not valid JSON: {exc}") from exc
+        if not isinstance(parsed, list):
+            raise ValueError("CVCPKG_OIDC_EXTRA_PROVIDERS must be a JSON array of provider objects")
+        for item in parsed:
+            if not isinstance(item, dict):
+                raise ValueError("each CVCPKG_OIDC_EXTRA_PROVIDERS entry must be a JSON object")
+            p = OidcConfig.from_dict(item)
+            if not p.id:
+                raise ValueError("each CVCPKG_OIDC_EXTRA_PROVIDERS entry needs a non-empty 'id'")
+            if p.id == "default":
+                raise ValueError(
+                    "CVCPKG_OIDC_EXTRA_PROVIDERS may not use id 'default' "
+                    "(that is the bare CVCPKG_OIDC_* provider)"
+                )
+            # An explicit JSON entry is a clear intent to configure — a missing
+            # field is a mistake, not an opt-out (unlike the bare vars).
+            if not p.is_enabled():
+                missing = [
+                    name
+                    for name, val in (
+                        ("issuer", p.issuer),
+                        ("client_id", p.client_id),
+                        ("client_secret", p.client_secret),
+                        ("redirect_url", p.redirect_url),
+                    )
+                    if not val
+                ]
+                raise ValueError(
+                    f"OIDC provider {p.id!r} is missing required field(s): {', '.join(missing)}"
+                )
+            out.append(p)
+    return out
+
+
+def validate_registry(providers: list[OidcConfig]) -> list[str]:
+    """Registry-level errors (dup ids/issuers) plus each provider's own errors."""
+    problems: list[str] = []
+    seen_ids: set[str] = set()
+    seen_issuers: set[str] = set()
+    for p in providers:
+        if not p.id:
+            problems.append("an OIDC provider has an empty id")
+        elif p.id in seen_ids:
+            problems.append(f"duplicate OIDC provider id {p.id!r}")
+        seen_ids.add(p.id)
+        if p.issuer in seen_issuers:
+            problems.append(
+                f"two OIDC providers share issuer {p.issuer!r}; callback routing "
+                f"would be ambiguous — give each ring a distinct issuer"
+            )
+        seen_issuers.add(p.issuer)
+        problems.extend(validate_config(p))
+    return problems
 
 
 # ── Claim -> role mapping (pure) ────────────────────────────────
