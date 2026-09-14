@@ -1166,8 +1166,11 @@ _LOG_GC_INTERVAL = int(os.environ.get("CVCPKG_LOG_GC_INTERVAL", "3600"))
 _YANK_RETENTION_DAYS = int(os.environ.get("CVCPKG_YANK_RETENTION_DAYS", "0"))
 # How often the yank retention GC runs (seconds, default 6 hours)
 _YANK_GC_INTERVAL = int(os.environ.get("CVCPKG_YANK_GC_INTERVAL", "21600"))
-# How often expired auth sessions + CLI-login rows are reaped (default 1 hour)
-_AUTH_GC_INTERVAL = int(os.environ.get("CVCPKG_AUTH_GC_INTERVAL", "3600"))
+# How often expired auth sessions + CLI-login rows are reaped (default 1 hour).
+# ``or "3600"`` (not a get() default) because the docker-compose ``${VAR:-}``
+# passthrough injects this key as an EMPTY string when the operator has not set
+# it — and int("") raises, which would crash the server on import.
+_AUTH_GC_INTERVAL = int(os.environ.get("CVCPKG_AUTH_GC_INTERVAL") or "3600")
 
 
 def _satisfies_capabilities(builder, job) -> bool:
