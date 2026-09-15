@@ -6,16 +6,25 @@ set -euo pipefail
 : "${CVC_SOURCE_DIR:?CVC_SOURCE_DIR must be set}"
 : "${CVC_JOBS:=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
 
-# GNU make + versioned autotools on BSD.
+# Prefer the autoconf/autom4te cvcpkg installed into this build's closure over
+# anything on the host. That bundle is now relocatable (see recipes/autoconf),
+# and using it avoids the OpenBSD/NetBSD trap where the ports `autoconf` is a
+# version-dispatch wrapper that aborts unless AUTOCONF_VERSION is exported —
+# which made automake's configure report "Autoconf 2.65 or better is required".
+for _root in "${CVC_BUILD_PREFIX:-}" "${CVC_DEPS_PREFIX:-}"; do
+    [[ -n "${_root}" ]] || continue
+    [[ -z "${AUTOCONF:-}" && -x "${_root}/bin/autoconf" ]] && export AUTOCONF="${_root}/bin/autoconf"
+    [[ -z "${AUTOM4TE:-}" && -x "${_root}/bin/autom4te" ]] && export AUTOM4TE="${_root}/bin/autom4te"
+done
+
+# GNU make on BSD; and, as a last resort where the closure lacks autoconf, fall
+# back to the ports-versioned autotools names.
 MAKE=make
 case "$(uname -s)" in
     FreeBSD|OpenBSD|NetBSD|DragonFly)
         if command -v gmake >/dev/null 2>&1; then
             MAKE=gmake
         fi
-        # OpenBSD/NetBSD ports install autoconf as autoconf-<VER>.
-        # Point configure at the latest ≥2.65 present on PATH so the
-        # "Autoconf 2.65 or better is required" check passes.
         if [[ -z "${AUTOCONF:-}" ]]; then
             for candidate in autoconf-2.72 autoconf-2.71 autoconf-2.69 autoconf; do
                 if command -v "${candidate}" >/dev/null 2>&1; then
@@ -37,8 +46,65 @@ esac
 
 cd "${CVC_SOURCE_DIR}"
 
-./configure \
-    --prefix="${CVC_INSTALL_DIR}"
+if ! ./configure --prefix="${CVC_INSTALL_DIR}"; then
+    # The build-log tail never carries config.log; surface the toolchain-check
+    # region so a failure is diagnosable instead of a bare "autoconf does not
+    # work" / "Autoconf 2.65 or better is required".
+    echo "===== configure FAILED (automake) — config.log excerpt ====="
+    grep -nE "autoconf is installed|autoconf works|Autoconf 2.65|autom4te|Can't locate|need GNU m4" \
+        config.log 2>/dev/null | head -20 || true
+    echo "===== end config.log excerpt ====="
+    exit 1
+fi
+
+# Neutralize man-page generation. The man pages are NOT in this recipe's
+# package.files, so regenerating the versioned .1 pages is pure wasted work — and
+# the versioned rule (doc/local.mk `update_mans`) runs `$(PERL) doc/help2man`,
+# automake's bundled help2man, which internally runs the freshly-built
+# `bin/automake --help` and fails the whole build on OpenBSD. Overriding the make
+# HELP2MAN variable does NOT help (that rule doesn't use it). Replace the bundled
+# doc/help2man with a stub that just writes the --output target, so make and make
+# install succeed without shipping (or depending on) man pages.
+cat > doc/help2man <<'STUB'
+#!/usr/bin/env perl
+# cvcpkg stub — write a minimal page to --output and exit; never runs the target.
+use strict; use warnings;
+my $out;
+while (@ARGV) { local $_ = shift;
+    if (/^--output=(.*)/) { $out = $1 } elsif ($_ eq '-o' or $_ eq '--output') { $out = shift } }
+if (defined $out) { open my $fh, '>', $out or die "$out: $!"; print $fh ".\\\" generated stub\n"; close $fh }
+exit 0;
+STUB
+chmod +x doc/help2man
 
 "${MAKE}" -j "${CVC_JOBS}"
 "${MAKE}" install
+
+# Relocate the installed automake. Like autoconf, `bin/automake` and `bin/aclocal`
+# bake ${CVC_INSTALL_DIR}/share/automake-<ver> as the @INC dir for their Perl
+# modules (Automake::*), so the INSTALLED tool cannot find its own modules once
+# cvcpkg reaps the ephemeral build prefix — it would die "Can't locate
+# Automake/Config.pm in @INC" on every platform. Inject a BEGIN that prepends the
+# real, self-relative module dir (<prefix>/share/automake-<ver>) derived from the
+# tool's own path. Idempotent (guarded by a marker).
+_reloc='BEGIN {
+  # cvcpkg relocation: find our Automake/* modules relative to this script.
+  my $s = $0; $s = "./$s" if $s !~ m{/};
+  (my $p = $s) =~ s{/[^/]+/[^/]+$}{};
+  for my $d (glob("$p/share/automake-*"), glob("$p/share/aclocal-*")) {
+    unshift @INC, $d if -d "$d/Automake" || -d $d;
+  }
+}'
+_relf="$(mktemp "${TMPDIR:-/tmp}/cvcpkg-automake-reloc.XXXXXX")"
+printf '%s\n' "${_reloc}" > "${_relf}"
+for _t in "${CVC_INSTALL_DIR}"/bin/automake* "${CVC_INSTALL_DIR}"/bin/aclocal*; do
+    [ -f "${_t}" ] || continue
+    head -1 "${_t}" | grep -q perl || continue
+    _RELF="${_relf}" perl -0777 -i -pe '
+        BEGIN { local $/; open my $fh, "<", $ENV{"_RELF"} or die $!; our $B = <$fh>; close $fh; }
+        s/(\n)(use warnings[^\n]*;\n)/$1$2\n$B\n/ unless /cvcpkg relocation/;
+    ' "${_t}"
+done
+rm -f "${_relf}"
+grep -q "cvcpkg relocation" "${CVC_INSTALL_DIR}/bin/automake" \
+    || { echo "automake reloc: @INC injection missing from bin/automake" >&2; exit 1; }
