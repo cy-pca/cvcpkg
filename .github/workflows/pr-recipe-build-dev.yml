@@ -1,24 +1,40 @@
-# Build recipes changed in a PR on the internal dev cluster.
+# Build recipes changed in a PR on the internal dev cluster — via catx-03.
 #
-# When a PR touches recipes/, this pushes the changed recipes to the dev
-# cvcpkg-server and submits build DAGs to the dev builders, then comments the
-# per-recipe result back on the PR.  Runs on the self-hosted runner that has
-# incus/LAN access to the dev cluster (same runner deploy-dev.yml uses).
+# The dev cvcpkg-server + builders are NAT'd incus VMs (10.66.77/10.99), not
+# routable from the internet.  Unlike the legacy star-01 runner (which sat ON
+# the incus LAN), the cy-pca org runner is catx-03, which reaches the cluster
+# only through the local gateway over passwordless SSH as the `tfx` user:
+#     catx-03  --ssh-->  tfx@transfix.mdns.org  --routes-->  10.66.77.207:8420
+# So this job opens an SSH local-forward through the gateway and talks to the
+# dev server over the tunnel.  No incus control plane is needed on the runner.
 #
-# Required repo secrets:
-#   CVCPKG_ADMIN_TOKEN  — a token valid on the dev server (publisher or admin)
+# SECURITY — this job runs as `tfx` on catx-03, which has SSH into the whole dev
+# LAN.  On a PUBLIC repo a fork PR that reached this runner would be LAN-wide
+# RCE.  It is therefore gated three ways: self-hosted only, same-repo PRs only,
+# and an actor allowlist; the repo must also require approval for all outside
+# contributors.  Never convert this to pull_request_target.
+#
+# Dormant until enabled: the job self-skips unless vars.DEV_CLUSTER_ENABLED is
+# 'true', so it can be merged before the dev runner/token exist without firing.
+#
+# Required repo config to enable:
+#   vars.DEV_CLUSTER_ENABLED = true
+#   secrets.CVCPKG_ADMIN_TOKEN  — token valid on the DEV server (publisher/admin)
+#   vars.DEV_GATEWAY_SSH        — e.g. tfx@transfix.mdns.org
+#   vars.DEV_CVCPKG_SERVER      — e.g. 10.66.77.207:8420  (host:port on the LAN)
+#   vars.CI_ALLOWED_ACTORS      — comma list, e.g. ,transfix,
+# Runner: catx-03-cy-pca must run as `tfx` and carry the label `cvcpkg-dev-gw`.
 
 name: PR recipe build (dev cluster)
 
-# Relocated repo (cy-pca/cvcpkg): per-PR recipe builds ran on the transfix dev
-# cluster (self-hosted 'star-01'), which does not exist in cy-pca.  Disabled as
-# an auto-trigger here so PRs don't queue forever on a missing runner; the dev
-# recipe-build plane stays on transfix/libcvc-deps.  Manual dispatch only.
 on:
+  pull_request:
+    paths:
+      - "recipes/**"
   workflow_dispatch:
 
 concurrency:
-  group: pr-recipe-dev-${{ github.event.pull_request.number }}
+  group: pr-recipe-dev-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -27,19 +43,24 @@ permissions:
 
 jobs:
   build-on-dev:
-    # Same-repo PRs only: fork PRs must not reach the self-hosted runner or
-    # the dev cluster secrets.
-    if: github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, Linux, star-01]
-    # Backstop only — a healthy run is push + a handful of dev builds
-    # (~5-15 min).  45 min covers the worst legitimate case (builder-
-    # registry read fails at submit → jobs pend until the server's
-    # 30-min unschedulable reap, which --wait now treats as terminal).
+    # Dormant unless explicitly enabled; then same-repo PRs + actor allowlist
+    # only (or manual dispatch).  Fork PRs must never reach this self-hosted
+    # host or the dev-cluster token.
+    if: >-
+      vars.DEV_CLUSTER_ENABLED == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.pull_request.head.repo.full_name == github.repository &&
+        contains(format(',{0},', vars.CI_ALLOWED_ACTORS), format(',{0},', github.actor))))
+    runs-on: [self-hosted, Linux, X64, cvcpkg-dev-gw]
     timeout-minutes: 45
+    env:
+      GW: ${{ vars.DEV_GATEWAY_SSH }}
+      DEV_SERVER: ${{ vars.DEV_CVCPKG_SERVER }}
+      LOCAL_PORT: "18420"
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 0 # need the base ref for the diff
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -54,40 +75,36 @@ jobs:
         id: changed
         run: |
           set -euo pipefail
-          git fetch -q origin "${{ github.base_ref }}"
+          git fetch -q origin "${{ github.base_ref }}" || true
+          base="origin/${{ github.base_ref }}"
+          git rev-parse --verify -q "$base" >/dev/null || base="HEAD~1"
           mapfile -t touched < <(
-            git diff --name-only "origin/${{ github.base_ref }}...HEAD" -- recipes/ \
+            git diff --name-only "${base}...HEAD" -- recipes/ \
               | grep -E '^recipes/[^/]+/' | cut -d/ -f2 | grep -v '^_' | sort -u
           )
-          # _common/ and other _-prefixed dirs are shared helpers, not
-          # recipes — they ship inside every recipe bundle instead.
-          #
-          # git diff lists deleted paths too, so a PR that removes or renames a
-          # recipe (e.g. collapsing per-interpreter -cpNNN wheels into one) would
-          # otherwise try to build a directory that no longer exists. Keep only
-          # recipes still present in the tree.
           names=()
-          for r in "${touched[@]}"; do
-            [ -d "recipes/$r" ] && names+=("$r")
-          done
+          for r in "${touched[@]}"; do [ -d "recipes/$r" ] && names+=("$r"); done
           echo "Changed recipes: ${names[*]:-<none>}"
-          # space-joined for the CLI, newline-joined for the report
           printf 'names=%s\n' "${names[*]:-}" >> "$GITHUB_OUTPUT"
 
-      - name: Resolve dev server URL + DAG id
-        id: dev
+      - name: Open SSH tunnel to the dev server
+        id: tunnel
         if: steps.changed.outputs.names != ''
         run: |
           set -euo pipefail
-          IP=$(incus list cvcpkg-server -c4 -fcsv | tr -d '"' | tr ',' '\n' | awk '{print $1}' | grep -E '^10\.' | head -1)
-          test -n "$IP" || { echo "::error::could not resolve dev cvcpkg-server IP"; exit 1; }
-          # Persist to $GITHUB_ENV (not just outputs) so the cancelled() cleanup
-          # step below still has them if a later step is mid-cancelled.
-          echo "DEV_URL=http://${IP}:8420" >> "$GITHUB_ENV"
-          # A per-RUN dag id (run_id, not a wall-clock stamp): the cleanup cancels
-          # exactly THIS run's sub-DAGs.  A PR-wide prefix would let a superseding
-          # run's cleanup cancel the fresh run's jobs (same PR number).
-          dag="pr-${{ github.event.pull_request.number }}-${{ github.run_id }}"
+          # Local-forward LOCAL_PORT -> DEV_SERVER, routed by the gateway.
+          # ExitOnForwardFailure makes a bad forward fail loudly instead of
+          # leaving a dead tunnel; -f backgrounds after the forward is up.
+          ssh -f -N \
+            -o BatchMode=yes -o ConnectTimeout=10 \
+            -o ExitOnForwardFailure=yes \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+            -o StrictHostKeyChecking=accept-new \
+            -L "127.0.0.1:${LOCAL_PORT}:${DEV_SERVER}" "${GW}"
+          echo "DEV_URL=http://127.0.0.1:${LOCAL_PORT}" >> "$GITHUB_ENV"
+          # Prove the tunnel before submitting anything.
+          curl -fsS --max-time 8 "http://127.0.0.1:${LOCAL_PORT}/healthz" | grep -q '"ok"'
+          dag="pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_id }}"
           echo "DAG_BASE=${dag:0:50}" >> "$GITHUB_ENV"
 
       - name: Push + build changed recipes on dev
@@ -99,79 +116,34 @@ jobs:
           NAMES: ${{ steps.changed.outputs.names }}
         run: |
           set -uo pipefail
-          echo "Dev server: $CVCPKG_SERVER_URL   DAG: $DAG_BASE"
-
-          # 1. Push each changed recipe to the dev server.
+          echo "Dev server (tunnelled): $CVCPKG_SERVER_URL   DAG: $DAG_BASE"
           for r in $NAMES; do
             echo "::group::push $r"
             cvcpkg recipe push "$r" --recipes-dir recipes \
               --server "$CVCPKG_SERVER_URL" --token "$CVCPKG_TOKEN"
             echo "::endgroup::"
           done
-
-          # 2. Submit a build DAG across every platform the dev cluster might
-          #    serve.  By default submit-dag skips combos no registered dev
-          #    builder can serve (it reads the builder registry up front), so
-          #    platforms like the BSDs simply don't produce jobs here.  Do NOT
-          #    add --allow-unschedulable: it force-submits those combos, whose
-          #    jobs then sit pending until the server's 30-min unschedulable
-          #    reap — that flag is for queues drained by ephemeral builders
-          #    (e.g. macos-drain), not for a --wait CI check (pr-223, pr-226).
-          #
-          # --skip-existing: a published variant is immutable, so never rebuild
-          #    one.  This is what makes a prose-only recipe edit a no-op (version
-          #    unchanged -> variant already published -> skipped) and stops stable
-          #    heavy recipes (llvm) rebuilding every time something in their
-          #    subtree changes.
-          # --wait-timeout: a genuinely NEW heavy recipe (a first llvm build, ~2h
-          #    at the cluster's -j2) cannot finish inside a CI window.  Rather than
-          #    let the 45-min job timeout SIGKILL the wait -- which orphans the
-          #    queued jobs -- stop waiting at 25 min.  A failure is still reported
-          #    (exit 1); "still building, nothing failed" exits 75, which we treat
-          #    as a soft pass (the build finishes on the cluster and is picked up
-          #    by --skip-existing next time).
           set +e
           cvcpkg builds submit-dag \
             --server "$CVCPKG_SERVER_URL" --token "$CVCPKG_TOKEN" \
             --platform linux,freebsd,openbsd,netbsd,windows,wasm,wasi \
-            --arch x86_64,wasm32 \
-            --config release --link shared \
-            --recipes-dir recipes \
-            --dag-id "$DAG_BASE" \
-            --skip-existing \
-            --wait --wait-timeout 1500 \
+            --arch x86_64,wasm32 --config release --link shared \
+            --recipes-dir recipes --dag-id "$DAG_BASE" \
+            --skip-existing --wait --wait-timeout 1500 \
             $NAMES | tee build.log
           rc=$?
           set -e
           echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
-          # On failure, append the tail of each failed job's build log so the PR
-          # comment says WHY; the status lines alone only say which platform.
-          # The log is only reachable from this runner (dev server is on the
-          # incus LAN), so this is the one place it can be surfaced.
           if [ "$rc" != "0" ] && [ "$rc" != "75" ]; then
             for id in $(grep -oE '#[0-9]+ [^ ]+ [(][^)]+[)]: failed' build.log | grep -oE '^#[0-9]+' | tr -d '#' | sort -u); do
-              {
-                echo ""
-                echo "===== job #$id: last 80 log lines ====="
-                cvcpkg builds log "$id" --server "$CVCPKG_SERVER_URL" --token "$CVCPKG_TOKEN" 2>&1 | tail -n 80
-              } >> build.log || true
+              { echo ""; echo "===== job #$id: last 80 log lines ====="; \
+                cvcpkg builds log "$id" --server "$CVCPKG_SERVER_URL" --token "$CVCPKG_TOKEN" 2>&1 | tail -n 80; } >> build.log || true
             done
           fi
-          # 75 = submitted OK, still building past the window -> soft pass.
-          if [ "$rc" = "75" ]; then
-            echo "status=building" >> "$GITHUB_OUTPUT"
-            exit 0
-          elif [ "$rc" = "0" ]; then
-            echo "status=passed" >> "$GITHUB_OUTPUT"
-          else
-            echo "status=failed" >> "$GITHUB_OUTPUT"
-            exit "$rc"
-          fi
+          if [ "$rc" = "75" ]; then echo "status=building" >> "$GITHUB_OUTPUT"; exit 0
+          elif [ "$rc" = "0" ]; then echo "status=passed" >> "$GITHUB_OUTPUT"
+          else echo "status=failed" >> "$GITHUB_OUTPUT"; exit "$rc"; fi
 
-      # Cancel THIS run's queued jobs when the run is cancelled (a new push
-      # supersedes it, or a manual cancel).  Scoped to $DAG_BASE so it never
-      # touches a superseding run's jobs.  Running jobs are left to finish (they
-      # publish and get reused).  Not needed on normal/soft-pass completion.
       - name: Cancel superseded DAG jobs
         if: cancelled() && steps.changed.outputs.names != ''
         env:
@@ -180,35 +152,25 @@ jobs:
         run: |
           set -uo pipefail
           [ -n "${DAG_BASE:-}" ] && [ -n "${CVCPKG_SERVER_URL:-}" ] || exit 0
-          cvcpkg builds cancel-dag "${DAG_BASE}-*" \
-            --server "$CVCPKG_SERVER_URL" --token "$CVCPKG_TOKEN" || true
+          cvcpkg builds cancel-dag "${DAG_BASE}-*" --server "$CVCPKG_SERVER_URL" --token "$CVCPKG_TOKEN" || true
+
+      - name: Close SSH tunnel
+        if: always()
+        run: pkill -f "127.0.0.1:${LOCAL_PORT}:${DEV_SERVER}" || true
 
       - name: Comment result on PR
-        if: always() && steps.changed.outputs.names != ''
+        if: always() && steps.changed.outputs.names != '' && github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -uo pipefail
           case "${{ steps.build.outputs.status || 'failed' }}" in
             passed)   status="✅ passed" ;;
-            building) status="⏳ submitted — still building on the cluster (see log); not blocking" ;;
+            building) status="⏳ submitted — still building on the cluster; not blocking" ;;
             *)        status="❌ failed" ;;
           esac
-          {
-            echo "### Dev-cluster recipe build — $status"
-            echo ""
-            echo "Recipes: \`${{ steps.changed.outputs.names }}\`"
-            echo ""
-            echo "<details><summary>build log</summary>"
-            echo ""
-            echo '```'
-            tail -c 60000 build.log 2>/dev/null || echo "(no log)"
-            echo '```'
-            echo "</details>"
-          } > comment.md
-          if command -v gh >/dev/null 2>&1; then
-            gh pr comment "${{ github.event.pull_request.number }}" --body-file comment.md
-          else
-            echo "::warning::gh CLI not on this runner; skipping PR comment"
-            cat comment.md
-          fi
+          { echo "### Dev-cluster recipe build — $status"; echo ""; \
+            echo "Recipes: \`${{ steps.changed.outputs.names }}\`"; echo ""; \
+            echo "<details><summary>build log</summary>"; echo ""; echo '```'; \
+            tail -c 60000 build.log 2>/dev/null || echo "(no log)"; echo '```'; echo "</details>"; } > comment.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file comment.md || cat comment.md

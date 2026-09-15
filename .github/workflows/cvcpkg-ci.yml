@@ -94,6 +94,16 @@ jobs:
             --junitxml=integration-results.xml \
             --cov=cvcpkg --cov-branch --cov-append --cov-report=xml:coverage.xml
 
+      # Coverage gate: enforced on the primary cell only (ubuntu / 3.12) so
+      # OS-/version-specific skips don't cause spurious threshold failures.
+      # Threshold is vars.COVERAGE_MIN (default 80).  .coverage is the combined
+      # unit+integration data written by the two --cov-append pytest runs above.
+      - name: Coverage gate
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        working-directory: .
+        shell: bash
+        run: poetry run coverage report --fail-under=${{ vars.COVERAGE_MIN || '80' }}
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
