@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
-# recipes/ffmpeg/build.sh — build FFmpeg shared libraries on Linux/macOS/BSD.
+# recipes/ffmpeg/build.sh — build FFmpeg shared libraries AND the
+# ffmpeg/ffprobe programs on Linux/macOS/BSD.
 #
-# Builds a feature-rich LGPL set: external codecs (Opus, MP3, Vorbis, VP8/VP9,
-# AV1), image formats (WebP, JPEG, PNG), OpenSSL for HTTPS, subtitle rendering
-# (freetype, fontconfig, fribidi), and PulseAudio on Linux.  GPL features and
-# non-free codecs (x264, x265, fdk-aac) are excluded.
+# Builds a feature-rich GPL set: H.264 (x264) and H.265 (x265), external codecs
+# (Opus, MP3, Vorbis, VP8/VP9, AV1), image formats (WebP, JPEG, PNG), OpenSSL
+# for HTTPS, subtitle rendering (freetype, fontconfig, fribidi), and PulseAudio
+# on Linux.  Non-free codecs (fdk-aac) are excluded.
+#
+# Nothing restricts components, so every muxer, demuxer, filter and protocol
+# FFmpeg can build is present.  There is no --enable-programs: the binaries are
+# on by default and only --disable-programs exists, so NOT passing it is what
+# ships them.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -23,7 +29,6 @@ CONFIGURE_ARGS=(
     --enable-gpl
     --enable-pic
     --enable-version3
-    --disable-programs
     --disable-doc
     --disable-debug
     --disable-static
@@ -37,10 +42,13 @@ CONFIGURE_ARGS=(
     --enable-libvorbis
     --enable-libvpx
     --enable-libdav1d
-    # Image formats
+    # Image formats.  JPEG and PNG are NATIVE in FFmpeg — mjpeg is built in and
+    # png goes through zlib — so there is no --enable-libjpeg or
+    # --enable-libpng.  configure aborts with 'Unknown option' on either, which
+    # is why this recipe had never produced a build on any platform.  The real
+    # external-JPEG option is --enable-libopenjpeg (JPEG 2000); cvcpkg has no
+    # openjpeg recipe, so it is not requested here.
     --enable-libwebp
-    --enable-libjpeg
-    --enable-libpng
     # Subtitle rendering
     --enable-libfreetype
     --enable-libfribidi
@@ -57,7 +65,6 @@ if [[ "${CVC_LINK:-shared}" == "static" ]]; then
         --enable-gpl
         --enable-pic
         --enable-version3
-        --disable-programs
         --disable-doc
         --disable-debug
         --enable-static
@@ -70,8 +77,6 @@ if [[ "${CVC_LINK:-shared}" == "static" ]]; then
         --enable-libvpx
         --enable-libdav1d
         --enable-libwebp
-        --enable-libjpeg
-        --enable-libpng
         --enable-libfreetype
         --enable-libfribidi
         --enable-openssl
@@ -81,14 +86,31 @@ if [[ "${CVC_LINK:-shared}" == "static" ]]; then
     )
 fi
 
+# The deps prefix must reach configure's own probes. pkg-config-covered libs
+# get their -I/-L appended as each check succeeds, but libmp3lame ships no .pc
+# file, so its bare `-lmp3lame` link test finds nothing without an explicit
+# -L — configure then aborts "libmp3lame >= 3.98.3 not found" even though the
+# library is right there. (ffmpeg's configure appends repeated --extra-* flags,
+# so the macOS rpath addition below still composes with these.)
+CONFIGURE_ARGS+=(
+    --extra-cflags="-I${CVC_DEPS_PREFIX}/include"
+    --extra-ldflags="-L${CVC_DEPS_PREFIX}/lib"
+)
+
 # fontconfig is Linux/BSD/macOS only (no Windows port in cvcpkg).
 if [[ "${CVC_PLATFORM}" != "windows" ]]; then
     CONFIGURE_ARGS+=(--enable-libfontconfig)
 fi
 
-# PulseAudio is Linux-only.
+# PulseAudio is Linux-only. libpulse.so pulls in libpulsecommon-<ver>.so via
+# DT_NEEDED, and that private helper lives in lib/pulseaudio/, not lib/. At the
+# final ffmpeg link ld follows libpulse's NEEDED entries to resolve its symbols
+# and can't find libpulsecommon on the search path — every pa_* comes back
+# "undefined reference". -rpath-link points ld at the subdir for this secondary
+# lookup without touching the shipped binary's runtime rpath.
 if [[ "${CVC_PLATFORM}" == "linux" ]]; then
     CONFIGURE_ARGS+=(--enable-libpulse)
+    CONFIGURE_ARGS+=(--extra-ldflags="-Wl,-rpath-link,${CVC_DEPS_PREFIX}/lib/pulseaudio")
 fi
 
 # FFmpeg's configure hard-defaults its C compiler to "gcc" and does not
@@ -176,3 +198,43 @@ fi
 
 # Make installed .pc files relocatable.
 cvc_rewrite_install_paths
+
+# Prove the codec set rather than trusting configure — a missing external codec
+# does not fail the build, it just silently drops the encoder.  Run the freshly
+# installed binary out of the install dir, with the sibling shared libs on the
+# loader path (the RPATH stamped above is $ORIGIN-relative, so this works
+# without installing anything system-wide).
+_ff="${CVC_INSTALL_DIR}/bin/ffmpeg"
+[[ -x "${_ff}" ]] || { echo "cvcpkg: no ffmpeg binary produced at ${_ff}" >&2; exit 1; }
+[[ -x "${CVC_INSTALL_DIR}/bin/ffprobe" ]] || { echo "cvcpkg: no ffprobe binary produced" >&2; exit 1; }
+
+# The deps prefix must be on the loader path too: the external codec libs
+# (libx264.so, libmp3lame.so, ...) live there, and on a split-prefix builder a
+# binary that cannot load them produces no output at all — the encoder greps
+# below would then misreport "missing encoder" when the binary never started.
+if [[ "${CVC_PLATFORM}" == "macos" ]]; then
+    export DYLD_LIBRARY_PATH="${CVC_INSTALL_DIR}/lib:${CVC_DEPS_PREFIX}/lib${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
+else
+    # lib/pulseaudio too: libpulse.so needs libpulsecommon from that subdir, and
+    # it is reached via LD_LIBRARY_PATH for this in-tree smoke run (the shipped
+    # ffmpeg relies on libpulse.so's own rpath, which is libpulse's concern).
+    export LD_LIBRARY_PATH="${CVC_INSTALL_DIR}/lib:${CVC_DEPS_PREFIX}/lib:${CVC_DEPS_PREFIX}/lib/pulseaudio${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+fi
+
+_encoders="$("${_ff}" -hide_banner -encoders 2>&1)"
+for _want in libx264 libx265 libopus libmp3lame libvorbis libvpx libwebp; do
+    grep -q -- "${_want}" <<<"${_encoders}" || {
+        echo "cvcpkg: built ffmpeg is missing the ${_want} encoder" >&2; exit 1; }
+done
+
+# Match on the NAME column only — a substring test would let "scale2ref" or
+# "zscale" satisfy a check for "scale".
+# Layout is "<flags> <name> <signature> <description>", e.g. "... hstack VV->V ...",
+# so the signature column is what identifies a real filter row and $2 is its name.
+_filters="$("${_ff}" -hide_banner -filters 2>&1 | awk '$3 ~ /->/ {print $2}')"
+for _want in scale format fps hstack vstack overlay pad crop setpts; do
+    grep -qx -- "${_want}" <<<"${_filters}" || {
+        echo "cvcpkg: built ffmpeg is missing the ${_want} filter" >&2; exit 1; }
+done
+
+echo "cvcpkg: $("${_ff}" -version 2>&1 | head -n1) — full codec set + programs OK"
