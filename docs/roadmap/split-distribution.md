@@ -1265,8 +1265,10 @@ The packager is a single Python entry point
    matrix-entry script.
 4. After the script returns, runs the `test.script` (if any)
    against `$CVC_INSTALL_DIR`.
-5. Copies the subset described by `package.files` into a staging
-   directory, generates `share/libcvc-deps/manifest.yaml` from
+5. Copies the install tree into a staging directory (the whole
+   tree — `package.files` turned out to be declarative rather than
+   a filter; it is verified against the staged tree, not applied to
+   it), generates `share/libcvc-deps/manifest.yaml` from
    `recipe.yaml` + measured file lists + probed upstream version,
    archives the staging directory, and emits sha256 + size.
 
@@ -1364,7 +1366,8 @@ same thing CI will execute on merge.
      §3.3's component table).
   2. For each component, invokes `cvcpkg pack recipes/<name>`
      (§7.5), which executes the recipe's build script(s), stages
-     the install subset declared in `package.files`, and
+     the install tree (all of it — `package.files` declares and is
+     verified against that tree rather than selecting from it), and
      archives it.
   3. Generates `share/libcvc-deps/manifest.yaml` from the
      recipe's `recipe.yaml` + measured file lists + upstream-
