@@ -126,7 +126,12 @@ jobs:
           retention-days: 1
 
   # ─────────────────── BSD builds via SSH ──────────────────────
+  # Relocated repo (cy-pca/cvcpkg): the BSD cross-build SSHes from the transfix
+  # 'cvcpkg-builder' host to internal BSD machines — infra that does not exist
+  # in cy-pca.  Gated off by default; set repo variable ENABLE_BSD_BUILDS=true
+  # once a cy-pca builder with BSD SSH access is provisioned.
   build-bsd:
+    if: vars.ENABLE_BSD_BUILDS == 'true'
     name: Build (${{ matrix.os }})
     runs-on: ["self-hosted", "Linux", "X64", "cvcpkg-builder"]
     strategy:

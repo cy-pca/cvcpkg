@@ -10,10 +10,12 @@
 
 name: PR recipe build (dev cluster)
 
+# Relocated repo (cy-pca/cvcpkg): per-PR recipe builds ran on the transfix dev
+# cluster (self-hosted 'star-01'), which does not exist in cy-pca.  Disabled as
+# an auto-trigger here so PRs don't queue forever on a missing runner; the dev
+# recipe-build plane stays on transfix/libcvc-deps.  Manual dispatch only.
 on:
-  pull_request:
-    paths:
-      - "recipes/**"
+  workflow_dispatch:
 
 concurrency:
   group: pr-recipe-dev-${{ github.event.pull_request.number }}

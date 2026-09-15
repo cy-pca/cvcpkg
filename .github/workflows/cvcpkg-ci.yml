@@ -231,7 +231,9 @@ jobs:
       (github.event.pull_request.head.repo.full_name == github.repository &&
        contains(format(',{0},', vars.CI_ALLOWED_ACTORS), format(',{0},', github.actor)))
     needs: [test, validate, lint]
-    runs-on: [self-hosted, Linux, cvcpkg-prod]
+    # cy-pca org runner (catx-03-cy-pca) provides Docker.  The same-repo +
+    # actor-allowlist gate above keeps fork PRs off this self-hosted host.
+    runs-on: [self-hosted, Linux, X64, docker]
     # The isolated `docker-container` builder below trades a little speed for not
     # sharing a content store with the rest of the host: a cold buildkit plus the
     # `--no-cache` rebuild of three images runs slower than the shared warm one,

@@ -24,10 +24,10 @@
 
 name: macOS drain queue
 
+# Relocated repo (cy-pca/cvcpkg): the macOS build-queue drain runs from
+# transfix/libcvc-deps, which owns the build plane.  The schedule is disabled
+# here to avoid two drains competing for the same queue; manual dispatch only.
 on:
-  schedule:
-    # Every 2 hours, at :17 past (offset from the top of the hour).
-    - cron: "17 */2 * * *"
   workflow_dispatch:
     inputs:
       server:
