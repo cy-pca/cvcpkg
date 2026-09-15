@@ -223,12 +223,18 @@ function Get-CvcGitBash {
     # Return a bash.exe that has (or can find) mingw-w64 gcc + make +
     # autotools on its PATH.  Priority order:
     #   1. CVC_MSYS2_DIR env var (manual override)
-    #   2. CVC_DEPS_PREFIX\msys2 (installed by the msys2 cvcpkg recipe)
-    #   3. Well-known MSYS2 system paths (C:\msys64, C:\tools\msys64)
-    #   4. Git Bash fallback (no MinGW — usable only for non-compile scripts)
+    #   2. CVC_BUILD_PREFIX\msys2 (host_tools are staged into the BUILD
+    #      prefix -- see cli/_build.py -- so on a split-prefix host this is
+    #      where a host_tools msys2 lands, and it was previously not searched)
+    #   3. CVC_DEPS_PREFIX\msys2 (installed by the msys2 cvcpkg recipe)
+    #   4. Well-known MSYS2 system paths (C:\msys64, C:\tools\msys64)
+    #   5. Git Bash fallback (no MinGW — usable only for non-compile scripts)
     $candidates = [System.Collections.Generic.List[string]]@()
     if ($env:CVC_MSYS2_DIR) {
         $candidates.Add((Join-Path $env:CVC_MSYS2_DIR 'usr\bin\bash.exe'))
+    }
+    if ($env:CVC_BUILD_PREFIX) {
+        $candidates.Add((Join-Path $env:CVC_BUILD_PREFIX 'msys2\usr\bin\bash.exe'))
     }
     if ($env:CVC_DEPS_PREFIX) {
         $candidates.Add((Join-Path $env:CVC_DEPS_PREFIX 'msys2\usr\bin\bash.exe'))
@@ -286,8 +292,20 @@ function Invoke-CvcMsysAutotoolsBuild {
     $bash        = Get-CvcGitBash
     $msysPrefix  = ConvertTo-CvcMsysPath $env:CVC_INSTALL_DIR
     $msysSource  = ConvertTo-CvcMsysPath $env:CVC_SOURCE_DIR
-    $msysDeps    = if ($env:CVC_DEPS_PREFIX) { ConvertTo-CvcMsysPath $env:CVC_DEPS_PREFIX } else { '' }
-    $depsFlag    = if ($msysDeps) { "PATH='$msysDeps/bin:'`$PATH" } else { '' }
+    # Search the BUILD prefix first, then the deps prefix. host_tools (the
+    # MinGW compiler, m4, ...) are staged into CVC_BUILD_PREFIX, deliberately
+    # not the runtime prefix; searching only CVC_DEPS_PREFIX made a correctly
+    # declared host_tool invisible. Same reasoning as recipes/x264/build.ps1.
+    $toolRoots     = @($env:CVC_BUILD_PREFIX, $env:CVC_DEPS_PREFIX) | Where-Object { $_ }
+    $msysToolPaths = ($toolRoots | ForEach-Object { (ConvertTo-CvcMsysPath $_) + '/bin' }) -join ':'
+
+    # `PATH=... cd dir && ./configure` scopes the assignment to `cd` ALONE --
+    # cd is a regular builtin, so the prefix does NOT survive into the commands
+    # after &&. configure and make then ran with the original PATH and never
+    # saw the staged tools. Export it so it persists for the whole command
+    # line. recipes/x264/build.ps1 hit this exact trap with nasm and fixed it
+    # locally; this is that fix, moved to the shared helper where it belongs.
+    $depsFlag      = if ($msysToolPaths) { "export PATH='${msysToolPaths}:'`$PATH; " } else { '' }
 
     # Force the MinGW-w64 64-bit subsystem so that /mingw64/bin
     # (gcc, make, libtool, autoconf, m4, ...) is on the shell PATH.
@@ -296,7 +314,21 @@ function Invoke-CvcMsysAutotoolsBuild {
     # prevents MSYS from mangling Windows-style arguments passed to
     # non-MSYS binaries invoked from configure/libtool.
     $env:MSYSTEM         = 'MINGW64'
-    $env:MSYS_NO_PATHCONV = '1'
+    # MSYS_NO_PATHCONV is deliberately NOT set here.
+    #
+    # It suppresses MSYS's POSIX->Windows argument translation, which breaks
+    # libtool: when linking a shared library from convenience archives libtool
+    # runs `cd .libs/<lib>.lax/<x>.a && ar x "/c/Users/.../<x>.a"`, handing a
+    # /c/... path to mingw64's ar.exe -- a NATIVE Win32 binary that cannot read
+    # it. gsl got all the way through configure, every object and the final
+    # link before dying there:
+    #     ar.exe: /c/Users/.../block/.libs/libgslblock.a: No such file or directory
+    #     make[2]: *** [Makefile:827: libgsl.la] Error 9
+    # Leaving conversion enabled lets MSYS rewrite that to C:\Users\... for the
+    # native tool, which is the behaviour autotools builds expect on MSYS2.
+    #
+    # MSYS2_ARG_CONV_EXCL is the knob to reach for if a specific argument ever
+    # needs excluding from conversion; blanket-disabling it is what broke this.
     $env:CHERE_INVOKING  = '1'
 
     # Clear MSVC compiler env inherited from the outer PowerShell
@@ -327,9 +359,43 @@ function Invoke-CvcMsysAutotoolsBuild {
     # automake, libtool) declared as host_tools in the calling recipe.
     # The $depsFlag prepends CVC_DEPS_PREFIX/bin so shim wrappers installed
     # by those recipes are found before any system copies.
-    $probe = & $bash -lc "$depsFlag command -v m4 >/dev/null && command -v libtool >/dev/null && command -v autoconf >/dev/null && command -v automake >/dev/null && command -v make >/dev/null && echo OK"
-    if ($probe -notmatch 'OK') {
-        throw 'MSYS2 autotools tools (m4, autoconf, automake, libtool, make) not found. Declare them as host_tools in recipe.yaml.'
+    Write-Host "cvcpkg: msys bash  = $bash"
+    Write-Host "cvcpkg: msys PATH+ = $msysToolPaths"
+
+    # Probe the compiler autotools will ACTUALLY invoke. ./configure
+    # --host=<triple> makes libtool call <triple>-gcc, so probing plain `gcc`
+    # is not enough: a toolchain providing only `gcc` passes the guard and then
+    # dies inside make with
+    #     ../libtool: line 1931: x86_64-w64-mingw32-gcc: command not found
+    # which is exactly the opaque failure this guard exists to prevent.
+    $probeCmd = "$depsFlag" + "for t in m4 libtool autoconf automake make gcc $HostTriple-gcc; do " +
+                'command -v $t >/dev/null || { echo "MISSING:$t"; }; done; echo PROBED'
+    $probe = & $bash -lc $probeCmd
+    $probeText = ($probe | Out-String)
+    $missing = [regex]::Matches($probeText, 'MISSING:(\S+)') |
+               ForEach-Object { $_.Groups[1].Value }
+
+    # NOTE on the comparison below. This guard used to read
+    #     if ($probe -notmatch 'OK') { throw ... }
+    # and it NEVER fired -- which is why a missing toolchain surfaced two
+    # steps later as configure's misleading "could not find a working
+    # compiler" instead of naming the actual problem. When the probe finds
+    # nothing it emits no stdout, so $probe is AutomationNull; `-notmatch`
+    # against that returns an EMPTY Object[], and `if` treats an empty array
+    # as false. Verified on pwsh 7.4.6:
+    #     $p = & bash -c "command -v nosuchtool >/dev/null && echo OK"
+    #     ($p -notmatch 'OK')   ->  Object[] with Count 0   =>  if() is FALSE
+    #     (-not ($p -match 'OK')) ->  True                  =>  fires
+    # Always test a scalar boolean here, never `-notmatch` on a possibly-null
+    # command result.
+    if (-not ($probeText -match 'PROBED') -or $missing.Count -gt 0) {
+        $what = if ($missing.Count -gt 0) { $missing -join ', ' } else { 'the probe produced no output' }
+        throw ("MSYS2/MinGW toolchain incomplete under $bash -- missing: $what.`n" +
+               "Searched PATH prefix: $msysToolPaths`n" +
+               "Fix by either (a) declaring the toolchain in the recipe's " +
+               "depends.host_tools (e.g. mingw-w64-gcc), or (b) provisioning " +
+               "MSYS2 packages on the runner -- see the 'Provision MSYS2 " +
+               "toolchain' step in .github/workflows/windows-build.yml.")
     }
 
     # Build one big command line for bash; the caller-provided extras

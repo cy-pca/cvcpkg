@@ -149,6 +149,46 @@ jobs:
             if ($dir) { echo $dir | Out-File -Append -Encoding utf8 $env:GITHUB_PATH }
           }
 
+      # ── MSYS2 autotools toolchain ────────────────────────────────────
+      # The hosted windows image ships MSYS2 at C:\msys64, but only the bare
+      # `base` package group -- no gcc, no binutils, no make, no m4, no
+      # autotools (see runner-images toolset-2022.json: "MsysPackages" lists
+      # msys2: [] / mingw: []). Recipes that build through
+      # Invoke-CvcMsysAutotoolsBuild (gmp, mpfr, gsl, aspell, iconv, idn2,
+      # libffi, libunistring) therefore have no compiler.
+      #
+      # This used to be self-healing: the helper pacman-installed these itself
+      # until #169 (18602ba6, 2026-07-07) removed that in favour of declaring
+      # them as host_tools. Only mingw-w64-gcc is actually publishable that
+      # way today -- make/m4/autoconf/automake/libtool have Windows matrix
+      # entries but no bundles, and cannot bootstrap (recipes/make/build.ps1
+      # needs make to build make). So the autotools half is provisioned here,
+      # and the compiler half comes from host_tools in the recipe.
+      #
+      # Every Windows bundle for those recipes predates the helper, which is
+      # why gmp/mpfr/gsl sat at +cvc.1 while linux moved to +cvc.8/5/4.
+      - name: Provision MSYS2 toolchain
+        shell: powershell
+        run: |
+          $msys = 'C:\msys64'
+          if (-not (Test-Path "$msys\usr\bin\pacman.exe")) {
+            throw "MSYS2 not found at $msys on this runner image."
+          }
+          & "$msys\usr\bin\pacman.exe" -Sy --noconfirm
+          & "$msys\usr\bin\pacman.exe" -S --noconfirm --needed `
+              base-devel m4 autoconf automake libtool make patch diffutils `
+              mingw-w64-x86_64-gcc mingw-w64-x86_64-binutils mingw-w64-x86_64-pkgconf
+          if ($LASTEXITCODE -ne 0) { throw "pacman failed with $LASTEXITCODE" }
+          # Fail loudly here rather than letting ./configure report the
+          # useless "could not find a working compiler" three steps later.
+          $probe = & "$msys\usr\bin\bash.exe" -lc 'for t in m4 libtool autoconf automake make; do command -v $t >/dev/null || echo "MISSING:$t"; done; echo PROBED'
+          $text = ($probe | Out-String)
+          Write-Host $text
+          if (($text -notmatch 'PROBED') -or ($text -match 'MISSING:')) {
+            throw "MSYS2 autotools provisioning did not take: $text"
+          }
+          echo "CVC_MSYS2_DIR=$msys" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
       - name: Ensure pwsh is on PATH
         shell: bash
         run: |
@@ -196,12 +236,18 @@ jobs:
               # already in --prefix (single-prefix model). Install the recipe's
               # build+runtime closure first, or its build.ps1 can't find python/
               # qt/llvm/etc. Host tools (cmake/ninja) come from the CI image.
+              # --include-host-tools: recipes that build through MSYS2 declare
+              # their compiler as a host_tool (mingw-w64-gcc). Without this the
+              # pinned toolchain is never staged into the prefix and the build
+              # silently falls back to whatever ambient gcc exists -- or, on a
+              # bare runner, to none at all.
               cvcpkg install-deps "recipes/$r" \
                 --platform windows \
                 --config "${{ inputs.config }}" \
                 --link "${{ inputs.link }}" \
                 --prefix "${{ github.workspace }}/prefix" \
-                --recipes-dir recipes
+                --recipes-dir recipes \
+                --include-host-tools
               echo "::endgroup::"
               echo "::group::pack $r (windows)"
               cvcpkg pack "recipes/$r" \

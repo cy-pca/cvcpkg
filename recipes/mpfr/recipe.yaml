@@ -22,10 +22,32 @@ patches: []
 
 depends:
   build:
-    - make
+    # Scoped away from windows: there is no `make` bundle for windows in the
+    # catalog, and build.ps1 does not want one -- it builds through MSYS2's
+    # MinGW-w64 gcc / GNU make / m4, which it sets up itself. Unscoped, this
+    # made `cvcpkg install-deps recipes/mpfr --platform windows` fail outright
+    # with "no bundles found in catalog for this platform tuple", which is
+    # what blocked publishing the windows-debug bundles.
+    - name: make
+      platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasi, cosmo]
   runtime:
     - name: gmp
       version: ">=6.1.0"
+  # NOT declaring mingw-w64-gcc here, though the Windows build needs it.
+  # host_tools is `array of string` in the schema -- unlike a normal dep entry
+  # it cannot be platform-scoped -- and mingw-w64-gcc is published for windows
+  # ONLY. Unscoped it breaks every other platform:
+  #     cvcpkg install-deps recipes/gsl --platform linux --include-host-tools
+  #     Error: requested component(s) not found in the catalog for this
+  #     platform tuple: mingw-w64-gcc
+  # which is the same trap the `make` dep above was scoped away from, in the
+  # other direction. (recipes/x264 carries the identical construct and has the
+  # same latent breakage; it simply has no caller that trips it.)
+  #
+  # The Windows toolchain comes from the pacman step in windows-build.yml /
+  # windows-recipe-check.yml instead, which installs mingw-w64-x86_64-gcc --
+  # that provides both `gcc` and the x86_64-w64-mingw32-gcc spelling libtool
+  # invokes via --host.
   host_tools: []
 
 build:

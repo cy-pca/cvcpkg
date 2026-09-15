@@ -48,6 +48,27 @@ inputs:
   build_type:
     description: 'Release or Debug.'
     required: true
+  include_host_tools:
+    description: >
+      Also install the recipe's host_tools (cmake, ninja, compilers a recipe
+      pins, ...) into the prefix, rather than assuming the runner image
+      provides them. Consumers that want a hermetic build -- no apt, no brew,
+      no vcpkg -- need this: without it a recipe can correctly declare its
+      toolchain and still not get it, and the build falls back to whatever the
+      image happens to ship, or to nothing at all.
+      Only meaningful with `recipe` (it maps to `cvcpkg install-deps
+      --include-host-tools`); ignored on the requirements path.
+    required: false
+    default: 'false'
+  fallback_to_source:
+    description: >
+      Build a component from its recipe when the catalog has no prebuilt
+      bundle for this platform/config tuple, instead of failing the job.
+      Turns "the catalog has a gap" from a hard stop into a slower build.
+      Still hermetic: cvcpkg builds from the recipe's pinned source, not from
+      anything the runner image supplies.
+    required: false
+    default: 'false'
   link:
     description: 'shared or static.'
     required: false
@@ -129,6 +150,8 @@ runs:
       shell: bash
       env:
         LCD_RECIPE:       ${{ inputs.recipe }}
+        LCD_HOST_TOOLS:   ${{ inputs.include_host_tools }}
+        LCD_FALLBACK_SRC: ${{ inputs.fallback_to_source }}
         LCD_REQUIREMENTS: ${{ inputs.requirements }}
         LCD_BUILD_TYPE:   ${{ inputs.build_type }}
         LCD_LINK:         ${{ inputs.link }}
@@ -191,6 +214,12 @@ runs:
             --config "$config"
             --link "${LCD_LINK}"
           )
+          case "$(printf '%s' "${LCD_HOST_TOOLS}" | tr '[:upper:]' '[:lower:]')" in
+            true|1|yes) cmd+=(--include-host-tools) ;;
+          esac
+          case "$(printf '%s' "${LCD_FALLBACK_SRC}" | tr '[:upper:]' '[:lower:]')" in
+            true|1|yes) cmd+=(--fallback-to-source) ;;
+          esac
         else
           reqs="${LCD_REQUIREMENTS}"
           if [ -z "$reqs" ]; then

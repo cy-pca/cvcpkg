@@ -18,6 +18,12 @@ recipe:
 source:
   type: tarball
   url: https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz
+  # Fallback: ftp.gnu.org is unreachable from some builders (the
+  # freebsd/openbsd dev nodes time out on it), which failed builds that
+  # had nothing wrong with them. mirrors.kernel.org is
+  # a reliable, well-maintained GNU mirror. ftpmirror.gnu.org, GNU's own
+  # redirector, was tried first and is not reachable at all (HTTP 000).
+  mirror: https://mirrors.kernel.org/gnu/make/make-4.4.1.tar.gz
   sha256: "dd16fb1d67bfab79a72f5e8390735c49e3e8e70b4945a15ab1f81ddb78658fb3"
   strip_components: 1
 
