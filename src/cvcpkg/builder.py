@@ -1477,13 +1477,11 @@ def run_build(
         winhost.run_winhost_build(ctx, matrix, script, log_callback=log_callback)
         return
 
-    # Haiku-target builds are delegated over SSH to a Haiku host — cvcpkg
-    # cannot run natively on Haiku (HaikuPorts has no pip and only
-    # cryptography 3.4.8 against our >=41 floor), so the Haiku box is a
-    # build target, never a builder.  See cvcpkg.haikuhost.  Both hooks sit
-    # ahead of everything below because the local path would otherwise hand
-    # the recipe's Haiku build.sh to the LOCAL toolchain and "succeed" —
-    # producing Linux binaries in a haiku/x86_64 package.
+    # Haiku-target builds are delegated over SSH to a Haiku host, because the
+    # Haiku toolchain is not on this builder.  See cvcpkg.haikuhost.  Both
+    # hooks sit ahead of everything below because the local path would
+    # otherwise hand the recipe's Haiku build.sh to the LOCAL toolchain and
+    # "succeed" — producing Linux binaries in a haiku/x86_64 package.
     from cvcpkg import haikuhost
 
     if haikuhost.should_delegate(ctx.platform, ctx.host_platform):

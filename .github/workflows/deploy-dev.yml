@@ -83,7 +83,8 @@ jobs:
             # Install CLI update. NOT '2>/dev/null || true': a discarded error
             # here is how the cluster ends up serving jobs with a cvcpkg that
             # never installed, while this step still reports success.
-            pip install --break-system-packages --quiet .
+            # [remote]: the host CLI drives the server's HTTP API (httpx extra).
+            pip install --break-system-packages --quiet '.[remote]'
 
             # Check for env file
             if [[ ! -f .env.production ]]; then
@@ -167,7 +168,8 @@ jobs:
               git fetch origin
               git checkout -f ${SHA}
               cd ${CVCPKG_DIR}
-              pip install --break-system-packages --quiet .
+              # [builder,validate]: this VM runs builder jobs and recipe validation.
+              pip install --break-system-packages --quiet '.[builder,validate]'
               # Verify by COMMIT, not by 'cvcpkg --version'. The package version
               # (2.0.2 at time of writing) does not move commit to commit, so it
               # prints the same string on a build from weeks ago and confirms
@@ -238,7 +240,7 @@ jobs:
           SHA="${{ steps.target.outputs.sha }}"
           echo "=== Updating sandipaws-wsl (WSL windows-cross builder) ==="
           ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new tfx@10.100.0.10 \
-            "set -e; cd ~/src/cvc/libcvc-deps && git fetch origin && git checkout -f ${SHA} && ~/.venv-cvcpkg/bin/pip install -q -e . && sudo systemctl restart cvcpkg-builder && systemctl is-active cvcpkg-builder" \
+            "set -e; cd ~/src/cvc/libcvc-deps && git fetch origin && git checkout -f ${SHA} && ~/.venv-cvcpkg/bin/pip install -q -e '.[builder,validate]' && sudo systemctl restart cvcpkg-builder && systemctl is-active cvcpkg-builder" \
             && echo "sandipaws-wsl updated and restarted." \
             || echo "::warning::sandipaws-wsl unreachable or update failed (offline?)"
 

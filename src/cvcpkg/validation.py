@@ -35,6 +35,8 @@ from pathlib import Path
 
 import yaml
 
+from cvcpkg.optional import require_jsonschema
+
 # Recipes whose minted version is not orderable SemVer.  This gate RATCHETS: new
 # recipes must parse, and the set may only shrink.  It is EMPTY and must stay so
 # — pick an upstream_version that parses (dot-separated numeric components; a git
@@ -212,6 +214,8 @@ def _validate_test_scripts(recipe_dir: Path, recipe_file: Path, doc: dict) -> li
 
 def validate_recipe_dir(recipe_dir: Path, *, schema: dict | None = None) -> list[str]:
     """Validate one recipe: schema, script/patch existence, version order."""
+    jsonschema = require_jsonschema()
+
     recipe_dir = Path(recipe_dir)
     recipe_file = recipe_dir / "recipe.yaml"
     if not recipe_file.exists():
@@ -222,9 +226,7 @@ def validate_recipe_dir(recipe_dir: Path, *, schema: dict | None = None) -> list
     doc = _load_yaml(recipe_file)
     errors: list[str] = []
 
-    from jsonschema import Draft202012Validator
-
-    v = Draft202012Validator(schema)
+    v = jsonschema.Draft202012Validator(schema)
     for e in sorted(v.iter_errors(doc), key=lambda x: list(x.absolute_path)):
         errors.append(f"{recipe_file}: {'.'.join(str(p) for p in e.absolute_path)}: {e.message}")
 
@@ -316,14 +318,14 @@ def validate_cross_deps(to_check: dict[str, Path], universe: set[str]) -> list[s
 
 def validate_components_file(components_file: Path) -> list[str]:
     """Validate a components.yaml against its schema + dependency cross-refs."""
+    jsonschema = require_jsonschema()
+
     components_file = Path(components_file)
     schema = load_schema("components")
     doc = _load_yaml(components_file)
     errors: list[str] = []
 
-    from jsonschema import Draft202012Validator
-
-    v = Draft202012Validator(schema)
+    v = jsonschema.Draft202012Validator(schema)
     for e in sorted(v.iter_errors(doc), key=lambda x: list(x.absolute_path)):
         errors.append(
             f"{components_file}: {'.'.join(str(p) for p in e.absolute_path)}: {e.message}"
