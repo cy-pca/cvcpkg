@@ -7,7 +7,12 @@ recipe:
   # console-script shebangs, pybind11 2.13.6+cvc.3), so hand-feeding it the
   # .pc dir and the header dir via CXXFLAGS is dead weight.  The hermetic
   # freetype/qhull wiring and the Agg render check are unchanged.
-  cvc_revision: 5
+  # Bumped 5 -> 6: source.type tarball (from-source meson build) -> python_wheel
+  # (pinned prebuilt PyPI wheels). The meson build can't produce a Windows column
+  # (meson-python can't find the `meson` executable on windows-2022), blocking the
+  # Windows grl-snam stack. matplotlib's official wheels are self-contained, so
+  # use them (like torch/contourpy/pillow).
+  cvc_revision: 6
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -27,65 +32,55 @@ recipe:
     and build.sh compiles the wheel with the prefix's own CPython 3.11 —
     no third-party prebuilt binary enters the bundle.
 
-# From-source sdist, sha256 as published by PyPI for this exact version.
+# Pinned prebuilt PyPI wheels (manylinux_2_17 + win_amd64 + macos arm64), sha256-
+# verified. Was a from-source meson build; that could not produce a Windows
+# column (meson-python can't find the `meson` executable on windows-2022), the
+# same wall contourpy/pillow hit. matplotlib ships official self-contained wheels
+# (C extensions statically link freetype/qhull/png — no vendored *.libs/), so use
+# them (the torch-cp311 / contourpy-cp311 / pillow-cp311 model).
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/68/dd/fa2e1a45fce2d09f4aea3cee169760e672c8262325aa5796c49d543dc7e6/matplotlib-3.10.0.tar.gz
-  sha256: "b886d02a581b96704c9d1ffe55709e49b4d2d52709ccebc4be42db856e511278"
-  strip_components: 1
+  type: python_wheel
+  artifacts:
+    linux-x86_64:
+      url: https://files.pythonhosted.org/packages/b2/7d/2d873209536b9ee17340754118a2a17988bc18981b5b56e6715ee07373ac/matplotlib-3.10.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+      sha256: "5439f4c5a3e2e8eab18e2f8c3ef929772fd5641876db71f08127eed95ab64683"
+    windows-x86_64:
+      url: https://files.pythonhosted.org/packages/14/cf/e382598f98be11bf51dd0bc60eca44a517f6793e3dc8b9d53634a144620c/matplotlib-3.10.0-cp311-cp311-win_amd64.whl
+      sha256: "7e8632baebb058555ac0cde75db885c61f1212e47723d63921879806b40bec6a"
+    macos-arm64:
+      url: https://files.pythonhosted.org/packages/c7/8b/92e9da1f28310a1f6572b5c55097b0c0ceb5e27486d85fb73b54f5a9b939/matplotlib-3.10.0-cp311-cp311-macosx_11_0_arm64.whl
+      sha256: "c58a9622d5dbeb668f407f35f4e6bfac34bb9ecdcc81680c04d0258169747997"
 
 python:
   interpreter: python311
   abi: cp311
+  manylinux_min: manylinux_2_17
 
 patches: []
 
 depends:
   build:
+    # Prebuilt wheel: just the interpreter to install into. The old from-source
+    # meson build's native-lib + backend edges (freetype/qhull/zlib/libpng/bzip2,
+    # meson-python/pybind11/setuptools-scm) are gone — the wheel's C extensions
+    # statically link those, and there is no PEP-517 build.
     - name: python311
-    # Native feature libraries (see build.sh): freetype + qhull are what
-    # -Dsystem-freetype/-Dsystem-qhull link; zlib/libpng/bzip2 are
-    # freetype's flat closure (cvcpkg staging is flat).
-    - name: freetype
-    - name: qhull
-    - name: zlib
-    - name: libpng
-    - name: bzip2
-    - name: contourpy-cp311
-    - name: cycler-cp311
-    - name: fonttools-cp311
-    - name: kiwisolver-cp311
-    - name: numpy-cp311
-    - name: packaging-cp311
-    - name: pillow-cp311
-    - name: pyparsing-cp311
-    - name: python-dateutil-cp311
-    # PEP-517 build backend, from this sdist's [build-system] requires.
-    # --no-build-isolation means pip will NOT fetch it, so it has to be
-    # in the build prefix already (build.sh bridges it onto sys.path).
-    - name: meson-python-cp311
-    - name: pybind11-cp311
-    - name: setuptools-scm-cp311
   runtime:
+    # The wheel is self-contained (no vendored *.libs/ — freetype/qhull/png are
+    # statically linked), so no native-lib runtime edges. matplotlib imports
+    # these Python packages at runtime, so they stay.
     - name: python311
-    - name: freetype
-    - name: qhull
-    - name: zlib
-    - name: libpng
-    - name: bzip2
+    - name: numpy-cp311
     - name: contourpy-cp311
     - name: cycler-cp311
     - name: fonttools-cp311
     - name: kiwisolver-cp311
-    - name: numpy-cp311
     - name: packaging-cp311
     - name: pillow-cp311
     - name: pyparsing-cp311
     - name: python-dateutil-cp311
   host_tools:
     - python311
-    - pkg-config
-    - patchelf
 
 build:
   build_type_independent: true
@@ -104,4 +99,6 @@ package:
     - lib/python3.11/site-packages/pylab.py
     - lib/python3.11/site-packages/matplotlib-*.dist-info/
     - Lib/site-packages/matplotlib/
-    - Lib/site-packages/*.dist-info/
+    - Lib/site-packages/mpl_toolkits/
+    - Lib/site-packages/pylab.py
+    - Lib/site-packages/matplotlib-*.dist-info/
