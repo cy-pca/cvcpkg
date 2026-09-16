@@ -11,9 +11,10 @@
 
 name: Deployment health check
 
+# Relocated repo (cy-pca/cvcpkg): the nightly health check runs from
+# transfix/libcvc-deps, which owns the deployment plane.  The schedule is
+# disabled here to avoid duplicate probes/alerts; manual dispatch only.
 on:
-  schedule:
-    - cron: "0 8 * * *" # 08:00 UTC daily
   workflow_dispatch: {}
 
 permissions:
