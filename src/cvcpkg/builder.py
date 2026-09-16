@@ -3028,7 +3028,13 @@ def pack_from_prefix(
     if not platform:
         platform = detect_platform()
     if not arch:
-        arch = detect_arch()
+        # Derive the arch FROM THE TARGET PLATFORM, not the host. --from-prefix
+        # skips the build, so there is no toolchain to infer arch from; a wasm-mt
+        # prefix packed on an x86_64 host must still be tagged wasm32 (matching
+        # _detect_arch_for_platform, which build_recipe uses). Using detect_arch()
+        # here mis-tagged wasm/wasi/cosmo bundles with the host arch so they never
+        # resolved for their real consumers.
+        arch = _detect_arch_for_platform(platform)
 
     # wasm/wasi/cosmo never link shared; keep the invariant used by build_recipe.
     if platform in ("wasm", "wasm-mt", "wasi", "cosmo"):
