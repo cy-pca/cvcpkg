@@ -282,32 +282,46 @@ jobs:
           DEPLOY_DIR="/home/tfx/libcvc-deps"
           CVCPKG_DIR="${DEPLOY_DIR}"
 
-          echo "=== Deploying to pkg.tx.wtf (local mirror) ==="
+          # The mirror runs on THIS runner host (catx-03).  The cy-pca runner is
+          # the isolated 'github-runner' user, which cannot write the tfx-owned
+          # deploy dir and cannot drive tfx's docker stack.  So deploy the mirror
+          # the same way as the primary -- over ssh AS tfx -- but to localhost.
+          # rsync reads the workspace as github-runner and writes the dir as tfx
+          # over ssh, sidestepping the cross-user permission split entirely.
+          # (github-runner's deploy key is authorised for tfx@localhost; it also
+          # already has NOPASSWD sudo, so this grants it no new effective power.)
+          REMOTE="tfx@localhost"
+          SSH="ssh -o StrictHostKeyChecking=accept-new"
+
+          echo "=== Deploying to pkg.tx.wtf (local mirror, via ${REMOTE}) ==="
 
           # Migrate .env.production from old tools/cvcpkg/ location before rsync
-          if [[ ! -f "${DEPLOY_DIR}/.env.production" && -f "${DEPLOY_DIR}/tools/cvcpkg/.env.production" ]]; then
-            echo "Migrating .env.production from tools/cvcpkg/ to repo root..."
-            mv "${DEPLOY_DIR}/tools/cvcpkg/.env.production" "${DEPLOY_DIR}/.env.production"
-          fi
-          rm -rf "${DEPLOY_DIR}/tools/cvcpkg" "${DEPLOY_DIR}/tools" 2>/dev/null || true
+          $SSH "$REMOTE" "
+            cd ${DEPLOY_DIR}
+            if [[ ! -f .env.production && -f tools/cvcpkg/.env.production ]]; then
+              echo 'Migrating .env.production from tools/cvcpkg/ to repo root...'
+              mv tools/cvcpkg/.env.production .env.production
+            fi
+            rm -rf tools/cvcpkg tools 2>/dev/null || true
+          "
 
-          echo "Syncing checkout to ${DEPLOY_DIR}..."
+          echo "Syncing checkout to ${REMOTE}:${DEPLOY_DIR}..."
           rsync -a --delete \
             --exclude '.env.production' \
             --exclude 'backups/' \
-            "${GITHUB_WORKSPACE}/" "${DEPLOY_DIR}/"
+            -e "$SSH" \
+            "${GITHUB_WORKSPACE}/" "${REMOTE}:${DEPLOY_DIR}/"
 
+          # Write the deploy script on the mirror host and run it (avoids
+          # docker-compose-over-stdin heredoc issues; same pattern as the primary).
+          $SSH "$REMOTE" "cat > /tmp/cvcpkg-mirror-deploy.sh" << 'DEPLOY_SCRIPT'
+          #!/bin/bash
+          set -euo pipefail
+          RELEASE_TAG="$1"; SHORT_SHA="$2"; DEPLOY_DIR="$3"; CVCPKG_DIR="$4"
           cd "$CVCPKG_DIR"
 
           rm -rf src/cvcpkg/recipes
           cp -r "${DEPLOY_DIR}/recipes" src/cvcpkg/recipes
-
-          # Migration: move .env.production from old tools/cvcpkg/ location
-          if [[ ! -f .env.production && -f tools/cvcpkg/.env.production ]]; then
-            echo "Migrating .env.production from tools/cvcpkg/ to repo root..."
-            mv tools/cvcpkg/.env.production .env.production
-            rm -rf tools/cvcpkg tools
-          fi
 
           if [[ ! -f .env.production ]]; then
             echo "::error::.env.production not found at ${CVCPKG_DIR}/"
@@ -336,18 +350,9 @@ jobs:
           fi
 
           echo "Building cvcpkg-server:${RELEASE_TAG}..."
-          # Build on a dedicated docker-container builder, never the daemon's
-          # embedded one.  On 2026-09-11 the default builder on catx-03 got a
-          # cache record pointing at a lease that no longer existed, and every
-          # build died with `failed to solve: lease ...: not found` -- including
-          # `--no-cache`, so the builder could not start ANY build.  Nothing
-          # short of resetting the daemon's buildkit state fixes that, which
-          # means bouncing every container on the host.
-          #
-          # A docker-container builder keeps its buildkit state in its own
-          # container, so the same corruption is cleared with `docker buildx rm`
-          # and costs nothing else.  Created on demand, so a host that has never
-          # deployed gets one automatically.
+          # Dedicated docker-container builder, never the daemon's embedded one
+          # (a corrupted embedded buildkit lease once killed every build on this
+          # host); its state is isolated and cheap to reset with `docker buildx rm`.
           docker buildx inspect cvcpkg-deploy >/dev/null 2>&1 \
             || docker buildx create --name cvcpkg-deploy --driver docker-container
           export BUILDX_BUILDER=cvcpkg-deploy
@@ -393,6 +398,10 @@ jobs:
           echo "::error::pkg.tx.wtf backend failed health check within 120s"
           $COMPOSE logs --tail=80 backend || true
           exit 1
+          DEPLOY_SCRIPT
+
+          $SSH "$REMOTE" "bash /tmp/cvcpkg-mirror-deploy.sh \
+            '${RELEASE_TAG}' '${SHORT_SHA}' '${DEPLOY_DIR}' '${CVCPKG_DIR}'"
 
       # ── Push recipes to the primary server DB ─────────────────
       # The deploy above bundles recipes into the backend image, but
