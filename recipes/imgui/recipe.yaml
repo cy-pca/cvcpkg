@@ -4,7 +4,10 @@ recipe:
   upstream_version: "1.92.9"
   # Bumped 1 -> 2: adds the wasm matrix entry (build-wasm.sh) so cvcGL's
   # ImGuiOverlay can ship in the WebAssembly demos.
-  cvc_revision: 2
+  # Bumped 2 -> 3: ships a cmake package config (lib/cmake/imgui/imguiConfig.cmake)
+  # exposing the relocatable imgui::imgui imported target, so consumers
+  # find_package(imgui) + link a target instead of a bare -limgui + manual -L.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -71,6 +74,7 @@ package:
   files:
     - lib/libimgui*
     - lib/imgui.lib
+    - lib/cmake/imgui/
     - include/imgui/
 
 abi:
