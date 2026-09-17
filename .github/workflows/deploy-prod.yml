@@ -11,10 +11,12 @@ name: deploy-prod
 # upstream catalog hourly inside the backend container; downloads are proxied
 # on demand and cached to the local archives volume.
 
-# Relocated repo (cy-pca/cvcpkg): the prod deploy plane still lives on
-# transfix/libcvc-deps.  Auto-deploy on push to prod is disabled here so this
-# repo does not double-deploy to cvcpkg.org/pkg.tx.wtf; manual dispatch only.
+# cy-pca/cvcpkg now OWNS the production deploy plane: transfix/libcvc-deps'
+# deploy-prod is frozen (disabled), so there is no longer a double-deploy risk.
+# Auto-deploys to cvcpkg.org + pkg.tx.wtf on every push to the prod branch.
 on:
+  push:
+    branches: [prod]
   workflow_dispatch:
     inputs:
       sha:
