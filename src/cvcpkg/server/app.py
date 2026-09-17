@@ -5994,7 +5994,7 @@ def create_app(
         channel = ET.SubElement(rss, "channel")
         site_title = os.environ.get("CVCPKG_SITE_TITLE", "cvcpkg")
         github_url = (
-            f"https://github.com/{os.environ.get('CVCPKG_GITHUB_REPO', 'transfix/libcvc-deps')}"
+            f"https://github.com/{os.environ.get('CVCPKG_GITHUB_REPO', 'cy-pca/cvcpkg')}"
         )
         ET.SubElement(channel, "title").text = f"{site_title} — Latest Packages"
         ET.SubElement(channel, "link").text = github_url

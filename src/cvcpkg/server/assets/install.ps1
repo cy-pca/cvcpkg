@@ -9,10 +9,12 @@
 # Env overrides:
 #   $env:CVCPKG_VERSION      pin a release tag, e.g. cvcpkg-v2.0.0
 #   $env:CVCPKG_INSTALL_DIR  install location (default: $env:LOCALAPPDATA\cvcpkg)
+#   $env:CVCPKG_REPO         GitHub repo to fetch releases from
+#                            (default: cy-pca/cvcpkg)
 
 $ErrorActionPreference = "Stop"
 
-$Repo = "transfix/libcvc-deps"
+$Repo = if ($env:CVCPKG_REPO) { $env:CVCPKG_REPO } else { "cy-pca/cvcpkg" }
 $InstallDir = if ($env:CVCPKG_INSTALL_DIR) { $env:CVCPKG_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "cvcpkg" }
 
 function Die($msg) {

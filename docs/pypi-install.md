@@ -82,8 +82,8 @@ Each asset has a sibling `<asset>.sha256`. To download and verify
 manually instead of using the one-liner:
 
 ```bash
-tag=cvcpkg-v2.0.2
-base=https://github.com/transfix/libcvc-deps/releases/download/$tag
+tag=cvcpkg-v2.2.2
+base=https://github.com/cy-pca/cvcpkg/releases/download/$tag
 curl -fsSLO "$base/cvcpkg-linux-x86_64"
 curl -fsSLO "$base/cvcpkg-linux-x86_64.sha256"
 sha256sum -c cvcpkg-linux-x86_64.sha256      # shasum -a 256 -c on macOS
@@ -100,8 +100,8 @@ extra (below).
 With Python ≥ 3.10:
 
 ```bash
-git clone https://github.com/transfix/libcvc-deps
-cd libcvc-deps
+git clone https://github.com/cy-pca/cvcpkg
+cd cvcpkg
 pip install .
 cvcpkg --version
 cvcpkg-server --version

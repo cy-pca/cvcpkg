@@ -17,7 +17,7 @@ import os
 
 from cvcpkg import __version__
 
-_GITHUB_REPO = os.environ.get("CVCPKG_GITHUB_REPO", "transfix/libcvc-deps")
+_GITHUB_REPO = os.environ.get("CVCPKG_GITHUB_REPO", "cy-pca/cvcpkg")
 _GITHUB_URL = f"https://github.com/{_GITHUB_REPO}"
 
 # The cvcpkg brand mark — the neon flaming-package icon, served self-hosted
@@ -4872,7 +4872,7 @@ cvcpkg builds list --server https://cvcpkg.org --token cvctok_...
           <code>CVCPKG_SITE_TAGLINE</code>, and
           <code>CVCPKG_SITE_HERO</code>.
           Set <code>CVCPKG_GITHUB_REPO</code> to change the
-          GitHub link (default: <code>transfix/libcvc-deps</code>).
+          GitHub link (default: <code>cy-pca/cvcpkg</code>).
           <code>CVCPKG_SITE_LOGO</code> overrides the favicon and social
           image &mdash; either an <code>https://</code> URL or a path to a
           local image file (png/svg/ico/jpg/webp); unset serves the bundled
