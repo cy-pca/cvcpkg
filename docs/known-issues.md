@@ -187,3 +187,63 @@ the recipe pipeline instead — `windows-build.yml` on hosted
 not build through vcpkg triplet matrices. If you resurrect a
 vcpkg-based static Windows build, assume the hang still reproduces on
 hosted runners until verified otherwise.
+
+## BSD standalone binaries: no `cvcpkg-builder` runner on cy-pca yet
+
+### Symptom
+
+A `cvcpkg-vX.Y.Z` GitHub Release built by
+[`cvcpkg-standalone.yml`](../.github/workflows/cvcpkg-standalone.yml) ships only
+the Linux, macOS and Windows single-file binaries. The FreeBSD, OpenBSD and
+NetBSD assets (`cvcpkg-freebsd-x86_64`, `cvcpkg-openbsd-x86_64`,
+`cvcpkg-netbsd-x86_64`) are missing, so `curl -fsSL https://cvcpkg.org/install.sh | sh`
+fails on the BSDs with *"no prebuilt binary for &lt;platform&gt;/x86_64 yet"*.
+
+### Root cause
+
+The workflow's `build-bsd` job is **double-gated**:
+
+1. `if: vars.ENABLE_BSD_BUILDS == 'true'` — off by default.
+2. `runs-on: [self-hosted, Linux, X64, cvcpkg-builder]` — it drives the BSD
+   builder VMs (`10.66.77.x`) over SSH from a self-hosted runner labelled
+   `cvcpkg-builder`, which is intended to live on the **star cluster**
+   (`star-00` shares the BSD VMs' LAN — see the runner table in
+   [ci-cd-pipeline.md](ci-cd-pipeline.md)).
+
+After the relocation to `cy-pca/cvcpkg`, **no `cvcpkg-builder` runner is
+registered** (the org has only `catx-03-cy-pca` and `star-01-cypca`, neither
+with that label). So even with `ENABLE_BSD_BUILDS=true`, `build-bsd` would sit
+queued with no runner and stall the release job (which `needs: [build,
+build-bsd]`). The variable is therefore kept **`false`**, and the BSD binaries
+are cut out-of-band.
+
+### Cutting the BSD binaries today (manual)
+
+Until a `cvcpkg-builder` runner exists, build the three BSD columns with
+[`scripts/build-bsd-standalone.sh`](../scripts/build-bsd-standalone.sh) from any
+host that can SSH to the BSD VMs (e.g. `prettyhatemachine` or `star-00`, both on
+the `10.66.77.x` LAN):
+
+```bash
+git checkout cvcpkg-vX.Y.Z          # build the exact released source
+scripts/build-bsd-standalone.sh cvcpkg-vX.Y.Z
+```
+
+It mirrors the `build-bsd` job step-for-step (same PyInstaller version, the
+NetBSD bootloader patch, the `--version` + `validate recipes/zlib` smoke test),
+writes `dist-bsd/cvcpkg-*bsd-x86_64` + `.sha256`, and attaches them to the
+release with retry (GitHub's asset upload 500s intermittently on large files).
+`cvcpkg-v2.2.2`'s BSD binaries were produced this way.
+
+### Automating it (the real fix)
+
+1. Register a self-hosted **org** runner on the star cluster (a host that shares
+   the BSD VMs' LAN, i.e. can `ssh root@10.66.77.x`) with labels
+   `self-hosted,Linux,X64,cvcpkg-builder`. Use a **fresh tarball install** — a
+   dir-copy of an existing runner fails `config.sh` with *"already configured"*.
+2. Confirm the `FREEBSD/OPENBSD/NETBSD_BUILDER_IPS/VMS` repo variables still
+   point at live VMs (they did as of the relocation).
+3. Set `ENABLE_BSD_BUILDS=true`.
+
+The next `cvcpkg-v*` tag then builds and attaches the BSD binaries
+automatically, and this manual step is no longer needed.
