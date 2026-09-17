@@ -28,6 +28,30 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
+## v2.2.2
+
+First release cut from **cy-pca/cvcpkg**, the relocated home of cvcpkg (the
+prior releases were cut from `transfix/libcvc-deps`, now frozen). Two critical
+fixes:
+
+### Package search renders results again
+
+The dedicated `/search` page returned zero results for every query — a
+perpetually stuck loading spinner. The shared `updateStatsFromResponse()`
+wrote to the landing page's `stat-*` hero elements unconditionally, but the
+`/search` page has no such elements, so `getElementById(...).textContent`
+threw a `TypeError` that aborted `runSearch()` before `renderResults()` ran.
+The `/v1/search` API and the `cvcpkg search` CLI were never affected. The
+stat writes are now null-safe, and results render before the stats/filter
+updates so a later throw can never block the table again. (#16)
+
+### Installers point at cy-pca/cvcpkg
+
+`install.sh` / `install.ps1` (and the site's GitHub links) hardcoded the
+pre-relocation `transfix/libcvc-deps` for the release lookup and asset
+download. They now default to `cy-pca/cvcpkg`, overridable via `CVCPKG_REPO`
+for forks and staged cutovers. (#25)
+
 ## v2.2.0
 
 ### Multi-issuer SSO — cvcpkg as an OIDC client of several tx.wtf rings
