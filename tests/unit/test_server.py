@@ -2352,3 +2352,47 @@ class TestPackagesPublishedCount:
         assert resp_admin.json()["packages_published"] == 1
         resp_pub = client.get("/v1/users/test-publisher")
         assert resp_pub.json()["packages_published"] == 0
+
+
+# ── Search page client rendering (regression: issue #16) ────────────
+#
+# The dedicated /search page renders results client-side from /v1/search.
+# It has no stat-* hero (those live only on the landing page), so the shared
+# updateStatsFromResponse() must tolerate missing elements: an unguarded
+# getElementById('stat-...').textContent throws a TypeError that aborts
+# runSearch() *before* renderResults() runs, and every query renders zero
+# results.  These are static assertions over the rendered page so they need
+# no browser.
+
+
+class TestSearchPageRendering:
+    def _search_js(self) -> str:
+        from cvcpkg.server.landing import search_html
+
+        return search_html()
+
+    def test_search_page_has_no_stat_hero(self):
+        # Documents *why* the guard below is required: the /search page really
+        # does lack the stat-* elements the landing hero owns.
+        html = self._search_js()
+        for sid in ("stat-packages", "stat-builds", "stat-platforms", "stat-size"):
+            assert f'id="{sid}"' not in html, f"{sid} unexpectedly present on /search"
+
+    def test_update_stats_is_null_safe(self):
+        html = self._search_js()
+        # No unguarded stat writes may survive.
+        for sid in ("stat-packages", "stat-builds", "stat-platforms", "stat-size"):
+            assert (
+                f"getElementById('{sid}').textContent" not in html
+            ), f"unguarded write to #{sid} — will throw on the /search page"
+        # The guarded helper must be present.
+        assert "const setText = (id, val) =>" in html
+
+    def test_results_render_before_stats(self):
+        # renderResults must run before updateStatsFromResponse so a throw in a
+        # later step can never leave the table stuck on its loading spinner.
+        html = self._search_js()
+        i_render = html.find("renderResults(data);")
+        i_stats = html.find("updateStatsFromResponse(data);")
+        assert i_render != -1 and i_stats != -1
+        assert i_render < i_stats, "renderResults(data) must precede updateStatsFromResponse(data)"
