@@ -17,10 +17,14 @@ name: deploy-dev
 # commits ahead, so the dev cluster silently ran week-old cvcpkg while every
 # recipe PR was gated against master's CLI.  Master is the branch that actually
 # moves, so it is the one the dev cluster should track.
-# Relocated repo (cy-pca/cvcpkg): the dev/prod deploy plane still lives on
-# transfix/libcvc-deps.  Auto-deploy on push is disabled here so this repo does
-# not double-deploy; kept as manual workflow_dispatch only.
+# cy-pca/cvcpkg owns the dev cluster (self-contained on the star incus cluster;
+# runs on the star-01 cy-pca runner). Auto-deploys the dev cluster (cvcpkg-server
+# + cvcpkg-builder-01/02 incus VMs) on every push to master, using the dev-server
+# token secrets.CVCPKG_DEV_ADMIN_TOKEN. transfix deploy-dev is frozen, so there is
+# no double-deploy.
 on:
+  push:
+    branches: [master]
   workflow_dispatch:
     inputs:
       sha:
