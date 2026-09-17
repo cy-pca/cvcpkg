@@ -706,21 +706,29 @@ async function runSearch(opts) {
     if (!p.description && m.description) p.description = m.description;
   });
   loadedPackages = loadedPackages.concat(pkgs);
+  // Render the results FIRST so that a later step throwing can never leave the
+  // table stuck on its loading spinner (see below).  updateStatsFromResponse
+  // and updateFilterOptions are both no-ops on pages that lack their targets.
+  renderResults(data);
   updateStatsFromResponse(data);
   updateFilterOptions(data.facets || {});
-  renderResults(data);
 }
 
 function updateStatsFromResponse(data) {
   const facets = data.facets || {};
-  const packages = (data.package_count || 0);
-  const builds = (data.total || 0);
-  const platforms = (facets.platforms || []).length;
-  const size = data.total_size_bytes || 0;
-  document.getElementById('stat-packages').textContent = packages;
-  document.getElementById('stat-builds').textContent = builds;
-  document.getElementById('stat-platforms').textContent = platforms;
-  document.getElementById('stat-size').textContent = fmtSizeLarge(size);
+  // The dedicated /search page has no stat-* hero (those live only on the
+  // landing page), so every write here must tolerate a missing element --
+  // otherwise the first getElementById(...).textContent throws a TypeError
+  // that aborts runSearch before renderResults runs, and every query renders
+  // zero results.  Guard like _syncSelect / showSearchEmptyState already do.
+  const setText = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
+  };
+  setText('stat-packages', data.package_count || 0);
+  setText('stat-builds', data.total || 0);
+  setText('stat-platforms', (facets.platforms || []).length);
+  setText('stat-size', fmtSizeLarge(data.total_size_bytes || 0));
 }
 
 function _syncSelect(id, buckets, keepValue) {
