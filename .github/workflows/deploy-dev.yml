@@ -255,19 +255,19 @@ jobs:
       - name: Notify builders to self-update
         continue-on-error: true
         env:
-          CVCPKG_ADMIN_TOKEN: ${{ secrets.CVCPKG_ADMIN_TOKEN }}
+          CVCPKG_DEV_ADMIN_TOKEN: ${{ secrets.CVCPKG_DEV_ADMIN_TOKEN }}
         run: |
           set -uo pipefail
           sleep 10
           SERVER_URL="http://$(incus list cvcpkg-server -c4 -fcsv | tr -d '"' | tr ',' '\n' | awk '{print $1}' | grep -E '^10\.' | head -1):8420"
-          if [ -z "${CVCPKG_ADMIN_TOKEN:-}" ]; then
-            echo "::warning::CVCPKG_ADMIN_TOKEN is unset — no builder outside the incus VMs was told to update. They keep running whatever cvcpkg they last had."
+          if [ -z "${CVCPKG_DEV_ADMIN_TOKEN:-}" ]; then
+            echo "::warning::CVCPKG_DEV_ADMIN_TOKEN is unset — no builder outside the incus VMs was told to update. They keep running whatever cvcpkg they last had."
             exit 0
           fi
 
           echo "Notifying builders via $SERVER_URL to self-update..."
           if ! curl -fsS -X POST "$SERVER_URL/v1/admin/update-builders" \
-                 -H "Authorization: Bearer $CVCPKG_ADMIN_TOKEN" \
+                 -H "Authorization: Bearer $CVCPKG_DEV_ADMIN_TOKEN" \
                  -H "Content-Type: application/json"; then
             echo "::warning::update-builders call failed — the fleet was NOT notified"
             exit 0
