@@ -1938,7 +1938,7 @@ project's intellectual property.
 Community contributions are welcome via pull request — see
 [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for the workflow — and the full
 list of everyone who has contributed on the
-[contributors page](https://github.com/transfix/libcvc-deps/graphs/contributors).
+[contributors page](https://github.com/cy-pca/cvcpkg/graphs/contributors).
 
 ## License
 

@@ -10,10 +10,12 @@
 # Env overrides:
 #   CVCPKG_VERSION      pin a release tag, e.g. cvcpkg-v2.0.0
 #   CVCPKG_INSTALL_DIR  install location (default: $HOME/.local/bin)
+#   CVCPKG_REPO         GitHub repo to fetch releases from
+#                       (default: cy-pca/cvcpkg)
 
 set -eu
 
-REPO="transfix/libcvc-deps"
+REPO="${CVCPKG_REPO:-cy-pca/cvcpkg}"
 INSTALL_DIR="${CVCPKG_INSTALL_DIR:-$HOME/.local/bin}"
 
 say() { printf '%s\n' "$*" >&2; }
