@@ -116,6 +116,52 @@ def test_later_dir_wins(tmp_path):
     assert rmap["pkg"] == b / "pkg"
 
 
+def test_duplicate_name_warns(tmp_path, capsys):
+    # Two dirs both define 'pkg' → validate succeeds (later wins) but prints a
+    # collision note; default CI stays green.
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    _write_recipe(a, "pkg", version="1.0")
+    _write_recipe(b, "pkg", version="2.0")
+    for target in ("recipes", "all"):
+        errors = validation.run(target, extra_dirs=[a, b], no_default=True)
+        assert errors == [], errors
+    out = capsys.readouterr().out
+    assert "pkg" in out and "shadows" in out
+
+
+def test_duplicate_name_strict_errors(tmp_path):
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    _write_recipe(a, "pkg", version="1.0")
+    _write_recipe(b, "pkg", version="2.0")
+    errors = validation.run("recipes", extra_dirs=[a, b], no_default=True, strict_duplicates=True)
+    assert any("shadows" in e for e in errors), errors
+
+
+def test_no_false_positive_single_dir(tmp_path, capsys):
+    r = tmp_path / "recipes"
+    _write_recipe(r, "solo")
+    errors = validation.run("recipes", extra_dirs=[r], no_default=True)
+    assert errors == [], errors
+    assert "shadows" not in capsys.readouterr().out
+
+
+def test_build_recipe_map_collisions_arg(tmp_path):
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    _write_recipe(a, "pkg", version="1.0")
+    _write_recipe(b, "pkg", version="2.0")
+    col: list = []
+    rmap = validation.build_recipe_map([a, b], collisions=col)
+    assert rmap["pkg"] == (b / "pkg").resolve()
+    assert len(col) == 1
+    name, shadowed, winner = col[0]
+    assert name == "pkg"
+    assert shadowed == (a / "pkg").resolve()
+    assert winner == (b / "pkg").resolve()
+
+
 def test_missing_build_script_reported(tmp_path):
     r = tmp_path / "recipes"
     _write_recipe(r, "noscript", with_script=False)

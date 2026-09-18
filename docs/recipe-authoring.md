@@ -18,7 +18,8 @@ Qt6, VTK, CGAL, HDF5, the CUDA-math libs, the Python interpreters, …).
 - **This repo holds the dependency stack** that those packages build against.
 - Consume a project-owned recipe with the `--recipes-dir` overlay
   (`cvcpkg <cmd> --recipes-dir cvcpkg/recipes …`); cvcpkg merges overlays over
-  the shared set, later directories winning.
+  the shared set, later directories winning. Same-named recipes across dirs
+  warn (later wins); `cvcpkg validate --strict-duplicates` makes it fatal.
 
 Rationale: a package's build definition belongs with the package it builds, so
 it versions and releases together and its maintainers own it — the dependency
