@@ -135,9 +135,7 @@ def test_duplicate_name_strict_errors(tmp_path):
     b = tmp_path / "b"
     _write_recipe(a, "pkg", version="1.0")
     _write_recipe(b, "pkg", version="2.0")
-    errors = validation.run(
-        "recipes", extra_dirs=[a, b], no_default=True, strict_duplicates=True
-    )
+    errors = validation.run("recipes", extra_dirs=[a, b], no_default=True, strict_duplicates=True)
     assert any("shadows" in e for e in errors), errors
 
 
