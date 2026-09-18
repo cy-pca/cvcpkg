@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 
@@ -24,6 +25,11 @@ from cvcpkg.cli._helpers import (
     _resolve_recipes_dirs,
     _validate_org_slug,
 )
+
+if TYPE_CHECKING:
+    from cvcpkg.lockfile import LockEntry, Lockfile
+    from cvcpkg.manifest import CatalogEntry
+    from cvcpkg.uninstaller import InstalledPackage
 
 # ── install ─────────────────────────────────────────────────────
 
@@ -207,7 +213,7 @@ def install(
     from cvcpkg.errors import InstallError, IntegrityError
     from cvcpkg.installer import build_from_source_fallback, install_entry
     from cvcpkg.lockfile import LockEntry, Lockfile
-    from cvcpkg.manifest import CatalogEntry, ComponentReq, Requirements, parse_component_spec
+    from cvcpkg.manifest import ComponentReq, Requirements, parse_component_spec
     from cvcpkg.platform import detect_arch, detect_platform
 
     ctx = click.get_current_context()
@@ -1101,13 +1107,37 @@ def _locate_bundle_manifest(prefix_path: Path, name: str) -> Path | None:
     return None
 
 
+def _missing_payload_files(pkg: InstalledPackage, platform: str, prefix_path: Path) -> list[str]:
+    """Prefix-relative payload paths the archive shipped but that are now gone.
+
+    The authoritative file list is the bundle's archive member list (populated
+    by ``load_installed``/``fetch_removal_archive`` from the cached archive).
+    When no archive is cached the member list is unknown and this returns ``[]``
+    -- the caller falls back to the manifest-presence check alone rather than
+    triggering a download from a verify/repair diagnosis.  Each member is mapped
+    through ``effective_path`` so a Windows-relocated payload is looked for where
+    install actually put it, and a broken symlink still counts as present (the
+    file exists as far as the prefix is concerned).
+    """
+    from cvcpkg.uninstaller import effective_path
+
+    missing: list[str] = []
+    for member in pkg.files:
+        mapped = effective_path(member, platform)
+        p = prefix_path / mapped
+        if not (p.exists() or p.is_symlink()):
+            missing.append(mapped)
+    return missing
+
+
 @cli.command()
 @_prefix_opt
 def verify(prefix: str) -> None:
     """Verify prefix integrity against the lockfile.
 
     Checks that every bundle recorded in the lockfile has a matching
-    manifest.yaml in the prefix with the correct version.  Use this
+    manifest.yaml in the prefix with the correct version, and that every
+    payload file the bundle's archive shipped is still present.  Use this
     after install to confirm nothing is missing or corrupted.
 
     \b
@@ -1119,11 +1149,23 @@ def verify(prefix: str) -> None:
     if not lock_path.exists():
         raise click.ClickException(f"no lockfile at {lock_path}")
 
+    from cvcpkg import uninstaller
+    from cvcpkg.cache import default_cache_dir
     from cvcpkg.lockfile import Lockfile
     from cvcpkg.manifest import BundleManifest
 
     lock = Lockfile.read(lock_path)
     click.echo(f"cvcpkg: verifying prefix {prefix_path} ({len(lock.bundles)} bundle(s)) ...")
+
+    # Load each bundle's cached-archive file list so a deleted payload file is
+    # caught, not just a missing/mismatched manifest.  Local recipes are only a
+    # fallback dep source; their absence must not fail the command.
+    cache_dir = default_cache_dir()
+    try:
+        rdirs: list[Path] | None = _resolve_recipes_dirs((), no_default=False)
+    except click.ClickException:
+        rdirs = None
+    packages = uninstaller.load_installed(lock, cache_dir, recipe_dirs=rdirs)
 
     ok = True
     for entry in lock.bundles:
@@ -1139,12 +1181,22 @@ def verify(prefix: str) -> None:
                 f"manifest says {manifest.version}"
             )
             ok = False
+            continue
+        missing = _missing_payload_files(packages[entry.name], lock.platform, prefix_path)
+        if missing:
+            shown = ", ".join(missing[:3]) + (" ..." if len(missing) > 3 else "")
+            click.echo(f"  BROKEN   {entry.name}: {len(missing)} payload file(s) missing: {shown}")
+            ok = False
         else:
             click.echo(f"  OK       {entry.name} == {entry.version}")
 
     if ok:
         click.echo("cvcpkg: prefix verified.")
     else:
+        click.echo(
+            f"cvcpkg: hint — run 'cvcpkg repair --prefix {prefix_path}' to restore broken bundles.",
+            err=True,
+        )
         raise click.ClickException("verification found issues.")
 
 
@@ -1163,6 +1215,32 @@ def lock() -> None:
 
 
 # ── sync ────────────────────────────────────────────────────────
+
+
+def _lock_entry_to_catalog(entry: LockEntry, lock: Lockfile) -> CatalogEntry:
+    """Reconstruct a CatalogEntry from a lockfile entry + prefix metadata.
+
+    ``sync``/``repair`` re-download the exact bundle the lockfile pins, so the
+    per-variant fields come from the prefix's ``lock`` (platform/arch/config/
+    link) and the per-bundle fields from ``entry``.  ``cvc_revision`` is only
+    used for catalog ordering, which is irrelevant here, so it is fixed at 1.
+    """
+    from cvcpkg.manifest import CatalogEntry
+
+    return CatalogEntry(
+        name=entry.name,
+        version=entry.version,
+        upstream_version=entry.upstream_version,
+        cvc_revision=1,
+        platform=lock.platform,
+        arch=lock.arch,
+        build_type=lock.config,
+        link=lock.link,
+        sha256=entry.sha256,
+        size_bytes=entry.size_bytes,
+        archive_url=entry.archive_url,
+        source_release=entry.source_release,
+    )
 
 
 @cli.command()
@@ -1186,7 +1264,6 @@ def sync(prefix: str) -> None:
     from cvcpkg.cache import default_cache_dir
     from cvcpkg.installer import install_entry
     from cvcpkg.lockfile import Lockfile
-    from cvcpkg.manifest import CatalogEntry
 
     lock = Lockfile.read(lock_path)
     cache_dir = default_cache_dir()
@@ -1203,20 +1280,7 @@ def sync(prefix: str) -> None:
             continue
         if not entry.archive_url:
             raise click.ClickException(f"cannot sync {entry.name} -- no archive_url in lockfile.")
-        cat_entry = CatalogEntry(
-            name=entry.name,
-            version=entry.version,
-            upstream_version=entry.upstream_version,
-            cvc_revision=1,
-            platform=lock.platform,
-            arch=lock.arch,
-            build_type=lock.config,
-            link=lock.link,
-            sha256=entry.sha256,
-            size_bytes=entry.size_bytes,
-            archive_url=entry.archive_url,
-            source_release=entry.source_release,
-        )
+        cat_entry = _lock_entry_to_catalog(entry, lock)
         # Inject mirror download URLs as fallbacks.
         if mirror_urls and cat_entry.archive_url:
             fname = cat_entry.archive_url.rsplit("/", 1)[-1]
@@ -1232,6 +1296,235 @@ def sync(prefix: str) -> None:
         click.echo(f"cvcpkg: synced {installed} bundle(s).")
     else:
         click.echo("cvcpkg: prefix is in sync.")
+
+
+# ── repair ──────────────────────────────────────────────────────
+
+
+def _diagnose_bundle(
+    pkg: InstalledPackage,
+    lock: Lockfile,
+    prefix_path: Path,
+    cache_dir: Path,
+    force: bool,
+) -> tuple[str, str]:
+    """Classify one installed bundle as ``ok`` / ``broken`` / ``unrepairable``.
+
+    Returns ``(status, reason)``.  Detection is layered:
+
+    - A source-built bundle has no archive to restore from -> ``unrepairable``.
+    - ``--force`` treats every other targeted bundle as ``broken``.
+    - level 1: the bundle's manifest is gone from the prefix.
+    - level 2: a payload file the archive shipped is missing from the prefix.
+      The authoritative member list comes from the cached archive; if it was
+      evicted, ``fetch_removal_archive`` re-downloads it (sha-verified) first.
+    - level 3: the cached archive itself is corrupt (re-hash != lockfile sha256),
+      so it is evicted here and re-downloaded when the bundle is reinstalled.
+    """
+    from cvcpkg import cache as cache_mod
+    from cvcpkg import uninstaller
+
+    entry = pkg.entry
+    if pkg.source_built or not entry.archive_url:
+        return "unrepairable", "built from source (no archive to restore from)"
+
+    if force:
+        return "broken", "forced reinstall"
+
+    if _locate_bundle_manifest(prefix_path, pkg.name) is None:
+        return "broken", "manifest missing"
+
+    # level 2 — need the authoritative member list; fetch the archive if evicted.
+    if pkg.archive is None:
+        uninstaller.fetch_removal_archive(pkg, lock, cache_dir)
+    missing = _missing_payload_files(pkg, lock.platform, prefix_path)
+    if missing:
+        return "broken", f"missing payload file {missing[0]}"
+
+    # level 3 — corruption of the cached archive.
+    if pkg.archive is not None and entry.sha256:
+        if cache_mod.file_sha256(pkg.archive) != entry.sha256:
+            try:
+                pkg.archive.unlink()
+            except OSError:
+                pass
+            pkg.archive = None
+            return "broken", "cached archive corrupt"
+
+    return "ok", ""
+
+
+@cli.command()
+@click.argument("components", nargs=-1)
+@_prefix_opt
+@click.option(
+    "--all",
+    "all_bundles",
+    is_flag=True,
+    help="Repair every bundle in the prefix (also the default when no " "COMPONENTS are named).",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show what would be repaired without downloading or changing anything.",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Re-download and reinstall every targeted bundle even if it looks healthy.",
+)
+@click.option(
+    "--verify-signatures/--no-verify-signatures",
+    default=False,
+    help="Verify Ed25519 signatures on re-downloaded archives when present.",
+)
+@click.option(
+    "--require-signatures",
+    is_flag=True,
+    default=False,
+    help="Require a valid signature on every re-downloaded archive.  Implies "
+    "--verify-signatures.",
+)
+def repair(
+    components: tuple[str, ...],
+    prefix: str,
+    all_bundles: bool,
+    dry_run: bool,
+    force: bool,
+    verify_signatures: bool,
+    require_signatures: bool,
+) -> None:
+    """Restore broken bundles in an installed prefix.
+
+    Detects bundles whose files have gone missing (a deleted manifest, a
+    deleted payload library, or a corrupted download cache) and re-downloads
+    and re-extracts them from the archive the lockfile pins — so a prefix
+    damaged after install is brought back to the locked state without
+    recreating it from scratch.  Restrict to specific COMPONENTS by naming
+    them; otherwise (or with --all) every installed bundle is checked.
+
+    A bundle built from source has no archive to restore from and is reported
+    as unrepairable rather than failing the command.  The lockfile is never
+    rewritten: repair restores the prefix to what the lockfile already records.
+
+    \b
+    Examples:
+      cvcpkg verify --prefix ./deps      # find what is broken
+      cvcpkg repair --prefix ./deps      # restore everything broken
+      cvcpkg repair zlib --prefix ./deps # restore just this bundle
+      cvcpkg repair --prefix ./deps --dry-run   # preview
+    """
+    from cvcpkg import installer, uninstaller
+    from cvcpkg.cache import default_cache_dir
+    from cvcpkg.lockfile import Lockfile
+
+    prefix_path = Path(prefix).resolve()
+    lock_path = prefix_path / "share" / "libcvc-deps" / "lockfile.yaml"
+    if not lock_path.exists():
+        raise click.ClickException(f"no lockfile at {lock_path}")
+    lock = Lockfile.read(lock_path)
+
+    installed_names = {b.name for b in lock.bundles}
+    if components:
+        wanted = {c.split("==")[0] for c in components}
+        unknown = wanted - installed_names
+        if unknown:
+            raise click.ClickException(
+                f"not installed in this prefix: {', '.join(sorted(unknown))}"
+            )
+    else:
+        wanted = None
+    if all_bundles or wanted is None:
+        targeted = [b.name for b in lock.bundles]
+    else:
+        targeted = [b.name for b in lock.bundles if b.name in wanted]
+
+    # Local recipes are only a fallback dep source (like uninstall); their
+    # absence must not fail the command.
+    try:
+        rdirs: list[Path] | None = _resolve_recipes_dirs((), no_default=False)
+    except click.ClickException:
+        rdirs = None
+
+    cache_dir = default_cache_dir()
+
+    # Fetch mirror list for failover downloads.
+    server_url = os.environ.get("CVCPKG_SERVER_URL", "")
+    mirror_urls: list[str] = []
+    if server_url:
+        mirror_urls = _fetch_mirror_urls(server_url, os.environ.get("CVCPKG_TOKEN"))
+
+    packages = uninstaller.load_installed(lock, cache_dir, recipe_dirs=rdirs)
+
+    click.echo(f"cvcpkg: checking prefix {prefix_path} ({len(targeted)} bundle(s)) ...")
+    statuses: dict[str, tuple[str, str]] = {}
+    for name in targeted:
+        statuses[name] = _diagnose_bundle(packages[name], lock, prefix_path, cache_dir, force)
+        status, reason = statuses[name]
+        if status == "ok":
+            click.echo(f"  OK       {name}")
+        elif status == "unrepairable":
+            click.echo(f"  SKIP     {name} -- {reason}")
+        else:
+            click.echo(f"  BROKEN   {name} -- {reason}")
+
+    broken = [n for n in targeted if statuses[n][0] == "broken"]
+    if not broken:
+        click.echo("cvcpkg: nothing to repair.")
+        return
+
+    if dry_run:
+        click.echo(
+            f"cvcpkg: dry run — {len(broken)} bundle(s) would be repaired: " + ", ".join(broken)
+        )
+        return
+
+    repaired = 0
+    for name in broken:
+        pkg = packages[name]
+        # The archive is the file list AND the payload source; fetch if evicted.
+        if pkg.archive is None:
+            click.echo(f"cvcpkg: fetching archive for {name} {pkg.entry.version} ...")
+        uninstaller.fetch_removal_archive(pkg, lock, cache_dir)
+
+        # Remove only this bundle's own files, protecting paths (and the
+        # share/libcvc-deps/ metadata slot) that a surviving package also owns.
+        removal = {name: pkg}
+        kept = {n: p for n, p in packages.items() if n != name}
+        plan = uninstaller.plan_removal(removal, kept, lock.platform)
+        click.echo(f"cvcpkg: repairing {name} {pkg.entry.version} ...")
+        uninstaller.execute_removal(prefix_path, plan.remove[name])
+
+        cat_entry = _lock_entry_to_catalog(pkg.entry, lock)
+        # Inject mirror download URLs as fallbacks.
+        if mirror_urls and cat_entry.archive_url:
+            fname = cat_entry.archive_url.rsplit("/", 1)[-1]
+            for murl in mirror_urls:
+                fallback = f"{murl.rstrip('/')}/v1/mirror/download/{fname}"
+                if fallback not in cat_entry.mirror_urls:
+                    cat_entry.mirror_urls.append(fallback)
+        installer.install_entry(
+            cat_entry,
+            prefix_path,
+            cache_dir,
+            verify_signatures=verify_signatures or require_signatures,
+            require_signatures=require_signatures,
+            target_platform=lock.platform,
+        )
+        repaired += 1
+
+    click.echo(f"cvcpkg: repaired {repaired} bundle(s).")
+
+    # Final pass: re-classify what we repaired against a fresh view of the
+    # prefix; anything still broken means the restore did not take.
+    fresh = uninstaller.load_installed(lock, cache_dir, recipe_dirs=rdirs)
+    still_broken = [
+        n
+        for n in broken
+        if _diagnose_bundle(fresh[n], lock, prefix_path, cache_dir, force=False)[0] == "broken"
+    ]
+    if still_broken:
+        raise click.ClickException(f"repair could not restore: {', '.join(still_broken)}")
 
 
 # ── upgrade ─────────────────────────────────────────────────────
