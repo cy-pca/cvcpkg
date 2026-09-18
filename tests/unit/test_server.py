@@ -1525,9 +1525,7 @@ class TestPackageDetailUrls:
         client, *_ = server_env
         resp = client.get("/package/boost")
         assert resp.status_code == 200
-        assert re.search(
-            r'<link rel="canonical" href="[^"]*/package/boost"', resp.text
-        )
+        assert re.search(r'<link rel="canonical" href="[^"]*/package/boost"', resp.text)
         # No package page link should use the legacy ?org= query form.
         assert not re.search(r'/package/[^"\'\s<>?]+\?org=', resp.text)
 
