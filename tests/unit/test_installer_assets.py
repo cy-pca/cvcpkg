@@ -30,6 +30,20 @@ def test_install_ps1_targets_cy_pca():
     assert f'else {{ "{NEW_REPO}" }}' in text
 
 
+def test_install_sh_supports_install_dir_flag():
+    # First-class install-location flags served by the shell installer (issue #17).
+    text = _asset("install.sh")
+    assert "--install-dir" in text, "install.sh missing the --install-dir flag"
+    assert "while [ $# -gt 0 ]" in text, "install.sh missing the argument-parse loop"
+
+
+def test_install_ps1_supports_install_dir_param():
+    # First-class install-location flags served by the PowerShell installer (issue #17).
+    text = _asset("install.ps1")
+    assert "param(" in text, "install.ps1 missing a param() block"
+    assert "$InstallDir" in text, "install.ps1 missing the $InstallDir parameter"
+
+
 def test_github_repo_defaults_are_cy_pca():
     # The server's "GitHub" link default (landing) and RSS channel link (app)
     # must default to the new repo when CVCPKG_GITHUB_REPO is unset.
