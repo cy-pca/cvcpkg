@@ -91,7 +91,7 @@ _SECTIONS: list[tuple[str, list[str]]] = [
     ),
     (
         "Reproducible prefixes",
-        ["lock", "sync", "verify", "image", "cpkg"],
+        ["lock", "sync", "verify", "repair", "image", "cpkg"],
     ),
     (
         "Recipes and building",
