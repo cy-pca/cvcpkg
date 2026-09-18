@@ -81,19 +81,43 @@ def _recipe_name(recipe_dir: Path) -> str:
     return doc.get("recipe", {}).get("name", recipe_dir.name)
 
 
-def build_recipe_map(roots: Iterable[Path], singles: Iterable[Path] = ()) -> dict[str, Path]:
+def build_recipe_map(
+    roots: Iterable[Path],
+    singles: Iterable[Path] = (),
+    *,
+    collisions: list | None = None,
+) -> dict[str, Path]:
     """Map recipe name → recipe dir across *roots* (dirs of recipes) and
     *singles* (individual recipe dirs).  Later entries win on name conflicts,
-    matching the ``--recipes-dir`` overlay ("later directories win")."""
+    matching the ``--recipes-dir`` overlay ("later directories win").
+
+    When *collisions* is given, each real shadow (a name already mapped to a
+    DIFFERENT recipe dir) appends a ``(name, shadowed, winner)`` tuple to it."""
     found: dict[str, Path] = {}
+
+    def _put(name: str, rd: Path) -> None:
+        rd = Path(rd).resolve()
+        if collisions is not None and name in found and found[name] != rd:
+            collisions.append((name, found[name], rd))
+        found[name] = rd
+
     for root in roots:
         for rd in _iter_recipe_dirs(Path(root)):
-            found[_recipe_name(rd)] = rd
+            _put(_recipe_name(rd), rd)
     for rd in singles:
         rd = Path(rd)
         if (rd / "recipe.yaml").is_file():
-            found[_recipe_name(rd)] = rd
+            _put(_recipe_name(rd), rd)
     return found
+
+
+def report_duplicates(collisions: list) -> list[str]:
+    """One human-readable message per recorded ``(name, shadowed, winner)``
+    collision from :func:`build_recipe_map`."""
+    return [
+        f"recipe {name!r} in {winner} shadows {shadowed} (later --recipes-dir wins)"
+        for name, shadowed, winner in collisions
+    ]
 
 
 def known_targets(recipe_map: dict[str, Path]) -> set[str]:
@@ -361,6 +385,7 @@ def run(
     *,
     extra_dirs: Iterable[str | Path] = (),
     no_default: bool = False,
+    strict_duplicates: bool = False,
 ) -> list[str]:
     """Validate *target* over the resolved recipe search path; return errors.
 
@@ -387,7 +412,8 @@ def run(
                     "'components')"
                 )
         if target in ("all", "recipes"):
-            rmap = build_recipe_map(resolved)
+            collisions: list = []
+            rmap = build_recipe_map(resolved, collisions=collisions)
             if not rmap:
                 errors.append(
                     "no recipes found on the recipe search path "
@@ -397,6 +423,12 @@ def run(
             for name in sorted(rmap):
                 errors += validate_recipe_dir(rmap[name])
             errors += validate_cross_deps(rmap, universe)
+            dup_msgs = report_duplicates(collisions)
+            if strict_duplicates:
+                errors += dup_msgs
+            else:
+                for m in dup_msgs:
+                    print(f"  ⚠ {m}")
 
     elif is_single or is_root:
         if is_single:
