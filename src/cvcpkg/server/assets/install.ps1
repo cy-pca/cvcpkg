@@ -2,20 +2,33 @@
 #
 #   irm https://cvcpkg.org/install.ps1 | iex
 #
+# To pass options, create a script block from the download and call it:
+#
+#   & ([scriptblock]::Create((irm https://cvcpkg.org/install.ps1))) -InstallDir C:\tools\cvcpkg
+#
 # Downloads the latest cvcpkg standalone binary release, verifies its
 # sha256 checksum, and installs it for the current user (no admin
 # rights required).
+#
+# Options:
+#   -InstallDir DIR   install location (default: $env:LOCALAPPDATA\cvcpkg)
+#   -Version TAG      pin a release tag, e.g. cvcpkg-v2.0.0
 #
 # Env overrides:
 #   $env:CVCPKG_VERSION      pin a release tag, e.g. cvcpkg-v2.0.0
 #   $env:CVCPKG_INSTALL_DIR  install location (default: $env:LOCALAPPDATA\cvcpkg)
 #   $env:CVCPKG_REPO         GitHub repo to fetch releases from
 #                            (default: cy-pca/cvcpkg)
+#
+# Precedence: command-line flag > environment variable > built-in default.
+
+param([string]$InstallDir, [string]$Version)
 
 $ErrorActionPreference = "Stop"
 
 $Repo = if ($env:CVCPKG_REPO) { $env:CVCPKG_REPO } else { "cy-pca/cvcpkg" }
-$InstallDir = if ($env:CVCPKG_INSTALL_DIR) { $env:CVCPKG_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "cvcpkg" }
+$InstallDir = if ($InstallDir) { $InstallDir } elseif ($env:CVCPKG_INSTALL_DIR) { $env:CVCPKG_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "cvcpkg" }
+if ($Version) { $env:CVCPKG_VERSION = $Version }
 
 function Die($msg) {
     Write-Error "error: $msg"

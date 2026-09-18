@@ -3,23 +3,95 @@
 #
 #   curl -fsSL https://cvcpkg.org/install.sh | sh
 #
+# To pass options, use the POSIX `sh -s --` form:
+#
+#   curl -fsSL https://cvcpkg.org/install.sh | sh -s -- --install-dir /opt/cvcpkg/bin
+#
 # Downloads the latest cvcpkg standalone binary release for your
-# platform, verifies its sha256 checksum, and installs it to
-# $CVCPKG_INSTALL_DIR (default: $HOME/.local/bin).
+# platform, verifies its sha256 checksum, and installs it to the
+# chosen directory (default: $HOME/.local/bin).
+#
+# Options:
+#   --install-dir DIR   install location (default: $HOME/.local/bin)
+#   --version TAG       pin a release tag, e.g. cvcpkg-v2.0.0
+#   -h, --help          show usage and exit
 #
 # Env overrides:
 #   CVCPKG_VERSION      pin a release tag, e.g. cvcpkg-v2.0.0
 #   CVCPKG_INSTALL_DIR  install location (default: $HOME/.local/bin)
 #   CVCPKG_REPO         GitHub repo to fetch releases from
 #                       (default: cy-pca/cvcpkg)
+#
+# Precedence: command-line flag > environment variable > built-in default.
 
 set -eu
 
-REPO="${CVCPKG_REPO:-cy-pca/cvcpkg}"
-INSTALL_DIR="${CVCPKG_INSTALL_DIR:-$HOME/.local/bin}"
-
 say() { printf '%s\n' "$*" >&2; }
 die() { say "error: $*"; exit 1; }
+
+REPO="${CVCPKG_REPO:-cy-pca/cvcpkg}"
+
+install_dir_flag=""
+
+usage() {
+    cat >&2 <<'EOF'
+cvcpkg installer
+
+Usage:
+  curl -fsSL https://cvcpkg.org/install.sh | sh
+  curl -fsSL https://cvcpkg.org/install.sh | sh -s -- [options]
+
+Options:
+  --install-dir DIR   install cvcpkg into DIR (default: $HOME/.local/bin)
+  --version TAG       install a specific release, e.g. cvcpkg-v2.0.0
+  -h, --help          show this help and exit
+
+Environment:
+  CVCPKG_INSTALL_DIR  install location (default: $HOME/.local/bin)
+  CVCPKG_VERSION      pin a release tag, e.g. cvcpkg-v2.0.0
+  CVCPKG_REPO         GitHub repo to fetch releases from (default: cy-pca/cvcpkg)
+
+Precedence: command-line flag > environment variable > built-in default.
+EOF
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --install-dir)
+            [ $# -ge 2 ] || die "--install-dir requires a directory argument"
+            install_dir_flag="$2"
+            shift 2
+            ;;
+        --install-dir=*)
+            install_dir_flag="${1#--install-dir=}"
+            shift
+            ;;
+        --version)
+            [ $# -ge 2 ] || die "--version requires a tag argument"
+            CVCPKG_VERSION="$2"
+            shift 2
+            ;;
+        --version=*)
+            CVCPKG_VERSION="${1#--version=}"
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            die "unknown option '$1' (try --help)"
+            ;;
+    esac
+done
+
+INSTALL_DIR="${install_dir_flag:-${CVCPKG_INSTALL_DIR:-$HOME/.local/bin}}"
+case "$INSTALL_DIR" in
+    "~")   INSTALL_DIR="$HOME" ;;
+    "~/"*) INSTALL_DIR="$HOME/${INSTALL_DIR#~/}" ;;
+    /*)    ;;
+    *)     INSTALL_DIR="$(pwd)/$INSTALL_DIR" ;;
+esac
 
 command -v curl >/dev/null 2>&1 || die "curl is required but not found"
 
@@ -90,7 +162,9 @@ fi
     || die "checksum mismatch for $asset (expected $expected, got $actual)"
 
 # ---- Install ------------------------------------------------------------
-mkdir -p "$INSTALL_DIR"
+if ! mkdir -p "$INSTALL_DIR" 2>/dev/null || [ ! -w "$INSTALL_DIR" ]; then
+    die "cannot write to $INSTALL_DIR — re-run with a writable --install-dir, or: curl -fsSL https://cvcpkg.org/install.sh | sudo sh -s -- --install-dir $INSTALL_DIR"
+fi
 chmod +x "$tmp/$asset"
 mv "$tmp/$asset" "$INSTALL_DIR/cvcpkg"
 

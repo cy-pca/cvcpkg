@@ -1053,7 +1053,13 @@ def landing_html() -> str:
       <span class="copy-btn" id="copy-install" title="Copy"><i class="fas fa-copy"></i></span>
     </span>
     <p class="is-size-7 has-text-grey mt-3">
-      Windows: <code class="is-family-monospace">iwr {_SITE_URL}/install.ps1 -useb | iex</code>
+      Custom location: <code class="is-family-monospace">curl -fsSL {_SITE_URL}/install.sh | sh -s -- --install-dir /opt/cvcpkg/bin</code>
+    </p>
+    <p class="is-size-7 has-text-grey mt-2">
+      Windows: <code class="is-family-monospace">irm {_SITE_URL}/install.ps1 | iex</code>
+    </p>
+    <p class="is-size-7 has-text-grey mt-2">
+      Windows (custom location): <code class="is-family-monospace">&amp; ([scriptblock]::Create((irm {_SITE_URL}/install.ps1))) -InstallDir C:\\tools\\cvcpkg</code>
     </p>
   </div>
 </section>
@@ -3945,11 +3951,19 @@ def guide_html() -> str:
         <p class="has-text-grey-lighter mb-2">
           Linux, macOS, or BSD — install the standalone binary (no Python required):
         </p>
-        <div class="guide-code"><pre><code>curl -fsSL https://cvcpkg.org/install.sh | sh</code></pre></div>
+        <div class="guide-code"><pre><code>curl -fsSL {_SITE_URL}/install.sh | sh</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">Install to a custom location:</p>
+        <div class="guide-code"><pre><code>curl -fsSL {_SITE_URL}/install.sh | sh -s -- --install-dir /opt/cvcpkg/bin</code></pre></div>
       </div>
       <div class="guide-step">
         <p class="has-text-grey-lighter mb-2">Windows (PowerShell):</p>
-        <div class="guide-code"><pre><code>irm https://cvcpkg.org/install.ps1 | iex</code></pre></div>
+        <div class="guide-code"><pre><code>irm {_SITE_URL}/install.ps1 | iex</code></pre></div>
+      </div>
+      <div class="guide-step">
+        <p class="has-text-grey-lighter mb-2">Windows — install to a custom location:</p>
+        <div class="guide-code"><pre><code>&amp; ([scriptblock]::Create((irm {_SITE_URL}/install.ps1))) -InstallDir C:\\tools\\cvcpkg</code></pre></div>
       </div>
       <div class="guide-step">
         <p class="has-text-grey-lighter mb-2">Or install from PyPI:</p>
