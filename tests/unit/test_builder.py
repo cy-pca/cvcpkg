@@ -1697,20 +1697,52 @@ class TestCreateArchive:
     def test_deterministic_tar_xz(self, tmp_path):
         staging = self._make_staging(tmp_path)
         _, sha1, _ = create_archive(
-            staging, tmp_path / "d1", "p", "1.0", "linux", "x86_64", "release", "shared", fmt="tar.xz"
+            staging,
+            tmp_path / "d1",
+            "p",
+            "1.0",
+            "linux",
+            "x86_64",
+            "release",
+            "shared",
+            fmt="tar.xz",
         )
         _, sha2, _ = create_archive(
-            staging, tmp_path / "d2", "p", "1.0", "linux", "x86_64", "release", "shared", fmt="tar.xz"
+            staging,
+            tmp_path / "d2",
+            "p",
+            "1.0",
+            "linux",
+            "x86_64",
+            "release",
+            "shared",
+            fmt="tar.xz",
         )
         assert sha1 == sha2
 
     def test_deterministic_tar_bz2(self, tmp_path):
         staging = self._make_staging(tmp_path)
         _, sha1, _ = create_archive(
-            staging, tmp_path / "d1", "p", "1.0", "linux", "x86_64", "release", "shared", fmt="tar.bz2"
+            staging,
+            tmp_path / "d1",
+            "p",
+            "1.0",
+            "linux",
+            "x86_64",
+            "release",
+            "shared",
+            fmt="tar.bz2",
         )
         _, sha2, _ = create_archive(
-            staging, tmp_path / "d2", "p", "1.0", "linux", "x86_64", "release", "shared", fmt="tar.bz2"
+            staging,
+            tmp_path / "d2",
+            "p",
+            "1.0",
+            "linux",
+            "x86_64",
+            "release",
+            "shared",
+            fmt="tar.bz2",
         )
         assert sha1 == sha2
 
