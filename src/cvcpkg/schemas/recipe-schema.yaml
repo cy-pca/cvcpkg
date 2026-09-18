@@ -479,6 +479,13 @@ $defs:
         type: array
         items: { type: string }
         description: "pkg-config module names shipped by this component"
+      archive_format:
+        type: string
+        enum: [tar.gz, tar.xz, tar.bz2, zip]
+        description: >
+          Archive format for this bundle. Omitted → per-target default (zip on
+          windows, tar.gz everywhere else incl. any/noarch, wasm, cosmo). All are
+          written deterministically; the consumer sniffs magic bytes.
 
   test_block:
     type: object

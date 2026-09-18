@@ -1631,6 +1631,89 @@ class TestCreateArchive:
         )
         assert path.name == "zlib-1.3.1+cvc.1-linux-x86_64-release-shared.tar.gz"
 
+    def test_tar_xz_explicit_format(self, tmp_path):
+        staging = self._make_staging(tmp_path)
+        out = tmp_path / "dist"
+        path, sha, size = create_archive(
+            staging, out, "p", "1.0", "linux", "x86_64", "release", "shared", fmt="tar.xz"
+        )
+        assert path.name.endswith(".tar.xz")
+        assert path.exists()
+        assert len(sha) == 64
+        assert size > 0
+
+        # tarfile auto-detects xz and extracts back to the same tree.
+        with tarfile.open(path) as tf:
+            names = tf.getnames()
+            assert "lib/libtest.so" in names
+            assert "include/test.h" in names
+
+    def test_tar_bz2_explicit_format(self, tmp_path):
+        staging = self._make_staging(tmp_path)
+        out = tmp_path / "dist"
+        path, sha, size = create_archive(
+            staging, out, "p", "1.0", "linux", "x86_64", "release", "shared", fmt="tar.bz2"
+        )
+        assert path.name.endswith(".tar.bz2")
+        assert path.exists()
+        assert len(sha) == 64
+        assert size > 0
+
+        with tarfile.open(path) as tf:
+            names = tf.getnames()
+            assert "lib/libtest.so" in names
+            assert "include/test.h" in names
+
+    def test_explicit_zip_overrides_non_windows_default(self, tmp_path):
+        # An explicit format beats the per-platform default (tar.gz on linux).
+        staging = self._make_staging(tmp_path)
+        out = tmp_path / "dist"
+        path, sha, _ = create_archive(
+            staging, out, "p", "1.0", "linux", "x86_64", "release", "shared", fmt="zip"
+        )
+        assert path.suffix == ".zip"
+        assert len(sha) == 64
+        with zipfile.ZipFile(path) as zf:
+            names = zf.namelist()
+            assert "lib/libtest.so" in names
+            assert "include/test.h" in names
+
+    def test_default_format_per_platform(self, tmp_path):
+        # fmt=None (or unset) keeps the per-platform default.
+        staging = self._make_staging(tmp_path)
+        win, _, _ = create_archive(
+            staging, tmp_path / "w", "p", "1.0", "windows", "x86_64", "release", "shared", fmt=None
+        )
+        assert win.suffix == ".zip"
+        lin, _, _ = create_archive(
+            staging, tmp_path / "l", "p", "1.0", "linux", "x86_64", "release", "shared", fmt=None
+        )
+        assert lin.name.endswith(".tar.gz")
+        noarch, _, _ = create_archive(
+            staging, tmp_path / "a", "p", "1.0", "any", "noarch", "release", "shared", fmt=None
+        )
+        assert noarch.name.endswith(".tar.gz")
+
+    def test_deterministic_tar_xz(self, tmp_path):
+        staging = self._make_staging(tmp_path)
+        _, sha1, _ = create_archive(
+            staging, tmp_path / "d1", "p", "1.0", "linux", "x86_64", "release", "shared", fmt="tar.xz"
+        )
+        _, sha2, _ = create_archive(
+            staging, tmp_path / "d2", "p", "1.0", "linux", "x86_64", "release", "shared", fmt="tar.xz"
+        )
+        assert sha1 == sha2
+
+    def test_deterministic_tar_bz2(self, tmp_path):
+        staging = self._make_staging(tmp_path)
+        _, sha1, _ = create_archive(
+            staging, tmp_path / "d1", "p", "1.0", "linux", "x86_64", "release", "shared", fmt="tar.bz2"
+        )
+        _, sha2, _ = create_archive(
+            staging, tmp_path / "d2", "p", "1.0", "linux", "x86_64", "release", "shared", fmt="tar.bz2"
+        )
+        assert sha1 == sha2
+
 
 # ── list_recipes (against the real recipes/ dir) ─────────────────
 

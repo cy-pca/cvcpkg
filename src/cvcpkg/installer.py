@@ -419,5 +419,7 @@ def _archive_filename(entry: CatalogEntry) -> str:
     parts = ["libcvc-deps", entry.name, entry.version, entry.platform, entry.arch, entry.build_type]
     if entry.link:
         parts.append(entry.link)
-    ext = ".tar.gz" if entry.platform != "windows" else ".zip"
+    from cvcpkg.platform import _ARCHIVE_EXT, default_archive_format
+
+    ext = _ARCHIVE_EXT[default_archive_format(entry.platform)]
     return "-".join(parts) + ext
