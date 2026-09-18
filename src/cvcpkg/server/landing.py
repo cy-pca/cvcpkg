@@ -529,13 +529,19 @@ def _footer_html() -> str:
 </footer>"""
 
 
-def _head_html(title: str) -> str:
+def _head_html(title: str, canonical: str = "") -> str:
     href = brand_logo_href()
     # Social scrapers need an absolute URL; a configured remote logo already
     # is one, a served asset gets the site origin prepended.  The wide banner
     # makes a better social card than the square icon.
     banner = brand_banner_href()
     og_image = href if _logo_is_remote() else f"{_SITE_URL}{banner}"
+    canonical_tags = (
+        f'\n  <link rel="canonical" href="{_SITE_URL}{canonical}" />'
+        f'\n  <meta property="og:url" content="{_SITE_URL}{canonical}" />'
+        if canonical
+        else ""
+    )
     return f"""<head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -545,7 +551,7 @@ def _head_html(title: str) -> str:
   <meta name="theme-color" content="#0a0a12" />
   <meta property="og:title" content="{title}" />
   <meta property="og:type" content="website" />
-  <meta property="og:image" content="{og_image}" />
+  <meta property="og:image" content="{og_image}" />{canonical_tags}
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:image" content="{og_image}" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -860,7 +866,7 @@ function renderResults(data) {
     tbody.innerHTML = grouped.map(g => {
       const isOrg = !!g.org;
       const pkgUrl = isOrg
-        ? '/package/' + encodeURIComponent(g.name) + '?org=' + encodeURIComponent(g.org)
+        ? '/package/' + encodeURIComponent(g.org) + '/' + encodeURIComponent(g.name)
         : '/package/' + encodeURIComponent(g.name);
       return `
       <tr class="pkg-card">
@@ -1935,10 +1941,11 @@ def package_detail_html(name: str, *, org: str = "") -> str:
     safe_name = _html.escape(name, quote=True)
     safe_org = _html.escape(org, quote=True) if org else ""
     display_title = f"{safe_org}/{safe_name}" if safe_org else safe_name
+    canonical_path = f"/package/{org}/{name}" if org else f"/package/{name}"
 
     return f"""<!DOCTYPE html>
 <html lang="en" data-theme="dark" class="has-background-black-bis">
-{_head_html(f"{display_title} &mdash; cvcpkg")}
+{_head_html(f"{display_title} &mdash; cvcpkg", canonical=canonical_path)}
 <body class="has-background-black-bis has-text-light">
 
 {_navbar_html()}
@@ -2470,12 +2477,14 @@ function renderOrg(data) {{
       '</tr></thead><tbody>' +
       Object.entries(groups).sort((a,b) => a[0].localeCompare(b[0])).map(([name, builds]) => {{
         const totalSize = builds.reduce((s, b) => s + (b.size_bytes || 0), 0);
-        const orgParam = builds[0].org ? '?org=' + encodeURIComponent(builds[0].org) : '';
         const orgSlug = builds[0].org || '';
+        const pkgUrl = orgSlug
+          ? '/package/' + encodeURIComponent(orgSlug) + '/' + encodeURIComponent(name)
+          : '/package/' + encodeURIComponent(name);
         const displayName = orgSlug
           ? '<span class="has-text-grey-light">' + esc(orgSlug) + '/</span><strong>' + esc(name) + '</strong>'
           : '<strong>' + esc(name) + '</strong>';
-        return '<tr><td><a href="/package/' + encodeURIComponent(name) + orgParam + '" class="has-text-link">' + displayName + '</a></td>' +
+        return '<tr><td><a href="' + pkgUrl + '" class="has-text-link">' + displayName + '</a></td>' +
           '<td><code>' + esc(builds[0].version) + '</code></td>' +
           '<td><span class="tag is-dark is-rounded">' + builds.length + '</span></td>' +
           '<td class="is-family-monospace is-size-7 has-text-grey-light">' + fmtSize(totalSize) + '</td></tr>';
@@ -3420,8 +3429,7 @@ async function loadJobs(resetOffset) {{
       return '<tr>' +
         '<td class="has-text-grey-light">' + j.id + '</td>' +
         '<td><a href="/build/' + j.id + '"><span class="tag ' + statusCls(j.status) + ' is-rounded"' + errTip + '>' + esc(j.status) + '</span></a></td>' +
-        '<td><a href="/package/' + encodeURIComponent(j.recipe_name) +
-        (j.org_slug ? '?org=' + encodeURIComponent(j.org_slug) : '') +
+        '<td><a href="' + (j.org_slug ? '/package/' + encodeURIComponent(j.org_slug) + '/' + encodeURIComponent(j.recipe_name) : '/package/' + encodeURIComponent(j.recipe_name)) +
         '" class="has-text-link">' + (j.org_slug ? esc(j.org_slug) + '/' : '') + esc(j.recipe_name) + '</a></td>' +
         '<td>' + platformTag(j.platform) + '</td>' +
         '<td class="has-text-grey-light">' + esc(j.arch) + '</td>' +
@@ -3635,12 +3643,10 @@ function populateMeta(j) {{
   document.getElementById('build-status').className = 'tag ' + statusCls(j.status) + ' is-medium is-rounded';
   document.getElementById('build-status').textContent = j.status;
   document.getElementById('build-title').innerHTML =
-    'Build #' + j.id + ' &mdash; <a href="/package/' + encodeURIComponent(j.recipe_name) +
-    (j.org_slug ? '?org=' + encodeURIComponent(j.org_slug) : '') +
+    'Build #' + j.id + ' &mdash; <a href="' + (j.org_slug ? '/package/' + encodeURIComponent(j.org_slug) + '/' + encodeURIComponent(j.recipe_name) : '/package/' + encodeURIComponent(j.recipe_name)) +
     '" class="has-text-link">' + (j.org_slug ? esc(j.org_slug) + '/' : '') + esc(j.recipe_name) + '</a>';
   document.getElementById('meta-recipe').innerHTML =
-    '<a href="/package/' + encodeURIComponent(j.recipe_name) +
-    (j.org_slug ? '?org=' + encodeURIComponent(j.org_slug) : '') +
+    '<a href="' + (j.org_slug ? '/package/' + encodeURIComponent(j.org_slug) + '/' + encodeURIComponent(j.recipe_name) : '/package/' + encodeURIComponent(j.recipe_name)) +
     '" class="has-text-link">' + (j.org_slug ? esc(j.org_slug) + '/' : '') + esc(j.recipe_name) + '</a>';
   document.getElementById('meta-platform').innerHTML = platformTag(j.platform) + ' / ' + esc(j.arch);
   document.getElementById('meta-config').textContent = j.config + ' / ' + j.link;

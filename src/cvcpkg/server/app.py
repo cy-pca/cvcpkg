@@ -2453,6 +2453,14 @@ def create_app(
             headers={"Cache-Control": "public, max-age=300"},
         )
 
+    @app.get("/package/{org}/{name}", response_class=HTMLResponse, include_in_schema=False)
+    async def package_detail_page_scoped(org: str, name: str):
+        from cvcpkg.server.landing import package_detail_html
+
+        if not _RECIPE_NAME_RE.match(org) or not _RECIPE_NAME_RE.match(name):
+            return HTMLResponse(status_code=404, content="not found")
+        return HTMLResponse(package_detail_html(name, org=org))
+
     @app.get("/package/{name}", response_class=HTMLResponse, include_in_schema=False)
     async def package_detail_page(
         name: str,
@@ -2460,6 +2468,8 @@ def create_app(
     ):
         from cvcpkg.server.landing import package_detail_html
 
+        if org:
+            return RedirectResponse(url=f"/package/{org}/{name}", status_code=301)
         return HTMLResponse(package_detail_html(name, org=org))
 
     @app.get("/guide", response_class=HTMLResponse, include_in_schema=False)

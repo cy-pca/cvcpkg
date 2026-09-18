@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 
 import pytest
 
@@ -1495,6 +1496,45 @@ class TestOrgHTMLPages:
         client, *_ = server_env
         resp = client.get("/org/test-org")
         assert resp.status_code == 200
+
+
+class TestPackageDetailUrls:
+    """Path-based org package URLs, with a 301 from the legacy ?org= form."""
+
+    def test_scoped_path_renders(self, server_env):
+        client, *_ = server_env
+        resp = client.get("/package/cy-pca/scene-austin-south")
+        assert resp.status_code == 200
+        assert 'init("scene-austin-south", "cy-pca")' in resp.text
+        assert re.search(
+            r'<link rel="canonical" href="[^"]*/package/cy-pca/scene-austin-south"',
+            resp.text,
+        )
+
+    def test_legacy_query_redirects(self, server_env):
+        client, *_ = server_env
+        resp = client.get(
+            "/package/scene-austin-south",
+            params={"org": "cy-pca"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 301
+        assert resp.headers["location"] == "/package/cy-pca/scene-austin-south"
+
+    def test_unscoped_path_has_canonical_and_no_query_links(self, server_env):
+        client, *_ = server_env
+        resp = client.get("/package/boost")
+        assert resp.status_code == 200
+        assert re.search(
+            r'<link rel="canonical" href="[^"]*/package/boost"', resp.text
+        )
+        # No package page link should use the legacy ?org= query form.
+        assert not re.search(r'/package/[^"\'\s<>?]+\?org=', resp.text)
+
+    def test_scoped_path_rejects_bad_name(self, server_env):
+        client, *_ = server_env
+        resp = client.get("/package/cy-pca/bad$name", follow_redirects=False)
+        assert resp.status_code == 404
 
 
 class TestOptionalToken:
