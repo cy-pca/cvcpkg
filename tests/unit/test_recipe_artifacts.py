@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 
 from cvcpkg.server.app import create_app
 from cvcpkg.server.auth import TokenStore
+from cvcpkg.server.landing import package_detail_html
 from cvcpkg.server.models import TokenRole
 
 # 1x1 transparent GIF — a stand-in for recipe media.
@@ -165,6 +166,27 @@ class TestRecipeArchive:
 
     def test_unknown_recipe_404(self, client):
         assert client.get("/v1/recipe/nosuch/archive").status_code == 404
+
+
+class TestPackagePageLayout:
+    """Static guards on where the recipe panel sits and how it opens.
+
+    The "yaml visible without a click" behaviour is DOM/Playwright and off
+    this box; these pin the ordering and markup the JS relies on.
+    """
+
+    def test_recipe_panel_sits_above_downloads(self):
+        h = package_detail_html("zlib")
+        assert h.index('id="recipe-section"') < h.index('id="download-stats-section"')
+
+    def test_recipe_renders_open_with_a_yaml_slot(self):
+        h = package_detail_html("zlib")
+        # The recipe body no longer starts collapsed, and there is a slot for
+        # recipe.yaml that the loader fills.
+        assert 'id="recipe-body" style="display:none"' not in h
+        assert 'id="recipe-yaml"' in h
+        # The loader references the slot by id.
+        assert "recipe-yaml" in h
 
 
 class TestOrgScope:

@@ -1512,20 +1512,64 @@ function recipeQuery(extra) {
 async function loadRecipeArtifacts() {
   const section = document.getElementById('recipe-section');
   const list = document.getElementById('recipe-artifacts');
+  const yaml = document.getElementById('recipe-yaml');
   if (!section || !list) return;
+
+  // Reveal the section and explain the absence, for a package published
+  // straight from prebuilt artifacts: the listing 404s or comes back empty
+  // and there is no bundle behind the archive buttons.
+  const showNoRecipe = () => {
+    section.style.display = '';
+    if (yaml) {
+      yaml.textContent =
+        'No recipe on file for this package — it was published from ' +
+        'prebuilt artifacts. Run cvcpkg recipe push ' + pkgName +
+        ' to attach one.';
+    }
+    ['recipe-archive-link', 'recipe-zip-link'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    });
+  };
 
   let files = [];
   try {
     const resp = await fetch(
       '/v1/recipe/' + encodeURIComponent(pkgName) + '/files' + recipeQuery());
-    if (!resp.ok) return;
+    if (!resp.ok) { showNoRecipe(); return; }
     files = (await resp.json()).files || [];
   } catch (_) { return; }
-  if (files.length === 0) return;
+  if (files.length === 0) { showNoRecipe(); return; }
 
   // recipe.yaml first, then the recipe's own files, then shared helpers.
   const rank = f => (f.kind === 'recipe' ? 0 : (f.shared ? 2 : 1));
   files.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+
+  // recipe.yaml renders open above the rest instead of behind a click.
+  const recipeFile = files.find(f => f.kind === 'recipe');
+  const rest = files.filter(f => f.kind !== 'recipe');
+
+  if (yaml) {
+    yaml.replaceChildren();
+    if (recipeFile) {
+      try {
+        const resp = await fetch(
+          '/v1/recipe/' + encodeURIComponent(pkgName) + recipeQuery());
+        const text = resp.ok ? await resp.text() : 'Could not load recipe.yaml.';
+        // textContent, not innerHTML: recipe content is untrusted.
+        const pre = document.createElement('pre');
+        pre.className = 'has-background-dark has-text-light p-3';
+        pre.style.borderRadius = '6px';
+        pre.style.overflowX = 'auto';
+        const code = document.createElement('code');
+        code.textContent = text;
+        pre.appendChild(code);
+        yaml.appendChild(pre);
+      } catch (_) {
+        yaml.textContent = 'Could not load recipe.yaml.';
+      }
+    }
+  }
 
   const iconFor = k =>
     k === 'recipe' ? 'fa-file-code' :
@@ -1533,7 +1577,7 @@ async function loadRecipeArtifacts() {
     k === 'patch'  ? 'fa-file-medical' :
     k === 'script' ? 'fa-terminal' : 'fa-file-alt';
 
-  list.innerHTML = files.map((f, i) =>
+  list.innerHTML = rest.map((f, i) =>
     '<div class="recipe-artifact">' +
       '<a class="recipe-artifact-head" onclick="toggleArtifact(' + i + ')">' +
         '<span class="icon is-small"><i id="ra-icon-' + i + '" class="fas fa-chevron-right"></i></span>' +
@@ -2022,6 +2066,44 @@ def package_detail_html(name: str, *, org: str = "") -> str:
   </div>
 </section>
 
+<!-- Recipe + its artifacts -->
+<!-- Above Downloads on purpose: the recipe is the source of truth for what
+     this package is, so it reads before the build/download table. -->
+<section class="section pt-0 has-background-black-bis" id="recipe-section" style="display:none">
+  <div class="container">
+    <div class="box has-background-black-ter">
+      <h3 class="title is-5 has-text-white collapsible-header" onclick="toggleRecipe()">
+        <span class="icon mr-1"><i class="fas fa-file-code"></i></span> Recipe
+        <span class="icon is-small ml-2"><i id="recipe-toggle-icon" class="fas fa-chevron-up"></i></span>
+        <span class="is-pulled-right" onclick="event.stopPropagation()">
+          <a class="button is-small is-link is-outlined" id="recipe-archive-link"
+             href="/v1/recipe/{safe_name}/archive{'?org=' + safe_org if safe_org else ''}"
+             title="Download recipe.yaml and every script it ships with, as a tar.gz">
+            <span class="icon is-small"><i class="fas fa-file-archive"></i></span>
+            <span>tar.gz</span>
+          </a>
+          <a class="button is-small is-link is-outlined ml-1" id="recipe-zip-link"
+             href="/v1/recipe/{safe_name}/archive?format=zip{'&amp;org=' + safe_org if safe_org else ''}"
+             title="Same archive as a zip">
+            <span class="icon is-small"><i class="fas fa-file-archive"></i></span>
+            <span>zip</span>
+          </a>
+        </span>
+      </h3>
+      <div id="recipe-body" class="recipe-viewer">
+        <p class="has-text-grey-lighter is-size-7 mb-3">
+          Extract either archive into a <code>recipes/</code> directory and it is a
+          well-formed recipe directory &mdash;
+          <code>cvcpkg build {safe_name} --recipes-dir &lt;dir&gt;</code> will use it as-is.
+          Click any file to view it.
+        </p>
+        <div id="recipe-yaml"></div>
+        <div id="recipe-artifacts"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- Available builds -->
 <!-- Above Quick Start on purpose: "which platforms is this actually built
      for?" is the first question a visitor has, and the install commands
@@ -2123,41 +2205,6 @@ tar --zstd -xf &lt;package&gt;.tar.zst -C /opt/cvcpkg</pre>
       <span class="icon mr-1"><i class="fas fa-sticky-note"></i></span> Build Notes
     </h2>
     <div id="pkg-notes-list"></div>
-  </div>
-</section>
-
-<!-- Recipe + its artifacts -->
-<section class="section pt-0 has-background-black-bis" id="recipe-section" style="display:none">
-  <div class="container">
-    <div class="box has-background-black-ter">
-      <h3 class="title is-5 has-text-white collapsible-header" onclick="toggleRecipe()">
-        <span class="icon mr-1"><i class="fas fa-file-code"></i></span> Recipe
-        <span class="icon is-small ml-2"><i id="recipe-toggle-icon" class="fas fa-chevron-down"></i></span>
-        <span class="is-pulled-right" onclick="event.stopPropagation()">
-          <a class="button is-small is-link is-outlined" id="recipe-archive-link"
-             href="/v1/recipe/{safe_name}/archive{'?org=' + safe_org if safe_org else ''}"
-             title="Download recipe.yaml and every script it ships with, as a tar.gz">
-            <span class="icon is-small"><i class="fas fa-file-archive"></i></span>
-            <span>tar.gz</span>
-          </a>
-          <a class="button is-small is-link is-outlined ml-1" id="recipe-zip-link"
-             href="/v1/recipe/{safe_name}/archive?format=zip{'&amp;org=' + safe_org if safe_org else ''}"
-             title="Same archive as a zip">
-            <span class="icon is-small"><i class="fas fa-file-archive"></i></span>
-            <span>zip</span>
-          </a>
-        </span>
-      </h3>
-      <div id="recipe-body" style="display:none" class="recipe-viewer">
-        <p class="has-text-grey-lighter is-size-7 mb-3">
-          Extract either archive into a <code>recipes/</code> directory and it is a
-          well-formed recipe directory &mdash;
-          <code>cvcpkg build {safe_name} --recipes-dir &lt;dir&gt;</code> will use it as-is.
-          Click any file to view it.
-        </p>
-        <div id="recipe-artifacts"></div>
-      </div>
-    </div>
   </div>
 </section>
 
