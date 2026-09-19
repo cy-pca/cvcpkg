@@ -74,9 +74,7 @@ class TestS3CliBackend:
 
     def test_head_swallows_subprocess_error(self, monkeypatch):
         _have(monkeypatch, s3_cli, "/usr/bin/aws")
-        monkeypatch.setattr(
-            s3_cli.subprocess, "run", MagicMock(side_effect=OSError("kaboom"))
-        )
+        monkeypatch.setattr(s3_cli.subprocess, "run", MagicMock(side_effect=OSError("kaboom")))
         # The broad except returns an unknown-size ObjectInfo instead of raising.
         assert s3_cli.S3CliBackend().head("s3-cli://b/k").size == -1
 
@@ -192,9 +190,7 @@ class TestRcloneBackend:
 
     def test_head_subprocess_error_returns_unknown(self, monkeypatch):
         _have(monkeypatch, rclone, "/usr/bin/rclone")
-        monkeypatch.setattr(
-            rclone.subprocess, "run", MagicMock(side_effect=_cpe(["rclone"]))
-        )
+        monkeypatch.setattr(rclone.subprocess, "run", MagicMock(side_effect=_cpe(["rclone"])))
         assert rclone.RcloneBackend().head("rclone://r:p").size == -1
 
     def test_head_missing_binary(self, monkeypatch):

@@ -59,9 +59,7 @@ def fake_azure(monkeypatch):
     monkeypatch.setitem(sys.modules, "azure.storage", storage_pkg)
     monkeypatch.setitem(sys.modules, "azure.storage.blob", blob_mod)
     monkeypatch.setitem(sys.modules, "azure.identity", identity_mod)
-    return SimpleNamespace(
-        ContainerClient=container_client, DefaultAzureCredential=default_cred
-    )
+    return SimpleNamespace(ContainerClient=container_client, DefaultAzureCredential=default_cred)
 
 
 class TestAzureGetClient:
@@ -373,9 +371,7 @@ class TestS3Backend:
         monkeypatch.setattr(s3, "_get_client", lambda: client)
         data = io.BytesIO(b"payload")
         s3.S3Backend().put("s3://b/k", data, size=7)
-        client.put_object.assert_called_once_with(
-            Bucket="b", Key="k", Body=data, ContentLength=7
-        )
+        client.put_object.assert_called_once_with(Bucket="b", Key="k", Body=data, ContentLength=7)
 
     def test_put_without_size(self, monkeypatch):
         client = MagicMock()
@@ -397,9 +393,7 @@ class TestS3Backend:
         result = list(s3.S3Backend().list("s3://bucket/pre"))
         assert result == ["a", "b", "sub/"]
         client.get_paginator.assert_called_once_with("list_objects_v2")
-        paginator.paginate.assert_called_once_with(
-            Bucket="bucket", Prefix="pre/", Delimiter="/"
-        )
+        paginator.paginate.assert_called_once_with(Bucket="bucket", Prefix="pre/", Delimiter="/")
 
 
 # ── Registry dispatch for the cloud schemes ─────────────────────

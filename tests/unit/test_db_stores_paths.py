@@ -152,10 +152,26 @@ class TestGetBundles:
 
         async def _t():
             idx = DbPackageIndex()
-            await _add(idx, name="a", platform="linux", arch="x86_64", link="shared",
-                       build_type="release", recipe_version="r1", release_tag="")
-            await _add(idx, name="b", platform="windows", arch="arm64", link="static",
-                       build_type="debug", recipe_version="r2", release_tag="2026.1")
+            await _add(
+                idx,
+                name="a",
+                platform="linux",
+                arch="x86_64",
+                link="shared",
+                build_type="release",
+                recipe_version="r1",
+                release_tag="",
+            )
+            await _add(
+                idx,
+                name="b",
+                platform="windows",
+                arch="arm64",
+                link="static",
+                build_type="debug",
+                recipe_version="r2",
+                release_tag="2026.1",
+            )
             assert (await idx.get_bundles(platform="windows"))[1] == 1
             assert (await idx.get_bundles(arch="arm64"))[1] == 1
             assert (await idx.get_bundles(link="static"))[1] == 1
@@ -200,10 +216,12 @@ class TestGetBundles:
 
         async def _t():
             orgs = DbOrgStore()
-            await orgs.create(slug="puborg", display_name="Pub", is_private=False,
-                              created_by="root")
-            await orgs.create(slug="secret", display_name="Secret", is_private=True,
-                              created_by="root")
+            await orgs.create(
+                slug="puborg", display_name="Pub", is_private=False, created_by="root"
+            )
+            await orgs.create(
+                slug="secret", display_name="Secret", is_private=True, created_by="root"
+            )
             await orgs.add_member("secret", "bob")
             idx = DbPackageIndex()
             await _add(idx, name="base")  # public base (org_slug "")
@@ -232,12 +250,33 @@ class TestSearchFacets:
 
         async def _t():
             idx = DbPackageIndex()
-            await _add(idx, name="boost", platform="linux", link="shared", size_bytes=10,
-                       pkg_license="BSL", tags="cpp,headers")
-            await _add(idx, name="boost", platform="macos", link="static", size_bytes=20,
-                       pkg_license="BSL", tags="cpp")
-            await _add(idx, name="fftw3", platform="linux", link="static", size_bytes=30,
-                       pkg_license="GPL", tags="math")
+            await _add(
+                idx,
+                name="boost",
+                platform="linux",
+                link="shared",
+                size_bytes=10,
+                pkg_license="BSL",
+                tags="cpp,headers",
+            )
+            await _add(
+                idx,
+                name="boost",
+                platform="macos",
+                link="static",
+                size_bytes=20,
+                pkg_license="BSL",
+                tags="cpp",
+            )
+            await _add(
+                idx,
+                name="fftw3",
+                platform="linux",
+                link="static",
+                size_bytes=30,
+                pkg_license="GPL",
+                tags="math",
+            )
             facets, total, distinct_names, total_size = await idx.get_search_facets()
             assert total == 3
             assert distinct_names == 2
@@ -284,8 +323,7 @@ class TestSearchFacets:
 
         async def _t():
             orgs = DbOrgStore()
-            await orgs.create(slug="secret", display_name="s", is_private=True,
-                              created_by="root")
+            await orgs.create(slug="secret", display_name="s", is_private=True, created_by="root")
             idx = DbPackageIndex()
             await _add(idx, name="base")
             await _add(idx, name="hidden", org_slug="secret", size_bytes=999)
@@ -308,8 +346,12 @@ class TestCatalogDict:
             await orgs.create(slug="sec", display_name="s", is_private=True, created_by="r")
             await orgs.add_member("sec", "bob")
             idx = DbPackageIndex()
-            await _add(idx, name="base", required_deps='[{"name":"dep","version":"^1"}]',
-                       provides='["cvc::base"]')
+            await _add(
+                idx,
+                name="base",
+                required_deps='[{"name":"dep","version":"^1"}]',
+                provides='["cvc::base"]',
+            )
             await _add(idx, name="pubpkg", org_slug="pub")
             await _add(idx, name="secpkg", org_slug="sec")
 
@@ -352,12 +394,14 @@ class TestCheckDuplicateAndAdd:
         async def _t():
             idx = DbPackageIndex()
             await _add(idx, name="zlib", version="1.0.0")
-            assert await idx.check_duplicate(
-                "zlib", "1.0.0", "linux", "x86_64", "release", "shared"
-            ) is True
-            assert await idx.check_duplicate(
-                "zlib", "9.9.9", "linux", "x86_64", "release", "shared"
-            ) is False
+            assert (
+                await idx.check_duplicate("zlib", "1.0.0", "linux", "x86_64", "release", "shared")
+                is True
+            )
+            assert (
+                await idx.check_duplicate("zlib", "9.9.9", "linux", "x86_64", "release", "shared")
+                is False
+            )
 
         run(_t())
 
@@ -391,14 +435,12 @@ class TestYankDelete:
             n = await idx.yank("zlib", "1.0", platform="linux")
             assert n == 1
             # Grab the yanked_at that was set.
-            pkgs, _ = await idx.get_bundles(name="zlib", platform="linux",
-                                            include_yanked=True)
+            pkgs, _ = await idx.get_bundles(name="zlib", platform="linux", include_yanked=True)
             first_at = pkgs[0].yanked_at
             # Re-yank the whole version: coalesce keeps the original clock.
             n2 = await idx.yank("zlib", "1.0")
             assert n2 == 2
-            pkgs2, _ = await idx.get_bundles(name="zlib", platform="linux",
-                                             include_yanked=True)
+            pkgs2, _ = await idx.get_bundles(name="zlib", platform="linux", include_yanked=True)
             assert pkgs2[0].yanked_at == first_at
 
         run(_t())
@@ -477,8 +519,7 @@ class TestNukeAndTombstones:
             idx = DbPackageIndex()
             await _add(idx, name="zlib")
             await idx.yank("zlib", "1.0.0")
-            res = await idx.nuke_bundles("zlib", "1.0.0", nuked_by="admin",
-                                         reason="manual")
+            res = await idx.nuke_bundles("zlib", "1.0.0", nuked_by="admin", reason="manual")
             assert res["count"] == 1
             _, total = await idx.get_bundles(include_yanked=True)
             assert total == 0
@@ -494,13 +535,13 @@ class TestNukeAndTombstones:
         from cvcpkg.server.db_stores import DbPackageIndex
 
         deleted = []
-        monkeypatch.setattr(archive_store, "delete",
-                            lambda uri, fname: deleted.append(fname) or True)
+        monkeypatch.setattr(
+            archive_store, "delete", lambda uri, fname: deleted.append(fname) or True
+        )
 
         async def _t():
             idx = DbPackageIndex()
-            await _add(idx, name="zlib",
-                       archive_url="/v1/download/zlib-1.0.0-linux.tar.zst")
+            await _add(idx, name="zlib", archive_url="/v1/download/zlib-1.0.0-linux.tar.zst")
             await idx.yank("zlib", "1.0.0")
             res = await idx.nuke_bundles("zlib", "1.0.0", storage_uri="file:///tmp")
             assert res["nuked"][0]["archive_deleted"] is True
@@ -512,9 +553,11 @@ class TestNukeAndTombstones:
         from cvcpkg.server import archive_store
         from cvcpkg.server.db_stores import DbPackageIndex
 
-        monkeypatch.setattr(archive_store, "delete",
-                            lambda uri, fname: (_ for _ in ()).throw(
-                                AssertionError("must not delete")))
+        monkeypatch.setattr(
+            archive_store,
+            "delete",
+            lambda uri, fname: (_ for _ in ()).throw(AssertionError("must not delete")),
+        )
 
         async def _t():
             idx = DbPackageIndex()
@@ -533,10 +576,12 @@ class TestNukeAndTombstones:
 
         async def _t():
             idx = DbPackageIndex()
-            await _add(idx, name="zlib", platform="linux",
-                       archive_url="/v1/download/zlib-linux.tar.zst")
-            await _add(idx, name="zlib", platform="windows",
-                       archive_url="/v1/download/zlib-win.tar.zst")
+            await _add(
+                idx, name="zlib", platform="linux", archive_url="/v1/download/zlib-linux.tar.zst"
+            )
+            await _add(
+                idx, name="zlib", platform="windows", archive_url="/v1/download/zlib-win.tar.zst"
+            )
             await idx.yank("zlib", "1.0.0")
             await idx.nuke_bundles("zlib", "1.0.0", nuked_by="a")
             all_t = await idx.get_tombstones("zlib")
@@ -560,8 +605,7 @@ class TestArchiveLookups:
 
         async def _t():
             idx = DbPackageIndex()
-            await _add(idx, name="zlib", org_slug="acme",
-                       archive_url="/v1/download/zlib_x.tar.zst")
+            await _add(idx, name="zlib", org_slug="acme", archive_url="/v1/download/zlib_x.tar.zst")
             assert await idx.get_archive_org("zlib_x.tar.zst") == "acme"
             assert await idx.get_archive_org("missing.tar.zst") is None
             # Underscore is escaped, so it is a literal, not a wildcard.
@@ -729,10 +773,15 @@ class TestUpstreamReconcile:
 
         async def _t():
             counts = await DbPackageIndex().reconcile_from_upstream(
-                "", upstream_yanked=set(), upstream_present=set(),
-                upstream_tombstoned=set())
-            assert counts == {"yanked": 0, "tombstoned": 0, "ambiguous": 0,
-                              "overridden": 0, "unyanked": 0}
+                "", upstream_yanked=set(), upstream_present=set(), upstream_tombstoned=set()
+            )
+            assert counts == {
+                "yanked": 0,
+                "tombstoned": 0,
+                "ambiguous": 0,
+                "overridden": 0,
+                "unyanked": 0,
+            }
 
         run(_t())
 
@@ -776,13 +825,13 @@ class TestUpstreamReconcile:
             await _add(idx, name="p", origin_upstream=up)
             # First: upstream yanks it → we inherit the yank + record verdict.
             c1 = await idx.reconcile_from_upstream(
-                up, upstream_yanked={key("p")}, upstream_present=set(),
-                upstream_tombstoned=set())
+                up, upstream_yanked={key("p")}, upstream_present=set(), upstream_tombstoned=set()
+            )
             assert c1["yanked"] == 1
             # Then: upstream serves it again → we lift our inherited yank.
             c2 = await idx.reconcile_from_upstream(
-                up, upstream_yanked=set(), upstream_present={key("p")},
-                upstream_tombstoned=set())
+                up, upstream_yanked=set(), upstream_present={key("p")}, upstream_tombstoned=set()
+            )
             assert c2["unyanked"] == 1
             pkgs, _ = await idx.get_bundles(name="p")
             assert pkgs[0].yanked is False
@@ -801,13 +850,13 @@ class TestUpstreamReconcile:
             idx = DbPackageIndex()
             await _add(idx, name="p", origin_upstream=up)
             await idx.reconcile_from_upstream(
-                up, upstream_yanked={key("p")}, upstream_present=set(),
-                upstream_tombstoned=set())
+                up, upstream_yanked={key("p")}, upstream_present=set(), upstream_tombstoned=set()
+            )
             # Operator overrides: locally unyank while upstream still yanks it.
             await idx.unyank("p", "1.0.0")
             counts = await idx.reconcile_from_upstream(
-                up, upstream_yanked={key("p")}, upstream_present=set(),
-                upstream_tombstoned=set())
+                up, upstream_yanked={key("p")}, upstream_present=set(), upstream_tombstoned=set()
+            )
             assert counts["overridden"] == 1
             pkgs, _ = await idx.get_bundles(name="p")
             assert pkgs[0].yanked is False  # local decision left standing
@@ -862,8 +911,7 @@ class TestDbOrgStore:
         async def _t():
             store = DbOrgStore()
             await store.create(slug="pub", display_name="Pub", created_by="root")
-            await store.create(slug="sec", display_name="Sec", is_private=True,
-                               created_by="root")
+            await store.create(slug="sec", display_name="Sec", is_private=True, created_by="root")
             await store.add_member("sec", "bob")
 
             anon, total = await store.list_orgs()
@@ -896,10 +944,15 @@ class TestDbOrgStore:
         async def _t():
             store = DbOrgStore()
             await store.create(slug="acme", display_name="A", created_by="root")
-            updated = await store.update("acme", display_name="Acme Inc",
-                                         description="d", is_private=True,
-                                         storage_limit_bytes=42, logo_url="l",
-                                         homepage="h")
+            updated = await store.update(
+                "acme",
+                display_name="Acme Inc",
+                description="d",
+                is_private=True,
+                storage_limit_bytes=42,
+                logo_url="l",
+                homepage="h",
+            )
             assert updated.display_name == "Acme Inc"
             assert updated.is_private is True
             assert updated.storage_limit_bytes == 42
@@ -969,8 +1022,9 @@ class TestDbOrgStore:
 
         async def _t():
             store = DbOrgStore()
-            await store.create(slug="acme", display_name="A", created_by="root",
-                               storage_limit_bytes=1000)
+            await store.create(
+                slug="acme", display_name="A", created_by="root", storage_limit_bytes=1000
+            )
             await store.update_storage_used("acme", 400)
             assert (await store.get("acme")).storage_used_bytes == 400
             assert await store.check_storage_limit("acme", 500) is True
@@ -991,8 +1045,7 @@ class TestDbTagStore:
 
         async def _t():
             store = DbTagStore()
-            info = await store.create(name="graphics", description="viz",
-                                      created_by="root")
+            info = await store.create(name="graphics", description="viz", created_by="root")
             assert info.name == "graphics" and info.display_name == "graphics"
             with pytest.raises(ValueError, match="already exists"):
                 await store.create(name="graphics")

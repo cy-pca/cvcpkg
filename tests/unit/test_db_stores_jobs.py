@@ -44,9 +44,7 @@ async def _set_job(job_id, **values):
     from cvcpkg.server.db import BuildJobRow, get_session
 
     async with get_session() as session:
-        await session.execute(
-            update(BuildJobRow).where(BuildJobRow.id == job_id).values(**values)
-        )
+        await session.execute(update(BuildJobRow).where(BuildJobRow.id == job_id).values(**values))
 
 
 # ── DbBuilderStore ──────────────────────────────────────────────
@@ -58,8 +56,7 @@ class TestDbBuilderStore:
 
         async def _t():
             store = DbBuilderStore()
-            info = await store.register("bx", "linux", "x86_64", "root",
-                                        labels=["gpu"], max_jobs=4)
+            info = await store.register("bx", "linux", "x86_64", "root", labels=["gpu"], max_jobs=4)
             assert info.name == "bx"
             assert info.status == "online"
             assert info.max_jobs == 4
@@ -109,9 +106,15 @@ class TestDbBuilderStore:
         async def _t():
             store = DbBuilderStore()
             info = await store.register("bx", "linux", "x86_64", "root")
-            upd = await store.update(info.id, labels=["a"], capabilities={"cuda": "12"},
-                                     max_jobs=3, prefer_affinity=True,
-                                     served_namespaces=["acme"], free_disk_gb=50)
+            upd = await store.update(
+                info.id,
+                labels=["a"],
+                capabilities={"cuda": "12"},
+                max_jobs=3,
+                prefer_affinity=True,
+                served_namespaces=["acme"],
+                free_disk_gb=50,
+            )
             assert upd.labels == ["a"]
             assert upd.capabilities == {"cuda": "12"}
             assert upd.max_jobs == 3
@@ -172,8 +175,7 @@ class TestDbBuilderStore:
             old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)
             async with get_session() as s:
                 await s.execute(
-                    update(BuilderRow).where(BuilderRow.id == stale.id).values(
-                        last_heartbeat=old)
+                    update(BuilderRow).where(BuilderRow.id == stale.id).values(last_heartbeat=old)
                 )
             reaped = await store.reap_stale(max_age_seconds=180)
             assert {r.name for r in reaped} == {"stale"}
@@ -188,12 +190,21 @@ class TestDbBuilderStore:
 
         async def _t():
             async with get_session() as s:
-                s.add(BuilderRow(
-                    name="legacy", org_slug="", served_namespaces="not-json",
-                    platform="linux", arch="x86_64", labels="not-json",
-                    capabilities="not-json", status="online", current_jobs=0,
-                    max_jobs=1, registered_by="root",
-                ))
+                s.add(
+                    BuilderRow(
+                        name="legacy",
+                        org_slug="",
+                        served_namespaces="not-json",
+                        platform="linux",
+                        arch="x86_64",
+                        labels="not-json",
+                        capabilities="not-json",
+                        status="online",
+                        current_jobs=0,
+                        max_jobs=1,
+                        registered_by="root",
+                    )
+                )
             store = DbBuilderStore()
             (info,) = await store.list_builders()
             # Bad JSON degrades gracefully: labels [], caps {}, served → home-only.
@@ -213,9 +224,15 @@ class TestDbBuildJobStore:
 
         async def _t():
             store = DbBuildJobStore()
-            job = await store.create("zlib", "linux", "x86_64", "ci",
-                                     required_capabilities=["cuda"], priority=5,
-                                     timeout_seconds=60)
+            job = await store.create(
+                "zlib",
+                "linux",
+                "x86_64",
+                "ci",
+                required_capabilities=["cuda"],
+                priority=5,
+                timeout_seconds=60,
+            )
             assert job.recipe_name == "zlib"
             assert job.status == "pending"
             assert job.required_capabilities == ["cuda"]
@@ -234,10 +251,18 @@ class TestDbBuildJobStore:
             jobs = await store.create_dag(
                 [
                     {"recipe_name": "lzma", "platform": "linux", "arch": "x86_64"},
-                    {"recipe_name": "zlib", "platform": "linux", "arch": "x86_64",
-                     "depends_on": [0, 0]},  # duplicate index → deduped
-                    {"recipe_name": "png", "platform": "linux", "arch": "x86_64",
-                     "depends_on": [1, 99]},  # 99 is out of range → ignored
+                    {
+                        "recipe_name": "zlib",
+                        "platform": "linux",
+                        "arch": "x86_64",
+                        "depends_on": [0, 0],
+                    },  # duplicate index → deduped
+                    {
+                        "recipe_name": "png",
+                        "platform": "linux",
+                        "arch": "x86_64",
+                        "depends_on": [1, 99],
+                    },  # 99 is out of range → ignored
                 ],
                 dag_id="dag1",
                 submitted_by="ci",
@@ -284,10 +309,16 @@ class TestDbBuildJobStore:
 
         async def _t():
             store = DbBuildJobStore()
-            await store.create_dag([{"recipe_name": "a", "platform": "linux",
-                                     "arch": "x86_64"}], dag_id="pr-1-linux", submitted_by="ci")
-            await store.create_dag([{"recipe_name": "b", "platform": "linux",
-                                     "arch": "x86_64"}], dag_id="pr-1-windows", submitted_by="ci")
+            await store.create_dag(
+                [{"recipe_name": "a", "platform": "linux", "arch": "x86_64"}],
+                dag_id="pr-1-linux",
+                submitted_by="ci",
+            )
+            await store.create_dag(
+                [{"recipe_name": "b", "platform": "linux", "arch": "x86_64"}],
+                dag_id="pr-1-windows",
+                submitted_by="ci",
+            )
             _, total = await store.list_jobs(dag_id="pr-1-*")
             assert total == 2
             _, exact = await store.list_jobs(dag_id="pr-1-linux")
@@ -353,16 +384,26 @@ class TestDbBuildJobStore:
         async def _t():
             store = DbBuildJobStore()
             await store.create_dag(
-                [{"recipe_name": "a", "platform": "linux", "arch": "x86_64"},
-                 {"recipe_name": "b", "platform": "linux", "arch": "x86_64"}],
-                dag_id="d1", submitted_by="ci")
+                [
+                    {"recipe_name": "a", "platform": "linux", "arch": "x86_64"},
+                    {"recipe_name": "b", "platform": "linux", "arch": "x86_64"},
+                ],
+                dag_id="d1",
+                submitted_by="ci",
+            )
             n = await store.cancel_dag("d1")
             assert n == 2
             # prefix form
-            await store.create_dag([{"recipe_name": "c", "platform": "linux",
-                                     "arch": "x86_64"}], dag_id="pr-9-lin", submitted_by="ci")
-            await store.create_dag([{"recipe_name": "d", "platform": "linux",
-                                     "arch": "x86_64"}], dag_id="pr-9-win", submitted_by="ci")
+            await store.create_dag(
+                [{"recipe_name": "c", "platform": "linux", "arch": "x86_64"}],
+                dag_id="pr-9-lin",
+                submitted_by="ci",
+            )
+            await store.create_dag(
+                [{"recipe_name": "d", "platform": "linux", "arch": "x86_64"}],
+                dag_id="pr-9-win",
+                submitted_by="ci",
+            )
             assert await store.cancel_dag("pr-9-*") == 2
 
         run(_t())
@@ -392,9 +433,13 @@ class TestDbBuildJobStore:
         async def _t():
             store = DbBuildJobStore()
             await store.create_dag(
-                [{"recipe_name": "a", "platform": "linux", "arch": "x86_64"},
-                 {"recipe_name": "b", "platform": "linux", "arch": "x86_64"}],
-                dag_id="d1", submitted_by="ci")
+                [
+                    {"recipe_name": "a", "platform": "linux", "arch": "x86_64"},
+                    {"recipe_name": "b", "platform": "linux", "arch": "x86_64"},
+                ],
+                dag_id="d1",
+                submitted_by="ci",
+            )
             assert await store.pause_dag("d1") == 2
             assert await store.resume_dag("d1") == 2
 
@@ -407,9 +452,13 @@ class TestDbBuildJobStore:
             store = DbBuildJobStore()
             assert await store.is_dag_complete("nope") is None  # no jobs
             jobs = await store.create_dag(
-                [{"recipe_name": "a", "platform": "linux", "arch": "x86_64"},
-                 {"recipe_name": "b", "platform": "linux", "arch": "x86_64"}],
-                dag_id="d1", submitted_by="ci")
+                [
+                    {"recipe_name": "a", "platform": "linux", "arch": "x86_64"},
+                    {"recipe_name": "b", "platform": "linux", "arch": "x86_64"},
+                ],
+                dag_id="d1",
+                submitted_by="ci",
+            )
             assert await store.is_dag_complete("d1") is False
             await store.complete(jobs[0].id)
             await store.fail(jobs[1].id, error_message="boom")
@@ -476,10 +525,18 @@ class TestDbBuildJobStore:
             b = await builders.register("bx", "linux", "x86_64", "root")
             store = DbBuildJobStore()
             jobs = await store.create_dag(
-                [{"recipe_name": "dep", "platform": "linux", "arch": "x86_64"},
-                 {"recipe_name": "app", "platform": "linux", "arch": "x86_64",
-                  "depends_on": [0]}],
-                dag_id="d1", submitted_by="ci")
+                [
+                    {"recipe_name": "dep", "platform": "linux", "arch": "x86_64"},
+                    {
+                        "recipe_name": "app",
+                        "platform": "linux",
+                        "arch": "x86_64",
+                        "depends_on": [0],
+                    },
+                ],
+                dag_id="d1",
+                submitted_by="ci",
+            )
             dep, app = jobs[0], jobs[1]
             ready = await store.find_ready_jobs()
             assert {j.recipe_name for j in ready} == {"dep"}  # app blocked
@@ -556,8 +613,8 @@ class TestDbBuildJobStore:
             j = await store.create("young", "freebsd", "x86_64", "ci")
             # Large min age → still within grace → not reaped.
             reaped = await store.reap_unschedulable(
-                schedulable_targets=set(), schedulable_platforms=set(),
-                min_age_seconds=3600)
+                schedulable_targets=set(), schedulable_platforms=set(), min_age_seconds=3600
+            )
             assert reaped == []
             assert (await store.get(j.id)).status == "pending"
 
@@ -568,8 +625,9 @@ class TestDbBuildJobStore:
 
         async def _t():
             store = DbBuildJobStore()
-            need = await store.create("cudajob", "linux", "x86_64", "ci",
-                                      required_capabilities=["cuda"])
+            need = await store.create(
+                "cudajob", "linux", "x86_64", "ci", required_capabilities=["cuda"]
+            )
             # A builder that covers the target but lacks 'cuda' → reaped.
             reaped = await store.reap_unschedulable(
                 schedulable_targets={("linux", "x86_64")},
@@ -587,8 +645,9 @@ class TestDbBuildJobStore:
 
         async def _t():
             store = DbBuildJobStore()
-            j = await store.create("cudajob", "linux", "x86_64", "ci",
-                                   required_capabilities=["cuda"])
+            j = await store.create(
+                "cudajob", "linux", "x86_64", "ci", required_capabilities=["cuda"]
+            )
             # One builder covers BOTH the target and the capability → not reaped.
             reaped = await store.reap_unschedulable(
                 schedulable_targets={("linux", "x86_64")},
@@ -618,8 +677,8 @@ class TestDbBuildJobStore:
             assert (await store.get(noarch.id)).status == "pending"
             # With nothing registered, the same 'any' job is unschedulable.
             reaped2 = await store.reap_unschedulable(
-                schedulable_targets=set(), schedulable_platforms=set(),
-                min_age_seconds=0)
+                schedulable_targets=set(), schedulable_platforms=set(), min_age_seconds=0
+            )
             assert {r.recipe_name for r in reaped2} == {"anypkg"}
 
         run(_t())
@@ -630,12 +689,14 @@ class TestDbBuildJobStore:
         async def _t():
             store = DbBuildJobStore()
             jobs = await store.create_dag(
-                [{"recipe_name": "a", "platform": "linux", "arch": "x86_64"},
-                 {"recipe_name": "b", "platform": "linux", "arch": "x86_64",
-                  "depends_on": [0]},
-                 {"recipe_name": "c", "platform": "linux", "arch": "x86_64",
-                  "depends_on": [1]}],
-                dag_id="d1", submitted_by="ci")
+                [
+                    {"recipe_name": "a", "platform": "linux", "arch": "x86_64"},
+                    {"recipe_name": "b", "platform": "linux", "arch": "x86_64", "depends_on": [0]},
+                    {"recipe_name": "c", "platform": "linux", "arch": "x86_64", "depends_on": [1]},
+                ],
+                dag_id="d1",
+                submitted_by="ci",
+            )
             a = jobs[0]
             n = await store.cancel_downstream(a.id)
             assert n == 2  # b and c cancelled transitively
@@ -666,8 +727,7 @@ class TestDbBuildJobStore:
             logs = tmp_path / "logs"
             store = DbBuildJobStore()
             assert await store.append_log(9999, "x", logs_dir=logs) is None
-            j = await store.create("a", "linux", "x86_64", "ci", org_slug="acme",
-                                   dag_id="d1")
+            j = await store.create("a", "linux", "x86_64", "ci", org_slug="acme", dag_id="d1")
             info = await store.append_log(j.id, "hello ", logs_dir=logs)
             assert info.log_size_bytes == len("hello ")
             info2 = await store.append_log(j.id, "world", logs_dir=logs)
@@ -733,12 +793,12 @@ class TestDbRecipeStore:
 
         async def _t():
             store = DbRecipeStore()
-            info = await store.upload("zlib", "/bundles/zlib.tar", 1234, "alice",
-                                      version="1.3.1", recipe_hash="abc")
+            info = await store.upload(
+                "zlib", "/bundles/zlib.tar", 1234, "alice", version="1.3.1", recipe_hash="abc"
+            )
             assert info.name == "zlib" and info.bundle_size == 1234
             # Upsert in place on the same (name, org).
-            info2 = await store.upload("zlib", "/bundles/zlib2.tar", 5678, "bob",
-                                       version="1.3.2")
+            info2 = await store.upload("zlib", "/bundles/zlib2.tar", 5678, "bob", version="1.3.2")
             assert info2.id == info.id and info2.bundle_size == 5678
             assert (await store.get("zlib")).version == "1.3.2"
             assert await store.get("ghost") is None
@@ -767,8 +827,9 @@ class TestDbWebhookStore:
 
         async def _t():
             store = DbWebhookStore()
-            wh = await store.register("https://h.example/hook", ["publish"], "root",
-                                      secret="s3cr3t")
+            wh = await store.register(
+                "https://h.example/hook", ["publish"], "root", secret="s3cr3t"
+            )
             assert wh.url == "https://h.example/hook"
             assert wh.events == ["publish"]
             assert wh.active is True
@@ -779,8 +840,9 @@ class TestDbWebhookStore:
             # register without a secret auto-generates one.
             wh2 = await store.register("https://h2.example/hook", ["*"], "root")
             assert await store.get_secret(wh2.id)
-            upd = await store.update(wh.id, url="https://new.example",
-                                     events=["yank"], active=False)
+            upd = await store.update(
+                wh.id, url="https://new.example", events=["yank"], active=False
+            )
             assert upd.url == "https://new.example"
             assert upd.events == ["yank"]
             assert upd.active is False
@@ -796,8 +858,7 @@ class TestDbWebhookStore:
         async def _t():
             store = DbWebhookStore()
             a = await store.register("https://a.example", ["publish"], "root")
-            await store.register("https://b.example", ["publish"], "root",
-                                 org_slug="acme")
+            await store.register("https://b.example", ["publish"], "root", org_slug="acme")
             await store.update(a.id, active=False)
             base, total = await store.list_webhooks(org_slug="")
             assert total == 1

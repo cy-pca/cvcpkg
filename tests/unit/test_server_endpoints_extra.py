@@ -58,8 +58,19 @@ def _auth(tok: str) -> dict:
     return {"Authorization": f"Bearer {tok}"}
 
 
-def _publish(client, tok, *, name, version="1.0", platform="linux", arch="x86_64",
-             build_type="release", link="shared", content=None, **params):
+def _publish(
+    client,
+    tok,
+    *,
+    name,
+    version="1.0",
+    platform="linux",
+    arch="x86_64",
+    build_type="release",
+    link="shared",
+    content=None,
+    **params,
+):
     body = content if content is not None else b"archive-" + name.encode()
     q = {
         "name": name,
@@ -295,13 +306,15 @@ class TestDependencyGraph:
 class TestCacheEndpoints:
     def test_cache_status_hit_and_miss(self, env):
         c, pub = env["client"], env["publisher"]
-        _publish(c, pub, name="zstd", version="1.5", platform="linux",
-                 recipe_version="deadbeef")
-        hit = c.get("/v1/cache/status", params={
-            "name": "zstd", "chain_hash": "deadbeef", "platform": "linux"})
+        _publish(c, pub, name="zstd", version="1.5", platform="linux", recipe_version="deadbeef")
+        hit = c.get(
+            "/v1/cache/status",
+            params={"name": "zstd", "chain_hash": "deadbeef", "platform": "linux"},
+        )
         assert hit.status_code == 200 and hit.json()["hit"] is True
-        miss = c.get("/v1/cache/status", params={
-            "name": "zstd", "chain_hash": "other", "platform": "linux"})
+        miss = c.get(
+            "/v1/cache/status", params={"name": "zstd", "chain_hash": "other", "platform": "linux"}
+        )
         assert miss.status_code == 200 and miss.json()["hit"] is False
 
     def test_cache_status_requires_query(self, env):
@@ -323,8 +336,10 @@ class TestCacheEndpoints:
     def test_cache_delete_and_gc_need_db(self, env):
         c, admin = env["client"], env["admin"]
         assert c.delete("/v1/cache", headers=_auth(admin)).status_code == 501
-        assert c.post("/v1/cache/gc", json={"max_age_seconds": 5},
-                      headers=_auth(admin)).status_code == 501
+        assert (
+            c.post("/v1/cache/gc", json={"max_age_seconds": 5}, headers=_auth(admin)).status_code
+            == 501
+        )
         # Auth still enforced ahead of the DB check.
         assert c.delete("/v1/cache").status_code == 401
         assert c.post("/v1/cache/gc", json={}, headers=_auth(env["reader"])).status_code == 403
@@ -383,8 +398,17 @@ class TestPublishBranches:
 
     def test_publish_with_org_and_tags(self, env):
         c, pub = env["client"], env["publisher"]
-        r = _publish(c, pub, name="scoped", version="1.0", org="cvc-lab",
-                     tags="utils,net", description="d", homepage="h", maintainer="m")
+        r = _publish(
+            c,
+            pub,
+            name="scoped",
+            version="1.0",
+            org="cvc-lab",
+            tags="utils,net",
+            description="d",
+            homepage="h",
+            maintainer="m",
+        )
         assert r.status_code == 200
         assert r.json()["name"] == "scoped"
         # It is discoverable filtered by org.
@@ -396,8 +420,12 @@ class TestPublishBranches:
 
 class TestChunkedUpload:
     def _init(self, c, tok, **kw):
-        params = {"name": kw.pop("name", "chunky"), "version": kw.pop("version", "1.0"),
-                  "platform": "linux", "arch": "x86_64"}
+        params = {
+            "name": kw.pop("name", "chunky"),
+            "version": kw.pop("version", "1.0"),
+            "platform": "linux",
+            "arch": "x86_64",
+        }
         params.update(kw)
         return c.post("/v1/upload/init", params=params, headers=_auth(tok))
 
@@ -425,8 +453,9 @@ class TestChunkedUpload:
 
         # Complete with the correct sha256, then the archive is downloadable.
         digest = hashlib.sha256(payload).hexdigest()
-        done = c.post(f"/v1/upload/{uid}/complete",
-                      params={"expected_sha256": digest}, headers=_auth(pub))
+        done = c.post(
+            f"/v1/upload/{uid}/complete", params={"expected_sha256": digest}, headers=_auth(pub)
+        )
         assert done.status_code == 200, done.text
         assert done.json()["sha256"] == digest
         assert c.get(done.json()["archive_url"]).content == payload
@@ -444,8 +473,7 @@ class TestChunkedUpload:
 
         # A session started by the publisher cannot be driven by another actor.
         uid = self._init(c, pub, name="owned").json()["upload_id"]
-        assert c.patch(f"/v1/upload/{uid}", content=b"x",
-                       headers=_auth(admin)).status_code == 403
+        assert c.patch(f"/v1/upload/{uid}", content=b"x", headers=_auth(admin)).status_code == 403
         assert c.post(f"/v1/upload/{uid}/complete", headers=_auth(admin)).status_code == 403
         assert c.delete(f"/v1/upload/{uid}", headers=_auth(admin)).status_code == 403
 
@@ -456,19 +484,24 @@ class TestChunkedUpload:
         assert c.post(f"/v1/upload/{uid}/complete", headers=_auth(pub)).status_code == 400
         # Upload a byte, then a wrong expected digest → 422 and the session is gone.
         c.patch(f"/v1/upload/{uid}", content=b"z", headers=_auth(pub))
-        bad = c.post(f"/v1/upload/{uid}/complete",
-                     params={"expected_sha256": "0" * 64}, headers=_auth(pub))
+        bad = c.post(
+            f"/v1/upload/{uid}/complete", params={"expected_sha256": "0" * 64}, headers=_auth(pub)
+        )
         assert bad.status_code == 422
         assert c.get(f"/v1/upload/{uid}", headers=_auth(pub)).status_code == 404
 
     def test_malformed_and_mismatched_range(self, env):
         c, pub = env["client"], env["publisher"]
         uid = self._init(c, pub, name="ranged").json()["upload_id"]
-        bad = c.patch(f"/v1/upload/{uid}", content=b"abc",
-                      headers={**_auth(pub), "Content-Range": "garbage"})
+        bad = c.patch(
+            f"/v1/upload/{uid}", content=b"abc", headers={**_auth(pub), "Content-Range": "garbage"}
+        )
         assert bad.status_code == 400
-        off = c.patch(f"/v1/upload/{uid}", content=b"abc",
-                      headers={**_auth(pub), "Content-Range": "bytes 99-101/200"})
+        off = c.patch(
+            f"/v1/upload/{uid}",
+            content=b"abc",
+            headers={**_auth(pub), "Content-Range": "bytes 99-101/200"},
+        )
         assert off.status_code == 409
 
     def test_cancel(self, env):
@@ -487,13 +520,13 @@ class TestLifecycleMutations:
         _publish(c, pub, name="scoped", version="1.0", platform="linux", link="shared")
         _publish(c, pub, name="scoped", version="1.0", platform="linux", link="static")
         # Yank only the static variant.
-        y = c.post("/v1/packages/scoped/1.0/yank", params={"link": "static"},
-                   headers=_auth(admin))
+        y = c.post("/v1/packages/scoped/1.0/yank", params={"link": "static"}, headers=_auth(admin))
         assert y.status_code == 200 and y.json()["count"] == 1
         assert c.get("/v1/packages/scoped").json()["total"] == 1
         # Unyank (admin only) restores it.
-        u = c.post("/v1/packages/scoped/1.0/unyank", params={"link": "static"},
-                   headers=_auth(admin))
+        u = c.post(
+            "/v1/packages/scoped/1.0/unyank", params={"link": "static"}, headers=_auth(admin)
+        )
         assert u.status_code == 200 and u.json()["count"] == 1
         assert c.get("/v1/packages/scoped").json()["total"] == 2
 
@@ -502,8 +535,7 @@ class TestLifecycleMutations:
         assert c.post("/v1/packages/x/1/yank").status_code == 401
         assert c.post("/v1/packages/x/1/yank", headers=_auth(env["reader"])).status_code == 403
         # unyank is admin-only: publisher is forbidden.
-        assert c.post("/v1/packages/x/1/unyank",
-                      headers=_auth(env["publisher"])).status_code == 403
+        assert c.post("/v1/packages/x/1/unyank", headers=_auth(env["publisher"])).status_code == 403
 
     def test_delete_and_by_link(self, env):
         c, pub, admin = env["client"], env["publisher"], env["admin"]
@@ -516,8 +548,9 @@ class TestLifecycleMutations:
         _publish(c, pub, name="linkpkg", version="2.0", platform="windows", link="static")
         bl = c.delete("/v1/packages/by-link/windows/static", headers=_auth(admin))
         assert bl.status_code == 200 and bl.json()["removed"] == 1
-        assert c.delete("/v1/packages/by-link/windows/static",
-                        headers=_auth(admin)).status_code == 404
+        assert (
+            c.delete("/v1/packages/by-link/windows/static", headers=_auth(admin)).status_code == 404
+        )
 
     def test_nuke_needs_db_and_tombstones_empty(self, env):
         c, admin = env["client"], env["admin"]
@@ -527,8 +560,7 @@ class TestLifecycleMutations:
         assert tb.status_code == 200 and tb.json() == {"tombstones": [], "count": 0}
         # Auth branches.
         assert c.post("/v1/packages/x/1/nuke").status_code == 401
-        assert c.post("/v1/packages/x/1/nuke",
-                      headers=_auth(env["publisher"])).status_code == 403
+        assert c.post("/v1/packages/x/1/nuke", headers=_auth(env["publisher"])).status_code == 403
 
 
 # ── Token management + self-service ─────────────────────────────
@@ -537,8 +569,9 @@ class TestLifecycleMutations:
 class TestTokenManagement:
     def test_create_list_revoke(self, env):
         c, admin = env["client"], env["admin"]
-        created = c.post("/v1/tokens", json={"name": "ci_bot", "role": "publisher"},
-                         headers=_auth(admin))
+        created = c.post(
+            "/v1/tokens", json={"name": "ci_bot", "role": "publisher"}, headers=_auth(admin)
+        )
         assert created.status_code == 200
         assert created.json()["token"].startswith("cvctok_")
         names = {t["name"] for t in c.get("/v1/tokens", headers=_auth(admin)).json()["tokens"]}
@@ -548,44 +581,84 @@ class TestTokenManagement:
 
     def test_create_validation(self, env):
         c, admin = env["client"], env["admin"]
-        assert c.post("/v1/tokens", json={"name": "bad name!"},
-                      headers=_auth(admin)).status_code == 422
-        assert c.post("/v1/tokens", json={"name": "admin-user"},
-                      headers=_auth(admin)).status_code == 409
+        assert (
+            c.post("/v1/tokens", json={"name": "bad name!"}, headers=_auth(admin)).status_code
+            == 422
+        )
+        assert (
+            c.post("/v1/tokens", json={"name": "admin-user"}, headers=_auth(admin)).status_code
+            == 409
+        )
 
     def test_create_auth(self, env):
         c = env["client"]
         assert c.post("/v1/tokens", json={"name": "n"}).status_code == 401
-        assert c.post("/v1/tokens", json={"name": "n"},
-                      headers=_auth(env["publisher"])).status_code == 403
+        assert (
+            c.post("/v1/tokens", json={"name": "n"}, headers=_auth(env["publisher"])).status_code
+            == 403
+        )
 
     def test_email_update_paths(self, env):
         c, admin, reader = env["client"], env["admin"], env["reader"]
         # No header / bad token.
         assert c.patch("/v1/tokens/read-user/email", json={"email": "a@b.c"}).status_code == 401
-        assert c.patch("/v1/tokens/read-user/email", json={"email": "a@b.c"},
-                       headers=_auth("cvctok_bogus")).status_code == 401
+        assert (
+            c.patch(
+                "/v1/tokens/read-user/email", json={"email": "a@b.c"}, headers=_auth("cvctok_bogus")
+            ).status_code
+            == 401
+        )
         # A reader updating its own email succeeds.
-        assert c.patch("/v1/tokens/read-user/email", json={"email": "me@x.io"},
-                       headers=_auth(reader)).status_code == 200
+        assert (
+            c.patch(
+                "/v1/tokens/read-user/email", json={"email": "me@x.io"}, headers=_auth(reader)
+            ).status_code
+            == 200
+        )
         # A reader cannot touch someone else's token.
-        assert c.patch("/v1/tokens/admin-user/email", json={"email": "x@y.z"},
-                       headers=_auth(reader)).status_code == 403
+        assert (
+            c.patch(
+                "/v1/tokens/admin-user/email", json={"email": "x@y.z"}, headers=_auth(reader)
+            ).status_code
+            == 403
+        )
         # Admin can set any token's email; unknown token → 404.
-        assert c.patch("/v1/tokens/pub-user/email", json={"email": "p@x.io"},
-                       headers=_auth(admin)).status_code == 200
-        assert c.patch("/v1/tokens/ghost/email", json={"email": "g@x.io"},
-                       headers=_auth(admin)).status_code == 404
+        assert (
+            c.patch(
+                "/v1/tokens/pub-user/email", json={"email": "p@x.io"}, headers=_auth(admin)
+            ).status_code
+            == 200
+        )
+        assert (
+            c.patch(
+                "/v1/tokens/ghost/email", json={"email": "g@x.io"}, headers=_auth(admin)
+            ).status_code
+            == 404
+        )
 
     def test_profile_update_paths(self, env):
         c, admin, reader = env["client"], env["admin"], env["reader"]
-        assert c.patch("/v1/tokens/read-user/profile", json={"description": "hi"}).status_code == 401
-        assert c.patch("/v1/tokens/read-user/profile", json={"description": "self"},
-                       headers=_auth(reader)).status_code == 200
-        assert c.patch("/v1/tokens/admin-user/profile", json={"description": "no"},
-                       headers=_auth(reader)).status_code == 403
-        assert c.patch("/v1/tokens/ghost/profile", json={"metadata": "{}"},
-                       headers=_auth(admin)).status_code == 404
+        assert (
+            c.patch("/v1/tokens/read-user/profile", json={"description": "hi"}).status_code == 401
+        )
+        assert (
+            c.patch(
+                "/v1/tokens/read-user/profile", json={"description": "self"}, headers=_auth(reader)
+            ).status_code
+            == 200
+        )
+        assert (
+            c.patch(
+                "/v1/tokens/admin-user/profile", json={"description": "no"}, headers=_auth(reader)
+            ).status_code
+            == 403
+        )
+        assert (
+            c.patch(
+                "/v1/tokens/ghost/profile", json={"metadata": "{}"}, headers=_auth(admin)
+            ).status_code
+            == 404
+        )
 
     def test_rotate_paths(self, env):
         c, admin, reader = env["client"], env["admin"], env["reader"]
@@ -596,8 +669,9 @@ class TestTokenManagement:
         assert c.post("/v1/tokens/admin-user/rotate", headers=_auth(reader)).status_code == 403
         assert c.post("/v1/tokens/ghost/rotate", headers=_auth(admin)).status_code == 404
         # Reader rotates its own secret (grace 0 → old secret dies immediately).
-        rot = c.post("/v1/tokens/read-user/rotate", json={"grace_minutes": 0},
-                     headers=_auth(reader))
+        rot = c.post(
+            "/v1/tokens/read-user/rotate", json={"grace_minutes": 0}, headers=_auth(reader)
+        )
         assert rot.status_code == 200
         assert rot.json()["token"].startswith("cvctok_")
 
@@ -627,8 +701,7 @@ class TestUsers:
     def test_by_name_and_by_email(self, env):
         c, admin = env["client"], env["admin"]
         # Give a token an email so the by-email lookup can find it.
-        c.patch("/v1/tokens/admin-user/email", json={"email": "boss@corp.io"},
-                headers=_auth(admin))
+        c.patch("/v1/tokens/admin-user/email", json={"email": "boss@corp.io"}, headers=_auth(admin))
         assert c.get("/v1/users/admin-user").json()["name"] == "admin-user"
         assert c.get("/v1/users/nobody-here").status_code == 404
         found = c.get("/v1/users/by-email/boss@corp.io")
@@ -651,7 +724,9 @@ class TestRegistration:
     def test_validation_branches(self, env):
         c = env["client"]
         assert c.post("/v1/register", json={"name": "", "email": "a@b.c"}).status_code == 422
-        assert c.post("/v1/register", json={"name": "bad name", "email": "a@b.c"}).status_code == 422
+        assert (
+            c.post("/v1/register", json={"name": "bad name", "email": "a@b.c"}).status_code == 422
+        )
         assert c.post("/v1/register", json={"name": "ok", "email": ""}).status_code == 422
 
     def test_duplicate_registration(self, env):
@@ -697,8 +772,9 @@ class TestAudit:
 class TestFeedAndDownloadStats:
     def test_rss_feed(self, env):
         c, pub = env["client"], env["publisher"]
-        _publish(c, pub, name="feedpkg", version="3.0", platform="linux",
-                 description="a feed package")
+        _publish(
+            c, pub, name="feedpkg", version="3.0", platform="linux", description="a feed package"
+        )
         r = c.get("/v1/feed.xml")
         assert r.status_code == 200
         assert "application/rss+xml" in r.headers["content-type"]
@@ -720,9 +796,13 @@ class TestFeedAndDownloadStats:
 class TestAnalyticsGated:
     def test_analytics_require_db(self, env):
         c, admin = env["client"], env["admin"]
-        for path in ("/v1/analytics/downloads", "/v1/analytics/bandwidth",
-                     "/v1/analytics/platforms", "/v1/analytics/trends",
-                     "/v1/analytics/telemetry"):
+        for path in (
+            "/v1/analytics/downloads",
+            "/v1/analytics/bandwidth",
+            "/v1/analytics/platforms",
+            "/v1/analytics/trends",
+            "/v1/analytics/telemetry",
+        ):
             assert c.get(path, headers=_auth(admin)).status_code == 503, path
 
     def test_analytics_auth(self, env):
@@ -777,8 +857,15 @@ class TestAdminSurface:
 
     def test_admin_html_pages_unauthenticated(self, env):
         c = env["client"]
-        for path in ("/admin", "/admin/health", "/admin/releases", "/admin/packages",
-                     "/admin/tokens", "/admin/audit", "/admin/principals"):
+        for path in (
+            "/admin",
+            "/admin/health",
+            "/admin/releases",
+            "/admin/packages",
+            "/admin/tokens",
+            "/admin/audit",
+            "/admin/principals",
+        ):
             r = c.get(path)
             assert r.status_code == 200, path
             assert "text/html" in r.headers["content-type"]
@@ -799,8 +886,9 @@ class TestAdminSurface:
 
     def test_admin_packages_action_requires_session(self, env):
         # Without an admin session cookie the mutating form endpoint is forbidden.
-        r = env["client"].post("/admin/packages/action",
-                               data={"action": "yank", "name": "x", "version": "1"})
+        r = env["client"].post(
+            "/admin/packages/action", data={"action": "yank", "name": "x", "version": "1"}
+        )
         assert r.status_code == 403
 
 
@@ -817,20 +905,24 @@ class TestOrganizationsGated:
 
     def test_create_requires_db(self, env):
         c, pub = env["client"], env["publisher"]
-        r = c.post("/v1/orgs", json={"slug": "myorg", "display_name": "My Org"},
-                   headers=_auth(pub))
+        r = c.post("/v1/orgs", json={"slug": "myorg", "display_name": "My Org"}, headers=_auth(pub))
         assert r.status_code == 501
         assert c.post("/v1/orgs", json={"slug": "x"}).status_code == 401
-        assert c.post("/v1/orgs", json={"slug": "x"},
-                      headers=_auth(env["reader"])).status_code == 403
+        assert (
+            c.post("/v1/orgs", json={"slug": "x"}, headers=_auth(env["reader"])).status_code == 403
+        )
 
     def test_logo_and_members_gated(self, env):
         c, admin = env["client"], env["admin"]
         # Logo GET 404s (no such org locally); member mutations need the DB.
         assert c.get("/v1/orgs/x/logo").status_code == 404
         # token_name is a query parameter; with the DB absent the handler 501s.
-        assert c.post("/v1/orgs/x/members", params={"token_name": "y"},
-                      headers=_auth(admin)).status_code == 501
+        assert (
+            c.post(
+                "/v1/orgs/x/members", params={"token_name": "y"}, headers=_auth(admin)
+            ).status_code
+            == 501
+        )
 
 
 # ── Tags (DB-gated for writes) ──────────────────────────────────
@@ -845,13 +937,16 @@ class TestTagsGated:
     def test_writes_need_db(self, env):
         c, admin = env["client"], env["admin"]
         assert c.post("/v1/tags", json={"name": "utils"}, headers=_auth(admin)).status_code == 501
-        assert c.put("/v1/tags/utils", json={"description": "d"},
-                     headers=_auth(admin)).status_code == 501
+        assert (
+            c.put("/v1/tags/utils", json={"description": "d"}, headers=_auth(admin)).status_code
+            == 501
+        )
         assert c.delete("/v1/tags/utils", headers=_auth(admin)).status_code == 501
         # Auth precedes the DB check.
         assert c.post("/v1/tags", json={"name": "x"}).status_code == 401
-        assert c.post("/v1/tags", json={"name": "x"},
-                      headers=_auth(env["reader"])).status_code == 403
+        assert (
+            c.post("/v1/tags", json={"name": "x"}, headers=_auth(env["reader"])).status_code == 403
+        )
 
 
 # ── Mirrors (DB-gated) ──────────────────────────────────────────
@@ -860,22 +955,41 @@ class TestTagsGated:
 class TestMirrorsGated:
     def test_endpoints_need_db(self, env):
         c, admin = env["client"], env["admin"]
-        assert c.post("/v1/mirrors/register", json={"url": "https://m.example.com"},
-                      headers=_auth(admin)).status_code == 501
+        assert (
+            c.post(
+                "/v1/mirrors/register", json={"url": "https://m.example.com"}, headers=_auth(admin)
+            ).status_code
+            == 501
+        )
         # Read listings degrade to an empty list on the local backend.
         assert c.get("/v1/mirrors").status_code == 200
         allm = c.get("/v1/mirrors/all", headers=_auth(admin))
         assert allm.status_code == 200 and allm.json()["total"] == 0
-        assert c.post("/v1/mirrors/reject", params={"url": "https://m.example.com"},
-                      headers=_auth(admin)).status_code == 501
-        assert c.request("DELETE", "/v1/mirrors", params={"url": "https://m.example.com"},
-                         headers=_auth(admin)).status_code == 501
+        assert (
+            c.post(
+                "/v1/mirrors/reject", params={"url": "https://m.example.com"}, headers=_auth(admin)
+            ).status_code
+            == 501
+        )
+        assert (
+            c.request(
+                "DELETE",
+                "/v1/mirrors",
+                params={"url": "https://m.example.com"},
+                headers=_auth(admin),
+            ).status_code
+            == 501
+        )
 
     def test_auth(self, env):
         c = env["client"]
         assert c.post("/v1/mirrors/register", json={"url": "https://m"}).status_code == 401
-        assert c.post("/v1/mirrors/register", json={"url": "https://m"},
-                      headers=_auth(env["reader"])).status_code == 403
+        assert (
+            c.post(
+                "/v1/mirrors/register", json={"url": "https://m"}, headers=_auth(env["reader"])
+            ).status_code
+            == 403
+        )
 
 
 # ── Builders & builds (DB-gated) ────────────────────────────────
@@ -886,14 +1000,17 @@ class TestBuildersBuildsGated:
         c, pub = env["client"], env["publisher"]
         assert c.get("/v1/builders").status_code == 501
         assert c.get("/v1/builders/1").status_code == 501
-        assert c.post("/v1/builders/register",
-                      json={"hostname": "h", "platform": "linux", "arch": "x86_64"},
-                      headers=_auth(pub)).status_code in (422, 501)
+        assert c.post(
+            "/v1/builders/register",
+            json={"hostname": "h", "platform": "linux", "arch": "x86_64"},
+            headers=_auth(pub),
+        ).status_code in (422, 501)
 
     def test_builds_need_db(self, env):
         c, pub, admin = env["client"], env["publisher"], env["admin"]
-        assert c.post("/v1/builds", json={"name": "zlib", "version": "1.0"},
-                      headers=_auth(pub)).status_code in (422, 501)
+        assert c.post(
+            "/v1/builds", json={"name": "zlib", "version": "1.0"}, headers=_auth(pub)
+        ).status_code in (422, 501)
         assert c.get("/v1/builds", headers=_auth(pub)).status_code == 501
         assert c.get("/v1/builds/1").status_code in (401, 404, 501)
         # Auth on the list endpoint.
@@ -915,9 +1032,18 @@ class TestCliAuthGated:
         assert c.post("/v1/auth/device", json={"client_id": "cvcpkg-cli"}).status_code == 501
         assert c.post("/v1/auth/device/token", json={"pairing_id": "p"}).status_code == 501
         assert c.post("/v1/auth/device/cancel", json={"pairing_id": "p"}).status_code == 501
-        assert c.get("/v1/auth/authorize", params={
-            "client_id": "cvcpkg-cli", "redirect_uri": "http://127.0.0.1:9/callback",
-            "code_challenge": "x" * 43}, follow_redirects=False).status_code == 501
+        assert (
+            c.get(
+                "/v1/auth/authorize",
+                params={
+                    "client_id": "cvcpkg-cli",
+                    "redirect_uri": "http://127.0.0.1:9/callback",
+                    "code_challenge": "x" * 43,
+                },
+                follow_redirects=False,
+            ).status_code
+            == 501
+        )
 
     def test_whoami_and_devices(self, env):
         c, admin = env["client"], env["admin"]
@@ -928,11 +1054,12 @@ class TestCliAuthGated:
         assert c.get("/v1/auth/whoami").status_code == 401
         # Device listing requires the broker DB.
         assert c.get("/v1/auth/devices", headers=_auth(admin)).status_code == 501
-        assert c.request("DELETE", "/v1/auth/devices/1",
-                         headers=_auth(admin)).status_code == 501
+        assert c.request("DELETE", "/v1/auth/devices/1", headers=_auth(admin)).status_code == 501
 
     def test_auth_revoke_needs_db(self, env):
         c = env["client"]
-        assert c.post("/v1/auth/revoke", json={"all": False},
-                      headers=_auth(env["reader"])).status_code == 501
+        assert (
+            c.post("/v1/auth/revoke", json={"all": False}, headers=_auth(env["reader"])).status_code
+            == 501
+        )
         assert c.post("/v1/auth/revoke", json={"all": False}).status_code == 401

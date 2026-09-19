@@ -132,15 +132,11 @@ class TestHttpsOpen:
 
 class TestHttpsSupportsRange:
     def test_true_when_size_positive(self, monkeypatch):
-        monkeypatch.setattr(
-            https.HttpsBackend, "head", lambda self, uri: ObjectInfo(size=10)
-        )
+        monkeypatch.setattr(https.HttpsBackend, "head", lambda self, uri: ObjectInfo(size=10))
         assert https.HttpsBackend().supports_range("https://x/y") is True
 
     def test_false_when_size_zero(self, monkeypatch):
-        monkeypatch.setattr(
-            https.HttpsBackend, "head", lambda self, uri: ObjectInfo(size=0)
-        )
+        monkeypatch.setattr(https.HttpsBackend, "head", lambda self, uri: ObjectInfo(size=0))
         assert https.HttpsBackend().supports_range("https://x/y") is False
 
     def test_false_on_oserror(self, monkeypatch):
@@ -268,25 +264,19 @@ class TestGhReleaseBackend:
         assert gh_release.GhReleaseBackend().supports_range("gh-release://o/r/v/a") is True
 
     def test_head(self, monkeypatch):
-        monkeypatch.setattr(
-            gh_release, "_resolve_asset_url", lambda *a: ("http://cdn/pkg", 99)
-        )
+        monkeypatch.setattr(gh_release, "_resolve_asset_url", lambda *a: ("http://cdn/pkg", 99))
         info = gh_release.GhReleaseBackend().head("gh-release://o/r/v1/pkg")
         assert info.size == 99
 
     def test_open_returns_stream(self, monkeypatch):
-        monkeypatch.setattr(
-            gh_release, "_resolve_asset_url", lambda *a: ("http://cdn/pkg", 99)
-        )
+        monkeypatch.setattr(gh_release, "_resolve_asset_url", lambda *a: ("http://cdn/pkg", 99))
         resp = _FakeResponse(body=b"asset-bytes")
         monkeypatch.setattr(urllib.request, "urlopen", lambda url, timeout=None: resp)
         result = gh_release.GhReleaseBackend().open("gh-release://o/r/v1/pkg")
         assert result.read() == b"asset-bytes"
 
     def test_open_urlerror_becomes_oserror(self, monkeypatch):
-        monkeypatch.setattr(
-            gh_release, "_resolve_asset_url", lambda *a: ("http://cdn/pkg", 99)
-        )
+        monkeypatch.setattr(gh_release, "_resolve_asset_url", lambda *a: ("http://cdn/pkg", 99))
 
         def boom(url, timeout=None):
             raise urllib.error.URLError("cdn down")

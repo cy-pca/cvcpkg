@@ -142,8 +142,15 @@ def test_catalog_generate_happy(tmp_path):
     with mock.patch("cvcpkg.catalog.generate_catalog", return_value=fake) as m:
         res = CliRunner().invoke(
             cli,
-            ["catalog-generate", "--indexes-dir", str(indexes),
-             "--output-dir", str(out), "--release-tag", "v1.2.0"],
+            [
+                "catalog-generate",
+                "--indexes-dir",
+                str(indexes),
+                "--output-dir",
+                str(out),
+                "--release-tag",
+                "v1.2.0",
+            ],
         )
     assert res.exit_code == 0
     assert "catalog revision 12 generated -- 1 bundle(s)." in res.output
@@ -157,8 +164,8 @@ def test_catalog_generate_missing_required_option(tmp_path):
     indexes.mkdir()
     # --release-tag omitted -> click usage error (exit 2)
     res = CliRunner().invoke(
-        cli, ["catalog-generate", "--indexes-dir", str(indexes),
-              "--output-dir", str(tmp_path / "o")]
+        cli,
+        ["catalog-generate", "--indexes-dir", str(indexes), "--output-dir", str(tmp_path / "o")],
     )
     assert res.exit_code != 0
 
@@ -166,8 +173,15 @@ def test_catalog_generate_missing_required_option(tmp_path):
 def test_catalog_generate_nonexistent_indexes_dir(tmp_path):
     res = CliRunner().invoke(
         cli,
-        ["catalog-generate", "--indexes-dir", str(tmp_path / "nope"),
-         "--output-dir", str(tmp_path / "o"), "--release-tag", "v1"],
+        [
+            "catalog-generate",
+            "--indexes-dir",
+            str(tmp_path / "nope"),
+            "--output-dir",
+            str(tmp_path / "o"),
+            "--release-tag",
+            "v1",
+        ],
     )
     assert res.exit_code != 0
 
@@ -302,8 +316,18 @@ def test_download_happy(tmp_path):
     ):
         res = CliRunner().invoke(
             cli,
-            ["download", "zlib", "--catalog", cat, "-o", str(out),
-             "--platform", "linux", "--arch", "x86_64"],
+            [
+                "download",
+                "zlib",
+                "--catalog",
+                cat,
+                "-o",
+                str(out),
+                "--platform",
+                "linux",
+                "--arch",
+                "x86_64",
+            ],
         )
     assert res.exit_code == 0, res.output
     assert "downloading zlib" in res.output
@@ -319,18 +343,34 @@ def test_download_org_qualified_skips_other_org(tmp_path):
         "revision": 1,
         "bundles": [
             {
-                "name": "libcvc", "org": "cvc", "version": "3.2.4+cvc.5",
-                "upstream_version": "3.2.4", "cvc_revision": 5,
-                "platform": "linux", "arch": "x86_64", "build_type": "release",
-                "link": "shared", "sha256": "cvcabc", "size_bytes": 1000,
-                "archive_url": "https://cvcpkg.org/a/libcvc.tar.gz", "source_release": "v1",
+                "name": "libcvc",
+                "org": "cvc",
+                "version": "3.2.4+cvc.5",
+                "upstream_version": "3.2.4",
+                "cvc_revision": 5,
+                "platform": "linux",
+                "arch": "x86_64",
+                "build_type": "release",
+                "link": "shared",
+                "sha256": "cvcabc",
+                "size_bytes": 1000,
+                "archive_url": "https://cvcpkg.org/a/libcvc.tar.gz",
+                "source_release": "v1",
             },
             {
-                "name": "libcvc", "org": "someone-else", "version": "9.9.9+cvc.1",
-                "upstream_version": "9.9.9", "cvc_revision": 1,
-                "platform": "linux", "arch": "x86_64", "build_type": "release",
-                "link": "shared", "sha256": "otherabc", "size_bytes": 2000,
-                "archive_url": "https://cvcpkg.org/a/other.tar.gz", "source_release": "v1",
+                "name": "libcvc",
+                "org": "someone-else",
+                "version": "9.9.9+cvc.1",
+                "upstream_version": "9.9.9",
+                "cvc_revision": 1,
+                "platform": "linux",
+                "arch": "x86_64",
+                "build_type": "release",
+                "link": "shared",
+                "sha256": "otherabc",
+                "size_bytes": 2000,
+                "archive_url": "https://cvcpkg.org/a/other.tar.gz",
+                "source_release": "v1",
             },
         ],
     }
@@ -352,8 +392,18 @@ def test_download_org_qualified_skips_other_org(tmp_path):
     ):
         res = CliRunner().invoke(
             cli,
-            ["download", "cvc/libcvc", "--catalog", str(cat), "-o", str(out),
-             "--platform", "linux", "--arch", "x86_64"],
+            [
+                "download",
+                "cvc/libcvc",
+                "--catalog",
+                str(cat),
+                "-o",
+                str(out),
+                "--platform",
+                "linux",
+                "--arch",
+                "x86_64",
+            ],
         )
     assert res.exit_code == 0, res.output
     # The cvc org's 3.2.4 was picked, not someone-else's 9.9.9.
@@ -364,8 +414,18 @@ def test_download_no_bundles_for_platform(tmp_path):
     cat = _write_catalog(tmp_path)  # only linux bundles
     res = CliRunner().invoke(
         cli,
-        ["download", "zlib", "--catalog", cat, "-o", str(tmp_path / "o"),
-         "--platform", "windows", "--arch", "x86_64"],
+        [
+            "download",
+            "zlib",
+            "--catalog",
+            cat,
+            "-o",
+            str(tmp_path / "o"),
+            "--platform",
+            "windows",
+            "--arch",
+            "x86_64",
+        ],
     )
     assert res.exit_code != 0
     assert "no bundles found in catalog" in res.output
@@ -376,8 +436,18 @@ def test_download_unsatisfiable_component(tmp_path):
     cat = _write_catalog(tmp_path)  # has zlib/yaml, not "ghost"
     res = CliRunner().invoke(
         cli,
-        ["download", "ghost", "--catalog", cat, "-o", str(tmp_path / "o"),
-         "--platform", "linux", "--arch", "x86_64"],
+        [
+            "download",
+            "ghost",
+            "--catalog",
+            cat,
+            "-o",
+            str(tmp_path / "o"),
+            "--platform",
+            "linux",
+            "--arch",
+            "x86_64",
+        ],
     )
     assert res.exit_code != 0
     # entries exist for this platform, so we reach and fail at the resolver
@@ -392,8 +462,18 @@ def test_download_resolver_empty_pick(tmp_path):
     with mock.patch("cvcpkg.resolver.resolve", return_value=empty_result):
         res = CliRunner().invoke(
             cli,
-            ["download", "zlib", "--catalog", cat, "-o", str(tmp_path / "o"),
-             "--platform", "linux", "--arch", "x86_64"],
+            [
+                "download",
+                "zlib",
+                "--catalog",
+                cat,
+                "-o",
+                str(tmp_path / "o"),
+                "--platform",
+                "linux",
+                "--arch",
+                "x86_64",
+            ],
         )
     assert res.exit_code != 0
     assert "resolver found no matching bundles." in res.output
@@ -402,8 +482,17 @@ def test_download_resolver_empty_pick(tmp_path):
 def test_download_catalog_fetch_failure(tmp_path):
     with mock.patch("cvcpkg.catalog.fetch_catalog", side_effect=RuntimeError("boom")):
         res = CliRunner().invoke(
-            cli, ["download", "zlib", "-o", str(tmp_path / "o"),
-                  "--platform", "linux", "--arch", "x86_64"]
+            cli,
+            [
+                "download",
+                "zlib",
+                "-o",
+                str(tmp_path / "o"),
+                "--platform",
+                "linux",
+                "--arch",
+                "x86_64",
+            ],
         )
     assert res.exit_code != 0
     assert "failed to fetch catalog" in res.output
@@ -417,14 +506,28 @@ def test_download_with_server_fetches_mirrors(tmp_path):
 
     with (
         mock.patch("cvcpkg.installer.download_bundle", return_value=fake_archive),
-        mock.patch("cvcpkg.cli._catalog._fetch_mirror_urls",
-                   return_value=["https://m.example"]) as fm,
+        mock.patch(
+            "cvcpkg.cli._catalog._fetch_mirror_urls", return_value=["https://m.example"]
+        ) as fm,
     ):
         res = CliRunner().invoke(
             cli,
-            ["download", "zlib", "--catalog", cat, "-o", str(out),
-             "--platform", "linux", "--arch", "x86_64",
-             "--server", "https://srv.example", "--token", "tok"],
+            [
+                "download",
+                "zlib",
+                "--catalog",
+                cat,
+                "-o",
+                str(out),
+                "--platform",
+                "linux",
+                "--arch",
+                "x86_64",
+                "--server",
+                "https://srv.example",
+                "--token",
+                "tok",
+            ],
         )
     assert res.exit_code == 0, res.output
     fm.assert_called_once_with("https://srv.example", "tok")

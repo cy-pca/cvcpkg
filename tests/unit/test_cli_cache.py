@@ -153,8 +153,16 @@ def test_cache_list_server_with_packages_and_filters():
         res = CliRunner().invoke(
             cli,
             [
-                "cache", "list", "--server", "https://srv.example",
-                "--token", "tok", "--name", "zlib", "--platform-filter", "linux",
+                "cache",
+                "list",
+                "--server",
+                "https://srv.example",
+                "--token",
+                "tok",
+                "--name",
+                "zlib",
+                "--platform-filter",
+                "linux",
             ],
         )
     assert res.exit_code == 0
@@ -189,9 +197,7 @@ def test_cache_info_direct_hit_with_org():
     m, inst = _patch_cache()
     inst.info.return_value = entry
     try:
-        res = CliRunner().invoke(
-            cli, ["cache", "info", "deadbeef", "--platform", "linux"]
-        )
+        res = CliRunner().invoke(cli, ["cache", "info", "deadbeef", "--platform", "linux"])
     finally:
         m.stop()
     assert res.exit_code == 0
@@ -205,9 +211,7 @@ def test_cache_info_prefix_match():
     # Direct info() misses, but a list scan finds a chain_hash with the prefix.
     m, inst = _patch_cache(info=None, list_entries=[_entry(chain_hash="deadbeefcafef00d1234")])
     try:
-        res = CliRunner().invoke(
-            cli, ["cache", "info", "deadbeef", "--platform", "linux"]
-        )
+        res = CliRunner().invoke(cli, ["cache", "info", "deadbeef", "--platform", "linux"])
     finally:
         m.stop()
     assert res.exit_code == 0
@@ -220,9 +224,7 @@ def test_cache_info_not_found():
     # A non-matching entry forces the prefix scan to iterate without a break.
     m, _inst = _patch_cache(info=None, list_entries=[_entry(chain_hash="ffffffffffff")])
     try:
-        res = CliRunner().invoke(
-            cli, ["cache", "info", "nope", "--platform", "linux"]
-        )
+        res = CliRunner().invoke(cli, ["cache", "info", "nope", "--platform", "linux"])
     finally:
         m.stop()
     assert res.exit_code == 1
@@ -235,9 +237,7 @@ def test_cache_info_not_found():
 def test_cache_remove_success():
     m, inst = _patch_cache(evict=True)
     try:
-        res = CliRunner().invoke(
-            cli, ["cache", "remove", "deadbeef", "--platform", "linux"]
-        )
+        res = CliRunner().invoke(cli, ["cache", "remove", "deadbeef", "--platform", "linux"])
     finally:
         m.stop()
     assert res.exit_code == 0
@@ -248,9 +248,7 @@ def test_cache_remove_success():
 def test_cache_remove_not_found():
     m, _inst = _patch_cache(evict=False)
     try:
-        res = CliRunner().invoke(
-            cli, ["cache", "remove", "deadbeef", "--platform", "linux"]
-        )
+        res = CliRunner().invoke(cli, ["cache", "remove", "deadbeef", "--platform", "linux"])
     finally:
         m.stop()
     assert res.exit_code == 1
@@ -356,8 +354,9 @@ def test_cache_purge_server_stale():
         captured["url"] = req.full_url
         return _Resp({"deleted_count": 0})
 
-    with mock.patch("urllib.request.urlopen", side_effect=_fake), mock.patch(
-        "cvcpkg.cli._cache._compute_current_chain_hashes", return_value={"h"}
+    with (
+        mock.patch("urllib.request.urlopen", side_effect=_fake),
+        mock.patch("cvcpkg.cli._cache._compute_current_chain_hashes", return_value={"h"}),
     ):
         res = CliRunner().invoke(
             cli, ["cache", "purge", "--stale", "--server", "https://srv.example"]
@@ -454,9 +453,7 @@ def test_cache_server_stats_with_orgs():
 def test_cache_server_stats_no_orgs():
     payload = {"total_packages": 0, "total_size_bytes": 0, "orgs": {}}
     with mock.patch("urllib.request.urlopen", return_value=_Resp(payload)):
-        res = CliRunner().invoke(
-            cli, ["cache", "server-stats", "--server", "https://srv.example"]
-        )
+        res = CliRunner().invoke(cli, ["cache", "server-stats", "--server", "https://srv.example"])
     assert res.exit_code == 0
     assert "Total packages: 0" in res.output
     assert "Per-organization:" not in res.output
@@ -464,18 +461,14 @@ def test_cache_server_stats_no_orgs():
 
 def test_cache_server_stats_http_error():
     with mock.patch("urllib.request.urlopen", side_effect=_http_error(401, "Unauthorized")):
-        res = CliRunner().invoke(
-            cli, ["cache", "server-stats", "--server", "https://srv.example"]
-        )
+        res = CliRunner().invoke(cli, ["cache", "server-stats", "--server", "https://srv.example"])
     assert res.exit_code == 1
     assert "Server error: 401 Unauthorized" in res.output
 
 
 def test_cache_server_stats_connection_error():
     with mock.patch("urllib.request.urlopen", side_effect=urllib.error.URLError("x")):
-        res = CliRunner().invoke(
-            cli, ["cache", "server-stats", "--server", "https://srv.example"]
-        )
+        res = CliRunner().invoke(cli, ["cache", "server-stats", "--server", "https://srv.example"])
     assert res.exit_code == 1
     assert "Connection error:" in res.output
 
@@ -504,8 +497,14 @@ def test_cache_server_gc_max_age():
         res = CliRunner().invoke(
             cli,
             [
-                "cache", "server-gc", "--server", "https://srv.example",
-                "--token", "t", "--max-age-days", "10",
+                "cache",
+                "server-gc",
+                "--server",
+                "https://srv.example",
+                "--token",
+                "t",
+                "--max-age-days",
+                "10",
             ],
         )
     assert res.exit_code == 0
@@ -533,9 +532,7 @@ def test_cache_server_gc_max_size():
 
 def test_cache_server_gc_no_options_errors():
     with mock.patch("urllib.request.urlopen", side_effect=AssertionError("no network")):
-        res = CliRunner().invoke(
-            cli, ["cache", "server-gc", "--server", "https://srv.example"]
-        )
+        res = CliRunner().invoke(cli, ["cache", "server-gc", "--server", "https://srv.example"])
     assert res.exit_code == 1
     assert "Specify --max-age-days and/or --max-size." in res.output
 
@@ -606,9 +603,11 @@ def test_compute_current_chain_hashes():
     def _chain_hash(r, by_name, plat):
         return f"{r.name}-{plat}"
 
-    with mock.patch("cvcpkg.builder.find_recipes_dir", return_value="/recipes"), mock.patch(
-        "cvcpkg.builder.list_recipes", return_value=recipes
-    ), mock.patch("cvcpkg.builder.chain_hash", side_effect=_chain_hash):
+    with (
+        mock.patch("cvcpkg.builder.find_recipes_dir", return_value="/recipes"),
+        mock.patch("cvcpkg.builder.list_recipes", return_value=recipes),
+        mock.patch("cvcpkg.builder.chain_hash", side_effect=_chain_hash),
+    ):
         hashes = _cache._compute_current_chain_hashes()
     assert hashes == {"zlib-linux", "zlib-windows"}
 
@@ -625,9 +624,11 @@ def test_compute_current_chain_hashes_empty_matrix_fallback():
         seen_platforms.add(plat)
         return ""  # empty hashes are dropped
 
-    with mock.patch("cvcpkg.builder.find_recipes_dir", return_value="/recipes"), mock.patch(
-        "cvcpkg.builder.list_recipes", return_value=[_R()]
-    ), mock.patch("cvcpkg.builder.chain_hash", side_effect=_chain_hash):
+    with (
+        mock.patch("cvcpkg.builder.find_recipes_dir", return_value="/recipes"),
+        mock.patch("cvcpkg.builder.list_recipes", return_value=[_R()]),
+        mock.patch("cvcpkg.builder.chain_hash", side_effect=_chain_hash),
+    ):
         hashes = _cache._compute_current_chain_hashes()
     assert hashes == set()
     # fallback default platform set was exercised

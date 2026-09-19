@@ -77,9 +77,7 @@ class TestDetectionErrors:
         # A CMake marker is present, but --build-system make forces parse_make,
         # which emits its "install step is a guess" warning.
         (tmp_path / "CMakeLists.txt").write_text("project(x VERSION 1.0)\n", encoding="utf-8")
-        res = _invoke(
-            runner, tmp_path, tmp_path / "recipes", "--build-system", "make", "--dry-run"
-        )
+        res = _invoke(runner, tmp_path, tmp_path / "recipes", "--build-system", "make", "--dry-run")
         assert res.exit_code == 0, res.output
         assert "detected a make project" in res.output
 
@@ -93,9 +91,7 @@ class TestNameValidation:
 
     def test_name_is_normalised(self, runner, tmp_path):
         (tmp_path / "CMakeLists.txt").write_text("project(x VERSION 1.0)\n", encoding="utf-8")
-        res = _invoke(
-            runner, tmp_path, tmp_path / "recipes", "--name", "My_Cool Lib", "--dry-run"
-        )
+        res = _invoke(runner, tmp_path, tmp_path / "recipes", "--name", "My_Cool Lib", "--dry-run")
         assert res.exit_code == 0, res.output
         assert "recipes/my-cool-lib/recipe.yaml" in res.output
 
@@ -129,8 +125,7 @@ class TestDryRun:
 
     def test_meson_dry_run_has_no_windows_row(self, runner, tmp_path):
         (tmp_path / "meson.build").write_text(
-            "project('mesonproj', 'c', version: '3.1.0', license: 'MIT')\n"
-            "dependency('zlib')\n",
+            "project('mesonproj', 'c', version: '3.1.0', license: 'MIT')\n" "dependency('zlib')\n",
             encoding="utf-8",
         )
         res = _invoke(runner, tmp_path, tmp_path / "recipes", "--dry-run")
@@ -178,9 +173,7 @@ class TestWrite:
     def test_meson_write_has_no_ps1(self, runner, tmp_path):
         proj = tmp_path / "proj"
         proj.mkdir()
-        (proj / "meson.build").write_text(
-            "project('m', 'c', version: '1.0')\n", encoding="utf-8"
-        )
+        (proj / "meson.build").write_text("project('m', 'c', version: '1.0')\n", encoding="utf-8")
         dest = tmp_path / "recipes"
         res = _invoke(runner, proj, dest)
         assert res.exit_code == 0, res.output
@@ -533,7 +526,7 @@ class TestParsePython:
         (tmp_path / "pyproject.toml").write_text(
             '[project]\nname = "rich_tool"\nversion = "1.0"\n'
             'license = { text = "BSD-3-Clause" }\n'
-            "dependencies = [\"numpy>=1\", \"click ; python_version>'3'\"]\n"
+            'dependencies = ["numpy>=1", "click ; python_version>\'3\'"]\n'
             '[project.urls]\nHomepage = "https://rich.example"\n',
             encoding="utf-8",
         )
@@ -582,7 +575,7 @@ class TestParsePython:
         # A valid TOML with no [project] and no [tool.poetry]: nothing to read,
         # and (no setup.cfg/setup.py either) an empty ProjectInfo comes back.
         (tmp_path / "pyproject.toml").write_text(
-            "[build-system]\nrequires = [\"setuptools\"]\n", encoding="utf-8"
+            '[build-system]\nrequires = ["setuptools"]\n', encoding="utf-8"
         )
         info = parse_python(tmp_path)
         assert info.name == ""

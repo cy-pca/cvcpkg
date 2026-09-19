@@ -60,9 +60,11 @@ class TestRecipeDistribution:
         assert c.delete("/v1/recipes/zlib", headers=_auth(admin)).status_code == 501
         assert c.post("/v1/recipes/zlib/register", headers=_auth(admin)).status_code == 501
         # Recipe push needs a file body; the DB gate still fires (501).
-        push = c.post("/v1/recipes/zlib",
-                      files={"file": ("zlib.tar.gz", io.BytesIO(b"x"))},
-                      headers=_auth(pub))
+        push = c.post(
+            "/v1/recipes/zlib",
+            files={"file": ("zlib.tar.gz", io.BytesIO(b"x"))},
+            headers=_auth(pub),
+        )
         assert push.status_code == 501
 
     def test_recipe_store_auth(self, env):
@@ -78,12 +80,20 @@ class TestRecipeDistribution:
 class TestWebhooks:
     def test_need_db(self, env):
         c, admin = env["client"], env["admin"]
-        assert c.post("/v1/webhooks", json={"url": "https://h.example.com", "events": ["*"]},
-                      headers=_auth(admin)).status_code == 501
+        assert (
+            c.post(
+                "/v1/webhooks",
+                json={"url": "https://h.example.com", "events": ["*"]},
+                headers=_auth(admin),
+            ).status_code
+            == 501
+        )
         assert c.get("/v1/webhooks", headers=_auth(admin)).status_code == 501
         assert c.get("/v1/webhooks/1", headers=_auth(admin)).status_code == 501
-        assert c.patch("/v1/webhooks/1", json={"active": False},
-                       headers=_auth(admin)).status_code == 501
+        assert (
+            c.patch("/v1/webhooks/1", json={"active": False}, headers=_auth(admin)).status_code
+            == 501
+        )
         assert c.delete("/v1/webhooks/1", headers=_auth(admin)).status_code == 501
         assert c.post("/v1/webhooks/1/test", headers=_auth(admin)).status_code == 501
 
@@ -104,13 +114,16 @@ class TestBuildersFleet:
 
     def test_writes_need_db(self, env):
         c, pub, admin = env["client"], env["publisher"], env["admin"]
-        assert c.patch("/v1/builders/1", json={"status": "idle"},
-                       headers=_auth(admin)).status_code in (422, 501)
+        assert c.patch(
+            "/v1/builders/1", json={"status": "idle"}, headers=_auth(admin)
+        ).status_code in (422, 501)
         assert c.post("/v1/builders/1/heartbeat", headers=_auth(pub)).status_code in (422, 501)
         assert c.delete("/v1/builders/1", headers=_auth(admin)).status_code == 501
-        assert c.post("/v1/builders/register",
-                      json={"hostname": "h", "platform": "linux", "arch": "x86_64"},
-                      headers=_auth(pub)).status_code in (422, 501)
+        assert c.post(
+            "/v1/builders/register",
+            json={"hostname": "h", "platform": "linux", "arch": "x86_64"},
+            headers=_auth(pub),
+        ).status_code in (422, 501)
 
     def test_auth(self, env):
         c = env["client"]
@@ -134,14 +147,14 @@ class TestBuildJobs:
         assert c.post("/v1/builds/dag/1/cancel", headers=h).status_code == 501
         assert c.post("/v1/builds/dag/1/pause", headers=h).status_code == 501
         assert c.post("/v1/builds/dag/1/resume", headers=h).status_code == 501
-        assert c.post("/v1/builds/1/claim", json={"builder_id": 1},
-                      headers=h).status_code in (422, 501)
-        assert c.post("/v1/builds/1/complete", json={},
-                      headers=h).status_code in (422, 501)
+        assert c.post("/v1/builds/1/claim", json={"builder_id": 1}, headers=h).status_code in (
+            422,
+            501,
+        )
+        assert c.post("/v1/builds/1/complete", json={}, headers=h).status_code in (422, 501)
         assert c.post("/v1/builds/1/fail", json={}, headers=h).status_code in (422, 501)
         assert c.get("/v1/builds/1/log", headers=h).status_code == 501
-        assert c.patch("/v1/builds/1/log", content=b"line",
-                       headers=h).status_code in (422, 501)
+        assert c.patch("/v1/builds/1/log", content=b"line", headers=h).status_code in (422, 501)
         assert c.get("/v1/builders/1/next-job", headers=h).status_code in (422, 501)
 
     def test_delete_log_admin_only(self, env):
@@ -164,8 +177,12 @@ class TestAdminGc:
         c, admin = env["client"], env["admin"]
         assert c.post("/v1/admin/gc/logs", headers=_auth(admin)).status_code == 501
         # older_than_days is ge=1; its server default may be 0, so pass it.
-        assert c.post("/v1/admin/gc/yanked", params={"older_than_days": 30},
-                      headers=_auth(admin)).status_code == 501
+        assert (
+            c.post(
+                "/v1/admin/gc/yanked", params={"older_than_days": 30}, headers=_auth(admin)
+            ).status_code
+            == 501
+        )
         assert c.post("/v1/admin/purge/builds", headers=_auth(admin)).status_code == 501
         assert c.get("/v1/admin/quota/logs/cvc-lab", headers=_auth(admin)).status_code == 501
 
@@ -181,13 +198,20 @@ class TestAdminGc:
 class TestAdminSettingsUpdate:
     def test_update_and_validation(self, env):
         c, admin = env["client"], env["admin"]
-        ok = c.patch("/v1/admin/settings",
-                     json={"global_cache_storage_limit_bytes": 1024}, headers=_auth(admin))
+        ok = c.patch(
+            "/v1/admin/settings",
+            json={"global_cache_storage_limit_bytes": 1024},
+            headers=_auth(admin),
+        )
         assert ok.status_code == 200
         assert ok.json()["updated"]["global_cache_storage_limit_bytes"] == 1024
         # Negative and empty bodies are both rejected.
-        assert c.patch("/v1/admin/settings", json={"org_storage_limit_bytes": -1},
-                       headers=_auth(admin)).status_code == 422
+        assert (
+            c.patch(
+                "/v1/admin/settings", json={"org_storage_limit_bytes": -1}, headers=_auth(admin)
+            ).status_code
+            == 422
+        )
         assert c.patch("/v1/admin/settings", json={}, headers=_auth(admin)).status_code == 422
         assert c.patch("/v1/admin/settings", json={"x": 1}).status_code == 401
 
@@ -198,21 +222,28 @@ class TestAdminSettingsUpdate:
 class TestOrgMutations:
     def test_patch_logo_delete_member(self, env):
         c, admin = env["client"], env["admin"]
-        assert c.patch("/v1/orgs/x", json={"display_name": "X"},
-                       headers=_auth(admin)).status_code == 501
-        assert c.request("DELETE", "/v1/orgs/x/members/y",
-                         headers=_auth(admin)).status_code == 501
+        assert (
+            c.patch("/v1/orgs/x", json={"display_name": "X"}, headers=_auth(admin)).status_code
+            == 501
+        )
+        assert c.request("DELETE", "/v1/orgs/x/members/y", headers=_auth(admin)).status_code == 501
         # Logo upload requires a multipart file; the DB gate fires regardless.
-        logo = c.post("/v1/orgs/x/logo",
-                      files={"file": ("l.png", io.BytesIO(b"\x89PNG"))},
-                      headers=_auth(admin))
+        logo = c.post(
+            "/v1/orgs/x/logo",
+            files={"file": ("l.png", io.BytesIO(b"\x89PNG"))},
+            headers=_auth(admin),
+        )
         assert logo.status_code in (422, 501)
 
     def test_auth(self, env):
         c = env["client"]
         assert c.patch("/v1/orgs/x", json={"display_name": "X"}).status_code == 401
-        assert c.patch("/v1/orgs/x", json={"display_name": "X"},
-                       headers=_auth(env["reader"])).status_code == 403
+        assert (
+            c.patch(
+                "/v1/orgs/x", json={"display_name": "X"}, headers=_auth(env["reader"])
+            ).status_code
+            == 403
+        )
 
 
 # ── OIDC entry points (dormant when unconfigured) ───────────────
@@ -264,8 +295,9 @@ class TestLinkAndAccount:
     def test_org_manage_page_needs_db(self, env):
         assert env["client"].get("/org/x/manage", follow_redirects=False).status_code == 501
         assert env["client"].post("/org/x/members", data={"token_name": "y"}).status_code == 501
-        assert env["client"].post("/org/x/members/remove",
-                                  data={"token_name": "y"}).status_code == 501
+        assert (
+            env["client"].post("/org/x/members/remove", data={"token_name": "y"}).status_code == 501
+        )
 
 
 # ── Admin principal console (session-guarded) ───────────────────
@@ -278,8 +310,9 @@ class TestAdminPrincipals:
         assert c.post("/admin/principals/alice/disable").status_code == 403
         assert c.post("/admin/principals/alice/enable").status_code == 403
         assert c.post("/admin/principals/alice/revoke-sessions").status_code == 403
-        assert c.post("/admin/tokens/create",
-                      data={"name": "t", "role": "reader"}).status_code == 403
+        assert (
+            c.post("/admin/tokens/create", data={"name": "t", "role": "reader"}).status_code == 403
+        )
         assert c.post("/admin/tokens/revoke", data={"name": "t"}).status_code == 403
 
 

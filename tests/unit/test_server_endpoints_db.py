@@ -66,8 +66,16 @@ def _h(tok: str) -> dict:
     return {"Authorization": f"Bearer {tok}"}
 
 
-def _publish(client, tok, name="zlib", version="1.3.1", platform="linux", arch="x86_64",
-             content=b"archive-bytes", **params):
+def _publish(
+    client,
+    tok,
+    name="zlib",
+    version="1.3.1",
+    platform="linux",
+    arch="x86_64",
+    content=b"archive-bytes",
+    **params,
+):
     body = {"name": name, "version": version, "platform": platform, "arch": arch}
     body.update(params)
     return client.post(
@@ -129,7 +137,9 @@ class TestPublishLifecycleDb:
         ok = client.delete("/v1/packages/by-link/linux/static", headers=_h(admin))
         assert ok.status_code == 200 and ok.json()["removed"] == 1
         # nothing left to match
-        assert client.delete("/v1/packages/by-link/linux/static", headers=_h(admin)).status_code == 404
+        assert (
+            client.delete("/v1/packages/by-link/linux/static", headers=_h(admin)).status_code == 404
+        )
 
     def test_yank_wrong_publisher_403(self, db_env):
         client, admin, pub, reader, _ = db_env
@@ -179,19 +189,28 @@ class TestOrgsDb:
         )
         assert c.status_code == 200, c.text
         # Duplicate -> 409
-        assert client.post(
-            "/v1/orgs", headers=_h(pub), json={"slug": "acme", "display_name": "x"}
-        ).status_code == 409
+        assert (
+            client.post(
+                "/v1/orgs", headers=_h(pub), json={"slug": "acme", "display_name": "x"}
+            ).status_code
+            == 409
+        )
         # Bad slug (consecutive hyphens) -> 422
-        assert client.post(
-            "/v1/orgs", headers=_h(pub), json={"slug": "a--b", "display_name": "x"}
-        ).status_code == 422
+        assert (
+            client.post(
+                "/v1/orgs", headers=_h(pub), json={"slug": "a--b", "display_name": "x"}
+            ).status_code
+            == 422
+        )
         # Bad logo url -> 422
-        assert client.post(
-            "/v1/orgs",
-            headers=_h(pub),
-            json={"slug": "acme2", "display_name": "x", "logo_url": "ftp://nope"},
-        ).status_code == 422
+        assert (
+            client.post(
+                "/v1/orgs",
+                headers=_h(pub),
+                json={"slug": "acme2", "display_name": "x", "logo_url": "ftp://nope"},
+            ).status_code
+            == 422
+        )
 
         # Get (owner sees members)
         g = client.get("/v1/orgs/acme", headers=_h(pub))
@@ -206,40 +225,54 @@ class TestOrgsDb:
         u = client.patch("/v1/orgs/acme", headers=_h(pub), json={"description": "hi"})
         assert u.status_code == 200
         # Non-admin cannot set storage limit -> 403
-        assert client.patch(
-            "/v1/orgs/acme", headers=_h(pub), json={"storage_limit_bytes": 1}
-        ).status_code == 403
+        assert (
+            client.patch(
+                "/v1/orgs/acme", headers=_h(pub), json={"storage_limit_bytes": 1}
+            ).status_code
+            == 403
+        )
         # Update by an unrelated publisher -> 403
-        assert client.patch(
-            "/v1/orgs/acme", headers=_h(reader), json={"description": "no"}
-        ).status_code == 403
+        assert (
+            client.patch(
+                "/v1/orgs/acme", headers=_h(reader), json={"description": "no"}
+            ).status_code
+            == 403
+        )
         # Update missing org (admin) -> 404
-        assert client.patch(
-            "/v1/orgs/ghost", headers=_h(admin), json={"description": "x"}
-        ).status_code == 404
+        assert (
+            client.patch("/v1/orgs/ghost", headers=_h(admin), json={"description": "x"}).status_code
+            == 404
+        )
 
         # Members: add the reader token, duplicate, bad kind, nonexistent
         add = client.post(
             "/v1/orgs/acme/members", headers=_h(pub), params={"token_name": "db-reader"}
         )
         assert add.status_code == 200
-        assert client.post(
-            "/v1/orgs/acme/members", headers=_h(pub), params={"token_name": "db-reader"}
-        ).status_code == 409
-        assert client.post(
-            "/v1/orgs/acme/members",
-            headers=_h(pub),
-            params={"token_name": "db-reader", "principal_kind": "bogus"},
-        ).status_code == 422
-        assert client.post(
-            "/v1/orgs/acme/members", headers=_h(pub), params={"token_name": "does-not-exist"}
-        ).status_code == 404
+        assert (
+            client.post(
+                "/v1/orgs/acme/members", headers=_h(pub), params={"token_name": "db-reader"}
+            ).status_code
+            == 409
+        )
+        assert (
+            client.post(
+                "/v1/orgs/acme/members",
+                headers=_h(pub),
+                params={"token_name": "db-reader", "principal_kind": "bogus"},
+            ).status_code
+            == 422
+        )
+        assert (
+            client.post(
+                "/v1/orgs/acme/members", headers=_h(pub), params={"token_name": "does-not-exist"}
+            ).status_code
+            == 404
+        )
         # Remove member, then removing a non-member -> 404
         rm = client.delete("/v1/orgs/acme/members/db-reader", headers=_h(pub))
         assert rm.status_code == 200
-        assert client.delete(
-            "/v1/orgs/acme/members/db-reader", headers=_h(pub)
-        ).status_code == 404
+        assert client.delete("/v1/orgs/acme/members/db-reader", headers=_h(pub)).status_code == 404
 
     def test_logo_upload_and_serve(self, db_env):
         client, admin, pub, reader, _ = db_env
@@ -322,26 +355,46 @@ class TestMirrorsDb:
         assert reg.status_code == 200
         assert reg.json()["url"] == "https://mirror.example.com"
         # Bad URL -> 422
-        assert client.post(
-            "/v1/mirrors/register", headers=_h(admin), json={"url": "ftp://bad.example"}
-        ).status_code == 422
+        assert (
+            client.post(
+                "/v1/mirrors/register", headers=_h(admin), json={"url": "ftp://bad.example"}
+            ).status_code
+            == 422
+        )
         # Listings
         assert "mirrors" in client.get("/v1/mirrors").json()
         assert "mirrors" in client.get("/v1/mirrors/all", headers=_h(admin)).json()
         # Reject then remove
-        assert client.post(
-            "/v1/mirrors/reject", headers=_h(admin), params={"url": "https://mirror.example.com"}
-        ).status_code == 200
-        assert client.request(
-            "DELETE", "/v1/mirrors", headers=_h(admin), params={"url": "https://mirror.example.com"}
-        ).status_code == 200
+        assert (
+            client.post(
+                "/v1/mirrors/reject",
+                headers=_h(admin),
+                params={"url": "https://mirror.example.com"},
+            ).status_code
+            == 200
+        )
+        assert (
+            client.request(
+                "DELETE",
+                "/v1/mirrors",
+                headers=_h(admin),
+                params={"url": "https://mirror.example.com"},
+            ).status_code
+            == 200
+        )
         # Reject/remove of unknown -> 404
-        assert client.post(
-            "/v1/mirrors/reject", headers=_h(admin), params={"url": "https://none.example"}
-        ).status_code == 404
-        assert client.request(
-            "DELETE", "/v1/mirrors", headers=_h(admin), params={"url": "https://none.example"}
-        ).status_code == 404
+        assert (
+            client.post(
+                "/v1/mirrors/reject", headers=_h(admin), params={"url": "https://none.example"}
+            ).status_code
+            == 404
+        )
+        assert (
+            client.request(
+                "DELETE", "/v1/mirrors", headers=_h(admin), params={"url": "https://none.example"}
+            ).status_code
+            == 404
+        )
 
 
 # ── Builders (DB) ───────────────────────────────────────────────
@@ -363,14 +416,13 @@ class TestBuildersDb:
         # Get missing -> 404
         assert client.get("/v1/builders/999999").status_code == 404
         # Patch
-        patched = client.patch(
-            f"/v1/builders/{bid}", headers=_h(pub), json={"max_jobs": 4}
-        )
+        patched = client.patch(f"/v1/builders/{bid}", headers=_h(pub), json={"max_jobs": 4})
         assert patched.status_code == 200
         # Patch missing -> 404
-        assert client.patch(
-            "/v1/builders/999999", headers=_h(pub), json={"max_jobs": 2}
-        ).status_code == 404
+        assert (
+            client.patch("/v1/builders/999999", headers=_h(pub), json={"max_jobs": 2}).status_code
+            == 404
+        )
         # Delete missing -> 404, then delete real -> 200
         assert client.delete("/v1/builders/999999", headers=_h(admin)).status_code == 404
         assert client.delete(f"/v1/builders/{bid}", headers=_h(admin)).status_code == 200
@@ -417,11 +469,14 @@ class TestWebhooksDb:
         assert reg.status_code == 200, reg.text
         wid = reg.json()["id"]
         # Bad url (loopback) -> 422
-        assert client.post(
-            "/v1/webhooks",
-            headers=_h(admin),
-            json={"url": "http://127.0.0.1/x", "events": ["package.published"]},
-        ).status_code == 422
+        assert (
+            client.post(
+                "/v1/webhooks",
+                headers=_h(admin),
+                json={"url": "http://127.0.0.1/x", "events": ["package.published"]},
+            ).status_code
+            == 422
+        )
         # List + get
         assert client.get("/v1/webhooks", headers=_h(admin)).json()["total"] >= 1
         assert client.get(f"/v1/webhooks/{wid}", headers=_h(admin)).json()["id"] == wid
@@ -430,9 +485,12 @@ class TestWebhooksDb:
         # Update (deactivate) + update missing
         up = client.patch(f"/v1/webhooks/{wid}", headers=_h(admin), json={"active": False})
         assert up.status_code == 200
-        assert client.patch(
-            "/v1/webhooks/999999", headers=_h(admin), json={"active": False}
-        ).status_code == 404
+        assert (
+            client.patch(
+                "/v1/webhooks/999999", headers=_h(admin), json={"active": False}
+            ).status_code
+            == 404
+        )
         # Delete + delete missing
         assert client.delete(f"/v1/webhooks/{wid}", headers=_h(admin)).status_code == 200
         assert client.delete("/v1/webhooks/999999", headers=_h(admin)).status_code == 404
@@ -488,17 +546,24 @@ class TestAdminOpsDb:
         # No parameters -> 422
         assert client.post("/v1/cache/gc", headers=_h(admin), json={}).status_code == 422
         # Bad max_age -> 422
-        assert client.post(
-            "/v1/cache/gc", headers=_h(admin), json={"max_age_seconds": 0}
-        ).status_code == 422
+        assert (
+            client.post("/v1/cache/gc", headers=_h(admin), json={"max_age_seconds": 0}).status_code
+            == 422
+        )
         # Bad storage cap -> 422
-        assert client.post(
-            "/v1/cache/gc", headers=_h(admin), json={"max_storage_bytes": -1}
-        ).status_code == 422
+        assert (
+            client.post(
+                "/v1/cache/gc", headers=_h(admin), json={"max_storage_bytes": -1}
+            ).status_code
+            == 422
+        )
         # valid_chain_hashes must be a list -> 422
-        assert client.post(
-            "/v1/cache/gc", headers=_h(admin), json={"valid_chain_hashes": "nope"}
-        ).status_code == 422
+        assert (
+            client.post(
+                "/v1/cache/gc", headers=_h(admin), json={"valid_chain_hashes": "nope"}
+            ).status_code
+            == 422
+        )
         # Valid GC by storage -> 200
         ok = client.post("/v1/cache/gc", headers=_h(admin), json={"max_storage_bytes": 0})
         assert ok.status_code == 200
@@ -549,9 +614,13 @@ class TestTokenRequestsDb:
         assert appr.status_code == 200
         assert appr.json()["token"].startswith("cvctok_")
         # Approving again -> already resolved (409)
-        assert client.post(f"/v1/token-requests/{rid}/approve", headers=_h(admin)).status_code == 409
+        assert (
+            client.post(f"/v1/token-requests/{rid}/approve", headers=_h(admin)).status_code == 409
+        )
         # Approve/deny a nonexistent request -> 404
-        assert client.post("/v1/token-requests/999999/approve", headers=_h(admin)).status_code == 404
+        assert (
+            client.post("/v1/token-requests/999999/approve", headers=_h(admin)).status_code == 404
+        )
         assert client.post("/v1/token-requests/999999/deny", headers=_h(admin)).status_code == 404
 
     def test_deny_flow(self, db_env, monkeypatch):
@@ -600,13 +669,9 @@ class TestAuthBrokerDb:
         assert body["user_code"] and body["pairing_id"]
         pid = body["pairing_id"]
         # Unknown client_id -> 400
-        assert client.post(
-            "/v1/auth/device", json={"client_id": "bogus-client"}
-        ).status_code == 400
+        assert client.post("/v1/auth/device", json={"client_id": "bogus-client"}).status_code == 400
         # Poll pending pairing with a mismatching verifier -> access_denied
-        poll = client.post(
-            "/v1/auth/device/token", json={"pairing_id": pid, "verifier": "wrong"}
-        )
+        poll = client.post("/v1/auth/device/token", json={"pairing_id": pid, "verifier": "wrong"})
         assert poll.status_code == 400
         assert poll.json()["error"] == "access_denied"
         # Poll an unknown pairing -> expired_token
@@ -615,9 +680,12 @@ class TestAuthBrokerDb:
         )
         assert gone.json()["error"] == "expired_token"
         # Cancel is idempotent 204
-        assert client.post(
-            "/v1/auth/device/cancel", json={"pairing_id": pid, "verifier": "x"}
-        ).status_code == 204
+        assert (
+            client.post(
+                "/v1/auth/device/cancel", json={"pairing_id": pid, "verifier": "x"}
+            ).status_code
+            == 204
+        )
 
     def test_authorize_validation(self, db_env):
         client, *_ = db_env

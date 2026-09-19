@@ -84,9 +84,7 @@ def test_request_success_with_body_and_headers():
         return _AuthResp(200, b'{"ok": true}')
 
     with mock.patch("urllib.request.urlopen", side_effect=_fake):
-        status, data = _auth._request(
-            "POST", f"{SRV}/v1/x", token="tok", json_body={"a": 1}
-        )
+        status, data = _auth._request("POST", f"{SRV}/v1/x", token="tok", json_body={"a": 1})
     assert status == 200
     assert data == {"ok": True}
     assert captured["method"] == "POST"
@@ -148,11 +146,12 @@ def test_prompt_provider_returns_selected_id():
 
 def test_login_loopback_success_text():
     cred = _cred()
-    with mock.patch("cvcpkg.oauth_native.fetch_providers", return_value=[]), mock.patch(
-        "cvcpkg.oauth_native.can_open_browser", return_value=True
-    ), mock.patch("cvcpkg.oauth_native.loopback_login", return_value=cred) as lb, mock.patch(
-        "cvcpkg.credentials.save"
-    ) as save:
+    with (
+        mock.patch("cvcpkg.oauth_native.fetch_providers", return_value=[]),
+        mock.patch("cvcpkg.oauth_native.can_open_browser", return_value=True),
+        mock.patch("cvcpkg.oauth_native.loopback_login", return_value=cred) as lb,
+        mock.patch("cvcpkg.credentials.save") as save,
+    ):
         res = CliRunner().invoke(cli, ["login", "--server", SRV])
     assert res.exit_code == 0, res.output
     assert "Signed in to x.example as joe (reader)." in res.output
@@ -164,10 +163,11 @@ def test_login_loopback_success_text():
 
 def test_login_json_output():
     cred = _cred()
-    with mock.patch("cvcpkg.oauth_native.fetch_providers", return_value=[]), mock.patch(
-        "cvcpkg.oauth_native.can_open_browser", return_value=True
-    ), mock.patch("cvcpkg.oauth_native.loopback_login", return_value=cred), mock.patch(
-        "cvcpkg.credentials.save"
+    with (
+        mock.patch("cvcpkg.oauth_native.fetch_providers", return_value=[]),
+        mock.patch("cvcpkg.oauth_native.can_open_browser", return_value=True),
+        mock.patch("cvcpkg.oauth_native.loopback_login", return_value=cred),
+        mock.patch("cvcpkg.credentials.save"),
     ):
         res = CliRunner().invoke(cli, ["login", "--server", SRV, "--json"])
     assert res.exit_code == 0
@@ -178,11 +178,12 @@ def test_login_json_output():
 
 def test_login_single_provider_autoselected():
     cred = _cred()
-    with mock.patch(
-        "cvcpkg.oauth_native.fetch_providers", return_value=[{"id": "ringa"}]
-    ), mock.patch("cvcpkg.oauth_native.can_open_browser", return_value=True), mock.patch(
-        "cvcpkg.oauth_native.loopback_login", return_value=cred
-    ) as lb, mock.patch("cvcpkg.credentials.save"):
+    with (
+        mock.patch("cvcpkg.oauth_native.fetch_providers", return_value=[{"id": "ringa"}]),
+        mock.patch("cvcpkg.oauth_native.can_open_browser", return_value=True),
+        mock.patch("cvcpkg.oauth_native.loopback_login", return_value=cred) as lb,
+        mock.patch("cvcpkg.credentials.save"),
+    ):
         res = CliRunner().invoke(cli, ["login", "--server", SRV])
     assert res.exit_code == 0, res.output
     assert lb.call_args.kwargs["provider"] == "ringa"
@@ -190,10 +191,11 @@ def test_login_single_provider_autoselected():
 
 def test_login_pairing_when_no_browser():
     cred = _cred()
-    with mock.patch("cvcpkg.oauth_native.fetch_providers", return_value=[]), mock.patch(
-        "cvcpkg.oauth_native.can_open_browser", return_value=False
-    ), mock.patch("cvcpkg.oauth_native.pairing_login", return_value=cred) as pl, mock.patch(
-        "cvcpkg.credentials.save"
+    with (
+        mock.patch("cvcpkg.oauth_native.fetch_providers", return_value=[]),
+        mock.patch("cvcpkg.oauth_native.can_open_browser", return_value=False),
+        mock.patch("cvcpkg.oauth_native.pairing_login", return_value=cred) as pl,
+        mock.patch("cvcpkg.credentials.save"),
     ):
         res = CliRunner().invoke(cli, ["login", "--server", SRV, "--no-browser"])
     assert res.exit_code == 0, res.output
@@ -204,10 +206,13 @@ def test_login_pairing_when_no_browser():
 def test_login_multi_provider_noninteractive_pairing_errors():
     # multiple providers, no --provider, not a tty, and not the loopback flow
     # (pairing) -> hard error asking for --provider.
-    with mock.patch(
-        "cvcpkg.oauth_native.fetch_providers",
-        return_value=[{"id": "ringa"}, {"id": "ringb"}],
-    ), mock.patch("cvcpkg.oauth_native.can_open_browser", return_value=False):
+    with (
+        mock.patch(
+            "cvcpkg.oauth_native.fetch_providers",
+            return_value=[{"id": "ringa"}, {"id": "ringb"}],
+        ),
+        mock.patch("cvcpkg.oauth_native.can_open_browser", return_value=False),
+    ):
         res = CliRunner().invoke(cli, ["login", "--server", SRV, "--no-browser"])
     assert res.exit_code != 0
     assert "multiple identity providers" in res.output
@@ -219,14 +224,17 @@ def test_login_multi_provider_tty_prompts():
     fake_sys = types.SimpleNamespace(
         stdin=types.SimpleNamespace(isatty=lambda: True), exit=sys.exit
     )
-    with mock.patch("cvcpkg.cli._auth.sys", fake_sys), mock.patch(
-        "cvcpkg.oauth_native.fetch_providers",
-        return_value=[{"id": "ringa"}, {"id": "ringb"}],
-    ), mock.patch("cvcpkg.oauth_native.can_open_browser", return_value=False), mock.patch(
-        "cvcpkg.cli._auth._prompt_provider", return_value="ringb"
-    ) as pp, mock.patch(
-        "cvcpkg.oauth_native.pairing_login", return_value=cred
-    ) as pl, mock.patch("cvcpkg.credentials.save"):
+    with (
+        mock.patch("cvcpkg.cli._auth.sys", fake_sys),
+        mock.patch(
+            "cvcpkg.oauth_native.fetch_providers",
+            return_value=[{"id": "ringa"}, {"id": "ringb"}],
+        ),
+        mock.patch("cvcpkg.oauth_native.can_open_browser", return_value=False),
+        mock.patch("cvcpkg.cli._auth._prompt_provider", return_value="ringb") as pp,
+        mock.patch("cvcpkg.oauth_native.pairing_login", return_value=cred) as pl,
+        mock.patch("cvcpkg.credentials.save"),
+    ):
         res = CliRunner().invoke(cli, ["login", "--server", SRV, "--no-browser"])
     assert res.exit_code == 0, res.output
     pp.assert_called_once()
@@ -235,24 +243,30 @@ def test_login_multi_provider_tty_prompts():
 
 def test_login_explicit_provider_validated_ok():
     cred = _cred()
-    with mock.patch(
-        "cvcpkg.oauth_native.fetch_providers",
-        return_value=[{"id": "ringa"}, {"id": "ringb"}],
-    ), mock.patch("cvcpkg.oauth_native.can_open_browser", return_value=True), mock.patch(
-        "cvcpkg.oauth_native.loopback_login", return_value=cred
-    ) as lb, mock.patch("cvcpkg.credentials.save"):
+    with (
+        mock.patch(
+            "cvcpkg.oauth_native.fetch_providers",
+            return_value=[{"id": "ringa"}, {"id": "ringb"}],
+        ),
+        mock.patch("cvcpkg.oauth_native.can_open_browser", return_value=True),
+        mock.patch("cvcpkg.oauth_native.loopback_login", return_value=cred) as lb,
+        mock.patch("cvcpkg.credentials.save"),
+    ):
         res = CliRunner().invoke(cli, ["login", "--server", SRV, "--provider", "ringb"])
     assert res.exit_code == 0, res.output
     assert lb.call_args.kwargs["provider"] == "ringb"
 
 
 def test_login_explicit_provider_unknown_errors():
-    with mock.patch(
-        "cvcpkg.oauth_native.fetch_providers",
-        return_value=[{"id": "ringa"}, {"id": "ringb"}],
-    ), mock.patch(
-        "cvcpkg.oauth_native.loopback_login",
-        side_effect=AssertionError("must not reach login flow"),
+    with (
+        mock.patch(
+            "cvcpkg.oauth_native.fetch_providers",
+            return_value=[{"id": "ringa"}, {"id": "ringb"}],
+        ),
+        mock.patch(
+            "cvcpkg.oauth_native.loopback_login",
+            side_effect=AssertionError("must not reach login flow"),
+        ),
     ):
         res = CliRunner().invoke(cli, ["login", "--server", SRV, "--provider", "nope"])
     assert res.exit_code != 0
@@ -264,12 +278,15 @@ def test_login_multi_provider_loopback_fallthrough():
     # multiple providers + loopback flow + not a tty: neither prompt nor error;
     # provider stays empty and the browser picker handles it downstream.
     cred = _cred()
-    with mock.patch(
-        "cvcpkg.oauth_native.fetch_providers",
-        return_value=[{"id": "ringa"}, {"id": "ringb"}],
-    ), mock.patch("cvcpkg.oauth_native.can_open_browser", return_value=True), mock.patch(
-        "cvcpkg.oauth_native.loopback_login", return_value=cred
-    ) as lb, mock.patch("cvcpkg.credentials.save"):
+    with (
+        mock.patch(
+            "cvcpkg.oauth_native.fetch_providers",
+            return_value=[{"id": "ringa"}, {"id": "ringb"}],
+        ),
+        mock.patch("cvcpkg.oauth_native.can_open_browser", return_value=True),
+        mock.patch("cvcpkg.oauth_native.loopback_login", return_value=cred) as lb,
+        mock.patch("cvcpkg.credentials.save"),
+    ):
         res = CliRunner().invoke(cli, ["login", "--server", SRV])
     assert res.exit_code == 0, res.output
     assert lb.call_args.kwargs["provider"] == ""
@@ -277,10 +294,11 @@ def test_login_multi_provider_loopback_fallthrough():
 
 def test_login_success_minimal_cred_omits_device_and_expiry():
     cred = _cred(device="", expires_at="")
-    with mock.patch("cvcpkg.oauth_native.fetch_providers", return_value=[]), mock.patch(
-        "cvcpkg.oauth_native.can_open_browser", return_value=True
-    ), mock.patch("cvcpkg.oauth_native.loopback_login", return_value=cred), mock.patch(
-        "cvcpkg.credentials.save"
+    with (
+        mock.patch("cvcpkg.oauth_native.fetch_providers", return_value=[]),
+        mock.patch("cvcpkg.oauth_native.can_open_browser", return_value=True),
+        mock.patch("cvcpkg.oauth_native.loopback_login", return_value=cred),
+        mock.patch("cvcpkg.credentials.save"),
     ):
         res = CliRunner().invoke(cli, ["login", "--server", SRV])
     assert res.exit_code == 0, res.output
@@ -290,11 +308,13 @@ def test_login_success_minimal_cred_omits_device_and_expiry():
 
 
 def test_login_loginerror_becomes_clickexception():
-    with mock.patch("cvcpkg.oauth_native.fetch_providers", return_value=[]), mock.patch(
-        "cvcpkg.oauth_native.can_open_browser", return_value=True
-    ), mock.patch(
-        "cvcpkg.oauth_native.loopback_login",
-        side_effect=oauth_native.LoginError("no dice"),
+    with (
+        mock.patch("cvcpkg.oauth_native.fetch_providers", return_value=[]),
+        mock.patch("cvcpkg.oauth_native.can_open_browser", return_value=True),
+        mock.patch(
+            "cvcpkg.oauth_native.loopback_login",
+            side_effect=oauth_native.LoginError("no dice"),
+        ),
     ):
         res = CliRunner().invoke(cli, ["login", "--server", SRV])
     assert res.exit_code != 0
@@ -312,10 +332,10 @@ def test_logout_not_signed_in():
 
 
 def test_logout_local_only_skips_server():
-    with mock.patch("cvcpkg.credentials.get", return_value=_cred()), mock.patch(
-        "cvcpkg.credentials.logout_local"
-    ) as ll, mock.patch(
-        "cvcpkg.cli._auth._request", side_effect=AssertionError("no network")
+    with (
+        mock.patch("cvcpkg.credentials.get", return_value=_cred()),
+        mock.patch("cvcpkg.credentials.logout_local") as ll,
+        mock.patch("cvcpkg.cli._auth._request", side_effect=AssertionError("no network")),
     ):
         res = CliRunner().invoke(cli, ["logout", "--server", SRV, "--local-only"])
     assert res.exit_code == 0
@@ -324,9 +344,11 @@ def test_logout_local_only_skips_server():
 
 
 def test_logout_server_revoke_ok():
-    with mock.patch("cvcpkg.credentials.get", return_value=_cred()), mock.patch(
-        "cvcpkg.credentials.logout_local"
-    ) as ll, mock.patch("cvcpkg.cli._auth._request", return_value=(200, None)) as rq:
+    with (
+        mock.patch("cvcpkg.credentials.get", return_value=_cred()),
+        mock.patch("cvcpkg.credentials.logout_local") as ll,
+        mock.patch("cvcpkg.cli._auth._request", return_value=(200, None)) as rq,
+    ):
         res = CliRunner().invoke(cli, ["logout", "--server", SRV, "--all"])
     assert res.exit_code == 0
     assert "Signed out of x.example." in res.output
@@ -336,9 +358,11 @@ def test_logout_server_revoke_ok():
 
 
 def test_logout_server_revoke_nonok_warns_but_clears():
-    with mock.patch("cvcpkg.credentials.get", return_value=_cred()), mock.patch(
-        "cvcpkg.credentials.logout_local"
-    ) as ll, mock.patch("cvcpkg.cli._auth._request", return_value=(500, None)):
+    with (
+        mock.patch("cvcpkg.credentials.get", return_value=_cred()),
+        mock.patch("cvcpkg.credentials.logout_local") as ll,
+        mock.patch("cvcpkg.cli._auth._request", return_value=(500, None)),
+    ):
         res = CliRunner().invoke(cli, ["logout", "--server", SRV])
     assert res.exit_code == 0
     assert "server-side revoke returned 500" in res.output
@@ -357,8 +381,9 @@ def test_whoami_not_signed_in():
 
 
 def test_whoami_session_expired():
-    with mock.patch("cvcpkg.cli._helpers.resolve_token", return_value="tok"), mock.patch(
-        "cvcpkg.cli._auth._request", return_value=(401, None)
+    with (
+        mock.patch("cvcpkg.cli._helpers.resolve_token", return_value="tok"),
+        mock.patch("cvcpkg.cli._auth._request", return_value=(401, None)),
     ):
         res = CliRunner().invoke(cli, ["whoami", "--server", SRV])
     assert res.exit_code != 0
@@ -366,8 +391,9 @@ def test_whoami_session_expired():
 
 
 def test_whoami_generic_failure():
-    with mock.patch("cvcpkg.cli._helpers.resolve_token", return_value="tok"), mock.patch(
-        "cvcpkg.cli._auth._request", return_value=(503, None)
+    with (
+        mock.patch("cvcpkg.cli._helpers.resolve_token", return_value="tok"),
+        mock.patch("cvcpkg.cli._auth._request", return_value=(503, None)),
     ):
         res = CliRunner().invoke(cli, ["whoami", "--server", SRV])
     assert res.exit_code != 0
@@ -382,8 +408,9 @@ def test_whoami_text_output():
         "email": "joe@x.example",
         "orgs": [{"slug": "acme", "role": "owner"}],
     }
-    with mock.patch("cvcpkg.cli._helpers.resolve_token", return_value="tok"), mock.patch(
-        "cvcpkg.cli._auth._request", return_value=(200, data)
+    with (
+        mock.patch("cvcpkg.cli._helpers.resolve_token", return_value="tok"),
+        mock.patch("cvcpkg.cli._auth._request", return_value=(200, data)),
     ):
         res = CliRunner().invoke(cli, ["whoami", "--server", SRV])
     assert res.exit_code == 0
@@ -394,8 +421,9 @@ def test_whoami_text_output():
 
 def test_whoami_text_no_email_no_orgs():
     data = {"name": "Joe", "role": "reader", "kind": "user"}
-    with mock.patch("cvcpkg.cli._helpers.resolve_token", return_value="tok"), mock.patch(
-        "cvcpkg.cli._auth._request", return_value=(200, data)
+    with (
+        mock.patch("cvcpkg.cli._helpers.resolve_token", return_value="tok"),
+        mock.patch("cvcpkg.cli._auth._request", return_value=(200, data)),
     ):
         res = CliRunner().invoke(cli, ["whoami", "--server", SRV])
     assert res.exit_code == 0
@@ -406,8 +434,9 @@ def test_whoami_text_no_email_no_orgs():
 
 def test_whoami_json_output():
     data = {"name": "Joe", "role": "reader", "kind": "user"}
-    with mock.patch("cvcpkg.cli._helpers.resolve_token", return_value="tok"), mock.patch(
-        "cvcpkg.cli._auth._request", return_value=(200, data)
+    with (
+        mock.patch("cvcpkg.cli._helpers.resolve_token", return_value="tok"),
+        mock.patch("cvcpkg.cli._auth._request", return_value=(200, data)),
     ):
         res = CliRunner().invoke(cli, ["whoami", "--server", SRV, "--json"])
     assert res.exit_code == 0
@@ -425,8 +454,9 @@ def test_auth_devices_not_signed_in():
 
 
 def test_auth_devices_session_expired():
-    with mock.patch("cvcpkg.cli._helpers.resolve_token", return_value="tok"), mock.patch(
-        "cvcpkg.cli._auth._request", return_value=(401, None)
+    with (
+        mock.patch("cvcpkg.cli._helpers.resolve_token", return_value="tok"),
+        mock.patch("cvcpkg.cli._auth._request", return_value=(401, None)),
     ):
         res = CliRunner().invoke(cli, ["auth", "devices", "--server", SRV])
     assert res.exit_code != 0
@@ -434,8 +464,9 @@ def test_auth_devices_session_expired():
 
 
 def test_auth_devices_failure():
-    with mock.patch("cvcpkg.cli._helpers.resolve_token", return_value="tok"), mock.patch(
-        "cvcpkg.cli._auth._request", return_value=(500, None)
+    with (
+        mock.patch("cvcpkg.cli._helpers.resolve_token", return_value="tok"),
+        mock.patch("cvcpkg.cli._auth._request", return_value=(500, None)),
     ):
         res = CliRunner().invoke(cli, ["auth", "devices", "--server", SRV])
     assert res.exit_code != 0
@@ -443,8 +474,9 @@ def test_auth_devices_failure():
 
 
 def test_auth_devices_empty():
-    with mock.patch("cvcpkg.cli._helpers.resolve_token", return_value="tok"), mock.patch(
-        "cvcpkg.cli._auth._request", return_value=(200, {"devices": []})
+    with (
+        mock.patch("cvcpkg.cli._helpers.resolve_token", return_value="tok"),
+        mock.patch("cvcpkg.cli._auth._request", return_value=(200, {"devices": []})),
     ):
         res = CliRunner().invoke(cli, ["auth", "devices", "--server", SRV])
     assert res.exit_code == 0
@@ -464,8 +496,9 @@ def test_auth_devices_text_lists_current():
             {"session_id": 2, "expires_at": "2027-01-01"},
         ]
     }
-    with mock.patch("cvcpkg.cli._helpers.resolve_token", return_value="tok"), mock.patch(
-        "cvcpkg.cli._auth._request", return_value=(200, data)
+    with (
+        mock.patch("cvcpkg.cli._helpers.resolve_token", return_value="tok"),
+        mock.patch("cvcpkg.cli._auth._request", return_value=(200, data)),
     ):
         res = CliRunner().invoke(cli, ["auth", "devices", "--server", SRV])
     assert res.exit_code == 0
@@ -477,8 +510,9 @@ def test_auth_devices_text_lists_current():
 
 def test_auth_devices_json():
     data = {"devices": [{"session_id": 1}]}
-    with mock.patch("cvcpkg.cli._helpers.resolve_token", return_value="tok"), mock.patch(
-        "cvcpkg.cli._auth._request", return_value=(200, data)
+    with (
+        mock.patch("cvcpkg.cli._helpers.resolve_token", return_value="tok"),
+        mock.patch("cvcpkg.cli._auth._request", return_value=(200, data)),
     ):
         res = CliRunner().invoke(cli, ["auth", "devices", "--server", SRV, "--json"])
     assert res.exit_code == 0
@@ -496,9 +530,10 @@ def test_auth_revoke_not_signed_in():
 
 
 def test_auth_revoke_success():
-    with mock.patch("cvcpkg.cli._helpers.resolve_token", return_value="tok"), mock.patch(
-        "cvcpkg.cli._auth._request", return_value=(204, None)
-    ) as rq:
+    with (
+        mock.patch("cvcpkg.cli._helpers.resolve_token", return_value="tok"),
+        mock.patch("cvcpkg.cli._auth._request", return_value=(204, None)) as rq,
+    ):
         res = CliRunner().invoke(cli, ["auth", "revoke", "5", "--server", SRV])
     assert res.exit_code == 0
     assert "Revoked session #5." in res.output
@@ -506,8 +541,9 @@ def test_auth_revoke_success():
 
 
 def test_auth_revoke_failure():
-    with mock.patch("cvcpkg.cli._helpers.resolve_token", return_value="tok"), mock.patch(
-        "cvcpkg.cli._auth._request", return_value=(404, None)
+    with (
+        mock.patch("cvcpkg.cli._helpers.resolve_token", return_value="tok"),
+        mock.patch("cvcpkg.cli._auth._request", return_value=(404, None)),
     ):
         res = CliRunner().invoke(cli, ["auth", "revoke", "5", "--server", SRV])
     assert res.exit_code != 0
@@ -518,8 +554,9 @@ def test_auth_revoke_failure():
 
 
 def test_auth_status_not_signed_in():
-    with mock.patch("cvcpkg.credentials.host_of", return_value="x.example"), mock.patch(
-        "cvcpkg.credentials.token_for", return_value=""
+    with (
+        mock.patch("cvcpkg.credentials.host_of", return_value="x.example"),
+        mock.patch("cvcpkg.credentials.token_for", return_value=""),
     ):
         res = CliRunner().invoke(cli, ["auth", "status", "--server", SRV])
     assert res.exit_code == 1
@@ -527,9 +564,11 @@ def test_auth_status_not_signed_in():
 
 
 def test_auth_status_signed_in():
-    with mock.patch("cvcpkg.credentials.host_of", return_value="x.example"), mock.patch(
-        "cvcpkg.credentials.token_for", return_value="tok"
-    ), mock.patch("cvcpkg.credentials.get", return_value=_cred()):
+    with (
+        mock.patch("cvcpkg.credentials.host_of", return_value="x.example"),
+        mock.patch("cvcpkg.credentials.token_for", return_value="tok"),
+        mock.patch("cvcpkg.credentials.get", return_value=_cred()),
+    ):
         res = CliRunner().invoke(cli, ["auth", "status", "--server", SRV])
     assert res.exit_code == 0
     assert "Signed in to x.example as joe (reader)." in res.output

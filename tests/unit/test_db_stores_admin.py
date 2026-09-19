@@ -44,8 +44,11 @@ async def _add_principal(name, *, last_role="publisher", disabled=False):
 
     async with get_session() as session:
         row = PrincipalRow(
-            name=name, issuer="idp", subject=f"sub-{name}",
-            last_role=last_role, disabled=disabled,
+            name=name,
+            issuer="idp",
+            subject=f"sub-{name}",
+            last_role=last_role,
+            disabled=disabled,
         )
         session.add(row)
         await session.flush()
@@ -62,8 +65,7 @@ class TestDbTokenCreateVerify:
 
         async def _t():
             store = DbTokenStore(tmp_path)
-            raw = await store.create("alice", TokenRole.publisher,
-                                     email="a@x.com", description="d")
+            raw = await store.create("alice", TokenRole.publisher, email="a@x.com", description="d")
             assert raw.startswith("cvctok_")
             rec = await store.verify(raw)
             assert rec is not None
@@ -85,9 +87,8 @@ class TestDbTokenCreateVerify:
             with pytest.raises(ValueError, match="reserved identity name"):
                 await store.create("joe", TokenRole.publisher)
             # Minting FOR that principal (principal_id set) is exempt.
-            pid = (await _principal_id("joe"))
-            raw = await store.create("joe.laptop", TokenRole.publisher,
-                                     principal_id=pid)
+            pid = await _principal_id("joe")
+            raw = await store.create("joe.laptop", TokenRole.publisher, principal_id=pid)
             assert raw.startswith("cvctok_")
 
         run(_t())
@@ -114,8 +115,7 @@ class TestDbTokenCreateVerify:
             await store.revoke("bob")
             assert await store.verify(raw) is None
             # An already-expired token does not verify.
-            raw2 = await store.create("carol", TokenRole.publisher,
-                                      expires_in_days=-1)
+            raw2 = await store.create("carol", TokenRole.publisher, expires_in_days=-1)
             assert await store.verify(raw2) is None
 
         run(_t())
@@ -127,8 +127,7 @@ class TestDbTokenCreateVerify:
         async def _t():
             pid = await _add_principal("joe", last_role="publisher")
             store = DbTokenStore(tmp_path)
-            raw = await store.create("joe.laptop", TokenRole.publisher,
-                                     principal_id=pid)
+            raw = await store.create("joe.laptop", TokenRole.publisher, principal_id=pid)
             rec = await store.verify(raw)
             assert rec is not None
             # Presents to the rest of the server AS the principal.
@@ -146,8 +145,7 @@ class TestDbTokenCreateVerify:
         async def _t():
             pid = await _add_principal("joe", disabled=True)
             store = DbTokenStore(tmp_path)
-            raw = await store.create("joe.laptop", TokenRole.publisher,
-                                     principal_id=pid)
+            raw = await store.create("joe.laptop", TokenRole.publisher, principal_id=pid)
             # A disabled principal invalidates every token it minted.
             assert await store.verify(raw) is None
 
@@ -231,9 +229,17 @@ class TestDbTokenAdmin:
             await store.create("alice", TokenRole.publisher, email="a@x.com")
             idx = DbPackageIndex()
             await idx.add_package(
-                name="zlib", version="1.0", platform="linux", arch="x86_64",
-                build_type="release", link="shared", sha256="s", size_bytes=1,
-                archive_url="/v1/download/z.tar.zst", published_by="alice")
+                name="zlib",
+                version="1.0",
+                platform="linux",
+                arch="x86_64",
+                build_type="release",
+                link="shared",
+                sha256="s",
+                size_bytes=1,
+                archive_url="/v1/download/z.tar.zst",
+                published_by="alice",
+            )
             prof = await store.get_public_profile("alice")
             assert prof.packages_published == 1
             assert await store.get_public_profile("ghost") is None
@@ -256,9 +262,17 @@ class TestDbTokenAdmin:
             await store.create("carol", TokenRole.publisher, email="carol@x.com")
             idx = DbPackageIndex()
             await idx.add_package(
-                name="p", version="1", platform="linux", arch="x86_64",
-                build_type="release", link="shared", sha256="s", size_bytes=1,
-                archive_url="/v1/download/p.tar.zst", published_by="alice")
+                name="p",
+                version="1",
+                platform="linux",
+                arch="x86_64",
+                build_type="release",
+                link="shared",
+                sha256="s",
+                size_bytes=1,
+                archive_url="/v1/download/p.tar.zst",
+                published_by="alice",
+            )
             orgs = DbOrgStore()
             await orgs.create(slug="acme", display_name="A", created_by="bob")
 
@@ -275,8 +289,7 @@ class TestDbTokenAdmin:
             _, unpublished = await store.search_users(has_published=False)
             assert unpublished == 2
             # sort by packages_published desc → alice (1) first.
-            ranked, _ = await store.search_users(sort_by="packages_published",
-                                                 sort_order="desc")
+            ranked, _ = await store.search_users(sort_by="packages_published", sort_order="desc")
             assert ranked[0].name == "alice"
             # sort by email asc.
             by_mail, _ = await store.search_users(sort_by="email", sort_order="asc")
@@ -420,8 +433,15 @@ class TestDbAuditLog:
         async def _t():
             # Insert a lone first row with a non-empty prev hash.
             async with get_session() as session:
-                session.add(AuditRow(action=AuditAction.publish.value, actor="a",
-                                     target="t", detail="", prev_sha256="bogus"))
+                session.add(
+                    AuditRow(
+                        action=AuditAction.publish.value,
+                        actor="a",
+                        target="t",
+                        detail="",
+                        prev_sha256="bogus",
+                    )
+                )
             ok, msg = await DbAuditLog().verify_chain()
             assert ok is False and "first entry" in msg
 
@@ -434,8 +454,15 @@ class TestDbAuditLog:
 
         async def _t():
             async with get_session() as session:
-                session.add(AuditRow(action="totally_unknown_action", actor="a",
-                                     target="t", detail="", prev_sha256=""))
+                session.add(
+                    AuditRow(
+                        action="totally_unknown_action",
+                        actor="a",
+                        target="t",
+                        detail="",
+                        prev_sha256="",
+                    )
+                )
             entries, _ = await DbAuditLog().entries()
             # An unknown stored action deserializes to a safe fallback.
             assert entries[0].action == AuditAction.admin_settings_update
@@ -452,8 +479,9 @@ class TestDbDownloadStore:
 
         async def _t():
             store = DbDownloadStore()
-            await store.record("zlib", "1.0", "linux", arch="x86_64",
-                               bytes_sent=100, cvcpkg_version="2.2.2")
+            await store.record(
+                "zlib", "1.0", "linux", arch="x86_64", bytes_sent=100, cvcpkg_version="2.2.2"
+            )
             await store.record("zlib", "1.0", "linux", bytes_sent=50)
             await store.record("boost", "1.86", "windows", bytes_sent=10)
             assert await store.get_total_downloads() == 3
@@ -467,10 +495,10 @@ class TestDbDownloadStore:
         async def _t():
             store = DbDownloadStore()
             for _ in range(3):
-                await store.record("zlib", "1.0", "linux", arch="x86_64",
-                                   bytes_sent=10, cvcpkg_version="2.2.2")
-            await store.record("boost", "1.86", "windows", arch="x86_64",
-                               bytes_sent=5)
+                await store.record(
+                    "zlib", "1.0", "linux", arch="x86_64", bytes_sent=10, cvcpkg_version="2.2.2"
+                )
+            await store.record("boost", "1.86", "windows", arch="x86_64", bytes_sent=5)
             top = await store.get_top_packages()
             assert top[0]["name"] == "zlib" and top[0]["count"] == 3
             assert top[0]["bytes_sent"] == 30
@@ -517,12 +545,21 @@ class TestDbTelemetryStore:
 
         async def _t():
             store = DbTelemetryStore()
-            await store.record(platform="linux", arch="x86_64",
-                               python_version="3.12", cvcpkg_version="2.2.2",
-                               ci=True, tools={"cmake": "3.30"})
-            await store.record(platform="linux", arch="x86_64",
-                               python_version="3.11", cvcpkg_version="2.2.2",
-                               ci=False)
+            await store.record(
+                platform="linux",
+                arch="x86_64",
+                python_version="3.12",
+                cvcpkg_version="2.2.2",
+                ci=True,
+                tools={"cmake": "3.30"},
+            )
+            await store.record(
+                platform="linux",
+                arch="x86_64",
+                python_version="3.11",
+                cvcpkg_version="2.2.2",
+                ci=False,
+            )
             summary = await store.get_summary()
             assert summary["total"] == 2
             plats = {(p["platform"], p["arch"]): p["count"] for p in summary["platforms"]}

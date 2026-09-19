@@ -110,8 +110,20 @@ class TestTokenCreate:
         )
         res = runner.invoke(
             cli,
-            ["token", "create", "--server", "http://s", "--token", "adm",
-             "--name", "ci", "--role", "reader", "--expires-in-days", "30"],
+            [
+                "token",
+                "create",
+                "--server",
+                "http://s",
+                "--token",
+                "adm",
+                "--name",
+                "ci",
+                "--role",
+                "reader",
+                "--expires-in-days",
+                "30",
+            ],
         )
         assert res.exit_code == 0, res.output
         assert "Created token 'ci' (role: reader)" in res.output
@@ -124,8 +136,18 @@ class TestTokenCreate:
         calls = _patch_api(monkeypatch, {"name": "ci", "role": "admin", "token": "t"})
         res = runner.invoke(
             cli,
-            ["token", "create", "--server", "http://s", "--token", "adm",
-             "--name", "ci", "--role", "admin"],
+            [
+                "token",
+                "create",
+                "--server",
+                "http://s",
+                "--token",
+                "adm",
+                "--name",
+                "ci",
+                "--role",
+                "admin",
+            ],
         )
         assert res.exit_code == 0, res.output
         assert "expires_in_days" not in calls[0]["kw"]["json"]
@@ -142,10 +164,12 @@ class TestTokenList:
     def test_lists_tokens_with_status(self, runner, monkeypatch):
         _patch_api(
             monkeypatch,
-            {"tokens": [
-                {"name": "alice", "role": "publisher", "expires_at": "2027-02-02"},
-                {"name": "bob", "role": "reader", "revoked": True},
-            ]},
+            {
+                "tokens": [
+                    {"name": "alice", "role": "publisher", "expires_at": "2027-02-02"},
+                    {"name": "bob", "role": "reader", "revoked": True},
+                ]
+            },
         )
         res = runner.invoke(cli, ["token", "list", "--server", "http://s", "--token", "adm"])
         assert res.exit_code == 0, res.output
@@ -169,13 +193,28 @@ class TestTokenRotate:
     def test_rotate_with_grace(self, runner, monkeypatch):
         calls = _patch_api(
             monkeypatch,
-            {"name": "svc", "role": "publisher", "token": "cvctok_r",
-             "previous_valid_until": "2026-10-01", "expires_at": "2027-01-01"},
+            {
+                "name": "svc",
+                "role": "publisher",
+                "token": "cvctok_r",
+                "previous_valid_until": "2026-10-01",
+                "expires_at": "2027-01-01",
+            },
         )
         res = runner.invoke(
             cli,
-            ["token", "rotate", "--server", "http://s", "--token", "adm",
-             "--name", "svc", "--grace-minutes", "60"],
+            [
+                "token",
+                "rotate",
+                "--server",
+                "http://s",
+                "--token",
+                "adm",
+                "--name",
+                "svc",
+                "--grace-minutes",
+                "60",
+            ],
         )
         assert res.exit_code == 0, res.output
         assert "Rotated token 'svc'" in res.output
@@ -198,8 +237,18 @@ class TestTokenProfileEdits:
         calls = _patch_api(monkeypatch)
         res = runner.invoke(
             cli,
-            ["token", "set-email", "--server", "http://s", "--token", "adm",
-             "--name", "svc", "--email", "a@b.c"],
+            [
+                "token",
+                "set-email",
+                "--server",
+                "http://s",
+                "--token",
+                "adm",
+                "--name",
+                "svc",
+                "--email",
+                "a@b.c",
+            ],
         )
         assert res.exit_code == 0, res.output
         assert "Email for 'svc' updated to 'a@b.c'." in res.output
@@ -209,8 +258,18 @@ class TestTokenProfileEdits:
         calls = _patch_api(monkeypatch)
         res = runner.invoke(
             cli,
-            ["token", "set-description", "--server", "http://s", "--token", "adm",
-             "--name", "svc", "--description", "hi there"],
+            [
+                "token",
+                "set-description",
+                "--server",
+                "http://s",
+                "--token",
+                "adm",
+                "--name",
+                "svc",
+                "--description",
+                "hi there",
+            ],
         )
         assert res.exit_code == 0, res.output
         assert "Description for 'svc' updated." in res.output
@@ -220,8 +279,18 @@ class TestTokenProfileEdits:
         calls = _patch_api(monkeypatch)
         res = runner.invoke(
             cli,
-            ["token", "set-metadata", "--server", "http://s", "--token", "adm",
-             "--name", "svc", "--metadata", '{"k":1}'],
+            [
+                "token",
+                "set-metadata",
+                "--server",
+                "http://s",
+                "--token",
+                "adm",
+                "--name",
+                "svc",
+                "--metadata",
+                '{"k":1}',
+            ],
         )
         assert res.exit_code == 0, res.output
         assert "Metadata for 'svc' updated." in res.output
@@ -238,9 +307,11 @@ class TestTokenRequests:
     def test_lists_and_filters_by_status(self, runner, monkeypatch):
         calls = _patch_api(
             monkeypatch,
-            {"requests": [
-                {"id": 1, "name": "eve", "email": "e@x", "role": "reader", "status": "pending"},
-            ]},
+            {
+                "requests": [
+                    {"id": 1, "name": "eve", "email": "e@x", "role": "reader", "status": "pending"},
+                ]
+            },
         )
         res = runner.invoke(
             cli,
@@ -254,14 +325,18 @@ class TestTokenRequests:
 class TestTokenApproveDeny:
     def test_approve_with_token(self, runner, monkeypatch):
         _patch_api(monkeypatch, {"message": "approved", "token": "cvctok_a"})
-        res = runner.invoke(cli, ["token", "approve", "5", "--server", "http://s", "--token", "adm"])
+        res = runner.invoke(
+            cli, ["token", "approve", "5", "--server", "http://s", "--token", "adm"]
+        )
         assert res.exit_code == 0, res.output
         assert "approved" in res.output
         assert "Token: cvctok_a" in res.output
 
     def test_approve_without_token_key(self, runner, monkeypatch):
         _patch_api(monkeypatch, {"message": "approved (no token to hand out)"})
-        res = runner.invoke(cli, ["token", "approve", "6", "--server", "http://s", "--token", "adm"])
+        res = runner.invoke(
+            cli, ["token", "approve", "6", "--server", "http://s", "--token", "adm"]
+        )
         assert res.exit_code == 0, res.output
         assert "Token:" not in res.output
 
@@ -278,9 +353,15 @@ class TestTokenApproveDeny:
 
 class TestUserInfo:
     def test_success(self, runner, monkeypatch):
-        data = {"name": "alice", "role": "publisher", "email": "a@x",
-                "description": "dev", "metadata": "m", "packages_published": 3,
-                "created_at": "2026-01-01"}
+        data = {
+            "name": "alice",
+            "role": "publisher",
+            "email": "a@x",
+            "description": "dev",
+            "metadata": "m",
+            "packages_published": 3,
+            "created_at": "2026-01-01",
+        }
         _patch_httpx(monkeypatch, _client(get=_resp(200, data)))
         res = runner.invoke(cli, ["user", "info", "alice", "--server", "http://s"])
         assert res.exit_code == 0, res.output
@@ -323,19 +404,42 @@ class TestUserList:
 
     def test_populated_with_filters(self, runner, monkeypatch):
         client = _client(
-            get=_resp(200, {
-                "total": 1,
-                "users": [{"name": "alice", "role": "admin", "email": "a@x",
-                           "packages_published": 9}],
-            })
+            get=_resp(
+                200,
+                {
+                    "total": 1,
+                    "users": [
+                        {"name": "alice", "role": "admin", "email": "a@x", "packages_published": 9}
+                    ],
+                },
+            )
         )
         _patch_httpx(monkeypatch, client)
         res = runner.invoke(
             cli,
-            ["user", "list", "--server", "http://s", "--name", "al", "--email", "@x",
-             "--role", "admin", "--org", "acme", "--has-published",
-             "--sort", "packages_published", "--order", "desc",
-             "--limit", "10", "--offset", "5"],
+            [
+                "user",
+                "list",
+                "--server",
+                "http://s",
+                "--name",
+                "al",
+                "--email",
+                "@x",
+                "--role",
+                "admin",
+                "--org",
+                "acme",
+                "--has-published",
+                "--sort",
+                "packages_published",
+                "--order",
+                "desc",
+                "--limit",
+                "10",
+                "--offset",
+                "5",
+            ],
         )
         assert res.exit_code == 0, res.output
         assert "Showing 1 of 1 users:" in res.output
@@ -356,8 +460,13 @@ class TestUserList:
 
 class TestUserByEmail:
     def test_success_with_metadata(self, runner, monkeypatch):
-        data = {"name": "bob", "role": "reader", "email": "b@x", "metadata": "m",
-                "packages_published": 0}
+        data = {
+            "name": "bob",
+            "role": "reader",
+            "email": "b@x",
+            "metadata": "m",
+            "packages_published": 0,
+        }
         _patch_httpx(monkeypatch, _client(get=_resp(200, data)))
         res = runner.invoke(cli, ["user", "by-email", "b@x", "--server", "http://s"])
         assert res.exit_code == 0, res.output
@@ -392,8 +501,21 @@ class TestRegister:
         _patch_httpx(monkeypatch, client)
         res = runner.invoke(
             cli,
-            ["register", "--server", "http://s", "--name", "newbie", "--email", "n@x",
-             "--role", "publisher", "--description", "desc", "--metadata", "meta"],
+            [
+                "register",
+                "--server",
+                "http://s",
+                "--name",
+                "newbie",
+                "--email",
+                "n@x",
+                "--role",
+                "publisher",
+                "--description",
+                "desc",
+                "--metadata",
+                "meta",
+            ],
         )
         assert res.exit_code == 0, res.output
         assert "registered" in res.output
@@ -478,8 +600,13 @@ class TestServerStop:
 
 class TestServerStatus:
     def test_ok(self, runner, monkeypatch):
-        data = {"status": "ok", "version": "2.1.0", "packages_count": 5,
-                "uptime_seconds": 60, "mirror_mode": True}
+        data = {
+            "status": "ok",
+            "version": "2.1.0",
+            "packages_count": 5,
+            "uptime_seconds": 60,
+            "mirror_mode": True,
+        }
         _patch_httpx(monkeypatch, _client(get=_resp(200, data)))
         res = runner.invoke(cli, ["server", "status", "--server", "http://s"])
         assert res.exit_code == 0, res.output
@@ -505,10 +632,20 @@ class TestServerStatsAndBackup:
     def test_stats_full_report(self, runner, monkeypatch):
         _patch_api(
             monkeypatch,
-            {"version": "2.0.0", "uptime_seconds": 12, "storage_scheme": "file",
-             "mirror_mode": False, "database_backend": "postgresql", "packages_count": 42,
-             "total_storage_bytes": 2048, "orgs_count": 3, "builders_count": 2,
-             "builders_connected": 1, "build_jobs_count": 7, "audit_entries": 99},
+            {
+                "version": "2.0.0",
+                "uptime_seconds": 12,
+                "storage_scheme": "file",
+                "mirror_mode": False,
+                "database_backend": "postgresql",
+                "packages_count": 42,
+                "total_storage_bytes": 2048,
+                "orgs_count": 3,
+                "builders_count": 2,
+                "builders_connected": 1,
+                "build_jobs_count": 7,
+                "audit_entries": 99,
+            },
         )
         res = runner.invoke(cli, ["server", "stats", "--server", "http://s", "--token", "adm"])
         assert res.exit_code == 0, res.output
@@ -566,13 +703,26 @@ class TestOrgAddRemove:
         calls = _patch_api(monkeypatch)
         res = runner.invoke(
             cli,
-            ["org", "add-member", "acme", "--user", "alice", "--role", "owner",
-             "--server", "http://s", "--token", "adm"],
+            [
+                "org",
+                "add-member",
+                "acme",
+                "--user",
+                "alice",
+                "--role",
+                "owner",
+                "--server",
+                "http://s",
+                "--token",
+                "adm",
+            ],
         )
         assert res.exit_code == 0, res.output
         assert "Added 'alice' to 'acme' as owner." in res.output
         assert calls[0]["kw"]["params"] == {
-            "token_name": "alice", "role": "owner", "principal_kind": "user"
+            "token_name": "alice",
+            "role": "owner",
+            "principal_kind": "user",
         }
 
     def test_add_member_uses_login_session(self, runner, monkeypatch):
@@ -590,8 +740,19 @@ class TestOrgAddRemove:
         _patch_api(monkeypatch)
         res = runner.invoke(
             cli,
-            ["org", "add-member", "acme", "--user", "a", "--token-name", "b",
-             "--server", "http://s", "--token", "adm"],
+            [
+                "org",
+                "add-member",
+                "acme",
+                "--user",
+                "a",
+                "--token-name",
+                "b",
+                "--server",
+                "http://s",
+                "--token",
+                "adm",
+            ],
         )
         assert res.exit_code != 0
         assert "exactly one of --user, --token-name or --name" in res.output
@@ -608,8 +769,17 @@ class TestOrgAddRemove:
         calls = _patch_api(monkeypatch)
         res = runner.invoke(
             cli,
-            ["org", "remove-member", "acme", "--token-name", "svc",
-             "--server", "http://s", "--token", "adm"],
+            [
+                "org",
+                "remove-member",
+                "acme",
+                "--token-name",
+                "svc",
+                "--server",
+                "http://s",
+                "--token",
+                "adm",
+            ],
         )
         assert res.exit_code == 0, res.output
         assert "Removed 'svc' from 'acme'." in res.output
@@ -622,8 +792,19 @@ class TestOrgCreate:
         calls = _patch_api(monkeypatch, {"slug": "acme", "is_private": False})
         res = runner.invoke(
             cli,
-            ["org", "create", "acme", "--server", "http://s", "--token", "adm",
-             "--description", "d", "--homepage", "https://h"],
+            [
+                "org",
+                "create",
+                "acme",
+                "--server",
+                "http://s",
+                "--token",
+                "adm",
+                "--description",
+                "d",
+                "--homepage",
+                "https://h",
+            ],
         )
         assert res.exit_code == 0, res.output
         assert "Created public organization 'acme'" in res.output
@@ -635,8 +816,18 @@ class TestOrgCreate:
         calls = _patch_api(monkeypatch, {"slug": "acme", "is_private": True})
         res = runner.invoke(
             cli,
-            ["org", "create", "acme", "--server", "http://s", "--token", "adm",
-             "--display-name", "Acme Inc", "--private"],
+            [
+                "org",
+                "create",
+                "acme",
+                "--server",
+                "http://s",
+                "--token",
+                "adm",
+                "--display-name",
+                "Acme Inc",
+                "--private",
+            ],
         )
         assert res.exit_code == 0, res.output
         assert "Created private organization 'acme'" in res.output
