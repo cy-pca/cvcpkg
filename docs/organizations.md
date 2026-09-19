@@ -148,7 +148,7 @@ When submitting remote build jobs, pass `--org` to publish the results under
 the org namespace:
 
 ```bash
-cvcpkg builds submit my-lib --org my-team
+cvcpkg builds submit --recipe my-lib --org my-team
 ```
 
 ---

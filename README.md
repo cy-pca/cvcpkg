@@ -451,18 +451,18 @@ cvcpkg builds submit --recipe zlib --platform linux --arch x86_64
 
 # Submit a dependency graph (DAG) of build jobs:
 cvcpkg builds submit-dag \
-    --recipe zlib --recipe zstd --recipe hdf5 \
-    --platform linux --arch x86_64
+    --platform linux --arch x86_64 \
+    zlib zstd hdf5
 
 # Submit wasm builds (dispatched to builders with --cross-platform wasm):
 cvcpkg builds submit-dag \
-    --recipe zlib --recipe zstd \
-    --platform wasm --arch wasm32
+    --platform wasm --arch wasm32 \
+    zlib zstd
 
 # Wait for builds to finish (exits non-zero on failure):
 cvcpkg builds submit-dag --wait \
-    --recipe zlib --recipe boost \
-    --platform linux --arch x86_64
+    --platform linux --arch x86_64 \
+    zlib boost
 
 # Monitor build progress:
 cvcpkg builds list --status running
@@ -525,7 +525,7 @@ The `populate-server.yml` GitHub Actions workflow uses this pattern:
 cvcpkg builder list
 
 # Check a specific builder:
-cvcpkg builder status --name linux-x64-builder-1
+cvcpkg builder status linux-x64-builder-1
 
 # Unregister a builder:
 cvcpkg builder unregister <builder-id>
@@ -623,8 +623,8 @@ cvcpkg builder run \
 ```bash
 # Submit DAG builds for all recipes:
 cvcpkg builds submit-dag \
-    --recipe zlib --recipe boost --recipe hdf5 ... \
-    --platform linux --arch x86_64
+    --platform linux --arch x86_64 \
+    zlib boost hdf5 ...
 
 # Or build locally and publish:
 cvcpkg pack-all --local --output-dir ./dist
@@ -772,8 +772,8 @@ cvcpkg builds submit --recipe zlib --platform linux --arch x86_64
 
 # Submit a DAG of recipes (respects dependency order):
 cvcpkg builds submit-dag \
-    --recipe zlib --recipe boost --recipe hdf5 \
-    --platform linux --arch x86_64
+    --platform linux --arch x86_64 \
+    zlib boost hdf5
 
 # Monitor progress (top-like dashboard):
 cvcpkg builds monitor
@@ -829,8 +829,8 @@ builder system eliminates this constraint:
 
 4. **Submit builds** via the API or CLI:
    ```bash
-   cvcpkg builds submit-dag --recipe zlib --recipe boost \
-       --platform linux --arch x86_64
+   cvcpkg builds submit-dag --platform linux --arch x86_64 \
+       zlib boost
    ```
 
 5. **Simplify CI** to just install prebuilt packages:
@@ -1164,8 +1164,8 @@ is printed exactly once — **store it in a password manager or secrets
 vault** immediately.  Then configure the client:
 
 ```bash
-cvcpkg config set server https://cvcpkg.org
-cvcpkg config set token cvctok_<your-admin-token>
+export CVCPKG_SERVER_URL=https://cvcpkg.org
+export CVCPKG_TOKEN=cvctok_<your-admin-token>
 ```
 
 ### Self-service registration
@@ -1473,8 +1473,9 @@ cvcpkg rev-bump zlib
 #   vtk:  cvc_revision 1 → 2
 ```
 
-The `--cascade` flag (default: on) automatically bumps every recipe
-that transitively depends on the target.  This ensures the entire
+Cascade is on by default (pass `--no-cascade` to disable it) and
+automatically bumps every recipe that transitively depends on the
+target.  This ensures the entire
 dependency chain is rebuilt and re-published against the patched
 version, catching breakage early rather than shipping an inconsistent
 set of binaries.

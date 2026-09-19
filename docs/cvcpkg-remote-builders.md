@@ -88,7 +88,7 @@ rebuilds the *whole* macOS recipe DAG via `pack-all` regardless of the queue.)
 Trigger the automated drainer instead of running locally:
 
 ```bash
-gh workflow run macos-drain.yml -R transfix/libcvc-deps   # drain the macOS queue now
+gh workflow run macos-drain.yml -R cy-pca/cvcpkg   # drain the macOS queue now
 ```
 
 The same pattern drains any platform's queue — pass the matching `--platform` and
@@ -282,7 +282,7 @@ an admin-role token. Create tokens with:
 
 ```bash
 # From within the server container:
-docker compose exec backend cvcpkg server token create \
+docker compose exec backend cvcpkg-server token create \
   --name <name> --role publisher --email <email>
 
 # Or via API with an admin token:
