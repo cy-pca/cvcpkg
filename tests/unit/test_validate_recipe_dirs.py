@@ -28,6 +28,7 @@ def _write_recipe(
     provides: list[str] | None = None,
     build_deps: list[str] | None = None,
     with_script: bool = True,
+    archive_format: str | None = None,
 ) -> Path:
     d = root / name
     d.mkdir(parents=True)
@@ -52,7 +53,10 @@ def _write_recipe(
         for dep in build_deps:
             lines.append(f"    - name: {dep}")
     lines.append("build: {matrix: [{platform: linux, script: build.sh}]}")
-    lines.append("package: {files: ['bin/x']}")
+    if archive_format is not None:
+        lines.append(f"package: {{files: ['bin/x'], archive_format: {archive_format}}}")
+    else:
+        lines.append("package: {files: ['bin/x']}")
     (d / "recipe.yaml").write_text("\n".join(lines) + "\n")
     if with_script:
         (d / "build.sh").write_text("#!/bin/sh\n")
@@ -183,6 +187,25 @@ def test_no_default_flags_external_deps(tmp_path):
     _write_recipe(r, "app", build_deps=["boost"])
     errors = validation.run(str(r / "app"), no_default=True)
     assert any("unknown dependency 'boost'" in e for e in errors), errors
+
+
+def test_archive_format_valid_passes(tmp_path):
+    r = tmp_path / "recipes"
+    d = _write_recipe(r, "xzpkg", archive_format="tar.xz")
+    assert validation.validate_recipe_dir(d) == [], validation.validate_recipe_dir(d)
+
+
+def test_archive_format_bogus_rejected(tmp_path):
+    r = tmp_path / "recipes"
+    d = _write_recipe(r, "badfmt", archive_format="bogus")
+    errors = validation.validate_recipe_dir(d)
+    assert any("archive_format" in e for e in errors), errors
+
+
+def test_recipe_without_archive_format_unchanged(tmp_path):
+    r = tmp_path / "recipes"
+    d = _write_recipe(r, "plainpkg")
+    assert validation.validate_recipe_dir(d) == [], validation.validate_recipe_dir(d)
 
 
 def test_report_exit_codes(capsys):

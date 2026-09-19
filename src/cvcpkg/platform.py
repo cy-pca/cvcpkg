@@ -68,6 +68,27 @@ ARCH_ALIASES = {
     "aarch64": "arm64",
 }
 
+# Bundle archive-format policy.  Kept here (not in builder) so both the producer
+# (builder.create_archive) and the consumer-side filename fallback
+# (installer._archive_filename) share one source of truth without importing the
+# builder — platform.py must stay free of a builder dependency (no circular
+# import).
+_ARCHIVE_EXT = {
+    "tar.gz": ".tar.gz",
+    "tar.xz": ".tar.xz",
+    "tar.bz2": ".tar.bz2",
+    "zip": ".zip",
+}
+
+
+def default_archive_format(platform: str) -> str:
+    """Per-target default bundle format when a recipe does not specify one.
+
+    ``zip`` on windows (consumers without a tar tool depend on it), ``tar.gz``
+    everywhere else including ``any``/noarch, wasm and cosmo.
+    """
+    return "zip" if platform == "windows" else "tar.gz"
+
 
 def noarch_build_target() -> tuple[str, str]:
     """The concrete ``(platform, arch)`` a noarch job is *built* on.

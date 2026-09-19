@@ -30,7 +30,13 @@ import yaml
 
 from cvcpkg.errors import CvcpkgError
 from cvcpkg.heartbeat import unwatch, watch, watched
-from cvcpkg.platform import detect_arch, detect_platform, lib_path_var
+from cvcpkg.platform import (
+    _ARCHIVE_EXT,
+    default_archive_format,
+    detect_arch,
+    detect_platform,
+    lib_path_var,
+)
 
 # ── Errors ──────────────────────────────────────────────────────
 
@@ -240,6 +246,7 @@ class Recipe:
     kind: str = ""  # e.g. data, media, config, iso, image -- downstream hints
     # NOTE: "image" is not just a hint -- pack_recipe enforces the
     # share/<name>/ layout and a schema-valid image.yaml for it.
+    archive_format: str | None = None  # tar.gz|tar.xz|tar.bz2|zip; None = per-platform default
     cross_toolchain_targets: list[str] = field(default_factory=list)
     cross_toolchain_env: dict[str, str] = field(default_factory=dict)
     conflicts: list[str] = field(default_factory=list)
@@ -298,6 +305,7 @@ class Recipe:
             recipe_dir=recipe_dir.resolve(),
             tags=recipe_block.get("tags", []) or [],
             kind=recipe_block.get("kind", ""),
+            archive_format=package_block.get("archive_format") or None,
             cross_toolchain_targets=ct_block.get("target_platforms", []) or [],
             cross_toolchain_env=ct_block.get("env", {}) or {},
             conflicts=raw.get("conflicts", []) or [],
@@ -2030,13 +2038,16 @@ def stage_bundle(
                 shutil.copy2(f, dest_recipe / f.name)
 
 
-def _archive_tar_gz(staging_dir: Path, output: Path) -> str:
-    """Create a deterministic .tar.gz archive. Returns SHA-256."""
-    import gzip
+def _build_deterministic_tar(staging_dir: Path) -> bytes:
+    """Build an uncompressed tar of *staging_dir* in memory, deterministically.
+
+    Zeroes mtime/uid/gid/uname/gname on every member over a sorted rglob so the
+    byte stream is reproducible across machines.  Shared by every tar-based
+    writer; the compressor wrapped around it (gzip/xz/bz2) must itself embed no
+    timestamp for the resulting archive SHA-256 to stay reproducible.
+    """
     import io
 
-    # Use a two-step approach: write tar to memory, then gzip with
-    # mtime=0 to ensure the gzip header is reproducible across machines.
     tar_buf = io.BytesIO()
     with tarfile.open(fileobj=tar_buf, mode="w") as tf:
         for entry in sorted(staging_dir.rglob("*")):
@@ -2053,9 +2064,38 @@ def _archive_tar_gz(staging_dir: Path, output: Path) -> str:
                     tf.addfile(info, fobj)
             else:
                 tf.addfile(info)
+    return tar_buf.getvalue()
+
+
+def _archive_tar_gz(staging_dir: Path, output: Path) -> str:
+    """Create a deterministic .tar.gz archive. Returns SHA-256."""
+    import gzip
+
+    # gzip with mtime=0 so the gzip header is reproducible across machines.
+    raw = _build_deterministic_tar(staging_dir)
     with open(output, "wb") as f_out:
         with gzip.GzipFile(fileobj=f_out, mode="wb", mtime=0) as gz:
-            gz.write(tar_buf.getvalue())
+            gz.write(raw)
+    return _sha256_file(output)
+
+
+def _archive_tar_xz(staging_dir: Path, output: Path) -> str:
+    """Create a deterministic .tar.xz archive. Returns SHA-256."""
+    import lzma
+
+    # xz embeds no per-stream timestamp, so compressing the deterministic tar
+    # bytes is itself reproducible.
+    output.write_bytes(lzma.compress(_build_deterministic_tar(staging_dir)))
+    return _sha256_file(output)
+
+
+def _archive_tar_bz2(staging_dir: Path, output: Path) -> str:
+    """Create a deterministic .tar.bz2 archive. Returns SHA-256."""
+    import bz2
+
+    # bz2 embeds no per-stream timestamp, so compressing the deterministic tar
+    # bytes is itself reproducible.
+    output.write_bytes(bz2.compress(_build_deterministic_tar(staging_dir)))
     return _sha256_file(output)
 
 
@@ -2073,6 +2113,11 @@ def _archive_zip(staging_dir: Path, output: Path) -> str:
     return _sha256_file(output)
 
 
+def resolve_archive_format(recipe_format: str | None, platform: str) -> str:
+    """Recipe-declared format if any, else the per-platform default."""
+    return recipe_format or default_archive_format(platform)
+
+
 def create_archive(
     staging_dir: Path,
     output_dir: Path,
@@ -2082,17 +2127,27 @@ def create_archive(
     arch: str,
     config: str,
     link: str,
+    fmt: str | None = None,
 ) -> tuple[Path, str, int]:
-    """Archive the staging directory. Returns (path, sha256, size)."""
+    """Archive the staging directory. Returns (path, sha256, size).
+
+    *fmt* is the recipe's ``package.archive_format`` (one of tar.gz/tar.xz/
+    tar.bz2/zip) or None to pick the per-platform default (zip on windows,
+    tar.gz everywhere else).  The extension rides on the basename; consumers
+    sniff magic bytes, so the choice only affects producer output.
+    """
+    fmt = resolve_archive_format(fmt, platform)
     stem = f"{name}-{version}-{platform}-{arch}-{config}-{link}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if platform == "windows":
-        archive_path = output_dir / f"{stem}.zip"
-        sha = _archive_zip(staging_dir, archive_path)
-    else:
-        archive_path = output_dir / f"{stem}.tar.gz"
-        sha = _archive_tar_gz(staging_dir, archive_path)
+    archive_path = output_dir / f"{stem}{_ARCHIVE_EXT[fmt]}"
+    writer = {
+        "tar.gz": _archive_tar_gz,
+        "tar.xz": _archive_tar_xz,
+        "tar.bz2": _archive_tar_bz2,
+        "zip": _archive_zip,
+    }[fmt]
+    sha = writer(staging_dir, archive_path)
 
     size = archive_path.stat().st_size
     return archive_path, sha, size
@@ -2948,6 +3003,7 @@ def pack_recipe(
         pkg_arch,
         ctx.config,
         ctx.link,
+        fmt=ctx.recipe.archive_format,  # None → per-platform default
     )
 
     print(f"cvcpkg: packed {archive_path.name} ({size:,} bytes)")
@@ -3072,6 +3128,7 @@ def pack_from_prefix(
             arch,
             config,
             link,
+            fmt=recipe.archive_format,  # None → per-platform default
         )
     finally:
         shutil.rmtree(staging, ignore_errors=True)
