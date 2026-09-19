@@ -1021,7 +1021,19 @@ def info(component: str) -> None:
 @click.argument("target", default="all")
 @_recipes_dir_opt
 @_no_default_recipes_opt
-def validate(target: str, recipes_dirs: tuple[str, ...], no_default_recipes: bool) -> None:
+@click.option(
+    "--strict-duplicates",
+    is_flag=True,
+    default=False,
+    help="Treat a recipe name defined in more than one --recipes-dir as an error "
+    "instead of a warning (later dir still wins).",
+)
+def validate(
+    target: str,
+    recipes_dirs: tuple[str, ...],
+    no_default_recipes: bool,
+    strict_duplicates: bool,
+) -> None:
     """Validate packaging YAML files against their JSON Schemas.
 
     Checks recipe.yaml files for schema conformance, verifies that referenced
@@ -1049,6 +1061,10 @@ def validate(target: str, recipes_dirs: tuple[str, ...], no_default_recipes: boo
     long as the default (or an overlay) provides them.
 
     \b
+    A recipe name defined in more than one --recipes-dir warns (later dir wins);
+    --strict-duplicates makes that shadowing a hard error instead.
+
+    \b
     Examples:
       cvcpkg validate
       cvcpkg validate recipes/grpc
@@ -1057,7 +1073,12 @@ def validate(target: str, recipes_dirs: tuple[str, ...], no_default_recipes: boo
     """
     from cvcpkg import validation
 
-    errors = validation.run(target, extra_dirs=recipes_dirs, no_default=no_default_recipes)
+    errors = validation.run(
+        target,
+        extra_dirs=recipes_dirs,
+        no_default=no_default_recipes,
+        strict_duplicates=strict_duplicates,
+    )
     ret = validation.report(errors)
     if ret != 0:
         raise SystemExit(ret)
