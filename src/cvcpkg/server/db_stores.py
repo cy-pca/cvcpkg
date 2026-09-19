@@ -3054,6 +3054,13 @@ class DbTagStore:
             if logo_url is not None:
                 row.logo_url = logo_url
             await session.flush()
+            # ``updated_at`` carries a SQL-side ``onupdate=func.now()``: after the
+            # UPDATE flushes, SQLAlchemy expires the attribute so it will be
+            # re-fetched from the DB.  ``_row_to_info`` reads it synchronously,
+            # which would trigger a lazy load outside the async greenlet and
+            # raise ``MissingGreenlet`` on the aiosqlite backend.  Refresh it
+            # here (inside an ``await``) so the value is loaded before we read it.
+            await session.refresh(row, ["updated_at"])
             return self._row_to_info(row)
 
     async def ensure_tags(
