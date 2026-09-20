@@ -48,8 +48,8 @@ The project is packaged with Poetry, but a plain editable pip install works
 (an in-tree PEP 517 backend syncs `recipes/` into the package at build time):
 
 ```bash
-git clone https://github.com/transfix/libcvc-deps.git
-cd libcvc-deps
+git clone https://github.com/cy-pca/cvcpkg.git
+cd cvcpkg
 pip install -e ".[server]"     # CLI + FastAPI server
 pip install pytest black       # test/format tools (or use poetry, below)
 ```

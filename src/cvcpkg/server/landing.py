@@ -4166,7 +4166,7 @@ cvcpkg verify   # check the prefix still matches the lockfile</code></pre></div>
             <tr><td><code>upgrade</code></td><td>Move installed components to newer catalog versions</td>
                 <td><code>cvcpkg upgrade --prefix ./deps</code></td></tr>
             <tr><td><code>download</code></td><td>Fetch archives without extracting them</td>
-                <td><code>cvcpkg download qt6 --platform linux --dest ./dl</code></td></tr>
+                <td><code>cvcpkg download qt6 --platform linux --output-dir ./dl</code></td></tr>
           </tbody>
         </table>
       </div>
@@ -4177,15 +4177,17 @@ cvcpkg verify   # check the prefix still matches the lockfile</code></pre></div>
           <thead><tr><th>Command</th><th>What it does</th><th>Example</th></tr></thead>
           <tbody>
             <tr><td><code>lock</code></td><td>Write/refresh <code>cvc-lock.yaml</code> pinning exact builds</td>
-                <td><code>cvcpkg lock --prefix ./deps</code></td></tr>
+                <td><code>cvcpkg lock</code></td></tr>
             <tr><td><code>sync</code></td><td>Make the prefix match the lockfile exactly</td>
                 <td><code>cvcpkg sync --prefix ./deps</code></td></tr>
             <tr><td><code>verify</code></td><td>Check prefix integrity against the lockfile</td>
                 <td><code>cvcpkg verify --prefix ./deps</code></td></tr>
+            <tr><td><code>repair</code></td><td>Restore broken or missing bundles in a prefix</td>
+                <td><code>cvcpkg repair --prefix ./deps</code></td></tr>
             <tr><td><code>image</code></td><td>Locate and check VM/disk images in a prefix</td>
-                <td><code>cvcpkg image list --prefix ./deps</code></td></tr>
+                <td><code>cvcpkg image ls --prefix ./deps</code></td></tr>
             <tr><td><code>cpkg</code></td><td>Interop with a cpkg (getcpkg.net) project</td>
-                <td><code>cvcpkg cpkg import ./cpkg.lua</code></td></tr>
+                <td><code>cvcpkg cpkg deps boost --prefix ./deps</code></td></tr>
           </tbody>
         </table>
       </div>
@@ -4226,7 +4228,7 @@ cvcpkg verify   # check the prefix still matches the lockfile</code></pre></div>
                 <td><strong>Live <code>top</code>-style dashboard</strong> of builders and running jobs</td>
                 <td><code>cvcpkg builds monitor</code></td></tr>
             <tr><td><code>builds submit</code></td><td>Queue one remote build job</td>
-                <td><code>cvcpkg builds submit zlib --platform linux</code></td></tr>
+                <td><code>cvcpkg builds submit --recipe zlib --platform linux</code></td></tr>
             <tr><td><code>builds submit-dag</code></td><td>Queue a whole dependency graph of jobs</td>
                 <td><code>cvcpkg builds submit-dag --platform linux,freebsd gsl</code></td></tr>
             <tr><td><code>builds list</code></td><td>List build jobs, filtered by state</td>
@@ -4243,7 +4245,7 @@ cvcpkg verify   # check the prefix still matches the lockfile</code></pre></div>
             <tr><td><code>builder status</code></td><td>Show one builder in detail</td>
                 <td><code>cvcpkg builder status 4</code></td></tr>
             <tr><td><code>builder logs</code></td><td>Recent build activity, optionally per builder</td>
-                <td><code>cvcpkg builder logs --builder star-00</code></td></tr>
+                <td><code>cvcpkg builder logs star-00</code></td></tr>
             <tr><td><code>builder run</code></td><td>Register this machine as a builder and poll for work</td>
                 <td><code>cvcpkg builder run --name star-00 --max-jobs 4</code></td></tr>
             <tr><td><code>builder fleet</code></td><td>Run one builder against several servers at once</td>
@@ -4264,11 +4266,11 @@ cvcpkg verify   # check the prefix still matches the lockfile</code></pre></div>
             <tr><td><code>recipe push</code></td><td>Upload a recipe directory so the server can build it</td>
                 <td><code>cvcpkg recipe push mylib --recipes-dir recipes</code></td></tr>
             <tr><td><code>recipe pull</code></td><td>Fetch a recipe (and its scripts) back down</td>
-                <td><code>cvcpkg recipe pull mylib --dest ./recipes</code></td></tr>
+                <td><code>cvcpkg recipe pull mylib --output-dir ./recipes</code></td></tr>
             <tr><td><code>yank</code> / <code>unyank</code></td><td>Hide a version from resolution, or restore it</td>
-                <td><code>cvcpkg yank mylib --version 2.1.0</code></td></tr>
+                <td><code>cvcpkg yank mylib 2.1.0</code></td></tr>
             <tr><td><code>nuke</code></td><td>Permanently delete a yanked bundle (admin)</td>
-                <td><code>cvcpkg nuke mylib --version 2.1.0</code></td></tr>
+                <td><code>cvcpkg nuke mylib 2.1.0</code></td></tr>
             <tr><td><code>rev-bump</code></td><td>Bump <code>cvc_revision</code> for a recipe and its dependents</td>
                 <td><code>cvcpkg rev-bump openssl</code></td></tr>
             <tr><td><code>next-revision</code></td><td>Print the revision a <code>--bump</code> pack would use</td>
@@ -4285,9 +4287,9 @@ cvcpkg verify   # check the prefix still matches the lockfile</code></pre></div>
           <thead><tr><th>Command</th><th>What it does</th><th>Example</th></tr></thead>
           <tbody>
             <tr><td><code>key</code></td><td>Create, list, and trust Ed25519 signing keys</td>
-                <td><code>cvcpkg key generate --name release</code></td></tr>
+                <td><code>cvcpkg key generate --label release</code></td></tr>
             <tr><td><code>sign</code></td><td>Sign an archive</td>
-                <td><code>cvcpkg sign dist/mylib-2.1.0.tar.zst --key release</code></td></tr>
+                <td><code>cvcpkg sign dist/mylib-2.1.0.tar.zst --signing-key release</code></td></tr>
             <tr><td><code>verify-sig</code></td><td>Verify an archive against the trusted keys</td>
                 <td><code>cvcpkg verify-sig dist/mylib-2.1.0.tar.zst</code></td></tr>
           </tbody>
@@ -4300,13 +4302,13 @@ cvcpkg verify   # check the prefix still matches the lockfile</code></pre></div>
           <thead><tr><th>Command</th><th>What it does</th><th>Example</th></tr></thead>
           <tbody>
             <tr><td><code>catalog</code></td><td>Browse or refresh the component catalog</td>
-                <td><code>cvcpkg catalog refresh</code></td></tr>
+                <td><code>cvcpkg catalog --refresh</code></td></tr>
             <tr><td><code>catalog-generate</code></td><td>Build a unified catalog from per-platform indexes</td>
-                <td><code>cvcpkg catalog-generate --out catalog/latest.yaml</code></td></tr>
+                <td><code>cvcpkg catalog-generate --output-dir ./catalog</code></td></tr>
             <tr><td><code>cache</code></td><td>Inspect or clear the local build cache</td>
-                <td><code>cvcpkg cache stats</code></td></tr>
+                <td><code>cvcpkg cache list</code></td></tr>
             <tr><td><code>gc</code></td><td>Prune the download cache</td>
-                <td><code>cvcpkg gc --older-than 30d</code></td></tr>
+                <td><code>cvcpkg gc</code></td></tr>
             <tr><td><code>clean</code></td><td>Remove leftover build work directories</td>
                 <td><code>cvcpkg clean</code></td></tr>
           </tbody>
@@ -4331,13 +4333,13 @@ cvcpkg verify   # check the prefix still matches the lockfile</code></pre></div>
             <tr><td><code>token</code></td><td>Create, list, and revoke API tokens</td>
                 <td><code>cvcpkg token list</code></td></tr>
             <tr><td><code>user</code></td><td>Look up a user profile</td>
-                <td><code>cvcpkg user show alice</code></td></tr>
+                <td><code>cvcpkg user info alice</code></td></tr>
             <tr><td><code>org</code></td><td>Create organizations and manage their members</td>
                 <td><code>cvcpkg org create my-team --display-name "My Team"</code></td></tr>
             <tr><td><code>server</code></td><td>Administer a running server</td>
                 <td><code>cvcpkg server stats</code></td></tr>
             <tr><td><code>webhook</code></td><td>Manage server webhooks</td>
-                <td><code>cvcpkg webhook add https://ci.example/hook</code></td></tr>
+                <td><code>cvcpkg webhook register https://ci.example/hook</code></td></tr>
           </tbody>
         </table>
       </div>
@@ -4811,7 +4813,7 @@ cvcpkg builder run \\
         </p>
         <div class="guide-code"><pre><code>\
 # Single build
-cvcpkg builds submit zlib --platform linux --arch x86_64 \\
+cvcpkg builds submit --recipe zlib --platform linux --arch x86_64 \\
   --server https://cvcpkg.org --token cvctok_...
 
 # DAG build (resolves dependencies automatically)

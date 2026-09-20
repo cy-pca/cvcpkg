@@ -72,7 +72,7 @@ execute external Lua scripts over HTTP — pull it from GitHub at build time:
 
 ```lua
 local cvcpkg = load(io.popen(
-  "curl -fsSL https://raw.githubusercontent.com/transfix/libcvc-deps/master/integrations/cpkg/cvcpkg.lua"
+  "curl -fsSL https://raw.githubusercontent.com/cy-pca/cvcpkg/master/integrations/cpkg/cvcpkg.lua"
 ):read("*a"))()
 ```
 
