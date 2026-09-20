@@ -937,6 +937,28 @@ async function ensureRecipeMeta() {
   } catch (_) {}
 }
 
+// Load recipe metadata (a license/description fallback for the results table)
+// WITHOUT blocking the search.  ensureRecipeMeta() fetches the whole recipe
+// catalog from /v1/deps, which can be slow; awaiting it before runSearch() made
+// a `?q=` deep link (and the first filter change) sit on an empty table until
+// that download finished -- the search only appeared to fire after "clear the
+// field and retype", because retyping found _recipeMetaLoaded already set and
+// so skipped the wait.  Instead fire-and-forget here and re-enrich whatever
+// results are already on screen once the metadata arrives.
+function loadRecipeMetaInBackground() {
+  if (_recipeMetaLoaded) return;  // already loaded; runSearch enriches inline
+  ensureRecipeMeta().then(() => {
+    if (!lastResponse || !loadedPackages.length) return;
+    loadedPackages.forEach(p => {
+      const m = recipeMeta[p.name];
+      if (!m) return;
+      if (!p.license && m.license) p.license = m.license;
+      if (!p.description && m.description) p.description = m.description;
+    });
+    renderResults(lastResponse);
+  });
+}
+
 function _hasCriteria() {
   return !!(state.q || state.platform || state.arch || state.tag || state.release
             || state.link || state.build_type);
@@ -959,10 +981,10 @@ function showSearchEmptyState() {
 }
 
 // Run a search only when the user has entered criteria; otherwise rest in the
-// empty state.  Recipe metadata is loaded lazily right before the first query.
+// empty state.  Recipe metadata loads in the background (never blocks the query).
 async function maybeSearch() {
   if (!_hasCriteria()) { showSearchEmptyState(); return; }
-  await ensureRecipeMeta();
+  loadRecipeMetaInBackground();
   await runSearch();
 }
 
@@ -980,7 +1002,7 @@ async function init() {
     if (v) state[k] = v;
   }
   if (_hasCriteria()) {
-    await ensureRecipeMeta();
+    loadRecipeMetaInBackground();
     await runSearch();
   } else {
     showSearchEmptyState();
