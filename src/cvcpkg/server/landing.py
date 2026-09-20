@@ -937,14 +937,17 @@ async function ensureRecipeMeta() {
   } catch (_) {}
 }
 
-// Load recipe metadata (a license/description fallback for the results table)
-// WITHOUT blocking the search.  ensureRecipeMeta() fetches the whole recipe
-// catalog from /v1/deps, which can be slow; awaiting it before runSearch() made
-// a `?q=` deep link (and the first filter change) sit on an empty table until
-// that download finished -- the search only appeared to fire after "clear the
-// field and retype", because retyping found _recipeMetaLoaded already set and
-// so skipped the wait.  Instead fire-and-forget here and re-enrich whatever
-// results are already on screen once the metadata arrives.
+// Load recipe metadata (a license/description fallback) AFTER the search, never
+// before or concurrently.  ensureRecipeMeta() fetches the whole recipe catalog
+// from /v1/deps, which is slow (~10s for ~900 recipes) and the server serializes
+// it against /v1/search: firing both at once made a `?q=` deep link's /v1/search
+// wait ~15s behind /v1/deps, so the results table spun until it finished — the
+// search only appeared to work after "clear the field and retype", because by
+// then /v1/deps had completed and the retyped /v1/search ran alone (~1s).
+// Callers therefore `await runSearch()` first and call this only afterwards; it
+// fire-and-forgets and re-enriches on-screen results once the metadata arrives.
+// (The metadata is not currently shown in the results columns, but the enrich
+// hook is kept for when it is.)
 function loadRecipeMetaInBackground() {
   if (_recipeMetaLoaded) return;  // already loaded; runSearch enriches inline
   ensureRecipeMeta().then(() => {
@@ -981,11 +984,12 @@ function showSearchEmptyState() {
 }
 
 // Run a search only when the user has entered criteria; otherwise rest in the
-// empty state.  Recipe metadata loads in the background (never blocks the query).
+// empty state.  Fire the query FIRST, then load recipe metadata — never before
+// or concurrently (see loadRecipeMetaInBackground for why).
 async function maybeSearch() {
   if (!_hasCriteria()) { showSearchEmptyState(); return; }
-  loadRecipeMetaInBackground();
   await runSearch();
+  loadRecipeMetaInBackground();
 }
 
 async function init() {
@@ -1002,10 +1006,11 @@ async function init() {
     if (v) state[k] = v;
   }
   if (_hasCriteria()) {
-    loadRecipeMetaInBackground();
     await runSearch();
+    loadRecipeMetaInBackground();
   } else {
     showSearchEmptyState();
+    loadRecipeMetaInBackground();
   }
 }
 

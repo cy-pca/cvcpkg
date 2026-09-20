@@ -28,6 +28,20 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
+## v2.3.1
+
+### Fixed
+
+- **Search page no longer spins forever on a `?q=` query.** The v2.3.0 search
+  fix loaded the recipe metadata (`/v1/deps`) in the background but still fired
+  it *concurrently* with the first `/v1/search`; the server serializes the two
+  and `/v1/deps` is slow (~10s for the full catalog), so `/v1/search` waited
+  ~15s behind it and the results table sat on its spinner until the user cleared
+  and retyped (by which point `/v1/deps` had finished and the retyped query ran
+  alone in ~1s). The search now runs **first, on its own**, and metadata loads
+  only afterwards — the query returns in ~1s. (The `/v1/deps` handler being slow
+  and serializing against `/v1/search` is a separate server-side follow-up.)
+
 ## v2.3.0
 
 Feature and fix roundup on top of v2.2.2 (all from cy-pca/cvcpkg).
