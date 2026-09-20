@@ -28,6 +28,22 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
+## v2.3.2
+
+### Changed
+
+- **`/v1/deps` no longer blocks the event loop or serialises against
+  `/v1/search`.** The dependency-graph handler parsed hundreds of `recipe.yaml`
+  files synchronously on *every* request, on the asyncio event loop, so it took
+  several seconds and serialised the `/v1/search` the search page fires
+  alongside it — this was the server-side root cause behind the v2.3.1
+  search-page hang (the "separate server-side follow-up" that entry flagged).
+  The whole response is now cached on a cheap `(local recipe signature, pushed
+  signature)` and, on a miss, built in a worker thread (`asyncio.to_thread`), so
+  the event loop stays free and a concurrent `/v1/search` returns immediately. A
+  push bumps the pushed signature and busts the cache, so freshly pushed recipes
+  still appear at once. No change to the response shape.
+
 ## v2.3.1
 
 ### Fixed
