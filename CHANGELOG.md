@@ -28,6 +28,61 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
+## v2.3.0
+
+Feature and fix roundup on top of v2.2.2 (all from cy-pca/cvcpkg).
+
+### New
+
+- **`cvcpkg repair`.** Detect and restore broken bundles in an installed prefix
+  — a missing `manifest.yaml`, deleted payload files, or a corrupted download
+  cache. It removes the broken bundle's footprint (protecting files a surviving
+  package still owns and the shared metadata slot) and re-downloads +
+  re-extracts from the lockfile-pinned archive. `cvcpkg verify` now also flags
+  missing payload files, not just a missing/mismatched manifest, and points at
+  `cvcpkg repair`. (#36)
+- **Recipe-chosen archive format.** A recipe may set `package.archive_format`
+  (`tar.gz` / `tar.xz` / `tar.bz2` / `zip`); when omitted the per-platform
+  default is unchanged (`zip` on windows, `tar.gz` everywhere else). All formats
+  are written deterministically, and the consumer sniffs magic bytes, so the
+  choice only affects producer output. (#35)
+- **`--install-dir` / `--version` flags on the installers.** `install.sh`
+  (`curl … | sh -s -- --install-dir DIR`) and `install.ps1` (`-InstallDir`) can
+  now be pointed at a custom location through the one-line pipe, with an
+  explicit flag > env > default precedence and an actionable message when the
+  target dir is not writable. (#31)
+- **Path-based org package URLs.** Org-scoped package pages are now
+  `/package/{org}/{name}`, with a 301 redirect from the legacy `?org=` form and
+  a proper `canonical` / `og:url`. (#32)
+- **`cvcpkg validate --strict-duplicates`.** A recipe name defined in more than
+  one `--recipes-dir` now warns (later dir wins); `--strict-duplicates` makes
+  such shadowing a hard error. (#34)
+- **Package page shows `recipe.yaml`** above the Downloads section by default,
+  with a clear note when a package has no recipe on file. (#33)
+
+### Fixed
+
+- **Search fires immediately on a `?q=` deep link.** Typing in the landing
+  search bar and hitting Search navigated to `/search?q=…` but the query did
+  not run until the field was cleared and retyped — the page awaited the slow
+  `/v1/deps` recipe-metadata fetch before searching. Metadata now loads in the
+  background (and re-enriches results when it arrives) so the search fires right
+  away. (#41)
+- **`PUT /v1/tags/{name}` no longer 500s.** `DbTagStore.update()` lazy-loaded
+  `updated_at` after the async session had committed/expired it, raising
+  `sqlalchemy.exc.MissingGreenlet` on the happy path. (#39)
+
+### Internal
+
+- Unit-test coverage raised above the 80% CI gate, including the previously
+  0%-covered cloud storage backends (sftp / azure / gcs / s3-cli). (#38)
+- Documentation pass: every user-facing CLI command verified against the actual
+  CLI and corrected (e.g. `image ls`, `cache list`, `webhook register`,
+  positional `yank`/`nuke` versions), plus stale `transfix/libcvc-deps`
+  references updated to `cy-pca/cvcpkg`. (#40)
+- CI hygiene: format-clean the RSS `github_url` line so the formatter gates pass
+  on master. (#37)
+
 ## v2.2.2
 
 First release cut from **cy-pca/cvcpkg**, the relocated home of cvcpkg (the
