@@ -215,3 +215,51 @@ class TestDepsGraphIncludesPushedRecipes:
         after = client.get("/v1/deps")
         assert after.status_code == 200, "a corrupt bundle 500'd the whole endpoint"
         assert "good" in after.json()["forward"], "a corrupt bundle blanked the graph"
+
+    def test_local_recipe_parse_is_cached(self, server_env, monkeypatch):
+        """The slow local-recipe parse must not re-run on a cache hit.
+
+        `/v1/deps` used to call `list_recipes(find_recipes_dir())` — hundreds of
+        synchronous recipe.yaml parses — on EVERY request, on the event loop, so
+        it took ~10s and serialised the `/v1/search` the search page fires
+        alongside it (results table spun until it finished). The whole graph is
+        now cached on (local recipe sig, pushed sig): a second call with no push
+        between must not parse again.
+        """
+        client, admin_token, _tmp = server_env
+        hdr = {"Authorization": f"Bearer {admin_token}"}
+
+        # A push bumps the pushed signature, so the NEXT /v1/deps is a guaranteed
+        # cache miss regardless of what earlier tests primed.
+        r = client.post(
+            "/v1/recipes/cachetest",
+            headers=hdr,
+            files={
+                "file": (
+                    "cachetest.tar.gz",
+                    _recipe_bundle("cachetest", ["zlib"]),
+                    "application/gzip",
+                )
+            },
+        )
+        if r.status_code == 501:
+            pytest.skip("recipe distribution requires a DB backend")
+
+        import cvcpkg.builder as _builder
+
+        calls: list[int] = []
+        real = _builder.list_recipes
+
+        def _counting(*a, **k):
+            calls.append(1)
+            return real(*a, **k)
+
+        monkeypatch.setattr(_builder, "list_recipes", _counting)
+
+        client.get("/v1/deps")  # cache miss -> parses the local set once
+        n1 = len(calls)
+        client.get("/v1/deps")  # same signature -> cache hit -> no parse
+        n2 = len(calls)
+
+        assert n1 == 1, f"expected exactly one local parse on the miss, got {n1}"
+        assert n2 == 1, f"list_recipes re-ran on a cache hit ({n1} -> {n2})"

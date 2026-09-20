@@ -2796,6 +2796,9 @@ def create_app(
     #: (signature, parsed) — see _pushed_recipes_for_deps.
     _pushed_deps_cache: dict[str, object] = {"sig": None, "val": []}
 
+    #: the whole /v1/deps response, cached on (local recipe sig, pushed sig).
+    _deps_graph_cache: dict[str, object] = {"sig": None, "val": None}
+
     async def _pushed_recipes_for_deps() -> list[tuple[str, dict]]:
         """Parse ``recipe.yaml`` out of every pushed recipe bundle.
 
@@ -2854,45 +2857,55 @@ def create_app(
         _pushed_deps_cache["val"] = out
         return out
 
-    @app.get("/v1/deps", tags=["packages"])
-    async def get_dependency_graph(
-        _auth: None = Depends(optional_reader_auth),
-    ):
-        """Return forward and reverse dependency maps derived from recipes.
+    def _local_recipe_sig() -> tuple:
+        """Cheap signature of the server's local recipe set: (count, newest
+        recipe.yaml mtime).  Stats the directory but parses nothing, so it is
+        safe to call per request to decide whether the cached dependency graph
+        is still valid without paying the full parse cost."""
+        from cvcpkg.builder import RecipeError, find_recipes_dir
 
-        Built from BOTH the server's local recipe set and the recipes orgs have
-        pushed with ``cvcpkg recipe push``.
+        try:
+            d = find_recipes_dir()
+        except RecipeError:
+            return (0, 0.0)
+        count = 0
+        newest = 0.0
+        try:
+            for child in d.iterdir():
+                ry = child / "recipe.yaml"
+                if child.is_dir() and ry.is_file():
+                    count += 1
+                    try:
+                        newest = max(newest, ry.stat().st_mtime)
+                    except OSError:
+                        pass
+        except OSError:
+            return (0, 0.0)
+        return (count, newest)
 
-        Pushed recipes used to be missing entirely, and the effect was silent:
-        every package published from a repo whose recipes live outside this
-        server's own tree — the whole `cvc` org family (libcvc, libcvc-cuda,
-        cvcgl, pycvc, pycvc-gl, cvc-cli) — had no entry here, so its package
-        page rendered neither "Dependencies" nor "Used By" (both blocks stay
-        `display:none` until renderDeps finds a match) and it was badged
-        `community` rather than mainline. Nothing errored; the sections just
-        were not there.
-        """
+    def _build_deps_graph(pushed: list) -> dict:
+        """Build the forward/reverse/meta/recipe_names maps from the local recipe
+        set plus the *pushed* overlay.  Parses hundreds of recipe.yaml files
+        (``Recipe.load`` per directory) and is therefore CPU/IO-heavy — several
+        seconds on a full catalog — so callers MUST run it off the event loop
+        (``asyncio.to_thread``); otherwise it blocks every concurrent request,
+        notably the ``/v1/search`` the search page fires alongside this one."""
         from cvcpkg.builder import RecipeError, find_recipes_dir, list_recipes
         from cvcpkg.refs import parse_dep_ref
 
-        recipes: list = []
         try:
             recipes = list(list_recipes(find_recipes_dir()))
         except RecipeError:
             recipes = []
 
-        # Overlay pushed recipes. Later entries win on a name collision, so an
-        # org's own push takes precedence over a stale local copy of the same
-        # name — the same "later wins" rule --recipes-dir already uses.
-        pushed = await _pushed_recipes_for_deps()
+        # Overlay pushed recipes (later entries win on a name collision — the
+        # same "later wins" rule --recipes-dir uses), so an org's own push
+        # takes precedence over a stale local copy of the same name.
         if pushed:
             by_name = {r.name: r for r in recipes}
             for name, raw in pushed:
                 by_name[name] = _RawRecipe(name, raw)
             recipes = [by_name[n] for n in sorted(by_name)]
-
-        if not recipes:
-            return JSONResponse({"forward": {}, "reverse": {}, "meta": {}, "recipe_names": []})
 
         forward: dict[str, list[str]] = {}
         meta: dict[str, dict] = {}
@@ -2929,14 +2942,46 @@ def create_app(
             for dep in deps:
                 reverse.setdefault(dep, []).append(pkg)
 
-        return JSONResponse(
-            {
-                "forward": forward,
-                "reverse": reverse,
-                "meta": meta,
-                "recipe_names": recipe_names,
-            }
-        )
+        return {
+            "forward": forward,
+            "reverse": reverse,
+            "meta": meta,
+            "recipe_names": recipe_names,
+        }
+
+    @app.get("/v1/deps", tags=["packages"])
+    async def get_dependency_graph(
+        _auth: None = Depends(optional_reader_auth),
+    ):
+        """Return forward and reverse dependency maps derived from recipes.
+
+        Built from BOTH the server's local recipe set and the recipes orgs have
+        pushed with ``cvcpkg recipe push``.
+
+        Pushed recipes used to be missing entirely, and the effect was silent:
+        every package published from a repo whose recipes live outside this
+        server's own tree — the whole `cvc` org family (libcvc, libcvc-cuda,
+        cvcgl, pycvc, pycvc-gl, cvc-cli) — had no entry here, so its package
+        page rendered neither "Dependencies" nor "Used By" (both blocks stay
+        `display:none` until renderDeps finds a match) and it was badged
+        `community` rather than mainline. Nothing errored; the sections just
+        were not there.
+        """
+        pushed = await _pushed_recipes_for_deps()
+        # Serve the whole graph from a cache keyed on (local recipe set, pushed
+        # set).  Building it parses hundreds of recipe.yaml files (several
+        # seconds), so a miss runs in a worker thread — never on the event loop,
+        # which would serialise every concurrent request, notably the
+        # /v1/search the search page fires alongside this one.  Both signatures
+        # are cheap, so the hot path is a dict lookup and a JSON dump.
+        local_sig = await asyncio.to_thread(_local_recipe_sig)
+        sig = (local_sig, _pushed_deps_cache["sig"])
+        if _deps_graph_cache["sig"] == sig and _deps_graph_cache["val"] is not None:
+            return JSONResponse(_deps_graph_cache["val"])
+        result = await asyncio.to_thread(_build_deps_graph, pushed)
+        _deps_graph_cache["sig"] = sig
+        _deps_graph_cache["val"] = result
+        return JSONResponse(result)
 
     # ── Recipe content (read) ──────────────────────────────
     #
