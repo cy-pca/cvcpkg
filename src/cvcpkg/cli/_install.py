@@ -740,6 +740,49 @@ def _check_conflicts(
 # ── install-deps ────────────────────────────────────────────────
 
 
+def _install_deps_search_dirs(
+    recipe_dir: Path,
+    recipes_dirs: tuple[str, ...],
+    no_default_recipes: bool,
+) -> list[Path]:
+    """Recipe directories to classify a recipe's depends.build tools against.
+
+    The resolved recipe search path, plus the target recipe's own parent — its
+    siblings (cmake/ninja/…) live there, so classification still works when the
+    recipe was given as a bare path outside any --recipes-dir.  Returns an empty
+    list only if nothing resolves, in which case classification is skipped.
+    """
+    try:
+        dirs = _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes)
+    except click.ClickException:
+        dirs = []
+    parent = recipe_dir.parent
+    if parent not in dirs:
+        dirs = [*dirs, parent]
+    return dirs
+
+
+def _find_dep_recipe(name: str, dirs: list[Path]):  # -> Recipe | None
+    """Load the recipe for dependency *name* from *dirs* (later dirs win), or None.
+
+    The org qualifier on an ``org/name`` dependency is ignored for the directory
+    lookup (the recipe dir is named for the recipe, not the org).  A load failure
+    is swallowed and reported as "not found" — classification is best-effort and
+    must never abort the install.
+    """
+    from cvcpkg.builder import Recipe
+
+    key = name.rsplit("/", 1)[-1]
+    for d in reversed(dirs):
+        candidate = d / key
+        if (candidate / "recipe.yaml").is_file():
+            try:
+                return Recipe.load(candidate)
+            except Exception:
+                return None
+    return None
+
+
 @cli.command("install-deps")
 @click.argument("recipe")
 @_prefix_opt
@@ -793,8 +836,20 @@ def _check_conflicts(
     "--include-host-tools",
     is_flag=True,
     default=False,
-    help="Also install the recipe's host_tools deps (cmake/ninja/swig/…). Off by "
-    "default: those are build tools, normally provided by the system/CI.",
+    help="Also install the recipe's host tools (cmake/ninja/swig/…) — both the "
+    "host_tools: role and, when cross-compiling, depends.build entries that have "
+    "no build for the target.  Off by default: those are build tools, normally "
+    "provided by the system/CI.  When cross-compiling they resolve for the host "
+    "(see --host-platform), not the target.",
+)
+@click.option(
+    "--host-platform",
+    default="",
+    help="Host platform for cross-compilation (e.g. linux, macos, windows).  When "
+    "the target platform differs from this, depends.build entries with no build "
+    "for the target (cmake/ninja/… — host tools placed under depends.build by "
+    "convention) are treated as host tools: excluded by default, or resolved for "
+    "this host with --include-host-tools.  Defaults to the detected host.",
 )
 @click.option(
     "--trust-mirror/--no-trust-mirror",
@@ -820,6 +875,7 @@ def install_deps(
     no_default_recipes: bool,
     local_mode: bool,
     include_host_tools: bool,
+    host_platform: str,
     trust_mirror: bool | None,
 ) -> None:
     """Install a recipe's dependency closure into --prefix.
@@ -836,13 +892,24 @@ def install_deps(
     from the system/CI; pass --include-host-tools to install them too.  All other
     flags mirror 'cvcpkg install' and are forwarded to it.
 
+    When cross-compiling (e.g. --platform wasm on a linux host), a depends.build
+    entry whose recipe has no build for the target platform is a host build tool
+    (cmake/ninja are placed under depends.build by convention, not host_tools:).
+    It cannot resolve for the target, so it is treated exactly like the
+    host_tools: role — excluded by default, or resolved for the host platform
+    (see --host-platform) with --include-host-tools.  The target's own libraries
+    (deps that DO have a target build) still resolve for the target.
+
     \b
     Example — install libcvc's deps, then build libcvc against them:
       cvcpkg install-deps cvcpkg/recipes/libcvc --prefix ./deps --config release
       cvcpkg build libcvc --recipes-dir cvcpkg/recipes --no-deps --prefix ./deps
       # (or drive CMake directly: -DCMAKE_PREFIX_PATH=$PWD/deps)
+    \b
+    Cross-compile: install VTK's wasm libraries; cmake/ninja come from the host:
+      cvcpkg install-deps recipes/vtk --platform wasm --arch wasm32 --prefix ./deps
     """
-    from cvcpkg.builder import Recipe, _dep_names_for_role
+    from cvcpkg.builder import Recipe, _dep_names_for_role, recipe_serves_platform
     from cvcpkg.platform import detect_platform
 
     # ── Resolve RECIPE: a recipe.yaml path, a dir containing one, or a name ──
@@ -865,49 +932,100 @@ def install_deps(
 
     r = Recipe.load(recipe_dir)
     plat = platform if platform != "auto" else detect_platform()
+    host_plat = host_platform or detect_platform()
 
-    names = _dep_names_for_role(r, "build", plat) | _dep_names_for_role(r, "runtime", plat)
-    if include_host_tools:
-        names |= _dep_names_for_role(r, "host_tools", plat)
-    names_sorted = sorted(names)
-    if not names_sorted:
+    build_names = _dep_names_for_role(r, "build", plat)
+    runtime_names = _dep_names_for_role(r, "runtime", plat)
+    host_tool_names = _dep_names_for_role(r, "host_tools", plat)
+
+    # When cross-compiling, a depends.build entry whose recipe has no build for
+    # the target platform is a host build tool (cmake/ninja/… — placed under
+    # depends.build by repo convention, not host_tools:).  It cannot resolve for
+    # the target, so treat it exactly like the host_tools: role: excluded by
+    # default, resolved for the HOST platform with --include-host-tools.  The
+    # classification uses the same build-matrix test as builder._collect_host_tools;
+    # a dep whose recipe is not on the search path is left as a target dep (we
+    # cannot classify it, and that preserves the previous behaviour).
+    build_tool_names: set[str] = set()
+    if plat != host_plat and build_names:
+        search_dirs = _install_deps_search_dirs(recipe_dir, recipes_dirs, no_default_recipes)
+        for name in build_names:
+            dep = _find_dep_recipe(name, search_dirs)
+            if dep is not None and not recipe_serves_platform(dep, plat):
+                build_tool_names.add(name)
+
+    target_names = (build_names - build_tool_names) | runtime_names
+    host_names = host_tool_names | build_tool_names
+
+    if build_tool_names:
+        excluded = (
+            ""
+            if include_host_tools
+            else (
+                f" (excluded — provided by the system/CI; pass --include-host-tools "
+                f"to install them for {host_plat})"
+            )
+        )
+        click.echo(
+            f"cvcpkg: install-deps {r.name}: "
+            f"{len(build_tool_names)} depends.build tool(s) have no {plat} build, "
+            f"treating as host tools: {' '.join(sorted(build_tool_names))}{excluded}"
+        )
+
+    # Assemble the install passes as (components, platform, arch).  Host tools
+    # resolve for the host, target deps for the target, so they are separate
+    # 'install' invocations — except in a native build (host == target) where
+    # they share one pass, exactly as before.  The deliverable target pass runs
+    # LAST so it writes the prefix's lockfile.
+    passes: list[tuple[list[str], str, str]] = []
+    if include_host_tools and host_names:
+        if host_plat == plat:
+            target_names |= host_names
+        else:
+            # Host arch, not the target's: let install() detect it (--arch auto).
+            passes.append((sorted(host_names), host_plat, "auto"))
+    if target_names:
+        passes.append((sorted(target_names), plat, arch))
+
+    if not passes:
         click.echo(f"cvcpkg: {r.name} declares no build/runtime deps for {plat} — nothing to do.")
         return
-
-    click.echo(
-        f"cvcpkg: install-deps {r.name} -> {len(names_sorted)} deps: {' '.join(names_sorted)}"
-    )
 
     # Reuse the full 'install' resolution/installation path with the recipe's
     # deps as the component set.
     ctx = click.get_current_context()
-    ctx.invoke(
-        install,
-        components=tuple(names_sorted),
-        from_file=None,
-        prefix=prefix,
-        release=release,
-        platform=platform,
-        arch=arch,
-        config=config,
-        link=link,
-        # None -> install() still reads CVCPKG_TOKEN from the environment, so a
-        # private-org dep resolves as long as the token is exported.
-        token=None,
-        catalog=catalog,
-        catalog_revision=catalog_revision,
-        source=source,
-        ignore_abi=ignore_abi,
-        verify_signatures=verify_signatures,
-        require_signatures=require_signatures,
-        fallback_to_source=fallback_to_source,
-        recipes_dirs=recipes_dirs,
-        no_default_recipes=no_default_recipes,
-        local_mode=local_mode,
-        keep_build_prefix=False,
-        keep_host_tools=None,
-        trust_mirror=trust_mirror,
-    )
+    for comps, pass_plat, pass_arch in passes:
+        click.echo(
+            f"cvcpkg: install-deps {r.name} -> {len(comps)} dep(s) for {pass_plat}: "
+            f"{' '.join(comps)}"
+        )
+        ctx.invoke(
+            install,
+            components=tuple(comps),
+            from_file=None,
+            prefix=prefix,
+            release=release,
+            platform=pass_plat,
+            arch=pass_arch,
+            config=config,
+            link=link,
+            # None -> install() still reads CVCPKG_TOKEN from the environment, so a
+            # private-org dep resolves as long as the token is exported.
+            token=None,
+            catalog=catalog,
+            catalog_revision=catalog_revision,
+            source=source,
+            ignore_abi=ignore_abi,
+            verify_signatures=verify_signatures,
+            require_signatures=require_signatures,
+            fallback_to_source=fallback_to_source,
+            recipes_dirs=recipes_dirs,
+            no_default_recipes=no_default_recipes,
+            local_mode=local_mode,
+            keep_build_prefix=False,
+            keep_host_tools=None,
+            trust_mirror=trust_mirror,
+        )
 
 
 # ── list ────────────────────────────────────────────────────────
