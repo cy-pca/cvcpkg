@@ -14,6 +14,9 @@
 #
 # Usage:
 #   gh workflow run windows-recipe-check -f recipe=ca-bundle
+#   gh workflow run windows-recipe-check -f recipe=vtk -f platform=wasm
+# (wasm/wasm-mt sets up the emsdk and builds the dep closure from source, so it
+#  proves a recipe's build-wasm.ps1 actually cross-compiles on a Windows host.)
 #
 # The pull_request trigger is deliberately narrow: it fires only when this
 # workflow file itself changes, so the PR that edits it proves it still works
@@ -29,6 +32,15 @@ on:
         required: true
         default: "ca-bundle"
         type: string
+      platform:
+        description: "Target platform (wasm/wasm-mt cross-compile with Emscripten)"
+        required: true
+        default: "windows"
+        type: choice
+        options:
+          - windows
+          - wasm
+          - wasm-mt
       config:
         description: "Build config"
         required: true
@@ -50,7 +62,7 @@ on:
       - ".github/workflows/windows-recipe-check.yml"
 
 concurrency:
-  group: windows-recipe-check-${{ github.ref }}-${{ inputs.recipe || 'ca-bundle' }}
+  group: windows-recipe-check-${{ github.ref }}-${{ inputs.recipe || 'ca-bundle' }}-${{ inputs.platform || 'windows' }}
   cancel-in-progress: true
 
 permissions:
@@ -60,7 +72,7 @@ jobs:
   build:
     name: Build ${{ inputs.recipe || 'ca-bundle' }} on Windows
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 150
 
     steps:
       - uses: actions/checkout@v5
@@ -112,17 +124,33 @@ jobs:
         shell: bash
         run: cvcpkg validate "recipes/${{ inputs.recipe || 'ca-bundle' }}"
 
-      - name: Build ${{ inputs.recipe || 'ca-bundle' }}
+      # wasm / wasm-mt cross-compile with Emscripten. Pin the emsdk version cvcpkg
+      # targets; env-wasm.ps1 reads CVC_EMSDK_DIR (set to $EMSDK in the build step).
+      - name: Set up Emscripten (wasm only)
+        if: ${{ startsWith(inputs.platform, 'wasm') }}
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: "5.0.7"
+          actions-cache-folder: emsdk-cache
+
+      - name: Build ${{ inputs.recipe || 'ca-bundle' }} (${{ inputs.platform || 'windows' }})
         shell: bash
         run: |
           set -euo pipefail
-          cvcpkg build "${{ inputs.recipe || 'ca-bundle' }}" \
-            --local \
-            --platform windows \
-            --config "${{ inputs.config || 'release' }}" \
-            --link "${{ inputs.link || 'shared' }}" \
-            --recipes-dir recipes \
-            --prefix "${{ github.workspace }}/prefix"
+          platform="${{ inputs.platform || 'windows' }}"
+          args=(--local --recipes-dir recipes
+                --config "${{ inputs.config || 'release' }}"
+                --prefix "${{ github.workspace }}/prefix")
+          if [[ "$platform" == wasm* ]]; then
+            # wasm is static-only; a hosted runner starts with an empty prefix, so
+            # build the (small, Qt/HDF5-filtered) dep closure from source too.
+            export CVC_EMSDK_DIR="$EMSDK"
+            args+=(--platform "$platform" --link static --with-deps)
+          else
+            args+=(--platform windows --link "${{ inputs.link || 'shared' }}")
+          fi
+          echo "cvcpkg build ${{ inputs.recipe || 'ca-bundle' }} ${args[*]}"
+          cvcpkg build "${{ inputs.recipe || 'ca-bundle' }}" "${args[@]}"
 
       - name: Show installed payload
         if: always()
