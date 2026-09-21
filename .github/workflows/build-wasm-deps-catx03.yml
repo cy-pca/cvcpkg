@@ -13,6 +13,11 @@ name: build-wasm-deps-catx03
 # when the fleet is drained or for a quick one-off against catx-03's own
 # prebuilt emsdk. Manual dispatch only.
 
+# NOTE (cy-pca): workflow_dispatch-only. These fleet-ops workflows were added
+# while Actions was disabled during the relocation, so GitHub never indexed
+# them and they were undispatchable (absent from `gh workflow list` / the
+# Actions UI). A no-op edit on the default branch re-registers a workflow;
+# this comment is that nudge. If one goes missing again, touch it here.
 on:
   workflow_dispatch:
     inputs:

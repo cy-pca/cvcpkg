@@ -23,6 +23,11 @@ name: Package lifecycle (yank / unyank / nuke)
 #   CVCPKG_ADMIN_TOKEN       — admin token for the dev server (its long-standing
 #                              meaning; the dev CI workflows depend on it)
 
+# NOTE (cy-pca): workflow_dispatch-only. These fleet-ops workflows were added
+# while Actions was disabled during the relocation, so GitHub never indexed
+# them and they were undispatchable (absent from `gh workflow list` / the
+# Actions UI). A no-op edit on the default branch re-registers a workflow;
+# this comment is that nudge. If one goes missing again, touch it here.
 on:
   workflow_dispatch:
     inputs:
