@@ -1,0 +1,151 @@
+name: Bulk yank (python arch cleanup)
+
+# Retire whole classes of mis-published python bundles in one run, using the
+# admin token secret on the runner (never a local token).  Two targets:
+#
+#   misclassified-noarch  — the platform=any/noarch bundles of the C-extension
+#                           columns cython/protobuf/sqlalchemy.  Their sdist
+#                           build compiles, so the "noarch" bundle carries a
+#                           platform .so and is broken on fallback hosts
+#                           (cy-pca/cvcpkg #53).  Run AFTER the per-platform
+#                           rebuild lands so every host has a concrete build.
+#
+#   pure-stale-concrete   — the leftover linux/macOS concrete builds of
+#                           genuinely-pure python columns that also publish a
+#                           correct (any,noarch) bundle (cy-pca/cvcpkg #54).
+#                           The noarch resolves on every host, so these shadow
+#                           it via the resolver's same-version tiebreak.  Keeps
+#                           the noarch and the windows/x86_64 concrete.
+#
+# Targets are DERIVED live from the catalog, so the set is always current.
+# `apply` defaults false: a dry run prints exactly what it would yank.  Yank is
+# reversible (`cvcpkg unyank`), unlike nuke.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Which class to yank"
+        required: true
+        type: choice
+        options: ["misclassified-noarch", "pure-stale-concrete"]
+      apply:
+        description: "Actually yank (false = dry run, just report)"
+        required: true
+        type: boolean
+        default: false
+      server:
+        description: "cvcpkg server"
+        required: true
+        default: "https://cvcpkg.org"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bulk-yank-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  bulk-yank:
+    name: ${{ inputs.target }} (apply=${{ inputs.apply }})
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install cvcpkg
+        run: pip install .
+      - name: Compute targets + yank
+        env:
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_ADMIN_TOKEN }}
+          TARGET: ${{ inputs.target }}
+          APPLY: ${{ inputs.apply }}
+          SERVER: ${{ inputs.server }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, subprocess, sys, urllib.request
+
+          server = os.environ["SERVER"].rstrip("/")
+          target = os.environ["TARGET"]
+          apply = os.environ["APPLY"] == "true"
+
+          # ---- pull the full catalog ----
+          builds, off = [], 0
+          while True:
+              u = f"{server}/v1/packages?limit=200&offset={off}"
+              d = json.load(urllib.request.urlopen(u, timeout=60))
+              b = d.get("packages", [])
+              if not b:
+                  break
+              builds += b
+              off += 200
+              if off >= d.get("total", 0):
+                  break
+          print(f"catalog: {len(builds)} builds", flush=True)
+
+          PYCOL = re.compile(r"-cp3\d\d?t?$")
+          BASES = ("cython", "protobuf", "sqlalchemy")
+          is_base = lambda n: any(re.match(rf"^{b}-cp3\d\d?t?$", n) for b in BASES)
+
+          if target == "misclassified-noarch":
+              # the any/noarch bundles of the 11 C-extension columns
+              tgt = [b for b in builds if is_base(b["name"]) and b["platform"] == "any"]
+          else:  # pure-stale-concrete
+              have_noarch = {
+                  b["name"]
+                  for b in builds
+                  if PYCOL.search(b["name"]) and (b["platform"] == "any" or b["arch"] == "noarch")
+              }
+              tgt = [
+                  b
+                  for b in builds
+                  if PYCOL.search(b["name"])
+                  and not is_base(b["name"])
+                  and b["name"] in have_noarch
+                  and b["platform"] in ("linux", "macos")
+              ]
+
+          # de-dupe to exact identity
+          seen, uniq = set(), []
+          for b in tgt:
+              k = (b["name"], b["version"], b["platform"], b["arch"], b["build_type"], b["link"])
+              if k in seen:
+                  continue
+              seen.add(k)
+              uniq.append(b)
+
+          print(f"target={target} apply={apply}: {len(uniq)} builds across "
+                f"{len({b['name'] for b in uniq})} packages", flush=True)
+
+          ok = fail = 0
+          for i, b in enumerate(uniq, 1):
+              cmd = [
+                  "cvcpkg", "yank", b["name"], b["version"],
+                  "--platform", b["platform"], "--arch", b["arch"],
+                  "--config", b["build_type"], "--link", b["link"],
+                  "--yes", "--server", server,
+              ]
+              tag = f"{b['name']} {b['version']} {b['platform']}/{b['arch']}/{b['build_type']}/{b['link']}"
+              if not apply:
+                  print(f"  [dry-run {i}/{len(uniq)}] would yank {tag}", flush=True)
+                  continue
+              r = subprocess.run(cmd, capture_output=True, text=True)
+              if r.returncode == 0:
+                  ok += 1
+                  print(f"  [{i}/{len(uniq)}] yanked {tag}", flush=True)
+              else:
+                  fail += 1
+                  msg = (r.stderr or r.stdout).strip().splitlines()[-1:] or [""]
+                  print(f"  [{i}/{len(uniq)}] FAILED {tag} :: {msg[0]}", flush=True)
+
+          if apply:
+              print(f"\nDONE: yanked {ok}, failed {fail}, total {len(uniq)}")
+              # tolerate a few already-yanked/absent failures; fail the run only on a large fraction
+              if fail and fail > max(5, len(uniq) // 20):
+                  sys.exit(1)
+          else:
+              print(f"\nDRY RUN: {len(uniq)} builds would be yanked (re-run with apply=true)")
+          PY
