@@ -33,6 +33,24 @@ def test_install_no_components(capsys):
     assert "nothing to do" in captured.out.lower() or ret == 0
 
 
+def test_install_auto_arch_follows_target_platform(capsys):
+    # `--arch auto` (the default) must derive from the TARGET platform, not the
+    # host.  A wasm bundle is always wasm32, so `install --platform wasm` with no
+    # --arch has to resolve for wasm32 — resolving for the host arch (e.g. x86_64)
+    # matched no wasm bundle and the install failed.  No components, so this stops
+    # at the resolve echo without touching the catalog.
+    main(["install", "--platform", "wasm"])
+    assert "resolving for wasm/wasm32/" in capsys.readouterr().out
+    main(["install", "--platform", "wasm-mt"])
+    assert "resolving for wasm-mt/wasm32/" in capsys.readouterr().out
+
+
+def test_install_auto_arch_any_is_noarch(capsys):
+    # A platform: any request resolves for noarch, again independent of the host.
+    main(["install", "--platform", "any"])
+    assert "resolving for any/noarch/" in capsys.readouterr().out
+
+
 def test_validate_components():
     """Validate components.yaml from the repo."""
     if os.path.exists("packaging/components.yaml"):

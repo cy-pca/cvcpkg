@@ -203,6 +203,7 @@ def install(
     and --link override the corresponding values in the requirements
     file if explicitly provided on the command line.
     """
+    from cvcpkg.builder import _detect_arch_for_platform
     from cvcpkg.cache import default_cache_dir
     from cvcpkg.catalog import (
         catalog_entries,
@@ -214,7 +215,7 @@ def install(
     from cvcpkg.installer import build_from_source_fallback, install_entry
     from cvcpkg.lockfile import LockEntry, Lockfile
     from cvcpkg.manifest import ComponentReq, Requirements, parse_component_spec
-    from cvcpkg.platform import detect_arch, detect_platform
+    from cvcpkg.platform import detect_platform
 
     ctx = click.get_current_context()
     prefix_path = Path(prefix).resolve()
@@ -294,7 +295,12 @@ def install(
 
     # Resolve "auto" sentinels to concrete values.
     plat = reqs.platform if reqs.platform != "auto" else detect_platform()
-    arc = reqs.arch if reqs.arch != "auto" else detect_arch()
+    # 'auto' arch derives from the TARGET platform, not the host: a wasm target
+    # is always wasm32 and 'any' is noarch, regardless of the machine running
+    # install.  This mirrors how pack tags bundles (_detect_arch_for_platform);
+    # using the host arch here made `install --platform wasm` (no --arch) resolve
+    # for wasm/<host-arch>, which no wasm bundle (always wasm32) ever matched.
+    arc = reqs.arch if reqs.arch != "auto" else _detect_arch_for_platform(plat)
 
     click.echo(f"cvcpkg: resolving for {plat}/{arc}/{reqs.config}/{reqs.link}")
     click.echo(f"cvcpkg: target prefix: {prefix_path}")
