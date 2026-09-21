@@ -143,15 +143,22 @@ jobs:
           prefix="${{ github.workspace }}/prefix"
           if [[ "$platform" == wasm* ]]; then
             export CVC_EMSDK_DIR="$EMSDK"
-            # Pull the recipe's wasm dependency closure PREBUILT from the catalog
-            # (host-independent wasm32 bundles) rather than building it from
-            # source: --with-deps also runs each dep's wasm TEST, and those tests
-            # (node smoke runs) fail on a hosted Windows runner, aborting before
-            # the target ever builds. Then build ONLY the target via its
-            # build-wasm.ps1 -- --host-platform windows selects the windows-host
-            # matrix entry (this is the script this check exists to exercise).
-            cvcpkg install-deps "recipes/$recipe" --platform "$platform" --arch wasm32 \
-              --config "$config" --link static --prefix "$prefix"
+            # Populate the prefix with the target's PREBUILT runtime dep closure
+            # from the catalog, then build ONLY the target from source via its
+            # build-wasm.ps1 (--host-platform windows selects the windows-host
+            # matrix entry -- the script this check exists to exercise).
+            #
+            # `cvcpkg install <recipe>` (not install-deps, not --with-deps) is the
+            # right populate step here: it fetches the recipe's RUNTIME closure
+            # only -- never the cmake/ninja build tools (recipes declare those
+            # under depends.build; they come from the choco step above) -- and it
+            # runs no tests. --with-deps rebuilds the whole closure and runs each
+            # dep's wasm node-smoke test, which fails on a hosted Windows runner;
+            # install-deps additionally tries to resolve cmake/ninja for wasm and
+            # dies. Installing the recipe's own (stale) bundle is harmless: the
+            # build below overwrites it. Recipe-agnostic (no hardcoded dep list).
+            cvcpkg install "$recipe" --platform "$platform" --arch wasm32 \
+              --config "$config" --link static --prefix "$prefix" --no-fallback-to-source
             echo "cvcpkg build $recipe --platform $platform --link static --no-deps --host-platform windows"
             cvcpkg build "$recipe" --local --recipes-dir recipes --config "$config" \
               --prefix "$prefix" --platform "$platform" --link static \
