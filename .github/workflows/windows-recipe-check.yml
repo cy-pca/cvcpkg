@@ -138,19 +138,29 @@ jobs:
         run: |
           set -euo pipefail
           platform="${{ inputs.platform || 'windows' }}"
-          args=(--local --recipes-dir recipes
-                --config "${{ inputs.config || 'release' }}"
-                --prefix "${{ github.workspace }}/prefix")
+          recipe="${{ inputs.recipe || 'ca-bundle' }}"
+          config="${{ inputs.config || 'release' }}"
+          prefix="${{ github.workspace }}/prefix"
           if [[ "$platform" == wasm* ]]; then
-            # wasm is static-only; a hosted runner starts with an empty prefix, so
-            # build the (small, Qt/HDF5-filtered) dep closure from source too.
             export CVC_EMSDK_DIR="$EMSDK"
-            args+=(--platform "$platform" --link static --with-deps)
+            # Pull the recipe's wasm dependency closure PREBUILT from the catalog
+            # (host-independent wasm32 bundles) rather than building it from
+            # source: --with-deps also runs each dep's wasm TEST, and those tests
+            # (node smoke runs) fail on a hosted Windows runner, aborting before
+            # the target ever builds. Then build ONLY the target via its
+            # build-wasm.ps1 -- --host-platform windows selects the windows-host
+            # matrix entry (this is the script this check exists to exercise).
+            cvcpkg install-deps "recipes/$recipe" --platform "$platform" --arch wasm32 \
+              --config "$config" --link static --prefix "$prefix"
+            echo "cvcpkg build $recipe --platform $platform --link static --no-deps --host-platform windows"
+            cvcpkg build "$recipe" --local --recipes-dir recipes --config "$config" \
+              --prefix "$prefix" --platform "$platform" --link static \
+              --no-deps --host-platform windows
           else
-            args+=(--platform windows --link "${{ inputs.link || 'shared' }}")
+            echo "cvcpkg build $recipe --platform windows --link ${{ inputs.link || 'shared' }}"
+            cvcpkg build "$recipe" --local --recipes-dir recipes --config "$config" \
+              --prefix "$prefix" --platform windows --link "${{ inputs.link || 'shared' }}"
           fi
-          echo "cvcpkg build ${{ inputs.recipe || 'ca-bundle' }} ${args[*]}"
-          cvcpkg build "${{ inputs.recipe || 'ca-bundle' }}" "${args[@]}"
 
       - name: Show installed payload
         if: always()
