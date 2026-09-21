@@ -32,14 +32,24 @@ curl -fsSL --retry 5 --retry-delay 3 -o "${SSL_DIR}/cert.pem" "${CERT_URL}"
 # sha256(1) on the BSDs, shasum/openssl on macOS.  Same fallback chain as
 # recipes/grpc/build.sh.  Still needed after the noarch move: the package is
 # platform-independent, but the machine that builds it is not.
+#
+# Each tool reads the file from STDIN rather than taking it as a path
+# argument.  On a Windows builder CVC_INSTALL_DIR is a native path with
+# backslashes (builder.py and winhost.py hand the build script the native
+# form), so "${SSL_DIR}/cert.pem" contains backslashes.  GNU coreutils
+# sha256sum, when its FILE operand contains a backslash (or newline),
+# switches to escaped output: it prefixes the whole line with '\' and
+# backslash-escapes the name.  `awk '{print $1}'` then captures "\<hash>"
+# and the compare fails on a stray leading backslash.  Feeding the bytes on
+# stdin leaves no filename in the output, so no host can escape it.
 if command -v sha256sum >/dev/null 2>&1; then
-    ACTUAL_SHA256="$(sha256sum "${SSL_DIR}/cert.pem" | awk '{print $1}')"
+    ACTUAL_SHA256="$(sha256sum < "${SSL_DIR}/cert.pem" | awk '{print $1}')"
 elif command -v sha256 >/dev/null 2>&1; then
-    ACTUAL_SHA256="$(sha256 -q "${SSL_DIR}/cert.pem")"
+    ACTUAL_SHA256="$(sha256 -q < "${SSL_DIR}/cert.pem")"
 elif command -v shasum >/dev/null 2>&1; then
-    ACTUAL_SHA256="$(shasum -a 256 "${SSL_DIR}/cert.pem" | awk '{print $1}')"
+    ACTUAL_SHA256="$(shasum -a 256 < "${SSL_DIR}/cert.pem" | awk '{print $1}')"
 else
-    ACTUAL_SHA256="$(openssl dgst -sha256 "${SSL_DIR}/cert.pem" | awk '{print $NF}')"
+    ACTUAL_SHA256="$(openssl dgst -sha256 < "${SSL_DIR}/cert.pem" | awk '{print $NF}')"
 fi
 if [ "${ACTUAL_SHA256}" != "${CERT_SHA256}" ]; then
     echo "SHA256 mismatch: expected ${CERT_SHA256}, got ${ACTUAL_SHA256}" >&2
