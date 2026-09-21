@@ -35,6 +35,7 @@ from cvcpkg.platform import (
     default_archive_format,
     detect_arch,
     detect_platform,
+    is_static_only_platform,
     lib_path_var,
 )
 
@@ -2776,7 +2777,7 @@ def build_recipe(
     # wasm/wasi/cosmo only support static linking — shared libraries are
     # impossible in these environments.  Cosmopolitan produces one-file
     # Actually Portable Executables that statically link everything.
-    if platform in ("wasm", "wasm-mt", "wasi", "cosmo"):
+    if is_static_only_platform(platform):
         link = "static"
 
     if incremental:
@@ -3093,7 +3094,7 @@ def pack_from_prefix(
         arch = _detect_arch_for_platform(platform)
 
     # wasm/wasi/cosmo never link shared; keep the invariant used by build_recipe.
-    if platform in ("wasm", "wasm-mt", "wasi", "cosmo"):
+    if is_static_only_platform(platform):
         link = "static"
 
     if output_dir is None:

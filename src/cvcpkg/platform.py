@@ -163,6 +163,19 @@ def arch_matches(bundle_arch: str, requested: str) -> bool:
     return not requested or bundle_arch == requested or bundle_arch == "noarch"
 
 
+def is_static_only_platform(platform: str) -> bool:
+    """True for platforms that only ever ship static libraries.
+
+    wasm/wasm-mt/wasi/cosmo have no shared library a loader resolves at runtime
+    (Cosmopolitan produces one-file Actually Portable Executables that statically
+    link everything), so ``build_recipe`` and ``pack`` force ``link: static`` for
+    them.  A consumer must request static to match — asking for the default
+    ``shared`` resolves nothing.  Keeping the list here means the producer and
+    consumer share one definition instead of re-listing the platforms per site.
+    """
+    return platform in ("wasm", "wasm-mt", "wasi", "cosmo")
+
+
 def normalize_arch(value: str) -> str:
     """Map a possibly-raw arch spelling onto the canonical name."""
     v = (value or "").strip().lower()
