@@ -51,6 +51,32 @@ def test_install_auto_arch_any_is_noarch(capsys):
     assert "resolving for any/noarch/" in capsys.readouterr().out
 
 
+def test_install_static_only_platforms_force_link_static(capsys):
+    # wasm/wasm-mt/wasi/cosmo ship static-only (build_recipe and pack force
+    # link: static), so the default --link shared would resolve no bundle.
+    # install coerces the link to static to match what was published.  No
+    # components, so this stops at the resolve echo without touching the catalog.
+    for plat in ("wasm", "wasm-mt", "wasi", "cosmo"):
+        main(["install", "--platform", plat])
+        out = capsys.readouterr().out
+        assert f"resolving for {plat}/" in out
+        assert "/release/static" in out, f"{plat}: link should be coerced to static"
+        assert "/release/shared" not in out
+
+
+def test_install_static_only_coerces_explicit_shared(capsys):
+    # Even an explicit --link shared is unsatisfiable for these targets, so it is
+    # coerced to static rather than silently resolving nothing.
+    main(["install", "--platform", "wasm", "--link", "shared"])
+    assert "resolving for wasm/wasm32/release/static" in capsys.readouterr().out
+
+
+def test_install_non_static_platform_keeps_shared(capsys):
+    # A normal platform is unaffected: shared stays the default link.
+    main(["install", "--platform", "linux"])
+    assert "/release/shared" in capsys.readouterr().out
+
+
 def test_validate_components():
     """Validate components.yaml from the repo."""
     if os.path.exists("packaging/components.yaml"):

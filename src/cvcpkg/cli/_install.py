@@ -215,7 +215,7 @@ def install(
     from cvcpkg.installer import build_from_source_fallback, install_entry
     from cvcpkg.lockfile import LockEntry, Lockfile
     from cvcpkg.manifest import ComponentReq, Requirements, parse_component_spec
-    from cvcpkg.platform import detect_platform
+    from cvcpkg.platform import detect_platform, is_static_only_platform
 
     ctx = click.get_current_context()
     prefix_path = Path(prefix).resolve()
@@ -301,6 +301,12 @@ def install(
     # using the host arch here made `install --platform wasm` (no --arch) resolve
     # for wasm/<host-arch>, which no wasm bundle (always wasm32) ever matched.
     arc = reqs.arch if reqs.arch != "auto" else _detect_arch_for_platform(plat)
+    # wasm/wasi/cosmo ship static-only: build_recipe and pack force link: static,
+    # so no bundle is ever published as shared for them.  Requesting the default
+    # 'shared' (or even an explicit --link shared, which is unsatisfiable here)
+    # would resolve nothing, so coerce to static to match what was published.
+    if is_static_only_platform(plat) and reqs.link != "static":
+        reqs.link = "static"
 
     click.echo(f"cvcpkg: resolving for {plat}/{arc}/{reqs.config}/{reqs.link}")
     click.echo(f"cvcpkg: target prefix: {prefix_path}")
