@@ -1258,7 +1258,19 @@ def load_runtime_packages(lock_path: Path) -> dict[str, dict]:
     return out
 
 
-def classify(wheels: list[dict], interps: list[str]) -> str:
+# Packages that publish a py3-none-any FALLBACK wheel but whose from-source
+# sdist build compiles C extensions (mypyc / C speedups / protobuf upb).  The
+# default sdist path (`--pure-policy sdist`) would emit a build-once artifact
+# stamped platform=any/noarch that in fact carries a platform-specific `.so`
+# — broken on every host it did not build on (cy-pca/cvcpkg #53: a
+# cython-cp311 "noarch" bundle shipped cpython-311-darwin.so).  Opt these out
+# of the none-any→pure shortcut so each column is classified compiled and
+# published per-platform.  This is the deliberate per-package decision the
+# note below describes.
+_PREFER_BINARY = {"cython", "protobuf", "sqlalchemy"}
+
+
+def classify(wheels: list[dict], interps: list[str], name: str | None = None) -> str:
     """Classify a package by its wheel set:
 
     * ``pure`` — a ``*-none-any.whl`` (py3-none-any, …) exists: platform- and
@@ -1270,15 +1282,15 @@ def classify(wheels: list[dict], interps: list[str]) -> str:
 
     Classification is per-package bookkeeping; wheel selection is per column
     (see wheel_for_column), so an abi3 package with an extra exact cp313t
-    wheel still gets its free-threaded column.
+    wheel still gets its free-threaded column.  ``name`` opts a package into
+    ``_PREFER_BINARY`` (skip the none-any shortcut).
     """
     # A none-any wheel wins even when binary wheels also exist (black,
-    # charset-normalizer, cython, protobuf, pytokens, sqlalchemy, tomli):
-    # the pure fallback trades speed (no mypyc / C speedups / upb) for a
-    # build-once noarch artifact and full-column coverage incl. cp313t.
-    # Flip a package to its binary wheels only as a deliberate, per-package
-    # decision (a PREFER_BINARY set would slot in here).
-    if any(w["filename"].endswith("none-any.whl") for w in wheels):
+    # charset-normalizer, pytokens, tomli): the pure fallback trades speed
+    # (no mypyc / C speedups / upb) for a build-once noarch artifact and
+    # full-column coverage incl. cp313t.  _PREFER_BINARY (above) opts a
+    # package out of that shortcut when its sdist build would compile.
+    if name not in _PREFER_BINARY and any(w["filename"].endswith("none-any.whl") for w in wheels):
         return "pure"
     return "abi3" if _is_abi3(wheels, interps) else "cext"
 
@@ -1643,7 +1655,7 @@ def main() -> int:
             **info,
             "wheels": wheels,
             "sdist": sdist,
-            "kind": classify(wheels, interps),
+            "kind": classify(wheels, interps, base),
             "license": lic,
         }
     for base, seed in sorted(SEED_PACKAGES.items()):
@@ -1666,7 +1678,7 @@ def main() -> int:
             "deps": seed["deps"],
             "wheels": wheels,
             "sdist": sdist,
-            "kind": classify(wheels, interps),
+            "kind": classify(wheels, interps, base),
             "license": seed.get("license", lic),
             "files": seed.get("files"),
             "check": seed.get("check"),
