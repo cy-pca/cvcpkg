@@ -3413,6 +3413,19 @@ def _detect_arch_for_platform(platform: str) -> str:
     return detect_arch()
 
 
+def recipe_serves_platform(recipe: Recipe, platform: str) -> bool:
+    """True when *recipe* can produce a bundle for *platform*.
+
+    That is, its build matrix has an entry for *platform* itself or a
+    ``platform: any`` entry (which serves every target without its own entry).
+    A recipe that serves neither has no bundle for the target — the same test
+    :func:`_collect_host_tools` uses to tell a cross-compilation host tool
+    (cmake/ninja/…, which carry only host-platform entries) from a target
+    library.
+    """
+    return any(m.platform == platform or m.platform == "any" for m in recipe.build_matrix)
+
+
 def _serves_target_via_any(recipe: Recipe, platform: str, host_platform: str = "") -> bool:
     """True when *recipe*'s build for *platform* is driven by its ``any`` entry.
 
