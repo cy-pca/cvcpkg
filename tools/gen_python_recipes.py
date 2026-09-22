@@ -144,6 +144,27 @@ PYPI = "https://pypi.org/pypi/{name}/{version}/json"
 # builder for them exists.
 SDIST_PLATFORMS = ["linux", "macos", "windows"]
 
+# Per-package platform overrides for compiled (``_PREFER_BINARY``) from-source
+# columns.  SDIST_PLATFORMS above is the conservative default and deliberately
+# omits the BSDs, because a GENERATED compiled package has never been proven to
+# build there.  cython is the one exception, and for a concrete reason: it is
+# the cythonizer the HAND-WRITTEN from-source columns of numpy, pyyaml and h5py
+# invoke at build time, and those recipes DO build on all three BSDs (their
+# native deps — openblas, yaml, hdf5 — already do).  A build dependency that
+# does not cover a platform its dependent declares is a phantom closure edge
+# that scripts/validate_all_recipes.py rejects, so cython must cover every
+# native platform those consumers claim.  The claim is real, not aspirational:
+# cython builds from its sdist with nothing but the interpreter + setuptools +
+# wheel, and python311/312/313/313t already build on all six native platforms
+# (windows included — python313t ships a real --disable-gil PCbuild), so there
+# is a genuine build behind every entry.  Keyed by base name like the other
+# per-package tables (_PREFER_BINARY, SCRIPT_PACKAGES, _LICENSE_OVERRIDE); the
+# list is uniform across the four interpreter columns because sdist_platforms()
+# is interpreter-independent — every column of a package shares one matrix.
+_SDIST_PLATFORMS_OVERRIDE: dict[str, list[str]] = {
+    "cython": ["linux", "macos", "windows", "freebsd", "netbsd", "openbsd"],
+}
+
 # ── Packages that must REMAIN prebuilt wheels ────────────────────────────────
 # These are NOT source distributions in any meaningful sense: the "wheel" is a
 # repackaged binary redistributable and there is nothing to compile.  Pretending
@@ -1459,7 +1480,7 @@ def resolve_source_modes(
     available = available_recipes(out, {f"{b}-cp{i}" for b, c in cols.items() for i in c})
     blockers: dict[str, list[str]] = {}
     for base, m in sorted(meta.items()):
-        m["platforms"] = platforms
+        m["platforms"] = _SDIST_PLATFORMS_OVERRIDE.get(base, platforms)
         probe = cols[base][0] if cols[base] else interps[0]
         reqs: list[str] = []
         missing: list[str] = []

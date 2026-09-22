@@ -974,6 +974,25 @@ class TestSdistPlatforms:
             ("freebsd", "build.sh"),
         ]
 
+    def test_cython_overrides_to_the_full_native_set(self):
+        # cython is the cythonizer the hand-written from-source columns of numpy,
+        # pyyaml and h5py invoke, and those DO build on the three BSDs — so a
+        # cython column that stopped at SDIST_PLATFORMS would be a phantom
+        # closure edge (scripts/validate_all_recipes.py).  The override lifts it
+        # to every native platform those consumers declare; it is surgical, so a
+        # package NOT in the table still follows the run's --sdist-platforms.
+        assert set(gen._SDIST_PLATFORMS_OVERRIDE["cython"]) == {
+            "linux",
+            "macos",
+            "windows",
+            "freebsd",
+            "netbsd",
+            "openbsd",
+        }
+        default = ["linux", "macos", "windows"]
+        assert gen._SDIST_PLATFORMS_OVERRIDE.get("cython", default) != default
+        assert gen._SDIST_PLATFORMS_OVERRIDE.get("colorama", default) == default
+
 
 class TestColumnAbiSourceMode:
     def test_sdist_column_is_always_the_exact_tag(self):
