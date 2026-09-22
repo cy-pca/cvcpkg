@@ -49,10 +49,14 @@ depends:
     - name: python312
     # VTK is rebuilt in full from source, so its own C++ build dependencies must
     # be present in the build closure (kept identical to recipes/vtk).
+    # Qt and HDF5 do not exist / are not used on wasm (mirrors recipes/vtk),
+    # so the wasm wrap build configures without them.
     - name: qt6
       version: ">=6.7"
+      platforms: [linux, macos, windows, windows-gnu, freebsd, openbsd, netbsd, haiku]
     - name: hdf5
       version: "^1.14"
+      platforms: [linux, macos, windows, windows-gnu, freebsd, openbsd, netbsd, haiku]
     - name: tiff
       version: "^4.6"
     - name: zlib
@@ -81,6 +85,16 @@ build:
         CXXFLAGS: "-O2 -fPIC -std=c++17"
     - platform: windows
       script: build.ps1
+    # GO/NO-GO SPIKE (WIP): can VTK_WRAP_PYTHON cross-compile to wasm statically?
+    # build-wasm.sh builds VTK's host compile-tools natively, then cross-builds a
+    # MINIMAL module set (CommonCore+DataModel, no rendering) with
+    # VTK_WRAP_PYTHON=ON + BUILD_SHARED_LIBS=OFF against a wasm libpython. Needs
+    # python312 built for wasm in the prefix. Expand to the rendering module set
+    # once the wrap pipeline is proven. host_platform linux (needs a native host
+    # toolchain for the wrapper generators).
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
 
 package:
   # ONLY the Python-specific artifacts — the C++ libs, headers, and CMake config
