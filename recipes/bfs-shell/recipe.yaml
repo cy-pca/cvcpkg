@@ -1,0 +1,45 @@
+schema_version: 1
+recipe:
+  name: bfs-shell
+  upstream_version: "1.0.0-beta.5"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  license: MIT
+  homepage: "https://www.haiku-os.org"
+  description: >
+    bfs_shell — Haiku's host-side BFS volume tool, built from the Haiku source
+    tree. A HOST executable (not a Haiku guest binary): it reads/writes a BFS
+    filesystem inside a disk image directly, so a fleet operator can inject an
+    authorized_keys (or any file) into an offline haiku-image before boot —
+    the (b) key-injection path used by
+    vm-provisioning/bsd/haiku/provision-haiku-vm.sh --bfs-shell. Split out of
+    the haiku-image recipe (a kind:image package must ship only the image);
+    this ships the tool as a normal host dependency.
+  tags: [haiku, host-tool, bfs]
+
+# build.sh clones haiku + buildtools at pinned refs and builds just the
+# <build>bfs_shell host target via jam. No single upstream tarball.
+source:
+  type: prebuilt
+  url: https://github.com/haiku/haiku
+
+patches: []
+
+depends:
+  build: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  # A full cross-tools configure fetches+builds gcc for the target; give it room.
+  min_disk_gb: 20
+  matrix:
+    - platform: linux
+      script: build.sh
+
+package:
+  files:
+    - bin/bfs_shell
+    - lib/libroot_build.so
