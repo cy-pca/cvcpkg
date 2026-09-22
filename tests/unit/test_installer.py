@@ -315,3 +315,67 @@ class TestRelocateWindowsSitePackages:
         (prefix / "Lib" / "site-packages" / "shiboken6").mkdir(parents=True)
         _relocate_windows_site_packages(prefix)  # no lib/python*/site-packages → no-op
         assert (prefix / "Lib" / "site-packages" / "shiboken6").exists()
+
+
+def test_safe_extractall_falls_back_when_data_filter_is_broken(tmp_path, monkeypatch):
+    """A CPython build whose tarfile 'data' filter references os.path.ALLOW_MISSING
+    while posixpath lacks it (GitHub Actions hostedtoolcache 3.12.14) must NOT crash
+    the install — _safe_extractall extracts with a manual guard and still succeeds."""
+    import os
+
+    from cvcpkg.installer import _safe_extractall
+
+    src = tmp_path / "src"
+    (src / "sub").mkdir(parents=True)
+    (src / "a.txt").write_text("hello")
+    (src / "sub" / "b.txt").write_text("world")
+    arc = tmp_path / "bundle.tar.gz"
+    with tarfile.open(arc, "w:gz") as tf:
+        tf.add(src / "a.txt", arcname="a.txt")
+        tf.add(src / "sub" / "b.txt", arcname="sub/b.txt")
+
+    if hasattr(os.path, "ALLOW_MISSING"):
+        monkeypatch.delattr(os.path, "ALLOW_MISSING")
+
+    dest = tmp_path / "prefix"
+    with tarfile.open(arc, "r:gz") as tf:
+        _safe_extractall(tf, dest)  # must not raise
+
+    assert (dest / "a.txt").read_text() == "hello"
+    assert (dest / "sub" / "b.txt").read_text() == "world"
+
+
+def test_safe_extractall_broken_filter_still_rejects_traversal(tmp_path, monkeypatch):
+    """Even on the broken interpreter, the manual guard must reject a '..'
+    path-traversal member rather than extract it fully-trusted."""
+    import os
+
+    from cvcpkg.installer import _safe_extractall
+
+    arc = tmp_path / "evil.tar.gz"
+    with tarfile.open(arc, "w:gz") as tf:
+        info = tarfile.TarInfo(name="../escape.txt")
+        data = b"pwned"
+        info.size = len(data)
+        tf.addfile(info, io.BytesIO(data))
+
+    if hasattr(os.path, "ALLOW_MISSING"):
+        monkeypatch.delattr(os.path, "ALLOW_MISSING")
+
+    with tarfile.open(arc, "r:gz") as tf:
+        with pytest.raises(InstallError, match="unsafe path"):
+            _safe_extractall(tf, tmp_path / "prefix")
+    assert not (tmp_path / "escape.txt").exists()
+
+
+def test_safe_extractall_reraises_unrelated_attributeerror(tmp_path):
+    """The fallback is scoped to the ALLOW_MISSING stdlib bug — any other
+    AttributeError propagates unchanged."""
+    from cvcpkg.installer import _safe_extractall
+
+    class Boom:
+        def extractall(self, path, filter=None):  # noqa: A002
+            raise AttributeError("something else entirely")
+
+    with pytest.raises(AttributeError, match="something else"):
+        _safe_extractall(Boom(), tmp_path)
