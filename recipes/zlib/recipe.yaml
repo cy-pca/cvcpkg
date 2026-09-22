@@ -21,8 +21,14 @@ patches: []
 
 depends:
   build:
-    - cmake
-    - ninja
+    # On haiku, cmake/ninja come from the box's own toolchain (there are no
+    # cvcpkg haiku cmake/ninja packages yet); restrict the cvcpkg build-dep to
+    # the platforms where cvcpkg actually provides them. Drop the restriction
+    # once cmake/ninja are published for haiku.
+    - name: cmake
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows, wasm, wasm-mt, wasi, cosmo]
+    - name: ninja
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows, wasm, wasm-mt, wasi, cosmo]
   runtime: []
   host_tools: []
 
