@@ -76,15 +76,20 @@ CONFIGURE_ARGS=(
     --enable-shared
     # pip is included in the stdlib; ensurepip bootstraps it at build time.
     --with-ensurepip=upgrade
-    # Point at the cvcpkg OpenSSL so ssl/hashlib use our library, not
-    # whatever happens to be on PATH.  openssldir=/etc/ssl (baked into our
-    # OpenSSL build) means CA verification uses the host system trust store.
-    --with-openssl="${CVC_DEPS_PREFIX}"
-    --with-ssl-default-suites=openssl
     # Install to versioned paths: lib/python3.X/, bin/python3.X, etc.
     # Multiple Python minor versions coexist in the same prefix this way.
     --enable-ipv6
 )
+
+# OpenSSL for ssl/hashlib — the cvcpkg OpenSSL (openssldir=/etc/ssl, so CA
+# verification uses the host trust store). SKIPPED on wasm: the single-threaded
+# wasm OpenSSL does not define OPENSSL_THREADS, and CPython's _ssl/_hashlib
+# hard-error without it ("Python requires thread-safe OpenSSL"). The emscripten
+# config.site disables those modules and a browser CPython needs no TLS; cosmo
+# and wasi keep OpenSSL.
+if [ "${CVC_PLATFORM}" != "wasm" ]; then
+    CONFIGURE_ARGS+=(--with-openssl="${CVC_DEPS_PREFIX}" --with-ssl-default-suites=openssl)
+fi
 
 # Cross-compilation targets: static-only, explicit host, no readline.
 if [ "$IS_CROSS" = true ]; then
