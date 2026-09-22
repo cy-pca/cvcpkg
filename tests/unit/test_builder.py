@@ -3380,6 +3380,60 @@ class TestCollectHostTools:
         assert "cross-sdk" in names
         assert "toolchain-base" in names
 
+    def test_explicit_host_tool_with_target_entry(self, tmp_path):
+        """A recipe under depends.host_tools is collected for the HOST platform
+        even when it ALSO builds for the target (mechanism 3).
+
+        Regression for the VTK-Python wasm wrap: python312 ships a wasm target
+        bundle (libpython) but VTK's wrap configure also needs a NATIVE
+        python3.12 whose version matches the target ABI; declaring it under
+        host_tools must provision that host build rather than being silently
+        dropped as "already a target dep".
+        """
+        recipes_dir = tmp_path / "recipes"
+
+        # pyhost: builds for BOTH linux (host) and wasm (target).
+        _write_recipe(
+            recipes_dir / "pyhost",
+            {
+                "recipe": {"name": "pyhost", "upstream_version": "3.12.10", "cvc_revision": 1},
+                "source": {"type": "prebuilt"},
+                "build": {
+                    "matrix": [
+                        {"platform": "linux", "script": "build.sh"},
+                        {"platform": "wasm", "script": "build-wasm.sh", "host_platform": "linux"},
+                    ]
+                },
+            },
+        )
+
+        # wrapper: wasm target that declares pyhost as a host tool.
+        _write_recipe(
+            recipes_dir / "wrapper",
+            {
+                "recipe": {"name": "wrapper", "upstream_version": "1.0", "cvc_revision": 1},
+                "source": {"type": "prebuilt"},
+                "depends": {"host_tools": ["pyhost"]},
+                "build": {
+                    "matrix": [
+                        {"platform": "wasm", "script": "build.sh", "host_platform": "linux"},
+                    ]
+                },
+            },
+        )
+
+        all_recipes = list_recipes(recipes_dir)
+        target_recipes = [
+            r
+            for r in all_recipes
+            if any(m.platform == "wasm" or m.platform == "any" for m in r.build_matrix)
+        ]
+        host_tools = _collect_host_tools(target_recipes, all_recipes, "wasm", "linux")
+        names = {r.name for r in host_tools}
+        # pyhost has a wasm target entry (mechanism 2 skips it) but is declared
+        # under wrapper's host_tools and has a linux entry -> mechanism 3 adds it.
+        assert "pyhost" in names
+
 
 class TestDiscoverCrossToolchains:
     """Tests for _discover_cross_toolchains."""

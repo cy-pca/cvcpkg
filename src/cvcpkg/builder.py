@@ -3378,6 +3378,25 @@ def _collect_host_tools(
             toolchains.append(dep_recipe)
             seen.add(dep_name)
 
+    # 3. Explicitly declared host tools that ALSO build for the target.
+    #    Mechanism 2 only catches deps with NO target entry (cmake, ninja, ...).
+    #    A recipe a target lists under ``depends.host_tools`` is meant to run on
+    #    the BUILD machine even when it also has a target build: e.g. python312's
+    #    wasm bundle is the target libpython, but VTK's Python-wrapping configure
+    #    (find_package(Python3 Interpreter)) needs a NATIVE python3.12 whose
+    #    version matches the target ABI. Resolve such recipes for the host
+    #    platform too, so they build natively (into the build prefix) in addition
+    #    to their target bundle. Without this the host tool is silently dropped
+    #    and the cross build falls back to the runner's system python.
+    for r in target_recipes:
+        for ht_name in _dep_names_for_role(r, "host_tools", target_platform):
+            if ht_name in seen:
+                continue
+            ht = all_by_name.get(ht_name)
+            if ht is not None and any(m.platform == host_platform for m in ht.build_matrix):
+                toolchains.append(ht)
+                seen.add(ht_name)
+
     return toolchains
 
 
