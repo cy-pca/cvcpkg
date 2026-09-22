@@ -96,6 +96,30 @@ if [ "$IS_CROSS" = true ]; then
     CONFIGURE_ARGS+=(--disable-shared --host="${CROSS_HOST}" --build="${_build_triple}")
     # readline/ncurses not available on wasm/wasi/cosmo.
     CONFIGURE_ARGS+=(--with-readline=tkinter)
+
+    # Emscripten needs more than a host triple. CPython's cross-build wants:
+    #   (a) a NATIVE interpreter of the SAME version to run build-time scripts
+    #       (--with-build-python), since the cross python can't run on the host;
+    #   (b) a config.site of ac_cv_* answers for the feature checks configure
+    #       cannot run (a wasm conftest binary won't execute on the build host).
+    # CC/CXX/CFLAGS are emcc/emscripten here (env-wasm), so build the native
+    # helper in a side dir with the native toolchain and the emscripten flags
+    # stripped.
+    if [ "${CVC_PLATFORM}" = "wasm" ]; then
+        _NATIVE_PY="${CVC_SOURCE_DIR}/cross-build/build"
+        if [ ! -x "${_NATIVE_PY}/python" ]; then
+            echo "build-python(wasm): building a native ${PYTHON_MINOR} build-python for --with-build-python"
+            mkdir -p "${_NATIVE_PY}"
+            ( cd "${_NATIVE_PY}" && \
+              env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u PKG_CONFIG_PATH \
+                  CC=cc CXX=c++ "${CVC_SOURCE_DIR}/configure" && \
+              env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS \
+                  CC=cc CXX=c++ ${MAKE} -j"${CVC_JOBS}" python )
+        fi
+        CONFIGURE_ARGS+=(--with-build-python="${_NATIVE_PY}/python")
+        _cfg_site="${CVC_SOURCE_DIR}/Tools/wasm/config.site-wasm32-emscripten"
+        [ -f "${_cfg_site}" ] && export CONFIG_SITE="${_cfg_site}"
+    fi
 else
     # Use the wide-char ncurses (libncursesw) for curses + readline.
     CONFIGURE_ARGS+=(--with-readline=readline)
