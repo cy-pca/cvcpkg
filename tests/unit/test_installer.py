@@ -317,12 +317,28 @@ class TestRelocateWindowsSitePackages:
         assert (prefix / "Lib" / "site-packages" / "shiboken6").exists()
 
 
-def test_safe_extractall_falls_back_when_data_filter_is_broken(tmp_path, monkeypatch):
+class _BrokenDataFilter:
+    """Wraps a real TarFile but makes ``extractall(filter='data')`` raise the exact
+    AttributeError the broken hostedtoolcache 3.12.14 stdlib raises — so the fallback
+    is exercised deterministically on every platform (rather than depending on whether
+    this interpreter's own tarfile happens to reference os.path.ALLOW_MISSING)."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def extractall(self, path, filter=None):  # noqa: A002
+        if filter == "data":
+            raise AttributeError("module 'posixpath' has no attribute 'ALLOW_MISSING'")
+        return self._inner.extractall(path=path, filter=filter)
+
+    def getmembers(self):
+        return self._inner.getmembers()
+
+
+def test_safe_extractall_falls_back_when_data_filter_is_broken(tmp_path):
     """A CPython build whose tarfile 'data' filter references os.path.ALLOW_MISSING
     while posixpath lacks it (GitHub Actions hostedtoolcache 3.12.14) must NOT crash
     the install — _safe_extractall extracts with a manual guard and still succeeds."""
-    import os
-
     from cvcpkg.installer import _safe_extractall
 
     src = tmp_path / "src"
@@ -334,22 +350,17 @@ def test_safe_extractall_falls_back_when_data_filter_is_broken(tmp_path, monkeyp
         tf.add(src / "a.txt", arcname="a.txt")
         tf.add(src / "sub" / "b.txt", arcname="sub/b.txt")
 
-    if hasattr(os.path, "ALLOW_MISSING"):
-        monkeypatch.delattr(os.path, "ALLOW_MISSING")
-
     dest = tmp_path / "prefix"
     with tarfile.open(arc, "r:gz") as tf:
-        _safe_extractall(tf, dest)  # must not raise
+        _safe_extractall(_BrokenDataFilter(tf), dest)  # must not raise
 
     assert (dest / "a.txt").read_text() == "hello"
     assert (dest / "sub" / "b.txt").read_text() == "world"
 
 
-def test_safe_extractall_broken_filter_still_rejects_traversal(tmp_path, monkeypatch):
-    """Even on the broken interpreter, the manual guard must reject a '..'
+def test_safe_extractall_broken_filter_still_rejects_traversal(tmp_path):
+    """When the broken-filter fallback runs, the manual guard must reject a '..'
     path-traversal member rather than extract it fully-trusted."""
-    import os
-
     from cvcpkg.installer import _safe_extractall
 
     arc = tmp_path / "evil.tar.gz"
@@ -359,12 +370,9 @@ def test_safe_extractall_broken_filter_still_rejects_traversal(tmp_path, monkeyp
         info.size = len(data)
         tf.addfile(info, io.BytesIO(data))
 
-    if hasattr(os.path, "ALLOW_MISSING"):
-        monkeypatch.delattr(os.path, "ALLOW_MISSING")
-
     with tarfile.open(arc, "r:gz") as tf:
         with pytest.raises(InstallError, match="unsafe path"):
-            _safe_extractall(tf, tmp_path / "prefix")
+            _safe_extractall(_BrokenDataFilter(tf), tmp_path / "prefix")
     assert not (tmp_path / "escape.txt").exists()
 
 
