@@ -144,10 +144,22 @@ if [ "${PYTHON_DISABLE_GIL}" = "1" ]; then
     CONFIGURE_ARGS+=(--disable-gil)
 fi
 
-./configure "${CONFIGURE_ARGS[@]}"
+# wasm builds must go through the emscripten compiler wrappers
+# (emconfigure/emmake), which put emcc/em++ on CC/CXX. env-wasm.sh only prepares
+# the emsdk PATH (so cmake toolchain files resolve) — it does NOT set CC=emcc, so
+# a bare ./configure builds CPython with native cc and dies compiling
+# Python/emscripten_signal.c (emscripten.h not found). wasi/cosmo set CC via their
+# own env, so they configure/make bare.
+_EMWRAP=""
+[ "${CVC_PLATFORM}" = "wasm" ] && _EMWRAP="emmake"
+if [ "${CVC_PLATFORM}" = "wasm" ]; then
+    emconfigure ./configure "${CONFIGURE_ARGS[@]}"
+else
+    ./configure "${CONFIGURE_ARGS[@]}"
+fi
 
-$MAKE -j "${CVC_JOBS}"
-$MAKE install
+${_EMWRAP} $MAKE -j "${CVC_JOBS}"
+${_EMWRAP} $MAKE install
 
 # --- Relocatable RPATH post-fixup (native only) ---
 # CPython's Makefile bakes the absolute build-time LDFLAGS rpath; patch
