@@ -7,6 +7,7 @@
 # produce a usable BuildConfig, so the cross-toolchain build is the long pole;
 # there is no lighter host-only configure that yields <build> tools.
 set -euo pipefail
+RECIPE_DIR="$(cd "$(dirname "$0")" && pwd)"
 : "${CVC_BUILD_DIR:?}"; : "${CVC_INSTALL_DIR:?}"
 JOBS="${CVC_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 HAIKU_REF="${HAIKU_REF:-r1beta5}"
@@ -18,6 +19,24 @@ BUILDTOOLS_REPO="${BUILDTOOLS_REPO:-https://github.com/haiku/buildtools.git}"
 cd "${CVC_BUILD_DIR}"
 [[ -d haiku ]]      || git clone --single-branch --branch "${HAIKU_REF}"      "${HAIKU_REPO}"      haiku
 [[ -d buildtools ]] || git clone --depth 1 --branch "${BUILDTOOLS_REF}" "${BUILDTOOLS_REPO}" buildtools
+
+# Patch the build-libroot so the attribute-emulation sidecar directory honours a
+# runtime HAIKU_BUILD_ATTRIBUTES_DIR override. Without it, the path is baked in
+# at configure time to this build tree's generated/attributes; once bfs_shell is
+# packaged and run elsewhere that path is gone, its non-recursive mkdir fails
+# ENOENT, and EVERY host-file open (the `cp :host guest` key injection) fails
+# with "Failed to open source path ... No such file or directory". Apply before
+# configure/jam builds libroot. Idempotent: the build dir is reused across
+# incremental re-runs, so a second run must not fail on an already-patched tree.
+for p in "${RECIPE_DIR}"/*.patch; do
+    [[ -e "$p" ]] || continue
+    if patch -p1 -d haiku --dry-run --silent -R -i "$p" >/dev/null 2>&1; then
+        echo "patch already applied, skipping: $(basename "$p")"
+        continue
+    fi
+    echo "Applying patch: $(basename "$p")"
+    patch -p1 -d haiku -i "$p"
+done
 
 # Haiku's own Jam (configure invokes it; also our target driver).
 ( cd buildtools/jam && make )

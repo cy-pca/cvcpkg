@@ -1,0 +1,29 @@
+diff --git a/src/build/libroot/fs_attr_generic.cpp b/src/build/libroot/fs_attr_generic.cpp
+index a86d4d555e..f96545e3a2 100644
+--- a/src/build/libroot/fs_attr_generic.cpp
++++ b/src/build/libroot/fs_attr_generic.cpp
+@@ -36,7 +36,23 @@
+ using namespace std;
+ using namespace BPrivate;
+ 
+-static const char *sAttributeDirBasePath = HAIKU_BUILD_ATTRIBUTES_DIR;
++// The attribute-emulation sidecar directory. Its default is baked in at
++// configure time (HAIKU_BUILD_ATTRIBUTES_DIR = <build output>/attributes), an
++// absolute path into the build tree. That path is gone once the host tool
++// (e.g. bfs_shell) is packaged and run on another machine, so every host-file
++// open would fail when the non-recursive mkdir of the missing path returns
++// ENOENT. Honour a runtime override so a relocated tool can point at a writable
++// directory it created; fall back to the compiled-in default otherwise.
++static const char *
++attribute_dir_base_path()
++{
++	const char *env = getenv("HAIKU_BUILD_ATTRIBUTES_DIR");
++	if (env != NULL && env[0] != '\0')
++		return env;
++	return HAIKU_BUILD_ATTRIBUTES_DIR;
++}
++
++static const char *sAttributeDirBasePath = attribute_dir_base_path();
+ 
+ #if HAIKU_HOST_USE_XATTR_REF
+ static const char* const kIDAttributeName = "id";

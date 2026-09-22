@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: bfs-shell
   upstream_version: "1.0.0-beta.5"
-  cvc_revision: 1
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -25,6 +25,9 @@ source:
   type: prebuilt
   url: https://github.com/haiku/haiku
 
+# attributes-dir-env-override.patch is applied by build.sh against its own git
+# clone of the Haiku tree (this recipe fetches no upstream tarball for cvcpkg's
+# patch mechanism to operate on), so it is intentionally NOT listed here.
 patches: []
 
 depends:
