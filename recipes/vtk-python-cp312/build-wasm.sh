@@ -31,6 +31,10 @@
 #        <module>_load()).
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Default CVC_JOBS: used in step 1 BEFORE env-wasm.sh is sourced, and set -u
+# would otherwise abort ("CVC_JOBS: unbound variable") if the builder didn't
+# export it.
+: "${CVC_JOBS:=$(nproc 2>/dev/null || echo 4)}"
 
 # ── (1) HOST compile tools — NATIVE compiler, BEFORE the wasm env ───────────
 # env-wasm.sh points CC/CXX at emcc, so build the host tools first while the
@@ -43,6 +47,18 @@ cmake -G Ninja -S "${CVC_SOURCE_DIR}" -B "${HOST_TOOLS}" \
     -DCMAKE_C_COMPILER="${CC}" -DCMAKE_CXX_COMPILER="${CXX}" \
     -DVTK_BUILD_COMPILE_TOOLS_ONLY=ON
 cmake --build "${HOST_TOOLS}" -j "${CVC_JOBS}"
+
+# [U1] The host compile-tools export is 64-bit; the wasm consumer is 32-bit, so
+# VTKCompileTools' generated config-version marks itself UNSUITABLE on the
+# pointer-size mismatch ("9.5.0 (64bit)") and the cross build's
+# find_package(VTKCompileTools) (CMake/vtkCrossCompiling.cmake, taken only when
+# CMAKE_CROSSCOMPILING_EMULATOR is unset) would reject it. The wrap tools are
+# host EXECUTABLES — pointer size is irrelevant to the consumer — so neutralize
+# the check. When emscripten's node emulator is present the import is skipped
+# entirely and this is a harmless no-op.
+for _cv in $(find "${HOST_TOOLS}" -name 'vtkcompiletools-config-version.cmake' 2>/dev/null); do
+    sed -i 's/set(PACKAGE_VERSION_UNSUITABLE TRUE)/set(PACKAGE_VERSION_UNSUITABLE FALSE)/' "${_cv}"
+done
 
 # ── (2) locate the wasm CPython (static libpython) in the dep closure ───────
 # [U2] Requires python312 built for wasm to be installed in the prefix
@@ -60,6 +76,53 @@ PY_INC="${PY_ROOT}/include/python3.12"
 PY_LIB="${PY_ROOT}/lib/libpython3.12.a"
 echo "vtk-python(wasm): wrapping against wasm CPython at ${PY_ROOT}"
 
+# [U2] RESOLVED — verified by reproducing VTK's REAL configure locally (an
+# isolated find_package() test is misleading: VTK's module system version-locks
+# the interpreter to the Development artifacts). VTK's top-level CMakeLists, on
+# the VTK_WRAP_PYTHON path, runs `find_package(Python3 COMPONENTS Interpreter)`,
+# which anchors on a NATIVE interpreter; the subsequent Development.Module find
+# must MATCH that interpreter's version. A mismatched host interpreter (the
+# runner's 3.10/3.13) makes it reject the 3.12 wasm artifacts ("missing
+# Development.Module, found suitable version 3.10"). Handing explicit
+# INCLUDE_DIR/LIBRARY does NOT rescue it — the interpreter version wins. So a
+# native python3.12 on the build host is REQUIRED. It is used only at
+# configure/wrap time (and optional .pyi generation); the wrappers still link
+# the wasm libpython3.12 at the target link.
+PY_EXE=""
+for _cand in \
+    "${CVC_BUILD_PREFIX:-}/bin/python3.12" \
+    "${CVC_DEPS_PREFIX:-}/bin/python3.12" \
+    "${CVC_INSTALL_DIR:-}/bin/python3.12" \
+    "$(command -v python3.12 2>/dev/null || true)"; do
+    [[ -n "${_cand}" && -x "${_cand}" ]] || continue
+    _v="$("${_cand}" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || true)"
+    [[ "${_v}" == "3.12" ]] && { PY_EXE="${_cand}"; break; }
+done
+if [[ -z "${PY_EXE}" ]]; then
+    echo "vtk-python(wasm): FATAL — no native python3.12 on the build host." >&2
+    echo "  VTK's wrap configure anchors find_package(Python3 Interpreter) on a native" >&2
+    echo "  interpreter whose version must match the 3.12 target artifacts, so a native" >&2
+    echo "  3.12 is required (declare python312 as a host tool that resolves for the HOST" >&2
+    echo "  platform). Diagnostics:" >&2
+    echo "    CVC_BUILD_PREFIX=${CVC_BUILD_PREFIX:-<unset>}" >&2
+    echo "    CVC_DEPS_PREFIX=${CVC_DEPS_PREFIX:-<unset>}" >&2
+    for _d in "${CVC_BUILD_PREFIX:-}" "${CVC_DEPS_PREFIX:-}" "${CVC_INSTALL_DIR:-}"; do
+        [[ -n "${_d}" && -d "${_d}/bin" ]] && ls -1 "${_d}/bin" 2>/dev/null | grep -i '^python' | sed "s|^|      ${_d}/bin/|" >&2
+    done
+    echo "    PATH python3*: $(command -v python3 python3.12 python3.13 2>/dev/null | tr '\n' ' ')" >&2
+    exit 1
+fi
+echo "vtk-python(wasm): native build interpreter (3.12): ${PY_EXE}"
+
+# FindPython3 knobs: LOCATION strategy + a matching native interpreter + the
+# explicit wasm TARGET artifacts (headers/lib stay 3.12 for the wasm link).
+PYFIND_ARGS=(
+    -DPython3_FIND_STRATEGY=LOCATION
+    -DPython3_EXECUTABLE="${PY_EXE}"
+    -DPython3_INCLUDE_DIR="${PY_INC}"
+    -DPython3_LIBRARY="${PY_LIB}"
+)
+
 # ── (3) cross-build VTK to wasm WITH python wrapping, STATIC ────────────────
 source "${SCRIPT_DIR}/../_common/env-wasm.sh"
 echo "vtk-python(wasm): [3/3] cross-building VTK (VTK_WRAP_PYTHON=ON, static)"
@@ -72,13 +135,14 @@ cmake -G Ninja -S "${CVC_SOURCE_DIR}" -B "${CVC_BUILD_DIR}" \
     -DCMAKE_PREFIX_PATH="${CVC_DEPS_PREFIX}" \
     -DCMAKE_FIND_ROOT_PATH="${CVC_DEPS_PREFIX}" \
     -DVTKCompileTools_DIR="${HOST_TOOLS}" \
+    -DVTK_REQUIRE_LARGE_FILE_SUPPORT_EXITCODE=0 \
     -DVTK_GROUP_ENABLE_Qt=NO \
     -DVTK_WRAP_PYTHON=ON \
     -DVTK_ENABLE_WRAPPING=ON \
     -DVTK_PYTHON_VERSION=3 \
-    -DPython3_FIND_STRATEGY=LOCATION \
-    -DPython3_INCLUDE_DIR="${PY_INC}" \
-    -DPython3_LIBRARY="${PY_LIB}" \
+    -DVTK_WHEEL_BUILD=ON \
+    -DVTK_INSTALL_PYTHON_EXES=OFF \
+    "${PYFIND_ARGS[@]}" \
     -DVTK_PYTHON_SITE_PACKAGES_SUFFIX="lib/python3.12/site-packages" \
     -DVTK_BUILD_TESTING=OFF -DVTK_BUILD_EXAMPLES=OFF -DVTK_BUILD_DOCUMENTATION=OFF \
     -DVTK_LEGACY_REMOVE=ON \
