@@ -116,13 +116,17 @@ if [ "$IS_CROSS" = true ]; then
     if [ "${CVC_PLATFORM}" = "wasm" ]; then
         _NATIVE_PY="${CVC_SOURCE_DIR}/cross-build/build"
         if [ ! -x "${_NATIVE_PY}/python" ]; then
-            echo "build-python(wasm): building a native ${PYTHON_MINOR} build-python for --with-build-python"
+            echo "build-python(wasm): building a full native ${PYTHON_MINOR} build-python for --with-build-python"
             mkdir -p "${_NATIVE_PY}"
+            # A FULL native build (not just the `python` target): the cross
+            # install runs this interpreter for compileall, so it needs its
+            # extension modules (math, etc.) — `make python` alone omits them
+            # ("ModuleNotFoundError: No module named 'math'").
             ( cd "${_NATIVE_PY}" && \
               env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u PKG_CONFIG_PATH \
                   CC=cc CXX=c++ "${CVC_SOURCE_DIR}/configure" && \
               env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS \
-                  CC=cc CXX=c++ ${MAKE} -j"${CVC_JOBS}" python )
+                  CC=cc CXX=c++ ${MAKE} -j"${CVC_JOBS}" )
         fi
         CONFIGURE_ARGS+=(--with-build-python="${_NATIVE_PY}/python")
         _cfg_site="${CVC_SOURCE_DIR}/Tools/wasm/config.site-wasm32-emscripten"
