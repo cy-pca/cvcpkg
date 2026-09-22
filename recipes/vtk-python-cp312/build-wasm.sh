@@ -98,6 +98,29 @@ for _cand in \
     _v="$("${_cand}" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || true)"
     [[ "${_v}" == "3.12" ]] && { PY_EXE="${_cand}"; break; }
 done
+# Fallback: fetch the published native python3.12 with cvcpkg directly. This
+# covers fleet nodes whose INSTALLED cvcpkg predates the _collect_host_tools fix
+# that resolves depends.host_tools:[python312] for the host platform (the recipe
+# is pushed fresh from the branch, but the node's builder is its own). No-op when
+# a native 3.12 was already found above (host-tool fix deployed).
+if [[ -z "${PY_EXE}" ]]; then
+    _hp="$(uname -s 2>/dev/null || echo Linux)"
+    case "${_hp}" in Linux) _hp=linux;; Darwin) _hp=macos;; *) _hp=linux;; esac
+    _ha="$(uname -m 2>/dev/null || echo x86_64)"
+    case "${_ha}" in x86_64|amd64) _ha=x86_64;; arm64|aarch64) _ha=arm64;; esac
+    _hostpy="${CVC_BUILD_DIR}/hostpy312"
+    _cvc="cvcpkg"; command -v cvcpkg >/dev/null 2>&1 || _cvc="python3 -m cvcpkg"
+    echo "vtk-python(wasm): no native 3.12 in prefix; provisioning via cvcpkg (${_hp}/${_ha})"
+    ${_cvc} install python312 --platform "${_hp}" --arch "${_ha}" \
+        --config release --link shared --prefix "${_hostpy}" --no-fallback-to-source >&2 || \
+        echo "vtk-python(wasm): 'cvcpkg install python312' (host) failed; see diagnostics below" >&2
+    for _c in "${_hostpy}/bin/python3.12" "${_hostpy}/bin/python3"; do
+        [[ -x "${_c}" ]] || continue
+        _v="$("${_c}" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || true)"
+        [[ "${_v}" == "3.12" ]] && { PY_EXE="${_c}"; break; }
+    done
+    [[ -n "${PY_EXE}" ]] && echo "vtk-python(wasm): provisioned native 3.12 at ${PY_EXE}"
+fi
 if [[ -z "${PY_EXE}" ]]; then
     echo "vtk-python(wasm): FATAL — no native python3.12 on the build host." >&2
     echo "  VTK's wrap configure anchors find_package(Python3 Interpreter) on a native" >&2
