@@ -94,8 +94,11 @@ if [ "$IS_CROSS" = true ]; then
     # triple from the tree's config.guess (native host, unaffected by CC=emcc).
     _build_triple="$(./config.guess)"
     CONFIGURE_ARGS+=(--disable-shared --host="${CROSS_HOST}" --build="${_build_triple}")
-    # readline/ncurses not available on wasm/wasi/cosmo.
-    CONFIGURE_ARGS+=(--with-readline=tkinter)
+    # readline/ncurses not available on wasm/wasi/cosmo. NOTE: --with-readline
+    # only accepts editline|readline|no; the old "tkinter" value is invalid and
+    # CPython 3.12's configure rejects it ("proper usage is --with(out)-readline
+    # [=editline|readline|no]") — only reached once the earlier cross gates pass.
+    CONFIGURE_ARGS+=(--without-readline)
 
     # Emscripten needs more than a host triple. CPython's cross-build wants:
     #   (a) a NATIVE interpreter of the SAME version to run build-time scripts
