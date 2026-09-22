@@ -71,12 +71,31 @@ echo "vtk-python(wasm): wrapping against wasm CPython at ${PY_ROOT}"
 # find_package(Python3 COMPONENTS Development.Module) picks the runner's system
 # python (3.10) and fails.
 PY_EXE=""
-for _root in "${CVC_BUILD_PREFIX:-}" "${CVC_DEPS_PREFIX:-}"; do
-    [[ -n "${_root}" && -x "${_root}/bin/python3.12" ]] && { PY_EXE="${_root}/bin/python3.12"; break; }
+for _cand in \
+    "${CVC_BUILD_PREFIX:-}/bin/python3.12" \
+    "${CVC_HOST_TOOLS_PREFIX:-}/bin/python3.12" \
+    "${CVC_DEPS_PREFIX:-}/bin/python3.12" \
+    "${CVC_INSTALL_DIR:-}/bin/python3.12"; do
+    [[ -x "${_cand}" ]] && { PY_EXE="${_cand}"; break; }
 done
-[[ -z "${PY_EXE}" ]] && PY_EXE="$(command -v python3.12 || true)"
+[[ -z "${PY_EXE}" ]] && PY_EXE="$(command -v python3.12 2>/dev/null || true)"
+# Last resort: any python3 that actually reports 3.12 (must match the target ABI).
 if [[ -z "${PY_EXE}" ]]; then
-    echo "vtk-python(wasm): no NATIVE python3.12 for Python3_EXECUTABLE (need the python312 host tool)" >&2
+    for _p in python3 python3.12; do
+        command -v "${_p}" >/dev/null 2>&1 || continue
+        _v="$("${_p}" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || true)"
+        [[ "${_v}" == "3.12" ]] && { PY_EXE="$(command -v "${_p}")"; break; }
+    done
+fi
+if [[ -z "${PY_EXE}" ]]; then
+    echo "vtk-python(wasm): no NATIVE python3.12 found for Python3_EXECUTABLE. Diagnostics:" >&2
+    echo "  CVC_BUILD_PREFIX=${CVC_BUILD_PREFIX:-<unset>}" >&2
+    echo "  CVC_HOST_TOOLS_PREFIX=${CVC_HOST_TOOLS_PREFIX:-<unset>}" >&2
+    echo "  CVC_DEPS_PREFIX=${CVC_DEPS_PREFIX:-<unset>}" >&2
+    for _d in "${CVC_BUILD_PREFIX:-}" "${CVC_HOST_TOOLS_PREFIX:-}" "${CVC_DEPS_PREFIX:-}" "${CVC_INSTALL_DIR:-}"; do
+        [[ -n "${_d}" && -d "${_d}/bin" ]] && ls -1 "${_d}/bin" 2>/dev/null | grep -i '^python' | sed "s|^|    ${_d}/bin/|" >&2
+    done
+    echo "  PATH python3*: $(command -v python3 python3.12 python3.13 2>/dev/null | tr '\n' ' ')" >&2
     exit 1
 fi
 echo "vtk-python(wasm): native build interpreter: ${PY_EXE}"
