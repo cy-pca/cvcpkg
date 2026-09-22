@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # recipes/_common/env-haiku.sh — shared environment for Haiku recipe builds.
 #
-# UNVERIFIED-ON-HARDWARE: every line below marked "[unverified]" is written
-# from Haiku R1/beta5 documentation and the HaikuPorts layout, but has NOT yet
-# been executed on a live Haiku host — the cluster's haiku-build VM is still
-# blank (Haiku has no getty and no virtio-console, so a stock ISO install needs
-# graphical interaction; the pre-installed image recipe is haiku-image).  The
-# unmarked lines mirror env-freebsd.sh / env-netbsd.sh verbatim and carry the
-# same confidence as those.  Fix marked lines first when a build misbehaves.
+# VERIFIED 2026-09-22 via a delegated `zlib` build on the cluster's haiku-build
+# VM (cvcpkg build zlib --platform haiku, delegated over SSH by cvcpkg.haikuhost):
+# the compiler (gcc/g++), CVC_JOBS, and the cmake/ninja build path below all ran
+# and produced a working libz.so + libz.a that passed the on-Haiku smoke test.
+# Lines still marked "[unverified]" were not exercised by that particular build
+# (zlib pulls in no extra system libs); fix those first if another recipe
+# misbehaves.  Unmarked lines mirror env-freebsd.sh / env-netbsd.sh verbatim.
 set -euo pipefail
 
 _COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
