@@ -163,7 +163,6 @@ cmake -G Ninja -S "${CVC_SOURCE_DIR}" -B "${CVC_BUILD_DIR}" \
     -DVTK_WRAP_PYTHON=ON \
     -DVTK_ENABLE_WRAPPING=ON \
     -DVTK_PYTHON_VERSION=3 \
-    -DVTK_WHEEL_BUILD=ON \
     -DVTK_INSTALL_PYTHON_EXES=OFF \
     "${PYFIND_ARGS[@]}" \
     -DVTK_PYTHON_SITE_PACKAGES_SUFFIX="lib/python3.12/site-packages" \
@@ -173,7 +172,24 @@ cmake -G Ninja -S "${CVC_SOURCE_DIR}" -B "${CVC_BUILD_DIR}" \
     -DVTK_GROUP_ENABLE_Rendering=DONT_WANT \
     -DVTK_MODULE_ENABLE_VTK_CommonCore=YES \
     -DVTK_MODULE_ENABLE_VTK_CommonDataModel=YES
-cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
+# Build keep-going (-k 0): the standalone `vtkpython` interpreter executable is
+# EXPECTED to fail to link on wasm — libpython3.12.a's _decimal.o references
+# mpd_isspecial (libmpdecimal is not archived into the wasm CPython). We do not
+# ship that CLI (VTK_INSTALL_PYTHON_EXES=OFF); every wrapper archive we package
+# builds fine. Keep-going lets the rest (vtkWrappingTools, the C++ libs, all
+# *Python.a + _vtkmodules_static.a) complete despite that one exe link error.
+cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}" -- -k 0 || true
+# A REAL failure must still abort: verify the packaged wrapper archives exist
+# before installing (only the vtkpython exe is permitted to be missing).
+_missing=""
+for _pat in "_vtkmodules_static.a" "libvtkWrappingPythonCore*.a" "libvtkCommonCorePython.a" "libvtkCommonDataModelPython.a"; do
+    compgen -G "${CVC_BUILD_DIR}/lib/${_pat}" >/dev/null 2>&1 || _missing="${_missing} ${_pat}"
+done
+if [ -n "${_missing}" ]; then
+    echo "vtk-python(wasm): FATAL — wrapper archive(s) missing after build:${_missing}" >&2
+    echo "  (only the vtkpython interpreter exe is permitted to fail on wasm)" >&2
+    exit 1
+fi
 cmake --install "${CVC_BUILD_DIR}"
 
 echo "vtk-python(wasm) GO/NO-GO result — static wrapper archives + vtkmodules:"
