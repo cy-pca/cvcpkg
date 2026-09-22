@@ -64,6 +64,23 @@ PY_INC="${PY_ROOT}/include/python3.12"
 PY_LIB="${PY_ROOT}/lib/libpython3.12.a"
 echo "vtk-python(wasm): wrapping against wasm CPython at ${PY_ROOT}"
 
+# [U2] VTK runs a NATIVE python of the same version during the wrapped build
+# (version query, wrapper glue) — the wasm libpython is a static archive with no
+# runnable interpreter. Point Python3_EXECUTABLE at the native python3.12 host
+# tool; the TARGET headers/lib stay the wasm ones. Without this,
+# find_package(Python3 COMPONENTS Development.Module) picks the runner's system
+# python (3.10) and fails.
+PY_EXE=""
+for _root in "${CVC_BUILD_PREFIX:-}" "${CVC_DEPS_PREFIX:-}"; do
+    [[ -n "${_root}" && -x "${_root}/bin/python3.12" ]] && { PY_EXE="${_root}/bin/python3.12"; break; }
+done
+[[ -z "${PY_EXE}" ]] && PY_EXE="$(command -v python3.12 || true)"
+if [[ -z "${PY_EXE}" ]]; then
+    echo "vtk-python(wasm): no NATIVE python3.12 for Python3_EXECUTABLE (need the python312 host tool)" >&2
+    exit 1
+fi
+echo "vtk-python(wasm): native build interpreter: ${PY_EXE}"
+
 # ── (3) cross-build VTK to wasm WITH python wrapping, STATIC ────────────────
 source "${SCRIPT_DIR}/../_common/env-wasm.sh"
 echo "vtk-python(wasm): [3/3] cross-building VTK (VTK_WRAP_PYTHON=ON, static)"
@@ -81,6 +98,7 @@ cmake -G Ninja -S "${CVC_SOURCE_DIR}" -B "${CVC_BUILD_DIR}" \
     -DVTK_ENABLE_WRAPPING=ON \
     -DVTK_PYTHON_VERSION=3 \
     -DPython3_FIND_STRATEGY=LOCATION \
+    -DPython3_EXECUTABLE="${PY_EXE}" \
     -DPython3_INCLUDE_DIR="${PY_INC}" \
     -DPython3_LIBRARY="${PY_LIB}" \
     -DVTK_PYTHON_SITE_PACKAGES_SUFFIX="lib/python3.12/site-packages" \
