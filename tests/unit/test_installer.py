@@ -335,6 +335,10 @@ class _BrokenDataFilter:
         return self._inner.getmembers()
 
 
+@pytest.mark.skipif(
+    sys.version_info < (3, 12),
+    reason="_safe_extractall only uses the tarfile filter + broken-filter fallback on Python >= 3.12",
+)
 def test_safe_extractall_falls_back_when_data_filter_is_broken(tmp_path):
     """A CPython build whose tarfile 'data' filter references os.path.ALLOW_MISSING
     while posixpath lacks it (GitHub Actions hostedtoolcache 3.12.14) must NOT crash
@@ -358,6 +362,10 @@ def test_safe_extractall_falls_back_when_data_filter_is_broken(tmp_path):
     assert (dest / "sub" / "b.txt").read_text() == "world"
 
 
+@pytest.mark.skipif(
+    sys.version_info < (3, 12),
+    reason="_safe_extractall only uses the tarfile filter + broken-filter fallback on Python >= 3.12",
+)
 def test_safe_extractall_broken_filter_still_rejects_traversal(tmp_path):
     """When the broken-filter fallback runs, the manual guard must reject a '..'
     path-traversal member rather than extract it fully-trusted."""
