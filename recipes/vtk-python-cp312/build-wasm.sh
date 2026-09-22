@@ -149,7 +149,19 @@ PYFIND_ARGS=(
 # ── (3) cross-build VTK to wasm WITH python wrapping, STATIC ────────────────
 source "${SCRIPT_DIR}/../_common/env-wasm.sh"
 echo "vtk-python(wasm): [3/3] cross-building VTK (VTK_WRAP_PYTHON=ON, static)"
-cmake -G Ninja -S "${CVC_SOURCE_DIR}" -B "${CVC_BUILD_DIR}" \
+# Force VTK to import our NATIVE host wrap tools (VTKCompileTools_DIR) rather than
+# building wasm wrap tools that run under node: the wasm tools cannot read the
+# host filesystem (@argfiles/headers) under emscripten's node FS and abort with a
+# usage message (this is why VTK wasm Python-wrapping has no prior art). VTK
+# builds wasm tools only when CMAKE_CROSSCOMPILING_EMULATOR is defined, which the
+# emscripten toolchain (Emscripten.cmake) sets iff find_program(node) succeeds on
+# PATH. Hiding node for the CONFIGURE leaves the emulator undefined, so
+# vtkCrossCompiling.cmake imports VTKCompileTools (native). emcc still finds node
+# via EMSDK_NODE for any internal need, and we never RUN wasm at build time
+# (native host-tool generation + the pre-seeded LFS try_run). This mirrors the
+# verified local build (whose configure also had node off PATH).
+_PATH_NONODE="$(printf '%s' "${PATH}" | tr ':' '\n' | grep -v '/node/' | tr '\n' ':' | sed 's/:$//')"
+env PATH="${_PATH_NONODE}" cmake -G Ninja -S "${CVC_SOURCE_DIR}" -B "${CVC_BUILD_DIR}" \
     -DCMAKE_INSTALL_PREFIX="${CVC_INSTALL_DIR}" \
     -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" \
     -DBUILD_SHARED_LIBS=OFF \
