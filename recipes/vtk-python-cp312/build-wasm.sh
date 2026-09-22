@@ -31,6 +31,10 @@
 #        <module>_load()).
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Default CVC_JOBS: used in step 1 BEFORE env-wasm.sh is sourced, and set -u
+# would otherwise abort ("CVC_JOBS: unbound variable") if the builder didn't
+# export it.
+: "${CVC_JOBS:=$(nproc 2>/dev/null || echo 4)}"
 
 # ── (1) HOST compile tools — NATIVE compiler, BEFORE the wasm env ───────────
 # env-wasm.sh points CC/CXX at emcc, so build the host tools first while the
