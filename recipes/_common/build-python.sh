@@ -88,7 +88,12 @@ CONFIGURE_ARGS=(
 
 # Cross-compilation targets: static-only, explicit host, no readline.
 if [ "$IS_CROSS" = true ]; then
-    CONFIGURE_ARGS+=(--disable-shared --host="${CROSS_HOST}")
+    # CPython's configure REQUIRES an explicit --build when cross-compiling
+    # ("configure: error: Cross compiling required --host=HOST-TUPLE and
+    # --build=ARCH"), even though it detects the build type — supply the build
+    # triple from the tree's config.guess (native host, unaffected by CC=emcc).
+    _build_triple="$(./config.guess)"
+    CONFIGURE_ARGS+=(--disable-shared --host="${CROSS_HOST}" --build="${_build_triple}")
     # readline/ncurses not available on wasm/wasi/cosmo.
     CONFIGURE_ARGS+=(--with-readline=tkinter)
 else
