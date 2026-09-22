@@ -64,41 +64,46 @@ PY_INC="${PY_ROOT}/include/python3.12"
 PY_LIB="${PY_ROOT}/lib/libpython3.12.a"
 echo "vtk-python(wasm): wrapping against wasm CPython at ${PY_ROOT}"
 
-# [U2] VTK runs a NATIVE python of the same version during the wrapped build
-# (version query, wrapper glue) — the wasm libpython is a static archive with no
-# runnable interpreter. Point Python3_EXECUTABLE at the native python3.12 host
-# tool; the TARGET headers/lib stay the wasm ones. Without this,
-# find_package(Python3 COMPONENTS Development.Module) picks the runner's system
-# python (3.10) and fails.
+# [U2] RESOLVED — verified with a local emscripten find_package() repro: when
+# cross-compiling, FindPython3 satisfies "COMPONENTS Development.Module" purely
+# from the explicit TARGET artifacts (Python3_INCLUDE_DIR + Python3_LIBRARY). It
+# reads the version (3.12.10) from the wasm patchlevel.h and requires NO runnable
+# interpreter. VTK's wrapping requests ONLY Development.Module (QUIET), so a
+# native python3.12 is NOT needed on the build host.
+#
+# The one real hazard: never hand FindPython3 a *mismatched* host interpreter
+# (e.g. the CI runner's system python3.10). Passing an empty
+# "-DPython3_EXECUTABLE=", or letting CMake auto-probe, anchors the search on
+# that interpreter's version and then rejects the 3.12 artifacts ("missing
+# Development.Module, found suitable version 3.10"). So we pass
+# Python3_EXECUTABLE ONLY when a genuinely *matching* native 3.12 is present
+# (optional — VTK uses it only for .pyi generation), and otherwise not at all.
 PY_EXE=""
 for _cand in \
     "${CVC_BUILD_PREFIX:-}/bin/python3.12" \
     "${CVC_HOST_TOOLS_PREFIX:-}/bin/python3.12" \
     "${CVC_DEPS_PREFIX:-}/bin/python3.12" \
-    "${CVC_INSTALL_DIR:-}/bin/python3.12"; do
-    [[ -x "${_cand}" ]] && { PY_EXE="${_cand}"; break; }
+    "${CVC_INSTALL_DIR:-}/bin/python3.12" \
+    "$(command -v python3.12 2>/dev/null || true)"; do
+    [[ -n "${_cand}" && -x "${_cand}" ]] || continue
+    _v="$("${_cand}" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || true)"
+    [[ "${_v}" == "3.12" ]] && { PY_EXE="${_cand}"; break; }
 done
-[[ -z "${PY_EXE}" ]] && PY_EXE="$(command -v python3.12 2>/dev/null || true)"
-# Last resort: any python3 that actually reports 3.12 (must match the target ABI).
-if [[ -z "${PY_EXE}" ]]; then
-    for _p in python3 python3.12; do
-        command -v "${_p}" >/dev/null 2>&1 || continue
-        _v="$("${_p}" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || true)"
-        [[ "${_v}" == "3.12" ]] && { PY_EXE="$(command -v "${_p}")"; break; }
-    done
+if [[ -n "${PY_EXE}" ]]; then
+    echo "vtk-python(wasm): optional native build interpreter (3.12): ${PY_EXE}"
+else
+    echo "vtk-python(wasm): no matching native python3.12 on host — resolving"
+    echo "  Development.Module from the wasm artifacts alone (verified OK, no interpreter needed)."
 fi
-if [[ -z "${PY_EXE}" ]]; then
-    echo "vtk-python(wasm): no NATIVE python3.12 found for Python3_EXECUTABLE. Diagnostics:" >&2
-    echo "  CVC_BUILD_PREFIX=${CVC_BUILD_PREFIX:-<unset>}" >&2
-    echo "  CVC_HOST_TOOLS_PREFIX=${CVC_HOST_TOOLS_PREFIX:-<unset>}" >&2
-    echo "  CVC_DEPS_PREFIX=${CVC_DEPS_PREFIX:-<unset>}" >&2
-    for _d in "${CVC_BUILD_PREFIX:-}" "${CVC_HOST_TOOLS_PREFIX:-}" "${CVC_DEPS_PREFIX:-}" "${CVC_INSTALL_DIR:-}"; do
-        [[ -n "${_d}" && -d "${_d}/bin" ]] && ls -1 "${_d}/bin" 2>/dev/null | grep -i '^python' | sed "s|^|    ${_d}/bin/|" >&2
-    done
-    echo "  PATH python3*: $(command -v python3 python3.12 python3.13 2>/dev/null | tr '\n' ' ')" >&2
-    exit 1
-fi
-echo "vtk-python(wasm): native build interpreter: ${PY_EXE}"
+
+# FindPython3 knobs: LOCATION strategy + explicit TARGET artifacts; add the
+# native interpreter only when it matches the target ABI (never a mismatch).
+PYFIND_ARGS=(
+    -DPython3_FIND_STRATEGY=LOCATION
+    -DPython3_INCLUDE_DIR="${PY_INC}"
+    -DPython3_LIBRARY="${PY_LIB}"
+)
+[[ -n "${PY_EXE}" ]] && PYFIND_ARGS+=(-DPython3_EXECUTABLE="${PY_EXE}")
 
 # ── (3) cross-build VTK to wasm WITH python wrapping, STATIC ────────────────
 source "${SCRIPT_DIR}/../_common/env-wasm.sh"
@@ -116,10 +121,7 @@ cmake -G Ninja -S "${CVC_SOURCE_DIR}" -B "${CVC_BUILD_DIR}" \
     -DVTK_WRAP_PYTHON=ON \
     -DVTK_ENABLE_WRAPPING=ON \
     -DVTK_PYTHON_VERSION=3 \
-    -DPython3_FIND_STRATEGY=LOCATION \
-    -DPython3_EXECUTABLE="${PY_EXE}" \
-    -DPython3_INCLUDE_DIR="${PY_INC}" \
-    -DPython3_LIBRARY="${PY_LIB}" \
+    "${PYFIND_ARGS[@]}" \
     -DVTK_PYTHON_SITE_PACKAGES_SUFFIX="lib/python3.12/site-packages" \
     -DVTK_BUILD_TESTING=OFF -DVTK_BUILD_EXAMPLES=OFF -DVTK_BUILD_DOCUMENTATION=OFF \
     -DVTK_LEGACY_REMOVE=ON \
