@@ -5,7 +5,7 @@ recipe:
   # Added wasm/wasi/cosmo entries.  Expat is a dependency-free C89 parser
   # whose only platform requirement is an entropy source for its hash salt;
   # each cross script documents how that resolves on its target.
-  cvc_revision: 3
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -50,6 +50,10 @@ build:
       env:
         CFLAGS: "-O2 -fPIC"
     - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: haiku
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"

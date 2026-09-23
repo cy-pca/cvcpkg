@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: lz4
   upstream_version: "1.10.0"
-  cvc_revision: 2
+  cvc_revision: 3
   maintainer: "CyberPC Angel, LLC"
   maintainer_email: "cvcpkg@cyberpcangel.com"
   maintainer_url: "https://cyberpcangel.com"
@@ -45,6 +45,10 @@ build:
       env:
         CFLAGS: "-O2 -fPIC"
     - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: haiku
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"

@@ -17,7 +17,7 @@ recipe:
   # tarfile.AbsoluteLinkError, so it is not merely cosmetic: it blocks any
   # recipe that declares bzip2 on macOS. libMagickCore and libfreetype both
   # link libbz2, which is why libcvc's macOS build needs this.
-  cvc_revision: 3
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -58,6 +58,10 @@ build:
       env:
         CFLAGS: "-O2 -fPIC"
     - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: haiku
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
