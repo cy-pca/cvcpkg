@@ -2,10 +2,11 @@ schema_version: 1
 recipe:
   name: vtk-python-cp312
   upstream_version: "9.5.0"
-  # Deliberately NOT bumped for the -cpXX matrix change (python: block added):
-  # build-environment-only edit — the packed artifact and its runtime manifest
-  # are byte-identical to the published bundle.
-  cvc_revision: 1
+  # cvc.2: the wasm build now PRUNES to python-only artifacts (the cvc.1 wasm
+  # bundle, published by a build that raced ahead without the prune, wrongly
+  # shipped a full VTK — yank it). The prune changes the packed artifact, so the
+  # revision must bump; other platforms rebuild identically.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
