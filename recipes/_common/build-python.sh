@@ -65,6 +65,26 @@ if [ "$IS_CROSS" = false ]; then
     export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib -Wl,-rpath,${RPATH_SELF} ${LDFLAGS:-}"
 fi
 
+# CPython bundles its own expat (Modules/expat) and finds every real dependency
+# in CVC_DEPS_PREFIX (via CPPFLAGS above / --with-openssl / pkg-config).  On the
+# BSDs env-<platform>.sh adds -I/usr/local/include so recipes that link ports
+# libraries can find their headers — but that path also carries a SYSTEM expat.h
+# (e.g. FreeBSD's expat-2.8.1), and it precedes -I./Modules/expat in CPython's
+# compile line.  pyexpat.c then compiles against the system header while linking
+# the bundled libexpat.a, and the resulting pyexpat.so cannot be imported:
+#   ImportError: ... pyexpat...: Undefined symbol "XML_ParserCreate_MM"
+# which cascades into ensurepip and fails the whole build (freebsd-build on the
+# dev cluster).  Strip /usr/local/include from CPython's OWN compile flags on the
+# native BSDs — nothing CPython builds needs a ports header, its deps are all in
+# CVC_DEPS_PREFIX, and dropping it lets the bundled expat win.  Verified on
+# freebsd-build: `import pyexpat` then loads the bundled expat_2.7.1.
+case "${CVC_PLATFORM}" in
+    freebsd|openbsd|netbsd)
+        export CFLAGS="${CFLAGS//-I\/usr\/local\/include/}"
+        export CXXFLAGS="${CXXFLAGS//-I\/usr\/local\/include/}"
+        ;;
+esac
+
 # On macOS ensure the deployment target is propagated.
 if [[ "${CVC_PLATFORM}" == "macos" ]]; then
     export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-13.0}"

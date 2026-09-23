@@ -15,7 +15,16 @@ recipe:
   # wasm32-*-* to the pure-C src/wasm backend upstreamed in 3.4.5, and
   # cosmocc emits plain x86-64 SysV so the existing x86 backend applies.
   # There is deliberately NO wasi entry — see the note at the bottom.
-  cvc_revision: 3
+  #
+  # rev 3 -> 4: fix the OpenBSD build (verified on openbsd-build, OpenBSD 7.7).
+  # It failed with "config.status: error: Something went wrong bootstrapping
+  # makefile fragments ... consider re-running configure with MAKE=gmake":
+  # configure's automatic-dependency-tracking bootstrap runs $MAKE, and
+  # OpenBSD's BSD /usr/bin/make cannot drive automake's generated fragments.
+  # build.sh now uses gmake there. It also dropped CXX=eg++ — the gcc package
+  # ships egcc but not eg++, and libffi is pure C, so that only made the
+  # optional C++ probe print "eg++: not found". No payload change (pure C lib).
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
