@@ -96,6 +96,15 @@ build:
     - platform: wasm
       host_platform: linux
       script: build-wasm.sh
+    # Threaded flavor for the wasm-mt closure: wraps the wasm-mt vtk against the
+    # -pthread python312/numpy, so pycvc_gl(BRIDGE=ON) on wasm-mt gets matching
+    # static wrapper archives. Same build-wasm.sh; env-wasm.sh injects -pthread on
+    # the CVC_WASM_THREADS hook (compile+link), keeping the flavor consistent.
+    - platform: wasm-mt
+      host_platform: linux
+      script: build-wasm.sh
+      env:
+        CVC_WASM_THREADS: "1"
 
 package:
   # ONLY the Python-specific artifacts — the C++ libs, headers, and CMake config

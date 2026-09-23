@@ -83,6 +83,13 @@ export CPATH="${DEPS}/include/python3.12${CPATH:+:${CPATH}}"
 
 # ── (3) meson emscripten cross-file ─────────────────────────────────────────
 _NODE="$(command -v node 2>/dev/null || ls "${EMSDK}"/node/*/bin/node 2>/dev/null | head -1)"
+# Thread flavor: env-wasm.sh sets CVC_WASM_THREADS=1 for the wasm-mt column and
+# prepends -pthread to CFLAGS/CXXFLAGS/LDFLAGS, but the meson cross-file's c_args
+# OVERRIDE the compiler defaults, so -pthread must be threaded into the cross-file
+# explicitly (compile AND link) or the wasm objects won't match the -pthread
+# python312/vtk stack (emscripten forbids mixing pthread and non-pthread objects).
+_CA="'-fPIC'"; _LA=""
+if [[ "${CVC_WASM_THREADS:-0}" == "1" ]]; then _CA="'-fPIC', '-pthread'"; _LA="'-pthread'"; fi
 _CROSS="${CVC_BUILD_DIR}/emscripten-cross.txt"
 cat > "${_CROSS}" <<EOF
 [binaries]
@@ -107,8 +114,10 @@ python3 = '${_XPY}'
 longdouble_format = 'IEEE_QUAD_LE'
 
 [built-in options]
-c_args = ['-fPIC']
-cpp_args = ['-fPIC']
+c_args = [${_CA}]
+cpp_args = [${_CA}]
+c_link_args = [${_LA}]
+cpp_link_args = [${_LA}]
 
 [host_machine]
 system = 'emscripten'

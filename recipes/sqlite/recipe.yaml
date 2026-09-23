@@ -59,6 +59,13 @@ build:
     - platform: wasm
       host_platform: linux
       script: build-wasm.sh
+    # Threaded flavor for the wasm-mt closure (CPython _sqlite3). Same script;
+    # env-wasm.sh prepends -pthread on the CVC_WASM_THREADS hook.
+    - platform: wasm-mt
+      host_platform: linux
+      script: build-wasm.sh
+      env:
+        CVC_WASM_THREADS: "1"
     - platform: wasi
       host_platform: linux
       script: build-wasi.sh

@@ -113,6 +113,14 @@ build:
     - platform: wasm
       host_platform: linux
       script: build-wasm.sh
+    # Threaded flavor for the wasm-mt closure (links the -pthread python312 +
+    # wasm-mt stack). build-wasm.sh threads -pthread into the meson cross-file's
+    # c_args/link_args on the CVC_WASM_THREADS hook.
+    - platform: wasm-mt
+      host_platform: linux
+      script: build-wasm.sh
+      env:
+        CVC_WASM_THREADS: "1"
 
 package:
   # DOCUMENTATION ONLY — stage_bundle ships the whole CVC_INSTALL_DIR tree;
