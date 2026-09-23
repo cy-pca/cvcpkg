@@ -73,10 +73,17 @@ echo "greenlet-cp313: built $(basename "${WHEEL}")"
 # stage_bundle ships the ENTIRE CVC_INSTALL_DIR tree (package.files is not a
 # filter), so installing --prefix into the initially-empty per-recipe dir IS the
 # packaging contract: nothing but this package can land there.
+# --ignore-installed is REQUIRED, not cosmetic: cvc_python_exe's interpreter (or
+# the step-2 PYTHONPATH bridge to CVC_BUILD_PREFIX) can already expose a
+# same-version greenlet on a reused builder prefix. Without this flag pip reports
+# "already installed" and stages NOTHING into --prefix, leaving CVC_INSTALL_DIR
+# empty and tripping the site-packages guard below (observed on the dev cluster;
+# the generated _BUILD_SH_SDIST carries this flag for exactly this reason).
 "${PY}" -m pip install \
     --no-index \
     --no-deps \
     --no-compile \
+    --ignore-installed \
     --prefix "${CVC_INSTALL_DIR}" \
     "${WHEEL}"
 
