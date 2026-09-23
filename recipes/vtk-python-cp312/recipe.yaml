@@ -2,10 +2,11 @@ schema_version: 1
 recipe:
   name: vtk-python-cp312
   upstream_version: "9.5.0"
-  # Deliberately NOT bumped for the -cpXX matrix change (python: block added):
-  # build-environment-only edit — the packed artifact and its runtime manifest
-  # are byte-identical to the published bundle.
-  cvc_revision: 1
+  # cvc.2: the wasm build now PRUNES to python-only artifacts (the cvc.1 wasm
+  # bundle, published by a build that raced ahead without the prune, wrongly
+  # shipped a full VTK — yank it). The prune changes the packed artifact, so the
+  # revision must bump; other platforms rebuild identically.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -49,10 +50,14 @@ depends:
     - name: python312
     # VTK is rebuilt in full from source, so its own C++ build dependencies must
     # be present in the build closure (kept identical to recipes/vtk).
+    # Qt and HDF5 do not exist / are not used on wasm (mirrors recipes/vtk),
+    # so the wasm wrap build configures without them.
     - name: qt6
       version: ">=6.7"
+      platforms: [linux, macos, windows, windows-gnu, freebsd, openbsd, netbsd, haiku]
     - name: hdf5
       version: "^1.14"
+      platforms: [linux, macos, windows, windows-gnu, freebsd, openbsd, netbsd, haiku]
     - name: tiff
       version: "^4.6"
     - name: zlib
@@ -81,6 +86,16 @@ build:
         CXXFLAGS: "-O2 -fPIC -std=c++17"
     - platform: windows
       script: build.ps1
+    # GO/NO-GO SPIKE (WIP): can VTK_WRAP_PYTHON cross-compile to wasm statically?
+    # build-wasm.sh builds VTK's host compile-tools natively, then cross-builds a
+    # MINIMAL module set (CommonCore+DataModel, no rendering) with
+    # VTK_WRAP_PYTHON=ON + BUILD_SHARED_LIBS=OFF against a wasm libpython. Needs
+    # python312 built for wasm in the prefix. Expand to the rendering module set
+    # once the wrap pipeline is proven. host_platform linux (needs a native host
+    # toolchain for the wrapper generators).
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
 
 package:
   # ONLY the Python-specific artifacts — the C++ libs, headers, and CMake config
@@ -92,6 +107,11 @@ package:
     - lib/libvtk*Python*
     - lib/vtk*Python*.lib
     - bin/vtk*Python*
+    # wasm STATIC build: the compiled modules aggregate into _vtkmodules_static.a
+    # (registered via PyImport_AppendInittab), and the pure-Python stubs ship as
+    # VTK's _vtk.zip rather than an unpacked vtkmodules/ tree.
+    - lib/_vtkmodules_static.a
+    - lib/python*/site-packages/_vtk.zip
     # The importable Python package (site-packages layout differs per platform).
     - lib/python*/site-packages/vtkmodules/
     - lib/python*/site-packages/vtk.py
