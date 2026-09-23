@@ -89,7 +89,11 @@ cvc_pip_install_wheel() {
   local py wheel
   py="$(cvc_python_exe)"
 
-  wheel="$(find "${CVC_SOURCE_DIR}" -maxdepth 1 -name '*.whl' -print -quit)"
+  # Shell glob, not `find -print -quit`: -quit is a GNU findutils extension the
+  # *BSD find does not implement (it errors out, which under set -e would abort
+  # the build).  A non-recursive *.whl glob is the maxdepth-1 equivalent.
+  wheel=""
+  for wheel in "${CVC_SOURCE_DIR}"/*.whl; do [ -e "${wheel}" ] && break; wheel=""; done
   if [ -z "${wheel}" ]; then
     echo "cvc_pip_install_wheel: no .whl in ${CVC_SOURCE_DIR}" >&2
     return 1
@@ -120,9 +124,14 @@ cvc_python_check() {
   py="$(cvc_python_exe)"
 
   # sysconfig would report the *interpreter's* own prefix, not the staging dir
-  # we just installed into, so locate the staged site-packages directly.  The
-  # find covers both layouts: lib/pythonX.Yt/site-packages and Lib/site-packages.
-  libdir="$(find "${CVC_INSTALL_DIR}" -maxdepth 3 -type d -name 'site-packages' -print -quit)"
+  # we just installed into, so locate the staged site-packages directly.  Two
+  # layouts exist: lib/pythonX.Y[t]/site-packages (POSIX) and Lib/site-packages
+  # (Windows).  A glob over exactly those, not `find -print -quit`: -quit is a
+  # GNU findutils extension the *BSD find lacks (it would abort under set -e).
+  libdir=""
+  for libdir in "${CVC_INSTALL_DIR}"/lib/python*/site-packages "${CVC_INSTALL_DIR}"/Lib/site-packages; do
+    [ -d "${libdir}" ] && break; libdir=""
+  done
   if [ -z "${libdir}" ]; then
     echo "cvc_python_check: no site-packages found under ${CVC_INSTALL_DIR}" >&2
     return 1

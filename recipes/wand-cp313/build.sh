@@ -19,7 +19,10 @@ cvc_pip_install_wheel
 # ImageMagick — not the host's — from any interpreter using this prefix,
 # including VolRover's embedded Python. sys.prefix is computed at runtime, so it
 # stays correct after the relocatable bundle is unpacked anywhere.
-_site="$(find "${CVC_INSTALL_DIR}" -maxdepth 3 -type d -name 'site-packages' -print -quit)"
+# Glob over the two site-packages layouts, not `find -print -quit`: -quit is a
+# GNU findutils extension the *BSD find lacks.
+_site=""
+for _site in "${CVC_INSTALL_DIR}"/lib/python*/site-packages "${CVC_INSTALL_DIR}"/Lib/site-packages; do [ -d "${_site}" ] && break; _site=""; done
 [ -n "${_site}" ] || { echo "wand: no site-packages under ${CVC_INSTALL_DIR}" >&2; exit 1; }
 cat > "${_site}/wand_cvcpkg_magick_home.pth" <<'PTH'
 import os, sys; os.environ.setdefault('MAGICK_HOME', sys.prefix)
