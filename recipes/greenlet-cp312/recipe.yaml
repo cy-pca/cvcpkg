@@ -11,7 +11,12 @@ recipe:
   # is not a detail we want to inherit from PyPI. It links nothing but libc, so
   # the only new dependency edge is the PEP-517 backend (setuptools-cp312) that
   # --no-build-isolation requires to already be in the prefix.
-  cvc_revision: 3
+  # Bumped 3 -> 4: build.sh now passes --ignore-installed to the staging
+  # pip install. On a reused builder prefix a same-version greenlet is already
+  # importable, so the install no-opped and left the staging prefix empty
+  # (the dev-cluster failure that blocked sqlalchemy-cp312). Build inputs are
+  # otherwise unchanged.
+  cvc_revision: 4
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
