@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# recipes/numpy-cp312/build-wasm.sh — cross-build NumPy 2.4.6 for wasm (Emscripten)
+# via meson-python. Proven viable by a local spike (meson cross-configure + emcc
+# compile). Key differences from the native build.sh:
+#   - NO BLAS (-Dallow-noblas=true): openblas is not built for wasm; numpy uses
+#     its internal fallback. matmul/linalg still work, just unaccelerated.
+#   - crossenv: a NATIVE python3.12 drives the build, but _PYTHON_SYSCONFIGDATA_NAME
+#     points it at the wasm CPython's sysconfigdata so meson-python emits a wasm
+#     extension (POSIX-only mechanism — hence wasm builds on the linux fleet, not
+#     a Windows host). The wasm sysconfigdata's INCLUDEPY/prefix are stale build
+#     paths; rewrite them to CVC_DEPS_PREFIX so meson finds the wasm Python.h/lib.
+#   - a meson cross-file (emcc/em++/emar + node exe_wrapper for run-checks).
+#   - the wheel carries a wasm platform tag, so native pip cannot install it;
+#     extract it into the staging site-packages instead.
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/../_common/env-wasm.sh"   # emsdk PATH (emcc/em++/emar/node), EMSDK, CVC_JOBS
+: "${CVC_JOBS:=$(nproc 2>/dev/null || echo 4)}"
+
+DEPS="${CVC_DEPS_PREFIX:?}"
+BLD="${CVC_BUILD_PREFIX:-${DEPS}}"
+
+# ── (1) NATIVE python3.12 (the wasm libpython cannot run) ───────────────────
+# host_tools:python312 provisions it (builder _collect_host_tools mechanism-3,
+# merged in #60); fleet NODES may run an older cvcpkg, so fall back to fetching
+# the published native python312 directly (mirrors vtk-python-cp312/build-wasm).
+PY_NATIVE=""
+for _c in "${BLD}/bin/python3.12" "${DEPS}/bin/python3.12" "$(command -v python3.12 2>/dev/null || true)"; do
+    [ -n "${_c}" ] && [ -x "${_c}" ] || continue
+    _v="$("${_c}" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || true)"
+    [ "${_v}" = "3.12" ] && { PY_NATIVE="${_c}"; break; }
+done
+if [ -z "${PY_NATIVE}" ]; then
+    _hp="$(uname -s 2>/dev/null || echo Linux)"; case "${_hp}" in Linux) _hp=linux;; Darwin) _hp=macos;; *) _hp=linux;; esac
+    _ha="$(uname -m 2>/dev/null || echo x86_64)"; case "${_ha}" in x86_64|amd64) _ha=x86_64;; arm64|aarch64) _ha=arm64;; esac
+    _cvc="cvcpkg"; command -v cvcpkg >/dev/null 2>&1 || _cvc="python3 -m cvcpkg"
+    echo "numpy(wasm): no native python3.12 in prefix; provisioning via cvcpkg (${_hp}/${_ha})"
+    ${_cvc} install python312 --platform "${_hp}" --arch "${_ha}" --config release --link shared \
+        --prefix "${CVC_BUILD_DIR}/hostpy312" --no-fallback-to-source >&2 || true
+    [ -x "${CVC_BUILD_DIR}/hostpy312/bin/python3.12" ] && PY_NATIVE="${CVC_BUILD_DIR}/hostpy312/bin/python3.12"
+fi
+[ -n "${PY_NATIVE}" ] || { echo "numpy(wasm): FATAL — no native python3.12 to drive the meson build" >&2; exit 1; }
+echo "numpy(wasm): host interpreter ${PY_NATIVE}"
+
+# Native build tools: meson/ninja/pkg-config CLIs (host_tools) first on PATH;
+# cython + meson-python live in the build prefix's site-packages — bridge them.
+export PATH="${BLD}/bin:${DEPS}/bin:${PATH}"
+_BRIDGE="${BLD}/lib/python3.12/site-packages"
+
+# ── (2) wasm CPython target: un-stale its cross sysconfigdata ───────────────
+_SYS="_sysconfigdata__emscripten_wasm32-emscripten"
+_SYS_SRC="${DEPS}/lib/python3.12/${_SYS}.py"
+[ -f "${_SYS_SRC}" ] || { echo "numpy(wasm): FATAL — wasm sysconfigdata missing at ${_SYS_SRC} (install python312 wasm first)" >&2; exit 1; }
+_CROSSSYS="${CVC_BUILD_DIR}/crosssys"; mkdir -p "${_CROSSSYS}"
+cp "${_SYS_SRC}" "${_CROSSSYS}/"
+# The build-time absolute prefix (/tmp/cvcpkg-builder/.../install) is baked into
+# INCLUDEPY/prefix/exec_prefix/LIBDIR/LIBPL; point them at the real deps prefix.
+sed -i -E "s#/tmp/cvcpkg-builder/[^'\"]*/install#${DEPS}#g" "${_CROSSSYS}/${_SYS}.py"
+export _PYTHON_SYSCONFIGDATA_NAME="${_SYS}"
+export PYTHONPATH="${_CROSSSYS}:${_BRIDGE}${PYTHONPATH:+:${PYTHONPATH}}"
+# Fallback include path for the wasm Python.h in case a probe reads a stale -I.
+export CPATH="${DEPS}/include/python3.12${CPATH:+:${CPATH}}"
+
+# ── (3) meson emscripten cross-file ─────────────────────────────────────────
+_NODE="$(command -v node 2>/dev/null || ls "${EMSDK}"/node/*/bin/node 2>/dev/null | head -1)"
+_CROSS="${CVC_BUILD_DIR}/emscripten-cross.txt"
+cat > "${_CROSS}" <<EOF
+[binaries]
+c = 'emcc'
+cpp = 'em++'
+ar = 'emar'
+ranlib = 'emranlib'
+exe_wrapper = '${_NODE}'
+
+[built-in options]
+c_args = ['-fPIC']
+cpp_args = ['-fPIC']
+
+[host_machine]
+system = 'emscripten'
+cpu_family = 'wasm32'
+cpu = 'wasm32'
+endian = 'little'
+EOF
+
+# ── (4) build the wheel (from source, offline, no BLAS) ─────────────────────
+WHEELOUT="${CVC_BUILD_DIR}/wheelhouse"; mkdir -p "${WHEELOUT}"
+_dump_meson_log() {
+    local _log="${CVC_BUILD_DIR}/meson/meson-logs/meson-log.txt"
+    echo "----- meson-log.txt tail -----" >&2
+    [ -f "${_log}" ] && tail -n 120 "${_log}" >&2 || echo "(no meson log)" >&2
+}
+if ! "${PY_NATIVE}" -m pip wheel \
+    --no-build-isolation --no-deps --no-index --no-cache-dir \
+    --wheel-dir "${WHEELOUT}" \
+    -C setup-args=--cross-file="${_CROSS}" \
+    -C setup-args=-Dallow-noblas=true \
+    -C builddir="${CVC_BUILD_DIR}/meson" \
+    -C compile-args=-j"${CVC_JOBS}" \
+    "${CVC_SOURCE_DIR}"; then
+    _dump_meson_log
+    exit 1
+fi
+
+WHEEL="$(find "${WHEELOUT}" -maxdepth 1 -name 'numpy-*.whl' | head -1)"
+[ -n "${WHEEL}" ] || { echo "numpy(wasm): no wheel produced" >&2; exit 1; }
+echo "numpy(wasm): built $(basename "${WHEEL}")"
+
+# ── (5) install by EXTRACTION (native pip rejects the wasm platform tag) ────
+# stage_bundle ships the whole CVC_INSTALL_DIR, so extract only into
+# site-packages to keep the staged tree pure.
+DEST="${CVC_INSTALL_DIR}/lib/python3.12/site-packages"; mkdir -p "${DEST}"
+"${PY_NATIVE}" -m zipfile -e "${WHEEL}" "${DEST}"
+echo "numpy(wasm): extracted into ${DEST}"
+find "${CVC_INSTALL_DIR}" -maxdepth 5 \( -name '_multiarray_umath*.so' -o -name 'version.py' -path '*numpy*' \) -print | head
+[ -d "${DEST}/numpy" ] || { echo "numpy(wasm): FATAL — numpy/ not staged" >&2; exit 1; }
+echo "numpy(wasm) build complete (no-BLAS static wasm)"
