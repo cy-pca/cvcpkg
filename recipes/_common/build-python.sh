@@ -96,21 +96,62 @@ CONFIGURE_ARGS=(
     --enable-shared
     # pip is included in the stdlib; ensurepip bootstraps it at build time.
     --with-ensurepip=upgrade
-    # Point at the cvcpkg OpenSSL so ssl/hashlib use our library, not
-    # whatever happens to be on PATH.  openssldir=/etc/ssl (baked into our
-    # OpenSSL build) means CA verification uses the host system trust store.
-    --with-openssl="${CVC_DEPS_PREFIX}"
-    --with-ssl-default-suites=openssl
     # Install to versioned paths: lib/python3.X/, bin/python3.X, etc.
     # Multiple Python minor versions coexist in the same prefix this way.
     --enable-ipv6
 )
 
+# OpenSSL for ssl/hashlib — the cvcpkg OpenSSL (openssldir=/etc/ssl, so CA
+# verification uses the host trust store). SKIPPED on wasm: the single-threaded
+# wasm OpenSSL does not define OPENSSL_THREADS, and CPython's _ssl/_hashlib
+# hard-error without it ("Python requires thread-safe OpenSSL"). The emscripten
+# config.site disables those modules and a browser CPython needs no TLS; cosmo
+# and wasi keep OpenSSL.
+if [ "${CVC_PLATFORM}" != "wasm" ]; then
+    CONFIGURE_ARGS+=(--with-openssl="${CVC_DEPS_PREFIX}" --with-ssl-default-suites=openssl)
+fi
+
 # Cross-compilation targets: static-only, explicit host, no readline.
 if [ "$IS_CROSS" = true ]; then
-    CONFIGURE_ARGS+=(--disable-shared --host="${CROSS_HOST}")
-    # readline/ncurses not available on wasm/wasi/cosmo.
-    CONFIGURE_ARGS+=(--with-readline=tkinter)
+    # CPython's configure REQUIRES an explicit --build when cross-compiling
+    # ("configure: error: Cross compiling required --host=HOST-TUPLE and
+    # --build=ARCH"), even though it detects the build type — supply the build
+    # triple from the tree's config.guess (native host, unaffected by CC=emcc).
+    _build_triple="$(./config.guess)"
+    CONFIGURE_ARGS+=(--disable-shared --host="${CROSS_HOST}" --build="${_build_triple}")
+    # readline/ncurses not available on wasm/wasi/cosmo. NOTE: --with-readline
+    # only accepts editline|readline|no; the old "tkinter" value is invalid and
+    # CPython 3.12's configure rejects it ("proper usage is --with(out)-readline
+    # [=editline|readline|no]") — only reached once the earlier cross gates pass.
+    CONFIGURE_ARGS+=(--without-readline)
+
+    # Emscripten needs more than a host triple. CPython's cross-build wants:
+    #   (a) a NATIVE interpreter of the SAME version to run build-time scripts
+    #       (--with-build-python), since the cross python can't run on the host;
+    #   (b) a config.site of ac_cv_* answers for the feature checks configure
+    #       cannot run (a wasm conftest binary won't execute on the build host).
+    # CC/CXX/CFLAGS are emcc/emscripten here (env-wasm), so build the native
+    # helper in a side dir with the native toolchain and the emscripten flags
+    # stripped.
+    if [ "${CVC_PLATFORM}" = "wasm" ]; then
+        _NATIVE_PY="${CVC_SOURCE_DIR}/cross-build/build"
+        if [ ! -x "${_NATIVE_PY}/python" ]; then
+            echo "build-python(wasm): building a full native ${PYTHON_MINOR} build-python for --with-build-python"
+            mkdir -p "${_NATIVE_PY}"
+            # A FULL native build (not just the `python` target): the cross
+            # install runs this interpreter for compileall, so it needs its
+            # extension modules (math, etc.) — `make python` alone omits them
+            # ("ModuleNotFoundError: No module named 'math'").
+            ( cd "${_NATIVE_PY}" && \
+              env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u PKG_CONFIG_PATH \
+                  CC=cc CXX=c++ "${CVC_SOURCE_DIR}/configure" && \
+              env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS \
+                  CC=cc CXX=c++ ${MAKE} -j"${CVC_JOBS}" )
+        fi
+        CONFIGURE_ARGS+=(--with-build-python="${_NATIVE_PY}/python")
+        _cfg_site="${CVC_SOURCE_DIR}/Tools/wasm/config.site-wasm32-emscripten"
+        [ -f "${_cfg_site}" ] && export CONFIG_SITE="${_cfg_site}"
+    fi
 else
     # Use the wide-char ncurses (libncursesw) for curses + readline.
     CONFIGURE_ARGS+=(--with-readline=readline)
@@ -132,10 +173,38 @@ if [ "${PYTHON_DISABLE_GIL}" = "1" ]; then
     CONFIGURE_ARGS+=(--disable-gil)
 fi
 
-./configure "${CONFIGURE_ARGS[@]}"
+# [wasm] Disable _decimal. CPython's emscripten build archives _decimal.o into
+# the static libpython3.X.a but does NOT archive its bundled libmpdec objects
+# (Modules/_decimal/libmpdec/*.o), so libpython carries undefined mpd_* symbols
+# (mpd_isspecial, mpd_version, ...) that break ANY final wasm app embedding it
+# (e.g. VolRover / the vtk-python-cp312 import harness — wasm-ld: undefined
+# symbol: mpd_isspecial). `decimal` is unused for the graphics/scene use case, so
+# disable it via CPython's own module-state knob (the same mechanism its wasm
+# config.site uses for unsupported modules) to keep libpython self-contained.
+# Keeping decimal would instead require archiving the bundled libmpdec — a
+# follow-up if the module is ever needed in the browser.
+case "${CVC_PLATFORM}" in
+    wasm|wasm-mt)
+        CONFIGURE_ARGS+=(py_cv_module__decimal=n/a)
+        ;;
+esac
 
-$MAKE -j "${CVC_JOBS}"
-$MAKE install
+# wasm builds must go through the emscripten compiler wrappers
+# (emconfigure/emmake), which put emcc/em++ on CC/CXX. env-wasm.sh only prepares
+# the emsdk PATH (so cmake toolchain files resolve) — it does NOT set CC=emcc, so
+# a bare ./configure builds CPython with native cc and dies compiling
+# Python/emscripten_signal.c (emscripten.h not found). wasi/cosmo set CC via their
+# own env, so they configure/make bare.
+_EMWRAP=""
+[ "${CVC_PLATFORM}" = "wasm" ] && _EMWRAP="emmake"
+if [ "${CVC_PLATFORM}" = "wasm" ]; then
+    emconfigure ./configure "${CONFIGURE_ARGS[@]}"
+else
+    ./configure "${CONFIGURE_ARGS[@]}"
+fi
+
+${_EMWRAP} $MAKE -j "${CVC_JOBS}"
+${_EMWRAP} $MAKE install
 
 # --- Relocatable RPATH post-fixup (native only) ---
 # CPython's Makefile bakes the absolute build-time LDFLAGS rpath; patch
