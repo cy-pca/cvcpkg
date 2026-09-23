@@ -153,6 +153,22 @@ if [ "${PYTHON_DISABLE_GIL}" = "1" ]; then
     CONFIGURE_ARGS+=(--disable-gil)
 fi
 
+# [wasm] Disable _decimal. CPython's emscripten build archives _decimal.o into
+# the static libpython3.X.a but does NOT archive its bundled libmpdec objects
+# (Modules/_decimal/libmpdec/*.o), so libpython carries undefined mpd_* symbols
+# (mpd_isspecial, mpd_version, ...) that break ANY final wasm app embedding it
+# (e.g. VolRover / the vtk-python-cp312 import harness — wasm-ld: undefined
+# symbol: mpd_isspecial). `decimal` is unused for the graphics/scene use case, so
+# disable it via CPython's own module-state knob (the same mechanism its wasm
+# config.site uses for unsupported modules) to keep libpython self-contained.
+# Keeping decimal would instead require archiving the bundled libmpdec — a
+# follow-up if the module is ever needed in the browser.
+case "${CVC_PLATFORM}" in
+    wasm|wasm-mt)
+        CONFIGURE_ARGS+=(py_cv_module__decimal=n/a)
+        ;;
+esac
+
 # wasm builds must go through the emscripten compiler wrappers
 # (emconfigure/emmake), which put emcc/em++ on CC/CXX. env-wasm.sh only prepares
 # the emsdk PATH (so cmake toolchain files resolve) — it does NOT set CC=emcc, so
