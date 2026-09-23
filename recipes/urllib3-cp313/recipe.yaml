@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: urllib3-cp313
   upstream_version: "2.7.0"
-  cvc_revision: 2
+  cvc_revision: 3
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -40,6 +40,11 @@ depends:
     - name: hatchling-cp313
     - name: hatch-vcs-cp313
     - name: setuptools-scm-cp313
+    - name: packaging-cp313
+    - name: pathspec-cp313
+    - name: pluggy-cp313
+    - name: trove-classifiers-cp313
+    - name: calver-cp313
   runtime:
     - name: python313
   host_tools:

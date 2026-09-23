@@ -9,7 +9,7 @@
 # METADATA), so a consumer's later `pip install <other>` coexists and pip's
 # resolver sees this package as satisfied.
 #
-# BUILD BACKEND: hatchling-cp311, hatch-vcs-cp311, hatch-fancy-pypi-readme-cp311
+# BUILD BACKEND: hatchling-cp311, hatch-vcs-cp311, hatch-fancy-pypi-readme-cp311, packaging-cp311, pathspec-cp311, pluggy-cp311, trove-classifiers-cp311, calver-cp311
 # --no-build-isolation means pip does NOT download the PEP-517 backend into a
 # throwaway venv (that would be both non-hermetic and impossible offline): the
 # backend must ALREADY be importable.  It is declared in recipe.yaml as a

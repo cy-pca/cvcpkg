@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: attrs-cp311
   upstream_version: "26.1.0"
-  cvc_revision: 3
+  cvc_revision: 4
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -40,6 +40,11 @@ depends:
     - name: hatchling-cp311
     - name: hatch-vcs-cp311
     - name: hatch-fancy-pypi-readme-cp311
+    - name: packaging-cp311
+    - name: pathspec-cp311
+    - name: pluggy-cp311
+    - name: trove-classifiers-cp311
+    - name: calver-cp311
   runtime:
     - name: python311
   host_tools:
