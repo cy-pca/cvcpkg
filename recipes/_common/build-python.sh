@@ -243,10 +243,25 @@ if [ "$IS_CROSS" = false ]; then
         # killing the build.
         _STDLIB_DIR="${CVC_INSTALL_DIR}/lib/python${PYTHON_LDVERSION}"
         [ -d "${_STDLIB_DIR}" ] || _STDLIB_DIR="${CVC_INSTALL_DIR}/lib/python${PYTHON_MINOR}"
+        # `realpath --relative-to` is GNU coreutils only; the BSD realpath in
+        # every *BSD base rejects it ("realpath: unknown option -- -") and, under
+        # set -e, fails the whole build after ensurepip has already run — the real
+        # openbsd python blocker behind libffi. Probe once and fall back to a
+        # lexical computation: every extension .so lives under CVC_INSTALL_DIR/lib,
+        # so the path back to lib/ is one ".." per path segment below it.
+        _HAVE_RELTO=0
+        realpath --relative-to=/ / >/dev/null 2>&1 && _HAVE_RELTO=1
         if [ -d "${_STDLIB_DIR}" ]; then
             find "${_STDLIB_DIR}" -name '*.so' -print0 \
                 | while IFS= read -r -d '' _so; do
-                    _rel="$(realpath --relative-to="$(dirname "${_so}")" "${CVC_INSTALL_DIR}/lib")"
+                    if [ "${_HAVE_RELTO}" = 1 ]; then
+                        _rel="$(realpath --relative-to="$(dirname "${_so}")" "${CVC_INSTALL_DIR}/lib")"
+                    else
+                        _sub="$(dirname "${_so}")"; _sub="${_sub#"${CVC_INSTALL_DIR}/lib/"}"
+                        _rel=""; _oldifs="$IFS"; IFS='/'
+                        for _seg in ${_sub}; do _rel="../${_rel}"; done
+                        IFS="${_oldifs}"; _rel="${_rel%/}"; [ -n "${_rel}" ] || _rel="."
+                    fi
                     patchelf --set-rpath "\$ORIGIN/${_rel}" "${_so}" 2>/dev/null || true
                   done
         else
