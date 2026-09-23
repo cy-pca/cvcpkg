@@ -21,32 +21,32 @@ source "${SCRIPT_DIR}/../_common/env-wasm.sh"   # emsdk PATH (emcc/em++/emar/nod
 DEPS="${CVC_DEPS_PREFIX:?}"
 BLD="${CVC_BUILD_PREFIX:-${DEPS}}"
 
-# ── (1) NATIVE python3.12 (the wasm libpython cannot run) ───────────────────
-# host_tools:python312 provisions it (builder _collect_host_tools mechanism-3,
-# merged in #60); fleet NODES may run an older cvcpkg, so fall back to fetching
-# the published native python312 directly (mirrors vtk-python-cp312/build-wasm).
-PY_NATIVE=""
-for _c in "${BLD}/bin/python3.12" "${DEPS}/bin/python3.12" "$(command -v python3.12 2>/dev/null || true)"; do
-    [ -n "${_c}" ] && [ -x "${_c}" ] || continue
-    _v="$("${_c}" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || true)"
-    [ "${_v}" = "3.12" ] && { PY_NATIVE="${_c}"; break; }
-done
-if [ -z "${PY_NATIVE}" ]; then
-    _hp="$(uname -s 2>/dev/null || echo Linux)"; case "${_hp}" in Linux) _hp=linux;; Darwin) _hp=macos;; *) _hp=linux;; esac
-    _ha="$(uname -m 2>/dev/null || echo x86_64)"; case "${_ha}" in x86_64|amd64) _ha=x86_64;; arm64|aarch64) _ha=arm64;; esac
-    _cvc="cvcpkg"; command -v cvcpkg >/dev/null 2>&1 || _cvc="python3 -m cvcpkg"
-    echo "numpy(wasm): no native python3.12 in prefix; provisioning via cvcpkg (${_hp}/${_ha})"
-    ${_cvc} install python312 --platform "${_hp}" --arch "${_ha}" --config release --link shared \
-        --prefix "${CVC_BUILD_DIR}/hostpy312" --no-fallback-to-source >&2 || true
-    [ -x "${CVC_BUILD_DIR}/hostpy312/bin/python3.12" ] && PY_NATIVE="${CVC_BUILD_DIR}/hostpy312/bin/python3.12"
+# ── (1) NATIVE build toolchain (the wasm libpython can't run meson/Cython) ──
+# Provision a COMPLETE native env — python3.12 + Cython + meson-python + meson +
+# ninja + pkg-config — into a private host prefix via cvcpkg (all published
+# native recipes). This is robust regardless of whether the node's cvcpkg has
+# the _collect_host_tools host-tool fix (#60) or bridges the build prefix: the
+# fresh host python must have Cython/meson-python importable AND `cython` on PATH
+# (meson invokes it as a program), which only co-installing them guarantees.
+HOSTENV="${CVC_BUILD_DIR}/hostenv"
+_hp="$(uname -s 2>/dev/null || echo Linux)"; case "${_hp}" in Linux) _hp=linux;; Darwin) _hp=macos;; *) _hp=linux;; esac
+_ha="$(uname -m 2>/dev/null || echo x86_64)"; case "${_ha}" in x86_64|amd64) _ha=x86_64;; arm64|aarch64) _ha=arm64;; esac
+_cvc="cvcpkg"; command -v cvcpkg >/dev/null 2>&1 || _cvc="python3 -m cvcpkg"
+echo "numpy(wasm): provisioning native build toolchain (${_hp}/${_ha}) -> ${HOSTENV}"
+${_cvc} install python312 cython-cp312 meson-python-cp312 meson ninja pkg-config \
+    --platform "${_hp}" --arch "${_ha}" --config release --link shared \
+    --prefix "${HOSTENV}" --no-fallback-to-source >&2
+PY_NATIVE="${HOSTENV}/bin/python3.12"
+[ -x "${PY_NATIVE}" ] || { echo "numpy(wasm): FATAL — native python3.12 not provisioned in ${HOSTENV}" >&2; ls -la "${HOSTENV}/bin" >&2 2>/dev/null; exit 1; }
+export PATH="${HOSTENV}/bin:${PATH}"
+# meson looks for `cython`/`cython3` as programs; ensure both names resolve.
+if [ ! -x "${HOSTENV}/bin/cython" ]; then
+    for _cy in "${HOSTENV}"/bin/cython3 "${HOSTENV}"/bin/cython3.*; do
+        [ -x "${_cy}" ] && ln -sf "$(basename "${_cy}")" "${HOSTENV}/bin/cython" && break
+    done
 fi
-[ -n "${PY_NATIVE}" ] || { echo "numpy(wasm): FATAL — no native python3.12 to drive the meson build" >&2; exit 1; }
-echo "numpy(wasm): host interpreter ${PY_NATIVE}"
-
-# Native build tools: meson/ninja/pkg-config CLIs (host_tools) first on PATH;
-# cython + meson-python live in the build prefix's site-packages — bridge them.
-export PATH="${BLD}/bin:${DEPS}/bin:${PATH}"
-_BRIDGE="${BLD}/lib/python3.12/site-packages"
+_BRIDGE="${HOSTENV}/lib/python3.12/site-packages"
+echo "numpy(wasm): host interpreter ${PY_NATIVE}; cython=$(command -v cython 2>/dev/null || echo MISSING); meson=$(command -v meson 2>/dev/null || echo MISSING)"
 
 # ── (2) wasm CPython target: un-stale its cross sysconfigdata ───────────────
 _SYS="_sysconfigdata__emscripten_wasm32-emscripten"
