@@ -315,3 +315,83 @@ class TestRelocateWindowsSitePackages:
         (prefix / "Lib" / "site-packages" / "shiboken6").mkdir(parents=True)
         _relocate_windows_site_packages(prefix)  # no lib/python*/site-packages → no-op
         assert (prefix / "Lib" / "site-packages" / "shiboken6").exists()
+
+
+class _BrokenDataFilter:
+    """Wraps a real TarFile but makes ``extractall(filter='data')`` raise the exact
+    AttributeError the broken hostedtoolcache 3.12.14 stdlib raises — so the fallback
+    is exercised deterministically on every platform (rather than depending on whether
+    this interpreter's own tarfile happens to reference os.path.ALLOW_MISSING)."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def extractall(self, path, filter=None):  # noqa: A002
+        if filter == "data":
+            raise AttributeError("module 'posixpath' has no attribute 'ALLOW_MISSING'")
+        return self._inner.extractall(path=path, filter=filter)
+
+    def getmembers(self):
+        return self._inner.getmembers()
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 12),
+    reason="_safe_extractall only uses the tarfile filter + broken-filter fallback on Python >= 3.12",
+)
+def test_safe_extractall_falls_back_when_data_filter_is_broken(tmp_path):
+    """A CPython build whose tarfile 'data' filter references os.path.ALLOW_MISSING
+    while posixpath lacks it (GitHub Actions hostedtoolcache 3.12.14) must NOT crash
+    the install — _safe_extractall extracts with a manual guard and still succeeds."""
+    from cvcpkg.installer import _safe_extractall
+
+    src = tmp_path / "src"
+    (src / "sub").mkdir(parents=True)
+    (src / "a.txt").write_text("hello")
+    (src / "sub" / "b.txt").write_text("world")
+    arc = tmp_path / "bundle.tar.gz"
+    with tarfile.open(arc, "w:gz") as tf:
+        tf.add(src / "a.txt", arcname="a.txt")
+        tf.add(src / "sub" / "b.txt", arcname="sub/b.txt")
+
+    dest = tmp_path / "prefix"
+    with tarfile.open(arc, "r:gz") as tf:
+        _safe_extractall(_BrokenDataFilter(tf), dest)  # must not raise
+
+    assert (dest / "a.txt").read_text() == "hello"
+    assert (dest / "sub" / "b.txt").read_text() == "world"
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 12),
+    reason="_safe_extractall only uses the tarfile filter + broken-filter fallback on Python >= 3.12",
+)
+def test_safe_extractall_broken_filter_still_rejects_traversal(tmp_path):
+    """When the broken-filter fallback runs, the manual guard must reject a '..'
+    path-traversal member rather than extract it fully-trusted."""
+    from cvcpkg.installer import _safe_extractall
+
+    arc = tmp_path / "evil.tar.gz"
+    with tarfile.open(arc, "w:gz") as tf:
+        info = tarfile.TarInfo(name="../escape.txt")
+        data = b"pwned"
+        info.size = len(data)
+        tf.addfile(info, io.BytesIO(data))
+
+    with tarfile.open(arc, "r:gz") as tf:
+        with pytest.raises(InstallError, match="unsafe path"):
+            _safe_extractall(_BrokenDataFilter(tf), tmp_path / "prefix")
+    assert not (tmp_path / "escape.txt").exists()
+
+
+def test_safe_extractall_reraises_unrelated_attributeerror(tmp_path):
+    """The fallback is scoped to the ALLOW_MISSING stdlib bug — any other
+    AttributeError propagates unchanged."""
+    from cvcpkg.installer import _safe_extractall
+
+    class Boom:
+        def extractall(self, path, filter=None):  # noqa: A002
+            raise AttributeError("something else entirely")
+
+    with pytest.raises(AttributeError, match="something else"):
+        _safe_extractall(Boom(), tmp_path)

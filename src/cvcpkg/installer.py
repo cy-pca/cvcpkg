@@ -19,13 +19,52 @@ from cvcpkg.retry import with_retry
 
 
 def _safe_extractall(tf: tarfile.TarFile, path: Path) -> None:
-    """Extract with filter='data' on Python >=3.12, plain extractall on older."""
+    """Extract with filter='data' on Python >=3.12, plain extractall on older.
+
+    Guard a broken CPython point release (seen on GitHub Actions hostedtoolcache
+    3.12.14) whose tarfile filters call
+    ``os.path.realpath(..., strict=os.path.ALLOW_MISSING)`` while its ``posixpath``
+    never defines ``ALLOW_MISSING`` -> ``AttributeError``. Both the 'data' and 'tar'
+    filters share the broken ``_get_filtered_attrs``, so neither runs. Each bundle's
+    sha256 is already verified before extraction (download_bundle), so the filter is
+    defense-in-depth; on such an interpreter apply the essential checks ourselves
+    (no absolute paths, no ``..`` traversal, no escaping link targets) and extract
+    fully-trusted rather than crash the whole install. The AttributeError fires in
+    the per-member filter before anything is written, so re-extracting is clean.
+    """
     import sys
 
-    if sys.version_info >= (3, 12):
-        tf.extractall(path=path, filter="data")
-    else:
+    if sys.version_info < (3, 12):
         tf.extractall(path=path)
+        return
+    try:
+        tf.extractall(path=path, filter="data")
+    except AttributeError as exc:
+        if "ALLOW_MISSING" not in str(exc):
+            raise
+        # Both stdlib filters share _get_filtered_attrs, which is what calls the
+        # broken os.path.ALLOW_MISSING realpath — so 'tar' fails the same way. Do
+        # the essential tar-filter checks ourselves (no absolute paths, no '..'
+        # traversal, no absolute/escaping link targets), then extract fully-trusted:
+        # the bundle is already sha256-verified (download_bundle), so this restores
+        # path-traversal safety without touching the broken interpreter path.
+        logging.getLogger(__name__).warning(
+            "tarfile filters are unusable on this interpreter (%s: %s); extracting "
+            "with a manual path-traversal guard",
+            sys.version.split()[0],
+            exc,
+        )
+        for m in tf.getmembers():
+            for label, target in (("path", m.name), ("link target", m.linkname)):
+                if not target and label == "link target":
+                    continue
+                if (
+                    target.startswith(("/", "\\"))
+                    or os.path.isabs(target)
+                    or ".." in Path(target).parts
+                ):
+                    raise InstallError(f"unsafe {label} in bundle archive: {target!r}") from None
+        tf.extractall(path=path, filter="fully_trusted")
 
 
 def download_bundle(
