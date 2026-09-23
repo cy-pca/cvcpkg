@@ -17,7 +17,17 @@ name: Bulk yank (python arch cleanup)
 #                           it via the resolver's same-version tiebreak.  Keeps
 #                           the noarch and the windows/x86_64 concrete.
 #
-# Targets are DERIVED live from the catalog, so the set is always current.
+#   explicit-names        — fully retire EVERY published build of the column
+#                           names passed in `names` (comma-separated).  For
+#                           columns whose recipe was deleted from the repo, so
+#                           the catalog still serves an artifact nothing
+#                           produces (e.g. cy-pca/cvcpkg #66 dropped
+#                           protobuf-cp313t + proto-plus-cp313t +
+#                           googleapis-common-protos-cp313t).  Unlike the two
+#                           class targets this is explicit, not derived — it
+#                           yanks exactly the names given, nothing adjacent.
+#
+# Class targets are DERIVED live from the catalog, so the set is always current.
 # `apply` defaults false: a dry run prints exactly what it would yank.  Yank is
 # reversible (`cvcpkg unyank`), unlike nuke.
 
@@ -28,7 +38,12 @@ on:
         description: "Which class to yank"
         required: true
         type: choice
-        options: ["misclassified-noarch", "pure-stale-concrete"]
+        options: ["misclassified-noarch", "pure-stale-concrete", "explicit-names"]
+      names:
+        description: "For target=explicit-names ONLY: comma-separated column names to fully retire (every build of each)"
+        required: false
+        default: ""
+        type: string
       apply:
         description: "Actually yank (false = dry run, just report)"
         required: true
@@ -62,6 +77,7 @@ jobs:
         env:
           CVCPKG_TOKEN: ${{ secrets.CVCPKG_ADMIN_TOKEN }}
           TARGET: ${{ inputs.target }}
+          NAMES: ${{ inputs.names }}
           APPLY: ${{ inputs.apply }}
           SERVER: ${{ inputs.server }}
         run: |
@@ -90,7 +106,18 @@ jobs:
           BASES = ("cython", "protobuf", "sqlalchemy")
           is_base = lambda n: any(re.match(rf"^{b}-cp3\d\d?t?$", n) for b in BASES)
 
-          if target == "misclassified-noarch":
+          if target == "explicit-names":
+              # Fully retire every build of the named columns (recipe deleted
+              # from the repo, so the catalog serves an orphan).  Explicit, not
+              # derived: yank exactly these names, nothing adjacent.
+              wanted = {n.strip() for n in os.environ.get("NAMES", "").split(",") if n.strip()}
+              if not wanted:
+                  sys.exit("explicit-names: `names` input is empty — nothing to yank")
+              tgt = [b for b in builds if b["name"] in wanted]
+              missing = sorted(wanted - {b["name"] for b in tgt})
+              if missing:
+                  print(f"note: no published builds for: {', '.join(missing)}", flush=True)
+          elif target == "misclassified-noarch":
               # the any/noarch bundles of the 11 C-extension columns
               tgt = [b for b in builds if is_base(b["name"]) and b["platform"] == "any"]
           else:  # pure-stale-concrete
