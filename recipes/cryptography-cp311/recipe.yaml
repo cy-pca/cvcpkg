@@ -21,7 +21,12 @@ recipe:
   # `maturin>=1.9.4,<2,!=1.12.0` + `cffi>=2.0.0` + setuptools, all of which the
   # matrix now satisfies (maturin 1.14.1, cffi 2.0.0, setuptools 80.9.0), so
   # there was no reason to chase 50.0.0.
-  cvc_revision: 3
+  # Bumped 3 -> 4: declare pycparser-cp311 as a build dep. cffi 2.0 no longer
+  # vendors pycparser, so build_openssl.py's ffi.cdef() needs the external
+  # pycparser staged in the build prefix; without it the build failed on the dev
+  # cluster with "No module named 'pycparser'" (the artifact is otherwise
+  # unchanged — pycparser is a build-time-only need).
+  cvc_revision: 4
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -86,6 +91,12 @@ depends:
     # `$PYO3_PYTHON ../../_cffi_src/build_openssl.py`, which imports cffi to
     # generate _openssl.c before cc compiles it into the crate.
     - name: cffi-cp311
+    # cffi 2.0 dropped its vendored pycparser (the cffi/_pycparser subpackage is
+    # gone) and imports the EXTERNAL pycparser the first time build_openssl.py
+    # runs ffi.cdef(). Staging cffi as a build edge does not pull cffi's own
+    # runtime deps into the build prefix, so pycparser must be declared here too
+    # or the build dies with "No module named 'pycparser'" (dev-cluster #70).
+    - name: pycparser-cp311
     # That same build_openssl.py imports setuptools (and build.rs asks setuptools
     # for the Python include dirs), which is also why upstream lists setuptools in
     # [build-system] requires.
