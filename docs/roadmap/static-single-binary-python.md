@@ -211,6 +211,55 @@ The static-embed happy path, independent of platform **[R1]**:
 
 ---
 
+## 8. Case B — execution plan (2026-09-20)
+
+This section turns Case B into a sequenced plan. Two decisions since the doc above was written
+resolve §7 Q8 (the VolRover UI question) and reorder the risk.
+
+**Decision 1 — the browser UI is Dear ImGui on a GL context, not Qt-for-WebAssembly.** Rationale:
+one UI codebase native + wasm; and **Qt-for-WebAssembly is GPLv3-or-commercial only (no LGPL)**, which
+would force open-sourcing or a commercial license for a proprietary build. Decisive enabler: the
+ImGui + VTK + GL shell already exists in cvcGL and is Qt-free —
+
+- VTK owns the GL context on every platform via its object factory (`vtkRenderWindow::New()` →
+  `vtkWebAssemblyOpenGLRenderWindow` under Emscripten); ImGui uses **`imgui_impl_opengl3` only, fed
+  from the VTK interactor** (`src/cvcGL/SceneRenderer.cpp`, `CameraController.cpp`, `ImGuiOverlay.{h,cpp}`).
+- `src/cvcGL/examples/volren_bunny.cpp` **already renders + scripts a GPU volume through this in the
+  browser**; `inc/cvc/gl/ImGuiBinding.h` (`cvc::gl::ui`) provides `cvc::state`-bound widgets, and
+  `bindings/pycvc/pycvc_imgui.i` already wraps them for Python.
+- **Prerequisite:** wasm ImGui has **no keyboard input today** (mouse/touch only). Routing
+  `vtkWebAssemblyRenderWindowInteractor` key/char events into `ImGuiIO` in `ImGuiOverlay` is the
+  linchpin for an in-browser REPL/editor and is the main net-new UI-side engineering.
+
+**Decision 2 — sequence the cheap, decisive spike first.** The only thing forcing the hard
+VTK-wrap-Python-on-wasm problem (§4 step 1) is `pycvc_gl` linking `vtkWrappingPythonCore`. The
+user-facing goal — script the scene — needs only the **cvc/cvcGL** surface, which can be bound
+*without* VTK's Python wrappers.
+
+- **Spike A (recommended first, ~1 wk):** a slim pybind11/SWIG module exposing only cvc types
+  (`cvc::gl::SceneGraph`, camera, volume, transfer function, `cvc::state`) with **no `vtkObject` in the
+  Python surface** — static, inittab-registered, driven from an in-browser console. Gate: `import
+  cvcscene` works in the wasm interpreter, then the scene updates from typed Python in-browser. This
+  also validates the static-CPython + `PyImport_AppendInittab` spine that Spike B needs.
+- **Spike B (optional, ~1–2 wk):** the §4 step-1 go/no-go — wasm VTK rebuilt `VTK_WRAP_PYTHON=ON` +
+  `BUILD_STATIC` + `BUILD_SHARED_LIBS=OFF`, wrappers registered via the generated `<TARGET>_load()`
+  (§2.3), gated on `import vtkmodules.vtkRenderingVolumeOpenGL2` succeeding headless. Only needed if
+  the full VTK/numpy Python API in-browser is required beyond Spike A. numpy-on-wasm (against emsdk
+  5.0.7) is a separable follow-on, not part of the gate.
+
+**Execution host:** rendering-capable wasm VTK builds only from a **Linux host** (the Windows
+`build-wasm.ps1` is compute-only), so both spikes run on catx-03 as `github-runner`.
+
+**In-app IDE (native + browser identical):** vendor MIT-licensed components — **ImGuiColorTextEdit**
+(maintained fork) for the source editor, the **Dear ImGui console** scaffold for the REPL, and
+**jedi** run in-process by the embedded interpreter for completion/hover (identical on both targets);
+optionally **tree-sitter** for highlighting and **Zep** if modal editing is wanted. We roll only the
+integration (keyboard seam, console↔interpreter glue, editor↔MEMFS/zipos, traceback→diagnostics). Full
+rationale, license table, and build-vs-borrow analysis:
+[`../../../cvc-engagement-docs/modernization/volrover3-wasm-embedded-python-and-imgui-ide.md`](../../../cvc-engagement-docs/modernization/volrover3-wasm-embedded-python-and-imgui-ide.md).
+
+---
+
 ### Key files cited
 
 **cvcpkg (`/home/joe/src/cvc/libcvc-deps/`)**
