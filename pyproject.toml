@@ -45,14 +45,28 @@ fastapi = { version = ">=0.100", optional = true }
 uvicorn = { version = ">=0.20", optional = true }
 pydantic = { version = "^2.0", optional = true }
 python-multipart = { version = ">=0.0.5", optional = true }
-sqlalchemy = "^2.0"
+# sqlalchemy / greenlet / cryptography are gated off Haiku so that a bare
+# `pip install .` yields an installable, pure-Python CLIENT there. Haiku ships
+# no cargo, so cryptography (Rust) cannot build from sdist; greenlet (C, only
+# ever pulled in transitively by sqlalchemy's async support) and sqlalchemy
+# itself are server-only and never imported by the client/builder. Excluding
+# the three on Haiku is what makes a self-contained `cvcpkg` builder possible
+# there (see docs/roadmap/platform-coverage-pypi-blockers.md). Same rationale
+# as the jsonschema < 4.18 pin below, which keeps Rust rpds-py off the BSDs.
+#   * cryptography powers `cvcpkg sign`/`verify` only, imported lazily inside
+#     cvcpkg.signing functions; builders never sign, so the Haiku client simply
+#     reports signing as unavailable if invoked.
+#   * sqlalchemy/greenlet live under cvcpkg.server + cvcpkg.migrations only.
+# platform_system == 'Haiku' on Haiku (sys.platform is 'haiku1', so a
+# sys_platform marker would be brittle across R1/R2).
+sqlalchemy = { version = "^2.0", markers = "platform_system != 'Haiku'" }
 alembic = { version = ">=1.13", optional = true }
 asyncpg = { version = ">=0.28", optional = true }
 aiosqlite = { version = ">=0.20", optional = true }
 aiomysql = { version = ">=0.2", optional = true }
-cryptography = ">=41.0"
+cryptography = { version = ">=41.0", markers = "platform_system != 'Haiku'" }
 httpx = ">=0.24"
-greenlet = ">=3.0"
+greenlet = { version = ">=3.0", markers = "platform_system != 'Haiku'" }
 # Runtime, not dev: cvcpkg.validation imports jsonschema unguarded to build the
 # Draft202012Validator, so `cvcpkg validate` and `cvcpkg pack` raise
 # ModuleNotFoundError in any install that lacks it — which was every install

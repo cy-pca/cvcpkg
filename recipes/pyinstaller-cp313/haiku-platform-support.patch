@@ -1,0 +1,95 @@
+diff --git a/PyInstaller/compat.py b/PyInstaller/compat.py
+index 776b3b8..a1b1e6b 100644
+--- a/PyInstaller/compat.py
++++ b/PyInstaller/compat.py
+@@ -89,11 +89,12 @@
+ is_aix = sys.platform.startswith('aix')
+ is_freebsd = sys.platform.startswith('freebsd')
+ is_openbsd = sys.platform.startswith('openbsd')
++is_haiku = sys.platform.startswith('haiku')
+ is_hpux = sys.platform.startswith('hp-ux')
+ 
+ # Some code parts are similar to several unix platforms (e.g. Linux, Solaris, AIX).
+ # macOS is not considered as unix since there are many platform-specific details for Mac in PyInstaller.
+-is_unix = is_linux or is_solar or is_aix or is_freebsd or is_hpux or is_openbsd
++is_unix = is_linux or is_solar or is_aix or is_freebsd or is_hpux or is_openbsd or is_haiku
+ 
+ # Linux distributions such as Alpine or OpenWRT use musl as their libc implementation and resultantly need specially
+ # compiled bootloaders. On musl systems, ldd with no arguments prints 'musl' and its version.
+diff --git a/PyInstaller/depend/bindepend.py b/PyInstaller/depend/bindepend.py
+index a8b8067..a67d258 100644
+--- a/PyInstaller/depend/bindepend.py
++++ b/PyInstaller/depend/bindepend.py
+@@ -298,6 +298,8 @@ def _get_imports(filename, search_paths):
+             return _get_imports_pefile(filename, search_paths)
+         elif compat.is_darwin:
+             return _get_imports_macholib(filename, search_paths)
++        elif compat.is_haiku:
++            return _get_imports_haiku(filename, search_paths)
+         else:
+             return _get_imports_ldd(filename, search_paths)
+ 
+@@ -351,6 +353,43 @@ def _get_imports_pefile(filename, search_paths):
+     return output
+ 
+ 
++def _get_imports_haiku(filename, search_paths):
++    """Haiku helper for `get_imports`. Haiku ships no `ldd`, so read the
++    DT_NEEDED entries via `readelf -d` and resolve them against
++    runtime_loader's search path (LIBRARY_PATH first, then system libs)."""
++    output = set()
++    try:
++        p = subprocess.run(
++            ['readelf', '-d', os.path.realpath(filename)],
++            stdin=subprocess.DEVNULL, stderr=subprocess.PIPE,
++            stdout=subprocess.PIPE, encoding='utf-8',
++        )
++    except FileNotFoundError:
++        logger.warning("readelf not found; cannot resolve imports of %r", filename)
++        return output
++    lib_dirs = [d for d in os.environ.get('LIBRARY_PATH', '').split(os.pathsep) if d]
++    if search_paths:
++        lib_dirs.extend(search_paths)
++    lib_dirs.extend([
++        '/boot/home/config/non-packaged/lib',
++        '/boot/system/non-packaged/lib',
++        '/boot/system/develop/lib',
++        '/boot/system/lib',
++    ])
++    for line in p.stdout.splitlines():
++        if '(NEEDED)' not in line or '[' not in line or ']' not in line:
++            continue
++        name = line[line.index('[') + 1:line.index(']')]
++        lib = None
++        for d in lib_dirs:
++            cand = os.path.join(d, name)
++            if os.path.isfile(cand):
++                lib = os.path.realpath(cand)
++                break
++        output.add((name, lib))
++    return output
++
++
+ def _get_imports_ldd(filename, search_paths):
+     """
+     Helper for `get_imports`, which uses `ldd` to analyze shared libraries. Used on Linux and other POSIX-like platforms
+diff --git a/bootloader/wscript b/bootloader/wscript
+index e86be20..f210e1a 100644
+--- a/bootloader/wscript
++++ b/bootloader/wscript
+@@ -48,6 +48,7 @@
+     'linux': 'Linux',
+     'freebsd': 'FreeBSD',
+     'openbsd': 'OpenBSD',
++    'haiku': 'Haiku',
+     'win32': 'Windows',
+     'darwin': 'Darwin',
+     'sunos': platform.system(),  # FIXME: inhibits cross-compile
+@@ -64,6 +65,7 @@
+     # Android is also folded back into 'linux', to avoid a message about "cross-compiling for Linux".
+     'Android': 'linux',
+     'FreeBSD': 'freebsd',
++    'Haiku': 'haiku',
+     'Windows': 'win32',
+     'Darwin': 'darwin',
+     'Solaris': 'sunos',

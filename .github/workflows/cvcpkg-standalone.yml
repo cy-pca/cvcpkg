@@ -1,5 +1,5 @@
 # Build self-contained cvcpkg executables for Linux, macOS, Windows,
-# and BSDs (FreeBSD, OpenBSD, NetBSD).
+# the BSDs (FreeBSD, OpenBSD, NetBSD), and Haiku.
 #
 # Produces single-file binaries via PyInstaller that embed the Python
 # runtime and all dependencies — no system Python required.
@@ -14,6 +14,7 @@
 #   cvcpkg-freebsd-x86_64
 #   cvcpkg-openbsd-x86_64
 #   cvcpkg-netbsd-x86_64
+#   cvcpkg-haiku-x86_64
 
 name: Build cvcpkg standalone
 
@@ -331,9 +332,136 @@ jobs:
           path: dist/${{ matrix.artifact }}
           retention-days: 1
 
+  # ─────────────────── Haiku build via SSH ──────────────────────
+  # Haiku is neither Linux nor BSD; PyInstaller ships no Haiku bootloader, so
+  # (exactly like the netbsd column) it is compiled from source on the box with
+  # recipes/pyinstaller-cp313/haiku-platform-tables.patch applied. cvcpkg's
+  # own deps resolve to a pure-Python client on Haiku: pyproject.toml gates
+  # cryptography (Rust)/greenlet/sqlalchemy behind `platform_system != 'Haiku'`,
+  # so `pip install .` needs no cargo. Gated off by default; set repo variable
+  # ENABLE_HAIKU_BUILD=true once a builder with SSH to a Haiku VM is provisioned.
+  build-haiku:
+    if: vars.ENABLE_HAIKU_BUILD == 'true'
+    name: Build (haiku-x86_64)
+    runs-on: ["self-hosted", "Linux", "X64", "cvcpkg-builder"]
+    env:
+      SSH_OPTS: '-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=1000'
+      PYTHON: python3
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Resolve Haiku VM IP
+        id: vm
+        shell: bash
+        run: |
+          # VM name + fallback IP come from repo variables so they are not
+          # hard-coded in this public workflow. HAIKU_BUILDER_VMS/IPS each hold
+          # "primary secondary".
+          resolve_vm_ip() {
+            local vm_name="$1" fallback="$2"
+            if command -v incus >/dev/null 2>&1; then
+              local ip
+              ip=$(incus list "$vm_name" --format csv -c 4 2>/dev/null \
+                   | grep -oE '10\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+              [ -n "$ip" ] && { echo "$ip"; return; }
+            fi
+            echo "$fallback"
+          }
+          vm_is_usable() {
+            [ -n "$1" ] || return 1
+            ssh ${SSH_OPTS} -o ConnectTimeout=5 "user@$1" true >/dev/null 2>&1 || return 1
+            ssh ${SSH_OPTS} -o ConnectTimeout=10 "user@$1" "${PYTHON} -c 'import sys'" >/dev/null 2>&1
+          }
+          read -r VM1 VM2 <<< "${{ vars.HAIKU_BUILDER_VMS }}"
+          read -r IP1 IP2 <<< "${{ vars.HAIKU_BUILDER_IPS }}"
+          HOST=$(resolve_vm_ip "$VM1" "$IP1")
+          FALLBACK=$(resolve_vm_ip "$VM2" "$IP2")
+          if ! vm_is_usable "$HOST"; then
+            if vm_is_usable "$FALLBACK"; then
+              echo "::warning::Primary Haiku VM $HOST failed a health check, falling back to $FALLBACK"
+              HOST="$FALLBACK"
+            else
+              echo "::error::No usable haiku builder: neither $HOST nor $FALLBACK can run ${PYTHON}"
+              exit 1
+            fi
+          fi
+          echo "host=$HOST" >> "$GITHUB_OUTPUT"
+          echo "Selected haiku VM: $HOST"
+
+      - name: Sync repo to Haiku VM
+        shell: bash
+        run: |
+          set -euo pipefail
+          VM="user@${{ steps.vm.outputs.host }}"
+          REMOTE_DIR="/boot/home/cvcpkg-standalone-$$"
+          ssh ${SSH_OPTS} "${VM}" "mkdir -p ${REMOTE_DIR}"
+          # A clean checkout has no src/cvcpkg/recipes (gitignored build
+          # artifact), so the in-tree backend copytree's recipes/ in fresh --
+          # never the shutil.rmtree path that fails on BFS with ENOTEMPTY.
+          tar cf - --exclude='.git' --exclude='build' --exclude='prefix' \
+            --exclude='dist' --exclude='__pycache__' --exclude='*.egg-info' \
+            --exclude='src/cvcpkg/recipes' . \
+            | ssh ${SSH_OPTS} "${VM}" "tar xf - -C ${REMOTE_DIR}"
+          echo "remote_dir=${REMOTE_DIR}" >> "$GITHUB_ENV"
+
+      - name: Install deps + build standalone
+        shell: bash
+        run: |
+          set -euo pipefail
+          VM="user@${{ steps.vm.outputs.host }}"
+          PYI_PATCH=recipes/pyinstaller-cp313/haiku-platform-support.patch
+          # Haiku ships python3 + gcc + git; bootstrap pip into the user tree.
+          # PyInstaller has no Haiku bootloader on PyPI, so build it from the
+          # tagged source with the platform-tables patch (waf compiles it
+          # against Haiku's POSIX layer -- no __HAIKU__ C branches needed).
+          ssh ${SSH_OPTS} "${VM}" "set -e; \
+            export PATH=\$HOME/config/non-packaged/bin:\$HOME/config/bin:\$PATH; \
+            python3 -m pip --version >/dev/null 2>&1 || python3 -m ensurepip --user; \
+            rm -rf /boot/home/pyi-src; \
+            git clone --quiet --branch v${{ env.PYINSTALLER_VERSION }} --depth 1 \
+              https://github.com/pyinstaller/pyinstaller /boot/home/pyi-src; \
+            cd /boot/home/pyi-src && patch -p1 < ${remote_dir}/${PYI_PATCH} && \
+            python3 -m pip install --user ."
+          # cvcpkg itself: markers drop the Rust/server deps on Haiku.
+          # LIBRARY_PATH must be set for the freeze: Haiku's CPython
+          # ctypes.util.find_library() reads os.environ['LIBRARY_PATH'] with
+          # bracket access, and PyInstaller's ctypes scan (e.g. click._winconsole)
+          # KeyErrors without it.
+          ssh ${SSH_OPTS} "${VM}" "set -e; \
+            export PATH=\$HOME/config/non-packaged/bin:\$HOME/config/bin:\$PATH; \
+            export LIBRARY_PATH=/boot/system/lib:/boot/system/develop/lib:\$HOME/config/non-packaged/lib:/boot/system/non-packaged/lib; \
+            cd ${remote_dir} && python3 -m pip install --user . && \
+            python3 -m PyInstaller --clean --noconfirm packaging/cvcpkg.spec"
+
+      - name: Verify + retrieve binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          VM="user@${{ steps.vm.outputs.host }}"
+          # Validate a bundled recipe from a dir with no ./recipes, so recipes,
+          # schemas and metadata all resolve out of _MEIPASS.
+          ssh ${SSH_OPTS} "${VM}" "set -e; cd ${remote_dir} && \
+            chmod +x dist/cvcpkg && ./dist/cvcpkg --version && \
+            BIN=\$(pwd)/dist/cvcpkg && cd /tmp && \$BIN validate recipes/zlib"
+          mkdir -p dist
+          scp ${SSH_OPTS} "${VM}:${remote_dir}/dist/cvcpkg" "dist/cvcpkg-haiku-x86_64"
+
+      - name: Clean up Haiku VM
+        if: always()
+        shell: bash
+        run: |
+          VM="user@${{ steps.vm.outputs.host }}"
+          ssh ${SSH_OPTS} "${VM}" "rm -rf ${remote_dir} /boot/home/pyi-src" || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cvcpkg-haiku-x86_64
+          path: dist/cvcpkg-haiku-x86_64
+          retention-days: 1
+
   release:
     name: Attach to GitHub Release
-    needs: [build, build-bsd]
+    needs: [build, build-bsd, build-haiku]
     runs-on: ubuntu-latest
     if: |
       always()
@@ -361,7 +489,8 @@ jobs:
           cd artifacts
           missing=()
           for f in cvcpkg-linux-x86_64 cvcpkg-macos-arm64 cvcpkg-windows-x86_64.exe \
-                   cvcpkg-freebsd-x86_64 cvcpkg-openbsd-x86_64 cvcpkg-netbsd-x86_64; do
+                   cvcpkg-freebsd-x86_64 cvcpkg-openbsd-x86_64 cvcpkg-netbsd-x86_64 \
+                   cvcpkg-haiku-x86_64; do
             [ -f "$f" ] || missing+=("$f")
           done
           if [ ${#missing[@]} -gt 0 ]; then
