@@ -2,7 +2,11 @@ schema_version: 1
 recipe:
   name: ninja
   upstream_version: "1.12.1"
-  cvc_revision: 1
+  # Bumped 1 -> 2: add a `platform: haiku` matrix entry so the Haiku build
+  # toolchain can be published as a cvcpkg package (drop the flaky HaikuPorts
+  # pkgman mirror). Ninja's configure.py --bootstrap builds cleanly on Haiku
+  # with gcc + python3 and needs no port.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -48,6 +52,10 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    - platform: haiku
+      # configure.py --bootstrap builds ninja with the base image's gcc +
+      # python3; no port needed (ninja does not touch sockets/attributes).
+      script: build.sh
     - platform: windows
       script: build.ps1
 

@@ -40,7 +40,12 @@ recipe:
   # explicit CMAKE_BUILD_RPATH. Added a readelf/objdump dump of bin/cmake's
   # real RPATH/RUNPATH/NEEDED entries to build.sh's existing debug block to
   # confirm before attempting another fix.
-  cvc_revision: 5
+  #
+  # Bumped 5 -> 6: add a `platform: haiku` matrix entry (build-haiku.sh) so the
+  # Haiku build toolchain can be published as a cvcpkg package instead of relying
+  # on the flaky HaikuPorts pkgman mirror. Bootstraps from source on the Haiku
+  # box with the libuv + arc4random Haiku ports.
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -64,6 +69,9 @@ depends:
   runtime:
     - name: curl
       version: ">=8.0"
+      # haiku bootstraps with cmake's BUNDLED curl (no cvcpkg haiku curl yet),
+      # so it has no external libcurl runtime dependency.
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
   host_tools: []
 
 build:
@@ -90,6 +98,10 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    - platform: haiku
+      # Bootstraps from source ON the Haiku box (delegated), with the libuv +
+      # arc4random Haiku ports and cmake's bundled curl. See build-haiku.sh.
+      script: build-haiku.sh
     - platform: windows
       script: build.ps1
 
