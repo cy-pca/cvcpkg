@@ -24,6 +24,9 @@ Config schema (``fleet.yaml``)::
     capabilities: [cuda]     # optional; host capabilities to advertise
                              # (merged with the worker's auto-detected set;
                              # see auto_capabilities), overridable per server
+    cross_platforms: [haiku] # optional; extra target platforms this host can
+                             # serve by delegating over SSH (haiku via
+                             # cvcpkg.haikuhost) -> --cross-platform; per-server
     auto_capabilities: true  # optional; false passes --no-auto-capabilities
     advertise_free_disk: true  # optional; false passes --no-free-disk, so the
                                # scheduler treats this host's work-volume
@@ -65,6 +68,9 @@ class FleetServer:
     platform: str | None = None
     arch: str | None = None
     capabilities: tuple[str, ...] = ()
+    # Extra target platforms this worker can serve by delegating over SSH
+    # (e.g. ``haiku`` via cvcpkg.haikuhost) — advertised as ``--cross-platform``.
+    cross_platforms: tuple[str, ...] = ()
     auto_capabilities: bool = True
     advertise_free_disk: bool = True
 
@@ -137,6 +143,9 @@ def parse_fleet_config(data: dict) -> FleetConfig:
     base_work_dir = data.get("work_dir")
     default_labels = tuple(str(x) for x in (data.get("labels") or []))
     default_capabilities = tuple(str(x) for x in (data.get("capabilities") or []))
+    default_cross_platforms = tuple(
+        str(x) for x in (data.get("cross_platforms") or [])
+    )
     default_auto_caps = bool(data.get("auto_capabilities", True))
     default_free_disk = bool(data.get("advertise_free_disk", True))
 
@@ -178,6 +187,10 @@ def parse_fleet_config(data: dict) -> FleetConfig:
                 arch=(str(entry["arch"]) if entry.get("arch") else None),
                 capabilities=tuple(
                     str(x) for x in (entry.get("capabilities") or default_capabilities)
+                ),
+                cross_platforms=tuple(
+                    str(x)
+                    for x in (entry.get("cross_platforms") or default_cross_platforms)
                 ),
                 auto_capabilities=bool(entry.get("auto_capabilities", default_auto_caps)),
                 advertise_free_disk=bool(entry.get("advertise_free_disk", default_free_disk)),
@@ -227,6 +240,8 @@ def worker_argv(fs: FleetServer) -> list[str]:
         argv += ["--label", label]
     for cap in fs.capabilities:
         argv += ["--capability", cap]
+    for cp in fs.cross_platforms:
+        argv += ["--cross-platform", cp]
     if not fs.auto_capabilities:
         argv += ["--no-auto-capabilities"]
     if not fs.advertise_free_disk:
