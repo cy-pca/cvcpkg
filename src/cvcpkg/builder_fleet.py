@@ -143,9 +143,7 @@ def parse_fleet_config(data: dict) -> FleetConfig:
     base_work_dir = data.get("work_dir")
     default_labels = tuple(str(x) for x in (data.get("labels") or []))
     default_capabilities = tuple(str(x) for x in (data.get("capabilities") or []))
-    default_cross_platforms = tuple(
-        str(x) for x in (data.get("cross_platforms") or [])
-    )
+    default_cross_platforms = tuple(str(x) for x in (data.get("cross_platforms") or []))
     default_auto_caps = bool(data.get("auto_capabilities", True))
     default_free_disk = bool(data.get("advertise_free_disk", True))
 
@@ -189,8 +187,7 @@ def parse_fleet_config(data: dict) -> FleetConfig:
                     str(x) for x in (entry.get("capabilities") or default_capabilities)
                 ),
                 cross_platforms=tuple(
-                    str(x)
-                    for x in (entry.get("cross_platforms") or default_cross_platforms)
+                    str(x) for x in (entry.get("cross_platforms") or default_cross_platforms)
                 ),
                 auto_capabilities=bool(entry.get("auto_capabilities", default_auto_caps)),
                 advertise_free_disk=bool(entry.get("advertise_free_disk", default_free_disk)),
