@@ -125,6 +125,42 @@ def test_worker_argv_maps_served_set_to_org_and_serve():
     assert argv[argv.index("--label") + 1] == "ramdisk"
 
 
+def test_cross_platforms_default_and_override_to_argv(monkeypatch):
+    monkeypatch.setenv("TP", "p")
+    monkeypatch.setenv("TD", "d")
+    cfg = parse_fleet_config(
+        {
+            "name": "phm",
+            "cross_platforms": ["haiku"],  # host default
+            "servers": [
+                {"server": "https://cvcpkg.org", "token_env": "TP", "serve": [""]},
+                {
+                    "server": "http://10.66.77.207:8420",
+                    "token_env": "TD",
+                    "serve": [""],
+                    "cross_platforms": ["haiku", "wasm"],  # per-server override
+                },
+            ],
+        }
+    )
+    prod, dev = cfg.servers
+    assert prod.cross_platforms == ("haiku",)
+    assert dev.cross_platforms == ("haiku", "wasm")
+
+    def cps(fs):
+        argv = worker_argv(fs)
+        return [argv[i + 1] for i, a in enumerate(argv) if a == "--cross-platform"]
+
+    assert cps(prod) == ["haiku"]
+    assert cps(dev) == ["haiku", "wasm"]
+    # Absent config → no flag at all.
+    plain = parse_fleet_config(
+        {"servers": [{"server": "https://x", "token": "t", "serve": [""]}]}
+    ).servers[0]
+    assert plain.cross_platforms == ()
+    assert "--cross-platform" not in worker_argv(plain)
+
+
 def test_load_from_yaml_file(tmp_path, monkeypatch):
     monkeypatch.setenv("TOK", "y")
     p = tmp_path / "fleet.yaml"
