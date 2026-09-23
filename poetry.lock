@@ -466,7 +466,6 @@ description = "Foreign Function Interface for Python calling C code."
 optional = false
 python-versions = ">=3.9"
 groups = ["main", "dev"]
-markers = "platform_python_implementation != \"PyPy\""
 files = [
     {file = "cffi-2.0.0-cp310-cp310-macosx_10_13_x86_64.whl", hash = "sha256:0cf2d91ecc3fcc0625c2c530fe004f82c110405f101548512cce44322fa8ac44"},
     {file = "cffi-2.0.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:f73b96c41e3b2adedc34a7356e64c8eb96e03a3782b535e043a986276ce12a49"},
@@ -553,6 +552,7 @@ files = [
     {file = "cffi-2.0.0-cp39-cp39-win_amd64.whl", hash = "sha256:b882b3df248017dba09d6b16defe9b5c407fe32fc7c65a9c69798e6175601be9"},
     {file = "cffi-2.0.0.tar.gz", hash = "sha256:44d1b5909021139fe36001ae048dbdde8214afa20200eda0f64c068cac5d5529"},
 ]
+markers = {main = "platform_python_implementation != \"PyPy\" and (platform_system != \"Haiku\" or extra == \"azure\" or extra == \"storage-all\" or extra == \"sftp\" or extra == \"gcs\")", dev = "platform_python_implementation != \"PyPy\""}
 
 [package.dependencies]
 pycparser = {version = "*", markers = "implementation_name != \"PyPy\""}
@@ -869,6 +869,7 @@ files = [
     {file = "cryptography-48.0.0-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:db63bf618e5dea46c07de12e900fe1cdd2541e6dc9dbae772a70b7d4d4765f6a"},
     {file = "cryptography-48.0.0.tar.gz", hash = "sha256:5c3932f4436d1cccb036cb0eaef46e6e2db91035166f1ad6505c3c9d5a635920"},
 ]
+markers = {main = "platform_system != \"Haiku\" or extra == \"azure\" or extra == \"storage-all\" or extra == \"sftp\" or extra == \"gcs\""}
 
 [package.dependencies]
 cffi = {version = ">=2.0.0", markers = "platform_python_implementation != \"PyPy\""}
@@ -1199,7 +1200,7 @@ files = [
     {file = "greenlet-3.5.3-cp315-cp315t-win_arm64.whl", hash = "sha256:b7068bd09f761f3f5b4d214c2bed063186b2a86148c740b3873e3f56d79bac31"},
     {file = "greenlet-3.5.3.tar.gz", hash = "sha256:a61efc018fd3eb317eeca31aba90ee9e7f26f22884a79b6c6ec715bf71bb62f1"},
 ]
-markers = {dev = "platform_machine == \"aarch64\" or platform_machine == \"ppc64le\" or platform_machine == \"x86_64\" or platform_machine == \"amd64\" or platform_machine == \"AMD64\" or platform_machine == \"win32\" or platform_machine == \"WIN32\""}
+markers = {main = "platform_system != \"Haiku\" or (extra == \"db\" or extra == \"db-sqlite\" or extra == \"db-mysql\" or extra == \"db-all\" or extra == \"production\") and (platform_machine == \"aarch64\" or platform_machine == \"ppc64le\" or platform_machine == \"x86_64\" or platform_machine == \"amd64\" or platform_machine == \"AMD64\" or platform_machine == \"win32\" or platform_machine == \"WIN32\")", dev = "platform_machine == \"aarch64\" or platform_machine == \"ppc64le\" or platform_machine == \"x86_64\" or platform_machine == \"amd64\" or platform_machine == \"AMD64\" or platform_machine == \"win32\" or platform_machine == \"WIN32\""}
 
 [package.extras]
 docs = ["Sphinx", "furo"]
@@ -1907,11 +1908,11 @@ description = "C parser in Python"
 optional = false
 python-versions = ">=3.10"
 groups = ["main", "dev"]
-markers = "platform_python_implementation != \"PyPy\" and implementation_name != \"PyPy\""
 files = [
     {file = "pycparser-3.0-py3-none-any.whl", hash = "sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992"},
     {file = "pycparser-3.0.tar.gz", hash = "sha256:600f49d217304a5902ac3c37e1281c9fe94e4d0489de643a9504c5cdfdfc6b29"},
 ]
+markers = {main = "implementation_name != \"PyPy\" and platform_python_implementation != \"PyPy\" and (platform_system != \"Haiku\" or extra == \"azure\" or extra == \"storage-all\" or extra == \"sftp\" or extra == \"gcs\")", dev = "implementation_name != \"PyPy\" and platform_python_implementation != \"PyPy\""}
 
 [[package]]
 name = "pydantic"
@@ -2553,6 +2554,7 @@ files = [
     {file = "sqlalchemy-2.0.50-py3-none-any.whl", hash = "sha256:92064363517a3ff8212b5a93b8c62876579d8dfd1ca5b561335f30152d884fa9"},
     {file = "sqlalchemy-2.0.50.tar.gz", hash = "sha256:af5607d11ef90fd6a5c0549fe0045dce1663d427426bcfb506dcb5346a85a3b9"},
 ]
+markers = {main = "platform_system != \"Haiku\" or extra == \"db\" or extra == \"db-sqlite\" or extra == \"db-mysql\" or extra == \"db-all\" or extra == \"production\""}
 
 [package.dependencies]
 greenlet = {version = ">=1", markers = "platform_machine == \"aarch64\" or platform_machine == \"ppc64le\" or platform_machine == \"x86_64\" or platform_machine == \"amd64\" or platform_machine == \"AMD64\" or platform_machine == \"win32\" or platform_machine == \"WIN32\""}
@@ -2695,6 +2697,7 @@ files = [
     {file = "typing_extensions-4.15.0-py3-none-any.whl", hash = "sha256:f0fa19c6845758ab08074a0cfa8b7aecb71c999ca73d62883bc25cc018c4e548"},
     {file = "typing_extensions-4.15.0.tar.gz", hash = "sha256:0cea48d173cc12fa28ecabc3b837ea3cf6f38c6d1136f85cbaaf598984861466"},
 ]
+markers = {main = "platform_system != \"Haiku\" or extra == \"db\" or extra == \"db-sqlite\" or extra == \"db-mysql\" or extra == \"db-all\" or extra == \"production\" or extra == \"server\" or extra == \"azure\" or extra == \"storage-all\" or python_version < \"3.13\""}
 
 [[package]]
 name = "typing-inspection"
@@ -2802,4 +2805,4 @@ storage-all = ["azure-identity", "azure-storage-blob", "boto3", "google-cloud-st
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.10"
-content-hash = "cd018e9b2ffed7d6d531757618a7dbd6fbbf9c1efb3cd2e90e26597ae0b83309"
+content-hash = "b33762407eb920baa7399170eb4ab4cd8b678e7d365751b7fdf2f295fc748560"

@@ -105,6 +105,7 @@ case "$os" in
     FreeBSD) platform=freebsd ;;
     OpenBSD) platform=openbsd ;;
     NetBSD)  platform=netbsd ;;
+    Haiku)   platform=haiku ;;
     *) die "unsupported OS '$os' — try 'pip install cvcpkg' instead" ;;
 esac
 
@@ -120,6 +121,7 @@ case "$platform-$arch" in
     freebsd-x86_64) asset=cvcpkg-freebsd-x86_64 ;;
     openbsd-x86_64) asset=cvcpkg-openbsd-x86_64 ;;
     netbsd-x86_64)  asset=cvcpkg-netbsd-x86_64 ;;
+    haiku-x86_64)   asset=cvcpkg-haiku-x86_64 ;;
     *)
         die "no prebuilt binary for $platform/$arch yet — try 'pip install cvcpkg' instead"
         ;;
