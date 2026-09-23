@@ -1959,6 +1959,22 @@ def _emit_column(out, base, m, interp, meta, cols, extra_universe=frozenset()):
             for b in m.get("build_deps") or []
             if f"{b}-cp{interp}" not in backends
         ]
+    # cffi 2.0 dropped its vendored pycparser (the cffi/_pycparser subpackage is
+    # gone) and imports the EXTERNAL `pycparser` the first time cffi.cdef() runs.
+    # Staging cffi as a build edge does not pull cffi's own runtime deps into the
+    # build prefix, so a column that runs cdef at build time (a cffi backend, e.g.
+    # pynacl) or whose import-check exercises a cffi consumer (weasyprint's
+    # write_pdf loads pango through cffi) dies with "No module named 'pycparser'"
+    # unless pycparser is staged alongside cffi. Build-only: runtime is already
+    # covered, since cffi's own runtime dep pulls pycparser into the consumer's
+    # runtime closure. (cryptography is hand-written and declares this directly.)
+    build_edges = {*deps, *backends}
+    if (
+        mode == "sdist"
+        and f"cffi-cp{interp}" in build_edges
+        and f"pycparser-cp{interp}" not in build_edges
+    ):
+        backends.append(f"pycparser-cp{interp}")
 
     if mode == "sdist":
         flavor = {

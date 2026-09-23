@@ -1054,6 +1054,24 @@ class TestEmitSdistColumn:
         y, _, _ = self._emit(tmp_path)
         assert "tomli-cp311" not in y  # python_version < 3.11
 
+    def test_cffi_build_edge_pulls_pycparser_alongside(self, tmp_path):
+        # cffi 2.0 dropped its vendored pycparser and imports the external one at
+        # cdef() time; --no-build-isolation means it must be staged too.  Staging
+        # cffi as a build edge does not pull cffi's runtime deps, so pycparser has
+        # to ride along as its own build-only edge (cryptography/pynacl/weasyprint
+        # all run cffi.cdef at build or import-check time).
+        y, _, _ = self._emit(tmp_path, build_requires=["setuptools>=61", "cffi>=2.0.0"])
+        build, _, runtime = y.partition("  runtime:\n")
+        assert "- name: cffi-cp311" in build
+        assert "- name: pycparser-cp311" in build  # coupled build-only edge
+        # build-only: the consumer's own runtime closure gets pycparser via cffi.
+        assert "pycparser-cp311" not in runtime
+
+    def test_no_cffi_means_no_pycparser(self, tmp_path):
+        # the coupling is surgical — a column that does not stage cffi is untouched.
+        y, _, _ = self._emit(tmp_path)  # build_requires has Cython, not cffi
+        assert "pycparser-cp311" not in y
+
     def test_interpreter_is_a_host_tool(self, tmp_path):
         # pip and the compiler run ON the builder, not in the target prefix.
         y, _, _ = self._emit(tmp_path)
