@@ -94,6 +94,18 @@ exe_wrapper = '${_NODE}'
 python = '${_XPY}'
 python3 = '${_XPY}'
 
+[properties]
+# emcc's long double is IEEE-754 binary128 little-endian (verified from emcc
+# predefined macros: __SIZEOF_LONG_DOUBLE__=16, __LDBL_MANT_DIG__=113,
+# __LDBL_MAX_EXP__=16384, __FLOAT128__=1). numpy's own detection is a cc.run()
+# byte-scan (numpy/_core/meson.build:444) — the ONLY run-check in numpy's meson
+# build — which returns empty stdout under the emscripten node wrapper, so numpy
+# sets a bogus empty HAVE_LDOUBLE_ macro and the compile dies in npy_fpmath.h
+# with "No long double representation defined". This external property is numpy's
+# own cross-compile escape hatch (numpy/_core/meson.build:442, added for gh-23972
+# / meson#11068): it short-circuits the run-check and sets HAVE_LDOUBLE_IEEE_QUAD_LE.
+longdouble_format = 'IEEE_QUAD_LE'
+
 [built-in options]
 c_args = ['-fPIC']
 cpp_args = ['-fPIC']
