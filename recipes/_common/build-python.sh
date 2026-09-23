@@ -39,10 +39,19 @@ fi
 IS_CROSS=false
 CROSS_HOST=""
 case "${CVC_PLATFORM}" in
-    wasm)   IS_CROSS=true; CROSS_HOST="wasm32-emscripten" ;;
+    wasm|wasm-mt) IS_CROSS=true; CROSS_HOST="wasm32-emscripten" ;;
     wasi)   IS_CROSS=true; CROSS_HOST="wasm32-wasi" ;;
     cosmo)  IS_CROSS=true; CROSS_HOST="x86_64-cosmo" ;;
 esac
+
+# Both emscripten flavors — plain `wasm` (single-threaded) and `wasm-mt`
+# (-pthread / SharedArrayBuffer) — share the SAME emscripten toolchain wrappers,
+# cross host triple (wasm32-emscripten), native build-python helper, config.site
+# and TLS-less module set. Only the -pthread flags differ, and env-wasm.sh
+# injects those via CVC_WASM_THREADS. Gate every emscripten-specific branch on
+# this rather than on the literal `wasm` platform, so wasm-mt takes the same path.
+IS_EMSCRIPTEN=false
+case "${CVC_PLATFORM}" in wasm|wasm-mt) IS_EMSCRIPTEN=true ;; esac
 
 # --- RPATH ---
 # Embed $ORIGIN/../lib so the installed python3.X binary finds:
@@ -102,12 +111,12 @@ CONFIGURE_ARGS=(
 )
 
 # OpenSSL for ssl/hashlib — the cvcpkg OpenSSL (openssldir=/etc/ssl, so CA
-# verification uses the host trust store). SKIPPED on wasm: the single-threaded
-# wasm OpenSSL does not define OPENSSL_THREADS, and CPython's _ssl/_hashlib
-# hard-error without it ("Python requires thread-safe OpenSSL"). The emscripten
-# config.site disables those modules and a browser CPython needs no TLS; cosmo
-# and wasi keep OpenSSL.
-if [ "${CVC_PLATFORM}" != "wasm" ]; then
+# verification uses the host trust store). SKIPPED on emscripten (wasm + wasm-mt):
+# there is no wasm/wasm-mt OpenSSL bundle to point at, the emscripten config.site
+# disables _ssl/_hashlib, and a browser CPython needs no TLS. (The wasm OpenSSL
+# also does not define OPENSSL_THREADS, which _ssl/_hashlib hard-error without.)
+# cosmo and wasi keep OpenSSL.
+if [ "$IS_EMSCRIPTEN" = false ]; then
     CONFIGURE_ARGS+=(--with-openssl="${CVC_DEPS_PREFIX}" --with-ssl-default-suites=openssl)
 fi
 
@@ -133,7 +142,7 @@ if [ "$IS_CROSS" = true ]; then
     # CC/CXX/CFLAGS are emcc/emscripten here (env-wasm), so build the native
     # helper in a side dir with the native toolchain and the emscripten flags
     # stripped.
-    if [ "${CVC_PLATFORM}" = "wasm" ]; then
+    if [ "$IS_EMSCRIPTEN" = true ]; then
         _NATIVE_PY="${CVC_SOURCE_DIR}/cross-build/build"
         if [ ! -x "${_NATIVE_PY}/python" ]; then
             echo "build-python(wasm): building a full native ${PYTHON_MINOR} build-python for --with-build-python"
@@ -196,8 +205,8 @@ esac
 # Python/emscripten_signal.c (emscripten.h not found). wasi/cosmo set CC via their
 # own env, so they configure/make bare.
 _EMWRAP=""
-[ "${CVC_PLATFORM}" = "wasm" ] && _EMWRAP="emmake"
-if [ "${CVC_PLATFORM}" = "wasm" ]; then
+[ "$IS_EMSCRIPTEN" = true ] && _EMWRAP="emmake"
+if [ "$IS_EMSCRIPTEN" = true ]; then
     emconfigure ./configure "${CONFIGURE_ARGS[@]}"
 else
     ./configure "${CONFIGURE_ARGS[@]}"
