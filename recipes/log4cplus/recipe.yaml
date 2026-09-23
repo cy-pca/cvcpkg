@@ -8,7 +8,11 @@ recipe:
   # variants are immutable, so republishing at the same revision silently
   # no-ops; the bump is what actually retires the bad bytes. pack_recipe now
   # verifies the floor (#432), so this cannot recur silently.
-  cvc_revision: 6
+  # Bumped 6 -> 7: the Windows build now passes -DUNICODE=OFF to produce the
+  # NARROW (char) log4cplus.lib instead of the MSVC-default UNICODE log4cplusU.lib
+  # — the CVC ecosystem uses the char API and got LNK2001 on the wide-char
+  # bundle. Published variants are immutable, so the bump is what ships the fix.
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
