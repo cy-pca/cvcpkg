@@ -65,6 +65,14 @@ build:
     - platform: wasm
       host_platform: windows
       script: build-wasm.ps1
+    # Thread-safe OpenSSL for the wasm-mt closure: build-wasm.sh drops no-threads
+    # and adds -pthread on the CVC_WASM_THREADS hook, so OPENSSL_THREADS is defined
+    # and CPython's _ssl/_hashlib can link against it (impossible on plain wasm).
+    - platform: wasm-mt
+      host_platform: linux
+      script: build-wasm.sh
+      env:
+        CVC_WASM_THREADS: "1"
     - platform: wasi
       host_platform: linux
       script: build-wasi.sh

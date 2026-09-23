@@ -8,6 +8,19 @@ source "${SCRIPT_DIR}/../_common/env-wasm.sh"
 
 cd "${CVC_SOURCE_DIR}"
 
+# Thread safety: plain wasm has no pthreads, so OpenSSL must be `no-threads` —
+# but a no-threads OpenSSL does not define OPENSSL_THREADS, which CPython's
+# _ssl/_hashlib reject ("Python requires thread-safe OpenSSL"). The wasm-mt
+# flavor DOES have pthreads (env-wasm.sh sets CVC_WASM_THREADS=1 and prepends
+# -pthread), so build OpenSSL WITH threads there → OPENSSL_THREADS, giving a
+# thread-safe OpenSSL that CPython can build TLS against. Pass -pthread to
+# Configure explicitly so OpenSSL's own compile/link carries it.
+_SSL_THREADS=(no-threads)
+if [[ "${CVC_WASM_THREADS:-0}" == "1" ]]; then
+    _SSL_THREADS=(threads -pthread)
+    echo "── openssl(wasm-mt): building thread-safe (threads + -pthread) ──"
+fi
+
 # OpenSSL's Configure (capital C) supports a "cc" target for generic cross.
 # We call Configure directly with CC/CXX set to the Emscripten compilers
 # instead of using emconfigure, which can garble paths when emsdk_env.sh
@@ -18,7 +31,7 @@ CC=emcc CXX=em++ AR=emar RANLIB=emranlib perl Configure \
     --openssldir="${CVC_INSTALL_DIR}/ssl" \
     no-shared \
     no-asm \
-    no-threads \
+    "${_SSL_THREADS[@]}" \
     no-engine \
     no-dso \
     no-tests \

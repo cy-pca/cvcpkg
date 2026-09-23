@@ -111,13 +111,19 @@ CONFIGURE_ARGS=(
 )
 
 # OpenSSL for ssl/hashlib — the cvcpkg OpenSSL (openssldir=/etc/ssl, so CA
-# verification uses the host trust store). SKIPPED on emscripten (wasm + wasm-mt):
-# there is no wasm/wasm-mt OpenSSL bundle to point at, the emscripten config.site
-# disables _ssl/_hashlib, and a browser CPython needs no TLS. (The wasm OpenSSL
-# also does not define OPENSSL_THREADS, which _ssl/_hashlib hard-error without.)
-# cosmo and wasi keep OpenSSL.
-if [ "$IS_EMSCRIPTEN" = false ]; then
+# verification uses the host trust store). SKIPPED on PLAIN wasm only: its OpenSSL
+# is built no-threads (no pthreads), so it does not define OPENSSL_THREADS, and
+# CPython's _ssl/_hashlib hard-error against a non-thread-safe OpenSSL. Native,
+# wasi, cosmo — AND wasm-mt, whose OpenSSL is -pthread thread-safe — get it.
+if [ "${CVC_PLATFORM}" != "wasm" ]; then
     CONFIGURE_ARGS+=(--with-openssl="${CVC_DEPS_PREFIX}" --with-ssl-default-suites=openssl)
+fi
+# wasm-mt: the emscripten config.site disables _ssl/_hashlib by default (written
+# for the plain-wasm no-TLS case). Now that a thread-safe wasm-mt OpenSSL exists,
+# force the modules back on — a command-line py_cv_module_* assignment overrides
+# the config.site's cached value. Gives the threaded browser/node CPython real TLS.
+if [ "${CVC_PLATFORM}" = "wasm-mt" ]; then
+    CONFIGURE_ARGS+=(py_cv_module__ssl=yes py_cv_module__hashlib=yes)
 fi
 
 # Cross-compilation targets: static-only, explicit host, no readline.

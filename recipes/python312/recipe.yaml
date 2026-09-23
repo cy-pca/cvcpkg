@@ -42,7 +42,10 @@ recipe:
   # wasm libpython3.12.a carried undefined mpd_* symbols (bundled libmpdec was
   # never archived), which broke any final wasm app embedding it. cvc.9 wasm is
   # self-contained; other platforms rebuild byte-identically. Yank cvc.8 wasm.
-  cvc_revision: 9
+  # cvc.10: wasm-mt gains _ssl/_hashlib (TLS) against a thread-safe wasm-mt
+  # OpenSSL. Only the wasm-mt variant is rebuilt at cvc.10; other platforms
+  # resolve to their existing revision (cvcpkg resolves per-platform tuple).
+  cvc_revision: 10
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -73,7 +76,7 @@ depends:
       # the config.site disables _ssl/_hashlib), and there is no wasm-mt openssl
       # bundle. Scope it to every python platform EXCEPT wasm-mt so the wasm-mt DAG
       # resolves without an unused openssl build. (Plain wasm keeps it: it exists.)
-      platforms: [linux, macos, windows, freebsd, openbsd, netbsd, wasm, wasi, cosmo]
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd, wasm, wasm-mt, wasi, cosmo]
     - name: zlib
       version: "^1.3"
     - name: libffi
@@ -98,7 +101,7 @@ depends:
       # the config.site disables _ssl/_hashlib), and there is no wasm-mt openssl
       # bundle. Scope it to every python platform EXCEPT wasm-mt so the wasm-mt DAG
       # resolves without an unused openssl build. (Plain wasm keeps it: it exists.)
-      platforms: [linux, macos, windows, freebsd, openbsd, netbsd, wasm, wasi, cosmo]
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd, wasm, wasm-mt, wasi, cosmo]
     - name: zlib
       version: "^1.3"
     - name: libffi
