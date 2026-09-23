@@ -205,6 +205,34 @@ if [ -n "${_missing}" ]; then
 fi
 cmake --install "${CVC_BUILD_DIR}"
 
-echo "vtk-python(wasm) GO/NO-GO result — static wrapper archives + vtkmodules:"
-find "${CVC_INSTALL_DIR}" -maxdepth 5 \
-     \( -name 'libvtk*Python*.a' -o -name 'vtkPythonUtil.h' -o -name 'vtkmodules' \) -print | head -20
+# ── PRUNE to python-only artifacts (CRITICAL) ───────────────────────────────
+# stage_bundle (builder.py) ships the ENTIRE install tree — package.files is
+# declarative, NOT a filter. Without this prune vtk-python would ship a full VTK
+# that FILE-CONFLICTS with the `vtk` package (whose C++ libs the wrappers link at
+# the consumer's final link). Keep ONLY the Python wrapper artifacts. For the
+# wasm STATIC build the python stubs ship as `_vtk.zip` (VTK's static-python
+# bundle, not an unpacked vtkmodules/) and the static module aggregate is
+# `_vtkmodules_static.a`; mirror recipes/vtk-python-cp312/build.sh otherwise.
+_keep() {
+  for _f in $1; do
+    [ -e "${_f}" ] || continue
+    mkdir -p "${_KEEP}/$(dirname "${_f}")"
+    cp -a "${_f}" "${_KEEP}/${_f}"
+  done
+}
+_KEEP="$(mktemp -d)"
+cd "${CVC_INSTALL_DIR}"
+_keep 'lib/libvtk*Python*'
+_keep 'lib/_vtkmodules_static.a'
+_keep 'lib/python*/site-packages/_vtk.zip'
+_keep 'lib/python*/site-packages/vtkmodules'
+_keep 'lib/python*/site-packages/vtk.py'
+_keep 'include/vtk-9.5/*Python*.h'
+_keep 'include/vtk-9.5/PyVTK*.h'
+_keep 'include/vtk-9.5/vtkSmartPyObject.h'
+find "${CVC_INSTALL_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+cp -a "${_KEEP}/." "${CVC_INSTALL_DIR}/"
+rm -rf "${_KEEP}"
+echo "vtk-python(wasm): pruned to python-only artifacts:"
+find "${CVC_INSTALL_DIR}" \( -name 'libvtk*Python*.a' -o -name '_vtkmodules_static.a' \
+     -o -name '_vtk.zip' -o -name 'vtkPythonUtil.h' \) -print | sort | head -20
