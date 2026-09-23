@@ -100,7 +100,7 @@ WHEEL="${_wheel_matches[0]:-}"
 echo "pillow-cp312: built $(basename "${WHEEL}")"
 
 # ── Install ONLY site-packages into the (empty) staging prefix ──────────────
-"${PY}" -m pip install --no-deps --no-index --no-compile \
+"${PY}" -m pip install --no-deps --no-index --no-compile --ignore-installed \
   --prefix "${CVC_INSTALL_DIR}" "${WHEEL}"
 
 readarray -t _pil_dir_matches < <(find "${CVC_INSTALL_DIR}" -maxdepth 4 -type d -name PIL)
