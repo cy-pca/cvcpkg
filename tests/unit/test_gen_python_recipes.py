@@ -1071,7 +1071,9 @@ class TestEmitSdistColumn:
         # cdef() time; staging cffi as a build edge does not pull cffi's runtime
         # deps, so pycparser rides along as a build-only edge.
         y, _, _ = self._emit(
-            tmp_path, meta_extra=self._CLOSURE_META, build_requires=["setuptools>=61", "cffi>=2.0.0"]
+            tmp_path,
+            meta_extra=self._CLOSURE_META,
+            build_requires=["setuptools>=61", "cffi>=2.0.0"],
         )
         build, _, runtime = y.partition("  runtime:\n")
         assert "- name: cffi-cp311" in build
@@ -1082,11 +1084,14 @@ class TestEmitSdistColumn:
         # hatchling -> pathspec + trove-classifiers -> calver (transitive), all
         # staged as build-only edges (pyinstaller-cp313's "No module named
         # 'pathspec'" failure).
-        y, _, _ = self._emit(
-            tmp_path, meta_extra=self._CLOSURE_META, build_requires=["hatchling"]
-        )
+        y, _, _ = self._emit(tmp_path, meta_extra=self._CLOSURE_META, build_requires=["hatchling"])
         build, _, runtime = y.partition("  runtime:\n")
-        for edge in ("hatchling-cp311", "pathspec-cp311", "trove-classifiers-cp311", "calver-cp311"):
+        for edge in (
+            "hatchling-cp311",
+            "pathspec-cp311",
+            "trove-classifiers-cp311",
+            "calver-cp311",
+        ):
             assert f"- name: {edge}" in build, edge
         assert "pathspec-cp311" not in runtime  # build-only
         assert "calver-cp311" not in runtime
