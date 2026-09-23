@@ -46,7 +46,9 @@ mkdir -p "${WHEELHOUSE}"
     --wheel-dir "${WHEELHOUSE}" \
     "${CVC_SOURCE_DIR}"
 
-WHEEL="$(find "${WHEELHOUSE}" -maxdepth 1 -name 'pyinstaller-*.whl' -print -quit)"
+# Shell glob, not `find -print -quit` (-quit is GNU-only, absent on *BSD find).
+WHEEL=""
+for WHEEL in "${WHEELHOUSE}"/pyinstaller-*.whl; do [ -e "${WHEEL}" ] && break; WHEEL=""; done
 [ -n "${WHEEL}" ] || { echo "pyinstaller-cp313: no wheel produced under ${WHEELHOUSE}" >&2; exit 1; }
 echo "pyinstaller-cp313: built $(basename "${WHEEL}")"
 

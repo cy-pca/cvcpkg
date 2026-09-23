@@ -2325,8 +2325,11 @@ mkdir -p "${{WHEELHOUSE}}"
     --wheel-dir "${{WHEELHOUSE}}" \\
     "${{CVC_SOURCE_DIR}}"
 
-# --no-deps means the wheelhouse holds exactly one wheel: ours.
-WHEEL="$(find "${{WHEELHOUSE}}" -maxdepth 1 -name '*.whl' -print -quit)"
+# --no-deps means the wheelhouse holds exactly one wheel: ours.  A shell glob,
+# not `find -print -quit`: -quit is a GNU findutils extension the *BSD find does
+# not implement, and it aborts the build after the wheel has already compiled.
+WHEEL=""
+for WHEEL in "${{WHEELHOUSE}}"/*.whl; do [ -e "${{WHEEL}}" ] && break; WHEEL=""; done
 [ -n "${{WHEEL}}" ] || {{ echo "{name}: no wheel produced under ${{WHEELHOUSE}}" >&2; exit 1; }}
 echo "{name}: built $(basename "${{WHEEL}}")"
 
