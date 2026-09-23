@@ -62,8 +62,6 @@ $depsFlag mkdir -p '$msysBuild' && cd '$msysBuild' && \
     --enable-libvpx \
     --enable-libdav1d \
     --enable-libwebp \
-    --enable-libjpeg \
-    --enable-libpng \
     --enable-libfreetype \
     --enable-libfribidi \
     --enable-openssl \
