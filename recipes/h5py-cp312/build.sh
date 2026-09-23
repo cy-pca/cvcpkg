@@ -153,7 +153,7 @@ else
         exit 1
     fi
     while IFS= read -r -d '' _so; do
-        _rel="$("${PY}" -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "${CVC_INSTALL_DIR}/lib" "$(dirname "${_so}")")"
+        _rel="$("${PY_EXE}" -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "${CVC_INSTALL_DIR}/lib" "$(dirname "${_so}")")"
         patchelf --set-rpath "\$ORIGIN:\$ORIGIN/${_rel}" "${_so}"
     done < <(find "${H5PY_DIR}" -name '*.so' -print0)
 fi

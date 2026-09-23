@@ -2,7 +2,12 @@ schema_version: 1
 recipe:
   name: h5py-cp313
   upstream_version: "3.16.0"
-  cvc_revision: 1
+  # Bumped 1 -> 2: fix a `${PY}` -> `${PY_EXE}` typo in build.sh's ELF rpath
+  # fixup. `PY` was never defined (the recipe uses `PY_EXE`), so under
+  # `set -u` the fixup aborted every Linux/BSD build AFTER the wheel had
+  # already compiled — the $ORIGIN rpaths were never written. The produced
+  # artifact changes (extensions now carry the relocatable rpath), hence the bump.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
