@@ -119,7 +119,7 @@ echo "numpy-cp313: built $(basename "${WHEEL}")"
 # ── Install ONLY site-packages into the (empty) staging prefix ──────────────
 # stage_bundle ships the ENTIRE CVC_INSTALL_DIR tree (package.files is not a
 # filter), so installing --prefix into the empty per-recipe dir keeps it pure.
-"${PY}" -m pip install --no-deps --no-index --no-compile \
+"${PY}" -m pip install --no-deps --no-index --no-compile --ignore-installed \
   --prefix "${CVC_INSTALL_DIR}" "${WHEEL}"
 
 readarray -t _np_dir_matches < <(find "${CVC_INSTALL_DIR}" -maxdepth 4 -type d -name numpy)

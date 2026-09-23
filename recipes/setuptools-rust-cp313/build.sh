@@ -84,6 +84,7 @@ echo "setuptools-rust-cp313: built $(basename "${WHEEL}")"
     --no-index \
     --no-deps \
     --no-compile \
+    --ignore-installed \
     --prefix "${CVC_INSTALL_DIR}" \
     "${WHEEL}"
 
