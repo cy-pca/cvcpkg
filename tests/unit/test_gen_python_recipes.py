@@ -1023,9 +1023,9 @@ def _meta_sdist(**kw):
 
 
 class TestEmitSdistColumn:
-    def _emit(self, tmp_path, **kw):
+    def _emit(self, tmp_path, meta_extra=None, **kw):
         m = _meta_sdist(**kw)
-        meta = {"widget": m, "colorama": {}}
+        meta = {"widget": m, "colorama": {}, **(meta_extra or {})}
         gen._emit_column(tmp_path, "widget", m, "311", meta, {"widget": ["311"]})
         d = tmp_path / "widget-cp311"
         return (
@@ -1054,23 +1054,48 @@ class TestEmitSdistColumn:
         y, _, _ = self._emit(tmp_path)
         assert "tomli-cp311" not in y  # python_version < 3.11
 
-    def test_cffi_build_edge_pulls_pycparser_alongside(self, tmp_path):
+    # A build backend must be importable under --no-build-isolation, so its own
+    # runtime deps ride along as build-only edges (see _BACKEND_RUNTIME_CLOSURE).
+    _CLOSURE_META = {
+        "cffi": {"deps": {"pycparser": "*"}},
+        "pycparser": {"deps": {}},
+        # hatchling's closure is transitive: trove-classifiers -> calver.
+        "hatchling": {"deps": {"pathspec": "*", "trove-classifiers": "*"}},
+        "pathspec": {"deps": {}},
+        "trove-classifiers": {"deps": {"calver": "*"}},
+        "calver": {"deps": {}},
+    }
+
+    def test_cffi_backend_pulls_pycparser_alongside(self, tmp_path):
         # cffi 2.0 dropped its vendored pycparser and imports the external one at
-        # cdef() time; --no-build-isolation means it must be staged too.  Staging
-        # cffi as a build edge does not pull cffi's runtime deps, so pycparser has
-        # to ride along as its own build-only edge (cryptography/pynacl/weasyprint
-        # all run cffi.cdef at build or import-check time).
-        y, _, _ = self._emit(tmp_path, build_requires=["setuptools>=61", "cffi>=2.0.0"])
+        # cdef() time; staging cffi as a build edge does not pull cffi's runtime
+        # deps, so pycparser rides along as a build-only edge.
+        y, _, _ = self._emit(
+            tmp_path, meta_extra=self._CLOSURE_META, build_requires=["setuptools>=61", "cffi>=2.0.0"]
+        )
         build, _, runtime = y.partition("  runtime:\n")
         assert "- name: cffi-cp311" in build
         assert "- name: pycparser-cp311" in build  # coupled build-only edge
-        # build-only: the consumer's own runtime closure gets pycparser via cffi.
-        assert "pycparser-cp311" not in runtime
+        assert "pycparser-cp311" not in runtime  # build-only
 
-    def test_no_cffi_means_no_pycparser(self, tmp_path):
-        # the coupling is surgical — a column that does not stage cffi is untouched.
-        y, _, _ = self._emit(tmp_path)  # build_requires has Cython, not cffi
+    def test_hatchling_backend_pulls_its_transitive_closure(self, tmp_path):
+        # hatchling -> pathspec + trove-classifiers -> calver (transitive), all
+        # staged as build-only edges (pyinstaller-cp313's "No module named
+        # 'pathspec'" failure).
+        y, _, _ = self._emit(
+            tmp_path, meta_extra=self._CLOSURE_META, build_requires=["hatchling"]
+        )
+        build, _, runtime = y.partition("  runtime:\n")
+        for edge in ("hatchling-cp311", "pathspec-cp311", "trove-classifiers-cp311", "calver-cp311"):
+            assert f"- name: {edge}" in build, edge
+        assert "pathspec-cp311" not in runtime  # build-only
+        assert "calver-cp311" not in runtime
+
+    def test_no_closure_backend_means_no_extra_edges(self, tmp_path):
+        # surgical — a column staging neither cffi nor hatchling is untouched.
+        y, _, _ = self._emit(tmp_path, meta_extra=self._CLOSURE_META)  # Cython backend only
         assert "pycparser-cp311" not in y
+        assert "pathspec-cp311" not in y
 
     def test_interpreter_is_a_host_tool(self, tmp_path):
         # pip and the compiler run ON the builder, not in the target prefix.

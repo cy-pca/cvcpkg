@@ -217,6 +217,24 @@ _NATIVE_BUILD_REQ = {"meson", "ninja", "cmake", "patchelf", "pkg-config"}
 # of the interpreter recipe itself, or are pip's own plumbing.
 _IMPLICIT_BUILD_REQ = {"pip"}
 
+# Build backends whose OWN runtime deps must be staged into the build prefix.
+# --no-build-isolation requires the backend importable, and importing it imports
+# its runtime deps — but staging a backend as a build edge does NOT pull that
+# closure in (a package's runtime closure is assembled only for ITS runtime).
+# So a backend that carries runtime deps dies mid-build unless they ride along:
+#   * hatchling -> pathspec/packaging/pluggy/trove-classifiers  (pyinstaller-cp313
+#     failed with "No module named 'pathspec'" on the dev cluster)
+#   * cffi 2.0  -> pycparser  (it dropped its vendored cffi/_pycparser copy;
+#     cryptography-cp313 failed with "No module named 'pycparser'")
+# For each of these that lands in a column's build closure, _emit_column stages
+# its TRANSITIVE runtime closure as build-only edges.  Deliberately a curated set
+# (not every backend): backends whose consumers build fine today — setuptools,
+# flit-core (no runtime deps), meson-python (whose noarch closure is already
+# resolved) — are left untouched rather than churned.  cffi is also reached as a
+# plain runtime dep whose import-check runs cdef (weasyprint), so the walk is
+# seeded from a runtime-dep cffi too.
+_BACKEND_RUNTIME_CLOSURE = {"cffi", "hatchling"}
+
 # A source distribution with no pyproject.toml is a legacy setup.py project;
 # PEP 517's documented fallback backend is setuptools.build_meta:__legacy__,
 # whose requirements are exactly these.
@@ -1959,22 +1977,39 @@ def _emit_column(out, base, m, interp, meta, cols, extra_universe=frozenset()):
             for b in m.get("build_deps") or []
             if f"{b}-cp{interp}" not in backends
         ]
-    # cffi 2.0 dropped its vendored pycparser (the cffi/_pycparser subpackage is
-    # gone) and imports the EXTERNAL `pycparser` the first time cffi.cdef() runs.
-    # Staging cffi as a build edge does not pull cffi's own runtime deps into the
-    # build prefix, so a column that runs cdef at build time (a cffi backend, e.g.
-    # pynacl) or whose import-check exercises a cffi consumer (weasyprint's
-    # write_pdf loads pango through cffi) dies with "No module named 'pycparser'"
-    # unless pycparser is staged alongside cffi. Build-only: runtime is already
-    # covered, since cffi's own runtime dep pulls pycparser into the consumer's
-    # runtime closure. (cryptography is hand-written and declares this directly.)
-    build_edges = {*deps, *backends}
-    if (
-        mode == "sdist"
-        and f"cffi-cp{interp}" in build_edges
-        and f"pycparser-cp{interp}" not in build_edges
-    ):
-        backends.append(f"pycparser-cp{interp}")
+    # Stage the transitive runtime closure of the backends in
+    # _BACKEND_RUNTIME_CLOSURE (see its definition): --no-build-isolation needs
+    # each such backend importable, and importing it imports its own runtime deps,
+    # which staging the backend as a build edge does not pull in. Build-only —
+    # the consumer's runtime closure already resolves these for RUNTIME. The walk
+    # is seeded from the column's whole build closure (backends + runtime-dep-also-
+    # build-dep entries, so a runtime-dep cffi is covered), and follows deps to a
+    # fixpoint (hatchling -> trove-classifiers -> calver). (Hand-written recipes
+    # such as cryptography declare the edge directly and are never regenerated.)
+    if mode == "sdist":
+        _universe = set(meta) | set(extra_universe)
+        _suffix = f"-cp{interp}"
+        _staged = {*deps, *backends}
+        _frontier = [
+            e
+            for e in (*backends, *deps)
+            if e.endswith(_suffix) and e[: -len(_suffix)] in _BACKEND_RUNTIME_CLOSURE
+        ]
+        _seen: set[str] = set()
+        while _frontier:
+            _edge = _frontier.pop()
+            if _edge in _seen or not _edge.endswith(_suffix):
+                continue
+            _seen.add(_edge)
+            _bm = meta.get(_edge[: -len(_suffix)])
+            if _bm is None:
+                continue
+            for _rt in deps_for_column(_bm, interp, _universe):
+                _rt_edge = f"{_rt}{_suffix}"
+                _frontier.append(_rt_edge)  # transitive
+                if _rt_edge not in _staged:
+                    backends.append(_rt_edge)
+                    _staged.add(_rt_edge)
 
     if mode == "sdist":
         flavor = {
