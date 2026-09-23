@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: annotated-types-cp313
   upstream_version: "0.7.0"
-  cvc_revision: 2
+  cvc_revision: 3
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -38,6 +38,11 @@ depends:
     # --no-build-isolation means pip will NOT fetch it, so it has to be
     # in the build prefix already (build.sh bridges it onto sys.path).
     - name: hatchling-cp313
+    - name: packaging-cp313
+    - name: pathspec-cp313
+    - name: pluggy-cp313
+    - name: trove-classifiers-cp313
+    - name: calver-cp313
   runtime:
     - name: python313
   host_tools:

@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: httpx-cp312
   upstream_version: "0.28.1"
-  cvc_revision: 3
+  cvc_revision: 4
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -43,6 +43,11 @@ depends:
     # in the build prefix already (build.sh bridges it onto sys.path).
     - name: hatchling-cp312
     - name: hatch-fancy-pypi-readme-cp312
+    - name: packaging-cp312
+    - name: pathspec-cp312
+    - name: pluggy-cp312
+    - name: trove-classifiers-cp312
+    - name: calver-cp312
   runtime:
     - name: python312
     - name: anyio-cp312

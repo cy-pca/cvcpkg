@@ -2,7 +2,12 @@ schema_version: 1
 recipe:
   name: pyinstaller-cp313
   upstream_version: "6.21.0"
-  cvc_revision: 1
+  # Bumped 1 -> 2: declare hatchling's runtime closure (packaging, pathspec,
+  # pluggy, trove-classifiers, calver) as build deps. hatchling is the PEP-517
+  # backend; --no-build-isolation imports it and its deps, which staging
+  # hatchling alone does not provide — the build failed on the dev cluster with
+  # "No module named 'pathspec'". Build-env only; the artifact is unchanged.
+  cvc_revision: 2
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -42,10 +47,18 @@ patches:
 depends:
   build:
     - name: python313
-    # PEP-517 backend, imported by the build interpreter under
-    # --no-build-isolation (hatchling pulls packaging/pathspec/pluggy/
-    # trove-classifiers columns).
+    # PEP-517 backend, imported by the build interpreter under --no-build-isolation.
     - name: hatchling-cp313
+    # hatchling's OWN runtime closure. --no-build-isolation imports hatchling,
+    # which imports these — but staging hatchling as a build edge does NOT pull
+    # its runtime deps into the build prefix (a package's runtime closure is only
+    # assembled for ITS runtime). Without them the build dies with
+    # "No module named 'pathspec'" (dev-cluster #70). trove-classifiers -> calver.
+    - name: packaging-cp313
+    - name: pathspec-cp313
+    - name: pluggy-cp313
+    - name: trove-classifiers-cp313
+    - name: calver-cp313
     # zlib headers: the bootloader links libz (bootloader/wscript probes it).
     - name: zlib
   runtime:

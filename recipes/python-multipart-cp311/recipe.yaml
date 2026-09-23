@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: python-multipart-cp311
   upstream_version: "0.0.29"
-  cvc_revision: 2
+  cvc_revision: 3
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -38,6 +38,11 @@ depends:
     # --no-build-isolation means pip will NOT fetch it, so it has to be
     # in the build prefix already (build.sh bridges it onto sys.path).
     - name: hatchling-cp311
+    - name: packaging-cp311
+    - name: pathspec-cp311
+    - name: pluggy-cp311
+    - name: trove-classifiers-cp311
+    - name: calver-cp311
   runtime:
     - name: python311
   host_tools:

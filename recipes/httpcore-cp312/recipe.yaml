@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: httpcore-cp312
   upstream_version: "1.0.9"
-  cvc_revision: 2
+  cvc_revision: 3
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -41,6 +41,11 @@ depends:
     # in the build prefix already (build.sh bridges it onto sys.path).
     - name: hatchling-cp312
     - name: hatch-fancy-pypi-readme-cp312
+    - name: packaging-cp312
+    - name: pathspec-cp312
+    - name: pluggy-cp312
+    - name: trove-classifiers-cp312
+    - name: calver-cp312
   runtime:
     - name: python312
     - name: certifi-cp312
