@@ -15,7 +15,9 @@ recipe:
   # system Accelerate framework. openblas had no macOS build when this recipe was
   # written, so macOS was the one column linking a BLAS we neither build nor ship;
   # openblas+cvc.6 added it. The macOS payload's BLAS changes, hence the bump.
-  cvc_revision: 4
+  # Bumped 4 -> 5: add a wasm column (meson-python cross, -Dallow-noblas). New
+  # platform only; native columns rebuild identically.
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -62,15 +64,18 @@ depends:
     # build.sh). meson-python-cp312 pulls packaging-cp312 + pyproject-metadata-cp312.
     - name: cython-cp312
     - name: meson-python-cp312
-    # OpenBLAS headers + openblas.pc at compile time, on every platform
-    # including macOS (openblas gained a macOS build in openblas+cvc.6).
+    # OpenBLAS headers + openblas.pc at compile time, on every NATIVE platform
+    # including macOS (openblas gained a macOS build in openblas+cvc.6). NOT on
+    # wasm: openblas has no wasm build, so the wasm column builds -Dallow-noblas.
     - name: openblas
       version: ">=0.3.28"
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows, windows-gnu, haiku]
   runtime:
     - name: python312
-    # libopenblas resolved from the merged prefix at import, every platform.
+    # libopenblas resolved from the merged prefix at import, every NATIVE platform.
     - name: openblas
       version: ">=0.3.28"
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows, windows-gnu, haiku]
   host_tools:
     - python312
     - pkg-config
@@ -84,10 +89,12 @@ build:
   # The Python ABI is stable across cvcpkg build types; build once, optimized.
   build_type_independent: true
   # openblas now builds on every native platform including macOS, so every
-  # column links the same BLAS. windows is a deliberate delta: meson + MSVC + DLL
-  # discovery differ enough to need its own build.ps1 (currently a loud stub —
-  # until the port lands, windows numpy is unavailable from this recipe).
-  # wasm/wasi/cosmo are excluded: static interpreter, no extension-module ABI.
+  # NATIVE column links the same BLAS. windows is a deliberate delta: meson + MSVC
+  # + DLL discovery differ enough to need its own build.ps1 (currently a loud stub
+  # — until the port lands, windows numpy is unavailable from this recipe).
+  # wasm: cross-built via meson-python with -Dallow-noblas (no openblas on wasm)
+  # and a crossenv (host python3.12 drives the build, emcc compiles). wasi/cosmo
+  # remain excluded.
   matrix:
     - platform: linux
       script: build.sh
@@ -103,6 +110,9 @@ build:
         MACOSX_DEPLOYMENT_TARGET: "13.0"   # matches the openblas recipe
     - platform: windows
       script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
 
 package:
   # DOCUMENTATION ONLY — stage_bundle ships the whole CVC_INSTALL_DIR tree;
