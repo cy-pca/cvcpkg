@@ -9,7 +9,7 @@
 # cvcpkg.org).
 #
 # Required repo secrets:
-#   CVCPKG_ADMIN_TOKEN  — a token valid on the dev server (publisher or admin)
+#   CVCPKG_DEV_ADMIN_TOKEN — a token valid on the dev server (publisher or admin)
 
 name: Populate dev cluster
 
@@ -80,14 +80,14 @@ jobs:
         if: ${{ !inputs.skip_push }}
         env:
           CVCPKG_SERVER_URL: ${{ steps.dev.outputs.url }}
-          CVCPKG_TOKEN: ${{ secrets.CVCPKG_ADMIN_TOKEN }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_DEV_ADMIN_TOKEN }}
         run: cvcpkg recipe push-all --recipes-dir recipes
 
       - name: Submit build DAGs
         id: submit
         env:
           CVCPKG_SERVER_URL: ${{ steps.dev.outputs.url }}
-          CVCPKG_TOKEN: ${{ secrets.CVCPKG_ADMIN_TOKEN }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_DEV_ADMIN_TOKEN }}
         run: |
           set -euo pipefail
           RECIPES=()
@@ -116,5 +116,5 @@ jobs:
       - name: Follow build output
         env:
           CVCPKG_SERVER_URL: ${{ steps.dev.outputs.url }}
-          CVCPKG_TOKEN: ${{ secrets.CVCPKG_ADMIN_TOKEN }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_DEV_ADMIN_TOKEN }}
         run: cvcpkg builds follow-dag "${{ steps.submit.outputs.dag_id }}"
