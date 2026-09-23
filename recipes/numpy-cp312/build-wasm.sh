@@ -33,7 +33,13 @@ _hp="$(uname -s 2>/dev/null || echo Linux)"; case "${_hp}" in Linux) _hp=linux;;
 _ha="$(uname -m 2>/dev/null || echo x86_64)"; case "${_ha}" in x86_64|amd64) _ha=x86_64;; arm64|aarch64) _ha=arm64;; esac
 _cvc="cvcpkg"; command -v cvcpkg >/dev/null 2>&1 || _cvc="python3 -m cvcpkg"
 echo "numpy(wasm): provisioning native build toolchain (${_hp}/${_ha}) -> ${HOSTENV}"
-${_cvc} install python312 cython-cp312 meson-python-cp312 meson ninja pkg-config \
+# NB: `cvcpkg install meson-python-cp312` does NOT pull mesonpy's PyPI runtime
+# deps, so list them explicitly — without packaging + pyproject-metadata,
+# `import mesonpy` dies with ModuleNotFoundError and pip reports the misleading
+# "BackendUnavailable: Cannot import 'mesonpy'". setuptools/wheel back pip wheel.
+${_cvc} install python312 cython-cp312 \
+    meson-python-cp312 packaging-cp312 pyproject-metadata-cp312 setuptools-cp312 wheel-cp312 \
+    meson ninja pkg-config \
     --platform "${_hp}" --arch "${_ha}" --config release --link shared \
     --prefix "${HOSTENV}" --no-fallback-to-source >&2
 PY_NATIVE="${HOSTENV}/bin/python3.12"
