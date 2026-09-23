@@ -57,8 +57,21 @@ cp "${_SYS_SRC}" "${_CROSSSYS}/"
 # The build-time absolute prefix (/tmp/cvcpkg-builder/.../install) is baked into
 # INCLUDEPY/prefix/exec_prefix/LIBDIR/LIBPL; point them at the real deps prefix.
 sed -i -E "s#/tmp/cvcpkg-builder/[^'\"]*/install#${DEPS}#g" "${_CROSSSYS}/${_SYS}.py"
+# Do NOT set _PYTHON_SYSCONFIGDATA_NAME globally: it makes the HOST python's
+# site/sysconfig resolve to the wasm purelib and breaks meson-python's own import
+# ("Cannot import mesonpy"). Expose the crossenv ONLY to meson, via a wrapper
+# 'cross-python' named in the cross-file [binaries] python: meson runs it to
+# introspect the TARGET interpreter (gets the wasm sysconfig), while pip / mesonpy
+# / Cython run the plain host python.
+_XPY="${CVC_BUILD_DIR}/cross-python"
+cat > "${_XPY}" <<EOF
+#!/bin/sh
 export _PYTHON_SYSCONFIGDATA_NAME="${_SYS}"
-export PYTHONPATH="${_CROSSSYS}:${_BRIDGE}${PYTHONPATH:+:${PYTHONPATH}}"
+export PYTHONPATH="${_CROSSSYS}\${PYTHONPATH:+:\$PYTHONPATH}"
+exec "${PY_NATIVE}" "\$@"
+EOF
+chmod +x "${_XPY}"
+: "${_BRIDGE:=}"   # (host mesonpy/Cython live in PY_NATIVE's own site-packages)
 # Fallback include path for the wasm Python.h in case a probe reads a stale -I.
 export CPATH="${DEPS}/include/python3.12${CPATH:+:${CPATH}}"
 
@@ -72,6 +85,8 @@ cpp = 'em++'
 ar = 'emar'
 ranlib = 'emranlib'
 exe_wrapper = '${_NODE}'
+python = '${_XPY}'
+python3 = '${_XPY}'
 
 [built-in options]
 c_args = ['-fPIC']
