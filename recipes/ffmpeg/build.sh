@@ -37,10 +37,11 @@ CONFIGURE_ARGS=(
     --enable-libvorbis
     --enable-libvpx
     --enable-libdav1d
-    # Image formats
+    # Image formats. FFmpeg's PNG and (M)JPEG are native codecs — there is no
+    # --enable-libpng / --enable-libjpeg configure switch, and passing them makes
+    # configure abort with "Unknown option", which is why this recipe had never
+    # produced a build. Only WebP needs an external library.
     --enable-libwebp
-    --enable-libjpeg
-    --enable-libpng
     # Subtitle rendering
     --enable-libfreetype
     --enable-libfribidi
@@ -70,8 +71,6 @@ if [[ "${CVC_LINK:-shared}" == "static" ]]; then
         --enable-libvpx
         --enable-libdav1d
         --enable-libwebp
-        --enable-libjpeg
-        --enable-libpng
         --enable-libfreetype
         --enable-libfribidi
         --enable-openssl
