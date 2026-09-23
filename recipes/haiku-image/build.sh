@@ -496,6 +496,8 @@ DISK_FILE=disk.qcow2
 DOCS_FILE=README.md
 INCUS_META=incus/metadata.tar.xz
 CHECKSUMS_FILE=SHA256SUMS
+PROVISION_FILE=provision.sh   # one-command import+inject+boot helper shipped
+                              # next to the image (see README.md "Provisioning").
 
 # POLICY CONSTANTS — the values that genuinely CANNOT be read off the artifact.
 # Each one is a decision or a measured guest behaviour, with its units stated.
@@ -571,6 +573,13 @@ echo "disk_min_gib=${DISK_MIN_GIB} GiB (derived from virtual-size ${DISK_VIRTUAL
  HAIKU_IMAGE_SIZE=${HAIKU_IMAGE_SIZE_MIB:-<unset>} MiB)"
 
 cp "${RECIPE_DIR}/README-import.md" "${IMGDIR}/${DOCS_FILE}"
+
+# Ship the provisioner next to the image so `cvcpkg install haiku-image` gives
+# the consumer a runnable import+inject+boot path, not just the qcow2. It is
+# generic (reads all facts from the descriptor above) and carries no site
+# specifics, so it is safe to publish.
+cp "${RECIPE_DIR}/${PROVISION_FILE}" "${IMGDIR}/${PROVISION_FILE}"
+chmod 755 "${IMGDIR}/${PROVISION_FILE}"
 
 # The Incus/LXD metadata carries its OWN copy of the guest axes (architecture,
 # release, variant) — a third place for them to go stale, after image.yaml and
@@ -758,7 +767,7 @@ ENV
 # above so the multi-gigabyte file is read once.
 ( cd "${IMGDIR}" && {
     printf '%s  %s\n' "${DISK_SHA256}" "${DISK_FILE}"
-    sha256sum "${DOCS_FILE}" image.yaml image.env incus/metadata.yaml "${INCUS_META}"
+    sha256sum "${DOCS_FILE}" "${PROVISION_FILE}" image.yaml image.env incus/metadata.yaml "${INCUS_META}"
   } > "${CHECKSUMS_FILE}" )
 
 echo "Haiku builder image staged to ${IMGDIR}:"

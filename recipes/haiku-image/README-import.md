@@ -65,6 +65,7 @@ $CVCPKG_PREFIX/share/haiku-image/
 ├── disk.qcow2            the payload
 ├── SHA256SUMS            `sha256sum -c` format
 ├── README.md             this file
+├── provision.sh          one-command import + key-inject + boot (see below)
 └── incus/
     ├── metadata.yaml     Incus/LXD image metadata
     └── metadata.tar.xz   what `incus image import` actually takes
@@ -106,6 +107,37 @@ $CVCPKG_PREFIX/share/haiku-image/disk.qcow2
 . $CVCPKG_PREFIX/share/haiku-image/image.env   # paths relative to that dir
 ```
 
+## Provisioning — the one-command path
+
+A `provision.sh` ships next to the image. It does the whole dance the manual
+sections below spell out — inject an SSH key into the BFS **offline**, import
+the image, create the VM with the right disk bus/firmware, boot it, wait for
+SSH and verify the login — reading every hypervisor fact from the descriptor,
+so there is nothing site-specific to edit:
+
+```sh
+cvcpkg install haiku-image bfs-shell
+bash "$(dirname "$(cvcpkg image path haiku-image)")/provision.sh" \
+    --pubkey ~/.ssh/id_ed25519.pub
+```
+
+It targets **Incus** (the verified path). For any other hypervisor, use it to
+write the key and stop, then boot the keyed image with the QEMU/Proxmox/libvirt
+stanzas further down:
+
+```sh
+bash .../provision.sh --image ./disk.qcow2 --pubkey ~/.ssh/id_ed25519.pub \
+    --bfs-shell "$(command -v bfs_shell)" --inject-only
+# -> writes disk.keyed.qcow2; boot that.
+```
+
+Key injection is **local and privileged** — it loop-mounts the image and drives
+`bfs_shell` as root — so run this on the machine that holds the image file. Pass
+`--help` for the full flag list; everything else (RAM/CPU/disk floors, disk bus,
+firmware, login account) defaults from the descriptor and can be overridden.
+The rest of this document is the manual procedure the script automates, and the
+reference for the hypervisors it does not drive.
+
 ## Booting: never boot the master in place
 
 qcow2 is a read-write format, so a VM booted directly off `disk.qcow2` mutates
@@ -144,12 +176,31 @@ file modes do not survive archive extraction, so nothing can enforce it.
   `sshd -D -e`). Measured: port 22 is open ~20 s after power-on, and
   survives a reboot.
 - If the image was built without a key (public builds), inject one before
-  first boot with Haiku's `bfs_shell` on the BFS partition
-  (`losetup -f -P haiku-builder-anyboot.iso` → `…p1`), writing
-  `/myfs/home/config/settings/ssh/authorized_keys` — `bfs_shell` mounts the
-  volume at the fixed path `/myfs` and starts in `/`, so a bare
-  `home/config/...` silently resolves to nothing (it prints an error but
-  still exits 0). Or set a password once via the VGA console.
+  first boot. The easy way is `provision.sh --pubkey <key> [--inject-only]`
+  (see [Provisioning](#provisioning--the-one-command-path)); the manual
+  procedure it automates, with the four traps that make hand-injection fail
+  silently:
+  1. Loop-mount the BFS partition: `losetup -f -P disk.raw` → `…p1`
+     (`bfs_shell` needs a **raw** disk; `qemu-img convert -O raw` a qcow2 first).
+  2. Write **`/myfs/home/config/settings/ssh/authorized_keys`**, absolute under
+     `/myfs`: `bfs_shell` mounts the volume at that fixed path with cwd `/`, so
+     a bare `home/config/...` resolves to `/home/...` (nothing) and is lost.
+     And it is `config/settings/ssh`, **not** `~/.ssh` — see the bullet above.
+  3. `chmod 700` the dir and `600` the file inside the same session: `cp` does
+     not carry the host mode over, and OpenSSH's StrictModes ignores a
+     group-writable key.
+  4. A relocated `bfs_shell` needs `HAIKU_BUILD_ATTRIBUTES_DIR` pointing at a
+     writable scratch dir for the host→guest `cp` (needs bfs-shell
+     ≥ `1.0.0-beta.5+cvc.2`); set it via `sudo env VAR=…` since sudo scrubs
+     the environment.
+
+  **Do not trust `bfs_shell`'s exit status.** It exits non-zero when its final
+  unmount reports `Unmounting FS failed: Device or resource busy` even though
+  the write succeeded, and exits *zero* when an individual scripted command
+  failed. Verify by reading the file back with a fresh session
+  (`cat /myfs/home/config/settings/ssh/authorized_keys`) and matching the key —
+  which is exactly what `build.sh` and `provision.sh` do. Or set a password
+  once via the VGA console.
 - **Read the facts from the descriptor, not from this file.** After
   `eval "$(cvcpkg image env haiku-image)"`, use `$CVCPKG_IMAGE_SSH_USER` for
   the account and `cvcpkg image info haiku-image --json` for
