@@ -73,8 +73,21 @@ fi
 # a hand-installed build tool ends up.
 _HAIKU_SYSTEM="/boot/system"
 _HAIKU_NONPKG="${_HAIKU_SYSTEM}/non-packaged"
-export CFLAGS="${CFLAGS:-} -I${_HAIKU_SYSTEM}/develop/headers -I${_HAIKU_NONPKG}/develop/headers"
-export CXXFLAGS="${CXXFLAGS:-} -I${_HAIKU_SYSTEM}/develop/headers -I${_HAIKU_NONPKG}/develop/headers"
+
+# -fPIC for EVERYTHING, executables included.  Haiku links executables as ELF
+# ET_DYN images (the same runtime_loader model as shared libraries), so ld
+# rejects any R_X86_64_PC32 relocation against a global symbol with
+# "relocation ... can not be used when making a shared object; recompile with
+# -fPIC / final link failed: bad value".  CMake's POSITION_INDEPENDENT_CODE=ON
+# is NOT enough: for executable targets CMake emits -fPIE, and PIE still leaves
+# PC32 relocations against globals (it assumes they are non-interposable, which
+# does not hold once the "executable" is a shared object).  Only true -fPIC is
+# safe, so we force it here for the whole build and DROP -DCMAKE_POSITION_...
+# below (leaving it on would append a later -fPIE that overrides this -fPIC on
+# exe targets).  Verified 2026-09-23: with this flag xz builds liblzma.so *and*
+# xzdec/lzmadec/lzmainfo/xz; without it the executables fail to link.
+export CFLAGS="${CFLAGS:-} -fPIC -I${_HAIKU_SYSTEM}/develop/headers -I${_HAIKU_NONPKG}/develop/headers"
+export CXXFLAGS="${CXXFLAGS:-} -fPIC -I${_HAIKU_SYSTEM}/develop/headers -I${_HAIKU_NONPKG}/develop/headers"
 export LDFLAGS="${LDFLAGS:-} -L${_HAIKU_SYSTEM}/develop/lib -L${_HAIKU_NONPKG}/develop/lib"
 
 # [unverified] Haiku's run-time linker is runtime_loader, and it reads
@@ -133,7 +146,6 @@ cvc_cmake_build() {
         -DCMAKE_INSTALL_PREFIX="${CVC_INSTALL_DIR}" \
         -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" \
         -DBUILD_SHARED_LIBS="${BUILD_SHARED_LIBS}" \
-        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DCMAKE_CXX_STANDARD=17 \
         -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
         -DCMAKE_INSTALL_RPATH=\$ORIGIN \
