@@ -46,10 +46,13 @@ build:
       script: build.sh
     - platform: netbsd
       script: build.sh
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
     - lib/libimgui*
+    - lib/imgui.lib
     - include/imgui/
 
 abi:

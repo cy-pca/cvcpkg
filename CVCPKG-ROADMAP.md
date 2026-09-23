@@ -3,7 +3,7 @@
 > A cross-platform, language-agnostic binary package archive
 > for the scientific computing community.
 
-*Last updated: 2026-07-18*
+*Last updated: 2026-08-24*
 
 ---
 
@@ -250,6 +250,7 @@ flowchart TD
 | 6 | Community & Governance | 🔶 Partially Done — org namespaces + private-visibility isolation shipped |
 | 7 | Python Ecosystem (hermetic wheels, no-GIL) | 🔶 Partially Done — `python_wheel`/`python_sdist` source types, the `python:` block, the GIL-disabled test harness, and the first full matrix (`numpy` × cp311/cp312/cp313/cp313t) landed; more wheels + CUDA-math recipes + manifest freeze remain |
 | 7.5 | Haskell Ecosystem (our GHC, our ABI) | ⬜ Planned — pin one GHC and build the closure against it (nixpkgs model); toolchain (ghc/cabal-install/HLS) + Haskell executables first; library distribution needs a Stackage snapshot; no cross-compilation, no BSD |
+| 7.7 | Standard-Registry Facades (PEP 503 pip index + npm registry) | ⬜ Planned — read-only PEP 503 Simple index over cvcpkg's Python wheels (**Track A**, unblocked by Phase 7) so `pip --index-url`/Dependabot consume them, plus an npm registry facade (**Track B**) gated on first adding a node package type. Core work item: make the built wheel a first-class *stored* artifact — today only prefix tarballs are published, never the `.whl`. |
 | 8 | Self-Hosting & Universal Bootstrap (`cvpkg`) | ⬜ Planned — `mingw-w64` toolchain recipe is the first concrete step (landed 2026-07); single-binary `cvpkg`/`cvcpkg-sc` runs a full server (seed from built-in recipes, remote builders, ad-hoc push, air-gapped) |
 | 9 | Fleet & Platform Expansion (GhostBSD/DragonflyBSD, qemu) | 🔶 In Progress — DragonflyBSD platform + provisioning underway in a parallel track |
 | 10 | Peer Providers & Hardware-Aware Concretization | ⬜ Planned |
@@ -1309,6 +1310,186 @@ closes for GHC, and `hermetic-native-toolchain.md` raises for `CC`/`CXX`.
         after the fact.  Relates to Phase 16 (Prefix Provenance) and to
         the reproducibility argument in
         [`hermetic-native-toolchain.md`](docs/roadmap/hermetic-native-toolchain.md).
+
+---
+
+### Phase 7.7 — Standard-Registry Facades: PEP 503 pip Index + npm Registry
+
+**Status: Planned** — Track A (pip) is unblocked by Phase 7 and comes first;
+Track B (npm) is blocked on a node package type that does not exist yet.
+
+Dependabot's private-registry support — and `pip install --index-url`, and
+npm's `--registry` — target **actual package registries**: a PEP 503 Simple
+index for Python, a CommonJS registry for Node.  cvcpkg distributes prefix
+tarballs through its own catalog + CLI; there is nothing pip or npm can point
+at.  So a downstream project that sources its Python deps from cvcpkg (e.g.
+`txwtf`) cannot have Dependabot track those deps, and cannot resolve them with
+a stock `pip install`.  This phase adds **standards-compliant, read-only
+registry facades over cvcpkg's catalog** so pip, npm, and Dependabot treat
+cvcpkg like any other index — without changing how packages are *published*
+(that stays the recipe path).
+
+> **Read this before planning anything — cvcpkg does not host wheels today.**
+> It hosts **prefix tarballs**.  A `python_wheel` recipe fetches a pinned
+> `.whl` into a transient build dir, `pip install --no-index --prefix`es it so
+> it explodes into the prefix's `site-packages`, and then tars the *whole
+> prefix* (`{name}-{version}-{platform}-{arch}-{cfg}-{link}.tar.gz`).  The
+> `.whl` is consumed as a build input and **never stored, never published,
+> never referenced anywhere in `server/`**.  Worse, the wheel-tag metadata
+> (`cp312-cp312-manylinux_2_28_x86_64`, the `manylinux_min` floor, the wheel's
+> own sha256, the real distribution name) lives **only in the recipe's
+> `python:` block on disk** — `generate_manifest` drops it; the catalog/DB
+> never see it.  A PEP 503 index is therefore **not** a thin view over the
+> existing catalog.  The core work item is making the built wheel a
+> **first-class, retained, servable artifact** and persisting its tag
+> metadata.  Everything else in Track A is plumbing around that.
+
+#### The mapping cvcpkg → a standard index
+
+cvcpkg ships each Python package as a **per-interpreter column recipe**
+(`numpy-cp311`, `numpy-cp312`, `numpy-cp313`, `numpy-cp313t`).  A standard
+index expects **one project** (`numpy`) whose page lists **many wheel files**,
+one per ABI, and lets the client pick by wheel tag.  The facade's central
+modelling job is to **collapse the columns back into one PEP 503 project** —
+which is exactly the shape pip and Dependabot already understand.
+
+```mermaid
+flowchart LR
+    subgraph Catalog["cvcpkg catalog (per-interpreter columns)"]
+        C1["numpy-cp311"]
+        C2["numpy-cp312"]
+        C3["numpy-cp313"]
+        C4["numpy-cp313t"]
+    end
+    subgraph Facade["/simple/ (PEP 503) — one project"]
+        P["project: numpy<br/>lists N wheel files by tag"]
+    end
+    C1 & C2 & C3 & C4 --> P
+    P -->|"pip install --index-url"| PIP["pip / uv"]
+    P -->|"reads version list"| DB["Dependabot<br/>(opens bump PRs)"]
+```
+
+#### Track A — PEP 503 pip index (achievable; extends Phase 7)
+
+- [ ] **Retain the wheel as a published artifact.**  A new artifact class
+      beside the prefix tarball: when a `python_wheel`/`python_sdist` recipe
+      builds, publish the `.whl` bytes to the archive store (via the existing
+      `StorageBackend`), not just the exploded prefix.  The compelling artifact
+      is the **`python_sdist`-built wheel** — it links cvcpkg's own C libraries
+      (h5py→cvcpkg `hdf5`, mpi4py→cvcpkg MPI) and exists **nowhere else**.  A
+      re-hosted `python_wheel` is a straight PyPI passthrough and should be
+      **policy-gated** (opt-in per recipe / per server) so we don't
+      accidentally become a full PyPI mirror.
+- [ ] **Persist wheel-tag metadata.**  New variant fields + migration + thread
+      the recipe `python:` block through `generate_manifest`: PEP 503
+      **normalized distribution name** (`numpy`, *not* the `numpy-cp312` column
+      name), PEP 440 **version** (decide how the `+cvc.N` local-version tag is
+      surfaced — see the correctness note below), the **full wheel tag**, the
+      **wheel filename**, and the **wheel's own sha256**.  Today none of this
+      reaches the catalog; only the on-disk recipe has it.
+- [ ] **Serve the Simple API.**  New endpoints, content-negotiated between the
+      legacy HTML (PEP 503) and JSON (PEP 691,
+      `application/vnd.pypi.simple.v1+json`):
+      - `GET /simple/` — the project index (one entry per collapsed project).
+      - `GET /simple/{project}/` — every wheel file for that project as
+        `<a href="…/{filename}#sha256=…">`, carrying `data-requires-python`,
+        `data-yanked` mapped from cvcpkg's existing yank flag (PEP 592 — cvcpkg
+        already yanks, so this maps cleanly), and optionally
+        `data-core-metadata` (PEP 658/714) if we expose `{filename}.metadata`.
+      - The wheel download reuses the existing streaming path
+        (`GET /v1/download/{filename}` today) pointed at the stored `.whl`.
+- [ ] **Auth = the existing bearer tokens.**  Reuse `Authorization: Bearer
+      cvctok_…` (roles `reader`/`publisher`/`admin`).  pip authenticates a
+      private index via `netrc`/keyring or `https://user:token@host/simple/`.
+      Public wheels stay anonymous; a private-org index scopes `/simple/` to
+      what the token can see, mirroring `_archive_is_visible` (404 on denial,
+      not 403).  An org-scoped index root lets a private stack be consumed
+      whole.
+- [ ] **Dependabot wiring (the actual ask).**  Ship a documented
+      `dependabot.yml` recipe (Track A's payoff):
+      ```yaml
+      registries:
+        cvcpkg:
+          type: python-index
+          url: https://cvcpkg.org/simple/          # or an org-scoped root
+          username: x-access-token
+          password: ${{ secrets.CVCPKG_TOKEN }}     # a reader token
+      updates:
+        - package-ecosystem: pip
+          directory: /
+          registries: ["cvcpkg"]
+          schedule: { interval: weekly }
+      ```
+      **Honest scoping of what Dependabot needs:** a version-**bump** only reads
+      the Simple page, sees a newer version, and opens a PR — it never installs
+      the wheel to do that.  So the metadata-first slice (persist tags + serve
+      `/simple/` with links) unblocks Dependabot's core job **before** every
+      wheel is necessarily re-hosted.  Actual `pip install --index-url`
+      resolution needs the wheels to download, which is why artifact retention
+      is item 1.
+
+#### Track B — npm registry (blocked on a node package type)
+
+The blocker, stated plainly: **cvcpkg has no JS/npm recipe type.**  There is no
+node toolchain recipe and no `npm_pkg` source type — nothing produces an
+npm-installable artifact, so there is literally nothing for a registry facade
+to serve.  Track B therefore has a hard prerequisite that is really a
+multi-language item (Phase 4 lineage), not a server-endpoint item:
+
+- [ ] **A node/npm package class first.**  A pinned Node toolchain recipe + an
+      `npm_pkg` source type that stages/produces an npm package tarball
+      (`.tgz`) as a **retained artifact** — the npm analogue of Track A item 1.
+- [ ] **Serve the CommonJS registry protocol.**  `GET /{package}` → packument
+      JSON (`name`, `versions{…}`, `dist-tags`, per-version
+      `dist.tarball`/`dist.integrity` (sha512 SRI)/`dist.shasum`);
+      `GET /{package}/-/{package}-{version}.tgz` → the tarball.  Scoped names
+      `@org/name` map onto cvcpkg org namespaces; `.npmrc`
+      `//host/:_authToken=` reuses bearer tokens.
+- [ ] **Dependabot wiring** — `type: npm-registry`, same url/token shape as
+      Track A.
+
+**Immediate `js-yaml` / `brace-expansion` reality:** those are *transitive npm
+deps* (a Dependabot alert somewhere), and there is **no path** to putting them
+in cvcpkg today — nor a reason to.  Dependabot already updates npm natively;
+leave them on npmjs.org.  Track B exists for **first-party** JS that cvcpkg
+might one day publish (e.g. a future web client), not for intercepting
+arbitrary npm transitive deps.
+
+#### Boundaries & non-goals
+
+- **Read-only facades.**  No `twine upload` / `npm publish` *into* cvcpkg —
+  publishing stays the cvcpkg recipe path.  This is an index to **read**.
+- **Not a general PyPI/npm mirror.**  We serve *our* artifacts (the hermetic
+  `python_sdist` wheels are the value).  Re-hosting arbitrary upstream is
+  policy-gated, off by default.
+- **Partial graphs compose via `--extra-index-url`.**  If not every transitive
+  dep is a cvcpkg wheel, pip falls back to PyPI for the rest.  Document the
+  composition **and** the dependency-confusion caveat: a cvcpkg project name
+  can shadow (or be shadowed by) a PyPI name, so prefer an explicit
+  `--index-url` precedence / org-scoped root over a blind `--extra-index-url`.
+
+#### One correctness note to carry into implementation
+
+cvcpkg stamps a `+cvc.N` **local-version** segment (`2.4.6+cvc.1`).  pip treats
+that as a local version *of* `2.4.6` and will prefer it — usually what we want.
+But (a) Dependabot's version comparison on non-PyPI local versions is a thing
+to **test explicitly**, and (b) the column-name→project collapse must normalize
+exactly (`numpy-cp312` → project `numpy`, PEP 503 normalization on the *real*
+name) or pip/Dependabot see phantom projects like `numpy-cp312`.
+
+#### Sequencing & cross-references
+
+- **Do Track A first** — Phase 7 already produces the wheels; MVP = retain the
+  artifact + persist tags + serve `/simple/` for public wheels + the Dependabot
+  doc.  **Interim for `txwtf` today:** while Track A is built, the pragmatic
+  stopgap is Dependabot `ignore` rules for the deps txwtf sources from cvcpkg
+  (cvcpkg's hermetic build is the source of truth there), so the alerts stop
+  without a facade.
+- **Track B waits** on the node package type.
+- Relates to **Phase 7** (the wheels this serves), **Phase 4 Interoperability**
+  (this is the pip/npm sibling of the Spack/Conan/vcpkg compat layers),
+  **Phase 5** (an org-scoped private index composes with edge/mirror clusters),
+  and **Phase 6 / 13** (org visibility + token auth gate the private index).
 
 ---
 

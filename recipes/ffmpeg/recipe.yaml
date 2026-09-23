@@ -12,12 +12,26 @@ recipe:
   description: >-
     FFmpeg — a complete, cross-platform solution to record, convert and
     stream audio and video.  Ships the libavformat, libavcodec,
-    libavutil, libavfilter, libavdevice, libswscale and libswresample
-    shared libraries.  Built with --enable-gpl and a broad external
-    codec set: H.264 (x264), H.265/HEVC (x265), Opus, MP3, Vorbis,
-    VP8/VP9 (libvpx), AV1 (dav1d), WebP, JPEG, PNG, OpenSSL,
-    bzip2/lzma, freetype/fontconfig/fribidi, and PulseAudio on Linux.
+    libavutil, libavfilter, libavdevice, libswscale, libswresample and
+    libpostproc shared libraries, AND the ffmpeg/ffprobe programs built
+    against that same codec set.  Built with --enable-gpl and a broad
+    external codec set: H.264 (x264), H.265/HEVC (x265), Opus, MP3,
+    Vorbis, VP8/VP9 (libvpx), AV1 (dav1d), WebP, OpenSSL, bzip2/lzma,
+    freetype/fontconfig/fribidi, and PulseAudio on Linux.  JPEG and PNG
+    are handled by FFmpeg's own native codecs — there is no
+    --enable-libjpeg or --enable-libpng, and passing either aborts
+    configure.  No component restrictions are applied, so every muxer,
+    demuxer, filter and protocol FFmpeg can build is present.
     Pared-down static builds are also provided for wasm, wasi, and cosmo.
+
+    This is the ONLY ffmpeg package.  A separate `ffmpeg-cli` recipe used to
+    build the same two programs with --disable-everything, for a three-package
+    dependency closure on Windows; it existed because this recipe once passed
+    --disable-programs and shipped no executables at all.  It no longer does,
+    so the two overlapped on bin/ffmpeg(.exe) and had to be declared
+    conflicting.  ffmpeg-cli was removed rather than kept in sync — consumers
+    that only shell out to the binary (grl_snam_dbg's offscreen platoon
+    capture) install this package and get a superset.
 
 source:
   type: tarball
@@ -111,6 +125,13 @@ depends:
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     - name: libpulse
       platforms: [linux]
+  # Deliberately empty. The Windows build needs a MinGW-w64 toolchain, but
+  # host_tools is schema-typed as plain strings and _dep_names() ignores
+  # `platforms:` on host_tools entries even when one is supplied — so declaring
+  # mingw-w64-gcc here would try to build a MinGW cross-compiler on Linux and
+  # macOS too. build.ps1 therefore searches CVC_BUILD_PREFIX and
+  # CVC_DEPS_PREFIX for a pinned toolchain and falls back to the ambient MSYS2
+  # install, with --cross-prefix probed rather than assumed.
   host_tools: []
 
 build:
@@ -174,6 +195,18 @@ package:
     - lib/avdevice.lib
     - lib/swscale.lib
     - lib/swresample.lib
+    # postproc — --enable-gpl turns it on, so it is built either way; without
+    # these entries it was compiled and then thrown away at package time.
+    - lib/libpostproc*
+    - lib/postproc.lib
+    - bin/postproc-*.dll
+    - lib/pkgconfig/libpostproc.pc
+    # The ffmpeg/ffprobe programs. Entries that do not match on a given
+    # platform are skipped, so both the Unix and Windows spellings live here.
+    - bin/ffmpeg
+    - bin/ffprobe
+    - bin/ffmpeg.exe
+    - bin/ffprobe.exe
     # Headers (shared)
     - include/libavformat/
     - include/libavcodec/
@@ -182,6 +215,7 @@ package:
     - include/libavdevice/
     - include/libswscale/
     - include/libswresample/
+    - include/libpostproc/
   pkg_config:
     - libavformat
     - libavcodec
@@ -190,6 +224,7 @@ package:
     - libavdevice
     - libswscale
     - libswresample
+    - libpostproc
 
 abi:
   cxx_std: 17
