@@ -184,7 +184,14 @@ env PATH="${_PATH_NONODE}" cmake -G Ninja -S "${CVC_SOURCE_DIR}" -B "${CVC_BUILD
     -DVTK_GROUP_ENABLE_StandAlone=DONT_WANT \
     -DVTK_GROUP_ENABLE_Rendering=DONT_WANT \
     -DVTK_MODULE_ENABLE_VTK_CommonCore=YES \
-    -DVTK_MODULE_ENABLE_VTK_CommonDataModel=YES
+    -DVTK_MODULE_ENABLE_VTK_CommonDataModel=YES \
+    -DVTK_MODULE_ENABLE_VTK_RenderingCore=YES
+# RenderingCore is the ABSTRACT rendering layer (vtkProp/vtkActor/vtkMapper/
+# vtkRenderer/vtkRenderWindow base classes) — no GL backend needed, so it wraps on
+# wasm without RenderingOpenGL2. This is what pycvc_gl's BRIDGE marshals (getProp
+# returns a vtkProp*/vtkActor*), so wrapping it lets pycvc_gl RETURN live Python vtk
+# rendering objects (not just the CommonDataModel data objects). VTK pulls the
+# needed Filters/Common deps automatically when RenderingCore is forced YES.
 # Build keep-going (-k 0): the standalone `vtkpython` interpreter executable is
 # EXPECTED to fail to link on wasm — libpython3.12.a's _decimal.o references
 # mpd_isspecial (libmpdecimal is not archived into the wasm CPython). We do not
@@ -195,7 +202,7 @@ cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}" -- -k 0 || true
 # A REAL failure must still abort: verify the packaged wrapper archives exist
 # before installing (only the vtkpython exe is permitted to be missing).
 _missing=""
-for _pat in "_vtkmodules_static.a" "libvtkWrappingPythonCore*.a" "libvtkCommonCorePython.a" "libvtkCommonDataModelPython.a"; do
+for _pat in "_vtkmodules_static.a" "libvtkWrappingPythonCore*.a" "libvtkCommonCorePython.a" "libvtkCommonDataModelPython.a" "libvtkRenderingCorePython.a"; do
     compgen -G "${CVC_BUILD_DIR}/lib/${_pat}" >/dev/null 2>&1 || _missing="${_missing} ${_pat}"
 done
 if [ -n "${_missing}" ]; then
