@@ -20,7 +20,7 @@ import sys
 import tarfile
 import tempfile
 import zipfile
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -239,7 +239,7 @@ class Recipe:
     source: SourceSpec
     patches: list[str]
     build_matrix: list[MatrixEntry]
-    package_files: list[str]
+    package_files: list[str | dict[str, Any]]
     test_script: str | None
     raw: dict[str, Any]  # full parsed YAML for manifest generation
     recipe_dir: Path
@@ -2014,14 +2014,34 @@ _PLATFORM_EXCLUDED_SUFFIXES: dict[str, tuple[str, ...]] = {
 }
 
 
-def _entry_applies_to(entry: str, platform: str) -> bool:
+def _pkg_glob(entry: str | Mapping[str, Any]) -> str:
+    """The glob pattern of a package.files entry (string or {glob, platforms})."""
+    return entry["glob"] if isinstance(entry, Mapping) else entry
+
+
+def _pkg_platforms(entry: str | Mapping[str, Any]) -> set[str] | None:
+    """Explicit platform scope of a package.files entry, or None if unscoped."""
+    if isinstance(entry, Mapping):
+        plats = entry.get("platforms")
+        if plats:
+            return set(plats)
+    return None
+
+
+def _entry_applies_to(entry: str | Mapping[str, Any], platform: str) -> bool:
     """Is *entry* expected to match anything when packing for *platform*?"""
+    # An explicit {glob, platforms} scope is authoritative -- it overrides the
+    # suffix heuristic below, which only exists to guess for bare-string entries.
+    scoped = _pkg_platforms(entry)
+    if scoped is not None:
+        return platform in scoped
+    glob = _pkg_glob(entry)
     for suffix, only in _PLATFORM_ONLY_SUFFIXES.items():
-        if suffix in entry:
+        if suffix in glob:
             return platform in only
     for suffix, excluded in _PLATFORM_EXCLUDED_SUFFIXES.items():
         # ".so" also catches ".so.6"; guard against matching e.g. "foo.sox".
-        if suffix in entry and platform in excluded:
+        if suffix in glob and platform in excluded:
             return False
     return True
 
@@ -2042,7 +2062,7 @@ def _alternate_group(entry: str) -> str:
 
 def check_declared_files(
     install_dir: Path,
-    package_files: Sequence[str],
+    package_files: Sequence[str | Mapping[str, Any]],
     platform: str,
 ) -> list[str]:
     """Return the ``package.files`` entries that match nothing in *install_dir*.
@@ -2063,7 +2083,8 @@ def check_declared_files(
     for entry in package_files:
         if not entry or not _entry_applies_to(entry, platform):
             continue
-        groups.setdefault(_alternate_group(entry), []).append(entry)
+        glob = _pkg_glob(entry)
+        groups.setdefault(_alternate_group(glob), []).append(glob)
 
     unmatched: list[str] = []
     for _key, entries in sorted(groups.items()):
@@ -2100,7 +2121,7 @@ def check_declared_files(
 
 def enforce_declared_files(
     install_dir: Path,
-    package_files: Sequence[str],
+    package_files: Sequence[str | Mapping[str, Any]],
     platform: str,
     recipe_name: str,
     *,
