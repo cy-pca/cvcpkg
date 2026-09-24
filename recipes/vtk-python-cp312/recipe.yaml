@@ -6,11 +6,13 @@ recipe:
   # bundle, published by a build that raced ahead without the prune, wrongly
   # shipped a full VTK — yank it). The prune changes the packed artifact, so the
   # revision must bump; other platforms rebuild identically.
-  # cvc.3: wasm/wasm-mt expand the wrapped module set from Common* to add
-  # RenderingCore (abstract vtkProp/vtkActor/vtkMapper/vtkRenderer — no GL backend),
-  # so pycvc_gl's BRIDGE can return live Python vtk RENDERING objects, not just data
-  # objects. Only the wasm/wasm-mt variants rebuild (per-platform revisioning).
-  cvc_revision: 3
+  # cvc.3: wasm/wasm-mt add RenderingCore to the wrapped set.
+  # cvc.4: wasm/wasm-mt go ALL THE WAY — StandAlone=WANT wraps the full backend-free
+  # data API (Common/Filters/IO/Imaging/Infovis) plus the base vtk recipe's proven
+  # wasm rendering set (RenderingOpenGL2/Volume/VolumeOpenGL2/FreeType/UI +
+  # Interaction), so pycvc_gl gets the FULL vtk-python API in the browser (data,
+  # filters, IO, and live render windows/actors/GPU volume). wasm/wasm-mt only.
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
