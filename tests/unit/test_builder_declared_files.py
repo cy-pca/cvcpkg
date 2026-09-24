@@ -110,6 +110,34 @@ def test_enforce_raises_in_strict_mode(tmp_path: Path) -> None:
     assert "lib/libfoo*" in str(excinfo.value)
 
 
+def test_explicit_platform_scope_exempts_off_platform_entries(tmp_path: Path) -> None:
+    """An explicit {glob, platforms} entry is only judged on its own platforms.
+
+    zlib's MSVC spelling `lib/zlib*` has no platform-locked suffix for the
+    heuristic to catch, so it must be scoped explicitly; a Linux build stages
+    only `lib/libz*` and must not trip on it.
+    """
+    files = [
+        "lib/libz*",
+        {"glob": "lib/zlib*", "platforms": ["windows"]},
+        {"glob": "lib/z.lib", "platforms": ["windows"]},
+    ]
+    nix = _tree(tmp_path / "nix", ("lib/libz.so.1",))
+    assert check_declared_files(nix, files, "linux") == []
+    # On windows the scoped entries ARE judged. libz.a (the GNU alias the build
+    # stages) satisfies lib/libz*, and zlib.lib satisfies lib/zlib*, but z.lib is
+    # absent -- so only that scoped entry is reported.
+    win = _tree(tmp_path / "win", ("lib/libz.a", "lib/zlib.lib"))
+    assert check_declared_files(win, files, "windows") == ["lib/z.lib"]
+
+
+def test_explicit_scope_reports_missing_on_its_own_platform(tmp_path: Path) -> None:
+    """Scoping does not weaken the check on the platforms it names."""
+    win = _tree(tmp_path, ("include/foo.h",))
+    files = [{"glob": "lib/foo.lib", "platforms": ["windows"]}]
+    assert check_declared_files(win, files, "windows") == ["lib/foo.lib"]
+
+
 def test_enforce_only_warns_when_not_strict(tmp_path: Path, capsys) -> None:
     prefix = _tree(tmp_path, ("include/foo.h",))
     enforce_declared_files(prefix, ["lib/libfoo*"], "linux", "foo", strict=False)
