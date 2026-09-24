@@ -18,7 +18,12 @@ recipe:
   # cvc.5: also wrap IOHDF, using VTK's EXTERNAL hdf5 (VTK_MODULE_USE_EXTERNAL_VTK_hdf5
   # against the cvcpkg hdf5 wasm/wasm-mt build) so no vendored-hdf5 TRY_RUN under the
   # node-hidden configure. Adds VTK's HDF5 IO (.vtkhdf etc.) to the browser API.
-  cvc_revision: 5
+  # cvc.6: also wrap IONetCDF (+ best-effort IOExodus), using VTK's EXTERNAL netcdf
+  # (VTK_MODULE_USE_EXTERNAL_VTK_netcdf against the cvcpkg netcdf wasm/wasm-mt build,
+  # published 2026-09-24) — the same external-lib trick as hdf5, so netCDF's vendored
+  # TRY_RUN never runs under the node-hidden wrap configure. Adds netCDF (and Exodus)
+  # readers to the browser vtk-python API. wasm/wasm-mt only.
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -73,6 +78,13 @@ depends:
       # so IOHDF wraps without VTK's vendored hdf5 configure TRY_RUN (which can't run
       # under the node-hidden wrap configure). hdf5 is a separate cvcpkg wasm build.
       platforms: [linux, macos, windows, windows-gnu, freebsd, openbsd, netbsd, haiku, wasm, wasm-mt]
+    - name: netcdf
+      version: "^4.9"
+      # wasm/wasm-mt only: VTK uses this EXTERNAL prebuilt netcdf
+      # (VTK_MODULE_USE_EXTERNAL_VTK_netcdf) so IONetCDF/IOExodus wrap without netCDF's
+      # vendored configure TRY_RUN under the node-hidden wrap build. netcdf is a
+      # separate cvcpkg wasm build (netcdf-4 on the same external hdf5).
+      platforms: [wasm, wasm-mt]
     - name: tiff
       version: "^4.6"
     - name: zlib
