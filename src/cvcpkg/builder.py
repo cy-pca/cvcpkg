@@ -1322,9 +1322,11 @@ def _find_patchelf(*prefixes: Path | None) -> str | None:
 # ELF platforms whose run-time linker expands ``$ORIGIN`` in RPATH, so the
 # $ORIGIN rewrite in _patch_elf_rpath makes their shared bundles relocatable.
 # OpenBSD is deliberately excluded: its ld.so does not implement $ORIGIN, so the
-# rewrite would be silently ignored — relocatable OpenBSD bundles need a
-# different mechanism if/when it becomes an active build target. macOS/Windows
-# are handled separately (install_name / PATH-relative DLLs).
+# rewrite would be silently ignored.  OpenBSD relocation happens INSTEAD at
+# install time — once the destination prefix is concrete — by baking an ABSOLUTE
+# RPATH pointing at the merged <prefix>/lib into every ELF object (see
+# _patch_elf_rpath_absolute, called from cli/_install.py). macOS/Windows are
+# handled separately (install_name / PATH-relative DLLs).
 # Haiku qualifies too: its images are plain ELF, its runtime_loader honours
 # DT_RPATH/DT_RUNPATH and expands $ORIGIN, and HaikuPorts ships the same
 # patchelf 0.18.0 this rewrite drives.
@@ -1377,6 +1379,78 @@ def _patch_elf_rpath(install_dir: Path, patchelf: str | None = None) -> None:
             [patchelf, "--set-rpath", new_rpath, str(so)],
             capture_output=True,
         )
+
+
+def _patch_elf_rpath_absolute(
+    prefix: Path, lib_dirs: Sequence[Path], patchelf: str | None = None
+) -> int:
+    """Bake an ABSOLUTE RPATH of *lib_dirs* into every ELF object under *prefix*.
+
+    OpenBSD relocation.  Its ld.so does not expand ``$ORIGIN`` (so the build-time
+    :func:`_patch_elf_rpath` rewrite is inert there and OpenBSD is excluded from
+    ``_ELF_RPATH_PLATFORMS``).  The only way an *installed* OpenBSD bundle can
+    resolve its own — possibly multi-hop — native chains (e.g. an h5py extension
+    → ``libhdf5`` → ``libz``, all merged into ``<prefix>/lib``) without the
+    caller exporting ``LD_LIBRARY_PATH`` is an absolute RPATH pointing at that
+    merged lib dir.  That path only becomes concrete at install time, so this
+    runs from the installer, not from :func:`run_build`.
+
+    Covers shared objects (``lib/**/*.so*``, including the Python extensions
+    under ``lib/pythonX.Y/site-packages``) AND executables (``bin/*``) — a bare
+    ``<prefix>/bin/python`` must itself find ``<prefix>/lib/libpython*.so``.
+    Pre-existing ABSOLUTE RPATH entries that still resolve *inside* ``prefix``
+    are preserved (e.g. a wheel's bundled sibling-lib dir); ``$ORIGIN`` entries
+    (inert here) and dead build-temp absolutes are dropped.
+
+    *patchelf* is the resolved binary (callers pass :func:`_find_patchelf`'s
+    result).  Returns the number of objects patched; a no-op returning 0 when
+    patchelf is unavailable or no *lib_dirs* exist.  Idempotent: re-running (as
+    a later ``install`` merges more into the prefix) re-stamps the same RPATH.
+    """
+    if not patchelf:
+        return 0
+    lib_dirs = [d for d in lib_dirs if d.is_dir()]
+    if not lib_dirs:
+        return 0
+    prefix_str = str(prefix.resolve())
+    base = [str(d.resolve()) for d in lib_dirs]
+
+    objs: list[Path] = []
+    for name in ("lib", "lib64"):
+        d = prefix / name
+        if d.is_dir():
+            objs.extend(p for p in d.rglob("*.so*") if p.is_file() and not p.is_symlink())
+    bindir = prefix / "bin"
+    if bindir.is_dir():
+        objs.extend(p for p in bindir.iterdir() if p.is_file() and not p.is_symlink())
+
+    patched = 0
+    for obj in objs:
+        printed = subprocess.run(
+            [patchelf, "--print-rpath", str(obj)], capture_output=True, text=True
+        )
+        if printed.returncode != 0:
+            # Not an ELF object patchelf groks (a shell script in bin/, a data
+            # file matching *.so* by name) — skip quietly.
+            continue
+        # Keep absolute entries that still point INTO this prefix (bundled
+        # sibling libs); drop $ORIGIN (openbsd ignores it) and stale paths.
+        kept = [
+            e
+            for e in printed.stdout.strip().split(":")
+            if e
+            and not e.startswith("$ORIGIN")
+            and e not in base
+            and e.startswith(prefix_str)
+            and Path(e).is_dir()
+        ]
+        result = subprocess.run(
+            [patchelf, "--set-rpath", ":".join([*base, *kept]), str(obj)],
+            capture_output=True,
+        )
+        if result.returncode == 0:
+            patched += 1
+    return patched
 
 
 def _patch_macos_install_names(install_dir: Path) -> None:
