@@ -221,6 +221,25 @@ fi
 ${_EMWRAP} $MAKE -j "${CVC_JOBS}"
 ${_EMWRAP} $MAKE install
 
+# [wasm] Fold the bundled HACL crypto objects into the static libpython. Same class
+# of gap as _decimal/libmpdec: CPython's emscripten build archives the hash MODULE
+# objects (sha2module.o, sha3module.o, ...) into libpython3.X.a but NOT the HACL
+# primitives they call (Modules/_hacl/*.o), so libpython carries undefined
+# python_hashlib_Hacl_* symbols that break ANY static app embedding it (e.g. the
+# pycvc_gl wasm host). Archive them so the built-in hash modules are self-contained
+# (CPython builds in-source, so the objects sit under CVC_SOURCE_DIR/Modules/_hacl).
+if [ "$IS_EMSCRIPTEN" = true ]; then
+    _libpy="$(find "${CVC_INSTALL_DIR}" -name "libpython${PYTHON_MINOR}*.a" 2>/dev/null | head -1)"
+    _hacl_objs="$(find "${CVC_SOURCE_DIR}/Modules/_hacl" -name '*.o' 2>/dev/null || true)"
+    if [ -n "${_libpy}" ] && [ -n "${_hacl_objs}" ]; then
+        # shellcheck disable=SC2086
+        emar rs "${_libpy}" ${_hacl_objs}
+        echo "build-python(wasm): archived $(printf '%s\n' ${_hacl_objs} | wc -l) HACL object(s) into $(basename "${_libpy}")"
+    else
+        echo "build-python(wasm): WARN — HACL objects or libpython not found; _sha2/_sha3 may leave undefined symbols" >&2
+    fi
+fi
+
 # --- Relocatable RPATH post-fixup (native only) ---
 # CPython's Makefile bakes the absolute build-time LDFLAGS rpath; patch
 # the installed binary so it uses $ORIGIN-relative paths instead.

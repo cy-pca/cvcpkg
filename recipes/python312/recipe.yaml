@@ -42,10 +42,13 @@ recipe:
   # wasm libpython3.12.a carried undefined mpd_* symbols (bundled libmpdec was
   # never archived), which broke any final wasm app embedding it. cvc.9 wasm is
   # self-contained; other platforms rebuild byte-identically. Yank cvc.8 wasm.
-  # cvc.10: wasm-mt gains _ssl/_hashlib (TLS) against a thread-safe wasm-mt
-  # OpenSSL. Only the wasm-mt variant is rebuilt at cvc.10; other platforms
-  # resolve to their existing revision (cvcpkg resolves per-platform tuple).
-  cvc_revision: 10
+  # cvc.10: wasm-mt gains _ssl/_hashlib (TLS) against a thread-safe wasm-mt OpenSSL.
+  # cvc.11: emscripten (wasm + wasm-mt) folds CPython's bundled HACL crypto objects
+  # into the static libpython so the built-in hash modules are self-contained — an
+  # app statically embedding libpython (the pycvc_gl wasm host) links with no
+  # undefined python_hashlib_Hacl_* symbols. Per-platform revisioning: only the
+  # rebuilt wasm/wasm-mt variants advance; other platforms keep their revision.
+  cvc_revision: 11
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
