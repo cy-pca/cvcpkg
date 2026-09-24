@@ -7,11 +7,14 @@ recipe:
   # shipped a full VTK — yank it). The prune changes the packed artifact, so the
   # revision must bump; other platforms rebuild identically.
   # cvc.3: wasm/wasm-mt add RenderingCore to the wrapped set.
-  # cvc.4: wasm/wasm-mt go ALL THE WAY — StandAlone=WANT wraps the full backend-free
-  # data API (Common/Filters/IO/Imaging/Infovis) plus the base vtk recipe's proven
-  # wasm rendering set (RenderingOpenGL2/Volume/VolumeOpenGL2/FreeType/UI +
-  # Interaction), so pycvc_gl gets the FULL vtk-python API in the browser (data,
-  # filters, IO, and live render windows/actors/GPU volume). wasm/wasm-mt only.
+  # cvc.4: wasm/wasm-mt wrap a broad set — the base vtk recipe's proven wasm rendering
+  # stack (RenderingOpenGL2/Volume/VolumeOpenGL2/FreeType/Annotation/UI + Interaction)
+  # plus a curated backend-free data set (Common/Filters/Imaging + IOXML/Geometry/
+  # Legacy/PLY/Image). CURATED, not StandAlone=WANT: the wrapping build hides node so
+  # VTK uses native wrap-tools, which means modules whose configure does TRY_RUN can't
+  # run — so the HDF5/netCDF/Exodus IO modules are explicitly OFF (they TRY_RUN). This
+  # gives pycvc_gl live render windows/actors/GPU-volume + the core data/filter/IO API
+  # in the browser. wasm/wasm-mt only.
   cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
