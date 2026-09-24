@@ -59,10 +59,6 @@ def _dep_name(d: object) -> str:
 # build-repair tasks; only once a recipe's fleet build is green can its leak fix
 # land and it drop off this list.
 #
-#   automake            — autoconf's self-test runs `autoconf -o /dev/null`, whose
-#                         autom4te resolves m4 as `$M4 || /usr/bin/m4` (never PATH);
-#                         builders lack /usr/bin/m4 or ship non-GNU BSD m4, so the
-#                         rebuild fails (build-on-dev #9688/#9692).
 #   wayland-protocols   — build-depend on the `wayland` recipe, whose own build
 #   xkbcommon             fails on linux/freebsd (build-on-dev #9691/#9695); their
 #                         rebuild can't succeed until wayland's does.
@@ -73,7 +69,6 @@ def _dep_name(d: object) -> str:
 # these are in the wasm-mt demo closure. Shrink this list as each build is repaired;
 # do NOT add to it — a new leaking recipe must be fixed, not deferred.
 _DEFERRED_LEAKS: set[str] = {
-    "automake",
     "wayland-protocols",
     "xkbcommon",
 }
