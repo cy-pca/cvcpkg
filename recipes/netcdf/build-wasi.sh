@@ -1,17 +1,25 @@
 #!/usr/bin/env bash
 # recipes/netcdf/build-wasi.sh — cross-compile netCDF-C to wasm32-wasi via wasi-sdk
 # (netcdf-4 on HDF5). Uses the external cvcpkg hdf5 (wasi) + zlib (wasi) from
-# CVC_DEPS_PREFIX (found via CMAKE_FIND_ROOT_PATH, which env-wasi.sh's
-# cvc_cmake_build sets). Same minimal netcdf-4-on-HDF5 config as build-wasm.sh —
-# DAP/byterange (remote curl), NCZARR (libxml2/zip) and plugins (dlopen) are off;
-# they don't apply on a wasi backend target either. Both the new NETCDF_ENABLE_*
-# and legacy ENABLE_* option names are passed so the recipe survives netCDF option
-# renames; unknown ones are ignored.
+# CVC_DEPS_PREFIX (found via CMAKE_FIND_ROOT_PATH). Same minimal
+# netcdf-4-on-HDF5 config as build-wasm.sh.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_common/env-wasi.sh"
+# Shared wasm32 SIZEOF_* pre-seed (see the file) so check_type_size is skipped.
+source "${SCRIPT_DIR}/wasm-type-sizes.sh"
 
+# NOTE: env-wasi.sh's cvc_cmake_build sets CMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY
+# globally, which makes link-based check_function_exists false-positive — the same
+# trap that makes netCDF misdetect a PARALLEL HDF5 and require MPI. We override it
+# back to EXECUTABLE here (later -D wins) so the HDF5 symbol probes link correctly,
+# and pre-seed the sizes so check_type_size doesn't need a static-lib try_compile.
+# PARALLEL4 off is belt-and-suspenders (wasi has no MPI). (wasi flavor is exercised
+# in the WASI build-out wave, not the cvc.6 critical path.)
 cvc_cmake_build \
+    "${WASM_TYPE_SIZES[@]}" \
+    -DCMAKE_TRY_COMPILE_TARGET_TYPE=EXECUTABLE \
+    -DENABLE_PARALLEL4=OFF -DNETCDF_ENABLE_PARALLEL4=OFF \
     -DNETCDF_ENABLE_DAP=OFF -DENABLE_DAP=OFF \
     -DNETCDF_ENABLE_DAP4=OFF -DENABLE_DAP4=OFF \
     -DNETCDF_ENABLE_BYTERANGE=OFF -DENABLE_BYTERANGE=OFF \

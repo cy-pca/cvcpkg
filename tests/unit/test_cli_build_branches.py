@@ -39,6 +39,7 @@ def fake_recipe(
     cvc_revision=1,
     source_type="url",
     source_url="https://example.com/src.tar.gz",
+    package_files=(),
 ):
     r = types.SimpleNamespace()
     r.name = name
@@ -50,6 +51,9 @@ def fake_recipe(
     r.recipe_dir = Path(recipe_dir) if recipe_dir else Path(".")
     r.cross_toolchain_env = {}
     r.source = types.SimpleNamespace(type=source_type, url=source_url)
+    # package.files declarations verified along the pack path (builder reads
+    # ctx.recipe.package_files); default to none declared.
+    r.package_files = list(package_files)
     return r
 
 
