@@ -1,27 +1,26 @@
 #!/usr/bin/env bash
 # recipes/netcdf/build-wasm.sh — cross-compile netCDF-C to wasm (netcdf-4 on HDF5).
 # Uses the external cvcpkg hdf5 + zlib from CVC_DEPS_PREFIX (found via
-# CMAKE_FIND_ROOT_PATH, which cvc_cmake_build sets). netCDF's own configure runs
-# its TRY_RUN checks via the emscripten node emulator (this build does NOT hide
-# node), so cross-compiling configures cleanly.
+# CMAKE_FIND_ROOT_PATH, which cvc_cmake_build sets).
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_common/env-wasm.sh"
+# Pre-seeded wasm32 SIZEOF_* (see the file for the full rationale) — makes
+# check_type_size skip its emscripten-broken probe without resorting to a
+# static-lib try_compile (which would break check_function_exists).
+source "${SCRIPT_DIR}/wasm-type-sizes.sh"
 
 # DAP/byterange (remote access via curl), NCZARR (libxml2/zip) and plugins (dlopen)
 # are off — none work / are wanted on wasm. NETCDF_4 on HDF5 is the point.
 # Both the new NETCDF_ENABLE_* and the legacy ENABLE_* option names are passed so
 # the recipe is robust across netCDF option renames; unknown ones are ignored.
-#
-# CMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY: netCDF derives SIZEOF_INT (and the
-# other type sizes in config.h) via check_type_size, whose binary-scan returns
-# EMPTY under emscripten unless try_compile emits a static archive instead of an
-# (unrunnable) executable — without it dutil.c fails with "undeclared identifier
-# 'SIZEOF_INT'". The wasi build inherits this from env-wasi.sh; env-wasm.sh does
-# not set it, so pass it here. (HDF5 has its own cross-compile size fallbacks,
-# which is why it builds without this.)
+# CMAKE_TRY_COMPILE_TARGET_TYPE=EXECUTABLE is the default on emscripten but set
+# explicitly so the HDF5 symbol probes link (correct serial detection). PARALLEL4
+# off is belt-and-suspenders (wasm has no MPI).
 cvc_cmake_build \
-    -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+    "${WASM_TYPE_SIZES[@]}" \
+    -DCMAKE_TRY_COMPILE_TARGET_TYPE=EXECUTABLE \
+    -DENABLE_PARALLEL4=OFF -DNETCDF_ENABLE_PARALLEL4=OFF \
     -DNETCDF_ENABLE_DAP=OFF -DENABLE_DAP=OFF \
     -DNETCDF_ENABLE_DAP4=OFF -DENABLE_DAP4=OFF \
     -DNETCDF_ENABLE_BYTERANGE=OFF -DENABLE_BYTERANGE=OFF \
