@@ -15,7 +15,10 @@ recipe:
   # run — so the HDF5/netCDF/Exodus IO modules are explicitly OFF (they TRY_RUN). This
   # gives pycvc_gl live render windows/actors/GPU-volume + the core data/filter/IO API
   # in the browser. wasm/wasm-mt only.
-  cvc_revision: 4
+  # cvc.5: also wrap IOHDF, using VTK's EXTERNAL hdf5 (VTK_MODULE_USE_EXTERNAL_VTK_hdf5
+  # against the cvcpkg hdf5 wasm/wasm-mt build) so no vendored-hdf5 TRY_RUN under the
+  # node-hidden configure. Adds VTK's HDF5 IO (.vtkhdf etc.) to the browser API.
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -66,7 +69,10 @@ depends:
       platforms: [linux, macos, windows, windows-gnu, freebsd, openbsd, netbsd, haiku]
     - name: hdf5
       version: "^1.14"
-      platforms: [linux, macos, windows, windows-gnu, freebsd, openbsd, netbsd, haiku]
+      # wasm/wasm-mt: VTK uses this EXTERNAL prebuilt hdf5 (VTK_MODULE_USE_EXTERNAL_VTK_hdf5)
+      # so IOHDF wraps without VTK's vendored hdf5 configure TRY_RUN (which can't run
+      # under the node-hidden wrap configure). hdf5 is a separate cvcpkg wasm build.
+      platforms: [linux, macos, windows, windows-gnu, freebsd, openbsd, netbsd, haiku, wasm, wasm-mt]
     - name: tiff
       version: "^4.6"
     - name: zlib

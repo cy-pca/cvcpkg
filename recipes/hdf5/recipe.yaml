@@ -61,10 +61,10 @@ build:
       host_platform: windows
       script: build-wasm.ps1
     # Threaded flavor for the wasm-mt closure (python312-mt / vtk-mt / netcdf-mt
-    # all pull hdf5-mt as a runtime dep). Same build-wasm.sh; env-wasm.sh prepends
-    # -pthread on the CVC_WASM_THREADS=1 hook so the whole -mt static closure stays
-    # one flavor. THREADSAFE stays OFF — this is -pthread ABI parity, not HDF5's
-    # own thread-safety feature (which emscripten can't provide).
+    # all pull hdf5-mt as a runtime dep; VTK's external-HDF5 → IOHDF wrapping too).
+    # Same build-wasm.sh; env-wasm.sh prepends -pthread on the CVC_WASM_THREADS=1
+    # hook so the whole -mt static closure stays one flavor. THREADSAFE stays OFF —
+    # this is -pthread ABI parity, not HDF5's own thread-safety feature.
     - platform: wasm-mt
       host_platform: linux
       script: build-wasm.sh
