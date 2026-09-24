@@ -12,7 +12,16 @@ source "${SCRIPT_DIR}/../_common/env-wasm.sh"
 # are off — none work / are wanted on wasm. NETCDF_4 on HDF5 is the point.
 # Both the new NETCDF_ENABLE_* and the legacy ENABLE_* option names are passed so
 # the recipe is robust across netCDF option renames; unknown ones are ignored.
+#
+# CMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY: netCDF derives SIZEOF_INT (and the
+# other type sizes in config.h) via check_type_size, whose binary-scan returns
+# EMPTY under emscripten unless try_compile emits a static archive instead of an
+# (unrunnable) executable — without it dutil.c fails with "undeclared identifier
+# 'SIZEOF_INT'". The wasi build inherits this from env-wasi.sh; env-wasm.sh does
+# not set it, so pass it here. (HDF5 has its own cross-compile size fallbacks,
+# which is why it builds without this.)
 cvc_cmake_build \
+    -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
     -DNETCDF_ENABLE_DAP=OFF -DENABLE_DAP=OFF \
     -DNETCDF_ENABLE_DAP4=OFF -DENABLE_DAP4=OFF \
     -DNETCDF_ENABLE_BYTERANGE=OFF -DENABLE_BYTERANGE=OFF \
