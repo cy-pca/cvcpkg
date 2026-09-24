@@ -171,9 +171,18 @@ jobs:
               --prefix "$prefix" --platform "$platform" --link static \
               --no-deps --host-platform windows
           else
-            echo "cvcpkg build $recipe --platform windows --link ${{ inputs.link || 'shared' }}"
+            # --with-deps: build the recipe's whole closure from source first, in
+            # topological order. The default gsl (and the other MSYS autotools
+            # recipes) need m4/autoconf/automake/libtool/make + mingw-w64-gcc built
+            # and staged into the build prefix -- host_tools stage only when
+            # CROSS-compiling, so a native Windows build gets them via depends.build
+            # (scoped to windows) and only --with-deps builds those. None of that
+            # chain declares a test:, so --with-deps runs no dep smoke tests here
+            # (unlike the wasm path above, which is why that one does not use it).
+            echo "cvcpkg build $recipe --with-deps --platform windows --link ${{ inputs.link || 'shared' }}"
             cvcpkg build "$recipe" --local --recipes-dir recipes --config "$config" \
-              --prefix "$prefix" --platform windows --link "${{ inputs.link || 'shared' }}"
+              --prefix "$prefix" --platform windows --link "${{ inputs.link || 'shared' }}" \
+              --with-deps
           fi
 
       - name: Show installed payload
