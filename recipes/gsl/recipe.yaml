@@ -23,8 +23,22 @@ depends:
   build:
     - cmake
     - ninja
+    # gsl builds via autotools (build.sh / build.ps1 both run ./configure && make),
+    # so make is a real build dep — needed on Windows where there is no system make.
+    - make
   runtime: []
-  host_tools: []
+  host_tools:
+    # Windows autotools build (Invoke-CvcMsysAutotoolsBuild in build.ps1) needs a
+    # pinned toolchain on PATH; without it the build silently fell through to
+    # ambient C:\msys64. host_tools resolve per-platform, so mingw-w64-gcc
+    # (windows-only) is a no-op elsewhere and the autotools stay inert on
+    # non-Windows, which build from the shipped ./configure. make rides in via
+    # depends.build (kept there to avoid recipes/make's own build self-cycle).
+    - m4
+    - autoconf
+    - automake
+    - libtool
+    - mingw-w64-gcc
 
 build:
   matrix:

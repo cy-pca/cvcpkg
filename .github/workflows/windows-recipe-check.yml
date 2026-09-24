@@ -13,7 +13,7 @@
 # which is exactly how ca-bundle shipped a build.ps1 that had never run.
 #
 # Usage:
-#   gh workflow run windows-recipe-check -f recipe=ca-bundle
+#   gh workflow run windows-recipe-check -f recipe=gsl
 #   gh workflow run windows-recipe-check -f recipe=vtk -f platform=wasm
 # (wasm/wasm-mt sets up the emsdk and builds the dep closure from source, so it
 #  proves a recipe's build-wasm.ps1 actually cross-compiles on a Windows host.)
@@ -30,7 +30,7 @@ on:
       recipe:
         description: "Recipe to build (single name)"
         required: true
-        default: "ca-bundle"
+        default: "gsl"
         type: string
       platform:
         description: "Target platform (wasm/wasm-mt cross-compile with Emscripten)"
@@ -60,9 +60,16 @@ on:
   pull_request:
     paths:
       - ".github/workflows/windows-recipe-check.yml"
+      # The shared Windows build harness — a break here (e.g. the silent
+      # autotools preflight guard) reaches every Windows recipe.
+      - "recipes/_common/env-windows.ps1"
+      # The autotools recipes whose Windows bundles this check exists to prove.
+      - "recipes/gmp/**"
+      - "recipes/mpfr/**"
+      - "recipes/gsl/**"
 
 concurrency:
-  group: windows-recipe-check-${{ github.ref }}-${{ inputs.recipe || 'ca-bundle' }}-${{ inputs.platform || 'windows' }}
+  group: windows-recipe-check-${{ github.ref }}-${{ inputs.recipe || 'gsl' }}-${{ inputs.platform || 'windows' }}
   cancel-in-progress: true
 
 permissions:
@@ -70,7 +77,7 @@ permissions:
 
 jobs:
   build:
-    name: Build ${{ inputs.recipe || 'ca-bundle' }} on Windows
+    name: Build ${{ inputs.recipe || 'gsl' }} on Windows
     runs-on: windows-latest
     timeout-minutes: 150
 
@@ -122,7 +129,7 @@ jobs:
 
       - name: Validate recipe
         shell: bash
-        run: cvcpkg validate "recipes/${{ inputs.recipe || 'ca-bundle' }}"
+        run: cvcpkg validate "recipes/${{ inputs.recipe || 'gsl' }}"
 
       # wasm / wasm-mt cross-compile with Emscripten. Pin the emsdk version cvcpkg
       # targets; env-wasm.ps1 reads CVC_EMSDK_DIR (set to $EMSDK in the build step).
@@ -133,12 +140,12 @@ jobs:
           version: "5.0.7"
           actions-cache-folder: emsdk-cache
 
-      - name: Build ${{ inputs.recipe || 'ca-bundle' }} (${{ inputs.platform || 'windows' }})
+      - name: Build ${{ inputs.recipe || 'gsl' }} (${{ inputs.platform || 'windows' }})
         shell: bash
         run: |
           set -euo pipefail
           platform="${{ inputs.platform || 'windows' }}"
-          recipe="${{ inputs.recipe || 'ca-bundle' }}"
+          recipe="${{ inputs.recipe || 'gsl' }}"
           config="${{ inputs.config || 'release' }}"
           prefix="${{ github.workspace }}/prefix"
           if [[ "$platform" == wasm* ]]; then
