@@ -463,7 +463,23 @@ $defs:
     properties:
       files:
         type: array
-        items: { type: string }
+        # An entry is either a bare glob (applies to every platform) or a
+        # platform-scoped mapping {glob, platforms}. Scoping lets a recipe
+        # declare a file that only one platform produces (e.g. the MSVC
+        # "lib/zlib*" spelling) without the strict-globs check firing on the
+        # platforms that legitimately never stage it.
+        items:
+          oneOf:
+            - type: string
+            - type: object
+              required: [glob, platforms]
+              additionalProperties: false
+              properties:
+                glob: { type: string }
+                platforms:
+                  type: array
+                  items: { type: string }
+                  minItems: 1
         minItems: 1
       cmake_packages:
         type: array
