@@ -1,0 +1,98 @@
+schema_version: 1
+recipe:
+  name: netcdf
+  upstream_version: "4.9.2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    netCDF-C — Unidata's libraries and self-describing, machine-independent data
+    formats for array-oriented scientific data. Builds the netCDF-4 backend on
+    HDF5. Enables VTK's IONetCDF / IOExodus (and other netCDF consumers) including
+    on wasm/wasm-mt.
+  homepage: https://www.unidata.ucar.edu/software/netcdf/
+  license: BSD-3-Clause
+  tags: [io, scientific, wasm, wasi]
+
+source:
+  type: tarball
+  url: https://github.com/Unidata/netcdf-c/archive/refs/tags/v4.9.2.tar.gz
+  sha256: "bc104d101278c68b303359b3dc4192f81592ae8640f1aee486921138f7f88cb7"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+    # netCDF-4 stores in HDF5; find_package(HDF5) at configure, link at build.
+    - name: hdf5
+      version: "^1.14"
+    - name: zlib
+      version: "^1.3"
+  runtime:
+    - name: hdf5
+      version: "^1.14"
+    - name: zlib
+      version: "^1.3"
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    # Threaded flavor for the wasm-mt closure (VTK external-netCDF → IONetCDF).
+    # Same build-wasm.sh; env-wasm.sh prepends -pthread on the CVC_WASM_THREADS hook.
+    - platform: wasm-mt
+      host_platform: linux
+      script: build-wasm.sh
+      env:
+        CVC_WASM_THREADS: "1"
+    - platform: cosmo
+      host_platform: linux
+      script: build-cosmo.sh
+    # Headless wasi backend target (wasmtime/wasmer/wamr): netcdf-4 on the wasi
+    # hdf5 + zlib. Single-threaded (wasm32-wasip1); a wasi-threads flavor would be
+    # a separate ABI, added later if needed.
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+
+package:
+  files:
+    - lib/libnetcdf*
+    - lib/cmake/netCDF/
+    - lib/pkgconfig/netcdf*
+    - include/netcdf.h
+    - include/netcdf_*.h
+    - bin/nc-config
+  cmake_packages:
+    - { name: netCDF, targets: ["netCDF::netcdf"] }
+
+abi:
+  cxx_std: 17
