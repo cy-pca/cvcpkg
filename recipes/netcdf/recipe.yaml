@@ -53,6 +53,16 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
     - platform: wasm
       host_platform: linux
       script: build-wasm.sh
@@ -63,6 +73,15 @@ build:
       script: build-wasm.sh
       env:
         CVC_WASM_THREADS: "1"
+    - platform: cosmo
+      host_platform: linux
+      script: build-cosmo.sh
+    # Headless wasi backend target (wasmtime/wasmer/wamr): netcdf-4 on the wasi
+    # hdf5 + zlib. Single-threaded (wasm32-wasip1); a wasi-threads flavor would be
+    # a separate ABI, added later if needed.
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
 
 package:
   files:
