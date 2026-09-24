@@ -149,6 +149,10 @@ PYFIND_ARGS=(
 # ── (3) cross-build VTK to wasm WITH python wrapping, STATIC ────────────────
 source "${SCRIPT_DIR}/../_common/env-wasm.sh"
 echo "vtk-python(wasm): [3/3] cross-building VTK (VTK_WRAP_PYTHON=ON, static)"
+# VTK's threaded-wasm switch (pool sizing + threaded SMP backend), from the flavor
+# hook — must match the -pthread the rest of the wasm-mt closure is built with.
+_vtk_threads=OFF
+[[ "${CVC_WASM_THREADS:-0}" == "1" ]] && _vtk_threads=ON
 # Force VTK to import our NATIVE host wrap tools (VTKCompileTools_DIR) rather than
 # building wasm wrap tools that run under node: the wasm tools cannot read the
 # host filesystem (@argfiles/headers) under emscripten's node FS and abort with a
@@ -183,8 +187,49 @@ env PATH="${_PATH_NONODE}" cmake -G Ninja -S "${CVC_SOURCE_DIR}" -B "${CVC_BUILD
     -DVTK_LEGACY_REMOVE=ON \
     -DVTK_GROUP_ENABLE_StandAlone=DONT_WANT \
     -DVTK_GROUP_ENABLE_Rendering=DONT_WANT \
-    -DVTK_MODULE_ENABLE_VTK_CommonCore=YES \
-    -DVTK_MODULE_ENABLE_VTK_CommonDataModel=YES
+    -DVTK_MODULE_ENABLE_VTK_hdf5=YES \
+    -DVTK_MODULE_USE_EXTERNAL_VTK_hdf5=ON \
+    -DVTK_MODULE_ENABLE_VTK_IOHDF=YES \
+    -DVTK_MODULE_ENABLE_VTK_netcdf=NO \
+    -DVTK_MODULE_ENABLE_VTK_IONetCDF=NO \
+    -DVTK_MODULE_ENABLE_VTK_IOExodus=NO \
+    -DVTK_MODULE_ENABLE_VTK_CommonColor=YES \
+    -DVTK_MODULE_ENABLE_VTK_CommonComputationalGeometry=YES \
+    -DVTK_MODULE_ENABLE_VTK_FiltersCore=YES \
+    -DVTK_MODULE_ENABLE_VTK_FiltersGeneral=YES \
+    -DVTK_MODULE_ENABLE_VTK_FiltersSources=YES \
+    -DVTK_MODULE_ENABLE_VTK_FiltersGeometry=YES \
+    -DVTK_MODULE_ENABLE_VTK_FiltersModeling=YES \
+    -DVTK_MODULE_ENABLE_VTK_FiltersExtraction=YES \
+    -DVTK_MODULE_ENABLE_VTK_FiltersHybrid=YES \
+    -DVTK_MODULE_ENABLE_VTK_FiltersGeometryPreview=YES \
+    -DVTK_MODULE_ENABLE_VTK_FiltersTexture=YES \
+    -DVTK_MODULE_ENABLE_VTK_ImagingCore=YES \
+    -DVTK_MODULE_ENABLE_VTK_ImagingGeneral=YES \
+    -DVTK_MODULE_ENABLE_VTK_ImagingSources=YES \
+    -DVTK_MODULE_ENABLE_VTK_IOXML=YES \
+    -DVTK_MODULE_ENABLE_VTK_IOGeometry=YES \
+    -DVTK_MODULE_ENABLE_VTK_IOLegacy=YES \
+    -DVTK_MODULE_ENABLE_VTK_IOPLY=YES \
+    -DVTK_MODULE_ENABLE_VTK_IOImage=YES \
+    -DVTK_MODULE_ENABLE_VTK_RenderingCore=YES \
+    -DVTK_MODULE_ENABLE_VTK_RenderingOpenGL2=YES \
+    -DVTK_MODULE_ENABLE_VTK_RenderingUI=YES \
+    -DVTK_MODULE_ENABLE_VTK_RenderingVolume=YES \
+    -DVTK_MODULE_ENABLE_VTK_RenderingVolumeOpenGL2=YES \
+    -DVTK_MODULE_ENABLE_VTK_RenderingAnnotation=YES \
+    -DVTK_MODULE_ENABLE_VTK_RenderingFreeType=YES \
+    -DVTK_MODULE_ENABLE_VTK_InteractionStyle=YES \
+    -DVTK_MODULE_ENABLE_VTK_InteractionWidgets=YES \
+    -DVTK_WEBASSEMBLY_THREADS=${_vtk_threads}
+# FULL wrap set (cvc.4 — "all the way"): StandAlone=WANT wraps the ENTIRE backend-free
+# data API (Common/Filters/IO/Imaging/Infovis), plus the base vtk recipe's proven
+# wasm RENDERING set (RenderingOpenGL2/Volume/VolumeOpenGL2/FreeType/Annotation/UI +
+# InteractionStyle/Widgets) on the WebGL2/GLES3 backend. This gives pycvc_gl the full
+# vtk-python API in the browser: data objects, filters, readers/writers, AND live
+# render windows / actors / GPU volume mappers. WANT enables only what builds on wasm
+# (external-dependency IO modules auto-skip); the -k 0 below tolerates any peripheral
+# module whose wrapper does not build, and the _missing check guards the core set.
 # Build keep-going (-k 0): the standalone `vtkpython` interpreter executable is
 # EXPECTED to fail to link on wasm — libpython3.12.a's _decimal.o references
 # mpd_isspecial (libmpdecimal is not archived into the wasm CPython). We do not
@@ -195,7 +240,7 @@ cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}" -- -k 0 || true
 # A REAL failure must still abort: verify the packaged wrapper archives exist
 # before installing (only the vtkpython exe is permitted to be missing).
 _missing=""
-for _pat in "_vtkmodules_static.a" "libvtkWrappingPythonCore*.a" "libvtkCommonCorePython.a" "libvtkCommonDataModelPython.a"; do
+for _pat in "_vtkmodules_static.a" "libvtkWrappingPythonCore*.a" "libvtkCommonCorePython.a" "libvtkCommonDataModelPython.a" "libvtkRenderingCorePython.a" "libvtkRenderingOpenGL2Python.a" "libvtkFiltersCorePython.a" "libvtkIOGeometryPython.a"; do
     compgen -G "${CVC_BUILD_DIR}/lib/${_pat}" >/dev/null 2>&1 || _missing="${_missing} ${_pat}"
 done
 if [ -n "${_missing}" ]; then

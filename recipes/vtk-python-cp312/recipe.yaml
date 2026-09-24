@@ -6,7 +6,19 @@ recipe:
   # bundle, published by a build that raced ahead without the prune, wrongly
   # shipped a full VTK — yank it). The prune changes the packed artifact, so the
   # revision must bump; other platforms rebuild identically.
-  cvc_revision: 2
+  # cvc.3: wasm/wasm-mt add RenderingCore to the wrapped set.
+  # cvc.4: wasm/wasm-mt wrap a broad set — the base vtk recipe's proven wasm rendering
+  # stack (RenderingOpenGL2/Volume/VolumeOpenGL2/FreeType/Annotation/UI + Interaction)
+  # plus a curated backend-free data set (Common/Filters/Imaging + IOXML/Geometry/
+  # Legacy/PLY/Image). CURATED, not StandAlone=WANT: the wrapping build hides node so
+  # VTK uses native wrap-tools, which means modules whose configure does TRY_RUN can't
+  # run — so the HDF5/netCDF/Exodus IO modules are explicitly OFF (they TRY_RUN). This
+  # gives pycvc_gl live render windows/actors/GPU-volume + the core data/filter/IO API
+  # in the browser. wasm/wasm-mt only.
+  # cvc.5: also wrap IOHDF, using VTK's EXTERNAL hdf5 (VTK_MODULE_USE_EXTERNAL_VTK_hdf5
+  # against the cvcpkg hdf5 wasm/wasm-mt build) so no vendored-hdf5 TRY_RUN under the
+  # node-hidden configure. Adds VTK's HDF5 IO (.vtkhdf etc.) to the browser API.
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -57,7 +69,10 @@ depends:
       platforms: [linux, macos, windows, windows-gnu, freebsd, openbsd, netbsd, haiku]
     - name: hdf5
       version: "^1.14"
-      platforms: [linux, macos, windows, windows-gnu, freebsd, openbsd, netbsd, haiku]
+      # wasm/wasm-mt: VTK uses this EXTERNAL prebuilt hdf5 (VTK_MODULE_USE_EXTERNAL_VTK_hdf5)
+      # so IOHDF wraps without VTK's vendored hdf5 configure TRY_RUN (which can't run
+      # under the node-hidden wrap configure). hdf5 is a separate cvcpkg wasm build.
+      platforms: [linux, macos, windows, windows-gnu, freebsd, openbsd, netbsd, haiku, wasm, wasm-mt]
     - name: tiff
       version: "^4.6"
     - name: zlib
