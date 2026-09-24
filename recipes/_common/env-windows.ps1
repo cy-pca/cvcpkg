@@ -358,9 +358,10 @@ function Invoke-CvcMsysAutotoolsBuild {
     }
 
     # Pre-flight: verify the MSYS2/MinGW build tools are actually reachable.
-    # These come from their own cvcpkg recipes — m4/autoconf/automake/libtool as
-    # host_tools, make via depends.build — staged into the prefixes $depsFlag now
-    # puts on PATH.
+    # These come from their own cvcpkg recipes declared under depends.build
+    # (scoped to windows) — cvcpkg stages host_tools only when cross-compiling, so
+    # a native Windows build must carry the GNU toolchain as real build deps that
+    # stage into the build prefix, which $depsFlag now puts on PATH.
     #
     # Probe each tool BY NAME and test a SCALAR boolean. The old guard,
     # `if ($probe -notmatch 'OK')`, was silently dead: when the probe finds
@@ -374,8 +375,8 @@ function Invoke-CvcMsysAutotoolsBuild {
     })
     if ($missing.Count -gt 0) {
         throw ("MSYS2 autotools not found on PATH: $($missing -join ', '). " +
-               'Declare m4/autoconf/automake/libtool as host_tools (and make in ' +
-               'depends.build) in recipe.yaml.')
+               'Declare m4/autoconf/automake/libtool/make (and mingw-w64-gcc) ' +
+               'under depends.build (scoped to windows) in recipe.yaml.')
     }
 
     # Build one big command line for bash; the caller-provided extras
