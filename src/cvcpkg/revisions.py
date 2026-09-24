@@ -104,7 +104,13 @@ def fetch_published_revisions(
     package is unknown or the server is unreachable — the caller then falls
     back to the recipe floor.
     """
-    import httpx
+    from cvcpkg.optional import require_httpx
+
+    # `pack --bump` is a publisher's command, so the publish extra is the one
+    # to name here; a missing httpx is a hard error rather than an empty list,
+    # because silently skipping the high-water-mark query would mint a
+    # revision the server already has and 409 at publish time.
+    httpx = require_httpx("publish")
 
     base = server.rstrip("/")
     headers = {"Authorization": f"Bearer {token}"} if token else {}
