@@ -56,7 +56,16 @@ python:
   interpreter: python312
   abi: cp312
 
-patches: []
+patches:
+  # SAME two wasm patches the base `vtk` recipe applies — vtk-python rebuilds VTK
+  # from the identical tarball, so without them the wasm/wasm-mt wrap build fails
+  # exactly where the C++ build would: fmt's format.h uses malloc/free but doesn't
+  # include <cstdlib> (undeclared under Emscripten's libc++), and ESSL 3.00 forbids
+  # the volume raycast composer's non-constant global initializer (kills shaded
+  # volumes under WebGL2). Harmless on native platforms (base vtk applies them
+  # unconditionally too).
+  - vtk-fmt-cstdlib-wasm.patch
+  - vtk-essl3-no-global-uniform-init.patch
 
 depends:
   build:
