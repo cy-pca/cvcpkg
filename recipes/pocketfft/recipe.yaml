@@ -56,6 +56,10 @@ build:
       script: build.sh
     - platform: netbsd
       script: build.sh
+    - platform: haiku
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
     # Cross-built from a Linux host. Nothing compiles here either, so build.sh
