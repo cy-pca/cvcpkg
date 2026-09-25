@@ -1,0 +1,41 @@
+Do not build the standalone vtkpython / pvtkpython interpreter executables when
+VTK_INSTALL_PYTHON_EXES is OFF.
+
+The vtk-python-cp312 package ships ONLY the Python wrapper artifacts (the
+libvtk*Python archives, _vtkmodules_static.a, _vtk.zip and the vtkmodules
+package + headers) and never the standalone `vtkpython` CLI — the recipe already
+sets VTK_INSTALL_PYTHON_EXES=OFF so it is not installed, and the prune step drops
+it regardless. Upstream still *builds* the executable (it is only gated on
+NOT VTK_WHEEL_BUILD), and on the static wasm / wasm-mt build that fat final link
+(every wrapped module + libpython3.12.a) fails anyway:
+  * libpython3.12.a(_decimal.o) references mpd_isspecial (libmpdecimal is not
+    archived into the wasm CPython), and (sha2module.o) references
+    python_hashlib_Hacl_Hash_SHA2_* (the HACL SHA2 objects are not archived);
+  * on wasm-mt the threaded link adds --no-growable-memory --initial-memory=16MiB
+    and the executable's static data exceeds it ("initial memory too small").
+Building an executable we never ship, only to have it fail and be tolerated by
+`ninja -k 0`, wastes the single heaviest link+wasm-opt step of the build and — on
+the heavier wasm-mt cell — tips the job over. Gate the whole interpreter block on
+VTK_INSTALL_PYTHON_EXES so it is skipped entirely when we are not installing it.
+Nothing depends on the vtkpython target (only VTK_BUILD_TESTING, OFF here); the
+_vtk.zip / _vtkmodules_static.a / wrapper archives are produced independently.
+
+No-op on native platforms: VTK_INSTALL_PYTHON_EXES defaults ON there (the native
+build.sh/build.ps1 do not set it), so `NOT VTK_WHEEL_BUILD AND
+VTK_INSTALL_PYTHON_EXES` stays TRUE and the executables build exactly as before.
+--- a/Wrapping/Python/CMakeLists.txt
++++ b/Wrapping/Python/CMakeLists.txt
+@@ -22,7 +22,12 @@ endif ()
+ endif ()
+
+ # The interpreters are not supported in wheel builds, so skip them.
+-if (NOT VTK_WHEEL_BUILD)
++# cvcpkg: also skip when VTK_INSTALL_PYTHON_EXES is OFF — the vtk-python-cp312
++# package ships only the wrapper archives / _vtkmodules_static.a / _vtk.zip and
++# never the standalone vtkpython, whose fat static link fails on wasm anyway
++# (mpd_isspecial + HACL SHA2 undefs, and on wasm-mt the threaded
++# --no-growable-memory 16 MiB initial-memory cap). Nothing depends on the target.
++if (NOT VTK_WHEEL_BUILD AND VTK_INSTALL_PYTHON_EXES)
+   add_executable(vtkpython)
+   target_sources(vtkpython
+     PRIVATE
