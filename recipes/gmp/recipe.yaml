@@ -23,6 +23,23 @@ patches: []
 depends:
   build:
     - make
+    # Windows autotools build (Invoke-CvcMsysAutotoolsBuild in build.ps1) needs the
+    # GNU toolchain in the BUILD closure. cvcpkg stages host_tools only when
+    # CROSS-compiling (target != host), so a native Windows build gets nothing
+    # from host_tools — these must be real build deps that build from source and
+    # stage into the build prefix, where env-windows's $depsFlag puts them on
+    # PATH. Scoped to windows: other platforms build from the shipped ./configure
+    # with the system toolchain and must not pull the mingw cross-compiler.
+    - name: m4
+      platforms: [windows]
+    - name: autoconf
+      platforms: [windows]
+    - name: automake
+      platforms: [windows]
+    - name: libtool
+      platforms: [windows]
+    - name: mingw-w64-gcc
+      platforms: [windows]
   runtime: []
   host_tools: []
 

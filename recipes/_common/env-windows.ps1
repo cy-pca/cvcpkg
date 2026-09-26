@@ -310,8 +310,19 @@ function Invoke-CvcMsysAutotoolsBuild {
     $bash        = Get-CvcGitBash
     $msysPrefix  = ConvertTo-CvcMsysPath $env:CVC_INSTALL_DIR
     $msysSource  = ConvertTo-CvcMsysPath $env:CVC_SOURCE_DIR
-    $msysDeps    = if ($env:CVC_DEPS_PREFIX) { ConvertTo-CvcMsysPath $env:CVC_DEPS_PREFIX } else { '' }
-    $depsFlag    = if ($msysDeps) { "PATH='$msysDeps/bin:'`$PATH" } else { '' }
+    # Put the staged build tools first on PATH. host_tools (m4/autoconf/automake/
+    # libtool/the compiler) are staged into the BUILD prefix; link deps and make
+    # land in the DEPS prefix — search BOTH, since the old form looked only in
+    # CVC_DEPS_PREFIX and missed host_tools entirely.
+    #
+    # EXPORT it: `PATH=x cd dir && ./configure` scopes the assignment to the `cd`
+    # builtin alone, so configure/make ran with the ORIGINAL PATH and never saw
+    # the staged tools — silently falling through to ambient C:\msys64. The same
+    # trap recipes/x264 and recipes/ffmpeg-cli document. A trailing `;` lets it
+    # compose in front of any command below.
+    $toolRoots    = @($env:CVC_BUILD_PREFIX, $env:CVC_DEPS_PREFIX) | Where-Object { $_ }
+    $msysToolBins = ($toolRoots | ForEach-Object { (ConvertTo-CvcMsysPath $_) + '/bin' }) -join ':'
+    $depsFlag     = if ($msysToolBins) { "export PATH='${msysToolBins}:'`$PATH; " } else { '' }
 
     # Force the MinGW-w64 64-bit subsystem so that /mingw64/bin
     # (gcc, make, libtool, autoconf, m4, ...) is on the shell PATH.
@@ -346,14 +357,26 @@ function Invoke-CvcMsysAutotoolsBuild {
         '--enable-shared --enable-static'
     }
 
-    # Pre-flight: verify that required MSYS2/MinGW tools are available.
-    # These should be provided by their own cvcpkg recipes (m4, autoconf,
-    # automake, libtool) declared as host_tools in the calling recipe.
-    # The $depsFlag prepends CVC_DEPS_PREFIX/bin so shim wrappers installed
-    # by those recipes are found before any system copies.
-    $probe = & $bash -lc "$depsFlag command -v m4 >/dev/null && command -v libtool >/dev/null && command -v autoconf >/dev/null && command -v automake >/dev/null && command -v make >/dev/null && echo OK"
-    if ($probe -notmatch 'OK') {
-        throw 'MSYS2 autotools tools (m4, autoconf, automake, libtool, make) not found. Declare them as host_tools in recipe.yaml.'
+    # Pre-flight: verify the MSYS2/MinGW build tools are actually reachable.
+    # These come from their own cvcpkg recipes declared under depends.build
+    # (scoped to windows) — cvcpkg stages host_tools only when cross-compiling, so
+    # a native Windows build must carry the GNU toolchain as real build deps that
+    # stage into the build prefix, which $depsFlag now puts on PATH.
+    #
+    # Probe each tool BY NAME and test a SCALAR boolean. The old guard,
+    # `if ($probe -notmatch 'OK')`, was silently dead: when the probe finds
+    # nothing $probe is AutomationNull, and `$null -notmatch 'OK'` returns an
+    # empty Object[], which `if` treats as false — so a missing toolchain sailed
+    # straight through and configure failed obscurely much later.
+    $required = @('m4', 'libtool', 'autoconf', 'automake', 'make')
+    $missing  = @($required | Where-Object {
+        $found = & $bash -lc "$depsFlag command -v $_ >/dev/null 2>&1 && echo OK"
+        "$found".Trim() -ne 'OK'
+    })
+    if ($missing.Count -gt 0) {
+        throw ("MSYS2 autotools not found on PATH: $($missing -join ', '). " +
+               'Declare m4/autoconf/automake/libtool/make (and mingw-w64-gcc) ' +
+               'under depends.build (scoped to windows) in recipe.yaml.')
     }
 
     # Build one big command line for bash; the caller-provided extras
@@ -371,10 +394,12 @@ function Invoke-CvcMsysAutotoolsBuild {
         throw "configure failed"
     }
 
-    & $bash -lc "cd '$msysSource' && make -j $Jobs"
+    # make (and the compiler it drives) also need the staged tools on PATH, so
+    # carry $depsFlag here too — not just on the configure line.
+    & $bash -lc "$depsFlag cd '$msysSource' && make -j $Jobs"
     if ($LASTEXITCODE -ne 0) { throw "make failed" }
 
-    & $bash -lc "cd '$msysSource' && make install"
+    & $bash -lc "$depsFlag cd '$msysSource' && make install"
     if ($LASTEXITCODE -ne 0) { throw "make install failed" }
 
     # Post-process installed libraries so MSVC downstream can link:
