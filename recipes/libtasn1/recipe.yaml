@@ -1,0 +1,61 @@
+schema_version: 1
+recipe:
+  name: libtasn1
+  upstream_version: "4.20.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.gnu.org/software/libtasn1/
+  # Only the shared library is packaged (its CLI tools + manual are GPLv3+);
+  # libtasn1 itself is LGPL-2.1-or-later.
+  license: LGPL-2.1-or-later
+  tags: [crypto]
+  description: >-
+    GNU libtasn1 — an ASN.1 and DER structure parsing/encoding library.
+    Added as a dependency of GnuTLS (used by the LGPL `ffmpeg-lgpl` build
+    for HTTPS on Linux/BSD).
+
+source:
+  type: tarball
+  url: https://ftp.gnu.org/gnu/libtasn1/libtasn1-4.20.0.tar.gz
+  sha256: "92e0e3bd4c02d4aeee76036b2ddd83f0c732ba4cda5cb71d583272b23587a76c"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - make
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libtasn1*
+    - lib/pkgconfig/libtasn1*
+    - include/libtasn1.h
+  pkg_config:
+    - libtasn1
+
+abi:
+  cxx_std: 17
