@@ -315,17 +315,18 @@ if [ "$IS_CROSS" = false ]; then
         fi
     fi
 
-    # Guarantee pip. --with-ensurepip=upgrade runs ensurepip during `make install`, but that invokes
-    # the freshly-built interpreter BEFORE the RPATH / install_name fixups above make libpython
-    # loadable; on a builder where libpython is not yet resolvable at that moment the install-time
-    # ensurepip fails silently and the artifact ships with NO site-packages/pip (the python312
-    # +cvc.11 linux artifact hit exactly this — bin/python3.X present, pip absent, so `python -m pip`
-    # -> "No module named pip"). The interpreter is runnable now (rpath patched), so re-bootstrap pip
-    # from the BUNDLED ensurepip wheel (no network) if it is missing. Native only — this whole block
-    # is IS_CROSS=false, and a cross target's PY_BIN can't execute on the builder anyway.
-    if ! "${PY_BIN}" -c 'import pip' >/dev/null 2>&1; then
-        echo "build-python.sh: pip missing after make install — bootstrapping via ensurepip"
-        "${PY_BIN}" -m ensurepip --upgrade >/dev/null 2>&1 ||
+    # Guarantee pip lands in the PACKAGE. --with-ensurepip=upgrade runs ensurepip during
+    # `make install`, but it invokes `./python -E -m ensurepip`: -E ignores PYTHON* env vars but NOT
+    # the user site (~/.local). On a builder whose account has a user-site pip, ensurepip resolves
+    # THAT ("Requirement already satisfied: pip in /home/.../.local/...") and installs NOTHING into the
+    # package — so python312 +cvc.11/+cvc.12 linux shipped with no site-packages/pip and
+    # `python -m pip` -> "No module named pip". Re-run ensurepip ISOLATED from the user site (-s +
+    # PYTHONNOUSERSITE) so it targets the package's own site-packages, and probe the same way (a bare
+    # `import pip` would also leak the builder's ~/.local pip and hide the gap). Bundled wheel, no
+    # network. Native only — this whole block is IS_CROSS=false (a cross PY_BIN can't run here).
+    if ! PYTHONNOUSERSITE=1 "${PY_BIN}" -s -c 'import pip' >/dev/null 2>&1; then
+        echo "build-python.sh: pip missing from the package — bootstrapping via ensurepip (isolated)"
+        PYTHONNOUSERSITE=1 "${PY_BIN}" -s -m ensurepip --upgrade >/dev/null 2>&1 ||
             echo "build-python.sh: WARNING: ensurepip bootstrap failed" >&2
     fi
 fi
