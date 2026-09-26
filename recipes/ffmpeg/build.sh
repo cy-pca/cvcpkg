@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # recipes/ffmpeg/build.sh — build FFmpeg shared libraries on Linux/macOS/BSD.
 #
-# Builds a feature-rich LGPL set: external codecs (Opus, MP3, Vorbis, VP8/VP9,
-# AV1), image formats (WebP, JPEG, PNG), OpenSSL for HTTPS, subtitle rendering
-# (freetype, fontconfig, fribidi), and PulseAudio on Linux.  GPL features and
-# non-free codecs (x264, x265, fdk-aac) are excluded.
+# Builds a feature-rich GPL set (--enable-gpl): the x264 (H.264) and x265
+# (HEVC) GPL encoders, plus external codecs (Opus, MP3, Vorbis, VP8/VP9,
+# AV1), image formats (WebP, JPEG, PNG), OpenSSL for HTTPS, subtitle
+# rendering (freetype, fontconfig, fribidi), and PulseAudio on Linux.
+# Enabling x264/x265 makes the result GPL-2.0-or-later (matching
+# recipe.yaml's license).  The non-free fdk-aac codec remains excluded.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
