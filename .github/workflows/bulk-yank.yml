@@ -72,7 +72,10 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install cvcpkg
-        run: pip install .
+        # [remote]: this job runs `cvcpkg yank --server`, which talks to the
+        # registry over HTTP (httpx). Listing is stdlib urllib, but the yank
+        # subprocess needs the remote extra.
+        run: pip install '.[remote]'
       - name: Compute targets + yank
         env:
           CVCPKG_TOKEN: ${{ secrets.CVCPKG_ADMIN_TOKEN }}

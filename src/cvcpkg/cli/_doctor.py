@@ -19,6 +19,7 @@ import sys
 import click
 
 from cvcpkg.cli import cli
+from cvcpkg.optional import MissingDependencyError, require_httpx
 
 # ── Check result model ──────────────────────────────────────────
 
@@ -102,7 +103,13 @@ def _check_compiler() -> _Check:
 
 def _check_server(server: str) -> _Check:
     """Check that a cvcpkg-server responds on /healthz."""
-    import httpx
+    try:
+        httpx = require_httpx()
+    except MissingDependencyError as exc:
+        # doctor is a REPORT, and one unavailable probe must not abort the
+        # other checks the user came for.  A core install (click + PyYAML)
+        # has no httpx, so this is the expected answer there, not a crash.
+        return _Check("Server", _FAIL, str(exc))
 
     url = f"{server.rstrip('/')}/healthz"
     try:

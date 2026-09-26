@@ -10,6 +10,7 @@ import click
 from cvcpkg.catalog import trust_mirror_default as _trust_mirror_default
 from cvcpkg.cli import cli
 from cvcpkg.cli._helpers import _human_size
+from cvcpkg.optional import require_httpx
 
 
 @cli.command("search")
@@ -99,7 +100,7 @@ def search(
     _trust = _trust_mirror_default() if trust_mirror is None else trust_mirror
     import json as _json
 
-    import httpx
+    httpx = require_httpx()
 
     params: dict[str, str | int | bool] = {
         "limit": limit,

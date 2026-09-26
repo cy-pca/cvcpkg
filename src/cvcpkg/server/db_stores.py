@@ -16,6 +16,11 @@ import json
 import secrets
 from pathlib import Path
 
+from cvcpkg.optional import require_sqlalchemy
+
+# See cvcpkg.server.db: this module is also reachable before db.py is imported.
+require_sqlalchemy()
+
 from sqlalchemy import distinct, or_, select, update
 from sqlalchemy import func as sa_func
 from sqlalchemy import true as sa_true

@@ -15,6 +15,7 @@ from pathlib import Path
 import click
 
 from cvcpkg.cli import cli
+from cvcpkg.optional import MissingDependencyError, require_jsonschema
 
 # ── Build-script templates ──────────────────────────────────────
 
@@ -243,4 +244,11 @@ def init(
     click.echo("Next steps:")
     click.echo("  1. Set source.url and source.sha256 in recipe.yaml.")
     click.echo("  2. List dependencies under depends: and adjust package.files.")
-    click.echo(f"  3. Validate: cvcpkg validate {target}")
+    # Step 3 is the one step that needs more than the core install; say so
+    # here rather than letting the user discover it by running it.
+    try:
+        require_jsonschema()
+        needs_extra = ""
+    except MissingDependencyError:
+        needs_extra = "   (first: pip install 'cvcpkg[validate]')"
+    click.echo(f"  3. Validate: cvcpkg validate {target}{needs_extra}")

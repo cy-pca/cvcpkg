@@ -8,13 +8,14 @@ from __future__ import annotations
 import click
 
 from cvcpkg.cli import cli
+from cvcpkg.optional import require_httpx
 
 # ── remote token management (client → server API) ──────────────
 
 
 def _api_request(method: str, url: str, token: str, **kwargs):
     """Make an authenticated HTTP request; return parsed JSON or raise."""
-    import httpx
+    httpx = require_httpx()
 
     headers = {"Authorization": f"Bearer {token}"}
     with httpx.Client(timeout=30) as client:
@@ -370,7 +371,7 @@ def user_group() -> None:
 @click.argument("name")
 def user_info(server: str, name: str):
     """Look up a user's public profile by name."""
-    import httpx
+    httpx = require_httpx()
 
     url = f"{server.rstrip('/')}/v1/users/{name}"
     with httpx.Client(timeout=30) as client:
@@ -445,7 +446,7 @@ def user_list(
     offset: int,
 ):
     """List user identities with pagination and filtering."""
-    import httpx
+    httpx = require_httpx()
 
     params: dict = {"limit": limit, "offset": offset, "sort": sort, "order": order}
     if name:
@@ -496,7 +497,7 @@ def user_list(
 @click.argument("email")
 def user_by_email(server: str, email: str):
     """Look up a user's profile by email address."""
-    import httpx
+    httpx = require_httpx()
 
     url = f"{server.rstrip('/')}/v1/users/by-email/{email}"
     with httpx.Client(timeout=30) as client:
@@ -549,7 +550,7 @@ def register_cmd(server: str, name: str, email: str, role: str, description: str
     receive a token immediately (open mode) or your request will be
     queued for admin approval (admin-gated mode).
     """
-    import httpx
+    httpx = require_httpx()
 
     url = f"{server.rstrip('/')}/v1/register"
     body: dict = {"name": name, "email": email, "role": role}
@@ -605,7 +606,7 @@ def server_group() -> None:
 @click.confirmation_option(prompt="Are you sure you want to shut down the server?")
 def server_stop(server: str, token: str):
     """Gracefully shut down the remote cvcpkg-server (requires admin token)."""
-    import httpx
+    httpx = require_httpx()
 
     url = f"{server.rstrip('/')}/v1/admin/shutdown"
     with httpx.Client(timeout=30) as client:
@@ -632,7 +633,7 @@ def server_stop(server: str, token: str):
 )
 def server_status(server: str):
     """Check the status of the remote cvcpkg-server."""
-    import httpx
+    httpx = require_httpx()
 
     url = f"{server.rstrip('/')}/healthz"
     try:

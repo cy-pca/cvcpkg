@@ -117,6 +117,35 @@ pip install ".[server,db-sqlite]"
 
 See [BUILDING.md](BUILDING.md) for a full development setup.
 
+## Core vs extras
+
+`pip install cvcpkg` resolves to **`click` + `PyYAML`, and
+nothing else**. That is the whole client: resolving the catalog, downloading
+(`urllib.request`), sha256 verification, extraction, lockfiles, the
+`cvcpkgConfig.cmake` and activation scripts, `cvcpkg build`, and the recipe
+tooling all run on those two. Keeping the mandatory list at two is what makes
+cvcpkg installable where the wheel ecosystem is thin — four
+mandatory-but-never-imported distributions were the entire blocker on such
+platforms.
+
+Everything heavier belongs to a **role**, not to the client, and lives behind
+an extra named after the *entry point* that needs it. Several extras resolve to
+the same distribution on purpose: the name is what the error message tells you
+to install, so a publisher is pointed at `[publish]` rather than at something
+that sounds like it belongs to somebody else.
+
+Running a command whose extra is missing is never a traceback — it is one line
+naming the extra:
+
+```
+$ cvcpkg publish zlib
+Error: httpx is required to talk to a cvcpkg server over HTTP. Install it with: pip install 'cvcpkg[publish]'
+```
+
+> **Upgrading from cvcpkg ≤ 2.0.2?** `httpx`, `cryptography`, `sqlalchemy` and
+> `greenlet` used to be mandatory, so you had them whether or not you used
+> them. `pip install "cvcpkg[all]"` is a superset of what you had before.
+
 ## Extras
 
 Optional dependency groups, selected with pip extras. They apply to
@@ -125,23 +154,25 @@ PyPI release lands.
 
 | Extra | Installs | When you need it |
 |-------|----------|------------------|
-| _(none)_ | client + build tooling | Using `cvcpkg` to install/build packages. |
-| `server` | FastAPI, Uvicorn, Pydantic, python-multipart | Running `cvcpkg-server`. |
-| `db-sqlite` | aiosqlite, Alembic | Server on a SQLite database. |
-| `db` | asyncpg, Alembic | Server on PostgreSQL. |
-| `db-mysql` | aiomysql, Alembic | Server on MySQL/MariaDB. |
-| `db-all` | asyncpg, aiosqlite, aiomysql, Alembic | Server on any of the above. |
+| _(none)_ | click, PyYAML | `install`, `upgrade`, `build`, `pack`, `init`, and the rest of the recipe tooling — the whole client. |
+| `remote` | httpx | Any command that talks to a cvcpkg registry: `search`, `recipe pull`/`list`, `builds list`/`log`/`monitor`/`purge`, `webhook …`, `token`/`user`/`org` admin, `yank`/`unyank`/`nuke`, `doctor --server`. |
+| `publish` | httpx | Publishing: `publish`, `recipe push`, `recipe push-all`, `recipe publish`, `builds submit-dag`/`follow-dag`. |
+| `builder` | httpx | Running a builder agent: `cvcpkg builder run`/`list`/`logs`. |
+| `signing` | cryptography | Ed25519 key management (`cvcpkg key …`, `sign`, `verify-sig`) and `install --verify-signatures`/`--require-signatures`. |
+| `validate` | jsonschema | `cvcpkg validate`: checking `recipe.yaml` / `components.yaml` against the bundled Draft 2020-12 schemas. Recipe authoring only — installing a package never reads a schema. |
+| `progress` | tqdm | Reserved for download/extract progress bars — currently unwired (nothing in `src/cvcpkg` imports tqdm yet; see [roadmap/cli-ux-recipe-first.md](roadmap/cli-ux-recipe-first.md)). |
+| `server` | FastAPI, Uvicorn, Pydantic, python-multipart, SQLAlchemy, greenlet, httpx | Running `cvcpkg-server` (and its `bootstrap`, `token`, `audit` subcommands). |
+| `db-sqlite` | aiosqlite, Alembic, SQLAlchemy, greenlet | Server on a SQLite database. |
+| `db` | asyncpg, Alembic, SQLAlchemy, greenlet | Server on PostgreSQL. |
+| `db-mysql` | aiomysql, Alembic, SQLAlchemy, greenlet | Server on MySQL/MariaDB. |
+| `db-all` | asyncpg, aiosqlite, aiomysql, Alembic, SQLAlchemy, greenlet | Server on any of the above. |
 | `production` | `server` + asyncpg + Alembic | Production server on PostgreSQL. |
-| `s3` | boto3 | `s3://` storage backend (AWS S3, MinIO, any S3-compatible store). |
-| `azure` | azure-storage-blob, azure-identity | `azblob://` storage backend. |
-| `gcs` | google-cloud-storage | `gs://` storage backend. |
-| `sftp` | paramiko | `sftp://` / `ssh://` storage backend. |
-| `storage-all` | all four storage-backend groups | Any of the above storage schemes. |
-
-`pyproject.toml` also defines a `progress` extra (installs `tqdm`), currently
-unwired — nothing in `src/cvcpkg` imports it — pending the terminal-UX work in
-[roadmap/cli-ux-recipe-first.md](roadmap/cli-ux-recipe-first.md). It is
-omitted from the table above since installing it has no effect today.
+| `s3` | boto3 | S3 (or Garage/MinIO) storage backend for `publish --dest` and server-side archives. |
+| `azure` | azure-storage-blob, azure-identity | Azure Blob storage backend. |
+| `gcs` | google-cloud-storage | Google Cloud Storage backend. |
+| `sftp` | paramiko | SFTP storage backend. |
+| `storage-all` | boto3, azure-*, google-cloud-storage, paramiko | Every storage backend. |
+| `all` | everything above | One-word migration from ≤ 2.0.2; also what CI installs to run the full test suite. |
 
 Extras combine — e.g. a SQLite-backed server is `server` + `db-sqlite`:
 
@@ -149,7 +180,14 @@ Extras combine — e.g. a SQLite-backed server is `server` + `db-sqlite`:
 pip install ".[server,db-sqlite]"   # server on SQLite
 pip install ".[production]"          # server on PostgreSQL
 pip install ".[server,db-all]"       # server, any DB backend
+pip install ".[publish,signing]"     # publish signed packages
+pip install ".[all]"                 # everything
 ```
+
+If you are scripting an install for CI or a deployment, pick the extra that
+matches the command that host actually runs — a builder host wants
+`[builder]`, a host that runs `recipe push` or `builds submit-dag` wants
+`[publish]`.
 
 The `https`/`http`, `file` and `gh-release` storage backends are always
 available with no extras; `rsync`, `rclone` and `s3-cli` shell out to

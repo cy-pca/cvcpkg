@@ -30,22 +30,26 @@ Read [How to get cvcpkg on Haiku](#how-to-get-cvcpkg-on-haiku) first: parts of
 ```
 pkgman install click_python310 pyyaml_python310
 python3.10 -m ensurepip --default-pip
-python3.10 -m pip install --no-deps cvcpkg
+python3.10 -m pip install cvcpkg
 ```
 
-The `--no-deps` is load-bearing, and here is why.  The folklore answer —
+As of 2.4.0 this is a plain install — no `--deps` gymnastics.  The core
+distribution is exactly `click` + `PyYAML`, which is the whole client; every
+heavier dependency (`cryptography`, `sqlalchemy`, `greenlet`, `httpx`,
+`jsonschema`) moved behind a role-keyed extra (see
+[pypi-install.md](pypi-install.md), *Core vs extras*).  The folklore answer —
 *cvcpkg cannot run on Haiku: HaikuPorts pins `cryptography` at 3.4.8 against
-cvcpkg's `>=41.0` floor* — is about the **declared** dependency list, never
-about what the code actually loads.  `pyproject.toml` currently lists
-`cryptography`, `sqlalchemy`, `greenlet`, `httpx` and `jsonschema` as
-mandatory, so a plain `pip install cvcpkg` insists on packages the client
-path never imports — and at least `cryptography >= 41` (needs a Rust
-toolchain) and `greenlet` (hand-written stack-switching assembly) are not
-buildable on Haiku.  Skip the resolver with `--no-deps` and the client works,
-because at runtime it only ever loads `click` and `PyYAML`, both of which
-HaikuPorts ships.  Splitting the heavy dependencies into role-keyed extras so
-the flag becomes unnecessary is proposed separately (see
-[Ranked options](#ranked-options)).
+cvcpkg's `>=41.0` floor* — was always about the **declared** dependency list,
+never about what the code loads, and that list is now minimal.  At least
+`cryptography >= 41` (needs a Rust toolchain) and `greenlet` (hand-written
+stack-switching assembly) are still not buildable on Haiku, so simply do not
+install the extras that pull them (`[signing]`, `[server]`); the client itself
+needs neither.
+
+> Historical note: before 2.4.0 those five were mandatory dependencies, so the
+> install line needed `--no-deps` to skip the resolver.  The role-keyed extras
+> proposed here (see [Ranked options](#ranked-options)) landed and made the flag
+> unnecessary.
 
 ### What `cvcpkg install` really imports
 
