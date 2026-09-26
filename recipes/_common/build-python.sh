@@ -333,16 +333,6 @@ if [ "${PYTHON_LDVERSION}" != "${PYTHON_MINOR}" ]; then
     # Free-threaded (t) build: keep a short pythonXt alias (e.g. python3t).
     MAJOR="${PYTHON_MINOR%%.*}"
     ln -sf "python${PYTHON_LDVERSION}" "python${MAJOR}t" 2>/dev/null || true
-    # CRITICAL: a free-threaded `make install` ALSO installs the NON-suffixed versioned names
-    # (bin/python3.13, python3.13-config) — the free-threaded interpreter under the STANDARD name
-    # (its sysconfig platlib is lib/python3.13t/site-packages, Py_GIL_DISABLED=1). In a SHARED build
-    # prefix (the fleet builder) that bin/python3.13 SHADOWS the non-t python313 column's, so a non-t
-    # cpNN package build resolves the free-threaded interpreter (cvc_python_exe_for "3.13" ->
-    # bin/python3.13) and pip mis-installs the wheel to lib/python3.13t/site-packages — where the
-    # standard python3.13 cannot import it. That silently broke every non-t cp313 tool column
-    # (mpmath/pluggy/sympy/pytest/...) and cascaded to their consumers. A free-threaded column must
-    # ship ONLY the t-suffixed names, so remove the standard ones.
-    rm -f "python${PYTHON_MINOR}" "python${PYTHON_MINOR}-config" 2>/dev/null || true
     # ensurepip names its console script pip3.X even in the free-threaded
     # build; give it the t-suffixed name (pip3.13t) so it can never collide
     # with the non-t interpreter's bin/pip3.X in a shared prefix. (Its

@@ -25,12 +25,7 @@ recipe:
   # and patches the wasm table at runtime — so it needs an Emscripten JS engine
   # and cannot work on wasip1. CPython upstream ships its own WASI build without
   # _ctypes for the same reason. wasm keeps the dependency.
-  # cvc.7 (freethreaded bin-leak fix): a free-threaded make install also ships the
-  # NON-suffixed bin/python3.X (the free-threaded interp under the standard name), which
-  # SHADOWS the non-t python column in a shared build prefix and made non-t cpX packages
-  # mis-install to lib/python3.Xt/site-packages. _common/build-python.sh now strips the
-  # standard names from a free-threaded column; rebuild republishes without the leak.
-  cvc_revision: 7
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
