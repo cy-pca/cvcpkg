@@ -1,0 +1,74 @@
+schema_version: 1
+recipe:
+  name: tvision
+  # magiblot/tvision has no tagged releases — pin a specific commit (same
+  # convention as recipes/llvm-cbe).
+  upstream_version: "0.0.0-git.b4831e2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    tvision (magiblot) — a modern, cross-platform port of Borland Turbo Vision:
+    a retained C++ TUI framework with movable overlapping windows, pull-down
+    menus and dialogs (a desktop-in-a-terminal). The native windowed-desktop
+    terminal backend option for the Ariadne UI/scene DSL (cvc::ariadne —
+    docs/roadmap/CVCGL-UI-DSL-ROADMAP.md §16.4). LICENSING NOTE: the MIT license
+    covers magiblot's own additions; the underlying Borland Turbo Vision base is
+    provided "AS IS" (see the upstream COPYRIGHT). Consumers who need to avoid
+    that can feature-flag this backend out (CVC_ARIADNE_TVISION).
+  homepage: https://github.com/magiblot/tvision
+  license: MIT
+  tags: [libraries, tui, cpp]
+
+source:
+  type: tarball
+  url: https://github.com/magiblot/tvision/archive/b4831e2ca16652db327fb7cc964f1c8c2d512524.tar.gz
+  sha256: "64de100a7d750ccdad9218fbb43dc711fe2928ca690e7ef8c532778868e14962"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+    - ncurses
+  runtime:
+    # tvision links libncursesw + libtinfo at build; the static lib needs them at
+    # the consumer's final link too, so ncurses must be in the flat prefix.
+    - ncurses
+  host_tools: []
+
+build:
+  # Unix only for this first cut: tvision uses ncursesw here. The Windows build
+  # (Win32 console, no ncurses) can be added later — same "add a platform in a
+  # revision bump" pattern the yaml-cpp recipe used.
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  # Upstream has no install target and ships no CMake config: build.sh stages the
+  # static lib + headers by hand and generates a pkg-config file. Consumers link
+  # -ltvision plus ncursesw/tinfo (pulled in via the pkg-config Requires).
+  files:
+    - lib/libtvision.*
+    - lib/pkgconfig/tvision.pc
+    - include/tvision/
+  cmake_packages: []
+
+abi:
+  cxx_std: 14
