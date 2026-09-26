@@ -48,7 +48,15 @@ recipe:
   # app statically embedding libpython (the pycvc_gl wasm host) links with no
   # undefined python_hashlib_Hacl_* symbols. Per-platform revisioning: only the
   # rebuilt wasm/wasm-mt variants advance; other platforms keep their revision.
-  cvc_revision: 11
+  # cvc.12 (linux): the published +cvc.11 linux artifact shipped WITHOUT pip —
+  # bin/python3.12 present, but no bin/pip3.12 and no lib/python3.12/site-packages/pip,
+  # so `python3.12 -m pip` failed with "No module named pip" and broke every
+  # grl-snam-cp312 CI closure (the dev-tool install step). Root cause: the
+  # install-time ensurepip (--with-ensurepip=upgrade) ran the freshly-built
+  # interpreter before the RPATH fixup made libpython loadable, so it failed
+  # silently. _common/build-python.sh now re-bootstraps pip from the bundled wheel
+  # after the rpath pass when it is missing (native only). Rebuild restores pip.
+  cvc_revision: 12
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

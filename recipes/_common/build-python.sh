@@ -314,6 +314,20 @@ if [ "$IS_CROSS" = false ]; then
                 "${PY_BIN}" 2>/dev/null || true
         fi
     fi
+
+    # Guarantee pip. --with-ensurepip=upgrade runs ensurepip during `make install`, but that invokes
+    # the freshly-built interpreter BEFORE the RPATH / install_name fixups above make libpython
+    # loadable; on a builder where libpython is not yet resolvable at that moment the install-time
+    # ensurepip fails silently and the artifact ships with NO site-packages/pip (the python312
+    # +cvc.11 linux artifact hit exactly this — bin/python3.X present, pip absent, so `python -m pip`
+    # -> "No module named pip"). The interpreter is runnable now (rpath patched), so re-bootstrap pip
+    # from the BUNDLED ensurepip wheel (no network) if it is missing. Native only — this whole block
+    # is IS_CROSS=false, and a cross target's PY_BIN can't execute on the builder anyway.
+    if ! "${PY_BIN}" -c 'import pip' >/dev/null 2>&1; then
+        echo "build-python.sh: pip missing after make install — bootstrapping via ensurepip"
+        "${PY_BIN}" -m ensurepip --upgrade >/dev/null 2>&1 ||
+            echo "build-python.sh: WARNING: ensurepip bootstrap failed" >&2
+    fi
 fi
 
 # --- Alias hygiene: keep version-specific builds side-by-side safe ---
