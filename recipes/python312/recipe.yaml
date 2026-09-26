@@ -48,7 +48,19 @@ recipe:
   # app statically embedding libpython (the pycvc_gl wasm host) links with no
   # undefined python_hashlib_Hacl_* symbols. Per-platform revisioning: only the
   # rebuilt wasm/wasm-mt variants advance; other platforms keep their revision.
-  cvc_revision: 11
+  # cvc.12/13 (linux): the published +cvc.11 (and the first +cvc.12 rebuild) linux
+  # artifacts shipped WITHOUT pip — bin/python3.12 present, but no bin/pip3.12 and no
+  # lib/python3.12/site-packages/pip, so `python3.12 -m pip` failed with "No module
+  # named pip" and broke every grl-snam-cp312 CI closure (the dev-tool install step).
+  # Root cause (found in the build log): the install-time ensurepip
+  # (--with-ensurepip=upgrade) runs `./python -E -m ensurepip`; -E ignores PYTHON* env
+  # but NOT the user site, so on a builder whose account has a ~/.local pip, ensurepip
+  # reports "Requirement already satisfied" and installs NOTHING into the package.
+  # cvc.12 added a post-rpath re-bootstrap but probed with a bare `import pip`, which
+  # ALSO resolved the builder's ~/.local pip and skipped. cvc.13: _common/build-python.sh
+  # now runs (and probes) ensurepip ISOLATED from the user site (-s + PYTHONNOUSERSITE),
+  # so pip installs into the package's own site-packages. Rebuild restores pip.
+  cvc_revision: 13
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
