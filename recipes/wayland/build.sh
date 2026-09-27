@@ -27,7 +27,14 @@ meson setup "${CVC_BUILD_DIR}" \
     --pkg-config-path="${CVC_DEPS_PREFIX}/lib/pkgconfig" \
     -Dc_link_args="${_rpath_flags}" \
     -Dtests=false \
-    -Ddocumentation=false
+    -Ddocumentation=false \
+    `# DTD validation pulls libxml-2.0 (src/meson.build gates dependency('libxml-2.0')` \
+    `# behind get_option('dtd_validation'), which defaults ON). libxml2 is not in the` \
+    `# dep closure, so a from-source build fails at configure: "Dependency libxml-2.0` \
+    `# not found". DTD validation only checks protocol XML at authoring time; libwayland` \
+    `# and wayland-scanner's codegen for consumers (SDL/GTK) don't need it. Disable it` \
+    `# to keep wayland dependency-free across linux/freebsd/openbsd/netbsd.` \
+    -Ddtd_validation=false
 
 ninja -C "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 ninja -C "${CVC_BUILD_DIR}" install
