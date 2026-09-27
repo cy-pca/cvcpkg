@@ -23,7 +23,11 @@ recipe:
   # published 2026-09-24) — the same external-lib trick as hdf5, so netCDF's vendored
   # TRY_RUN never runs under the node-hidden wrap configure. Adds netCDF (and Exodus)
   # readers to the browser vtk-python API. wasm/wasm-mt only.
-  cvc_revision: 6
+  # cvc.7: don't build the standalone vtkpython/pvtkpython interpreter exes when
+  # VTK_INSTALL_PYTHON_EXES=OFF (wasm/wasm-mt) — see vtk-no-python-interpreter-exe.patch.
+  # Unblocks the wasm-mt build (the fat exe link fails there and was tipping the job
+  # over); the wrapper artifacts we actually ship are unchanged. No-op on native.
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -66,6 +70,12 @@ patches:
   # unconditionally too).
   - vtk-fmt-cstdlib-wasm.patch
   - vtk-essl3-no-global-uniform-init.patch
+  # Don't BUILD the standalone vtkpython/pvtkpython interpreter exes when
+  # VTK_INSTALL_PYTHON_EXES=OFF (wasm/wasm-mt): this package ships only the Python
+  # wrapper artifacts, and that fat exe link (all wrapped modules + libpython)
+  # fails on the static wasm CPython anyway (mpd_isspecial + HACL SHA2 undefs; on
+  # wasm-mt also the threaded 16 MiB initial-memory cap). No-op on native (EXES ON).
+  - vtk-no-python-interpreter-exe.patch
 
 depends:
   build:
