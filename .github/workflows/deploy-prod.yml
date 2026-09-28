@@ -421,7 +421,7 @@ jobs:
             echo "::warning::CVCPKG_PUBLISHER_TOKEN not set — skipping recipe push"
             exit 0
           fi
-          python3 -m pip install --quiet --user . || true
+          python3 -m pip install --quiet --user '.[publish]' || true
           # Prefer the freshly-checked-out package script over any installed copy.
           CVCPKG="python3 -m cvcpkg"
           ok=0
