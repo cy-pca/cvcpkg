@@ -1,0 +1,63 @@
+schema_version: 1
+recipe:
+  name: epoll-shim
+  upstream_version: "0.0.20240608"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/jiixyj/epoll-shim
+  license: MIT
+  tags: [libraries]
+  description: >-
+    epoll-shim — a small library implementing Linux epoll / timerfd / signalfd /
+    eventfd / itimer on top of kqueue, for the BSDs which have no native epoll.
+    Required by wayland (libwayland-server's event loop uses epoll) on
+    FreeBSD/OpenBSD/NetBSD; consumed via its pkg-config file `epoll-shim`.
+
+source:
+  type: tarball
+  url: https://github.com/jiixyj/epoll-shim/archive/refs/tags/v0.0.20240608.tar.gz
+  sha256: "8f5125217e4a0eeb96ab01f9dfd56c38f85ac3e8f26ef2578e538e72e87862cb"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    # BSD-only: Linux has native epoll, and macOS/Windows are out of scope. This is
+    # the shim wayland (and other Linux-oriented libs) need on the BSDs.
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libepoll-shim*
+    - lib/pkgconfig/epoll-shim.pc
+    - lib/pkgconfig/epoll-shim-interpose.pc
+    - lib/cmake/epoll-shim/
+    - include/libepoll-shim/
+  pkg_config:
+    - epoll-shim
+  cmake_packages:
+    - { name: epoll-shim, targets: ["epoll-shim::epoll-shim"] }
+
+abi:
+  cxx_std: 17
