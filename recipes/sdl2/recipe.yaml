@@ -1,0 +1,112 @@
+schema_version: 1
+recipe:
+  name: sdl2
+  upstream_version: "2.32.10"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.libsdl.org/
+  license: Zlib
+  tags: [libraries, graphics, gui, game, audio]
+  description: >-
+    SDL 2.x (Simple DirectMedia Layer) — the cross-platform low-level access
+    library for audio, keyboard, mouse, joystick, and graphics hardware
+    (OpenGL/Vulkan/Direct3D/Metal). This is the SDL 2 LTS series; many classic
+    games/engines (ioquake3, quakespasm, DarkPlaces, …) link SDL2 specifically
+    and do not support SDL3. Most platform backends (X11, Wayland, PulseAudio,
+    PipeWire, …) are dlopen'd at runtime; the dependency libraries below supply
+    the build headers. Sibling of the sdl3 recipe.
+
+source:
+  type: tarball
+  url: https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz
+  sha256: "5f5993c530f084535c65a6879e9b26ad441169b3e25d789d83287040a9ca5165"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+    - pkg-config
+  runtime:
+    - name: libglvnd
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libx11
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxext
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxrandr
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxcursor
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxi
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxfixes
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxscrnsaver
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxtst
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: wayland
+      platforms: [linux, freebsd]
+    - name: wayland-protocols
+      platforms: [linux, freebsd]
+    - name: xkbcommon
+      platforms: [linux, freebsd]
+    - name: alsa-lib
+      platforms: [linux]
+    - name: libpulse
+      platforms: [linux]
+    - name: pipewire
+      platforms: [linux]
+    - name: jack
+      platforms: [linux, freebsd]
+    - name: sndio
+      platforms: [linux, freebsd, openbsd, netbsd]
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    # Unix static + shared artifacts (.a / .so / .so.N / .dylib).
+    - lib/libSDL2*
+    - lib/pkgconfig/sdl2.pc
+    - lib/cmake/SDL2/
+    - include/SDL2/
+    # Windows static + shared artifacts (import/static .lib + runtime .dll).
+    - lib/SDL2*.lib
+    - bin/SDL2*.dll
+  pkg_config:
+    - sdl2
+  cmake_packages:
+    - { name: SDL2, targets: ["SDL2::SDL2"] }
+
+abi:
+  cxx_std: 17
