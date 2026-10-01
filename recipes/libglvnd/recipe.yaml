@@ -2,7 +2,12 @@ schema_version: 1
 recipe:
   name: libglvnd
   upstream_version: "1.7.0"
-  cvc_revision: 1
+  # Bumped 1 -> 2: relocatable-egl-vendor-dir.patch — libEGL now also searches
+  # <dir of libEGL.so>/../share/glvnd/egl_vendor.d (via dladdr) instead of only
+  # the configure-time absolute <prefix>/{etc,share}/glvnd/egl_vendor.d, so an
+  # EGL vendor ICD (cvcpkg `mesa`) installed in the same prefix is found from
+  # any prefix location without __EGL_VENDOR_LIBRARY_* env vars.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -10,7 +15,7 @@ recipe:
   license: MIT
   tags: [libraries, x11, graphics]
   description: >-
-    The GL Vendor-Neutral Dispatch loader — ships libGL/libGLX/libEGL/libOpenGL/libGLdispatch + GL/GLX/EGL/GLES headers. The actual GPU driver ICD stays system-provided at runtime.
+    The GL Vendor-Neutral Dispatch loader — ships libGL/libGLX/libEGL/libOpenGL/libGLdispatch + GL/GLX/EGL/GLES headers. The actual GPU driver ICDs are separate packages (cvcpkg `mesa` for software GL) or system-provided; EGL vendor JSONs are discovered relative to libEGL.so.
 
 source:
   type: tarball
@@ -18,7 +23,8 @@ source:
   sha256: "2b6e15b06aafb4c0b6e2348124808cbd9b291c647299eaaba2e3202f51ff2f3d"
   strip_components: 1
 
-patches: []
+patches:
+  - relocatable-egl-vendor-dir.patch
 
 depends:
   build:

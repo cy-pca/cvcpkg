@@ -1,0 +1,106 @@
+schema_version: 1
+recipe:
+  name: mesa
+  upstream_version: "25.3.6"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.mesa3d.org/
+  license: MIT
+  tags: [libraries, graphics, opengl, software-rendering]
+  description: >-
+    Mesa 3D software OpenGL — the llvmpipe (LLVM JIT) and softpipe Gallium
+    rasterizers behind GLX (libGLX_mesa.so.0, X11 platform, GLVND vendor
+    "mesa") and EGL (libEGL_mesa.so.0 + glvnd egl_vendor.d/50_mesa.json),
+    plus GLES2. Lets a headless Linux server run the cvcpkg VTK / pycvc_gl
+    OpenGL stack with no system Mesa (no libgl1-mesa-dri / libglx-mesa0).
+    Relocatable: every library carries an $ORIGIN RUNPATH and the GLVND
+    dispatch layer (cvcpkg libglvnd >= +cvc.2) finds the GLX/EGL vendor
+    libraries and the EGL vendor JSON relative to its own location, so no
+    environment variables are needed beyond the usual cvcpkg activate.
+    No hardware drivers, no Vulkan, no gbm, no video codecs, no OpenCL.
+
+source:
+  type: tarball
+  url: https://archive.mesa3d.org/mesa-25.3.6.tar.xz
+  sha256: "59217efeac3b64e7ced958324b9db7494f1e0741aeb22d780276514cc1b8f206"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - meson
+    - ninja
+    - pkg-config
+    - patchelf
+    - bison
+    - flex
+    - m4
+    - name: python311
+    # Mesa's code generators import mako, yaml and packaging.
+    - name: markupsafe-cp311
+    - name: mako-cp311
+    - name: pyyaml-cp311
+    - name: packaging-cp311
+    - name: xorgproto
+  runtime:
+    - name: llvm20
+    # >= libglvnd 1.7.0+cvc.2 (relocatable EGL vendor dir) is required for the
+    # EGL path; the resolver serves the newest revision.
+    - name: libglvnd
+    - name: libdrm
+    - name: libx11
+    - name: libxext
+    - name: libxcb
+    - name: libxxf86vm
+    - name: libxshmfence
+    - name: expat
+    - name: zlib
+    - name: zstd
+  host_tools: []
+
+package:
+  files:
+    - lib/
+    - include/
+    - share/
+
+build:
+  matrix:
+    # Linux only. Verified on x86_64; llvm20 targets X86/AArch64/WebAssembly so
+    # llvmpipe's JIT also has an AArch64 backend (arm64 not exercised).
+    - platform: linux
+      script: build.sh
+
+notes:
+  - title: "Relocation / environment"
+    platforms: [linux]
+    description: >-
+      After `cvcpkg install mesa --prefix P` (which also installs libglvnd),
+      software GL works from any P with no environment variables beyond the
+      standard cvcpkg activate (LD_LIBRARY_PATH=P/lib, so the application
+      finds libGL/libEGL).  GLX: libGLX.so.0 dlopens libGLX_mesa.so.0 through
+      its own $ORIGIN RUNPATH; libGLX_mesa links libgallium-<ver>.so
+      (llvmpipe/softpipe) and libLLVM.so.20.1 from the same prefix.  EGL:
+      libEGL.so.1 (cvcpkg libglvnd >= +cvc.2) scans
+      <libEGL dir>/../share/glvnd/egl_vendor.d, which holds 50_mesa.json
+      (library_path is the bare soname libEGL_mesa.so.0, resolved through the
+      $ORIGIN RUNPATH).  With an older libglvnd (+cvc.1) the EGL vendor dir is
+      a baked build path, so set __EGL_VENDOR_LIBRARY_FILENAMES=
+      P/share/glvnd/egl_vendor.d/50_mesa.json.  lib/dri/swrast_dri.so is a
+      symlink to libdril_dri.so (RUNPATH $ORIGIN:$ORIGIN/..) for X servers that
+      load it (Xvfb); the X server must look in P/lib/dri.
+  - title: "Known limitations"
+    platforms: [linux]
+    description: >-
+      Mesa 25.3.6 crashes (NULL swrast loader in drisw_init_screen) when
+      LIBGL_ALWAYS_SOFTWARE=1 is combined with EGL *device* enumeration
+      (vtkEGLRenderWindow) on a host that also exposes a DRM render node;
+      leave LIBGL_ALWAYS_SOFTWARE unset (llvmpipe is still selected) or use
+      EGL_PLATFORM=surfaceless.  gbm is enabled only because Mesa builds
+      swrast_dri.so under it.  drirc (share/drirc.d) and the gbm backend dir
+      are baked absolute paths that do not follow a relocated prefix; they only
+      affect hardware-driver app workarounds, never llvmpipe.  The classic
+      OSMesa library was removed from Mesa in 25.1 and is not built.
