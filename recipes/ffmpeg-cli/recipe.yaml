@@ -9,7 +9,7 @@ recipe:
   maintainer_url: "https://cvcpkg.org"
   homepage: https://ffmpeg.org/
   license: GPL-2.0-or-later
-  tags: [tools, media, windows]
+  tags: [tools, media, linux, windows]
   description: >-
     The ffmpeg/ffprobe COMMAND-LINE tools, H.264 only.
 
@@ -27,6 +27,11 @@ recipe:
     muxer is built in, so this produces browser-playable H.264/MP4 with no
     external muxer — which is what x264's own CLI would have needed lsmash for.
 
+    Built for Linux (x86_64, glibc) and Windows. On Linux the binaries are
+    linked against cvcpkg's own x264 + zlib with a $ORIGIN/../lib RUNPATH, so
+    they run from any prefix (`cvcpkg install ffmpeg-cli --prefix P` then
+    `P/bin/ffmpeg`) with no system ffmpeg or libx264 needed.
+
     If you need a codec that is not here, extend the `ffmpeg` library recipe
     and link against it; do not widen this one.
 
@@ -43,6 +48,10 @@ depends:
     - name: nasm
     - name: x264
     - name: zlib
+    # Linux: stamps the $ORIGIN/../lib RUNPATH on the installed binaries.
+    - name: patchelf
+      platforms: [linux]
+    - pkg-config
   runtime:
     - name: x264
     - name: zlib
@@ -51,6 +60,7 @@ depends:
     # and the tempting fix (-static) silently absorbs MSYS2's zlib instead of
     # cvcpkg's -- see the link-flag comment in build.ps1.
     - name: mingw-w64-runtime
+      platforms: [windows]
   host_tools:
     - nasm
     # See recipes/x264: FFmpeg's configure is a GNU toolchain build, and the
@@ -59,6 +69,10 @@ depends:
 
 build:
   matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
 
