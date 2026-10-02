@@ -6,7 +6,14 @@ recipe:
   # wayland/ ports category (wlroots, sway, labwc) and NetBSD ships
   # devel/wayland in pkgsrc, so the previous linux+freebsd scoping understated
   # where this actually builds.
-  cvc_revision: 2
+  # Bumped 2 -> 3: (1) disable dtd_validation (build.sh) — cvc.2 never published
+  # because a from-source build fails "Dependency libxml-2.0 not found" (wayland's
+  # optional DTD validator needs libxml2, which is not in the closure). Validation
+  # is authoring-only; libwayland + wayland-scanner build fine without it. (2) add
+  # the new `epoll-shim` dep on the BSDs so libwayland-server's epoll event loop
+  # resolves there — the other half of getting wayland to build on FreeBSD/OpenBSD/
+  # NetBSD (previously only linux ever published).
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -36,6 +43,11 @@ depends:
       version: "^3.4"
     - name: expat
       version: "^2.6"
+    # BSD event loop: libwayland-server's event loop uses epoll, which the BSDs
+    # have no native equivalent for. wayland's meson requires the `epoll-shim`
+    # pkg-config package on non-Linux (meson.build: dependency('epoll-shim')).
+    - name: epoll-shim
+      platforms: [freebsd, openbsd, netbsd]
   host_tools: []
 
 build:
