@@ -1,0 +1,84 @@
+schema_version: 1
+recipe:
+  name: xvfb
+  upstream_version: "21.1.24"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.x.org/
+  license: MIT
+  tags: [x11, graphics, headless, tools]
+  description: >-
+    Xvfb — the X virtual framebuffer server (from X.Org xserver 21.1) plus an
+    `xvfb-run` helper, so a headless Linux server can host an X display for the
+    cvcpkg VTK / pycvc_gl OpenGL stack with no apt packages.  Built with GLX
+    enabled (software rendering through the cvcpkg `mesa` swrast driver),
+    built-in fonts (no font files needed) and no DRM/DRI2/DRI3/glamor/udev/
+    libdrm dependency.  Relocatable: Xvfb finds xkbcomp, the XKB data and
+    <prefix>/lib/dri relative to its own location (relocatable-paths.patch),
+    every ELF carries RUNPATH $ORIGIN/../lib, and xvfb-run derives the prefix
+    from its own path.  Pair it with `mesa` (software GL) for working GLX.
+
+source:
+  type: tarball
+  url: https://xorg.freedesktop.org/archive/individual/xserver/xorg-server-21.1.24.tar.xz
+  sha256: "1a4eb36ca65cc3b1b936566d677a9786e13c11cd5806e951ac55f3f5ce3984af"
+  strip_components: 1
+
+patches:
+  - relocatable-paths.patch
+
+depends:
+  build:
+    - meson
+    - ninja
+    - pkg-config
+    - patchelf
+    - name: xorgproto
+    - name: xtrans
+    # gl.pc + GL/glx headers for the server's GLX module (it only needs the
+    # headers; GL symbols are resolved by the swrast driver at run time).
+    - name: libglvnd
+  runtime:
+    - name: libxfont2
+    - name: libxkbfile
+    - name: libfontenc
+    - name: libx11
+    - name: libxau
+    - name: libglvnd
+    - name: pixman
+    - name: nettle
+    - name: xkbcomp
+    - name: xkeyboard-config
+  host_tools: []
+
+package:
+  files:
+    - bin/
+    - share/
+    - lib/
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+
+notes:
+  - title: "Software OpenGL (GLX) needs the mesa package"
+    platforms: [linux]
+    description: >-
+      Xvfb's GLX extension is served by Mesa's swrast DRI driver
+      (<prefix>/lib/dri/swrast_dri.so, installed by the cvcpkg `mesa`
+      package).  Install both (`cvcpkg install xvfb mesa --prefix P`); Xvfb
+      looks in <dir of Xvfb>/../lib/dri automatically, or in
+      $LIBGL_DRIVERS_PATH if set.  Without mesa the server still starts but
+      advertises no GLX.
+  - title: "xvfb-run"
+    platforms: [linux]
+    description: >-
+      `P/bin/xvfb-run -a COMMAND...` starts a private Xvfb on a free display
+      (Xvfb -displayfd), writes a MIT-MAGIC-COOKIE-1 Xauthority file itself (no
+      xauth program needed), runs COMMAND with DISPLAY/XAUTHORITY set and
+      stops the server on exit, preserving COMMAND's exit status.  Default
+      screen is 1280x1024x24; override with -s "-screen 0 WxHxD".
