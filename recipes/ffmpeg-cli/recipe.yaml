@@ -2,9 +2,10 @@ schema_version: 1
 recipe:
   name: ffmpeg-cli
   upstream_version: "7.1.2"
-  # cvc.2: ship only bin/ (ffmpeg/ffprobe). The prior build left FFmpeg's
-  # H.264-only libav* libs, headers and .pc files in the bundle, colliding with
-  # the `ffmpeg` library package's full libav* set in any closure that has both.
+  # cvc.2: ship only bin/ (ffmpeg/ffprobe) on Linux and Windows. cvc.1 left
+  # FFmpeg's H.264-only libav* libs, headers and .pc files in the bundle,
+  # colliding with the `ffmpeg` library package's full libav* set in any closure
+  # that has both. build.sh and build.ps1 now both prune everything but bin/.
   cvc_revision: 2
 
   maintainer: "cvcpkg group"

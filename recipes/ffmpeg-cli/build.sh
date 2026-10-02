@@ -88,3 +88,14 @@ done
 # point the loader there for this check.
 LD_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
     "${CVC_INSTALL_DIR}/bin/ffmpeg" -hide_banner -encoders 2>/dev/null | grep -q libx264
+
+# Ship ONLY the executables, as build.ps1 does on Windows. package.files declares
+# bin/, but that field is declarative — stage_bundle archives the whole
+# $CVC_INSTALL_DIR tree regardless (docs/recipe-authoring.md, "package.files").
+# `make install` also lays down FFmpeg's stripped, H.264-only libav* set (static
+# libs, headers, .pc files under lib/ and include/, plus share/). That set is the
+# sibling `ffmpeg` LIBRARY recipe's job; shipping a second, smaller libav* here
+# would collide with it in any closure that pulls both. The binaries link libav*
+# statically (--disable-shared above) and reach libx264/libz through the x264 and
+# zlib runtime deps, so nothing outside bin/ is needed at runtime.
+find "${CVC_INSTALL_DIR}" -mindepth 1 -maxdepth 1 ! -name bin -exec rm -rf {} +
