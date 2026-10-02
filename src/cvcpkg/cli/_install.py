@@ -640,6 +640,39 @@ def install(
     except OSError as exc:
         click.echo(f"cvcpkg: warning — could not write CMake config: {exc}", err=True)
 
+    # ── OpenBSD: bake absolute RPATHs so the prefix works without activation ──
+    #
+    # OpenBSD's ld.so does not expand $ORIGIN, so the build-time relocation is
+    # inert there (openbsd is excluded from builder._ELF_RPATH_PLATFORMS).  Now
+    # that the destination prefix is concrete and all bundles have merged into
+    # one <prefix>/lib, rewrite every ELF object's RPATH to that absolute lib
+    # dir so a bare `<prefix>/bin/python` — or a Python extension pulling in
+    # libhdf5 → libz — resolves its libraries with NO LD_LIBRARY_PATH.  This is
+    # the "different mechanism" the _ELF_RPATH_PLATFORMS comment refers to.
+    #
+    # Best-effort: it needs patchelf.  Prefer one already in the prefix (a
+    # cvcpkg-installed one, e.g. bootstrapped as a host tool) then PATH; without
+    # it the activation script's LD_LIBRARY_PATH stays the fallback.
+    if plat == "openbsd":
+        from cvcpkg.builder import _find_patchelf, _patch_elf_rpath_absolute
+
+        pe = _find_patchelf(prefix_path)
+        if pe:
+            n = _patch_elf_rpath_absolute(
+                prefix_path, [prefix_path / "lib", prefix_path / "lib64"], pe
+            )
+            click.echo(
+                f"cvcpkg: openbsd — baked absolute RPATH into {n} ELF object(s) "
+                f"→ {prefix_path / 'lib'}"
+            )
+        else:
+            click.echo(
+                "cvcpkg: openbsd — patchelf not found; the prefix's libraries "
+                f"resolve only after `source {prefix_path / 'bin' / 'activate'}` "
+                "(sets LD_LIBRARY_PATH). Install patchelf for activation-free use.",
+                err=True,
+            )
+
     # ── Write activation scripts ──
     #
     # Users can `source <prefix>/bin/activate` (POSIX) or

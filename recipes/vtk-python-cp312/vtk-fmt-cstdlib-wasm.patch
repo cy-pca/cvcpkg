@@ -1,0 +1,10 @@
+--- a/ThirdParty/fmt/vtkfmt/vtkfmt/format.h
++++ b/ThirdParty/fmt/vtkfmt/vtkfmt/format.h
+@@ -44,6 +44,7 @@
+ #  include <cstddef>  // std::byte
+ #  include <cstdint>  // uint32_t
+ #  include <cstring>  // std::memcpy
++#  include <cstdlib>  // std::malloc, std::free (required by Emscripten)
+ #  include <limits>   // std::numeric_limits
+ #  include <new>      // std::bad_alloc
+ #  if defined(__GLIBCXX__) && !defined(_GLIBCXX_USE_DUAL_ABI)

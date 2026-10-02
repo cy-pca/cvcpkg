@@ -1,0 +1,74 @@
+schema_version: 1
+recipe:
+  name: gnutls
+  upstream_version: "3.8.9"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.gnutls.org/
+  # Only libgnutls is packaged, and it is built --disable-tools --disable-libdane
+  # so the GPLv3 command-line tools and DANE library are never produced.  The
+  # library itself is LGPL-2.1-or-later.
+  license: LGPL-2.1-or-later
+  tags: [crypto, network]
+  description: >-
+    GnuTLS — a secure communications library implementing TLS/SSL and DTLS.
+    Provides libgnutls, the LGPL-2.1+ TLS backend for the `ffmpeg-lgpl`
+    build's HTTPS support on Linux/BSD (macOS and Windows use the OS-native
+    SecureTransport/SChannel instead).  Built minimally: no p11-kit, no IDN,
+    no TPM, no DANE, no command-line tools; unistring is the bundled copy.
+    Links nettle/hogweed (crypto) and gmp (bignum).
+
+source:
+  type: tarball
+  url: https://www.gnupg.org/ftp/gcrypt/gnutls/v3.8/gnutls-3.8.9.tar.xz
+  sha256: "69e113d802d1670c4d5ac1b99040b1f2d5c7c05daec5003813c049b5184820ed"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - make
+    - pkg-config
+    - nettle
+    - libtasn1
+    - name: gmp
+      version: ">=6.1.0"
+  runtime:
+    - nettle
+    - libtasn1
+    - name: gmp
+      version: ">=6.1.0"
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libgnutls*
+    - lib/pkgconfig/gnutls.pc
+    - include/gnutls/
+  pkg_config:
+    - gnutls
+
+abi:
+  cxx_std: 17

@@ -30,6 +30,11 @@ case "${CVC_PLATFORM}" in
         TARGET="BSD-x86_64"
         [[ "$(uname -m)" == "aarch64" ]] && TARGET="BSD-aarch64"
         ;;
+    haiku)
+        # OpenSSL ships a native Haiku target (gcc, ELF). Falling through to the
+        # linux-x86_64 default misconfigures OS-specific bits, so name it here.
+        TARGET="haiku-x86_64"
+        ;;
     *)
         TARGET="linux-x86_64"
         [[ "$(uname -m)" == "aarch64" ]] && TARGET="linux-aarch64"

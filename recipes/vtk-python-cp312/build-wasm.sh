@@ -190,9 +190,10 @@ env PATH="${_PATH_NONODE}" cmake -G Ninja -S "${CVC_SOURCE_DIR}" -B "${CVC_BUILD
     -DVTK_MODULE_ENABLE_VTK_hdf5=YES \
     -DVTK_MODULE_USE_EXTERNAL_VTK_hdf5=ON \
     -DVTK_MODULE_ENABLE_VTK_IOHDF=YES \
-    -DVTK_MODULE_ENABLE_VTK_netcdf=NO \
-    -DVTK_MODULE_ENABLE_VTK_IONetCDF=NO \
-    -DVTK_MODULE_ENABLE_VTK_IOExodus=NO \
+    -DVTK_MODULE_ENABLE_VTK_netcdf=YES \
+    -DVTK_MODULE_USE_EXTERNAL_VTK_netcdf=ON \
+    -DVTK_MODULE_ENABLE_VTK_IONetCDF=YES \
+    -DVTK_MODULE_ENABLE_VTK_IOExodus=YES \
     -DVTK_MODULE_ENABLE_VTK_CommonColor=YES \
     -DVTK_MODULE_ENABLE_VTK_CommonComputationalGeometry=YES \
     -DVTK_MODULE_ENABLE_VTK_FiltersCore=YES \
@@ -240,7 +241,7 @@ cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}" -- -k 0 || true
 # A REAL failure must still abort: verify the packaged wrapper archives exist
 # before installing (only the vtkpython exe is permitted to be missing).
 _missing=""
-for _pat in "_vtkmodules_static.a" "libvtkWrappingPythonCore*.a" "libvtkCommonCorePython.a" "libvtkCommonDataModelPython.a" "libvtkRenderingCorePython.a" "libvtkRenderingOpenGL2Python.a" "libvtkFiltersCorePython.a" "libvtkIOGeometryPython.a"; do
+for _pat in "_vtkmodules_static.a" "libvtkWrappingPythonCore*.a" "libvtkCommonCorePython.a" "libvtkCommonDataModelPython.a" "libvtkRenderingCorePython.a" "libvtkRenderingOpenGL2Python.a" "libvtkFiltersCorePython.a" "libvtkIOGeometryPython.a" "libvtkIOHDFPython.a" "libvtkIONetCDFPython.a"; do
     compgen -G "${CVC_BUILD_DIR}/lib/${_pat}" >/dev/null 2>&1 || _missing="${_missing} ${_pat}"
 done
 if [ -n "${_missing}" ]; then

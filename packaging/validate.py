@@ -13,7 +13,7 @@ Usage:
     python packaging/validate.py recipes                # validate all recipes
     python packaging/validate.py recipes/zlib           # validate one recipe
 
-Requires: pip install pyyaml jsonschema  (and cvcpkg importable)
+Requires: pip install 'cvcpkg[validate]'  (jsonschema; pyyaml is core)
 """
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 
 from cvcpkg import validation
+from cvcpkg.optional import MissingDependencyError
 
 # Re-exported so back-compat callers / tests can read the canonical value.
 _UNPARSEABLE_VERSION_GRANDFATHER = validation._UNPARSEABLE_VERSION_GRANDFATHER
@@ -58,13 +59,20 @@ def main() -> int:
     target = sys.argv[1] if len(sys.argv) > 1 else "all"
     errors: list[str] = []
 
-    if target in ("all", "components"):
-        errors += validate_components()
+    # jsonschema is the [validate] extra; outside Click there is nothing to
+    # turn its guard into one clean line, so do it here rather than let a CI
+    # log end in a traceback.
+    try:
+        if target in ("all", "components"):
+            errors += validate_components()
 
-    if target in ("all", "recipes"):
-        errors += validate_all_recipes()
-    elif target.startswith("recipes/"):
-        errors += validate_recipe(RECIPES / target.split("/", 1)[1])
+        if target in ("all", "recipes"):
+            errors += validate_all_recipes()
+        elif target.startswith("recipes/"):
+            errors += validate_recipe(RECIPES / target.split("/", 1)[1])
+    except MissingDependencyError as exc:
+        print(f"Error: {exc.message}", file=sys.stderr)
+        return 1
 
     return validation.report(errors)
 

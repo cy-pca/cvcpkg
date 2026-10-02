@@ -2,10 +2,15 @@ schema_version: 1
 recipe:
   name: libpulse
   upstream_version: "17.0"
-  # Bumped 1 -> 2: added the BSD builds. All three BSDs package pulseaudio, and
-  # this recipe builds the CLIENT libraries only (-Ddaemon=false with every
-  # backend integration disabled), which is the portable part.
-  cvc_revision: 2
+  # cvc.2 declared BSD builds, but libpulse never actually built or published on
+  # any BSD (only linux has ever shipped — see the catalog), and every consumer
+  # (ffmpeg, sdl3, allegro5, openal-soft) depends on it linux-only.  So cvc.3
+  # drops the dead BSD matrix entries back to linux.
+  # cvc.3 also fixes the RPATH: libpulse.so must resolve libpulsecommon (in
+  # lib/pulseaudio/) and libpulsecommon must resolve libsndfile (in lib/), but
+  # only $ORIGIN was stamped — so linking -lpulse failed with "undefined
+  # reference to pa_*".  Client-only build (-Ddaemon=false, integrations off).
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -32,6 +37,8 @@ depends:
     - ninja
     - meson
     - pkg-config
+    # Post-install RPATH normalization (strip meson's absolute privlib path).
+    - patchelf
   runtime:
     - name: libsndfile
       version: "^1.2"
@@ -40,18 +47,6 @@ depends:
 build:
   matrix:
     - platform: linux
-      script: build.sh
-      env:
-        CFLAGS: "-O2 -fPIC"
-    - platform: freebsd
-      script: build.sh
-      env:
-        CFLAGS: "-O2 -fPIC"
-    - platform: openbsd
-      script: build.sh
-      env:
-        CFLAGS: "-O2 -fPIC"
-    - platform: netbsd
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"

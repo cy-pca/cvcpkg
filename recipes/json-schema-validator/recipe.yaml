@@ -1,0 +1,73 @@
+schema_version: 1
+recipe:
+  name: json-schema-validator
+  upstream_version: "2.4.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    pboettch/json-schema-validator — JSON Schema validation (draft 4/6/7/2019-09
+    and 2020-12) on top of nlohmann/json. Used by cvc::ariadne's .ari Layer-2
+    schema validation (docs/roadmap/CVCGL-UI-DSL-ROADMAP.md §15).
+  homepage: https://github.com/pboettch/json-schema-validator
+  license: MIT
+  tags: [utils, cpp, json, schema]
+
+source:
+  type: tarball
+  url: https://github.com/pboettch/json-schema-validator/archive/refs/tags/2.4.0.tar.gz
+  sha256: "24cbb114609cc9b43d4018b8d03e082ff5d2f26f5dce8bd36538097267b63af9"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+    - nlohmann-json
+  runtime:
+    # The installed CMake config does find_dependency(nlohmann_json), and the
+    # public header <nlohmann/json-schema.hpp> includes <nlohmann/json.hpp>, so
+    # nlohmann-json must be present in the same flat prefix at build AND consume
+    # time.
+    - nlohmann-json
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libnlohmann_json_schema_validator*
+    # MSVC: import lib in lib/, DLL in bin/, both without the "lib" prefix.
+    - lib/nlohmann_json_schema_validator*
+    - bin/nlohmann_json_schema_validator*
+    - lib/cmake/nlohmann_json_schema_validator/
+    - include/nlohmann/json-schema.hpp
+  cmake_packages:
+    - { name: nlohmann_json_schema_validator, targets: ["nlohmann_json_schema_validator::validator"] }
+
+abi:
+  cxx_std: 17

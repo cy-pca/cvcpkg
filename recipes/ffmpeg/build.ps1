@@ -1,9 +1,11 @@
 # recipes/ffmpeg/build.ps1 — build FFmpeg on Windows via MSYS2/MinGW64.
 #
 # Produces native Windows DLLs (avcodec-*.dll etc.) using the MinGW-w64
-# GCC toolchain inside MSYS2.  The same external codec set as the Unix
-# build is enabled: Opus, MP3, Vorbis, VP8/VP9, AV1 (dav1d), WebP,
-# JPEG, PNG, OpenSSL, freetype, fribidi, bzip2, lzma.
+# GCC toolchain inside MSYS2.  The same GPL codec set as the Unix build
+# is enabled (--enable-gpl): the x264 (H.264) and x265 (HEVC) GPL
+# encoders, plus Opus, MP3, Vorbis, VP8/VP9, AV1 (dav1d), WebP, JPEG,
+# PNG, OpenSSL, freetype, fribidi, bzip2, lzma.  Enabling x264/x265
+# makes the result GPL-2.0-or-later (matching recipe.yaml's license).
 #
 # All codec/library dependencies must be pre-built and available in
 # CVC_DEPS_PREFIX (declared as depends.build in recipe.yaml).

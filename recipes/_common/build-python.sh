@@ -314,6 +314,21 @@ if [ "$IS_CROSS" = false ]; then
                 "${PY_BIN}" 2>/dev/null || true
         fi
     fi
+
+    # Guarantee pip lands in the PACKAGE. --with-ensurepip=upgrade runs ensurepip during
+    # `make install`, but it invokes `./python -E -m ensurepip`: -E ignores PYTHON* env vars but NOT
+    # the user site (~/.local). On a builder whose account has a user-site pip, ensurepip resolves
+    # THAT ("Requirement already satisfied: pip in /home/.../.local/...") and installs NOTHING into the
+    # package — so python312 +cvc.11/+cvc.12 linux shipped with no site-packages/pip and
+    # `python -m pip` -> "No module named pip". Re-run ensurepip ISOLATED from the user site (-s +
+    # PYTHONNOUSERSITE) so it targets the package's own site-packages, and probe the same way (a bare
+    # `import pip` would also leak the builder's ~/.local pip and hide the gap). Bundled wheel, no
+    # network. Native only — this whole block is IS_CROSS=false (a cross PY_BIN can't run here).
+    if ! PYTHONNOUSERSITE=1 "${PY_BIN}" -s -c 'import pip' >/dev/null 2>&1; then
+        echo "build-python.sh: pip missing from the package — bootstrapping via ensurepip (isolated)"
+        PYTHONNOUSERSITE=1 "${PY_BIN}" -s -m ensurepip --upgrade >/dev/null 2>&1 ||
+            echo "build-python.sh: WARNING: ensurepip bootstrap failed" >&2
+    fi
 fi
 
 # --- Alias hygiene: keep version-specific builds side-by-side safe ---

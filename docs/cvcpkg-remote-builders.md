@@ -24,6 +24,18 @@ whose platform/arch — or advertised cross target — matches.
 
 ## Builder Registration
 
+A builder agent needs the **`builder` extra**. The core install is `click` +
+`PyYAML`; everything the agent does — registering, claiming jobs, streaming
+logs, publishing the archive — goes over the server's HTTP API via `httpx`:
+
+```bash
+pip install 'cvcpkg[builder]'          # or: pipx install 'cvcpkg[builder]'
+```
+
+Without it, `cvcpkg builder run` exits 1 with `httpx is required to talk to a
+cvcpkg server over HTTP. Install it with: pip install 'cvcpkg[builder]'`. See
+[pypi-install.md](pypi-install.md) for the full extras table.
+
 Builders register with the server on startup and maintain presence via
 periodic heartbeats. If a builder misses heartbeats, it transitions to
 "offline" status and won't receive new jobs.
@@ -468,8 +480,10 @@ cvcpkg builds cancel <job-id> --server https://cvcpkg.org --token $TOKEN
 Pull the latest cvcpkg and reinstall:
 
 ```bash
+# Keep the [builder] extra on the reinstall — a bare `pip install .` downgrades
+# the host to the core (click + PyYAML) install and `builder run` stops working.
 cd <libcvc-deps checkout> && git fetch origin && git checkout origin/master && \
-  pip install --quiet .
+  pip install --quiet '.[builder]'
 ```
 
 The new code takes effect when the builder next (re)starts, not mid-run — a

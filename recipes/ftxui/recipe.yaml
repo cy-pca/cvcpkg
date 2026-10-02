@@ -1,0 +1,69 @@
+schema_version: 1
+recipe:
+  name: ftxui
+  upstream_version: "7.0.3"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    FTXUI — Functional Terminal (X) User interface: a simple, dependency-free
+    C++ library for terminal user interfaces. The default terminal backend for
+    the Ariadne UI/scene DSL (cvc::ariadne — docs/roadmap/CVCGL-UI-DSL-ROADMAP.md
+    §16.4). Ships three libraries: ftxui::screen, ftxui::dom, ftxui::component.
+  homepage: https://github.com/ArthurSonzogni/FTXUI
+  license: MIT
+  tags: [libraries, tui, cpp]
+
+source:
+  type: tarball
+  url: https://github.com/ArthurSonzogni/FTXUI/archive/refs/tags/v7.0.3.tar.gz
+  sha256: "e7c62ffe19009759821b4f0f8df7f2a6fb83784c3a9f1477d81f56d3ee723c88"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libftxui-*
+    # MSVC: import libs in lib/, DLLs in bin/, both without the "lib" prefix.
+    - lib/ftxui-*
+    - bin/ftxui-*
+    - lib/cmake/ftxui/
+    - lib/pkgconfig/ftxui*
+    - include/ftxui/
+  cmake_packages:
+    - { name: ftxui, targets: ["ftxui::screen", "ftxui::dom", "ftxui::component"] }
+
+abi:
+  cxx_std: 17

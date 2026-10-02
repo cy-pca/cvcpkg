@@ -592,12 +592,12 @@ def check_staged_image_tree(install_dir: Path | str, package: str) -> list[str]:
 
 def validate_descriptor(doc: Any, *, source: str = "image.yaml") -> list[str]:
     """Validate an ``image.yaml`` document against the bundled JSON Schema."""
-    from jsonschema import Draft202012Validator
-
+    from cvcpkg.optional import require_jsonschema
     from cvcpkg.validation import load_schema
 
+    jsonschema = require_jsonschema()
     schema = load_schema("image")
-    validator = Draft202012Validator(schema)
+    validator = jsonschema.Draft202012Validator(schema)
     return [
         f"{source}: {'.'.join(str(p) for p in e.absolute_path)}: {e.message}"
         for e in sorted(validator.iter_errors(doc), key=lambda x: list(x.absolute_path))

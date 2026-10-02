@@ -8,7 +8,10 @@ recipe:
   # XSCRNSAVER it stopped on XTEST (the last check in the chain). libxtst closes
   # the set (XEXT/XCURSOR/XDBE/XINPUT/XFIXES/XSYNC/XRANDR/XSCRNSAVER/XSHAPE/XTEST
   # are now all satisfied).
-  cvc_revision: 3
+  # cvc.4: add wasm + wasm-mt builds (build-wasm.sh) — SDL3 cross-compiles to
+  # Emscripten with the browser-backed audio/camera/joystick drivers, for the
+  # browser VolRover/pycvc_gl stack (audio/mic/gamepad; VTK owns the canvas).
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -108,6 +111,19 @@ build:
         CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
+    # wasm / wasm-mt: SDL3's CMake auto-selects the Emscripten backends (Web Audio,
+    # getUserMedia camera, Gamepad-API joystick); the native X11/Wayland/audio deps
+    # above are platforms:-scoped to linux/BSD, so none apply here. Static only.
+    # For the browser VolRover/pycvc_gl stack SDL is used peripherals-only (audio/
+    # mic/gamepad); VTK owns the WebGL canvas, so SDL_INIT_VIDEO is unused.
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm-mt
+      host_platform: linux
+      script: build-wasm.sh
+      env:
+        CVC_WASM_THREADS: "1"
 
 package:
   files:

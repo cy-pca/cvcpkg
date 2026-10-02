@@ -48,7 +48,9 @@ class ResolvedNode:
 
 
 def _default_http_get(url: str, token: str, timeout: float = 30.0) -> dict:
-    import httpx
+    from cvcpkg.optional import require_httpx
+
+    httpx = require_httpx()
 
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     resp = httpx.get(url, headers=headers, timeout=timeout, follow_redirects=True)

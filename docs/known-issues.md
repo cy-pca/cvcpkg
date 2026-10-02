@@ -2,9 +2,19 @@
 
 ## BSD: cryptography package requires OS-level installation
 
+> **Largely resolved (2.4.0).** `cryptography` is no longer a core
+> dependency — it moved behind the `[signing]` extra when the core install
+> shrank to `click` + `PyYAML` (see [pypi-install.md](pypi-install.md), *Core
+> vs extras*). A plain `pip install cvcpkg` no longer builds it, so the client
+> installs cleanly on the BSDs with no Rust and no OS package. The section
+> below applies **only** when you deliberately install `cvcpkg[signing]` (or
+> `[all]`) — i.e. you need Ed25519 package signing/verification on a BSD host.
+> Keeping the whole core off the heavy wheels is the same motivation as the
+> multi-platform binaries (down to cosmo APE), where those wheels do not exist.
+
 ### Symptom
 
-`pip install cvcpkg` fails on FreeBSD, OpenBSD, and NetBSD when
+`pip install 'cvcpkg[signing]'` fails on FreeBSD, OpenBSD, and NetBSD when
 building the `cryptography` dependency from source:
 
 ```
@@ -81,16 +91,21 @@ PyInstaller version from PyPI.
 
 ### Related: the jsonschema pin
 
-`cvcpkg` pins `jsonschema = ">=4.0,<4.18"` in
-[`pyproject.toml`](../pyproject.toml) for the same underlying reason:
-jsonschema 4.18 swapped the pure-Python `pyrsistent` for `rpds-py`,
-which is Rust. PyPI ships no BSD wheels for it and the BSD builders
-have no cargo, so an unbounded bound makes `pip install cvcpkg`
-unsatisfiable on the BSDs. Lifting the pin is gated on a
+`jsonschema` is likewise no longer core — it moved behind the `[validate]`
+extra (only `cvcpkg validate` and the `kind: image` layout gate construct a
+`Draft202012Validator`). So a plain `pip install cvcpkg` no longer pulls it,
+and the BSD `rpds-py` problem below only applies to `pip install
+'cvcpkg[validate]'`.
+
+`cvcpkg` still pins `jsonschema = ">=4.0,<4.18"` in
+[`pyproject.toml`](../pyproject.toml): jsonschema 4.18 swapped the pure-Python
+`pyrsistent` for `rpds-py`, which is Rust. PyPI ships no BSD wheels for it and
+the BSD builders have no cargo, so an unbounded bound would make `pip install
+'cvcpkg[validate]'` unsatisfiable on the BSDs. Lifting the pin is gated on a
 rust-toolchain recipe — see
 [roadmap/platform-coverage-pypi-blockers.md](roadmap/platform-coverage-pypi-blockers.md)
-(§W11). Do not install jsonschema explicitly on the BSD VMs either;
-let `pip install .` resolve it inside the pin.
+(§W11). When you do install `[validate]` on a BSD VM, do not install jsonschema
+explicitly — let pip resolve it inside the pin.
 
 ### OpenBSD disk requirements
 

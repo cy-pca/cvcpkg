@@ -15,6 +15,7 @@ from cvcpkg.cli import cli
 from cvcpkg.cli._helpers import (
     _resolve_recipes_dirs,
 )
+from cvcpkg.optional import require_httpx
 
 # ── Recipe distribution commands ────────────────────────────────
 
@@ -158,7 +159,7 @@ def recipe_push(
     import io
     import tarfile
 
-    import httpx
+    httpx = require_httpx("publish")
 
     rdirs = _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes)
 
@@ -251,7 +252,7 @@ def recipe_push(
 @click.option("--org", "org_slug", default=None, help="Filter by organization.")
 def recipe_list(server: str, token: str, org_slug: str | None):
     """List recipes available on the server."""
-    import httpx
+    httpx = require_httpx()
 
     params: dict[str, str] = {}
     if org_slug is not None:
@@ -300,7 +301,7 @@ def recipe_list(server: str, token: str, org_slug: str | None):
 @click.option("--org", "org_slug", default="", help="Organization scope.")
 def recipe_delete(name: str, server: str, token: str, org_slug: str):
     """Delete a recipe from the server (admin only)."""
-    import httpx
+    httpx = require_httpx()
 
     url = f"{server.rstrip('/')}/v1/recipes/{name}"
     params = {"org_slug": org_slug}
@@ -369,7 +370,7 @@ def recipe_publish(
     import io
     import tarfile
 
-    import httpx
+    httpx = require_httpx("publish")
 
     base = server.rstrip("/")
     headers = {"Authorization": f"Bearer {token}"}
@@ -502,7 +503,7 @@ def recipe_pull(name: str, server: str, token: str, org_slug: str, output_dir: s
     """
     import tarfile
 
-    import httpx
+    httpx = require_httpx()
 
     base = server.rstrip("/")
     headers: dict[str, str] = {}
@@ -568,7 +569,7 @@ def recipe_pull_all(server: str, token: str, org_slug: str, output_dir: str):
     """
     import tarfile
 
-    import httpx
+    httpx = require_httpx()
 
     base = server.rstrip("/")
     headers: dict[str, str] = {}
@@ -648,7 +649,7 @@ def recipe_push_all(
     import io
     import tarfile
 
-    import httpx
+    httpx = require_httpx("publish")
 
     base = server.rstrip("/")
     headers = {"Authorization": f"Bearer {token}"}

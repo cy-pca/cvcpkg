@@ -1,0 +1,199 @@
+schema_version: 1
+recipe:
+  name: ffmpeg-lgpl
+  upstream_version: "7.1.2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://ffmpeg.org/
+  license: LGPL-2.1-or-later
+  tags: [multimedia]
+  description: >-
+    FFmpeg built as a strict LGPL-2.1 shared-library set, for LGPL
+    consumers that must not inherit a GPL (or LGPLv3) obligation.
+
+    Distinct from the `ffmpeg` recipe on purpose.  That one is built
+    --enable-gpl --enable-version3 with the x264/x265 encoders and
+    OpenSSL, so it is GPL-3.0-or-later; linking it into an LGPL-2.1
+    library (libcvc, and the Ariadne UI/scene DSL that decodes media for
+    playback) would relicense that library.  This recipe drops
+    --enable-gpl (so no x264/x265), drops --enable-version3 (so the
+    result stays at v2.1, not v3), and drops OpenSSL (OpenSSL 3.x is
+    Apache-2.0, whose patent-termination clause is a "further
+    restriction" GPLv2/LGPLv2.1 forbids — Apache-2.0 is compatible with
+    v3 only) — leaving a clean LGPL-2.1-or-later build.
+
+    HTTPS/TLS is still available, from a license-clean backend chosen per
+    OS: macOS links the native SecureTransport framework and Windows the
+    native SChannel stack (no external library, no license impact), while
+    Linux and the BSDs use GnuTLS (LGPL-2.1+).  So streaming over https://
+    works on every supported platform without pulling the build up to v3.
+    (GnuTLS in turn
+    links nettle + gmp, which are LGPLv3+/GPLv2+; under dynamic linking
+    each keeps its own license and none relicenses this library or its
+    consumers.)
+
+    Decode is unaffected: FFmpeg's own native H.264 and HEVC DECODERS
+    are LGPL and stay in — x264/x265 are ENCODERS only.  All the
+    LGPL/BSD-licensed external codecs are kept: Opus, MP3 (LAME),
+    Vorbis, VP8/VP9 (libvpx), AV1 (dav1d), WebP, plus
+    freetype/fontconfig/fribidi and bzip2/lzma/zlib.  (PNG and MJPEG are
+    FFmpeg's own native codecs — there is no external libpng/libjpeg to
+    declare.  libpulse is deliberately omitted: a decode/streaming library
+    has no need of a PulseAudio device backend.)  Given up versus `ffmpeg`:
+    H.264/HEVC ENCODING only.
+
+    Produces the same libav*/libsw* SONAMEs as `ffmpeg`; the two are
+    alternates — install ONE.  LGPL consumers pick this; consumers that
+    need the x264/x265 encoders pick `ffmpeg`.
+
+source:
+  type: tarball
+  url: https://ffmpeg.org/releases/ffmpeg-7.1.2.tar.xz
+  sha256: "089bc60fb59d6aecc5d994ff530fd0dcb3ee39aa55867849a2bbc4e555f9c304"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: patchelf
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: nasm
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libopus
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libmp3lame
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libogg
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libvorbis
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: dav1d
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libvpx
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libwebp
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: freetype
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: fontconfig
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: fribidi
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    # TLS backend for Linux/BSD; macOS uses SecureTransport and Windows uses
+    # SChannel (OS-native, no dependency).  See build.sh / build.ps1.
+    - name: gnutls
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: bzip2
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: xz
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: zlib
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - pkg-config
+  runtime:
+    - name: libopus
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libmp3lame
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libogg
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libvorbis
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: dav1d
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libvpx
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: libwebp
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: freetype
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: fontconfig
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: fribidi
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    # TLS backend for Linux/BSD; macOS uses SecureTransport and Windows uses
+    # SChannel (OS-native, no dependency).  See build.sh / build.ps1.
+    - name: gnutls
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: bzip2
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: xz
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: zlib
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    # Unix shared libs (.so / .dylib)
+    - lib/libavformat*
+    - lib/libavcodec*
+    - lib/libavutil*
+    - lib/libavfilter*
+    - lib/libavdevice*
+    - lib/libswscale*
+    - lib/libswresample*
+    - lib/pkgconfig/libav*
+    - lib/pkgconfig/libsw*
+    # Windows DLLs and import libs
+    - bin/avformat-*.dll
+    - bin/avcodec-*.dll
+    - bin/avutil-*.dll
+    - bin/avfilter-*.dll
+    - bin/avdevice-*.dll
+    - bin/swscale-*.dll
+    - bin/swresample-*.dll
+    - lib/avformat.lib
+    - lib/avcodec.lib
+    - lib/avutil.lib
+    - lib/avfilter.lib
+    - lib/avdevice.lib
+    - lib/swscale.lib
+    - lib/swresample.lib
+    # Headers (shared)
+    - include/libavformat/
+    - include/libavcodec/
+    - include/libavutil/
+    - include/libavfilter/
+    - include/libavdevice/
+    - include/libswscale/
+    - include/libswresample/
+  pkg_config:
+    - libavformat
+    - libavcodec
+    - libavutil
+    - libavfilter
+    - libavdevice
+    - libswscale
+    - libswresample
+
+abi:
+  cxx_std: 17
