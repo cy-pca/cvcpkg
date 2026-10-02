@@ -6,7 +6,13 @@
 Provides key generation, archive signing (detached signatures), and
 verification.  Keys are stored in ``~/.config/cvcpkg/keys/``.
 
-The ``cryptography`` package is a required dependency of cvcpkg.
+``cryptography`` is an OPTIONAL dependency — ``pip install
+'cvcpkg[signing]'``.  Signing and verification are opt-in (``cvcpkg
+sign``, ``install --verify-signatures``), and the install path's
+integrity check is ``hashlib.sha256``, so a core install never loads it.
+Every entry point below therefore calls
+:func:`cvcpkg.optional.require_cryptography` first, so a missing extra
+reports the pip command to run instead of a ModuleNotFoundError.
 
 Key format:
     Private key: PEM-encoded Ed25519 (optionally password-protected)
@@ -28,6 +34,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from cvcpkg.errors import SigningError
+from cvcpkg.optional import require_cryptography
 
 if TYPE_CHECKING:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -91,6 +98,8 @@ def generate_keypair(
         <keys_dir>/<label>.pub      -- public key  (PEM)
         <keys_dir>/<label>.fp       -- fingerprint (hex string)
     """
+    require_cryptography()
+
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -149,6 +158,8 @@ def load_private_key(
     password: str | None = None,
 ) -> Ed25519PrivateKey:  # type: ignore[name-defined]
     """Load an Ed25519 private key from a PEM file."""
+    require_cryptography()
+
     from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
     data = key_path.read_bytes()
@@ -164,6 +175,8 @@ def load_private_key(
 
 def load_public_key(pub_path: Path) -> Ed25519PublicKey:  # type: ignore[name-defined]
     """Load an Ed25519 public key from a PEM file."""
+    require_cryptography()
+
     from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
     data = pub_path.read_bytes()
@@ -226,6 +239,8 @@ def import_public_key(
     keys_dir: Path | None = None,
 ) -> KeyInfo:
     """Import a public key PEM string into the keyring."""
+    require_cryptography()
+
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     from cryptography.hazmat.primitives.serialization import load_pem_public_key
@@ -360,6 +375,8 @@ def _verify_digest(
     keys_dir: Path | None = None,
 ) -> KeyInfo:
     """Verify against the trusted keyring, preferring fingerprint match."""
+    require_cryptography("for signature verification")
+
     from cryptography.exceptions import InvalidSignature
 
     # Decode signature

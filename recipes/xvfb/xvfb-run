@@ -1,0 +1,195 @@
+#!/bin/sh
+# xvfb-run — run a command inside a private Xvfb (X virtual framebuffer) server.
+#
+# cvcpkg's relocatable, POSIX-sh counterpart of Debian's xvfb-run.  It starts
+# the Xvfb that sits next to it (<prefix>/bin/Xvfb), waits until the server is
+# ready, exports DISPLAY (+ XAUTHORITY), runs the command, returns the command's
+# exit status, and always stops the server again.
+#
+# Usage: xvfb-run [OPTION ...] COMMAND [ARG ...]
+#   -a, --auto-servernum        pick a free display number (uses Xvfb -displayfd)
+#   -n, --server-num N          display number to use (default 99; ignored by -a)
+#   -s, --server-args "ARGS"    extra Xvfb arguments, e.g. "-screen 0 1920x1080x24"
+#                               (default: "-screen 0 1280x1024x24")
+#   -e, --error-file FILE       file receiving Xvfb's stdout/stderr (default /dev/null)
+#   -f, --auth-file FILE        write the MIT-MAGIC-COOKIE-1 Xauthority file here
+#                               (default: a private temp file, removed on exit)
+#   -w, --wait SECONDS          how long to wait for the server (default 30)
+#   -l, --listen-tcp            allow TCP connections (default: -nolisten tcp)
+#   -p, --xauth-protocol PROTO  accepted for Debian compatibility; ignored
+#   -h, --help                  this text
+#
+# Access control: unlike Debian's script this does not need the `xauth`
+# program.  A random MIT-MAGIC-COOKIE-1 entry is written straight into an
+# Xauthority file in the standard binary format, the server is started with
+# -auth on that file, and XAUTHORITY is exported to COMMAND — only processes
+# that inherit it can connect.  Pass "-ac" via -s to turn access control off.
+#
+# GL: when <prefix>/lib/dri exists (cvcpkg `mesa`), LIBGL_DRIVERS_PATH is
+# pointed at it and LIBGL_ALWAYS_SOFTWARE=1 is set for COMMAND (only if not
+# already set), so software GLX works from any prefix location.
+
+prog="xvfb-run"
+
+# ---- locate ourselves (follow symlinks), derive the prefix ------------------
+self=$0
+while [ -L "$self" ]; do
+    link=$(readlink "$self") || break
+    case $link in
+        /*) self=$link ;;
+        *)  self=$(dirname "$self")/$link ;;
+    esac
+done
+bindir=$(cd "$(dirname "$self")" && pwd -P) || exit 1
+prefix=$(dirname "$bindir")
+xvfb="$bindir/Xvfb"
+
+usage() {
+    sed -n '/^# Usage:/,/^#   -h, --help/p' "$self" | sed 's/^# \{0,1\}//'
+}
+
+die() {
+    echo "$prog: $*" >&2
+    exit 1
+}
+
+# ---- option parsing ---------------------------------------------------------
+auto=0
+servernum=99
+server_args=
+errfile=/dev/null
+authfile=
+wait_s=30
+listen_tcp=0
+
+while [ $# -gt 0 ]; do
+    case $1 in
+        -a|--auto-servernum)       auto=1 ;;
+        -n|--server-num)           [ $# -ge 2 ] || die "$1 needs an argument"
+                                   servernum=$2; shift ;;
+        --server-num=*)            servernum=${1#*=} ;;
+        -s|--server-args)          [ $# -ge 2 ] || die "$1 needs an argument"
+                                   server_args=$2; shift ;;
+        --server-args=*)           server_args=${1#*=} ;;
+        -e|--error-file)           [ $# -ge 2 ] || die "$1 needs an argument"
+                                   errfile=$2; shift ;;
+        --error-file=*)            errfile=${1#*=} ;;
+        -f|--auth-file)            [ $# -ge 2 ] || die "$1 needs an argument"
+                                   authfile=$2; shift ;;
+        --auth-file=*)             authfile=${1#*=} ;;
+        -w|--wait)                 [ $# -ge 2 ] || die "$1 needs an argument"
+                                   wait_s=$2; shift ;;
+        --wait=*)                  wait_s=${1#*=} ;;
+        -p|--xauth-protocol)       [ $# -ge 2 ] || die "$1 needs an argument"
+                                   shift ;;
+        --xauth-protocol=*)        ;;
+        -l|--listen-tcp)           listen_tcp=1 ;;
+        -h|--help)                 usage; exit 0 ;;
+        --)                        shift; break ;;
+        -*)                        usage >&2; die "unknown option: $1" ;;
+        *)                         break ;;
+    esac
+    shift
+done
+
+[ $# -gt 0 ] || { usage >&2; exit 2; }
+[ -x "$xvfb" ] || die "cannot find Xvfb next to $prog ($xvfb)"
+case $servernum in ''|*[!0-9]*) die "invalid server number: $servernum" ;; esac
+case $wait_s in ''|*[!0-9]*) die "invalid wait time: $wait_s" ;; esac
+
+case " $server_args " in
+    *" -screen "*) ;;
+    *) server_args="-screen 0 1280x1024x24 $server_args" ;;
+esac
+
+# ---- private scratch dir + cleanup -----------------------------------------
+oldumask=$(umask)
+umask 077
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/xvfb-run.XXXXXX") || die "cannot create a temp dir"
+umask "$oldumask"
+xvfb_pid=
+
+cleanup() {
+    if [ -n "$xvfb_pid" ]; then
+        kill "$xvfb_pid" 2>/dev/null
+        wait "$xvfb_pid" 2>/dev/null
+        xvfb_pid=
+    fi
+    rm -rf "$tmpdir"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# ---- Xauthority cookie (no xauth needed) -----------------------------------
+# File = one record: family(2) addrlen(2) addr numlen(2) num namelen(2) name
+# datalen(2) data, all big-endian.  Family 0xFFFF = wildcard (any host), empty
+# display number = any display, so the same file works whatever number the
+# server ends up with and in containers whose hostname differs.
+if [ -z "$authfile" ]; then
+    authfile=$tmpdir/Xauthority
+fi
+octets=$(od -An -N16 -to1 /dev/urandom 2>/dev/null) || octets=
+[ "$(echo $octets | wc -w)" -eq 16 ] || die "cannot read /dev/urandom for the auth cookie"
+{
+    printf '\377\377'                 # family: wildcard
+    printf '\000\000'                 # address length 0
+    printf '\000\000'                 # display number length 0
+    printf '\000\022MIT-MAGIC-COOKIE-1'
+    printf '\000\020'                 # 16 data bytes
+    for o in $octets; do printf "\\$o"; done
+} > "$authfile" || die "cannot write $authfile"
+chmod 600 "$authfile" 2>/dev/null
+
+# ---- start the server -------------------------------------------------------
+dfd=$tmpdir/displayfd
+: > "$dfd"
+set -f   # server_args is word-split on purpose; keep it glob-safe
+nolisten=-nolisten
+[ "$listen_tcp" -eq 1 ] && nolisten=
+if [ "$auto" -eq 1 ]; then
+    disp_arg=
+else
+    disp_arg=":$servernum"
+fi
+# shellcheck disable=SC2086
+"$xvfb" $disp_arg -auth "$authfile" $nolisten ${nolisten:+tcp} -displayfd 3 \
+    $server_args 3>"$dfd" >>"$errfile" 2>&1 &
+xvfb_pid=$!
+set +f
+
+# Wait for the server to report its display number (written after it is ready
+# to accept connections).  Ten polls a second; falls back to 1 s sleeps where
+# sleep does not take fractions.
+polls=$((wait_s * 10))
+display=
+while [ "$polls" -gt 0 ]; do
+    if [ -s "$dfd" ]; then
+        display=$(sed -n '1p' "$dfd")
+        case $display in ''|*[!0-9]*) display= ;; esac
+        [ -n "$display" ] && break
+    fi
+    if ! kill -0 "$xvfb_pid" 2>/dev/null; then
+        xvfb_pid=
+        die "Xvfb exited before becoming ready (see ${errfile} for its output)"
+    fi
+    sleep 0.1 2>/dev/null || sleep 1
+    polls=$((polls - 1))
+done
+[ -n "$display" ] || die "timed out after ${wait_s}s waiting for Xvfb"
+
+# ---- run the command --------------------------------------------------------
+DISPLAY=:$display
+XAUTHORITY=$authfile
+export DISPLAY XAUTHORITY
+if [ -d "$prefix/lib/dri" ]; then
+    : "${LIBGL_DRIVERS_PATH:=$prefix/lib/dri}"
+    export LIBGL_DRIVERS_PATH
+fi
+: "${LIBGL_ALWAYS_SOFTWARE:=1}"
+export LIBGL_ALWAYS_SOFTWARE
+
+"$@"
+status=$?
+exit "$status"

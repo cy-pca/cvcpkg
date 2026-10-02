@@ -1,0 +1,44 @@
+schema_version: 1
+recipe:
+  name: libxkbfile
+  upstream_version: "1.2.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.x.org/
+  license: MIT
+  tags: [libraries, x11]
+  description: >-
+    libxkbfile — XKB file handling routines (keymap read/write), used by
+    xkbcomp and the X server.
+
+source:
+  type: tarball
+  url: https://xorg.freedesktop.org/archive/individual/lib/libxkbfile-1.2.0.tar.xz
+  sha256: "7f71884e5faf56fb0e823f3848599cf9b5a9afce51c90982baeb64f635233ebf"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - meson
+    - ninja
+    - pkg-config
+    - patchelf
+    - name: xorgproto
+  runtime:
+    - name: libx11
+  host_tools: []
+
+package:
+  files:
+    - lib/
+    - include/
+    - share/
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh

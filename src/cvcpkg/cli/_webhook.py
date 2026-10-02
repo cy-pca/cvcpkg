@@ -8,6 +8,7 @@ from __future__ import annotations
 import click
 
 from cvcpkg.cli import cli
+from cvcpkg.optional import require_httpx
 
 # ── Webhook CLI commands ────────────────────────────────────────
 
@@ -43,7 +44,7 @@ def webhook_group() -> None:
 @click.option("--org", "org_slug", default="", help="Organization scope.")
 def webhook_register(url: str, events: tuple[str, ...], server: str, token: str, org_slug: str):
     """Register a new webhook."""
-    import httpx
+    httpx = require_httpx()
 
     api = f"{server.rstrip('/')}/v1/webhooks"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -78,7 +79,7 @@ def webhook_register(url: str, events: tuple[str, ...], server: str, token: str,
 @click.option("--org", "org_slug", default=None, help="Filter by organization.")
 def webhook_list(server: str, token: str, org_slug: str | None):
     """List registered webhooks."""
-    import httpx
+    httpx = require_httpx()
 
     api = f"{server.rstrip('/')}/v1/webhooks"
     headers = {"Authorization": f"Bearer {token}"}
@@ -118,7 +119,7 @@ def webhook_list(server: str, token: str, org_slug: str | None):
 )
 def webhook_info(webhook_id: int, server: str, token: str):
     """Get details for a webhook."""
-    import httpx
+    httpx = require_httpx()
 
     api = f"{server.rstrip('/')}/v1/webhooks/{webhook_id}"
     headers = {"Authorization": f"Bearer {token}"}
@@ -163,7 +164,7 @@ def webhook_update(
     token: str,
 ):
     """Update a webhook."""
-    import httpx
+    httpx = require_httpx()
 
     api = f"{server.rstrip('/')}/v1/webhooks/{webhook_id}"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -205,7 +206,7 @@ def webhook_update(
 )
 def webhook_delete(webhook_id: int, server: str, token: str):
     """Delete a webhook (admin only)."""
-    import httpx
+    httpx = require_httpx()
 
     api = f"{server.rstrip('/')}/v1/webhooks/{webhook_id}"
     headers = {"Authorization": f"Bearer {token}"}
@@ -238,7 +239,7 @@ def webhook_delete(webhook_id: int, server: str, token: str):
 )
 def webhook_test(webhook_id: int, server: str, token: str):
     """Send a test payload to a webhook."""
-    import httpx
+    httpx = require_httpx()
 
     api = f"{server.rstrip('/')}/v1/webhooks/{webhook_id}/test"
     headers = {"Authorization": f"Bearer {token}"}

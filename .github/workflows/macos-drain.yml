@@ -101,7 +101,7 @@ jobs:
 
       - name: Install cvcpkg
         run: |
-          pip3 install --break-system-packages '.[progress]'
+          pip3 install --break-system-packages '.[builder,progress,validate]'
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           echo "$(python3 -m site --user-base)/bin" >> "$GITHUB_PATH"
 

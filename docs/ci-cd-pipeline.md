@@ -23,6 +23,14 @@ The `deploy` job:
 2. **Deploy to pkg.tx.wtf** — same flow, executed locally on the runner host
 3. **Push recipes to cvcpkg.org** — refresh the DB-backed `/v1/recipes/*` store so builders fetch the deployed recipe revision (needs `CVCPKG_PUBLISHER_TOKEN`)
 
+> **Extras matter on every host these pipelines touch.** A bare
+> `pip install .` now gets the core client only (`click` + `PyYAML`). Each
+> workflow installs the extra its own commands need — `[builder,validate]` on
+> builder hosts, `[publish]` where it runs `recipe push` / `builds submit-dag`
+> / `publish`, `[remote]` for registry admin. Dropping the extra back to a
+> bare `.` silently breaks that host at the first HTTP call. See
+> [pypi-install.md](pypi-install.md).
+
 ### Deploying to Production
 
 ```bash
