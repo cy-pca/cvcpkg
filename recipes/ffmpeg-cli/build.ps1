@@ -238,4 +238,19 @@ $dec = & $ff -hide_banner -decoders 2>&1 | Select-String -Pattern '\bh264\b'
 if (-not $dec) { throw 'ffmpeg-cli: built ffmpeg.exe cannot decode h264 (cannot read its own output)' }
 Write-Host "ffmpeg-cli: $((& $ff -version 2>&1 | Select-Object -First 1)) — libx264 + mp4 OK"
 
+# Ship ONLY the executables. package.files declares bin/, but that field is
+# declarative — stage_bundle archives the whole $CVC_INSTALL_DIR tree regardless
+# (see docs/recipe-authoring.md, "package.files"). FFmpeg's `make install` also
+# lays down a stripped, H.264-only libav* set: static libs, headers and .pc
+# files under lib/ and include/, plus share/. Those are exactly what the sibling
+# `ffmpeg` LIBRARY recipe exists to provide (its full codec set), so shipping
+# them here would put a second, smaller libav* into any closure that pulls both
+# and collide. ffmpeg.exe/ffprobe.exe are self-contained static binaries — the
+# whole point of this recipe — so nothing under lib/ or share/ is needed at
+# runtime. Delete everything but bin/, the documented way to keep files out of a
+# bundle.
+Get-ChildItem -LiteralPath $env:CVC_INSTALL_DIR -Force |
+    Where-Object { $_.Name -ne 'bin' } |
+    ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force }
+
 Invoke-CvcRewriteInstallPaths
