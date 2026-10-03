@@ -867,6 +867,11 @@ def builder_run(
     # tree.  Guarded by jobs_lock; added when the root is created and removed in
     # the same finally that rmtree's it.
     active_job_roots: set[Path] = set()
+    # Server job ids this process is executing right now.  A job id can be
+    # handed to us more than once while we are still running it -- see
+    # _admit_job -- and must never start a second thread.  Guarded by
+    # jobs_lock; added by _admit_job, removed in _run_job_guarded's finally.
+    inflight_job_ids: set[int] = set()
     _job_seq = 0
     current_jobs = 0
     jobs_lock = threading.Lock()
@@ -895,10 +900,38 @@ def builder_run(
         current_jobs = len(active_jobs)
         return _job_seq
 
-    def _release_slot(slot_id: int) -> None:
+    def _admit_job(job: dict) -> int | None:
+        """Reserve a slot for *job*, or return None if we are already running it.
+
+        The server hands a job out until it is claimed, and the claim happens
+        inside the job thread.  ``next-job`` returns a job for as long as it is
+        still ``dispatched`` (``next-claimable`` while it is ``pending``), and
+        the poll loop polls again the moment it has started a job thread -- so
+        with a free slot it is routinely handed the SAME job before its own
+        claim has landed.  The server cannot refuse that second claim: a
+        re-claim by the job's own builder (or ``--name`` claimant) is
+        idempotent on purpose, so a builder whose claim response was lost can
+        retry.  Admitting it anyway ran most jobs on a max-jobs >= 2 builder
+        two (once three) times concurrently, each in its own job tree and each
+        publishing the same variant (populate-server runs 36933340879,
+        37099829036, 37106564280).  The job id is what a repeated hand-out has
+        in common with the first, so dedupe on it here.
+
+        Call under jobs_lock.
+        """
+        job_id = job.get("id")
+        if job_id is not None:
+            if job_id in inflight_job_ids:
+                return None
+            inflight_job_ids.add(job_id)
+        return _claim_slot()
+
+    def _release_slot(slot_id: int, job_id: int | None = None) -> None:
         nonlocal current_jobs
         with jobs_lock:
             active_jobs.discard(slot_id)
+            if job_id is not None:
+                inflight_job_ids.discard(job_id)
             current_jobs = len(active_jobs)
 
     def _handle_signal(signum, frame):
@@ -1586,6 +1619,19 @@ def builder_run(
                     err=True,
                 )
                 return
+            # A 200 is not by itself a go-ahead.  For a job that is no longer
+            # claimable (cancelled or paused while it was being handed out,
+            # or already finished) the server answers 200 and hands the row
+            # back so the caller can see why.  Building it would publish a
+            # cancelled job and then /complete would flip it to succeeded.
+            # A body without a status (an older or fake server) proceeds.
+            try:
+                claimed_status = str(resp.json().get("status") or "")
+            except Exception:
+                claimed_status = ""
+            if claimed_status and claimed_status != "running":
+                click.echo(f"  [{job_id}] claim returned status '{claimed_status}', skipping")
+                return
         except Exception as exc:
             click.echo(f"  [{job_id}] claim error: {exc}", err=True)
             return
@@ -1756,18 +1802,19 @@ def builder_run(
     def _run_job_guarded(job: dict, slot_id: int) -> None:
         """Thread entry point: run a job and ALWAYS release its slot.
 
-        The caller reserves the slot (``_claim_slot``) before starting the
-        thread; this wrapper's finally releases it no matter how
-        ``_execute_job`` exits — normal return, exception, or the early
-        ``return`` in its claim step.  Previously the release lived inside
-        ``_execute_job``'s try/finally, which a failed-claim early return
+        The caller reserves the slot (``_admit_job``) before starting the
+        thread; this wrapper's finally releases it, along with the job id's
+        in-flight mark, no matter how ``_execute_job`` exits — normal return,
+        exception, or the early ``return`` in its claim step.  Previously the
+        release lived inside ``_execute_job``'s try/finally, which a
+        failed-claim early return
         skipped, permanently leaking a slot (a max-jobs=2 builder wedged at
         2/2 after two failed claims and stopped taking work).
         """
         try:
             _execute_job(job)
         finally:
-            _release_slot(slot_id)
+            _release_slot(slot_id, job.get("id"))
 
     # -- Self-update helper ---------------------------------
 
@@ -1944,7 +1991,13 @@ def builder_run(
                         with jobs_lock:
                             if current_jobs >= max_jobs:
                                 continue
-                            slot_id = _claim_slot()
+                            slot_id = _admit_job(job)
+                        if slot_id is None:
+                            click.echo(
+                                f"  [{job.get('id')}] already running here, "
+                                "ignoring the repeated dispatch"
+                            )
+                            continue
                         t = threading.Thread(
                             target=_run_job_guarded, args=(job, slot_id), daemon=True
                         )
@@ -2154,7 +2207,13 @@ def builder_run(
                 # NOT `token`: this runs in builder_run's own scope, so binding
                 # the slot id to that name replaced the bearer credential every
                 # nested closure reads -- publishes then sent "Bearer 1".
-                slot_id = _claim_slot()
+                slot_id = _admit_job(job)
+            if slot_id is None:
+                # The server handed back a job we are already running: our own
+                # claim, sent from the job thread, has not landed yet.  It will
+                # within a round trip; don't spin on the poll meanwhile.
+                time.sleep(1.0)
+                continue
 
             # Run in a thread so we can keep heartbeating & polling.  The
             # guarded wrapper releases the slot on any exit path.
