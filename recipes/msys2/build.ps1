@@ -92,5 +92,38 @@ Invoke-MsysBash "gcc --version | head -n1 && printf 'int main(void){return 0;}\n
 Invoke-MsysBash "perl -Mstrict -Mwarnings -e 'print qq(perl ), `$^V, qq(\n)' && cmp --version | head -n1"
 Invoke-MsysBash "command -v make >/dev/null 2>&1 && echo 'msys2: note: bootstrap ships a make' || echo 'msys2: no make in the bootstrap (expected: make comes from the cvcpkg make recipe)'"
 
+# ── 6. Make the tree survive the bundle round trip ───────────────────
+# The Windows bundle is a zip, and two things in a live MSYS2 root do not come
+# back out of one. msys2 +cvc.2 shipped both, and the INSTALLED copy broke:
+#
+#  * Empty directories are dropped. /tmp and /dev (with shm, mqueue) vanished,
+#    so bash warned "could not find /tmp, please create!" (here-documents need
+#    it), and 01-devices.post, unable to mkdir /dev/shm under a /dev that no
+#    longer existed, printed "Creating /dev/shm directory failed." on STDOUT.
+#    env-windows.ps1's tool probes read that stdout as their answer, so they
+#    reported gcc missing from a tree that contains it:
+#      MSYS build tools not found on PATH (bash: ...\prefix\msys2\usr\bin\bash.exe): gcc
+#    A placeholder file in every empty directory keeps each one in the archive.
+#  * /etc/mtab is a Cygwin symlink: a "!<symlink>" cookie file carrying the
+#    SYSTEM attribute. A login re-creates it (03-mtab.post), and extracting the
+#    bundle over that again is refused, because CreateFile(CREATE_ALWAYS) is
+#    denied on an existing SYSTEM file:
+#      PermissionError: [Errno 13] Permission denied: '...\prefix\msys2\etc\mtab'
+#    That is every install-deps after the first in a shared prefix. Ship no
+#    mtab at all; 03-mtab.post makes the link on first login.
+$mtab = Join-Path $root 'etc\mtab'
+if (Test-Path -LiteralPath $mtab) { Remove-Item -LiteralPath $mtab -Force }
+$tmpDir = Join-Path $root 'tmp'
+foreach ($d in $tmpDir, (Join-Path $root 'dev\shm'), (Join-Path $root 'dev\mqueue')) {
+    New-Item -ItemType Directory -Force -Path $d | Out-Null
+}
+Get-ChildItem -LiteralPath $tmpDir -Force | Remove-Item -Recurse -Force
+$emptyDirs = @(Get-ChildItem -LiteralPath $root -Recurse -Directory -Force |
+    Where-Object { -not (Get-ChildItem -LiteralPath $_.FullName -Force | Select-Object -First 1) })
+foreach ($d in $emptyDirs) {
+    New-Item -ItemType File -Force -Path (Join-Path $d.FullName '.cvcpkg-keep') | Out-Null
+}
+Write-Host "msys2: kept $($emptyDirs.Count) empty directories (placeholder .cvcpkg-keep); /etc/mtab left to first login"
+
 Set-Content -LiteralPath (Join-Path $root 'cvcpkg-version.txt') -Value $ver -NoNewline -Encoding ascii
 Write-Host "msys2: bootstrap $ver ready at $root (MSYS packages: $($packages -join ', '))"
